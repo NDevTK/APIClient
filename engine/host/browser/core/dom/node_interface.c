@@ -14,6 +14,8 @@
 #include "core/dom/node.h"          /* node_template_content — the ONE spelling of where a template's markup is;
                                        node_wrap_forget / node_agent_runtime — the dying node hands its wrapper back */
 #include "core/dom/node_heap.h"
+#include "core/dom/shadow_root.h"  /* shadow_root_take_owned_by — the ONE spelling of the OWNING element -> shadow
+                                      root edge, which is not §4.9's per-flow association and takes no realm */
 #include "core/html/html_parse.h"   /* the ONE place a Document is parsed — the destroy asserts it was that one */
 #include "core/dom/node_interface.h"
 #include "solver/attr_shadow.h"     /* …and the taint slots keyed on the dying element go with it */
@@ -130,12 +132,29 @@ static lxb_dom_interface_t *dom_node_interface_free(lxb_dom_interface_t *intrfc)
  * THE CHILDREN ARE DETACHED BEFORE THEY ARE QUEUED, because lexbor's template destructor frees the fragment
  * struct a few lines later and a queued node whose `parent` still named it would read freed memory at its own
  * `lxb_dom_node_remove`. It is `_wo_events` and not the removal: §4.2.3's removing steps belong to a DOM
- * operation observed by the page, and this is a teardown of a fragment that is ceasing to exist. */
-static lxb_dom_node_t **g_tpl_queue;
-static size_t g_tpl_n, g_tpl_cap;
-static int g_tpl_draining;
+ * operation observed by the page, and this is a teardown of a fragment that is ceasing to exist.
+ *
+ * AND THE QUEUE HOLDS TWO KINDS OF SECOND TREE NOW, WHICH IS WHY IT IS NOT NAMED FOR THE TEMPLATE ANY MORE.
+ * DOM §4.8's SHADOW ROOT is the other one, and it is the same sentence twice over: not a child of its host, so
+ * no walk of `first_child` reaches it; not the element's `content`, so the template arm does not either; and
+ * reached from the host and from nowhere in any tree. The nesting argument is identical and it is the PAGE's
+ * depth again — a shadow tree may hold a host whose own shadow tree holds another — so the shadow root goes
+ * through this same worklist rather than being destroyed inline, and the two kinds share it because they share
+ * the reason for it. What differs is one line: a template's contents are queued CHILD BY CHILD because
+ * lexbor's template destructor frees the fragment struct itself, and a shadow root is queued WHOLE because
+ * nothing else frees it at all — `lxb_dom_node_destroy_deep` on it takes its children and then its own struct
+ * through this dispatcher, whose SHADOW_ROOT arm routes to `lxb_dom_shadow_root_interface_destroy`.
+ * ITS EDGE IS AN ENGINE FIELD AND NOT A REALM READ, and that is what makes it askable here at all. §4.9's
+ * element -> shadow root ASSOCIATION is per flow and lives on the host's JS wrapper, which this function holds
+ * no realm to read; the OWNING edge is `lxb_dom_element_t::baseline_shadow_root`, written by
+ * core/dom/shadow_root.c only where the attach is BASELINE, and read here through `shadow_root_take_owned_by`,
+ * which clears it as it reads so one root cannot be queued twice. A flow's shadow root answers NULL there and
+ * is freed by that flow's delta (solver/dom_cow.c kind 4) — one owner each, never both. */
+static lxb_dom_node_t **g_second_tree_queue;
+static size_t g_second_tree_n, g_second_tree_cap;
+static int g_second_tree_draining;
 
-static void tpl_queue_push(lxb_dom_node_t *n)
+static void second_tree_queue_push(lxb_dom_node_t *n)
 {
     /* THE NODE DOCUMENT MUST STILL HOLD THE AGENT'S HEAP, and this is the one site that can say so. §4.12.3's
        "establish the template contents" creates the fragment with the INERT owner as its node document, and its
@@ -149,23 +168,26 @@ static void tpl_queue_push(lxb_dom_node_t *n)
        creation writes it too, every template's contents name the inert owner and this assertion covers them
        all rather than the adopted ones. */
     DCHECK(n->owner_document != NULL && n->owner_document->mraw != NULL,
-           "a <template>'s contents are being queued for destruction with their NODE DOCUMENT already detached "
-           "from the agent's DOM heap — HTML §4.12.3 gives the contents to an inert owner document whose own "
-           "tree is empty, so that document was destroyed without ever reaching them; order the inert owner's "
-           "destroy after every document whose templates it owns");
-    if (g_tpl_n == g_tpl_cap) {
-        size_t want = g_tpl_cap ? g_tpl_cap * 2 : 8;
+           "a second tree is being queued for destruction with its NODE DOCUMENT already detached from the "
+           "agent's DOM heap. For a <template>'s contents that is the ordering HTML §4.12.3 creates: it gives "
+           "them an inert owner document whose own tree is empty, so that document is destroyed without ever "
+           "reaching them — order the inert owner's destroy after every document whose templates it owns. A "
+           "DOM §4.8 shadow root's node document is the HOST's, which is being destroyed right now and still "
+           "holds its arenas, so this arm firing for one means the host outlived its own document");
+    if (g_second_tree_n == g_second_tree_cap) {
+        size_t want = g_second_tree_cap ? g_second_tree_cap * 2 : 8;
         /* PLAIN realloc, NOT solver/reclaim.h's: this runs on the FREE path, and selling a flow to fund it
            would re-enter the delta release that is walking the very tree being torn down. */
-        lxb_dom_node_t **v = realloc(g_tpl_queue, sizeof *v * want);
+        lxb_dom_node_t **v = realloc(g_second_tree_queue, sizeof *v * want);
 
-        CHECK(v != NULL, "a <template>'s contents could not be queued for destruction — this queue is the only "
-                         "remaining name for those nodes, so a failed grow is the page's whole template tree "
-                         "leaked and there is no bound to trade against it");
-        g_tpl_queue = v;
-        g_tpl_cap = want;
+        CHECK(v != NULL, "a second tree could not be queued for destruction — this queue is the only remaining "
+                         "name for those nodes (HTML §4.12.3's template contents, or DOM §4.8's shadow root), "
+                         "so a failed grow is that whole tree leaked and there is no bound to trade against "
+                         "it");
+        g_second_tree_queue = v;
+        g_second_tree_cap = want;
     }
-    g_tpl_queue[g_tpl_n++] = n;
+    g_second_tree_queue[g_second_tree_n++] = n;
 }
 
 /* DOM §4.9'S ATTRIBUTES ARE THE SECOND STRUCTURE REACHED FROM A NODE THAT NO WALK OF CHILDREN SEES, AND FOR AN
@@ -237,16 +259,22 @@ static void elem_release_attrs(lxb_dom_node_t *node)
 
 static lxb_dom_interface_t *dom_node_interface_destroy(lxb_dom_interface_t *intrfc)
 {
-    lxb_dom_node_t *node = intrfc, *content, *child;
+    lxb_dom_node_t *node = intrfc, *content, *child, *shadow;
     lxb_dom_interface_t *r;
 
     if (node == NULL)
         return NULL;
+    /* DOM §4.8's SHADOW ROOT — the second kind of second tree, queued WHOLE. Before the template arm only
+       because the two are independent and one of them has to be first; a node cannot be both, since a
+       `<template>` is not a valid shadow host name and §4.9 step 2 refuses it. */
+    shadow = shadow_root_take_owned_by(node);
+    if (shadow != NULL)
+        second_tree_queue_push(shadow);
     content = node_template_content(node);
     if (content != NULL) {
         while ((child = content->first_child) != NULL) {
             lxb_dom_node_remove_wo_events(child);
-            tpl_queue_push(child);
+            second_tree_queue_push(child);
         }
         /* THE FRAGMENT ITSELF DIES HERE AND NOWHERE ELSE, so its wrapper goes back here. Its CHILDREN are
            queued above and each reaches this function on its own; the fragment does not. lexbor's template
@@ -272,18 +300,18 @@ static lxb_dom_interface_t *dom_node_interface_destroy(lxb_dom_interface_t *intr
      * be covered, which is the only property that makes this statement true rather than currently true. */
     node_wrap_forget(node);
     r = dom_node_interface_free(intrfc);
-    if (!g_tpl_draining) {
-        g_tpl_draining = 1;
+    if (!g_second_tree_draining) {
+        g_second_tree_draining = 1;
         /* Every entry is an independent DETACHED subtree, so the order among them is free; LIFO keeps the queue
            shallow, and each `destroy_deep` re-enters the function above, which pushes rather than descends. */
-        while (g_tpl_n > 0)
-            lxb_dom_node_destroy_deep(g_tpl_queue[--g_tpl_n]);
-        g_tpl_draining = 0;
+        while (g_second_tree_n > 0)
+            lxb_dom_node_destroy_deep(g_second_tree_queue[--g_second_tree_n]);
+        g_second_tree_draining = 0;
         /* The buffer goes back with the work: a queue kept between destroys is an allocation the agent's own
            teardown has nobody to name. */
-        free(g_tpl_queue);
-        g_tpl_queue = NULL;
-        g_tpl_cap = 0;
+        free(g_second_tree_queue);
+        g_second_tree_queue = NULL;
+        g_second_tree_cap = 0;
     }
     return r;
 }

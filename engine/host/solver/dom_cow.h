@@ -283,12 +283,16 @@ void dom_cow_insert_private(lxb_dom_node_t *root, lxb_dom_node_t *parent, lxb_do
 /* and drop it — `with_children` false is an emptied root and asserts it; true DEEP-destroys, which is the
    abandoned-parse case (a machine torn down mid-placement still holds everything it has not moved yet).
    IT TAKES A REALM BECAUSE THE TREE IT FREES IS NOT THE ONLY TREE IT IS ABOUT. A node's second and third
-   trees — a `<template>`'s content and a SHADOW ROOT — are neither of them children, and the two are reached
-   differently: core/dom/node_interface.c's destroy dispatcher follows the content from a C field, and cannot
-   follow the shadow root at all, because DOM §4.9 Interface Element's `attach a shadow root` writes that edge
-   as a slot on the HOST'S WRAPPER and the dispatcher holds no realm to read it with. So the question is asked
-   HERE, where there is one, and the answer is currently an assert: see the pair of DCHECKs this entry and
-   dom_private_copy_one hold, which are one ownership contract read in two directions. */
+   trees — a `<template>`'s content and a SHADOW ROOT — are neither of them children, and the dispatcher in
+   core/dom/node_interface.c now follows BOTH from C fields: the content from lexbor's own, and a BASELINE
+   shadow root from `lxb_dom_element_t::baseline_shadow_root`, which core/dom/shadow_root.c writes at exactly
+   the attaches this file's capture gate calls baseline. What that edge deliberately does NOT cover is the one
+   this entry is about — a shadow root attached INSIDE a flow, whose §4.9 association is a per-flow slot on the
+   host's wrapper and whose node the running flow's delta claims as a kind-4 creation. That claim is the second
+   owner over a private tree the private ROOT already owns, which is the convention mixing this file refuses
+   one node at a time and cannot see here. So the question is still asked HERE, where there is a realm, and the
+   answer is still an assert: see the pair of DCHECKs this entry and dom_private_copy_one hold, which are one
+   ownership contract read in two directions. */
 void dom_cow_destroy_private(JSContext *ctx, lxb_dom_node_t *root, bool with_children);
 /* MOVE a node between two trees NEITHER of which is shared — the parse boundary's own operation. HTML
    §13.2.6.4.4 sets a `<template>`'s template contents to the shadow root it attaches, and a parse that filled
@@ -384,15 +388,26 @@ long dom_cow_head_bytes(int cap);
 
 /* THIS FLOW CREATED THIS NODE. Called from every place a node is made, so the delta owns it and destroys it
    when the delta is discarded. Inert while capture is off — a boot-time creation is baseline and outlives
-   every delta. */
-void dom_cow_note_created(lxb_dom_node_t *node);
+   every delta.
+   AND IT SAYS WHICH OF THE TWO HAPPENED, because "the document it was made in owns a baseline node" is true of
+   a node the document's destroy can REACH and of no other. That destroy walks child links and the one second
+   tree core/dom/node_interface.c's dispatcher follows per node, so it covers every node that ends up in a
+   tree — and a node that ends up as a tree of its OWN is reached by neither. DOM §4.8's shadow root is that
+   node: it is not a child of its host and it is not a `<template>`'s contents, so a baseline attach used to
+   leave one owned by nothing at all, with the whole parsed shadow subtree under it (`<template
+   shadowrootmode=open><span>x</span>` measured 3 node and 1 text allocation still held at teardown, linear in
+   the number of ROOTS and independent of the schedule, because no flow was ever involved).
+   So `false` is a statement to ACT on and not a no-op: the caller now owns the choice of baseline owner, which
+   is the same shape `dom_cow_note_created_document` has stated one kind up since documents needed it. A caller
+   whose node is INSERTED somewhere has only one possible owner and rightly ignores the answer. */
+bool dom_cow_note_created(lxb_dom_node_t *node);
 
 /* THIS FLOW CREATED THIS DOCUMENT — DOM §4.5.1's createHTMLDocument and createDocument, whose result is a whole
-   second Document rather than a node in one. Same contract as dom_cow_note_created and one difference that has
-   to come back to the caller: a baseline NODE is owned by the document it was made in, and a document has no
-   such parent. So this RETURNS true when the running flow's delta took ownership (it destroys the document when
-   the delta is discarded) and false when capture is off, which means the creation is BASELINE and the realm
-   that made it is what must own it. */
+   second Document rather than a node in one. Same contract as dom_cow_note_created, including the answer: this
+   RETURNS true when the running flow's delta took ownership (it destroys the document when the delta is
+   discarded) and false when capture is off, which means the creation is BASELINE and the realm that made it is
+   what must own it. A document has no containing tree at all, which is why this kind needed the answer FIRST —
+   the node kind needed it as soon as a node could be a tree of its own. */
 bool dom_cow_note_created_document(lxb_html_document_t *dom);
 
 /* DESTROY A DOCUMENT THIS ENGINE OWNS, and release the flow-level record that names it. What it adds over

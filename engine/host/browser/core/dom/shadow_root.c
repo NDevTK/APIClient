@@ -233,6 +233,50 @@ lxb_dom_node_t *shadow_root_of_element(JSContext *ctx, const lxb_dom_element_t *
     return n;
 }
 
+/* ---- the OWNING edge, which is a different question from the association above ------------------------------- */
+
+/* THE SHADOW ROOT THIS ELEMENT OWNS, TAKEN — read and cleared in one call, so nothing can act on the claim
+ * twice. That is dom_cow.c's own convention for a spent ownership record — its release nulls the entry's node
+ * so nothing may act on it twice — and here it is what makes a second queueing of one shadow root unspellable
+ * rather than merely unlikely.
+ *
+ * IT TAKES NO REALM, WHICH IS THE WHOLE POINT AND THE WHOLE DIFFERENCE FROM `shadow_root_of_element` ABOVE.
+ * The consumer is core/dom/node_interface.c's destroy dispatcher — the one point every node death converges
+ * on, whoever called `lxb_dom_node_destroy` or `_destroy_deep` — and it is handed a node and nothing else. So
+ * the two entries are not two spellings of one fact and must never be collapsed: the association is §4.9's and
+ * is PER FLOW, kept on the host's wrapper where the heap delta captures it; this is OWNERSHIP and is BASELINE
+ * only, so it answers NULL for every shadow root a flow attached — which is correct, because those are owned
+ * by that flow's delta (dom_cow.c kind 4) and freeing one here would be the second owner.
+ *
+ * ONE OWNER, WHICH IS WHY THIS IS A `take` AND NOT A `get`. The two arms of `attach a shadow root`'s ownership
+ * split are exclusive by construction, and the dispatcher clears the edge before it queues the tree, so the
+ * only route to a double free — the same address claimed twice — cannot be reached from here. */
+lxb_dom_node_t *shadow_root_take_owned_by(lxb_dom_node_t *node)
+{
+    lxb_dom_element_t *el;
+    lxb_dom_shadow_root_t *sr;
+
+    if (node == NULL || node->type != LXB_DOM_NODE_TYPE_ELEMENT)
+        return NULL;
+    el = lxb_dom_interface_element(node);
+    sr = el->baseline_shadow_root;
+    if (sr == NULL)
+        return NULL;
+    /* THE ROUND TRIP, ASSERTED — the same reason node_template_content_host is a round trip through
+       node_template_content rather than a type test: two directions over one edge must not be able to answer
+       differently about one node. §4.8's `host` is written by the attach above, on the same statement that
+       writes this edge, and nothing in §4.8 ever writes either again. */
+    DCHECK(sr->host == el,
+           "an element's OWNING edge names a shadow root whose §4.8 host is a different element — the two are "
+           "written by one statement in attach a shadow root and neither is ever written again, so a "
+           "disagreement means one of them was copied onto a node it does not belong to, and the free below "
+           "would take a tree out of another element's hands");
+    DCHECK(shadow_root_is(lxb_dom_interface_node(sr)),
+           "an element's OWNING edge names a node that is not a shadow root");
+    el->baseline_shadow_root = NULL;
+    return lxb_dom_interface_node(sr);
+}
+
 /* ---- §4.8's record on the shadow root's wrapper --------------------------------------------------------------- */
 
 /* WHICH of §4.8's fields — one enum, used as the getter magic and as the record's key set, so a field cannot be
@@ -437,9 +481,36 @@ static JSValue sr_attach(JSContext *ctx, JSValueConst el_wrap, const char *mode,
        reader can ever see a shadow root whose host is null. */
     sr->host = el;
     sr->mode = (strcmp(mode, "open") == 0) ? LXB_DOM_SHADOW_ROOT_MODE_OPEN : LXB_DOM_SHADOW_ROOT_MODE_CLOSED;
-    /* The running flow OWNS the node: it is destroyed with the flow's delta if the flow is discarded, exactly
-       like an element the flow created and never inserted. */
-    dom_cow_note_created(lxb_dom_interface_node(sr));
+    /* WHO OWNS THIS NODE, WHICH IS TWO ANSWERS AND NOT ONE — the same split core/dom/document.c states at
+       `if (!dom_cow_note_created_document(dom)) doc_realm_owns(ctx, d);`, and for the same reason: a creation
+       made with capture ON belongs to the running flow, and one made with capture OFF is BASELINE and needs an
+       owner that outlives every delta. A shadow root is the node that made the second half load-bearing,
+       because it is a TREE OF ITS OWN: not a child of its host and not a `<template>`'s contents, so the
+       document's destroy — which walks child links and the one second tree the node-death dispatcher follows —
+       reaches it through neither. HTML §13.2.6.4.4's declarative attach runs at document_install, on the
+       host's own time, where solver/engine.c leaves `g_dom_capture` at 0; so this arm used to be a silent
+       no-op and `<template shadowrootmode=open><span>x</span>` left its whole parsed subtree held at teardown.
+       THE BASELINE ARM IS A C EDGE AND THAT IS NOT THE REFUSAL THIS FILE'S BANNER MAKES. What the banner
+       refuses is a C answer to §4.9's ASSOCIATION, because the host is a baseline element two flows share and
+       `attachShadow` in one arm of a fork must not be visible in the other. This edge is written only where
+       there is no fork to be wrong about — before any flow exists, on a root every flow sees by construction —
+       and it answers a different question from the association — not which shadow root this element HAS, which
+       is per flow, but which second tree DIES with it, which is the question the node-death dispatcher asks
+       and the one it holds no realm to ask the other way. It is the same split this file already draws between lexbor's
+       `host`/`mode` fields and the wrapper's booleans, and HTML §4.12.3's template contents are the working
+       precedent — also out of the tree, also baseline, also owned by a C edge the dispatcher follows. */
+    DCHECK(el->baseline_shadow_root == NULL,
+           "§4.9 step 5 is about to make a second shadow root for an element that already OWNS one. Step 4 "
+           "refuses a re-attach by reading the association off the host's WRAPPER, so reaching here with the "
+           "C owning edge set means the two disagree about this element — either a flow-visible root is "
+           "hiding a baseline one, or a clone copied the edge (lxb_dom_element_interface_copy must not, and "
+           "two elements naming one shadow root is two owners and a double free)");
+    if (!dom_cow_note_created(lxb_dom_interface_node(sr))) {
+        /* BASELINE: the HOST owns it, and core/dom/node_interface.c's dispatcher frees it when the host dies —
+           which covers the document tree walk, a delta's own release of a created host, and every other
+           destroy, because that dispatcher is the one point every node death converges on. */
+        el->baseline_shadow_root = sr;
+    }
     wrap = node_wrap(ctx, lxb_dom_interface_node(sr));
     CHECK(JS_IsObject(wrap), "a ShadowRoot wrapper could not be allocated");
     slots = idl_slots_new(ctx);

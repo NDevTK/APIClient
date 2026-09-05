@@ -106,6 +106,19 @@ lxb_dom_node_t *shadow_root_of_element(JSContext *ctx, const lxb_dom_element_t *
 /* The same association as the WRAPPER §4.8's members hand back. OWNED; JS_NULL when there is none. */
 JSValue shadow_root_of_element_wrap(JSContext *ctx, JSValueConst el_wrap);
 
+/* THE SHADOW ROOT THIS NODE OWNS, TAKEN — a DIFFERENT QUESTION from the two above, and the difference is what
+   this entry exists to keep. Those answer DOM §4.9's ASSOCIATION, which is per flow and lives on the host's
+   wrapper. This answers OWNERSHIP: what second tree dies with this node. They agree for a shadow root attached
+   at BASELINE and they differ for every one a flow attached, where this answers NULL because that root is
+   owned by the flow's delta (solver/dom_cow.c kind 4) and a second owner is a double free.
+   ITS ONE CONSUMER IS core/dom/node_interface.c's DESTROY DISPATCHER, which is why it takes a NODE and no
+   realm: that dispatcher is the one point every node death converges on and it is handed nothing else, so a
+   question it cannot ask is a tree nothing frees. HTML §4.12.3's template contents are the same shape and are
+   already answered there by node_template_content.
+   IT TAKES rather than gets: the edge is cleared as it is read, so one shadow root cannot be claimed twice.
+   NULL for a node that is not an element, and for an element that owns none. */
+lxb_dom_node_t *shadow_root_take_owned_by(lxb_dom_node_t *node);
+
 /* §4.8's `keep custom element registry null` — "initially false", and DOM notes it "can only ever be true in
    combination with declarative shadow roots". HTML §13.2.6.4.4 sets it for a
    `<template shadowrootcustomelementregistry>`; DOM §4.5's adopt reads it, and without it that attribute is

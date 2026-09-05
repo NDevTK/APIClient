@@ -16,8 +16,10 @@
 /* DOM §4.4 Interface Node's `clone a node` STEP 3 CLONING STEPS, which a private tree's copy owes exactly as
    clone-a-node does — these are the same two component entries core/dom/node.c calls at its own step 3, and
    the two the list does NOT cover are what the copy crashes on by name. */
-#include "core/dom/shadow_root.h"        /* the ELEMENT -> shadow root edge, a WRAPPER slot no C walk can see —
-                                            so BOTH halves of a private tree have to ask for it by name */
+#include "core/dom/shadow_root.h"        /* §4.9's ELEMENT -> shadow root ASSOCIATION, a per-flow WRAPPER slot no
+                                            C walk can see — which is why BOTH halves of a private tree have to
+                                            ask for it by name, and is a different edge from the BASELINE
+                                            owning one the node-death dispatcher follows */
 #include "core/html/html_script.h"       /* §4.12.1's pair: `already started`, which §13.4's Inert mode sets */
 #include "core/html/media_element.h"     /* §4.8.11 — state on the wrapper, and no cloning steps at all */
 #include "core/html/nonce_attribute.h"   /* §2.5.6's pair, over every HTML element and not one tag */
@@ -1158,11 +1160,19 @@ static void dom_note_created_attr(lxb_dom_attr_t *a)
     dom_capture_end();
 }
 
-void dom_cow_note_created(lxb_dom_node_t *node)
+/* RETURNS WHETHER THE DELTA TOOK IT, exactly as its DOCUMENT twin below does and for the identical reason: a
+ * creation made with capture OFF is BASELINE, and baseline state needs an owner that outlives every delta.
+ * `false` is therefore not "nothing happened" — it is this seam telling its caller that the OTHER arm is now
+ * the caller's to take, which is the shape core/dom/document.c's `if (!dom_cow_note_created_document(dom))
+ * doc_realm_owns(ctx, d);` already states one kind up. A caller with only ONE possible owner ignores the
+ * answer and is right to: a node it created and then INSERTED is owned by the tree it went into, and the
+ * document's own destroy frees that. A caller whose node ends up in NO tree has two owners to choose between
+ * and must choose — see core/dom/shadow_root.c, whose node is a tree of its own. */
+bool dom_cow_note_created(lxb_dom_node_t *node)
 {
     DomUndo u;
     if (!g_dom_capture || !node)
-        return;
+        return false;
     /* ONE CLAIM PER NODE, ASSERTED WHERE THE CLAIM IS MADE — which is the only place it can be asserted once
        rather than at each of the twenty-odd callers. A second entry over one node is not a duplicate record,
        it is a second `lxb_dom_node_destroy_deep` at discard: dom_release_created nulls ITS OWN entry and knows
@@ -1190,6 +1200,7 @@ void dom_cow_note_created(lxb_dom_node_t *node)
     u.kind = 4; u.node = node; u.sh_old = u.sh_cur = JS_UNDEFINED;
     dom_undo_push(u);
     dom_capture_end();
+    return true;
 }
 
 void dom_cow_destroy_document(lxb_html_document_t *dom)
@@ -1231,10 +1242,12 @@ bool dom_cow_note_created_document(lxb_html_document_t *dom)
    IT WALKS EXACTLY WHAT THE FREE FREES, because an assertion over a different set answers a different
    question: child links, and a `<template>`'s CONTENT fragment, which is not a child and which
    core/dom/node_interface.c's destroy dispatcher follows for every node it is handed. A SHADOW ROOT is the
-   third tree and that dispatcher does not follow it — DOM §4.9 Interface Element's `attach a shadow root`
-   writes the element -> shadow root edge as a slot on the HOST'S WRAPPER, so no C walk can see it and the
-   dispatcher holds no realm to read it with (core/dom/node_heap.c's teardown DCHECK says exactly that). This
-   is where there IS a realm, which is why the question is asked here and why this entry takes one. */
+   third tree, and that dispatcher follows the BASELINE ones now — `lxb_dom_element_t::baseline_shadow_root`,
+   an owning C edge written by core/dom/shadow_root.c wherever the attach happened with capture off. It is
+   exactly the ones inside a PRIVATE tree that it still cannot follow, and not for want of a realm: a flow's
+   attach writes §4.9's association as a per-flow slot on the host's WRAPPER and leaves the node claimed by the
+   flow's delta, which is the second owner this walk exists to report. So the question is asked here, where
+   there is a realm to read that slot with, and this entry takes one for that reason. */
 static lxb_dom_element_t *dom_private_shadow_host_in(JSContext *ctx, lxb_dom_node_t *root)
 {
     lxb_dom_node_t *n = root, *content, *host;

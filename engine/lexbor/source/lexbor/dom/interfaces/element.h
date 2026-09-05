@@ -53,6 +53,28 @@ typedef lxb_status_t
                                  const lxb_char_t *value, size_t value_len,
                                  lxb_ns_id_t ns);
 
+/*
+ * DOM 4.8 "Interface ShadowRoot" AS AN OWNING EDGE, WHICH IS NOT 4.9's ASSOCIATION -- an embedder field, and
+ * the one reason this struct differs from upstream's.
+ *
+ * A shadow root is a THIRD tree hanging off an element. It is not a child, so no walk of `first_child` reaches
+ * it, and it is not `lxb_html_template_element_t::content`, so the one second-tree pointer this library
+ * already has does not name it either. Upstream declares `lxb_dom_shadow_root_t` and links to one from
+ * nowhere, so a shadow root allocated out of `mraw` is memory no destroy can find.
+ *
+ * IT IS NOT THE ANSWER TO WHICH SHADOW ROOT AN ELEMENT HAS, AND MUST NEVER BE READ AS ONE. 4.9's association
+ * is a PER-FLOW fact for an embedder that explores several futures of one page -- `attachShadow` in one arm of
+ * a fork must not be visible in the other -- so that embedder keeps it on the host's script wrapper, where its
+ * copy-on-write delta captures the write. This field is written ONLY where the attach happened before any such
+ * arm could exist, on a root every arm therefore sees, and it is never written again. So it is NULL for every
+ * shadow root a flow attached, and a reader that took it for the association would answer null for those. Its
+ * one consumer is the node-death dispatcher, whose question is which second tree DIES with this element, and
+ * which holds no script realm to ask the other one.
+ *
+ * NOT COPIED BY `lxb_dom_element_interface_copy`, deliberately and by that function already being written
+ * field by field: two elements naming one shadow root is two owners and a double free. A clone's shadow root
+ * is DOM 4.4 "clone a node" step 6's own, attached to the copy by the embedder.
+ */
 struct lxb_dom_element {
     lxb_dom_node_t                 node;
 
@@ -77,6 +99,9 @@ struct lxb_dom_element {
 
     lxb_dom_element_condition_t    condition;
     lxb_dom_element_custom_state_t custom_state;
+
+    /* DOM 4.8's shadow root, as an OWNING edge -- see the block above the struct. */
+    lxb_dom_shadow_root_t          *baseline_shadow_root;
 };
 
 

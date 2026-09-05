@@ -88,14 +88,15 @@ void node_heap_detach(lxb_dom_document_t *doc)
            element and from nowhere in any tree, and lexbor's per-tag HTML destructors free the element's own
            struct and follow neither. Both are freed with the element by core/dom/node_interface.c's destroy
            dispatcher, which is the one point every node death converges on, so the document tree walk, the
-           per-flow delta's kind-4 release and every other destroy carry them. What is left are the trees a walk
-           of CHILDREN still cannot reach and no C pointer names:
-             - A SHADOW ROOT. DOM §4.8's shadow root is a second tree exactly as a template's contents are, and
-               the element→shadow-root edge is on the host's WRAPPER (core/dom/shadow_root.c writes it as a slot
-               on the element's JS object, which is what `shadow_root_of_element` peeks), so no C walk can see
-               it and only the delta's kind-4 entry frees one. A shadow root attached while capture was off has
-               no owner at all, and node_interface.c's dispatcher cannot become that owner: it holds no realm,
-               so the edge it would have to follow is one it cannot read.
+           per-flow delta's kind-4 release and every other destroy carry them. A SHADOW ROOT was the third of
+           them and is not one any more: DOM §4.8's shadow root is a second tree exactly as a template's
+           contents are, and it used to have NO owner when the attach happened with capture off — which is
+           every declarative `<template shadowrootmode>` in a page's own markup, attached at document_install on
+           the host's own time. The edge the dispatcher would have had to follow was §4.9's ASSOCIATION, a slot
+           on the host's JS wrapper that it holds no realm to read; what it follows instead is an OWNING edge
+           in C, `lxb_dom_element_t::baseline_shadow_root`, which core/dom/shadow_root.c writes at exactly the
+           attaches this heap calls baseline. A flow's shadow root is still the delta's kind-4 entry, one owner
+           each. What is left are the trees a walk of CHILDREN still cannot reach and no C pointer names:
              - A node created while capture was off and then DETACHED. Kind 4 frees what a FLOW created; a
                creation outside one is baseline and its owner is the document it was made in, which frees its
                TREE and nothing that left it.
@@ -122,11 +123,13 @@ void node_heap_detach(lxb_dom_document_t *doc)
                 "TWICE text is an attribute list nothing freed; a TEXT, COMMENT or CDATASection is one of "
                 "each, so nodes at ROUGHLY text is character data; text at ZERO with nodes non-zero is "
                 "element or fragment structs alone. THEN THE MAGNITUDE. A HANDFUL is a second structure "
-                "reached from an element and from nowhere in any tree, which no walk of children can see "
-                "— DOM §4.8's shadow root is the one left, its edge from the host being a slot on the "
-                "host's WRAPPER, so only a per-flow delta's kind-4 entry ever frees one (§4.9's "
-                "attributes and §4.12.3's template contents are the same shape and are freed by "
-                "core/dom/node_interface.c's dispatcher). HUNDREDS, in proportion, is the ORDER instead: "
+                "reached from an element and from nowhere in any tree, which no walk of children can see. "
+                "The three of those — §4.9's attribute list, §4.12.3's template contents and DOM §4.8's "
+                "shadow root — are all freed with their element by core/dom/node_interface.c's "
+                "dispatcher now, the shadow root through the OWNING C edge shadow_root.c writes for a "
+                "BASELINE attach; a count in this range is therefore a FOURTH such structure, or one of "
+                "those three reached by a route that never went through that dispatcher. HUNDREDS, in "
+                "proportion, is the ORDER instead: "
                 "a delta released after this line rather than before it, leaving a whole flow's creations "
                 "live (and every one of them would then be freed out of an arena that is gone). A node "
                 "created while capture was off and then detached is the remaining shape and looks like "
