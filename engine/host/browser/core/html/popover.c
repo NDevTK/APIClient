@@ -79,6 +79,7 @@
 #include "core/dom/node.h"
 #include "core/dom/shadow_root.h"
 #include "core/events/event_target.h"
+#include "core/html/autofocus.h"
 #include "core/html/close_watcher.h"
 #include "core/html/enumerated_attribute.h"
 #include "core/html/focus.h"
@@ -1637,16 +1638,16 @@ static int popover_focusing_steps(JSContext *ctx, PopoverState *s, JSStepHdr *hd
     /* Step 6. */
     r = focus_element_run(docctx, s->control, &s->focus_phase, STEP_CB(s->cb), in, out_cb, out_argc);
     if (r) return r;
-    /* Steps 7-10 empty the TOP-LEVEL document's autofocus candidates and set its autofocus processed flag —
-       reachable only when step 3 or 4 produced a control, which in this build means the subject itself carried
-       `autofocus`. core/html/autofocus.c owns both, and neither is exported: its door is the insertion steps
-       that FILL the list and the flush that drains it. */
-    DFAIL("HTML §6.12 The popover attribute's popover focusing steps steps 7-10 resolve the control's node "
-          "navigable's top-level traversable's active document, compare origins, EMPTY that document's "
-          "AUTOFOCUS CANDIDATES and set its AUTOFOCUS PROCESSED FLAG — core/html/autofocus.c owns both and "
-          "exports neither (its doors are the insertion steps that fill the list and §6.6.7's flush that "
-          "drains it). Export the empty-and-mark pair from autofocus.c and call it here");
-    return 0;   /* release: the four steps above are skipped with the assert that names them */
+    /* Steps 7-10 — "let topDocument be control's node navigable's top-level traversable's active document",
+       the origin comparison, "empty topDocument's autofocus candidates" and "set topDocument's autofocus
+       processed flag to true". They are §6.6.7's state, so core/html/autofocus.c writes them, and they are the
+       SAME FOUR STEPS §4.11.4's dialog focusing steps end in — which is why they are one exported door there
+       rather than a copy here that html_dialog.c would later need a second of.
+       THE REALM IS THE CONTROL'S AND NOT THE SUBJECT'S. Both steps name `control`, and the two are the same
+       element only while step 4's autofocus-delegate arm is unbuilt; passing the subject's would answer step 8
+       about the wrong document the day that arm lands. */
+    autofocus_focusing_steps_tail(popover_document_realm(s->control));
+    return 0;
 }
 
 /* ---- §6.12's SHOW POPOVER and HIDE A POPOVER, and the three members over them ------------------------------- */

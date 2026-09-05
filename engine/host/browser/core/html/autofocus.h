@@ -50,6 +50,17 @@ int autofocus_element_inserted(lxb_dom_element_t *el, JSStepHdr *h, uint8_t *ua_
    would need the fork (a cross-origin-embedded one) rather than picking an arm for it. */
 void autofocus_document_parsed(JSContext *ctx);
 
+/* THE LAST FOUR STEPS OF HTML §6.12 The popover attribute's POPOVER FOCUSING STEPS AND OF HTML §4.11.4 The
+ * dialog element's DIALOG FOCUSING STEPS, which are the same four in both — steps 7-10 of each: resolve
+ * `control`'s node navigable's top-level traversable's active document, return if `control`'s node document is
+ * not same origin with it, then EMPTY that document's autofocus candidates and set its autofocus processed
+ * flag. Both algorithms are ten steps and both end here.
+ * It is §6.6.7's state, so it is this component's to write, and it is ONE door rather than two because the
+ * list and the flag are written together (see af_record's note in autofocus.c).
+ * `ctlctx` is the CONTROL's node document's realm — steps 7 and 8 name the control and not the subject.
+ * It runs NO page code and asks nothing unknown, so it is a plain call and not a request. */
+void autofocus_focusing_steps_tail(JSContext *ctlctx);
+
 /* HTML §8.1.7.3 update the rendering STEP 7 — "For each doc of docs, flush autofocus candidates for doc if its
  * node navigable is a top-level traversable."
  *

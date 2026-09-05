@@ -326,6 +326,51 @@ void autofocus_document_parsed(JSContext *ctx)
     }
 }
 
+/* ---- THE FOUR STEPS §6.12's AND §4.11.4's FOCUSING STEPS BOTH END IN ---------------------------------------
+ *
+ * HTML §6.12 The popover attribute's POPOVER FOCUSING STEPS and HTML §4.11.4 The dialog element's DIALOG
+ * FOCUSING STEPS are each ten steps, and their last four are the SAME four, word for word:
+ *   7. "Let topDocument be control's node navigable's top-level traversable's active document."
+ *   8. "If control's node document's origin is not the same as the origin of topDocument, then return."
+ *   9. "Empty topDocument's autofocus candidates."
+ *   10. "Set topDocument's autofocus processed flag to true."
+ * They live HERE and not at either caller because the state they act on is §6.6.7's, and because two copies of
+ * one sentence is two chances for one case to be read differently — the same argument this file's own
+ * top_document_realm note makes, and the reason §7.1.1's same-origin question has one answer in
+ * core/frame/window_proxy.c rather than one per asker.
+ *
+ * STEPS 9 AND 10 ARE ONE OPERATION AND ARE EXPORTED AS ONE. The note above af_record gives the reason: the two
+ * pieces of state are written together, and a reader that saw one without the other would run the whole
+ * algorithm a second time. Handing a caller two doors would let it take one.
+ *
+ * `ctlctx` IS THE CONTROL'S NODE DOCUMENT'S REALM — steps 7 and 8 both name `control`, not the subject, and the
+ * two are the same element only until a caller's autofocus-delegate arm lands. */
+void autofocus_focusing_steps_tail(JSContext *ctlctx)
+{
+    JSContext *topctx;
+    JSValue list;
+
+    DCHECK(g_ready, "a focusing steps tail reached §6.6.7 before autofocus_init declared its state");
+    /* A CONTROL WITH NO LIVE DOCUMENT REALM HAS NO NAVIGABLE, SO STEP 7 RESOLVES NO topDocument AND THERE IS
+       NOTHING FOR STEPS 9 AND 10 TO WRITE. This is a POSITIVE answer and not a swallowed error, which is why it
+       is a return and not an assert: step 6 has just run §6.6.4's focusing steps, which fire `blur`,
+       `focusout`, `focus` and `focusin` at the PAGE's own listeners, and one of those may navigate the
+       control's document away — so the null is a state a page produces, not one this engine's logic excludes,
+       and §WHOSE-BYTES-STATE-THE-VALUE reserves DCHECK for the second. It is also what keeps the dereference
+       below out of a release build that has no assert in front of it. */
+    if (!ctlctx) return;
+    topctx = top_document_realm(ctlctx);                                                    /* step 7 */
+    if (!topctx) return;
+    /* Step 8. §7.1.1's SAME ORIGIN over the two origin RECORDS, asked through the one place that answers it;
+       a top-level document is its own top, so this is true for one — INCLUDING one whose origin is opaque,
+       because §7.1.1 step 1 makes an opaque origin same origin with itself. */
+    if (!window_proxy_same_origin_with_top(ctlctx)) return;
+    list = af_candidates(topctx);
+    list_truncate(topctx, list, 0);                                                         /* step 9 */
+    JS_FreeValue(topctx, list);
+    af_mark_processed(topctx);                                                              /* step 10 */
+}
+
 /* ---- FLUSH AUTOFOCUS CANDIDATES, as a machine ---------------------------------------------------------------
  *
  * IT RESTS ONCE PER CANDIDATE, and that is not decoration: step 5 is a `while` over a list a page controls the
