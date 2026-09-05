@@ -6334,6 +6334,75 @@ static void exposure_selftest(JSContext *ctx, const char *top_level_url)
            FALSE in the Window arm because that global has no §3.7.3 chain until window_install runs, TRUE in
            the worker arm because that global's chain reaches §2.7's prototype from its own realm intrinsic. */
         { "addEventListener",  false, true },
+        /* THE FETCH AND FILE API GROUP'S SIX, AND THE THREE NAMES THAT DO NOT MOVE WITH THEM. Fetch §5.1
+           "Headers class", §5.4 "Request class" and §5.5 "Response class" each declare
+           `[Exposed=(Window,Worker)]`, and File API §3 "The Blob Interface and Binary Data", §4 "The File
+           Interface" and §6.2 "The FileReader API" declare the same set — so a realm whose global names are a
+           DedicatedWorkerGlobalScope's owes all six, and every one of them was placed from core/platform.c's
+           per-document column, which such a realm never reaches. Two standards, five components and three
+           core/platform.c rows, which is why all six are listed: the banner above records `MessagePort` for
+           exactly this reason, and core/file/blob.c offers that mistake inside ONE FUNCTION — `Blob` and
+           `File` are minted four lines apart there, with `File.prototype` chained to `Blob.prototype`, so a
+           conversion that carried the first and dropped the second leaves every member answering and only the
+           page-visible constructor name gone.
+           `fetch` IS THE DISCRIMINATING ROW AND IT GUARDS THE LARGEST LOSS IN THIS CONVERSION. Fetch §5.6
+           "Fetch methods" declares it on `partial interface mixin WindowOrWorkerGlobalScope`, so it is a
+           MEMBER — Web IDL §3.7.7 "Operations" over a [Global] object's own interface chain — and Web IDL
+           Web IDL §3.8 "Platform objects implementing interfaces" defines no property reference for it
+           anywhere. Its install is the LAST LINE of core/fetch/fetch.c's fetch_install, the same per-document
+           entry the three interface objects above have just left — so the conversion the four commits before
+           this one each describe, in which the per-document thunk and its core/platform.c install entry both
+           go, takes `fetch` out of EVERY realm, Window included. That is `ProgressEvent`'s mistake with a MEMBER in the place of an
+           interface object, and it is worse in its consequence: `fetch` is the one name this whole engine
+           exists to watch a bundle call. Under it this row reads `true` in both arms and fails twice; the six
+           rows above pass. It is also a name IDL_EXPOSURE cannot back up — a member has no row there, so
+           `idl_exposed_in_realm("fetch")` answers TRUE — and browser/idl_exposure.h's IDL_MEMBER_EXPOSURE
+           states (Window, Worker) for it, which is the OTHER thing this row says: a worker realm is owed the
+           member and does not get it, and core/workers/worker_global_scope.c's item (7) already names this
+           component's `fetch` as one of the members it owes. `false` in the worker arm is therefore that
+           known absence and `false` in the Window arm is this table's own moment, exactly as the six
+           `[Exposed=Window]` rows above say those two halves apart.
+           `Body` IS `TextDecoderCommon`'S TEST OVER THIS STANDARD, AND BOTH MOVED FETCH INTERFACES INCLUDE IT.
+           Fetch §5.3 "Body mixin" is an `interface mixin`, and Web IDL §3.7.1 "Interface object" is written of
+           an interface, so a mixin has no interface object and Web IDL §3.8 step 1's population ("every interface that
+           is exposed in realm") does not contain it — while `Request includes Body` and `Response includes
+           Body`, and this engine physically installs the mixin's members from core/fetch/body.c into BOTH
+           prototypes the diff below touches. So the wrong answer is not theoretical here: a conversion that
+           placed what its component's IDL declares rather than what Web IDL §3.8 enumerates has the mixin in hand at
+           the moment it mints. It is blind to browser/idl_exposure.h for the reason that header states in as
+           many words — a name with no row is EXPOSED, and a mixin gets no row — so
+           `idl_exposed_in_realm("Body")` answers TRUE and the door would place the name in BOTH realms
+           without a word.
+           `FileList` IS THIS GROUP'S `ProgressEvent`, AND IT IS THAT ROW'S SHAPE TWICE OVER. File API §5
+           "The FileList Interface" is `[Exposed=(Window,Worker)]` and shares core/platform.c's `blob` row with
+           the two interfaces above — blob_init's LAST LINE is `file_list_init(ctx)`, exactly the tail-call
+           position XHR §5's install stood in — and its Web IDL §3.8 property reference was ALREADY placed by
+           its own realm intrinsic, so that call is the only thing keeping it. So one of that row's three names
+           reached every realm and the other two reached only a Window with a Document over it, which the row
+           itself cannot show; and a conversion that rebuilds blob_init or blob_install_protos and drops the
+           call takes `FileList` out of EVERY realm while `Blob` and `File` go on passing. It reads `true` in
+           both arms before this change and after it.
+           AT THE PARENT REVISION the six `[Exposed=(Window,Worker)]` rows FAIL in BOTH arms, because this runs
+           after tf_agent_init and before tf_realm_install reaches platform_document_install, so no document
+           column has run over either realm. `fetch`, `Body` and `FileList` read the same at the parent as
+           here; they are discriminators against a wrong conversion, never calibration rows, and are reported
+           as such. Established by READING main's call order and core/platform.c's two columns, never by a
+           run — a subagent does not build. */
+        { "Headers",                          true,  true  },  /* Fetch §5.1 "Headers class" */
+        { "Request",                          true,  true  },  /* Fetch §5.4 "Request class" */
+        { "Response",                         true,  true  },  /* Fetch §5.5 "Response class" */
+        { "Blob",                             true,  true  },  /* File API §3 "The Blob Interface and Binary Data" */
+        /* File API §4 "The File Interface" — its prototype chains to Blob.prototype, minted four lines away */
+        { "File",                             true,  true  },
+        { "FileReader",                       true,  true  },  /* File API §6.2 "The FileReader API" */
+        /* File API §5 "The FileList Interface" — the `blob` row's third name, and the realm column's already */
+        { "FileList",                         true,  true  },
+        /* Fetch §5.6 "Fetch methods"' MEMBER, which stays in the per-document column — no Web IDL §3.8
+           property reference exists for it, and this row is what catches the conversion that removed it */
+        { "fetch",                            false, false },
+        /* Fetch §5.3 "Body mixin" — a MIXIN that BOTH `Request` and `Response` include, so no Web IDL §3.8
+           property reference exists for it anywhere */
+        { "Body",                             false, false },
         /* THE STREAMS STANDARD'S THIRTEEN, WHICH IS EVERY INTERFACE IT DECLARES, AND THE MIXIN THAT IS NOT
            ONE OF THEM. §4.2 "The ReadableStream class", §4.4 "The ReadableStreamDefaultReader class", §4.5
            "The ReadableStreamBYOBReader class", §4.6 "The ReadableStreamDefaultController class", §4.7 "The
