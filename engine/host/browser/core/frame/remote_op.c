@@ -189,8 +189,18 @@ RemoteOp *remote_op_parse(const char *record)
           "document, whose cross-instance arm in core/html/html_iframe.c names the member `document` after "
           "filtering for same origin-domain. That read is legitimate and this refusal is still right, because "
           "the RECORD carries no claim about who is asking and a receiver cannot tell that emitter from an "
-          "untrusted instance naming the same member. What it needs is a verb of its own, and an answer: a "
-          "Document is an OBJECT, which crosses only once core/frame/remote_object.c can name one");
+          "untrusted instance naming the same member. WHAT IT NEEDS IS A VERB OF ITS OWN, and that is the "
+          "whole of what it needs: this clause used to end \"a Document is an OBJECT, which crosses only "
+          "once core/frame/remote_object.c can name one\", and remote_object.c NAMES ONE — `o`/`f`/`c` as "
+          "`<document>:<generation>:<id>`, minted by remote_object_export, with remote_completion_encode "
+          "layering a completion over it. A next-diff clause is a claim about THIS TREE and it had gone "
+          "stale in the direction that gets EXECUTED: the one reader it has is someone who has already "
+          "decided to do the work, and it would have sent them to build the ANSWER, which exists, instead "
+          "of the QUESTION, which does not. §7.3.1.3 \"Child navigables\"' content document cannot borrow "
+          "this verb either — it filters on same origin-DOMAIN rather than on the list above, and yields a "
+          "Document rather than a window member — so it takes a row of its own in OPS whose program runs "
+          "§7.3.1.3 steps 2-4 here. core/html/html_iframe.c now DFAILs at the emitter rather than sending a "
+          "record this line must kill an agent over");
     /* AND THAT THE ENTRY IS §7.2.1.3.4's ACCESSOR BRANCH, ASKED IN THE SAME BREATH AND OFF THE SAME LOOKUP.
        §7.2.1.3.1 writes each entry with its [[NeedsGetter]] and [[NeedsSetter]], and the lookup above returns
        the RECORD rather than a boolean precisely so the second question needs no second table. An entry with

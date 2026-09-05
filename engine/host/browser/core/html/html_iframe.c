@@ -751,6 +751,46 @@ static int iframe_content_document_step(JSContext *ctx, JSStepHdr *hdr, void *st
             JS_FreeValue(ctx, nav);
             return JS_STEP_DONE;
         }
+        /* AND A CROSS-INSTANCE CONTENT DOCUMENT HAS NO VERB — WHICH IS A DEFECT AT THIS LINE AND NOT AT THE
+           PEER'S. §7.3.1.3's step 4 returns a DOCUMENT, and the record built below asks for it as though it
+           were a §7.2.1 window member: `windowproxy.get … document`. §7.2.1.3.1 CrossOriginProperties ( O )
+           does not list `document`, so the receiving instance CHECK-aborts inside remote_op_parse the moment
+           this record arrives. THAT ABORT IS CORRECT AND IT IS UNREADABLE: remote_op_parse is ONE line shared
+           by every cross-agent operation, in ANOTHER PROCESS, and its message can name neither
+           `contentDocument`, nor this frame, nor the origin pair that reached it — CLAUDE.md's assert that
+           names a remedy but not a site, with a process boundary standing between the two. So the crash is
+           raised HERE, where all three are in hand.
+           IT IS REACHED, BY §7.1.1 "Origins"' OWN TABLE RATHER THAN BY A CONTRIVANCE. Two documents on one
+           host at DIFFERENT PORTS are not same origin — origin_same compares the port, so child_in_this_agent
+           sent this child to an instance of its own — and they ARE same origin-domain once both have run
+           §7.1.1.2's `document.domain` setter, because §7.1.1's step 2.1 compares SCHEME and DOMAIN and never
+           looks at the port. That is the FIRST of the two disagreeing rows origin.c spells out above
+           origin_same_origin_domain. Step 3's filter therefore passes and this arm runs.
+           WHAT THE NEXT DIFF BUILDS IS THE VERB, AND NOT AN OBJECT HANDLE — the distinction matters because
+           the CHECK this record currently dies on says the second, and the second already exists.
+           core/frame/remote_object.c names an object TODAY (`o`/`f`/`c` as `<document>:<generation>:<id>`,
+           minted by remote_object_export, which holds a reference so the export outlives every other), and
+           remote_completion_encode layers a completion over it. So the ANSWER has a grammar and only the
+           QUESTION does not. §7.3.1.3's content document must not borrow §7.2.1's verb either: it filters on
+           same origin-DOMAIN rather than on §7.2.1.3.1's fixed list, and it yields the peer's Document rather
+           than a window member, so it takes a ROW OF ITS OWN in remote_op.c's OPS table whose program runs
+           §7.3.1.3 steps 2-4 in the instance that HOLDS the document.
+           HOW ITS ABSENCE SHOWS: in dev, this DFAIL. In release it is compiled out, the record below goes on
+           the wire unchanged, and the receiving instance takes remote_op_parse's CHECK — a whole agent lost,
+           one process away, for an `iframe.contentDocument` read. */
+        DFAIL("HTML §4.8.5 \"The iframe element\"' `contentDocument` reached §7.3.1.3 \"Child navigables\"' "
+              "step 4 for a child navigable in ANOTHER INSTANCE. Step 3's filter is same origin-DOMAIN, which "
+              "§7.1.1 \"Origins\" makes TRUE for two documents differing only in PORT once both have set "
+              "`document.domain` (step 2.1 compares scheme and domain and never the port), while origin_same "
+              "makes those same two documents different agents — so this arm is reachable and this is it. "
+              "Step 4 returns a DOCUMENT and this seam carries no verb that asks for one: the record below "
+              "spells the ask as `windowproxy.get … document`, §7.2.1.3.1 CrossOriginProperties ( O ) does "
+              "not list `document`, and the PEER therefore CHECK-aborts in remote_op_parse — in another "
+              "process, on a line every cross-agent operation shares, unable to name this read. BUILD THE "
+              "VERB: a row of its own in remote_op.c's OPS table whose program runs §7.3.1.3 steps 2-4 in the "
+              "instance holding the document and answers through remote_completion_encode over "
+              "core/frame/remote_object.c's object name — that name already exists (remote_object_export), so "
+              "what is missing is the QUESTION and not the ANSWER");
         DCHECK(f != NULL, "a cross-document read was issued outside a flow — there would be nothing to suspend");
         /* THE WORLD VECTOR IS world_serialize'S AND NOBODY ELSE'S (solver/world.h), and this site was the
            second spelling of it — the head written by hand, then a hand-rolled loop over world_ancestry. Two
