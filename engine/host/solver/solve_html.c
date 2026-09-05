@@ -39,7 +39,10 @@ typedef struct {
     int kind;
     const lxb_char_t *tag;  size_t tag_n;    /* the element holding it: a text node's PARENT, an attribute's OWNER */
     const lxb_char_t *attr; size_t attr_n;   /* the attribute's name  — LOC_ATTR_VALUE / LOC_ATTR_NAME only */
-    const lxb_char_t *val;  size_t val_n;    /* the attribute's value — LOC_ATTR_VALUE only */
+    /* WHAT THE LOCATOR IS ACTUALLY SITTING IN: the attribute's value for LOC_ATTR_VALUE, and the character
+       data for LOC_TEXT / LOC_COMMENT. One field because it is one question — the bytes the discrimination
+       re-parses below read back to see what the spliced character did to them. */
+    const lxb_char_t *val;  size_t val_n;
     lxb_dom_element_t *el;                   /* the owning element    — LOC_ATTR_VALUE / LOC_ATTR_NAME */
     /* THE LOCATOR BEGINS THE TAG NAME — LOC_TAG_NAME only. It decides whether the attacker CHOOSES the
        element or merely extends the name the page opened, which is the difference between an escape that
@@ -138,6 +141,7 @@ static int locate(lxb_html_document_t *doc, Locate *out) {
             const lxb_dom_character_data_t *cd = (const lxb_dom_character_data_t *)n;
 
             if (!mem_has(cd->data.data, cd->data.length, SOLVE_HTML_LOCATOR)) continue;
+            out->val = cd->data.data; out->val_n = cd->data.length;
             if (n->type == LXB_DOM_NODE_TYPE_COMMENT) out->kind = LOC_COMMENT;
             else {
                 out->kind = LOC_TEXT;
@@ -346,22 +350,23 @@ static int tag_open_is_live(const char *witness, size_t at) {
     size_t wl = 0;
     char *w = splice(witness, at, "<" SOLVE_HTML_PAD ">", &wl);
     lxb_html_document_t *doc = dom_document_create();
-    int found = 0;
+    int live = 0;
 
     CHECK(doc != NULL, "solve_html: OOM creating a CDATA-section discrimination parse");
     if (html_parse_document(doc, DOM_PARSE_ROOT_PRIVATE, HTML_SCRIPTING_DISABLED, (const lxb_char_t *)w, wl) == LXB_STATUS_OK) {
-        lxb_dom_node_t *root = lxb_dom_interface_node(&doc->dom_document), *n;
-
-        for (n = root->first_child; n != NULL && !found; n = walk_next(n, root)) {
-            size_t tl = 0;
-            if (n->type != LXB_DOM_NODE_TYPE_ELEMENT) continue;
-            found = name_is(lxb_dom_element_qualified_name(lxb_dom_interface_element(n), &tl),
-                            tl, SOLVE_HTML_PAD);
-        }
+        Locate lo;
+        /* THE ANSWER IS READ OFF THE LOCATOR'S OWN NODE, never off the document. A `<` the tokenizer
+           consumed as §13.2.5.6 "Tag open state" is GONE from the text it was standing in; one it consumed
+           as a character token is still sitting there beside the locator. Walking the tree for the filler
+           ELEMENT instead would answer the same question by a route a page can confuse — it would report
+           the data state for a document that already ships an element of that name, and report it for a
+           CDATA hole, which is the direction that emits an escape the section cannot be left by. */
+        if (locate(doc, &lo) && lo.kind == LOC_TEXT)
+            live = !mem_has(lo.val, lo.val_n, SOLVE_HTML_PAD);
     }
     dom_document_destroy(doc);
     free(w);
-    return found;
+    return live;
 }
 
 static HoleState attr_state_of(const char *witness, size_t at) {
