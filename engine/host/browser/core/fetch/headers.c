@@ -1357,12 +1357,22 @@ void headers_init(JSContext *ctx)
     realm_declare_intrinsic(headers_install_proto);
 }
 
-/* §5.1's INTERFACE PROTOTYPE OBJECT, FOR ONE REALM. */
+/* FETCH §5.1 "Headers class"' INTERFACE PROTOTYPE OBJECT *AND* ITS INTERFACE OBJECT, FOR ONE REALM.
+   §5.1 declares `[Exposed=(Window,Worker)] interface Headers`, and Web IDL §3.8 "Platform objects implementing
+   interfaces"' `define the global property references` is "To define the global property references on target,
+   given realm realm" whose step 1 is "Let interfaces be a list that contains every interface that is exposed
+   in realm" — a REALM, with no Document anywhere in the algorithm. The interface object used to be placed from
+   core/platform.c's per-DOCUMENT column through a `headers_install`, so a realm that reaches no
+   platform_document_install got no `Headers` at all — a worker realm always, and a Window realm until a
+   Document was installed over it. It is minted here instead, beside the prototype this function has already
+   built, which is also what removes the JS_GetClassProto re-read that entry made: a second answer to a
+   question settled four lines up. */
 void headers_install_proto(JSContext *ctx)
 {
-    JSValue proto, prev;
+    JSValue proto, prev, ctor, global;
 
     DCHECK(g_headers_class != 0, "a realm asked for Headers.prototype before the class was declared");
+    DCHECK(g_ctor_stepid >= 0, "a realm asked for Headers before headers_init declared its constructor");
     prev = JS_GetClassProto(ctx, g_headers_class);
     DCHECK(JS_IsNull(prev), "headers_install_proto ran twice in one realm");
     JS_FreeValue(ctx, prev);
@@ -1377,7 +1387,17 @@ void headers_install_proto(JSContext *ctx)
     idl_install_method(ctx, proto, "has", g_id[HDR_HAS]);
     idl_install_method(ctx, proto, "getSetCookie", g_id[HDR_GETSETCOOKIE]);
     idl_pair_iter_install(ctx, proto, g_pair_handle);
+
+    ctor = idl_step_constructor(ctx, "Headers", g_ctor_stepid);
+    CHECK(!JS_IsException(ctor), "the Headers interface object could not be allocated");
+    JS_SetConstructor(ctx, ctor, proto);
+    /* THE HANDOVER IS LAST: JS_SetClassProto TAKES the reference, so `proto` is this function's until the realm
+       owns it, and the Web IDL §3.7.1 Interface object pairing above reads a local rather than a class slot it has
+       given away. */
     JS_SetClassProto(ctx, g_headers_class, proto);
+    global = JS_GetGlobalObject(ctx);
+    idl_define_global_property_reference(ctx, global, "Headers", ctor);
+    JS_FreeValue(ctx, global);
 }
 
 /* The prototype and the interned name are this component's for the runtime's life, so they are released WITH
@@ -1392,18 +1412,4 @@ void headers_free(JSContext *ctx)
     g_ctor_stepid = -1;
 }
 
-void headers_install(JSContext *ctx, JSValueConst global)
-{
-    JSValue ctor;
 
-    DCHECK(g_ctor_stepid >= 0, "Headers was installed before headers_init declared its constructor");
-    ctor = idl_step_constructor(ctx, "Headers", g_ctor_stepid);
-    CHECK(!JS_IsException(ctor), "the Headers interface object could not be allocated");
-    {
-        JSValue proto = JS_GetClassProto(ctx, g_headers_class);
-        DCHECK(!JS_IsNull(proto), "Headers was installed into a realm that never ran its proto build");
-        JS_SetConstructor(ctx, ctor, proto);
-        JS_FreeValue(ctx, proto);
-    }
-    idl_define_global_property_reference(ctx, global, "Headers", ctor);
-}

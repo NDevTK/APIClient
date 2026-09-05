@@ -828,9 +828,18 @@ void file_reader_init(JSContext *ctx)
     realm_declare_intrinsic(file_reader_install_proto);
 }
 
+/* FILE API §6.2 "The FileReader API"' INTERFACE PROTOTYPE OBJECT *AND* ITS INTERFACE OBJECT, FOR ONE REALM.
+   §6.2 declares `[Exposed=(Window,Worker)] interface FileReader: EventTarget`, and Web IDL §3.8 "Platform
+   objects implementing interfaces"' `define the global property references` is "To define the global property
+   references on target, given realm realm" whose step 1 is "Let interfaces be a list that contains every
+   interface that is exposed in realm" — a REALM, with no Document in the algorithm. The interface object was
+   placed from core/platform.c's per-DOCUMENT column, so a realm that reaches no platform_document_install got
+   no `FileReader`: a worker realm always, and a Window realm until a Document was installed over it. Minting
+   it here also removes the JS_GetClassProto re-read that entry made, which was a second answer to a question
+   this function had just settled. */
 void file_reader_install_proto(JSContext *ctx)
 {
-    JSValue proto, prev;
+    JSValue proto, prev, ctor, global;
 
     DCHECK(g_ready, "a realm asked for FileReader.prototype before file_reader_init declared it");
     prev = JS_GetClassProto(ctx, g_fr_class);
@@ -853,23 +862,22 @@ void file_reader_install_proto(JSContext *ctx)
     idl_install_method(ctx, proto, "readAsText", g_id_read[FILE_READ_TEXT]);
     idl_install_method(ctx, proto, "readAsDataURL", g_id_read[FILE_READ_DATA_URL]);
     idl_install_method(ctx, proto, "abort", g_abort_stepid);
-    JS_SetClassProto(ctx, g_fr_class, proto);
-}
 
-void file_reader_install(JSContext *ctx, JSValueConst global)
-{
-    JSValue ctor, proto;
-
-    DCHECK(g_ready, "FileReader was installed before file_reader_init declared it");
+    /* §6.2's INTERFACE OBJECT, on THIS realm's global. Web IDL §3.7.5 "Constants" puts the four state values
+       on the interface object AND on the prototype, which is why FR_CONSTANTS is installed twice and not
+       moved. */
     ctor = JS_NewCFunction2(ctx, js_fr_ctor, "FileReader", 0, JS_CFUNC_constructor, 0);
     CHECK(!JS_IsException(ctor), "the FileReader interface object could not be allocated");
     JS_SetPropertyFunctionList(ctx, ctor, FR_CONSTANTS,
                                (int)(sizeof(FR_CONSTANTS) / sizeof(FR_CONSTANTS[0])));
-    proto = JS_GetClassProto(ctx, g_fr_class);
-    DCHECK(!JS_IsNull(proto), "FileReader was installed into a realm that never ran its proto build");
     JS_SetConstructor(ctx, ctor, proto);
-    JS_FreeValue(ctx, proto);
+    /* THE HANDOVER IS LAST: JS_SetClassProto TAKES the reference, so `proto` is this function's until the realm
+       owns it, and the Web IDL §3.7.1 Interface object pairing above reads a local rather than a class slot it
+       has given away. */
+    JS_SetClassProto(ctx, g_fr_class, proto);
+    global = JS_GetGlobalObject(ctx);
     idl_define_global_property_reference(ctx, global, "FileReader", ctor);
+    JS_FreeValue(ctx, global);
 }
 
 void file_reader_free(JSRuntime *rt)

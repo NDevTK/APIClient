@@ -7,8 +7,11 @@
 #include "core/fetch/headers.h"
 
 void    response_init(JSContext *ctx);   /* register the class, its prototype and its machines (install time) */
-void    response_install_proto(JSContext *ctx);   /* §5.5's prototype and serializer, for ONE realm */
-void    response_install(JSContext *ctx, JSValueConst global);   /* the Response interface object */
+/* Fetch §5.5 "Response class"' prototype, its serializer AND its interface object with §5.5's two statics, for
+   ONE realm — Web IDL §3.8 "Platform objects implementing interfaces" is given a realm and names no Document,
+   and §5.5 is `[Exposed=(Window,Worker)]`, so the name is owed by a realm that reaches no per-document
+   install. */
+void    response_install_proto(JSContext *ctx);
 void    response_free(JSContext *ctx);   /* the prototype this component holds */
 /* §2.2.6's URL LIST, from the SERIALIZED URLs a host observed — "a list of zero or more URLs", of which only
    the FIRST and the LAST are ever exposed to script (the spec says so, and it is why atomic HTTP redirect

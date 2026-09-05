@@ -1558,9 +1558,23 @@ void fetch_install(JSContext *ctx, JSValueConst global)
                                 "prototypes are per-realm intrinsics, and a component that declares itself from "
                                 "inside a per-DOCUMENT install declares itself after the agent's own realm has "
                                 "already built its list");
-    headers_install(ctx, global);   /* §5.1's interface object — a page builds an init with it before it fetches */
-    response_install(ctx, global);  /* §5.5's — a page constructs one to seed a cache or a service-worker path */
-    request_install(ctx, global);   /* §5.4's — `fetch(new Request(u, init))` is how half of real code calls it */
+    /* THE THREE INTERFACE OBJECTS ARE NOT PLACED FROM HERE ANY MORE, and this entry is not therefore empty.
+       §5.1 "Headers class", §5.4 "Request class" and §5.5 "Response class" each declare
+       `[Exposed=(Window,Worker)]`, and Web IDL §3.8 "Platform objects implementing interfaces"' `define the
+       global property references` is "To define the global property references on target, given realm realm"
+       whose step 1 is "Let interfaces be a list that contains every interface that is exposed in realm" — a
+       REALM, with no Document in the algorithm. Each of the three is now minted by its own component's
+       per-realm intrinsic beside the prototype it already built there, so a realm this per-DOCUMENT entry
+       never runs over gets all three.
+       WHAT STAYS IS §5.6's MEMBER, AND IT IS A DIFFERENT QUESTION. `fetch` is not an interface object: §5.6
+       "Fetch methods" declares it on `partial interface mixin WindowOrWorkerGlobalScope`, so it is Web IDL
+       §3.7.7 "Operations" over a [Global] object's own interface chain rather than Web IDL §3.8's property
+       reference,
+       and browser/idl_exposure.h states its member row as (Window, Worker) rather than through IDL_EXPOSURE.
+       A worker realm is owed it and does not get it here — core/workers/worker_global_scope.c's item (7)
+       already records that by name, naming this component's `fetch` as one of the members it owes and naming
+       the receiver resolution underneath it as the subproblem — so moving it is that entry's diff and not this
+       one. Deleting this entry along with the three above would take `fetch` out of EVERY realm. */
     /* Fetch §5.6 "Fetch methods"' member, through the declaration — so its `length` is Web IDL §3.7.7 Operations' own number
        (min of the first optional position and the declared count, which is 1) rather than one written here,
        and so the argument conversion a page can observe is the platform's and not this file's. */

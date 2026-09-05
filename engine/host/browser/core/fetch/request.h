@@ -7,8 +7,10 @@
 #include "core/idl_args.h"
 
 void request_init(JSContext *ctx);
-void request_install_proto(JSContext *ctx);   /* §5.4's prototype, for ONE realm */
-void request_install(JSContext *ctx, JSValueConst global);
+/* Fetch §5.4 "Request class"' prototype AND its interface object, for ONE realm — Web IDL §3.8 "Platform
+   objects implementing interfaces" is given a realm and names no Document, and §5.4 is
+   `[Exposed=(Window,Worker)]`, so the name is owed by a realm that reaches no per-document install. */
+void request_install_proto(JSContext *ctx);
 void request_free(JSContext *ctx);
 
 /* IS THIS VALUE A Request — the BRAND, which is what Web IDL's `RequestInfo = Request or USVString` union

@@ -8,8 +8,11 @@
 #include "quickjs.h"
 
 void blob_init(JSContext *ctx);
-void blob_install_protos(JSContext *ctx);   /* §3.1's and §4's prototypes, for ONE realm */
-void blob_install(JSContext *ctx, JSValueConst global);
+/* File API §3 "The Blob Interface and Binary Data"' and §4 "The File Interface"' prototypes AND their two
+   interface objects, for ONE realm — Web IDL §3.8 "Platform objects implementing interfaces" is given a realm
+   and names no Document, and both sections are `[Exposed=(Window,Worker)]`, so both names are owed by a realm
+   that reaches no per-document install. */
+void blob_install_protos(JSContext *ctx);
 void blob_free(JSContext *ctx);
 
 /* BUILD ONE from bytes the host already holds — Fetch's `blob()` reader, and every other spec that answers with

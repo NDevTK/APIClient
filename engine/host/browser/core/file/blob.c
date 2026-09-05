@@ -965,12 +965,27 @@ void blob_init(JSContext *ctx)
     file_list_init(ctx);
 }
 
-/* §3.1's AND §4's INTERFACE PROTOTYPE OBJECTS, FOR ONE REALM. */
+/* FILE API §3 "The Blob Interface and Binary Data"' AND §4 "The File Interface"' INTERFACE PROTOTYPE OBJECTS
+   *AND* THEIR INTERFACE OBJECTS, FOR ONE REALM.
+   BOTH NAMES ARE PLACED HERE AND NOT FROM A PER-DOCUMENT INSTALL. §3 declares
+   `[Exposed=(Window,Worker), Serializable] interface Blob` and §4 `[Exposed=(Window,Worker), Serializable]
+   interface File : Blob`, and Web IDL §3.8 "Platform objects implementing interfaces"' `define the global
+   property references` is "To define the global property references on target, given realm realm" whose step 1
+   is "Let interfaces be a list that contains every interface that is exposed in realm" — a REALM, and the
+   algorithm names no Document. A realm that reaches no platform_document_install therefore got neither name:
+   a worker realm always, and a Window realm until a Document was installed over it. §5's FileList already did
+   it this way (file_list_install_protos), which is the shape routed to here rather than re-invented.
+   THE TWO GO TOGETHER BECAUSE ONE FUNCTION PLACES BOTH — an edit that carried `Blob` across and left `File`
+   behind is the sibling-drop core/events/message_port.c records for MessagePort/MessageChannel, and
+   `File.prototype` chains to `Blob.prototype` here, so the survivor would go on answering every member and
+   only the page-visible constructor name would be gone. */
 void blob_install_protos(JSContext *ctx)
 {
-    JSValue blob_p, file_p, prev;
+    JSValue blob_p, file_p, prev, ctor, global;
 
     DCHECK(g_blob_class != 0, "a realm asked for Blob.prototype before the class was declared");
+    DCHECK(g_blob_ctor_stepid >= 0, "a realm asked for Blob before blob_init declared its constructor");
+    DCHECK(g_file_ctor_stepid >= 0, "a realm asked for File before blob_init declared its constructor");
     prev = JS_GetClassProto(ctx, g_blob_class);
     DCHECK(JS_IsNull(prev), "blob_install_protos ran twice in one realm");
     JS_FreeValue(ctx, prev);
@@ -993,7 +1008,6 @@ void blob_install_protos(JSContext *ctx)
     idl_install_method(ctx, blob_p, "textStream", g_blob_textstream_stepid);
     idl_install_method(ctx, blob_p, "slice", g_blob_id_slice);
     byte_reader_install(ctx, blob_p, g_blob_reader_handle);
-    JS_SetClassProto(ctx, g_blob_class, blob_p);
 
     /* §4: `interface File : Blob`. The prototype CHAINS to Blob.prototype, so a File's `slice`, `text` and
        `size` are the same functions rather than copies — and its instances wear the same class id, so every
@@ -1003,32 +1017,24 @@ void blob_install_protos(JSContext *ctx)
     idl_interface_tag(ctx, file_p, "File");
     idl_install_accessor(ctx, file_p, "name", js_blob_get, FILE_NAME, -1);
     idl_install_accessor(ctx, file_p, "lastModified", js_blob_get, FILE_LAST_MODIFIED, -1);
-    JS_SetClassProto(ctx, g_file_class, file_p);
-}
 
-void blob_install(JSContext *ctx, JSValueConst global)
-{
-    JSValue ctor;
-    DCHECK(g_blob_ctor_stepid >= 0, "Blob was installed before blob_init declared its constructor");
+    /* §3's AND §4's INTERFACE OBJECTS, on THIS realm's global. Both are minted while the two prototypes are
+       still LOCALS: JS_SetClassProto TAKES the reference, so the Web IDL §3.7.1 Interface object pairing reads
+       what this function owns rather than a class slot it has already given away. */
+    global = JS_GetGlobalObject(ctx);
     ctor = idl_step_constructor(ctx, "Blob", g_blob_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the Blob interface object could not be allocated");
-    {
-        JSValue proto = JS_GetClassProto(ctx, g_blob_class);
-        DCHECK(!JS_IsNull(proto), "Blob was installed into a realm that never ran its proto build");
-        JS_SetConstructor(ctx, ctor, proto);
-        JS_FreeValue(ctx, proto);
-    }
+    JS_SetConstructor(ctx, ctor, blob_p);
     idl_define_global_property_reference(ctx, global, "Blob", ctor);
 
     ctor = idl_step_constructor(ctx, "File", g_file_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the File interface object could not be allocated");
-    {
-        JSValue proto = JS_GetClassProto(ctx, g_file_class);
-        DCHECK(!JS_IsNull(proto), "File was installed into a realm that never ran its proto build");
-        JS_SetConstructor(ctx, ctor, proto);
-        JS_FreeValue(ctx, proto);
-    }
+    JS_SetConstructor(ctx, ctor, file_p);
     idl_define_global_property_reference(ctx, global, "File", ctor);
+    JS_FreeValue(ctx, global);
+
+    JS_SetClassProto(ctx, g_blob_class, blob_p);
+    JS_SetClassProto(ctx, g_file_class, file_p);
 }
 
 void blob_free(JSContext *ctx)

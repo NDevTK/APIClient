@@ -1241,13 +1241,26 @@ void request_init(JSContext *ctx)
     realm_declare_intrinsic(request_install_proto);
 }
 
-/* §5.4's INTERFACE PROTOTYPE OBJECT, FOR ONE REALM — `url` resolves against the READING realm's API base URL,
-   so a shared one answers a child document's `new Request("api/x").url` with the parent's address. */
+/* FETCH §5.4 "Request class"' INTERFACE PROTOTYPE OBJECT *AND* ITS INTERFACE OBJECT, FOR ONE REALM — `url`
+   resolves against the READING realm's API base URL, so a shared one answers a child document's
+   `new Request("api/x").url` with the parent's address.
+   THE INTERFACE OBJECT IS MINTED HERE AND NOT FROM A PER-DOCUMENT INSTALL. §5.4 declares
+   `[Exposed=(Window,Worker)] interface Request`, and Web IDL §3.8 "Platform objects implementing interfaces"'
+   `define the global property references` is "To define the global property references on target, given realm
+   realm" whose step 1 is "Let interfaces be a list that contains every interface that is exposed in realm" —
+   a REALM, and the algorithm names no Document. A realm that reaches no platform_document_install therefore
+   got no `Request`, which is a worker realm always and a Window realm until a Document is installed over it.
+   AND THE MINT STRANDS NOTHING, which is the question this component owes an answer to and the others do not:
+   §5.4's per-document inputs are real — an API base URL, a referrer, a credentials mode — and every one of
+   them is read when a MEMBER RUNS rather than when this object is built. fetch_parse_url asks
+   document_base_url of the RUNNING realm at step 6's parse, and request_init_apply reads the init the caller
+   passed; nothing below is read off a Document here. */
 void request_install_proto(JSContext *ctx)
 {
-    JSValue proto, prev;
+    JSValue proto, prev, ctor, global;
 
     DCHECK(g_request_class != 0, "a realm asked for Request.prototype before the class was declared");
+    DCHECK(g_request_ctor_stepid >= 0, "a realm asked for Request before request_init declared its constructor");
     prev = JS_GetClassProto(ctx, g_request_class);
     DCHECK(JS_IsNull(prev), "request_install_proto ran twice in one realm");
     JS_FreeValue(ctx, prev);
@@ -1267,22 +1280,17 @@ void request_install_proto(JSContext *ctx)
                          "every answer a getter could give is invented, and \"public\" worst of all, since "
                          "LOCAL NETWORK ACCESS §3.1.1 Fetching's own check asserts \"request's target IP "
                          "address space is not public\"");
-    JS_SetClassProto(ctx, g_request_class, proto);
-}
 
-void request_install(JSContext *ctx, JSValueConst global)
-{
-    JSValue ctor;
-    DCHECK(g_request_ctor_stepid >= 0, "Request was installed before request_init declared its constructor");
     ctor = idl_step_constructor(ctx, "Request", g_request_ctor_stepid);
     CHECK(!JS_IsException(ctor), "the Request interface object could not be allocated");
-    {
-        JSValue proto = JS_GetClassProto(ctx, g_request_class);
-        DCHECK(!JS_IsNull(proto), "Request was installed into a realm that never ran its proto build");
-        JS_SetConstructor(ctx, ctor, proto);
-        JS_FreeValue(ctx, proto);
-    }
+    JS_SetConstructor(ctx, ctor, proto);
+    /* THE HANDOVER IS LAST: JS_SetClassProto TAKES the reference, so `proto` is this function's until the realm
+       owns it, and the Web IDL §3.7.1 Interface object pairing above reads a local rather than a class slot it
+       has given away. */
+    JS_SetClassProto(ctx, g_request_class, proto);
+    global = JS_GetGlobalObject(ctx);
     idl_define_global_property_reference(ctx, global, "Request", ctor);
+    JS_FreeValue(ctx, global);
 }
 
 void request_free(JSContext *ctx)

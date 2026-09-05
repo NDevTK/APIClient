@@ -6,9 +6,11 @@
 #include "quickjs.h"
 
 void file_reader_init(JSContext *ctx);
-/* §6.2's PROTOTYPE FOR ONE REALM — run where a realm's other intrinsics are added, exactly once per realm. */
+/* File API §6.2 "The FileReader API"' PROTOTYPE AND ITS INTERFACE OBJECT, FOR ONE REALM — run where a realm's
+   other intrinsics are added, exactly once per realm. Web IDL §3.8 "Platform objects implementing interfaces"
+   is given a realm and names no Document, and §6.2 is `[Exposed=(Window,Worker)]`, so the name is owed by a
+   realm that reaches no per-document install. */
 void file_reader_install_proto(JSContext *ctx);
-void file_reader_install(JSContext *ctx, JSValueConst global);
 void file_reader_free(JSRuntime *rt);
 
 /* §6.3 Packaging data's FOUR RESULT KINDS, which are the `type` operand of both the read operation (§6.2) and

@@ -876,15 +876,25 @@ void response_init(JSContext *ctx)
     realm_declare_intrinsic(response_install_proto);
 }
 
-/* §5.5's INTERFACE PROTOTYPE OBJECT AND ITS SERIALIZER, FOR ONE REALM.
+/* FETCH §5.5 "Response class"' INTERFACE PROTOTYPE OBJECT, ITS SERIALIZER *AND* ITS INTERFACE OBJECT, FOR ONE
+   REALM.
    ONE PROTOTYPE PER REALM, not a copy of the members per instance. They were own properties of each Response,
    which is not what Web IDL describes and is observable three ways: `Response.prototype.text` was absent,
-   `delete r.text` removed the method, and every reply paid for eight property installs. */
+   `delete r.text` removed the method, and every reply paid for eight property installs.
+   THE INTERFACE OBJECT IS MINTED HERE AND NOT FROM A PER-DOCUMENT INSTALL. §5.5 declares
+   `[Exposed=(Window,Worker)] interface Response`, and Web IDL §3.8 "Platform objects implementing interfaces"'
+   `define the global property references` is "To define the global property references on target, given realm
+   realm" whose step 1 is "Let interfaces be a list that contains every interface that is exposed in realm" —
+   a REALM, with no Document in the algorithm, so a realm that reaches no platform_document_install got no
+   `Response`. §5.5's TWO STATICS COME WITH IT: `json` and `redirect` are members of the INTERFACE OBJECT
+   rather than of the prototype, so an interface object minted without them is a `Response` a page can
+   feature-detect and not call — which is why they moved in the same edit rather than being left behind. */
 void response_install_proto(JSContext *ctx)
 {
-    JSValue proto, prev;
+    JSValue proto, prev, ctor;
 
     DCHECK(g_response_class != 0, "a realm asked for Response.prototype before the class was declared");
+    DCHECK(g_ctor_stepid >= 0, "a realm asked for Response before response_init declared its constructor");
     prev = JS_GetClassProto(ctx, g_response_class);
     DCHECK(JS_IsNull(prev), "response_install_proto ran twice in one realm");
     JS_FreeValue(ctx, prev);
@@ -898,9 +908,23 @@ void response_install_proto(JSContext *ctx)
     body_install(ctx, proto, g_body_handle);
     /* §5.5's clone(), a STEP because cloning a body tees its stream — see js_response_clone_step. */
     idl_install_method(ctx, proto, "clone", g_clone_stepid);
+
+    ctor = idl_step_constructor(ctx, "Response", g_ctor_stepid);
+    CHECK(!JS_IsException(ctor), "the Response interface object could not be allocated");
+    JS_SetConstructor(ctx, ctor, proto);
+    JS_SetPropertyFunctionList(ctx, ctor, js_response_static_funcs,
+                               (int)(sizeof(js_response_static_funcs) / sizeof(js_response_static_funcs[0])));
+    /* The two statics whose arguments the args machine converts, installed on the INTERFACE OBJECT — which is
+       what `static` means in the IDL and is the only difference from a prototype member. */
+    idl_install_method(ctx, ctor, "json", g_json_stepid);
+    idl_install_method(ctx, ctor, "redirect", g_redirect_stepid);
+    /* THE HANDOVER IS LAST: JS_SetClassProto TAKES the reference, so `proto` is this function's until the realm
+       owns it, and the Web IDL §3.7.1 Interface object pairing above reads a local rather than a class slot it
+       has given away. */
     JS_SetClassProto(ctx, g_response_class, proto);
 
-    /* §5.5's serializer, read off THIS realm's builtin before any of its scripts run. */
+    /* §5.5's serializer, and Web IDL §3.8's property reference for the object built above — both over THIS realm's
+       global, read before any of its scripts run. */
     {
         JSValue global = JS_GetGlobalObject(ctx);
         JSValue json = JS_GetPropertyStr(ctx, global, "JSON");
@@ -909,30 +933,9 @@ void response_install_proto(JSContext *ctx)
               "%JSON.stringify% is not a function — Response.json has no serializer to run");
         realm_value_set(ctx, g_json_stringify_slot, stringify);
         JS_FreeValue(ctx, json);
+        idl_define_global_property_reference(ctx, global, "Response", ctor);
         JS_FreeValue(ctx, global);
     }
-}
-
-void response_install(JSContext *ctx, JSValueConst global)
-{
-    JSValue ctor;
-
-    DCHECK(g_ctor_stepid >= 0, "Response was installed before response_init declared its constructor");
-    ctor = idl_step_constructor(ctx, "Response", g_ctor_stepid);
-    CHECK(!JS_IsException(ctor), "the Response interface object could not be allocated");
-    {
-        JSValue proto = JS_GetClassProto(ctx, g_response_class);
-        DCHECK(!JS_IsNull(proto), "Response was installed into a realm that never ran its proto build");
-        JS_SetConstructor(ctx, ctor, proto);
-        JS_FreeValue(ctx, proto);
-    }
-    JS_SetPropertyFunctionList(ctx, ctor, js_response_static_funcs,
-                               (int)(sizeof(js_response_static_funcs) / sizeof(js_response_static_funcs[0])));
-    /* The two statics whose arguments the args machine converts, installed on the INTERFACE OBJECT — which is
-       what `static` means in the IDL and is the only difference from a prototype member. */
-    idl_install_method(ctx, ctor, "json", g_json_stepid);
-    idl_install_method(ctx, ctor, "redirect", g_redirect_stepid);
-    idl_define_global_property_reference(ctx, global, "Response", ctor);
 }
 
 void response_free(JSContext *ctx)

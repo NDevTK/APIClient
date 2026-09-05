@@ -120,8 +120,10 @@ int  headers_fill_run(JSContext *ctx, JSStepHdr *h, HeadersFill *f, JSValueConst
                       HeadersGuard guard, JSValue in, JSValue **out_cb, int *out_argc);
 
 void    headers_init(JSContext *ctx);                       /* register the class + its machines (install time) */
-void    headers_install_proto(JSContext *ctx);              /* §5.1's prototype, for ONE realm */
-void    headers_install(JSContext *ctx, JSValueConst global);   /* the Headers interface object */
+/* Fetch §5.1 "Headers class"' prototype AND its interface object, for ONE realm — Web IDL §3.8 "Platform
+   objects implementing interfaces" is given a realm and names no Document, and §5.1 is
+   `[Exposed=(Window,Worker)]`, so the name is owed by a realm that reaches no per-document install. */
+void    headers_install_proto(JSContext *ctx);
 void    headers_free(JSContext *ctx);   /* the prototypes this component holds */
 /* A Headers over an existing list; the object takes a COPY, because a header list a component owns outlives
    nothing the page can reach and a page must not be able to mutate a reply's headers through the copy it was
