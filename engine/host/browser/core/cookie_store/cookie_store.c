@@ -2,14 +2,21 @@
  * See cookie_store.h for which standard this is, where it moved to, and what this component deliberately is not.
  *
  * WHY THE QUERY HALF LANDS ALONE, AND IT IS A SUBPROBLEM ORDER RATHER THAN A CONVENIENCE. §7.2 "Set a cookie"
- * step 12.3 refuses a Domain that "is not a registrable domain suffix of and is not equal to host", and that
- * predicate is HTML's `is a registrable domain suffix of or is equal to`, which is decided against the PUBLIC
- * SUFFIX LIST. cookie_jar.c's own header states this engine is not given that data — it is why RFC 6265 §5.3
- * step 5's public-suffix rejection is a step whose condition is false here. So `set` and `delete` (which §7.3
- * defines AS a `set`) stand on an unbuilt component, and §7.1 does not: it reads RFC 6265 §5.4, which the jar
- * implements whole. Building the write half first would have meant either a silent wrong answer for every
- * `Domain` a page passes, or a hand-rolled suffix guess — and a guess about which registrable domain a host
- * belongs to is a security answer, not a heuristic.
+ * step 12.3 refuses a Domain that "is not a registrable domain suffix of and is not equal to host". That
+ * predicate is HTML's `is a registrable domain suffix of or is equal to`, and in THIS tree it exists and is
+ * PRIVATE: core/url/public_suffix.h answers URL §3.2 over a vendored table, and the predicate itself is static
+ * inside core/dom/document_domain.c, whose header exports only init, install and free. So §7.2 is blocked on
+ * EXTRACTING that predicate into a component both callers share, and §7.1 is blocked on nothing — it reads RFC
+ * 6265 §5.4, which the jar implements whole. Writing a second copy of the predicate here is the answer that
+ * must not be taken: it is one fact stated twice over a 10239-rule table that changes several times a week,
+ * which is the shape that drifts, and a wrong answer about which registrable domain a host belongs to is a
+ * security answer rather than a near miss.
+ *
+ * THAT REASON IS THE SECOND ONE THIS COMPONENT HAD. The first said the Public Suffix List was data this engine
+ * is not given, which is what cookie_jar.c's header said at the time and was false when read; it reached a
+ * landed commit message before a grep of the clause caught it. The conclusion survived the correction and the
+ * argument did not, which is why the argument is written out here rather than summarised: a reader who checks
+ * a wrong argument discards the conclusion with it.
  *
  * NOTHING HERE SUSPENDS, AND THAT IS WHY NONE OF IT IS A STEP MACHINE. §3.1 step 6 runs its work "in parallel"
  * and settles a promise; in this engine the work is a walk of an in-memory jar, so it completes within the call
@@ -319,7 +326,15 @@ static void cs_install_realm(JSContext *ctx)
        non-secure realm rather than making them throw: `window.cookieStore ? … : document.cookie` takes the
        fallback there, which is the branch a bundle writes it to take, and `"cookieStore" in window` is false.
        §3.3 set and §3.4 delete are ABSENT here and that is this component's stated narrowing, not an exposure
-       decision — see the file header and the residual below. */
+       decision — see the file header.
+       NAMED RESIDUAL. NOT COVERED: §3.3's `set` and §3.4's `delete`, so a page can read this store through
+       this API and cannot write it through this API; `document.cookie` remains the only writer, and because
+       both reach ONE jar a cookie written there IS read back here. NEXT DIFF: give the registrable-domain-
+       suffix predicate a component of its own (it is static in core/dom/document_domain.c today and
+       core/url/public_suffix.h already answers the list half), then §7.2 over cookie_jar_receive. HOW ITS
+       ABSENCE SHOWS: `cookieStore.set` is undefined, so a page calling it throws a TypeError at its own line
+       rather than at anything of this engine's, and `node engine/idlgen.mjs` prints
+       `CookieStore (core/cookie_store/cookie_store.c): ABSENT 3 — set, delete, onchange`. */
     idl_install_method_exposed(ctx, proto, "get", g_id_get, IDL_SECURE_CONTEXT);
     idl_install_method_exposed(ctx, proto, "getAll", g_id_get_all, IDL_SECURE_CONTEXT);
     JS_SetClassProto(ctx, g_cs_class, JS_DupValue(ctx, proto));

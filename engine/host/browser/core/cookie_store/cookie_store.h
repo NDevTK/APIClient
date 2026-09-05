@@ -8,8 +8,9 @@
  *
  * WHAT THIS COMPONENT IS AND IS NOT. It is §3.1's `get` and §3.2's `getAll` — the QUERY half, §7.1 "Query
  * cookies" — and the §6.1 Window member that reaches them. It is NOT §3.3's `set` or §3.4's `delete`, and that
- * absence is a SUBPROBLEM ORDER rather than an oversight; see the named residual in cookie_store.c above
- * cs_install_realm. A page that calls `cookieStore.set` finds it absent and throws, which is what §NO STUBS
+ * absence is a SUBPROBLEM ORDER rather than an oversight: §7.2's step 12.3 needs a registrable-domain-suffix
+ * predicate that exists in this tree but is private to another component, and §7.1 needs nothing that is not
+ * built. See the file header and the named residual in cookie_store.c. A page that calls `cookieStore.set` finds it absent and throws, which is what §NO STUBS
  * asks for and is the forcing function for the diff that builds §7.2.
  *
  * WHY THE JAR AND NOT A STORE OF ITS OWN. §2.2 "Cookie store" says the object is a view: this API and

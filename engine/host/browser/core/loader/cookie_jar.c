@@ -53,8 +53,21 @@
  *                       distinct state a run may hold, and CLAUDE.md's §NO BOUNDS forbids one. This user agent
  *                       takes the MAY-not.
  *   public suffixes   — §5.3 step 5 is conditional on the user agent being "configured to reject public
- *                       suffixes", and rejecting them requires the Public Suffix List, which is data this
- *                       engine is not given. It is not configured to, so the step's condition is false. */
+ *                       suffixes". This one is not, so the step's condition is false.
+ *                       THAT REASON USED TO BE "the Public Suffix List is data this engine is not given", AND
+ *                       IT WAS FALSE WHEN READ: core/url/public_suffix.h answers URL §3.2's "obtain the public
+ *                       suffix of a host" over a vendored 10239-rule table. It is corrected rather than
+ *                       deleted because a reader who re-derives the retired reason re-introduces it — and
+ *                       because it had already cost something: a lane building the Cookie Store API took this
+ *                       sentence as its evidence that §7.2 "Set a cookie" step 12.3 was blocked on missing
+ *                       data, and wrote that into a landed commit message. The step is a CHOICE now, and the
+ *                       residual below is what makes it a falsifiable one.
+ *                       NAMED RESIDUAL. NOT COVERED: a `Domain` attribute that IS a public suffix
+ *                       (`Domain=com`, `Domain=github.io`) is stored here and is refused by a real browser.
+ *                       NEXT DIFF: call public_suffix_of on the lowercased cookie-domain in cookie_jar_receive
+ *                       between §5.3 steps 4 and 6, and take step 5's reject arm when the whole domain matches
+ *                       it. HOW ITS ABSENCE SHOWS: `document.cookie = "a=1; Domain=com"` on any http(s)
+ *                       document stores a cookie every browser drops, and a later read returns it. */
 #include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
