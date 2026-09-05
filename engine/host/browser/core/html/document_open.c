@@ -80,11 +80,22 @@ bool document_open_stream_is_ours(JSContext *ctx, JSValueConst doc_obj, lxb_dom_
     /* THE TWO-SIDED ASSERTION, AND THE ONE STATE IT REFUSES. This flow's record says whether IT opened the
        stream; §13.2.3.5's insertion point is a fact about the ONE `lxb_html_parser_t` the document carries,
        which is not in any delta. They agree for every flow that opened and closed its own stream, and they
-       disagree in exactly one situation: a SIBLING flow opened this document's stream and parked. Resolving
-       that to either answer is wrong in a way that cannot be seen afterwards — taking the parser's word makes
-       this flow write into a sibling's tokenizer, taking the record's makes it re-open a stream the sibling is
-       standing in — so it crashes at the flow that is about to do it, naming the capability that would make
-       the two agree. */
+       disagree in exactly one situation: a SIBLING flow opened this document's stream and did not close it.
+       Resolving that to either answer is wrong in a way that cannot be seen afterwards — taking the parser's
+       word makes this flow write into a sibling's tokenizer, over a stack of open elements standing on nodes
+       that flow's step 11 removed IN ITS OWN DELTA; taking the record's makes it re-open a stream the sibling
+       is standing in — so it crashes at the flow that is about to do it, naming the capability that would make
+       the two agree.
+       THAT SITUATION IS THE ORDINARY ONE AND NOT A RACE, which the sentence above is silent about and which
+       decides how much this is worth. §8.4.1 leaves the stream OPEN — §8.4.2's close is the only thing that
+       ends it, and almost no page writes one, so a document that has been written into once carries an open
+       parser for the rest of its life. CLAUDE.md §Every-runtime-job makes each timer callback, each reaction
+       and each queued job its OWN flow, so the second flow to reach §8.4.3 step 9 or §8.4.2 step 3 on that
+       document is not a coincidence of interleaving; it is what the scheduler does next. The shape is three
+       lines and needs no fork and no second document:
+           setTimeout(function () { document.write('<b>x</b>'); }, 0);   // in one inline script
+       and appending `document.close()` to that same callback removes it, which is the discriminator: what the
+       assert is about is a stream left OPEN across a flow boundary, never a write. */
     DCHECK(ours == html_parse_insertion_point_defined(dom),
            "§13.2.3.5's insertion point and this flow's §8.4.2 step 3 record DISAGREE about whether an input "
            "stream is open on this document — which is another flow's script-created parser being visible to "
@@ -196,16 +207,38 @@ bool document_open_steps(JSContext *ctx, JSValueConst doc_obj, lxb_dom_document_
               "be built is the document's own parse kept OPEN across script execution — its OWNERSHIP half is "
               "DONE (solver/dom_cow.c's cow_tc_create records every node §13.2.6 makes into the running flow's "
               "delta, so a live parser's nodes die with the flow that built them exactly as an appendChild's "
-              "do), and what is left is core/loader/document_load.c's: open the ACTIVE document's parse with "
-              "html_parse_document_open instead of completing it with html_parse_document, and close it at "
-              "§13.2.7 \"The end\"'s own moment — the lifecycle stage that moves the readiness to "
-              "\"interactive\". Its hazard is html_parse.c's own: lexbor emits the EOF token in `chunk_end` "
-              "and §13.2.6 builds html/head/body from it, so a document left open has a NULL documentElement "
-              "until the close, and each reader that assumes otherwise is what must change. With that, a "
-              "parse-time script runs with the insertion point DEFINED and never reaches §8.4.3 step 9 at all");
+              "do). WHAT IS LEFT IS *WHEN* §13.2.7 \"The end\" RUNS, AND NOT WHICH ENTRY OPENS THE PARSE: "
+              "core/loader/html_document.c ALREADY opens the §7.5.2 load with html_parse_document_open and "
+              "fills it a rest unit at a time, so the parse is incremental and the stream is genuinely open "
+              "while it runs. What completes it before any script of that document exists is the FINISH — "
+              "core/loader/document_load.c's document_load_finish, reached from core/frame/navigable.c's "
+              "nav_create_finish for a child navigable and from the host's own completing document_load for "
+              "the root — and moving it is not a relocation of one call, because that finish is what the "
+              "REALM is built around: nav_create_finish's own assert says the Document handed over must be "
+              "PARSED, since document_policy_new walks the finished tree for CSP §3.3's `<meta>` policies. So "
+              "the subproblem this crash names is an ORDER a browser gets by construction and this engine "
+              "buys with the finish: §4.2.5.3 \"Pragma directives\" says \"when a meta element is inserted "
+              "into the document, if its http-equiv attribute is present and represents one of the above "
+              "states, then the user agent must run the algorithm appropriate for that state\", and "
+              "§13.2.6.4.4 'The \"in head\" insertion mode' does that insertion AT THE TOKEN — so a browser "
+              "has the policy in force before the next token is read, while this engine has it only because "
+              "the whole tree exists before the realm does. That ordering, and not the opening, is what the "
+              "next diff owes. Its hazard is html_parse.c's own: lexbor "
+              "emits the EOF token in `chunk_end` and §13.2.6 builds html/head/body from it, so a document "
+              "whose source produced none has a NULL documentElement until the close, and each reader that "
+              "assumes otherwise is what must change. With that, a parse-time script runs with the insertion "
+              "point DEFINED and never reaches §8.4.3 step 9 at all");
         /* STEP 5's OWN ACTION — "return document" — so that a release build, where the DFAIL above is compiled
            out, takes the standard's branch for the state it believes it is in rather than falling through into
-           the destructive half of an algorithm the crash exists to keep it out of. */
+           the destructive half of an algorithm the crash exists to keep it out of.
+           AND THE CALLER HAS TO PERFORM THE SAME STEP OR THE RELEASE BUILD PERFORMS HALF OF ONE ALGORITHM.
+           This arm returns a Document with NO INPUT STREAM, which is a state §8.4.3 step 10 cannot be reached
+           in inside the standard — every §8.4.1 arm that returns without creating a parser has an insertion
+           point anyway — so a caller that read this `true` as "a stream is open" inserted into a parser that is
+           not in lexbor's PROCESS stage, and its WRONG_STAGE arrived at core/html/html_parse.c's always-fatal
+           ALLOCATION check. core/html/document_write.c now asks §13.2.3.5's insertion point after this returns
+           and takes step 9's own answer; the two halves of one release build agree, and neither of them is a
+           softening of the dev crash above. */
         return true;
     }
 
@@ -373,11 +406,20 @@ void document_close_input_stream(JSContext *ctx, JSValueConst doc_obj, lxb_dom_d
        tokenizer to it. ONE call for the same reason step 16 above is one: the stream is the tokenizer's cursor,
        so the EOF and the run to it are `chunk_end`, which is also §13.2.7 "The end" — the insertion point
        becomes undefined and the `html`/`head`/`body` a zero-length write never produced are built here.
-       STEP 5 — "if this's pending parsing-blocking script is not null, then return" — is DECIDED: a pending
-       parsing-blocking script is set by §13.2.6.4.4's `script` handling of a PARSER-INSERTED external script,
-       and this engine's tree construction prepares no script at all (§8.4.3's own definition permits it:
-       "User agents are explicitly allowed to avoid executing script elements inserted via this method"). It
-       becomes a real read in the diff that gives a written `script` its §4.12.1 preparation. */
+       STEP 5 — "if this's pending parsing-blocking script is not null, then return" — is DECIDED, AND THE
+       ARGUMENT THAT USED TO DECIDE IT IS RETIRED RATHER THAN DELETED, because a reader who re-derives it will
+       re-introduce it. The retired argument was that this engine's tree construction prepares no script at
+       all, resting on §8.4.3's permission — "User agents are explicitly allowed to avoid executing script
+       elements inserted via this method" — and it has not been true since core/html/html_parse.c's
+       token-done wrapper began calling
+       html_script_parser_inserted at every non-fragment `</script>`: a written `<script src>` IS prepared, and
+       measurably reaches the same program-compile as a `<script src>` the markup carried.
+       WHAT DECIDES IT NOW IS THAT THIS ENGINE HAS NO SUCH FIELD, and that is a positive statement rather than
+       an absent one. §4.12.1's `pending parsing-blocking script` exists so §13.2.6.4.8 'The "text" insertion
+       mode' can BLOCK THE TOKENIZER on it; this engine's tokenizer does not block — core/html/html_script.c
+       sends a parser-inserted external script to the flow's own sequence instead, and names the
+       parser-suspension capability that would change it. So there is nothing for this step to read, and it
+       becomes a real read in the diff that gives the tokenizer a way to stop. */
     st = html_parse_document_close(lxb_html_interface_document(dom));
     CHECK(st == LXB_STATUS_OK,
           "§8.4.2 step 6's tokenizer run did not complete — the document is left with an input stream that is "

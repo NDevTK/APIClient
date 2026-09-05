@@ -271,10 +271,40 @@ static int dw_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
             return JS_STEP_DONE;
         /* STEP 9.2 — "Run the document open steps with document." */
         if (!document_open_steps(ctx, hdr->this_val, dom)) return JS_STEP_ABRUPT;
-        DCHECK(html_parse_insertion_point_defined(dom),
-               "§8.4.3 step 9.2's document open steps returned with no input stream open — every arm of "
-               "§8.4.1 that declines to open one RETURNS DOCUMENT at a step this engine has established it "
-               "cannot be standing at, so step 10 is about to insert into a stream that is not there");
+        /* THE POSTCONDITION STEP 10 STANDS ON, AND THE ONE ARM OF §8.4.1 THAT DOES NOT MEET IT.
+           IN THE STANDARD STEP 10 CANNOT BE REACHED WITHOUT ONE. §8.4.1 has three arms that "return
+           document" without creating a parser — step 5's active parser whose script nesting level is
+           greater than 0, step 6's unload counter and step 7's active parser was aborted — and a browser
+           reaching any of them has an insertion point anyway: step 5's condition IS an active parser, step 6's
+           counter is what §8.4.3 step 9.1 already returned for, and step 7's is what §8.4.3 step 8 already
+           returned for. So the assert below is the standard's own guarantee restated at the caller, not this
+           engine's hope.
+           AND THE TWO BUILDS HAVE TO AGREE ABOUT IT, WHICH IS WHAT THIS `if` IS AND WHY IT IS NOT A FALLBACK.
+           core/html/document_open.c's step 5 CRASHES in a dev build and, in release, takes §8.4.1's own
+           "return document" — leaving a Document with no stream. This file then ran step 10 into it, so the
+           release halves of one algorithm DISAGREED across two files: one performed step 5 and the other
+           performed step 10 as if it had not. What that reached is lexbor's `chunk` on a parser that is not in
+           the PROCESS stage, whose LXB_STATUS_ERROR_WRONG_STAGE arrives at core/html/html_parse.c's always-fatal
+           allocation CHECK — so a page whose parse-time `document.write` this build cannot serve died in
+           production under a message that says the cause is memory. It is not a fallback by the test
+           CLAUDE.md §C-stack states: delete the arm it selects against and the question remains, because it is
+           §13.2.3.5's insertion point — §8.4.3's own step 9 condition, asked again after step 9.2 changed the
+           answer — rather than a choice between two implementations of anything.
+           THE SINK HAS ALREADY BEEN ANNOUNCED, so this returns having reported what the page wrote: the @S half
+           of this member is complete on every arm and it is the @H half — the written markup's own scripts and
+           the endpoints they load — that the unbuilt capability costs. */
+        {
+            const bool stream_open = html_parse_insertion_point_defined(dom);
+
+            DCHECK(stream_open,
+                   "§8.4.3 step 9.2's document open steps returned with no input stream open — every arm of "
+                   "§8.4.1 that declines to open one RETURNS DOCUMENT at a step a browser cannot be standing "
+                   "at with an undefined insertion point, so step 10 is about to insert into a stream that is "
+                   "not there. In THIS engine one such arm is reachable and it has already crashed by name one "
+                   "file over (core/html/document_open.c's step 5), so a dev build never arrives here; an "
+                   "arrival means a SECOND arm of §8.4.1 now returns without opening one and did not say so");
+            if (!stream_open) return JS_STEP_DONE;
+        }
     }
     {
         /* STEPS 10 AND 11 — one call, because in lexbor the input stream is the tokenizer's own cursor rather

@@ -28,6 +28,13 @@
  * situation: another flow opened the stream and this one is looking at it. That is a real isolation gap in the
  * parser rather than in this record, and the two answers are compared at every entry so it crashes at the
  * flow that would have written into a sibling's parser instead of silently doing it.
+ * AND THAT SITUATION IS THE ORDINARY ONE, which the sentence above does not say and which is what decides how
+ * much the gap is worth. §8.4.1 OPENS a stream and only §8.4.2's close ends one, so a document written into
+ * once carries an open parser for the rest of its life; CLAUDE.md §Every-runtime-job makes each timer
+ * callback, each reaction and each queued job its own flow. The second arrival is therefore not an
+ * interleaving to be reproduced — it is what the scheduler does next, and a single `document.write` from a
+ * single `setTimeout` callback is enough to reach it. Adding `document.close()` to that same callback removes
+ * it, which is the discriminator: the assert is about a stream left OPEN across a flow boundary, never a write.
  *
  * WHAT §8.4.1 STILL OWES, NAMED HERE BECAUSE THE STEP THAT OWES IT IS HERE. Step 8's "stop loading" of a
  * navigable with an ongoing navigation is a write to state core/frame/navigable.c owns, and there is nothing

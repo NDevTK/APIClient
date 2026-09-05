@@ -18,7 +18,14 @@
  *   - A write from a POST-LOAD task — a `load` handler, a timer, an event — finds §13.2.3.5's insertion point
  *     undefined and takes step 9's other arm: §8.4.1's DOCUMENT OPEN STEPS, which replace the document in
  *     place. Those are built (core/html/document_open.c), so is §8.4.2's close, and so is the `open()` member
- *     that shares them.
+ *     that shares them — AND WHAT THEY LEAVE BEHIND IS NOT: §8.4.1 opens a stream and only §8.4.2's close ends
+ *     one, so a page that writes and never closes (which is nearly every page that writes) carries an open
+ *     `lxb_html_parser_t` for the rest of the document's life, while the RECORD that says whose it is rides
+ *     the writing flow's COW delta. The next flow to reach §8.4.3 step 9 or §8.4.2 step 3 on that document
+ *     therefore meets the two-sided assert at document_open.c's `document_open_stream_is_ours`, which is
+ *     where the isolation gap is stated and where the capability that closes it is named. That is not a race
+ *     to be reproduced under load: CLAUDE.md §Every-runtime-job makes each queued job its own flow, so the
+ *     second arrival is what the scheduler does next.
  *   - A write from a PARSE-TIME script must APPEND at the insertion point instead, and it CANNOT here: this
  *     engine parses a document to completion and then seeds its scripts as flows, so by the time any of them
  *     runs, §13.2.7 "The end" has set the insertion point to undefined. In a browser that script runs with the
@@ -30,12 +37,19 @@
  *     writes go through solver/dom_cow.c's table (a document parse declares DOM_PARSE_ROOT_SHARED, so inserts
  *     and removals push the entries that revert them) AND its `create` member records every node the parse
  *     makes into the running flow's delta, so a live parser's nodes die with the flow that built them exactly
- *     as an `appendChild`'s do. What is left is core/loader/document_load.c's: open the active document's
- *     parse with html_parse_document_open instead of completing it with html_parse_document, and close it at
- *     §13.2.7's own moment — the lifecycle stage that moves the readiness to "interactive". Its hazard is
+ *     as an `appendChild`'s do. WHAT IS LEFT IS *WHEN* THE PARSE IS CLOSED, AND NOT WHICH ENTRY OPENS IT.
+ *     This paragraph used to send its reader to core/loader/document_load.c to replace an `html_parse_document`
+ *     that is not called there; the §7.5.2 loader that IS there already opens with `html_parse_document_open`
+ *     and fills the stream a rest unit at a time, so the parse is incremental and genuinely open while it
+ *     runs. What ends it before any script of that document exists is the FINISH, and the finish is
+ *     load-bearing where it stands: the realm is built around the FINISHED tree because CSP §3.3's `<meta>`
+ *     policies are collected off it. So moving §13.2.7 "The end" past the realm is not a relocation of one
+ *     call — it is giving this engine an ORDER a browser gets by construction, since §4.2.5.3 "Pragma
+ *     directives" runs a pragma's algorithm "when a meta element is inserted into the document" rather than
+ *     over a finished tree. Its hazard is
  *     html_parse.c's own: lexbor emits the EOF token in `chunk_end` and §13.2.6 builds `html`/`head`/`body`
- *     from it, so a document left open has a NULL `documentElement` until the close — which is what a browser
- *     does too, and which each reader that assumes otherwise has to be changed for.
+ *     from it, so a document whose source produced none has a NULL `documentElement` until the close — which
+ *     is what a browser does too, and which each reader that assumes otherwise has to be changed for.
  *
  * WHAT IS WRITTEN RUNS ITS SCRIPTS, AND THE STANDARD DOES NOT REQUIRE THAT — which is why the omission had to
  * be found by reading rather than by any instrument. §8.4.3's own definition says "User agents are explicitly
