@@ -2674,6 +2674,45 @@ function unescapeC(s) {
   });
 }
 
+/* A QUOTATION MARK INSIDE A BACKTICK CODE SPAN IS A CHARACTER BEING SHOWN, NOT A DELIMITER — and this tree's
+ * own convention already says so. `singleQuotedRuns` below refuses an opener that FOLLOWS a closing specimen
+ * mark for exactly this reason, and its closing paragraph tells an author that "a specimen goes in backticks,
+ * which both this scanner and `mentionNotClaim`'s rule already read as a spelling being shown rather than a
+ * claim being made". That sentence was FALSE of the double-quote scanner, which read no backtick at all — and
+ * the cost of the gap was not a wrong finding, it was a SILENT ZERO, which is the failure this file is written
+ * against.
+ *
+ * WHAT THE GAP ACTUALLY DID, MEASURED RATHER THAN REASONED. An odd `"` leaves the scan with an opener it
+ * cannot pair, and the scan then ABANDONED THE WHOLE PROSE BLOCK — `if (j < 0) break`. On the frozen tree that
+ * happened 518 times across 95 files and left 37358 characters of prose unscanned: not judged, not counted
+ * short, not counted anywhere, so a file carrying one simply read as a file with fewer quotations in it. 34 of
+ * those 518 stood at a mark inside a code span, and the two largest of THOSE were `solve_filter.h:91` (2897
+ * characters) and `wpt.mjs:209` (2085).
+ *
+ * AND ONE FILE HAD ALREADY PAID FOR IT IN PROSE, WHICH IS WHAT MAKES THIS A ROOT AND NOT A TIDY-UP.
+ * `solve_filter.h` carries a standing instruction to its own authors that neither of two paragraphs "may gain
+ * a double quote", because the fragment-set listing above them spells U+0022 inside a code span. That is
+ * CLAUDE.md's contract-that-names-a-hazard-and-offers-no-exit: a warning a writer cannot act on except by not
+ * writing, standing over a tool defect, for as long as the defect stands. Its account of the mechanism is also
+ * wrong in the direction that matters — it says the next quotation is "swallowed as a several-hundred-word
+ * continuation", and with no later mark in the block the scan does not swallow, it STOPS. Both readings are
+ * symptoms of one cause and the cause is here.
+ *
+ * THE SPAN IS BOUNDED TO ONE LINE, WHICH IS WHAT STOPS THIS BECOMING THE DEFECT IT REMOVES. A stray backtick
+ * that could open a span running to the end of a comment would mask real quotation marks by the paragraph, so
+ * a run that reaches a newline is not a code span and its backtick is ordinary punctuation. The double form is
+ * tried FIRST because it is how this tree writes a code span whose CONTENT is a backtick (``` `` ` `` ```), and
+ * reading that as two single spans would put the mask in the wrong place. */
+const CODE_SPAN = /``[^\n]*?``|`[^`\n]*`/g;
+function codeSpanMask(prose) {
+  const mask = new Uint8Array(prose.length);
+  if (prose.indexOf("`") < 0) return mask;
+  CODE_SPAN.lastIndex = 0;
+  let m;
+  while ((m = CODE_SPAN.exec(prose))) mask.fill(1, m.index, m.index + m[0].length);
+  return mask;
+}
+
 /* THE DOUBLE-QUOTED RUNS, WHICH ARE MOST OF THE QUOTATIONS AND NOT ALL OF THEM. This paragraph said for a
  * long time that a quotation was a double-quoted run AND NOTHING ELSE, on the ground that this tree writes
  * code in backticks and a term in single quotes. The first half of that is right and the conclusion did not
@@ -2696,7 +2735,9 @@ function unescapeC(s) {
  * quotation is READ and then declined by the word floor, where the report can count it. */
 function quotedRuns(prose) {
   const out = [];
+  const code = codeSpanMask(prose);
   for (let i = 0; i < prose.length; i++) {
+    if (code[i]) continue;
     const ch = prose[i];
     /* A QUOTE THE AUTHOR ESCAPED IS NOT A DELIMITER. Both zones write a nested quotation as `\"`: a C message
      * because the literal needs it, a comment because it is quoting C. Reading one as a close pairs the
@@ -2707,7 +2748,7 @@ function quotedRuns(prose) {
     const close = ch === '"' ? '"' : "\u201d";
     const nextMark = (from) => {
       let k = prose.indexOf(close, from);
-      while (k > 0 && prose[k - 1] === "\\") k = prose.indexOf(close, k + 1);
+      while (k > 0 && (prose[k - 1] === "\\" || code[k])) k = prose.indexOf(close, k + 1);
       return k;
     };
     let j = nextMark(i + 1);
@@ -2735,7 +2776,15 @@ function quotedRuns(prose) {
         j = resumed;
       }
     }
-    if (j < 0) break;
+    /* AN OPENER WITH NO PARTNER IS PUNCTUATION, AND IT MAY NOT END THE SCAN. `break` here abandoned the whole
+     * remaining prose block, so everything after an odd mark was not judged, not counted short, and not counted
+     * anywhere — the silent zero this function's own paragraph names, arriving through this function. Measured
+     * on the frozen tree WITH the code-span mask already in place: 483 blocks in 85 files still reach this line
+     * and 14808 characters of prose stood behind it. Skipping the mark instead cannot mis-pair anything: every
+     * pairing this scan makes is decided by `nextMark` from an opener, and an opener that answered -1 paired
+     * with nothing to begin with. It is the same direction the nested-opener loop above already takes — a run
+     * with no partner falls through rather than swallowing the rest of the comment. */
+    if (j < 0) continue;
     out.push({ text: prose.slice(i + 1, j), at: i, mark: '"' });
     i = j;
   }

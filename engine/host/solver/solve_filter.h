@@ -114,11 +114,17 @@ void solve_filter_survival(const char *out, const char *cand, FilterObs *o);
  * would refuse the delivery probe, which is BUILT out of exactly those bytes.
  * A SEEDED TABLE IS NOT A MEASURED ONE, and nothing may read it as one: `deliv_seen` remains the search's
  * answer to whether a run has observed anything, and the report's measured set is emitted only under it.
- * (Neither paragraph above may gain a double quote. The fragment-set listing beside the URL §1.3 citation
- * higher up spells U+0022 inside a code span, which is an UNBALANCED quote to any reader that pairs them, so
- * the next quotation added below it is swallowed as a several-hundred-word continuation of that citation and
- * reported as fabricated. Both paragraphs above therefore say cookie-octet and delivery-probe without
- * quoting either.) */
+ * (The instruction that stood here — that neither paragraph above may gain a double quote, because the
+ * fragment-set listing beside the URL §1.3 citation spells U+0022 inside a code span — is RETIRED, and is
+ * recorded rather than deleted so that a reader who spots that unbalanced mark does not re-impose it. It was
+ * a contract naming a hazard and offering no exit from it: the one thing an author could do about it was not
+ * write, for as long as the tool defect stood. `citegen.mjs` now reads a quotation mark inside a backtick
+ * code span as a CHARACTER BEING SHOWN rather than a delimiter, which is this tree's own convention for a
+ * specimen, so the listing is balanced to it and the paragraphs above may quote whatever they need to. The
+ * retired note was also wrong about the mechanism in the direction that matters, which is why it is worth
+ * keeping: with no later mark in the block the scan did not swallow the next quotation, it STOPPED — 2897
+ * characters of this comment went unread by every channel, counted nowhere, which is the silent zero rather
+ * than a false finding.) */
 typedef struct SolveDelivered { unsigned char ok[256]; } SolveDelivered;
 
 /* EVERYTHING DELIVERS — the initial state of a search's table, and all a search can honestly hold before it
