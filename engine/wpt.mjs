@@ -717,7 +717,17 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                       say "unscorable here" rather than quoting a pass that was never attempted.
                       Widening this list is expected to ADD failures. Per §A-DIRECTORY-THAT-ABORTS, that is the
                       first honest measurement of an area and never a regression to revert. */
-                   "cookies"];
+                   "cookies",
+                   /* INTERACTIVE ELEMENTS — the same absence as `cookies` above, found the same way. A lane
+                      built HTML §4.11.4's `show()`, `showModal()` and the dialog focusing steps and then
+                      reported that NO gate here judges a single `<dialog>` test, so none of it has any
+                      conformance oracle in this tree. It established that by reading
+                      `.git/info/sparse-checkout` rather than the directory listing — the right instrument,
+                      because a directory that is absent and a directory that is empty look alike from a `ls`.
+                      Its sibling `html/semantics/popovers` IS here and gave the popover half an oracle all
+                      along, which is exactly how a missing entry hides: the neighbouring area reports
+                      normally and the total looks complete. */
+                   "html/semantics/interactive-elements"];
 
 /* AND THE DIRECTORIES WHOSE OWN LEVEL CONE MODE HAS ALREADY PUT ON DISK. A cone-mode checkout materializes every
    file of every directory ON THE PATH to a listed one, so naming one helper's `resources` lands its standard's
