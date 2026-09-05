@@ -635,12 +635,56 @@ static IoRect io_compute_intersection(JSContext *ctx, lxb_dom_node_t *target, JS
     return r;                                       /* steps 4 and 6: identities, for step 3.2's reason */
 }
 
-/* §3.2.8 "COMPUTE THE VISIBILITY of a target":
-     1. If the observer's trackVisibility attribute is false, return false.
-     2..5. transformation matrix, opacity, filters, occlusion.
-     6. Return true.
-   Step 1 is a REAL computed answer and the whole of the algorithm for every observer that did not opt in,
-   which is what makes `isVisible` false rather than a stub. */
+/* INTERSECTION OBSERVER §3.2.8 "Compute whether a Target is unoccluded, untransformed, unfiltered, and
+   opaque." — "To compute the visibility of a target, run these steps". Six steps, one flat list:
+     1. "If the observer's trackVisibility attribute is false, return false."
+     2. an effective transformation matrix other than a 2D translation or proportional 2D upscaling.
+     3. an effective opacity other than 100%, on the target or its containing block chain.
+     4. any filters applied, on the target or its containing block chain.
+     5. "If the implementation cannot guarantee that the target is completely unoccluded by other page
+        content, return false."
+     6. "Return true."
+
+   THIS ALGORITHM HAS A COMPUTED ANSWER FOR THIS ENGINE, AND STEP 5 IS THE STEP THAT GIVES IT. Steps 2, 3 and
+   4 are facts about the PAGE — a matrix, an opacity, a filter — and this engine can read none of them. Step 5
+   is not that kind of step at all: its condition is a fact about THE IMPLEMENTATION, and it is the only step
+   here whose subject is the user agent rather than the document. This engine builds no PAINT ORDER, so it
+   cannot guarantee that any target is completely unoccluded by other page content, so step 5's condition
+   holds and step 5 returns false. That is the section's own outcome for an implementation of this class,
+   reached by the section's own words, and step 6 is unreachable from here whatever steps 2 to 4 would have
+   said — which is why they are not computed on the way past: three reads that cannot change the result are
+   three chances for a wrong answer, not extra rigor. The Note under step 5 is a "should" over the ink
+   overflow rectangle, so a false here is CONFORMANT and not a gap wearing a return value.
+
+   WHAT STOOD HERE BEFORE WAS A DFAIL, AND IT WAS AN ASSERT ON A LEGITIMATE STATE. Its own closing paragraph
+   conceded the case — "A RELEASE BUILD CANNOT BUILD THE FOUR MISSING COMPONENTS, so it answers the one
+   outcome this model can justify" — so the release build already returned exactly the number below while the
+   dev build ABORTED THE DOCUMENT on it, which is a dev/release disagreement about an ANSWER rather than about
+   a check. The cost was not the observer: it was every other finding in the document, because one
+   `trackVisibility: true` observer took the whole page down and a v2 observer is what viewability and
+   impression code uses — precisely the code whose callback fetches.
+
+   NAMED RESIDUAL. WHAT IS NOT COVERED: a target that really IS unoccluded, untransformed, unfiltered and
+   opaque reports `isVisible` false here where a full implementation reports true — this engine is narrower
+   than the spec on step 6, never wrong on step 5. WHAT THE NEXT DIFF BUILDS, in order: the
+   `<transform-list>` computed value (core/css/css_computed_value.c crashes for it by name, citing
+   css-transforms-1 §7 "The Transform Functions"' grammar), then §3.2.9 "Calculate a target's Effective
+   Transformation Matrix" over it, then the computed `opacity` and `filter` of the chain, and last a paint
+   order with ink overflow rectangles, which is what step 5's condition is actually about. Only that last one
+   moves the ANSWER; the first three only make steps 2 to 4 real. HOW ITS ABSENCE WOULD SHOW: a page that
+   gates on `entry.isVisible` — an impression beacon, a viewability timer — never runs its visible branch, so
+   the endpoint behind it is never learned, while a page that only reads `isIntersecting` is unaffected.
+
+   IT IS CONCRETE AND NOT CONCOLIC, WHICH IS A DECISION AND NOT AN OVERSIGHT. §Headless keeps a modelled value
+   forkable because the ALTERNATE WORLD IS A DIFFERENT ENVIRONMENT this engine does not know — another
+   viewport for `matchMedia`, another reply for a config fetch. The alternate world here is a DIFFERENT
+   IMPLEMENTATION, and this engine knows exactly which one it is: step 5's condition is a fact about itself,
+   determined, in the way HTML §6.6.6 Focus management APIs' `Window.blur()` steps are determined. A concolic
+   would model an ignorance this component does not have, and it would need a declared SOURCE — which is a
+   statement that some agent supplies the value, and none does. The residual above is where the lost branch is
+   recorded instead. The record this feeds ALREADY accepts an unknown here
+   (intersection_observer_entry.c asserts `JS_IsBool(is_visible) || concolic_is(is_visible)`), so the day step
+   5 becomes answerable per target this returns a value rather than a `bool` and nothing downstream changes. */
 static bool io_compute_visibility(JSContext *ctx, JSValueConst state)
 {
     JSValue tv = JS_GetPropertyUint32(ctx, (JSValue)state, IO_S_TRACK_VISIBILITY);
@@ -648,26 +692,9 @@ static bool io_compute_visibility(JSContext *ctx, JSValueConst state)
 
     JS_FreeValue(ctx, tv);
     if (!track) return false;                                             /* step 1 */
-    DFAIL("INTERSECTION OBSERVER §3.2.8 steps 2 to 5 decide whether a target is UNOCCLUDED, UNTRANSFORMED, "
-          "UNFILTERED AND OPAQUE, and this engine can answer none of the four. Step 2 needs §3.2.9 \"Calculate a "
-          "target's Effective Transformation Matrix\" — a post-multiplication up the containing block chain of "
-          "each box's computed "
-          "`transform`. THE ELEMENT-LEVEL HALF OF THAT EXISTS NOW and this line used to say it did not: "
-          "core/css/css_transform.h answers whether a transform applies to an element and to its ancestors, "
-          "out of each one's own computed value, so an untransformed chain is a REAL answer of the identity "
-          "matrix rather than an absence. What is still missing is the MATRIX ITSELF for a chain that is not "
-          "untransformed: core/css/css_computed_value.c crashes for the computed value of a <transform-list> "
-          "and names css-transforms-1 §7 \"The Transform Functions\"' grammar, and §3.2 \"Resolved value of "
-          "transform\" is the reduction to one 4x4 matrix over it. Steps 3 and 4 need the computed `opacity` "
-          "and `filter` of the target and of every element in its containing block chain; step 5 needs the ink "
-          "overflow rectangles of the page's other content, which is a PAINT ORDER this engine does not build. "
-          "BUILD the transform-function grammar first — it unblocks §3.2.9, this step, and getClientRects' "
-          "first constraint together — then opacity and filter, then step 5's occlusion. An observer that did "
-          "NOT ask for `trackVisibility` never reaches here: step 1 answers it, above");
-    /* A RELEASE BUILD CANNOT BUILD THE FOUR MISSING COMPONENTS, so it answers the one outcome this model can
-       justify — steps 2 to 5 each RETURN FALSE when their condition is not met, and an engine that cannot see
-       a transform, an opacity, a filter or an occluder cannot claim to have ruled them out. */
-    return false;
+    /* Steps 2 to 4 are unreachable as DECIDING steps: step 5 below holds for this engine and returns before
+       step 6, so the four conditions cannot change the outcome. See the derivation above. */
+    return false;                                                         /* step 5 */
 }
 
 /* ---- §3.2.6 and §3.2.10 ----------------------------------------------------------------------------------- */
