@@ -1309,11 +1309,19 @@ static int js_fetch_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
  * iterator, a Proxy trap, a `toString`) and §5.2's body extraction — so any concolic branch inside a page's
  * own header or body value forks the flow with this machine on its frame chain.
  *
- * THE PREDICATE IS THE RECORD AND COVERS ALL THREE, because §5.4's members are applied at FETCH_RECORD and the
- * header list and the body come after it: `rec.method` is NULL for a zeroed state and non-NULL from the moment
- * `request_init_apply` returns 0 (the CHECK at the end of that operation is what makes the second half true),
- * so it is exactly the window in which any of the three exists. A fork before it — the `input` ToString at
- * FETCH_URL_STR — copies a state whose every filled slot the visit names, and stays allowed.
+ * THE PREDICATE ASKS ALL THREE AND NEVER ONE STAGE'S PROXY FOR THE OTHERS. `rec.method != NULL` reads as
+ * exactly this window — the record is filled at FETCH_RECORD, the list and the body come after it — and it is
+ * WRONG BY SEVEN FIELDS, because §5.4 fills the record in its own order and the method is step 25, the
+ * second-to-last: a fork standing between step 13 and step 25 holds the strings steps 13-23 placed and answers
+ * NO. That window is not hypothetical; it is precisely where §5.4 step 25's own fork will stand once the
+ * method can carry unknown external input, so the one fork this guard exists to catch is the one a
+ * method-shaped predicate would wave through. `request_record_holds` is the record's own question, asked out of
+ * the same nine names its free releases.
+ * A FORK BEFORE ANY OF THE THREE — the `input` ToString at FETCH_URL_STR — copies a state whose every filled
+ * slot the visit names, and stays allowed. `body.stream` is NOT tested directly: a zeroed step state's JSValue
+ * is the INTEGER 0 rather than JS_UNDEFINED (see `captured` above), so `!JS_IsUndefined(stream)` is true for
+ * every fresh state and would refuse that fork too; `body.has` is the flag §5.2's stream arm sets, and it is
+ * the question.
  *
  * WHAT THE NEXT DIFF BUILDS, AND IT IS THE SAME DIFF §5.4 STEP 25's METHOD IS WAITING FOR: the record's owned
  * fields as JSValues rather than `char *`, named by `js_fetch_visit` so a fork re-takes them, with
@@ -1326,9 +1334,10 @@ static const char *js_fetch_unforkable(const void *st)
     const JSFetchState *s = st;
 
     DCHECK(s != NULL, "the fetch machine was asked whether it may be forked with no state to ask about");
-    if (!s->rec.method)
+    if (!request_record_holds(&s->rec) && !s->body.has && !s->body.bytes && !s->hdrs.e)
         return NULL;
-    return "Fetch §5.6 Fetch methods' fetch(input, init) was forked while holding §2.2.5's request record. A "
+    return "Fetch §5.6 Fetch methods' fetch(input, init) was forked while holding C memory its `visit` "
+           "cannot name — §5.4's request record, the extracted body, or the parsed header list. A "
            "step state is BYTE-COPIED at a deep fork and only what `visit` names is re-taken, and this "
            "machine's record (nine engine-allocated strings), extracted body (`bytes`, and a `stream` the "
            "visit does not name either) and parsed header list are freed by its `release` instead — so both "

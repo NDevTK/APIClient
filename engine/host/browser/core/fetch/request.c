@@ -109,6 +109,16 @@ void request_record_free(JSRuntime *rt, RequestRecord *rec)
     request_record_init(rec);
 }
 
+bool request_record_holds(const RequestRecord *rec)
+{
+    DCHECK(rec != NULL, "a §2.2.5 request record was asked what it holds through a null pointer");
+    /* ONE TEST PER OWNED FIELD, in the SAME ORDER `request_record_free` releases them and out of the same nine
+       names, so the two lists are read together and a tenth field added to one is conspicuous in the other —
+       which is the whole ownership obligation a record like this creates. */
+    return rec->method || rec->mode || rec->credentials || rec->cache || rec->redirect || rec->referrer ||
+           rec->referrer_policy || rec->integrity || rec->destination;
+}
+
 /* EVERY FIELD IS PLACED BEFORE THE NEXT ONE IS ATTEMPTED, so a failure leaves a record whose remaining fields
    are still NULL and whose free is exact — the same rule the constructor's own state follows and for the same
    reason: the failure path frees what the record holds and nothing else. */

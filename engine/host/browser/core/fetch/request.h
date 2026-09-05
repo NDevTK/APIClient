@@ -1,6 +1,8 @@
 /* THE REQUEST INTERFACE — WHATWG Fetch §5.4 "Request class". See request.c. */
 #ifndef ENGINE_HOST_BROWSER_CORE_FETCH_REQUEST_H
 #define ENGINE_HOST_BROWSER_CORE_FETCH_REQUEST_H
+#include <stdbool.h>
+
 #include "quickjs.h"
 #include "core/idl_args.h"
 
@@ -69,6 +71,17 @@ void request_record_free(JSRuntime *rt, RequestRecord *rec);
 /* §5.4 step 12's carry-forward as a copy of the record. -1 with an exception live on OOM, and `dst` is then
    safe to free: every field placed before the first that could fail is owned, and the rest are NULL. */
 int  request_record_copy(JSContext *ctx, RequestRecord *dst, const RequestRecord *src);
+/* DOES THIS RECORD HOLD ANY ALLOCATION — asked by a step machine that carries a record BY VALUE and must know
+   whether a fork would alias one (see core/fetch/fetch.c's js_fetch_unforkable, which is the one caller).
+ *
+ * IT IS THE RECORD'S OWN QUESTION AND NOT A TEST ON ONE FIELD, because the fields are filled IN §5.4's ORDER
+ * and `method` is step 25 — the second-to-last. A caller that asked `rec->method != NULL` would answer NO for
+ * a record holding the seven strings steps 13-23 already placed, which is precisely the window §5.4 step 25's
+ * fork will stand in: the guard would permit the one fork it exists to refuse, and the hole would be invisible
+ * because every field it misses is a real allocation belonging to a real step.
+ * A PARTIALLY FILLED RECORD IS THE ANSWERABLE STATE, not an error one: `request_init_apply` leaves exactly that
+ * behind when a step refuses, and its contract is that such a record is safe to free. */
+bool request_record_holds(const RequestRecord *rec);
 /* A Request's own record, or NULL for a value that is not one — §5.4 step 6's "Set request to input's
    request", as the read its two callers make on a `RequestInfo` that took the interface arm. Borrowed. */
 const RequestRecord *request_record_of(JSValueConst v);
