@@ -40,6 +40,7 @@
 #include "core/html/event_handler_attribute.h"
 #include "core/html/html_image.h"
 #include "core/html/html_link.h"
+#include "core/html/html_dialog.h"
 #include "core/html/html_style_element.h"
 #include "core/html/dom_string_list.h"   /* §3.1.3's ancestor origins list IS a DOMStringList */
 #include "core/html/html_script.h"   /* §4.12.1.1's `force async`: the stamp every parser makes */
@@ -5001,6 +5002,14 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
        for the reason the media walk is: a `<style>` inside a `<template shadowrootmode>` is by now a style
        element in a shadow tree, and its sheet is the shadow root's. */
     html_style_element_parsed(ctx, lxb_dom_interface_node(dom));
+    /* HTML §4.11.4 FOR THE TREE THE PARSER BUILT — the dialog HTML element insertion steps, which establish a
+       `<dialog open>`'s §6.10.2 close watcher. A parser-inserted `dialog` becomes connected through the parser
+       rather than through the mutation chokepoint, and its `open` attribute arrives with §13.2.6.1's "create
+       an element for a token", so NEITHER of §4.11.4's two script-side hooks can see it. Without this the
+       markup's own `<dialog open>` is the one dialog an Esc cannot close, and `requestClose()` on it reaches
+       an assert that an open, connected, fully active dialog has a watcher. AFTER the declarative-shadow
+       conversion, for the reason the media and style walks are: the walk is shadow-including. */
+    html_dialog_parsed(ctx, lxb_dom_interface_node(dom));
     /* HTML §8.1.8.1 Event handlers FOR THE TREE THE PARSER BUILT — its attribute change steps are what turn a
        markup `<body onload="init()">` or `<img onerror=…>` into a handler, and a lexbor parse writes its
        attributes through `lxb_dom_attr_set_value_wo_copy`, which reaches none of DOM §4.9's mutation

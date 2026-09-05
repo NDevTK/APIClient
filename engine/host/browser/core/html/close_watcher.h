@@ -5,7 +5,11 @@
  * dismiss gesture", a game controller's back button — and §6.10.2 defines the ONE per-Window structure every
  * dismissable thing in the platform registers with, so that one such request closes exactly one of them.
  * HTML §6.12 The popover attribute's show popover, §6.10.3 The CloseWatcher interface's `new CloseWatcher()`
- * and §4.11.4 The dialog element's modal `dialog` are three establishers of the SAME struct in the SAME list.
+ * and §4.11.4 The dialog element's dialog setup steps are three establishers of the SAME struct in the SAME
+ * list. (THE THIRD IS NOT "a modal dialog", which is what this line used to say: §4.11.4 establishes from the
+ * `open` attribute's change steps for any connected dialog in a fully active document, and `showModal()` only
+ * asserts at its step 12 that the establish has already happened. Whether the dialog is MODAL is read by that
+ * watcher's getEnabledState, through the computed closed-by state, and decides nothing about whether it exists.)
  * That is why this is its own component and not a
  * member of any of them: a second copy of the group algebra, per establisher, is three copies that can
  * disagree about whether one Esc closes one popover or all of them.
@@ -86,13 +90,16 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/events/event_target.h"   /* EventFireCb — the width of the fire request an ACTION parks on */
+#include "core/html/html_dialog.h"  /* DialogCloseRun — the shape the close action §4.11.4 supplies parks on.
+                                       THE POSSESSIVE IS WRONG HERE for popover.h's reason one line down:
+                                       "close action" is §6.10.2's own term and §4.11.4 SUPPLIES one. */
 #include "core/html/popover.h"     /* PopoverHideCb — the width of the CALL the close action §6.12 supplies
                                       parks on. THE POSSESSIVE IS WRONG HERE and this file's older prose is
                                       careful about it: "close action" is §6.10.2's own term, and §6.12
                                       SUPPLIES one rather than defining one. */
 
 /* WHICH ALGORITHM TRIPLE A WATCHER CARRIES — see the header note above for why this is an id and not a
-   closure. TWO ENTRIES, because two establishers are in this build:
+   closure. ONE ENTRY PER ESTABLISHER, and the standard has three:
      §6.12 The popover attribute's show popover step 15 establishes a watcher "given element's relevant global
    object, with: cancelAction being to return true. closeAction being to hide a popover given element, true,
    true, false, and null. getEnabledState being to return true."
@@ -100,10 +107,14 @@
    object, with: cancelAction given canPreventClose being to return the result of firing an event named cancel
    at this, with the cancelable attribute initialized to canPreventClose. closeAction being to fire an event
    named close at this. getEnabledState being to return true."
-     §4.11.4 The dialog element adds its own entry with its own three when it lands, and its three are NOT
-   either of these — its getEnabledState is "to return true if dialog's enable close watcher for request close
-   is true or dialog's computed closed-by state is not …", which is the concrete reason the dispatch in
-   close_watcher.c asks the kind for the enabled state rather than answering `true` from one place.
+     §4.11.4 The dialog element's set the dialog close watcher step 3 establishes one "given dialog's relevant
+   global object, with: cancelAction given canPreventClose being to return the result of firing an event named
+   cancel at dialog, with the cancelable attribute initialized to canPreventClose. closeAction being to close
+   the dialog given dialog, dialog's request close return value, and dialog's request close source element.
+   getEnabledState being to return true if dialog's enable close watcher for request close is true or dialog's
+   computed closed-by state is not None; otherwise false." THAT LAST ONE IS THE CONCRETE REASON the dispatch in
+   close_watcher.c asks the kind for the enabled state rather than answering `true` from one place, and it is
+   the reason this file's prose has named §4.11.4 as the next entry since before it existed.
    AN ENTRY IS APPENDED AND NEVER INSERTED. The number is stored on the watcher and a parked flow resumes
    holding it, so it is §AN-INDEX-NAMES-A-THING's permitted case only while the set is FIXED AT THIS
    DEFINITION and only grows at the end: renumbering POPOVER would give a resumed watcher a different triple.
@@ -112,6 +123,7 @@
 typedef enum {
     CLOSE_WATCHER_KIND_POPOVER = 0,     /* HTML §6.12 The popover attribute — subject is the popover Element */
     CLOSE_WATCHER_KIND_CLOSE_WATCHER,   /* HTML §6.10.3 The CloseWatcher interface — subject is the instance */
+    CLOSE_WATCHER_KIND_DIALOG,          /* HTML §4.11.4 The dialog element — subject is the `dialog` Element */
     CLOSE_WATCHER_KIND_COUNT
 } CloseWatcherKind;
 
@@ -180,6 +192,14 @@ typedef struct {
        mistake core/events/event_target.h's EventFireCb note records. Each is named by ITS algorithm's type. */
     uint8_t  hphase;            /* the hide a popover CALL's own phase */
     PopoverHideCb hide_cb;      /* step_call_run's [this, hide, element, focusPrev, fireEvents, throws, source] */
+    /* AND THE CLOSE ACTION §4.11.4 SUPPLIES IS A THIRD SHAPE — neither a fire nor a call, but a SUB-SEQUENCE
+       cursor whose state is heap-held and opaque (core/html/html_dialog.h's DialogCloseRun), because close the
+       dialog fires `beforetoggle` at step 2 and runs §6.6.4's focusing steps at step 12.3. It is kept APART
+       from the two above for their own reason: at most one of the three arms is ever in flight, and one buffer
+       serving three algorithms is one width three callers must all stay abreast of. It is a POINTER and not a
+       JSValue, so close_watcher_run_visit forwards to the operation that owns BOTH its clone and its teardown
+       rather than naming it as a value. */
+    DialogCloseRun *dlg;
     /* THE WATCHER WHOSE "is running cancel action" THIS RUN SET AND STILL OWES A CLEAR (owned), or undefined.
        It is a FLAG and not a reference, which is why it is here rather than left to the declaration: a flow
        abandoned inside the page's `cancel` handler must not leave that watcher refusing every later request at

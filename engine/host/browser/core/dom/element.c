@@ -57,6 +57,7 @@
 #include "core/html/html_image.h"
 #include "core/html/html_link.h"
 #include "core/html/html_option.h"
+#include "core/html/html_dialog.h"   /* HTML §4.11.4's attribute change steps and removing steps, both below */
 #include "core/html/input_value.h"   /* HTML §4.10.5's type change steps, in the family below */
 #include "core/html/fragment_parser.h"
 #include "core/html/fragment_serializer.h"
@@ -2481,6 +2482,18 @@ static int element_tree_steps_step(JSContext *ctx, void *vb, JSStepHdr *h, JSVal
                    observes the style rules that were applied in the above step." The script is FIRST in that
                    fragment, so the phase split is the only thing that gives the example its answer. */
                 html_style_element_update(el);
+                /* HTML §4.11.4's DIALOG HTML ELEMENT INSERTION STEPS, 2 steps: a `<dialog>` that arrives
+                   ALREADY OPEN runs the dialog setup steps, which establish its §6.10.2 close watcher. The
+                   attribute change steps above cannot cover this edge and the standard's own note beside their
+                   step 5 says why — the parser sets `open` before the element is inserted, so those steps see
+                   a disconnected node — which makes this the entry that gives a parsed `<dialog open>` a
+                   watcher, and therefore the entry that lets §4.11.4's request to close the dialog ASSERT at
+                   its step 3 rather than test. */
+                {
+                    JSValue w = node_wrap(ctx, n);
+                    html_dialog_insertion_steps(ctx, w);
+                    JS_FreeValue(ctx, w);
+                }
                 /* THE CUSTOM-ELEMENT ENQUEUE IS NOT HERE, AND ITS ABSENCE IS THE MECHANISM. Insert step 7.7.3
                    is a SIBLING of step 7.7.1's insertion steps inside one loop, not a part of them, and
                    `remove` separates the two further still — its step 11 runs the removing steps and its step
@@ -2555,6 +2568,17 @@ static int element_tree_steps_step(JSContext *ctx, void *vb, JSStepHdr *h, JSVal
                no longer connected, so a `<style>` taken out of the document stops having a style sheet and the
                one it had is orphaned rather than left claiming an owner node it no longer has. */
             html_style_element_update(el);
+            /* HTML §4.11.4's DIALOG HTML ELEMENT REMOVING STEPS, 3 steps: the dialog cleanup steps for a
+               `<dialog open>` that LEAVES the document, the immediate top-layer removal, and clearing is modal.
+               It is the other half of the close watcher's life — removing a node changes no attribute, so the
+               attribute change steps above never see this edge, and without it a removed open dialog keeps its
+               place in its Window's §6.10.2 close watcher manager for ever and one Esc closes a dialog that is
+               not in any document. */
+            {
+                JSValue w = node_wrap(ctx, n);
+                html_dialog_removing_steps(ctx, w);
+                JS_FreeValue(ctx, w);
+            }
             /* `remove` steps 13 and 14.2 ARE NOT HERE either, and on this side the standard makes the point
                with its numbering rather than with a loop: step 11 runs the removing steps, step 12 reads
                isParentConnected, and step 13 enqueues disconnectedCallback — three top-level steps, of which
@@ -2842,6 +2866,13 @@ static void element_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const ch
        reparse) and an IDL setter answers for exactly one of them — and it needs BOTH values because the steps
        turn on ADDED and REMOVED: a `selected=""` overwritten with `selected="x"` is neither of those. */
     html_option_attr_changed(rctx, el, ns, local, old_val, val);
+    /* HTML §4.11.4 The dialog element's OWN attribute change steps for `open`, 6 steps. Here for the reason
+       `selected` above is — a content attribute has more than one spelling (`d.open = true`, `setAttribute`,
+       `removeAttribute`, an `innerHTML` reparse) and an IDL reflection's setter answers for exactly one of
+       them — and it needs BOTH values for the same reason that one does: its steps 3 and 6 turn on REMOVED and
+       ADDED, so `open=""` overwritten with `open="x"` is neither. It is what ESTABLISHES and DESTROYS a
+       dialog's §6.10.2 close watcher, which is why `showModal()`'s step 12 can assert one is already there. */
+    html_dialog_attr_changed(rctx, el, ns, local, old_val, val);
     /* HTML §4.10.5 The input element's OWN type change steps: "When an input element's type attribute changes
        state, the user agent must run the following steps". Here for the reason `src` and `selected` above are —
        a content attribute has more than one spelling (`i.type = "radio"`, `setAttribute`, `removeAttribute`, an

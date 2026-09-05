@@ -47,6 +47,7 @@
 #include "core/events/event.h"
 #include "core/events/event_target.h"
 #include "core/html/close_watcher.h"
+#include "core/html/html_dialog.h"
 #include "core/html/close_watcher_interface.h"
 #include "core/html/popover.h"
 #include "core/html/user_activation.h"
@@ -434,6 +435,19 @@ static bool cw_get_enabled_state(JSContext *wctx, JSValueConst watcher)
         return true;    /* §6.12 show popover step 15: "getEnabledState being to return true" */
     case CLOSE_WATCHER_KIND_CLOSE_WATCHER:
         return true;    /* §6.10.3 constructor step 2.3: "getEnabledState being to return true" */
+    case CLOSE_WATCHER_KIND_DIALOG: {
+        /* §4.11.4 set the dialog close watcher step 3: "getEnabledState being to return true if dialog's
+           enable close watcher for request close is true or dialog's computed closed-by state is not None;
+           otherwise false." THE ONLY ARM THAT IS NOT A CONSTANT, and the reason this dispatch asks the kind at
+           all rather than answering `true` from one place. Both of its disjuncts are §4.11.4's own state, so
+           the question is asked of that component; it runs no page code, which §6.10.2 requires of this
+           algorithm in its own words ("This algorithm can never throw an exception"). */
+        JSValue subject = cw_subject(wctx, watcher);
+        bool enabled = html_dialog_close_watcher_enabled(wctx, subject);
+
+        JS_FreeValue(wctx, subject);
+        return enabled;
+    }
     case CLOSE_WATCHER_KIND_COUNT:
         break;
     }
@@ -463,6 +477,16 @@ static int cw_cancel_action_run(JSContext *wctx, CloseWatcherRun *r, JSValueCons
         *pcontinue = true;
         return 0;
     case CLOSE_WATCHER_KIND_CLOSE_WATCHER:
+    case CLOSE_WATCHER_KIND_DIALOG:
+        /* TWO ESTABLISHERS, ONE ARM, AND IT IS ONE ARM BECAUSE THE TWO SENTENCES SAY THE SAME THING — not
+           because the code happened to fit. §6.10.3's constructor step 2.1 supplies its cancelAction as the
+           result of firing `cancel` at the CloseWatcher instance with the cancelable attribute initialized to
+           canPreventClose, and §4.11.4's set the dialog close watcher step 3 supplies the same fire at the
+           dialog element; the only thing that differs is which object the establisher passed as the subject,
+           which is the one thing cw_subject already answers. (Neither sentence is quoted here, because a run
+           of words assembled from two sections with a placeholder in the middle is not either standard's text
+           and engine/citegen.mjs is right to say so.) A second copy would be two places for the cancelable
+           initializer and the not-canceled reading to drift. */
         break;
     case CLOSE_WATCHER_KIND_COUNT:
         JS_FreeValue(wctx, in);
@@ -470,8 +494,10 @@ static int cw_cancel_action_run(JSContext *wctx, CloseWatcherRun *r, JSValueCons
         *pcontinue = true;
         return 0;
     }
-    /* §6.10.3 constructor step 2.1: "cancelAction given canPreventClose being to return the result of firing
-       an event named cancel at this, with the cancelable attribute initialized to canPreventClose."
+    /* §4.11.4's set the dialog close watcher step 3 states the same shape over the dialog element, and it is
+       the OTHER kind's establisher; the words below are §6.10.3 constructor step 2.1's, which is the one they
+       are taken from: "cancelAction given canPreventClose being to return the result of firing an event named
+       cancel at this, with the cancelable attribute initialized to canPreventClose."
        NOT BUBBLING: §6.10.3 names one initialiser for this fire and no others, so `bubbles` stays at DOM
        §2.2's default. The event is TRUSTED — DOM §2.9's fire is the user agent dispatching, which is exactly
        what separates it from one the page constructs. */
@@ -549,6 +575,31 @@ static int cw_close_action_run(JSContext *wctx, CloseWatcherRun *r, JSValueConst
         JS_FreeValue(wctx, ignored);
         return 0;
     }
+    case CLOSE_WATCHER_KIND_DIALOG: {
+        /* §4.11.4 set the dialog close watcher step 3: "closeAction being to close the dialog given dialog,
+           dialog's request close return value, and dialog's request close source element."
+           THE TWO ARGUMENTS ARE READ NOW AND NOT AT THE ESTABLISH, which is what the standard's own phrasing
+           says and what makes `requestClose(v)` work at all: the watcher is established when the `open`
+           attribute arrives and both fields are null then, while `requestClose()`'s steps 5 and 6 write them
+           between that moment and this one. Reading them at the establish would make every close request
+           answer with the return value of whichever request came first — for a dialog closed by an Esc, with
+           `null`, which is right for the wrong reason and wrong the moment a page uses `requestClose("ok")`.
+           IT IS A SUB-SEQUENCE AND NOT A CALL: close the dialog fires `beforetoggle` at step 2 and runs
+           §6.6.4's focusing steps at step 12.3, so it parks on its own cursor, which this run holds. */
+        JSValue result, src;
+
+        subject = cw_subject(wctx, watcher);
+        result = html_dialog_request_close_return_value(wctx, subject);
+        src = html_dialog_request_close_source_element(wctx, subject);
+        rc = html_dialog_close_run(wctx, &r->dlg, subject, result, src, in, out_cb, out_argc);
+        JS_FreeValue(wctx, src);
+        JS_FreeValue(wctx, result);
+        JS_FreeValue(wctx, subject);
+        if (rc > 0) return rc;
+        if (rc < 0) return -1;
+        html_dialog_close_release(wctx, &r->dlg);
+        return 0;
+    }
     case CLOSE_WATCHER_KIND_CLOSE_WATCHER:
         break;
     case CLOSE_WATCHER_KIND_COUNT:
@@ -589,6 +640,7 @@ void close_watcher_run_init(CloseWatcherRun *r)
     r->can_prevent = r->processed = 0;
     r->i = 0;
     r->group = r->cur = r->ev = r->running = JS_UNDEFINED;
+    r->dlg = NULL;
     STEP_CB_FOREACH(r->cb, k) r->cb[k] = JS_UNDEFINED;
     STEP_CB_FOREACH(r->hide_cb, k) r->hide_cb[k] = JS_UNDEFINED;
 }
@@ -605,6 +657,11 @@ void close_watcher_run_visit(JSContext *ctx, CloseWatcherRun *r, JSStepVisit *v)
         v->val(ctx, &r->cb[k]);
     STEP_CB_FOREACH(r->hide_cb, k)
         v->val(ctx, &r->hide_cb[k]);
+    /* AND THE DIALOG ARM'S CURSOR, forwarded rather than named field by field: html_dialog.c owns what a
+       half-finished close the dialog holds, and its one operation does the clone and the teardown in the
+       OPPOSITE ORDERS each needs. A fork mid-`beforetoggle` therefore gives each arm its own half-closed
+       dialog, which is the whole reason this is a visit entry and not a plain pointer copy. */
+    html_dialog_close_visit(ctx, &r->dlg, v);
 }
 
 void close_watcher_run_unlock(JSContext *ctx, CloseWatcherRun *r)

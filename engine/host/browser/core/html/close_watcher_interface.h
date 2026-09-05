@@ -2,10 +2,10 @@
  *
  * WHY IT IS NOT PART OF core/html/close_watcher.c, WHICH IS THE SAME §6.10. close_watcher.h's own opening
  * argument decides this: §6.12 The popover attribute's show popover, §6.10.3's `new CloseWatcher()` and §4.11.4
- * The dialog element's modal `dialog` are three ESTABLISHERS of one struct in one list, and the infrastructure
+ * The dialog element's dialog setup steps are three ESTABLISHERS of one struct in one list, and the infrastructure
  * is its own component precisely so that no establisher grows a copy of the group algebra. §6.12's establisher
- * lives in core/html/popover.c; this is §6.10.3's, and it lives beside it rather than inside the thing all
- * three of them call. The dependency runs one way and only one way: this file calls establish, destroy,
+ * lives in core/html/popover.c and §4.11.4's in core/html/html_dialog.c; this is §6.10.3's, and it lives
+ * beside them rather than inside the thing all three of them call. The dependency runs one way and only one way: this file calls establish, destroy,
  * request to close and close, and close_watcher.c names this interface nowhere — what it knows is a KIND.
  *
  * WHAT THE INTERFACE IS FOR, WHICH IS NOT DECORATION. §6.10.1 Close requests defines a close request by its

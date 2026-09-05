@@ -134,10 +134,17 @@ enum {
     PS_TRACKER_TASK,     /* …and its TASK, as the JSTaskHandle JS_EnqueueCallTask answered, in a BigInt */
     PS_OPENED_MODE,      /* "opened in popover mode … 'auto', 'hint', or null, initially null" */
     PS_CLOSE_WATCHER,    /* "popover close watcher, a close watcher or null, initially null" */
-    /* "Each HTML element has a previously focused element which is null or an element, and it is initially
-       null" — defined by HTML §4.11.4 The dialog element, NOT by §6.6 Focus, which is what this line used to
-       say and what citegen's term check reports. §6.12 steps 16 and 24 write it and its step 19 reads it. */
-    PS_PREV_FOCUSED,
+    /* THE PREVIOUSLY FOCUSED ELEMENT IS NOT A ROW HERE, AND ITS ABSENCE IS THE POINT. "Each HTML element has a
+       previously focused element which is null or an element, and it is initially null" is defined by HTML
+       §4.11.4 The dialog element, NOT by §6.6 Focus — this file's own line used to say §6.6 and citegen's term
+       check reported it — and §4.11.4's own sentence names BOTH writers in one breath: "When showModal() and
+       show() are called, this element is set to the currently focused element before running the dialog
+       focusing steps. Elements with the popover attribute set this element to the currently focused element
+       during the show popover algorithm." So it is ONE field over two sections, it belongs to the section that
+       declares it, and steps 16, 19 and 24 below reach it through core/html/html_dialog.h. A row here would be
+       the second copy, and the copy is browser-visibly wrong rather than merely redundant: `<dialog open
+       popover>` shown by showPopover() and then closed by a `method=dialog` submission must restore focus at
+       §4.11.4's close the dialog step 12, and a §6.12-private copy answers null there. */
     PS_DOC_SHOWING,      /* Document: "showing popover, a boolean, initially false" */
     PS_DOC_NESTING,      /* Document: "hiding popover nesting count, a number, initially 0" */
     PS_DOC_HINT_PARENT,  /* Document: "hint stack parent, an HTML element or null, initially null" */
@@ -146,7 +153,7 @@ enum {
 static const char *const PS_SLOT_NAME[PS_SLOT_N] = {
     "popoverVisibilityState", "popoverTrigger", "popoverHiding", "popoverToggleTaskTracker",
     "popoverToggleTaskTrackerTask", "openedInPopoverMode", "popoverCloseWatcher",
-    "popoverPreviouslyFocusedElement", "documentShowingPopover", "documentHidingPopoverNestingCount",
+    "documentShowingPopover", "documentHidingPopoverNestingCount",
     "documentHintStackParent"
 };
 static JSValue g_slot_key[PS_SLOT_N];
@@ -296,16 +303,21 @@ static int popover_check_validity(JSContext *ctx, JSValueConst el, bool expected
             return -1;
         }
     }
-    /* The fourth disjunct is "element is a dialog element and its IS MODAL is set to true", and the fifth is
-       "element's fullscreen flag is set". Nothing in this build can set either — `showModal()` is the only
-       producer of a modal dialog and Fullscreen's `requestFullscreen()` the only producer of the flag — so
-       both are false here by construction and step 3 does not throw for them. That is a condition EVALUATED at
-       the step that asks it rather than a skipped step, and the day either member lands, the assert fires AT
-       the disjunct that must then be written. */
-    realm_awaits(ctx, "HTMLDialogElement.prototype.showModal",
-                 "HTML §6.12 The popover attribute's check popover validity step 3 refuses a `dialog` element "
-                 "whose IS MODAL flag is set — `showModal()` is what sets it, so with that member in this "
-                 "build this disjunct must be written and must throw an \"InvalidStateError\"");
+    /* THE FOURTH DISJUNCT — "element is a dialog element and its is modal is set to true". It is ASKED now
+       rather than asserted-absent: §4.11.4's IS MODAL boolean has real per-element storage, so the question has
+       an answer for every element and html_dialog.h's predicate carries both of the standard's conjuncts. A
+       `realm_awaits` naming `showModal()` stood here, and it is retired with the storage it was waiting for
+       rather than with the member — the probe's DOMAIN is a member, and the producer of a false answer to this
+       disjunct is the FLAG, which close the dialog step 8 and §4.11.4's removing steps already clear. */
+    if (html_dialog_is_modal(ctx, el)) {
+        JS_ThrowDOMException(ctx, "InvalidStateError",
+                             "the element is a `dialog` element whose is modal flag is set");
+        return -1;
+    }
+    /* The fifth disjunct is "element's fullscreen flag is set". Nothing in this build can set it — Fullscreen's
+       `requestFullscreen()` is its only producer — so it is false here by construction and step 3 does not
+       throw for it. That is a condition EVALUATED at the step that asks it rather than a skipped step, and the
+       day that member lands the assert fires AT the disjunct that must then be written. */
     realm_awaits(ctx, "Element.prototype.requestFullscreen",
                  "HTML §6.12 The popover attribute's check popover validity step 3 refuses an element whose "
                  "FULLSCREEN FLAG is set — Fullscreen's `requestFullscreen()` is what sets it, so with that "
@@ -1351,7 +1363,8 @@ static int js_popover_hide_step(JSContext *ctx, void *st, JSValue cb_result, JSV
         }
         if (s->fire_events)                                                                      /* step 18 */
             popover_queue_toggle_task(ctx, element, POPOVER_OPEN, POPOVER_CLOSED, source);
-        s->prev_focused = ps_get(ctx, element, PS_PREV_FOCUSED);                                 /* step 19 */
+        s->prev_focused = html_dialog_previously_focused_element(ctx, element);                  /* step 19 */
+        if (JS_IsNull(s->prev_focused)) { JS_FreeValue(ctx, s->prev_focused); s->prev_focused = JS_UNDEFINED; }
         /* Step 20, WITH ITS TWO HALVES APART: step 20.1's clear is unconditional inside the block, and only
            step 20.2's focusing steps are gated on `focusPreviousElement`. That distinction is invisible from a
            member entry, which passes true, and it is exactly what hide popover stack until's callers vary.
@@ -1364,7 +1377,7 @@ static int js_popover_hide_step(JSContext *ctx, void *st, JSValue cb_result, JSV
             JSValue anchor;
             bool inside;
 
-            ps_clear(ctx, element, PS_PREV_FOCUSED);                                          /* step 20.1 */
+            html_dialog_set_previously_focused_element(ctx, element, JS_NULL);               /* step 20.1 */
             DCHECK(docctx != NULL,
                    "HTML §6.12 The popover attribute's hide a popover step 20.2 reads the document's FOCUSED "
                    "AREA OF THE DOCUMENT, and this element's node document is no realm's active document — "
@@ -1550,7 +1563,7 @@ static void popover_show_tail(JSContext *ctx, PopoverState *s)
 {
     JSContext *docctx = popover_document_realm(s->el);
 
-    ps_clear(ctx, s->el, PS_PREV_FOCUSED);                                                        /* step 16 */
+    html_dialog_set_previously_focused_element(ctx, s->el, JS_NULL);                              /* step 16 */
     /* Step 17 — "Let originallyFocusedElement be document's focused area of the document's DOM anchor." READ
        HERE AND NOT AT STEP 24, because that is where the standard reads it and because step 23's popover
        focusing steps move the focus: a read deferred to step 24 would answer with whatever this show just
@@ -2063,7 +2076,7 @@ static int popover_body(JSContext *ctx, JSStepHdr *hdr, void *state, int argc, J
                "HTML §6.12 The popover attribute's show popover step 24 stores originallyFocusedElement, and "
                "step 17 never bound one — shouldRestoreFocus is raised only at step 15.8, which every path "
                "reaches before step 17's read, so an unbound value here means the two steps came apart");
-        ps_set(ctx, s->el, PS_PREV_FOCUSED, JS_DupValue(ctx, s->originally_focused));
+        html_dialog_set_previously_focused_element(ctx, s->el, s->originally_focused);
     }
     popover_cleanup_showing(ctx, s);                                                              /* step 25 */
     popover_queue_toggle_task(ctx, s->el, POPOVER_CLOSED, POPOVER_OPEN, s->source);               /* step 26 */

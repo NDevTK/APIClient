@@ -17,13 +17,24 @@
  * same fact. The class is also what §3.7 needs anyway, because JS_SetClassProto is where this realm's
  * prototype lives.
  *
- * WHAT `new CloseWatcher()` MAKES REACHABLE, WHICH IS THE POINT OF LANDING IT. Before it, core/html's §6.10.2
- * manager had NO live establisher at all: §6.12 show popover's step 15 DFAILs before it establishes anything
- * and §4.11.4's modal `dialog` is not built, so every Window's groups was permanently empty and §6.10.2's
- * anti-abuse arithmetic — the allowance, the banking boolean, the join-the-last-group branch — had been
- * verified by reading and by two-sided DCHECKs and by nothing that ran. This constructor is its first caller,
- * and `requestClose()` and `close()` are the first callers of the three algorithms that run a watcher's
- * actions. */
+ * WHAT `new CloseWatcher()` MADE REACHABLE, AND WHY THAT SENTENCE IS REWRITTEN RATHER THAN KEPT. What stood
+ * here said §6.10.2's manager had NO live establisher at all before this constructor, on the ground that §6.12
+ * show popover's step 15 crashed before establishing anything and that §4.11.4's modal `dialog` was not built.
+ * (That retired sentence is paraphrased and deliberately NOT put in quotation marks, for the reason
+ * core/html/close_watcher.c's own close-action arm records: a quoted run standing beside a citation is read as
+ * the STANDARD's words, and engine/citegen.mjs cannot tell a fabricated sentence from a piece of this tree
+ * quoting itself.) BOTH HALVES ARE NOW FALSE, and the first was false well before anybody read it: §6.12's show popover step 15.10
+ * calls establish with the POPOVER kind and there is no crash anywhere in front of it, so this file was
+ * describing a §6.12 that had already been built. The second is false as of §4.11.4's own close watcher chain,
+ * whose set the dialog close watcher establishes the DIALOG kind from the `open` attribute's change steps.
+ * THE CLAIM IS DELETED RATHER THAN RE-AIMED, and the reason is worth more than the correction: a paragraph
+ * saying another component crashes where it does not is the stale-claim failure with no crash to meet traffic —
+ * a reader consults it INSTEAD of grepping, and it had already sent one.
+ *   WHAT IS TRUE AND DOES NOT ROT: this interface is the establisher a PAGE reaches directly, and its
+ * `requestClose()` and `close()` are the shortest road to §6.10.2's three action-running algorithms, needing
+ * neither a popover nor a `dialog` nor a modelled close request to get there. That is why it is worth having
+ * beside the other two rather than instead of them, and it is a statement about the standard's shape rather
+ * than about which of the three establishers this build happens to hold. */
 #include <stdbool.h>
 #include <stdint.h>
 
