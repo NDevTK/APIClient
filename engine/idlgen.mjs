@@ -68,9 +68,36 @@ const REGEN = process.argv.includes("--regen");
    code is non-zero if ANY category is non-empty. What is NOT a defect is stated by declaration rather than by
    omission: an interface declared UNBUILT with its reason, and a member declared CONDITIONAL by
    idl_members_excluded, are the two accepted steady states — and both are checked from the other side, so a
-   declaration that has gone stale is itself a category. */
+   declaration that has gone stale is itself a category.
+
+   AND IT IS TWO LEDGERS, BECAUSE A CATEGORY THIS RUN COULD NOT EVALUATE HAS FOUND NOTHING AND SUMMING IT WITH
+   ONE THAT DID IS THE THREE-STATES-BEHIND-ONE-ANSWER SHAPE ARRIVING IN THE INSTRUMENT BUILT TO END IT.
+   §Testing: a gate states its FINDINGS and its BLIND SPOTS as separate verdicts, because an instrument that
+   cannot see something has not found anything — and where the two must share a line, the line says which is
+   which. They shared one here: every category printed under one heading, sorted together by size, beneath a
+   closing sentence asserting that each "names ONE disagreement between the platform's IDL and this engine".
+   That sentence is TRUE of an absent member and FALSE of an install construct whose member name this scan
+   could not resolve — the second is a statement about THIS AUDIT, and a reader sent to it looking for a
+   disagreement finds an unreadable line of C and no disagreement anywhere. Measured on the run that split
+   them: three of seven categories, and 601 of 1095 items, were the audit's own blindness, and the largest of
+   those three carried the second-largest number on the page while reading as engine work in every column
+   printed.
+
+   THE DISCRIMINATOR IS WHOSE STATE THE NUMBER IS ABOUT, and it is DECLARED AT THE SITE that raises the
+   category rather than inferred from the category's wording — a rule read off the label would be a count of a
+   SPELLING, which is the defect this family of gates exists to remove. `defect` is a statement about the
+   ENGINE: it does not install a member the IDL declares, it installs one the IDL does not, it declares an
+   absence the corpus contradicts, it cannot construct what the platform constructs. `blind` is a statement
+   about THIS RUN: a construct it could not read, a target it could not attribute, a mint it could not prove —
+   so it made no claim about the engine either way, and its count is the amount by which the other ledger is a
+   FLOOR rather than a total. BOTH ARE RED: an audit that cannot read its subject is an unbuilt capability of
+   the audit, and going green where its input is unreadable is the excluded check §Testing forbids. They are
+   red about OPPOSITE WORK, which is all the split is for — a finding is closed in the engine, a blind spot is
+   closed here. */
 const defects = new Map();
+const blinds = new Map();
 const defect = (kind, n = 1) => { if (n) defects.set(kind, (defects.get(kind) || 0) + n); };
+const blind = (kind, n = 1) => { if (n) blinds.set(kind, (blinds.get(kind) || 0) + n); };
 const gapRows = [];
 
 // interface -> the component .c that implements it, or the componentS: one interface's surface can be split
@@ -1177,7 +1204,7 @@ for (const [iface, paths] of AUDITED) {
      distinct-members line above, and the exit code is unchanged, because a category is non-empty either way.
      The per-interface rows stay exact — each still names every member a page cannot reach on that interface,
      which is the honest answer to a different question. */
-  defect("UNPROVEN members — installed on a target the audit cannot attribute", unproven.length);
+  blind("UNPROVEN members — installed on a target the audit cannot attribute", unproven.length);
   defect("STALE member exclusions", condStale.length);
   defect("CONTRADICTED member exclusions", condInstalled.length);
   defect("CROSS-CHECK rows naming a file that installs nothing this interface has", strangers.length);
@@ -1267,7 +1294,7 @@ defect(`js_noop-STUB members (distinct; ${pairsNoop} interface-member pairs)`, d
    overridden algorithm reached from sixty-odd interface objects, and the ordinary ones are that many distinct
    construct steps to write. One count over both would name neither job. */
 const ctorDeclaring = ctorBuilt.length + htmlCtorAbsent.length + ordinaryCtorAbsent.length + ctorUnproven.length;
-defect(`interfaces whose \`new\` this audit CANNOT DECIDE — ${ctorUnread.length} constructing mint(s) name an ` +
+blind(`interfaces whose \`new\` this audit CANNOT DECIDE — ${ctorUnread.length} constructing mint(s) name an ` +
        `interface this scan could not read, so the set of names it minted is incomplete by an unknown amount ` +
        `and no interface's absence from it proves a thing (of ${ctorDeclaring} audited interfaces declaring a ` +
        `constructor). Closed by making the mint READABLE — a name the scan can resolve at the site or through ` +
@@ -1343,7 +1370,7 @@ for (const [id, iface] of legacyFactoryAbsent)
               `resolution, internally create a new object implementing ${iface}, run the constructor steps, ` +
               `and a non-writable non-configurable \`prototype\` pointing at ${iface}'s interface prototype ` +
               `object.`);
-defect(`Web IDL §3.7.2 legacy factory functions whose presence this audit CANNOT DECIDE — see the unreadable ` +
+blind(`Web IDL §3.7.2 legacy factory functions whose presence this audit CANNOT DECIDE — see the unreadable ` +
        `mint(s) above`, legacyFactoryUnproven.length);
 /* THE LIVE PATH FOR `ownConstructors`'s MISS — see its own comment. A name here is one the ENGINE mints, so it
    need not be an interface at all, and the two readings are told apart rather than merged: the corpus carries
@@ -1384,7 +1411,7 @@ const strayConstructs = strayAll.filter((n) => !strayForwarded(n));
 const strayUnproven = strayAll.filter(strayForwarded);
 defect("interface objects this engine gives [[Construct]] that the platform declares no constructor for",
        strayConstructs.length);
-defect("names a filtered install loop's COLUMN carries whose mint this scan cannot prove reaches them — " +
+blind("names a filtered install loop's COLUMN carries whose mint this scan cannot prove reaches them — " +
        "neither charged as a stray construct nor credited as constructing", strayUnproven.length);
 /* THE ROW STATES HOW THE NAME WAS READ, because the two readings do not support the same accusation and the
    difference decides which of three things a reader should go and do. A name read as a LITERAL beside the mint
@@ -1460,7 +1487,7 @@ for (const [iface, files] of stale)
    and they fail the run for the reason the report exists: a construct it cannot resolve is a member it can
    neither count nor miss, so the ABSENT number beside it is a number over a surface with holes in it. Making
    them a warning would be the gate reporting green about a question it declined to ask. */
-defect("install constructs whose member name is not statically resolvable", unresolvedAll.size);
+blind("install constructs whose member name is not statically resolvable", unresolvedAll.size);
 if (unresolvedAll.size) {
   console.log(`[idl-audit] ${unresolvedAll.size} install construct(s) whose member name could not be resolved ` +
               `statically — neither counted as installed nor reported as a gap:`);
@@ -1470,7 +1497,7 @@ if (unresolvedAll.size) {
 /* The same constructs in components no row names. The scan is over the whole program now, so these exist and
    are counted; hiding them behind "no row asked" would be the audit choosing what to know about itself. */
 const elsewhere = world.unresolved.filter((u) => !unresolvedAll.has(`${u.file}:${u.line}:${u.expr}`));
-defect("install constructs whose member name is not statically resolvable", elsewhere.length);
+blind("install constructs whose member name is not statically resolvable", elsewhere.length);
 if (elsewhere.length) {
   const byFile = new Map();
   for (const u of elsewhere) byFile.set(u.file, (byFile.get(u.file) || 0) + 1);
@@ -1489,7 +1516,7 @@ if (elsewhere.length) {
    above it never gets to run. A primitive that cannot read its input now says so, and a refusal is counted
    only where the analysis DEPENDS on the answer — which interface a member's target is, and which interface a
    §3.7.1 interface object was built over. Zero is the armed state, not an absent check. */
-defect("facts a parsing primitive could not read that the analysis then depended on", env.refusals.length);
+blind("facts a parsing primitive could not read that the analysis then depended on", env.refusals.length);
 console.log(`[idl-audit] reader refusals — ${env.refusals.length} fact(s) a parsing primitive could not read ` +
             `and an interface question then depended on`);
 for (const r of env.refusals)
@@ -1512,7 +1539,7 @@ for (const r of wrongKind)
               `getOwnPropertyDescriptor wrongly and, being writable, lets a page overwrite the member`);
 /* An install form whose property kind is not stated is a member nobody can ask this of. Zero is the armed
    state, exactly as it is for the reader refusals. */
-defect("install forms whose property kind is not declared, over a member the IDL declares", kindUndeclared.length);
+blind("install forms whose property kind is not declared, over a member the IDL declares", kindUndeclared.length);
 for (const r of [...new Map(kindUndeclared.map((r) => [r.form, r])).values()])
   console.log(`[idl-audit] ${r.form} declares no property kind, so ${r.iface}.${r.name} and every member it ` +
               `installs is exempt from the §3.7.6/§3.7.7/§3.7.5 check — state its kind in idl_installed.mjs`);
@@ -1526,7 +1553,7 @@ if (nonIface.length)
   console.log(`[idl-audit] ${nonIface.length} property(ies) installed on objects Web IDL declares are NOT ` +
               `interface prototype objects, so they are nobody's IDL member: ` +
               `${[...new Set(nonIface.map((r) => `${r.name} (${r.nonInterface.kind})`))].join(", ")}`);
-defect("installed members whose target interface could not be decided", unattributed.length);
+blind("installed members whose target interface could not be decided", unattributed.length);
 if (unattributed.length) {
   const byFile = new Map();
   for (const r of unattributed) {
@@ -1554,12 +1581,30 @@ const unknownTags = [...tagged].filter((n) => !byName.has(n)).sort();
    selector at all, have the C declare what the loop LEAVES ON THE TARGET (idl_install_covers_column), which
    the engine then asserts per realm against the object itself. The same category carries a declaration no
    install answers to — the other side of that pair, and the reason it is not simply believed. */
-defect("install sites whose selected subset could not be computed", world.unselected.length);
+blind("install sites whose selected subset could not be computed", world.unselected.length);
 for (const u of world.unselected)
   console.log(`[idl-audit] ${u.file.replace(BROWSER + "/", "")}:${u.line}  ${u.fn}() — ${u.why}`);
 defect("interface tags naming something the IDL corpus does not declare", unknownTags.length);
-defect("install targets whose interface tag is not statically decidable", env.tagIssues.length);
-defect("interface objects whose prototype identity the corpus contradicts or cannot reach", env.tagChecks.length);
+blind("install targets whose interface tag is not statically decidable", env.tagIssues.length);
+/* ONE CATEGORY HELD BOTH ANSWERS, AND THEY TAKE OPPOSITE WORK. A prototype the corpus CONTRADICTS is a
+   statement about the engine; an interface object this detector could not REACH is a statement about this run,
+   so a single count of the two cannot be filed in either ledger without being wrong about half of it — and it
+   was the one category here that could not be classified at all until it was split. The split reads the
+   producer's OWN `kind`, which idl_installed.mjs already stamps on every record and which the row printer
+   below already branches on; it does not re-derive the distinction, which would be the second copy. A kind in
+   neither arm is FATAL rather than filed under neither: a third answer landing in no ledger is exactly the
+   silent drop this split exists to remove, and the run that adds one is the run that must classify it. */
+const TAGCHECK_KINDS = new Set(["contradicted", "unreached"]);
+const tagCheckUnclassified = env.tagChecks.filter((c) => !TAGCHECK_KINDS.has(c.kind));
+if (tagCheckUnclassified.length)
+  throw new Error(`[idl-audit] idl_installed.mjs raised ${tagCheckUnclassified.length} tagCheck(s) of a kind ` +
+                  `this verdict does not classify (${[...new Set(tagCheckUnclassified.map((c) => c.kind))]
+                    .join(", ")}) — file each as a FINDING about the engine or a BLIND SPOT of this audit at ` +
+                  `this site; a kind in neither ledger is counted nowhere and reported as nothing.`);
+defect("interface objects whose prototype identity the corpus CONTRADICTS",
+       env.tagChecks.filter((c) => c.kind === "contradicted").length);
+blind("interface objects whose prototype identity this run could not REACH",
+      env.tagChecks.filter((c) => c.kind === "unreached").length);
 defect("installs onto an object built with no prototype", env.recordContradictions.length);
 if (unknownTags.length)
   console.log(`[idl-audit] ${unknownTags.length} interface tag(s) name something the IDL corpus does not ` +
@@ -1803,7 +1848,7 @@ defect("IdlDictMember entries naming a member the dictionary the declaration nam
 defect("dictionary members whose declared `required` contradicts the IDL", dictRequired.length);
 defect("named dictionary declarations whose member order is not §3.2.17's", dictOrder.length);
 defect("IdlDictDecl identifiers naming a dictionary no spec in @webref/idl defines", dictUnknownName.length);
-defect("IdlDictMember declarations this audit could not read", dictUnreadable.length);
+blind("IdlDictMember declarations this audit could not read", dictUnreadable.length);
 console.log(`[idl-audit] ── Web IDL §2.7 dictionaries ── ${dictSites.size} reachable from the members this ` +
             `engine installs; ${dictArrays.length} IdlDictMember declaration(s) read, ${dictNamed.size} of ` +
             `them naming their dictionary`);
@@ -2251,12 +2296,29 @@ if (withGaps.length) {
                    : ""));
 }
 console.log("[idl-audit] ── verdict ──");
-if (!defects.size) {
+if (!defects.size && !blinds.size) {
   console.log("[idl-audit]   PASS — every audited interface installs its whole IDL surface, every declaration " +
               "is current, and every install construct resolved.");
   process.exit(0);
 }
-for (const [kind, n] of [...defects].sort((a, b) => b[1] - a[1]))
+const ledgerItems = (m) => [...m.values()].reduce((a, b) => a + b, 0);
+const ledgerRows = (m) => [...m].sort((a, b) => b[1] - a[1]);
+/* BOTH BLOCKS PRINT, INCLUDING THE EMPTY ONE. A block that appears only when it is non-empty is one nobody
+   learns to look for, so its absence reads as the absence of the QUESTION rather than as an answer to it — and
+   the direction that costs something is the blind block going quiet, which is the only evidence that the
+   findings above it are a total rather than a floor. */
+console.log(`[idl-audit] ── FINDINGS ── ${defects.size} category(ies), ${ledgerItems(defects)} item(s). Each ` +
+            `names ONE disagreement between the platform's IDL and this engine, and each states its own ` +
+            `outcome on its own line.`);
+for (const [kind, n] of ledgerRows(defects))
+  console.log(`[idl-audit]   ${String(n).padStart(5)}  ${kind}`);
+console.log(`[idl-audit] ── BLIND SPOTS ── ${blinds.size} category(ies), ${ledgerItems(blinds)} item(s). Each ` +
+            `names something THIS RUN COULD NOT READ, so it found nothing about the engine there and the ` +
+            `FINDINGS above are a FLOOR by at most this much: an unresolved construct is neither charged as a ` +
+            `gap (which reports a built member unbuilt) nor dropped (which reports it complete). Each is ` +
+            `closed HERE — by making the construct readable at its site, or by declaring to this audit what ` +
+            `it cannot see — never in the engine.`);
+for (const [kind, n] of ledgerRows(blinds))
   console.log(`[idl-audit]   ${String(n).padStart(5)}  ${kind}`);
 /* THE ACTION IS ON THE CATEGORY'S OWN LINE, AND THIS SENTENCE NO LONGER GUESSES ONE FOR ALL OF THEM. It used
    to offer three actions for however many categories printed above it, with nothing saying which belonged to
@@ -2266,8 +2328,9 @@ for (const [kind, n] of [...defects].sort((a, b) => b[1] - a[1]))
    because a reader who obeys it lands a conformance violation and the instrument that told them to goes on
    printing. Each category above states its own outcome; what is common to all of them is only that a category
    is non-empty, and that is all this line is entitled to say. */
-console.error(`[idl-audit] FAILED — ${defects.size} category(ies) above. Each names ONE disagreement between ` +
-              `the platform's IDL and this engine, and each states its own outcome on its own line: they are ` +
-              `not all members to write, and a category is closed at the ROOT by the action ITS line names — ` +
-              `never a js_noop stub and never a g_opaque prototype, whichever line sent you.`);
+console.error(`[idl-audit] FAILED — ${defects.size} FINDING category(ies) and ${blinds.size} BLIND-SPOT ` +
+              `category(ies) above, never summed. A finding is closed at the ROOT IN THE ENGINE by the action ` +
+              `ITS line names — they are not all members to write, and never a js_noop stub and never a ` +
+              `g_opaque prototype, whichever line sent you. A blind spot is closed IN THIS AUDIT, and until ` +
+              `it is, the finding count above it is a floor.`);
 process.exit(1);
