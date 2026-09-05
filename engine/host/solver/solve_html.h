@@ -17,15 +17,29 @@
  *
  * WHAT IT ANSWERS IS A TOKENIZER STATE (WHATWG HTML §13.2.5), and the escape is the MINIMAL byte sequence that
  * state's own transition table defines as its exit — `-->` for the comment state, `</textarea>` for RCDATA,
- * the opening quote for an attribute value. The state is read off the REAL Lexbor parse, and the one fact the
- * DOM does not record — WHICH of §13.2.5.36/.37/.38 an attribute value is in — is asked of the same real parser
- * by DIFFERENTIAL RE-PARSE rather than by scanning backwards for a quote by hand (`<div title="a > b" id={}>`
- * defeats every hand scan; it does not defeat the tokenizer).
+ * the opening quote for an attribute value, `]]>` for a CDATA section. The state is read off the REAL Lexbor
+ * parse, and the facts the DOM does not record are asked of that same real parser by DIFFERENTIAL RE-PARSE
+ * rather than scanned for by hand. There are TWO of them and they are asked the same way — splice in the byte
+ * the states disagree about and re-parse:
+ *   - WHICH of §13.2.5.36/.37/.38 an attribute value is in. A hand scan backwards for the opening quote is
+ *     defeated by the first `<div title="a > b" id={}>` it meets; the tokenizer is not.
+ *   - WHETHER FOREIGN TEXT IS INSIDE A CDATA SECTION (§13.2.5.69). Its "Anything else" is "Emit the current
+ *     input character as a character token", so the HTML parser never builds a CDATASection node and both
+ *     states put their bytes in a TEXT node — the tree cannot tell them apart, and a `<` spliced in behind
+ *     the locator becomes an ELEMENT in exactly one of them.
  *
  * A STATE WITH NO ESCAPE RULE CRASHES, NAMING ITSELF. That is the work queue: a DFAIL here says which
  * §13.2.5 state the attacker's bytes are in and therefore exactly what has to be built. It is NOT the same
  * thing as a search that has not solved — a derived escape that does not fire is an ordinary parked @S search
- * (CLAUDE.md forbids asserting on that), while a context this file cannot NAME is an unbuilt capability. */
+ * (CLAUDE.md forbids asserting on that), while a context this file cannot NAME is an unbuilt capability.
+ *
+ * AND THE LINE BETWEEN THOSE TWO IS DRAWN BY WHOSE BYTES STATE THE VALUE, NOT BY HOW MUCH IS BUILT. What is
+ * parsed here is the string the PAGE'S OWN CODE handed the sink, so the parse's OUTCOME is not a value this
+ * engine computed and may not be asserted on: `<div id=a id={hole}>` (§13.2.5.33 removes the duplicate
+ * attribute from the token), a DOCTYPE outside the initial insertion mode, and an unterminated tag whose
+ * eof-in-tag discards it all put the locator in a token that builds NO NODE, and each is ordinary markup a
+ * page emits. Those answer 0 — a parked search — and the residual is named at the site. What still crashes is
+ * a node kind this file's own walk produced and does not name, which is a statement about this codebase. */
 #ifndef ENGINE_HOST_SOLVER_SOLVE_HTML_H
 #define ENGINE_HOST_SOLVER_SOLVE_HTML_H
 

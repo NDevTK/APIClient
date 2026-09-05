@@ -21,8 +21,17 @@ typedef char solve_html_tokens_are_the_same_length[
 /* WHERE THE LOCATOR LANDED, as the REAL parse reports it. The three NAME kinds are separated from the value
    kinds deliberately: a hole in an attribute NAME (§13.2.5.33) or a tag NAME (§13.2.5.8) is a different
    escape problem from a hole in a VALUE, and collapsing them would make the derivation answer the value's
-   escape for a context it does not fit. */
-enum { LOC_NONE = 0, LOC_TEXT, LOC_COMMENT, LOC_CDATA, LOC_ATTR_VALUE, LOC_ATTR_NAME, LOC_TAG_NAME };
+   escape for a context it does not fit.
+   THERE IS NO CDATA KIND, AND THAT IS A FACT ABOUT THE HTML PARSER RATHER THAN A GAP IN THIS LIST.
+   §13.2.5.69 "CDATA section state" says of every character it consumes "Emit the current input character as
+   a character token", so the HTML tokenizer turns a CDATA section into TEXT and tree construction never
+   builds a CDATASection node - Lexbor agrees by construction, setting `tkz->token->tag_id = LXB_TAG__TEXT`
+   before it enters the state. A kind for it could therefore never be REPORTED: the arm that used to crash
+   naming §13.2.5.69 was unreachable for every input, while a real hole in a CDATA section arrived here as
+   LOC_TEXT and was handed the data state's escape, which cannot leave a CDATA section. The state is still
+   named and still escaped - see HOLE_CDATA and `tag_open_is_live` - it is simply not a NODE KIND, because
+   the DOM has nothing to say about it. */
+enum { LOC_NONE = 0, LOC_TEXT, LOC_COMMENT, LOC_ATTR_VALUE, LOC_ATTR_NAME, LOC_TAG_NAME };
 
 /* Every field points INTO the parsed document and is valid only while it lives — deliberately, because a copy
    would need a bound on an element name that has none (a custom element's name is arbitrarily long). */
@@ -31,7 +40,16 @@ typedef struct {
     const lxb_char_t *tag;  size_t tag_n;    /* the element holding it: a text node's PARENT, an attribute's OWNER */
     const lxb_char_t *attr; size_t attr_n;   /* the attribute's name  — LOC_ATTR_VALUE / LOC_ATTR_NAME only */
     const lxb_char_t *val;  size_t val_n;    /* the attribute's value — LOC_ATTR_VALUE only */
-    lxb_dom_element_t *el;                   /* the owning element    — LOC_ATTR_VALUE only */
+    lxb_dom_element_t *el;                   /* the owning element    — LOC_ATTR_VALUE / LOC_ATTR_NAME */
+    /* THE LOCATOR BEGINS THE TAG NAME — LOC_TAG_NAME only. It decides whether the attacker CHOOSES the
+       element or merely extends the name the page opened, which is the difference between an escape that
+       needs a `<` and one that does not. */
+    int owns_tag_name;
+    /* THE HOLDER IS A FOREIGN ELEMENT — LOC_TEXT only. §13.2.5.42 "Markup declaration open state" enters the
+       CDATA section state only where "there is an adjusted current node and it is not an element in the HTML
+       namespace", so foreign content is the ONLY place that state can be reached; it is also the only place
+       the HTML-only RCDATA/RAWTEXT element names below stop meaning what they mean. */
+    int foreign;
 } Locate;
 
 /* THE TOKENIZER STATE the attacker's bytes are in. Named after §13.2.5's own states because the escape is that
@@ -45,7 +63,10 @@ typedef enum {
     HOLE_COMMENT,         /* §13.2.5.45 comment state */
     HOLE_ATTR_DOUBLE,     /* §13.2.5.36 attribute value (double-quoted) state */
     HOLE_ATTR_SINGLE,     /* §13.2.5.37 attribute value (single-quoted) state */
-    HOLE_ATTR_UNQUOTED    /* §13.2.5.38 attribute value (unquoted) state */
+    HOLE_ATTR_UNQUOTED,   /* §13.2.5.38 attribute value (unquoted) state */
+    HOLE_ATTR_NAME,       /* §13.2.5.33 attribute name state */
+    HOLE_TAG_NAME,        /* §13.2.5.8  tag name state */
+    HOLE_CDATA            /* §13.2.5.69 CDATA section state — reachable only in foreign content */
 } HoleState;
 
 static int mem_has(const lxb_char_t *h, size_t n, const char *needle) {
@@ -56,6 +77,10 @@ static int mem_has(const lxb_char_t *h, size_t n, const char *needle) {
 }
 static int name_is(const lxb_char_t *t, size_t n, const char *lit) {
     return t && strlen(lit) == n && !memcmp(t, lit, n);
+}
+static int mem_begins(const lxb_char_t *h, size_t n, const char *needle) {
+    size_t m = strlen(needle);
+    return h && n >= m && !memcmp(h, needle, m);
 }
 
 /* Document order without a C frame per level — the tree's depth is the CANDIDATE'S data (a breakout that nests
@@ -87,6 +112,7 @@ static int locate(lxb_html_document_t *doc, Locate *out) {
 
             if (mem_has(tn, tl, SOLVE_HTML_LOCATOR)) {
                 out->kind = LOC_TAG_NAME; out->tag = tn; out->tag_n = tl;
+                out->owns_tag_name = mem_begins(tn, tl, SOLVE_HTML_LOCATOR);
                 return 1;
             }
             for (a = lxb_dom_element_first_attribute(el); a; a = lxb_dom_element_next_attribute(a)) {
@@ -95,7 +121,7 @@ static int locate(lxb_html_document_t *doc, Locate *out) {
                 const lxb_char_t *av = lxb_dom_attr_value(a, &vl);
 
                 if (mem_has(an, al, SOLVE_HTML_LOCATOR)) {
-                    out->kind = LOC_ATTR_NAME;
+                    out->kind = LOC_ATTR_NAME; out->el = el;
                     out->tag = tn; out->tag_n = tl; out->attr = an; out->attr_n = al;
                     return 1;
                 }
@@ -108,17 +134,17 @@ static int locate(lxb_html_document_t *doc, Locate *out) {
             }
             continue;
         }
-        if (n->type == LXB_DOM_NODE_TYPE_TEXT || n->type == LXB_DOM_NODE_TYPE_COMMENT ||
-            n->type == LXB_DOM_NODE_TYPE_CDATA_SECTION) {
+        if (n->type == LXB_DOM_NODE_TYPE_TEXT || n->type == LXB_DOM_NODE_TYPE_COMMENT) {
             const lxb_dom_character_data_t *cd = (const lxb_dom_character_data_t *)n;
 
             if (!mem_has(cd->data.data, cd->data.length, SOLVE_HTML_LOCATOR)) continue;
             if (n->type == LXB_DOM_NODE_TYPE_COMMENT) out->kind = LOC_COMMENT;
-            else if (n->type == LXB_DOM_NODE_TYPE_CDATA_SECTION) out->kind = LOC_CDATA;
             else {
                 out->kind = LOC_TEXT;
-                if (n->parent && n->parent->type == LXB_DOM_NODE_TYPE_ELEMENT)
+                if (n->parent && n->parent->type == LXB_DOM_NODE_TYPE_ELEMENT) {
                     out->tag = lxb_dom_element_qualified_name(lxb_dom_interface_element(n->parent), &out->tag_n);
+                    out->foreign = n->parent->ns != LXB_NS_HTML;
+                }
             }
             return 1;
         }
@@ -165,6 +191,16 @@ static const struct { const char *tag; const char *event; const char *resource; 
 };
 #define AUTOFIRE_N ((int)(sizeof AUTOFIRE / sizeof AUTOFIRE[0]))
 
+/* HOW MANY OF THOSE ROWS FIRE ON INSERTION ALONE. They are the ones listed FIRST, so the minimal firing
+   element is row 0 and the answer is an INDEX rather than a search. The count and the ordering are two
+   hand-written statements of one fact, so they are reconciled where they are read (`firing_element`) — a
+   check whose two sides can actually disagree, which is what stood here and was not: a loop over a build
+   constant, looking for a row that build constant contains, returned at row 0 for every input, so the abort
+   behind it could not fire for ANY state of the program and asserted nothing about any run. */
+#define AUTOFIRE_INSERTION_N 2
+typedef char solve_html_autofire_has_an_insertion_row[
+    (AUTOFIRE_INSERTION_N >= 1 && AUTOFIRE_INSERTION_N < AUTOFIRE_N) ? 1 : -1];
+
 static int autofire_of(const lxb_char_t *tag, size_t n) {
     int i;
     for (i = 0; i < AUTOFIRE_N; i++) if (name_is(tag, n, AUTOFIRE[i].tag)) return i;
@@ -193,20 +229,18 @@ static int has_attribute(lxb_dom_element_t *el, const char *name) {
    solved and not a capability that is missing. */
 static int firing_element(char *b, size_t n, const SolveDelivered *d) {
     const char *sep = solve_delivered_byte(d, ' ') ? " " : solve_delivered_byte(d, '/') ? "/" : NULL;
-    int i;
+    int k;
 
+    DCHECK(AUTOFIRE[AUTOFIRE_INSERTION_N - 1].resource == NULL &&
+           AUTOFIRE[AUTOFIRE_INSERTION_N].resource != NULL,
+           "the auto-fire table's insertion-firing rows are no longer its first AUTOFIRE_INSERTION_N - the "
+           "count and the ordering are two statements of one fact and every construction here reads row 0 as "
+           "THE minimal firing element, so a row inserted without moving the count makes each constructed "
+           "breakout name an element whose handler waits on a resource nothing has broken");
     if (!sep || !solve_delivered_byte(d, '<') || !solve_delivered_byte(d, '>')) { b[0] = 0; return 0; }
-    for (i = 0; i < AUTOFIRE_N; i++)
-        if (!AUTOFIRE[i].resource) {
-            int k = snprintf(b, n, "<%s%s%s=X9()>", AUTOFIRE[i].tag, sep, AUTOFIRE[i].event);
-            CHECK(k > 0 && (size_t)k < n, "solve_html: the firing element did not fit its buffer");
-            return 1;
-        }
-    DFAIL("no element in the auto-fire table fires on insertion alone, so a data-state escape has no element "
-          "to inject and every HTML breakout this file constructs is unfireable - restore the row for an "
-          "element that dispatches a handler with no resource and no interaction");
-    b[0] = 0;
-    return 0;
+    k = snprintf(b, n, "<%s%s%s=X9()>", AUTOFIRE[0].tag, sep, AUTOFIRE[0].event);
+    CHECK(k > 0 && (size_t)k < n, "solve_html: the firing element did not fit its buffer");
+    return 1;
 }
 
 /* AN ESCAPE THE SOURCE CANNOT CARRY IS NOT EMITTED, and this is the one place that decides it — every
@@ -296,6 +330,40 @@ static int space_starts_attribute(const char *witness, size_t at) {
     return found;
 }
 
+/* …AND THE ONE STATE NO NODE RECORDS AT ALL: §13.2.5.69 "CDATA section state". Its "Anything else" is "Emit
+   the current input character as a character token", so a CDATA section's bytes reach the tree as ordinary
+   TEXT and are indistinguishable there from data-state text — the DOM has no answer to give, exactly as it
+   has none for which of §13.2.5.36/.37/.38 an attribute value is in, and the same real parser is asked.
+   THE QUESTION IS THE ONE BYTE THE TWO STATES DISAGREE ABOUT. In the data state a `<` is §13.2.5.6 "Tag open
+   state" and a start tag spliced in behind the locator becomes an ELEMENT; inside a CDATA section it is an
+   ordinary character and no element appears. Nothing else in the splice can move the parse either way: the
+   filler name is ASCII alphanumeric, so it opens no state on either side of the question.
+   IT IS ASKED ONLY IN FOREIGN CONTENT, because §13.2.5.42 "Markup declaration open state" reaches the CDATA
+   section state only where "there is an adjusted current node and it is not an element in the HTML
+   namespace" — so in HTML content the answer is known without a parse, and `<![CDATA[` there is a
+   cdata-in-html-content parse error that becomes a §13.2.5.41 bogus comment instead. */
+static int tag_open_is_live(const char *witness, size_t at) {
+    size_t wl = 0;
+    char *w = splice(witness, at, "<" SOLVE_HTML_PAD ">", &wl);
+    lxb_html_document_t *doc = dom_document_create();
+    int found = 0;
+
+    CHECK(doc != NULL, "solve_html: OOM creating a CDATA-section discrimination parse");
+    if (html_parse_document(doc, DOM_PARSE_ROOT_PRIVATE, HTML_SCRIPTING_DISABLED, (const lxb_char_t *)w, wl) == LXB_STATUS_OK) {
+        lxb_dom_node_t *root = lxb_dom_interface_node(&doc->dom_document), *n;
+
+        for (n = root->first_child; n != NULL && !found; n = walk_next(n, root)) {
+            size_t tl = 0;
+            if (n->type != LXB_DOM_NODE_TYPE_ELEMENT) continue;
+            found = name_is(lxb_dom_element_qualified_name(lxb_dom_interface_element(n), &tl),
+                            tl, SOLVE_HTML_PAD);
+        }
+    }
+    dom_document_destroy(doc);
+    free(w);
+    return found;
+}
+
 static HoleState attr_state_of(const char *witness, size_t at) {
     int dq = quote_ends_value(witness, at, '"');
     int sq = quote_ends_value(witness, at, '\'');
@@ -317,6 +385,73 @@ static HoleState attr_state_of(const char *witness, size_t at) {
    every percent-encode set in URL §1.3 "Percent-encoded bytes" holds SPACE and none of them holds the solidus,
    so for a fragment- or query-carried payload the two spellings are the difference between an escape and no
    escape at all. */
+/* THE TWO NAME STATES' ESCAPES — §13.2.5.33 "Attribute name state" and §13.2.5.8 "Tag name state". ONE
+   function because their exit transitions are the same two doors, read off the same table:
+     - U+003E GREATER-THAN SIGN. §13.2.5.8 switches to the data state and emits the tag outright; §13.2.5.33
+       RECONSUMES in §13.2.5.34 "After attribute name state" (not §13.2.5.32 — the two states leave to
+       different places and only §13.2.5.8's whitespace exit reaches the before-attribute-name one), whose
+       `>` does the same. So `>` ends the tag from either, and behind it is the ordinary data-state escape:
+       the firing element.
+     - WHITESPACE or U+002F SOLIDUS, and THIS is the escape that needs no `<` at all. §13.2.5.8 goes to
+       §13.2.5.32 "Before attribute name state" on whitespace and to §13.2.5.40 "Self-closing start tag
+       state" on the solidus, whose "Anything else" is an unexpected-solidus-in-tag parse error that
+       RECONSUMES in §13.2.5.32; §13.2.5.33 reconsumes in §13.2.5.34 for both, and its "Anything else" starts
+       a new attribute. Either way what follows is an ATTRIBUTE NAME, so a handler can be written there.
+   WHAT THE TWO STATES DO NOT SHARE IS WHOSE ELEMENT IT IS. A hole in an attribute name extends an element
+   the PAGE chose, so a handler written on it fires only where that element auto-fires. A hole that BEGINS a
+   tag name IS the element, so the escape names the minimal firing element itself and needs no `<`, no `>`
+   and no auto-firing page element — the strongest breakout this file constructs, and the one a source that
+   percent-encodes both angle brackets still carries. Where the locator only EXTENDS a name the page opened
+   (`<div{hole}>`) the element stays the page's unknown one, so that door is the `>` above and nothing else.
+   THE SOLIDUS SPELLING QUOTES ITS VALUES AND THE WHITESPACE ONE DOES NOT, which is measured against the real
+   parser rather than assumed: §13.2.5.38 "Attribute value (unquoted) state" appends the solidus as "anything
+   else", so `/src=x/onerror=X9()/x9pad` puts every byte after the FIRST solidus inside one unquoted `src` —
+   only §13.2.5.39 "After attribute value (quoted) state" gives the solidus back its separator meaning.
+   AND EVERY SPELLING ENDS ON A BARE FILLER NAME, because the page's own bytes follow the hole and the one
+   that breaks the escape is `=`: a template `<img data-{hole}="v">` leaves `="v"` immediately behind the
+   injected handler, §13.2.5.38 appends the `=` and both quotes to the value, and the handler becomes
+   `X9()="v"` — an invalid assignment target, which throws before it calls anything. A trailing `x9pad` takes
+   that `="v"` as its own value and the handler stays exactly `X9()`.
+   THERE IS NO "THE HOLE IS THE RESOURCE" ARM here, unlike the value escape below, and that is a property of
+   the state rather than an omission: the name this state is building CONTAINS the locator, so it is never
+   equal to `src`/`href`/`data` and the page's own resource is never the attribute the payload sits in. */
+static int construct_name(HoleState st, const Locate *lo, const SolveDelivered *d,
+                          const char *fire, int have_fire, SolveHtmlEmit emit, void *user) {
+    const char *sep, *vq, *ev, *res;
+    char tail[64];
+    int n = 0, af, k;
+
+    if (have_fire) emit_one(emit, user, &n, d, ">%s", fire);
+    sep = solve_delivered_byte(d, ' ') ? " " : solve_delivered_byte(d, '/') ? "/" : NULL;
+    if (!sep) return n;
+    vq = *sep != '/' ? "" :
+         solve_delivered_byte(d, '"') ? "\"" : solve_delivered_byte(d, '\'') ? "'" : NULL;
+    if (!vq) return n;
+    k = snprintf(tail, sizeof tail, "%s%s", sep, SOLVE_HTML_PAD);
+    CHECK(k > 0 && (size_t)k < sizeof tail, "solve_html: the escape's filler attribute did not fit");
+    if (st == HOLE_TAG_NAME) {
+        if (!lo->owns_tag_name) return n;
+        emit_one(emit, user, &n, d, "%s%s%s=%sX9()%s%s",
+                 AUTOFIRE[0].tag, sep, AUTOFIRE[0].event, vq, vq, tail);
+        return n;
+    }
+    af = autofire_of(lo->tag, lo->tag_n);
+    if (af < 0) return n;
+    ev = AUTOFIRE[af].event;
+    res = AUTOFIRE[af].resource;
+    if (!res) {
+        /* Fires on insertion alone — the handler is the whole escape. */
+        emit_one(emit, user, &n, d, "%s%s=%sX9()%s%s", sep, ev, vq, vq, tail);
+    } else if (!has_attribute(lo->el, res)) {
+        /* THE ELEMENT NEEDS A RESOURCE AND HAS NONE, so the escape supplies one that fails. Where it already
+           carries one, §13.2.5.33's own duplicate-attribute rule removes ours from the token and the page's
+           still loads, so there is nothing to emit and the search is honestly short one spelling. */
+        emit_one(emit, user, &n, d, "%s%s=%sx%s%s%s=%sX9()%s%s",
+                 sep, res, vq, vq, sep, ev, vq, vq, tail);
+    }
+    return n;
+}
+
 static int construct(HoleState st, const Locate *lo, const SolveDelivered *d, SolveHtmlEmit emit, void *user) {
     char fire[96], tail[64];
     const char *q, *sep, *vq, *ev, *res;
@@ -346,6 +481,15 @@ static int construct(HoleState st, const Locate *lo, const SolveDelivered *d, So
         /* §13.2.5.45 -> .50 comment end dash -> .51 comment end, which emits on `>`. */
         if (have_fire) emit_one(emit, user, &n, d, "-->%s", fire);
         return n;
+    case HOLE_CDATA:
+        /* §13.2.5.69 leaves on `]` to §13.2.5.70 "CDATA section bracket state", which leaves on a second `]`
+           to §13.2.5.71 "CDATA section end state", whose `>` switches to the data state. `]]>` is the whole
+           exit and nothing shorter is one — a `<` inside the section is a character token like any other. */
+        if (have_fire) emit_one(emit, user, &n, d, "]]>%s", fire);
+        return n;
+    case HOLE_ATTR_NAME:
+    case HOLE_TAG_NAME:
+        return construct_name(st, lo, d, fire, have_fire, emit, user);
     case HOLE_ATTR_DOUBLE:
     case HOLE_ATTR_SINGLE:
     case HOLE_ATTR_UNQUOTED:
@@ -415,30 +559,51 @@ static int construct(HoleState st, const Locate *lo, const SolveDelivered *d, So
 static int breakouts_at(const char *witness, size_t after, const SolveDelivered *d,
                         SolveHtmlEmit emit, void *user) {
     lxb_html_document_t *doc = dom_document_create();
+    lxb_status_t status;
     Locate lo;
     int n = 0;
 
     CHECK(doc != NULL, "solve_html: OOM parsing a sink output for its breakout context");
-    if (html_parse_document(doc, DOM_PARSE_ROOT_PRIVATE, HTML_SCRIPTING_DISABLED,
-                            (const lxb_char_t *)witness, strlen(witness)) != LXB_STATUS_OK) {
-        dom_document_destroy(doc);
-        DFAIL("the real HTML parser refused a string an HTML sink was handed - HTML 13.2 makes every byte "
-              "sequence a parseable document, so this is Lexbor reporting an allocation failure and the "
-              "derivation has just measured nothing");
-        return 0;
-    }
+    status = html_parse_document(doc, DOM_PARSE_ROOT_PRIVATE, HTML_SCRIPTING_DISABLED,
+                                 (const lxb_char_t *)witness, strlen(witness));
+    /* AN ALLOCATION FAILURE AND NOTHING ELSE, WHICH IS WHY IT IS A `CHECK`. §13.2 makes EVERY byte sequence a
+       parseable document — there is no ill-formed input an HTML parser may reject — so a non-OK status is
+       Lexbor reporting that it could not get memory, which is the condition the sibling CHECK one line up
+       already treats as always-fatal. What stood here was a DFAIL whose own message said all of this and
+       then compiled itself out of the one build where running on past an OOM does the damage. */
+    CHECK(status == LXB_STATUS_OK, "solve_html: OOM parsing a sink output for its breakout context");
     if (!locate(doc, &lo)) {
         dom_document_destroy(doc);
-        DFAIL("the sink output carries the @S context locator but the real parse put it in no element, "
-              "attribute, text, comment or CDATA node - the states that consume bytes and produce no node are "
-              "the DOCTYPE states (13.2.5.53-.68), the processing-instruction states (13.2.5.72-.76), and an "
-              "unterminated tag whose eof-in-tag parse error discards the whole token; build the escape for "
-              "the one this document put it in");
+        /* THE TOKEN THAT CONSUMED THE LOCATOR BUILT NO NODE, AND THAT IS A SEARCH THAT HAS NOT SOLVED — never
+           a `@WHY`. What is parsed here is the string the PAGE'S OWN CODE handed the sink, so these bytes are
+           not a value this engine computed and an abort on them hands any page a switch that ends the whole
+           document's analysis: a DCHECK asserts this codebase's own logic is correct and may only stand on a
+           value this codebase produced. A DFAIL stood here, and three shapes of ordinary markup reach it —
+           each measured against the real Lexbor parse rather than reasoned about:
+             `<div id=a id={hole}>`      §13.2.5.33's closing paragraph removes a duplicate attribute from the
+                                         token, so the value the locator is in is never given to an element;
+             `<div>x<!DOCTYPE {hole}>`   a DOCTYPE token outside the initial insertion mode is ignored;
+             `<div class={hole}`         eof-in-tag discards the whole tag token.
+           RESIDUAL, NAMED. This answers 0 for holes whose TOKENIZER state does have an exit — all three above
+           sit in a state that leaves on `>` — so an escape exists and is not constructed. WHAT THE NEXT DIFF
+           BUILDS is a state reading that does not go through the TREE: `attr_state_of` and `tag_open_is_live`
+           already put a differential question to the real parser instead of to the DOM, and the same
+           splice-and-re-parse asks whether a `>` spliced in behind the locator ended a tag, for a token that
+           no node records. ITS ABSENCE SHOWS as a sink whose search reports `probes == payloads` while its
+           witness does contain the locator — a context was observed and nothing was derived from it. */
         return 0;
     }
     switch (lo.kind) {
     case LOC_TEXT:
-        n = construct(text_state_of(lo.tag, lo.tag_n), &lo, d, emit, user);
+        /* IN FOREIGN CONTENT THE HOLDER'S NAME IS THE WRONG QUESTION, so it is not asked there. The element
+           names `text_state_of` reads are §13.2.6's HTML dispatch — "in head" hands `title` to the generic
+           RCDATA algorithm, "in body" hands `xmp` to the raw text one — and §13.2.6.5 "The rules for parsing
+           tokens in foreign content" runs none of it: an SVG `title` holds ordinary data-state text, which
+           the name table would answer RCDATA for and prefix with a `</title>` nothing needs. What foreign
+           content adds instead is the one state the tree cannot report, so the real parser is asked. */
+        n = construct(lo.foreign ? (tag_open_is_live(witness, after) ? HOLE_DATA : HOLE_CDATA)
+                                 : text_state_of(lo.tag, lo.tag_n),
+                      &lo, d, emit, user);
         break;
     case LOC_COMMENT:
         n = construct(HOLE_COMMENT, &lo, d, emit, user);
@@ -452,18 +617,14 @@ static int breakouts_at(const char *witness, size_t after, const SolveDelivered 
         n = construct(attr_state_of(witness, after), &lo, d, emit, user);
         break;
     case LOC_ATTR_NAME:
-        DFAIL("the attacker bytes land in an attribute NAME (HTML 13.2.5.33), and the escape for that state "
-              "is not the value escape - a name is left by whitespace, `/` or `>` into 13.2.5.32 before "
-              "attribute name, so the breakout is a handler NAME plus its value and it has to be built");
+        DCHECK(lo.el != NULL,
+               "the real parse reported the attacker bytes in an attribute NAME and named no element that "
+               "carries it — the escape asks that owner whether it auto-fires and whether it already holds "
+               "the resource its handler needs, so a name with no owner would be answered for blind");
+        n = construct(HOLE_ATTR_NAME, &lo, d, emit, user);
         break;
     case LOC_TAG_NAME:
-        DFAIL("the attacker bytes land in a tag NAME (HTML 13.2.5.8) - the element itself is attacker-chosen, "
-              "so the breakout is not an escape at all but a choice of element and handler, and it has to be "
-              "built");
-        break;
-    case LOC_CDATA:
-        DFAIL("the attacker bytes land in a CDATA section (HTML 13.2.5.69), which foreign content reaches and "
-              "which leaves only through 13.2.5.70/.71 on `]]>` - build that escape");
+        n = construct(HOLE_TAG_NAME, &lo, d, emit, user);
         break;
     default:
         DFAIL("the locator was placed by a node kind this derivation does not name");
