@@ -711,7 +711,19 @@ function decodeEntities(s) {
   return s.replace(/&(#x?[0-9a-fA-F]+|[a-zA-Z]+);/g, (m, e) => {
     const k = e.toLowerCase();
     if (ENTITIES[k] !== undefined) return ENTITIES[k];
-    if (k[0] === "#") return String.fromCodePoint(parseInt(k[1] === "x" ? k.slice(2) : k.slice(1), k[1] === "x" ? 16 : 10));
+    /* A NUMERIC REFERENCE OUTSIDE UNICODE IS NOT A CHARACTER, AND `String.fromCodePoint` THROWS ON ONE — so
+     * this line was a crash reachable from any prose this tool normalizes. It is not hypothetical text: XML
+     * §4.1 "Character and Entity References" lets production [66] carry arbitrarily many digits, this tree
+     * argues that in `xml_ref.c`'s own header, and a quotation carrying `&#99999999999999;` would have taken
+     * the whole audit down with a RangeError naming nothing. The standard already answers it: HTML §13.2.5.84
+     * "Numeric character reference end state" — a code point above 0x10FFFF is a
+     * character-reference-outside-unicode-range parse error whose character reference code becomes U+FFFD.
+     * `quoteTokens` then folds U+FFFD to a space like every other non-alphanumeric, so the replacement costs
+     * the comparison nothing and the crash is gone at its root rather than guarded at one caller. */
+    if (k[0] === "#") {
+      const cp = parseInt(k[1] === "x" ? k.slice(2) : k.slice(1), k[1] === "x" ? 16 : 10);
+      return Number.isFinite(cp) && cp >= 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : "\ufffd";
+    }
     return m;
   });
 }
@@ -3269,6 +3281,15 @@ function agreementPassages(records) {
            agreed: multiSite - passages.length - noticed.length, noticedSites: sitesIn(noticed) };
 }
 
+/* WHERE A QUOTE-NOT-FOUND SITS ON THE ONE AXIS THAT SAYS WHETHER IT IS SPEC TEXT AT ALL, and it has ONE owner
+ * because THREE readers now ask it. A quotation that matched MIN_FRAGMENT_WORDS of the cited standard and then
+ * stopped is a real sentence that went wrong partway — the standard's own text names the repair. One that left
+ * within those words carries no evidence of being the standard's at all, and that is the band the census has
+ * always called indistinguishable from this tree's own prose in quotation marks. The report bands on it, and
+ * `treeAuthored` below is asked ONLY of the second — a distinction that is a threshold in one place and a
+ * copy in two is the copy that drifts. */
+const divergedLate = (q) => !!(q.div && q.div.matched >= MIN_FRAGMENT_WORDS);
+
 /* ONE WORDING FOR A QUOTATION FINDING, READ BY BOTH ITS READERS. The full report prints it and --since prints
  * it, and the second reader is the reason this is a function rather than a template inside the report loop: a
  * finding a lane meets in its own delta and a finding it meets in the full audit must be the SAME sentence, or
@@ -3309,6 +3330,182 @@ function lineIndex(src) {
     while (lo <= hi) { const mid = (lo + hi) >> 1; if (starts[mid] <= at) { n = mid + 1; lo = mid + 1; } else hi = mid - 1; }
     return n;
   };
+}
+
+/* THE DEFAULT POPULATION, LIFTED OUT OF `audit` BECAUSE A SECOND READER NEEDS THE SAME LIST AND MUST NOT
+ * RESTATE IT. `treeAuthored` below asks whether a run of words is THIS TREE'S OWN PROSE, and that is a claim
+ * about the TREE — so it may not be answered out of whatever paths the caller happened to name. A corpus
+ * built from `--since`'s handful of changed files would answer NO for a sentence CLAUDE.md has carried for
+ * months, and the same site would then be a finding in the delta run and not a finding in the full one:
+ * a verdict that depends on the reader's argv, which is the population-dependent answer this file refuses
+ * everywhere else. So the corpus is ALWAYS this list, and a run over one path still judges against the tree.
+ * `notify` is how the absent-submodule notice reaches a reader from the audit path and stays silent on the
+ * corpus path, where printing it a second time would say the same absence twice about one run. */
+/* WHAT THIS TREE ITSELF WROTE, AS THE SAME TOKEN STREAM A QUOTATION IS COMPARED AGAINST — the evidence that
+ * separates a quotation this check has JUDGED AND REJECTED from one it CANNOT JUDGE AT ALL.
+ *
+ * WHY THE SEPARATION IS OWED. The census has said for as long as this check has existed that a fabricated
+ * sentence and a run of this tree's own prose in quotation marks both land in QUOTE-NOT-FOUND and "nothing
+ * mechanical separates them". That sentence was true and it is the shape CLAUDE.md rates worst in an
+ * instrument: two populations that take opposite work, summed behind one verdict, so a reader cannot tell a
+ * defect from a thing the tool cannot see. It also costs the channel its credit in the direction nobody
+ * checks — a finding total that is a fifth noise teaches a reader to skim the category, and every real
+ * fabrication beside it is skimmed with it.
+ *
+ * THE DISCRIMINATOR IS DERIVED AND NEVER LISTED, which is the whole of why it may be trusted. A list of
+ * exempt sentences would be a second copy of prose the tree already holds, and the copy that drifts is the
+ * one nobody runs. What is asked instead is a question about the corpus this walk already reads: DO THESE
+ * WORDS OCCUR IN THIS TREE'S OWN AUTHORED PROSE, somewhere other than inside quotation marks. `CLAUDE.md` is
+ * a `.md` inside the audited tree and is read here like any other file, so its headings are in this corpus
+ * because they are in the tree — not because anybody wrote them down twice.
+ *
+ * AUTHORED means OUTSIDE A QUOTED RUN, and that clause is what stops the mechanism verifying itself. Leave
+ * the quoted runs in and a fabrication quoted at ONE site finds itself; quoted at TWO sites it finds its
+ * sibling. So every run `quotedRuns` and `singleQuotedRuns` return is blanked before the tokens are taken —
+ * the SAME two readers PASS 4 uses, asked of the whole file rather than of one citation's window, so what
+ * counts as a quotation cannot come to mean two things. What is left is the sentences somebody in this
+ * project wrote as their own, and a quotation matching one of those is a quotation OF THIS TREE.
+ *
+ * IT ERRS TOWARD KEEPING THE FINDING, IN BOTH OF ITS TWO FAILURE DIRECTIONS. An unbalanced mark makes
+ * `quotedRuns` blank more than it should, which REMOVES prose from this corpus and leaves a site accused; a
+ * sentence nobody wrote twice is never matched, and stays accused. The direction that would be fatal — a
+ * fabrication laundered — needs somebody to have written that same fabricated sentence into this tree
+ * unquoted, and then the site's evidence names the file that did, which is a claim a reader can check in one
+ * command. Nothing is suppressed either way: the band below prints every site with the file that authored
+ * the words, so the queue stays drainable and the verdict stays falsifiable. */
+let TREE_PROSE = null;
+function treeProse() {
+  if (TREE_PROSE) return TREE_PROSE;
+  TREE_PROSE = [];
+  for (const f of defaultTargets()) {
+    let src;
+    try { src = readFileSync(f, "utf8"); } catch { continue; }
+    let prose = "";
+    for (const sp of proseSpans(src, f)) prose += src.slice(sp[0], sp[1]) + "\n \n";
+    /* BOTH MARKS AND IN ONE ORDER, for PASS 4's reason: the blanking walks the runs left to right and a run
+     * arriving out of order would rewind `cur` and re-admit text a previous run had removed. */
+    const runs = [...quotedRuns(prose), ...singleQuotedRuns(prose)].sort((a, b) => a.at - b.at);
+    let kept = "", cur = 0;
+    for (const r of runs) {
+      const stop = r.at + r.text.length + 2;
+      if (r.at > cur) kept += prose.slice(cur, r.at);
+      kept += "\n \n";
+      if (stop > cur) cur = stop;
+    }
+    kept += prose.slice(cur);
+    TREE_PROSE.push({ file: relative(ROOT, f), text: quoteTokens(kept, false) });
+  }
+  return TREE_PROSE;
+}
+
+/* WHICH FILE OF THIS TREE AUTHORED EACH CANDIDATE'S WORDS, or none. Sets `authoredAt` on the record.
+ *
+ * ONE PASS OVER THE CORPUS AND NOT ONE PASS PER CANDIDATE. The corpus is about twenty megabytes of tokens and
+ * the candidates are several hundred, so asking each candidate of each file is twelve gigabytes of scanning —
+ * measured at 24.6 s, which is a third again on top of the whole audit. The needles are known before the scan
+ * starts, so the scan is turned inside out: a MIN_FRAGMENT_WORDS-word rolling window over the corpus, looked
+ * up in a map keyed by each candidate's own first fragment. That is a PREFILTER and never the verdict —
+ * `containsAnyForm` is what decides, on the candidate's every authoring and every fragment in order, exactly
+ * as the verification and the WRONG-SECTION probe decide. The same two-step is what `alt` already does one
+ * channel over, for the same reason and at the same floor. */
+function treeAuthored(cands) {
+  if (!cands.length) return;
+  const want = new Map();
+  for (const c of cands) {
+    for (const frags of c.frags.forms) {
+      if (!frags.length) continue;
+      const w = frags[0].split(" ");
+      if (w.length < MIN_FRAGMENT_WORDS) continue;
+      const k = w.slice(0, MIN_FRAGMENT_WORDS).join(" ");
+      if (!want.has(k)) want.set(k, new Set());
+      want.get(k).add(c);
+    }
+  }
+  if (!want.size) return;
+  for (const { file, text } of treeProse()) {
+    if (!text) continue;
+    const w = text.split(" ");
+    const hit = new Set();
+    for (let i = 0; i + MIN_FRAGMENT_WORDS <= w.length; i++) {
+      /* A MANUAL JOIN AND NOT slice().join(): this runs once per WORD of the whole corpus, which is millions
+       * of times, and the floor is a compile-time constant so the window can be spelled out. */
+      const cs = want.get(w[i] + " " + w[i + 1] + " " + w[i + 2] + " " + w[i + 3]);
+      if (cs) for (const c of cs) if (!c.q.authoredAt) hit.add(c);
+    }
+    for (const c of hit) if (!c.q.authoredAt && containsAnyForm(text, c.frags)) c.q.authoredAt = file;
+  }
+}
+
+function defaultTargets(notify = () => {}) {
+  const out = [];
+  /* The default is what this project WROTE: the host, plus the fork's own two quickjs translation units.
+   * The rest of engine/qjs is upstream and its citations are not this tree's to answer for — but quickjs.c
+   * carries more ECMAScript citations than the whole of engine/host, and a gate nobody points at a file is
+   * a gate that does not run on it. */
+  out.push(...walk(join(HERE, "host")));
+  for (const extra of ["qjs/quickjs.c", "qjs/quickjs.h"]) {
+    const p = join(HERE, extra);
+    /* AND AN ABSENT ONE IS ANNOUNCED, BECAUSE THIS GUARD SILENTLY DROPPED THE LARGEST BODY OF CITATIONS
+     * THIS GATE HAS. `engine/qjs` is a SUBMODULE, and a submodule is TRACKED BUT NOT POPULATED: a
+     * `git clone --shared` — which is the frozen-snapshot procedure CLAUDE.md prescribes for every
+     * instrument that reads this tree — leaves that directory EMPTY unless the snapshot's author copies it
+     * in. `existsSync` then answers false, the file is skipped, and the run prints a resolved-of-total that
+     * is a fraction of a population missing the file whose own comment above says it carries more
+     * ECMAScript citations than the whole of engine/host.
+     * MEASURED: a lane froze a snapshot exactly as prescribed, audited it, and reported the fork's
+     * §27.5.1.3 cluster as "outside the auditor entirely, before and after" — it was outside THAT RUN, and
+     * the reason was an empty directory rather than a policy. Nothing in the output said so.
+     * ABSENT AND ZERO ARE DIFFERENT FACTS. A skipped file is not a clean file, so it is named here rather
+     * than banded with the findings: a reader who sees no line assumes the default set was read, and this
+     * is the one line that can tell them the snapshot they measured is not the tree they think it is. */
+    if (existsSync(p)) out.push(p);
+    else notify(`[citegen] NOT READ — ${extra} is absent from this checkout, so every citation it ` +
+                     `carries is UNAUDITED and the totals below are a fraction of a population without ` +
+                     `it. engine/qjs is a submodule: a plain clone does not populate it. This is an ` +
+                     `ABSENCE, not a clean result.`);
+  }
+  /* AND THE TWO DOCUMENTS THE TREE DEFERS TO. CLAUDE.md states the rule this closes — a `.md` a C file cites
+   * by name is CODE, because a claim about this tree travels by reference and nothing mechanical reports
+   * that it has gone stale — and this file's own header used to name `.md` as its blind spot. These two are
+   * cited by name from C hundreds of times between them, and they carry real spec citations with quoted
+   * titles and quoted sentences, so leaving them out is the silent zero rather than a clean bill. */
+  for (const doc of ["CLAUDE.md", "SECURITY.md"]) {
+    const p = join(ROOT, doc);
+    if (existsSync(p)) out.push(p);
+  }
+  /* AND THE TRUSTED ZONE, WHICH IS THE OTHER HALF OF THE PRODUCT AND WAS IN NO RUN THIS AUDITOR HAS EVER
+   * MADE. A file the gate does not COLLECT is an excluded file, and the total LOOKS complete — §Testing's
+   * rule, arriving here rather than in a test runner. `extension/` holds thirty-five files carrying a `§`,
+   * and pointing this audit at them for the first time returned 18 MISATTRIBUTED and 18 undecided sites.
+   *
+   * THE DIAGNOSIS THAT SENT ME HERE WAS WRONG IN A WAY WORTH RECORDING, because the wrong one is the one
+   * that gets repeated. A lane retired a number across the tree, then found more copies by grepping for the
+   * RETIRED NUMBER rather than for the files this tool had listed, and concluded that an auditor "sees
+   * misplaced terms it indexes, not the same wrong number in prose it cannot parse". That is a claim about
+   * PARSING and it is false. The copy it found last was `§4.4 API base URL` in `bridge.js`, which is exactly
+   * the form this file indexes — number, then a phrase HTML defines elsewhere — and it was invisible for one
+   * reason only: nothing had ever pointed the audit at a `.js` file.
+   *
+   * AND THE GREP THAT REPLACED THE TOOL DID NOT FINISH THE JOB EITHER. `bridge.js` still carried that number
+   * under a commit whose own message states that `git grep` returns no instance of it — `so the engine's
+   * §4.4` ends one line and `API base URL was the bare origin` begins the next, so an exact-string grep
+   * cannot see it and a prose scan that reads a comment as one unit can. That is the argument for the tool
+   * over the grep, made by the case that had been offered as the argument against it. */
+  for (const dir of ["extension"]) {
+    const p = join(ROOT, dir);
+    if (existsSync(p)) out.push(...walk(p));
+  }
+  /* AND THE GATES, which were named as a stated limit one commit ago and are collected one commit later,
+   * because the reason they were outside has been built. A gate's prose is where this project reasons about
+   * the standards out loud — idlgen argues Web IDL's §3.7.3 for five paragraphs, trusted.mjs argues Fetch's
+   * network error — so a wrong number there misleads a reader exactly as one in a C file does, and it does
+   * it in the document that TEACHES the convention. The blocker was real and specific: these files quote
+   * wrong numbers on purpose as worked examples, and until MENTION-NOT-CLAIM existed collecting them would
+   * have planted permanent false reds in the auditor itself. It exists, so they are collected. `readdir`
+   * rather than `walk`, because engine/ contains host/ and qjs/ and this wants only the gates beside them.
+   * The 15 real findings this returns are a queue, not a reason to have left it shut. */
+  for (const e of readdirSync(HERE)) if (/\.mjs$/.test(e)) out.push(join(HERE, e));
+  return out;
 }
 
 function audit(argv, opts = {}) {
@@ -3438,80 +3635,16 @@ function audit(argv, opts = {}) {
   let files;
   if (opts.files) files = opts.files;
   else if (targets.length) files = targets.map((t) => (statSync(t).isDirectory() ? walk(t) : [t])).flat();
-  else {
-    /* The default is what this project WROTE: the host, plus the fork's own two quickjs translation units.
-     * The rest of engine/qjs is upstream and its citations are not this tree's to answer for — but quickjs.c
-     * carries more ECMAScript citations than the whole of engine/host, and a gate nobody points at a file is
-     * a gate that does not run on it. */
-    files = walk(join(HERE, "host"));
-    for (const extra of ["qjs/quickjs.c", "qjs/quickjs.h"]) {
-      const p = join(HERE, extra);
-      /* AND AN ABSENT ONE IS ANNOUNCED, BECAUSE THIS GUARD SILENTLY DROPPED THE LARGEST BODY OF CITATIONS
-       * THIS GATE HAS. `engine/qjs` is a SUBMODULE, and a submodule is TRACKED BUT NOT POPULATED: a
-       * `git clone --shared` — which is the frozen-snapshot procedure CLAUDE.md prescribes for every
-       * instrument that reads this tree — leaves that directory EMPTY unless the snapshot's author copies it
-       * in. `existsSync` then answers false, the file is skipped, and the run prints a resolved-of-total that
-       * is a fraction of a population missing the file whose own comment above says it carries more
-       * ECMAScript citations than the whole of engine/host.
-       * MEASURED: a lane froze a snapshot exactly as prescribed, audited it, and reported the fork's
-       * §27.5.1.3 cluster as "outside the auditor entirely, before and after" — it was outside THAT RUN, and
-       * the reason was an empty directory rather than a policy. Nothing in the output said so.
-       * ABSENT AND ZERO ARE DIFFERENT FACTS. A skipped file is not a clean file, so it is named here rather
-       * than banded with the findings: a reader who sees no line assumes the default set was read, and this
-       * is the one line that can tell them the snapshot they measured is not the tree they think it is. */
-      if (existsSync(p)) files.push(p);
-      else console.log(`[citegen] NOT READ — ${extra} is absent from this checkout, so every citation it ` +
-                       `carries is UNAUDITED and the totals below are a fraction of a population without ` +
-                       `it. engine/qjs is a submodule: a plain clone does not populate it. This is an ` +
-                       `ABSENCE, not a clean result.`);
-    }
-    /* AND THE TWO DOCUMENTS THE TREE DEFERS TO. CLAUDE.md states the rule this closes — a `.md` a C file cites
-     * by name is CODE, because a claim about this tree travels by reference and nothing mechanical reports
-     * that it has gone stale — and this file's own header used to name `.md` as its blind spot. These two are
-     * cited by name from C hundreds of times between them, and they carry real spec citations with quoted
-     * titles and quoted sentences, so leaving them out is the silent zero rather than a clean bill. */
-    for (const doc of ["CLAUDE.md", "SECURITY.md"]) {
-      const p = join(ROOT, doc);
-      if (existsSync(p)) files.push(p);
-    }
-    /* AND THE TRUSTED ZONE, WHICH IS THE OTHER HALF OF THE PRODUCT AND WAS IN NO RUN THIS AUDITOR HAS EVER
-     * MADE. A file the gate does not COLLECT is an excluded file, and the total LOOKS complete — §Testing's
-     * rule, arriving here rather than in a test runner. `extension/` holds thirty-five files carrying a `§`,
-     * and pointing this audit at them for the first time returned 18 MISATTRIBUTED and 18 undecided sites.
-     *
-     * THE DIAGNOSIS THAT SENT ME HERE WAS WRONG IN A WAY WORTH RECORDING, because the wrong one is the one
-     * that gets repeated. A lane retired a number across the tree, then found more copies by grepping for the
-     * RETIRED NUMBER rather than for the files this tool had listed, and concluded that an auditor "sees
-     * misplaced terms it indexes, not the same wrong number in prose it cannot parse". That is a claim about
-     * PARSING and it is false. The copy it found last was `§4.4 API base URL` in `bridge.js`, which is exactly
-     * the form this file indexes — number, then a phrase HTML defines elsewhere — and it was invisible for one
-     * reason only: nothing had ever pointed the audit at a `.js` file.
-     *
-     * AND THE GREP THAT REPLACED THE TOOL DID NOT FINISH THE JOB EITHER. `bridge.js` still carried that number
-     * under a commit whose own message states that `git grep` returns no instance of it — `so the engine's
-     * §4.4` ends one line and `API base URL was the bare origin` begins the next, so an exact-string grep
-     * cannot see it and a prose scan that reads a comment as one unit can. That is the argument for the tool
-     * over the grep, made by the case that had been offered as the argument against it. */
-    for (const dir of ["extension"]) {
-      const p = join(ROOT, dir);
-      if (existsSync(p)) files.push(...walk(p));
-    }
-    /* AND THE GATES, which were named as a stated limit one commit ago and are collected one commit later,
-     * because the reason they were outside has been built. A gate's prose is where this project reasons about
-     * the standards out loud — idlgen argues Web IDL's §3.7.3 for five paragraphs, trusted.mjs argues Fetch's
-     * network error — so a wrong number there misleads a reader exactly as one in a C file does, and it does
-     * it in the document that TEACHES the convention. The blocker was real and specific: these files quote
-     * wrong numbers on purpose as worked examples, and until MENTION-NOT-CLAIM existed collecting them would
-     * have planted permanent false reds in the auditor itself. It exists, so they are collected. `readdir`
-     * rather than `walk`, because engine/ contains host/ and qjs/ and this wants only the gates beside them.
-     * The 15 real findings this returns are a queue, not a reason to have left it shut. */
-    for (const e of readdirSync(HERE)) if (/\.mjs$/.test(e)) files.push(join(HERE, e));
-  }
+  else files = defaultTargets((m) => console.log(m));
 
   const findings = [];
   const undecided = [];
   const mentions = [];
   const quotes = [];
+  /* THE QUOTE-NOT-FOUND RECORDS WHOSE WORDS CARRY NO EVIDENCE OF BEING ANY STANDARD'S, HELD FOR ONE PASS OVER
+   * THE TREE'S OWN PROSE AFTER THE WALK. Asked per file it would be one corpus scan per file; asked once it
+   * is one scan for the run — see `treeAuthored`. */
+  const ownCands = [];
   /* THE QUOTATIONS THIS CHECK REFUSED TO ASK ABOUT, HELD AS SITES AND NOT ONLY AS A NUMBER. A count with no
    * list behind it is the silent-zero shape CLAUDE.md names for exactly this state — "a standard with no
    * committed index is COUNTED and never CHECKED, which is a silent zero rather than a clean bill" — and this
@@ -3535,7 +3668,8 @@ function audit(argv, opts = {}) {
   const qstat = { okNearbyCrossLiteral: 0, seen: 0, checked: 0, verified: 0, okNearby: 0, wrongSection: 0, wrongSectionAncestor: 0, wrongStandard: 0, notFound: 0, notFoundNothing: 0,
                   noCorpus: 0, noCorpusCrash: 0, noSection: 0, noSectionCrash: 0, tooShort: 0,
                   single: 0, singleCrash: 0, singleTooShort: 0,
-                  voted: 0, votedCrash: 0, foreign: 0, foreignCrash: 0, unresolved: 0, unresolvedCrash: 0 };
+                  voted: 0, votedCrash: 0, foreign: 0, foreignCrash: 0, unresolved: 0, unresolvedCrash: 0,
+                  ownProse: 0, ownProseCrash: 0 };
   const noCorpusBy = new Map();
   const gapHist = [];
   const stepsOut = [], stepsAway = [], stepsSays = [], stepsSaysAmbig = [];
@@ -4895,7 +5029,21 @@ function audit(argv, opts = {}) {
                 .filter((n) => (" " + txt.get(alt.key).sections[n] + " ").includes(" " + head + " ")).sort(cmpNo);
             }
           }
-          quotes.push({ ...rec, kind: "QUOTE-NOT-FOUND", div: d, alt });
+          /* AND THE ONE BAND THAT MAY BE ASKED WHETHER THIS TREE WROTE THE SENTENCE, WHICH IS A MEASUREMENT
+           * AND NOT A PREFERENCE. The question is asked ONLY where the quotation left the standard inside
+           * MIN_FRAGMENT_WORDS — the band this file's own census calls indistinguishable from this tree's
+           * prose — and never where some standard's words are positive evidence for the other reading.
+           * MEASURED at the revision this landed, on the frozen tree, by asking it of every quotation finding
+           * instead: 8 of 55 QUOTE-WRONG-SECTION, 5 of 6 QUOTE-WRONG-STANDARD and 10 of 182
+           * QUOTE-NOT-FOUND/MIS-TRANSCRIBED also occur in this tree's own prose, and reading them says why
+           * that is not an exemption — `xml_tag.c` quotes XML §3's own sentence and the same file states it
+           * again unquoted two paragraphs down; `element.c:1628` mis-transcribes a real HTML sentence its own
+           * neighbour paraphrases. Every one of those is a REAL finding about a REAL spec quotation, and a
+           * rule that cleared them would be the exemption swallowing the defect. Where the standard has none
+           * of the words, it is not evidence about a standard at all. */
+          const nf = { ...rec, kind: "QUOTE-NOT-FOUND", div: d, alt };
+          quotes.push(nf);
+          if (!divergedLate(nf)) ownCands.push({ q: nf, frags: f });
         }
       }
     }
@@ -5357,6 +5505,24 @@ function audit(argv, opts = {}) {
     t.set(name, (t.get(name) || 0) + 1);
   }
   const suspects = undecided.filter((u) => wrong.has(u.file + "\u0000" + u.groupNo));
+  /* AND THE QUOTATIONS THIS CHECK CANNOT JUDGE ARE TAKEN OUT OF THE FINDINGS HERE, WHERE THE WALK IS OVER AND
+   * THE WHOLE CANDIDATE SET IS IN ONE HAND. They leave `quotes`, so they leave `quoteFindings`, so they leave
+   * --since and the total — a site whose words this tree wrote is not a defect anybody can repair at that
+   * site, and leaving it in the count is what teaches a reader to skim the band it sits in.
+   * THE TOTAL FALLS AND THE DENOMINATOR DOES NOT, WHICH IS THE ONE DIRECTION CLAUDE.md SAYS INVITES NO
+   * SCRUTINY, so the census prints this population's size beside the NOT-FOUND figure it came out of and the
+   * band below prints every one of its sites. `qstat.checked`, `qstat.verified` and `qstat.notFound` are the
+   * PASS's own counts and are deliberately not adjusted: they state what was compared and what the comparison
+   * answered, and this is a later question asked of a subset of one of them. */
+  const ownProse = [];
+  treeAuthored(ownCands);
+  {
+    const kept = quotes.filter((q) => (q.authoredAt ? (ownProse.push(q), false) : true));
+    quotes.length = 0;
+    for (const q of kept) quotes.push(q);
+    qstat.ownProse = ownProse.length;
+    qstat.ownProseCrash = ownProse.filter((q) => q.crash).length;
+  }
   /* A QUOTATION FINDING IS A FINDING, SO --since MUST SEE IT — and this line is what makes "run it on what you
    * write" reach the axis a lane is most likely to get wrong. A fabricated sentence is written by the person
    * writing the comment, in the diff they are landing, which is exactly the population --since reports; leaving
@@ -5726,7 +5892,7 @@ function audit(argv, opts = {}) {
      * is what says the word floor — never the mark — is what separates a term from a quotation. */
     console.log(`    by MARK: ${qstat.seen - qstat.single} double-quoted, ${qstat.single} single-quoted (${qstat.singleCrash} of those in a crash message; a further ${qstat.singleTooShort} single-quoted run(s) were declined by the word floor, which is where this tree's own terms and property names land)`);
     console.log(`    VERIFIED ${qstat.verified}  CONFIRMED-BY-A-NUMBER-THE-SAME-COMMENT-CITES ${qstat.okNearby} (${qstat.okNearbyCrossLiteral} of them by a number in a DIFFERENT LITERAL of the same crash message — the population a span-keyed lookup cannot see, so this figure is what the prose-unit rule is carrying)  WRONG-SECTION ${qstat.wrongSection} (${qstat.wrongSectionAncestor} of them at a section that CONTAINS the cited one)  WRONG-STANDARD ${qstat.wrongStandard}  NOT-FOUND ${qstat.notFound}` +
-      ` (of which ${qstat.notFoundNothing} leave the standard within their first ${MIN_FRAGMENT_WORDS} words — a fabricated sentence and a piece of this tree's own prose in quotation marks both land there, and nothing mechanical separates them)`);
+      ` (of which ${qstat.notFoundNothing} leave the standard within their first ${MIN_FRAGMENT_WORDS} words, and ${qstat.ownProse} of THOSE are a run of this tree's OWN authored prose in quotation marks — separated by evidence, named below under OWN-PROSE QUOTATION, and NOT counted as findings)`);
     /* EACH REFUSAL NAMES ITS OWN STATE AND THE SUBSET A CRASH PRINTS, because these are a WORK QUEUE and the
      * three former `voted` states do not have the same repair: VOTED and UNRESOLVED are drained by writing
      * the standard's name at the site (measured, not assumed — see PASS 4), and FOREIGN is not, because it
@@ -5775,7 +5941,7 @@ function audit(argv, opts = {}) {
     for (const kind of ["QUOTE-NOT-FOUND", "QUOTE-WRONG-STANDARD", "QUOTE-WRONG-SECTION"]) {
       const g = qg.get(kind) || [];
       if (kind !== "QUOTE-NOT-FOUND") { bands.push([kind, g, ""]); continue; }
-      const late = (q) => q.div && q.div.matched >= MIN_FRAGMENT_WORDS;
+      const late = divergedLate;
       bands.push([`${kind} / MIS-TRANSCRIBED`, g.filter(late),
         ` — matched ${MIN_FRAGMENT_WORDS}+ words and then diverged, so the standard's own text names the exact word to repair.` +
         ` An ELIDED PARENTHETICAL lands here too and is not a defect: IndexedDB writes "less than or equal to 2^53 (9007199254740992) + 1"` +
@@ -5791,6 +5957,26 @@ function audit(argv, opts = {}) {
         console.log(`      "${q.quote.length > 150 ? q.quote.slice(0, 150) + "…" : q.quote}"`);
       }
       elided(ord, qlimit, label);
+    }
+
+    /* THE QUOTATIONS THIS CHECK CANNOT JUDGE BECAUSE THIS TREE WROTE THEM — a separate VERDICT and not a
+     * quieter finding. CLAUDE.md: an instrument that cannot see something has not found anything, and a gate
+     * that sums the two states leaves a reader unable to name a single thing it currently says. So the count
+     * stands on its own line with the population it was drawn from beside it, on the clean day as well as the
+     * bad one, and every site prints with the file whose own prose holds the words. */
+    {
+      console.log(`\nOWN-PROSE QUOTATION: ${ownProse.length} of the ${qstat.checked} quotation(s) compared` +
+        ` (${qstat.ownProseCrash} in a crash message) — NOT findings, and NOT a suppression: the words occur in THIS TREE'S own` +
+        ` authored prose, outside any quotation mark, at the file named on each row. That is a positive fact a` +
+        ` reader can check in one command, and it says only what it says — this is not a quotation of a standard,` +
+        ` so the question "are these the standard's words" has no answer here rather than a NO. Everything else` +
+        ` about the site stands: the citation over it is still resolved and still checked by every other channel.`);
+      const ord = [...ownProse].sort((a, b) => rank(a) - rank(b));
+      for (const q of head(ord, qlimit)) {
+        console.log(`  ${q.file}:${q.line}  ${q.spec} §${q.no}${q.crash ? "  [in a crash message]" : ""} — this tree's own prose, authored at ${q.authoredAt}`);
+        console.log(`      "${q.quote.length > 150 ? q.quote.slice(0, 150) + "…" : q.quote}"`);
+      }
+      elided(ord, qlimit, "OWN-PROSE QUOTATION");
     }
 
     /* THE QUOTATIONS THIS CHECK REFUSED, AS A CATEGORY WITH SITES IN IT RATHER THAN A CLAUSE IN A SENTENCE.
