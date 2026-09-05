@@ -264,7 +264,7 @@ static void screen_install_realm(JSContext *ctx)
        TypeError — and its PRESENCE is what `screen instanceof Screen` and every prototype-patching shim needs,
        which is exactly what this interface had none of. */
     global = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, global, "Screen", idl_interface_object(ctx, "Screen", proto));
+    idl_define_global_property_reference(ctx, global, "Screen", idl_interface_object(ctx, "Screen", proto));
 
     scr = JS_NewObjectProtoClass(ctx, proto, g_screen_class);
     JS_FreeValue(ctx, proto);

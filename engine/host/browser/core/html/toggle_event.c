@@ -293,7 +293,7 @@ static void toggle_event_install_realm(JSContext *ctx)
     JS_SetConstructor(ctx, ctor, proto);
     JS_FreeValue(ctx, proto);
     global = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, global, "ToggleEvent", ctor);
+    idl_define_global_property_reference(ctx, global, "ToggleEvent", ctor);
     JS_FreeValue(ctx, global);
 }
 

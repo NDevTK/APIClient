@@ -576,7 +576,7 @@ static void idb_key_range_install_realm(JSContext *ctx)
     idl_install_method(ctx, ctor, "upperBound", g_id_upper_bound);
     idl_install_method(ctx, ctor, "bound", g_id_bound);
     global = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, global, "IDBKeyRange", ctor);
+    idl_define_global_property_reference(ctx, global, "IDBKeyRange", ctor);
     JS_FreeValue(ctx, global);
 }
 

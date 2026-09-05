@@ -277,8 +277,8 @@ void navigation_destination_install_protos(JSContext *ctx)
     /* §3.7.1's INTERFACE OBJECT. NavigationDestination declares no constructor, so `new NavigationDestination()`
        is a TypeError — and its PRESENCE is what `event.destination instanceof NavigationDestination` needs. */
     global = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, global, "NavigationDestination",
-                      idl_interface_object(ctx, "NavigationDestination", proto));
+    idl_define_global_property_reference(ctx, global, "NavigationDestination",
+                                         idl_interface_object(ctx, "NavigationDestination", proto));
     JS_FreeValue(ctx, global);
     JS_FreeValue(ctx, proto);
 }

@@ -1531,7 +1531,7 @@ static void idb_transaction_install_realm(JSContext *ctx)
     CHECK(!JS_IsException(ctor), "the IDBTransaction interface object could not be allocated");
     JS_FreeValue(ctx, proto);
     global = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, global, "IDBTransaction", ctor);
+    idl_define_global_property_reference(ctx, global, "IDBTransaction", ctor);
     JS_FreeValue(ctx, global);
 }
 

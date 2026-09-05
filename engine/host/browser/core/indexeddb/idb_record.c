@@ -210,7 +210,7 @@ static void idb_record_install_realm(JSContext *ctx)
     CHECK(!JS_IsException(ctor), "the IDBRecord interface object could not be allocated");
     JS_FreeValue(ctx, proto);
     global = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, global, "IDBRecord", ctor);
+    idl_define_global_property_reference(ctx, global, "IDBRecord", ctor);
     JS_FreeValue(ctx, global);
 }
 

@@ -252,7 +252,7 @@ static void crypto_install_realm(JSContext *ctx)
     JS_SetClassProto(ctx, g_crypto_class, JS_DupValue(ctx, proto));
 
     global = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, global, "Crypto", idl_interface_object(ctx, "Crypto", proto));
+    idl_define_global_property_reference(ctx, global, "Crypto", idl_interface_object(ctx, "Crypto", proto));
 
     obj = JS_NewObjectProtoClass(ctx, proto, g_crypto_class);
     JS_FreeValue(ctx, proto);

@@ -693,7 +693,7 @@ static void history_install_realm(JSContext *ctx)
     global = JS_GetGlobalObject(ctx);
     /* §3.7.1's INTERFACE OBJECT. History declares no constructor, so `new History()` is a TypeError — and its
        PRESENCE is what `history instanceof History` and every prototype-patching router shim needs. */
-    JS_SetPropertyStr(ctx, global, "History", idl_interface_object(ctx, "History", proto));
+    idl_define_global_property_reference(ctx, global, "History", idl_interface_object(ctx, "History", proto));
 
     hist = JS_NewObjectProtoClass(ctx, proto, g_history_class);
     JS_FreeValue(ctx, proto);

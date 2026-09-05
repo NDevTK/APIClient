@@ -781,7 +781,7 @@ void navigation_install_realm(JSContext *ctx)
     global = JS_GetGlobalObject(ctx);
     /* §3.7.1's INTERFACE OBJECT. Navigation declares no constructor, so `new Navigation()` is a TypeError —
        and its PRESENCE is what a feature-detecting bundle reads before it touches `window.navigation`. */
-    JS_SetPropertyStr(ctx, global, "Navigation", idl_interface_object(ctx, "Navigation", proto));
+    idl_define_global_property_reference(ctx, global, "Navigation", idl_interface_object(ctx, "Navigation", proto));
     idl_install_replaceable(ctx, global, "navigation", js_win_navigation, 0);
     JS_FreeValue(ctx, global);
     JS_FreeValue(ctx, proto);

@@ -353,7 +353,7 @@ static void user_timing_install(JSContext *ctx)
     JS_SetConstructor(ctx, ctor, proto);
     JS_FreeValue(ctx, proto);
     global = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, global, "PerformanceMark", ctor);
+    idl_define_global_property_reference(ctx, global, "PerformanceMark", ctor);
     JS_FreeValue(ctx, global);
 
     /* §2.1.1's member, onto the PARTIAL's target — HIGH RESOLUTION TIME §7's prototype, for THIS realm. The

@@ -900,11 +900,12 @@ static void fs_handle_install_realm(JSContext *ctx)
        FileSystemHandle()` is a TypeError — and their presence is what tells a feature-detecting bundle the API
        exists at all, which is exactly the gate this component was built to stop lying about. */
     global = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, global, "FileSystemHandle", idl_interface_object(ctx, "FileSystemHandle", base));
-    JS_SetPropertyStr(ctx, global, "FileSystemFileHandle",
-                      idl_interface_object(ctx, "FileSystemFileHandle", file_p));
-    JS_SetPropertyStr(ctx, global, "FileSystemDirectoryHandle",
-                      idl_interface_object(ctx, "FileSystemDirectoryHandle", dir_p));
+    idl_define_global_property_reference(ctx, global, "FileSystemHandle",
+                                         idl_interface_object(ctx, "FileSystemHandle", base));
+    idl_define_global_property_reference(ctx, global, "FileSystemFileHandle",
+                                         idl_interface_object(ctx, "FileSystemFileHandle", file_p));
+    idl_define_global_property_reference(ctx, global, "FileSystemDirectoryHandle",
+                                         idl_interface_object(ctx, "FileSystemDirectoryHandle", dir_p));
     JS_FreeValue(ctx, global);
     JS_FreeValue(ctx, base);
     JS_FreeValue(ctx, file_p);

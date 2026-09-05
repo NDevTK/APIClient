@@ -710,7 +710,8 @@ static void user_activation_install_realm(JSContext *ctx)
        UserActivation()` is a TypeError — and its presence is what tells a feature-detecting bundle that the
        interface exists at all, which is exactly the gate this component was built to stop lying about. */
     global = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, global, "UserActivation", idl_interface_object(ctx, "UserActivation", proto));
+    idl_define_global_property_reference(ctx, global, "UserActivation",
+                                         idl_interface_object(ctx, "UserActivation", proto));
     JS_FreeValue(ctx, global);
 
     /* "Upon creation of the Window object, its associated UserActivation must be set to a new UserActivation

@@ -353,8 +353,8 @@ void navigation_history_entry_install_protos(JSContext *ctx)
        NavigationHistoryEntry()` is a TypeError — and its PRESENCE is what `entry instanceof
        NavigationHistoryEntry` needs. */
     global = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, global, "NavigationHistoryEntry",
-                      idl_interface_object(ctx, "NavigationHistoryEntry", proto));
+    idl_define_global_property_reference(ctx, global, "NavigationHistoryEntry",
+                                         idl_interface_object(ctx, "NavigationHistoryEntry", proto));
     JS_FreeValue(ctx, global);
     JS_FreeValue(ctx, proto);
 }

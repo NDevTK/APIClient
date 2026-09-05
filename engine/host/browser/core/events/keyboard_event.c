@@ -464,7 +464,7 @@ void keyboard_event_install_protos(JSContext *ctx)
     JS_SetPropertyFunctionList(ctx, ctor, js_ke_consts,
                                (int)(sizeof(js_ke_consts) / sizeof(js_ke_consts[0])));
     global = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, global, "KeyboardEvent", ctor);
+    idl_define_global_property_reference(ctx, global, "KeyboardEvent", ctor);
     JS_FreeValue(ctx, global);
 }
 

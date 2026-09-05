@@ -310,8 +310,8 @@ static void performance_entry_install(JSContext *ctx)
        PerformanceEntry()` is a TypeError — and its PRESENCE is what a feature-detecting bundle reads, and
        what `entry instanceof PerformanceEntry` needs. */
     global = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, global, "PerformanceEntry",
-                      idl_interface_object(ctx, "PerformanceEntry", proto));
+    idl_define_global_property_reference(ctx, global, "PerformanceEntry",
+                                         idl_interface_object(ctx, "PerformanceEntry", proto));
     JS_FreeValue(ctx, global);
     JS_FreeValue(ctx, proto);
 }

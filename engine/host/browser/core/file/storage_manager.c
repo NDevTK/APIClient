@@ -467,7 +467,8 @@ static void storage_manager_install_realm(JSContext *ctx)
     JS_SetClassProto(ctx, g_sm_class, JS_DupValue(ctx, proto));
 
     global = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, global, "StorageManager", idl_interface_object(ctx, "StorageManager", proto));
+    idl_define_global_property_reference(ctx, global, "StorageManager",
+                                         idl_interface_object(ctx, "StorageManager", proto));
     JS_FreeValue(ctx, global);
 
     obj = JS_NewObjectProtoClass(ctx, proto, g_sm_class);

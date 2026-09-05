@@ -353,7 +353,7 @@ static void css_unit_value_install_realm(JSContext *ctx)
        it is a TypeError — which is also what tells a feature-detecting bundle the interface EXISTS. */
     ctor = idl_interface_object(ctx, "CSSStyleValue", sv_proto);
     CHECK(!JS_IsException(ctor), "the CSSStyleValue interface object could not be allocated");
-    JS_SetPropertyStr(ctx, global, "CSSStyleValue", ctor);
+    idl_define_global_property_reference(ctx, global, "CSSStyleValue", ctor);
 
     /* §4.3.1's CSSNumericValue. §3.7.3 Interface prototype object: "if interface is declared to inherit from
        another interface, then set proto to the interface prototype object IN REALM of that inherited
@@ -380,7 +380,7 @@ static void css_unit_value_install_realm(JSContext *ctx)
     idl_install_method(ctx, nv_proto, "max", css_numeric_value_member_id(CSS_NUMERIC_MEMBER_MAX));
     ctor = idl_interface_object(ctx, "CSSNumericValue", nv_proto);
     CHECK(!JS_IsException(ctor), "the CSSNumericValue interface object could not be allocated");
-    JS_SetPropertyStr(ctx, global, "CSSNumericValue", ctor);
+    idl_define_global_property_reference(ctx, global, "CSSNumericValue", ctor);
     JS_FreeValue(ctx, sv_proto);
     /* §4.3.4's SEVEN INTERFACES AND CSSNumericArray, over the object one line up. They are built HERE rather
        than from a realm intrinsic of their own for the §3.7.3 Interface prototype object reason this whole
@@ -404,7 +404,7 @@ static void css_unit_value_install_realm(JSContext *ctx)
     CHECK(!JS_IsException(ctor), "the CSSUnitValue interface object could not be allocated");
     JS_SetConstructor(ctx, ctor, uv_proto);
     JS_FreeValue(ctx, uv_proto);
-    JS_SetPropertyStr(ctx, global, "CSSUnitValue", ctor);
+    idl_define_global_property_reference(ctx, global, "CSSUnitValue", ctor);
     JS_FreeValue(ctx, global);
 }
 

@@ -508,7 +508,7 @@ static void indexed_db_install_realm(JSContext *ctx)
     ctor = idl_interface_object(ctx, "IDBFactory", proto);
     CHECK(!JS_IsException(ctor), "the IDBFactory interface object could not be allocated");
     global = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, global, "IDBFactory", ctor);
+    idl_define_global_property_reference(ctx, global, "IDBFactory", ctor);
 
     obj = JS_NewObjectProtoClass(ctx, proto, g_factory_class);
     JS_FreeValue(ctx, proto);

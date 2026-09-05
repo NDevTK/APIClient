@@ -430,7 +430,7 @@ static void permissions_install_realm(JSContext *ctx)
 
     /* §3.7.1's INTERFACE OBJECT on THIS realm's global. §6.2 declares no constructor. */
     global = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, global, "Permissions", idl_interface_object(ctx, "Permissions", proto));
+    idl_define_global_property_reference(ctx, global, "Permissions", idl_interface_object(ctx, "Permissions", proto));
     JS_FreeValue(ctx, global);
 
     /* §6.1's `[SameObject]` object, minted WITH the realm — so `navigator.permissions ===

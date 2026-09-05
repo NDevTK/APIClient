@@ -1741,7 +1741,7 @@ static void idb_object_store_install_realm(JSContext *ctx)
     CHECK(!JS_IsException(ctor), "the IDBObjectStore interface object could not be allocated");
     JS_FreeValue(ctx, proto);
     global = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, global, "IDBObjectStore", ctor);
+    idl_define_global_property_reference(ctx, global, "IDBObjectStore", ctor);
     JS_FreeValue(ctx, global);
 }
 

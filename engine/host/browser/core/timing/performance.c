@@ -206,7 +206,7 @@ static void performance_install(JSContext *ctx)
     /* §3.7.1's INTERFACE OBJECT, on THIS realm's global. Performance declares no constructor, so
        `new Performance()` is a TypeError — and its PRESENCE is what a feature-detecting bundle reads. */
     global = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, global, "Performance", idl_interface_object(ctx, "Performance", proto));
+    idl_define_global_property_reference(ctx, global, "Performance", idl_interface_object(ctx, "Performance", proto));
 
     obj = JS_NewObjectProtoClass(ctx, proto, g_perf_class);
     JS_FreeValue(ctx, proto);

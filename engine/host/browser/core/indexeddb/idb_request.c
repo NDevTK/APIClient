@@ -744,7 +744,7 @@ static void idb_request_install_realm(JSContext *ctx)
     ctor = idl_interface_object(ctx, "IDBRequest", proto);
     CHECK(!JS_IsException(ctor), "the IDBRequest interface object could not be allocated");
     global = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, global, "IDBRequest", ctor);
+    idl_define_global_property_reference(ctx, global, "IDBRequest", ctor);
 
     /* §4.1's SECOND INTERFACE: `interface IDBOpenDBRequest : IDBRequest`. Its prototype chains to the one just
        built — so `request.result` and `request.readyState` are reached through it rather than copied — and it
@@ -758,7 +758,7 @@ static void idb_request_install_realm(JSContext *ctx)
     ctor = idl_interface_object(ctx, "IDBOpenDBRequest", open_proto);
     CHECK(!JS_IsException(ctor), "the IDBOpenDBRequest interface object could not be allocated");
     JS_FreeValue(ctx, open_proto);
-    JS_SetPropertyStr(ctx, global, "IDBOpenDBRequest", ctor);
+    idl_define_global_property_reference(ctx, global, "IDBOpenDBRequest", ctor);
     JS_FreeValue(ctx, global);
 }
 

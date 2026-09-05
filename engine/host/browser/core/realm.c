@@ -6,6 +6,15 @@
 #include "core/idl_args.h"   /* §3.3.7 [Exposed] step 1: resolving a [Global] interface's global names */
 #include "core/realm.h"
 #include "solver/concolic.h"
+#if APICLIENT_DEV
+/* THE GENERATED CORPUS TABLE ITSELF, read for the check below and not restated. This is the second
+   translation unit to include it (core/idl_args.c is the first), and that is the point rather than a
+   duplication: an auditor of a rule derives the rule from the artifact the rule is about, so the set of
+   identifiers §3.8 defines on a global is asked of the same generated rows the install path asks. A
+   hand-kept list here would be a third copy of a fact whose second copy is what this check exists to catch.
+   Under APICLIENT_DEV because the walk below is, and an unused static table at DEV=0 is a diagnostic. */
+#include "idl_exposure.h"
+#endif
 
 static RealmIntrinsic *g_list;
 static int g_n, g_cap;
@@ -43,6 +52,78 @@ static int g_top_level_url_slot;
    rather than at each ask, so a host names an interface and nothing downstream re-derives what that name
    means. */
 static int g_global_names_slot;
+
+#if APICLIENT_DEV
+/* bsearch over IDL_EXPOSURE's own rows, keyed by the identifier — the same shape core/idl_args.c uses over the
+   same table, because the table is sorted by that field and there is one right way to ask it. */
+static int idl_exposure_row_name_cmp(const void *key, const void *row)
+{
+    return strcmp((const char *)key, ((const IdlExposureRow *)row)->name);
+}
+
+/* WEB IDL §3.8 Platform objects implementing interfaces' DESCRIPTOR, ASSERTED OVER THE FINISHED GLOBAL — the
+   one check that can see an install which never called the install entry.
+   WHY IT CANNOT LIVE AT THE ENTRY. `define the global property references` has exactly one door here
+   (core/idl_args' idl_define_global_property_reference), and the failure this guards is a component that does
+   not USE that door: it reaches for JS_SetPropertyStr, which is ECMAScript §10.1.9.2 OrdinarySetWithOwnDescriptor
+   creating the property through CreateDataProperty, whose descriptor is writable AND ENUMERABLE AND
+   configurable. §3.8 performs "DefineMethodProperty(target, id, interfaceObject, false)" and ECMAScript
+   §10.2.8 DefineMethodProperty ( homeObj, name, closure, enumerable ) writes the triple down — "Let
+   propertyDesc be the PropertyDescriptor { [[Value]]: closure, [[Writable]]: true, [[Enumerable]]: enumerable,
+   [[Configurable]]: true }" — so with §3.8's `false` substituted the two agree on the value and disagree on
+   [[Enumerable]]. An assert INSIDE the entry is blind to every caller that never arrives at it, and would in
+   any case stamp the entry's own file and line for all hundred-odd callers, naming an action with no object.
+   THE IDENTIFIER IS THE SITE. This does not thread a caller's __FILE__ anywhere: the message names the
+   IDENTIFIER, and an identifier is an address — `git grep '"Screen"' engine/host/browser` is one command and
+   lands on the line that installed it. That is what makes a walk over a finished object an actionable crash
+   rather than a report that something, somewhere, is wrong.
+   WHY IT IS SOUND. The subject is a realm this codebase has just finished building, before one byte of page
+   script has run, so every property name it reads is a name this codebase wrote — never a value a stranger
+   stated, which is the only thing that would make an abort here a switch somebody else holds. The two sets
+   cannot collide by accident either: of the corpus's identifiers exactly ONE begins with a lower-case letter
+   (`console`, a §3.13.1 namespace object, which is in this band and answers to the same descriptor), so a
+   §3.7.6 attribute or §3.7.7 operation of the [Global] interface — which §3.7.6 requires to be ENUMERABLE, and
+   which is spelled `location`, `document`, `fetch` — can never be mistaken for one of these. No ECMAScript
+   intrinsic global name is a Web IDL identifier either, so the JS engine's own globals are outside the set.
+   WHAT IT DOES NOT SEE, named because a check trusted past its evidence is worse than none: an interface
+   object a HOST puts on the global AFTER this returns (a harness global, a solver seam) is outside the walk,
+   because the walk runs where the platform's own installs finish. Those are not §3.8 property references and
+   none of them is named by the corpus; the day one is, this check is the thing that has to move rather than
+   the thing that was wrong. */
+static void realm_assert_global_property_references(JSContext *ctx)
+{
+    JSPropertyEnum *tab = NULL;
+    uint32_t n = 0, i;
+    JSValue global = JS_GetGlobalObject(ctx);
+    int ok = JS_GetOwnPropertyNames(ctx, &tab, &n, global, JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY);
+
+    /* This block only exists in a dev build, so the DCHECK is live here and the failure arm below it is not a
+       path: a non-zero status aborts, and `tab`/`n` are never read out of a failed call. */
+    DCHECK(ok == 0, "the realm's global could not be enumerated to check Web IDL §3.8's descriptor");
+    for (i = 0; i < n; i++) {
+        const char *name = JS_AtomToCString(ctx, tab[i].atom);
+        const IdlExposureRow *row;
+
+        if (name == NULL) continue;
+        row = bsearch(name, IDL_EXPOSURE, sizeof IDL_EXPOSURE / sizeof IDL_EXPOSURE[0],
+                      sizeof IDL_EXPOSURE[0], idl_exposure_row_name_cmp);
+        DCHECKF(row == NULL,
+                "`%s` is an ENUMERABLE own property of this realm's global, and Web IDL §3.8 Platform objects "
+                "implementing interfaces performs DefineMethodProperty(target, id, interfaceObject, false) for "
+                "it — ECMAScript §10.2.8 DefineMethodProperty ( homeObj, name, closure, enumerable ) makes that "
+                "{ [[Writable]]: true, [[Enumerable]]: FALSE, [[Configurable]]: true }, so a browser never "
+                "shows this name to `for (var k in globalThis)` or to `Object.keys(globalThis)`. It got here "
+                "through an ordinary [[Set]] rather than through core/idl_args' "
+                "idl_define_global_property_reference, which is §3.8's one door and also where §3.3.7 "
+                "[Exposed] step 1 is asked — so this interface is ALSO present in every realm its exposure set "
+                "excludes. Route the install: `git grep '\\\"%s\\\"' engine/host/browser` finds it", name, name);
+        JS_FreeCString(ctx, name);
+    }
+    for (i = 0; i < n; i++) JS_FreeAtom(ctx, tab[i].atom);
+    js_free(ctx, tab);
+    JS_FreeValue(ctx, global);
+}
+#endif
 
 void realm_install_intrinsics(JSContext *ctx, const char *top_level_creation_url,
                               const char *global_interface)
@@ -99,6 +180,12 @@ void realm_install_intrinsics(JSContext *ctx, const char *top_level_creation_url
                     JS_NewInt32(ctx, (int32_t)idl_global_names_of(global_interface)));
     for (i = 0; i < g_n; i++)
         g_list[i](ctx);
+#if APICLIENT_DEV
+    /* EVERY §3.8 PROPERTY REFERENCE THIS REALM HAS, NOW THAT IT HAS ALL OF THEM. It is asked here and not
+       inside a component because the invariant is about the FINISHED global: a component can only see the one
+       name it installed, and what has to be true is a statement about the whole object. */
+    realm_assert_global_property_references(ctx);
+#endif
 }
 
 JSValue realm_top_level_creation_url(JSContext *ctx)

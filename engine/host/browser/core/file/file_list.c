@@ -297,7 +297,7 @@ void file_list_install_protos(JSContext *ctx)
     CHECK(!JS_IsException(ctor), "the FileList interface object could not be allocated");
     JS_FreeValue(ctx, proto);
     global = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, global, "FileList", ctor);
+    idl_define_global_property_reference(ctx, global, "FileList", ctor);
     JS_FreeValue(ctx, global);
 }
 

@@ -777,7 +777,7 @@ void mouse_event_install_protos(JSContext *ctx)
     JS_SetConstructor(ctx, ctor, proto);
     JS_FreeValue(ctx, proto);
     global = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, global, "MouseEvent", ctor);
+    idl_define_global_property_reference(ctx, global, "MouseEvent", ctor);
     JS_FreeValue(ctx, global);
 }
 

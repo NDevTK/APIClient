@@ -778,7 +778,7 @@ static void idb_connection_install_realm(JSContext *ctx)
     CHECK(!JS_IsException(ctor), "the IDBDatabase interface object could not be allocated");
     JS_FreeValue(ctx, proto);
     global = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, global, "IDBDatabase", ctor);
+    idl_define_global_property_reference(ctx, global, "IDBDatabase", ctor);
     JS_FreeValue(ctx, global);
 }
 

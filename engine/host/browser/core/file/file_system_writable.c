@@ -908,8 +908,8 @@ static void fs_writable_install_realm(JSContext *ctx)
     JS_SetClassProto(ctx, g_fw_class, JS_DupValue(ctx, proto));
 
     global = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, global, "FileSystemWritableFileStream",
-                      idl_interface_object(ctx, "FileSystemWritableFileStream", proto));
+    idl_define_global_property_reference(ctx, global, "FileSystemWritableFileStream",
+                                         idl_interface_object(ctx, "FileSystemWritableFileStream", proto));
     JS_FreeValue(ctx, global);
     JS_FreeValue(ctx, proto);
 }

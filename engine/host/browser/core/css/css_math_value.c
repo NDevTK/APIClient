@@ -743,7 +743,7 @@ void css_math_value_install_realm(JSContext *ctx, JSValueConst numeric_proto)
     idl_install_accessor_no_user_code(ctx, mv_proto, "operator", js_mv_operator, 0, -1);
     ctor = idl_interface_object(ctx, "CSSMathValue", mv_proto);
     CHECK(!JS_IsException(ctor), "the CSSMathValue interface object could not be allocated");
-    JS_SetPropertyStr(ctx, global, "CSSMathValue", ctor);
+    idl_define_global_property_reference(ctx, global, "CSSMathValue", ctor);
     JS_SetClassProto(ctx, g_abstract_class, JS_DupValue(ctx, mv_proto));
 
     /* §4.3.4's CSSNumericArray. Its IDL declares no inheritance, so §3.7.3's last arm puts its interface
@@ -760,7 +760,7 @@ void css_math_value_install_realm(JSContext *ctx, JSValueConst numeric_proto)
     idl_indexed_install_value_iterator(ctx, na_proto);
     ctor = idl_interface_object(ctx, "CSSNumericArray", na_proto);
     CHECK(!JS_IsException(ctor), "the CSSNumericArray interface object could not be allocated");
-    JS_SetPropertyStr(ctx, global, "CSSNumericArray", ctor);
+    idl_define_global_property_reference(ctx, global, "CSSNumericArray", ctor);
     JS_SetClassProto(ctx, g_array_class, na_proto);   /* CONSUMES na_proto */
 
     /* The six constructible subclasses, each over CSSMathValue.prototype for §3.7.3's inheritance arm. */

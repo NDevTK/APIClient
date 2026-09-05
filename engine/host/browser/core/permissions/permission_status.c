@@ -385,8 +385,8 @@ static void permission_status_install_realm(JSContext *ctx)
     /* §3.7.1's INTERFACE OBJECT on THIS realm's global. §6.3 declares no constructor, so
        `new PermissionStatus()` is a TypeError — and its PRESENCE is what a feature-detecting bundle reads. */
     global = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, global, "PermissionStatus",
-                      idl_interface_object(ctx, "PermissionStatus", proto));
+    idl_define_global_property_reference(ctx, global, "PermissionStatus",
+                                         idl_interface_object(ctx, "PermissionStatus", proto));
     JS_FreeValue(ctx, global);
     JS_FreeValue(ctx, proto);
 }

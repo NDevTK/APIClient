@@ -1433,7 +1433,7 @@ static void idb_cursor_install_realm(JSContext *ctx)
     ctor = idl_interface_object(ctx, "IDBCursor", proto);
     CHECK(!JS_IsException(ctor), "the IDBCursor interface object could not be allocated");
     global = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, global, "IDBCursor", ctor);
+    idl_define_global_property_reference(ctx, global, "IDBCursor", ctor);
 
     /* §4.9's SECOND INTERFACE: `interface IDBCursorWithValue : IDBCursor`. Its prototype chains to the one just
        built — so `key`, `advance` and the rest are reached THROUGH it rather than copied — and it adds exactly
@@ -1447,7 +1447,7 @@ static void idb_cursor_install_realm(JSContext *ctx)
     ctor = idl_interface_object(ctx, "IDBCursorWithValue", wv_proto);
     CHECK(!JS_IsException(ctor), "the IDBCursorWithValue interface object could not be allocated");
     JS_FreeValue(ctx, wv_proto);
-    JS_SetPropertyStr(ctx, global, "IDBCursorWithValue", ctor);
+    idl_define_global_property_reference(ctx, global, "IDBCursorWithValue", ctor);
     JS_FreeValue(ctx, global);
 }
 

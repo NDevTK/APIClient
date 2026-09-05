@@ -936,7 +936,7 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
        global's, not a Window's: HTML's global IS the Window, and the tag it carries is the interface's. */
     JS_DeleteProperty(ctx, g, JS_WellKnownSymbolAtom(JS_WKS_TO_STRING_TAG), 0);
     event_target_install_interface(ctx, g);   /* §2.7's interface object, now that its prototype is in a chain */
-    JS_SetPropertyStr(ctx, g, "Window", idl_interface_object(ctx, "Window", gp));
+    idl_define_global_property_reference(ctx, g, "Window", idl_interface_object(ctx, "Window", gp));
 
     /* 7.2.2: window, self and frames all return THIS Window's proxy, and the global object IS that proxy here —
        so `window.X`, `self.X` and a bare `X` are one read spelled three ways. */

@@ -423,7 +423,7 @@ static void navigator_install_realm(JSContext *ctx)
        `new Navigator()` is a TypeError — and its PRESENCE is what `navigator instanceof Navigator` and every
        prototype-patching polyfill needs, which is exactly what this interface had none of. */
     global = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, global, "Navigator", idl_interface_object(ctx, "Navigator", proto));
+    idl_define_global_property_reference(ctx, global, "Navigator", idl_interface_object(ctx, "Navigator", proto));
 
     nav = JS_NewObjectProtoClass(ctx, proto, g_nav_class);
     JS_FreeValue(ctx, proto);

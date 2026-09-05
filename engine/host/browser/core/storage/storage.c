@@ -837,7 +837,7 @@ static void storage_install_realm(JSContext *ctx)
        a TypeError, and its PRESENCE is what `localStorage instanceof Storage` and every prototype-patching
        shim needs — which is the spelling a bundle uses to feature-detect the whole API. */
     global = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, global, "Storage", idl_interface_object(ctx, "Storage", proto));
+    idl_define_global_property_reference(ctx, global, "Storage", idl_interface_object(ctx, "Storage", proto));
     JS_FreeValue(ctx, global);
     JS_FreeValue(ctx, proto);
 }

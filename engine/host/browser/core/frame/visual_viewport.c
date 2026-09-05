@@ -288,7 +288,8 @@ static void visual_viewport_install(JSContext *ctx)
        `new VisualViewport()` is a TypeError — and its PRESENCE is what a feature-detecting bundle reads before
        it touches `window.visualViewport` at all. */
     global = JS_GetGlobalObject(ctx);
-    JS_SetPropertyStr(ctx, global, "VisualViewport", idl_interface_object(ctx, "VisualViewport", proto));
+    idl_define_global_property_reference(ctx, global, "VisualViewport",
+                                         idl_interface_object(ctx, "VisualViewport", proto));
 
     obj = JS_NewObjectProtoClass(ctx, proto, g_vv_class);
     JS_FreeValue(ctx, proto);
