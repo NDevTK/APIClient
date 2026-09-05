@@ -6,6 +6,7 @@
 #include <lexbor/dom/interfaces/attr.h>   /* lxb_dom_attr_t — the list elem_release_attrs walks */
 #include <lexbor/dom/interfaces/document_type.h>
 #include <lexbor/dom/interfaces/element.h>
+#include <lexbor/dom/interfaces/shadow_root.h>   /* DOM §4.8's node type is the one lexbor's own dispatch drops */
 
 #include "check.h"
 #include "core/dom/attr_list.h"     /* dom_attr_destroy — the ONE point an Attr's death converges on */
@@ -45,6 +46,45 @@ static lxb_dom_interface_t *dom_node_interface_free(lxb_dom_interface_t *intrfc)
     if (node->type == LXB_DOM_NODE_TYPE_ELEMENT &&
         node->local_name < LXB_TAG__LAST_ENTRY && node->ns >= LXB_NS__LAST_ENTRY)
         return lxb_dom_element_interface_destroy(intrfc);
+    /* DOM §4.8 Interface ShadowRoot IS A DocumentFragment, AND LEXBOR AGREES EVERYWHERE BUT IN THE ONE SWITCH
+       THAT FREES IT. `lxb_dom_shadow_root_interface_create` callocs the struct out of `mraw` and
+       `lxb_dom_shadow_root_interface_destroy` hands it straight back through the fragment's leaf free, so the
+       destructor exists and is arena-correct; what does not exist is any route to it.
+       `lxb_html_interface_destroy`'s switch names TEXT, COMMENT, ELEMENT, DOCUMENT, DOCUMENT_TYPE, ATTRIBUTE,
+       CDATA_SECTION, DOCUMENT_FRAGMENT and PROCESSING_INSTRUCTION, and LXB_DOM_NODE_TYPE_SHADOW_ROOT is not
+       among them — it reaches `default: return NULL`, which is the free that frees nothing.
+       SO EVERY SHADOW ROOT THIS ENGINE HAS EVER DESTROYED LOST ITS STRUCT, and the loss is invisible from
+       either end: `lxb_dom_node_destroy_deep` walks the children, each of which IS in the switch and dies
+       correctly, and the caller gets the NULL it expects back. MEASURED through the production ABI, one
+       document parsed and torn down with no scheduler step at all: `el.attachShadow()` leaks 1 node and 0 text
+       with an EMPTY shadow tree, 1 and 0 with a `<span>` and a text node under it, 1 and 0 with three of each,
+       and 2 and 0 for two hosts — invariant in the subtree and linear in the number of ROOTS, which is the
+       struct and nothing else. Upstream never sees it for the reason node_interface.h already gives about the
+       other defects in this dispatch: upstream frees the whole arena and destroys no node on its own.
+       ANSWERED BY TYPE, like §4.6's doctype above, because the type is what the create wrote — lexbor's
+       (local name, namespace) table cannot name a shadow root at all, its `local_name` being the zero
+       `lexbor_mraw_calloc` left. */
+    if (node->type == LXB_DOM_NODE_TYPE_SHADOW_ROOT)
+        return lxb_dom_shadow_root_interface_destroy(lxb_dom_interface_shadow_root(intrfc));
+    /* AND NOTHING MAY REACH THE FALL-THROUGH THAT IT ANSWERS `default: return NULL` FOR, which is the arm the
+       shadow root sat in. A destructor that frees nothing and reports nothing is the worst shape available to
+       this dispatcher: the node's wrapper has already gone back to the identity map one frame up, the caller
+       is handed the NULL every arm returns, and the only witness is node_heap.c's teardown count — which
+       names an arena, not a type, so it can say a struct survived and never which one. The set below is
+       `lxb_html_interface_destroy`'s own switch labels, transcribed; CHARACTER_DATA, SHADOW_ROOT, UNDEF and
+       §4.7's three historical types (ENTITY_REFERENCE, ENTITY, NOTATION) are the ones it does not name. A
+       type added to lexbor's create side and not to its destroy side now ABORTS at the free instead of
+       leaking one struct per node for the life of the agent. */
+    DCHECK(node->type == LXB_DOM_NODE_TYPE_ELEMENT   || node->type == LXB_DOM_NODE_TYPE_ATTRIBUTE ||
+           node->type == LXB_DOM_NODE_TYPE_TEXT      || node->type == LXB_DOM_NODE_TYPE_CDATA_SECTION ||
+           node->type == LXB_DOM_NODE_TYPE_COMMENT   || node->type == LXB_DOM_NODE_TYPE_DOCUMENT ||
+           node->type == LXB_DOM_NODE_TYPE_DOCUMENT_TYPE ||
+           node->type == LXB_DOM_NODE_TYPE_DOCUMENT_FRAGMENT ||
+           node->type == LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION,
+           "a node is about to be freed through a dispatcher whose switch does not name its TYPE — lexbor "
+           "answers `default: return NULL` there, so the struct is kept, the caller is told nothing, and the "
+           "only report is a node-arena count at agent teardown that cannot say which type survived. Give the "
+           "type its own arm above, beside DOM §4.8's shadow root");
     DCHECK((node->type != LXB_DOM_NODE_TYPE_TEXT     || node->local_name == LXB_TAG__TEXT) &&
            (node->type != LXB_DOM_NODE_TYPE_COMMENT  || node->local_name == LXB_TAG__EM_COMMENT) &&
            (node->type != LXB_DOM_NODE_TYPE_DOCUMENT || node->local_name == LXB_TAG__DOCUMENT),
