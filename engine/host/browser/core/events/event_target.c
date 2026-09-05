@@ -2817,11 +2817,67 @@ static void handler_declare_members(JSContext *ctx)
     }
 }
 
+/* WHICH MIXINS A MASK NAMES, ASKED OF THE X-LIST ITSELF — the one thing an install of the event handler IDL
+ * attributes of HTML §8.1.8.1 Event handlers — the section that states them — cannot find out by succeeding.
+ *
+ * THE FAILURE IT ENDS IS SILENCE AND NOT A WRONG ANSWER. The entry below selects rows by ONE constant mask,
+ * so a caller whose bit no row carries installs ZERO members and returns exactly as a caller that installed
+ * eighty does: the prototype is built, the realm finishes, and the only reader downstream is
+ * engine/idlgen.mjs going on reporting those members ABSENT — which is what it reports for an interface
+ * nobody has started. An absent install and a completed one were different facts this call could not tell
+ * apart, and the caller could not either, because there is nothing to test: the members it asked for are
+ * missing in precisely the way a member nobody asked for is.
+ *
+ * IT IS THE HALF-WIRED STATE OF ADDING A BIT, WHICH IS WHY IT LANDS AHEAD OF THE NEXT BIT AND NOT WITH IT.
+ * A bit is added in TWO places — the enum in event_target.h, and the rows of the handler list above — and the
+ * install site is usually a third file. Land the enum and the install without the rows and the install is a
+ * no-op; that is the intermediate revision a conversion split across two commits leaves behind, and it is the
+ * revision a bisect stops on and charges to the commit under test. The set that needs a bit next is the one
+ * declared by HTML §10.2.1.1 The WorkerGlobalScope common interface — six event handler IDL attributes that
+ * WorkerGlobalScope writes in its own interface, so no existing bit can carry them: every bit that holds any
+ * of the six holds dozens of names beside them.
+ *
+ * BOTH OPERANDS ARE THIS FILE'S AND NEITHER IS A LITERAL COPIED FROM THE OTHER: the mask the caller passed,
+ * and the union DERIVED from EH_MASK at the moment of the check. A restated constant would be a second copy
+ * of the list's own arithmetic, and a mask compared against the constant it was spelled from is a comparison
+ * of a thing with itself — an assert whose two sides cannot disagree.
+ *
+ * THE STRAY BITS ARE PRINTED IN DECIMAL BECAUSE THAT IS THE ADDRESS. This is a shared entry with twenty-odd
+ * callers, so its abort stamps THIS file's line for every one of them and the message can name no site. A
+ * mask bit is per-interface by construction, so the VALUE identifies the caller better than a line would,
+ * and event_target.h's bit enum spells every bit as a decimal literal — so the number in the message greps
+ * straight to the bit that names nothing. */
+#if APICLIENT_DEV
+static void eh_assert_mask_named(int mask)
+{
+    int carried = 0, i;
+
+    for (i = 0; i < EH_COUNT; i++)
+        carried |= EH_MASK[i];
+    DCHECK(mask != 0,
+           "event handlers were installed with a mask naming no mixin at all — a mask IS the set an "
+           "interface's IDL declares, and an interface that declares no event handler does not reach this "
+           "entry, so a zero is a caller that computed a set and got nothing rather than one that wanted "
+           "nothing");
+    DCHECKF((mask & ~carried) == 0,
+            "event handlers were installed with mask %d, whose bits %d are carried by no row of this file's "
+            "handler list — every member those bits name is silently NOT installed, and this call returns "
+            "exactly as a successful one does. Grep event_target.h's bit enum for that decimal literal: "
+            "either the bit was added to the enum and the rows it is meant to select were never given it, or "
+            "the caller names a bit whose rows have gone",
+            mask, mask & ~carried);
+}
+#define EH_ASSERT_MASK_NAMED(m) eh_assert_mask_named(m)
+#else
+#define EH_ASSERT_MASK_NAMED(m) ((void)0)
+#endif
+
 void event_target_install_handlers(JSContext *ctx, JSValueConst target, int mask)
 {
     int i;
 
     DCHECK(JS_IsObject(target), "event handlers were installed on something that is not an object");
+    EH_ASSERT_MASK_NAMED(mask);
     for (i = 0; i < EH_COUNT; i++) {
         if (!(EH_MASK[i] & mask))
             continue;

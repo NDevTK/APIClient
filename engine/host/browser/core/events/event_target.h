@@ -188,6 +188,12 @@ void event_target_install_interface(JSContext *ctx, JSValueConst global);
    WindowEventHandlers' members (EH_WINDOW) and against nothing else. §4.3.1 The body element says those six,
    exposed on the body, "replace the generic event handlers with the same names normally supported by HTML
    elements" — REPLACE, not shadow: one accessor per name, whose target the determination decides. */
+/* A BIT IS TWO EDITS AND THE SECOND ONE IS NOT HERE. Adding a member to this enum names nothing on its own:
+   what a bit SELECTS is the rows of event_target.c's handler list that carry it, so a bit added here and
+   handed to event_target_install_handlers without those rows installs no member and returns exactly as a
+   successful install does. That entry asserts it — a mask whose bits no row carries ABORTS there naming the
+   stray bits in decimal, which is what this enum spells them in — so the half-wired state is loud rather than
+   a prototype quietly missing the members its IDL declares. */
 enum { EH_GLOBAL = 1, EH_WINDOW = 2, EH_DOCUMENT = 4, EH_SIGNAL = 8, EH_PORT = 16,
        EH_MEDIA_QUERY_LIST = 32, EH_XHR = 64, EH_XHR_READYSTATE = 128, EH_SHADOW_ROOT = 256,
        EH_VISUAL_VIEWPORT = 512, EH_PERMISSION_STATUS = 1024, EH_NAVIGATION = 2048,
