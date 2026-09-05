@@ -43,7 +43,7 @@
 #include "core/eventsource/event_source_parser.h"
 
 /* A GROWING BYTE RUN, AND IT IS NOT core/json_buf.h's. That buffer's append takes a NUL-TERMINATED STRING and
-   measures it with strlen, which is right for a JSON writer and wrong for exactly this: §9.2.5's `any-char`
+   measures it with strlen, which is right for a JSON writer and wrong for exactly this: HTML §9.2.5's `any-char`
    production is "a scalar value other than U+000A LINE FEED (LF) or U+000D CARRIAGE RETURN (CR)", so a field
    value may contain U+0000, and §9.2.6's `id` arm is written around that possibility — "If the field value does
    not contain U+0000 NULL, then set the last event ID buffer to the field value". Routing these through a
@@ -327,7 +327,7 @@ void event_source_parser_interpret(const char *bytes, size_t n,
  *
  * WHAT IS NOT COVERED: this entry interprets a COMPLETE body, so no event of a stream is dispatched before the
  * whole reply has arrived. A server that holds the connection open — which is what an event stream is for, and
- * what §9.2.5 means by "connections established to remote servers for such resources are expected to be
+ * what HTML §9.2.5 means by "connections established to remote servers for such resources are expected to be
  * long-lived" — delivers nothing at all through this path, because the reply never completes.
  *
  * WHAT THE NEXT DIFF BUILDS: an incremental body delivery across the one chokepoint SECURITY.md names, and a
@@ -335,10 +335,31 @@ void event_source_parser_interpret(const char *bytes, size_t n,
  * then CROSSES A SUSPEND POINT, so by CLAUDE.md's §PLATFORM-DATA-A-FLOW-QUEUES-IS-A-JS-VALUE those four
  * buffers become JS values on the EventSource object's own record rather than the plain C they correctly are
  * here, and the decode becomes the STREAMING one — core/encoding/encoding.h's `enc_decoder_decode` with
- * `stream` true — because a character split across two chunks decodes to two U+FFFDs otherwise. GREPPED at
- * `origin/main` before this clause was written: `enc_decoder_decode`'s streaming argument exists;
- * `extension/lib/safe-fetch.js` reads a body with one `await resp.arrayBuffer()` and has no chunk seam, and
- * `engine/host/qjs_abi.h` declares no incremental body entry — so the delivery is the half that does not exist.
+ * `stream` true — because a character split across two chunks decodes to two U+FFFDs otherwise.
+ *
+ * AND THE TRUSTED HALF OF THAT DELIVERY IS BUILT, WHICH THIS CLAUSE SAID IT WAS NOT. The words that stood here
+ * were `extension/lib/safe-fetch.js reads a body with one await resp.arrayBuffer() and has no chunk seam`, and
+ * that is the one failure mode a next-diff clause has: it is a claim about a tree that moves, read once, by
+ * somebody who has already decided to do the work — so a wrong one is not caught, it is executed. RE-DERIVED
+ * rather than repeated: `_readBody` takes the response through `resp.body.getReader()` and RELEASES each chunk
+ * to an `opts.onChunk` sink as it arrives, with no chunk cap, no size cap and no timeout, sitting BELOW every
+ * gate that reads the response head and ABOVE the one that reads the body. An event stream is on the
+ * streamable side of that boundary and does not have to argue for it: HTML §9.2.2's step 8 creates its request
+ * "given urlRecord, the empty string, and corsAttributeState", and the empty destination is not one
+ * `_isScriptLike` enumerates, so `_bodyGated` is false and the entry's `blocked-stream-body-gated:` refusal
+ * cannot reach it. That sink has NO CALLER anywhere in this tree, which is what it was waiting for.
+ *
+ * SO THE HALF THAT IS ACTUALLY MISSING IS THE ENGINE'S, AND IT IS TWO THINGS RATHER THAN ONE. First, a
+ * NON-SETTLING DELIVERY: `engine/host/qjs_abi.h` declares `qjs_provide` and `qjs_decline` and nothing else
+ * that carries bytes for a park, and `engine/host/solver/pending.h`'s field list holds one `body` beside one
+ * `haveValue`, so the only thing the zone can say about a request is its whole answer, once — there is no
+ * state in which a park has received bytes and is still owed more. Second, a HEAD DELIVERED BEFORE ITS BODY:
+ * `_readBody`'s own banner states that consequence, that a sink is handed bytes while its caller still holds
+ * no head and that the computed type is the sniff's, so a head cannot carry one — "enough for a consumer that
+ * parses a byte stream, and not enough for one that must announce a connection before it may dispatch".
+ * HTML §9.2.2's step 15 is exactly that consumer: its third arm refuses a response whose "status is not 200" or
+ * whose "`Content-Type` is not `text/event-stream`", and its fourth announces the connection, and BOTH run
+ * before a byte of this file's input is read.
  *
  * HOW ITS ABSENCE WOULD SHOW: a page whose `EventSource` addresses a real streaming endpoint fires no `message`
  * event ever, while its flow stays parked on a reply that never completes — the flow is outranked and paged,
