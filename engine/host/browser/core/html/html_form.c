@@ -1030,10 +1030,17 @@ static bool form_no_validate(JSContext *ctx, JSValueConst submitter, lxb_dom_ele
     return has_attr(form, "novalidate");
 }
 
-/* §4.10.22.3 steps 16-18. THE ALGORITHM IS §4.2.3's AND IT IS CALLED, NOT RESTATED — what is left here is the
+/* §4.10.22.3 steps 18-20. THE ALGORITHM IS §4.2.3's AND IT IS CALLED, NOT RESTATED — what is left here is the
  * two steps that belong to a form: "Let formTarget be null. If the submitter element is a submit button and it
- * has a `formtarget` attribute, then set formTarget to the formtarget attribute value" (steps 16-17), and then
- * step 18 hands that, with the submitter's FORM OWNER, to get an element's target.
+ * has a `formtarget` attribute, then set formTarget to the formtarget attribute value" (steps 18-19), and then
+ * step 20 hands that, with the submitter's FORM OWNER, to get an element's target.
+ *
+ * THE THREE NUMBERS ABOVE WERE 16-18, 16-17 AND 18, AND ALL THREE WERE TWO LOW — steps 16 and 17 are "let
+ * scheme be the scheme of parsed action" and "let enctype be the submitter element's enctype", which this
+ * component does not touch. It is CLAUDE.md's cluster shape: the drift was uniform, so every member of it
+ * looked consistent with every other and a reader spot-checking one found nothing wrong. Counted with list
+ * depth tracked, §4.10.22.3 has 26 top-level steps and its LAST is the table, which is the fixed point the
+ * whole cluster is anchored against.
  *
  * WHAT WAS HERE WAS A SECOND COPY, AND IT DISAGREED WITH THE FIRST IN BOTH DIRECTIONS. It walked for a
  * `<base target>` where core/html/hyperlink.c did not look for one at all, and neither ran §4.2.3 step 2's
@@ -1052,19 +1059,27 @@ static const char *form_element_target(JSContext *ctx, JSValueConst submitter, l
     const char *form_target = NULL;
     size_t ft_len = 0;
 
-    /* Steps 16-17: PRESENCE on the submit button, so `formtarget=""` is an explicit empty target that stops the
+    /* Steps 18-19: PRESENCE on the submit button, so `formtarget=""` is an explicit empty target that stops the
        form's own attribute being consulted — the same reason submitter_attr_from asks §4.9's list. */
     if (button && has_attr(button, "formtarget")) {
         form_target = attr_of(button, "formtarget", &ft_len);
         if (!form_target) { form_target = ""; ft_len = 0; }
     }
-    return html_base_element_get_target(form_node, form_target, ft_len, plen);   /* step 18 */
+    return html_base_element_get_target(form_node, form_target, ft_len, plen);   /* step 20 */
 }
 
-/* §7.1's RULES FOR CHOOSING A NAVIGABLE, for the only answer this engine can act in: `_self` and the empty
-   string both choose the navigable the form is already in, which is this document. Every other target — a
-   keyword or a name — chooses one this engine has not computed, because steps 18-21 exist for a navigation and
-   the recording rows never needed a navigable. */
+/* HTML §7.3.1.7 "Navigable target names"' RULES FOR CHOOSING A NAVIGABLE, for the only answer this engine can
+   act in: `_self` and the empty string both choose the navigable the form is already in, which is this
+   document. Every other target — a keyword or a name — chooses one this engine has not computed, because
+   §4.10.22.3 steps 18-23 exist for a navigation and the recording rows never needed a navigable.
+   (The section was cited as "§7.1", which is "Browsing the web"'s parent in no edition that numbers these
+   rules; core/frame/navigable.h carries the same algorithm under the right number.)
+   NAMED RESIDUAL. What is not covered: `_parent` and `_top`, which §7.3.1.7 steps 5 and 6 ALSO answer with the
+   current navigable when it has no parent and is itself the top-level traversable — the ordinary case for a
+   document that is not framed. What the next diff builds: a predicate over this navigable's parent, so the two
+   keywords take the same arm as `_self` where they denote the same navigable. How its absence shows: a
+   top-level document's `<form action="javascript:…" target="_top">` aborts at the crash below where a browser
+   evaluates the URL in this very document. */
 static bool form_target_is_self(const char *t, size_t len)
 {
     return !t || len == 0 || ascii_ci_is(t, len, "_self");
@@ -1547,31 +1562,39 @@ static void submit_plan_to_navigate(JSContext *ctx, JSSubmitState *s, UrlRecord 
         form_hand_off_to_external(ctx, parsed);
         return;
     }
-    /* Everything below NAVIGATES a navigable, and steps 18-21 are what say WHICH — get an element's target,
-       get an element's noopener, then the rules for choosing a navigable. This engine does not run them,
-       because until now no row needed a navigable at all: the recording rows derive a request and the two
-       hand-offs affect none. `_self` and the empty string are the one target whose chosen navigable is the
-       form's own, which is this document, so that is the case the rows below can act in and the rest is named
-       as the work it is. */
-    target = form_element_target(ctx, s->submitter, node_of(s->hdr.this_val), &tlen);
+    /* Everything below NAVIGATES a navigable, and §4.10.22.3 steps 18-23 are what say WHICH — formTarget, get
+       an element's target, get an element's noopener, the rules for choosing a navigable, and the return when
+       they answer null. This engine does not run them as a sequence, because until now no row needed a
+       navigable at all: the recording rows derive a request and the two hand-offs affect none. `_self` and the
+       empty string are the one target whose chosen navigable is the form's own, which is this document, so
+       that is the case the rows below can act in and the rest is named as the work it is. */
+    target = form_element_target(ctx, s->submitter, node_of(s->hdr.this_val), &tlen);   /* steps 18-20 */
     if (strcmp(scheme, "javascript") == 0) {
         if (!form_target_is_self(target, tlen))
             /* WHAT THIS ASKED FOR HAS PARTLY ARRIVED, AND A DFAIL THAT KEEPS ASKING IS THE STALE ONE
                CLAUDE.md NAMES. It used to instruct the next reader to "build steps 18-21 (get an element's
-               target, get an element's noopener, the rules for choosing a navigable)", and TWO of those three
-               are in this tree: get-an-element's-target is §4.2.3's, in core/html/html_base_element.c, reached
-               through form_element_target and already called on the line above; the rules for choosing a
-               navigable are HTML §7.3.1.7's, implemented as
-               navigable_open in core/frame/navigable.c and reached by both `window.open` and §4.6.3. So the
-               instruction sent its reader to write a third copy of an algorithm whose whole point is that
-               there is one. What is genuinely absent is named instead. */
+               target, get an element's noopener, the rules for choosing a navigable)", and ALL THREE are now
+               in this tree: get-an-element's-target is §4.2.3's, in core/html/html_base_element.c, reached
+               through form_element_target and already called on the line above; get-an-element's-noopener is
+               §4.6.5's, in core/html/hyperlink.c, which is a COMPONENT over "an a, area, or form element"
+               rather than the substring test inside the hyperlink caller it used to be; the rules for choosing
+               a navigable are HTML §7.3.1.7 "Navigable target names"', implemented as navigable_open in
+               core/frame/navigable.c and reached by both `window.open` and §4.6.3. So the instruction sent its
+               reader to write a third copy of an algorithm whose whole point is that there is one, and the
+               step numbers it cited were wrong besides: the noopener sentence is step 21 and not step 19, the
+               rules are step 22 and not "18-21", and §4.10.22.3's plan-to-navigate sets sourceElement to the
+               SUBMITTER rather than to the form. What is genuinely absent is named instead. */
             DFAIL("a form submits to a `javascript:` action while naming another navigable in `target` or "
-                  "`formtarget` — §4.10.22.3 steps 18-21 choose that navigable and §7.4.2.3.2 evaluates the "
-                  "URL in ITS active document, under ITS settings object and API base URL, while "
-                  "navigable_evaluate_javascript_url below runs it in THIS one. Build §4.10.22.3 step 19's "
-                  "get-an-element's-noopener for a form, hand the target, that flag and the FORM as §4.6.5 step "
-                  "11's sourceElement to navigable_open (core/frame/navigable.c, which already runs §7.3.1.7's "
-                  "rules), and evaluate the URL in the realm of the navigable it answers with");
+                  "`formtarget` — §4.10.22.3 step 22 chooses that navigable and §7.4.2.3.2 \"The javascript: "
+                  "URL special case\" evaluates the URL in ITS active document, under ITS settings object and "
+                  "API base URL, while navigable_evaluate_javascript_url below runs it in THIS one and takes "
+                  "no realm to run it in. What must exist afterward: an evaluation entry that names the "
+                  "navigable it runs in, and a §4.10.22.3 steps 21-23 here that hands "
+                  "hyperlink_element_noopener's answer and this target to navigable_open with the SUBMITTER as "
+                  "plan-to-navigate's sourceElement, returning when it answers null. Note that navigable_open "
+                  "cannot yet be handed a `javascript:` address at all: its create folds §7.4 step 14's "
+                  "navigate, whose load job DCHECKs that scheme away because the request would put the program "
+                  "text on the wire");
         serialized = url_serialize(parsed, /*exclude_fragment*/ false);
         CHECK(serialized != NULL, "form: OOM serializing a javascript: action URL");
         navigable_evaluate_javascript_url(ctx, serialized);
@@ -1579,20 +1602,33 @@ static void submit_plan_to_navigate(JSContext *ctx, JSSubmitState *s, UrlRecord 
         return;
     }
     if (strcmp(scheme, "data") == 0)
+        /* THIS CRASH'S REMEDY CLAUSE WAS HALF STALE AND THE HALF THAT WAS STALE IS THE HALF A READER ACTS ON.
+           It said "build the data: URL processor and the navigate that takes a response the engine already
+           has". The data: URL processor EXISTS — WHATWG Fetch §6, at core/fetch/data_url.c, and §4.3's scheme
+           fetch already runs it for this very scheme (core/fetch/scheme_fetch.c) — so a reader obeying the
+           clause would have written a second copy of a decoder this tree ships. Only the NAVIGATE half was
+           ever missing, and that is what the message asks for now. */
         DFAIL("a form submits to a `data:` action — §4.10.22.3 step 26 plans to navigate to it (the GET cell "
               "having mutated its query first), and navigating to a data: URL builds a Document out of the "
-              "URL's OWN bytes with no network involved. §7.4's navigate can only load an address the HOST "
-              "fetches (navigable.c's js_nav_load_step asks `document.fetch\\t<prov>\\t<url>`, which for a data: URL is "
-              "a GET of the literal text); build the data: URL processor and the navigate that takes a "
-              "RESPONSE THE ENGINE ALREADY HAS, then route this row through it");
+              "URL's OWN bytes with no network involved. §7.4's document-load job can only load an address the "
+              "HOST fetches (navigable.c's js_nav_load_step asks `document.fetch\\t<prov>\\t<url>`, which for a "
+              "data: URL is a GET of the literal text), and its `fetches` predicate names exactly one "
+              "non-fetching scheme, `about:`, with its own comment saying that is not the only one. What must "
+              "exist afterward: a navigation whose response can be produced IN THE ENGINE — data_url_process "
+              "(core/fetch/data_url.h) already answers the body and the MIME type — so that this row and every "
+              "other local-scheme navigation reaches §7.4.5's create-navigation-params-by-fetching with a "
+              "response nobody asked the host for. DO NOT rebuild the processor: it is there");
     /* The unlisted-scheme row took `Get action URL` above, which is a decision about the TABLE; what the
        navigation then does is §7.4.2.3.4's business and depends on the scheme — `file:` and `blob:` load a
        document, a registered `web+foo:` hands off — and nothing here knows which. */
     DFAIL("a form submits to an action whose scheme §4.10.22.3's step 26 table does not list. The TABLE row is "
           "decided — `Get action URL` in both columns, so the entry list is discarded and the parsed action is "
-          "navigated to unchanged (see submit_cell_for) — and what is missing is the navigation: §7.4.2.3.4's "
-          "navigate has to decide, per scheme, between loading a document and handing off to external "
-          "software, and this engine's navigate does neither for a scheme it has never seen");
+          "navigated to unchanged (see submit_cell_for) — and what is missing is the navigation: §7.4.2.3.4 "
+          "\"Non-fetch schemes and external software\" has to decide, per scheme, between loading a document "
+          "and handing off, and this engine's navigate does neither for a scheme it has never seen. What must "
+          "exist afterward: that per-scheme decision as a COMPONENT the document-load job asks, rather than the "
+          "single `about:`-shaped predicate it asks today, so that `about:`, `blob:` and `file:` load and a "
+          "registered `web+foo:` hands off — at which point this row calls it and the arm here disappears");
 }
 
 /* Steps 10-26 over an entry list that exists: the method, the dialog branch, the action URL, and the row of

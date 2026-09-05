@@ -240,23 +240,135 @@ static JSValue js_link_tostring(JSContext *ctx, JSValueConst this_val, int argc,
  * THE NAVIGATION IS §7.2.2.1's, reached through navigable_open — the same §7.3.1.7 rules for choosing a
  * `window.open()` applies. `rel="noopener"` and `rel="noreferrer"` are where this caller's noopener comes
  * from instead of a features string, which is the only difference between the two callers. */
+/* ---- HTML §4.6.8 "Link types" AND §4.6.5's GET AN ELEMENT'S NOOPENER --------------------------------------
+ *
+ * §4.6.8: "To determine which link types apply to a link, a, area, or form element, the element's rel attribute
+ * must be split on ASCII whitespace. The resulting tokens are the keywords for the link types that apply to
+ * that element." And of the keywords themselves: "Keywords are always ASCII case-insensitive, and must be
+ * compared as such."
+ *
+ * BOTH HALVES OF THAT SENTENCE WERE WRITTEN DOWN HERE AND NEITHER WAS PERFORMED. The membership test was
+ * `strstr(rel, "noopener") != NULL`, sitting under a comment reading "A relation LIST is space-separated and
+ * ASCII case-insensitive" — which is the rule stated correctly directly above the code that breaks it, and a
+ * substring search is neither of the two things it names. It was wrong in BOTH directions at once, which is
+ * why no test shaped like "does rel=noopener work" could find it: `rel="nonoopener"` CONTAINS the eight bytes
+ * at offset 2 and is not the keyword, so a window was severed from its opener on a token that means nothing;
+ * and `rel="NOOPENER"` IS the keyword and does not contain the bytes, so the attribute a page actually wrote
+ * did nothing at all.
+ *
+ * ONE ALGORITHM, THREE ELEMENT KINDS, TWO CALLERS. §4.6.5 defines get-an-element's-noopener over "an a, area,
+ * or form element", and the standard reaches it from follow-the-hyperlink and from §4.10.22.3 "Form submission
+ * algorithm" step 21. Written as an `if` at the hyperlink caller it was invisible to the other one — which is
+ * exactly what §4.10.3's supported-token row had to say out loud about itself, and why that row could only
+ * answer with the empty set. */
+
+/* INFRA's ASCII whitespace: TAB, LF, FF, CR, SPACE. Named here because §4.6.8's split is over that set and not
+   over `isspace`, which is the C LOCALE's and answers for U+000B as well. */
+static bool link_ascii_ws(char c)
+{
+    return c == ' ' || c == '\t' || c == '\n' || c == '\f' || c == '\r';
+}
+
+/* §4.6.8's determination over ONE attribute value — the split, and that section's own comparison for each
+   token. `rel` is the `rel` attribute's value, or NULL when the attribute is absent, which is the EMPTY set of
+   link types rather than a value to default past: an element with no `rel` has no link types, which is a
+   positive statement and the one every keyword is false against. */
+static bool link_types_include(const char *rel, const char *keyword)
+{
+    size_t klen = keyword ? strlen(keyword) : 0;
+    const char *p = rel;
+
+    DCHECK(keyword != NULL && klen > 0,
+           "HTML §4.6.8 \"Link types\"' membership was asked about no keyword — the question is whether a "
+           "keyword is among the element's link types, so a caller with none has not decided what it is asking");
+    if (!rel) return false;
+    while (*p) {
+        const char *tok;
+        size_t i;
+
+        while (*p && link_ascii_ws(*p)) p++;
+        tok = p;
+        while (*p && !link_ascii_ws(*p)) p++;
+        if ((size_t)(p - tok) != klen) continue;
+        for (i = 0; i < klen; i++) {
+            char c = tok[i];
+            /* §4.6.8's "ASCII case-insensitive", written out rather than reached for as `strncasecmp`: that
+               one is the C LOCALE's, and a Turkish locale folds `I` to `ı`. A link-type keyword is ASCII by
+               definition and must not depend on where the process is running. */
+            if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+            if (c != keyword[i]) break;
+        }
+        if (i == klen) return true;
+    }
+    return false;
+}
+
+bool hyperlink_link_types_include(JSContext *ctx, JSValueConst element, const char *keyword)
+{
+    char *rel = element_attr_get(ctx, element, "rel");
+    bool r = link_types_include(rel, keyword);
+
+    free(rel);
+    return r;
+}
+
+/* §4.6.5 step 2's "ASCII case-insensitive match for `_blank`", over a target that is NOT NUL-terminated — a
+   navigable name is a DOMString and its length travels with it. */
+static bool link_target_is_blank(const char *target, size_t len)
+{
+    static const char BLANK[] = "_blank";
+    size_t i;
+
+    if (!target || len != sizeof BLANK - 1) return false;
+    for (i = 0; i < len; i++) {
+        char c = target[i];
+        if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+        if (c != BLANK[i]) return false;
+    }
+    return true;
+}
+
+bool hyperlink_element_noopener(JSContext *ctx, JSValueConst element, const char *target, size_t target_len)
+{
+    char *rel = element_attr_get(ctx, element, "rel");
+    bool r;
+
+    /* Step 1: "If element's link types include the noopener or noreferrer keyword, then return true."
+       `noreferrer` implies `noopener` because a window with no referrer has no opener — the opener is how it
+       would have one — which is the same implication §7.4's features string carries. */
+    if (link_types_include(rel, "noopener") || link_types_include(rel, "noreferrer"))
+        r = true;
+    /* Step 2: "If element's link types do not include the opener keyword and target is an ASCII
+       case-insensitive match for `_blank`, then return true." THIS CLAUSE IS WHY `<a target=_blank>` WITH NO
+       `rel` AT ALL SEVERS THE OPENER in every current browser, and its absence here was not a pedantic gap:
+       it is the default for the commonest target a page writes, so the engine gave every `_blank` window an
+       opener that a browser does not.
+       NAMED RESIDUAL. What is not covered: step 3, the blob-URL-entry clause — "If url's blob URL entry is not
+       null: let blobOrigin be url's blob URL entry's environment's origin; let topLevelOrigin be element's
+       relevant settings object's top-level origin; if blobOrigin is not same site with topLevelOrigin, then
+       return true." What the next diff builds: a third parameter on this entry holding §4.6.5's `url` as a
+       parsed URL RECORD, a blob URL entry reachable from one, and INFRA's SAME SITE relation over the two
+       origins. How its absence shows: following `<a href="blob:…">` to a blob minted by a cross-site
+       environment opens a window that still has an opener, where a browser severs it — and, because step 3 is
+       the only clause that can answer true for a target that is neither `_blank` nor `rel`-marked, the
+       divergence is silent everywhere else. */
+    else
+        r = !link_types_include(rel, "opener") && link_target_is_blank(target, target_len);
+    free(rel);
+    return r;
+}
+
 bool hyperlink_rel_supported(const char *token, size_t len)
 {
     size_t i;
-    /* §4.6.2 "Links created by a and area elements": "The possible supported tokens are noreferrer, noopener,
-       and opener", filtered to those that "impact the processing model, and are supported by the user agent".
-       The model is §4.6.5 "Following hyperlinks"'s get-an-element's-noopener, which this component runs — and
-       it runs that algorithm's FIRST clause only ("If element's link types include the noopener or noreferrer
-       keyword, then return true"). `opener` appears only in the SECOND ("If element's link types do not
-       include the opener keyword and target is an ASCII case-insensitive match for `_blank`, then return
-       true"), which the noopener computation below does not have, so `opener` is not a supported token here:
-       reporting it would state a processing model this engine does not run.
-       NAMED RESIDUAL. What is not covered: the `opener` keyword. What the next diff builds: the second clause
-       of get-an-element's-noopener, beside the first one below, which needs the resolved `target` the clause
-       compares against `_blank`. How its absence shows: `a.relList.supports("opener")` answers false where a
-       browser answers true, and `<a target=_blank rel=opener>` opens a window with NO opener where a browser
-       gives it one. */
-    static const char *const KEYWORDS[] = { "noopener", "noreferrer" };
+    /* §4.6.2 "Links created by a and area elements" and §4.10.3 "The form element" say the same sentence about
+       their own element kinds: "The possible supported tokens are noreferrer, noopener, and opener", filtered
+       to those that "impact the processing model, and are supported by the user agent". The model is §4.6.5
+       "Following hyperlinks"'s get-an-element's-noopener, which this component runs, and it now runs BOTH of
+       that algorithm's decidable clauses — so all three keywords impact it and all three are reported.
+       `opener` used to be absent from this list, correctly, because the second clause was not built; it is
+       here now because that clause is, directly above. */
+    static const char *const KEYWORDS[] = { "noopener", "noreferrer", "opener" };
 
     DCHECK(token != NULL,
            "HTML §4.6.2 \"Links created by a and area elements\"'s supported-token question was asked with "
@@ -296,7 +408,6 @@ static bool link_has_activation(JSContext *ctx, JSValueConst el)
 static int link_run_activation(JSContext *ctx, JSValueConst el, JSValueConst ev, uint8_t *phase, uint32_t *req)
 {
     JSValue hrefv = element_attr_get_value(ctx, el, "href");
-    char *rel = element_attr_get(ctx, el, "rel");
     const char *href, *tv;
     size_t tlen = 0;
     char *target;
@@ -321,13 +432,11 @@ static int link_run_activation(JSContext *ctx, JSValueConst el, JSValueConst ev,
                                "link_has_activation is what decides that, and it reads the same attribute");
     /* Borrowed from `hrefv`, which outlives the navigation below — one read of the attribute, not two. */
     href = JS_ToCString(ctx, hrefv);
-    /* §4.6.5's "get an element's noopener". A relation LIST is space-separated and ASCII case-insensitive;
-       `noreferrer` implies `noopener` for the same reason §7.4's feature does — a window with no referrer has
-       no opener, because the opener is how it would have one. */
-    if (rel) {
-        feat.noopener = strstr(rel, "noopener") != NULL || strstr(rel, "noreferrer") != NULL;
-        feat.noreferrer = strstr(rel, "noreferrer") != NULL;
-    }
+    /* §4.6.5 step 11's "referrerPolicy set to subject's hyperlink referrer policy", of which the `noreferrer`
+       link type is the half this build answers — §4.6.8's determination, asked through the ONE entry that runs
+       it. §4.6.5's NOOPENER is asked below instead of here, because its second clause reads the resolved
+       `target` and that string does not exist until §4.2.3 has answered. */
+    feat.noreferrer = hyperlink_link_types_include(ctx, el, "noreferrer");
     /* §4.6.5 "Following hyperlinks" steps 2-3: "Let targetAttributeValue be the empty string. If subject is an
        `a` or `area` element, then set targetAttributeValue to the result of GETTING AN ELEMENT'S TARGET given
        subject." Both words of that are the algorithm's and neither was here: this read the `target` attribute
@@ -358,6 +467,10 @@ static int link_run_activation(JSContext *ctx, JSValueConst el, JSValueConst ev,
     /* §4.6.5 step 11 navigates "with … sourceElement set to subject" — the element is what makes this an
        ELEMENT-initiated navigation, which is the one thing §7.3.1.7's rules cannot ask of the name alone and
        the fact the assert at their entry is about. */
+    /* §4.6.5's GET AN ELEMENT'S NOOPENER, ONE COMPONENT AND NOT AN `if` HERE — §4.10.22.3 step 21 asks the
+       same question of a `form` and used to be unable to, which is what a substring test written into this
+       caller costs. It is asked AFTER the target because step 2 compares that target against `_blank`. */
+    feat.noopener = hyperlink_element_noopener(ctx, el, target, tlen);
     r = navigable_open(ctx, href, target, &feat, node_of(el), &window_type);
     /* §4.6.5 STEP 9: "Navigate targetNavigable to urlString using subject's node document, with referrerPolicy
        set to subject's hyperlink referrer policy, userInvolvement set to userInvolvement, and sourceElement set
@@ -380,7 +493,6 @@ static int link_run_activation(JSContext *ctx, JSValueConst el, JSValueConst ev,
     JS_FreeCString(ctx, href);
     JS_FreeValue(ctx, hrefv);
     free(target);
-    free(rel);
     (void)phase; (void)req;
     /* A URL THAT DOES NOT PARSE IS NOT AN ERROR HERE. §4.6.5 step 4 says to return if the url is failure, and a
        click is not a place a page can catch anything — unlike `window.open()`, whose caller gets the

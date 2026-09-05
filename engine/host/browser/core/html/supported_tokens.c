@@ -113,16 +113,15 @@ HtmlSupportedToken html_supported_token(lxb_dom_element_t *el, const char *attr_
            which are allowed on form elements, impact the processing model, and are supported by the user
            agent. The possible supported tokens are noreferrer, noopener, and opener." The model that reads
            them is the same §4.6.5 "Following hyperlinks" get-an-element's-noopener §4.6.2's row answers
-           through, and a form reaches it from §4.10.22.3 "Form submission algorithm" ("Let noopener be the
-           result of getting an element's noopener with form, parsed action, and target"). Nothing in this
-           engine runs that sentence, so the row is DEFINED — a `supports` on a form's relList must not throw —
-           with an EMPTY supported set.
-           NAMED RESIDUAL. What is not covered: a `form`'s `rel`. What the next diff builds: §4.10.22.3's
-           noopener sentence and the rules for choosing a navigable it feeds, at which point this row asks
-           core/html/hyperlink.c exactly as §4.6.2's does and this case disappears. How its absence shows:
-           `form.relList.supports("noopener")` answers false where a browser answers true, and a
-           `<form target=_blank rel=noopener>` submits into a window that still has an opener. */
-        present = false;
+           through, and a form reaches it from §4.10.22.3 "Form submission algorithm" step 21 ("Let noopener be
+           the result of getting an element's noopener with form, parsed action, and target").
+           SO THE TWO ROWS ARE ONE ANSWER, and they always were: §4.6.5 defines that algorithm over "an a,
+           area, or form element", so the set of keywords that impact its processing model cannot depend on
+           which of the three is asking. This row answered with the EMPTY set for as long as the algorithm was
+           an `if` inside the hyperlink caller — not because a form's keywords differ, but because the model
+           was not a component anything else could reach. It is one now (core/html/hyperlink.c), so this row
+           asks it exactly as §4.6.2's does. */
+        present = hyperlink_rel_supported((const char *)token, token_len);
         break;
     case ROW_IFRAME_SANDBOX:
         /* §4.8.5 "The iframe element": "The supported tokens for sandbox's DOMTokenList are the allowed values
