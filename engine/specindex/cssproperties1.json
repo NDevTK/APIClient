@@ -1,0 +1,280 @@
+{
+ "spec": "CSS Properties and Values API Level 1",
+ "key": "cssproperties1",
+ "base": "https://drafts.css-houdini.org/css-properties-values-api-1/",
+ "specUpdated": "6 August 2026",
+ "fetched": "2026-09-06",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "intro"
+  },
+  "2": {
+   "title": "Registered Custom Properties",
+   "page": "",
+   "id": "behavior-of-custom-properties"
+  },
+  "3": {
+   "title": "The @property Rule",
+   "page": "",
+   "id": "at-property-rule"
+  },
+  "4": {
+   "title": "Registering Custom Properties in JS",
+   "page": "",
+   "id": "registering-custom-properties"
+  },
+  "5": {
+   "title": "Syntax Strings",
+   "page": "",
+   "id": "syntax-strings"
+  },
+  "6": {
+   "title": "CSSOM",
+   "page": "",
+   "id": "cssom"
+  },
+  "7": {
+   "title": "Examples",
+   "page": "",
+   "id": "examples"
+  },
+  "8": {
+   "title": "Security Considerations",
+   "page": "",
+   "id": "security-considerations"
+  },
+  "9": {
+   "title": "Privacy Considerations",
+   "page": "",
+   "id": "privacy-considerations"
+  },
+  "10": {
+   "title": "Changes",
+   "page": "",
+   "id": "changes"
+  },
+  "2.1": {
+   "title": "Determining the Registration",
+   "page": "",
+   "id": "determining-registration"
+  },
+  "2.2": {
+   "title": "Parse-Time Behavior",
+   "page": "",
+   "id": "parsing-custom-properties"
+  },
+  "2.3": {
+   "title": "Specified Value -Time Behavior",
+   "page": "",
+   "id": "specified-value"
+  },
+  "2.4": {
+   "title": "Computed Value -Time Behavior",
+   "page": "",
+   "id": "calculation-of-computed-values"
+  },
+  "2.5": {
+   "title": "Animation Behavior",
+   "page": "",
+   "id": "animation-behavior-of-custom-properties"
+  },
+  "2.6": {
+   "title": "Conditional Rules",
+   "page": "",
+   "id": "conditional-rules"
+  },
+  "2.7": {
+   "title": "Substitution via var()",
+   "page": "",
+   "id": "substitution"
+  },
+  "2.7.1": {
+   "title": "Dependency Cycles via Relative Units",
+   "page": "",
+   "id": "dependency-cycles"
+  },
+  "2.8": {
+   "title": "Shadow DOM",
+   "page": "",
+   "id": "shadow-dom"
+  },
+  "3.1": {
+   "title": "The syntax Descriptor",
+   "page": "",
+   "id": "the-syntax-descriptor"
+  },
+  "3.2": {
+   "title": "The inherits Descriptor",
+   "page": "",
+   "id": "inherits-descriptor"
+  },
+  "3.3": {
+   "title": "The initial-value Descriptor",
+   "page": "",
+   "id": "initial-value-descriptor"
+  },
+  "4.1": {
+   "title": "The registerProperty() Function",
+   "page": "",
+   "id": "the-registerproperty-function"
+  },
+  "4.2": {
+   "title": "The PropertyDefinition Dictionary",
+   "page": "",
+   "id": "the-propertydefinition-dictionary"
+  },
+  "5.1": {
+   "title": "Supported Names",
+   "page": "",
+   "id": "supported-names"
+  },
+  "5.2": {
+   "title": "The '+' and '#' Multipliers",
+   "page": "",
+   "id": "multipliers"
+  },
+  "5.3": {
+   "title": "The '|' Combinator",
+   "page": "",
+   "id": "combinator"
+  },
+  "5.4": {
+   "title": "Parsing The Syntax String",
+   "page": "",
+   "id": "parsing-syntax"
+  },
+  "5.4.1": {
+   "title": "Definitions",
+   "page": "",
+   "id": "parsing-definitions"
+  },
+  "5.4.2": {
+   "title": "Consume a Syntax Definition",
+   "page": "",
+   "id": "consume-syntax-definition"
+  },
+  "5.4.3": {
+   "title": "Consume a Syntax Component",
+   "page": "",
+   "id": "consume-syntax-component"
+  },
+  "5.4.4": {
+   "title": "Consume a Data Type Name",
+   "page": "",
+   "id": "consume-data-type-name"
+  },
+  "6.1": {
+   "title": "The CSSPropertyRule Interface",
+   "page": "",
+   "id": "the-css-property-rule-interface"
+  },
+  "6.2": {
+   "title": "CSSStyleValue Reification",
+   "page": "",
+   "id": "css-style-value-reification"
+  },
+  "7.1": {
+   "title": "Example 1: Using custom properties to add animation behavior",
+   "page": "",
+   "id": "example-1"
+  },
+  "7.2": {
+   "title": "Example 2: Using @property to register a property",
+   "page": "",
+   "id": "example-2"
+  },
+  "10.1": {
+   "title": "Changes since the Working Draft of 13 October 2020",
+   "page": "",
+   "id": "changes-20201013"
+  }
+ },
+ "dfns": {
+  "computationally independent": [
+   "4.1"
+  ],
+  "consume a data type name": [
+   "5.4.4"
+  ],
+  "consume a syntax component": [
+   "5.4.3"
+  ],
+  "consume a syntax definition": [
+   "5.4.2"
+  ],
+  "custom property registration": [
+   "2.1"
+  ],
+  "data type name": [
+   "5.4.1"
+  ],
+  "equivalent token sequence": [
+   "2.7"
+  ],
+  "pre multiplied data type name": [
+   "5.4.1"
+  ],
+  "register a custom property": [
+   "4.1"
+  ],
+  "registered custom property": [
+   "2"
+  ],
+  "reify a registered custom property value": [
+   "6.2"
+  ],
+  "serialize a csspropertyrule": [
+   "6.1"
+  ],
+  "supported syntax component name": [
+   "5.1"
+  ],
+  "supported syntax component names": [
+   "5.1"
+  ],
+  "syntax component": [
+   "5.4.1"
+  ],
+  "syntax component name": [
+   "5.4.1"
+  ],
+  "syntax definition": [
+   "5.4.1"
+  ],
+  "syntax string": [
+   "5"
+  ],
+  "universal syntax definition": [
+   "5.4.1"
+  ]
+ },
+ "ops": {},
+ "uses": {
+  "custom property registration": {
+   "3": 2,
+   "2.4": 2,
+   "10.1": 2
+  },
+  "registered custom property": {
+   "2.1": 2,
+   "2.6": 3,
+   "10.1": 2
+  },
+  "syntax component": {
+   "5.1": 2,
+   "5.3": 2,
+   "5.4.2": 2
+  },
+  "syntax component name": {
+   "5.2": 2
+  },
+  "syntax definition": {
+   "5.3": 2
+  },
+  "universal syntax definition": {
+   "5.4.2": 2
+  }
+ }
+}

@@ -1,0 +1,131 @@
+{
+ "spec": "CSS Conditional Rules Module Level 3",
+ "key": "cssconditional3",
+ "base": "https://drafts.csswg.org/css-conditional-3/",
+ "specUpdated": "7 December 2025",
+ "fetched": "2026-09-06",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "introduction"
+  },
+  "2": {
+   "title": "Processing of conditional group rules",
+   "page": "",
+   "id": "processing"
+  },
+  "3": {
+   "title": "Contents of conditional group rules",
+   "page": "",
+   "id": "contents-of"
+  },
+  "4": {
+   "title": "Placement of conditional group rules",
+   "page": "",
+   "id": "use"
+  },
+  "5": {
+   "title": "Media-specific style sheets: the @media rule",
+   "page": "",
+   "id": "at-media"
+  },
+  "6": {
+   "title": "Feature queries: the @supports rule",
+   "page": "",
+   "id": "at-supports"
+  },
+  "7": {
+   "title": "APIs",
+   "page": "",
+   "id": "apis"
+  },
+  "8": {
+   "title": "Changes",
+   "page": "",
+   "id": "changes"
+  },
+  "1.1": {
+   "title": "Background",
+   "page": "",
+   "id": "context"
+  },
+  "1.2": {
+   "title": "Module Interactions",
+   "page": "",
+   "id": "placement"
+  },
+  "6.1": {
+   "title": "Definition of support",
+   "page": "",
+   "id": "support-definition"
+  },
+  "7.1": {
+   "title": "Extensions to the CSSRule interface",
+   "page": "",
+   "id": "extensions-to-cssrule-interface"
+  },
+  "7.2": {
+   "title": "The CSSConditionRule interface",
+   "page": "",
+   "id": "the-cssconditionrule-interface"
+  },
+  "7.3": {
+   "title": "The CSSMediaRule interface",
+   "page": "",
+   "id": "the-cssmediarule-interface"
+  },
+  "7.4": {
+   "title": "The CSSSupportsRule interface",
+   "page": "",
+   "id": "the-csssupportsrule-interface"
+  },
+  "7.5": {
+   "title": "The CSS namespace, and the supports () function",
+   "page": "",
+   "id": "the-css-namespace"
+  }
+ },
+ "dfns": {
+  "conditional group rule": [
+   "2"
+  ],
+  "conditional group rules": [
+   "2"
+  ],
+  "css feature queries": [
+   "6"
+  ],
+  "supports condition": [
+   "6"
+  ],
+  "supports decl": [
+   "6"
+  ],
+  "supports feature": [
+   "6"
+  ],
+  "supports in parens": [
+   "6"
+  ],
+  "supports queries": [
+   "6"
+  ]
+ },
+ "ops": {},
+ "uses": {
+  "conditional group rules": {
+   "3": 3,
+   "8": 2
+  },
+  "css feature queries": {
+   "8": 3
+  },
+  "supports condition": {
+   "7.5": 2
+  },
+  "supports queries": {
+   "8": 2
+  }
+ }
+}

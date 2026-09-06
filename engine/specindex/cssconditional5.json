@@ -1,0 +1,509 @@
+{
+ "spec": "CSS Conditional Rules Module Level 5",
+ "key": "cssconditional5",
+ "base": "https://drafts.csswg.org/css-conditional-5/",
+ "specUpdated": "30 June 2026",
+ "fetched": "2026-09-06",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "introduction"
+  },
+  "2": {
+   "title": "Extensions to the @supports rule",
+   "page": "",
+   "id": "at-supports-ext"
+  },
+  "3": {
+   "title": "Generalized Conditional Rules: the @when rule",
+   "page": "",
+   "id": "when-rule"
+  },
+  "4": {
+   "title": "Chained Conditionals: the @else rule",
+   "page": "",
+   "id": "else-rule"
+  },
+  "5": {
+   "title": "Container Queries",
+   "page": "",
+   "id": "container-queries"
+  },
+  "6": {
+   "title": "Container Features",
+   "page": "",
+   "id": "container-features"
+  },
+  "7": {
+   "title": "Container Relative Lengths: the cqw",
+   "page": "",
+   "id": "container-lengths"
+  },
+  "8": {
+   "title": "Defining Custom Support Queries: the @supports-condition rule",
+   "page": "",
+   "id": "supports-condition-rule"
+  },
+  "9": {
+   "title": "APIs",
+   "page": "",
+   "id": "apis"
+  },
+  "2.1": {
+   "title": "Extensions to the definition of support",
+   "page": "",
+   "id": "support-definition-ext"
+  },
+  "2.1.1": {
+   "title": "Font techs and formats",
+   "page": "",
+   "id": "support-definition-ext-fonts"
+  },
+  "2.1.2": {
+   "title": "At-rules",
+   "page": "",
+   "id": "support-definition-at-rules"
+  },
+  "2.1.3": {
+   "title": "Named features",
+   "page": "",
+   "id": "support-definition-named-features"
+  },
+  "2.1.4": {
+   "title": "Named conditions",
+   "page": "",
+   "id": "support-definition-supports-condition-name"
+  },
+  "2.1.5": {
+   "title": "Environment variables",
+   "page": "",
+   "id": "support-definition-env"
+  },
+  "5.1": {
+   "title": "Creating Query Containers: the container-type property",
+   "page": "",
+   "id": "container-type"
+  },
+  "5.2": {
+   "title": "Naming Query Containers: the container-name property",
+   "page": "",
+   "id": "container-name"
+  },
+  "5.3": {
+   "title": "Creating Named Containers: the container shorthand",
+   "page": "",
+   "id": "container-shorthand"
+  },
+  "5.4": {
+   "title": "Container Queries: the @container rule",
+   "page": "",
+   "id": "container-rule"
+  },
+  "5.5": {
+   "title": "Animated Containers",
+   "page": "",
+   "id": "animated-containers"
+  },
+  "6.1": {
+   "title": "Size Container Features",
+   "page": "",
+   "id": "size-container"
+  },
+  "6.1.1": {
+   "title": "Width: the width feature",
+   "page": "",
+   "id": "width"
+  },
+  "6.1.2": {
+   "title": "Height: the height feature",
+   "page": "",
+   "id": "height"
+  },
+  "6.1.3": {
+   "title": "Inline-size: the inline-size feature",
+   "page": "",
+   "id": "inline-size"
+  },
+  "6.1.4": {
+   "title": "Block-size: the block-size feature",
+   "page": "",
+   "id": "block-size"
+  },
+  "6.1.5": {
+   "title": "Aspect-ratio: the aspect-ratio feature",
+   "page": "",
+   "id": "aspect-ratio"
+  },
+  "6.1.6": {
+   "title": "Orientation: the orientation feature",
+   "page": "",
+   "id": "orientation"
+  },
+  "6.2": {
+   "title": "Style Container Features",
+   "page": "",
+   "id": "style-container"
+  },
+  "6.3": {
+   "title": "Scroll State Container Features",
+   "page": "",
+   "id": "scroll-state-container"
+  },
+  "6.3.1": {
+   "title": "Updating Scroll State",
+   "page": "",
+   "id": "updating-scroll-state"
+  },
+  "6.3.2": {
+   "title": "Sticky positioning: the stuck feature",
+   "page": "",
+   "id": "stuck"
+  },
+  "6.3.3": {
+   "title": "Scroll snapping: the snapped feature",
+   "page": "",
+   "id": "snapped"
+  },
+  "6.3.4": {
+   "title": "Scrollable: the scrollable feature",
+   "page": "",
+   "id": "scrollable"
+  },
+  "6.3.5": {
+   "title": "Scrolled: the scrolled feature",
+   "page": "",
+   "id": "scrolled"
+  },
+  "9.1": {
+   "title": "The CSSContainerRule interface",
+   "page": "",
+   "id": "the-csscontainerrule-interface"
+  },
+  "9.2": {
+   "title": "The CSSSupportsConditionRule interface",
+   "page": "",
+   "id": "the-csssupportscondition-interface"
+  }
+ },
+ "dfns": {
+  "@supports condition": [
+   "8"
+  ],
+  "anchor position follows transforms": [
+   "2.1.3"
+  ],
+  "at rule( at keyword token )": [
+   "2"
+  ],
+  "at rule()": [
+   "2"
+  ],
+  "boolean condition": [
+   "3"
+  ],
+  "conditional rule chain": [
+   "4"
+  ],
+  "container condition": [
+   "5.4"
+  ],
+  "container feature": [
+   "6"
+  ],
+  "container name": [
+   "5.2",
+   "5.4"
+  ],
+  "container query": [
+   "5.4"
+  ],
+  "container query length": [
+   "7"
+  ],
+  "container query length unit": [
+   "7"
+  ],
+  "container query length units": [
+   "7"
+  ],
+  "container scroll state query": [
+   "6.3"
+  ],
+  "container size query": [
+   "6.1"
+  ],
+  "container style query": [
+   "6.2"
+  ],
+  "container type": [
+   "5.1"
+  ],
+  "env( ident )": [
+   "2"
+  ],
+  "evaluate a style range": [
+   "6.2"
+  ],
+  "font format( font format )": [
+   "2"
+  ],
+  "font format()": [
+   "2"
+  ],
+  "font tech( font tech )": [
+   "2"
+  ],
+  "font tech()": [
+   "2"
+  ],
+  "media ()": [
+   "3"
+  ],
+  "named feature( ident )": [
+   "2"
+  ],
+  "named feature()": [
+   "2"
+  ],
+  "named supports condition": [
+   "8"
+  ],
+  "query container": [
+   "5"
+  ],
+  "query container name": [
+   "5.2"
+  ],
+  "query container names": [
+   "5.2"
+  ],
+  "query containers": [
+   "5"
+  ],
+  "query in parens": [
+   "5.4"
+  ],
+  "scroll state feature": [
+   "6.3"
+  ],
+  "scroll state features": [
+   "6.3"
+  ],
+  "scroll state in parens": [
+   "5.4"
+  ],
+  "scroll state query": [
+   "5.4"
+  ],
+  "single axis scroll container": [
+   "2.1.3"
+  ],
+  "size feature": [
+   "6.1"
+  ],
+  "size features": [
+   "6.1"
+  ],
+  "style feature": [
+   "5.4"
+  ],
+  "style feature boolean": [
+   "5.4"
+  ],
+  "style feature name": [
+   "6.2"
+  ],
+  "style feature plain": [
+   "5.4"
+  ],
+  "style feature value": [
+   "6.2"
+  ],
+  "style features": [
+   "6.2"
+  ],
+  "style in parens": [
+   "5.4"
+  ],
+  "style query": [
+   "5.4"
+  ],
+  "style range": [
+   "5.4",
+   "6.2"
+  ],
+  "style range value": [
+   "5.4"
+  ],
+  "support a font format": [
+   "2.1.1"
+  ],
+  "support a font tech": [
+   "2.1.1"
+  ],
+  "support a named condition": [
+   "2.1.4"
+  ],
+  "support a named feature": [
+   "2.1.3"
+  ],
+  "support an at rule": [
+   "2.1.2"
+  ],
+  "support an environment variable": [
+   "2.1.5"
+  ],
+  "support the at rule": [
+   "2.1.2"
+  ],
+  "support the environment variable": [
+   "2.1.5"
+  ],
+  "support the font format": [
+   "2.1.1"
+  ],
+  "support the font tech": [
+   "2.1.1"
+  ],
+  "support the named condition": [
+   "2.1.4"
+  ],
+  "support the named feature": [
+   "2.1.3"
+  ],
+  "supports ()": [
+   "3"
+  ],
+  "supports at rule fn": [
+   "2"
+  ],
+  "supports condition name": [
+   "8"
+  ],
+  "supports decl": [
+   "2"
+  ],
+  "supports env fn": [
+   "2"
+  ],
+  "supports feature": [
+   "2"
+  ],
+  "supports font format fn": [
+   "2"
+  ],
+  "supports font tech fn": [
+   "2"
+  ],
+  "supports named feature fn": [
+   "2"
+  ]
+ },
+ "ops": {},
+ "uses": {
+  "@supports condition": {
+   "9.2": 4
+  },
+  "at rule( at keyword token )": {
+   "9.2": 3
+  },
+  "boolean condition": {
+   "4": 2
+  },
+  "conditional rule chain": {
+   "1": 2
+  },
+  "container feature": {
+   "5.4": 2,
+   "6.3.3": 6
+  },
+  "container name": {
+   "5.3": 3,
+   "9.2": 3
+  },
+  "container query": {
+   "9.2": 3
+  },
+  "container query length units": {
+   "9.2": 2
+  },
+  "container scroll state query": {
+   "5.1": 2
+  },
+  "container size query": {
+   "5": 3,
+   "5.1": 3
+  },
+  "container style query": {
+   "5.1": 2,
+   "5.4": 5
+  },
+  "container type": {
+   "5.3": 3,
+   "9.2": 2
+  },
+  "env( ident )": {
+   "9.2": 2
+  },
+  "font format( font format )": {
+   "9.2": 3
+  },
+  "font tech( font tech )": {
+   "9.2": 3
+  },
+  "named feature( ident )": {
+   "9.2": 3
+  },
+  "named supports condition": {
+   "9.2": 2
+  },
+  "query containers": {
+   "7": 8,
+   "5.1": 6,
+   "5.2": 2,
+   "5.4": 4,
+   "6.1": 7,
+   "6.2": 3,
+   "6.3.1": 2,
+   "6.3.3": 6,
+   "6.3.5": 2
+  },
+  "scroll state feature": {
+   "5.4": 2
+  },
+  "style feature name": {
+   "5.4": 2
+  },
+  "style feature value": {
+   "5.4": 2
+  },
+  "style range": {
+   "9.2": 2
+  },
+  "style range value": {
+   "6.2": 4
+  },
+  "support a font format": {
+   "9.2": 2
+  },
+  "support a font tech": {
+   "9.2": 2
+  },
+  "support a named condition": {
+   "9.2": 2
+  },
+  "support a named feature": {
+   "9.2": 2
+  },
+  "support an at rule": {
+   "9.2": 2
+  },
+  "support an environment variable": {
+   "9.2": 2
+  },
+  "supports condition name": {
+   "2": 2
+  }
+ }
+}

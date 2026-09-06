@@ -725,6 +725,39 @@ const SPECS = [
   { key: "cssposition4", label: "CSS Positioned Layout Module Level 4", kind: "bikeshed",
     base: "https://drafts.csswg.org/css-position-4/", edition: "maintained",
     anchors: ["css-position-4", "css-positioned-layout-4", "positioned-layout-4"] },
+  /* CSS CONDITIONAL RULES, BOTH LEVELS, IN ONE DIFF BECAUSE ONE OF THEM ALONE WOULD BE A WRONG ANSWER.
+     This tree cites the two side by side and their numbering DISAGREES HEAD-ON — measured against both
+     documents before either row was written: Level 3 numbers `§3` as its conditional-group-rule CONTENTS and
+     `§7` as its APIs, while Level 5 numbers `§3` as the @when rule and `§7` as its container relative
+     lengths. Indexing one level would answer the other's numbers out of it,
+     which is the css-images-3/4 argument in its strongest form and the reason `css conditional` stays a
+     foreign refusal for every site that writes no level.
+     THE SITES SPLIT CLEANLY ALONG THAT LINE: `CSS Conditional 5 §9.1 §7 §5.4 §3 §9.2 §4` are all sections
+     Level 5 numbers, and `CSS Conditional Rules 3 §7.5`, `§6` and `§7.2` are all sections Level 3 numbers —
+     no site's number exists only in the other document. Anchored by every levelled spelling this tree
+     writes, with and without `Rules`, because `CSS Conditional Rules Module Level 3` and `CSS Conditional 5`
+     are the same claim in two hands. */
+  /* AND CSS PROPERTIES AND VALUES API 1 LANDS IN THE SAME DIFF, BECAUSE THE CONDITIONAL ROWS WITHOUT IT ARE
+     THE ACCUSATION DIRECTION. `core/css/css_rule.c` writes §6.1 THIRTY-THREE times for TWO documents: one
+     site says `§6.1's size features`, which is CSS Conditional 5's "Size Container Features" and is correct,
+     and thirty-two are `CSS Properties and Values API 1 §6.1`'s CSSPropertyRule members. A group is a union
+     over ONE NUMBER in ONE FILE, so that single correct site made cssconditional5 the group's only key and
+     every bare §6.1 in the file inherited it — 33 confident wrong answers where there had been 33 silences,
+     and SEVEN quotation findings against a file that had none. Indexing the standard the other 32 actually
+     name is what splits the group: two keys, no single answer, and each site is then decided by its own
+     evidence. THE MEASUREMENT IS IN THE COMMIT MESSAGE; what belongs here is why the two rows are one diff.
+     THE TOKENIZER READS THREE TRAILING WORDS AND THIS NAME IS FIVE, so the anchors are the tails it can
+     actually produce: `values api` for the unlevelled spelling and `values-api-1` for the levelled one, which
+     is the same reason the `background tasks` row is spelled by its last two words rather than its title. */
+  { key: "cssproperties1", label: "CSS Properties and Values API Level 1", kind: "bikeshed",
+    base: "https://drafts.css-houdini.org/css-properties-values-api-1/", edition: "maintained",
+    anchors: ["css-properties-values-api-1", "values-api-1", "values api"] },
+  { key: "cssconditional3", label: "CSS Conditional Rules Module Level 3", kind: "bikeshed",
+    base: "https://drafts.csswg.org/css-conditional-3/", edition: "maintained",
+    anchors: ["css-conditional-3", "css-conditional-rules-3", "conditional-rules-3"] },
+  { key: "cssconditional5", label: "CSS Conditional Rules Module Level 5", kind: "bikeshed",
+    base: "https://drafts.csswg.org/css-conditional-5/", edition: "maintained",
+    anchors: ["css-conditional-5", "css-conditional-rules-5", "conditional-rules-5"] },
   { key: "cssbackgrounds3", label: "CSS Backgrounds and Borders Module Level 3", kind: "bikeshed",
     base: "https://drafts.csswg.org/css-backgrounds-3/", edition: "maintained", anchors: ["css-backgrounds-3"] },
   { key: "csstransforms1", label: "CSS Transforms Module Level 1", kind: "bikeshed",
@@ -1496,6 +1529,26 @@ function regenW3cChapters(spec) {
 
 /* ---- reader: Bikeshed single page (DOM, URL, Fetch) ------------------------------------------------------ */
 
+/* THE SAME DECLARATION DECIDES WHETHER A DFN IS A TERM AT ALL, AND FOR THE SAME REASON THE OP RULE GIVES.
+ * A standard marks its SURFACE vocabulary with a type and an owner — `<dfn data-dfn-for="@container"
+ * data-dfn-type="descriptor">aspect-ratio</dfn>` — and the bare spelling of such a dfn is not the concept's
+ * name, it is one at-rule's descriptor or one interface's member. Indexing it as a term does not merely add a
+ * coincidence: it makes the ONLY definer of a common phrase a document that is not about it, so the term
+ * channel resolves CONFIDENTLY and the audit then accuses a correct citation.
+ * MEASURED, on the diff that added CSS Conditional Rules 5: `aspect-ratio`, a @container descriptor, was the
+ * only indexed definition of "aspect ratio", so four citations in `core/layout/flex_intrinsic_size.c` — a
+ * file whose every §9.2 is css-flexbox-1's "Line Length Determination" — moved to cssconditional5 and SIX
+ * quotation findings were manufactured against a file that had none. That is the accusation direction, from
+ * an index row, which is the one way a row can be worse than the silence it replaces.
+ * IT IS THE `data-dfn-type` AND NOT THE QUALIFIER THAT DECIDES, because a qualified CONCEPT is still a
+ * concept: `<dfn data-dfn-for="CSS">support a font tech</dfn>` is a phrase a comment names and it stays. The
+ * regenBikeshed residual on `data-dfn-for` is UNCHANGED by this and still open — that residual is about a
+ * term this index does not HOLD, and this is about a term it must not hold under the wrong name.
+ * IT TAKES EFFECT PER STANDARD AT ITS NEXT REGEN, because an index is generated: every corpus committed
+ * before this line keeps the terms it was written with. */
+const SCOPED_SURFACE_DFN = new Set(["descriptor", "value", "attribute", "method", "dict-member",
+                                    "enum-value", "const", "constructor", "argument", "element-attr"]);
+
 function regenBikeshed(spec) {
   const body = curl(spec.base);
   const updated = (/<time class="dt-updated"[^>]*>([^<]*)<\/time>/.exec(body) || [])[1];
@@ -1544,7 +1597,8 @@ function regenBikeshed(spec) {
     const lt = attrOf(m[1], "data-lt");
     if (lt) for (const alt of lt.split("|")) spellings.push(normTerm(alt));
     let primary = null;
-    for (const t of spellings) { if (!keepTerm(t)) continue; addDef(defs, t, sec); if (!primary) primary = t; }
+    if (!SCOPED_SURFACE_DFN.has(attrOf(m[1], "data-dfn-type")))
+      for (const t of spellings) { if (!keepTerm(t)) continue; addDef(defs, t, sec); if (!primary) primary = t; }
     /* THE STANDARD'S OWN DECLARATION, READ RATHER THAN GUESSED — see addOp. Only `abstract-op` earns a bare
      * name; `method`, `attribute`, `interface`, `constructor` and `dict-member` are vocabulary a correct
      * comment names while citing a section about something else, and admitting them was measured wrong. */
@@ -1606,8 +1660,10 @@ function regenRespec(spec) {
       if (v) for (const alt of decodeEntities(v).split("|")) spellings.push(normTerm(alt));
     }
     let primary = null;
-    for (const t of spellings) { if (!keepTerm(t)) continue; addDef(defs, t, sec); if (!primary) primary = t; }
-    /* ReSpec stamps the same `data-dfn-type` bikeshed does, so the same declaration answers here — see addOp. */
+    if (!SCOPED_SURFACE_DFN.has(attrOf(m[1], "data-dfn-type")))
+      for (const t of spellings) { if (!keepTerm(t)) continue; addDef(defs, t, sec); if (!primary) primary = t; }
+    /* ReSpec stamps the same `data-dfn-type` bikeshed does, so the same declaration answers here — see addOp
+       and SCOPED_SURFACE_DFN, which reads it for the term channel exactly as addOp reads it for the op one. */
     let op = null;
     if (attrOf(m[1], "data-dfn-type") === "abstract-op")
       for (const b of opNames(m[2], attrOf(m[1], "data-lt"))) { const k = addOp(ops, b, sec); if (k && !op) op = k; }
@@ -1985,12 +2041,13 @@ const OTHER_SPECS = [
      this table asserting a renumbering nobody verified. All six sites write `CSS Scoping §4.1` with the title
      "Flattening the DOM into an Element Tree" and are the shadow-tree flat-tree walk in core/html.
      `positioned layout` — the citation names the LEVEL and the tokenizer throws it away. This tree writes
-     `CSS Positioned Layout Level 4 §3 "Top Layer"`, and anchorTokens strips a trailing `Level N` before
-     classifyAnchor is asked, so the tail is `CSS Positioned Layout` — a name that answers for cssposition3
-     AND cssposition4, which are two documents with two numberings and both already indexed. An anchor here
-     would be the `css-images` hazard the SPECS table refuses by name: one index answering two levels
-     manufactures wrong answers rather than losing coverage. A foreign row refuses instead, and the ordered
-     repair is to make the level SURVIVE the tail rather than to guess which document it belonged to.
+     `CSS Positioned Layout Level 4 §3 "Top Layer"`, and anchorTokens USED TO STRIP a trailing `Level N`
+     before classifyAnchor was asked, so the tail was `CSS Positioned Layout` — a name that answers for
+     cssposition3 AND cssposition4, which are two documents with two numberings and both already indexed. An
+     anchor for the UNLEVELLED name would be the `css-images` hazard the SPECS table refuses by name, so this
+     entry STAYS and still refuses it. THE ORDERED REPAIR IT ASKED FOR HAS SINCE LANDED: the level now
+     survives to the classifier and joins onto the name, so the LEVELLED spellings are resolved by the two
+     rows that hold them and only the two sites that write no level at all reach this line.
      `css conditional` — CSS Conditional Rules is LEVELLED, and the population SPLITS on whether the citation
      says so. THE SENTENCE THAT STOOD HERE SAID THE SITES "write no level at all", AND IT WAS WRONG ABOUT MOST
      OF THEM, WHICH IS RECORDED RATHER THAN DELETED because a reader who re-derives a retired reason will
@@ -1998,9 +2055,10 @@ const OTHER_SPECS = [
      write the bare name. This entry ARMS the level join for the first two — they classify apart as
      `css-conditional-5` and `css-conditional-3`, on their own evidence — so what the row actually refuses is
      the 28 that carry NO level, which are the only ones with nothing in the citation to say which document
-     numbers the section they mean. The levelled 35 are an index row away and that is the next diff for this
-     standard, not a refusal. The claim was one command from being checked when it was written
-     (`grep -c 'CSS Conditional [0-9]* §'`), and it was not.
+     numbers the section they mean. THAT INDEX ROW HAS SINCE LANDED, for BOTH levels, so the levelled sites
+     are now resolved rather than counted — this entry refuses exactly the unlevelled ones, and the two rows
+     say why that refusal is right rather than cautious. The claim was one command from being checked when it
+     was written (`grep -c 'CSS Conditional [0-9]* §'`), and it was not.
      AND `typed om` IS THE ENTRY THAT PROVES A CAPITALISED-TOKEN SCAN CANNOT DERIVE THIS POPULATION, which is
      worth more than the entry. The list above was derived from the audit's own "capitalised tokens in front of
      a section sign that no list knows" line and from a grep for a name in front of one, and both read the
