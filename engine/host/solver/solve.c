@@ -246,6 +246,14 @@ typedef struct {
        nonzero runway in some run. `eval` and `innerHTML` each appear on BOTH sides of that split, so it is
        not a property of the sink class; the fixture's `s-loc`, `s-attr` and `s-park` rows never reach this
        rung because all three are bound to `location.hash`; `s-attr`'s ATTR_SRC is `{location.hash}.slice(1)`.
+       AND THE CAUSE THAT SPLIT INVITED IS REFUTED, RECORDED HERE BECAUSE IT WAS ACTED ON. The split above is
+       real; its cause was predicted wrongly. The reading was that a hash-sourced search freezes a ZERO-LENGTH
+       path, so its 0 here is a tautology and the work is at the DETECTION. The refuter was pinned before the
+       data existed — any hash row with arms above 0 and nothing walked — and the first build to carry the arm
+       count fired it: hash records at ELEVEN arms with none of them walked. So the first-arm reading is the
+       live one, there IS something in front of the replay's first branch, and the source split above says
+       nothing about why. In that same run 8 of 9 records read arms offered and none walked REGARDLESS of
+       source, which is one run and not a mode — which is why the split is left stated rather than explained.
        WHAT SEPARATES THEM IS A DENOMINATOR AND IT IS BUILT — `reinject_len` below, emitted as `runwayArms`.
        The two are read together: `runwayArms:0` is the search having no recorded path to replay at all, and
        `runwayArms:N` beside a 0 here is the first-arm reading this comment describes.

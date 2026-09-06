@@ -307,6 +307,21 @@ function _parkedProgress(item) {
   //           reading, and this card cannot separate them: the replay was turned back at its first arm, or no
   //           arm was ever offered because the search has no recorded path. solve.c's own declaration now
   //           records the measurement — every `location.hash` record reads 0 here across 76 logs.
+  //           AND THE PREDICTION THAT SHAPED THIS BRANCH WAS REFUTED BY THE FIRST BUILD THAT COULD SCORE IT,
+  //           which is recorded here because the wrong half was an INSTRUCTION and instructions get followed.
+  //           The reading was that `location.hash` records read 0 because their detecting flow decided no
+  //           branch, so the frozen path had zero length and the work was at the DETECTION. The refuter was
+  //           pinned in advance as "any hash row with arms > 0 and walked 0", and it fired on the first run
+  //           to carry the fields: hash records at arms=11, walked=0. The path is ELEVEN arms and none were
+  //           consumed, so the first-arm reading is the live one and the no-path reading is not.
+  //           WHAT IS STILL OPEN IS NARROWER AND IS NOT THIS CARD'S: `observe_runway` samples a candidate at
+  //           its switch-in and at its finish and nowhere between, so a walked of 0 is a refusal at the first
+  //           arm OR an interval nobody sampled. Those take opposite work and the entry cannot separate them.
+  //           The frontier census can, one-directionally and with no new field: `distMax` is the max of
+  //           flow_distance over the WHOLE frontier at every census, and its three rungs are each
+  //           non-negative, so a `distMax` of 0 at every census forces every flow's replay fraction to have
+  //           been 0 at every one of them — far more sampling than the entry gets. A nonzero `distMax`
+  //           standing over a walked of 0 is the under-read caught in the act.
   //           THE PRODUCER FLAG THIS USED TO WAIT FOR NOW EXISTS AND THE SENTENCE THAT SAID OTHERWISE IS GONE:
   //           it read "names the producer flag that would tell them apart. Until it exists, this is not a
   //           distance", and it went stale the moment solve.c gained `runwayArms` — the arm count of the frozen
@@ -346,14 +361,16 @@ function _parkedProgress(item) {
          + 'have never been in the page\'s program at all. That is a question about the PATH in front of the '
          + 'source, and the runway says WHICH question: '
          + (item.runwayPerMille === 0
-            ? 'not one of these candidates has been observed consuming an arm of its own recorded path. That '
-              + 'is TWO states and this card cannot yet separate them: the replay reached its first arm and '
-              + 'was turned back, or no arm was ever offered because this search has no recorded path to '
-              + 'walk. Measured across 76 smoke logs, every parked record on a `location.hash` source reads 0 '
-              + 'here in every run that produced one, so the second state is the common one and the first has '
-              + 'not been observed at all — do NOT go hunting the gate that refuses an arm. The producer now '
-              + 'says which of the two it is (`runwayArms`), and this card will read it on the build that '
-              + 'ships it'
+            ? 'not one of these candidates has been observed consuming an arm of its own recorded path. Read '
+              + 'it with the arm count beside it: arms at 0 is a search that was never offered a path, and '
+              + 'arms above 0 is a path that WAS offered and not walked — which is a question about what '
+              + 'stands in front of the replay\'s first branch. THE SECOND IS WHAT HAS BEEN MEASURED. This '
+              + 'card used to say the opposite here, on a prediction, and told a reader not to hunt that '
+              + 'gate; the first build to publish the arm count refuted it — every `location.hash` record in '
+              + 'it carried an eleven-arm path with none of it walked. So the gate IS the thing to look at, '
+              + 'and what is still open is narrower: whether a zero was a refusal at the first arm or an '
+              + 'interval nobody sampled, since the producer samples a candidate only at its switch-in and '
+              + 'at its finish'
             : item.runwayPerMille >= 1000
               ? 'they consumed the WHOLE of their recorded path and the source read is still ahead of them. '
                 + 'That rung is SATURATED and is directing nothing further — and it is a fraction of decision '
