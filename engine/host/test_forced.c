@@ -13362,10 +13362,18 @@ static int fixture_have_answers(void) {
        counter, so a session declared non-forking reads `asked == 0` BY CONSTRUCTION however many flows ran out
        of their own work — the schedule reading and the policy reading rendering as the same zero, and they
        take opposite work, one being a scheduler question and the other not a question at all.
-       IT IS LIVE RATHER THAN HYPOTHETICAL: this conformance host begins its sessions non-forking and the
-       shipped host begins them forking, so the one stream a reader compares across hosts is exactly the one
-       where the two zeros mean different things. A consumer that says "the frontier never reached the
-       question" without reading this bit states the SCHEDULE as the cause of a zero the POLICY guaranteed.
+       AND THE HOST THAT EMITS THIS LINE IS FORKING, WHICH IS WHY THE BIT IS PUBLISHED RATHER THAN ASSUMED.
+       The sentence that stood here said this conformance host begins non-forking; it was inherited verbatim
+       from solver/engine.c's own note and never re-derived, and it is wrong about THIS host. There are two
+       non-solver hosts and they differ: host/wpt_runner.c passes forking 0, host/main.c passes 1, and this
+       file reaches engine_sched_begin only through qjs_begin, which is main.c's. So the fourth reading is not
+       reachable on this stream today — and that is a fact about a call argument two files away, which is
+       exactly the kind of assumption that goes stale silently and that a consumer downstream cannot check.
+       Publishing the bit turns it from a claim into a value: the reader takes the policy arm when it is
+       false, and until some host that begins non-forking emits this line it will simply always read 1, which
+       is the assumption being CONFIRMED every run rather than believed. A consumer that says "the frontier
+       never reached the question" without reading it would state the SCHEDULE as the cause of a zero the
+       POLICY guaranteed, the day that argument changes.
        IT IS A REGIME AND NOT A COUNTER, which is the distinction a shared key vocabulary erases: the numbers
        beside it are lifetime totals a reader may difference across samples, and differencing this one is
        meaningless. Its kind is not left to that comment — the consumer ASSERTS it constant across a session's

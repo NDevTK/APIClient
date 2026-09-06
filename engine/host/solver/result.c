@@ -1755,7 +1755,20 @@ char *result_json(JSContext *ctx) {
            side of the four numbers above it. `_orphansDriven` existed and reached only the heap/progress line,
            which §Testing says nobody can read; `_orphansAsked` is what tells "this bundle ships no uncalled
            code" from "no flow ever reached the end of its own work". They ride the result document for the
-           same reason every count here does. */
+           same reason every count here does.
+           THOSE ARE TWO OF FOUR READINGS AND THE SENTENCE ABOVE IS THE ONE EVERY DOWNSTREAM CONSUMER LEARNS
+           THEM FROM, which is why the correction belongs here rather than at any of them. solver/engine.c's
+           own note at the ask records the other two: the walk can have found nothing, and — the one that is
+           invisible in the pair — a session declared NON-FORKING returns at the ask's gate BEFORE the counter
+           moves, so its zero is guaranteed by policy and is byte-identical to "no flow reached the end of its
+           own work". The distinguishing fact is public and is not in this pair (engine_session_forks).
+           IT IS NOT A DEFECT IN THIS DOCUMENT TODAY, AND THAT IS A FACT ABOUT A CALL ARGUMENT RATHER THAN
+           ABOUT THIS FILE: the only host that composes this document begins its sessions forking, so the
+           fourth reading cannot arise here. It is written down because the argument is two files away, a
+           consumer of this document cannot check it, and an under-claim is the one kind of wrong sentence
+           nobody discovers by acting on it — a reader told the pair separates two states does not go looking
+           for a third. A host that begins non-forking and composes this document owes the regime beside the
+           pair, exactly as the stdout census now carries it. */
         long orphansDriven = 0, orphansAsked = 0;
         /* AND WHAT BECAME OF THE TASKS THOSE DELIVERIES QUEUED. `_routedDelivered` alone is the shape §@S
            forbids in a search and forbids here for the same reason: a page whose listener ran fewer times than
