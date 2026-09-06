@@ -2034,6 +2034,20 @@ static bool xhr_main_fetch_local(JSContext *ctx, XhrData *d)
        (method, url) pair and never passes that door. Reshaping it to fit would change what that door means,
        so this component asks the question itself, of the same component, with its own answers to the two
        things a caller states. */
+    /* FETCH §4.1 "Main fetch" STEP 6, BEFORE STEP 7. XHR §3.5.6's request has the EMPTY destination, which is
+       none of Mixed Content §4.1's three, so this call answers NULL today and the address is unchanged. It is
+       made because a step some request-creating sites run and others do not is one missing capability wearing
+       two names — the same argument core/fetch/fetch.h makes about the disjunction below, which had four
+       hand-written copies and a fifth entry with none. */
+    {
+        char *up = fetch_main_upgrade(ctx, u, /*destination*/ "", /*initiator*/ NULL);
+        DCHECK(up == NULL,
+               "Mixed Content §4.1 upgraded an XMLHttpRequest's address — its step 1.4 ends the algorithm for "
+               "a destination that is not `image`, `audio` or `video`, and XHR §3.5.6 \"The send() method\" "
+               "creates its request with the EMPTY destination, so an upgrade here means this site's "
+               "destination and the one it passes to step 7 below have come apart");
+        free(up);
+    }
     if (parsed &&
         fetch_main_blocked(ctx, u, /*destination*/ "",
                            /* FETCH §2.2.5's TWO METADATA FIELDS, UNSTATED, and here the claim is the

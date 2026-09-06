@@ -26,6 +26,7 @@
 #include <stdbool.h>
 
 #include "quickjs.h"
+#include "core/url/origin.h"
 #include "core/url/url.h"
 
 /* SECURE CONTEXTS §3.1 "Is origin potentially trustworthy?", over the URL RECORD whose origin it is.
@@ -41,25 +42,23 @@
  * serialize §4.7's answer and run the URL parser over the bytes to get the parsed host back, which was the
  * last place in the engine where a lossy serialization stood between an algorithm and the thing it reads.
  *
- * AND THE ENTRY §3.1 WOULD ACTUALLY DECLARE IS NOT HERE, WHICH IS A STATEMENT ABOUT THE CONSUMER AND NOT AN
- * OVERSIGHT. §3.1 says "Given an origin (origin)"; the entry BELOW is that algorithm applied to the origin OF
- * A URL, which is the only shape anything in this tree has ever asked it in — §3.2's step 3 ("Return the
- * result of executing § 3.1 Is origin potentially trustworthy? on url's origin"), HTML §8.1.3.5's step 2, and
- * every host that states a top-level creation URL. An entry taking an `Origin *` would be one call away
- * (`origin_is_opaque` is step 1, and core/url/origin.h's origin_scheme/origin_host are steps 3 to 8 — the
- * components, NOT origin_effective_domain, which §3.1's closing note excludes by name) and it has NO CALLER
- * IN THIS TREE. It arrives WITH the algorithm that reads an environment settings object's origin, and not
- * before: a predicate with no consumer is the write-with-no-reader defect, and the reader is what decides
- * whether the shape is right.
- *
- * AND THE OBVIOUS WAY TO ADD IT IS THE WRONG ONE, WHICH IS WHY THIS PARAGRAPH IS HERE RATHER THAN NOWHERE.
- * The tempting move is to route the entry below through it — parse, take the URL's origin, ask §3.1 — so that
- * one body serves both. core/url/origin.h forbids exactly that and says why at the function it would use:
- * origin_of_url MINTS an agent-lifetime record per call, and origin_tuple_url exists *for this algorithm*,
- * naming it, so that a [SecureContext] member check does not leave one origin behind per question asked. What
- * the two entries would share is the TAIL over a tuple's scheme and host, which is already one static
- * function in the .c — so there is one implementation of steps 3 to 9 today, and a second entry adds a second
- * spelling of step 1 and nothing else. */
+ * AND THE ENTRY §3.1 ACTUALLY DECLARES IS BELOW, WITH THE CONSUMER THAT FINALLY ASKED FOR IT. §3.1 says
+ * "Given an origin (origin)", and the entry above is that algorithm applied to the origin OF A URL — which
+ * was the only shape anything in this tree asked it in until Mixed Content §4.3 "Does settings prohibit mixed
+ * security contexts?" arrived, whose step 1 reads an environment settings object's ORIGIN.
+ * THIS PARAGRAPH SAID THE ENTRY HAD NO CALLER AND THAT IT MUST ARRIVE WITH ONE, and both halves stood: it was
+ * refused once, on exactly that ground, and is landed now in the same diff as the algorithm that reads it. A
+ * predicate with no consumer is the write-with-no-reader defect, and the reader is what decides the shape —
+ * which it did: Mixed Content §4.3 holds an `Origin *` and no URL, so the shape is the record and not a
+ * serialization.
+ * THE TWO ENTRIES SHARE STEPS 3 THROUGH 9 AND DIFFER ONLY IN STEP 1, and they are two entries rather than one
+ * because the ONE thing they do differently is how they answer "is this origin opaque": the URL form asks
+ * core/url/origin.h for a TUPLE and reads step 1's answer off "there is none", and the record form asks
+ * origin_is_opaque. Routing the URL form through this one would use origin_of_url, which MINTS an
+ * agent-lifetime record per call — origin.h says origin_tuple_url exists FOR THIS ALGORITHM so that a
+ * [SecureContext] member check does not leave one origin behind per question asked — so the sharing is of the
+ * TAIL, in one static function, and never of the entry. */
+bool secure_context_origin_record_potentially_trustworthy(const Origin *o);
 bool secure_context_origin_potentially_trustworthy(const UrlRecord *u);
 
 /* SECURE CONTEXTS §3.2 "Is url potentially trustworthy?" over a serialized URL. False for input that is not a

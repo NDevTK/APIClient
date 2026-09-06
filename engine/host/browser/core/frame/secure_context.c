@@ -100,6 +100,22 @@ bool secure_context_origin_potentially_trustworthy(const UrlRecord *u)
     return r;
 }
 
+bool secure_context_origin_record_potentially_trustworthy(const Origin *o)
+{
+    DCHECK(o != NULL, "§3.1 was asked about no origin at all — every environment settings object has one, so "
+                      "a NULL here is a caller that has not decided which environment it is asking about");
+    /* STEP 1: "If origin is an opaque origin, return Not Trustworthy." Asked of the RECORD, which is the one
+       thing this entry does differently from its sibling above — §7.1.1 gives an opaque origin no scheme and
+       no host, and core/url/origin.h's component accessors ASSERT that a caller answered this first. */
+    if (origin_is_opaque(o)) return false;
+    /* STEP 2's assert holds by construction: what is left is a tuple origin.
+       STEPS 3 THROUGH 9, over the same components the URL form reads — and NOT origin_effective_domain, which
+       §3.1's own closing note excludes by name: "Neither origin's domain nor port has any effect on whether or
+       not it is considered to be a secure context." A `document.domain` write must not make an origin
+       trustworthy, and reading the effective domain here is exactly how it would. */
+    return tuple_origin_trustworthy(origin_scheme(o), origin_host(o));
+}
+
 /* §3.2 STEP 1's two literals. "If url is `about:blank` or `about:srcdoc`" means the URL RECORD is that one and
    not one that merely starts with it: `about:blank?x` has a query, has no inherited context, and is not what
    a navigable's initial Document is created at. */

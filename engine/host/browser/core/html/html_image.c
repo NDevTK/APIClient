@@ -670,6 +670,12 @@ static JSValue img_update_rest(JSContext *ctx, JSValueConst this_val, int argc, 
     size_t selected_n = 0;
     char *abs = NULL;
     CspRequestMetadata csp_meta;
+    /* §4.8.4.3.5's INITIATOR, whose first consumer finally exists — core/fetch/fetch.h carried a note
+       saying this field was absent "for want of a consumer", and Mixed Content §4.1's step 1.5 is that
+       consumer. `imageset` is NOT upgraded, so an `<img srcset>` whose address is http on an https page is
+       refused by step 7 where a plain `<img src>` is upgraded and loaded; the two differ, and stating this
+       is the whole of what makes them differ correctly. */
+    const char *initiator;
     ImageSourceSet ss;
     int i;
 
@@ -875,7 +881,19 @@ static JSValue img_update_rest(JSContext *ctx, JSValueConst this_val, int argc, 
        of §4.1 step 7, and core/fetch/fetch.h's fetch_main_blocked is the one component they collapsed into.
        What this site still states is what only it knows — the destination §4.8.4.3.5 creates the request with,
        and the metadata that algorithm sets. */
+    initiator = img_uses_srcset_or_picture(el) ? "imageset" : NULL;
     csp_meta = csp_request_metadata_unstated();
+    /* FETCH §4.1 "Main fetch" STEP 6, WHICH RUNS BEFORE STEP 7 BECAUSE THAT IS THE ORDER THE TWO STEPS ARE
+       IN. `image` is one of the three destinations Mixed Content §4.1 upgrades, so this is one of the few
+       sites where the step does anything at all. THE ADDRESS IT RETURNS REPLACES `abs` FOR EVERYTHING
+       DOWNSTREAM — the step-7 check below, the request handed to the host, and the address the reply's own
+       delivery names. There is ONE variable and it is overwritten here, because judging the old address and
+       fetching the new one (or the reverse) is the defect core/fetch/fetch.h describes: nothing crashes, and
+       the only trace is this element firing `error` where a browser fires `load`. */
+    {
+        char *up = fetch_main_upgrade(ctx, abs, /*destination*/ "image", initiator);
+        if (up) { free(abs); abs = up; }
+    }
     /* §4.8.4.3.5 creates its request with "creating a potential-CORS request given urlString, `image`, and
        the current state of the element's crossorigin content attribute", and HTML §2.5.1 answers a MODE out
        of that third operand exactly as it answers the destination out of the second — so this states the mode
@@ -907,11 +925,14 @@ static JSValue img_update_rest(JSContext *ctx, JSValueConst this_val, int argc, 
         /* §4.8.4.3.5 creates the request and never sets a method, so it is Fetch §2.2.5 "Requests"'s `GET`.
            STATED, because the reply seam is keyed on the (method, url) pair and a park that does not say is a
            park the host's join cannot list.
-           §4.8.4.3.5's "If the element USES SRCSET OR PICTURE, set request's INITIATOR to `imageset`" writes a
-           field core/fetch/fetch.h's request record does not carry, and it is not carried because it has no
-           reader in this engine: Fetch's initiator is read by service workers and by §4.8.4.3.13 "Reacting to
-           environment changes", and neither exists here. A field a producer writes and nothing reads is the
-           mirror of the defect CLAUDE.md counts seven of, so it arrives with its first consumer. */
+           §4.8.4.3.5's "If the element USES SRCSET OR PICTURE, set request's INITIATOR to `imageset`" IS
+           STATED NOW, above and on the record, and this note is the sentence that promised it. It said the
+           field was not carried "because it has no reader in this engine … so it arrives with its first
+           consumer", naming service workers and §4.8.4.3.13 as the readers this engine lacks — and the
+           consumer that turned up is neither: Mixed Content §4.1's step 1.5 exempts an `imageset` image from
+           the upgrade, so the field decides whether THIS request's address is rewritten. The rule held and
+           the reader was not one of the two it guessed at, which is the ordinary way that sentence comes
+           true. */
         /* …AND THE DESTINATION IS THAT SENTENCE COMING TRUE FOR THE FIELD BESIDE IT. §4.8.4.3.5's step is "Let
            request be the result of creating a potential-CORS request given urlString, `image`, and the current
            state of the element's crossorigin content attribute", and §2.5.1 "Terminology"'s create a
@@ -922,6 +943,9 @@ static JSValue img_update_rest(JSContext *ctx, JSValueConst this_val, int argc, 
         req.method = "GET";
         req.url = abs;
         req.destination = "image";
+        /* …AND §4.8.4.3.5's INITIATOR ON THE RECORD, so the park's own step 6 asks the identical question of
+           the identical request rather than re-reading the element. */
+        req.initiator = initiator;
         /* …AND THE THIRD FIELD THAT SAME SENTENCE STATES. §4.8.4.3.5's step is "creating a potential-CORS
            request given urlString, `image`, and the current state of the element's crossorigin content
            attribute", and HTML §2.5.1 "Terminology"'s create a potential-CORS request answers a CREDENTIALS

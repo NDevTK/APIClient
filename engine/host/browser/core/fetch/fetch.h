@@ -221,6 +221,13 @@ typedef struct {
        script fetch options. A correctly-numbered, correctly-titled citation of a section that does not GOVERN
        is the one every instrument here confirms and only a reader can catch. */
     FetchCredentialsMode credentials;
+    /* Fetch §2.2.5 "Requests"' INITIATOR. NULL is the field's own initial value — a request whose creating
+       algorithm states none — and is a real answer rather than a hole, which is why it is a pointer and not
+       an enum with an unplaced zero: unlike the mode below, an absent initiator takes the SAME arm as every
+       value but one, so nothing is silently decided by not stating it. Its only reader is Mixed Content §4.1
+       step 1.5's `imageset` exemption; core/html/html_image.c is the only producer that states one.
+       BORROWED and never freed here: every producer passes a literal. */
+    const char *initiator;
     /* Fetch §2.2.5 "Requests"' MODE. Stated by the algorithm that CREATES the request and never derived here:
        §5.4's constructor gives a request built from a string `cors`, HTML §2.5.1's create a potential-CORS
        request gives `no-cors` or `cors` off the element's `crossorigin` state, and XHR states `cors` outright.
@@ -233,73 +240,28 @@ typedef struct {
  * Security Policy, or should request be blocked by Integrity Policy Policy returns blocked, then set response
  * to a network error".
  *
- * WHAT IS NOT COVERED: the step is FOUR checks and this component runs THREE of them — bad port, CSP, and
- * Subresource Integrity's Integrity Policy. The ONE still absent is MIXED CONTENT, and it is absent for a
- * reason rather than by order of arrival: it is the only one of the four gated by a DIFFERENT STEP.
+ * ALL FOUR CHECKS RUN, AND THIS PARAGRAPH IS WHAT IS LEFT OF THE RESIDUAL THAT TRACKED THEM. The step's
+ * four disjuncts are bad port, MIXED CONTENT, Content Security Policy and Integrity Policy, and every one is
+ * asked here. What the residual recorded, and what is worth keeping now that it is discharged, is the SHAPE
+ * of why the last one took longest: mixed content was never blocked by its own difficulty but by the step
+ * BEFORE it. §4.1 step 6 — "Upgrade a mixed content request to a potentially trustworthy URL, if appropriate"
+ * — REWRITES the address step 7 judges, so the disjunct could not be added to this predicate until that
+ * rewrite existed as its own component with every request-creating site calling it first. A reader who had
+ * priced the disjunct by reading Mixed Content §4.4 alone would have found a short algorithm and been
+ * wrong about the work
+ * by the whole of step 6, its address plumbing, and the request MODE and INITIATOR neither step could ask for
+ * until they were carried.
  *
- * MIXED CONTENT (disjunct 2) IS GATED BY THE STEP ABOVE THIS ONE, WHICH IS THE FACT THAT DECIDES THE ORDER.
- * §4.1 step 6 is "Upgrade a mixed content request to a potentially trustworthy URL, if appropriate", and that
- * algorithm's own last step is to set an `http` URL's scheme to `https` and return — so the step IMMEDIATELY
- * ABOVE this one REWRITES THE ADDRESS this one judges, for the three destinations it does not return early
- * for (`image`, `audio`, `video`). A component that ran the mixed-content block WITHOUT it would refuse an
- * `<img src="http://…">` on an https page where a browser upgrades it and LOADS it: a wrong answer in the
- * coverage-losing direction, which also fires `error` at the element and drives the page down a handler path
- * the real page never takes. That is a REGRESSION and not a narrowing, so the block is not landed here alone.
- * AND STEP 6 CANNOT BE FOLDED INTO THIS FUNCTION EITHER. This is a PURE PREDICATE and is evaluated TWICE for
- * every request that reaches the host — once at the component that builds it, again at solver/engine.c's
- * park, whose own comment rests on the two evaluations being unable to disagree — and that park composes its
- * pending URL BEFORE calling this. A rewriting step 6 therefore needs its own component, a signature that
- * hands an address BACK, every call site to consume it, and that compose order reversed, since the park is
- * keyed on (method, url) and would otherwise park a request under an address the host is never asked for.
- * WHAT THE NEXT DIFF BUILDS, AND THE ORDER IS THE DELIVERABLE: (a) Secure Contexts §3.1 "Is origin
- * potentially trustworthy?" over an ORIGIN RECORD — core/frame/secure_context.h exposes that algorithm only
- * over a UrlRecord and over a serialized URL, while the mixed-content settings test reads an environment
- * settings object's ORIGIN, which core/url/origin.h's origin_agent answers for every realm in this instance;
- * (b) the settings test itself over that; (c) §4.1 step 6 as its own component, which needs Fetch §2.2.5
- * "Requests"' INITIATOR on the request record — core/html/html_image.c records that field as deliberately
- * absent for want of a consumer, and the upgrade's `imageset` arm is that consumer; (d) the block, as a
- * further disjunct HERE.
- * THAT IS A DEPENDENCY ORDER AND NOT A LANDING ORDER, AND READING IT AS ONE COSTS A DIFF. The list runs
- * deepest-first, so it reads as a build sequence and it is very nearly the REVERSE of one: (d) is the only
- * member with a consumer that exists — this function, called from five components — and (a) through (c) are
- * read by nothing but each other, so each of them landed alone is the write-with-no-reader defect. The
- * sentence that stood here — that nothing before (d) has a reader — was TRUE and did not work: it was read,
- * agreed with, and (a) was dispatched anyway, because a numbered list is an instruction and one line of prose
- * under it is not. THE RULE THAT SURVIVES IT: a dependency order is not a landing order, and the first
- * LANDABLE unit is whichever one is nearest an existing consumer — which here is the LAST one named.
- * The consequence is stated plainly rather than left to be rediscovered a third time: the whole of (a)..(d)
- * is ONE landing, and its file set is not this directory — step 6's rewrite has to be consumed at every
- * component that builds a request, so a scope naming only core/fetch and core/frame/secure_context cannot
- * hold it. That (a) has no reader is VERIFIED and not assumed, and the evidence is recorded where the
- * algorithm lives rather than restated here: core/frame/secure_context.h names the two shapes anything in
- * this tree has ever asked §3.1 in, and neither is an origin record.
- * HOW ITS ABSENCE SHOWS: an https document fetching `http://cdn/chunk.js` is served that script here and is
- * refused it by a browser — so a lazy chunk this engine executes for its endpoints is one the real page
- * never runs, and the surface it contributes is reported as the page's.
- * AND NO INSTRUMENT HERE WILL EVER SAY SO ABOUT THE MIXED-CONTENT NUMBERS ABOVE: that standard has no
- * committed corpus row, while its two WebAppSec siblings (csp, securecontexts) are indexed at the same
- * editor's-draft base, so a citation of it is COUNTED AND NEVER CHECKED rather than clean. Its ED renders
- * with numbered headings, so the row is one fetch away and the silence is a gap rather than a limit.
+ * TWO STANDARDS THIS STEP DEPENDS ON ARE COUNTED AND NEVER CHECKED. Neither Subresource Integrity nor Mixed
+ * Content has a row in engine/specindex, so the citation auditor resolves none of their numbers and compares
+ * none of their quotations, and reports zero for both — silence about them rather than a clean bill. Mixed
+ * Content's editor's draft renders with 46 numbered headings, so its row is ONE FETCH from existing.
  *
- * INTEGRITY POLICY (disjunct 4) IS BUILT AND THIS PARAGRAPH RECORDS WHAT IT COST, because the clause that
- * stood here priced it at one call and it was four components. It is the disjunct §4.1 gained after the four
- * copies this replaced were written — every one of them quoted a three-check version of the sentence above,
- * and moving the quotation to a fresh site is what made the auditor say so.
- * IT IS NOT A STANDARD OF ITS OWN: the algorithm is a subsection of SUBRESOURCE INTEGRITY, which is where
- * Fetch's own cross-reference data resolves this disjunct, and §4.1's sentence renders that section's title
- * with the word Policy DOUBLED — Fetch's rendering is redundant and the standard is not wrong, so a reader
- * searching it for §4.1's exact phrase should not conclude either document is in error.
- * WHAT IT TOOK, and the two that were not visible from here: the policy is an ITEM of the policy container,
- * so it needed a field, a clone, a free AND a slot on the serialized form every producer states — and the
- * check reads the request's MODE, which nothing on this path carried. Both are now built; every SRI number
- * in this tree is still COUNTED AND NEVER CHECKED, because that standard has no committed corpus row.
- *
- * MIXED CONTENT (disjunct 2) REMAINS, AND ITS BLOCKER IS UNCHANGED BY ANY OF THAT. It is gated by §4.1 step
- * 6, which REWRITES the address step 7 judges, so it cannot be added here until that step exists — and the
- * ordered subproblems for it are above. What the Integrity Policy work DID remove from its path is the mode:
- * that dependency is discharged, and what is left for mixed content is the settings test, the step-6 upgrade
- * component, and Fetch §2.2.5's INITIATOR, which core/html/html_image.c still records as absent for want of a
- * consumer and which §4.1 step 6's `imageset` arm would be.
+ * WHAT REMAINS IS NOT A DISJUNCT. Mixed Content §4.3's ancestor-navigable walk answers only for ancestors in
+ * a PEER instance and is the residual at core/fetch/mixed_content.h; SRI §3.8.3's violation report and its
+ * report-only policy are the residuals at core/fetch/integrity_policy.h and core/frame/policy_container.c;
+ * and the §7.1.7 container item is still absent from the two CROSS-BOUNDARY carriers named at
+ * engine/host/main.c and engine/host/wpt_runner.c. Each is named where its own algorithm lives.
  *
  * IT WAS FOUR HAND-WRITTEN COPIES, ONE PER ENTRY, and the fifth entry is what proved that shape wrong: a
  * `<script src>` ran NO CSP check at all, because §4.12.1.1's fetch is the one nobody remembered to add a copy
@@ -321,6 +283,35 @@ typedef struct {
  * Answers non-zero for BLOCKED. `url` is the request's serialized current URL. */
 int fetch_main_blocked(JSContext *ctx, const char *url, const char *destination,
                       CspRequestMetadata metadata, FetchMode mode);
+
+/* FETCH §4.1 "Main fetch" STEP 6, AS THE ONE COMPONENT IT IS A STEP OF — "Upgrade a mixed content request to
+ * a potentially trustworthy URL, if appropriate", which is Mixed Content §4.1 and lives in
+ * core/fetch/mixed_content.h. Returns an OWNED upgraded address, or NULL for that algorithm's "return
+ * without modifying request".
+ *
+ * IT IS A SEPARATE ENTRY FROM STEP 7 ABOVE AND MUST STAY ONE, WHICH IS A CLAIM ABOUT WHAT EACH STEP IS RATHER
+ * THAN A STYLE. Step 7 is a PURE PREDICATE and is evaluated TWICE for every request that reaches the host —
+ * once at the component that builds it and again at solver/engine.c's park, whose comment rests on the two
+ * evaluations being unable to disagree. Step 6 MUTATES. Folding a rewrite into a predicate would make the
+ * second evaluation's answer depend on whether the first had already run, which is exactly the property that
+ * comment relies on not being true.
+ *
+ * AND EVERY CALLER RUNS THEM IN THE STANDARD'S ORDER — 6 THEN 7 — ON THE SAME ADDRESS. Step 7's second
+ * disjunct asks whether the request's URL is potentially trustworthy, so asking it of the address a caller
+ * STARTED with refuses an `<img src="http://…">` on an https page that a browser upgrades and loads. THE
+ * SILENT ONE IS THE ORDER, not the omission: a caller that runs step 6 and then judges the OLD address, or
+ * that composes a park key from the old address after upgrading, produces a run in which nothing crashes and
+ * the only trace is an element firing `error` where a browser fires `load`. solver/engine.c's park composes
+ * its `(method, url)` key AFTER this call for that reason, and asserts the ordering it depends on.
+ *
+ * IDEMPOTENT, WHICH IS WHAT MAKES THE DOUBLE EVALUATION SAFE: an address this returns is https, and Mixed
+ * Content §4.1's step 1.1 ends the algorithm for a potentially trustworthy URL — so a second call on an
+ * upgraded address answers NULL and the park's re-run cannot disagree with the producer's.
+ *
+ * `initiator` is Fetch §2.2.5's initiator, which only Mixed Content §4.1 step 1.5 reads. NULL is a
+ * request whose creating
+ * algorithm sets none — §2.2.5's own initial value and a real answer rather than a hole. */
+char *fetch_main_upgrade(JSContext *ctx, const char *url, const char *destination, const char *initiator);
 
 /* IS THIS ONE OF FETCH §2.2.5 "Requests"' DESTINATION TYPES — the enumeration quoted in the paragraph above,
  * as a predicate, in the component whose record carries the field.

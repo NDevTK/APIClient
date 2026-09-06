@@ -737,6 +737,10 @@ static void link_fetch_request(JSContext *ctx, lxb_dom_element_t *el, JSValueCon
        THE DISJUNCTION AND THE URL PARSE ARE NOT WRITTEN HERE — they were one of FOUR hand-written copies of
        §4.1 step 7, and core/fetch/fetch.h's fetch_main_blocked is the one component they collapsed into. What
        this site still states is what only it knows: the caller's destination and §4.2.4.3's metadata. */
+    /* FETCH §4.1 "Main fetch" STEP 6 HAS ALREADY RUN, AT THE CALLER, and it runs there rather than here for a
+       reason this signature states: `abs` is `const` and belongs to whoever resolved it, so a rewrite
+       performed here could not replace the address its caller goes on to use. Both callers upgrade before
+       they call, which keeps the judged address and the fetched address ONE value. */
     if (fetch_main_blocked(ctx, abs, destination, metadata, mode)) {
         JS_FreeCString(ctx, nonce);
         JS_FreeValue(ctx, nonce_slot);
@@ -920,6 +924,15 @@ static void link_preload(JSContext *ctx, lxb_dom_element_t *el)
        `crossorigin` attribute is in the No CORS state, which HTML §2.5.1 "Terminology" answers `include` — the
        OPPOSITE of what its modulepreload sibling answers for the identical markup, and the reason this value
        is passed rather than computed inside the shared function. */
+    /* FETCH §4.1 "Main fetch" STEP 6, BEFORE THE STEP 7 THE CALL BELOW MAKES. `as=image`, `as=audio` and
+       `as=video` are exactly Mixed Content §4.1's three upgradeable, so this site reaches the
+       step for real. §4.2.4.3 states no INITIATOR — Mixed Content §4.1 step 1.5's exemption belongs to
+       §4.8.4.3.5's images
+       alone — so NULL is this algorithm's answer rather than a field this site failed to plumb. */
+    {
+        char *up = fetch_main_upgrade(ctx, abs, destination, /*initiator*/ NULL);
+        if (up) { free(abs); abs = up; }
+    }
     link_fetch_request(ctx, el, wrap, abs, destination, CSP_PARSER_METADATA_EMPTY,
                        cors_potential_request_credentials(cors_settings_attribute_state(el)),
                        cors_potential_request_mode(cors_settings_attribute_state(el)), link_deliver);
@@ -1178,6 +1191,15 @@ static void link_modulepreload(JSContext *ctx, lxb_dom_element_t *el)
        simplification: its note says these are "more modern features, where the request's mode is always
        `cors`", and the attribute has been "repurposed … wherein they only impact the request's credentials
        mode". So the state decides the CREDENTIALS here and decides nothing about the mode. */
+    /* FETCH §4.1 "Main fetch" STEP 6. A `modulepreload`'s destination is `script` or one §4.6.8.12 step 3
+       translated, none of which Mixed Content §4.1 upgrades — so this call answers NULL today. It is made
+       anyway, because a step some request-creating sites run and others do not is one missing capability
+       wearing two names: the day §4.6.8.12 admits a destination Mixed Content §4.1 touches, this site
+       already asks. */
+    {
+        char *up = fetch_main_upgrade(ctx, abs, destination, /*initiator*/ NULL);
+        if (up) { free(abs); abs = up; }
+    }
     link_fetch_request(ctx, el, wrap, abs, destination, CSP_PARSER_METADATA_NOT_PARSER_INSERTED,
                        cors_settings_attribute_credentials(cors_settings_attribute_state(el)),
                        FETCH_MODE_CORS, link_module_deliver);

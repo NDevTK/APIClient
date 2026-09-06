@@ -29,10 +29,12 @@
 #include "core/agent_state.h"
 #include "core/fetch/fetch.h"
 #include "core/fetch/integrity_policy.h"
+#include "core/fetch/mixed_content.h"
 #include "core/fetch/scheme_fetch.h"
 #include "core/file/blob.h"
 #include "core/frame/location.h"
 #include "core/dom/document.h"
+#include "core/frame/window_proxy.h"
 #include "core/fetch/headers.h"
 #include "core/fetch/port_blocking.h"
 #include "core/fetch/body.h"
@@ -190,6 +192,21 @@ FetchMode fetch_mode_of_token(const char *token)
    `<link rel=preload>` of one went to the trusted zone, which can fetch nothing but an HTTP(S) scheme and
    answered a refusal the page cannot tell from a network failure. §4.3 answers it with a 200 out of bytes that
    were already in this address space, and `deliver` is exactly the processResponse steps that answer needs. */
+/* FETCH §4.1 "Main fetch" STEP 6 — see core/fetch/fetch.h. It is a forwarder to Mixed Content §4.1 and
+   nothing else, which is the point: the STEP is Fetch's and the ALGORITHM is that standard's, and a caller
+   that reached into the other standard directly would be spelling Fetch's step ordering at its own site. */
+char *fetch_main_upgrade(JSContext *ctx, const char *url, const char *destination, const char *initiator)
+{
+    DCHECK(url != NULL, "§4.1 step 6 was asked about a request with no address — every caller resolved one "
+                        "before it built the request this step is about");
+    DCHECK(destination != NULL,
+           "§4.1 step 6 was asked about a request stating no DESTINATION — Mixed Content §4.1's step 1.4 "
+           "is a "
+           "membership test over it and decides this step's whole answer, so a request without one would be "
+           "compared against a pointer nobody wrote");
+    return mixed_content_upgrade_url(ctx, url, destination, initiator);
+}
+
 /* FETCH §4.1 "Main fetch" STEP 7 — see core/fetch/fetch.h for why it is one component and what each caller
    owes it. The disjunction is written ONCE here; the four hand-written copies that stood at `fetch()`,
    §4.8.4.3.5, §4.6.8.20 and §3.5.2's send() are calls to it, and the fifth entry that had no copy at all —
@@ -231,6 +248,18 @@ int fetch_main_blocked(JSContext *ctx, const char *url, const char *destination,
        are asked of a request the algorithm has already answered. */
     blocked = url_parse(&rec, url, strlen(url), NULL) &&
               (fetch_block_bad_port(&rec) == FETCH_PORT_BLOCKED ||
+               /* MIXED CONTENT, THE SECOND DISJUNCT, ASKED OF THE ADDRESS STEP 6 HAS ALREADY REWRITTEN. This
+                  component judges whatever `url` it is handed, so the ORDER is the caller's obligation and the
+                  contract for it is stated at fetch_main_upgrade — a caller that judges the pre-upgrade
+                  address refuses an `<img src="http://…">` on an https page that a browser loads, and nothing
+                  crashes when it does.
+                  Mixed Content §4.4's step 1.4 needs whether this request's target browsing context HAS A
+                  PARENT, and that
+                  is this component's to answer rather than each caller's for the reason the URL parse and the
+                  policy container are: it is a fact about the CLIENT, `ctx` is the client, and every caller
+                  would answer it the same way. */
+               mixed_content_should_block_fetching(ctx, &rec, destination,
+                                                   !window_proxy_is_top_level(document_window_proxy(ctx))) ||
                policy_should_block_request(document_policy(ctx), &rec, destination, metadata,
                                            /*redirect count*/ 0) == CSP_REQUEST_BLOCKED ||
                integrity_policy_should_block_request(
@@ -970,6 +999,21 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, const RequestRecord 
            predicate is that uncertainty KEEPS the arm. Blocking on the accident that a shape's text carried
            `:25` would delete a real endpoint from the surface. The same sentence covers §4.1.2: a policy is
            matched against a URL, and a shape is not the URL the request will go to. */
+        /* FETCH §4.1 "Main fetch" STEP 6, BEFORE STEP 7. §5.4's Request has the EMPTY destination, which is
+           none of Mixed Content §4.1's three, so this answers NULL and `abs` below is the address step 2
+           resolved. It is asked anyway, for the reason the disjunction is one component: a step some entries
+           ask and others do not is one missing capability wearing two names. */
+        if (url_is_real) {
+            /* §5.4's constructor steps set no INITIATOR — the field's §2.2.5 initial value — so NULL is this
+               algorithm's answer and not a value this entry failed to read off the record. */
+            char *up = fetch_main_upgrade(ctx, u, /*destination*/ "", /*initiator*/ NULL);
+            DCHECK(up == NULL,
+                   "Mixed Content §4.1 upgraded a fetch()'s address — its step 1.4 ends the algorithm for a "
+                   "destination that is not `image`, `audio` or `video`, and Fetch §5.4 \"Request class\" "
+                   "gives a request built here the EMPTY destination (§2.2.5's \"unless stated otherwise\"), "
+                   "so an upgrade means this entry's destination has come apart from the one it states below");
+            free(up);
+        }
         if (url_is_real && fetch_main_blocked(ctx, u, /*destination*/ "", csp_meta,
                                               req_mode)) {
             JSValue value;

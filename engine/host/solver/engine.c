@@ -268,6 +268,14 @@ static void script_csp_meta_free(JSContext *ctx, ScriptCspMeta *h)
 static void pending_park_request(JSContext *ctx, JSValue e, const FetchRequest *req)
 {
     JSValue reply = JS_UNDEFINED;
+    /* §4.1 step 6's answer, and the address every step below reads. `up_url` is OWNED and is NULL when the
+       step returned without modifying the request, which is why the two are separate: `use_url` is what to
+       read and `up_url` is what to free. */
+    char *up_url = NULL;
+    const char *use_url;
+    /* §4.3's request, which is this one with step 6's address on it — a COPY because the caller's record is
+       `const` and belongs to the component that built it. */
+    FetchRequest sf;
 
     /* THE METHOD AND THE URL ARE THE REQUEST'S IDENTITY, and both are what this park is keyed on: the join
        lists the PAIR and engine_provide delivers against it (engine.h). Fetch §2.2.5 Requests: "A request has an
@@ -321,7 +329,19 @@ static void pending_park_request(JSContext *ctx, JSValue e, const FetchRequest *
            "writes as its else. State the mode the algorithm creating this request names "
            "(core/html/cors_settings_attribute.h holds HTML §2.5.1's and §2.5.4's two answers over an "
            "element's `crossorigin` state, and they differ)");
-    pending_set(e, PEND_URL, JS_NewString(ctx, req->url));
+    /* FETCH §4.1 "Main fetch" STEP 6, AND IT RUNS BEFORE THE KEY IS COMPOSED — WHICH IS THE ORDERING THIS
+       WHOLE PARK DEPENDS ON. The reply seam is keyed on (method, url); step 6 REWRITES that url; so composing
+       PEND_URL from the pre-upgrade address and then fetching the post-upgrade one parks the request under an
+       address the host is never asked for, and the flow waits forever on a reply nobody owes it. Nothing
+       crashes when that happens — the entry simply never settles — which is why the order is stated here
+       rather than left to whoever reads the two lines.
+       IT IS ASKED AT THE CONSUMER AS WELL AS AT THE PRODUCERS for the reason step 7 is: the three parks in
+       this file build their own record and pass no producer's door, so a step asked only at the builders is a
+       step those three never take. It is IDEMPOTENT (core/fetch/fetch.h), so the producer having already run
+       it cannot make this answer differ. */
+    up_url = fetch_main_upgrade(ctx, req->url, req->destination, req->initiator);
+    use_url = up_url ? up_url : req->url;
+    pending_set(e, PEND_URL, JS_NewString(ctx, use_url));
     pending_set(e, PEND_METHOD, JS_NewString(ctx, req->method));
     pending_set(e, PEND_DESTINATION, JS_NewString(ctx, req->destination));
     /* THE ONE WIRE SPELLING IS `fetch_credentials_token`'S AND NOBODY ELSE'S (core/fetch/fetch.h), so this
@@ -364,19 +384,32 @@ static void pending_park_request(JSContext *ctx, JSValue e, const FetchRequest *
            "value (core/frame/policy_container.h), so a NULL is a zero-filled FetchRequest whose producer "
            "never said which of the two claims it is making, and §4.1 step 7 below would compare a policy's "
            "nonce-source expressions against a pointer nobody wrote");
-    if (fetch_main_blocked(ctx, req->url, req->destination, req->metadata, req->mode)) {
+    /* …AND STEP 7 IS ASKED OF THE ADDRESS STEP 6 LEFT, never of `req->url`. Judging the pre-upgrade address
+       here would refuse an `<img src="http://…">` on an https page that a browser upgrades and loads, and the
+       park would then answer a NETWORK ERROR for a request whose key names the upgraded address — two wrong
+       answers from one mis-ordering, neither of which aborts. */
+    if (fetch_main_blocked(ctx, use_url, req->destination, req->metadata, req->mode)) {
         pending_set(e, PEND_VALUE, JS_NULL);
         pending_set(e, PEND_HAVE_VALUE, JS_TRUE);
+        free(up_url);
         return;
     }
     /* FETCH §4.3 Scheme fetch. §5.4's CAPTURED blob URL entry is JS_UNDEFINED because no standard but the
        Request constructor has one to have captured, and a Request never reaches a park — it reaches
        `fetch_owe`, which runs §4.3 with its own captured entry and a `deliver` closure before this register is
        ever touched (core/fetch/scheme_fetch.h). */
-    switch (scheme_fetch(ctx, req, JS_UNDEFINED, &reply)) {
+    /* §4.3 IS RUN OVER THE UPGRADED ADDRESS TOO — a copy of the record with `url` replaced, rather than the
+       caller's, because the record is `const` and belongs to the component that built it. Handing §4.3 the
+       PRE-upgrade address would make a `data:` or `blob:` arm answer for one address while the park's key
+       names another; for the http(s) row it would send the trusted zone the address step 6 exists to replace,
+       which is the mixed-content load a browser never makes. */
+    sf = *req;
+    sf.url = use_url;
+    switch (scheme_fetch(ctx, &sf, JS_UNDEFINED, &reply)) {
     /* §4.3's "HTTP(S) scheme" row — "Return the result of running HTTP fetch given fetchParams". This is the
        ONE outcome the host is shown, and the entry stays outstanding until engine_provide answers it. */
     case SCHEME_FETCH_NETWORK:
+        free(up_url);
         return;
     /* §4.3 built the whole response inside this agent. It is the same reply record a host delivers, so it goes
        where a host's goes and the delivery cannot tell them apart — which is right, because the standard does
@@ -391,6 +424,7 @@ static void pending_park_request(JSContext *ctx, JSValue e, const FetchRequest *
         pending_set(e, PEND_VALUE, JS_NULL);
         break;
     }
+    free(up_url);
     /* LAST, AND THAT ORDER IS THE FRONTIER'S OUTSTANDING SET. `haveValue` is the write that takes a record OUT
        of that set (solver/pending.c's pend_index_sync), so the address and the method must already be on the
        record when it lands — otherwise the set is keyed after it was answered and the host is offered a
