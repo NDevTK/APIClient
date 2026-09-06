@@ -249,10 +249,46 @@ function _parkedProgress(item) {
       + 'delivery through this source, so ' + (withdrawn === 1 ? 'it was' : 'they were') + ' never sent'
     : "");
 
+  // …AND A CANDIDATE THIS BUILD REFUSED AT THE DOOR IS NOT A CANDIDATE THE SCHEDULER HAS NOT REACHED, WHICH IS
+  // THE STATE `turns:0,tried:0` COULD NOT SAY. A parked record carries bytes an EARLIER session derived, and
+  // solve_resume_candidate seeds this search's delivery table from the root's carrier declaration the moment
+  // the root arrives — so a record written before that narrowing names a payload this build positively
+  // contradicts, and it is withdrawn at the door. solve.h is explicit that NEITHER `tried` NOR `resumed` moves
+  // for it, because both count candidate RUNS and a withdrawn record has none. Without this field a search
+  // whose every parked candidate was refused reports `tried:0,resumed:0,turns:0` byte-identically to a search
+  // nothing was ever parked for, and the branch below states the SECOND for both — "seeded and queued and
+  // nothing has run yet, so this is a scheduling state and not a search that failed" — which is a confident
+  // wrong instruction for the first: nothing is queued, nothing is coming, and what happened is that this
+  // build's carrier rules have moved past a stored recipe. The two take opposite work, so they are told apart
+  // before the sentence that is wrong about one of them.
+  // COUNTED AND NEVER SUBTRACTED FROM ANYTHING. It is disjoint from `tried` and from `resumed` by the producer's
+  // own statement, so there is no arithmetic here to perform and none is attempted; the recipe outlives the
+  // bytes (solve.h), so the path itself comes back as an ordinary exploration flow that re-opens the search
+  // against the narrowed table, and this sentence says so rather than reporting a loss.
+  var refused = item.resumedWithdrawn === 0 ? ""
+    : ', and ' + item.resumedWithdrawn + ' parked candidate'
+      + (item.resumedWithdrawn === 1 ? ' was' : 's were') + ' WITHDRAWN AT THE DOOR when '
+      + (item.resumedWithdrawn === 1 ? 'it' : 'they') + ' came back from a previous session — this build\'s '
+      + 'delivery table has narrowed past the recipe that wrote ' + (item.resumedWithdrawn === 1 ? 'it' : 'them')
+      + ', so ' + (item.resumedWithdrawn === 1 ? 'its bytes are' : 'their bytes are') + ' known not to arrive '
+      + 'through this source and ' + (item.resumedWithdrawn === 1 ? 'it' : 'they') + ' never ran. The path is '
+      + 'not lost: it comes back as an ordinary flow that re-opens this search against the narrowed table';
+  // FOLDED INTO `held` SO IT REACHES EVERY BRANCH BELOW AND NOT ONLY THE ONE THAT IS WRONG ABOUT IT. A
+  // withdrawal is a fact about the SEARCH, not about the state the card happens to land in, and every sentence
+  // under this point accounts for what ran out of `tried` and `payloads` — neither of which a withdrawn record
+  // is in. Reporting it only where `turns === 0` would leave a search that ran ten turns and refused four
+  // stored candidates describing its distance out of an account with a hole in it.
+  held += refused;
   if (item.turns === 0)
-    return 'the scheduler has not yet given this search a turn — its ' + item.tried + ' candidate'
-         + (item.tried === 1 ? " is" : "s are") + ' seeded and queued and NOTHING has run yet, so this is a '
-         + 'scheduling state and not a search that failed';
+    return (item.resumedWithdrawn > 0
+            ? 'nothing has run for this search' + refused + (item.tried > 0
+               ? ', and its ' + item.tried + ' other candidate' + (item.tried === 1 ? ' is' : 's are')
+                 + ' seeded and queued'
+               : ' — and it holds no other candidate at all, so this is NOT a scheduling state and no turn '
+                 + 'will change it')
+            : 'the scheduler has not yet given this search a turn — its ' + item.tried + ' candidate'
+              + (item.tried === 1 ? " is" : "s are") + ' seeded and queued and NOTHING has run yet, so this is '
+              + 'a scheduling state and not a search that failed');
   // THE RUNWAY STATE, CHECKED BEFORE EVERY SINK ONE BECAUSE ALL OF THEM ARE WRONG ABOUT IT — INCLUDING THE
   // PROBE BRANCH BELOW. `substituted` is raised where the page's own source read hands back the candidate's
   // bytes (solve.h), so its site is the lowest one in the page's own program. A zero here is
@@ -262,22 +298,50 @@ function _parkedProgress(item) {
   // real run handed the sink, so a search that has never substituted cannot have witnessed one, and the arm
   // that would otherwise fire says "the probes have not got this far through the document" when what happened
   // is that they never got as far as the read.
+  // THE RUNWAY SPLITS THAT SENTENCE IN TWO, AND THE TWO TAKE OPPOSITE WORK. `runwayPerMille` is the report's
+  // copy of the ladder rung BELOW the delivery (flow.h's `cand_replay`, sampled by solve.c's observe_runway at
+  // every switch-in and once more at the flow's end, ratcheted over the search), and it is the only number on
+  // this record whose observation site is IN FRONT of the source read — every other one is at it or past it,
+  // which is §@S(i)'s requirement that a rung be observed strictly before the thing it is a distance to.
+  //   0     — the candidates were given the thread and consumed NONE of their own recorded path. The replay is
+  //           being turned back at its FIRST ARM, so nothing here is a distance at all and the work is to find
+  //           what refuses that arm.
+  //   1000  — SATURATED, which is not "nearly at the read". solve.c's own declaration is explicit that what
+  //           this is a fraction of is DECISION ARMS and not statements, so a candidate whose recorded path is
+  //           short saturates here while still far from its source read in program order: the bottom rung is
+  //           spent and the remaining runway is UNMEASURED BY IT. A card that said "almost there" would be
+  //           restating the comparator's arithmetic as a claim about the page's program.
+  //   middle — the replay is consuming its path and stopping partway, which is the distance question this
+  //           branch has always been read as, and the only one of the three it was ever right about.
+  // IT UNDER-READS AND NEVER OVER-READS, which is solve.c's own named residual (a candidate that walks part of
+  // its runway and is then parked contributes only what its last switch-in saw), so a low number is read as a
+  // floor and never as a measured stop. That asymmetry is why the 0 arm speaks about the FIRST ARM — the one
+  // reading no under-sampling can manufacture — rather than about a distance.
+  // ITS ABSENCE WAS THE DEFECT THIS REPLACES, AND THE DEFERRAL THAT STOOD HERE WAS TRUE WHEN IT WAS WRITTEN.
+  // It said a reader here would speak a protocol the shipped wasm does not implement (§A-CROSS-BOUNDARY-DIFF),
+  // and that was exactly right on the day: the trusted zone's JS is interpreted from the tree and deploys on
+  // WRITE while the C is live only after a build. What retired it is not an argument, it is the build — the
+  // clause is a claim about an ARTIFACT and it went stale the moment one was produced. Checked the way the
+  // `deliveryProbed` note below checks the same thing, by CONTENT and never by timestamp: `runwayPerMille`
+  // occurs in extension/lib/qjs/qjs.wasm, beside `survivedOf` which this card already reads and unlike a name
+  // no producer writes, so both halves are live and the deferral has nothing left to defer.
   if (item.substituted === 0)
     return held + ' and NOT ONE of them reached its own SOURCE READ — the substitution is performed where the '
          + 'page reads the attacker source, and it has never once happened for this search, so these bytes '
          + 'have never been in the page\'s program at all. That is a question about the PATH in front of the '
-         + 'source: something is turning these flows away before they get to the read. Nothing here is about '
-         + 'the payload, the page\'s own filter or the sink';
-  // AND THIS SENTENCE IS STILL TWO STATES UNDER ONE READING, WHICH IS A NAMED RESIDUAL AND NOT AN OVERSIGHT.
-  // solve.c now emits `runwayPerMille` — the report's copy of the ladder rung BELOW the delivery (flow.h's
-  // `cand_replay`, the fraction of a candidate's recorded decision path a run has replayed) — and it splits
-  // the branch above into "the replay was turned back at its first arm" (0) and "it consumed its whole
-  // recorded path and the source read is still ahead" (~1000), which take opposite work. This card does not
-  // read it yet DELIBERATELY: the field is emitted by C that is live only after a build, while this file is
-  // interpreted from the tree and deploys on write, so a reader here would speak a protocol the shipped wasm
-  // does not implement (CLAUDE.md §A-CROSS-BOUNDARY-DIFF). The next diff lands both halves together and
-  // branches this sentence on the number. Its absence shows as this card telling a user "something is turning
-  // these flows away" for a search whose candidates walked their whole runway and simply ran out of thread.
+         + 'source, and the runway says WHICH question: '
+         + (item.runwayPerMille === 0
+            ? 'not one of these candidates consumed a single arm of its own recorded path, so the replay is '
+              + 'being turned back at its FIRST ARM — this is not a distance through the document at all, and '
+              + 'the work is to find what refuses that arm'
+            : item.runwayPerMille >= 1000
+              ? 'they consumed the WHOLE of their recorded path and the source read is still ahead of them. '
+                + 'That rung is SATURATED and is directing nothing further — and it is a fraction of decision '
+                + 'ARMS, not of the page\'s program, so this says the ladder has run out of runway to measure '
+                + 'and NOT that the read is close'
+              : 'they consumed ' + (item.runwayPerMille / 10) + '% of their own recorded path and stopped, so '
+                + 'something in front of the source is turning these flows away partway through the replay')
+         + '. Nothing here is about the payload, the page\'s own filter or the sink';
   // THE STATE THE OTHER FOUR CANNOT SAY, AND IT IS CHECKED BEFORE THEM BECAUSE THEY ARE WRONG ABOUT IT. When
   // every candidate this search has run is an inert probe, no breakout has been CONSTRUCTED — so `reached:0`
   // is not a distance question and not a filter question, and the two branches below state both of those as
@@ -591,11 +655,13 @@ function renderSecurityPanel() {
 
     // THE CARD READS THE RECORD THE ENGINE ACTUALLY EMITS. `solve_json_array` (engine/host/solver/solve.c)
     // writes {sink, source, poc, firesOn, cspBlocks?, trustedTypes?, sourceEncodes?, delivery?,
-    // deliveryPrefix?} for a fired sink and {sink, source, search:"parked", tried, resumed, reached, turns,
-    // substituted, sinkStrings, survived,
-    // survivedOf, escaped, fires?, probes, payloads, survivedBy, withdrawn, sourceEncodes?, delivery?,
+    // deliveryPrefix?} for a fired sink and {sink, source, search:"parked", tried, resumed, resumedWithdrawn,
+    // reached, turns, substituted, sinkStrings, runwayPerMille, survived,
+    // survivedOf, survivedAt?, survivedTo?, escaped, fires?, witnessed?, deliveryProbed?, probes, payloads,
+    // survivedBy, withdrawn, sourceEncodes?, sourceDelivers?, delivery?,
     // deliveryPrefix?}
-    // for a parked one. This card used to read `shape`,
+    // for a parked one — the unbracketed names are solve.h's own grammar and are emitted unconditionally, which
+    // is what makes 0 their load-bearing reading and absence the relay broken rather than a statement. This card used to read `shape`,
     // `evidence`, `cspBlocked`, `cspReason` and `csp`: five names from a contract that no longer exists, so
     // every card silently dropped its source line AND its CSP verdict, and the live-verify button (gated on
     // `shape`) could not appear for any finding the engine has ever emitted. A bridge edge asserts its
@@ -751,6 +817,27 @@ function renderSecurityPanel() {
         + "construction (solve_resume_candidate raises both together), so this card is about to read the "
         + "columns below as a complete account of what this search has run when it is not (sink=" + pit.sink
         + " tried=" + JSON.stringify(pit.tried) + " resumed=" + JSON.stringify(pit.resumed) + ")");
+      // …AND `resumedWithdrawn` BESIDE BOTH, WHICH IS THE THIRD TERM AND THE ONE NEITHER OF THEM CAN EXPRESS.
+      // solve_resume_candidate refuses a stored record whose payload this build's carrier rules contradict, and
+      // solve.h states that NEITHER `tried` NOR `resumed` moves for it — both count candidate RUNS and a
+      // withdrawn record has none. So a `|| 0` here is the confident wrong direction exactly as it is one
+      // assert up: it would print "seeded and queued and NOTHING has run yet, so this is a scheduling state and
+      // not a search that failed" over a search whose every stored candidate this build positively refused,
+      // which is the opposite instruction — nothing is queued and no turn is coming.
+      // ASSERTED FOR TYPE AND SIGN AND FOR NO RELATION, DELIBERATELY. `resumed <= tried` is asserted above
+      // because the producer raises those two together; this one is DISJOINT from both by the producer's own
+      // statement, so there is no relation here to check and inventing one — `resumedWithdrawn <= tried` is the
+      // one that reads naturally — would abort on a correct record the moment a session's only parked
+      // candidates were the refused ones, which is precisely the state the field exists to report. Emitted
+      // UNCONDITIONALLY on the parked shape (solve.h's grammar carries it unbracketed), so 0 is the
+      // load-bearing value and absence is that serializer or the relay broken rather than a statement.
+      DCHECK(typeof pit.resumedWithdrawn === "number" && pit.resumedWithdrawn >= 0,
+        "a parked @S record reached the popup without its withdrawn-at-the-door count — solve_json_array emits "
+        + "`resumedWithdrawn` on every parked entry, and without it a search whose every stored candidate this "
+        + "build refused reports tried:0,resumed:0,turns:0 byte-identically to a search nothing was ever "
+        + "parked for, so this card is about to call a narrowed delivery table a scheduling state (sink="
+        + pit.sink + " source=" + pit.source + " tried=" + JSON.stringify(pit.tried)
+        + " resumedWithdrawn=" + JSON.stringify(pit.resumedWithdrawn) + ")");
       DCHECK(typeof pit.reached === "number" && typeof pit.turns === "number" && Array.isArray(pit.payloads),
         "a parked @S record reached the popup without reached/turns/payloads — solve_json_array emits all "
         + "three on every parked entry, so absence is that serializer or the relay to this panel broken, and "
@@ -778,6 +865,25 @@ function renderSecurityPanel() {
         + "read out of a number it does not have (sink=" + pit.sink + " source=" + pit.source
         + " substituted=" + JSON.stringify(pit.substituted) + " sinkStrings=" + JSON.stringify(pit.sinkStrings)
         + ")");
+      // …AND THE RUNG BENEATH THEM, WHICH IS THE ONE FIELD ON THIS RECORD OBSERVED IN FRONT OF THE SOURCE READ.
+      // `runwayPerMille` splits `substituted:0` — itself a positive statement that these runs ended before
+      // their own source read — into a replay turned back at its FIRST ARM and a replay that consumed its whole
+      // recorded path, which take opposite work. A default here would pick the first and print "the replay is
+      // being turned back at its first arm" over a candidate that walked all of it.
+      // THE RANGE IS THE PRODUCER'S OWN AND IS NOT RESTATED FROM ANYTHING. solve.c's observe_runway asserts
+      // `cand_replay` in [0,1] at its own site and publishes `(int)(cand_replay * 1000.0 + 0.5)`, so [0,1000]
+      // is the domain that computation can produce and nothing narrower is this file's to claim. No relation to
+      // `turns` is asserted: observe_runway is called from solve_flow_end as well as from the switch-in, so a
+      // candidate flow that ended without ever being switched in can legitimately carry a reading over
+      // `turns:0`, and an assert tying the two would fire on it.
+      DCHECK(typeof pit.runwayPerMille === "number" && pit.runwayPerMille >= 0
+             && pit.runwayPerMille <= 1000,
+        "a parked @S record reached the popup without its runway reading, or with one outside the fraction "
+        + "solve.c can publish — observe_runway asserts cand_replay in [0,1] and emits thousandths of it, so a "
+        + "value outside [0,1000] is the ladder's bottom rung carrying something other than a fraction, and "
+        + "this card is about to name WHICH question a search is stuck on out of a number that is not one "
+        + "(sink=" + pit.sink + " source=" + pit.source + " substituted=" + JSON.stringify(pit.substituted)
+        + " runwayPerMille=" + JSON.stringify(pit.runwayPerMille) + ")");
       DCHECK((pit.sinkStrings === 0 || pit.substituted > 0) && (pit.reached === 0 || pit.substituted > 0),
         "a parked @S record reports a sink observation or an arrival over a search that has never recorded a "
         + "substitution — bytes enter the program before any sink can be handed a string carrying them, and "
