@@ -831,8 +831,14 @@ const SPECS = [
      ORDERED BY LEVEL WITHIN A MODULE, ANCHORED ONLY BY THE HYPHENATED LEVELLED SHORTNAME, for the reason the
      css-images-3 row states above: two levels of one module are two documents with two numberings, and an
      unlevelled `CSS Text §3.1` names neither. Those sites are normalized at the citation. */
+  /* AND `values-and-units-4` BESIDE THE SHORTNAME, BECAUSE THE TREE WRITES THE TITLE AND THE ANCHOR HELD
+     ONLY THE SHORTNAME. `joinLevel` reads at most three words before the level, so `CSS Values and Units 4
+     §N` offers `values-and-units-4` and never `css-values-4`; ten sites came back unanchored and were
+     decided by their file's vote. This is the INDEXED half of what the levelled band named — the half that
+     produces wrong verdicts rather than silence, because a vote in a CSS-dense file answers confidently. */
   { key: "cssvalues4", label: "CSS Values and Units Module Level 4", kind: "bikeshed",
-    base: "https://drafts.csswg.org/css-values-4/", edition: "maintained", anchors: ["css-values-4"] },
+    base: "https://drafts.csswg.org/css-values-4/", edition: "maintained",
+    anchors: ["css-values-4", "values-and-units-4"] },
   { key: "csssizing3", label: "CSS Box Sizing Module Level 3", kind: "bikeshed",
     base: "https://drafts.csswg.org/css-sizing-3/", edition: "maintained", anchors: ["css-sizing-3"] },
   { key: "csstext3", label: "CSS Text Module Level 3", kind: "bikeshed",
@@ -901,8 +907,11 @@ const SPECS = [
   { key: "cssconditional5", label: "CSS Conditional Rules Module Level 5", kind: "bikeshed",
     base: "https://drafts.csswg.org/css-conditional-5/", edition: "maintained",
     anchors: ["css-conditional-5", "css-conditional-rules-5", "conditional-rules-5"] },
+  /* `backgrounds-and-borders-3` for the reason the css-values row above gives: the tree writes the title and
+     the anchor held only the shortname. */
   { key: "cssbackgrounds3", label: "CSS Backgrounds and Borders Module Level 3", kind: "bikeshed",
-    base: "https://drafts.csswg.org/css-backgrounds-3/", edition: "maintained", anchors: ["css-backgrounds-3"] },
+    base: "https://drafts.csswg.org/css-backgrounds-3/", edition: "maintained",
+    anchors: ["css-backgrounds-3", "backgrounds-and-borders-3"] },
   { key: "csstransforms1", label: "CSS Transforms Module Level 1", kind: "bikeshed",
     base: "https://drafts.csswg.org/css-transforms-1/", edition: "maintained", anchors: ["css-transforms-1"] },
   { key: "csscascade5", label: "CSS Cascading and Inheritance Level 5", kind: "bikeshed",
@@ -929,8 +938,20 @@ const SPECS = [
     base: "https://www.w3.org/TR/CSS2/", edition: "final", anchors: ["css-2-1"] },
   { key: "css22", label: "Cascading Style Sheets Level 2 Revision 2 (CSS 2.2)", kind: "w3c-chapters",
     base: "https://www.w3.org/TR/CSS22/", edition: "final", anchors: ["css-2-2"] },
+  /* `xml-1-0` IS ADDED WITH A PAIRED FOREIGN ENTRY AND MUST NEVER LAND WITHOUT IT. The tree writes `XML 1.0
+     §N`, which ends on a digit, so it reaches classifyAnchor only through the join and `xml-1-0` was on no
+     list — those sites fell to a vote. But it ALSO writes `Namespaces in XML 1.0 §3`, a DIFFERENT standard,
+     and `joinLevel` offers every suffix: `namespaces-in-xml-1-0` first and then `xml-1-0`. classifyAnchor
+     returns on the first token either list holds, and OTHER_SPECS held only the SPACED `namespaces in xml`
+     — so an `xml-1-0` anchor alone would have read every Namespaces citation as this standard's. The
+     joined foreign spelling is added below in the same diff, and it must sort before this one, which it
+     does because joinLevel pushes the longest base first. Verified against the two sites before landing.
+     THIS IS THE `mixed` LESSON IN THE OTHER DIRECTION: there a foreign entry held a spelling nobody wrote
+     and protected nothing; here one holds a spelling nobody writes AT THIS LEVEL, and a widening one row
+     over is what would have made it fire. Both are the same question — does the list hold the string this
+     tree actually produces — asked of a refusal and of a resolution. */
   { key: "xml", label: "Extensible Markup Language (XML) 1.0 (Fifth Edition)", kind: "xmlspec",
-    base: "https://www.w3.org/TR/xml/", edition: "final", anchors: ["xml"] },
+    base: "https://www.w3.org/TR/xml/", edition: "final", anchors: ["xml", "xml-1-0"] },
 ];
 const SPEC_BY_KEY = new Map(SPECS.map((s) => [s.key, s]));
 const indexFileOf = (key) => join(INDEX_DIR, key + ".json");
@@ -2145,6 +2166,11 @@ const OTHER_SPECS = [
      later diff with its own whole-corpus measurement. */
   "pointer events", "pointer lock", "css mixins", "css extensions",
   "css anchor positioning", "css color adjust",
+  /* THE JOINED SPELLING OF A FOREIGN NAME THIS LIST ALREADY HOLDS UNSPACED, and it is here because the xml
+     row one screen down gained a levelled anchor. classifyAnchor returns on the FIRST token either list
+     holds, joinLevel offers the longest base first, and this entry is what makes `Namespaces in XML 1.0 §3`
+     answer before `xml-1-0` can. Deleting it re-points those citations at XML 1.0 silently. */
+  "namespaces-in-xml-1-0",
   /* THE TWO STANDARDS THAT EXTEND Fetch's `RequestInit` BY A PARTIAL DICTIONARY, and they are here for the
      reason the whole list exists: a partial's member is declared beside Fetch's own, in a Fetch-dominant
      file, so a citation of the OTHER standard's numbering sits surrounded by evidence for Fetch. Their
