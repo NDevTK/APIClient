@@ -795,16 +795,18 @@ const CALL_FORMS = new Map(Object.entries({
      "DefineMethodProperty ( homeObj, name, closure, enumerable )" writes out. This audit still quotes no triple
      because it reads which members EXIST and what KIND of property each is, and never their attributes; the
      descriptor is stated once in core/idl_args.h and installed through the form below.
-     These two are core/dom/node.c's shared
-     install helpers for one, and they are HERE for the reason every other shared helper is: the helper's own
-     forwarding install takes the name from a PARAMETER, so it is the one line that
-     cannot resolve by construction. Unregistered, that line was reported UNRESOLVED against every interface
-     whose row names node.c — a defect count with no root fix behind it, since no change to the C could have
-     made the forwarding line name a member — while the CALL SITES that do name one (`"HTMLElement"`,
-     `"Element"`, `"Document"`, `"Node"` and thirty more literals) were read by nobody. Registered, the
-     forwarding line is skipped by the shared-helper rule and each caller is audited where its literal is. */
-  node_install_interface:        { target: 1, name: 2, kind: "data" },
-  node_install_interface_ctor:   { target: 1, name: 2, kind: "data" },
+     core/dom/node.c's `node_install_interface` and `node_install_interface_ctor` USED TO BE TWO HAND-WRITTEN
+     ROWS HERE, and their retired argument is worth keeping because it is still half true: the helper's own
+     forwarding install takes the name from a PARAMETER, so unregistered, that line was reported UNRESOLVED
+     against every interface whose row names node.c while the CALL SITES that do name one (`"HTMLElement"`,
+     `"Element"`, `"Document"`, `"Node"` and thirty more literals) were read by nobody. What the argument
+     missed is that the shared-helper derivation below ALREADY reaches both — `node_install_interface_ctor`
+     forwards its `name` parameter into the door on the row below, and `node_install_interface` forwards into
+     IT — so the rows were a SECOND COPY of a fact this file computes, and the copy could not carry the door's
+     `globalRef` mark. Measured across the removal on one tree state: `records` 2826 and `offInstaller` 2157
+     both sides, the two derived forms byte-identical to the rows deleted ({target:1, name:2, kind:"data"}),
+     and the §3.8 population 182 with the rows and 340 without — which is the 158 installs the copy was
+     hiding from the mark. */
   /* §3.8's `define the global property references`, as the engine spells it — the ONE door an interface object,
      a legacy factory function, a §3.11.1 legacy callback interface object or a §3.13.1 namespace object reaches
      the global through. It is NOT `ambiguous`: JS_SetPropertyStr and JS_DefinePropertyValueStr carry that mark
@@ -819,7 +821,18 @@ const CALL_FORMS = new Map(Object.entries({
      the global rather than a MEMBER on an interface, and this audit counts members — the number is small and
      the direction is the one that matters. A new install spelling is a row here, in the same diff that writes
      it. */
-  idl_define_global_property_reference: { target: 1, name: 2, kind: "data" },
+  /* AND IT IS NOT A MEMBER INSTALL AT ALL, WHICH IS WHY THE ROW CARRIES A SECOND FIELD. The four things
+     §3.8 reaches this call with — an interface object, a [LegacyWindowAlias] of one, a §3.7.2 legacy
+     factory function, a §3.11.1 legacy callback interface object, a §3.13.1 namespace object — are
+     properties OF A GLOBAL under the construct's own identifier, and no interface declares any of them
+     as a member. Asking "which interface prototype does this land on" of one is the wrong question, and
+     an auditor that asks it gets an answer it must then either credit (a member of Window named `Node`,
+     which Window's IDL does not declare) or refuse (an UNATTRIBUTED line naming no disagreement anybody
+     can act on). `globalRef` says which question this record is FOR; the caller asks §3.8's own — is
+     this identifier one the corpus places on a global, and on one this realm could be — and never the
+     member one. The mark rides the wrapper derivation exactly as `kind` does, so every helper that
+     reaches this door is one too without anybody listing them. */
+  idl_define_global_property_reference: { target: 1, name: 2, kind: "data", globalRef: true },
   /* Both write a DATA property, which is what makes them the two forms that can be an §3.7.6 violation: an
      IDL attribute is an accessor and nothing else. */
   JS_SetPropertyStr:             { target: 1, name: 2, fn: 3, ambiguous: true, kind: "data" },
@@ -1569,7 +1582,8 @@ export function loadEnvironment(root) {
             const tgt = stripCast(site.args[form.target] || "");
             /* A WRAPPER DEFINES WHAT ITS CALLEE DEFINES. The kind rides the derivation for the same reason
                the name position does: `nav_env` installs whatever idl_install_accessor installs. */
-            const derived = { target: fn.params.indexOf(tgt), ambiguous: !!form.ambiguous, kind: form.kind };
+            const derived = { target: fn.params.indexOf(tgt), ambiguous: !!form.ambiguous, kind: form.kind,
+                              globalRef: !!form.globalRef };
             if (direct >= 0) derived.name = direct;
             else { derived.tableArg = via; derived.field = col[2]; }
             forms.set(fn.name, derived);
@@ -2326,10 +2340,15 @@ export function installedMembers(paths, env) {
 
     const emitWith = (names, stub, a, off, form, where, kind) => {
       const at = where || { file: path, line: lineOf(orig, off) };
+      /* §3.8's DEFINE, carried on the record rather than re-derived by the caller — the mark is a property of
+         the FORM, and reading it off `env.forms` here is the same lookup the derivation already made, so the
+         caller cannot hold a second list of which helpers reach the door. A form this map has never heard of
+         (an entry macro, a synthetic label) is not one. */
+      const globalRef = !!(env.forms.get(form) || {}).globalRef;
       for (const name of names)
         records.push({ name, stubbed: !!stub, file: at.file, line: at.line, form,
                        ifaces: a.ifaces, candidates: a.candidates, why: a.why,
-                       nonInterface: a.nonInterface || null, kind: kind || null });
+                       nonInterface: a.nonInterface || null, kind: kind || null, globalRef });
     };
     const emit = (names, stub, f, targetExpr, off, form, kind) =>
       emitWith(names, stub, interfacesOf(path, f, targetExpr, off), off, form, null, kind);

@@ -50,13 +50,21 @@
  * `node engine/idlgen.mjs --regen` is the one command that writes it. */
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { loadEnvironment, installedMembers } from "./idl_installed.mjs";
 import { loadIdl, windowGlobals, unplacedInterfaces, iterationMembers, EXPOSED_STAR, rhsNames, extOf } from "./idl_members.mjs";
 import { readDictDecls } from "./idl_dictdecl.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const HOST = join(HERE, "host");
+/* THE C TREE THIS RUN MEASURES, AS AN ARGUMENT. It defaults to the one beside this file, and the two reasons it
+   can move are §Testing's: a gate run from the working tree measures a program no revision contains, so a
+   number that is to be quoted at a revision is taken over a FROZEN SNAPSHOT; and a check that has never been
+   shown REJECTING anything is not a check, so the positive control for every category below has to be able to
+   run this same tool over a tree that holds the construct being probed. Only the SUBJECT moves — the IDL
+   corpus, webidl2 and the lexbor property registry stay relative to THIS FILE, which is why the tool is not
+   itself copied (a copied instrument resolves none of them and answers a silent nothing). */
+const hostArg = process.argv.indexOf("--host");
+const HOST = hostArg >= 0 && process.argv[hostArg + 1] ? resolve(process.argv[hostArg + 1]) : join(HERE, "host");
 const BROWSER = join(HOST, "browser");
 
 const REGEN = process.argv.includes("--regen");
@@ -297,11 +305,20 @@ const INTERFACES = {
   /* module_loader.c IS NOT IN THIS ROW, and the cross-check is what settled it: it installs no member on
      anything — §8.1.3's dynamic `import()` and `import.meta` are ECMAScript syntax, not Web IDL members of
      Window — so the row's belief that Window is partly built out of it was false. It came in with the union
-     above and nothing ever read it. */
+     above and nothing ever read it.
+     abort.c IS NOT IN THIS ROW EITHER, AND ITS REASON IS THE SAME ONE ONE LEVEL DOWN. The union above named it
+     because `AbortController` "read as ABSENT while it was shipping", and that argument is RETIRED: what
+     abort.c puts on the global is two Web IDL §3.8 `define the global property references` — the interface
+     OBJECTS for AbortController and AbortSignal — and §3.8's identifiers are members of no interface, so
+     `AbortController` was never in Window's member census to be absent from. Every other install in the file
+     lands on AbortSignal.prototype or AbortController.prototype. The row survived only because the §3.8
+     defines were being credited to whichever [Global] interfaces the target resolved to, which made abort.c
+     read as installing two members of Window; the moment §3.8 got its own census the cross-check said so, and
+     it is the same sentence the line above makes about module_loader.c. */
   Window:              ["core/frame/window.c", "core/dom/document.c", "core/frame/location.c",
                         "core/fetch/fetch.c", "core/events/event_target.c",
                         "core/timing/timer.c", "core/frame/navigator.c", "core/frame/screen.c",
-                        "core/dom/abort.c", "core/css/css_style_declaration.c",
+                        "core/css/css_style_declaration.c",
                         "core/frame/navigable.c", "core/frame/bar_prop.c",
                         "core/frame/window_message.c", "core/structured_clone.c",
                         /* CSSOM VIEW §4's Window extensions — innerWidth/innerHeight, outerWidth/outerHeight,
@@ -639,6 +656,23 @@ const env = loadEnvironment(HOST);
 const world = installedMembers([...env.sources.keys()].filter((p) => p.endsWith(".c")), env);
 const installedBy = new Map(), stubbedBy = new Map(), landsIn = new Map();
 const unattributed = [];
+/* WEB IDL §3.8 `define the global property references` — the identifiers this engine puts on a global, kept
+   OUT of the member census because they are not members. §3.8 reaches its DefineMethodProperty from five steps
+   whose arguments are an interface object, a [LegacyWindowAlias] of one, a §3.7.2 legacy factory function, a
+   §3.11.1 legacy callback interface object and a §3.13.1 namespace object, and NOT ONE of those is declared as
+   a member by any interface: `Node` is a property of the global under the interface's own identifier, and
+   Window's IDL does not list it.
+   THEY WERE IN THE MEMBER CENSUS AND THEY WERE WRONG IN BOTH DIRECTIONS AT ONCE, which is what makes this a
+   split rather than a filter. Where the target resolved, 119 of them were credited to BOTH [Global] interfaces
+   this engine mints — 238 entries in `installedBy` naming members neither interface declares. Where it did
+   not, 221 more were charged to "installed members whose target interface could not be decided", which is a
+   blind spot naming no disagreement anybody could act on: the answer to "which interface prototype does this
+   land on" is NONE, and the audit was refusing to state it because it was asking the wrong question. That is
+   §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS with the two questions being the member one and §3.8's own, and the
+   cost landed silently on the second, which nothing here was asking at all.
+   The mark is DECLARED at the door (idl_installed.mjs's `globalRef`) and carried to every wrapper by the
+   shared-helper derivation, so this list is not a set of file or function names anybody maintains. */
+const globalRefs = [];
 const addTo = (map, iface, name) => {
   if (!map.has(iface)) map.set(iface, new Set());
   map.get(iface).add(name);
@@ -685,6 +719,10 @@ for (const r of world.records) {
     if (!r.nonInterface.members.includes(r.name)) nonIfaceExtra.push(r);
     continue;
   }
+  /* ASKED BEFORE THE TARGET QUESTION, for the reason the non-interface arm above is: "which interface is this"
+     is not the question a §3.8 define asks, and an unanswered question is what this audit refuses to fake. Its
+     own census and its own checks are below, against the corpus's §3.8 identifier set. */
+  if (r.globalRef) { globalRefs.push(r); continue; }
   if (!r.ifaces.length) { unattributed.push(r); continue; }
   for (const iface of r.ifaces) {
     addTo(r.stubbed ? stubbedBy : installedBy, iface, r.name);
@@ -1553,19 +1591,61 @@ if (nonIface.length)
   console.log(`[idl-audit] ${nonIface.length} property(ies) installed on objects Web IDL declares are NOT ` +
               `interface prototype objects, so they are nobody's IDL member: ` +
               `${[...new Set(nonIface.map((r) => `${r.name} (${r.nonInterface.kind})`))].join(", ")}`);
-blind("installed members whose target interface could not be decided", unattributed.length);
-if (unattributed.length) {
-  const byFile = new Map();
-  for (const r of unattributed) {
-    if (!byFile.has(r.file)) byFile.set(r.file, []);
-    byFile.get(r.file).push(r);
+/* THE TARGET THIS COULD NOT DECIDE, SPLIT BY WHY — because one number was answering two questions that take
+   opposite work, and the larger of them is not a question about this reader at all.
+   §3.7.3 [Global] puts a [Global] interface's members ON THE GLOBAL OBJECT rather than on its interface
+   prototype object, so an install whose target is the realm's global is a MEMBER INSTALL whose interface is
+   whichever [Global] interface that realm's global implements. This engine mints two, and the C states which
+   one a realm is — core/realm.h's `realm_install_intrinsics(ctx, url, global_interface, secure)` takes the
+   identifier as an argument, which is the fact §3.3.7 step 1 is asked with. What it does NOT state anywhere a
+   source reader can follow is which of those realms a given install RUNS IN: every component reaches the
+   object through `JS_GetGlobalObject(ctx)`, which is one node for the whole program, and the identifier that
+   would separate them is a run-time argument several call frames above.
+   SO THIS HALF IS NOT CLOSABLE HERE, AND THE HONEST ANSWER IS A RUNTIME INVARIANT rather than a static guess.
+   Crediting the member to whichever candidates DECLARE it is exactly the false COMPLETE this attribution
+   exists to remove: `fetch` is declared on Window and on WorkerGlobalScope alike, and an install that only
+   ever runs in the document column would then report a worker realm as having it. The engine already keeps the
+   census that answers it — core/idl_args.c records every §3.8 ask per realm and core/realm.h reads it back —
+   so the shape that closes this category is the same one, one axis over: a per-realm record of the member
+   names installed ON THE GLOBAL, asserted at the install (where the target object is in hand) and read back
+   against the realm's own stated [Global] identifier. That is an assertion about a value this engine computed,
+   and it is what §3.7.3's split deserves; nothing a reader of the C can derive will do it.
+   The OTHER half stays as it was, and its zero is the armed state: a target this reader could not follow for
+   any other reason is a construct to teach it. */
+{
+  const onGlobal = unattributed.filter((r) => r.candidates.length &&
+                                              r.candidates.every((n) => globalNamesOf.has(n)));
+  const onGlobalSet = new Set(onGlobal);
+  const elsewhere = unattributed.filter((r) => !onGlobalSet.has(r));
+  const byFileList = (rs) => {
+    const byFile = new Map();
+    for (const r of rs) {
+      if (!byFile.has(r.file)) byFile.set(r.file, []);
+      byFile.get(r.file).push(r);
+    }
+    for (const [f, list] of [...byFile].sort((a, b) => b[1].length - a[1].length)) {
+      const why = [...new Set(list.map((r) => r.why || (r.candidates.length ? `one of ${r.candidates.join("/")}` : "?")))];
+      console.log(`[idl-audit]   ${f.replace(BROWSER + "/", "")}: ${list.length} — ` +
+                  `${list.map((r) => `${r.name}@${r.line}`).join(", ")}  [${why.join(" | ")}]`);
+    }
+    return byFile.size;
+  };
+  blind("members installed on the realm's global object, whose [Global] interface a source reader cannot " +
+        "decide — §3.7.3 puts them there and only the running realm says which global it is", onGlobal.length);
+  if (onGlobal.length) {
+    const cands = [...new Set(onGlobal.flatMap((r) => r.candidates))].sort();
+    console.log(`[idl-audit] ${onGlobal.length} member(s) installed on the realm's global object, which is ` +
+                `${cands.join(" or ")} — every one of the candidates is a §3.3.8 [Global] interface, so each ` +
+                `of these IS a member and the open question is only WHOSE. Neither credited to all its ` +
+                `candidates (the false COMPLETE: a member the document column installs would read as a ` +
+                `worker's) nor dropped:`);
+    byFileList(onGlobal);
   }
-  console.log(`[idl-audit] ${unattributed.length} installed member(s) in ${byFile.size} file(s) could not be ` +
-              `attributed to an interface — neither credited to their file nor dropped:`);
-  for (const [f, rs] of [...byFile].sort((a, b) => b[1].length - a[1].length)) {
-    const why = [...new Set(rs.map((r) => r.why || (r.candidates.length ? `one of ${r.candidates.join("/")}` : "?")))];
-    console.log(`[idl-audit]   ${f.replace(BROWSER + "/", "")}: ${rs.length} — ` +
-                `${rs.map((r) => `${r.name}@${r.line}`).join(", ")}  [${why.join(" | ")}]`);
+  blind("installed members whose target interface could not be decided", elsewhere.length);
+  if (elsewhere.length) {
+    console.log(`[idl-audit] ${elsewhere.length} installed member(s) could not be attributed to an interface ` +
+                `— neither credited to their file nor dropped:`);
+    byFileList(elsewhere);
   }
 }
 /* THE TAG READ BACK AGAINST THE CORPUS. A tag is a hand-written string, so it can name an interface Web IDL
@@ -1947,7 +2027,9 @@ const header =
    this three-way is right on the day it is written and silently diverges on the day the first one learns
    something, which is the reason idl_members.mjs exists one layer up. */
 const emitGenerated = (file, text, what, cost) => {
-  const out = join(HERE, "host", "browser", file);
+  /* THE TREE UNDER MEASUREMENT owns its generated tables, so this reads and writes BROWSER and not a path
+     derived from this file. The two are the same directory whenever --host is absent, which is every build. */
+  const out = join(BROWSER, file);
   let prev = "";
   try { prev = readFileSync(out, "utf8"); } catch { /* first run */ }
   if (prev === text) { console.log(`[idl-audit] ${file} current — ${what}`); return; }
@@ -2199,6 +2281,65 @@ exposureRows.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
 const globalRows = [...globalNamesOf].map(([iface, names]) =>
   [iface, [...names].reduce((m, n) => m | exposureBit.get(n), 0)]);
 globalRows.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+
+/* ---- WEB IDL §3.8's DEFINES, AUDITED AS §3.8's OWN QUESTION -------------------------------------------- */
+/* The identifiers this engine puts on a global, checked against the set the corpus says §3.8 may place there
+   and against the globals the install could be running in. It is the SAME two tables the generated header two
+   blocks up is emitted from — `exposureRows` is "every identifier §3.8 can define on a global" and `globalRows`
+   is each §3.3.8 [Global] interface's own bit — so this is a second READING of one derivation and never a
+   second copy of it. Which is also why it stands here rather than beside the member census: the rows have to
+   exist before anything can be asked of them.
+   TWO QUESTIONS, AND THEY FAIL DIFFERENTLY, so they are two categories rather than one number:
+     - an identifier the corpus places on NO global. §3.8 step 3.1 defines nothing for an interface declared
+       [LegacyNoInterfaceObject] or [LegacyNamespace], and a name that is not an interface, a namespace, a
+       callback interface, a §3.7.2 legacy factory function or a §3.4.11 [LegacyWindowAlias] identifier is not
+       a §3.8 identifier at all — either way the property is one no browser has.
+     - an identifier whose §3.3.7 exposure set shares no global name with ANY global this install could be
+       running in. That is step 1 failing, so §3.8's own loop never reaches the define.
+   THE SECOND TEST IS DELIBERATELY THE WEAKEST SOUND ONE. Where the target resolves to several [Global]
+   candidates the reader cannot tell apart (see the blind spot above), a mask that meets ONE of them is a
+   define that is right in at least one realm, and charging it would be an accusation this run cannot support.
+   Where the candidate set is one interface the test is exact, and it gets sharper for free the day the
+   per-realm record that closes that blind spot exists. */
+{
+  const exposureOf = new Map(exposureRows);
+  const globalMask = new Map(globalRows);
+  const unknownId = [], notExposed = [], unnamedGlobal = [];
+  let placed = 0;
+  for (const r of globalRefs) {
+    if (!exposureOf.has(r.name)) { unknownId.push(r); continue; }
+    const where = r.ifaces.length ? r.ifaces : r.candidates;
+    if (!where.length) { unnamedGlobal.push(r); continue; }
+    const mask = exposureOf.get(r.name);
+    const reach = where.reduce((m, n) => m | (globalMask.get(n) || 0), 0);
+    if (mask !== null && !(mask & reach)) { notExposed.push({ r, mask, where, reach }); continue; }
+    placed++;
+  }
+  console.log(`[idl-audit] ── Web IDL §3.8 define the global property references ── ${globalRefs.length} ` +
+              `identifier(s) this engine defines on a global, ${placed} of them an identifier the corpus ` +
+              `places on a global this install could be running in. They are NOT interface members and are ` +
+              `in no member count above: §3.8's five DefineMethodProperty steps take an interface object, a ` +
+              `[LegacyWindowAlias] of one, a §3.7.2 legacy factory function, a §3.11.1 legacy callback ` +
+              `interface object and a §3.13.1 namespace object, and no interface declares any of them`);
+  defect("§3.8 defines under an identifier Web IDL places on no global", unknownId.length);
+  for (const r of unknownId)
+    console.log(`[idl-audit] ${r.file.replace(BROWSER + "/", "")}:${r.line}  \`${r.name}\` is defined on a ` +
+                `global and is not one of the identifiers Web IDL §3.8 places on one — it is no interface, ` +
+                `namespace or callback interface the corpus declares, no §3.7.2 legacy factory function name ` +
+                `and no §3.4.11 [LegacyWindowAlias] identifier, or it is an interface §3.8 step 3.1 refuses ` +
+                `to place ([LegacyNoInterfaceObject] / [LegacyNamespace]). No browser has this property`);
+  defect("§3.8 defines whose §3.3.7 exposure set excludes every global they can reach", notExposed.length);
+  for (const e of notExposed)
+    console.log(`[idl-audit] ${e.r.file.replace(BROWSER + "/", "")}:${e.r.line}  \`${e.r.name}\` is defined ` +
+                `on ${e.where.join(" or ")}, whose §3.3.8 global names are ${maskSpelling(e.reach) || "none"} ` +
+                `— and its own §3.3.7 exposure set is ${maskSpelling(e.mask)}, which shares none of them, so ` +
+                `§3.8 step 3.1's condition is not met and the define does not happen in any browser`);
+  blind("§3.8 defines whose target global this scan could not name", unnamedGlobal.length);
+  for (const r of unnamedGlobal)
+    console.log(`[idl-audit] ${r.file.replace(BROWSER + "/", "")}:${r.line}  \`${r.name}\` is a §3.8 define ` +
+                `whose target object reaches no [Global] interface this reader can name (${r.why || "?"}), so ` +
+                `step 1's exposure question has nothing to be asked against`);
+}
 
 /* WEB IDL §3.3.7 [Exposed] STEP 1's OTHER VOCABULARY — THE MEMBER, WHICH THE TABLE ABOVE CANNOT KEY AND
  * WHICH §3.7.6 AND §3.7.7 EACH ASK ONCE PER MEMBER.
