@@ -2564,8 +2564,9 @@ static int proxy_get_own(JSContext *ctx, JSPropertyDescriptor *desc, JSValueCons
        would refuse §7.2.1.3.1's whole list rather than answer it — a filter that throws for everything passes
        any test that only checks the throw. */
     DCHECK(g_xo_atom[0] != JS_ATOM_NULL && g_xo_fallback[0] != JS_ATOM_NULL,
-           "a WindowProxy read reached §7.2.3.5 before this agent interned §7.2.1.3.1's property names — the "
-           "class was registered without proxy_capture_names running beside it");
+           "a WindowProxy read reached §7.2.3.5 before this agent interned the property names "
+           "§7.2.1.3.1 \"CrossOriginProperties ( O )\" lists — the class was registered without "
+           "proxy_capture_names running beside it");
 
     /* STEP 2, WHICH IS FIRST BECAUSE THE STANDARD PUTS IT FIRST. Every path through it returns, so an array
        index reaches neither the cross-origin name list nor step 3 — and asking it here rather than after the
