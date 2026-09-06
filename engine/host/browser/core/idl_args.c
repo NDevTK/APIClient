@@ -6119,25 +6119,28 @@ static void idl_tag_write(JSContext *ctx, JSValueConst obj, const char *iface)
  * are included by, and the annotation is on them precisely because real pages already had bare identifiers of
  * those names inside `with`.
  *
- * ── NAMED RESIDUAL: the ids are not checked against the members the engine installs ─────────────────────────
- *   — WHAT IS NOT COVERED: §3.7.3's loop writes "member's identifier", so every id in a row NAMES A MEMBER of
- *     that interface. Nothing here asserts the engine installs it. The table cannot be wrong on its own — it
- *     is the corpus's own answer — so the divergence this leaves open is an id whose member this ENGINE has
- *     not built, which would put a name in the unscopables object that is on no prototype. All 23 of this
- *     corpus's placements are installed today, so the residual is about a member that goes AWAY rather than
- *     one that was never there.
- *   — WHAT THE NEXT DIFF BUILDS: the check needs the interface AND its finished prototype in one hand, and
- *     §3.7.3 puts this block before the members, so it cannot be made here. core/realm.h's dev-only census is
- *     the shape that has both ends: realm_note_interface_prototype_object is called from THIS function with
- *     the identifier, realm_assert_interface_objects_asked is the entry a caller uses to state the realm is
- *     finished, and the census currently records the identifier and not the object. Carrying the prototype
- *     into that census — checked at `origin/main` before this was written: realm.c's realm_census_note takes a
- *     key and no value — makes the end-of-realm walk able to ask JS_GetOwnSlotDesc for each id.
- *   — HOW ITS ABSENCE WOULD SHOW: `Symbol.unscopables in Element.prototype` is true and
- *     `Object.keys(Element.prototype[Symbol.unscopables]).filter(k => !(k in Element.prototype))` is non-empty
- *     — a name declared unscopable for a member a page cannot reach. `node engine/idlgen.mjs` reports the same
- *     member ABSENT on that interface's row on the same run, which is the cross-check that says the census is
- *     measuring the engine rather than the table. */
+ * ── THAT RESIDUAL IS DISCHARGED, AND ITS CLAUSE WAS HALF WRONG ──────────────────────────────────────────────
+ *   What stood here said the ids are not checked against the members the engine installs, and named
+ *   core/realm.c's §3.7.3 census as the carrier the next diff would extend. The check is below
+ *   (idl_assert_unscopables_name_members) and the census IS the carrier — it records the prototype now, which
+ *   is one extra argument and not a second walk: the fact that census already records is that this realm built
+ *   an object for that interface, and only the object was being thrown away.
+ *   THE CLAUSE WAS WRONG ABOUT THE SITE, WHICH IS THE HALF THAT WOULD HAVE BEEN EXECUTED. It pointed at
+ *   realm_assert_interface_objects_asked, on the ground that it is the entry a caller uses to state that the
+ *   realm is finished — and that entry states a §3.8 condition, no further property reference will be placed,
+ *   while this check needs a
+ *   §3.7.6/§3.7.7 one, every member is installed. They are two questions and their populations differ:
+ *   core/realm.h says in its own words that "a realm that reaches no document install is not audited by it at
+ *   all", and core/platform.c is its only non-fixture caller. Built to the clause, the check would have been
+ *   silent for every realm a host brings up without a document — which is the shape a fixture uses. The site
+ *   is the END OF THE PER-REALM INTRINSIC LIST instead, which runs for every realm and is the first point at
+ *   which all five of this corpus's interfaces have their members: each declares its install with
+ *   realm_declare_intrinsic and installs its members in the same function that tags its prototype.
+ *   RECORDED RATHER THAN DELETED because the error is the ordinary one this project keeps measuring — a
+ *   next-diff clause is a claim about THIS TREE written by someone who knew what was missing and was guessing
+ *   at what fills it, and the guess here reached for the one entry that already said the words "the realm is
+ *   finished" without asking finished FOR WHAT.
+ */
 static int idl_unscopables_row_cmp(const void *key, const void *row)
 {
     return strcmp((const char *)key, ((const IdlUnscopablesRow *)row)->iface);
@@ -6219,6 +6222,121 @@ static void idl_install_unscopables(JSContext *ctx, JSValueConst proto, const ch
             "interface prototype object after something else had finished with it", iface);
 }
 
+#if APICLIENT_DEV
+/* WEB IDL §3.7.3's [Unscopable] BLOCK, CHECKED AGAINST THE MEMBERS THE ENGINE ACTUALLY INSTALLED — the other
+ * end of idl_install_unscopables, and the reason it is a separate entry called from somewhere else.
+ *
+ * WHAT IT ASKS. §3.7.3's loop writes "member's identifier", so every name in a prototype's %Symbol.unscopables%
+ * object is a name that interface HAS. This asks that of the finished object: for each id the artifact
+ * carries, the prototype must own a property of that name. A member the corpus declares [Unscopable] and this
+ * engine has not built is the divergence — an unscopables entry for a name a page cannot reach, which is a
+ * `with` statement declining to resolve a binding for a member that is not there either way, and a lie in
+ * `Object.keys(Element.prototype[Symbol.unscopables])`.
+ *
+ * IT READS THE ARTIFACT AND NOT THE TABLE, which is the whole reason it is worth having. Re-deriving the id
+ * list from IDL_UNSCOPABLES and checking THAT against the prototype would compare the table with the engine
+ * and never see the install; walking the object the install actually produced compares what SHIPPED with the
+ * engine, and catches an id the install wrote that no table row names as well as a member that is absent. It
+ * is the same preference for asking a question of the RESULT that this file's other generated-table checks
+ * make.
+ *
+ * IT CANNOT BE ASKED WHERE THE OBJECT IS BUILT, and that is a fact about the standard rather than about this
+ * engine: §3.7.3 defines %Symbol.unscopables% BEFORE "Define the regular attributes of interface on
+ * interfaceProtoObj", so at idl_install_unscopables not one member is on the object yet and every id would
+ * read as absent. The check therefore needs a LATER site and a way back to the object, which is why
+ * core/realm.c's §3.7.3 census now carries the prototype as its value.
+ *
+ * WHY THE END OF THE PER-REALM INTRINSIC LIST AND NOT THE END OF THE REALM. Every interface that carries a row
+ * today — CharacterData, Document, DocumentFragment, DocumentType, Element — declares its install with
+ * realm_declare_intrinsic and defines its members inside the same function that tags its prototype, so the end
+ * of that loop is the first point at which all of them are finished. The other end a realm has,
+ * realm_assert_interface_objects_asked, is LATER and would also work for a Window — and it is the wrong site,
+ * because core/realm.h says in its own words that "a realm that reaches no document install is not audited by
+ * it at all". That entry states a §3.8 condition (no further property reference will be placed) and this one
+ * needs a §3.7.6/§3.7.7 condition (every member is installed); the two are different questions and only one of
+ * them is true of every realm. Hanging this on the §3.8 entry would have made it silent for exactly the realms
+ * a fixture builds directly.
+ *
+ * A REALM THAT NEVER BUILT THE INTERFACE IS OUTSIDE THE POPULATION AND NOT A FAILURE. The census records the
+ * ASK — a prototype was tagged — so a worker realm, which has no Element, has no row and is skipped. A census
+ * of what LANDED would fire on every Window-only interface in a worker realm, which is §3.3.7 [Exposed]
+ * working. */
+void idl_assert_unscopables_name_members(JSContext *ctx)
+{
+    unsigned i, k;
+
+    for (i = 0; i < sizeof IDL_UNSCOPABLES / sizeof IDL_UNSCOPABLES[0]; i++) {
+        const char *iface = IDL_UNSCOPABLES[i].iface;
+        JSValue proto = realm_interface_prototype_object(ctx, iface);
+        JSValue unscopables;
+        JSPropertyEnum *tab = NULL;
+        uint32_t n = 0;
+        JSPropertyDescriptor d;
+        int got;
+
+        if (!JS_IsObject(proto)) { JS_FreeValue(ctx, proto); continue; }
+
+        /* THE INSTALL RAN. A row exists, so §3.7.3's outer condition is met for this interface, and the
+           prototype is in this realm's census — which means idl_interface_tag ran on it and this property is
+           owed. Reading it as an OWN property rather than through the chain is deliberate: Element inherits
+           Node, and a `Symbol.unscopables` found one prototype up would be a different interface's answer. */
+        got = JS_GetOwnSlotDesc(ctx, &d, proto, JS_WellKnownSymbolAtom(JS_WKS_UNSCOPABLES));
+        DCHECKF(got == 1,
+                "\"%s\"'s interface prototype object carries no OWN %%Symbol.unscopables%% property, and "
+                "browser/idl_unscopables.h has a row for it — Web IDL §3.7.3 Interface prototype object "
+                "defines one for every interface that declares an [Unscopable] member, idl_install_unscopables "
+                "is the one place that happens, and this realm's census says its prototype was tagged. Either "
+                "something replaced the property after the tag call, or the tag ran on a different object than "
+                "the one the members went onto", iface);
+        unscopables = d.value;
+        d.value = JS_UNDEFINED;
+        JS_FreeValue(ctx, d.getter);
+        JS_FreeValue(ctx, d.setter);
+
+        /* AND IT IS STILL THE OBJECT §3.7.3 MINTED. The property is [[Configurable]], so a later install CAN
+           replace it; a replacement with a chained object would make every %Object.prototype% member read as a
+           blocked name, which is the same divergence idl_install_unscopables asserts against at the mint. */
+        {
+            JSValue had = JS_GetPrototype(ctx, unscopables);
+            DCHECKF(JS_IsObject(unscopables) && JS_IsNull(had),
+                    "\"%s\"'s %%Symbol.unscopables%% is no longer the null-prototype object Web IDL §3.7.3 "
+                    "mints — ECMAScript §9.1.1.2.1 \"HasBinding ( name )\" step 6.a's Get(unscopables, name) "
+                    "walks the chain, so a replacement carrying %%Object.prototype%% blocks `toString`, "
+                    "`valueOf` and `constructor` in every `with` over this interface", iface);
+            JS_FreeValue(ctx, had);
+        }
+
+        /* THE QUESTION ITSELF: every id the object carries names a member this prototype OWNS. */
+        /* EVERY string key, not only the enumerable ones. §3.7.3 makes each id enumerable, so the two sets
+           agree today — and a check that asked only for the enumerable ones would be blind to exactly the
+           defect that made them disagree, which is the population this walk exists to see. */
+        got = JS_GetOwnPropertyNames(ctx, &tab, &n, unscopables, JS_GPN_STRING_MASK);
+        DCHECKF(got == 0, "\"%s\"'s Web IDL §3.7.3 %%Symbol.unscopables%% object could not be enumerated — the "
+                          "same spelling core/realm.c's §3.7.3 census walk uses for the same failure on the "
+                          "same kind of object, and the only way it fails is allocation", iface);
+        for (k = 0; k < n; k++) {
+            int has = JS_GetOwnSlotDesc(ctx, &d, proto, tab[k].atom);
+            const char *id;
+
+            if (has == 1) { JS_FreeValue(ctx, d.value); JS_FreeValue(ctx, d.getter); JS_FreeValue(ctx, d.setter); }
+            id = JS_AtomToCString(ctx, tab[k].atom);
+            DCHECKF(has == 1,
+                    "\"%s\"'s Web IDL §3.7.3 %%Symbol.unscopables%% object names `%s` and \"%s\".prototype has "
+                    "no own property of that name — §3.7.3's loop writes \"member's identifier\", so every id "
+                    "in that object is a member the interface HAS, and this engine has not installed it. "
+                    "`node engine/idlgen.mjs` reports the same member ABSENT on this interface's row, which is "
+                    "the cross-check that says the gap is in the engine and not in browser/idl_unscopables.h. "
+                    "Build the member in its own component; do not drop the row, which is the corpus's answer "
+                    "and not this engine's to edit", iface, id ? id : "?", iface);
+            if (id) JS_FreeCString(ctx, id);
+        }
+        JS_FreePropertyEnum(ctx, tab, n);
+        JS_FreeValue(ctx, unscopables);
+        JS_FreeValue(ctx, proto);
+    }
+}
+#endif
+
 /* §3.7.3: EVERY INTERFACE PROTOTYPE OBJECT CARRIES @@toStringTag, whose value is the interface's IDENTIFIER and
    whose attributes are { writable: false, enumerable: false, configurable: true }. It is what makes
    `Object.prototype.toString.call(new Blob())` answer "[object Blob]" — the brand check a page performs without
@@ -6241,7 +6359,7 @@ void idl_interface_tag(JSContext *ctx, JSValueConst proto, const char *iface)
     /* AND THE OBJECT IS COUNTED, because this call is the only observation of §3.7.3's mint that SURVIVES the
        failure core/realm.h's owed-half assertion is about: a component that stops asking §3.8 for the property
        goes on building the prototype, and the prototype is what is in hand here. */
-    realm_note_interface_prototype_object(ctx, iface);
+    realm_note_interface_prototype_object(ctx, proto, iface);
 #endif
     idl_tag_write(ctx, proto, iface);
     /* §3.7.3's [Unscopable] BLOCK, on the same object and in the same call. §3.7.3 runs it between

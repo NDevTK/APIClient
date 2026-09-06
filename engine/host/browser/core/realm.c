@@ -249,27 +249,62 @@ static JSValue realm_census(JSContext *ctx, int *slot, const char *what, bool cr
     return set;   /* OWNED by the caller */
 }
 
-static void realm_census_note(JSContext *ctx, int *slot, const char *what, const char *name)
+/* `value` is CONSUMED. It used to be nothing at all — "this is a set, and the key is the whole of what it
+   records" — and that is still true of the §3.8 census, which passes JS_UNDEFINED. It is NOT true of the
+   §3.7.3 one: the identifier says an interface prototype object was built and says nothing about WHICH OBJECT,
+   and a realm has no other way to reach one by name. A dev-only check that has to read a finished prototype
+   therefore had nowhere to get it, which is exactly the gap idl_args.c's [Unscopable] residual named.
+   CHECK rather than DCHECK because the define consumes nothing a caller could retry with and the only way it
+   fails is allocation — a census that silently dropped an identifier would report a component as having asked
+   when it did not, which is the one direction this instrument must never fail in. */
+static void realm_census_note(JSContext *ctx, int *slot, const char *what, const char *name, JSValue value)
 {
     JSValue set = realm_census(ctx, slot, what, true);
 
-    /* The VALUE is nothing: this is a set, and the key is the whole of what it records. CHECK rather than
-       DCHECK because the define consumes nothing a caller could retry with and the only way it fails is
-       allocation — a census that silently dropped an identifier would report a component as having asked when
-       it did not, which is the one direction this instrument must never fail in. */
-    CHECK(JS_DefinePropertyValueStr(ctx, set, name, JS_UNDEFINED, JS_PROP_C_W_E) >= 0,
+    CHECK(JS_DefinePropertyValueStr(ctx, set, name, value, JS_PROP_C_W_E) >= 0,
           "realm: an identifier could not be recorded in a Web IDL §3.8 census");
     JS_FreeValue(ctx, set);
 }
 
-void realm_note_interface_prototype_object(JSContext *ctx, const char *iface)
+void realm_note_interface_prototype_object(JSContext *ctx, JSValueConst proto, const char *iface)
 {
     DCHECK(iface != NULL && *iface,
            "Web IDL §3.7.3 Interface prototype object's census was told an interface prototype object had been "
            "built for no identifier — §3.7.3 makes the class string the interface's own identifier, so a "
            "prototype with nothing to be called is one nothing downstream can ask a question about");
+    DCHECK(JS_IsObject(proto),
+           "Web IDL §3.7.3 Interface prototype object's census was handed something that is not an object — "
+           "§3.7.3's own step is OrdinaryObjectCreate(proto), so the thing being tagged is an Object or the "
+           "algorithm did not run");
     realm_census_note(ctx, &g_proto_tagged_slot,
-                      "Web IDL §3.7.3 the interface prototype objects built in this realm", iface);
+                      "Web IDL §3.7.3 the interface prototype objects built in this realm", iface,
+                      JS_DupValue(ctx, proto));
+}
+
+/* THE OBJECT BACK, BY IDENTIFIER — the read the value above exists for, and the one thing a per-realm check
+   that must run AFTER a prototype is finished cannot get any other way. An interface this realm never built
+   has no row and answers JS_UNDEFINED, which is the SOUND arm and not a failure: a worker realm has no
+   Element, and a census of what LANDED must never charge a realm for an interface Web IDL §3.3.7 [Exposed]
+   correctly keeps out of it. OWNED by the caller. */
+JSValue realm_interface_prototype_object(JSContext *ctx, const char *iface)
+{
+    JSValue set, proto;
+
+    DCHECK(iface != NULL && *iface,
+           "Web IDL §3.7.3 Interface prototype object's census was asked for the object of no identifier");
+    set = realm_census(ctx, &g_proto_tagged_slot, NULL, false);
+    if (!JS_IsObject(set)) { JS_FreeValue(ctx, set); return JS_UNDEFINED; }
+    /* The census object's [[Prototype]] is null, so this read cannot reach %Object.prototype% and answer with
+       a function for an interface named `toString` — the same reason the membership walk gives. */
+    proto = JS_GetPropertyStr(ctx, set, iface);
+    JS_FreeValue(ctx, set);
+    /* AND A THROW IS NOT AN ABSENCE. The census object is a plain null-prototype data map, so the only way
+       this read fails is allocation — and returning the exception value as though it were "this realm did not
+       build that interface" would leave the exception PENDING on the context for whatever runs next, which is
+       the one failure this read could cause that has nothing to do with the question asked. */
+    CHECK(!JS_IsException(proto),
+          "realm: OOM reading the Web IDL §3.7.3 census for an interface prototype object");
+    return proto;
 }
 
 void realm_note_property_reference_asked(JSContext *ctx, const char *id)
@@ -279,7 +314,7 @@ void realm_note_property_reference_asked(JSContext *ctx, const char *id)
            "been asked for with no identifier — §3.8 keys every one of its DefineMethodProperty calls by an "
            "identifier and there is nothing else to record");
     realm_census_note(ctx, &g_reference_asked_slot,
-                      "Web IDL §3.8 the identifiers asked of this realm's global", id);
+                      "Web IDL §3.8 the identifiers asked of this realm's global", id, JS_UNDEFINED);
 }
 
 void realm_assert_interface_objects_asked(JSContext *ctx)
@@ -458,6 +493,15 @@ void realm_install_intrinsics(JSContext *ctx, const char *top_level_creation_url
        at the end that finishes THAT realm. See the banner above for why one function with two callers is
        routing rather than a second copy. */
     realm_assert_global_property_references(ctx);
+
+    /* AND WEB IDL §3.7.3's [Unscopable] BLOCK AGAINST THE MEMBERS THIS LIST JUST INSTALLED. It belongs HERE and
+       not at the owed-half entry below, and the difference is a population rather than a preference: that entry
+       states §3.8's condition and is not reached by a realm that never installs a document, while this one
+       needs §3.7.6's and §3.7.7's — every member is on its prototype — which is true of every realm exactly at
+       the end of this loop, because an interface that carries an [Unscopable] row declares its install here and
+       defines its members in the same function that tags its prototype. core/idl_args.c owns the question; what
+       this line states is the ORDERING fact, which is this file's to state and not that one's. */
+    idl_assert_unscopables_name_members(ctx);
 #endif
 }
 

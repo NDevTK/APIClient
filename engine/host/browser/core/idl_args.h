@@ -2271,6 +2271,19 @@ int64_t idl_step_total(long *count);
    nothing standing at a member's install knows which interface it is on or whether it is the last one. The
    member list is browser/idl_unscopables.h, generated from the real .idl. */
 void idl_interface_tag(JSContext *ctx, JSValueConst proto, const char *iface);
+#if APICLIENT_DEV
+/* THE OTHER END OF THAT BLOCK, which cannot be asked at the call above: §3.7.3 defines %Symbol.unscopables%
+   BEFORE it defines the interface's members, so at the mint not one id is on the prototype yet. This walks the
+   %Symbol.unscopables% object each of this realm's tagged prototypes actually carries and asserts every id in
+   it names an own property of that prototype — "member's identifier" is what §3.7.3's loop writes, so an id
+   whose member this engine has not built is a name in that object a page cannot reach.
+   CALLED WHERE THE PER-REALM INTRINSIC LIST ENDS, which is a §3.7.6/§3.7.7 condition (every member installed)
+   and NOT §3.8's (no further property reference), and the two have different populations — core/realm.h's
+   owed-half entry is documented as not auditing a realm that reaches no document install, and every interface
+   with a row here installs its members in the same function that tags its prototype. It reaches the objects
+   through core/realm.h's §3.7.3 census, which is why that census records the prototype and not only the name. */
+void idl_assert_unscopables_name_members(JSContext *ctx);
+#endif
 
 /* THE SAME CLASS STRING ON AN OBJECT THAT IS NOT AN INTERFACE PROTOTYPE OBJECT, so §3.7.3's proto step does not
    govern it and is not asserted. Exactly one object needs this: HTML §7.2.3 The WindowProxy exotic object's

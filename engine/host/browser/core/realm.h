@@ -210,10 +210,21 @@ void realm_assert_global_property_references(JSContext *ctx);
  * rather than a side-effect-free test, so the block and not merely the DCHECK is compiled out. A caller guards
  * its call with APICLIENT_DEV. */
 #if APICLIENT_DEV
-/* WEB IDL §3.7.3 Interface prototype object — this realm built one for `iface`. Called from core/idl_args'
-   idl_interface_tag, which is the one statement of that step in this tree, so a component cannot build a
-   prototype outside the census without first inventing a second way to give it a class string. */
-void realm_note_interface_prototype_object(JSContext *ctx, const char *iface);
+/* WEB IDL §3.7.3 Interface prototype object — this realm built one for `iface`, and THIS IS THE OBJECT.
+   Called from core/idl_args' idl_interface_tag, which is the one statement of that step in this tree, so a
+   component cannot build a prototype outside the census without first inventing a second way to give it a
+   class string.
+   THE OBJECT IS RECORDED AND NOT ONLY THE NAME, and the difference is what makes a whole class of check
+   possible. §3.7.3 defines %Symbol.unscopables% BEFORE it defines the interface's members, so an invariant
+   over a FINISHED prototype cannot be asked at the call that builds it — and until this carried the object
+   there was no way to reach a realm's prototype by identifier at all, so such a check had nowhere to stand.
+   It is one record and not two: the fact recorded is that this realm built THIS object for THAT interface, and
+   each consumer asks its own question of it — realm_assert_interface_objects_asked reads the KEYS and ignores the
+   value, idl_args.c's §3.3.14 [Unscopable] walk reads the VALUE. */
+void realm_note_interface_prototype_object(JSContext *ctx, JSValueConst proto, const char *iface);
+/* That object back, by identifier. JS_UNDEFINED for an interface this realm never built — the sound arm, not
+   a failure: a worker realm has no Element. OWNED by the caller. */
+JSValue realm_interface_prototype_object(JSContext *ctx, const char *iface);
 /* WEB IDL §3.8's `define the global property references` — a component ASKED this realm's global for `id`.
    Called at the two entries that can refuse: §3.8's door itself, before §3.3.7 step 1, and
    idl_install_interface_object_exposed, before §3.3.7 step 2. Recorded BEFORE either refusal, because a
