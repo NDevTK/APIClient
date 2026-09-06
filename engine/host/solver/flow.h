@@ -1991,6 +1991,35 @@ typedef struct {
      *   `deliv_framed` — the member fails flow_stack_empty, so the reply-delivery arm cannot run for it. This
      *                    is HTML §8.1.4.4 "Calling scripts"'s clean up after running script step 3 measured,
      *                    not a defect on its own — exactly as `jobs_framed` is not.
+     *                    AND THAT SENTENCE COVERS ONE OF THIS ROW'S TWO READINGS, WHICH IS WHY THE OTHER IS
+     *                    WRITTEN HERE RATHER THAN LEFT TO WHOEVER MEETS IT. A frontier some of whose members
+     *                    are part-way through a program, and one in which not a single member is FINISHING
+     *                    one, produce the same row and take opposite work — and the sentence above names only
+     *                    the first, so it reads as a clearance for both. Framing is benign while frames END;
+     *                    this row cannot say whether they do, because it is a gauge over the members standing
+     *                    NOW and a frame that ended leaves nobody standing anywhere to be counted.
+     *                    THE DISCRIMINATOR IS ALREADY PUBLISHED AND IT IS NOT THIS ROW, so nothing here needs
+     *                    a counter. `stepUnitRuns` counts the ladder's arms over the instance's life, and
+     *                    `resume-ended-its-frame` against `resume-program` is the rate at which a program
+     *                    that has survived at least one preempt ever COMPLETES. It is the only one of the two
+     *                    frame-ending rows that can free a reply-holder: `start-ended-its-frame` is a row
+     *                    that ended in the step that STARTED it, which a program long enough to issue a
+     *                    request and go on running never is. `finished` beside them is how many flows have
+     *                    ever retired.
+     *                    WHAT A FRAMED ROW NEAR `live` MEANS WHEN THAT RATE IS NEAR ZERO is not that the arm
+     *                    lost a ranking. flow_stack_empty's first line is `if (f->frame) return 0;` AND
+     *                    engine.c encloses its whole task ladder — the delivery arm with it — in
+     *                    `if (!f->frame)`, so such a member's steps never reach the arm's line at all. That
+     *                    makes `deliv_ready` the WHOLE population any ordering could serve, and a zero
+     *                    delivery count read as starvation is a fraction of a population of that size.
+     *                    MEASURED, three runs at three revisions of one day (a08a1158, ca96fc52, e08db848),
+     *                    each the last @COLD of its own smoke: framed/live 552/561, 309/322 and 635/635,
+     *                    with `resume-ended-its-frame` 9, 6 and 2 against `resume-program` 690, 182 and 1519,
+     *                    `finished` 0 in all three, `pendReady == pend` at 46456, 48092 and 45115
+     *                    answered-and-untaken entries, and `deliver-one-reply` 0, 0 and 1. The arms sum to
+     *                    `steps` in each run, so the split needs nothing but addition: 699 of 874, 188 of 283
+     *                    and 1521 of 1548 steps never entered the block. Add them up against `steps` before
+     *                    reading any one arm as a rate, and quote the revision beside whichever you quote.
      *   `deliv_ready`  — neither: the arm's whole guard holds and the pick will consider it, so this member's
      *                    reply waits on RANK ALONE. It is the population §scheduler's WFQ sentence is about.
      *
