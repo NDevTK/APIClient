@@ -1089,19 +1089,42 @@ for (const [iface, paths] of AUDITED) {
      change to the C could have made it stop. A red with no root fix is not a forcing function, it is noise
      that teaches the reader to skip the category. */
   const declares = (p) => [...(env.declaresIface.get(p) || [])];
-  const strangers = present.filter((p) => {
+  /* An install in one of this row's files whose target's interface could not be decided. Neither credited to
+     the row (the false COMPLETE this attribution removes) nor dropped — named, with its member and line. */
+  const rowUnattributed = inRow(unattributed);
+  /* A FILE THIS ROW COULD NOT READ IS NOT A STRANGER TO IT, AND CHARGING ONE CONTRADICTS THIS ROW'S OWN OUTPUT
+     A FEW FIELDS LATER. The stranger test below asks `landsIn`, which holds what attribution DECIDED — so a
+     file whose only contribution is an install this scan cannot attribute has nothing landing anywhere and
+     looks like a stranger to every interface, and the row then prints `installs nothing this can attribute`
+     as a FINDING. That sentence is the tool describing its own blindness in the grammar of an accusation: it
+     sends a reader to fix the engine for something no reader of these sources could have decided, which is the
+     accusing direction this file's findings/blind-spots split exists to keep apart, and which the verdict
+     line's own promise — that findings and blind spots are NEVER SUMMED — is broken by, since the blindness is
+     then counted on both sides.
+     THE POPULATION IS NOT MARGINAL AND IT IS THE ONE INTERFACE THAT MATTERS MOST. §3.7.6/§3.7.7's [Global] arm
+     puts a member on the realm's global object and only the RUNNING realm says which global that is, so every
+     Window member installed that way is unattributable by construction — and its file is then a stranger to
+     Window. Measured before this guard: 8 of 8 CROSS-CHECK files in Window's row were named in the SAME row's
+     UNATTRIBUTED list, each with a member and a line number.
+     So a file carrying an unreadable install in this row is BANDED rather than charged — counted, openly
+     unchecked, and left as the floor under the finding count instead of added to it. It is not dropped: a file
+     can be BOTH unreadable here and a genuine stranger, and the honest statement about that pair is that this
+     scan cannot separate them, which is what a blind spot says. Closing it means making the install readable
+     (an attributable install site), never quieting the row. */
+  const unreadableHere = new Set([...rowUnattributed, ...unresolved].map((x) => x.file));
+  const isStranger = (p) => {
     const lands = landsIn.get(p);
     if (lands && [...lands].some((n) => chain.includes(n))) return false;
     return !declares(p).some((n) => chain.includes(n));
-  }).map((p) => {
+  };
+  const rawStrangers = present.filter(isStranger);
+  const strangerBlind = rawStrangers.filter((p) => unreadableHere.has(p));
+  const strangers = rawStrangers.filter((p) => !unreadableHere.has(p)).map((p) => {
     const lands = [...(landsIn.get(p) || [])], decl = declares(p);
     const what = [lands.length ? "installs for " + lands.join(", ") : "installs nothing this can attribute",
                   decl.length ? "declares " + decl.join(", ") : "declares no interface"];
     return `${p.replace(BROWSER + "/", "")} (${what.join("; ")})`;
   });
-  /* An install in one of this row's files whose target's interface could not be decided. Neither credited to
-     the row (the false COMPLETE this attribution removes) nor dropped — named, with its member and line. */
-  const rowUnattributed = inRow(unattributed);
   // The g_opaque-as-prototype fallback is a BANNED shrug: it silently serves EVERY unbuilt member as an opaque
   // value, hiding a missing browser feature (it is not our choice which features to omit — a browser has them
   // all). A component must implement its real surface and DFAIL loud on an unbuilt member, never opaque-shrug it.
@@ -1251,6 +1274,8 @@ for (const [iface, paths] of AUDITED) {
   defect("STALE member exclusions", condStale.length);
   defect("CONTRADICTED member exclusions", condInstalled.length);
   defect("CROSS-CHECK rows naming a file that installs nothing this interface has", strangers.length);
+  blind("CROSS-CHECK rows unjudgeable — the file's only installs here are ones this scan could not read",
+        strangerBlind.length);
   if (bannedShrug) defect("BANNED g_opaque-prototype shrugs");
   for (const u of unresolved)
     unresolvedAll.set(`${u.file}:${u.line}:${u.expr}`, u);
@@ -1310,6 +1335,10 @@ for (const [iface, paths] of AUDITED) {
   }
   if (strangers.length) parts.push(`CROSS-CHECK ${strangers.length} of this row's files install nothing ` +
                                    `${iface} or its bases have — ${strangers.join("; ")}`);
+  if (strangerBlind.length) parts.push(`CROSS-CHECK-UNJUDGEABLE ${strangerBlind.length} of this row's files ` +
+    `land nothing on ${iface} AND carry an install this scan could not read, so whether they belong to this ` +
+    `row is a question these sources do not answer — ` +
+    `${strangerBlind.map((p) => p.replace(BROWSER + "/", "")).join("; ")}`);
   if (bannedShrug) parts.push(`BANNED g_opaque-prototype shrug (silently serves unbuilt members as opaque — remove it, build the features or DFAIL)`);
   if (parts.length) console.log(`[idl-audit] ${iface} (${file}): ${parts.join(" | ")}`);
   else console.log(`[idl-audit] ${iface}: complete`);
