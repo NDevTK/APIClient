@@ -50,6 +50,7 @@
 #include "core/file/file_system.h"
 #include "core/file/file_system_access.h"
 #include "core/file/file_system_handle.h"
+#include "core/mime/mime_type.h"   /* File System Access §3.2.1 step 2.1.1's MIME parse, and 2.2.2's essence */
 #include "core/dom/document.h"        /* §3.1's verify step 1 reads THIS document's navigable's origin */
 #include "core/frame/window_proxy.h"
 #include "core/html/user_activation.h"
@@ -87,44 +88,315 @@ static int g_id_open = -1, g_id_save = -1, g_id_directory = -1;
 static JSValue g_recent;
 static JSRuntime *g_rt;
 
-/* ---- §3.2.1's ACCEPT TYPES ---------------------------------------------------------------------------- */
+/* ---- File System Access §3.2.1's ACCEPT TYPES ---------------------------------------------------------- *
+ *
+ * File System Access §3.2.1 "Accepted file types" holds TWO named algorithms — *process accept types* and
+ * *validate a suffix* — so every citation below names the one it means. Both were counted off the fetched text
+ * with LIST DEPTH TRACKED: *process accept types* has FIVE top-level steps and *validate a suffix* has four.
+ * THE NUMBERS THAT STOOD HERE WERE 1 AND 5-7 AND WERE WRONG BY TWO, in the direction a flat `<li>` count
+ * produces: step 2 holds a nested list, so counting its sub-items as peers promotes 2.1 and 2.2 to top level
+ * and pushes everything after them along. The all-files condition is step 3, the empty-list TypeError is step
+ * 4 and the return is step 5.
+ *
+ * WHAT THIS ENGINE'S PROMPT DOES WITH THE OPTIONS, STATED ONCE. File System Access §3.3 step 7.6 says "The displayed prompt
+ * should let the user pick one of the accepts options to filter the list of displayed files" — the choice is
+ * the USER'S, and this agent has no user. So the modelled prompt offers a file that ANY option would admit,
+ * which is the union over the options the page declared. It is the faithful reading of a user who may pick
+ * any of them, and it is also the one that explores more rather than less: a file the page's own types admit
+ * is a file some real user could select. It preserves today's answer exactly where the all-files option is
+ * appended (step 3), since that option admits everything, and it differs only where the page asked it to —
+ * `excludeAcceptAllOption: true` with a non-empty `types`.
+ */
 
-/* §3.2.1's PROCESS ACCEPT TYPES, over the options this component can convert.
- *
- * With `types` absent, the algorithm is steps 1 and 5-7: accepts options starts empty, step 5's condition
- * ("either accepts options is empty, OR options['excludeAcceptAllOption'] is false") is TRUE by its first
- * disjunct however `excludeAcceptAllOption` was written, so the all-files option is appended and step 6's
- * TypeError is unreachable. The FILTER that option carries is "an algorithm that returns true", which over
- * this engine's device is core/file/file_device.c's accept filter with no attribute — the one place a file's
- * name and type are matched against a token set, shared with HTML §4.10.5.1.17's control so a file offered by
- * one door is offered by the other.
- *
- * With `types` PRESENT it crashes, naming the conversion — see file_picker.h. It answers nothing, because with `types`
- * absent §3.2.1 CANNOT fail: step 6's "if accepts options is empty, then throw a TypeError" is unreachable
- * once step 5 has appended the all-files option, and step 5's condition is true by its first disjunct. */
-static void picker_process_accept_types(JSContext *ctx, JSValueConst options)
+/* File System Access §2.1 "Concepts" defines a VALID SUFFIX CODE POINT as a code point that is ASCII
+   alphanumeric, U+002B (+), or U+002E (.). It is defined in File System Access §2.1 and USED by
+   File System Access §3.2.1's *validate a suffix* step 2, which is why the term is cited to the section that
+   mints it rather than to the one that reads it. Every member of the set is ASCII,
+   so a non-ASCII byte fails it without being decoded. */
+static bool picker_valid_suffix_byte(unsigned char c)
 {
-    JSValue types = idl_dict_get(ctx, options, "types");
-    bool present = !JS_IsUndefined(types);
+    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+           c == '+' || c == '.';
+}
 
+/* File System Access §3.2.1's *validate a suffix*, all four steps in order, each of them a TypeError.
+ *
+ * THEY ARE TypeErrors AND NOT ASSERTS, and that is the rule rather than a preference: a dictionary member is
+ * PAGE-SUPPLIED INPUT, so a `DCHECK` here would hand any page an abort switch for the whole engine. This
+ * codebase asserts only what it COMPUTED; what a page stated it refuses.
+ * Returns 0, or -1 with the throw live. `suffix` is a USVString by the time it arrives — §3.2.12 has already
+ * replaced any unpaired surrogate — so its UTF-8 form round-trips and step 4's "length is more than 16" is
+ * counted in CODE POINTS off it, which is what File System Access §2.1's own note about extensions being
+ * limited to a length of sixteen code points means, and what a UTF-16 unit count would get wrong for a suffix
+ * holding an astral character. */
+static int picker_validate_suffix(JSContext *ctx, JSValueConst suffix)
+{
+    size_t len = 0, i, cps = 0;
+    const char *sx = JS_ToCStringLen(ctx, &len, suffix);
+
+    if (!sx) return -1;
+    if (len == 0 || sx[0] != '.') {                                   /* step 1 */
+        JS_ThrowTypeError(ctx, "a file picker suffix does not start with '.'");
+        goto fail;
+    }
+    for (i = 0; i < len; i++) {                                       /* step 2 */
+        if (!picker_valid_suffix_byte((unsigned char)sx[i])) {
+            JS_ThrowTypeError(ctx, "a file picker suffix contains a code point that is not ASCII "
+                                   "alphanumeric, '+' or '.'");
+            goto fail;
+        }
+        /* A CONTINUATION BYTE IS NOT A CODE POINT. Every valid suffix byte is ASCII, so by this line no
+           multi-byte sequence has survived step 2 — the test is kept anyway because it makes the count
+           correct on its own terms rather than correct only because the loop above happens to run first. */
+        if (((unsigned char)sx[i] & 0xC0) != 0x80) cps++;
+    }
+    if (sx[len - 1] == '.') {                                         /* step 3 */
+        JS_ThrowTypeError(ctx, "a file picker suffix ends with '.'");
+        goto fail;
+    }
+    if (cps > 16) {                                                   /* step 4 */
+        JS_ThrowTypeError(ctx, "a file picker suffix is longer than 16 code points");
+        goto fail;
+    }
+    JS_FreeCString(ctx, sx);
+    return 0;
+fail:
+    JS_FreeCString(ctx, sx);
+    return -1;
+}
+
+/* File System Access §3.2.1's *process accept types* step 2.1, over ONE `typeString → suffixes` entry of a type's `accept` map:
+   parse the MIME type (2.1.1), refuse a failure (2.1.2), refuse parameters (2.1.3), and validate the suffix or
+   every suffix of the sequence (2.1.4 / 2.1.5). Returns 0, or -1 with a throw live. */
+static int picker_check_accept_entry(JSContext *ctx, JSValueConst type_string, JSValueConst suffixes)
+{
+    MimeType m;
+    size_t tlen = 0;
+    const char *ts = JS_ToCStringLen(ctx, &tlen, type_string);
+    bool ok;
+
+    if (!ts) return -1;
+    mime_type_init(&m);
+    ok = mime_type_parse(&m, ts, tlen);                               /* step 2.1.1 */
+    JS_FreeCString(ctx, ts);
+    if (!ok) {                                                        /* step 2.1.2 */
+        mime_type_free(&m);
+        JS_ThrowTypeError(ctx, "a file picker accept key is not a valid MIME type");
+        return -1;
+    }
+    if (m.nparams != 0) {                                             /* step 2.1.3 */
+        mime_type_free(&m);
+        JS_ThrowTypeError(ctx, "a file picker accept key is a MIME type with parameters");
+        return -1;
+    }
+    mime_type_free(&m);
+    /* §3.2.23 gave the value ONE of the union's two arms, so "is a string" is the arm and not a guess: the
+       sequence arm produced an Array and the string arm a String, and nothing else can be here. */
+    if (!JS_IsArray(suffixes))                                        /* step 2.1.4 */
+        return picker_validate_suffix(ctx, suffixes);
+    {                                                                 /* step 2.1.5 */
+        uint32_t n = 0, i;
+        JSValue lv = JS_GetPropertyStr(ctx, suffixes, "length");
+
+        if (JS_ToUint32(ctx, &n, lv) < 0) { JS_FreeValue(ctx, lv); return -1; }
+        JS_FreeValue(ctx, lv);
+        for (i = 0; i < n; i++) {
+            JSValue sx = JS_GetPropertyUint32(ctx, suffixes, i);
+            int r;
+
+            if (JS_IsException(sx)) return -1;
+            r = picker_validate_suffix(ctx, sx);
+            JS_FreeValue(ctx, sx);
+            if (r < 0) return -1;
+        }
+    }
+    return 0;
+}
+
+/* File System Access §3.2.1's *process accept types* step 2.2 — "Let filter be these steps, given a filename (a string) and a
+   type (a MIME type)" — asked of ONE candidate file. `accept` is the record's pair list, which is the map the
+   spec's closure captures.
+   THE SPEC SHADOWS ITS OWN VARIABLE HERE and the shadowing is a defect in the text rather than a rule to
+   copy: step 2.2's inner steps say `type["accept"]` while `type` is also the filter's own MIME-type
+   parameter. The captured FilePickerAcceptType is what carries an `accept`, so that is what the map comes
+   from, and the parameter is the candidate's type. Every implementation reads it that way; written literally
+   the algorithm has no meaning.
+   Step 2.2.2.2 is missing its "If" in the fetched text ("parsedType's essence is type's essence, return
+   true") — the same editorial slip one step down, read as the condition its siblings are. */
+static bool picker_filter_matches(JSContext *ctx, JSValueConst accept, const char *filename,
+                                  const MimeType *type)
+{
+    uint32_t n = 0, i;
+    JSValue lv = JS_GetPropertyStr(ctx, accept, "length");
+    bool hit = false;
+
+    JS_ToUint32(ctx, &n, lv);
+    JS_FreeValue(ctx, lv);
+    for (i = 0; i < n && !hit; i++) {                                 /* step 2.2.1 */
+        JSValue pair = JS_GetPropertyUint32(ctx, accept, i);
+        JSValue key = JS_GetPropertyUint32(ctx, pair, 0);
+        JSValue suffixes = JS_GetPropertyUint32(ctx, pair, 1);
+        size_t klen = 0;
+        const char *ks = JS_ToCStringLen(ctx, &klen, key);
+        MimeType m;
+
+        mime_type_init(&m);
+        if (ks && mime_type_parse(&m, ks, klen)) {                    /* step 2.2.2 */
+            if (!strcmp(m.subtype, "*")) {                            /* step 2.2.2.1 */
+                if (!strcmp(m.type, "*")) hit = true;                 /* step 2.2.2.1.1 */
+                else if (type && !strcmp(m.type, type->type)) hit = true;   /* step 2.2.2.1.2 */
+            }
+            if (!hit && type) {                                       /* step 2.2.2.2 */
+                char *a = mime_type_essence(&m), *b = mime_type_essence(type);
+
+                if (a && b && !strcmp(a, b)) hit = true;
+                free(a);
+                free(b);
+            }
+        }
+        mime_type_free(&m);
+        if (ks) JS_FreeCString(ctx, ks);
+        if (!hit) {
+            /* steps 2.2.2.3 and 2.2.2.4 — a lone string is treated as a one-element list, so the two arms
+               share the tail rather than spelling `ends with` twice. */
+            uint32_t sn = 1, k;
+            bool one = !JS_IsArray(suffixes);
+
+            if (!one) {
+                JSValue slv = JS_GetPropertyStr(ctx, suffixes, "length");
+                JS_ToUint32(ctx, &sn, slv);
+                JS_FreeValue(ctx, slv);
+            }
+            for (k = 0; k < sn && !hit; k++) {
+                JSValue sv = one ? JS_DupValue(ctx, suffixes) : JS_GetPropertyUint32(ctx, suffixes, k);
+                size_t sl = 0;
+                const char *sx = JS_ToCStringLen(ctx, &sl, sv);
+                size_t fl = filename ? strlen(filename) : 0;
+
+                if (sx && sl <= fl && !memcmp(filename + fl - sl, sx, sl)) hit = true;
+                if (sx) JS_FreeCString(ctx, sx);
+                JS_FreeValue(ctx, sv);
+            }
+        }
+        JS_FreeValue(ctx, suffixes);
+        JS_FreeValue(ctx, key);
+        JS_FreeValue(ctx, pair);
+    }
+    return hit;                                                       /* step 2.2.3 */
+}
+
+/* THE ACCEPTS OPTIONS, ASKED OF ONE CANDIDATE — the union described in this section's banner. An option whose
+   filter is the all-files one (step 3's "an algorithm that returns true") is stored as JS_NULL, so a list
+   holding it admits everything without the matcher being asked. `type` is NULL for a directory, which has no
+   MIME type; a suffix can still match one, which is what a real picker does with a folder named `x.app`. */
+static bool picker_accepts_admits(JSContext *ctx, JSValueConst accepts, const char *filename, const char *type_str)
+{
+    uint32_t n = 0, i;
+    JSValue lv;
+    MimeType m;
+    bool have_type = false, hit = false;
+
+    if (JS_IsUndefined(accepts) || JS_IsNull(accepts)) return true;
+    lv = JS_GetPropertyStr(ctx, accepts, "length");
+    JS_ToUint32(ctx, &n, lv);
+    JS_FreeValue(ctx, lv);
+    mime_type_init(&m);
+    if (type_str && *type_str) have_type = mime_type_parse(&m, type_str, strlen(type_str));
+    for (i = 0; i < n && !hit; i++) {
+        JSValue opt = JS_GetPropertyUint32(ctx, accepts, i);
+        JSValue filter = JS_GetPropertyUint32(ctx, opt, 1);
+
+        if (JS_IsNull(filter)) hit = true;
+        else hit = picker_filter_matches(ctx, filter, filename, have_type ? &m : NULL);
+        JS_FreeValue(ctx, filter);
+        JS_FreeValue(ctx, opt);
+    }
+    mime_type_free(&m);
+    return hit;
+}
+
+/* File System Access §3.2.1's *process accept types*, all five steps.
+ *
+ * `options` is the CONVERTED dictionary, so `types` is already `sequence<FilePickerAcceptType>` and each
+ * element's `accept` is already `record<USVString, (USVString or sequence<USVString>)>` — Web IDL converted
+ * both, in §3.2.17's own member order, before this algorithm's step 1. That is why nothing here reads a page
+ * property: everything it walks is an engine-built list.
+ * `*out` takes the accepts options (owned). Returns 0, or -1 with a throw live. */
+static int picker_process_accept_types(JSContext *ctx, JSValueConst options, JSValue *out)
+{
+    JSValue accepts = JS_NewArray(ctx);                               /* step 1 */
+    JSValue types = idl_dict_get(ctx, options, "types");
+    JSValue excl = idl_dict_get(ctx, options, "excludeAcceptAllOption");
+    uint32_t n = 0, i, taken = 0;
+
+    *out = JS_UNDEFINED;
+    if (JS_IsException(accepts)) goto fail;
+    if (!JS_IsUndefined(types)) {                                     /* step 2 */
+        JSValue lv = JS_GetPropertyStr(ctx, types, "length");
+
+        if (JS_ToUint32(ctx, &n, lv) < 0) { JS_FreeValue(ctx, lv); goto fail; }
+        JS_FreeValue(ctx, lv);
+    }
+    for (i = 0; i < n; i++) {
+        JSValue type = JS_GetPropertyUint32(ctx, types, i);
+        JSValue accept = idl_dict_get(ctx, type, "accept");
+        JSValue desc = idl_dict_get(ctx, type, "description");
+        JSValue opt;
+        uint32_t an = 0, k;
+        JSValue alv;
+
+        JS_FreeValue(ctx, type);
+        /* `accept` IS NOT REQUIRED IN THE IDL, so a type that omits it has no entries to walk and step 2.1's
+           loop runs zero times — which is a filter that matches nothing, and an option the page is entitled
+           to declare. It is left absent rather than defaulted to an empty map: the two are the same walk
+           here, and inventing a value the IDL does not write is what §Consumer-defaults forbids. */
+        alv = JS_IsUndefined(accept) ? JS_UNDEFINED : JS_GetPropertyStr(ctx, accept, "length");
+        if (!JS_IsUndefined(alv)) { JS_ToUint32(ctx, &an, alv); JS_FreeValue(ctx, alv); }
+        for (k = 0; k < an; k++) {                                    /* step 2.1 */
+            JSValue pair = JS_GetPropertyUint32(ctx, accept, k);
+            JSValue key = JS_GetPropertyUint32(ctx, pair, 0);
+            JSValue sfx = JS_GetPropertyUint32(ctx, pair, 1);
+            int r = picker_check_accept_entry(ctx, key, sfx);
+
+            JS_FreeValue(ctx, sfx);
+            JS_FreeValue(ctx, key);
+            JS_FreeValue(ctx, pair);
+            if (r < 0) { JS_FreeValue(ctx, accept); JS_FreeValue(ctx, desc); goto fail; }
+        }
+        /* steps 2.2 to 2.5 — the filter is the `accept` map itself, which is what step 2.2's closure captures,
+           and step 2.4's "some user understandable string describing filter" for an empty description is left
+           to whatever surface displays one: this agent has no prompt to render it in, and inventing a
+           sentence here would be a value no algorithm reads. */
+        opt = JS_NewArray(ctx);
+        if (JS_IsException(opt)) { JS_FreeValue(ctx, accept); JS_FreeValue(ctx, desc); goto fail; }
+        JS_SetPropertyUint32(ctx, opt, 0, desc);
+        JS_SetPropertyUint32(ctx, opt, 1, JS_IsUndefined(accept) ? JS_NewArray(ctx) : accept);
+        JS_SetPropertyUint32(ctx, accepts, taken++, opt);
+    }
+    /* step 3 — "If either accepts options is empty, or options['excludeAcceptAllOption'] is false". The
+       member's IDL default is `false`, so an absent one is that; the first disjunct is what makes the
+       all-files option appear for every call that declares no `types` at all. */
+    if (taken == 0 || !JS_ToBool(ctx, excl)) {
+        JSValue opt = JS_NewArray(ctx);
+
+        if (JS_IsException(opt)) goto fail;
+        JS_SetPropertyUint32(ctx, opt, 0, JS_NewString(ctx, "all files"));
+        JS_SetPropertyUint32(ctx, opt, 1, JS_NULL);   /* step 3's "an algorithm that returns true" */
+        JS_SetPropertyUint32(ctx, accepts, taken++, opt);
+    }
+    if (taken == 0) {                                                 /* step 4 */
+        JS_ThrowTypeError(ctx, "a file picker's accepts options are empty");
+        goto fail;
+    }
     JS_FreeValue(ctx, types);
-    if (present)
-        DFAIL("File System Access §3.2.1's process accept types was given `types`, whose IDL type is "
-              "`sequence<FilePickerAcceptType>` — an ITERATOR-PROTOCOL conversion (Web IDL §3.2.21) whose "
-              "element is a DICTIONARY carrying a `record<USVString, (USVString or sequence<USVString>)>`. "
-              "THE SEQUENCE HALF IS BUILT AND THIS CRASH USED TO SAY IT WAS NOT: core/idl_args.h's "
-              "IDL_SEQUENCE_DICT is `sequence<D>` over a bare dictionary, landed for Web Cryptography API "
-              "§15's `sequence<RsaOtherPrimesInfo> oth`, and the sentence that stood here — that idl_args.h "
-              "declares NEITHER type — went stale the moment it landed. What is still missing is the RECORD: "
-              "build `record<K,V>` over step_ownkeys_run + step_getownprop_run, which quickjs-step.h exports "
-              "and which this crash was already right about, then declare FilePickerAcceptType (`USVString "
-              "description = \"\"` and that record, neither of them required), retype `types` here from "
-              "IDL_ANY to IDL_SEQUENCE_DICT, and run File System Access §3.2.1's steps 1-4 over the result — "
-              "INCLUDING `validate a suffix`, "
-              "whose four TypeErrors (does not start with '.', a code point that is not ASCII alphanumeric / "
-              "'+' / '.', ends with '.', longer than 16 code points) are reachable from NOWHERE ELSE and are "
-              "therefore not written "
-              "yet — and give each option's filter to picker_select in place of the all-files one");
+    JS_FreeValue(ctx, excl);
+    *out = accepts;                                                   /* step 5 */
+    return 0;
+fail:
+    JS_FreeValue(ctx, accepts);
+    JS_FreeValue(ctx, types);
+    JS_FreeValue(ctx, excl);
+    return -1;
 }
 
 /* ---- §3.2.2's STARTING DIRECTORY --------------------------------------------------------------------------- */
@@ -319,7 +591,8 @@ static void picker_remember(JSContext *ctx, JSValueConst id_v, JSValueConst entr
  * — which with no `types` admits everything — and bounded by `multiple` exactly as §4.10.5.1.17 bounds a file
  * control's. `*ppath` takes the picked entry's PATH (owned) for the LAST entry, which is what §3.3 step 7.10
  * remembers a directory from. Returns the list of handles (owned array), empty when nothing is selectable. */
-static JSValue picker_select(JSContext *ctx, JSValueConst start_path, int magic, bool multiple, JSValue *ppath)
+static JSValue picker_select(JSContext *ctx, JSValueConst start_path, JSValueConst accepts,
+                             int magic, bool multiple, JSValue *ppath)
 {
     JSValue out = JS_NewArray(ctx);
     const char **items;
@@ -357,7 +630,11 @@ static JSValue picker_select(JSContext *ctx, JSValueConst start_path, int magic,
            directory — which is what §3.5's prompt ("pick a directory") says and why its options carry no
            `types` at all. */
         type = want_directory ? NULL : file_system_type_cstr(ctx, child);
-        ok = want_directory || file_device_accepts(NULL, 0, name, type);
+        /* File System Access §3.3 step 7.6's filtering of the list of displayed files, over the accepts
+           options step 2 built. A DIRECTORY still asks, because File System Access §3.2.1's filter takes a
+           filename and a suffix can match one — what a
+           directory has no answer for is the MIME half, which is why its `type` is NULL rather than "". */
+        ok = picker_accepts_admits(ctx, accepts, name, type);
         child_path = malloc(sizeof *child_path * (size_t)(n + 1));
         CHECK(child_path != NULL, "file picker: OOM building a selected entry's locator path");
         for (k = 0; k < n; k++) child_path[k] = items[k];
@@ -391,7 +668,8 @@ static JSValue picker_select(JSContext *ctx, JSValueConst start_path, int magic,
    suggestion is taken when there is one, and otherwise an existing file is. `suggested` is the sanitized name
    or NULL. Returns the handle (owned) and its path in `*ppath`, or JS_UNINITIALIZED when nothing is
    selectable. */
-static JSValue picker_select_save(JSContext *ctx, JSValueConst start_path, const char *suggested, JSValue *ppath)
+static JSValue picker_select_save(JSContext *ctx, JSValueConst start_path, JSValueConst accepts,
+                                  const char *suggested, JSValue *ppath)
 {
     const char **items;
     int n = picker_path_c(ctx, start_path, &items);
@@ -434,7 +712,7 @@ static JSValue picker_select_save(JSContext *ctx, JSValueConst start_path, const
         handle = fs_handle_new(ctx, /*directory*/ false, items[0], path, n + 1);
         free((void *)path);
     } else {
-        JSValue list = picker_select(ctx, start_path, M_OPEN, /*multiple*/ false, ppath);
+        JSValue list = picker_select(ctx, start_path, accepts, M_OPEN, /*multiple*/ false, ppath);
         JSValue first = JS_GetPropertyUint32(ctx, list, 0);
 
         JS_FreeValue(ctx, list);
@@ -520,6 +798,10 @@ typedef struct {
     JSValue funcs[2];    /* the capability's [resolve, reject] (owned) */
     JSValue value;       /* what it settles with (owned) */
     JSValue start_path;  /* §3.2.2's answer, held across the dialog's fork (owned) */
+    /* §3.2.1's ACCEPTS OPTIONS — step 2 of §3.3/§3.4 computes them BEFORE the in-parallel steps and step 7.6
+       consumes them inside those steps, so they cross the dialog's fork exactly as `start_path` does and are
+       owned here for the same reason: a value that survives a rest point cannot live in a C local. */
+    JSValue accepts;
     JSValue id;          /* options["id"] as read, carried for step 7.10 (owned) */
     JSValue suggested;   /* §3.4's sanitized suggestedName, or undefined (owned) */
     JSValue dismissed;   /* step 7.4's unknown (owned) */
@@ -542,6 +824,7 @@ static void fpk_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->funcs[1]);
     v->val(ctx, &s->value);
     v->val(ctx, &s->start_path);
+    v->val(ctx, &s->accepts);
     v->val(ctx, &s->id);
     v->val(ctx, &s->suggested);
     v->val(ctx, &s->dismissed);
@@ -613,6 +896,7 @@ static int fpk_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
         cb_result = JS_UNDEFINED;
         s->promise = s->funcs[0] = s->funcs[1] = s->value = JS_UNDEFINED;
         s->start_path = s->id = s->suggested = s->dismissed = s->picked = JS_UNDEFINED;
+        s->accepts = JS_UNDEFINED;
         s->cphase = s->ua_phase = s->reject = 0;
         STEP_CB_FOREACH(s->cb, k) s->cb[k] = JS_UNDEFINED;
         s->started = 1;
@@ -635,9 +919,14 @@ static int fpk_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
            abandoned request. */
         JS_FreeValue(ctx, cb_result);
         /* STEP 2 — process accept types, which showDirectoryPicker does not perform (DirectoryPickerOptions
-           declares no `types` and §3.5's steps do not list it). */
-        if (magic != M_DIRECTORY)
-            picker_process_accept_types(ctx, options);
+           declares no `types` and §3.5's steps do not list it).
+           IT IS THE FIRST STEP OF THIS ALGORITHM THAT CAN THROW, and §3.7.7 makes that a REJECTION rather than
+           a throw past the page's `.catch` — which is why the capability above is minted before this line and
+           why every one of §3.2.1's TypeErrors lands in `reject` like any other failure. */
+        if (magic != M_DIRECTORY && picker_process_accept_types(ctx, options, &s->accepts) < 0) {
+            s->value = JS_GetException(ctx);
+            goto reject;
+        }
         STEP_GOTO(hdr->stage, FPK_STARTDIR, &s->cphase, &s->ua_phase, NULL);
         return JS_STEP_YIELD;
 
@@ -771,13 +1060,13 @@ static int fpk_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueC
         if (magic == M_SAVE) {
             const char *sug = JS_IsString(s->suggested) ? JS_ToCString(ctx, s->suggested) : NULL;
 
-            result = picker_select_save(ctx, s->start_path, sug, &s->picked);
+            result = picker_select_save(ctx, s->start_path, s->accepts, sug, &s->picked);
             if (sug) JS_FreeCString(ctx, sug);
             empty = JS_IsUninitialized(result);
             if (empty) result = JS_UNDEFINED;
         } else {
             bool multiple = (magic == M_OPEN && idl_dict_bool(ctx, options, "multiple"));
-            JSValue list = picker_select(ctx, s->start_path, magic, multiple, &s->picked);
+            JSValue list = picker_select(ctx, s->start_path, s->accepts, magic, multiple, &s->picked);
             JSValue len_v = JS_GetPropertyStr(ctx, list, "length");
             uint32_t n = 0;
 
@@ -888,22 +1177,48 @@ static const IdlStepDecl FPK_DECL = {
  * each dictionary's own members LEXICOGRAPHICALLY among themselves. `OpenFilePickerOptions : FilePickerOptions`
  * therefore reads excludeAcceptAllOption, id, startIn, types (the base's four, sorted) and then multiple — an
  * order no single sorted list produces, which is what the `level` column exists to express.
- *   `types` is declared IDL_ANY rather than left out, so a page that passes one is SEEN: process accept types
- * crashes naming the conversion that is missing, where an undeclared member would silently be ignored and the
- * page would get a picker with no filter at all. `startIn` is IDL_ANY for the union reason its own site
- * states. */
+ * `startIn` is IDL_ANY for the union reason its own site states.
+ *   `types` WAS IDL_ANY AND IS NOW ITS DECLARED TYPE. It was declared at all — rather than left out — so that
+ * a page passing one was SEEN rather than silently ignored, and the crash that saw it named what was missing.
+ * What that crash named was wrong about this tree, and the correction is worth keeping because the METHOD is
+ * what produced it: it said to BUILD `record<K, V>` over step_ownkeys_run and step_getownprop_run, and
+ * core/idl_iter.c's RecordCursor already WAS that algorithm, with two live consumers. The clause was derived
+ * from the submodule header's exports looking unused HERE, and never from a grep of the tree for a consumer of
+ * them — a question asked about one file and written down as a claim about the whole checkout. It was wrong on
+ * the day it was written and not merely stale, which is the reading that matters: nothing had moved, so the
+ * enumeration was faulty rather than overtaken. */
+/* `dictionary FilePickerAcceptType { USVString description = ""; record<USVString, (USVString or
+   sequence<USVString>)> accept; };` — NEITHER MEMBER IS `required`, which the IDL says by writing neither
+   keyword and which §3.2.1 relies on: a type carrying no `accept` has no entries for step 2.1 to walk and is
+   an option that admits nothing, and a type carrying no `description` reaches step 2.4's "some user
+   understandable string". Two members, lexicographically `accept` then `description` — which is the order
+   §3.2.17 reads them in and therefore the order a page's getters observe.
+   `description`'s `= ""` IS ITS IDL DEFAULT and is stated as one rather than left to the absent-member path,
+   because §3.2.1 step 2.4 tests the description against the EMPTY STRING and an absent member would answer
+   that test as undefined. */
+static const IdlDictMember FILE_PICKER_ACCEPT_TYPE_MEMBERS[] = {
+    { "accept",      IDL_RECORD_USVSTRING_STRING_OR_SEQUENCE, false, NULL, 0, NULL, IDL_DEFAULT_NONE, NULL },
+    { "description", IDL_USVSTRING, false, NULL, 0, NULL, IDL_DEFAULT_STRING, "" },
+};
+static const IdlDictDecl FILE_PICKER_ACCEPT_TYPE_DECL = {
+    "FilePickerAcceptType", FILE_PICKER_ACCEPT_TYPE_MEMBERS,
+    (int)(sizeof FILE_PICKER_ACCEPT_TYPE_MEMBERS / sizeof *FILE_PICKER_ACCEPT_TYPE_MEMBERS)
+};
+
 static const IdlDictMember OPEN_OPTIONS[] = {
     { "excludeAcceptAllOption", IDL_BOOLEAN, false, NULL, 0, NULL, IDL_DEFAULT_NONE, NULL },
     { "id",                     IDL_DOMSTRING, false, NULL, 0, NULL, IDL_DEFAULT_NONE, NULL },
     { "startIn",                IDL_ANY,      false, NULL, 0, NULL, IDL_DEFAULT_NONE, NULL },
-    { "types",                  IDL_ANY,      false, NULL, 0, NULL, IDL_DEFAULT_NONE, NULL },
+    { "types",                  IDL_SEQUENCE_DICT, false, NULL, 0, &FILE_PICKER_ACCEPT_TYPE_DECL,
+                                                                       IDL_DEFAULT_NONE, NULL },
     { "multiple",               IDL_BOOLEAN,  false, NULL, 1, NULL, IDL_DEFAULT_NONE, NULL }
 };
 static const IdlDictMember SAVE_OPTIONS[] = {
     { "excludeAcceptAllOption", IDL_BOOLEAN, false, NULL, 0, NULL, IDL_DEFAULT_NONE, NULL },
     { "id",                     IDL_DOMSTRING, false, NULL, 0, NULL, IDL_DEFAULT_NONE, NULL },
     { "startIn",                IDL_ANY,      false, NULL, 0, NULL, IDL_DEFAULT_NONE, NULL },
-    { "types",                  IDL_ANY,      false, NULL, 0, NULL, IDL_DEFAULT_NONE, NULL },
+    { "types",                  IDL_SEQUENCE_DICT, false, NULL, 0, &FILE_PICKER_ACCEPT_TYPE_DECL,
+                                                                       IDL_DEFAULT_NONE, NULL },
     { "suggestedName",          IDL_USVSTRING_NULLABLE, false, NULL, 1, NULL, IDL_DEFAULT_NONE, NULL }
 };
 /* DirectoryPickerOptions inherits from nothing, so its three are one lexicographic list. `mode` is read and

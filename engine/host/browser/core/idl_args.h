@@ -490,6 +490,37 @@ typedef enum {
        and every test at the resolution site is written over that Object. See idl_concolic_rule for the reason
        and idl_args.c's resolution site for the ask. */
     IDL_SEQUENCE_OBJECT_OR_DICT,
+    /* `sequence<USVString>` — §3.2.21 Sequences' iterator protocol whose ELEMENT type is §3.2.12
+       USVString. It is a row of its own beside IDL_SEQUENCE_DOMSTRING and not a spelling of it, for the one
+       reason §3.2.12 exists: its conversion ends in the SCALAR VALUE STRING replacement, so an unpaired
+       surrogate in an element becomes U+FFFD rather than surviving into whatever reads the list. Declaring it
+       as the DOMString sequence would have been a silent wrong answer for exactly the input §3.2.12 is about,
+       which is the axis no member-list audit can see.
+       ITS FIRST USE IS AS THE SEQUENCE ARM OF A RECORD'S VALUE, not as a member type: File System Access
+       §3.2.1 Accepted file types' `accept` is
+       `record<USVString, (USVString or sequence<USVString>)>`, whose value takes §3.2.25's `? GetMethod(V,
+       %Symbol.iterator%)` arm exactly as a member's union does. */
+    IDL_SEQUENCE_USVSTRING,
+    /* `record<USVString, (USVString or sequence<USVString>)>` — §3.2.23 "Records — record<K, V>"'s
+       *convert a JavaScript value to record* over the one record type this platform declares at a DICTIONARY
+       MEMBER. File System Access §3.2.1 Accepted file types' `FilePickerAcceptType.accept` is it.
+       THE CONVERSION ITSELF IS NOT NEW AND THIS ROW DOES NOT BUILD ONE. core/idl_iter.c's RecordCursor is
+       §3.2.23's algorithm and has been since before this row existed, with two live consumers — Headers'
+       `record<ByteString, ByteString>` and URLSearchParams' `record<USVString, USVString>` — both of which
+       drive it from their OWN step machines at an ARGUMENT position. What had no route was a record reached as
+       a DICTIONARY MEMBER, and that is the whole of what this row adds: the member loop pushes a frame, the
+       frame holds that same cursor, and §3.2.23 is not written a second time.
+       WHY IT MUST BE A MEMBER TYPE AND NOT A WALK IN THE ALGORITHM'S BODY. §3.2.17 converts a dictionary's
+       members in lexicographic order, each with its own `? Get` followed by its own conversion, and `accept`
+       sorts before `description` — so the record's [[OwnPropertyKeys]] and its per-key reads are owed BEFORE
+       `description` is read at all. Left at IDL_ANY and converted in the body, every one of those operations
+       would run after the whole `types` sequence had been walked, which a page with getters observes directly.
+       That is the defect dicttypegate.mjs was built to find, and choosing it deliberately would be worse than
+       the one it found.
+       THE KEY IS §3.2.12 AND THE VALUE IS §3.2.25 over `(USVString or sequence<USVString>)`, whose arm is
+       the same `? GetMethod(V, %Symbol.iterator%)` read every other sequence union in this file resolves
+       through idl_union_seq_arm — one implementation of that step, never a second notion of GetMethod. */
+    IDL_RECORD_USVSTRING_STRING_OR_SEQUENCE,
     /* A DICTIONARY. Web IDL converts one by READING each declared member IN ORDER and converting each by ITS
        OWN type — so a dictionary is that member list plus this very machine, not a second kind of thing. A read
        is one accessor or Proxy trap away from being the page's code, and so is each member's conversion, so
@@ -789,6 +820,20 @@ static inline IdlConcolicRule idl_concolic_rule(IdlArgType t)
        any rule is asked — the only value the row itself describes is the dictionary at the shorter arity, and a
        dictionary asks the value nothing. See IDL_UNRESTRICTED_DOUBLE_OR_DICT. */
     case IDL_UNRESTRICTED_DOUBLE_OR_DICT:
+    /* A RECORD IS FILED WITH THE DICTIONARY ABOVE AND FOR THE SENTENCE ALREADY WRITTEN THERE: it is not a
+       value that crosses at all but a bag of READS — §3.2.23's *convert a JavaScript value to record* step 3
+       asks [[OwnPropertyKeys]], its step 4.1 asks each key's descriptor and its step 4.2.2 asks `Get(O, key)`
+       — and each of those is a request like any other, each yielding another unknown. What separates it from a
+       dictionary is only WHERE the key list comes from, which is not a question about the value's type.
+       THE UNKNOWN-KEY-SET FORK IS NOT THIS TYPE'S AND MUST NOT BE DECLARED HERE. An enumeration of unknown
+       external input forks over whether it holds an own member at all and then walks a per-position chain,
+       each position asking whether there is a member beyond the ones already named; that ask belongs to
+       step_ownkeys_run, which states the question in its own words there and which owns
+       `keys_pred` and `keys_probe` for it, and it is asked once for every consumer of the request rather than
+       once per declared type. Declaring FORKS here would be this conversion asking a second time, at a site
+       with no second question to ask — and a type is only ever FORKS when the site that resolves it asks that
+       fork, which the two assert against each other. */
+    case IDL_RECORD_USVSTRING_STRING_OR_SEQUENCE:
     case IDL_INTERFACE:
         return IDL_CONCOLIC_UNASKED;
     /* `(AddEventListenerOptions or boolean)` — the one union of this shape in the DOM. Its arm decides
@@ -1022,6 +1067,24 @@ static inline bool idl_type_admits_enumeration(IdlArgType t)
  * sequence, the member's own type for the other two — which is what makes the count a walk of the DECLARED type
  * tree rather than of the page's data: the tree is finite and ends at its own leaves, so page data nesting
  * deeper does not make the conversion deeper. */
+/* DOES THIS TYPE PUSH A FRAME THAT READS NO DICTIONARY — the SECOND of the two questions
+   `idl_type_pushes_level` used to answer alone, split out here because a `record<K, V>` is exactly where the
+   two diverge and one bit answering two questions is decided by the stricter one.
+   THE TWO QUESTIONS. idl_seal_check_dict_members pairs "pushes a level" with "names a dictionary" in BOTH
+   directions — a member whose type pushes one must name a member list for it, and one that names a list must
+   push. A record pushes a FRAME and names no dictionary at all: its keys come from the page's own object, so
+   there is no declared member list and never could be. Left in the predicate above it would have failed that
+   seal at the declaration; left out of the DEPTH count it would have failed idl_conv_push's capacity CHECK at
+   the first page that used one. So the depth counter asks BOTH predicates and the seal asks only the first.
+   A RECORD COSTS EXACTLY ONE FRAME AND NOTHING UNDER IT, which is why this needs no recursion beside
+   idl_members_depth's: the frame holds the key cursor and the value's sequence, and a record's VALUE type
+   names no further conversion that pushes. A record whose value were itself a record or a dictionary would
+   change that — and would be a new row here, which is where the depth would have to be counted. */
+static inline bool idl_type_pushes_record(IdlArgType t)
+{
+    return t == IDL_RECORD_USVSTRING_STRING_OR_SEQUENCE;
+}
+
 static inline bool idl_type_pushes_level(IdlArgType t)
 {
     switch (t) {
@@ -1287,7 +1350,7 @@ typedef struct {
    a level of their own, and the ONLY thing that differs between them is what happens when that level's step 5
    is reached. A DICTIONARY frame's result is the member's value one level down; a SEQUENCE frame's result is
    ONE ELEMENT, which joins the list and is followed by the cursor's next pull. */
-enum { IDL_FRAME_DICT = 0, IDL_FRAME_SEQUENCE };
+enum { IDL_FRAME_DICT = 0, IDL_FRAME_SEQUENCE, IDL_FRAME_RECORD };
 
 /* ONE PUSHED LEVEL. For IDL_FRAME_DICT that is the whole of it — `lvl` is the nested dictionary being read.
  * For IDL_FRAME_SEQUENCE it is a `sequence<(DOMString or D)>`'s own iterator PLUS the D-dictionary the element
@@ -1306,9 +1369,17 @@ typedef struct {
        "no union": a bit would answer one question and this answers the one question a third element type
        would also need answered, which is what the element IS. */
     IdlArgType  elem;
-    uint32_t    n;          /* SEQUENCE only: how many elements `list` holds */
-    uint8_t     kind;       /* IDL_FRAME_DICT / IDL_FRAME_SEQUENCE */
-    uint8_t     phase;      /* SEQUENCE only */
+    /* RECORD only: §3.2.23's *convert a JavaScript value to record* AS A CURSOR, which is core/idl_iter.c's
+       and is the SAME one Headers and URLSearchParams drive from their own step machines. It is held here
+       rather than re-implemented because that algorithm is the standard's once: step 3's [[OwnPropertyKeys]],
+       step 4.1's [[GetOwnProperty]] and step 4.2's enumerable test, and step 4.2.2's `Get(O, key)` are all
+       requests, so the frame parks at whichever key it stands on at whatever depth. `lvl` carries the VALUE's
+       own conversion beside it — §3.2.25's arm in `lvl.uni_phase` and the sequence arm in `lvl.seq*` — which
+       is what a per-level cursor is for and is why no second frame is pushed for the value. */
+    RecordCursor rec;
+    uint32_t    n;          /* SEQUENCE: how many elements `list` holds. RECORD: how many PAIRS it holds */
+    uint8_t     kind;       /* IDL_FRAME_DICT / IDL_FRAME_SEQUENCE / IDL_FRAME_RECORD */
+    uint8_t     phase;      /* SEQUENCE and RECORD */
 } IdlConvFrame;
 
 /* §3.2.17 IN FLIGHT — the whole of what a park has to carry, and nothing the host can re-derive.

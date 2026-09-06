@@ -860,6 +860,15 @@ static int idl_members_depth(const IdlDictMember *ms, int n)
     for (k = 0; k < n; k++) {
         int d;
 
+        /* A RECORD COSTS ONE FRAME AND HAS NOTHING UNDER IT — no declared member list, so nothing to recurse
+           into. It is counted through the SECOND predicate because the seal pairs the first one with `dict`
+           in both directions and a record names none; counting it through the first would have failed that
+           seal at every declaration, and leaving it out of the count would have failed idl_conv_push's
+           capacity CHECK at the first page that passed one. */
+        if (idl_type_pushes_record(ms[k].type)) {
+            if (max < 1) max = 1;
+            continue;
+        }
         if (!idl_type_pushes_level(ms[k].type)) continue;
         DCHECK(ms[k].dict != NULL,
                "a member whose declared type pushes a §3.2.17 level named no dictionary for it — the dictionary "
@@ -1726,6 +1735,10 @@ static int idl_level_start_decl(JSContext *ctx, IdlDictLevel *l, JSValueConst sr
 static void idl_conv_frame_visit(JSContext *ctx, IdlConvFrame *f, JSStepVisit *v)
 {
     iter_cursor_visit(ctx, &f->cur, v);
+    /* THE RECORD CURSOR'S THREE OWNED VALUES, named here for the same reason every other line of this
+       function is: a frame is BYTE-COPIED by a deep fork and re-taken only through this walk, so a value the
+       visit does not name is one the sibling shares and the first teardown frees under the other. */
+    record_cursor_visit(ctx, &f->rec, v);
     v->val(ctx, &f->src);
     v->val(ctx, &f->list);
     idl_level_visit(ctx, &f->lvl, v);
@@ -1739,6 +1752,11 @@ static void idl_conv_frame_clear(JSContext *ctx, IdlConvFrame *f)
     memset(f, 0, sizeof *f);
     f->src = f->list = JS_UNDEFINED;
     f->lvl.src = f->lvl.out = f->lvl.mv = f->lvl.seq_list = JS_UNDEFINED;
+    /* AND THE RECORD CURSOR'S, WHICH ARE NOT JS_UNDEFINED AFTER A MEMSET. A zeroed JSValue is the
+       non-refcounted INTEGER 0, so freeing one is harmless — but READING one is not: `name` would be the
+       number 0 rather than a key. record_cursor_init states that invariant once, so this asks it rather than
+       re-spelling which three slots the cursor holds. */
+    record_cursor_init(&f->rec);
 }
 
 /* PUSH one level and hand the caller its frame to fill — the CAPACITY check and the clear, which are the same
@@ -2022,6 +2040,209 @@ static int idl_union_seq_arm(JSContext *ctx, JSStepHdr *hdr, IdlDictLevel *w, ui
        fact for every caller of this shape, and §3.6's flat arm is a DICTIONARY rather than a string at all. */
     *pout = (*phase == IDL_UNI_SEQUENCE) ? seq_arm : flat_arm;
     return 0;
+}
+
+/* ---- §3.2.23's record<K, V>, AS A PUSHED FRAME ------------------------------------------------------------
+ *
+ * WEB IDL §3.2.23 "Records — record<K, V>"'s *convert a JavaScript value to record*, reached as a DICTIONARY
+ * MEMBER. The section holds TWO sibling algorithms and the spec NAMES them, so every citation here names the
+ * one it means rather than a bare step number: a plain "§3.2.23 step 2" is ambiguous between
+ * *convert a JavaScript value to record* and *convert a record to a JavaScript value*.
+ *
+ * THE ALGORITHM IS NOT WRITTEN HERE AND MUST NOT BE. core/idl_iter.c's RecordCursor IS §3.2.23's
+ * JavaScript-to-record list — step 3's `? O.[[OwnPropertyKeys]]()`, step 4.1's `? O.[[GetOwnProperty]](key)`,
+ * step 4.2's present-and-enumerable test and step 4.2.2's `? Get(O, key)` — and it has two live consumers
+ * already (Fetch's `record<ByteString, ByteString>` and URL's `record<USVString, USVString>`), each driving it
+ * from its own step machine at an ARGUMENT position. What had no route was a record reached as a dictionary
+ * MEMBER, so this frame supplies the route and nothing else. A second walk over [[OwnPropertyKeys]] would be
+ * the dual system this engine forbids, and it would be the copy that drifts: the cursor performs FIVE
+ * operations for `{a: "b", "\uFFFF": "d"}` and not six, because step 4.2.1 converts the key before step
+ * 4.2.2's read is issued, and that ordering is observable to a Proxy.
+ *
+ * WHAT THIS FRAME ADDS IS THE VALUE'S CONVERSION, which the cursor deliberately does not do — it hands back a
+ * raw pair and the caller converts it by the record's declared V. Here V is §3.2.25 over
+ * `(USVString or sequence<USVString>)`, whose arm is the same `? GetMethod(V, %Symbol.iterator%)` every other
+ * sequence union in this file resolves through idl_union_seq_arm. The frame's own `lvl` carries both halves —
+ * `lvl.uni_phase` for the arm and `lvl.seq*` for the sequence — which is exactly what a per-level cursor is
+ * for, and is why a record's value pushes NO further frame however the page shapes it.
+ *
+ * THE RESULT IS AN ARRAY OF [key, value] PAIRS AND NOT AN OBJECT WITH PROPERTIES. §3.2.23's result is an
+ * Infra ORDERED MAP, and the algorithm that reads it (File System Access §3.2.1 Accepted file types) iterates
+ * it in order. A JavaScript object would answer order by ECMAScript's own property-order rules — integer-like
+ * keys first, in numeric order — so a record whose keys were "2" and "1" would be read back reversed. Pairs
+ * keep insertion order by construction.
+ * AND THE MAP SEMANTICS ARE THE MAP'S: *convert a JavaScript value to record* step 4.2.4 is "Set
+ * result[typedKey] to typedValue", so two ES keys that converge under Web IDL §3.2.12 USVString's
+ * scalar-value replacement are ONE entry that keeps the FIRST's position and takes the LAST's value. Web IDL
+ * §3.2.23 says so in its own Note: "It's possible that typedKey is already in result, if K is USVString and
+ * key contains unpaired surrogates". Appending blindly would make it two.
+ * THE STANDARD IS NAMED IN FRONT OF THAT QUOTATION RATHER THAN LEFT TO THE NEAREST NUMBER ABOVE IT, because
+ * the nearest one is §3.2.12 and the sentence is §3.2.23's — a resolver takes the closest preceding citation,
+ * so a quotation placed after a list of numbers is judged against whichever came last.
+ *
+ * Returns >0 (the caller returns it — parked in the page's ownKeys trap, a getter, or an iterator), 0 having
+ * advanced the frame, or -1 with a throw live. `in` is CONSUMED. */
+
+/* §3.2.23 step 4.2.1's KEY conversion for a record whose K is USVString — "Let typedKey be key converted to an
+   IDL value of type K". A key off [[OwnPropertyKeys]] is a String or a Symbol and nothing else, and §3.2.12
+   USVString has no conversion for a Symbol: ECMAScript's ToString throws a TypeError for one. It runs none of
+   the page's code, which is why the cursor takes it as a predicate rather than as a request. */
+static int idl_rec_key_usvstring(JSContext *ctx, JSValueConst key, void *user)
+{
+    (void)user;
+    if (JS_IsSymbol(key)) {
+        JS_ThrowTypeError(ctx, "a Symbol is not a valid record key");
+        return -1;
+    }
+    return 0;
+}
+
+/* §3.2.23 step 4.2.4's "Set result[typedKey] to typedValue" over the pair array — the ORDERED MAP's set, which
+   replaces an existing key's value IN PLACE and appends only a key the map does not hold. `key` and `value`
+   are CONSUMED. Returns 0, or -1 with a throw live. */
+static int idl_rec_map_set(JSContext *ctx, JSValue list, uint32_t *pn, JSValue key, JSValue value)
+{
+    uint32_t i;
+
+    for (i = 0; i < *pn; i++) {
+        JSValue pair = JS_GetPropertyUint32(ctx, list, i);
+        JSValue k;
+        int same;
+
+        if (JS_IsException(pair)) { JS_FreeValue(ctx, key); JS_FreeValue(ctx, value); return -1; }
+        k = JS_GetPropertyUint32(ctx, pair, 0);
+        /* Both are Strings by now — §3.2.12 has already run on each — so this is a byte comparison and not
+           the page's `valueOf`. JS_IsSameValue is exact for two Strings. */
+        same = JS_IsSameValue(ctx, k, key);
+        JS_FreeValue(ctx, k);
+        if (same) {
+            int rc = JS_SetPropertyUint32(ctx, pair, 1, value);
+            JS_FreeValue(ctx, pair);
+            JS_FreeValue(ctx, key);
+            return rc < 0 ? -1 : 0;
+        }
+        JS_FreeValue(ctx, pair);
+    }
+    {
+        JSValue pair = JS_NewArray(ctx);
+
+        if (JS_IsException(pair)) { JS_FreeValue(ctx, key); JS_FreeValue(ctx, value); return -1; }
+        JS_SetPropertyUint32(ctx, pair, 0, key);
+        JS_SetPropertyUint32(ctx, pair, 1, value);
+        JS_SetPropertyUint32(ctx, list, (*pn)++, pair);
+    }
+    return 0;
+}
+
+enum { IDL_REC_PAIR = 0, IDL_REC_VALUE };
+
+static int idl_conv_rec_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *w, IdlConvFrame *frames,
+                            JSValue in, JSValue **out_cb, int *out_argc)
+{
+    IdlConvFrame *f;
+    int r;
+
+    DCHECK(w->conv_sp > 0, "the record driver was run with no frame under it");
+    f = &frames[w->conv_sp - 1];
+    DCHECK(f->kind == IDL_FRAME_RECORD,
+           "the record driver was handed a frame that is converting something else — a record frame holds "
+           "§3.2.23's key cursor and a pair list, and neither of the other two kinds has one");
+    for (;;) {
+        if (f->phase == IDL_REC_PAIR) {
+            r = record_cursor_run(ctx, hdr, &f->rec, f->src, in, idl_rec_key_usvstring, NULL,
+                                  out_cb, out_argc);
+            in = JS_UNDEFINED;
+            if (r > 0) return r;   /* parked in the page's ownKeys trap, its descriptor trap or a getter */
+            if (r < 0) return -1;
+            if (f->rec.done) {
+                /* step 5's "Return result" — the record joins the MEMBER that named it, one level down,
+                   exactly as a nested dictionary's and a sequence's results do. */
+                JSValue done = f->list;
+                IdlDictLevel *p;
+
+                f->list = JS_UNDEFINED;
+                idl_conv_pop(ctx, w, frames);
+                p = idl_level_at(w, frames, w->conv_sp);
+                DCHECK(p->mphase == 1,
+                       "a record finished under a level that was not converting a member — a level is pushed "
+                       "from exactly one place, and this is not where it returns to");
+                JS_FreeValue(ctx, p->mv);
+                p->mv = done;
+                p->mphase = 2;
+                return 0;
+            }
+            /* A FRESH VALUE, SO A FRESH ARM. `uni_phase` is re-armed per PAIR and not per frame: the union is
+               asked once for each value the record holds, and a phase left standing from the previous pair
+               would answer this one's arm from the last one's @@iterator read. */
+            f->lvl.uni_phase = IDL_UNI_ASK;
+            f->phase = IDL_REC_VALUE;
+        }
+        DCHECK(f->phase == IDL_REC_VALUE, "a record frame resumed at a phase it never parks in");
+        {
+            /* §3.2.23 step 4.2.3 — "Let typedValue be value converted to an IDL value of type V" — where V is
+               §3.2.25 over `(USVString or sequence<USVString>)`. Steps 4 through 10 name no arm this union
+               has (no dictionary, no interface, no object, no buffer source, no callback), so the whole
+               decision is step 11.2's `? GetMethod(V, %Symbol.iterator%)` against step 15's string clause: an
+               Object with a callable @@iterator is the sequence and EVERYTHING else is ToString'd — an Object
+               with no @@iterator included, and null, and a number. */
+            IdlArgType vt = IDL_USVSTRING;
+            JSValue str = JS_UNDEFINED;
+
+            r = idl_union_seq_arm(ctx, hdr, &f->lvl, &f->lvl.uni_phase, f->rec.value, &in, &vt,
+                                  IDL_SEQUENCE_USVSTRING, IDL_USVSTRING, out_cb, out_argc);
+            if (r > 0) return r;   /* parked INSIDE the page's @@iterator getter or its Proxy trap */
+            if (r < 0) return -1;
+            if (vt == IDL_SEQUENCE_USVSTRING) {
+                /* §3.2.21.1 Creating a sequence from an iterable's repeat loop, on the frame's OWN cursor.
+                   Its step 3.1 `IteratorStepValue` is the page's code and so is each element's ToString, so
+                   both are rest points and the loop resumes at the element it stands on. */
+                for (;;) {
+                    if (f->lvl.seq_phase == 1) {
+                        r = iter_cursor_run(ctx, hdr, &f->lvl.seq, f->rec.value, in, out_cb, out_argc);
+                        in = JS_UNDEFINED;
+                        if (r > 0) return r;
+                        if (r < 0) return -1;
+                        if (f->lvl.seq.done) break;
+                        f->lvl.seq_phase = 2;
+                    }
+                    DCHECK(f->lvl.seq_phase == 2,
+                           "a record value's sequence resumed at a phase it never parks in");
+                    r = step_tostring_run(ctx, hdr, f->lvl.seq.value, in, &str, out_cb, out_argc);
+                    in = JS_UNDEFINED;
+                    if (r > 0) return r;
+                    if (r < 0) return -1;
+                    /* §3.2.12's scalar value string — the whole of what separates this element type from a
+                       DOMString, and the reason IDL_SEQUENCE_USVSTRING is its own row. */
+                    str = JS_ToScalarValueString(ctx, str);
+                    if (JS_IsException(str)) return -1;
+                    JS_SetPropertyUint32(ctx, f->lvl.seq_list, f->lvl.seq_n++, str);
+                    f->lvl.seq_phase = 1;
+                }
+                str = f->lvl.seq_list;
+                f->lvl.seq_list = JS_UNDEFINED;
+                f->lvl.seq_phase = 0;
+                f->lvl.seq_n = 0;
+                iter_cursor_init(&f->lvl.seq);
+            } else {
+                r = step_tostring_run(ctx, hdr, f->rec.value, in, &str, out_cb, out_argc);
+                in = JS_UNDEFINED;
+                if (r > 0) return r;
+                if (r < 0) return -1;
+                str = JS_ToScalarValueString(ctx, str);
+                if (JS_IsException(str)) return -1;
+            }
+            {
+                /* THE KEY IS CONVERTED HERE AND NOT AT `key_ok`, WHICH ONLY REFUSED A SYMBOL. §3.2.12's
+                   replacement is what makes two ES keys converge, and the map set below is what step 4.2.4
+                   then does with that — so the two must be one step apart and in this order. */
+                JSValue key = JS_ToScalarValueString(ctx, JS_DupValue(ctx, f->rec.name));
+
+                if (JS_IsException(key)) { JS_FreeValue(ctx, str); return -1; }
+                if (idl_rec_map_set(ctx, f->list, &f->n, key, str) < 0) return -1;
+            }
+            f->phase = IDL_REC_PAIR;
+        }
+    }
 }
 
 /* §3.2.11 ByteString's RANGE, defined below beside the public idl_is_bytestring it is the throwing form of.
@@ -2515,6 +2736,32 @@ static int idl_level_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *walk, IdlC
                 return 0;
             }
         }
+        else if (idl_type_pushes_record(mt)) {
+            /* §3.2.23's *convert a JavaScript value to record* STEP 1 — "If O is not an Object, throw a
+               TypeError". It is the WHOLE of that algorithm's refusal: unlike §3.2.17 step 1 a record admits
+               neither null nor undefined, so `{accept: null}` throws where `{accept: {}}` is the empty map.
+               (undefined never reaches here — for a dictionary member it IS absent, and step 4.1.5's default
+               or step 4.1.6's TypeError answered it above.)
+               STEP 2's "Let result be a new empty instance of record<K, V>" is the pair list, built before the
+               cursor is planted so that a failure tears the frame down through the same `visit` that would
+               have named it. */
+            IdlConvFrame *f;
+
+            if (!JS_IsObject(w->mv)) {
+                JS_FreeValue(ctx, in);
+                JS_ThrowTypeError(ctx, "member `%s` of %s is not a record", dm->name, idl_dict_where(w));
+                return -1;
+            }
+            JS_FreeValue(ctx, in);
+            f = idl_conv_push(ctx, walk, frames, frames_cap, IDL_FRAME_RECORD);
+            f->src = JS_DupValue(ctx, w->mv);
+            f->list = JS_NewArray(ctx);
+            if (JS_IsException(f->list)) { f->list = JS_UNDEFINED; return -1; }
+            record_cursor_init(&f->rec);
+            f->phase = IDL_REC_PAIR;
+            *pushed = true;
+            return 0;
+        }
         else if (mt == IDL_SEQUENCE_DOMSTRING || mt == IDL_SEQUENCE_INTERFACE ||
                  mt == IDL_SEQUENCE_OBJECT || mt == IDL_SEQUENCE_DOUBLE ||
                  mt == IDL_SEQUENCE_ENUM) {
@@ -2883,6 +3130,16 @@ int idl_dict_walk_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *w, IdlConvFra
             r = idl_conv_seq_run(ctx, hdr, w, frames, in, out_cb, out_argc);
             in = JS_UNDEFINED;
             if (r > 0) return r;   /* parked INSIDE the page's iterator, at whatever depth */
+            if (r < 0) return -1;
+            continue;
+        }
+        /* A RECORD FRAME IS NEVER THE MEMBER LOOP'S. §3.2.23 reads its keys off the PAGE'S object rather than
+           off a declared list, so there is no level in it to run and no `IDL_CONV_MEMBERS` state to leave —
+           which is why this arm needs no phase test where the sequence's does. */
+        if (f && f->kind == IDL_FRAME_RECORD) {
+            r = idl_conv_rec_run(ctx, hdr, w, frames, in, out_cb, out_argc);
+            in = JS_UNDEFINED;
+            if (r > 0) return r;
             if (r < 0) return -1;
             continue;
         }

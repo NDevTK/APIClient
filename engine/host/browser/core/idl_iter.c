@@ -183,7 +183,12 @@ int iter_cursor_run(JSContext *ctx, JSStepHdr *h, IterCursor *c, JSValueConst sr
 
 
 
-/* ---- §3.2.23's record<K, V> ------------------------------------------------------------------------------ */
+/* ---- §3.2.23 "Records — record<K, V>"'s *convert a JavaScript value to record* --------------------------
+ *
+ * THE SECTION HOLDS TWO SIBLING TOP-LEVEL LISTS and the standard NAMES them — *convert a JavaScript value to
+ * record* and *convert a record to a JavaScript value* — so a bare "step N" here would be ambiguous between
+ * two different algorithms rather than merely imprecise. Every citation below names the algorithm. Steps were
+ * counted off the fetched text with LIST DEPTH TRACKED: five top-level steps, the loop being step 4. */
 
 enum { RC_KEYS_ASKED = 0, RC_DESC_ASKED, RC_VALUE_ASKED, RC_NEXT_KEY };
 
@@ -236,8 +241,13 @@ int record_cursor_run(JSContext *ctx, JSStepHdr *h, RecordCursor *c, JSValueCons
             if (r > 0) return r;
             if (r < 0) return -1;
             in = JS_UNDEFINED;
-            /* step 5.2: present AND enumerable, or the key is not part of the record. The descriptor is the
-               engine's own object, so reading it reaches nothing of the page's. */
+            /* *convert a JavaScript value to record* step 4.2: present AND enumerable, or the key is not
+               part of the record. The descriptor is the engine's own object, so reading it reaches nothing
+               of the page's.
+               THE NUMBER HERE WAS 5.2 AND THE HEADER'S WAS 4.2.1 — one sentence about one algorithm, written
+               twice, disagreeing. §3.2.23's JavaScript-to-record list has FIVE top-level steps and the loop
+               is step 4, so the header was right; and the section holds TWO sibling algorithms, which is why
+               the citation now NAMES the one it means rather than trusting a bare number to pick. */
             keep = JS_IsObject(desc);
             if (keep) {
                 JSValue en = JS_GetPropertyStr(ctx, desc, "enumerable");
