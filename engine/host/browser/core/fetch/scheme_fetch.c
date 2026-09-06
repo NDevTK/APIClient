@@ -30,9 +30,12 @@
  * `scheme_fetch_is_network` below and crashes on an address §4.3 would have answered here. A park added later
  * therefore FIRES instead of silently widening the old wrong answer.
  *
- * WHAT IS NOT HERE. §4.1 "Main fetch"'s step 7 — bad port, mixed content, Content Security Policy — is a
- * different step of a different algorithm and stays with its callers; §4.3 runs after it. §6's `data:` URL
- * processor is core/fetch/data_url.c and §4.3 merely runs it. */
+ * WHAT IS NOT HERE. §4.1 "Main fetch"'s step 7 — bad port, mixed content, Content Security Policy, Integrity
+ * Policy — is a different step of a different algorithm and stays with its callers; §4.3 runs after it. THE
+ * FOURTH NAME IS A REPAIR AND NOT AN ADDITION: this sentence enumerated THREE, which was §4.1's disjunction
+ * before it gained the Integrity Policy arm, and an enumeration is not a quotation so no checker here could
+ * ever have said so — core/fetch/fetch.h holds the sentence itself and which two of the four are built.
+ * §6's `data:` URL processor is core/fetch/data_url.c and §4.3 merely runs it. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

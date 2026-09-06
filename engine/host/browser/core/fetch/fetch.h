@@ -183,15 +183,53 @@ typedef struct {
  * Security Policy, or should request be blocked by Integrity Policy Policy returns blocked, then set response
  * to a network error".
  *
- * WHAT IS NOT COVERED: the step is FOUR checks and this component runs TWO of them. Mixed content is not
- * implemented anywhere in this engine, and INTEGRITY POLICY is the disjunct §4.1 gained after the four copies
- * this replaced were written — every one of them quoted a three-check version of this sentence, and moving the
- * quotation to a fresh site is what made the auditor say so. WHAT THE NEXT DIFF BUILDS: Integrity Policy's own
- * "should request be blocked by Integrity Policy Policy", over a policy parsed from the `Integrity-Policy`
- * response header into the policy container beside the CSP list, called as a third disjunct here. HOW ITS
- * ABSENCE SHOWS: a document served `Integrity-Policy: blocked-destinations=(script)` loads a `<script src>`
- * carrying no `integrity` attribute here and is refused it by a browser — so an @S breakout measured against
- * that document's policy reports a sink the real page cannot reach.
+ * WHAT IS NOT COVERED: the step is FOUR checks and this component runs TWO of them — bad port and CSP. The
+ * two absent disjuncts are NOT one residual, and the difference is not their size: only ONE of them can be
+ * built at this component at all.
+ *
+ * MIXED CONTENT (disjunct 2) IS GATED BY THE STEP ABOVE THIS ONE, WHICH IS THE FACT THAT DECIDES THE ORDER.
+ * §4.1 step 6 is "Upgrade a mixed content request to a potentially trustworthy URL, if appropriate", and that
+ * algorithm's own last step is to set an `http` URL's scheme to `https` and return — so the step IMMEDIATELY
+ * ABOVE this one REWRITES THE ADDRESS this one judges, for the three destinations it does not return early
+ * for (`image`, `audio`, `video`). A component that ran the mixed-content block WITHOUT it would refuse an
+ * `<img src="http://…">` on an https page where a browser upgrades it and LOADS it: a wrong answer in the
+ * coverage-losing direction, which also fires `error` at the element and drives the page down a handler path
+ * the real page never takes. That is a REGRESSION and not a narrowing, so the block is not landed here alone.
+ * AND STEP 6 CANNOT BE FOLDED INTO THIS FUNCTION EITHER. This is a PURE PREDICATE and is evaluated TWICE for
+ * every request that reaches the host — once at the component that builds it, again at solver/engine.c's
+ * park, whose own comment rests on "the two evaluations cannot disagree" — and that park composes its
+ * pending URL BEFORE calling this. A rewriting step 6 therefore needs its own component, a signature that
+ * hands an address BACK, every call site to consume it, and that compose order reversed, since the park is
+ * keyed on (method, url) and would otherwise park a request under an address the host is never asked for.
+ * WHAT THE NEXT DIFF BUILDS, AND THE ORDER IS THE DELIVERABLE: (a) Secure Contexts §3.1 "Is origin
+ * potentially trustworthy?" over an ORIGIN RECORD — core/frame/secure_context.h exposes that algorithm only
+ * over a UrlRecord and over a serialized URL, while the mixed-content settings test reads an environment
+ * settings object's ORIGIN, which core/url/origin.h's origin_agent answers for every realm in this instance;
+ * (b) the settings test itself over that; (c) §4.1 step 6 as its own component, which needs Fetch §2.2.5
+ * "Requests"' INITIATOR on the request record — core/html/html_image.c records that field as deliberately
+ * absent for want of a consumer, and the upgrade's `imageset` arm is that consumer; (d) the block, as a
+ * further disjunct HERE. Nothing before (d) has a reader, so nothing before (d) lands on its own.
+ * HOW ITS ABSENCE SHOWS: an https document fetching `http://cdn/chunk.js` is served that script here and is
+ * refused it by a browser — so a lazy chunk this engine executes for its endpoints is one the real page
+ * never runs, and the surface it contributes is reported as the page's.
+ * AND NO INSTRUMENT HERE WILL EVER SAY SO ABOUT THE MIXED-CONTENT NUMBERS ABOVE: that standard has no
+ * committed corpus row, while its two WebAppSec siblings (csp, securecontexts) are indexed at the same
+ * editor's-draft base, so a citation of it is COUNTED AND NEVER CHECKED rather than clean. Its ED renders
+ * with numbered headings, so the row is one fetch away and the silence is a gap rather than a limit.
+ *
+ * INTEGRITY POLICY (disjunct 4) is the disjunct §4.1 gained after the four copies this replaced were written
+ * — every one of them quoted a three-check version of this sentence, and moving the quotation to a fresh site
+ * is what made the auditor say so. WHAT THE NEXT DIFF BUILDS: Integrity Policy's own "should request be
+ * blocked by Integrity Policy Policy", over a policy parsed from the `Integrity-Policy` response header into
+ * the policy container beside the CSP list, called as a further disjunct here. HOW ITS ABSENCE SHOWS: a
+ * document served `Integrity-Policy: blocked-destinations=(script)` loads a `<script src>` carrying no
+ * `integrity` attribute here and is refused it by a browser — so an @S breakout measured against that
+ * document's policy reports a sink the real page cannot reach.
+ * ITS PLACE IN THE ORDER IS AFTER MIXED CONTENT AND NOT BEFORE IT, which is the correction this paragraph
+ * carries: the sentence that stood here named Integrity Policy as what the next diff builds, and §4.1's own
+ * disjunction puts mixed content SECOND and Integrity Policy FOURTH. Integrity Policy is also the cheaper of
+ * the two to reach, since it needs no step 6 and no address rewrite — so a reader who takes it first is
+ * taking the easier disjunct, not the next one, and should say which they did.
  *
  * IT WAS FOUR HAND-WRITTEN COPIES, ONE PER ENTRY, and the fifth entry is what proved that shape wrong: a
  * `<script src>` ran NO CSP check at all, because §4.12.1.1's fetch is the one nobody remembered to add a copy
@@ -289,9 +327,14 @@ JSValue fetch_reply_new(JSContext *ctx, int status, const char *status_text, con
                         const char *body, size_t body_len, const char *const *url_list, int url_list_n,
                         const char *computed_type);
 
-/* ---- §2.2.5's BODY, WHICH IS A BYTE SEQUENCE AND CROSSES AS ONE ------------------------------------------
+/* ---- §2.2.6's BODY, WHICH IS A BYTE SEQUENCE AND CROSSES AS ONE ------------------------------------------
  *
- * "A response has an associated body (null or a body)", and a body's is "a byte sequence". It was a JS STRING
+ * §2.2.6 "Responses": "A response has an associated body (null or a body)", and §2.2.4 "Bodies" makes a
+ * body's source "a byte sequence". THE NUMBER ABOVE READ §2.2.5 AND THAT IS A REPAIR, NOT A RENUMBER: §2.2.5
+ * is "Requests", the quotation is about a RESPONSE, and no channel could report it while the surrounding
+ * citations left this file's standard to a vote — it became visible only when unrelated citations were added
+ * above and the resolver started judging this site. A correctly-numbered claim about the wrong section is the
+ * one axis a quotation check sees only once it is ASKED. It was a JS STRING
  * on this record, at every producer, and that is not a representation choice — it is a DECODE, run by whoever
  * built the record, before any standard's own decode could run:
  *
