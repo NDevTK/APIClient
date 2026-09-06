@@ -2127,6 +2127,24 @@ const OTHER_SPECS = [
      right about the cause and wrong about the category — worth recording, because a band that explicitly
      withholds a verdict being read as an accusation is how a correct refusal gets "fixed". */
   "css counter styles",
+  /* AND THE SIX MORE THE LEVELLED BAND NAMED THE DAY IT WAS BUILT, all the same shape and all in the
+     refusal direction, which is why they land as one entry rather than six diffs. Each is a standard with no
+     index row whose citations this tree writes WITH their level — `Pointer Events 4 §N`, `Pointer Lock 2.0`,
+     `CSS Mixins 1`, `CSS Extensions 1`, `CSS Anchor Positioning 1`, `CSS Color Adjust 1` — so each reaches
+     classifyAnchor only through `joinLevel`, whose gate is a base one of the two lists already holds. With
+     none held, every one of them came back with no anchor and fell to its file's dominant vote.
+     `pointerevents` WAS ALREADY HERE AND PROTECTED NOTHING, which is the `mixed` incident a third time: the
+     entry is ONE WORD and the twelve sites write TWO. It stays, because a spelling that never fires costs
+     nothing and a reader who re-derives the rule that listed it will list it again; what is added beside it
+     is the spelling the tree actually uses. The lesson is in the Mixed Content row and it is now measured
+     three times — an entry keyed on a spelling nobody writes is indistinguishable from no entry at all.
+     THESE ARE FOREIGN AND NOT INDEXED ROWS ON PURPOSE. An index row would answer more, and it would also
+     make each of these a NEIGHBOUR of every standard already here — which is how indexing Mixed Content
+     alone moved a defect onto Subresource Integrity rather than ending it. A refusal only ever removes a
+     guess, so it is the change that cannot manufacture an accusation; an index row for any of them is a
+     later diff with its own whole-corpus measurement. */
+  "pointer events", "pointer lock", "css mixins", "css extensions",
+  "css anchor positioning", "css color adjust",
   /* THE TWO STANDARDS THAT EXTEND Fetch's `RequestInit` BY A PARTIAL DICTIONARY, and they are here for the
      reason the whole list exists: a partial's member is declared beside Fetch's own, in a Fetch-dominant
      file, so a citation of the OTHER standard's numbering sits surrounded by evidence for Fetch. Their
