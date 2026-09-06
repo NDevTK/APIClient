@@ -254,6 +254,19 @@ typedef struct {
  *     a report-only one, from two response headers. core/frame/policy_container.c already states, with the
  *     citation, that a policy container's five items include both; the struct carries NEITHER, so they
  *     arrive with their field, their clone and their free, in that file and not this one.
+ *     AND THE HEADERS REACH THE ENGINE ALREADY, WHICH IS THE PART A PRICING GUESS GETS WRONG IN THE
+ *     ALARMING DIRECTION. A container is built from CSP *text* rather than from a header list, so the
+ *     obvious reading is that a new item has to be extracted by the trusted zone and carried over the ABI —
+ *     which would make this a cross-boundary diff, the one shape §Disposition rates worst because the JS
+ *     half deploys on write and the C half only after a build. It is not one. The response's HEADER LIST
+ *     arrives in this engine at navigation, and the component that reads it already carries the ENFORCED and
+ *     REPORT-ONLY values of another two-header policy as owned strings, for the identical reason this one
+ *     needs to: the algorithm that consumes them cannot run until the Document exists. So the route is
+ *     entirely engine-side, and the pattern to copy is one field-pair over in the same struct.
+ *   - AND ONE ITEM OF A CONTAINER MUST ALSO SURVIVE A CLONE ACROSS AN INSTANCE, which is the second half and
+ *     is easy to miss: a container crosses as a SERIALIZED value, so an item added to the live struct and not
+ *     to that one is silently dropped for exactly the children that inherit rather than fetch — a `data:`
+ *     frame, whose opaque origin is why it is in a peer instance at all.
  *   - THE CHECK READS THE REQUEST'S MODE, and neither `FetchRequest` above nor `fetch_main_blocked` below
  *     carries one. Its early-allow arm is the conjunction `this request has integrity metadata AND its mode
  *     is cors or same-origin`, so a reader who cannot ask the mode must pick an arm: allowing on the metadata
