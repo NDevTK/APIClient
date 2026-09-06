@@ -701,16 +701,46 @@ static int xs_attr_one(JSContext *ctx, XmlSerializeState *s, lxb_dom_attr_t *a)
             /* §5.2.1.1.3 step 3.6.4, whose own first clause is this guard: "Otherwise (attribute namespace is
                not the XMLNS namespace), if candidate prefix is null" — see the head comment, (1), for the
                older draft that ran the sub-step unconditionally and what that cost.
-               NOT COVERED: step 3.6.4's FIRST arm, "If prefix is not null and local prefixes map does not
-               contain prefix, set candidate prefix to prefix", so an attribute carrying a prefix for a
-               namespace nothing in scope declares gets a generated `nsN` here where the standard would keep
-               the attribute's own prefix. THE NEXT DIFF builds that arm: a lookup of `pid` in the local
-               prefixes map (xs_local_get already answers it) selecting `pid` over xs_generate_prefix, with
-               the map add and the local-prefixes-map set that follow it applying to whichever was chosen.
-               ITS ABSENCE SHOWS as `ns1:` in place of the authored prefix on exactly that attribute —
-               wpt/domparsing/XMLSerializer-serializeToString.html compares the serialization as a string, so
-               the arm is observable there and nowhere in this file's own asserts. */
-            cand = xs_generate_prefix(ctx, s, ans);
+
+               THE RESIDUAL THAT STOOD HERE IS BUILT BELOW, AND ITS NEXT-DIFF CLAUSE WAS INCOMPLETE IN A WAY
+               THAT WOULD HAVE MADE THINGS WORSE. It said to select `pid` over `xs_generate_prefix`, with the
+               map add and the local-prefixes-map set that follow it applied to whichever was chosen — its own
+               words, unquoted here because this tree's prose inside quotation marks under a spec citation is
+               read as a claim about the standard. That reads as describing steps this file already ran. It
+               did not: the local prefixes map had
+               exactly ONE writer in this file — the xmlns-declaration branch above — and §5.2.1.1.3 writes
+               it in TWO places. Building only the arm would have left the map populated from the element's
+               own declarations alone, so two attributes carrying one authored prefix for two different
+               namespaces would both keep it and the start tag would carry two conflicting `xmlns:p=`
+               declarations. A residual's remedy clause is a hypothesis about this tree, and this one named
+               the arm correctly and the writes it depends on only by allusion. */
+            /* Step 3.6.4's first arm, whose run is kept on ONE line so the quotation is comparable:
+               "local prefixes map does not contain prefix, set candidate prefix to prefix".
+               The attribute's OWN prefix is kept whenever this element has not already bound it to something
+               else. `xs_local_get` answering XS_NULL is "not a key", which is what "does not contain" asks. */
+            if (pid != XS_NULL && xs_local_get(s, pid) == XS_NULL) {
+                cand = pid;
+                /* "Add candidate prefix to map given attribute namespace." The standard runs this step after
+                   BOTH arms, and it is redundant for the other one: §5.2.1.1.4 Generating namespace prefixes
+                   is "add generated prefix to map given new namespace" before it returns, so the generating
+                   arm has already done it. Doing it only here is the same map and one fewer duplicate. */
+                xs_map_add(ctx, s, ans, cand);
+            } else {
+                /* "Otherwise, set candidate prefix to the result of generating a prefix given map, attribute
+                   namespace and prefix index." */
+                cand = xs_generate_prefix(ctx, s, ans);
+            }
+            /* "Let map value be the empty string if attribute namespace is null, and attribute namespace
+               otherwise. Set local prefixes map[candidate prefix] to map value." `ans` is non-null in this
+               whole branch, so map value IS the namespace, and `ans` is already its interned string.
+
+               THIS WRITE IS WHAT MAKES THE ARM ABOVE SOUND, and it is the half a reader building only the
+               arm would leave out: the arm's own condition is "local prefixes map does not contain prefix",
+               so without this the map is populated only from the element's own xmlns declarations and a
+               SECOND attribute carrying the same authored prefix for a DIFFERENT namespace would keep it
+               too — emitting two conflicting `xmlns:p=` declarations on one start tag, which is ill-formed
+               output rather than a missing refinement. */
+            xs_local_add(ctx, s, cand, ans);
             xs_lit(ctx, s, " xmlns:");
             xs_out_id(ctx, s, cand);
             xs_lit(ctx, s, "=\"");
