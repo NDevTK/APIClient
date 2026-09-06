@@ -308,7 +308,15 @@ typedef struct {
        required by lib/store-record.js's currency predicate; these three are in neither yet, because that JS
        deploys on WRITE while this C is live only after a build (§A-CROSS-BOUNDARY-DIFF) and the currency
        predicate SHEDS what it judges stale — so requiring them early would drop every parked @S record in the
-       store until the next install. THE OBSERVATION THAT RETIRES IT, and not the reason: these names occurring
+       store until the next install.
+       THAT ENUMERATION IS OF THE SHIPPED CONSUMERS AND IT IS NOT THE WHOLE SET, which matters because it
+       decides whether these numbers are measurable before that install. The `@S` line a host prints is a
+       VERBATIM dump of this array — not a hand-picked projection of it — so a field added here reaches the
+       archived logs on the first build that emits it, with no census change anywhere and nothing to keep in
+       step. Corpus analysis therefore gets these three immediately while the card waits, which is the
+       difference between a number that is invisible until a popup diff and one that can be measured next
+       build. It is also why the deferral above costs the investigation nothing: the reading that needs them
+       is over runs, and runs are what the logs are. THE OBSERVATION THAT RETIRES IT, and not the reason: these names occurring
        in `extension/lib/qjs/qjs.wasm`, checked by CONTENT with `runwayPerMille` as the positive control and an
        invented name as the negative one. Measured at this commit: the control PRESENT, all three ABSENT. When
        the artifact carries them the reader and the requirement land together, in one diff. */
