@@ -5721,26 +5721,80 @@ static int engine_orphan_seed(JSContext *ctx, Flow *f) {
     /* AN EMPTY WALK IS NOT THE SAME CLAIM AS "THIS BUNDLE SHIPS NO UNCALLED CODE", AND THE TAKE IS NARROWER
        THAN THE SURFACE §What-the-tool-produces NAMES — a NAMED RESIDUAL, because what is here is correct and
        what it covers is smaller than what the product promises.
-       WHAT IS NOT COVERED: JS_OrphanTakeOne enumerates rt->gc_obj_list filtered to JS_GC_OBJ_TYPE_JS_OBJECT,
-       so what it can find is a live FUNCTION OBJECT whose body has not been entered. A body the bundle
-       shipped whose only closure has already been released is therefore not an orphan this walk can see —
-       and quickjs is refcounted, so a `function` declared at the scope of an IIFE and referenced by nothing
-       that outlives it is gone the instant that frame is popped, before any flow has run out of work. That is
-       the ordinary shape of a minified bundle's inner helpers.
-       WHAT THE NEXT DIFF BUILDS is NOT a second enumeration: JS_GC_OBJ_TYPE_FUNCTION_BYTECODE is a sibling
-       type on the SAME list, and a nested body is held alive by its enclosing body's cpool, so the BODIES are
-       already reachable from the walk that is here. What is missing is the ENVIRONMENT — js_closure takes the
-       enclosing frame's `var_refs`, and those died with the closure — so driving such a body means MINTING an
-       environment nobody observed, which is a concolic question (§Solver: an unknown with no example) and
-       belongs beside engine_orphan_call's argument minting rather than inside the take.
-       HOW ITS ABSENCE SHOWS, and this is measured rather than argued (artifact 9c757178, solvergate `direct`,
-       3 runs a side, identical on every run): two documents differing ONLY in whether the uncalled function's
-       closure outlives its defining frame. Held on a live object -> `asked` 396, `driven` 2, and the two
-       endpoints only those bodies name appear in the finding set carrying `{orphan<locator>.argN}`. Left as
-       a bare declaration inside the IIFE -> `asked` 387, `driven` 0, and both endpoints absent. Same seed,
-       same ladder, same schedule; the difference is entirely whether the heap still held a closure. So a
-       `driven` of 0 beside a large `asked` is this residual until the heap is checked, and NOT the third of
-       the three readings engine_orphan_census names being the same thing as the first. */
+       WHAT IS NOT COVERED, as a PROPERTY and not as a list of source shapes: this walk can hand over only a
+       body that has a LIVE FUNCTION OBJECT OF ITS OWN, because JS_OrphanTakeOne enumerates rt->gc_obj_list
+       filtered to JS_GC_OBJ_TYPE_JS_OBJECT and reads the body off `p->u.func.function_bytecode`. A body whose
+       only closure has already been released has no such object — quickjs is refcounted and
+       js_bytecode_function_finalizer drops the body's reference with the closure — so it is invisible here
+       however loudly the bundle ships it. That is the ordinary shape of a minified bundle's inner helpers.
+       THE NEXT-DIFF CLAUSE THAT STOOD HERE IS RETIRED, AND IT IS RECORDED RATHER THAN DELETED because its
+       METHOD is the part the next reader would otherwise copy. It said: "JS_GC_OBJ_TYPE_FUNCTION_BYTECODE is
+       a sibling type on the SAME list, and a nested body is held alive by its enclosing body's cpool, so the
+       BODIES are already reachable from the walk that is here. What is missing is the ENVIRONMENT — js_closure
+       takes the enclosing frame's `var_refs`, and those died with the closure." Every premise in it is true
+       and the two conclusions drawn from them are not. Read, at the sites named, without a build:
+       (1) THE REACHABILITY ARGUMENT TRACES ITS EDGE ONE WAY AND NEVER ASKS WHAT HOLDS THE ROOT. `cpool` is a
+       PARENT-TO-CHILD owning edge and nothing else — cpool_add takes js_dup at parse, free_function_bytecode
+       releases `b->cpool[i]`, the mark arm walks it — and JSFunctionBytecode carries NO parent pointer. So a
+       released closure's body is alive IF AND ONLY IF its enclosing chain's root is held, and for a document's
+       script that root is the program function object async_func_init dup'd into `sf->cur_func`, which
+       flow_step's program-completion arm releases through JS_FlowFree — whose completed and suspended arms
+       BOTH free `sf->cur_func` — before it writes `f->frame = NULL`, the state this function is reached in.
+       A parked sibling's JS_FlowClone dups the same `cur_func` and extends that life, so the population is a
+       function of THE SCHEDULE (how many flows still hold a frame for that program) and can be empty.
+       "Already reachable" asserts unconditionally what is at
+       best conditional, and the condition is one no reader of this site can see.
+       (2) THE ENUMERATION IT NAMES CANNOT SUPPLY THE HALF OF THE ENVIRONMENT THAT IS OBSERVED, and this half
+       needs no measurement at all. A bare JSFunctionBytecode reached off the object list carries no route back
+       to any live enclosing closure — see the missing parent pointer above — and js_closure2 reads EVERY
+       JS_CLOSURE_REF / JS_CLOSURE_GLOBAL_REF cell out of exactly that closure's `p->u.func.var_refs`. So that
+       walk could only mint the whole environment, which is §Solver's "a SHAPE for an APP-OWNED value is a
+       DRIVING FAILURE" one scope out: it would replace module-scope config the page COMPUTED with an unknown
+       and degrade every endpoint the body builds out of it.
+       WHAT THE NEXT DIFF BUILDS is therefore a DESCENT FROM THE OBJECTS THIS WALK ALREADY VISITS rather than
+       a second enumeration, because that walk is the one place both halves are in hand at once: the live
+       enclosing closure `p`, and in `p->u.func.function_bytecode->cpool` every body it can instantiate. What
+       is handed over is that PAIR. The environment then splits exactly along js_closure2's own switch:
+         · JS_CLOSURE_REF / JS_CLOSURE_GLOBAL_REF are OBSERVED — `cur_var_refs[cv->var_idx]` is the enclosing
+           closure's own `var_refs`, alive because that object is what the walk found — and are TAKEN.
+         · JS_CLOSURE_LOCAL / JS_CLOSURE_ARG go through get_var_ref, which dereferences the enclosing STACK
+           FRAME (`sf->cur_func`, `sf->var_buf`, `sf->arg_buf`). That frame is gone and no session gets it
+           back, so THOSE are the unknowns — one per JSClosureVar, named from `cv->var_name` beside the
+           parent's JS_OrphanHash so the per-flow tracker keys them apart for the reason engine_orphan_call
+           gives about arguments. The shape needs no new kind: get_var_ref's own uncaptured arm already builds
+           a DETACHED JSVarRef holding its own value, which is what a minted cell is.
+       The pair is found at the take; the mint belongs beside engine_orphan_call's argument minting, which is
+       the same question one scope out. IT CANNOT BE BUILT FROM THIS DIRECTORY, and that is read rather than
+       assumed: quickjs.h's JS_EXTERN list hands out a var-ref cell a caller ALREADY HOLDS
+       (JS_VarRefGetValue / JS_VarRefSetValue) and, on the spellings searched, nothing that yields a body's
+       nested bodies or a closure's cell BY INDEX — so the descent is a quickjs-side entry first.
+       AND THAT ENTRY IS NOT ON THE `qjs_*` WASM ABI, which is the wrong rule to reach for here and was
+       reached for once while this paragraph was being written. JS_OrphanTakeOne is plain C linkage — one
+       JS_EXTERN in quickjs.h, one definition in quickjs.c, one caller in this file — so its sibling costs
+       three files in one link and NOT §A-CROSS-BOUNDARY-DIFF's seven hops (build.mjs names it only inside a
+       diagnostic string). What it does still cost is a SUBMODULE commit plus the superproject's gitlink,
+       which land together or not at all.
+       HOW ITS ABSENCE SHOWS, measured rather than argued (artifact 9c757178, solvergate `direct`, 3 runs a
+       side, identical on every run): two documents differing ONLY in whether the uncalled function's closure
+       outlives its defining frame. Held on a live object -> `asked` 396, `driven` 2, and the two endpoints
+       only those bodies name appear in the finding set carrying `{orphan<locator>.argN}`. Left as a bare
+       declaration inside the IIFE -> `asked` 387, `driven` 0, and both endpoints absent. Same seed, same
+       ladder, same schedule; the difference is entirely whether the heap still held a closure.
+       WHAT THAT PAIR IS AND IS NOT EVIDENCE FOR, which the retired clause did not separate and which is why
+       it read as settled. It establishes WHAT IS NOT COVERED and nothing past it. Its second document is the
+       case (1) shows may hold no live body at all, so a diff that builds the descent above and is SCORED
+       against that document can read as a total failure while being correct. Score it instead on the
+       population the descent reaches unconditionally: an ENTERED body held by a live object — `App.init` on a
+       global, called once, with a helper it does not call — whose nested body is alive by that object, never
+       entered, and reachable from no object of its own. Expect the helper's endpoint to appear carrying
+       `{orphan<locator>.argN}` beside an env-named unknown, and expect the IIFE document to be unchanged.
+       AND THE ONE COUNT THAT SEPARATES THE TWO READINGS OF ONE `driven` 0, which nothing in this tree can
+       take today for the reason just given: how many live, never-entered, non-program JSFunctionBytecode
+       exist at ask time. The retired clause predicts at least one in the IIFE document; the reading above
+       predicts it is scheduler-dependent there and at least one in the `App.init` document. Printing that
+       count is the first thing the descent should be able to do, and it settles this paragraph.
+       So a `driven` of 0 beside a large `asked` is this residual until the heap is checked, and NOT the third
+       of the three readings engine_orphan_census names being the same thing as the first. */
     /* THE MEMO IS RECORDED ONLY BY AN EMPTY WALK, and that is what the take taking ONE changes about it. It
        used to be written before the walk, which was right for a call that drained the set: after it, the answer
        to "is there anything at this generation" really was no. A one-at-a-time take leaves the rest of the set
