@@ -4172,6 +4172,198 @@ function lineIndex(src) {
  * unquoted, and then the site's evidence names the file that did, which is a claim a reader can check in one
  * command. Nothing is suppressed either way: the band below prints every site with the file that authored
  * the words, so the queue stays drainable and the verdict stays falsifiable. */
+/* ---- THE FORK'S OWN SOURCES: a quotation whose ATTRIBUTION is a FILE rather than a standard --------------- */
+
+/* THE FOURTH READING OF AN UNCORROBORATED ROW, AND THE ONE THAT BAND'S OWN SENTENCE DOES NOT NAME.
+ *
+ * A comment in this tree writes `quickjs-step.h's rule is explicit about what that means: "…"`. That is an
+ * attribution, and its target is a FILE — in a project whose JS engine is a SUBMODULE. `defaultTargets` reads
+ * `engine/host`, the fork's own `quickjs.c` and `quickjs.h`, the two design notes, `extension/` and the gates;
+ * every OTHER translation unit under `engine/qjs` is outside it. So a quotation of one is compared against
+ * NOTHING — not against a standard, because the citation above it names none or names one whose words these
+ * are not; and not by `treeAuthored` either, because the corpus that answers "did this tree write these words"
+ * IS `defaultTargets`, and the named file is not in it. It lands in UNJUDGEABLE / UNCORROBORATED, whose banner
+ * names three readings (a fabrication, a citation of an unindexed standard, this tree's own prose in quotation
+ * marks) and this is a fourth. Two lanes reached that independently; the band's own words are what sent them.
+ *
+ * WHAT MAKES IT CHECKABLE IS THAT THE SITE NAMES ITS SOURCE. There is no vote here and no title coincidence —
+ * the two mechanisms this file elsewhere prices in false accusations — because the comment STATES which file
+ * it is quoting, so the audit opens THAT file and asks whether the words are in it. It is the form the header
+ * endorses: a fact carrying its own proof. And it is the OPPOSITE of the coupling CLAUDE.md records against
+ * the own-prose channel, where a clearance consults the whole corpus, so one file's quoting style grants or
+ * withdraws a DIFFERENT file's clearance. A verdict here depends on exactly two things — the accused site, and
+ * the file the accused site names.
+ *
+ * IT IS A CLEARANCE AND NOT AN ACCUSATION, AND THAT ASYMMETRY IS THE WHOLE OF ITS PRECISION ARGUMENT. The
+ * anchor rule is NEAREST-PRECEDING over a whole prose unit, which is loose — a unit can name a file in its
+ * first paragraph and quote a standard in its fifth. Looseness cannot manufacture a CLEARANCE, because a
+ * clearance rests on the named file actually holding the words and no anchor rule can put them there. It is
+ * exactly what would manufacture an ACCUSATION, because an accusation would rest on ABSENCE, and absence is
+ * what a wrong anchor always produces. So the positive answer is a verdict and the negative answer is a BAND:
+ * counted, listed one line each, and openly unchecked. CLAUDE.md's own division — an instrument that cannot
+ * see something has not found anything — read at the one place where this channel genuinely cannot see.
+ *
+ * THE SET IS DERIVED FROM `defaultTargets` AND NEVER LISTED, for the reason every derived rule here is: a
+ * hand-kept list of which `engine/qjs` files this audit already reads would be a second copy of a fact the
+ * walk holds, and the copy that drifts is the one nobody runs. The derivation also makes the haystack DISJOINT
+ * from the audited population by construction, in ONE line below — and that is what lets this channel keep
+ * quoted runs in its haystack where `treeProse` must blank them. `treeProse` blanks because a fabrication
+ * written at one AUDITED site would otherwise find itself at another; a file this audit never reads can hold
+ * no accused site, so there is nothing here for a fabrication to find, and blanking anyway would delete
+ * exactly the sentences an author is likeliest to quote — a file's own quoted terms — for nothing.
+ *
+ * ABSENT AND ZERO ARE DIFFERENT FACTS HERE TOO. `engine/qjs` is a submodule and a plain clone leaves it EMPTY,
+ * which is the hole `defaultTargets` already announces for `quickjs.c`. With no directory this map is empty,
+ * every attribution answers "no fork source named", and the channel reads clean while being blind — so the
+ * census prints the size of this set on every run, including the clean one. */
+let FORK_SOURCES = null;
+function forkSources() {
+  if (FORK_SOURCES) return FORK_SOURCES;
+  FORK_SOURCES = new Map();
+  const audited = new Set(defaultTargets());
+  let names = [];
+  try { names = readdirSync(join(HERE, "qjs")); } catch { return FORK_SOURCES; }
+  for (const e of names) {
+    if (!/\.[ch]$/.test(e)) continue;
+    const p = join(HERE, "qjs", e);
+    /* THE ONE LINE THAT MAKES THE HAYSTACK DISJOINT FROM THE ACCUSED POPULATION. An assert beside it would be
+     * one whose two sides cannot disagree — the vacuous check CLAUDE.md names, which reports as a passing
+     * check and is not one — so the property is stated here and held by the `continue`, not by a condition
+     * that can never be false. What a later widening of `defaultTargets` does is SHRINK this set, which is the
+     * safe direction: a file that becomes audited stops being a fork source and its quotations fall to
+     * `treeAuthored`, which is where an audited file's prose belongs. */
+    if (audited.has(p)) continue;
+    FORK_SOURCES.set(e, p);
+  }
+  return FORK_SOURCES;
+}
+
+/* A NAME IS MATCHED ON ITS OWN BOUNDARIES, WHICH IS NOT PEDANTRY — IT IS THE WHOLE FALSE-POSITIVE SURFACE.
+ * `list.h` is a real fork source and `dom_string_list.h`, `csp_directive_list.h`, `csp_source_list.h` and
+ * `idb_name_list.h` are real files of THIS tree, so a substring match attributes four of this project's own
+ * headers to the submodule. The character before a match may not be a name character, and `/` is deliberately
+ * NOT one, so a full path (`engine/qjs/qjs.c`) matches on its basename and `libqjs.c` does not. */
+const FORK_NAME_BEFORE = /[A-Za-z0-9_.-]/;
+const FORK_NAME_AFTER = /[A-Za-z0-9_-]/;
+
+/* WHICH FORK SOURCE A QUOTATION IS ATTRIBUTED TO, or none. NEAREST-PRECEDING — the same rule PASS 4 already
+ * uses to decide which citation owns a quotation, asked of a different kind of anchor, because an author
+ * writes the source and THEN the words.
+ *
+ * QUOTED RUNS ARE BLANKED OUT OF THE ANCHOR TEXT AND CODE SPANS ARE NOT, and the two are opposite on purpose.
+ * An attribution is a claim the author makes in their OWN voice, so a filename inside a quotation is part of
+ * what is being QUOTED rather than a statement about where the words came from — the same clause `treeProse`
+ * rests on, asked of a name instead of a sentence. A BACKTICK span is the opposite case and it is the MEASURED
+ * one: `file_system_writable.c` spells an attribution as `` `quickjs-atom.h`'s ``, which is how this tree
+ * writes them, so masking code spans would delete the commonest TRUE anchor there is.
+ * THE DOUBLE-QUOTED CASE HAS NO MEASURED INSTANCE IN THIS TREE and the blanking stands anyway, because its
+ * error has a DIRECTION: blanking only ever REMOVES an anchor, so it can only ever remove a fork row, and a
+ * removed row is one the standards channel or the own-prose channel is already looking at. Positions are
+ * preserved rather than the text compacted, because the only thing this function reports is WHICH match is
+ * nearest. */
+function forkNameAt(text, name, i) {
+  if (i > 0 && FORK_NAME_BEFORE.test(text[i - 1])) return false;
+  const after = text[i + name.length];
+  return after === undefined || !FORK_NAME_AFTER.test(after);
+}
+
+/* EVERY FILE THIS AUDIT DOES READ, BY BASENAME — the COMPETING anchors, and the reason this exists is that a
+ * rule which defers only to a section mark defers to half the claims an author can make. A comment that names
+ * a submodule header in one clause and `quickjs.c` in the next is attributing the quotation after it to
+ * quickjs.c, and a fork channel that took the earlier name would report a sentence as missing from a file
+ * nobody said it was in. MEASURED ON THIS FILE'S OWN AUTHOR: the correction written into `engine.c` for the
+ * incident that produced this channel names a submodule header, then names quickjs.c, then quotes quickjs.c —
+ * and without this it generated three false rows in the band it was documenting.
+ * IT IS DERIVED FROM `defaultTargets` LIKE THE FORK SET, so the two are complements by construction and a file
+ * cannot be in both: whichever list a name falls in decides which channel owns the quotation, and no name
+ * decides twice. */
+let AUDITED_NAMES = null;
+function auditedNames() {
+  if (AUDITED_NAMES) return AUDITED_NAMES;
+  AUDITED_NAMES = new Set();
+  for (const p of defaultTargets()) {
+    const b = p.slice(p.lastIndexOf("/") + 1);
+    if (b.includes(".")) AUDITED_NAMES.add(b);
+  }
+  return AUDITED_NAMES;
+}
+
+/* THE NEAREST PRECEDING SOURCE CLAIM, whichever kind it is. Returns the anchor with `isFork` saying which
+ * channel owns the quotation after it — the fork channel fires only on its own, and defers to an audited
+ * file's name exactly as it defers to a section mark, because all three are an author saying where the words
+ * came from. The audited scan runs ONLY behind a raw fork hit: it is a set of hundreds of names and almost no
+ * prose unit in this tree names a submodule source at all. */
+function sourceAnchor(pre) {
+  const fork = forkAttribution(pre);
+  if (!fork) return null;
+  let best = fork;
+  for (const name of auditedNames()) {
+    if (name.length + best.at > pre.length) continue;
+    for (let i = pre.indexOf(name, best.at + 1); i >= 0; i = pre.indexOf(name, i + 1))
+      if (forkNameAt(pre, name, i) && i > best.at) best = { at: i, name, audited: true };
+  }
+  return { ...best, isFork: !best.audited };
+}
+
+function forkAttribution(pre) {
+  const srcs = forkSources();
+  if (!srcs.size || !pre) return null;
+  /* THE RAW SCAN IS A GATE AND NOT THE ANSWER, and the order is the whole of this channel's cost. Almost no
+   * prose unit in this corpus names a submodule source, so blanking every unit's quoted runs to find that out
+   * would put a scan of the entire tree behind a question that is almost always no. A name absent from the raw
+   * text is absent from the blanked text too — blanking only ever removes — so bailing here can miss nothing. */
+  let any = false;
+  for (const name of srcs.keys()) {
+    for (let i = pre.indexOf(name); i >= 0 && !any; i = pre.indexOf(name, i + 1))
+      if (forkNameAt(pre, name, i)) any = true;
+    if (any) break;
+  }
+  if (!any) return null;
+  const ch = [...pre];
+  for (const r of [...quotedRuns(pre), ...singleQuotedRuns(pre)])
+    for (let i = Math.max(0, r.at), stop = Math.min(ch.length, r.at + r.text.length + 2); i < stop; i++) ch[i] = " ";
+  const text = ch.join("");
+  let best = null;
+  for (const name of srcs.keys())
+    for (let i = text.indexOf(name); i >= 0; i = text.indexOf(name, i + 1))
+      if (forkNameAt(text, name, i) && (!best || i > best.at)) best = { at: i, name };
+  /* THE POSITION RIDES THE ANSWER because the walk's nearest-preceding rule compares it against a section
+   * mark, and a caller that re-derived it with `lastIndexOf` would get a DIFFERENT offset: the raw last
+   * occurrence can be one this function rejected — inside a quoted run, or failing a name boundary — so the
+   * comparison would run against a position no anchor stands at. One owner of "where the anchor is". */
+  return best;
+}
+
+/* THE NAMED FILE'S OWN WORDS, AS THE SAME TOKEN STREAM A QUOTATION IS COMPARED AGAINST. Built exactly the way
+ * `treeProse` builds an audited file's — `proseSpans` then `quoteTokens` — because what counts as this
+ * project's prose may not come to mean two things depending on which side of the submodule boundary a file
+ * sits on. The one difference is the blanking, and its argument is at `forkSources` above. */
+const FORK_TEXT = new Map();
+function forkText(name) {
+  if (FORK_TEXT.has(name)) return FORK_TEXT.get(name);
+  const p = forkSources().get(name);
+  let out = null;
+  try {
+    const s = readFileSync(p, "utf8");
+    let prose = "";
+    for (const sp of proseSpans(s, p)) prose += s.slice(sp[0], sp[1]) + "\n \n";
+    out = quoteTokens(prose, false);
+  } catch { out = null; }
+  FORK_TEXT.set(name, out);
+  return out;
+}
+
+/* DOES THE FILE THE SITE NAMES HOLD THESE WORDS. Returns "held", "unheld", or null where there is no
+ * attribution to ask about — three states and not two, for the reason every partition here has three: a
+ * quotation nobody attributed to a file and one attributed to a file that does not hold it take opposite
+ * work, and a boolean would sum them. */
+function forkHeld(name, frags) {
+  if (!name) return null;
+  const hay = forkText(name);
+  if (hay === null) return null;
+  return containsAnyForm(hay, frags) ? "held" : "unheld";
+}
+
 let TREE_PROSE = null;
 function treeProse() {
   if (TREE_PROSE) return TREE_PROSE;
@@ -4452,6 +4644,10 @@ function audit(argv, opts = {}) {
    * standing in the file. Only the two site-drainable states are collected; FOREIGN is not, because no edit at
    * that site can fix it, and NO-SECTION is a citation this run already reports as wrong somewhere else. */
   const unjudgedQuotes = [];
+  /* THE FORK-SOURCE CHANNEL'S OWN POPULATION — a quotation attributed to a file rather than to a standard.
+   * It is filled by its own walk over prose units at the end of each file's pass, NOT by PASS 4, because its
+   * question does not involve a citation at all. See the walk for why that is not a preference. */
+  const forkSites = [];
   /* EVERY QUOTATION THIS RUN SAW, FOR THE AGREEMENT CHANNEL — see agreementPassages. It is filled BEFORE the
    * five refusals below and never after, because this channel's evidence is other SITES rather than a
    * standard: a quotation whose citation nothing placed is one this tree may still be quoting twice, and it is
@@ -4468,7 +4664,11 @@ function audit(argv, opts = {}) {
                   noCorpus: 0, noCorpusCrash: 0, noSection: 0, noSectionCrash: 0, tooShort: 0,
                   single: 0, singleCrash: 0, singleTooShort: 0,
                   voted: 0, votedCrash: 0, foreign: 0, foreignCrash: 0, unresolved: 0, unresolvedCrash: 0,
-                  ownProse: 0, ownProseCrash: 0 };
+                  ownProse: 0, ownProseCrash: 0,
+                  /* THE FORK-SOURCE CHANNEL'S TWO ANSWERS, COUNTED APART FROM EACH OTHER AND FROM THE
+                   * POPULATION THEY CAME OUT OF — one is a verdict and one is a band, so a single figure
+                   * would sum a thing this tool judged with a thing it cannot see. */
+                  forkCleared: 0, forkClearedCrash: 0, forkUnheld: 0, forkUnheldCrash: 0 };
   const noCorpusBy = new Map();
   /* THE QUOTATION FINDINGS THE PROSE ITSELF RETIRES — a counted band, never a silence. See the emit router. */
   const quoteMentions = [];
@@ -5957,6 +6157,13 @@ function audit(argv, opts = {}) {
            * judged quotations into unjudged ones, which is a coverage loss that reads as a falling finding
            * count. So the flag is computed here, where the prose is in hand, and consumed at the push. */
           rec.qMention = mentionOfText(precedingProse(src, spans, c.at) + prose.slice(0, q.at), prose.slice(q.at));
+          /* NOTHING FORK-RELATED IS ASKED HERE, AND THAT IS DELIBERATE RATHER THAN AN OMISSION. This pass
+           * governs a quotation by its CITATION, and the fork channel governs one by its nearest ANCHOR of
+           * either kind — so asking the fork question at this point would answer it under a different rule
+           * from the one the channel's own walk uses, on a `pre` that excludes the governing citation's own
+           * mark. Two spellings of one question is the copy this file refuses everywhere else, so the walk at
+           * the end of this file's pass is the only place the question is asked, and its answers reach the two
+           * consumers by the site's own text. */
           /* BEFORE EVERY REFUSAL BELOW — the agreement channel is asked of the whole `qstat.seen` population,
              and half its value is the sites the resolver could not place. */
           agreeSeen.push({ ...rec, frags: f });
@@ -6574,6 +6781,72 @@ function audit(argv, opts = {}) {
         }
       }
     }
+
+    /* THE FORK-SOURCE CHANNEL, WALKED OVER PROSE UNITS AND NOT OVER CITATIONS — see `forkSources`.
+     *
+     * IT IS INDEPENDENT OF THE CITATION CHANNEL BECAUSE ITS QUESTION IS, and hanging it off PASS 4 was a
+     * measurement away from being a channel that could not see its own motivating defect. PASS 4 walks the
+     * prose a CITATION governs, so a quotation in a comment carrying no section number is not in its
+     * population at all — and the mis-attribution that put this channel here was exactly that: an ordinary
+     * block comment naming a submodule header, quoting a sentence that file does not contain, and citing
+     * no standard anywhere in it.
+     * A channel keyed on citations would have reported nothing about it, which was checked against that
+     * revision rather than assumed. So the anchor here is the FILE MENTION, and the rule over it is the same
+     * NEAREST-PRECEDING one PASS 4 uses for citations, asked of the whole unit rather than of a governed slice.
+     *
+     * THE POPULATION IS THIS CHANNEL'S OWN AND IS NOT A SUBSET OF `qstat.seen`, which is why the band prints
+     * its own denominator: a quotation under no citation is not a quotation this check "saw" in PASS 4's
+     * sense, and reporting one against that total would be a fraction of the wrong thing. */
+    {
+      const seenUnit = new Set();
+      for (let i = 0; i < spans.length; i++) {
+        const u = proseUnit(src, spans, spans[i][0]);
+        if (!u || seenUnit.has(u.lo)) continue;
+        seenUnit.add(u.lo);
+        const prose = unitProse(src, spans, u, spans[u.lo][0], spans[u.hi][1]);
+        if (!prose) continue;
+        /* THE CHEAP TEST FIRST AND THE SCANNERS ONLY BEHIND IT. Almost every unit in this tree names no
+         * submodule source at all, and `quotedRuns` over every comment in the corpus is the one cost this
+         * channel could impose on a run that gains nothing from it — so `forkAttribution` bails on a raw scan
+         * before it blanks anything, and this call is that bail. */
+        if (!forkAttribution(prose)) continue;
+        const runs = [...quotedRuns(prose), ...singleQuotedRuns(prose)].sort((a, b) => a.at - b.at);
+        for (const q of runs) {
+          const f = fragmentsOf(q.text);
+          if (!f.all.length || f.compared < MIN_COMPARED_WORDS) continue;
+          /* NEAREST-PRECEDING OVER BOTH KINDS OF ANCHOR, WHICH IS PASS 4'S RULE AND NOT A SECOND ONE. A
+           * citation and a file mention are both an author saying WHERE THESE WORDS COME FROM, so the one
+           * standing nearer owns the quotation; a fork mention four paragraphs up does not own a run that has
+           * a section number three lines above it. MEASURED, on the first file this channel was pointed at:
+           * `subtle_crypto.c`'s file header names quickjs-step.h in one paragraph and quotes Web Crypto's
+           * registry lookup four paragraphs later under its own number, and without this the channel reported
+           * that WebCrypto sentence as missing from a quickjs header. Deferring is the conservative direction
+           * in both halves — it can only ever REMOVE a fork row, and a removed row is one the standards
+           * channel or the own-prose channel is already looking at.
+           * THE TWO KINDS OF COMPETING ANCHOR ARE ASKED DIFFERENTLY BECAUSE THEY COST DIFFERENTLY. A file name
+           * is asked by `sourceAnchor`, which returns whichever claim stands nearest and says which channel
+           * owns it. A section is asked as a MARK and not a parse: only whether the author wrote a `§` between
+           * the anchor and the quotation, never which standard it resolves to. A citation spelled without the
+           * mark is invisible to it, which leaves such a quotation attributed to the file — the band it lands
+           * in is the one that says out loud it cannot separate that case. */
+          const pre = prose.slice(0, q.at);
+          const anchor = sourceAnchor(pre);
+          if (!anchor || !anchor.isFork) continue;
+          if (pre.lastIndexOf("§") > anchor.at) continue;
+          const held = forkHeld(anchor.name, f);
+          if (!held) continue;
+          const name = anchor.name;
+          /* THE LINE IS THE UNIT'S OWN AND THE ROW SAYS SO. A prose unit is a FLATTENED stream — a comment's
+           * gutter and a message's literal joints are gone from it — so an offset inside it does not map back
+           * to a source offset without a second flattening rule, which would be a copy of `unitProse`'s. The
+           * comment or message a row names is the thing a reader opens, and the quotation printed beneath it
+           * is what they search for inside it. PASS 4 already reports the CITATION'S line rather than the
+           * quotation's for the same reason. */
+          forkSites.push({ file: relative(ROOT, file), line: lineOf(spans[u.lo][0]), fork: name,
+                           quote: q.text.trim(), held, crash: inCrashMessage(src, spans, spans[u.lo][0]) });
+        }
+      }
+    }
   }
 
   /* A site the tool CANNOT decide, standing on a number whose other sites in the same file ARE diagnosed, is
@@ -6605,6 +6878,53 @@ function audit(argv, opts = {}) {
     for (const q of kept) quotes.push(q);
     qstat.ownProse = ownProse.length;
     qstat.ownProseCrash = ownProse.filter((q) => q.crash).length;
+  }
+  /* AND THE SAME REMOVAL FOR A QUOTATION THE SITE ATTRIBUTED TO A FILE THIS AUDIT DOES NOT READ, WHERE THAT
+   * FILE HOLDS THE WORDS. It is the own-prose question asked of the submodule half of this project, and it is
+   * asked SECOND so the own-prose band is byte-identical to what it printed before: a site both channels
+   * would clear leaves under the older verdict and this one reports the overlap rather than competing for it.
+   * THE FINDING TOTAL FALLS AND THE DENOMINATOR DOES NOT, which is the direction CLAUDE.md says invites no
+   * scrutiny — so the size of this population prints beside the NOT-FOUND figure it came out of, and every one
+   * of its sites prints below with the file that holds the words, which is a claim a reader checks in one
+   * grep. `qstat.checked`/`verified`/`notFound` are PASS 4's own counts and are deliberately not adjusted,
+   * for the reason the own-prose block directly above gives. */
+  const forkProse = [], forkHeldQ = [], forkUnheldQ = [];
+  let unjudgedOut = 0;
+  {
+    /* THE SAME GATE `ownCands` USES, AND FOR THE SAME REASON RATHER THAN FOR SYMMETRY. A quotation whose words
+     * ARE some standard's — at another section, in another standard, or for the first four words of the cited
+     * one — is a SPEC quotation with a filename standing near it, and clearing that on the filename would be
+     * the exemption swallowing the defect. So only the band this file's own census already calls
+     * indistinguishable from prose is asked: QUOTE-NOT-FOUND that left the standard inside MIN_FRAGMENT_WORDS.
+     * `divergedLate` is the one owner of that threshold; asking it again here would be the copy that drifts. */
+    /* THE WALK'S ANSWER REACHES ITS TWO CONSUMERS BY THE SITE'S OWN TEXT — one producer, and a key both can
+     * build. What it cannot tell apart is two identical quotations in ONE file where only one stands under a
+     * fork anchor: the clearance is then granted to both. That is stated rather than guarded, because the
+     * fact it rests on is still true of the words and the file, and a guard would need the walk and this
+     * filter to agree on an offset neither of them holds in the other's coordinates. */
+    const forkKey = new Set(forkSites.filter((s) => s.held === "held")
+                                     .map((s) => s.file + " " + quoteTokens(s.quote, false)));
+    const isForkHeld = (q) => forkKey.has(q.file + " " + quoteTokens(q.quote, false));
+    const kept = quotes.filter((q) =>
+      (q.kind === "QUOTE-NOT-FOUND" && !divergedLate(q) && isForkHeld(q) ? (forkProse.push(q), false) : true));
+    quotes.length = 0;
+    for (const q of kept) quotes.push(q);
+    /* THE POPULATION IS BUILT HERE, WHERE BOTH HALVES ARE IN ONE HAND, AND NOT AT THE BAND THAT PRINTS IT —
+     * the census line runs BEFORE the bands and reads these counters, and a counter set by its own printer is
+     * one that reads zero for every reader upstream of it. */
+    /* THE BAND'S POPULATION IS THE UNIT WALK'S AND NOT THIS FILTER'S. The filter above answers one question
+     * — may this QUOTE-NOT-FOUND finding stand — and the walk answers the channel's, over a population that
+     * includes every quotation no citation governs. The walk's population CONTAINS the filter's, because the
+     * unit a citation stands in is a unit the walk reads and the attribution rule is the one helper both call;
+     * so `forkProse.length` is reported as a subset figure rather than added to anything. */
+    forkHeldQ.push(...forkSites.filter((q) => q.held === "held"));
+    forkUnheldQ.push(...forkSites.filter((q) => q.held === "unheld"));
+    qstat.forkCleared = forkHeldQ.length; qstat.forkClearedCrash = forkHeldQ.filter((q) => q.crash).length;
+    qstat.forkUnheld = forkUnheldQ.length; qstat.forkUnheldCrash = forkUnheldQ.filter((q) => q.crash).length;
+    /* WHERE THE HELD ROWS USED TO STAND, COUNTED HERE BECAUSE THE BAND PRINTS BEFORE THE ONE THEY CAME OUT OF.
+     * A count set by its own printer reads zero for every reader upstream of it. */
+    for (const u of unjudgedQuotes) u.forkHeld = isForkHeld(u);
+    unjudgedOut = unjudgedQuotes.filter((u) => u.forkHeld).length;
   }
   /* A QUOTATION FINDING IS A FINDING, SO --since MUST SEE IT — and this line is what makes "run it on what you
    * write" reach the axis a lane is most likely to get wrong. A fabricated sentence is written by the person
@@ -7046,7 +7366,8 @@ function audit(argv, opts = {}) {
      * is what says the word floor — never the mark — is what separates a term from a quotation. */
     console.log(`    by MARK: ${qstat.seen - qstat.single} double-quoted, ${qstat.single} single-quoted (${qstat.singleCrash} of those in a crash message; a further ${qstat.singleTooShort} single-quoted run(s) were declined by the word floor, which is where this tree's own terms and property names land)`);
     console.log(`    VERIFIED ${qstat.verified}  CONFIRMED-BY-A-NUMBER-THE-SAME-COMMENT-CITES ${qstat.okNearby} (${qstat.okNearbyCrossLiteral} of them by a number in a DIFFERENT LITERAL of the same crash message — the population a span-keyed lookup cannot see, so this figure is what the prose-unit rule is carrying)  WRONG-SECTION ${qstat.wrongSection} (${qstat.wrongSectionAncestor} of them at a section that CONTAINS the cited one)  WRONG-STANDARD ${qstat.wrongStandard}  NOT-FOUND ${qstat.notFound}` +
-      ` (of which ${qstat.notFoundNothing} leave the standard within their first ${MIN_FRAGMENT_WORDS} words, and ${qstat.ownProse} of THOSE are a run of this tree's OWN authored prose in quotation marks — separated by evidence, named below under OWN-PROSE QUOTATION, and NOT counted as findings)`);
+      ` (of which ${qstat.notFoundNothing} leave the standard within their first ${MIN_FRAGMENT_WORDS} words, and ${qstat.ownProse} of THOSE are a run of this tree's OWN authored prose in quotation marks — separated by evidence, named below under OWN-PROSE QUOTATION, and NOT counted as findings;` +
+      ` a further ${forkProse.length} are a quotation of a file under engine/qjs that this audit does not read, named below under FORK-SOURCE QUOTATION and likewise not findings)`);
     /* EACH REFUSAL NAMES ITS OWN STATE AND THE SUBSET A CRASH PRINTS, because these are a WORK QUEUE and the
      * three former `voted` states do not have the same repair: VOTED and UNRESOLVED are drained by writing
      * the standard's name at the site (measured, not assumed — see PASS 4), and FOREIGN is not, because it
@@ -7133,6 +7454,64 @@ function audit(argv, opts = {}) {
       elided(ord, qlimit, "OWN-PROSE QUOTATION");
     }
 
+    /* THE QUOTATIONS WHOSE SOURCE IS A FILE THIS AUDIT DOES NOT READ — the fourth reading of an UNCORROBORATED
+     * row, given its own verdict and its own band. See `forkSources` for what the population is and why the
+     * positive answer is a verdict while the negative one is a band. Both halves print on every run including
+     * the clean one, with the SIZE OF THE HAYSTACK beside them: this channel is silent when `engine/qjs` is
+     * unpopulated, which a plain clone leaves it, and a silent channel and a clean one are different facts. */
+    {
+      const srcN = forkSources().size;
+      const held = forkHeldQ, unheld = forkUnheldQ;
+      console.log(`\nFORK-SOURCE QUOTATION: ${held.length} verdict(s) and ${unheld.length} banded, over a population of` +
+        ` ${held.length + unheld.length} — its OWN denominator, and deliberately not ${qstat.seen}: this channel walks PROSE UNITS,` +
+        ` so it reads quotations no citation governs and PASS 4's total is a fraction of a different thing.` +
+        ` The prose before each names one of the ${srcN} file(s) under engine/qjs that this audit does NOT read, so a` +
+        ` standard is not what these words are attributed to and no other channel here has a document to compare them` +
+        ` against: not the quotation check, whose corpus is the standards, and not OWN-PROSE, whose corpus is exactly` +
+        ` the set this audit reads.`);
+      if (!srcN)
+        console.log(`  NOT READ — engine/qjs holds no source this audit can open, so every attribution above answered` +
+                    ` "no fork source named" and this channel is SILENT rather than clean. engine/qjs is a submodule:` +
+                    ` a plain clone does not populate it. This is an ABSENCE, not a result.`);
+      console.log(`\n  FORK-SOURCE / HELD: ${held.length} (${qstat.forkClearedCrash} in a crash message)` +
+        ` — the named file HOLDS these words. NOT findings and NOT a suppression: this is a quotation of this` +
+        ` project's own engine, and the row names the file, so the claim is one grep from being checked.` +
+        ` ${forkProse.length} of them were QUOTE-NOT-FOUND findings until this channel existed and are no longer counted as such;` +
+        ` ${unjudgedOut} more stood in UNJUDGEABLE below, where nothing had ever asked. The rest carry no citation at all` +
+        ` and were in NO band of this report before this channel existed.`);
+      for (const q of head([...held].sort((a, b) => rank(a) - rank(b)), qlimit)) {
+        console.log(`  ${q.file}:${q.line}${q.crash ? "  [in a crash message]" : ""} — these words are engine/qjs/${q.fork}'s`);
+        console.log(`      "${q.quote.length > 150 ? q.quote.slice(0, 150) + "…" : q.quote}"`);
+      }
+      elided([...held].sort((a, b) => rank(a) - rank(b)), qlimit, "FORK-SOURCE / HELD");
+      /* NAMED RESIDUAL — THE BANDED HALF IS NOT SEPARATED, AND IT COULD BE, FROM CORPORA THIS RUN ALREADY HOLDS.
+       * NOT COVERED: a row whose ANCHOR is wrong and a row whose ATTRIBUTION is wrong print under one heading,
+       *   so the band names this instrument's limit rather than the tree's defects — the shape CLAUDE.md rates
+       *   as a poor work index, and the reason banding is not by itself an answer.
+       * WHAT MUST EXIST AFTERWARD: a sub-partition asking of each banded row whether its words are some INDEXED
+       *   STANDARD's — the probe UNJUDGEABLE runs a few lines down already asks exactly that — or occur in this
+       *   tree's authored prose, which `treeProse` holds. A row either accounts for is a FALSE ANCHOR and
+       *   belongs under that name; a row NEITHER accounts for is the candidate for a real mis-attribution, and
+       *   is the only kind worth a reader's time.
+       * HOW ITS ABSENCE SHOWS: a reader meeting this band cannot tell which line to open, so a genuine wrong
+       *   attribution arrives as one more row among rows that are each a quotation of something else standing
+       *   after a mention of a file — and the more of those the tree accumulates, the less the band is read. */
+      console.log(`\n  FORK-SOURCE / NOT IN THE NAMED FILE: ${unheld.length} (${qstat.forkUnheldCrash} in a crash message)` +
+        ` — NOT findings. The named file does not hold these words, and that is consistent with TWO things this` +
+        ` channel cannot separate: an attribution that is wrong, and a quotation of something else standing after` +
+        ` a mention of that file. The anchor is NEAREST-PRECEDING over a whole prose unit, so a unit that names a` +
+        ` file early and quotes a standard late lands here with nothing wrong at the site. Reading one is what` +
+        ` separates them — and a wrong attribution IS a defect this tree has had: a comment named a submodule` +
+        ` header as the source of a sentence that file does not contain, and its rendering of that sentence` +
+        ` asserted the very thing the real source's next clause exists to deny.`);
+      for (const q of head([...unheld].sort((a, b) => rank(a) - rank(b)), qlimit)) {
+        console.log(`  ${q.file}:${q.line}${q.crash ? "  [in a crash message]" : ""}` +
+                    ` — the comment or message here names engine/qjs/${q.fork}, which does not hold these words`);
+        console.log(`      "${q.quote.length > 150 ? q.quote.slice(0, 150) + "…" : q.quote}"`);
+      }
+      elided([...unheld].sort((a, b) => rank(a) - rank(b)), qlimit, "FORK-SOURCE / NOT IN THE NAMED FILE");
+    }
+
     /* THE QUOTATIONS THIS CHECK REFUSED, AS A CATEGORY WITH SITES IN IT RATHER THAN A CLAUSE IN A SENTENCE.
      * The census line above has counted this population all along, and counting is what CLAUDE.md calls the
      * silent zero: "a standard with no committed index is COUNTED and never CHECKED, which is a silent zero
@@ -7169,15 +7548,25 @@ function audit(argv, opts = {}) {
         for (const [k] of txt) if (ownSections(k, u.no).length && containsAnyForm(ownText(k, u.no), u.frags)) hits.push(k);
         return hits;
       };
-      for (const u of unjudgedQuotes) u.where = probe(u);
-      const un = unjudgedQuotes.filter((u) => !u.where.length), corr = unjudgedQuotes.filter((u) => u.where.length);
+      /* ONLY THE ROWS THE FORK CHANNEL ACTUALLY JUDGED LEAVE THIS BAND, WHICH IS THE HELD HALF AND NOT BOTH.
+       * A HELD row is no longer unjudgeable in this band's own sense — there IS a document and this run has
+       * read it — so counting it here would be a judged thing sitting in a band whose whole sentence is that
+       * nothing here has read it. An UNHELD row STAYS: the fork channel did not judge it either, and its
+       * citation still names no standard, so both statements about it remain true and removing it would be
+       * this instrument quietly shrinking a queue it had not drained. */
+      const forkOut = unjudgedQuotes.filter((u) => u.forkHeld);
+      const unjudged = unjudgedQuotes.filter((u) => !u.forkHeld);
+      for (const u of unjudged) u.where = probe(u);
+      const un = unjudged.filter((u) => !u.where.length), corr = unjudged.filter((u) => u.where.length);
       const nCrash = (g) => g.filter((u) => u.crash).length;
       const byWhy = (g, w) => g.filter((u) => u.why === w).length;
-      console.log(`\nUNJUDGEABLE QUOTATION: ${unjudgedQuotes.length} of the ${qstat.seen} quotation(s) this check saw` +
+      console.log(`\nUNJUDGEABLE QUOTATION: ${unjudged.length} of the ${qstat.seen} quotation(s) this check saw` +
         ` — NOT findings. The citation over each names no standard, so there is no document to compare it against;` +
-        ` a site here may be quoting its standard perfectly and nothing here has read it.`);
-      console.log(`  ${byWhy(unjudgedQuotes, "voted")} sit under a citation a FILE VOTE placed (the audit's inference, never the citation's claim) and` +
-        ` ${byWhy(unjudgedQuotes, "unresolved")} under one nothing placed at all; ${nCrash(unjudgedQuotes)} are printed by a CRASH, which is read with no file open.`);
+        ` a site here may be quoting its standard perfectly and nothing here has read it.` +
+        (forkOut.length ? ` A further ${forkOut.length} stood here until this run and are in FORK-SOURCE QUOTATION above:` +
+                          ` their prose names a file, so there IS a document and it has been read.` : ``));
+      console.log(`  ${byWhy(unjudged, "voted")} sit under a citation a FILE VOTE placed (the audit's inference, never the citation's claim) and` +
+        ` ${byWhy(unjudged, "unresolved")} under one nothing placed at all; ${nCrash(unjudged)} are printed by a CRASH, which is read with no file open.`);
       console.log(`  THE REPAIR IS ONE EDIT AT THE SITE: write the standard's name in front of the number. That moves the quotation into` +
         ` the ${qstat.checked} compared above, where the next run judges it — so draining this queue can RAISE the finding count, and that is the` +
         ` repair working. The ${qstat.foreign} FOREIGN and ${qstat.noSection} NO-SECTION refusals in the census line are NOT here: no edit at those sites drains them.`);
@@ -7187,7 +7576,10 @@ function audit(argv, opts = {}) {
           ` — no indexed standard numbers §N AND holds these words there. That is true of every document this tool holds, and it is` +
           ` consistent with THREE different things: a fabricated sentence, a correct citation of a standard nothing here indexes, and a run of` +
           ` THIS TREE'S OWN prose in quotation marks (measured — \`"OWNED: the caller frees. Never NULL"\` sits here). Nothing mechanical` +
-          ` separates those, which is why this is a queue and not a finding; reading one is what separates them`],
+          ` separates those, which is why this is a queue and not a finding; reading one is what separates them.` +
+          ` THERE WAS A FOURTH AND IT HAS ITS OWN BAND NOW: a quotation of this project's ENGINE, whose sources are a SUBMODULE and` +
+          ` mostly outside the set this audit reads — so it was compared against nothing and sat here indistinguishable from the other` +
+          ` three, which is what this sentence itself told two readers. Where the site names the file, FORK-SOURCE QUOTATION reads it`],
         [`UNJUDGEABLE / CORROBORATED-ELSEWHERE`, corr,
           ` — some indexed standard numbers §N and its own words hold this quotation. The audit names it and does NOT adopt it: a standard` +
           ` the citation never named cannot become the standard it is judged against. Writing that name at the site is the whole repair`]]) {
