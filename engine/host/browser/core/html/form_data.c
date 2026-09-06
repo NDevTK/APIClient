@@ -13,7 +13,7 @@
  * three arms of Fetch's `BodyInit` union, so a body built from a form has somewhere to come from.
  *
  * THE ENTRY LIST IS HTML §4.10.22.4 Constructing the entry list's, AND IT IS SHAPED LIKE THE URL STANDARD'S
- * urlencoded list. It is HTML's and not XHR's by the XHR standard's own words — §4 says "This section used to
+ * urlencoded list. It is HTML's and not XHR's by the XHR standard's own words — XHR §4 says "This section used to
  * define entry, an entry's name and value, and the create an entry algorithm." and "These definitions have
  * been moved to the HTML Standard." — which is why the citation here was `§5.1`, a number XHR gives to
  * `Firing events using the ProgressEvent interface` and never gave to this. FormData's entries are
@@ -21,7 +21,7 @@
  * answers with the first — which is the same list Headers and URLSearchParams are built on, so it is the
  * same one and not a third copy of it.
  *
- * A VALUE IS A STRING OR A FILE: §4's `append` is overloaded on `(USVString value)` and
+ * A VALUE IS A STRING OR A FILE: XHR §4's `append` is overloaded on `(USVString value)` and
  * `(Blob blobValue, optional USVString filename)`, and Web IDL resolves the overload by asking whether the
  * argument is a platform object of the Blob interface — so the arm is chosen by a BRAND TEST on the argument
  * (`fd_entry_value` below), and HTML §4.10.22.4's create an entry then turns a Blob into a File. The
@@ -45,11 +45,11 @@
 #include "core/idl_iter.h"
 #include "solver/concolic.h"
 
-/* §4's ENTRY: a name, and a value that is EITHER a USVString OR a File. It was the URL Standard's urlencoded
+/* HTML §4.10.22.4 Constructing the entry list's ENTRY: a name, and a value that is EITHER a USVString OR a File. It was the URL Standard's urlencoded
    list, whose value is bytes, and that was right for exactly as long as nothing could be a File — the file
    comment said so, and `append`'s overload reached for the string arm on a Blob the moment Blob landed and
    stringified it out of C, which is the ToPrimitive the engine aborts on.
-   THE VALUE IS A JSValue, so a File entry holds the File ITSELF: §4's `get` must hand back the same object, and
+   THE VALUE IS A JSValue, so a File entry holds the File ITSELF: XHR §4's `get` must hand back the same object, and
    a copy of its bytes would answer a different one. That makes a FormData a GC ROOT for its entries, which is
    what `gc_mark` below is for — the entry can hold a File whose own properties reach back. */
 typedef struct { char *name; size_t nlen; JSValue value; } FdEntry;
@@ -170,7 +170,7 @@ JSValue form_data_new(JSContext *ctx, const UrlEncodedList *entries)
    value's entry list" and not the FormData it was handed, and the difference is the whole point: a page that
    calls `setFormValue(fd)` and then appends to `fd` has not changed what its element submits. A SHALLOW clone
    of the list — the entries themselves are immutable (a name and a USVString-or-File), and a File entry must
-   stay the SAME object because §4's `get` answers with identity. */
+   stay the SAME object because XHR §4's `get` answers with identity. */
 JSValue form_data_clone(JSContext *ctx, JSValueConst src)
 {
     FormDataObj *from = JS_GetOpaque(src, g_fd_class), *to;
@@ -344,7 +344,7 @@ void form_data_append_all(JSContext *ctx, JSValueConst dst, JSValueConst src)
     int i;
 
     DCHECK(to != NULL && from != NULL,
-           "§4.13.7.3's entry construction was handed something that is not a FormData — the union's brand test "
+           "HTML §4.13.7.3's entry construction was handed something that is not a FormData — the union's brand test "
            "runs before this");
     for (i = 0; i < from->list.n; i++)
         fd_list_append(&to->list, from->list.e[i].name, from->list.e[i].nlen,
@@ -569,18 +569,20 @@ char *form_data_serialize_multipart(JSContext *ctx, JSValueConst fd, char *bound
     return out;
 }
 
-/* ---- §4's members ---------------------------------------------------------------------------------------- */
+/* ---- XHR §4's members ---------------------------------------------------------------------------------------- */
 
 enum { FD_APPEND = 0, FD_DELETE, FD_GET, FD_GETALL, FD_HAS, FD_SET, FD_MEMBER_N };
 /* THE AGENT'S POOL ENTRIES — the OBJECTS they are installed as are each realm's. */
 static int g_fd_id[FD_MEMBER_N];
 
-/* §4's `append` and `set` are OVERLOADED on their second argument: `(USVString value)` and
+/* XHR §4's `append` and `set` are OVERLOADED on their second argument: `(USVString value)` and
  * `(Blob blobValue, optional USVString filename)`. Web IDL resolves the overload by asking whether the
  * argument is a platform object of the Blob interface — so this is a brand test, and the third argument
  * belongs to one arm only.
  *
- * THE BLOB ARM STORES A FILE, not the Blob. §4 says to "create a new File object" from a Blob value: its name
+ * THE BLOB ARM STORES A FILE, not the Blob. THE SECTION IS HTML’S AND NOT XHR’S, and `§4` stood here: XHR §4’s `append` steps say only
+ * "Let entry be the result of creating an entry with name, value, and filename if given", and XHR §4’s own
+ * prose says that algorithm has MOVED. The File rule is HTML §4.10.22.4 Constructing the entry list’s: its name
  * is the `filename` argument, or "blob" when none was given, and its type is the Blob's. A page that appends a
  * Blob and reads the entry back gets a File, which is what every form submission carries. */
 static JSValue fd_entry_value(JSContext *ctx, JSValueConst v, JSValueConst filename, bool have_filename)
@@ -608,7 +610,8 @@ static JSValue fd_entry_value(JSContext *ctx, JSValueConst v, JSValueConst filen
         name = JS_ToCStringLen(ctx, &nlen, filename);
         if (!name) return JS_EXCEPTION;
     } else {
-        /* §4: a Blob with no filename argument becomes a File named "blob" — and a value that is ALREADY a
+        /* HTML §4.10.22.4 Constructing the entry list: a Blob with no filename argument becomes a File
+           named "blob" — and a value that is ALREADY a
            File keeps its own name, because the spec's create step is skipped for one. */
         const char *own = blob_file_name_of(v);
         name = own ? own : "blob";
@@ -654,7 +657,7 @@ static JSValue js_form_data_member(JSContext *ctx, JSValueConst this_val, int ar
         d->list.n = w;
         break;
     case FD_GET:
-        r = JS_NULL;   /* §4: absent is null, not "" */
+        r = JS_NULL;   /* XHR §4: absent is null, not "" */
         for (i = 0; i < d->list.n; i++)
             if (FD_NAME_IS(i)) { r = JS_DupValue(ctx, d->list.e[i].value); break; }
         break;
@@ -672,7 +675,7 @@ static JSValue js_form_data_member(JSContext *ctx, JSValueConst this_val, int ar
         for (i = 0; i < d->list.n; i++) if (FD_NAME_IS(i)) { r = JS_TRUE; break; }
         break;
     default: {
-        /* §4 set(): the FIRST entry with this name keeps its POSITION and takes the new value, and every other
+        /* XHR §4 set(): the FIRST entry with this name keeps its POSITION and takes the new value, and every other
            entry with that name is removed. Deleting then appending would move it to the end. */
         int found = -1;
         DCHECK(magic == FD_SET, "a FormData member was declared with a magic this component does not answer");
@@ -703,7 +706,7 @@ static JSValue js_form_data_member(JSContext *ctx, JSValueConst this_val, int ar
     return r;
 }
 
-/* The two operations §3.7.9's binding needs of an `iterable<K, V>` interface — the count and the i-th of
+/* The two operations Web IDL §3.7.9 Iterable declarations's binding needs of an `iterable<K, V>` interface — the count and the i-th of
    §2.5.9's "value pairs to iterate over" — over the entry list as it stands right now. */
 static int form_data_pair_count(JSContext *ctx, JSValueConst target)
 {
@@ -722,7 +725,7 @@ static void form_data_pair_at(JSContext *ctx, JSValueConst target, int i, JSValu
 
 static const IdlPairIterOps FD_PAIR_OPS = { form_data_pair_count, form_data_pair_at, "FormData" };
 
-/* ---- §4's constructor -------------------------------------------------------------------------------------
+/* ---- XHR §4's constructor -------------------------------------------------------------------------------------
  *
  * `constructor(optional HTMLFormElement form, optional HTMLElement? submitter = null)`. Constructing FROM a
  * form runs HTML §4.10.22.4's "construct the entry list", and that algorithm FIRES A `formdata` EVENT at the
@@ -773,7 +776,7 @@ static int js_fd_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
         }
         form_entry_list_init(&s->entries);
         /* `optional HTMLFormElement form` with no default: an omitted or explicitly-undefined argument is NOT
-           GIVEN (§3.6), so this is what "if form is given" reads. Anything else that is not an
+           GIVEN (Web IDL §3.6 Overload resolution algorithm), so this is what "if form is given" reads. Anything else that is not an
            HTMLFormElement is Web IDL's TypeError — `new FormData(null)` included, because the position is not
            nullable. */
         if (JS_IsUndefined(form)) {
@@ -785,7 +788,7 @@ static int js_fd_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
             return -1;
         }
         /* Step 1.1. `submitter` IS nullable, and null is what the IDL's own default is, so both spellings mean
-           "no submitter". The two refusals are in the order §4 lists them. */
+           "no submitter". The two refusals are in the order XHR §4 lists them. */
         if (!JS_IsUndefined(submitter) && !JS_IsNull(submitter)) {
             if (!html_element_is(submitter)) {
                 JS_ThrowTypeError(ctx, "the FormData submitter is not an HTMLElement");
@@ -812,12 +815,12 @@ static int js_fd_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
         }
         hdr->stage = FD_CTOR_ENTRIES;
     }
-    DCHECK(hdr->stage == FD_CTOR_ENTRIES, "the FormData constructor resumed into a stage §4 does not have");
+    DCHECK(hdr->stage == FD_CTOR_ENTRIES, "the FormData constructor resumed into a stage XHR §4 does not have");
     if (JS_IsUndefined(submitter)) submitter = JS_NULL;
     /* Step 1.2. The ENCODING is not given, so §4.10.22.4's own default applies — UTF-8. A form's
        `accept-charset` belongs to HTML §4.10.22.5 Selecting a form submission encoding's "pick an encoding",
        which is the SUBMISSION's step and not this constructor's; reading it here would put a `_charset_`
-       entry in a list the spec builds without one. The number here was §4.10.21.3, which is `The constraint
+       entry in a list the spec builds without one. The number here was HTML §4.10.21.3, which is `The constraint
        validation API` — a real section that answers a different question, so it resolved and named nothing
        about encodings; core/html/form_entry_list.c still carries the same wrong number for a DIFFERENT
        algorithm ("submit a form", which is §4.10.22.3 Form submission algorithm). */
@@ -849,16 +852,17 @@ void form_data_init(JSContext *ctx)
     JSClassDef def = { "FormData", .finalizer = form_data_finalizer, .gc_mark = form_data_gc_mark };
     JSRuntime *rt = JS_GetRuntime(ctx);
     static const IdlArgType TWO_STR[3] = { IDL_USVSTRING, IDL_ANY, IDL_USVSTRING };
-    /* §4's two arguments are `optional HTMLFormElement form` and `optional HTMLElement? submitter = null`.
+    /* XHR §4's two arguments are `optional HTMLFormElement form` and `optional HTMLElement? submitter = null`.
        THIS COMMENT GAVE THREE REASONS THE DECLARATION SURFACE COULD EXPRESS NEITHER, AND TWO OF THEM ARE
        RETIRED — they are deleted rather than softened, because an impossibility claim is the one stale
        comment that tells the next reader not to look.
-         - "one brand and one narrowing per MEMBER, so two differently-narrowed positions cannot both be
-           stated": that was true of idl_iface_brand alone. §3.2.15's `I` is stated PER POSITION now
+         - this file used to say "one brand and one narrowing per MEMBER, so two differently-narrowed
+           positions cannot both be stated": that was true of idl_iface_brand alone. Web IDL §3.2.15 Interface types' `I` is stated PER POSITION now
            (idl_arg_iface), and core/events/mouse_event.c declares Window at position 3 and EventTarget at
            position 14 of ONE argument list — which is this member's shape exactly.
-         - "there is no nullable-interface type for the second at all": IDL_INTERFACE_NULLABLE is in
-           IdlArgType, the positional conversion resolves §3.2.20's null rule over it before any brand is
+         - this file used to say "there is no nullable-interface type for the second at all":
+           IDL_INTERFACE_NULLABLE is in
+           IdlArgType, the positional conversion resolves Web IDL §3.2.20's null rule over it before any brand is
            read, and core/html/submit_event.c declares this very `HTMLElement? submitter` with it.
        THE THIRD REASON STILL HOLDS, AND IT RULES OUT EXACTLY ONE OF THE TWO ROUTES. idl_iface_brand takes a
        CLASS ID at declaration time and refuses a zero; core/platform.c declares `form_data` far above the
@@ -873,10 +877,11 @@ void form_data_init(JSContext *ctx)
        per-position form that demands a realm and a realm-free form (idl_iface_narrow) that is
        declaration-wide, and this member needs per-position AND realm-free at two positions naming two
        interfaces.
-       NAMED RESIDUAL. WHAT IS NOT COVERED: both positions cross as IDL_ANY, so §3.2.15's TypeError is thrown
-       by the body below rather than by the type, and §3.6's `= null` for `submitter` is re-derived in the
+       NAMED RESIDUAL. WHAT IS NOT COVERED: both positions cross as IDL_ANY, so Web IDL §3.2.15's TypeError is thrown
+       by the body below rather than by the type, and Web IDL §3.6 Overload resolution algorithm's `= null`
+       for `submitter` is re-derived in the
        body instead of declared. WHAT THE NEXT DIFF BUILDS: core/html/html_form.h and core/html/html_element.h
-       state their §3.2.15 predicates in the shape a POSITION declares one with, this declaration becomes
+       state their Web IDL §3.2.15 predicates in the shape a POSITION declares one with, this declaration becomes
        `{ IDL_INTERFACE, IDL_INTERFACE_NULLABLE }` with idl_arg_iface at 0 and 1 and
        idl_arg_default(1, IDL_DEFAULT_NULL, NULL), and the body's two brand tests and BOTH of its
        `submitter = JS_NULL` re-derivations go in that same diff — the second of those is not redundant with
@@ -905,22 +910,22 @@ void form_data_init(JSContext *ctx)
     g_fd_rt = rt;
     JS_NewClassID(rt, &g_fd_class);
     JS_NewClass(rt, g_fd_class, &def);
-    /* The value argument is IDL_ANY because §4's overload picks its type: a Blob crosses as itself and
+    /* The value argument is IDL_ANY because XHR §4's overload picks its type: a Blob crosses as itself and
        everything else is a USVString. With no Blob interface nothing is one, and the member's own
        JS_ToCStringLen is that arm — declaring it USVString here would convert a Blob too, once there is one. */
     g_fd_id[FD_APPEND] = idl_method_id(ctx, TWO_STR, 3, js_form_data_member, FD_APPEND);
-    idl_optional_from(2);   /* §4: `append(name, blobValue, optional filename)` — two are required */
+    idl_optional_from(2);   /* XHR §4: `append(name, blobValue, optional filename)` — two are required */
     g_fd_id[FD_DELETE] = idl_method_id(ctx, TWO_STR, 1, js_form_data_member, FD_DELETE);
     g_fd_id[FD_GET]    = idl_method_id(ctx, TWO_STR, 1, js_form_data_member, FD_GET);
     g_fd_id[FD_GETALL] = idl_method_id(ctx, TWO_STR, 1, js_form_data_member, FD_GETALL);
     g_fd_id[FD_HAS]    = idl_method_id(ctx, TWO_STR, 1, js_form_data_member, FD_HAS);
     g_fd_id[FD_SET]    = idl_method_id(ctx, TWO_STR, 3, js_form_data_member, FD_SET);
-    idl_optional_from(2);   /* §4: `set(name, blobValue, optional filename)` — two are required */
+    idl_optional_from(2);   /* XHR §4: `set(name, blobValue, optional filename)` — two are required */
 
     g_fd_pair_handle = idl_pair_iter_declare(ctx, &FD_PAIR_OPS);
 
     g_fd_ctor_stepid = idl_method_id_step(ctx, CTOR_ARGS, 2, NULL, 0, &js_fd_ctor_decl, 0);
-    idl_optional_from(0);   /* §4: both constructor arguments are optional */
+    idl_optional_from(0);   /* XHR §4: both constructor arguments are optional */
     realm_declare_intrinsic(form_data_install_realm);
 }
 
@@ -960,9 +965,9 @@ void form_data_install_realm(JSContext *ctx)
     idl_install_method(ctx, proto, "set", g_fd_id[FD_SET]);
     idl_pair_iter_install(ctx, proto, g_fd_pair_handle);
 
-    /* WEB IDL §3.7.1's INTERFACE OBJECT AND §3.8's STEP 3.1.3 FOR ITS NAME. XHR §4 declares no
-       [LegacyWindowAlias], so §3.8 step 3.1.4 has nothing to do for this interface, and no
-       [LegacyFactoryFunction], so neither does step 3.2. */
+    /* WEB IDL §3.7.1 Interface object's INTERFACE OBJECT AND WEB IDL §3.8's STEP 3.1.3 FOR ITS NAME. XHR §4
+       declares no [LegacyWindowAlias], so Web IDL §3.8 step 3.1.4 has nothing to do for this interface, and no
+       [LegacyFactoryFunction], so neither does Web IDL §3.8 step 3.2. */
     {
         JSValue ctor, global;
 
