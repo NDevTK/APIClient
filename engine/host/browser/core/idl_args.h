@@ -2412,9 +2412,18 @@ bool idl_exposed_in_realm(JSContext *ctx, const char *identifier);
  *
  * A NAME WITH NO ROW IS EXPOSED, which is browser/idl_exposure.h's own rule and is the direction that cannot
  * remove something on absence of evidence. The generator omits a member whose exposure set is `*` and one
- * whose set is empty, because neither can EXCLUDE a realm and a set of no bits is how `*` is spelled — so a
- * member installed on a global that the corpus does not declare on any [Global] interface keeps its property,
- * exactly as an unknown identifier keeps its own.
+ * whose set is empty, because neither can EXCLUDE a realm and a set of no bits is how `*` is spelled.
+ *
+ * AND THAT SILENCE CARRIED TWO STATES, WHICH IS NOW ASKED APART RATHER THAN AVERAGED. The paragraph above used
+ * to end "so a member installed on a global that the corpus does not declare on any [Global] interface keeps
+ * its property, exactly as an unknown identifier keeps its own" — the RELEASE behaviour is unchanged and that
+ * sentence is still true of it, and reading it as the whole answer is what made a real defect invisible: a
+ * no-row name is EITHER a member whose §3.3.7 exposure set is `*` OR a name that is no [Global] interface's
+ * member at all, and the second is a property on a global that no browser has. browser/idl_exposure.h's
+ * IDL_GLOBAL_MEMBERS tells them apart — the same union IDL_MEMBER_EXPOSURE is filtered out of, emitted whole
+ * in the same pass, with the containment asserted by the generator so the two cannot come to answer about two
+ * populations. The implementation DCHECKs it at the one call that knows the target is the realm's global, and
+ * a release build takes the arm this paragraph always described.
  *
  * IT IS THE MEMBER NAME AND NOT AN ACCESSOR'S — the "get "/"set " prefix §3.7.6 puts on the FUNCTION OBJECT is
  * not part of the property key and not part of the corpus's identifier, so the string asked here is the one

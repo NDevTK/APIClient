@@ -6053,15 +6053,26 @@ static void tf_realm_install(JSContext *ctx, lxb_html_document_t *dom, const cha
     JS_SetPropertyStr(ctx, g, "setInnerHTML", JS_NewCFunction(ctx, js_html_sink, "setInnerHTML", 1));   /* the innerHTML sink */
     JS_SetPropertyStr(ctx, g, "setLocation", JS_NewCFunction(ctx, js_url_sink, "setLocation", 1));   /* the location/URL sink */
     /* THE SYNCHRONOUS HOST READ. A DECLARED step member, because suspending and answering at the same call
-       site is the only thing a plain C body cannot do. */
-    idl_install_method(ctx, g, "hostRead", g_id_host_read);
+       site is the only thing a plain C body cannot do — MINTED and then SET, rather than installed through
+       idl_install_method. The two are the same function object (idl_install_method's own body is
+       `JS_SetPropertyStr(target, name, idl_mint_step(..., IDL_SEC_METHOD))`, which is what idl_step_function
+       mints), and what differs is the CLAIM: idl_install_method is Web IDL §3.7.7 Operations' define the
+       operations, so calling it says this name is an operation of the interface the target implements. On the
+       realm's GLOBAL that interface is `Window`, which declares no `hostRead` — so the call was making a §3.7.7
+       claim about a name this fixture invented, and core/idl_args.c's §3.7.6/§3.7.7 continue-step now DCHECKs
+       exactly that. It is a fixture's own surface, like the seven JS_SetPropertyStr lines around it, and it
+       installs the same way they do. */
+    JS_SetPropertyStr(ctx, g, "hostRead", idl_step_function(ctx, "hostRead", g_id_host_read));
     JS_SetPropertyStr(ctx, g, "setBodyAttr", JS_NewCFunction(ctx, js_set_body_attr, "setBodyAttr", 2));   /* DOM attr write (per-flow) */
     JS_SetPropertyStr(ctx, g, "getBodyAttr", JS_NewCFunction(ctx, js_get_body_attr, "getBodyAttr", 1));   /* DOM attr read (per-flow) */
     /* A DECLARED member, like every DOM member — this host-edge mutates the tree, and §4.2.3's insertion
        steps are drained by the machine every declared member converges on. As a raw JS_CFUNC_DEF its steps
        never ran at all; nothing showed it, because the <span> it appends is neither a script nor a custom
        element. The engine asserts on exactly this now, which is what caught it. */
-    idl_install_method(ctx, g, "appendChild", g_id_append_child);
+    /* MINTED AND SET for the reason `hostRead` two lines up is: this is the FIXTURE's `appendChild` on the
+       global, not Node's on Node.prototype, and Window declares no such operation — so §3.7.7's define was the
+       wrong door and the step member is the only part that was wanted. Nothing about the object changes. */
+    JS_SetPropertyStr(ctx, g, "appendChild", idl_step_function(ctx, "appendChild", g_id_append_child));
     JS_SetPropertyStr(ctx, g, "lastChildMark", JS_NewCFunction(ctx, js_last_child_mark, "lastChildMark", 0));   /* DOM node read */
     JS_SetPropertyStr(ctx, g, "state", concolic_new(ctx, "{state}", "{state}", JS_UNDEFINED));   /* injected/unknown app state */
     /* AN UNKNOWN CARRYING A NUMERIC EXAMPLE, which is what §13.15.3 step 1.c's arm turns on. Its display form

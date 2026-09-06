@@ -6481,6 +6481,33 @@ static int idl_member_exposure_row_cmp(const void *key, const void *row)
     return strcmp((const char *)key, ((const IdlMemberExposureRow *)row)->name);
 }
 
+/* NOT UNDER `#if APICLIENT_DEV`, AND THE RELEASE BUILD IS WHAT SAYS SO. check.h's release `DCHECKF` keeps
+   `(void)sizeof(cond)` and runs its arguments through APICLIENT_FMT_UNUSED, so every identifier a dev-only
+   assertion names must still be DECLARED in a release translation unit — the condition is unevaluated, not
+   absent. Guarding these two produced two hard errors at -DAPICLIENT_DEV=0 and nothing at all at =1, which is
+   the asymmetry that makes checking both builds the rule rather than the belt-and-braces. */
+static int idl_global_member_name_cmp(const void *key, const void *row)
+{
+    return strcmp((const char *)key, *(const char *const *)row);
+}
+
+/* WHICH §3.3.8 [Global] INTERFACE THIS REALM'S GLOBAL OBJECT IMPLEMENTS, spelled for a crash message. The
+   realm stores the MASK (core/realm.c resolves it once, through idl_global_names_of, from the identifier the
+   host stated), and the identifier is what a reader needs in front of them — so it is read BACK out of the
+   same IDL_GLOBALS row the mask came from rather than remembered anywhere. Dev-only, because its only caller
+   is a DCHECK's message. */
+static const char *idl_realm_global_interface(JSContext *ctx)
+{
+    unsigned names = realm_global_names(ctx);
+    size_t i;
+
+    for (i = 0; i < sizeof IDL_GLOBALS / sizeof IDL_GLOBALS[0]; i++)
+        if (IDL_GLOBALS[i].names == names) return IDL_GLOBALS[i].iface;
+    /* Unreachable while every mask comes from idl_global_names_of, which returns a row's own `names` — and a
+       message is the wrong place to abort, so this says what it could not name instead of asserting it. */
+    return "a [Global] interface no IDL_GLOBALS row's global names match";
+}
+
 /* WEB IDL §3.3.7 [Exposed] STEP 1 OVER §3.7.6's AND §3.7.7's VOCABULARY — see idl_args.h for why this is a
    second table rather than a second lookup into IDL_EXPOSURE, and for the residual the union carries.
    THE TABLE IS SORTED BY THE GENERATOR AND ITS IDENTIFIERS ARE ASCII, which idlgen.mjs refuses to emit
@@ -6496,7 +6523,51 @@ bool idl_member_exposed_in_realm(JSContext *ctx, const char *member)
            "the question by");
     r = bsearch(member, IDL_MEMBER_EXPOSURE, sizeof IDL_MEMBER_EXPOSURE / sizeof IDL_MEMBER_EXPOSURE[0],
                 sizeof IDL_MEMBER_EXPOSURE[0], idl_member_exposure_row_cmp);
-    if (r == NULL) return true;                     /* a name with no row is exposed — idl_args.h says why */
+    if (r == NULL) {
+        /* A NO-ROW ANSWER CARRIED TWO STATES AND THE CONSUMER READ IT AS ONE. The generator emits a row only
+           for a member whose exposure set can EXCLUDE a realm, so silence here means EITHER that §3.3.7's
+           exposure set is `*` — correctly exposed in every realm, which is what the `return true` below is
+           for — OR that the name is not a member of ANY §3.3.8 [Global] interface or of anything one of them
+           inherits, which is a property standing on a global that no browser has. Told apart by
+           IDL_GLOBAL_MEMBERS, which browser/idl_exposure.h emits from the SAME union IDL_MEMBER_EXPOSURE is
+           filtered out of, in the same pass, with the containment asserted by the generator.
+           THIS IS THE ONE PLACE THE QUESTION CAN BE ASKED, and that is why the check is here rather than in a
+           per-realm census walked at the end. §3.7.6 Attributes and §3.7.7 Operations put a [Global]
+           interface's members on the GLOBAL OBJECT — "unless the attribute is unforgeable or if the interface
+           was declared with the [Global] extended attribute, in which case they are exposed on every object
+           that implements the interface" — and idl_global_member_refused is the one call that knows a member
+           install's target IS the realm's global. Every member-placing entry in this file reaches it, so the
+           population is every member this engine installs on a global and nothing else.
+           IT IS THE ASK AND NOT THE OUTCOME. The question is asked BEFORE the exposure arithmetic below and
+           before any caller's own gate, so a member §3.3.7 step 1 or step 2 correctly REFUSES never reaches
+           this arm — a refusal needs a row. A census of what LANDED on the global would instead fire on every
+           Window-only member in a worker realm and on every [SecureContext] member in an insecure one, which
+           is the gate's own correct behaviour re-reported as a failure.
+           IT STANDS ONLY ON WHAT THIS CODEBASE COMPUTED: `member` is the string one of this engine's own
+           installers passed, and the realm's [Global] identifier is the one its host stated. No page and no
+           server can put a name into this population — a page's own `globalThis.x = 1` is an ordinary [[Set]]
+           that reaches no entry in this file — so this is a DCHECK and it hands nobody an abort switch.
+           WHAT IT CANNOT SEE, said here because a check trusted past its evidence is worse than none: a
+           member-shaped own property placed on the global with a raw JS_SetPropertyStr never reaches this
+           call. core/frame/remote_op.c's five `__apiclient*` operand bindings are that today, deliberately,
+           and they are outside this population rather than exempted from it. */
+        DCHECKF(bsearch(member, IDL_GLOBAL_MEMBERS,
+                        sizeof IDL_GLOBAL_MEMBERS / sizeof IDL_GLOBAL_MEMBERS[0],
+                        sizeof IDL_GLOBAL_MEMBERS[0], idl_global_member_name_cmp) != NULL,
+                "`%s` is being installed as a member on the global object of a realm whose Web IDL §3.3.8 "
+                "[Global] interface is `%s`, and `%s` is a member of NO [Global] interface in the platform's "
+                "IDL and of nothing any of them inherits — browser/idl_exposure.h's IDL_GLOBAL_MEMBERS is the "
+                "corpus's own list of those names. §3.7.6 Attributes and §3.7.7 Operations are what put a "
+                "member on a global at all (\"unless the attribute is unforgeable or if the interface was "
+                "declared with the [Global] extended attribute, in which case they are exposed on every object "
+                "that implements the interface\"), so a name outside that list is a property no browser has on "
+                "any global. Either the member belongs on an interface PROTOTYPE and the install was handed "
+                "the wrong target, or the identifier is misspelt, or the corpus has moved and the table is "
+                "stale (`node engine/idlgen.mjs --regen`). Route it: "
+                "`git grep -n '\"%s\"' engine/host/browser` lands on the install",
+                member, idl_realm_global_interface(ctx), member, member);
+        return true;                                /* §3.3.7's `*` — idl_args.h states why silence is sound */
+    }
     /* THE GENERATOR EMITS NO ROW THAT CANNOT EXCLUDE, AND THE TWO SIDES CAN DISAGREE: this is a claim about a
        committed generated artifact against a constant of this file, so a regenerated table whose filter
        changed makes it false without anyone editing C. It matters because a set of no bits is how `*` is

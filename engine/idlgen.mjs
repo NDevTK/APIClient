@@ -2394,6 +2394,27 @@ for (const g of globalNamesOf.keys())
   }
 const memberRows = [...memberExposureUnion].filter(([, m]) => m !== null && m !== 0);
 memberRows.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+/* THE SAME UNION READ FOR ITS OTHER FACT — the NAMES, whole, and not the subset that can exclude.
+   IDL_MEMBER_EXPOSURE answers "which realms does §3.3.7 step 1 remove this member from", so a member it has no
+   row for is EXPOSED and the filter above is exactly right for that question. It makes a SECOND question
+   unanswerable, and the second question is the one the engine needs at the same call: a no-row name means
+   EITHER a member whose union is `*` (correctly exposed everywhere) OR a name that is not a member of any
+   [Global] interface or its chain AT ALL — which is a member installed on a global that no [Global] interface
+   declares, and no browser has it. Two states behind one answer, and the consumer reads the value as the
+   first.
+   IT IS A SECOND READING AND NOT A SECOND COPY, which is the whole reason it is emitted from
+   `memberExposureUnion` here rather than derived anywhere else: both arrays come from ONE map, built in ONE
+   pass over `chainOf` of every [Global] interface, so the day the union learns a member both learn it. The
+   containment is ASSERTED below rather than assumed, because two arrays out of one map is exactly the shape
+   that drifts the moment somebody filters one of them differently. */
+const globalMemberNames = [...memberExposureUnion.keys()].sort();
+for (const [n] of memberRows)
+  if (!globalMemberNames.includes(n))
+    throw new Error(`[idl-audit] \`${n}\` has an IDL_MEMBER_EXPOSURE row and is not in IDL_GLOBAL_MEMBERS — ` +
+                    `both are read out of one union over chainOf of every §3.3.8 [Global] interface, so the ` +
+                    `first being a subset of the second is what makes core/idl_args.c's no-row arm mean "this ` +
+                    `member's exposure set is \`*\`" rather than "this is not a [Global] member". A filter ` +
+                    `that broke the containment has made the two arrays answer about two populations`);
 /* THE SAME UNIQUENESS THE TABLE ABOVE ASSERTS, AND HERE IT IS THE MAP THAT ENFORCES IT rather than a check:
    the union is BUILT keyed by name, so two declarations of one identifier are one row by construction and
    there is no bsearch-over-duplicates hazard to guard. What the map cannot make true is that the emitted
@@ -2485,11 +2506,29 @@ const exposureH =
   "} IdlMemberExposureRow;\n\n" +
   "static const IdlMemberExposureRow IDL_MEMBER_EXPOSURE[] = {\n" +
   memberRows.map(([n, m]) =>
-    `    { ${`"${n}",`.padEnd(memW + 1)} ${maskSpelling(m)} },`).join("\n") + "\n};\n\n#endif\n";
+    `    { ${`"${n}",`.padEnd(memW + 1)} ${maskSpelling(m)} },`).join("\n") + "\n};\n\n" +
+  "/* EVERY MEMBER NAME A §3.3.8 [Global] INTERFACE OR ONE IT INHERITS DECLARES — the same union the table\n" +
+  "   above is filtered out of, read for its OTHER fact. IDL_MEMBER_EXPOSURE answers which realms §3.3.7\n" +
+  "   step 1 REMOVES a member from, and by construction it has no row for a member whose exposure set is `*`;\n" +
+  "   so its silence carries two states at once — a member exposed everywhere, and a name that is no [Global]\n" +
+  "   interface's member at all — and the second is a property installed on a global that no browser has.\n" +
+  "   §3.7.6 Attributes and §3.7.7 Operations are what put a member THERE: \"Regular attributes are exposed on\n" +
+  "   the interface prototype object, unless the attribute is unforgeable or if the interface was declared\n" +
+  "   with the [Global] extended attribute, in which case they are exposed on every object that implements\n" +
+  "   the interface\", and the same sentence for operations — so the population is the [Global] interfaces AND\n" +
+  "   their inheritance chains, exactly as the exposure table's is, because a WorkerGlobalScope member is\n" +
+  "   reachable from a DedicatedWorkerGlobalScope global one link up the prototype chain.\n" +
+  "   IT IS NOT A SECOND COPY: both arrays are emitted from one union in one pass, and the generator refuses\n" +
+  "   to emit them if IDL_MEMBER_EXPOSURE is not a subset of this. core/idl_args.c reads it at the ONE place\n" +
+  "   §3.7.6's and §3.7.7's continue-step is asked, which is the one place a member's target is known to be\n" +
+  "   the realm's global. */\n" +
+  "static const char *const IDL_GLOBAL_MEMBERS[] = {\n" +
+  globalMemberNames.map((n) => `    "${n}",`).join("\n") + "\n};\n\n#endif\n";
 emitGenerated("idl_exposure.h", exposureH,
               `${exposureRows.length} identifiers §3.8 can define on a global, the ${globalRows.length} ` +
-              `[Global] interfaces §3.3.7 step 1 measures them against, and the ${memberRows.length} of ` +
-              `their members whose exposure set can EXCLUDE a realm`,
+              `[Global] interfaces §3.3.7 step 1 measures them against, the ${globalMemberNames.length} ` +
+              `members those interfaces and their chains declare, and the ${memberRows.length} of THOSE ` +
+              `whose exposure set can EXCLUDE a realm`,
               "idl_args.c answers §3.3.7 step 1 off it at every global property reference and at every member " +
               "installed on a global, so a stale table is a name present in a realm the standard says it is " +
               "absent from, or absent from one it is in.");
