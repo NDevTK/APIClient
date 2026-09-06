@@ -12289,8 +12289,39 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        ASKS THE SAME QUESTION AS THE THING IT CONTROLS, so this is whole-value equality for rung 3's reason:
        a control that could be satisfied by a shape while the claim could not is a control that answers a
        different question and cannot isolate anything. */
-    int base_fork = (param_value_is(js, "/api/getbase", "v", "gbADMIN") &&
-                     param_value_is(js, "/api/getbase", "v", "gbPUBLIC"));
+    /* AND IT CARRIES ITS OWN `why`, BECAUSE A CONTROL WHOSE ZERO CANNOT SPEAK CONTROLS NOTHING. The paragraph
+       above says the whole point of this row is that without it two states "are one number, and the wrong one
+       gets worked on" — and the row as it stood committed that same defect one level down: a bare conjunction
+       of two value tests is 0 when the endpoint was never emitted AT ALL, when it was emitted carrying only
+       the admin arm, and when it was emitted carrying only the public one, which are three states taking
+       three different actions. The first says the statement never ran and the ladder above is unreadable
+       rather than negative; the other two say the ternary was DECIDED and name which arm survived, which is
+       the concretized gate §Solver-half forbids and is the finding.
+       IT WAS THE ONLY ROW IN THIS FAMILY WITH NO TEXT, which is how it went unnoticed: `fold_row` asserts
+       that a 0 row carries a diagnostic, and a row that never folds never reaches that assert. */
+    const char *base_fork_why = NULL;
+    int base_fork = 1;
+    {
+        const int adm = param_value_is(js, "/api/getbase", "v", "gbADMIN");
+        const int pub = param_value_is(js, "/api/getbase", "v", "gbPUBLIC");
+        const int n   = param_value_count(js, "/api/getbase", "v");
+
+        fold_row(&base_fork, &base_fork_why, n > 0,
+                 "NOT REACHED: `/api/getbase` carries no `v` at all, so the control statement never ran. The "
+                 "`getter-*` ladder above cannot be read as being about the accessor OR about the fixture "
+                 "until this one does — a control that did not execute isolates nothing");
+        fold_row(&base_fork, &base_fork_why, adm || pub,
+                 "`/api/getbase` was emitted and its `v` is NEITHER arm's value: this control asks for whole-"
+                 "value equality on purpose (a shape could satisfy a laxer test while the claim above could "
+                 "not), so a `v` that is some third thing means the statement ran and produced a value this "
+                 "row cannot recognise, which is a claim about the fixture and not about the engine");
+        fold_row(&base_fork, &base_fork_why, adm && pub,
+                 "the same ternary over the same source in the same frame, with NO accessor in the way, "
+                 "produced exactly ONE of its two arms — so `cfg.admin` is not two-armed at this point in the "
+                 "document at all. That is the concretized gate §Solver-half forbids for server-injected "
+                 "absent state, and it is UPSTREAM of every `getter-*` row above: those assert something no "
+                 "run can satisfy while this is 0, so the accessor is not what needs fixing");
+    }
 
     /* THE CONSTRUCT-TIME THROW HAPPENED. Without this row a green `con_shape` below is also what a statement
        that never threw produces, which is the failure mode of asserting only the consequence. */
@@ -13063,7 +13094,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "getter-arms", getter_arms, "_gx.x", SESS_EXPLORE },
         /* AND ITS CONTROL, keyed on its OWN statement — it is a different statement making a different claim,
            so it carries its own key rather than borrowing the accessor's. */
-        { "base-fork", base_fork, "gbADMIN", SESS_EXPLORE },
+        { "base-fork", base_fork, "gbADMIN", SESS_EXPLORE, base_fork_why },
         { "con-threw", con_threw, "_CShape", SESS_EXPLORE },
         { "con-s-one", con_s_one, "_CShape", SESS_EXPLORE },
         { "con-shape", con_shape, "_CShape", SESS_EXPLORE },
