@@ -1006,21 +1006,34 @@ uint32_t engine_host_request(JSContext *ctx, const char *op) {
        the point". The driver therefore re-enters a machine that yields IMMEDIATELY unless the preempt hook
        says otherwise, so a machine using the yield to WAIT is a busy spin unless preempt_hook's clause (0)
        sees this entry on the register.
-         THE ATTRIBUTION AND THE WORDS BOTH STOOD WRONG HERE, AND THE WORDS INVERTED THE ARGUMENT THIS
-       PARAGRAPH IS MAKING. It read `whose contract (quickjs-step.h) is "I have more work; preempt me if you
-       want"` — a file that does not contain the sentence, and a rendering of it that ASSERTS THE ASK the
-       source's next clause exists to DENY. quickjs.c records that this arm USED to ask and that the asking
-       was the defect: it made "the only C span this driver could be preempted inside the one a machine
-       explicitly declared", so a walk built out of keyed requests "had no rest point at all". The register
-       below is load-bearing PRECISELY BECAUSE the yield asks nothing — so the misquotation was arguing
-       against the very line it introduces, which is the shape a wrong quotation takes when the reasoning
-       around it is right, and the reason repairing it changes no code.
-         IT SURVIVED EVERY GATE BECAUSE NOTHING CHECKS A QUOTATION OF THE SUBMODULE AGAINST THE SUBMODULE.
-       The citation auditor compares a quoted run against a SPEC corpus, and its default targets are
-       engine/host, exactly quickjs.c and quickjs.h out of the fork, the two .md files and extension/ — so a
-       run attributed to any OTHER file in engine/qjs is neither compared against that file nor clearable as
-       this tree's own prose, and lands unremarked. It was found by grepping the quoted words at the file the
-       comment named, which is the check this site had never been given. Nothing else ties the two together: they are a step code in the engine
+         THE ATTRIBUTION THAT STOOD HERE WAS CORRECT AND A LANDED REPAIR SAID IT WAS NOT, WHICH IS THE MORE
+       EXPENSIVE OF THE TWO ERRORS. This paragraph used to read `whose contract (quickjs-step.h) is "I have
+       more work; preempt me if you want"`, and it was rewritten on the stated ground that quickjs-step.h is
+       `a file that does not contain the sentence`. IT CONTAINS IT, on the line that introduces
+       `#define JS_STEP_YIELD`, in CAPITALS. The repair states its own evidence as a grep of the quoted words
+       at the file the comment named, and a grep is exactly the instrument that cannot see this: a
+       case-SENSITIVE search for the lowercase spelling answers 0 and a case-insensitive one answers 1. The
+       reader who found this ran the same wrong grep first and got the same 0. So an accusation of
+       mis-attribution was published against a comment that had named its source correctly — the shape
+       CLAUDE.md calls the mirror of a fabrication charge, made with less evidence than the citation it
+       attacked.
+         WHAT IS ACTUALLY THE CASE IS THAT ONE CONTRACT IS DECLARED IN TWO PLACES AND NOBODY HAS RECONCILED
+       THEM, and this comment does not pretend to. quickjs.c's arm for this code re-enters with JS_UNDEFINED
+       and says "It ASKS NOTHING, and that is the point", recording that the arm USED to ask and that the
+       asking was the defect — it made "the only C span this driver could be preempted inside the one a
+       machine explicitly declared", so a walk built out of keyed requests "had no rest point at all". The
+       header's headline says instead that the machine may ask to be preempted, while its own next paragraph
+       — return it with no request pending, re-entered immediately — agrees with quickjs.c. Whether those are
+       a CONTRADICTION or the machine-side and driver-side halves of ONE contract is NOT settled here, and was
+       not settled by the repair either; what is settled is that the sentence exists where the original
+       comment said it did. The register below is load-bearing either way, because the driver's arm asks
+       nothing whatever the header calls the offer.
+         THE CHECK THIS SITE HAD NEVER BEEN GIVEN NOW EXISTS, and it is what refuted the repair rather than
+       the repair's own method. `citegen.mjs`'s FORK-SOURCE channel takes a quotation whose nearest preceding
+       anchor is a file under engine/qjs that the audit does not read, opens THAT file, and answers HELD or
+       NOT-IN-THE-NAMED-FILE. It sees what two hand-greps could not because it compares TOKEN STREAMS: both
+       sides are lowercased and stripped of punctuation, so a capitalised headline and a lowercase quotation
+       of it are the same words, which is exactly the axis a grep is spelled on. Nothing else ties the two together: they are a step code in the engine
        and a pending kind in the scheduler, and a pending kind added without pending_blocked's agreement would
        turn every cross-instance read into a flow that burns the thread until the host answers — with the host
        only asked BETWEEN steps, so the answer can never arrive. Asserted here because this is where the
