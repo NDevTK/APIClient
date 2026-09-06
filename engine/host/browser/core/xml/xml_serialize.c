@@ -475,6 +475,20 @@ static bool xs_has_byte(const char *b, size_t n, char c)
 /* A byte substring. The three needles this file looks for — `--`, `]]>` and `?>` — are all ASCII, and an ASCII
    byte can never occur as a UTF-8 continuation byte (every continuation byte is 0x80..0xBF), so asking the
    question of bytes and of characters is the same question. */
+/* DOM Parsing and Serialization §5.2.1.7 XML serializing a DocumentType node's "the serialization of the id":
+   "If id contains U+0022 QUOTATION MARK, let q be U+0027 APOSTROPHE and let q be U+0022 QUOTATION MARK
+   otherwise. Return the concatenation of q, id and q."
+
+   IT IS NOT GATED ON `require well formed`, WHICH IS WHY BOTH IDS GO THROUGH IT. The well-formedness step
+   above refuses a systemId holding BOTH marks, because then no delimiter exists — and that check is the
+   reason a hardcoded `"` looked safe here. It is not the same question: an id holding ONLY a quotation mark
+   passes that check and still cannot be written inside quotation marks. The publicId is safe from a
+   different direction and only while `require well formed` is true, since XML §2.3's [13] PubidChar
+   production admits an apostrophe and not a quotation mark; with the flag false that check does not run, so
+   this entry decides for both ids rather than for the one that is wrong under the flag this engine happens
+   to be called with. */
+static char xs_id_quote(const char *b, size_t n) { return xs_has_byte(b, n, '"') ? '\'' : '"'; }
+
 static bool xs_has_bytes(const char *b, size_t n, const char *needle, size_t m)
 {
     size_t i;
@@ -920,15 +934,19 @@ static int xs_leaf(JSContext *ctx, XmlSerializeState *s, lxb_dom_node_t *n)
         xs_lit(ctx, s, "<!DOCTYPE ");
         xs_out(ctx, s, nm ? nm : "", nm ? nlen : 0);
         if (publen) {
-            xs_lit(ctx, s, " PUBLIC \"");
+            char q = xs_id_quote(pub, publen);
+            xs_lit(ctx, s, " PUBLIC ");
+            xs_out(ctx, s, &q, 1);
             xs_out(ctx, s, pub, publen);
-            xs_lit(ctx, s, "\"");
+            xs_out(ctx, s, &q, 1);
         }
         if (syslen && !publen) xs_lit(ctx, s, " SYSTEM");
         if (syslen) {
-            xs_lit(ctx, s, " \"");
+            char q = xs_id_quote(sys, syslen);
+            xs_lit(ctx, s, " ");
+            xs_out(ctx, s, &q, 1);
             xs_out(ctx, s, sys, syslen);
-            xs_lit(ctx, s, "\"");
+            xs_out(ctx, s, &q, 1);
         }
         xs_lit(ctx, s, ">");
         return JS_STEP_YIELD;
