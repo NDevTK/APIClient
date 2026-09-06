@@ -4284,7 +4284,7 @@ function audit(argv, opts = {}) {
   const stat = { total: 0, bare: 0, anchored: 0, byTerm: 0, byFile: 0, other: 0, skipped: 0, quotedNumber: 0,
                  confirmed: 0, confirmedByUse: 0, confirmedByContainment: 0, confirmedByAncestor: 0, confirmedByRun: 0,
                  confirmedByText: 0, confirmedByIdent: 0, textRefused: 0,
-                 unverified: 0, multiSpec: 0, byGroupTitle: 0,
+                 unverified: 0, multiSpec: 0, byGroupTitle: 0, byRunAnchor: 0,
                  foreignTerm: 0, titleRefused: 0, byTitle: 0, numberRefused: 0,
                  titled: 0, titledQuoted: 0, titledEv: 0, titledOK: 0, titledMis: 0, titledMisInTitle: 0,
                  titledTailEv: 0, titledTailMis: 0, titleDeclined: 0,
@@ -4626,6 +4626,46 @@ function audit(argv, opts = {}) {
         run.push(prev.no);
       }
       if (run.length > 1) c.run = run;
+      /* AND THE RUN SHARES ITS ANCHOR, WHICH IS THE SAME SENTENCE THE PARAGRAPH ABOVE ALREADY MAKES: if a run
+       * of adjacent numbers is ONE CITATION WITH SEVERAL TARGETS, it has ONE STANDARD. Measured before this
+       * existed, by probe: `Fetch §5.4.2 and §3.1` leaves §3.1 unanchored, and so does `Fetch §5.4.2 / §3.1`,
+       * while repeating the name anchors both. The cause is not the 40-character window `anchorTokens` reads —
+       * its tail matches only a run of LETTER-INITIAL words, and an intervening section number is not one, so
+       * an anchor never survives a preceding citation AT ANY DISTANCE. A message naming its standard once and
+       * citing three numbers therefore left two of them deciding by file vote, which is the shape this
+       * codebase writes constantly.
+       * A FORWARD REACH WOULD BE THE WRONG FIX AND IS DELIBERATELY NOT WHAT THIS IS. Reaching over arbitrary
+       * prose cannot tell `and §3.1` — the same standard, distributed — from `and §7.4`, a different one the
+       * author left bare, and guessing wrong there manufactures a missing-section claim against a document
+       * nobody named. The RUN is already the answer to exactly that question: it is bounded to a few
+       * characters of separator with no words in them, and `§4.7's X. §4.8's Y` stays two claims because a
+       * period ends it. Nothing here widens what a run IS; it only stops a run's own anchor from being
+       * readable by one of its members and invisible to the rest.
+       * IT IS TAKEN FROM THE NEAREST PRECEDING MEMBER THAT HAS ONE, and it may itself have been inherited —
+       * `Fetch §1/§2/§3` carries the name to all three — because the run is one citation however many
+       * separators it holds. A member that states its OWN standard keeps it: the loop only fills a blank.
+       * AND IT TAKES A STRICTLY NARROWER SEPARATOR SET THAN THE TERM RUN ABOVE, WHICH THE FIRST CUT DID NOT
+       * AND WAS CAUGHT BY ITS OWN INTRODUCED LIST. `RUN_JOIN` admits a `+` and an EMPTY gap, and neither of
+       * those ENUMERATES: measured tree-wide, sharing an anchor across them raised two fresh UNKNOWN-SECTION
+       * claims and both were false — `URL §4.7 + §7.1.1's serializer`, where the second number is HTML's
+       * Origins and the `+` means "and also", so `url has no §7.1.1` was reported against a document the
+       * comment never named; and `DOM §4.2.3 §3.4.`, two numbers with nothing between them at all.
+       * THE DIFFERENCE IS WHAT THE SEPARATOR MEANS, and it is the whole of why this is narrower rather than
+       * bounded tighter. A list separator, a conjunction or a range dash says the author is naming SEVERAL
+       * TARGETS OF ONE CITATION, which is the premise the run rests on and the premise that makes one anchor
+       * cover them. A `+` says two things are used TOGETHER — which is exactly the sentence in which they may
+       * be two documents — and adjacency says nothing at all. The term run may keep both, because there a
+       * wrong run only offers an extra confirmation; here it decides the STANDARD, and a wrong standard is
+       * the missing-section claim above. Same shape, opposite cost, so the two sets are allowed to differ. */
+      const RUN_ANCHOR_JOIN = /^[ \t]*(?:[/,&]|and|or|through|to|[-‐-―])[ \t]*$/;
+      if (!c.anchor)
+        for (let j = i - 1; j >= 0; j--) {
+          const prev = cites[j], next = cites[j + 1];
+          if (prev.bare) break;
+          const gapAt = prev.at + prev.len;
+          if (next.at - gapAt > 8 || !RUN_ANCHOR_JOIN.test(src.slice(gapAt, next.at))) break;
+          if (prev.anchor) { c.anchor = prev.anchor; c.anchorFromRun = true; break; }
+        }
     }
     for (const c of cites) {
       const after = src.slice(c.at + c.len, c.at + c.len + 220).replace(/\n\s*\*?\s*/g, " ");
@@ -4787,7 +4827,7 @@ function audit(argv, opts = {}) {
        * SO THE CITATION'S OWN EVIDENCE IS CONSULTED — but LAST, below the file fallback, for the reason spelled
        * out at that site: it must ADD a resolution rather than replace one. */
       const own = c.ev ? new Set(c.ev.hits.map((h) => h.key)) : null;
-      if (c.anchor) { spec = c.anchor; how = "anchored"; }
+      if (c.anchor) { spec = c.anchor; how = "anchored"; if (c.anchorFromRun) stat.byRunAnchor++; }
       else if (g.keys.size === 1) { spec = [...g.keys][0]; how = "term"; }
       else if (g.keys.size > 1) {
         stat.multiSpec++;
@@ -6364,7 +6404,7 @@ function audit(argv, opts = {}) {
   if (!opts.files && !targets.length)
     console.log(`  NOT COLLECTED by this default run: engine/qjs beyond quickjs.c/.h and engine/lexbor — upstream, not this tree's to answer for; ` +
       `and generated bytes under out/ and .work/, which nobody wrote. Everything this project's own hands typed is collected, gates included.`);
-  console.log(`  resolved: ${stat.anchored} by their own anchor, ${stat.byTerm} by the term they name, ` +
+  console.log(`  resolved: ${stat.anchored} by their own anchor (${stat.byRunAnchor} of them by the anchor of the RUN they stand in, which is one citation with several targets), ${stat.byTerm} by the term they name, ` +
     `${stat.byTitle} by a section TITLE (${stat.byGroupTitle} of them stated at ANOTHER site citing the same number in the same file, which is the group rule) that only one standard uses AND that that standard numbers beside the cited § ` +
     `(the neighbourhood half is not caution — without it a title whose owner this audit does not index resolves to whichever indexed standard happens to reuse the heading)`);
   console.log(`  INFERRED: ${stat.byFile} name no standard, no term and no title, and were placed by their file's dominant anchor — a guess, ` +
