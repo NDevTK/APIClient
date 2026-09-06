@@ -2383,6 +2383,19 @@ const LEVELLED = /^[a-z]+(-[a-z0-9]+)*-[0-9]+$/;
 const MODULE_BEFORE_LEVEL = /[ \t]+Module(?=[ \t]+Level[ \t]+[0-9]+(?:\.[0-9]+)*$)/i;
 const MODULE_BEFORE_VERSION = /[ \t]+Module(?=[ \t]+[0-9]+(?:\.[0-9]+)*$)/i;
 
+/* HOW FAR BACK A CITATION IS READ FOR ITS STANDARD'S NAME, DECLARED ONCE BECAUSE THREE THINGS NOW DEPEND ON
+   IT and a bound restated at each of them is the second copy that drifts. The scan uses it; the sibling test
+   below asks whether another standard was NAMED inside the same span; and the truncation marker asks what a
+   wider read would have seen. A literal at the scan and a literal at the tests would be one fact spelled
+   three times, and the two that are not the scan would go on describing a window the scan had stopped using.
+   THE WIDE ONE IS A MARKER AND NEVER A RESOLUTION, which is the whole of why widening the real window was
+   refused rather than done. The narrow bound exists because a longer read picks up a capitalised name from a
+   PREVIOUS sentence and anchors the citation to a standard nobody cited there — the coverage-gaining
+   direction CLAUDE.md prices in false accusations. So the wide read answers exactly one question, "was the
+   narrow read CUT", and no verdict anywhere is allowed to depend on its answer. */
+const ANCHOR_WINDOW = 40;
+const ANCHOR_WINDOW_WIDE = 200;
+
 function anchorTokens(before) {
   /* THE LEVELLED NAMES `joinLevel` REFUSED, carried out with the tokens so the caller can census what it
      could not place — see joinLevel for why they would otherwise vanish. */
@@ -3997,7 +4010,16 @@ function quoteMsg(q) {
                               : `: not even its FIRST WORD follows a boundary there`) +
                (q.alt ? ` — but ${q.alt.matched} of those words ARE ${q.alt.key} §${q.alt.at.slice(0, 3).join(", §")}'s` : "")
      : ` — ${q.words} words that appear in NO indexed standard`) +
-    (q.elided ? ` (${q.elided} fragment(s) under ${MIN_FRAGMENT_WORDS} words not compared)` : "");
+    (q.elided ? ` (${q.elided} fragment(s) under ${MIN_FRAGMENT_WORDS} words not compared)` : "") +
+    /* AND WHETHER THE SITE NAMED A SECOND STANDARD THIS CLOSE — a clause about the SOURCE, appended to every
+       quotation wording so a reader meets it wherever the finding is printed, the full report and the delta
+       alike. It changes no verdict and is no part of the judgement: the resolver took the nearer name, which
+       is the only rule it can have, and this says what that name was competing with so a reader does not have
+       to re-derive it. Where the quotation belongs to the OTHER standard the repair is at the site — a
+       quotation follows the standard it belongs to, or repeats that standard's name in front of itself — and
+       never here. */
+    (q.rival ? ` — the site names ${q.rival} ${q.rivalAt} character(s) before this number and this resolver` +
+               ` takes the NEARER name, so if these words are that standard's the repair is at the site` : "");
 }
 
 function inSpans(spans, at) {
@@ -4425,6 +4447,22 @@ function audit(argv, opts = {}) {
      `joinLevel`'s gate is different in kind: the shape is the evidence, `CSS Counter Styles 3` cannot be a
      stray English word, and there is no floor to apply because a standard cited ONCE is exactly the case. */
   const unknownLev = new Map();
+  /* AND WHICH OF THOSE NAMES THE READER'S OWN WINDOW CUT, WHICH IS A DIFFERENT FACT AND TAKES DIFFERENT WORK.
+     The band prescribes one remedy — a foreign entry, or an index row — and that remedy is right only for a
+     name an AUTHOR WROTE. A name the anchor scan MANUFACTURED by opening part-way through one is not a
+     standard at all, and the two print identically. Measured on two of them, as classifiers over the one file
+     each: the entry the band asks for was HARMFUL for one, taking a file's resolutions from 189 to 187
+     because a group rule already places those sites from their siblings and a foreign entry wins before it is
+     asked, and INERT for the other. So this Set is not decoration on the census, it is the difference between
+     a queue and a trap.
+     THE FIRST TEST WRITTEN FOR THIS DID NOT FIRE, and it is recorded because the reasoning had already been
+     published as a next-diff clause before anyone ran it. That clause said the window knows whether it opened
+     MID-TOKEN, because the character before its start is a word character — and at the site it was written
+     about, the window opens on WHITESPACE: a continuation line's own indentation fills it, so the cut lands in
+     the gutter rather than inside a word. The clause named a mechanism and the mechanism was not that, which
+     is the failure mode CLAUDE.md gives that clause by name. What is asked instead is the only question that
+     cannot be wrong about the source's shape: READ WIDER AND SEE IF THE ANSWER CHANGES. */
+  const levCut = new Set();
   const SEC = "[0-9]+(?:\\.[0-9]+)*|[A-F](?:\\.[0-9]+)+";
   /* A CITATION THE READER CANNOT SEE IS WORSE THAN ONE IT REPORTS WRONG, BECAUSE IT APPEARS IN NO TOTAL. This
    * pattern demanded the number touch the §, and `§ 3.2.26` — a spelling a human reads as identical — was
@@ -4692,15 +4730,24 @@ function audit(argv, opts = {}) {
     CITE.lastIndex = 0;
     for (let m; (m = CITE.exec(src)); ) {
       if (inQuotedRun(qruns, m.index)) { stat.quotedNumber++; continue; }
-      const toks = anchorTokens(src.slice(Math.max(0, m.index - 40), m.index));
+      const toks = anchorTokens(src.slice(Math.max(0, m.index - ANCHOR_WINDOW), m.index));
       const a = classifyAnchor(toks);
       const tok = toks.length ? toks[toks.length - 1] : null;   /* the one word, for the gap report below */
       cites.push({ at: m.index, len: m[0].length, no: m[1], anchor: a, bare: false });
       seen.add(m.index + m[0].length - m[1].length);
       if (a) votes.set(a, (votes.get(a) || 0) + 1);
       else if (tok && /^[A-Z]/.test(tok) && tok.length > 2) unknownTok.set(tok, (unknownTok.get(tok) || 0) + 1);
-      else if (!a && toks.missed && toks.missed.length)
-        unknownLev.set(toks.missed[0], (unknownLev.get(toks.missed[0]) || 0) + 1);
+      else if (!a && toks.missed && toks.missed.length) {
+        const nm = toks.missed[0];
+        unknownLev.set(nm, (unknownLev.get(nm) || 0) + 1);
+        /* AND WAS THIS NAME CUT BY THE WINDOW RATHER THAN WRITTEN BY ANYBODY — asked ONLY here, over the few
+           citations that reached this line, so the second read costs nothing on the population that does not
+           need it. A wider read that ANCHORS, or that names something else, says the narrow one was a
+           fragment; that answer is used for this one sentence and for nothing else, and no resolution above
+           or below consults it. */
+        const wide = anchorTokens(src.slice(Math.max(0, m.index - ANCHOR_WINDOW_WIDE), m.index));
+        if (classifyAnchor(wide) || (wide.missed.length && wide.missed[0] !== nm)) levCut.add(nm);
+      }
     }
     BARE.lastIndex = 0;
     for (let m; (m = BARE.exec(src)); ) {
@@ -4711,6 +4758,35 @@ function audit(argv, opts = {}) {
       cites.push({ at: m.index, len: m[0].length, no: m[1], anchor: null, bare: true });
     }
     cites.sort((a, b) => a.at - b.at);
+
+    /* WHETHER A SECOND STANDARD IS NAMED INSIDE THE SPAN THIS CITATION'S OWN STANDARD WAS READ FROM, which is
+     * a fact about the SOURCE and not a verdict about the citation. The resolver takes the NEAREST name and
+     * that is the only rule it may have: asking whether the words are in EITHER of two documents would accept
+     * a quotation because SOME nearby standard holds it, which is a check whose two sides cannot disagree —
+     * and it would do it in the one channel here that has a real oracle. So nearest-anchor stays, and what is
+     * added is that the site SAID SO.
+     * WHY THAT IS WORTH SAYING: a message naming one standard, printed against a line that visibly names
+     * another, reads as this tool mis-attributing. The verdict is right and renders as an accusation, which is
+     * the direction CLAUDE.md rates as needing more suspicion than the quiet one — an excluder that
+     * under-covers ACCUSES, and its output looks like a result. The reader who meets one has to re-derive the
+     * whole resolution before they can see that the repair is at the site. This hands them that in the
+     * sentence, and changes no verdict to do it.
+     * IT IS THE NEAREST RIVAL AND NOT ALL OF THEM, because the claim being made is minimal and checkable —
+     * another standard is named this close, and the resolver preferred the nearer one. A list of every
+     * standard on the line would be a larger claim resting on the same single observation. */
+    /* AND ONLY WHERE THE ANCHOR IS WHAT DECIDED IT, or the sentence this produces would be false. A citation
+     * placed by a TERM, a stated TITLE or a file vote did not take the nearer name — it took evidence of
+     * another kind — so telling its reader that "this resolver takes the NEARER name" would explain a
+     * resolution that never happened. The mark is a claim like any other and is made only where it holds. */
+    for (let i = 0; i < cites.length; i++) {
+      const c = cites[i];
+      if (!c.anchor) continue;
+      for (let j = i - 1; j >= 0; j--) {
+        const q = cites[j];
+        if (q.at + q.len <= c.at - ANCHOR_WINDOW) break;
+        if (q.anchor && q.anchor !== c.anchor) { c.rival = q.anchor; c.rivalAt = c.at - q.at; break; }
+      }
+    }
 
     let dominant = null, best = 0, second = 0;
     for (const [k, v] of votes) { if (v > best) { second = best; dominant = k; best = v; } else if (v > second) second = v; }
@@ -5768,7 +5844,9 @@ function audit(argv, opts = {}) {
           qstat.seen++;
           const rec = { file: relative(ROOT, file), line: lineOf(c.at), no: c.no, spec: c.spec,
                         how: c.how, quote: q.text.trim(), words: f.words, elided: f.elided, gap: q.at,
-                        mark: q.mark, crash: inCrashMessage(src, spans, c.at) };
+                        mark: q.mark, crash: inCrashMessage(src, spans, c.at),
+                        /* carried so `quoteMsg` can say the site named two standards — see the rival scan */
+                        rival: c.rival, rivalAt: c.rivalAt };
           if (q.mark === "'") { qstat.single++; if (rec.crash) qstat.singleCrash++; }
           /* BEFORE EVERY REFUSAL BELOW — the agreement channel is asked of the whole `qstat.seen` population,
              and half its value is the sites the resolver could not place. */
@@ -6698,10 +6776,19 @@ function audit(argv, opts = {}) {
      prints. Numbers in this note are illustrative and are written without a section sign on purpose: this
      file is inside the population it audits, so an example citation here becomes a citation. */
   const lev = [...unknownLev].sort((a, b) => b[1] - a[1]);
+  const cut = lev.filter(([k]) => levCut.has(k));
   if (lev.length)
     console.log(`  NAMES SHAPED LIKE A LEVELLED STANDARD THAT NO LIST HOLDS — each is a standard whose citations are being ` +
-      `judged as somebody else's, and one entry is enough: ${lev.map(([k, v]) => `${k}=${v}`).join(" ")}` +
-      `; an OTHER_SPECS entry for the UNLEVELLED base stops the guess, an index row answers instead`);
+      `judged as somebody else's, and one entry is enough: ` +
+      `${lev.map(([k, v]) => `${k}=${v}${levCut.has(k) ? "(cut)" : ""}`).join(" ")}` +
+      `; an OTHER_SPECS entry for the UNLEVELLED base stops the guess, an index row answers instead` +
+      (cut.length
+        ? ` — EXCEPT the ${cut.length} marked (cut), where a wider read of the same site anchors or names something ` +
+          `else, so the printed name is a FRAGMENT this reader's own window made and no author wrote. An entry for ` +
+          `one of those is keyed on a spelling that occurs nowhere: at best it protects nothing, and where the ` +
+          `fragment's real standard IS indexed it REMOVES resolutions the site already had. The repair for those ` +
+          `is at neither list — it is the site, or this window`
+        : ` — none is marked (cut), so no name printed here is a fragment this reader's own window made`));
   else
     console.log(`  names shaped like a levelled standard that no list holds: none — every \`Name N §…\` this run read joins to a ` +
       `base SPECS or OTHER_SPECS already has. One APPEARING here is a standard being audited as another.`);
