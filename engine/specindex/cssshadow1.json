@@ -1,0 +1,219 @@
+{
+ "spec": "CSS Shadow Module Level 1",
+ "key": "cssshadow1",
+ "base": "https://drafts.csswg.org/css-shadow-1/",
+ "specUpdated": "28 April 2026",
+ "fetched": "2026-09-06",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "intro"
+  },
+  "2": {
+   "title": "Default Styles for Custom Elements",
+   "page": "",
+   "id": "default-element-styles"
+  },
+  "3": {
+   "title": "Shadow Encapsulation",
+   "page": "",
+   "id": "shadow-dom"
+  },
+  "4": {
+   "title": "Shadow Trees and the Cascade",
+   "page": "",
+   "id": "shadow-cascading"
+  },
+  "5": {
+   "title": "Exposing a Shadow Element",
+   "page": "",
+   "id": "exposing"
+  },
+  "6": {
+   "title": "Changes",
+   "page": "",
+   "id": "changes"
+  },
+  "7": {
+   "title": "Privacy Considerations",
+   "page": "",
+   "id": "privacy"
+  },
+  "8": {
+   "title": "Security Considerations",
+   "page": "",
+   "id": "security"
+  },
+  "3.1": {
+   "title": "Informative Explanation of Shadow DOM",
+   "page": "",
+   "id": "shadow-gloss"
+  },
+  "3.2": {
+   "title": "Shadow DOM and Selectors",
+   "page": "",
+   "id": "selectors"
+  },
+  "3.2.1": {
+   "title": "Matching Selectors Against Shadow Trees",
+   "page": "",
+   "id": "selectors-data-model"
+  },
+  "3.2.2": {
+   "title": "Selecting Shadow Hosts from within a Shadow Tree",
+   "page": "",
+   "id": "host-element-in-tree"
+  },
+  "3.2.3": {
+   "title": "Selecting Into the Light: the :host , :host() , and :host-context() pseudo-classes",
+   "page": "",
+   "id": "host-selector"
+  },
+  "3.2.4": {
+   "title": "Selecting Slot-Assigned Content: the ::slotted() pseudo-element",
+   "page": "",
+   "id": "slotted-pseudo"
+  },
+  "3.2.5": {
+   "title": "Matching on the Presence of Slot-Assigned Nodes: the :has-slotted pseudo-class",
+   "page": "",
+   "id": "the-has-slotted-pseudo"
+  },
+  "4.1": {
+   "title": "Flattening the DOM into an Element Tree",
+   "page": "",
+   "id": "flattening"
+  },
+  "4.1.1": {
+   "title": "Slots and Slotted Elements in a Shadow Tree",
+   "page": "",
+   "id": "slots-in-shadow-tree"
+  },
+  "4.2": {
+   "title": "Name-Defining Constructs and Inheritance",
+   "page": "",
+   "id": "shadow-names"
+  },
+  "4.2.1": {
+   "title": "Serialized Tree-Scoped References",
+   "page": "",
+   "id": "shadow-names-serialization"
+  },
+  "5.1": {
+   "title": "Motivation",
+   "page": "",
+   "id": "motivation"
+  },
+  "5.2": {
+   "title": "Naming a Shadow Element: the part attribute",
+   "page": "",
+   "id": "part-attr"
+  },
+  "5.3": {
+   "title": "Forwarding a Shadow Element: the exportparts attribute",
+   "page": "",
+   "id": "exportparts-attr"
+  },
+  "5.4": {
+   "title": "Selecting a Shadow Element: the ::part() pseudo-element",
+   "page": "",
+   "id": "part"
+  },
+  "5.5": {
+   "title": "Extensions to the Element Interface",
+   "page": "",
+   "id": "idl"
+  },
+  "5.6": {
+   "title": "Microsyntaxes for parsing",
+   "page": "",
+   "id": "parsing"
+  },
+  "5.6.1": {
+   "title": "Rules for parsing part mappings",
+   "page": "",
+   "id": "parsing-mapping"
+  },
+  "5.6.2": {
+   "title": "Rules for parsing a list of part mappings",
+   "page": "",
+   "id": "parsing-mapping-list"
+  }
+ },
+ "dfns": {
+  "flat tree": [
+   "4.1"
+  ],
+  "flattened element tree": [
+   "4.1"
+  ],
+  "forwarded part name list": [
+   "5"
+  ],
+  "has slotted": [
+   "3.2.5"
+  ],
+  "host context()": [
+   "3.2.3"
+  ],
+  "in the context of a shadow tree": [
+   "3.2.1"
+  ],
+  "in the context of the shadow tree": [
+   "3.2.1"
+  ],
+  "loosely matched": [
+   "4.2"
+  ],
+  "part element map": [
+   "5"
+  ],
+  "part name list": [
+   "5"
+  ],
+  "strictly matched": [
+   "4.2"
+  ],
+  "tree context": [
+   "3.2.1"
+  ],
+  "tree scoped name": [
+   "4.2"
+  ],
+  "tree scoped reference": [
+   "4.2"
+  ],
+  "valid list of part mappings": [
+   "5.6.2"
+  ],
+  "valid part mapping": [
+   "5.6.1"
+  ]
+ },
+ "ops": {},
+ "uses": {
+  "flattened element tree": {
+   "8": 2
+  },
+  "forwarded part name list": {
+   "5.3": 3
+  },
+  "in the context of a shadow tree": {
+   "8": 2,
+   "3.2.3": 3
+  },
+  "loosely matched": {
+   "8": 2
+  },
+  "part element map": {
+   "5.4": 2
+  },
+  "strictly matched": {
+   "8": 2
+  },
+  "tree scoped reference": {
+   "4.2.1": 5
+  }
+ }
+}

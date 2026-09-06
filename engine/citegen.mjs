@@ -705,6 +705,21 @@ const SPECS = [
   { key: "domparsing", label: "DOM Parsing and Serialization", kind: "respec",
     base: "https://w3c.github.io/DOM-Parsing/", edition: "maintained",
     anchors: ["parsing and serialization", "dom parsing"] },
+  /* CSS SCOPING IS INDEXED UNDER THE DOCUMENT IT BECAME, AND THAT IS A VERIFICATION RATHER THAN A GUESS.
+     `drafts.csswg.org/css-scoping-1/` answers 200 with 315 bytes — a redirect stub titled "Moved to CSS
+     Shadow Module Level 1" whose body sets `location.href` — so the standard this tree cites by name has no
+     text of its own to index, and the foreign row that stood here refused it on the ground that a §4.1 of the
+     predecessor is not a §4.1 of the successor UNLESS SOMEBODY CHECKS. This is that check, made against the
+     sites rather than against the redirect: ALL ELEVEN numbered citations in this tree write §4.1, one of
+     them states the section's own title, and css-shadow-1 numbers §4.1 "Flattening the DOM into an Element
+     Tree" — the title `core/html/html_element_view.c` writes beside the number, word for word. A stated
+     title matching the successor's own heading at the same number is the strongest evidence available here,
+     and it is what turns a renumbering nobody checked into one somebody did.
+     THE ANCHOR IS THE OLD NAME BECAUSE THAT IS WHAT THE TREE WRITES, and the row records the new one in its
+     label, so a reader meets the move at the table rather than at a 404. */
+  { key: "cssshadow1", label: "CSS Shadow Module Level 1", kind: "bikeshed",
+    base: "https://drafts.csswg.org/css-shadow-1/", edition: "maintained",
+    anchors: ["css scoping", "css shadow", "css-shadow-1", "css-scoping-1"] },
   { key: "hrtime", label: "High Resolution Time", kind: "bikeshed",
     base: "https://w3c.github.io/hr-time/", edition: "maintained", anchors: ["hr-time", "hrtime", "high resolution time"] },
   /* THE THREE STANDARDS THAT SIT ON TOP OF THE ROW ABOVE, and they are here for the reason that row's own
@@ -2175,7 +2190,7 @@ const OTHER_SPECS = [
      refusal does — an explicit `other:` anchor beats a term coincidence, by design, since the citation's own
      claim about which standard it means outranks a phrase two documents share. An index row RAISES it; that is
      the next diff and not this one. */
-  "css conditional", "css scoping",
+  "css conditional",
   "positioned layout", "css nesting", "css viewport", "har",
   /* CSS modules, as this tree spells them when it does not use the levelled shortname */
   "css", "selectors", "cascade", "view", "values", "sizing", "fonts", "backgrounds", "text",
