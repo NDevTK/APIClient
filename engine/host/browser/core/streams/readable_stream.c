@@ -3922,15 +3922,31 @@ static const JSTrampStepDef js_from_defs[FROM_N] = {
    steps are the page's code. */
 /* WHERE THIS MACHINE RESTS. §4.2's `from` is one step over §4.9.1's ReadableStreamFromIterable, whose first
    step is GetIterator(asyncIterable, ASYNC) — and three of that operation's four steps are the page's code. */
+/* THESE FIVE LABELS CITED AN EARLIER EDITION AND EVERY NUMBER IN THEM WAS WRONG, which is not a typo but a
+   RESTRUCTURE: ECMAScript renumbered this family and moved work between its members. GetIterator is §7.4.4
+   (§7.4.2 is now GetIteratorDirect and §7.4.3 GetIteratorFromMethod), and the Call the old labels placed at
+   "GetIterator step 3" no longer happens in GetIterator at all — §7.4.4 delegates to §7.4.3, whose step 1 is
+   `Let iterator be ? Call(method, obj)`. Every number here was read off the fetched document with list depth
+   tracked, because §7.4.4's four top-level steps carry sub-lists three deep and a flat count promotes them.
+   A LABEL IS THE ONE CITATION SITE THIS TREE CANNOT REPAIR FOREVER: JSTrampStepDef.steps declares that a
+   resume resolves a label back to an index, so once that resume exists these bytes are a parked flow's
+   identity and correcting one becomes a dropped flow. The resolver exists; its only caller today is the
+   declaration's own duplicate check, so the window to fix these was open and closes with no announcement on
+   the day the resume lands. That is why they are corrected now and why no NEW label should carry a number.
+   The two Call stages name the same spec step by different routes and stay textually distinct, which
+   js_step_labels_check requires. Titles are unquoted deliberately: a quoted title inside a string literal
+   ends the literal, which has broken this tree's build once. */
 #define FC_STAGES(X) \
     X(FC_START = IDL_STEP_FIRST, \
-      "ECMA-262 7.4.2 GetIterator step 1.a (GetMethod(obj, @@asyncIterator))") \
-    X(FC_ASYNC_CALL, "ECMA-262 7.4.2 GetIterator step 3 (Call(method, obj) for the async iterator)") \
-    X(FC_SYNC_GET, "ECMA-262 7.4.2 GetIterator step 1.b (GetMethod(obj, @@iterator), when there is no async " \
-                   "one)") \
-    X(FC_SYNC_CALL, "ECMA-262 7.4.2 GetIterator step 3 (Call(method, obj) for the sync iterator, then " \
-                    "27.1.4.1 CreateAsyncFromSyncIterator over it)") \
-    X(FC_NEXT, "ECMA-262 7.4.3 GetIteratorDirect step 1 (Get(iterator, \"next\"))") \
+      "ECMA-262 7.4.4 GetIterator step 1.1 (GetMethod(obj, @@asyncIterator))") \
+    X(FC_ASYNC_CALL, "ECMA-262 7.4.3 GetIteratorFromMethod step 1 (Call(method, obj) for the async " \
+                     "iterator), reached from 7.4.4 GetIterator step 4") \
+    X(FC_SYNC_GET, "ECMA-262 7.4.4 GetIterator step 1.2.1 (GetMethod(obj, @@iterator), when there is no " \
+                   "async one)") \
+    X(FC_SYNC_CALL, "ECMA-262 7.4.3 GetIteratorFromMethod step 1 (Call(method, obj) for the sync iterator), " \
+                    "reached from 7.4.4 GetIterator step 1.2.3, whose step 1.2.4 then returns 27.1.5.1 " \
+                    "CreateAsyncFromSyncIterator over the record") \
+    X(FC_NEXT, "ECMA-262 7.4.2 GetIteratorDirect step 1 (Get(iterator, \"next\"))") \
     X(FC_BUILD, "Streams §4.9.1 ReadableStreamFromIterable steps 2-4 (the stream, with the iterator's `next` " \
                 "and `return` as its pull and cancel algorithms)") \
     X(FC_STARTED, "Streams §4.9.1 ReadableStreamFromIterable step 4's startAlgorithm (the start promise's " \
@@ -3979,7 +3995,9 @@ static int js_from_call_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
             JS_ThrowTypeError(ctx, "ReadableStream.from was given something that is not an object");
             return -1;
         }
-        /* 7.4.2 GetIterator with the ASYNC hint: @@asyncIterator first, and only a NULLISH one falls back. */
+        /* ECMAScript §7.4.4 "GetIterator ( obj, kind )" with the ASYNC hint: step 1.1 reads
+           %Symbol.asyncIterator% first, and only a NULLISH one takes step 1.2's fallback. §7.4.2 stood
+           here and is "GetIteratorDirect ( obj )", a different operation this family renumbered past. */
         r = step_getprop_run(ctx, hdr, src, JS_WellKnownSymbolAtom(JS_WKS_ASYNC_ITERATOR), cb_result,
                              &s->method, out_cb, out_argc);
         if (r > 0) return r;
