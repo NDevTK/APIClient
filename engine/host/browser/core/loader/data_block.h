@@ -21,9 +21,12 @@
  * admin endpoint is lost — config is opaque-for-control-flow yet carries its loaded value as the example)."
  * A data block is that payload delivered in the document instead of over the network, and the difference is
  * the transport only. So its text is minted as the solver's triple — provenance naming the block, and the
- * REAL BYTES as the example — and the engine's own `JSON.parse` carries it the rest of the way: 25.5.1 over
- * an unknown text forks its two completions, runs the REAL codec on the example, and derives the result from
- * the source it came from. Nothing here parses anything, and nothing derives a transform expression from one.
+ * REAL BYTES as the example — and the engine's own `JSON.parse` carries it the rest of the way:
+ * ECMAScript §25.5.2 "JSON.parse ( text [ , reviver ] )" over an unknown text forks its two completions,
+ * runs the REAL codec on the example, and derives the result from the source it came from. Nothing here
+ * parses anything, and nothing derives a transform expression from one. (THE NUMBER STOOD AS `25.5.1`,
+ * which the standard now titles JSON.isRawJSON ( obj ) — a retired number that still RESOLVES, so no
+ * channel can accuse it. Read off the standard's text rather than recalled.)
  *
  * WHY THE PRESENT MEMBERS DO NOT GO CONCRETE AND THE ABSENT ONES DO NOT GO `undefined`. This visitor's block
  * says `"isBot":false` and `"user":null`; the next visitor's says something else, and the fields it holds are

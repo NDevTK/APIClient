@@ -2247,8 +2247,9 @@ int concolic_candidate_delivered(void) {
 /* THE MEMBER'S OWN EXAMPLE — the third of §Solver's triple, computed by RUNNING THE REAL READ on the parent's
    example rather than by deriving anything from a recorded expression.
  *
- * A concolic whose example is a RECORD is what the real codec hands back: 25.5.1 over an unknown text runs the
- * engine's own `JSON.parse` on the source's example and the completion carries that parsed value. Until this
+ * A concolic whose example is a RECORD is what the real codec hands back:
+ * ECMAScript §25.5.2 "JSON.parse ( text [ , reviver ] )" over an unknown text runs the engine's own
+ * `JSON.parse` on the source's example and the completion carries that parsed value. Until this
  * existed, every field read off it minted example-free, so a loaded config's `region` — a value the run had
  * concretely in hand — reached an @H parameter as a hole with no value under it, which is §@H's "a shape
  * states two facts" with one of them thrown away. Absence stays absence: a member the record does NOT hold
@@ -2264,8 +2265,17 @@ int concolic_candidate_delivered(void) {
  * AN ACCESSOR ON AN EXAMPLE IS ANSWERED WITH NO EXAMPLE, and that is a positive statement rather than a
  * default: its value is whatever the page's getter would compute, this read may not run it, so there is no
  * concrete value here to report — the same answer as a member the record does not hold, for a different and
- * equally honest reason. `JSON.parse` builds only data properties, so the only route to one is a 25.5.1 step 9
- * reviver that defined one, which is the page's own choice. */
+ * equally honest reason. `JSON.parse` builds only data properties, so the only route to one is a reviver
+ * that defined one, and
+ * ECMAScript §25.5.2 "JSON.parse ( text [ , reviver ] )" step 9 is what hands the walk to it, which is
+ * the page's own choice.
+ *
+ * BOTH NUMBERS ABOVE STOOD AS `25.5.1`, which the standard now titles JSON.isRawJSON ( obj ). THE STEP
+ * SURVIVED THE MOVE AND THAT IS NOT AUTOMATIC: a renumber applied uniformly would have carried a step
+ * number across two sections without reading either, and JSON.isRawJSON has only TWO steps, so `step 9`
+ * was out of range at the number it was written under. It is in range at §25.5.2, whose step 9 is
+ * `Return ? InternalizeJSONProperty(root, rootName, reviver, snapshot)` — the call that runs the reviver.
+ * Read off the standard's text rather than recalled. */
 /* §10.4.3.5 StringGetOwnProperty ( string, propertyKey ) — THE OWN MEMBERS OF A VALUE WHOSE EXAMPLE IS A
  * STRING, and the only own members any PRIMITIVE example has: §10.4.3 String Exotic Objects is the one
  * primitive wrapper that owns properties at all, so a Number, Boolean, BigInt or Symbol example answers none
