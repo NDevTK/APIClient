@@ -1,4 +1,6 @@
-/* AbortController / AbortSignal — DOM §3.2. See abort.c. */
+/* AbortController — DOM §3.1 "Interface AbortController" — and AbortSignal — DOM §3.2 "Interface
+   AbortSignal". See abort.c. The two are ONE component and TWO sections, which is why the number is stated
+   per interface here: `§3.2` alone stood for both and is AbortSignal's alone. */
 #ifndef ENGINE_HOST_BROWSER_CORE_DOM_ABORT_H
 #define ENGINE_HOST_BROWSER_CORE_DOM_ABORT_H
 #include <stdbool.h>
@@ -8,11 +10,13 @@
 #include "core/events/event_target.h"   /* EventFireCb — the width of the fire request this machine parks on */
 
 void abort_init(JSContext *ctx);
-/* §3.2's two prototypes for ONE realm — declared into core/realm.h's list. */
+/* DOM §3.1's and §3.2's two prototypes AND their two interface objects, for ONE realm — declared into
+   core/realm.h's list. Both interfaces are `[Exposed=*]`, and Web IDL §3.8 "Platform objects implementing
+   interfaces" is given a REALM and names no Document, so the two names are owed by a realm that reaches no
+   per-document install and are placed from here rather than from core/platform.c's third column. */
 void abort_install_protos(JSContext *ctx);
-/* PER REALM. OWNED: the caller frees. */
-JSValue abort_signal_proto(JSContext *ctx);                                 /* the private slot key (install time) */
-void abort_install(JSContext *ctx, JSValueConst global);         /* AbortController + AbortSignal */
+/* §3.2's interface prototype object for THIS realm. PER REALM. OWNED: the caller frees. */
+JSValue abort_signal_proto(JSContext *ctx);
 void abort_free(JSContext *ctx);                                 /* release the slot key this component owns */
 
 /* A FRESH, UNABORTED SIGNAL.

@@ -142,7 +142,7 @@ static JSValue signal_slots(JSContext *ctx, JSValueConst sig)
 /* WHAT THIS QUESTION ANSWERS IN A SESSION THAT EXPLORES NOTHING — DOM §3.2 Interface AbortSignal's own model,
  * read for the one world such a session is in.
  *
- * §3.2 gives an AbortSignal an "abort reason", "which is initially undefined", and the `aborted` getter steps
+ * DOM §3.2 "Interface AbortSignal" gives an AbortSignal an "abort reason", "which is initially undefined", and the `aborted` getter steps
  * "are to return true if this is aborted; otherwise false" — a REAL state machine, written only by §3.2's
  * "signal abort". This file's header says the same thing from the other side: a controller's signal is never
  * concolic, because there is no ignorance to model. The ONE flag that is concolic is `AbortSignal.timeout()`'s,
@@ -157,7 +157,7 @@ static JSValue signal_slots(JSContext *ctx, JSValueConst sig)
  * whole purpose is to reproduce ONE path the page really takes. A fabricated abort is a different program.
  *
  * A NON-CONCOLIC FLAG DECLARES NOTHING, because the seam answers -1 for it before this value is ever read and
- * the real ToBool decides — which is §3.2's answer exactly.
+ * the real ToBool decides — which is DOM §3.2's answer exactly.
  *
  * AND NEITHER DOES A FLAG WHOSE EXAMPLE THIS FLOW HAS ITSELF CONTRADICTED, WHICH IS A FACT ABOUT THE FLOW AND
  * NOT ABOUT THE SLOT. `concolic_example` is a PER-FLOW accessor: §Learning-from-replies' "the forced sibling
@@ -518,7 +518,7 @@ void abort_signal_add_algorithm(JSContext *ctx, JSValueConst sig, JSValueConst f
     JSValue arr;
 
     DCHECK(JS_IsFunction(ctx, fn), "an abort algorithm that is not callable was registered on a signal");
-    /* §3.2: "if signal is aborted, then return". A signal that has already fired has already emptied its list,
+    /* DOM §3.2: "if signal is aborted, then return". A signal that has already fired has already emptied its list,
        so registering into it would leave a value nothing will ever run or free. */
     if (abort_signal_aborted(ctx, sig))
         return;
@@ -674,7 +674,7 @@ int abort_signal_run(JSContext *ctx, AbortSignalWork *w, JSValueConst sig, JSVal
         cur = JS_GetPropertyUint32(ctx, w->targets, w->j);
 
         if (w->stage == SA_TAKE) {
-            /* THE LIST IS SNAPSHOT AND EMPTIED BEFORE THE FIRST ALGORITHM RUNS. §3.2 empties it as its own
+            /* THE LIST IS SNAPSHOT AND EMPTIED BEFORE THE FIRST ALGORITHM RUNS. DOM §3.2 empties it as its own
                step, and an algorithm is free to abort another signal that shares this one's list-manipulating
                code; a walk over the live array would then run an entry that was added after the operation
                began, which the spec's "for each algorithm of signal's abort algorithms" over an emptied list
@@ -711,7 +711,7 @@ int abort_signal_run(JSContext *ctx, AbortSignalWork *w, JSValueConst sig, JSVal
         }
 
         if (w->stage == SA_FIRE) {
-            /* §3.2 "fire an event named abort at signal" — the ONE §2.9 dispatch, as a REQUEST, so the
+            /* DOM §3.2 "fire an event named abort at signal" — the ONE §2.9 dispatch, as a REQUEST, so the
                listeners run as ordinary preemptible page code and the caller resumes after every one of them
                has returned. */
             if (JS_IsUndefined(w->ev))
@@ -751,7 +751,7 @@ static void js_abort_visit(JSContext *ctx, void *st, JSStepVisit *v)
     abort_signal_work_visit(ctx, &s->w, v);
 }
 
-/* WHERE THIS MACHINE RESTS. §3.2's abort() is one step — "signal abort on this's signal with reason" — and
+/* WHERE THIS MACHINE RESTS. DOM §3.2's abort() is one step — "signal abort on this's signal with reason" — and
    that abstract operation is what runs the signal's abort algorithms and fires `abort` at it, which is the
    page's code. So the operand is one stage and the operation is the other; `started` was a private flag
    standing in for exactly that split, with no way to say which of the two a parked flow was at. */
@@ -801,7 +801,6 @@ static const JSTrampStepDef js_abort_def = {
     .algorithm = "DOM §3.2 AbortController.abort(reason)", .steps = ABORT_STEPS
 };
 static int g_abort_stepid = -1;
-
 
 JSValue abort_signal_new(JSContext *ctx)
 {
@@ -903,7 +902,7 @@ static JSValue js_timeout_fini(JSContext *ctx, void *st, bool take_result)
     return r;
 }
 
-/* §3.2 STEP 3's COMPLETION STEPS — "queue a global task on the timer task source given global to signal abort
+/* DOM §3.2 STEP 3's COMPLETION STEPS — "queue a global task on the timer task source given global to signal abort
  * given signal and a new TimeoutError DOMException". A machine, because signalling abort RUNS THE PAGE'S CODE:
  * the signal's abort algorithms and then its `abort` listeners, with every dependent signal taking the reason
  * first. HTML §8.7 Timers's timer_after performs it at the expiry, on the same task source the page's own timers are
@@ -988,7 +987,7 @@ static int js_timeout_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
     flag = concolic_new(ctx, "{AbortSignal.timeout().aborted}", "AbortSignal.timeout().aborted", JS_FALSE);
     CHECK(!JS_IsException(flag), "minting the timeout signal's aborted flag failed");
     s->result = signal_new(ctx, flag, abort_reason_default(ctx, "TimeoutError", "signal timed out"));
-    /* §3.2 STEP 3: "run steps after a timeout given global, \"AbortSignal-timeout\", milliseconds, and the
+    /* DOM §3.2 STEP 3: "run steps after a timeout given global, \"AbortSignal-timeout\", milliseconds, and the
        following step: queue a global task on the timer task source given global to signal abort given signal
        and a new TimeoutError DOMException."
        THE CONCOLIC FLAG ABOVE IS A DIFFERENT QUESTION and both are needed. It answers "has the deadline passed
@@ -1018,7 +1017,7 @@ static const JSTrampStepDef js_timeout_def = {
     .algorithm = "DOM §3.2 AbortSignal.timeout(milliseconds)", .steps = TIMEOUT_STEPS
 };
 
-/* ---- §3.2's AbortSignal.any(signals) ------------------------------------------------------------------------
+/* ---- DOM §3.2's AbortSignal.any(signals) ------------------------------------------------------------------------
  *
  * `[NewObject] static AbortSignal any(sequence<AbortSignal> signals)`, and DOM states its steps as exactly one:
  * "return the result of creating a dependent abort signal from signals using AbortSignal and the current realm".
@@ -1164,12 +1163,41 @@ static void abort_build_agent(JSContext *ctx)
     realm_declare_intrinsic(abort_install_protos);
 }
 
-/* §3.2's TWO INTERFACE PROTOTYPE OBJECTS, FOR ONE REALM. */
+/* DOM §3.1 "Interface AbortController"'s AND §3.2 "Interface AbortSignal"'s TWO INTERFACE PROTOTYPE OBJECTS
+   *AND* THEIR TWO INTERFACE OBJECTS, FOR ONE REALM.
+   BOTH INTERFACES ARE `[Exposed=*]`, AND WEB IDL §3.8 "Platform objects implementing interfaces" IS GIVEN A
+   REALM. Its `define the global property references` is "To define the global property references on target,
+   given realm realm" and its step 1 is "Let interfaces be a list that contains every interface that is exposed
+   in realm" — a REALM, with no Document anywhere in the algorithm. The two interface objects used to be placed
+   from core/platform.c's per-DOCUMENT column through an `abort_install`, so a realm that reaches no
+   platform_document_install got neither name: a worker realm always, and a Window realm until a Document was
+   installed over it. They are minted here instead, beside the two prototypes this function has already built,
+   which is also what removes the two prototype re-reads that entry made — a JS_GetClassProto of g_ctrl_class
+   and an abort_signal_proto, each a second answer to a question settled a few lines up.
+   A NAMED RESIDUAL, AND THE ENGINE IS RIGHT FOR EVERY REALM IT BUILDS RATHER THAN UNFINISHED. §3.2 declares
+   `timeout` `[Exposed=(Window,Worker)]` — a MEMBER exposure NARROWER than its own interface's `*` — and the
+   three statics below are placed unconditionally. WHAT IS NOT COVERED: a member whose own §3.3.7 exposure set
+   is narrower than its interface's, on an interface that is not a [Global] one. WHAT THE NEXT DIFF BUILDS: a
+   member-exposure table keyed by (interface, member) rather than by member name alone — core/idl_args.c's
+   idl_member_exposed_in_realm says at its own banner that IDL_MEMBER_EXPOSURE holds only the members of
+   [Global] interfaces, so a non-global interface's member looked up there is answered out of an unrelated
+   construct's set and the question cannot be asked today. HOW ITS ABSENCE WOULD SHOW: a WORKLET realm
+   answering `typeof AbortSignal.timeout === "function"`. No such realm exists — every realm_install_intrinsics
+   in this tree is reached with "Window" or "DedicatedWorkerGlobalScope", whose global names are exactly the
+   two `timeout` names — so this diff widens the interface object's reach without widening that member's. */
 void abort_install_protos(JSContext *ctx)
 {
-    JSValue sig_p, ctrl_p, prev;
+    JSValue sig_p, ctrl_p, prev, ctrl, sigctor, global;
 
     DCHECK(g_sig_class != 0, "a realm asked for AbortSignal.prototype before the interfaces were declared");
+    DCHECK(g_ready, "a realm built §3.1's and §3.2's interfaces before abort_init");
+    /* THE STEP IDS BELOW ARE THE AGENT'S, so the runtime that minted them is the runtime whose realms may
+       carry functions holding them. This moved here WITH the three statics and the controller's `abort`: it is
+       an invariant about the objects this function now mints, and it stood in abort_install because that is
+       where they used to be minted. */
+    DCHECK(g_abort_rt == NULL || g_abort_rt == JS_GetRuntime(ctx),
+           "§3.1's and §3.2's interfaces were built in a second runtime — their step ids belong to the first, "
+           "and a runtime is an AGENT");
     prev = JS_GetClassProto(ctx, g_sig_class);
     DCHECK(JS_IsNull(prev), "abort_install_protos ran twice in one realm");
     JS_FreeValue(ctx, prev);
@@ -1198,6 +1226,24 @@ void abort_install_protos(JSContext *ctx)
     }
     JS_SetPropertyStr(ctx, sig_p, "throwIfAborted",
                       JS_NewCFunction(ctx, js_sig_throw_if_aborted, "throwIfAborted", 0));
+
+    /* DOM §3.2's Web IDL §3.7.1 "Interface object", WITH ITS THREE STATICS. They are members OF this object, so they are minted
+       with it and not after: an `AbortSignal` whose `abort`, `timeout` and `any` are missing is one a page can
+       feature-detect and not call. */
+    sigctor = JS_NewCFunction2(ctx, js_abort_signal_ctor, "AbortSignal", 0, JS_CFUNC_constructor, 0);
+    CHECK(!JS_IsException(sigctor), "the AbortSignal interface object allocation failed");
+    JS_SetPropertyStr(ctx, sigctor, "abort",
+                      JS_NewCFunction(ctx, js_sig_static_abort, "abort", 0));
+    JS_SetPropertyStr(ctx, sigctor, "timeout",
+                      JS_NewCFunction2(ctx, NULL, "timeout", 1, JS_CFUNC_step, g_timeout_stepid));
+    /* §3.2's third static. Its ONE required argument is what `length` states, and the sequence conversion
+       behind it is the page's code, which is why it is a machine and `abort` beside it is not. */
+    JS_SetPropertyStr(ctx, sigctor, "any",
+                      JS_NewCFunction2(ctx, NULL, "any", 1, JS_CFUNC_step, g_any_stepid));
+    /* THE HANDOVER IS LAST: JS_SetClassProto TAKES the reference, so `sig_p` is this function's until the
+       realm owns it, and Web IDL §3.7.1 "Interface object"'s pairing above reads a LOCAL rather than a class
+       slot it has already given away. */
+    JS_SetConstructor(ctx, sigctor, sig_p);
     JS_SetClassProto(ctx, g_sig_class, sig_p);
 
     ctrl_p = JS_NewObject(ctx);
@@ -1213,7 +1259,19 @@ void abort_install_protos(JSContext *ctx)
     }
     JS_SetPropertyStr(ctx, ctrl_p, "abort",
                       JS_NewCFunction2(ctx, NULL, "abort", 0, JS_CFUNC_step, g_abort_stepid));
+
+    /* DOM §3.1's Web IDL §3.7.1 "Interface object". */
+    ctrl = JS_NewCFunction2(ctx, js_abort_controller_ctor, "AbortController", 0, JS_CFUNC_constructor, 0);
+    CHECK(!JS_IsException(ctrl), "the AbortController constructor allocation failed");
+    JS_SetConstructor(ctx, ctrl, ctrl_p);   /* .prototype and .constructor, both directions, off the LOCAL */
     JS_SetClassProto(ctx, g_ctrl_class, ctrl_p);
+
+    /* WEB IDL §3.8's TWO PROPERTY REFERENCES, IN THE ORDER THE DELETED PER-DOCUMENT ENTRY PLACED THEM. */
+    global = JS_GetGlobalObject(ctx);
+    DCHECK(JS_IsObject(global), "a realm's global object is not an object");
+    idl_define_global_property_reference(ctx, global, "AbortController", ctrl);
+    idl_define_global_property_reference(ctx, global, "AbortSignal", sigctor);
+    JS_FreeValue(ctx, global);
 }
 
 JSValue abort_signal_proto(JSContext *ctx)
@@ -1223,39 +1281,3 @@ JSValue abort_signal_proto(JSContext *ctx)
     return proto;   /* OWNED */
 }
 
-void abort_install(JSContext *ctx, JSValueConst global)
-{
-    JSValue ctrl, sigctor;
-
-    DCHECK(JS_IsObject(global), "abort_install was given something that is not the global object");
-    DCHECK(g_ready, "abort_install ran before abort_init");
-    DCHECK(g_abort_rt == NULL || g_abort_rt == JS_GetRuntime(ctx),
-           "abort was installed into a second runtime — its step id belongs to the first, and a runtime is an "
-           "AGENT");
-
-    ctrl =JS_NewCFunction2(ctx, js_abort_controller_ctor, "AbortController", 0, JS_CFUNC_constructor, 0);
-    CHECK(!JS_IsException(ctrl), "the AbortController constructor allocation failed");
-    {
-        JSValue cp = JS_GetClassProto(ctx, g_ctrl_class);
-        JS_SetConstructor(ctx, ctrl, cp);   /* .prototype and .constructor, both directions */
-        JS_FreeValue(ctx, cp);
-    }
-    idl_define_global_property_reference(ctx, global, "AbortController", ctrl);
-
-    sigctor = JS_NewCFunction2(ctx, js_abort_signal_ctor, "AbortSignal", 0, JS_CFUNC_constructor, 0);
-    CHECK(!JS_IsException(sigctor), "the AbortSignal interface object allocation failed");
-    JS_SetPropertyStr(ctx, sigctor, "abort",
-                      JS_NewCFunction(ctx, js_sig_static_abort, "abort", 0));
-    JS_SetPropertyStr(ctx, sigctor, "timeout",
-                      JS_NewCFunction2(ctx, NULL, "timeout", 1, JS_CFUNC_step, g_timeout_stepid));
-    /* §3.2's third static. Its ONE required argument is what `length` states, and the sequence conversion
-       behind it is the page's code, which is why it is a machine and `abort` beside it is not. */
-    JS_SetPropertyStr(ctx, sigctor, "any",
-                      JS_NewCFunction2(ctx, NULL, "any", 1, JS_CFUNC_step, g_any_stepid));
-    {
-        JSValue sp = abort_signal_proto(ctx);
-        JS_SetConstructor(ctx, sigctor, sp);
-        JS_FreeValue(ctx, sp);
-    }
-    idl_define_global_property_reference(ctx, global, "AbortSignal", sigctor);
-}

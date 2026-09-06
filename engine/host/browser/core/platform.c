@@ -671,7 +671,6 @@ static void i_page_reveal(JSContext *c, JSValueConst g, const PlatformDocument *
 static void i_media_query_list(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; media_query_list_install(c, g); }
 static void i_simple_dialogs(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; simple_dialogs_install(c, g); }
 static void i_fetch(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; fetch_install(c, g); }
-static void i_abort(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; abort_install(c, g); }
 static void i_observable(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; observable_install(c, g); }
 static void i_dom_rect_list(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; dom_rect_list_install(c, g); }
 static void i_intersection_observer(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; intersection_observer_install(c, g); }
@@ -1054,7 +1053,15 @@ static const PlatformComponent PLATFORM[] = {
        after `fetch` handed that declaration a class id of zero. It depends on nothing this list has not
        already built: abort_init allocates a symbol and two classes, and its per-realm install chains
        AbortSignal.prototype to EventTarget.prototype, whose row is far above both of these. */
-    { "abort",               d_abort,               i_abort },
+    /* NO DOCUMENT HALF. DOM §3.1 "Interface AbortController" and §3.2 "Interface AbortSignal" both declare
+       `[Exposed=*]`, and Web IDL §3.8 Platform objects implementing interfaces is "To define the global
+       property references on target, given realm realm" whose step 1 is "Let interfaces be a list that
+       contains every interface that is exposed in realm" — a REALM, with no Document in the algorithm. Both
+       interface objects are minted by abort_install_protos beside the two prototypes it already built, so a
+       realm that reaches no platform_document_install gets both names. §3.2's three STATICS moved with its
+       interface object: `abort`, `timeout` and `any` are members OF that object, and one minted without them
+       is an `AbortSignal` a page can feature-detect and not call. */
+    { "abort",               d_abort,               NULL },
     /* THE DOCUMENT HALF SURVIVES HERE FOR ONE MEMBER AND NO INTERFACE OBJECT, which is why this row keeps a
        third column where `blob` and `file_reader` above lost theirs. Fetch §5.1 "Headers class", §5.4 "Request
        class" and §5.5 "Response class" all declare `[Exposed=(Window,Worker)]`, and Web IDL §3.8 Platform

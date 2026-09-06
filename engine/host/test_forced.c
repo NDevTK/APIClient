@@ -6648,6 +6648,122 @@ static void exposure_selftest(JSContext *ctx, const char *top_level_url)
         /* Web IDL §3.13 "Namespaces" — NOT one of §3.8 step 1's interfaces, `[Exposed=Window]`, and the
            realm column's already: the row that measures the gate every refusal above reasons from */
         { "CSS",                     true,  false },
+        /* THE DOM STANDARD'S OWN GROUP, AND ITS VERDICT IS TWO `MOVE` AGAINST EIGHTEEN `STAY` — the most
+           lopsided one here, and the refusals are the larger half of it. DOM §3.1 "Interface AbortController"
+           and §3.2 "Interface AbortSignal" declare `[Exposed=*]`, so a realm whose global names are a
+           DedicatedWorkerGlobalScope's owes both names and had neither: both were placed from
+           core/platform.c's per-document column, which such a realm never reaches. Those are the two
+           calibration rows. Everything else core/dom places is `[Exposed=Window]` and its per-document column
+           is CORRECT, which is what the rows below them assert.
+
+           NINETEEN `false, false` ROWS ARE THE REFUSAL — the eighteen listed together below, ONE PER FILE
+           THAT HOLDS A REFUSED SITE, and `NodeFilter` with the discriminating pair, which is a refusal in its
+           own right as well as the control. Eighteen refused SITES, nineteen NAMES: core/dom/node.c's one
+           site names eighty-six identifiers, so two of these rows stand over it. Written down so the next
+           reader cannot re-derive the doubt. DOM §4.4 "Interface Node" (whose install places
+           eighty-six identifiers from one helper), §4.5 "Interface Document" (which also declares
+           XMLDocument), §4.5.1 "Interface DOMImplementation", §4.7 "Interface DocumentFragment", §4.8
+           "Interface ShadowRoot", §4.9.1 "Interface NamedNodeMap", §4.2.10.1 "Interface NodeList", §4.2.10.2
+           "Interface HTMLCollection", §4.3.1 "Interface MutationObserver", §4.3.3 "Interface MutationRecord",
+           §5.3 "Interface AbstractRange", §5.4 "Interface StaticRange", §5.5 "Interface Range", §6.1
+           "Interface NodeIterator", §6.2 "Interface TreeWalker", §6.3 "Interface NodeFilter" and §7.1
+           "Interface DOMTokenList" are every one of them `[Exposed=Window]`, and so is the Selection API's
+           Selection interface. A Window-only interface object is owed by exactly the realms a Document is
+           installed over, so a per-document column for one is not the defect this conversion is about, and
+           moving it would be a change with nothing behind it.
+           THE WORKER HALF IS AN EXPOSURE ASSERTION AND THE WINDOW HALF IS A COLUMN ONE, and they are said
+           apart rather than counted together: `false` in the worker arm is what Web IDL §3.3.7 [Exposed] step
+           1 requires of `[Exposed=Window]` in a DedicatedWorkerGlobalScope realm HOWEVER the name is placed,
+           and `false` in the Window arm is this table's own moment — the banner above says an identifier
+           installed from the per-document column is absent from both realms here.
+           THAT SPLIT IS WHAT MAKES THEM DISCRIMINATE RATHER THAN CONFIRM, AND THE POPULATION IS WHY THERE ARE
+           NINETEEN OF THEM. This is the largest single directory in the conversion — twenty-two Web IDL §3.8
+           placement sites in core/dom, of which exactly two move — so the mistake on offer is not a stray
+           sibling but a WHOLESALE one: a conversion that moved the DIRECTORY rather than the interfaces the
+           exposure table names takes all eighteen with it, and core/dom/node.c offers it at its worst, where
+           ONE site names eighty-six identifiers through a helper parameter. Placed unconditionally they read
+           `true` in both arms; placed through Web IDL §3.8's door they read `true` in the Window arm and
+           `false` in the worker one, because that door asks §3.3.7 step 1 off browser/idl_exposure.h's
+           IDL_GLOBAL_WINDOW rows. Either mistake fails at least one arm of every refusal row, and both
+           calibration rows pass under both. One row per refused FILE is what makes that true of the whole
+           directory rather than of a sample: a wrong conversion is written per file, so a file with no row is
+           a file the table cannot speak about.
+
+           `EventListener` AND `NodeFilter` ARE THE DISCRIMINATING PAIR, AND THEY OPEN AN AXIS NO ROW ABOVE
+           TOUCHES — Web IDL §3.8's CALLBACK-INTERFACE STEP. `define the global property references` has five
+           top-level steps, and step 4 is "For every callback interface interface that is exposed in realm and
+           on which constants are defined" — so a callback interface gets a property reference IF AND ONLY IF
+           constants are declared on it, and that condition, not [Exposed], is what separates these two.
+           `NodeFilter` is the POSITIVE CONTROL and it is a refusal row at the same time: DOM §6.3 "Interface
+           NodeFilter" is a `callback interface` declared `[Exposed=Window]` on which sixteen constants ARE
+           defined, so step 4 does reach it, core/dom/node_filter.c does place it, and its per-document column
+           is correct. `EventListener` is the discriminator: DOM §2.7 "Interface EventTarget" declares it as a
+           `callback interface` with NO constants at all — only `handleEvent` — so step 4 skips it, no other
+           step of the algorithm mentions it, and NO Web IDL §3.8 property reference for it exists in any
+           realm. Nothing in this tree places it, and nothing should.
+           AND IT IS A ROW browser/idl_exposure.h ACTIVELY CONTRADICTS, WHICH IS WHY IT IS SHARPER THAN THE
+           MIXIN ROWS ABOVE. `TextDecoderCommon`, `Body` and `ReadableStreamGenericReader` are each answered
+           TRUE by the ABSENCE rule that header states in as many words — a name with no row is exposed.
+           `EventListener` HAS a row, and that row is IDL_EXPOSED_STAR, which is the WIDEST answer the table
+           can give: `idl_exposed_in_realm("EventListener")` returns true in every realm there is, by a
+           positive statement rather than by a silence. A conversion that placed what the exposure table calls
+           exposed — rather than what Web IDL §3.8 enumerates — puts the name in BOTH realms and fails this row
+           twice, while passing every interface row in this group. The pair is stated in both directions
+           deliberately: the control fires the check (§6.3 IS placed, and by the column this table measures)
+           before the discriminator is asked, so a zero here is a judgement and not an unarmed probe.
+
+           AT THE PARENT REVISION the two `[Exposed=*]` rows FAIL in BOTH arms, because this runs after
+           tf_agent_init and before tf_realm_install reaches platform_document_install, so no document column
+           has run over either realm. The eighteen refusal rows and `EventListener` read the same at the parent
+           as here; they are discriminators against a wrong conversion, never calibration rows, and are
+           reported as such. Established by READING main's call order and core/platform.c's two columns, never
+           by a run — a subagent does not build.
+
+           WHAT IS DELIBERATELY LEFT, AND IT IS NOT ASSERTED HERE. core/dom/observable.c's two sites are the
+           remaining `MOVE` in this directory: WICG Observable §2.2 "The Observable interface" and §2.1 "The
+           Subscriber interface" are both `[Exposed=*]` and both are still placed from the per-document column.
+           No row for either name appears below, in either direction — `true` would assert a name this
+           revision does not place and `false` would assert the defect as an expectation, and a fixture row
+           that states a gap as a correct answer is the one thing this table must never carry. They arrive
+           with the diff that moves them. */
+        { "AbortController",   true,  true  },   /* DOM §3.1 "Interface AbortController", [Exposed=*] */
+        { "AbortSignal",       true,  true  },   /* DOM §3.2 "Interface AbortSignal", [Exposed=*] */
+        /* THE EIGHTEEN LISTED TOGETHER, ONE PER core/dom FILE THAT HOLDS A REFUSED Web IDL §3.8 SITE
+           (`NodeFilter`, the nineteenth refusal, stands below with the pair it controls): each
+           `[Exposed=Window]`, so the worker arm is Web IDL §3.3.7 step 1's own answer, and each still
+           core/platform.c's per-document column, so the Window arm is this table's moment rather than a claim
+           about the interface */
+        { "Node",              false, false },   /* DOM §4.4, and the site that names eighty-six identifiers */
+        { "Document",          false, false },   /* DOM §4.5, the head of that same helper's list */
+        { "XMLDocument",       false, false },   /* DOM §4.5, declared beside Document and placed on its own */
+        { "DOMImplementation", false, false },   /* DOM §4.5.1 */
+        { "DocumentFragment",  false, false },   /* DOM §4.7 */
+        { "ShadowRoot",        false, false },   /* DOM §4.8 */
+        { "NamedNodeMap",      false, false },   /* DOM §4.9.1 */
+        { "NodeList",          false, false },   /* DOM §4.2.10.1 */
+        { "HTMLCollection",    false, false },   /* DOM §4.2.10.2, minted one line from NodeList */
+        { "MutationObserver",  false, false },   /* DOM §4.3.1 */
+        { "MutationRecord",    false, false },   /* DOM §4.3.3 */
+        { "AbstractRange",     false, false },   /* DOM §5.3 */
+        { "StaticRange",       false, false },   /* DOM §5.4, minted nine lines from AbstractRange */
+        { "Range",             false, false },   /* DOM §5.5 */
+        { "NodeIterator",      false, false },   /* DOM §6.1 */
+        { "TreeWalker",        false, false },   /* DOM §6.2 */
+        { "DOMTokenList",      false, false },   /* DOM §7.1 */
+        /* The Selection API's Selection interface, `[Exposed=Window]`. NO SECTION NUMBER IS CITED and that is
+           not an omission: the edition its editors maintain is unrendered ReSpec source, so the document a
+           fetch returns carries a respecConfig and not one numbered heading, and a number taken from the
+           published snapshot would be a number from a different document. The heading is "Selection
+           interface" and the exposure is read off node_modules/@webref/idl/selection-api.idl, whose own
+           source line names that same editor's draft. */
+        { "Selection",         false, false },
+        /* DOM §6.3 "Interface NodeFilter" — a `callback interface` WITH constants, so Web IDL §3.8 step 4
+           reaches it; the POSITIVE CONTROL that arms the row below, and a refusal in its own right */
+        { "NodeFilter",        false, false },
+        /* DOM §2.7 "Interface EventTarget"'s `callback interface` with NO constants, so Web IDL §3.8 step 4
+           skips it and no property reference for it exists in any realm — while browser/idl_exposure.h
+           carries it as IDL_EXPOSED_STAR and answers that it is exposed everywhere */
+        { "EventListener",     false, false },
     };
     JSContext *worker = JS_NewContext(JS_GetRuntime(ctx));
     /* THE SECOND WORKER REALM IS THE OTHER ARM OF ONE STEP, and it is a second REALM because that is the only
