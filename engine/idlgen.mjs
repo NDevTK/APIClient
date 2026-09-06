@@ -2025,6 +2025,51 @@ for (const r of world.records) {
           noteSite(d, { what, file: r.file, line: r.line });
 }
 
+/* A DICTIONARY IS ALSO REACHED THROUGH ANOTHER DICTIONARY'S MEMBER, and until this closure ran, one that could
+ * be reached NO OTHER WAY appeared in this audit ZERO times — not as a row, not in a total, not as a gap.
+ *
+ * WHY THE SEED LOOP CANNOT SEE IT. `dictionaryTypesIn` walks a TYPE EXPRESSION to any depth — through unions,
+ * sequences, records and nullables — and a dictionary is a LEAF of that walk: the name is collected and the
+ * walk stops. It never opens the dictionary and asks what ITS members can carry. So the reachable set was one
+ * level deep in the DICTIONARY graph while being arbitrarily deep in the type graph, and the difference is
+ * invisible from any row the audit printed.
+ *
+ * THE REASON THIS WAS RELAYED TO ME WAS A DIFFERENT ONE AND IT IS WRONG, which matters because the two
+ * prescribe opposite fixes. The claim was that the walk reaches a dictionary "through the members this engine
+ * DECLARES", so declaring the member would make the successor appear. It would not: `dictSites` is built from
+ * `op.arguments`' IDL types and reads no C declaration at all, so no amount of declaring in the engine can add
+ * a row here. The defect is in the AUDIT's reachability, not in the engine's declarations, and only a change
+ * here can close it. Recorded rather than quietly repaired because a reader who re-derives the wrong reason
+ * will go and edit a component instead.
+ *
+ * IT IS A FRONTIER AND NOT A SET, WHICH IS WHY THE FINDING COUNT CAN RISE. A dictionary uncovered here brings
+ * its own undeclared members with it, so closing the walk ADDS findings — that is the instrument seeing
+ * further and not the tree getting worse, and the number to read beside the total is the reachable count on
+ * the header line above.
+ *
+ * IT TERMINATES ON A CYCLE by construction: the worklist only ever carries names `noteSite` has not recorded
+ * before, and `dictSites` is what decides that — a dictionary that names itself, directly or through a ring of
+ * members, is enqueued once and never again. */
+/* THE DIRECT SET, CAPTURED BEFORE THE CLOSURE, so the header below can print the split. A count that cannot
+   move without one of its parts moving is a count a reader can reason from, and this is the one part that
+   would silently go to zero if the closure below were ever broken or removed. */
+const dictDirect = new Set(dictSites.keys());
+{
+  const queue = [...dictSites.keys()];
+  while (queue.length) {
+    const owner = queue.shift();
+    /* THE SITE THAT NAMES THE MEMBER, and the file and line of how the OWNER was reached — which is where a
+       reader has to go, because a member's type is stated in the corpus and the entry point is in the C. */
+    const via = dictSites.get(owner)[0];
+    for (const m of dictMembers(owner))
+      for (const d of dictionaryTypesIn(m.idlType)) {
+        const fresh = !dictSites.has(d);
+        noteSite(d, { what: `${owner}.${m.name}`, file: via.file, line: via.line });
+        if (fresh) queue.push(d);
+      }
+  }
+}
+
 const dictUndeclared = [], dictStranger = [], dictRequired = [], dictOrder = [];
 for (const [d, sites] of [...dictSites].sort()) {
   const spec = dictMembers(d);
@@ -2061,7 +2106,8 @@ defect("named dictionary declarations whose member order is not §3.2.17's", dic
 defect("IdlDictDecl identifiers naming a dictionary no spec in @webref/idl defines", dictUnknownName.length);
 blind("IdlDictMember declarations this audit could not read", dictUnreadable.length);
 console.log(`[idl-audit] ── Web IDL §2.7 dictionaries ── ${dictSites.size} reachable from the members this ` +
-            `engine installs; ${dictArrays.length} IdlDictMember declaration(s) read, ${dictNamed.size} of ` +
+            `engine installs, ${dictSites.size - dictDirect.size} of them ONLY through another dictionary's ` +
+            `member; ${dictArrays.length} IdlDictMember declaration(s) read, ${dictNamed.size} of ` +
             `them naming their dictionary`);
 for (const u of dictUndeclared)
   console.log(`[idl-audit]   ${u.d}: ${u.missing.length} of ${u.spec.length} member(s) UNDECLARED — ` +
