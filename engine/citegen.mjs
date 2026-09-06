@@ -671,6 +671,15 @@ const SPECS = [
   { key: "trustedtypes", label: "Trusted Types", kind: "bikeshed",
     base: "https://w3c.github.io/trusted-types/dist/spec/", edition: "maintained",
     anchors: ["trusted types", "trusted", "tt"] },
+  /* SECURE CONTEXTS, cited by the components that decide whether a capability is available at all: §3.1 "Is
+     origin potentially trustworthy?" and §3.2 "Is url potentially trustworthy?" are the two algorithms this
+     tree calls by name, and §4.2 "Ancestral Risk" is the frame-chain half of the same question. Verified
+     against the sites before the row was written. Bikeshed-rendered: 32 `data-level` headings, a dt-updated,
+     no `respecConfig`. Its dt-updated is 2023 and that is the DOCUMENT's fact rather than a staleness in this
+     corpus — the editors have not amended it since, and the row records what the page states. */
+  { key: "securecontexts", label: "Secure Contexts", kind: "bikeshed",
+    base: "https://w3c.github.io/webappsec-secure-contexts/", edition: "maintained",
+    anchors: ["secure contexts"] },
   { key: "hrtime", label: "High Resolution Time", kind: "bikeshed",
     base: "https://w3c.github.io/hr-time/", edition: "maintained", anchors: ["hr-time", "hrtime", "high resolution time"] },
   /* THE THREE STANDARDS THAT SIT ON TOP OF THE ROW ABOVE, and they are here for the reason that row's own
@@ -2141,7 +2150,7 @@ const OTHER_SPECS = [
      refusal does — an explicit `other:` anchor beats a term coincidence, by design, since the citation's own
      claim about which standard it means outranks a phrase two documents share. An index row RAISES it; that is
      the next diff and not this one. */
-  "parsing and serialization", "css conditional", "css scoping", "secure contexts", "reporting",
+  "parsing and serialization", "css conditional", "css scoping", "reporting",
   "positioned layout", "css nesting", "css viewport", "har",
   /* CSS modules, as this tree spells them when it does not use the levelled shortname */
   "css", "selectors", "cascade", "view", "values", "sizing", "fonts", "backgrounds", "text",

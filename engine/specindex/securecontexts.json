@@ -1,0 +1,179 @@
+{
+ "spec": "Secure Contexts",
+ "key": "securecontexts",
+ "base": "https://w3c.github.io/webappsec-secure-contexts/",
+ "specUpdated": "10 November 2023",
+ "fetched": "2026-09-06",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "intro"
+  },
+  "2": {
+   "title": "Framework",
+   "page": "",
+   "id": "framework"
+  },
+  "3": {
+   "title": "Algorithms",
+   "page": "",
+   "id": "algorithms"
+  },
+  "4": {
+   "title": "Threat models and risks",
+   "page": "",
+   "id": "threat-models-risks"
+  },
+  "5": {
+   "title": "Security Considerations",
+   "page": "",
+   "id": "security-considerations"
+  },
+  "6": {
+   "title": "Privacy Considerations",
+   "page": "",
+   "id": "privacy-considerations"
+  },
+  "7": {
+   "title": "Implementation Considerations",
+   "page": "",
+   "id": "implementation-considerations"
+  },
+  "8": {
+   "title": "Acknowledgements",
+   "page": "",
+   "id": "acknowledgements"
+  },
+  "1.1": {
+   "title": "Top-level Documents",
+   "page": "",
+   "id": "examples-top-level"
+  },
+  "1.2": {
+   "title": "Framed Documents",
+   "page": "",
+   "id": "examples-framed"
+  },
+  "1.3": {
+   "title": "Web Workers",
+   "page": "",
+   "id": "examples-workers"
+  },
+  "1.4": {
+   "title": "Shared Workers",
+   "page": "",
+   "id": "examples-shared-workers"
+  },
+  "1.5": {
+   "title": "Service Workers",
+   "page": "",
+   "id": "examples-service-workers"
+  },
+  "2.1": {
+   "title": "Integration with WebIDL",
+   "page": "",
+   "id": "integration-idl"
+  },
+  "2.2": {
+   "title": "Integrations with HTML",
+   "page": "",
+   "id": "monkey-patching-html"
+  },
+  "2.2.1": {
+   "title": "Shared Workers",
+   "page": "",
+   "id": "shared-workers"
+  },
+  "2.2.2": {
+   "title": "Feature Detection",
+   "page": "",
+   "id": "monkey-patching-global-object"
+  },
+  "2.2.3": {
+   "title": "Secure and non-secure contexts",
+   "page": "",
+   "id": "is-settings-object-contextually-secure"
+  },
+  "3.1": {
+   "title": "Is origin potentially trustworthy?",
+   "page": "",
+   "id": "is-origin-trustworthy"
+  },
+  "3.2": {
+   "title": "Is url potentially trustworthy?",
+   "page": "",
+   "id": "is-url-trustworthy"
+  },
+  "4.1": {
+   "title": "Threat Models",
+   "page": "",
+   "id": "threat-models"
+  },
+  "4.1.1": {
+   "title": "Passive Network Attacker",
+   "page": "",
+   "id": "threat-passive"
+  },
+  "4.1.2": {
+   "title": "Active Network Attacker",
+   "page": "",
+   "id": "threat-active"
+  },
+  "4.2": {
+   "title": "Ancestral Risk",
+   "page": "",
+   "id": "ancestors"
+  },
+  "4.3": {
+   "title": "Risks associated with non-secure contexts",
+   "page": "",
+   "id": "threat-risks"
+  },
+  "5.1": {
+   "title": "Incomplete Isolation",
+   "page": "",
+   "id": "isolation"
+  },
+  "5.2": {
+   "title": "localhost",
+   "page": "",
+   "id": "localhost"
+  },
+  "7.1": {
+   "title": "Packaged Applications",
+   "page": "",
+   "id": "packaged-applications"
+  },
+  "7.2": {
+   "title": "Development Environments",
+   "page": "",
+   "id": "development-environments"
+  },
+  "7.3": {
+   "title": "Restricting New Features",
+   "page": "",
+   "id": "new"
+  },
+  "7.4": {
+   "title": "Restricting Legacy Features",
+   "page": "",
+   "id": "legacy"
+  },
+  "7.4.1": {
+   "title": "Example: Geolocation",
+   "page": "",
+   "id": "legacy-example"
+  }
+ },
+ "dfns": {
+  "potentially trustworthy origin": [
+   "3.1"
+  ],
+  "potentially trustworthy url": [
+   "3.2"
+  ]
+ },
+ "ops": {},
+ "uses": {}
+}
