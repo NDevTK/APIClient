@@ -17,11 +17,15 @@
  *
  * WHAT RAN BEFORE THIS FILE EXISTED: neither algorithm, for any script this engine has ever fetched. The reply's
  * bytes went from the host's reply record to JS_FlowNew / JS_FlowEvalModule unchanged, which is wrong in both
- * directions at once. Forward: quickjs's `next_token` REFUSES a byte no UTF-8 sequence contains ("invalid UTF-8
- * sequence"), so one stray 0x81 anywhere in a minified bundle answered a SyntaxError no browser produces and
- * every endpoint in that chunk was lost silently — a page reported with less API surface than it has. Backward:
- * quickjs's decoder "accepts UTF-8 encoded surrogates as JavaScript allows them in strings" (cutils.h's own
- * words), so `ED A0 80` compiled a LONE SURROGATE into a string where Encoding's decoder answers U+FFFD. A
+ * directions at once. The two runs below are the SUBMODULE'S OWN WORDS and so go in BACKTICKS, the way
+ * core/byte_reader.c and core/fetch/fetch.h write this same decoder: a quotation mark claims a STANDARD's
+ * sentence, and the anchor nearest them is Fetch §3.5, so quickjs in quotation marks is judged against a
+ * document it never came from — which is what the second of them used to be. Forward: quickjs's `next_token`
+ * REFUSES a byte no UTF-8 sequence contains (`invalid UTF-8 sequence`), so one stray 0x81 anywhere in a
+ * minified bundle answered a SyntaxError no browser produces and every endpoint in that chunk was lost
+ * silently — a page reported with less API surface than it has. Backward: cutils.h says its decoder
+ * implements Encoding's algorithm `except it accepts UTF-8 encoded surrogates as JavaScript allows them in
+ * strings`, so `ED A0 80` compiled a LONE SURROGATE into a string where Encoding's decoder answers U+FFFD. A
  * fetched script is also an @S sink's input, and a breakout is constructed from the bytes that survive to the
  * sink: a decode that disagrees with the browser's mis-places every one of them.
  *
