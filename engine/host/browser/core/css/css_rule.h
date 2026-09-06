@@ -57,7 +57,7 @@
  * answered from the CLASS, on the stated ground that this build had exactly one rule interface; that stopped
  * being true with §7.3. The
  * alternative — a class per interface — would have
- * put §6.4.2's four members (which run with `this` being ANY rule, whatever its interface) behind a lookup that
+ * put CSSOM §6.4.2's four members (which run with `this` being ANY rule, whatever its interface) behind a lookup that
  * tries each class in turn, or copied them onto every concrete prototype, which is the hand-maintained list
  * core/realm.h exists to abolish. So the BRAND is the one class, the INTERFACE is the stored type, and each
  * interface prototype is the realm's own.
@@ -84,11 +84,13 @@
  * admissible positions and the reason css_rule.c states a sheet's prologue as a set of ZONES rather than as a
  * rank per type. What they SHARE is the `<layer-name>` grammar, so they share one storage: §8.2 requires
  * `nameList` "normalized following the same rule as the CSSLayerBlockRule's name attribute", and §8.1's `name`
- * is that list read at index 0 — the empty string when there is nothing there, which is §6.4.2.1's anonymous
- * layer.
- * NEITHER HAS A `type` NUMBER, and that is §6.4.2 speaking rather than a gap: its table ends "otherwise, return
- * 0" with the note that "this enumeration is thus frozen in its current state, and no new values will be added
- * to reflect additional at-rules". So the stored discriminator continues past the table and `rule_legacy_type`
+ * is that list read at index 0 — the empty string when there is nothing there, which is CSS Cascade 5
+ * §6.4.2.1's anonymous layer.
+ * NEITHER HAS A `type` NUMBER, and that is CSSOM §6.4.2 speaking rather than a gap: its table ends
+ * "Otherwise: return 0" with the note that "This enumeration is thus frozen in its current state, and no new
+ * new values will be added to reflect additional at-rules" — the doubled "new new" being CSSOM's own, as the
+ * sibling of this sentence in css_rule.c also records. So the stored discriminator continues past the table
+ * and `rule_legacy_type`
  * maps it back — the same shape as the split below, and for the same reason.
  *
  * A `@keyframes` HOLDS RULES AND IS NOT A §6.4.5 GROUPING RULE, so those are two questions here and not one.
@@ -108,7 +110,7 @@
  * an arm of its own. CSS Compatibility Standard §3.1 "CSS At-rules" requires "-webkit- vendor prefixed
  * at-rules ... as aliases of the corresponding unprefixed at-rules" over a table with one row today
  * (`@-webkit-keyframes` onto `@keyframes`), so the alias names the AT-KEYWORD and nothing else: one interface,
- * one prototype, one §6.4.2 `type`, one prelude grammar, one body. A second arm would be a second creator able
+ * one prototype, one CSSOM §6.4.2 `type`, one prelude grammar, one body. A second arm would be a second creator able
  * to disagree with the first about any of those and no reader would see it. What the two spellings DO NOT
  * share is the at-keyword §6.4's serialize-a-CSS-rule emits — which is why the rule stores the one it was
  * written with, and why that half is settled by measuring a real browser rather than by reading CSSOM's arm,
@@ -129,7 +131,7 @@
  * precisely a mutation two flows must be able to disagree about, and it lands in a C record behind a class
  * opaque where no property hook can see it. A conditional rule's `media` is a §4.4 MediaList, whose own
  * collection is an Array for the reasons above again.
- * §6.4.2's `cssText` is §6.4's SERIALIZE A CSS RULE over all of it: for a style rule the stored selector list,
+ * CSSOM §6.4.2's `cssText` is §6.4's SERIALIZE A CSS RULE over all of it: for a style rule the stored selector list,
  * then §6.6's serialize-a-CSS-declaration-block over the stored body (which is where the shorthand consolidation
  * loop runs), then its nested rules; for a media rule `@media`, the media query list and its nested rules. Its
  * setter is the spec's own no-effect ("on setting the cssText attribute must do nothing"), not an unbuilt one. */

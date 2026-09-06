@@ -39,17 +39,16 @@
 #include "core/realm.h"
 #include "solver/cow.h"
 
-/* §6.4's TYPE state item, which IS which interface this rule is. For every interface §6.4.2's `type` table
+/* §6.4's TYPE state item, which IS which interface this rule is. For every interface CSSOM §6.4.2's `type` table
    NAMES, the discriminator and that table's number are ONE number rather than a stored type beside an interface
    tag that could disagree with it — CSS Animations §6.1.1's `partial interface CSSRule` adds the two in the
    middle, exactly as CSS Conditional 3 §7.1 adds SUPPORTS_RULE to a list CSSOM calls frozen.
-   AND THE TABLE RAN OUT, WHICH IS THE SPEC'S OWN DECISION RATHER THAN A GAP TO INVENT A NUMBER FOR. CSSOM
-   §6.4.2's `type` ends "Otherwise: return 0" and attaches the reason: "This enumeration is thus frozen in its
-   current state, and no new new values will be added to reflect additional at-rules; all at-rules beyond the
-   ones listed above will return 0." The doubled "new new" is CSSOM's own and is quoted as it stands: a
-   quotation is what the document says, not what it should have said. So CSS Cascade 5 §8.1's and §8.2's
-   `@layer` interfaces have no number at all, and neither will the next interface that lands. The
-   discriminator therefore CONTINUES PAST the table and
+   AND THE TABLE RAN OUT, WHICH IS THE SPEC'S OWN DECISION RATHER THAN A GAP TO INVENT A NUMBER FOR. CSSOM §6.4.2's
+   `type` ends "Otherwise: return 0" and attaches the reason: "This enumeration is thus frozen in its current state,
+   and no new new values will be added to reflect additional at-rules; all at-rules beyond the ones listed above will
+   return 0." The doubled "new new" is CSSOM's own and is quoted as it stands: a quotation is what the document says,
+   not what it should have said. So CSS Cascade 5 §8.1's and §8.2's `@layer` interfaces have no number at all, and
+   neither will the next interface that lands. The discriminator therefore CONTINUES PAST the table and
    `rule_legacy_type` maps it back — one fact split into two the moment they stopped agreeing, exactly as
    `rule_type_has_child_rules` and `rule_type_is_grouping` are. */
 enum { RULE_TYPE_STYLE = 1, RULE_TYPE_IMPORT = 3, RULE_TYPE_MEDIA = 4, RULE_TYPE_FONT_FACE = 5,
@@ -60,11 +59,11 @@ enum { RULE_TYPE_STYLE = 1, RULE_TYPE_IMPORT = 3, RULE_TYPE_MEDIA = 4, RULE_TYPE
           and 14 (CSS Fonts 4 §12.2's) are DECLARED as constants below and have no interface behind them, which
           is why they are not here: this enum is the interfaces, and CR_CONSTS is the historical table. */
        RULE_TYPE_SUPPORTS = 12,
-       /* At and above this, §6.4.2's `type` answers 0 — the interfaces its frozen table does not name. */
+       /* At and above this, CSSOM §6.4.2's `type` answers 0 — the interfaces its frozen table does not name. */
        RULE_TYPE_UNNUMBERED = 0x100,
        RULE_TYPE_LAYER_BLOCK = RULE_TYPE_UNNUMBERED, RULE_TYPE_LAYER_STATEMENT,
        /* CSS Properties and Values API 1 §6.1's CSSPropertyRule — also numberless, and for the same reason the
-          two above it are: §6.4.2's table is frozen and that standard adds no `partial interface CSSRule` to
+          two above it are: CSSOM §6.4.2's table is frozen and that standard adds no `partial interface CSSRule` to
           it, so `propertyRule.type` is 0. */
        RULE_TYPE_PROPERTY,
        /* CSS Conditional 5 §9.1's CSSContainerRule — numberless too, and it is the clearest case of the
@@ -101,21 +100,21 @@ enum { RULE_TYPE_STYLE = 1, RULE_TYPE_IMPORT = 3, RULE_TYPE_MEDIA = 4, RULE_TYPE
 enum { ZONE_LEAD = 0, ZONE_IMPORT, ZONE_NAMESPACE, ZONE_BODY, ZONE_N };
 #define ZONE_BIT(z) (1u << (unsigned)(z))
 
-/* §6.4.2's `type` for a rule whose interface is `type` — the frozen table's number, or its own "otherwise,
+/* CSSOM §6.4.2's `type` for a rule whose interface is `type` — the frozen table's number, or its own "otherwise,
    return 0" for an interface the table does not name. */
 static uint32_t rule_legacy_type(uint16_t type)
 {
     if (type >= RULE_TYPE_UNNUMBERED) return 0;
     DCHECK(type >= RULE_TYPE_STYLE && type <= RULE_TYPE_SUPPORTS,
-           "a CSS rule's interface discriminator is neither one of §6.4.2's table numbers nor above the end of "
+           "a CSS rule's interface discriminator is neither one of CSSOM §6.4.2's table numbers nor above the end of "
            "the table — the enum above is the one place both halves are declared, so a value between them "
            "means a row was added without deciding which half it is in");
     return type;
 }
 
 typedef struct CssRuleData {
-    JSValue parent_style_sheet;  /* §6.4.2 "parent CSS style sheet" (OWNED) */
-    JSValue parent_rule;         /* §6.4.2 "parent CSS rule" (OWNED) */
+    JSValue parent_style_sheet;  /* CSSOM §6.4.2 "parent CSS style sheet" (OWNED) */
+    JSValue parent_rule;         /* CSSOM §6.4.2 "parent CSS rule" (OWNED) */
     /* THE RULE'S PRELUDE, in the canonical form its own getter must answer — §6.4.3's selector list, §6.4.7's
        page selector list and CSS Animations §6.2.2's keyText are three grammars and one field, because each
        is that rule's prelude serialized and each is what its setter replaces. JS_NULL on a rule that has
@@ -193,8 +192,9 @@ typedef struct CssRuleData {
        SAME fact under two multipliers — core/css/css_at_rule_prelude.h parses `<layer-name>?` and
        `<layer-name>#` with one grammar and normalizes both the same way, which is what §8.2 requires outright
        ("normalized following the same rule as the CSSLayerBlockRule's name attribute"). A block rule's list
-       holds at most one entry and §8.1's `name` is that entry, or the empty string for §6.4.2.1's anonymous
-       layer; a statement rule's holds one or more. Two fields could disagree about which. (OWNED) */
+       holds at most one entry and §8.1's `name` is that entry, or the empty string for CSS Cascade 5
+       §6.4.2.1's anonymous layer; a statement rule's holds one or more. Two fields could disagree about
+       which. (OWNED) */
     JSValue layer_names;
     /* CSS Properties and Values API 1 §3 "The @property Rule"'s `<custom-property-name>#` prelude — the
        names the `@property` at-rule declares, as an Array. JS_NULL on every rule that is not an `@property`.
@@ -949,7 +949,7 @@ static JSValue margin_rule_new(JSContext *ctx, JSValueConst parent_style_sheet, 
  * AN ALIAS IS A SECOND SPELLING OF ONE RULE, NOT A SECOND RULE. §3.1 aliases the AT-KEYWORD, so everything
  * downstream of the name is the unprefixed rule's: the same `<keyframes-name>` grammar (so
  * `@-webkit-keyframes none {}` is dropped exactly as `@keyframes none {}` is), the same CSS Animations §6.3
- * CSSKeyframesRule interface and prototype, the same §6.4.2 `type` of 7, the same body. That is why this is a
+ * CSSKeyframesRule interface and prototype, the same CSSOM §6.4.2 `type` of 7, the same body. That is why this is a
  * NAME RESOLUTION in front of the builder's dispatch rather than an arm inside it — an arm would be a second
  * creator able to disagree with the first about any of those, and the disagreement would be invisible.
  *
@@ -1002,7 +1002,7 @@ static const char *at_rule_alias(const char *name)
    is why the storage is the one the attribute returns.
    `at_keyword` IS THE SPELLING THE PAGE WROTE — `keyframes`, or one CSS Compatibility Standard §3.1 "CSS
    At-rules" aliases onto it — and it is stored because it is the ONE thing the two spellings do not share:
-   the interface, the prototype, the §6.4.2 `type`, the `<keyframes-name>` grammar and the body are the same
+   the interface, the prototype, the CSSOM §6.4.2 `type`, the `<keyframes-name>` grammar and the body are the same
    rule, and only the at-keyword the serialization emits differs. See the alias table above for the
    measurement that says so.
    The child list `rule_new` gives it is where its `<keyframe-block>`s go. */
@@ -1090,10 +1090,10 @@ static JSValue layer_names_array(JSContext *ctx, const CssLayerNames *names)
 /* A CSS Cascade 5 §8.1 CSSLayerBlockRule over the `@layer` BLOCK at-rule's prelude. §6.4.4.1's grammar is
    `@layer <layer-name>? { <rule-list> }` — AT MOST ONE name — so a prelude carrying a list is an at-rule whose
    grammar failed, which CSS Syntax drops and which is JS_UNDEFINED here, the same answer `@keyframes none {}`
-   gets. The EMPTY list is the other outcome and it IS a rule: §6.4.2.1's anonymous layer, whose `name` §8.1
-   states as the empty string and whose every occurrence is a layer of its own ("multiple unnamed layer rules
-   place their styles into separate layers, as each occurrence is referencing a distinct anonymous layer name").
-   The child list `rule_new` gives it is where the layer's rules go. */
+   gets. The EMPTY list is the other outcome and it IS a rule: CSS Cascade 5 §6.4.2.1's anonymous layer,
+   whose `name` §8.1 states as the empty string and whose every occurrence is a layer of its own ("multiple unnamed
+   layer rules place their styles into separate layers, as each occurrence is referencing a distinct anonymous layer
+   name"). The child list `rule_new` gives it is where the layer's rules go. */
 static JSValue layer_block_rule_new(JSContext *ctx, JSValueConst parent_style_sheet, JSValueConst parent_rule,
                                     const char *prelude)
 {
@@ -1300,7 +1300,7 @@ static void rule_orphan(JSContext *ctx, JSValueConst rule)
    with it rather than being re-parented to the top of the sheet. */
 typedef struct {
     JSContext   *ctx;
-    JSValueConst sheet;        /* §6.4.2's parent CSS style sheet, which every rule in this parse names */
+    JSValueConst sheet;        /* CSSOM §6.4.2's parent CSS style sheet, which every rule in this parse names */
     JSValueConst top_parent;   /* the enclosing rule of the TOP-LEVEL rules — JS_NULL at a sheet's level */
     JSValueConst top_list;     /* where the top-level rules go */
     JSValue     *built;
@@ -1804,7 +1804,7 @@ static const struct {
       "Interface\" — two, split by the block exactly as `@apply`'s pair is" },
     { "counter-style",      "CSSCounterStyleRule",
       "CSS Counter Styles 3 §9.2 \"The CSSCounterStyleRule interface\" — and it is one of only TWO rows here "
-      "whose §6.4.2 TYPE NUMBER is already declared (COUNTER_STYLE_RULE = 11) with no interface behind it" },
+      "whose CSSOM §6.4.2 TYPE NUMBER is already declared (COUNTER_STYLE_RULE = 11) with no interface behind it" },
     { "custom-media",       "CSSCustomMediaRule",
       "Media Queries 5 §11 \"CSSOM\"" },
     { "custom-selector",    NULL,
@@ -2659,9 +2659,9 @@ static bool media_rule_serialize(JSContext *ctx, CssRuleData *r, JSValueConst ru
 }
 
 /* THE `<layer-name>`s A RULE DECLARES, read back out of the frozen Array. `*pn` is how many, and ZERO IS AN
-   ANSWER — §6.4.2.1's anonymous layer, which only `@layer { }` has — which is why the FAILURE is the return
-   value and not an empty list: a caller that read "no names" out of a string conversion that threw would print
-   `@layer {` for a rule that declares one, and that is a plausible datum rather than a crash. False leaves the
+   ANSWER — CSS Cascade 5 §6.4.2.1's anonymous layer, which only `@layer { }` has — which is why the FAILURE
+   is the return value and not an empty list: a caller that read "no names" out of a string conversion that threw would
+   print `@layer {` for a rule that declares one, and that is a plausible datum rather than a crash. False leaves the
    caller's pending exception. OWNED on true: the caller frees the array and its entries. */
 static bool rule_layer_names(JSContext *ctx, CssRuleData *r, char ***pv, unsigned *pn)
 {
@@ -3073,8 +3073,8 @@ static JSValue js_rule_get(JSContext *ctx, JSValueConst this_val, int magic)
     case CR_PARENT_STYLE_SHEET:
         r = rule_here(ctx, this_val);
         return r ? JS_DupValue(ctx, r->parent_style_sheet) : JS_EXCEPTION;
-    /* §6.4.2's deprecated `type`: the rule's own TYPE state item, which §6.4 says is "initialized when a rule
-       is created and cannot change" — mapped through the frozen table, because past its end the answer §6.4.2
+    /* CSSOM §6.4.2's deprecated `type`: the rule's own TYPE state item, which §6.4 says is "initialized when a rule
+       is created and cannot change" — mapped through the frozen table, because past its end the answer CSSOM §6.4.2
        states is 0 and not a number this file could invent. `layerRule.type === 0`, and the spec's own note
        says what a page should read instead: "to tell what type of rule a given object is, it is recommended to
        check rule.constructor.name". */
@@ -3244,8 +3244,8 @@ static JSValue js_rule_get(JSContext *ctx, JSValueConst this_val, int magic)
        (and not 'outer.foo.bar')" — so this is the rule's own prelude and never a concatenation with the
        enclosing layers', which is also why nothing here walks `parent_rule`.
        It is index 0 of the ONE list both interfaces answer from: CSS Cascade 5 §6.4.4.1's `<layer-name>?` is a list of
-       at most one, and an EMPTY one is §6.4.2.1's anonymous layer — which is where the empty string comes from,
-       so the two are one storage and not a string beside a list that could disagree. */
+       at most one, and an EMPTY one is CSS Cascade 5 §6.4.2.1's anonymous layer — which is where the empty
+       string comes from, so the two are one storage and not a string beside a list that could disagree. */
     case CR_LAYER_BLOCK_NAME: {
         JSValue first;
 
@@ -3381,7 +3381,7 @@ static JSValue js_rule_get(JSContext *ctx, JSValueConst this_val, int magic)
     }
 }
 
-/* §6.4.2 states the other half of `cssText` in one sentence — "on setting the cssText attribute must do
+/* CSSOM §6.4.2 states the other half of `cssText` in one sentence — "on setting the cssText attribute must do
    nothing" — so the attribute is READ-WRITE in the IDL and its setter is a real, specified no-effect rather
    than an unbuilt one. Installing it without a setter would be a different behaviour a page can see:
    `rule.cssText = 'x'` throws a TypeError in strict mode against a getter-only accessor, where the spec says
@@ -4209,7 +4209,7 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, 
         bool named;
 
         /* CSSOM §6.4.4's `layerName` — NULL for an import that declares no layer, the EMPTY STRING for the anonymous
-           `layer` keyword (§6.4.2.1: "an @import rule uses the layer keyword (which does not provide a
+           `layer` keyword (CSS Cascade 5 §6.4.2.1: "an @import rule uses the layer keyword (which does not provide a
            <layer-name>) ... its layer name gains a unique anonymous segment"), and the name otherwise. */
         if (!ln) return true;
         named = css_prelude_layer_names(ln, strlen(ln), &names);
@@ -4417,17 +4417,17 @@ bool css_rule_cascade_sheet(JSContext *ctx, JSValueConst list, CssLayerOrder *or
 
 /* ---- the interfaces -------------------------------------------------------------------------------------- */
 
-/* §6.4.2's historical constants, which the IDL declares on the interface AND its prototype. */
+/* CSSOM §6.4.2's historical constants, which the IDL declares on the interface AND its prototype. */
 static const struct { const char *name; uint32_t v; } CR_CONSTS[] = {
     { "STYLE_RULE", 1 }, { "CHARSET_RULE", 2 }, { "IMPORT_RULE", 3 }, { "MEDIA_RULE", 4 },
     { "FONT_FACE_RULE", 5 }, { "PAGE_RULE", 6 },
     /* CSS Animations §6.1.1's `partial interface CSSRule` — two more additions to a list CSSOM calls frozen,
-       and §6.4.2's own `type` table lists both numbers, so the two standards agree about them outright. */
+       and CSSOM §6.4.2's own `type` table lists both numbers, so the two standards agree about them outright. */
     { "KEYFRAMES_RULE", 7 }, { "KEYFRAME_RULE", 8 },
     { "MARGIN_RULE", 9 }, { "NAMESPACE_RULE", 10 },
     /* CSS Counter Styles 3 §9.1 "Extensions to the CSSRule interface" — its `partial interface CSSRule`, the
        same shape the two above have. THE NUMBER IS DECLARED WHETHER OR NOT THE RULE IS BUILT, and that is
-       §6.4.2's own arrangement rather than a shortcut: the constants are a HISTORICAL enumeration a page reads
+       CSSOM §6.4.2's own arrangement rather than a shortcut: the constants are a HISTORICAL enumeration a page reads
        off `CSSRule`, so `CSSRule.COUNTER_STYLE_RULE` is 11 in a document containing no `@counter-style` at all,
        exactly as `CHARSET_RULE` is 2 with no CSSCharsetRule interface anywhere in the platform and
        `SUPPORTS_RULE` is 12 here. What is NOT declared is a rule OBJECT for it — meeting `@counter-style` still
@@ -4521,9 +4521,9 @@ void css_rule_install_proto(JSContext *ctx)
 
     DCHECK(g_rule_class != 0, "a realm asked for the rule prototypes before the interfaces existed");
 
-    /* §6.4.2's CSSRule.prototype. Nothing is an instance of it — §6.4.2 is "an abstract, base CSS rule" — and
-       nothing is an instance of the two abstract prototypes chained above it either; each is nonetheless the
-       REALM's own, because a C member runs in the realm that DEFINED it. */
+    /* CSSOM §6.4.2 "The CSSRule Interface"'s CSSRule.prototype. Nothing is an instance of it — CSSOM §6.4.2
+       is "an abstract, base CSS rule" — and nothing is an instance of the two abstract prototypes chained above it
+       either; each is nonetheless the REALM's own, because a C member runs in the realm that DEFINED it. */
     base = JS_NewObject(ctx);
     CHECK(!JS_IsException(base), "CSSRule.prototype could not be allocated");
     idl_interface_tag(ctx, base, "CSSRule");
@@ -4794,7 +4794,7 @@ void css_rule_install(JSContext *ctx, JSValueConst global)
         if (IFACES[i].inherits >= 0)
             JS_SetPrototype(ctx, iface[i], iface[IFACES[i].inherits]);
     }
-    /* §6.4.2's constants are on the INTERFACE OBJECT as well as the prototype, which is what Web IDL says of a
+    /* CSSOM §6.4.2's constants are on the INTERFACE OBJECT as well as the prototype, which is what Web IDL says of a
        `const` and what `CSSRule.STYLE_RULE` reads. Only the base declares them, because the chain above is
        what carries them to every interface that inherits. */
     rule_install_constants(ctx, iface[0]);
