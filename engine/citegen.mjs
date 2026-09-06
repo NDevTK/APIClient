@@ -688,6 +688,23 @@ const SPECS = [
      THE LABEL IS THE DOCUMENT'S OWN TITLE, `Reporting API`, and the anchor is the word this tree writes. */
   { key: "reporting", label: "Reporting API", kind: "bikeshed",
     base: "https://w3c.github.io/reporting/", edition: "maintained", anchors: ["reporting"] },
+  /* DOM PARSING AND SERIALIZATION, AND THIS ROW IS EXPECTED TO GO RED — 33 citations whose numbers exist in
+     NO FETCHABLE EDITION of this standard, which is precisely the state an index exists to surface.
+     THE TREE WRITES THE XML SERIALIZER'S ALGORITHMS AS §3.2.1.x AND THE MAINTAINED DOCUMENT NUMBERS THEM
+     §5.2.1.x, ONE FOR ONE, WITH THE SAME HEADINGS: §5.2.1 "XML Serialization", §5.2.1.1 "XML serializing an
+     Element node", §5.2.1.1.3 "Serializing an Element's attributes", §5.2.1.2 Document, §5.2.1.3 Comment,
+     §5.2.1.4 CDATASection, §5.2.1.5 Text, §5.2.1.6 DocumentFragment, §5.2.1.7 DocumentType. The repair at
+     every site is the leading component and nothing else. It was checked against BOTH available documents
+     before this row was written, because "the numbers moved" is a claim and not an impression: the /TR/
+     snapshot is a 2016 Working Draft that numbers §4.2 "Serializing" and has no §3.2.1.x either, so the
+     tree's numbers are an intermediate draft nobody can fetch — stale against the maintained edition and
+     against the published one at once.
+     IT IS `respec`: 30 `<bdi class="secno">` openings inside an `<hN>`, a dt-published, no `respecConfig`.
+     THE ANCHOR IS THE THREE-WORD TAIL, because the tokenizer reads at most three trailing words and this name
+     is four — `parsing and serialization` is what a citation of it actually presents. */
+  { key: "domparsing", label: "DOM Parsing and Serialization", kind: "respec",
+    base: "https://w3c.github.io/DOM-Parsing/", edition: "maintained",
+    anchors: ["parsing and serialization", "dom parsing"] },
   { key: "hrtime", label: "High Resolution Time", kind: "bikeshed",
     base: "https://w3c.github.io/hr-time/", edition: "maintained", anchors: ["hr-time", "hrtime", "high resolution time"] },
   /* THE THREE STANDARDS THAT SIT ON TOP OF THE ROW ABOVE, and they are here for the reason that row's own
@@ -2158,7 +2175,7 @@ const OTHER_SPECS = [
      refusal does — an explicit `other:` anchor beats a term coincidence, by design, since the citation's own
      claim about which standard it means outranks a phrase two documents share. An index row RAISES it; that is
      the next diff and not this one. */
-  "parsing and serialization", "css conditional", "css scoping",
+  "css conditional", "css scoping",
   "positioned layout", "css nesting", "css viewport", "har",
   /* CSS modules, as this tree spells them when it does not use the levelled shortname */
   "css", "selectors", "cascade", "view", "values", "sizing", "fonts", "backgrounds", "text",

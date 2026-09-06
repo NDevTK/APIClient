@@ -1,0 +1,259 @@
+{
+ "spec": "DOM Parsing and Serialization",
+ "key": "domparsing",
+ "base": "https://w3c.github.io/DOM-Parsing/",
+ "specUpdated": "02 September 2026",
+ "fetched": "2026-09-06",
+ "sections": {
+  "1": {
+   "title": "Conformance",
+   "page": "",
+   "id": "x1-conformance"
+  },
+  "2": {
+   "title": "Extensibility",
+   "page": "",
+   "id": "x2-extensibility"
+  },
+  "3": {
+   "title": "Introduction",
+   "page": "",
+   "id": "x3-introduction"
+  },
+  "4": {
+   "title": "APIs for parsing and serializing DOM",
+   "page": "",
+   "id": "x4-apis-for-parsing-and-serializing-dom"
+  },
+  "5": {
+   "title": "Algorithms for parsing and serializing",
+   "page": "",
+   "id": "x5-algorithms-for-parsing-and-serializing"
+  },
+  "4.1": {
+   "title": "The DOMParser interface",
+   "page": "",
+   "id": "x4-1-the-domparser-interface"
+  },
+  "4.2": {
+   "title": "The XMLSerializer interface",
+   "page": "",
+   "id": "x4-2-the-xmlserializer-interface"
+  },
+  "4.3": {
+   "title": "The InnerHTML mixin",
+   "page": "",
+   "id": "x4-3-the-innerhtml-mixin"
+  },
+  "4.4": {
+   "title": "Extensions to the Element interface",
+   "page": "",
+   "id": "x4-4-extensions-to-the-element-interface"
+  },
+  "4.5": {
+   "title": "Extensions to the Range interface",
+   "page": "",
+   "id": "x4-5-extensions-to-the-range-interface"
+  },
+  "5.1": {
+   "title": "Parsing",
+   "page": "",
+   "id": "x5-1-parsing"
+  },
+  "5.2": {
+   "title": "Serializing",
+   "page": "",
+   "id": "x5-2-serializing"
+  },
+  "5.2.1": {
+   "title": "XML Serialization",
+   "page": "",
+   "id": "x5-2-1-xml-serialization"
+  },
+  "5.2.1.1": {
+   "title": "XML serializing an Element node",
+   "page": "",
+   "id": "x5-2-1-1-xml-serializing-an-element-node"
+  },
+  "5.2.1.1.1": {
+   "title": "Recording the namespace",
+   "page": "",
+   "id": "x5-2-1-1-1-recording-the-namespace"
+  },
+  "5.2.1.1.2": {
+   "title": "The Namespace Prefix Map",
+   "page": "",
+   "id": "x5-2-1-1-2-the-namespace-prefix-map"
+  },
+  "5.2.1.1.3": {
+   "title": "Serializing an Element's attributes",
+   "page": "",
+   "id": "x5-2-1-1-3-serializing-an-element-s-attributes"
+  },
+  "5.2.1.1.4": {
+   "title": "Generating namespace prefixes",
+   "page": "",
+   "id": "x5-2-1-1-4-generating-namespace-prefixes"
+  },
+  "5.2.1.2": {
+   "title": "XML serializing a Document node",
+   "page": "",
+   "id": "x5-2-1-2-xml-serializing-a-document-node"
+  },
+  "5.2.1.3": {
+   "title": "XML serializing a Comment node",
+   "page": "",
+   "id": "x5-2-1-3-xml-serializing-a-comment-node"
+  },
+  "5.2.1.4": {
+   "title": "XML serializing a CDATASection node",
+   "page": "",
+   "id": "x5-2-1-4-xml-serializing-a-cdatasection-node"
+  },
+  "5.2.1.5": {
+   "title": "XML serializing a Text node",
+   "page": "",
+   "id": "x5-2-1-5-xml-serializing-a-text-node"
+  },
+  "5.2.1.6": {
+   "title": "XML serializing a DocumentFragment node",
+   "page": "",
+   "id": "x5-2-1-6-xml-serializing-a-documentfragment-node"
+  },
+  "5.2.1.7": {
+   "title": "XML serializing a DocumentType node",
+   "page": "",
+   "id": "x5-2-1-7-xml-serializing-a-documenttype-node"
+  },
+  "5.2.1.8": {
+   "title": "XML serializing a ProcessingInstruction node",
+   "page": "",
+   "id": "x5-2-1-8-xml-serializing-a-processinginstruction-node"
+  },
+  "A": {
+   "title": "Dependencies",
+   "page": "",
+   "id": "a-dependencies"
+  },
+  "B": {
+   "title": "Revision History",
+   "page": "",
+   "id": "b-revision-history"
+  },
+  "C": {
+   "title": "Acknowledgements",
+   "page": "",
+   "id": "c-acknowledgements"
+  },
+  "D": {
+   "title": "References",
+   "page": "",
+   "id": "d-references"
+  },
+  "D.1": {
+   "title": "Normative references",
+   "page": "",
+   "id": "d-1-normative-references"
+  }
+ },
+ "dfns": {
+  "applicable specification": [
+   "2"
+  ],
+  "copy a namespace prefix map": [
+   "5.2.1.1.2"
+  ],
+  "found a suitable namespace prefix": [
+   "5.2.1.1"
+  ],
+  "generate a prefix": [
+   "5.2.1.1.4"
+  ],
+  "generating a prefix": [
+   "5.2.1.1.4"
+  ],
+  "namespace prefix map": [
+   "5.2.1.1.2"
+  ],
+  "recording the namespace information": [
+   "5.2.1.1.1"
+  ],
+  "retrieve a preferred prefix string": [
+   "5.2.1.1.2"
+  ],
+  "retrieving a preferred prefix string": [
+   "5.2.1.1.2"
+  ],
+  "round tripping": [
+   "3"
+  ],
+  "serialization of the id": [
+   "5.2.1.7"
+  ],
+  "serializing an attribute value": [
+   "5.2.1.1.3"
+  ],
+  "throw an exception": [
+   "5.2.1"
+  ],
+  "xml serialization": [
+   "5.2.1"
+  ],
+  "xml serialization algorithm": [
+   "5.2.1"
+  ],
+  "xml serialization of the attributes": [
+   "5.2.1.1.3"
+  ],
+  "xml serializing a cdatasection node": [
+   "5.2.1.4"
+  ],
+  "xml serializing a comment node": [
+   "5.2.1.3"
+  ],
+  "xml serializing a document node": [
+   "5.2.1.2"
+  ],
+  "xml serializing a documentfragment node": [
+   "5.2.1.6"
+  ],
+  "xml serializing a documenttype node": [
+   "5.2.1.7"
+  ],
+  "xml serializing a processinginstruction node": [
+   "5.2.1.8"
+  ],
+  "xml serializing a text node": [
+   "5.2.1.5"
+  ],
+  "xml serializing an element node": [
+   "5.2.1.1"
+  ]
+ },
+ "ops": {},
+ "uses": {
+  "generate a prefix": {
+   "5.2.1.1": 3
+  },
+  "namespace prefix map": {
+   "5.2.1": 2,
+   "5.2.1.1": 2,
+   "5.2.1.1.1": 2
+  },
+  "retrieve a preferred prefix string": {
+   "5.2.1.1": 2
+  },
+  "serializing an attribute value": {
+   "5.2.1.1": 2
+  },
+  "throw an exception": {
+   "5.2.1.1": 2,
+   "5.2.1.1.3": 5,
+   "5.2.1.7": 2,
+   "5.2.1.8": 2
+  },
+  "xml serialization of the attributes": {
+   "5.2.1.1": 2
+  }
+ }
+}
