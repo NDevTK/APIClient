@@ -3339,6 +3339,19 @@ static const char *HTML =
     " _ut.onabort = function(){ _uq = _ut.error.name; }; };"
     "_u.onerror = function(){ fetch('/api/idbuniq?v=' + _uq + ':' + _u.error.name); };"
     "</script>"
+    /* THE FRAME CONTROL, AND IT IS A CONTROL RATHER THAN A PROBE — its whole content is that it is
+       SHORT and that it is its OWN <script>. The five reply-consuming rows all issue their fetch
+       from the ~248 KB script above, and `flow_deliver_one_reply` is gated twice on `f->frame`:
+       structurally, by the `if (!f->frame)` that encloses the whole task ladder, and again by
+       `flow_stack_empty`, whose first line returns 0 for a framed flow. A frame is released only
+       when the program RUNS TO COMPLETION, so a reply asked for at the top of a quarter-megabyte
+       row cannot be taken until that same flow has executed the rest of it. This row asks for the
+       same reply from a program that ENDS in the step that starts it.
+       SO THE TWO ROWS TOGETHER ARE THE EXPERIMENT AND NEITHER IS ALONE: this one reading 1 while
+       the five read 0 says the gate is the frame and not the queue, the rank or the reply path.
+       This one reading 0 says the frame is NOT the mechanism and the account above is wrong. */
+    "<script>fetch('/api/config').then(function(r){ return r.json(); })"
+            ".then(function(c){ fetch('/api/framectl?r=' + c.region); });</script>"
     /* THE LAST <script> OF THE DOCUMENT, and it exists only to REPORT — see the injection in script 1. It has
        to be a document script rather than a task, because what is being proved is that a program injected from
        a NON-FINAL <script> took a position ahead of the document's remaining ones. */
@@ -9998,6 +10011,18 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        nothing a reader could act on — `param_value_is` returns 0 when the record is absent, so the scoped
        clause already answers it, and folding them made "the await never delivered" and "the reply's field
        did not reach this param" one 0 that named neither. */
+    /* THE CONTROL FOR THE FIVE REPLY ROWS — same reply, same await machinery, one difference: the
+       program issuing it ENDS in the step that starts it, so `f->frame` is released and the
+       delivery arm is reachable. See the frame-control <script> for why the pair is the
+       experiment and why either row alone answers nothing. */
+    const char *frame_ctl_why = NULL; int frame_ctl = 1;
+    fold_row(&frame_ctl, &frame_ctl_why, !!strstr(js, "\"/api/framectl\""),
+             "NOT REACHED: there is no /api/framectl record, so the reply this short program asked "
+             "for was not delivered to it either — which is the SAME reading the five long-program "
+             "rows give, and it says the frame is not what gates the delivery");
+    fold_row(&frame_ctl, &frame_ctl_why, param_value_is(js, "/api/framectl", "r", "us-west-2"),
+             "the reply WAS delivered to a program that ended its own frame, and json()'s field did "
+             "not reach this endpoint — so the frame gate is not the whole of it");
     const char *fetch_await_why = NULL; int fetch_await = 1;
     fold_row(&fetch_await, &fetch_await_why, !!strstr(js, "\"/api/user\""),
              "NOT REACHED: there is no /api/user record at all, so `await fetch('/api/config')` never "
@@ -12784,6 +12809,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "orphan-ccode", orphan_ccode, "orphanCharCode", SESS_EXPLORE, orphan_why },
         { "orphan-update", orphan_update, "orphanUpdate", SESS_EXPLORE, orphan_why },
         { "orphan-clamp", orphan_clamp, "orphanClamp", SESS_EXPLORE, orphan_why },
+        { "frame-ctl", frame_ctl, "/api/framectl", SESS_EXPLORE, frame_ctl_why },
         { "fetch", fetch_await, "/api/config", SESS_EXPLORE, fetch_await_why },
         { "then-chain", then_chain, "at=chain1", SESS_EXPLORE },
         { "clone-body", clone_body, "/api/clonebody", SESS_EXPLORE, clone_body_why },
