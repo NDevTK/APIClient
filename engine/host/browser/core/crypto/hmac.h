@@ -174,10 +174,30 @@ typedef struct {
  *
  * A NAMED RESIDUAL — STEP 5's `format is "jwk"` ARM. WHAT IS NOT COVERED: a JWK import, whose nine sub-steps
  * decode the `k` field per Section 6.4 of JSON Web Algorithms and check `kty`, `alg`, `use`, `key_ops` and
- * `ext`. WHAT THE NEXT DIFF BUILDS: §15's JsonWebKey dictionary declared in core/idl_args, an
- * `IDL_BUFFERSOURCE_OR_DICT` row for §14.3.9's `(BufferSource or JsonWebKey) keyData` position (no row of that
- * shape exists — the enum's unions are all string-, boolean-, double- or sequence-with-dictionary), and these
- * nine sub-steps here. HOW ITS ABSENCE SHOWS: `importKey("jwk", {kty:"oct",k:"…"}, {name:"HMAC",hash:"SHA-256"},
+ * `ext`. WHAT THE NEXT DIFF BUILDS, IN THIS ORDER AND AS ONE LANDING: an `IDL_BUFFERSOURCE_OR_DICT` row for
+ * §14.3.9's `(BufferSource or JsonWebKey) keyData` position (no row of that shape exists — the enum's unions
+ * are all string-, boolean-, double- or sequence-with-dictionary), THEN §15's dictionary as an
+ * `IdlDictMember[]` table, THEN these nine sub-steps here.
+ * THE TABLE GOES IN THIS COMPONENT AND NOT IN core/idl_args, WHICH THIS CLAUSE USED TO SAY. core/idl_args
+ * owns the MECHANISM — the `IdlArgType` row and its conversion arm — while every dictionary's member table is
+ * declared by the component that receives it, as `REQUEST_INIT` is in core/fetch/request.c and
+ * `CSS_STYLE_SHEET_INIT` in core/css/css_style_sheet.c. A reader who obeyed the retired clause would have
+ * written this table into another component's file.
+ * AND THE ORDER IS NOT A PREFERENCE. The table has NO READER until the union row exists, because the position
+ * that would reach it is declared IDL_BUFFERSOURCE; landing it alone turns the Web IDL gap audit's
+ * `JsonWebKey: 20 of 20 UNDECLARED` row green while `importKey("jwk", …)` fails exactly as it does today —
+ * a false COMPLETE bought for the price of the mechanism. Landing the first two without the third moves the
+ * failure from a TypeError at the conversion to step 5's own NotSupportedError, which is a different wrong
+ * answer and not a nearer one.
+ * THE SURFACE IS 23 MEMBERS ACROSS TWO DICTIONARIES, NOT THE 20 THE AUDIT ROW NAMES. Web Cryptography API
+ * §15 "JsonWebKey dictionary" declares EIGHTEEN;
+ * the row's `pub` and `priv` come from a `partial dictionary JsonWebKey` in a WICG draft (Modern Algorithms
+ * in the Web Cryptography API, whose own comment attributes them to RFC 9964), which is a correct flattening
+ * and a different population from the shipped standard's. The remaining three are the element type of that
+ * same section's `sequence<RsaOtherPrimesInfo> oth`, a NESTED dictionary of `r`, `d` and `t`: no audit row
+ * names it, because that walk reaches a dictionary through the members this engine declares and `oth` is one
+ * of the undeclared ones — so the audit cannot see one level past its own finding.
+ * HOW ITS ABSENCE SHOWS: `importKey("jwk", {kty:"oct",k:"…"}, {name:"HMAC",hash:"SHA-256"},
  * false, ["sign"])` rejects with a TypeError raised by the ARGUMENT CONVERSION — because the position is
  * declared IDL_BUFFERSOURCE and a JWK is an ordinary object — where a browser resolves with a CryptoKey. That
  * is a WRONG answer and not merely a narrower one, and it is stated rather than crashed on for one reason: the
