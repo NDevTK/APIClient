@@ -694,9 +694,34 @@ const standingText = (s) =>
                          ? ` — the whole stream stands at that one point, so this run answered what it ` +
                            `answered without the work clock moving between its tables`
                          : ` from ${s.first.workDone} at the first, a span of ` +
-                           `${s.work.workDone - s.first.workDone} units: a row still 0 across it is a ` +
-                           `statement this run had the work to reach and did not, which is the OTHER reading ` +
-                           `of a 0 and takes the mechanism rather than the budget`));
+                           `${s.work.workDone - s.first.workDone} units` +
+                           /* AND WORK IS NOT THE ONLY THING A ROW CAN BE WAITING ON, WHICH THIS SENTENCE USED
+                              TO ASSUME. Every async continuation in this engine is a JOB, so a statement
+                              behind an await, a reaction, a timer or a delivery cannot be answered by ANY
+                              amount of straight-line work — and a run that executed none has not "had the
+                              work to reach and did not", it has not reached the half of itself those rows sit
+                              behind. Charging the MECHANISM there is the wrong component.
+                              THE SPLIT IS WHAT DECIDES IT AND IT IS ON THE LINE. solver/flow.h partitions the
+                              backlog by what each job waits on — the host, the member finishing its own
+                              program, or RANK — and only the last is the ordering's to move. So a zero job
+                              count beside a zero rank-eligible count is a run whose jobs were all FRAMED:
+                              nothing was ever the scheduler's to pick, and the rows behind them are unasked
+                              rather than unanswered. Read as a positive statement, never defaulted — the
+                              field is in probeWork's derived list, so its absence throws above rather than
+                              arriving here as a plausible zero. */
+                           (s.work._jobsRun === 0
+                              ? `, AND NOT ONE JOB RAN across it${s.work._jobsReady === 0
+                                   ? ` with NOTHING EVER RANK-ELIGIBLE — every job this run held was waiting `
+                                     + `on a member to finish its own program, so no ordering was ever asked `
+                                     + `and a row still 0 behind an await, a reaction, a timer or a delivery `
+                                     + `is UNASKED rather than unanswered. That is a statement about programs `
+                                     + `completing and not about the mechanism any row names`
+                                   : ` while ${s.work._jobsReady} were rank-eligible — jobs the ordering could `
+                                     + `have picked and did not, which is the one shape here that IS the `
+                                     + `scheduler's`}`
+                              : `: a row still 0 across it is a statement this run had the work to reach and ` +
+                                `did not, which is the OTHER reading of a 0 and takes the mechanism rather ` +
+                                `than the budget`)));
 
 /* AN ABORT IS AN ABORT EVEN WHERE NO SIGNAL CAN CARRY IT, AND UNDER EMSCRIPTEN NONE CAN.
    `runOutcome`'s `.signal` arm exists precisely so that a DCHECK doing its job is never misfiled as a timing
