@@ -330,13 +330,39 @@ function resolveEndpointSchema(endpointKey, service, methodId) {
       if (!contentTypes.includes(ct)) contentTypes.push(ct);
     }
   }
+  /* `pd.contentType &&` STOOD HERE AND COULD NEVER BE FALSE, WHICH IS WHY IT IS AN ASSERT NOW AND NOT A GUARD.
+     A truthiness test in front of a producer's field turns "the producer did not produce this" into a silent
+     skip, and a skipped probe detail is indistinguishable from one that was never there — the content-type
+     list simply comes back SHORT, with nothing anywhere saying so. That is the quiet half of
+     §A-FIELD-A-CONSUMER-DEFAULTS, and this record reaches here out of the RESTORED store
+     (`globalStore.probeResults.get(endpointKey)` above), which is the one place a record can arrive short of a
+     name with no producer in this session having gone wrong.
+     THE PRODUCER SETTLES WHICH FIX THIS IS, AND IT WAS GREPPED RATHER THAN INFERRED FROM THIS READER. Both
+     `results.push` sites in lib/req2proto.js set `contentType` from a non-empty string LITERAL — the three
+     `ct:` configs, and a ternary between two more for the nested probe — and no `sendProbe` return carries a
+     `contentType` key, so the `...result` spread that follows cannot overwrite it. `fieldCount` is
+     `r.fields?.length || 0`, always written and always a number. So the producer CANNOT legitimately omit
+     either name: there is no absence here to read positively, and the remedy is the assert rather than a
+     positive reading of a gap.
+     AND NO STORED RECORD CAN LACK THEM EITHER, which is what makes asserting safe rather than a regression
+     delivered as a fix. The mint is byte-identical at every revision where the file exists — the first commit
+     that introduced it states the same five names as today, and the one revision in between is the commit that
+     emptied the tree and its restore. So this cannot fire on a record any build ever wrote, and if it ever
+     does, the producer stopped writing a name this list is composed from.
+     `pd.fieldCount > 0` IS NOT A DEFAULT AND STAYS. It is the semantic filter this loop is for: only a content
+     type that actually yielded fields is worth suggesting, and 0 is a real answer meaning the probe got
+     nothing back. Deleting it would widen the suggestion list, which is a different change and not this one. */
   if (probeResult?.probeDetails) {
     for (const pd of probeResult.probeDetails) {
-      if (
-        pd.fieldCount > 0 &&
-        pd.contentType &&
-        !contentTypes.includes(pd.contentType)
-      ) {
+      DCHECK(typeof pd.contentType === "string" && pd.contentType !== "" &&
+             typeof pd.fieldCount === "number",
+        "a stored probe detail reached the send panel without its content type or field count — " +
+        "lib/req2proto.js writes both on every entry of `probeDetails` and has since the mint was " +
+        "introduced, so absence is that producer or the store's restore broken, and this panel would " +
+        "otherwise skip the entry in silence and suggest a SHORT content-type list that reads exactly like " +
+        "a probe which found nothing (contentType=" + JSON.stringify(pd.contentType) +
+        " fieldCount=" + JSON.stringify(pd.fieldCount) + ")");
+      if (pd.fieldCount > 0 && !contentTypes.includes(pd.contentType)) {
         contentTypes.push(pd.contentType);
       }
     }
