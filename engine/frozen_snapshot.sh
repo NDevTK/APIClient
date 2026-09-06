@@ -90,6 +90,11 @@ if [ "$QN" -lt 50 ]; then
   exit 1
 fi
 
+# PRINT WHERE THE EVIDENCE GOES, because a reader who wants a cross-revision reading globs for it and a
+# glob that misses half the runs UNDER-SAMPLES SILENTLY — the same shape as a truncated search feeding a scope
+# list, arriving in the data instead of the query. Runs made under different roots accumulate in different
+# directories and nothing in a per-run log says so, so the path is stated rather than assumed.
+echo "evidence   $ROOT/EVIDENCE-*.log  (per-revision logs kept when a snapshot is reclaimed)"
 echo "snapshot   $DIR"
 echo "revision   $SHA"
 echo "engine/qjs $QSHA  ($QN entries)"
