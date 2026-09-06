@@ -707,7 +707,14 @@ static JSValue js_window_post(JSContext *ctx, JSValueConst this_val, int argc, J
               "another unknown and §3.2.21.1 repeats to an unknown length, so there is no given arm set to "
               "ask over. What this needs is §3.2.21 answered over unknown input at the CONVERSION — the "
               "cursor already parks per element, so the missing piece is what the protocol answers when the "
-              "iterable itself is unknown, and until it exists no transfer list can be built from one");
+              "iterable itself is unknown, and until it exists no transfer list can be built from one. "
+              "AND THAT INSTRUCTION IS NECESSARY AND NOT SUFFICIENT FOR THIS SITE, which is a fact about the "
+              "ROADS rather than about the standard. The ARGUMENT road reaches that conversion and crashes "
+              "there; the MEMBER road does not reach it at all, because the dictionary member loop crosses "
+              "an unknown as itself instead of applying the member's declared sequence type. So a reader "
+              "who builds the conversion and stops will find THIS crash still firing on the same input. "
+              "What unblocks it is that a sequence-typed member stop crossing and reach the one conversion, "
+              "after which this site and its twin one directory over are the same gap in one place");
     DCHECK(JS_IsArray(transfer), "postMessage's transfer list is not the materialized sequence — "
                                  "IDL_SEQUENCE_OBJECT is what §3.2.21 builds, and reading the page's object "
                                  "again here would run its iterator a second time");
