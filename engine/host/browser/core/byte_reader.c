@@ -335,19 +335,25 @@ JSValue byte_reader_text(JSContext *ctx, JSValueConst recv, const char *bytes, s
     /* Fetch §5.3 "Body mixin": "the result of running consume body with this and UTF-8 decode" — and
        File API §3.3 "Methods and Parameters" states the same algorithm for a Blob. ENCODING §6's UTF-8
        decode, which is a named algorithm and not a synonym for whatever the host's string constructor does.
-       This read `JS_NewStringLen`, and quickjs's decoder is not that algorithm in either direction: cutils.h
-       converts an encoding error to U+FFFD "and uses a single byte" (Encoding consumes the whole maximal
-       subpart) and it "accepts UTF-8 encoded surrogates as JavaScript allows them in strings" (Encoding
-       answers U+FFFD). It also does not run §6's step 2, the three-byte peek that DROPS a leading UTF-8 BOM,
-       so `res.text()` on a BOM'd body answered a string starting U+FEFF. The difference was invisible while
-       the body reaching this reader was itself the output of a decode; it is not invisible now that a body
-       is bytes. */
+       This read `JS_NewStringLen`, and quickjs's decoder is not that algorithm in either direction.
+       THE SUBMODULE'S OWN WORDS GO IN BACKTICKS, the way core/fetch/fetch.h and fetch.c already write this
+       same decoder: a quotation mark claims a STANDARD's sentence, and the anchor nearest the two runs
+       below is Encoding §6, so cutils.h in quotation marks is judged against a document it never came
+       from — which is what both of them used to be. cutils.h states its error mode outright,
+       `encoding errors are converted as 0xFFFD and use a single byte`, where Encoding consumes the whole
+       maximal subpart; and its decoder's header says it implements Encoding's algorithm
+       `except it accepts UTF-8 encoded surrogates as JavaScript allows them in strings`, where Encoding
+       answers U+FFFD. It also does not run UTF-8 decode's steps 1-2, the three-byte peek and the read that
+       DROPS a leading UTF-8 BOM — Encoding §6 numbers each of its algorithm lists from 1, so the LIST is
+       named and never a bare step number — so `res.text()` on a BOM'd body answered a string starting
+       U+FEFF. The difference was invisible while the body reaching this reader was itself the output of a
+       decode; it is not invisible now that a body is bytes. */
     char *text;
     size_t n = 0;
     JSValue out;
 
     text = encoding_utf8_decode(bytes, len, &n);
-    CHECK(text != NULL, "byte reader: OOM running §6's UTF-8 decode over a body");
+    CHECK(text != NULL, "byte reader: OOM running Encoding §6's UTF-8 decode over a body");
     out = JS_NewStringLen(ctx, text, n);
     free(text);
     return byte_reader_content(ctx, recv, out);
@@ -356,10 +362,14 @@ JSValue byte_reader_text(JSContext *ctx, JSValueConst recv, const char *bytes, s
 JSValue byte_reader_json(JSContext *ctx, JSValueConst recv, const char *bytes, size_t len)
 {
     /* Fetch §5.3 "Body mixin"'s `json()` is "the result of running consume body with this and parse JSON
-       from bytes", and Infra's parse JSON FROM BYTES is TWO steps: "let string be the result of running
-       UTF-8 decode on bytes", then parse JSON from string. Handing the bytes straight to the parser ran
-       quickjs's lenient decoder instead, so a body whose bytes are not well-formed UTF-8 parsed as something
-       Encoding's decoder would have replaced.
+       from bytes", and the name Fetch links there is Infra §6 "JSON"'s parse JSON bytes to a JavaScript
+       value, whose TWO steps are Infra's "Let string be the result of running UTF-8 decode on bytes" and
+       then parse a JSON string to a JavaScript value given string. Infra §6 numbers each of its algorithm
+       lists from 1, so the list is named and never a bare step number; and Infra has no committed corpus
+       here, so its name in front of the number is what keeps this quotation from being judged as Fetch's
+       or as Encoding's — both of which also number a §6. Handing the bytes straight to the parser ran
+       quickjs's lenient decoder instead, so a body whose bytes are not well-formed UTF-8 parsed as
+       something Encoding's decoder would have replaced.
        The REAL parser runs on the decoded string, so a malformed body rejects with the SyntaxError the page
        would actually catch rather than a placeholder this engine invented. */
     char *text;
@@ -367,7 +377,7 @@ JSValue byte_reader_json(JSContext *ctx, JSValueConst recv, const char *bytes, s
     JSValue out;
 
     text = encoding_utf8_decode(bytes, len, &n);
-    CHECK(text != NULL, "byte reader: OOM running §6's UTF-8 decode over a body before parsing it");
+    CHECK(text != NULL, "byte reader: OOM running Encoding §6's UTF-8 decode over a body before parsing it");
     out = JS_ParseJSON(ctx, text, n, "<body>");
     free(text);
     /* THE PARSE ARM ONLY. A body that is not a JSON text left a SyntaxError standing and `out` is the
