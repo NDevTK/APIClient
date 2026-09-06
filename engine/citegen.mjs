@@ -2166,6 +2166,34 @@ const OTHER_SPECS = [
      later diff with its own whole-corpus measurement. */
   "pointer events", "pointer lock", "css mixins", "css extensions",
   "css anchor positioning", "css color adjust",
+  /* CSS NAVIGATION, HELD OUT OF THE SIX ABOVE AND LANDED ALONE BECAUSE ITS NAME STARTS WITH A WORD AN INDEXED
+     STANDARD'S ANCHOR ALSO STARTS WITH, which makes it a COLLISION CANDIDATE like `xml` rather than another
+     member of that batch — and a batch would have hidden that. BOTH POPULATIONS WERE GREPPED BEFORE THIS
+     ENTRY WAS WRITTEN, because the question an entry like this has to answer is not "does my name resolve"
+     but "does the OTHER name still resolve after it". POPULATION A is exactly two sites, both in
+     core/css/css_rule.c, writing `CSS Navigation 1` with the level. POPULATION B is one site writing
+     `Navigation Timing`, whose row this table indexes.
+     THERE IS NO COLLISION, AND THE REASON IS THAT THE TWO NAMES NEVER MEET IN ONE TOKENIZER PASS. Navigation
+     Timing carries NO LEVEL DIGIT before its section sign, so joinLevel is not involved in it at all:
+     classifyAnchor reads the trimmed tail, tests `navigation timing` and then `timing`, and hits the
+     navtiming anchor on the first. This entry adds a base reachable only through the JOIN and only from the
+     literal two-word tail `css navigation`, which `Navigation Timing` cannot produce — and a hypothetical
+     levelled `Navigation Timing 2` would offer the bases `navigation timing` and `timing`, never this one.
+     Verified with an ARMED probe rather than by reading: a file holding both names plus an indexed standard
+     cited at a section that does not exist, so the run had to SPEAK before its silence about the other two
+     meant anything. With unknown sections written after each name the resolver names its answer out loud, and
+     it named navtiming for Navigation Timing on both sides of this change.
+     WHAT IT RETIRES IS TWO WRONG GUESSES AND NOT A COVERAGE GAP, which is why it is a refusal and cannot
+     manufacture an accusation. css_rule.c is CSSOM-dominant, so both sites fell to that vote: line 1832's
+     1.2 was reported as a section CSSOM does not have, and its quotation — a correct one of this
+     standard's own heading — stood in UNJUDGEABLE/UNCORROBORATED under a standard the citation never named,
+     which is
+     the queue a reader reads as a possible fabrication. Line 1837's 3.1 was one of a CSSOM cluster of the
+     same shape that the whole-corpus run counts at 22 and counts at 21 with this entry in place — a per-file
+     run reads that cluster at 20, so the number here is the tree's and not one file's. Not indexed, so both are counted and never checked, which is the honest state for a
+     standard whose text this audit does not hold; an index row would be better and is a fetch away
+     (drafts.csswg.org/css-nav-1/, a bikeshed document) and is a later diff with its own measurement. */
+  "css navigation",
   /* THE JOINED SPELLING OF A FOREIGN NAME THIS LIST ALREADY HOLDS UNSPACED, and it is here because the xml
      row one screen down gained a levelled anchor. classifyAnchor returns on the FIRST token either list
      holds, joinLevel offers the longest base first, and this entry is what makes `Namespaces in XML 1.0 §3`
@@ -6635,6 +6663,40 @@ function audit(argv, opts = {}) {
      audited as Fetch, and `CSS Counter Styles 3` was on no list at all. So the count below the floor is
      STATED, and `--all` lists it — the difference between a blind spot and a silent one. */
   /* THE LEVELLED NAMES FIRST AND WITH NO FLOOR, for the reason `unknownLev` is a separate map. */
+  /* AND THE INSTRUCTION THIS BAND PRINTS IS RIGHT FOR ONE OF THE THREE POPULATIONS IN IT, WHICH IS RECORDED
+     HERE BECAUSE THE BAND CANNOT TELL THEM APART AND A READER OBEYING IT ON THE WRONG ONE MAKES THE AUDIT
+     WORSE. `anchorTokens` reads a FORTY-CHARACTER WINDOW, so a name beginning before that window opens
+     arrives TRUNCATED and joinLevel records the truncated base — a name NO AUTHOR EVER WROTE, manufactured by
+     this reader. Adding an OTHER_SPECS entry for it is CLAUDE.md's "an entry keyed on a spelling nobody
+     writes protects nothing" defect arriving from the INSTRUMENT rather than from the tree, and where the
+     truncated name's real standard is INDEXED it is strictly worse than that: the entry moves a judged
+     standard's citations into a refusal, which is a coverage loss dressed as a repair.
+     MEASURED ON THE WHOLE TREE, AND THE SPLIT IS THE POINT. The band's members drain to three populations,
+     not one. (a) A NAME THE TREE WRITES FOR A STANDARD WITH NO ROW — the remedy the line states, and the
+     population it was built for; `css navigation` is one, landed in the list above. (b) A NAME THE TREE
+     WRITES SHORT FOR A STANDARD THAT IS ALREADY INDEXED — `conditional 5` was one site writing the module
+     name without its `CSS`, while thirty-odd siblings wrote it whole and resolved; the remedy is ONE WORD AT
+     THE SITE and both remedies the line offers are wrong for it, since the row already exists and a foreign
+     entry would retire it. (c) A NAME THIS WINDOW INVENTED — `om 1` is `CSS Typed OM 1` split across a C
+     string-literal line break at core/css/css_numeric_value.c:406 and :1266, where the continuation line's
+     own indentation fills the window before the name's first half can be reached; `inter events 4` is
+     `Pointer Events 4` split the same way at core/events/event_target.c:3505. Both read exactly like (a) and
+     NEITHER IS ACTIONABLE, and they fail in the two opposite directions, which was MEASURED rather than
+     argued — each spelling was added to this list as a classifier, the one file re-read, and the entry
+     removed again with the control repeating exactly. Adding the first takes that file's csstypedom1 from
+     189 resolutions to 187: those two sites carry no file vote at all, so what places them is the
+     group rule reading their own siblings' anchor on the same number in the same file, and a foreign entry
+     wins BEFORE that rule is asked. Adding the second changes no standard's count by one — the site is
+     unresolved and stays unresolved, so the entry protects nothing. HARMFUL and INERT, and the printed band
+     shows the same shape for both.
+     The remaining members are ordinary prose in which a digit follows a capitalised word by accident.
+     WHAT WOULD SEPARATE THEM IS A MARK AND NOT A FILTER, and it is one bit the slice already has: the window
+     knows whether it opened MID-TOKEN, because the character before its start is a word character. An entry
+     whose FIRST word is that truncated one could say so, and a reader would stop instead of acting. That is a
+     widening of this census and it is a later diff with its own whole-corpus measurement — recording the
+     correction here is what stops the next reader obeying a sentence now measured wrong for most of what it
+     prints. Numbers in this note are illustrative and are written without a section sign on purpose: this
+     file is inside the population it audits, so an example citation here becomes a citation. */
   const lev = [...unknownLev].sort((a, b) => b[1] - a[1]);
   if (lev.length)
     console.log(`  NAMES SHAPED LIKE A LEVELLED STANDARD THAT NO LIST HOLDS — each is a standard whose citations are being ` +
