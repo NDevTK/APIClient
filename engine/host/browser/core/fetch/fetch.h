@@ -197,7 +197,7 @@ typedef struct {
  * the real page never takes. That is a REGRESSION and not a narrowing, so the block is not landed here alone.
  * AND STEP 6 CANNOT BE FOLDED INTO THIS FUNCTION EITHER. This is a PURE PREDICATE and is evaluated TWICE for
  * every request that reaches the host — once at the component that builds it, again at solver/engine.c's
- * park, whose own comment rests on "the two evaluations cannot disagree" — and that park composes its
+ * park, whose own comment rests on the two evaluations being unable to disagree — and that park composes its
  * pending URL BEFORE calling this. A rewriting step 6 therefore needs its own component, a signature that
  * hands an address BACK, every call site to consume it, and that compose order reversed, since the park is
  * keyed on (method, url) and would otherwise park a request under an address the host is never asked for.
@@ -208,7 +208,21 @@ typedef struct {
  * (b) the settings test itself over that; (c) §4.1 step 6 as its own component, which needs Fetch §2.2.5
  * "Requests"' INITIATOR on the request record — core/html/html_image.c records that field as deliberately
  * absent for want of a consumer, and the upgrade's `imageset` arm is that consumer; (d) the block, as a
- * further disjunct HERE. Nothing before (d) has a reader, so nothing before (d) lands on its own.
+ * further disjunct HERE.
+ * THAT IS A DEPENDENCY ORDER AND NOT A LANDING ORDER, AND READING IT AS ONE COSTS A DIFF. The list runs
+ * deepest-first, so it reads as a build sequence and it is very nearly the REVERSE of one: (d) is the only
+ * member with a consumer that exists — this function, called from five components — and (a) through (c) are
+ * read by nothing but each other, so each of them landed alone is the write-with-no-reader defect. The
+ * sentence that stood here — that nothing before (d) has a reader — was TRUE and did not work: it was read,
+ * agreed with, and (a) was dispatched anyway, because a numbered list is an instruction and one line of prose
+ * under it is not. THE RULE THAT SURVIVES IT: a dependency order is not a landing order, and the first
+ * LANDABLE unit is whichever one is nearest an existing consumer — which here is the LAST one named.
+ * The consequence is stated plainly rather than left to be rediscovered a third time: the whole of (a)..(d)
+ * is ONE landing, and its file set is not this directory — step 6's rewrite has to be consumed at every
+ * component that builds a request, so a scope naming only core/fetch and core/frame/secure_context cannot
+ * hold it. That (a) has no reader is VERIFIED and not assumed, and the evidence is recorded where the
+ * algorithm lives rather than restated here: core/frame/secure_context.h names the two shapes anything in
+ * this tree has ever asked §3.1 in, and neither is an origin record.
  * HOW ITS ABSENCE SHOWS: an https document fetching `http://cdn/chunk.js` is served that script here and is
  * refused it by a browser — so a lazy chunk this engine executes for its endpoints is one the real page
  * never runs, and the surface it contributes is reported as the page's.

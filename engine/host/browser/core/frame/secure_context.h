@@ -39,14 +39,39 @@
  * WHICH URLs HAVE AN OPAQUE ORIGIN IS URL §4.7's RULE, and core/url/origin.c owns it — this asks that
  * component for the tuple (origin_tuple_url) and reads step 1's answer off "there is none". It used to
  * serialize §4.7's answer and run the URL parser over the bytes to get the parsed host back, which was the
- * last place in the engine where a lossy serialization stood between an algorithm and the thing it reads. */
+ * last place in the engine where a lossy serialization stood between an algorithm and the thing it reads.
+ *
+ * AND THE ENTRY §3.1 WOULD ACTUALLY DECLARE IS NOT HERE, WHICH IS A STATEMENT ABOUT THE CONSUMER AND NOT AN
+ * OVERSIGHT. §3.1 says "Given an origin (origin)"; the entry BELOW is that algorithm applied to the origin OF
+ * A URL, which is the only shape anything in this tree has ever asked it in — §3.2's step 3 ("Return the
+ * result of executing § 3.1 Is origin potentially trustworthy? on url's origin"), HTML §8.1.3.5's step 2, and
+ * every host that states a top-level creation URL. An entry taking an `Origin *` would be one call away
+ * (`origin_is_opaque` is step 1, and core/url/origin.h's origin_scheme/origin_host are steps 3 to 8 — the
+ * components, NOT origin_effective_domain, which §3.1's closing note excludes by name) and it has NO CALLER
+ * IN THIS TREE. It arrives WITH the algorithm that reads an environment settings object's origin, and not
+ * before: a predicate with no consumer is the write-with-no-reader defect, and the reader is what decides
+ * whether the shape is right.
+ *
+ * AND THE OBVIOUS WAY TO ADD IT IS THE WRONG ONE, WHICH IS WHY THIS PARAGRAPH IS HERE RATHER THAN NOWHERE.
+ * The tempting move is to route the entry below through it — parse, take the URL's origin, ask §3.1 — so that
+ * one body serves both. core/url/origin.h forbids exactly that and says why at the function it would use:
+ * origin_of_url MINTS an agent-lifetime record per call, and origin_tuple_url exists *for this algorithm*,
+ * naming it, so that a [SecureContext] member check does not leave one origin behind per question asked. What
+ * the two entries would share is the TAIL over a tuple's scheme and host, which is already one static
+ * function in the .c — so there is one implementation of steps 3 to 9 today, and a second entry adds a second
+ * spelling of step 1 and nothing else. */
 bool secure_context_origin_potentially_trustworthy(const UrlRecord *u);
 
 /* SECURE CONTEXTS §3.2 "Is url potentially trustworthy?" over a serialized URL. False for input that is not a
    URL at all: a string with no origin cannot have a trustworthy one. */
 bool secure_context_url_potentially_trustworthy(const char *url);
 
-/* HTML §8.1.3.5 "Secure contexts" — "is `ctx`'s environment a secure context?", all three of its steps.
+/* HTML §8.1.3.5 "Secure contexts" — is the environment of `ctx` a secure context, all three of its steps.
+ * THE QUESTION IS NOT IN QUOTATION MARKS AND THAT IS THE NOTATION RULE, not a style preference: double quotes
+ * in this tree are a STANDARD's words, engine/citegen reads them as such, and this one was an engine
+ * paraphrase carrying the identifier `ctx` inside them — so the auditor could only report it as a run that
+ * leaves HTML after one word, which is a finding a reader has to adjudicate by hand every time. The sibling
+ * .c states the same rule about its own retired sentence; it is stated here because this is where it broke.
  *
  * WHICH ARM ANSWERS IS DECIDED BY THE REALM'S §3.3.8 [Global] INTERFACE, which core/realm.h holds because the
  * environment is created with the realm. Step 1.2 answers a WorkerGlobalScope from its owner's own answer;
