@@ -18025,8 +18025,8 @@ static char *abi_take(char **p, const char *what)
    tokenizer has a rule for per state, and newlines, which this line-oriented channel could not carry raw. So
    they cross base64'd, in the shape `wpt_runner.c`'s own channel already crosses a payload in
    (`windowproxy.post`'s record rides it base64), through quickjs's own codec rather than a second one grown
-   here. This is a TRANSPORT ENCODING and never a Fetch §5.3 "Body mixin" DECODE: `text()` is "run consume body
-   with this and UTF-8 decode", which is an algorithm over the bytes that DESTROYS the label HTML §8.1.4.2
+   here. This is a TRANSPORT ENCODING and never a Fetch §5.3 "Body mixin" DECODE: `text()` is "the result of running consume
+   body with this and UTF-8 decode", which is an algorithm over the bytes that DESTROYS the label HTML §8.1.4.2
    "Fetching scripts"'s classic-script decode exists to honour — and it is what the trusted zone was running
    before this byte side-channel existed. Nothing here reads a charset or applies one.
    THE NUL PAST THE LENGTH IS THE GUARD BYTE `qjs_init` ASSERTS ON — the length is what bounds the read and the
