@@ -6088,7 +6088,17 @@ static void tf_realm_install(JSContext *ctx, lxb_html_document_t *dom, const cha
        wrong door and the step member is the only part that was wanted. Nothing about the object changes. */
     JS_SetPropertyStr(ctx, g, "appendChild", idl_step_function(ctx, "appendChild", g_id_append_child));
     JS_SetPropertyStr(ctx, g, "lastChildMark", JS_NewCFunction(ctx, js_last_child_mark, "lastChildMark", 0));   /* DOM node read */
-    JS_SetPropertyStr(ctx, g, "state", concolic_new(ctx, "{state}", "{state}", JS_UNDEFINED));   /* injected/unknown app state */
+    /* ONE LITERAL FOR THE SOURCE NAME, because this file had TWO and they disagreed. The probe that asks
+       whether any predicate over this source forked composed its identity from `"state"` while the source
+       is minted as `"{state}"` — the braces are part of the NAME here, not punctuation a speller adds — so
+       the probe searched the fork census for a key the engine never writes and read its own silence as a
+       negative. Its clause then accused the engine of DECIDING the injected-state gate rather than forking
+       it, which §Solver-half forbids and which would mean the solver's central thesis was broken; the fork
+       census in fact names this source in tens of thousands of keys. Two literals 3,400 lines apart in one
+       file is what made that possible, so there is now one and the disagreement cannot recur. */
+#define FIXTURE_STATE_SRC "{state}"
+    JS_SetPropertyStr(ctx, g, "state",
+                      concolic_new(ctx, FIXTURE_STATE_SRC, FIXTURE_STATE_SRC, JS_UNDEFINED));   /* injected/unknown app state */
     /* AN UNKNOWN CARRYING A NUMERIC EXAMPLE, which is what §13.15.3 step 1.c's arm turns on. Its display form
        is a HOLE so endpoint.c mints a path parameter for it and aligns the computed address against the shape,
        which is how the example is readable at all: a query value is read off the SHAPE.
@@ -9524,7 +9534,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         CHECK(fa, "the fork census could not render — this row's whole claim is a function of that table, and "
                   "the question it answers (did §Boot's own gate fork) has no other statement anywhere in "
                   "this document");
-        sfield[0] = "state";
+        sfield[0] = FIXTURE_STATE_SRC;
         sid = concolic_ident_compose("s", sfield, 1);          /* concolic.c's concolic_new: a source read */
         mfield[0] = sid; mfield[1] = "admin";
         mid = sid ? concolic_ident_compose(".", mfield, 2) : NULL;  /* its concolic_exotic_get member read */
@@ -9552,7 +9562,11 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            front at the emission. So this needle is composed from the same two literals the key is —
            absent.c's ns_member_spell braces the src and concolic_exotic_get appends `.<field>`, which is
            `{state}.admin` — and a hit on it says the branch FORKED while recording no constraint. */
-        qsn = snprintf(qs, sizeof qs, "\"~{%s}.%s\"", sfield[0], mfield[1]);
+        /* THE BRACES ARE IN THE NAME AND ARE NOT ADDED HERE. This composed `~{%s}` around a bare `state`,
+           which produced the right site shape from the wrong literal and hid the identity defect above —
+           the site needle worked, so only the constraint-key needle was silent, and one working needle
+           beside one silent one reads as a census with nothing to say. */
+        qsn = snprintf(qs, sizeof qs, "\"~%s.%s\"", sfield[0], mfield[1]);
         DCHECK(qsn > 0 && (size_t)qsn < sizeof qs,
                "the quoted site shape did not fit its needle buffer — a truncated shape is a PREFIX match "
                "against a table holding the page's own bytes, so this clause would answer about whatever "
