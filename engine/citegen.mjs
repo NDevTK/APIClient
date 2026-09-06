@@ -635,6 +635,14 @@ const SPECS = [
   { key: "webcrypto", label: "Web Cryptography API Level 2", kind: "respec",
     base: "https://w3c.github.io/webcrypto/", edition: "maintained",
     anchors: ["web cryptography", "web cryptography api", "cryptography api", "webcrypto"] },
+  /* UI EVENTS, whose 35 citations stand in the event components and were counted and never checked. Its
+     numbering was verified against the sites before the row was written, because a row is a claim that this
+     document numbers what they cite: §3.2.1 "Interface UIEvent", §3.2.1.2 "UIEventInit", §3.3.1 "Interface
+     FocusEvent", §3.3.1.2 "FocusEventInit", §3.3.2 "Focus Event Order", §3.5.1 "Interface KeyboardEvent",
+     §6.1.1 and §6.1.2 the legacy initializers — every number this tree writes, at the subject it writes
+     beside it. Bikeshed-rendered: 129 `data-level` headings, a dt-updated, no `respecConfig`. */
+  { key: "uievents", label: "UI Events", kind: "bikeshed",
+    base: "https://w3c.github.io/uievents/", edition: "maintained", anchors: ["ui events", "uievents"] },
   { key: "hrtime", label: "High Resolution Time", kind: "bikeshed",
     base: "https://w3c.github.io/hr-time/", edition: "maintained", anchors: ["hr-time", "hrtime", "high resolution time"] },
   /* THE THREE STANDARDS THAT SIT ON TOP OF THE ROW ABOVE, and they are here for the reason that row's own
@@ -1548,6 +1556,18 @@ function regenW3cChapters(spec) {
  * before this line keeps the terms it was written with. */
 const SCOPED_SURFACE_DFN = new Set(["descriptor", "value", "attribute", "method", "dict-member",
                                     "enum-value", "const", "constructor", "argument", "element-attr"]);
+/* AND `data-noexport` IS THE SAME DECLARATION AGAIN, SAID BY THE STANDARD ABOUT ITS OWN WORD. Bikeshed marks
+ * a definition NOT-EXPORTED when it is the document's local sense of a phrase rather than the platform's name
+ * for a concept — a glossary gloss, a shorthand used in one section — and it marks the real ones `data-export`.
+ * Indexing a noexport dfn as a term makes THIS document the only definer of a phrase whose owner is somewhere
+ * else, which is the "aspect ratio" failure with a glossary in place of a descriptor.
+ * MEASURED, on the diff that indexed UI Events: its §12 Glossary defines `body element` as `data-noexport`,
+ * HTML's index does not hold that phrase at all, so UI Events became its ONLY definer and
+ * `core/css/css_presentational_hints.c:295` — which cites HTML §4.3.1 "The body element" — was accused
+ * against `uievents §4.3.1 "Modifier keys"`. One row, one false accusation, from a word the standard itself
+ * says it does not export. The exported neighbours in that same glossary (`initialize a UIEvent`, `key
+ * modifier state`, `default action`) are unaffected and are the terms a comment legitimately names. */
+const NOEXPORT = /\sdata-noexport\b/;
 
 function regenBikeshed(spec) {
   const body = curl(spec.base);
@@ -1597,7 +1617,7 @@ function regenBikeshed(spec) {
     const lt = attrOf(m[1], "data-lt");
     if (lt) for (const alt of lt.split("|")) spellings.push(normTerm(alt));
     let primary = null;
-    if (!SCOPED_SURFACE_DFN.has(attrOf(m[1], "data-dfn-type")))
+    if (!SCOPED_SURFACE_DFN.has(attrOf(m[1], "data-dfn-type")) && !NOEXPORT.test(m[1]))
       for (const t of spellings) { if (!keepTerm(t)) continue; addDef(defs, t, sec); if (!primary) primary = t; }
     /* THE STANDARD'S OWN DECLARATION, READ RATHER THAN GUESSED — see addOp. Only `abstract-op` earns a bare
      * name; `method`, `attribute`, `interface`, `constructor` and `dict-member` are vocabulary a correct
@@ -1660,7 +1680,7 @@ function regenRespec(spec) {
       if (v) for (const alt of decodeEntities(v).split("|")) spellings.push(normTerm(alt));
     }
     let primary = null;
-    if (!SCOPED_SURFACE_DFN.has(attrOf(m[1], "data-dfn-type")))
+    if (!SCOPED_SURFACE_DFN.has(attrOf(m[1], "data-dfn-type")) && !NOEXPORT.test(m[1]))
       for (const t of spellings) { if (!keepTerm(t)) continue; addDef(defs, t, sec); if (!primary) primary = t; }
     /* ReSpec stamps the same `data-dfn-type` bikeshed does, so the same declaration answers here — see addOp
        and SCOPED_SURFACE_DFN, which reads it for the term channel exactly as addOp reads it for the op one. */
@@ -1883,7 +1903,9 @@ const OTHER_SPECS = [
      unindexed standard's citations must not be audited as somebody else's — and it is retired rather than
      deleted because a reader who re-derives it will re-introduce it: the standard is INDEXED now, so the same
      rule that put these four on this list is what takes them off it. */
-  "svg", "mathml", "wasm", "uievents", "console", "performance",
+  /* `uievents` MOVED TO ITS OWN ROW, with `ui events`, for the reason the webcrypto note above gives: the
+     rule that lists a name here is the rule that takes it off once the standard is indexed. */
+  "svg", "mathml", "wasm", "console", "performance",
   "workers", "websockets", "rfc", "unicode", "utf", "trusted", "clipboard",
   "notifications", "geolocation", "geometry", "fullscreen", "pointerevents", "webaudio", "webrtc",
   "beacon", "referrer", "mixed", "cors", "cookies",
@@ -2027,7 +2049,7 @@ const OTHER_SPECS = [
      `web cryptography api`, `cryptography api`, `webcrypto` — are that row's anchors, and the longest-tail
      order still does the work it did here: the three-word spelling is asked before the two-word one, so the
      API form cannot be shadowed by the form without it, and neither can be read as the File API. */
-  "ui events", "trusted types", "tt",
+  "trusted types", "tt",
   "media queries", "mq4", "referrer policy", "uax14",
   /* AND THE STANDARDS THIS TREE NAMES THAT NO LIST HELD UNDER ANY SPELLING. Each is a document with a real
      numbering that this audit holds no text for, cited with its name in front of the number exactly as CLAUDE.md

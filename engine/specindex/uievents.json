@@ -1,0 +1,697 @@
+{
+ "spec": "UI Events",
+ "key": "uievents",
+ "base": "https://w3c.github.io/uievents/",
+ "specUpdated": "21 February 2026",
+ "fetched": "2026-09-06",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "ui-events-intro"
+  },
+  "2": {
+   "title": "Stylistic Conventions",
+   "page": "",
+   "id": "style-conventions"
+  },
+  "3": {
+   "title": "Basic Event Interfaces",
+   "page": "",
+   "id": "event-interfaces"
+  },
+  "4": {
+   "title": "Keyboard events and key values",
+   "page": "",
+   "id": "keys"
+  },
+  "5": {
+   "title": "External Algorithms",
+   "page": "",
+   "id": "external-algorithms"
+  },
+  "6": {
+   "title": "Legacy Event Initializers",
+   "page": "",
+   "id": "legacy-event-initializers"
+  },
+  "7": {
+   "title": "Legacy Key & Mouse Event Attributes",
+   "page": "",
+   "id": "legacy-key-attributes"
+  },
+  "8": {
+   "title": "Legacy Event Types",
+   "page": "",
+   "id": "legacy-event-types"
+  },
+  "9": {
+   "title": "Extending Events",
+   "page": "",
+   "id": "extending-events"
+  },
+  "10": {
+   "title": "Security Considerations",
+   "page": "",
+   "id": "security-considerations"
+  },
+  "11": {
+   "title": "Acknowledgements",
+   "page": "",
+   "id": "acknowledgements-contributors"
+  },
+  "12": {
+   "title": "Glossary",
+   "page": "",
+   "id": "glossary"
+  },
+  "1.1": {
+   "title": "Overview",
+   "page": "",
+   "id": "ui-events-overview"
+  },
+  "1.1.1": {
+   "title": "Mouse and Wheel Events",
+   "page": "",
+   "id": "previous-events"
+  },
+  "1.2": {
+   "title": "Conformance",
+   "page": "",
+   "id": "ui-events-conformance"
+  },
+  "1.2.1": {
+   "title": "Web browsers and other dynamic or interactive user agents",
+   "page": "",
+   "id": "conf-interactive-ua"
+  },
+  "1.2.2": {
+   "title": "Authoring tools",
+   "page": "",
+   "id": "conf-author-tools"
+  },
+  "1.2.3": {
+   "title": "Content authors and content",
+   "page": "",
+   "id": "conf-authors"
+  },
+  "1.2.4": {
+   "title": "Specifications and host languages",
+   "page": "",
+   "id": "conf-specs"
+  },
+  "3.1": {
+   "title": "List of Event Types",
+   "page": "",
+   "id": "event-types-list"
+  },
+  "3.2": {
+   "title": "User Interface Events",
+   "page": "",
+   "id": "events-uievents"
+  },
+  "3.2.1": {
+   "title": "Interface UIEvent",
+   "page": "",
+   "id": "interface-uievent"
+  },
+  "3.2.1.1": {
+   "title": "UIEvent",
+   "page": "",
+   "id": "idl-uievent"
+  },
+  "3.2.1.2": {
+   "title": "UIEventInit",
+   "page": "",
+   "id": "idl-uieventinit"
+  },
+  "3.2.2": {
+   "title": "UIEvent Algorithms",
+   "page": "",
+   "id": "uievent-algorithms"
+  },
+  "3.2.2.1": {
+   "title": "initialize a UIEvent",
+   "page": "",
+   "id": "initialize-a-uievent-id"
+  },
+  "3.2.3": {
+   "title": "UIEvent Types",
+   "page": "",
+   "id": "events-uievent-types"
+  },
+  "3.2.3.1": {
+   "title": "load",
+   "page": "",
+   "id": "event-type-load"
+  },
+  "3.2.3.2": {
+   "title": "unload",
+   "page": "",
+   "id": "event-type-unload"
+  },
+  "3.2.3.3": {
+   "title": "abort",
+   "page": "",
+   "id": "event-type-abort"
+  },
+  "3.2.3.4": {
+   "title": "error",
+   "page": "",
+   "id": "event-type-error"
+  },
+  "3.2.3.5": {
+   "title": "select",
+   "page": "",
+   "id": "event-type-select"
+  },
+  "3.3": {
+   "title": "Focus Events",
+   "page": "",
+   "id": "events-focusevent"
+  },
+  "3.3.1": {
+   "title": "Interface FocusEvent",
+   "page": "",
+   "id": "interface-focusevent"
+  },
+  "3.3.1.1": {
+   "title": "FocusEvent",
+   "page": "",
+   "id": "idl-focusevent"
+  },
+  "3.3.1.2": {
+   "title": "FocusEventInit",
+   "page": "",
+   "id": "idl-focuseventinit"
+  },
+  "3.3.2": {
+   "title": "Focus Event Order",
+   "page": "",
+   "id": "events-focusevent-event-order"
+  },
+  "3.3.3": {
+   "title": "Document Focus and Focus Context",
+   "page": "",
+   "id": "events-focusevent-doc-focus"
+  },
+  "3.3.4": {
+   "title": "Focus Event Types",
+   "page": "",
+   "id": "events-focus-types"
+  },
+  "3.3.4.1": {
+   "title": "blur",
+   "page": "",
+   "id": "event-type-blur"
+  },
+  "3.3.4.2": {
+   "title": "focus",
+   "page": "",
+   "id": "event-type-focus"
+  },
+  "3.3.4.3": {
+   "title": "focusin",
+   "page": "",
+   "id": "event-type-focusin"
+  },
+  "3.3.4.4": {
+   "title": "focusout",
+   "page": "",
+   "id": "event-type-focusout"
+  },
+  "3.4": {
+   "title": "Input Events",
+   "page": "",
+   "id": "events-inputevents"
+  },
+  "3.4.1": {
+   "title": "Interface InputEvent",
+   "page": "",
+   "id": "interface-inputevent"
+  },
+  "3.4.1.1": {
+   "title": "InputEvent",
+   "page": "",
+   "id": "idl-inputevent"
+  },
+  "3.4.1.2": {
+   "title": "InputEventInit",
+   "page": "",
+   "id": "idl-inputeventinit"
+  },
+  "3.4.2": {
+   "title": "Input Event Order",
+   "page": "",
+   "id": "events-inputevent-event-order"
+  },
+  "3.4.3": {
+   "title": "Input Event Types",
+   "page": "",
+   "id": "events-input-types"
+  },
+  "3.4.3.1": {
+   "title": "beforeinput",
+   "page": "",
+   "id": "event-type-beforeinput"
+  },
+  "3.4.3.2": {
+   "title": "input",
+   "page": "",
+   "id": "event-type-input"
+  },
+  "3.5": {
+   "title": "Keyboard Events",
+   "page": "",
+   "id": "events-keyboardevents"
+  },
+  "3.5.1": {
+   "title": "Interface KeyboardEvent",
+   "page": "",
+   "id": "interface-keyboardevent"
+  },
+  "3.5.1.1": {
+   "title": "KeyboardEvent",
+   "page": "",
+   "id": "idl-keyboardevent"
+  },
+  "3.5.1.2": {
+   "title": "KeyboardEventInit",
+   "page": "",
+   "id": "idl-keyboardeventinit"
+  },
+  "3.5.2": {
+   "title": "Keyboard Event Key Location",
+   "page": "",
+   "id": "events-keyboard-key-location"
+  },
+  "3.5.3": {
+   "title": "Event Modifier Initializers",
+   "page": "",
+   "id": "event-modifier-initializers"
+  },
+  "3.5.4": {
+   "title": "KeyboardEvent Algorithms",
+   "page": "",
+   "id": "keyboardevent-algorithms"
+  },
+  "3.5.4.1": {
+   "title": "Global State for KeyboardEvent",
+   "page": "",
+   "id": "keyboardevent-global-state"
+  },
+  "3.5.4.1.1": {
+   "title": "User Agent-Level State",
+   "page": "",
+   "id": "keyboardevent-global-ua"
+  },
+  "3.5.5": {
+   "title": "Keyboard Event Order",
+   "page": "",
+   "id": "events-keyboard-event-order"
+  },
+  "3.5.6": {
+   "title": "Keyboard Event Types",
+   "page": "",
+   "id": "events-keyboard-types"
+  },
+  "3.5.6.1": {
+   "title": "keydown",
+   "page": "",
+   "id": "event-type-keydown"
+  },
+  "3.5.6.2": {
+   "title": "keyup",
+   "page": "",
+   "id": "event-type-keyup"
+  },
+  "3.6": {
+   "title": "Composition Events",
+   "page": "",
+   "id": "events-compositionevents"
+  },
+  "3.6.1": {
+   "title": "Interface CompositionEvent",
+   "page": "",
+   "id": "interface-compositionevent"
+  },
+  "3.6.1.1": {
+   "title": "CompositionEvent",
+   "page": "",
+   "id": "idl-compositionevent"
+  },
+  "3.6.1.2": {
+   "title": "CompositionEventInit",
+   "page": "",
+   "id": "idl-compositioneventinit"
+  },
+  "3.6.2": {
+   "title": "Composition Event Order",
+   "page": "",
+   "id": "events-composition-order"
+  },
+  "3.6.3": {
+   "title": "Handwriting Recognition Systems",
+   "page": "",
+   "id": "events-composition-handwriting"
+  },
+  "3.6.4": {
+   "title": "Canceling Composition Events",
+   "page": "",
+   "id": "events-composition-canceling"
+  },
+  "3.6.5": {
+   "title": "Key Events During Composition",
+   "page": "",
+   "id": "events-composition-key-events"
+  },
+  "3.6.6": {
+   "title": "Input Events During Composition",
+   "page": "",
+   "id": "events-composition-input-events"
+  },
+  "3.6.7": {
+   "title": "Composition Event Types",
+   "page": "",
+   "id": "events-composition-types"
+  },
+  "3.6.7.1": {
+   "title": "compositionstart",
+   "page": "",
+   "id": "event-type-compositionstart"
+  },
+  "3.6.7.2": {
+   "title": "compositionupdate",
+   "page": "",
+   "id": "event-type-compositionupdate"
+  },
+  "3.6.7.3": {
+   "title": "compositionend",
+   "page": "",
+   "id": "event-type-compositionend"
+  },
+  "4.1": {
+   "title": "Keyboard Input",
+   "page": "",
+   "id": "keyboard-input"
+  },
+  "4.1.1": {
+   "title": "Key Legends",
+   "page": "",
+   "id": "key-legends"
+  },
+  "4.2": {
+   "title": "Key codes",
+   "page": "",
+   "id": "keys-codevalues"
+  },
+  "4.2.1": {
+   "title": "Motivation for the code Attribute",
+   "page": "",
+   "id": "code-motivation"
+  },
+  "4.2.2": {
+   "title": "The Relationship Between key and code",
+   "page": "",
+   "id": "relationship-between-key-code"
+  },
+  "4.2.3": {
+   "title": "code Examples",
+   "page": "",
+   "id": "code-examples"
+  },
+  "4.2.4": {
+   "title": "code and Virtual Keyboards",
+   "page": "",
+   "id": "code-virtual-keyboards"
+  },
+  "4.3": {
+   "title": "Keyboard Event key Values",
+   "page": "",
+   "id": "keys-keyvalues"
+  },
+  "4.3.1": {
+   "title": "Modifier keys",
+   "page": "",
+   "id": "keys-modifiers"
+  },
+  "4.3.2": {
+   "title": "Dead keys",
+   "page": "",
+   "id": "keys-dead"
+  },
+  "4.3.3": {
+   "title": "Input Method Editors",
+   "page": "",
+   "id": "keys-IME"
+  },
+  "4.3.3.1": {
+   "title": "Input Method Editor mode keys",
+   "page": "",
+   "id": "keys-IME-keys"
+  },
+  "4.3.4": {
+   "title": "Default actions and cancelable keyboard events",
+   "page": "",
+   "id": "keys-cancelable-keys"
+  },
+  "5.1": {
+   "title": "Core DOM Algorithms",
+   "page": "",
+   "id": "external-dom-algorithms"
+  },
+  "5.2": {
+   "title": "PointerLock Algorithms",
+   "page": "",
+   "id": "external-pointerlock-algorithms"
+  },
+  "5.2.1": {
+   "title": "Global State for PointerLock",
+   "page": "",
+   "id": "pointer-lock-global-state"
+  },
+  "5.2.1.1": {
+   "title": "Window-Level State",
+   "page": "",
+   "id": "pointer-lock-global-window"
+  },
+  "5.2.2": {
+   "title": "initialize PointerLock attributes for MouseEvent",
+   "page": "",
+   "id": "initialize-pointerlock-attributes-for-mouseevent-id"
+  },
+  "5.2.3": {
+   "title": "set PointerLock attributes for mousemove",
+   "page": "",
+   "id": "set-pointerlock-attributes-for-mousemove-id"
+  },
+  "6.1": {
+   "title": "Legacy Event Initializer Interfaces",
+   "page": "",
+   "id": "legacy-event-initializer-interfaces"
+  },
+  "6.1.1": {
+   "title": "Initializers for interface UIEvent",
+   "page": "",
+   "id": "idl-interface-UIEvent-initializers"
+  },
+  "6.1.2": {
+   "title": "Initializers for interface KeyboardEvent",
+   "page": "",
+   "id": "idl-interface-KeyboardEvent-initializers"
+  },
+  "6.1.3": {
+   "title": "Initializers for interface CompositionEvent",
+   "page": "",
+   "id": "idl-interface-CompositionEvent-initializers"
+  },
+  "7.1": {
+   "title": "Legacy UIEvent supplemental interface",
+   "page": "",
+   "id": "legacy-UIEvent"
+  },
+  "7.1.1": {
+   "title": "Interface UIEvent (supplemental)",
+   "page": "",
+   "id": "legacy-interface-UIEvent"
+  },
+  "7.1.2": {
+   "title": "Interface UIEventInit (supplemental)",
+   "page": "",
+   "id": "legacy-dictionary-UIEventInit"
+  },
+  "7.2": {
+   "title": "Legacy KeyboardEvent supplemental interface",
+   "page": "",
+   "id": "legacy-KeyboardEvent"
+  },
+  "7.2.1": {
+   "title": "Interface KeyboardEvent (supplemental)",
+   "page": "",
+   "id": "legacy-interface-KeyboardEvent"
+  },
+  "7.2.2": {
+   "title": "Interface KeyboardEventInit (supplemental)",
+   "page": "",
+   "id": "legacy-dictionary-KeyboardEventInit"
+  },
+  "7.3": {
+   "title": "Legacy key models",
+   "page": "",
+   "id": "legacy-key-models"
+  },
+  "7.3.1": {
+   "title": "How to determine keyCode for keydown and keyup events",
+   "page": "",
+   "id": "determine-keydown-keyup-keyCode"
+  },
+  "7.3.2": {
+   "title": "How to determine keyCode for keypress events",
+   "page": "",
+   "id": "determine-keypress-keyCode"
+  },
+  "7.3.3": {
+   "title": "Fixed virtual key codes",
+   "page": "",
+   "id": "fixed-virtual-key-codes"
+  },
+  "7.3.4": {
+   "title": "Optionally fixed virtual key codes",
+   "page": "",
+   "id": "optionally-fixed-virtual-key-codes"
+  },
+  "8.1": {
+   "title": "Legacy UIEvent events",
+   "page": "",
+   "id": "legacy-uievent-events"
+  },
+  "8.1.1": {
+   "title": "Legacy UIEvent event types",
+   "page": "",
+   "id": "legacy-uievent-event-types"
+  },
+  "8.1.1.1": {
+   "title": "DOMActivate",
+   "page": "",
+   "id": "event-type-DOMActivate"
+  },
+  "8.1.2": {
+   "title": "Activation event order",
+   "page": "",
+   "id": "legacy-uievent-event-order"
+  },
+  "8.2": {
+   "title": "Legacy FocusEvent events",
+   "page": "",
+   "id": "legacy-focusevent-events"
+  },
+  "8.2.1": {
+   "title": "Legacy FocusEvent event types",
+   "page": "",
+   "id": "legacy-focusevent-event-types"
+  },
+  "8.2.1.1": {
+   "title": "DOMFocusIn",
+   "page": "",
+   "id": "event-type-DOMFocusIn"
+  },
+  "8.2.1.2": {
+   "title": "DOMFocusOut",
+   "page": "",
+   "id": "event-type-DOMFocusOut"
+  },
+  "8.2.2": {
+   "title": "Legacy FocusEvent event order",
+   "page": "",
+   "id": "legacy-focusevent-event-order"
+  },
+  "8.3": {
+   "title": "Legacy KeyboardEvent events",
+   "page": "",
+   "id": "legacy-keyboardevent-events"
+  },
+  "8.3.1": {
+   "title": "Legacy KeyboardEvent event types",
+   "page": "",
+   "id": "legacy-keyboardevent-event-types"
+  },
+  "8.3.1.1": {
+   "title": "keypress",
+   "page": "",
+   "id": "event-type-keypress"
+  },
+  "8.3.2": {
+   "title": "keypress event order",
+   "page": "",
+   "id": "keypress-event-order"
+  },
+  "8.4": {
+   "title": "Legacy TextEvent events",
+   "page": "",
+   "id": "legacy-textevent-events"
+  },
+  "9.1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "extending-events-intro"
+  },
+  "9.2": {
+   "title": "Custom Events",
+   "page": "",
+   "id": "extending-events-Custom_Events"
+  },
+  "9.3": {
+   "title": "Implementation-Specific Extensions",
+   "page": "",
+   "id": "extending-events-Impl_Extensions"
+  },
+  "9.3.1": {
+   "title": "Known Implementation-Specific Prefixes",
+   "page": "",
+   "id": "extending-events-prefixes"
+  }
+ },
+ "dfns": {
+  "default action": [
+   "12"
+  ],
+  "host language": [
+   "12"
+  ],
+  "initialize a uievent": [
+   "3.2.2.1"
+  ],
+  "initialize pointerlock attributes for mouseevent": [
+   "5.2.2"
+  ],
+  "key modifier state": [
+   "3.5.4.1.1"
+  ],
+  "set pointerlock attributes for mousemove": [
+   "5.2.3"
+  ],
+  "un initialized value": [
+   "12"
+  ]
+ },
+ "ops": {},
+ "uses": {
+  "default action": {
+   "3.5.5": 3,
+   "3.6.4": 2,
+   "4.3.4": 5,
+   "8.1.1.1": 2,
+   "8.1.2": 5
+  },
+  "host language": {
+   "1.2.4": 3,
+   "3.2.3.5": 2,
+   "4.3": 2
+  },
+  "un initialized value": {
+   "3.2.1.1": 2,
+   "3.4.1.1": 3,
+   "3.5.1.1": 9
+  }
+ }
+}
