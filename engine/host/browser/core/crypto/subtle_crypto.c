@@ -1073,8 +1073,13 @@ static void ik_visit(JSContext *ctx, void *st, JSStepVisit *v)
 IDL_ENUM_VALUES(IK_KEY_USAGES, "encrypt", "decrypt", "sign", "verify", "deriveKey", "deriveBits", "wrapKey",
                 "unwrapKey");
 
-/* §9 Terminology's "normalized value of a usages list", which is "the usage intersection of usages and the
- * list of recognized key usage values" — a sequence containing each recognized value that appears in both, in
+/* Web Cryptography API §9 Terminology's "normalized value of a usages list usages", whose result "shall be
+ * the usage intersection of usages and a sequence containing all recognized key usage values" — and §9's
+ * usage intersection of two sequences is "a sequence containing each recognized key usage value that appears
+ * in both a and b, in the order listed in the list of recognized key usage values". The second half used to
+ * stand here as "the list of recognized key usage values", which is the name of the ORDERING §9 intersects
+ * in, not the sequence it intersects WITH — one word apart and a different operand. In this engine that is
+ * a mask over each recognized value that appears in both, in
  * the order that list gives them. As a mask, that is exactly a set of bits, which is why §13.3's [[usages]] is
  * one (crypto_key.h states the argument in full).
  *

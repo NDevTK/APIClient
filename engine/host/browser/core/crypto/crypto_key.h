@@ -21,8 +21,9 @@
  * whether an algorithm's step 2 throws an InvalidAccessError.
  *
  * THE FOUR MEMBERS ARE TWO DIFFERENT KINDS OF ANSWER, AND §13.4 SAYS SO IN ITS OWN WORDS. `type` and
- * `extractable` "Reflect" their internal slots — the value IS the slot. `algorithm` and `usages` "Return the
- * cached ECMAScript object associated with" theirs, which is §9 Terminology's operation over a SECOND slot
+ * `extractable` "Reflect" their internal slots — the value IS the slot. `algorithm` and `usages` each
+ * "returns the cached ECMAScript object associated with" its own internal slot, which is §9 Terminology's
+ * operation over a SECOND slot
  * ([[algorithm_cached]], [[usages_cached]]), and the difference is reachable from three lines of script: the
  * object a page gets back is the SAME object every read, and writing to it cannot reach the slot the
  * algorithms of §20-§34 consult. Modelling the pair as one value answers `key.algorithm === key.algorithm`

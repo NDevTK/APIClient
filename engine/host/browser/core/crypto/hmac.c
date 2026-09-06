@@ -19,7 +19,9 @@
  *   Step 8  Append the result from step 6 to step 7: (K0 ^ opad) || H((K0 ^ ipad) || text).
  *   Step 9  Apply H to the result from step 8: H((K0 ^ opad )|| H((K0 ^ ipad) || text)).
  *
- * §2.3 HMAC Parameters and Symbols supplies the four constants those steps are written in, also verbatim:
+ * FIPS 198-1 §2.3 HMAC Parameters and Symbols supplies the four constants those steps are written in, also
+ * verbatim — the standard is repeated here rather than inherited from the banner above, because nothing
+ * carries a document across a paragraph and a bare number placed nothing at all:
  *   "B  Block size (in bytes) of the input to the Approved hash function."
  *   "ipad  Inner pad; the byte x'36' repeated B times."
  *   "L  Block size (in bytes) of the output of the Approved hash function."
@@ -277,8 +279,16 @@ JSValue hmac_import_key(JSContext *ctx, const char *format, JSValueConst key_dat
     DCHECK(bytes != NULL || byte_len == 0,
            "§14.3.9 step 4's own copy of the key data is detached — nothing but this algorithm holds it, and "
            "the whole reason that step copies is that the page cannot reach these bytes");
-    /* STEP 3: "If usages contains an entry which is not \"sign\" or \"verify\", then throw a SyntaxError."
-       §9's normalized value is a mask, so "contains an entry which is not" is a bit outside the pair. */
+    /* §31.6.4 Import Key STEP 3: "If usages contains an entry which is not \"sign\" or \"verify\", then throw
+       a SyntaxError." §9's normalized value is a mask, so the standard's contains-an-entry-which-is-not test
+       is a bit outside the pair — that gloss is this file's own and is not in quotation marks, because a
+       five-word fragment of the sentence above it would be attributed to whichever citation stands nearest
+       and the nearest one here is §9. THE SECTION IS NAMED BECAUSE THIS SENTENCE IS NOT UNIQUE: §31.6.3 Generate Key writes it word
+       for word, and so do the Import Key steps of algorithms that are not HMAC at all — so a bare citation
+       here resolves against whichever section an auditor reaches first, which is a correct quotation of a
+       section that does not govern this function. This one is `hmac_import_key`, and §31.6.4's own step order
+       is what makes the numbering in this file check out: step 1 is the zero-length member, step 2 takes the
+       key data, step 3 is this. */
     if (usages & ~(uint32_t)(CRYPTO_KEY_USAGE_SIGN | CRYPTO_KEY_USAGE_VERIFY))
         return JS_ThrowDOMException(ctx, "SyntaxError", "%s",
                                     "an HMAC key may only be used to sign or to verify");
