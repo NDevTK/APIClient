@@ -71,7 +71,7 @@ static JSValue js_win_closed(JSContext *ctx, JSValueConst this_val, int magic)
     return JS_NewBool(ctx, window_proxy_closed(ctx, nav));
 }
 
-/* HTML §8.1.7.1's WindowOrWorkerGlobalScope: `readonly attribute boolean isSecureContext`. "The
+/* HTML §8.2 "The WindowOrWorkerGlobalScope mixin": `readonly attribute boolean isSecureContext`. "The
    isSecureContext getter steps are to return true if this's relevant settings object is a secure context, or
    false otherwise" — §8.1.3.5's algorithm, which secure_context.c owns, over THIS realm's environment. A C
    member runs in the realm that DEFINED it, so `ctx` is this document's and an `http` iframe of an `https`
@@ -96,9 +96,10 @@ static JSValue js_win_is_secure_context(JSContext *ctx, JSValueConst this_val, i
        navigable's ACTIVE DOCUMENT, which is the same realm-of-a-navigable edge §7.2.2.2's `length` wants one
        member down. */
     DCHECK(JS_VALUE_GET_PTR(nav) == JS_VALUE_GET_PTR(document_window_proxy(ctx)),
-           "§8.1.7.1's isSecureContext was read with ANOTHER navigable as its receiver — §8.1.3.5 answers for "
-           "THIS's relevant settings object and secure_context_is answers for a realm, so build the edge from "
-           "a navigable to its active document's realm and ask that one");
+           "HTML §8.2 The WindowOrWorkerGlobalScope mixin's isSecureContext was read with ANOTHER navigable "
+           "as its receiver — §8.1.3.5 answers for THIS's relevant settings object and secure_context_is "
+           "answers for a realm, so build the edge from a navigable to its active document's realm and ask "
+           "that one");
     return JS_NewBool(ctx, secure_context_is(ctx));
 }
 
@@ -119,12 +120,12 @@ static JSValue js_win_close(JSContext *ctx, JSValueConst this_val, int argc, JSV
     return JS_UNDEFINED;
 }
 
-/* HTML §7.2.2.1 "Opening and closing windows"' `stop()`, WHICH HAS REAL STEPS AND IS NOT §6.6.6's NO-EFFECT.
- * The standard states two: "If this's navigable is null, then return. Stop loading this's navigable." Step 1 is
- * written below because this engine can answer it; step 2 is the capability that does not exist, and it now
- * says so at the site instead of being served by `blur`'s body — where a page calling `window.stop()` got the
- * exact bytes the spec prescribes for a member with no steps at all, and nothing anywhere could tell the two
- * apart.
+/* HTML §7.2.2.1 "Opening and closing windows"' `stop()`, WHICH HAS REAL STEPS AND IS NOT HTML §6.6.6 "Focus
+ * management APIs"' NO-EFFECT. HTML §7.2.2.1 states two: "If this's navigable is null, then return. Stop
+ * loading this's navigable." Step 1 is written below because this engine can answer it; step 2 is the
+ * capability that does not exist, and it now says so at the site instead of being served by `blur`'s body —
+ * where a page calling `window.stop()` got the exact bytes the spec prescribes for a member with no steps at
+ * all, and nothing anywhere could tell the two apart.
  *
  * WHAT STEP 2 IS. §7.5.11 "Aborting a document load" defines "stop loading a navigable": (1) let document be
  * navigable's active document; (2) if document's unload counter is 0 AND navigable's ongoing navigation is a
@@ -141,8 +142,9 @@ static JSValue js_win_close(JSContext *ctx, JSValueConst this_val, int argc, JSV
  * the member cannot ask its question, let alone answer it. THAT DIFF ALREADY HAS TWO OTHER CALLERS WAITING AND
  * MUST DELETE ALL THREE SITES AT ONCE: core/frame/session_history.c's §7.4.6.2 step 5.1 is the WRITER (its
  * comment declines to write a field with no reader and names this body as the reason), and
- * core/html/document_open.c's §8.4.1 step 8 is the second READER ("if document's node navigable's ongoing
- * navigation is a navigation ID, then stop loading document's node navigable"). Step 3's own two effects need
+ * core/html/document_open.c's HTML §8.4.1 "Opening the input stream" step 8 is the second READER ("If
+ * document's node navigable is non-null and document's node navigable's ongoing navigation is a navigation
+ * ID, then stop loading document's node navigable"). Step 3's own two effects need
  * state this engine does not keep either — core/frame/document_lifecycle.c argues there is no `salvageable`
  * field because every reader of it is on a path where it is already false, and core/html/document_open.c's step
  * 7 records that there is no mid-parse state to abort — so the abort arrives with the parse that outlives its
@@ -210,8 +212,8 @@ static JSValue js_win_length(JSContext *ctx, JSValueConst this_val, int magic)
    If container is null, then return null. If container's node document's origin is not same origin-domain with
    the current settings object's origin, then return null. Return container."
    IT WAS A FIXED `JS_NULL` INSTALLED ON EVERY REALM, which answered the top-level case correctly and every
-   child navigable WRONGLY, as a plain data property, with a comment calling null "the real answer for what this
-   is". Then it was a DFAIL naming the edge to build. The edge is built — §7.3.1.3's container, recorded by
+   child navigable WRONGLY, as a plain data property, with a comment calling null `the real answer for what
+   this is`. Then it was a DFAIL naming the edge to build. The edge is built — §7.3.1.3's container, recorded by
    create-a-new-child-navigable and confirmed against the element's own content navigable
    (window_proxy_container) — so the four steps are four lines.
    STEP 5 IS SAME ORIGIN-DOMAIN AND IT CAN FAIL INSIDE ONE INSTANCE, which is why it is asked rather than argued
@@ -340,8 +342,9 @@ static JSValue js_win_set_opener(JSContext *ctx, JSValueConst this_val, JSValueC
 /* §7.2.2.1's `name` — THE NAVIGABLE'S, which is the same attribute `w.name` reads through the WindowProxy and is
    answered from the same record. It was a second source here: a source-only concolic with no example, so
    `open(url, "chan42")` gave "chan42" to the opener and an example-free unknown to the popup's own script,
-   which is the popup unable to learn the name it was created with. §7.2.2.1 says "return this's navigable's
-   target name"; window_proxy_name_value is where that is computed, including whether it is known at all. */
+   which is the popup unable to learn the name it was created with. HTML §7.2.2.1 says "return this's
+   navigable's target name"; window_proxy_name_value is where that is computed, including whether it is known
+   at all. */
 static JSValue js_win_get_name(JSContext *ctx, JSValueConst this_val, int magic)
 {
     JSValueConst nav = window_proxy_this_navigable(ctx, this_val);
@@ -509,8 +512,8 @@ static JSRuntime *g_window_rt;
    one the shadow-including ancestor test cannot answer for. Asking it as "is it not a node" would be an
    inference about who else can appear in a path rather than a fact about this object, and the class is what
    makes it a fact: HTML's global IS the Window, and window_install gives the global exactly this class.
-   IT OPENED `g_window_class != 0 &&`, WHICH IS TWO QUESTIONS SHARING ONE ANSWER — "this component is not
-   declared" and "this object is not a Window" both came back `false`. That was harmless only while the id was
+   IT OPENED `g_window_class != 0 &&`, WHICH IS TWO QUESTIONS SHARING ONE ANSWER — `this component is not
+   declared` and `this object is not a Window` both came back `false`. That was harmless only while the id was
    carried past the release; now that window_free gives it back (core/agent_state.h), the folded predicate
    would report EVERY LIVE Window as something else at every branch site the moment the release column ran.
    The two are separated: the declaration is asserted, the brand is answered. Every call site is a page-visible
@@ -791,13 +794,14 @@ static int win_named_get_own(JSContext *ctx, JSPropertyDescriptor *desc, JSValue
     return 1;
 }
 
-/* WEB IDL §3.7.4.5 [[PreventExtensions]] — the NAMED PROPERTIES OBJECT's, which is a different section from the
-   §3.9.5 every legacy platform object obeys and says the same thing: "When the [[PreventExtensions]] internal
-   method of a named properties object is called, the following steps are taken: Return false."
-   THIS OBJECT IS THAT ONE. §3.7.4 defines it as existing "for every interface declared with the [Global]
-   extended attribute that supports named properties", which is Window, and §3.7.4's construction sets exactly
-   five overrides — [[GetOwnProperty]], [[DefineOwnProperty]], [[Delete]], [[SetPrototypeOf]] and
-   [[PreventExtensions]] — of which this class now carries two. It is not the Window and it is not a legacy
+/* WEB IDL §3.7.4.5 [[PreventExtensions]] — the NAMED PROPERTIES OBJECT's, whose steps are "When the
+   [[PreventExtensions]] internal method of a named properties object is called, the following steps are taken:
+   Return false." It is a DIFFERENT section from Web IDL §3.9.5 [[PreventExtensions]], which states the
+   identical refusal for a legacy platform object and is the one every legacy platform object obeys.
+   THIS OBJECT IS THAT ONE. Web IDL §3.7.4 "Named properties object" defines it as existing "for every
+   interface declared with the [Global] extended attribute that supports named properties", which is Window,
+   and §3.7.4's construction sets exactly five overrides — [[GetOwnProperty]], [[DefineOwnProperty]],
+   [[Delete]], [[SetPrototypeOf]] and [[PreventExtensions]] — of which this class now carries two. It is not the Window and it is not a legacy
    platform object: it is the link between Window.prototype and EventTarget.prototype window_install builds,
    and a page
    reaches it with one `Object.getPrototypeOf(Window.prototype)`. Without this hook that one expression handed
@@ -952,8 +956,8 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
        is one link up the chain, and window-properties.https.html reads exactly that for every attribute and
        every method Window has.
        The comment that stood here said the opposite — that [LegacyUnforgeable] is what puts a member on the
-       global and that `frames`, `parent` and `opener` therefore "are declared on the prototype like every
-       other member". [LegacyUnforgeable] decides the ATTRIBUTES (non-configurable, so a page cannot shadow or
+       global and that `frames`, `parent` and `opener` therefore `are declared on the prototype like every
+       other member`. [LegacyUnforgeable] decides the ATTRIBUTES (non-configurable, so a page cannot shadow or
        delete), never the LOCATION; on a [Global] interface there is no other location. */
     /* §3.7.6 makes it an ACCESSOR — every attribute is one, and [LegacyUnforgeable] decides only that it is
        not configurable. It was a data property, which is the right VALUE behind the wrong kind of property:
@@ -978,8 +982,8 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
     idl_install_replaceable_value(ctx, g, "frames", JS_DupValue(ctx, global));   /* [Replaceable] */
     /* §7.2.2.4's `parent` and `opener` ARE THE NAVIGABLE'S, so they are read from this realm's own WindowProxy
        rather than answered here. They were two FIXED values behind two comments explaining why an embedder
-       could not exist — "no embedder is reachable from this instance" and "the document was navigated to, not
-       opened by a script in another navigable" — and both were true exactly while one instance was one
+       could not exist — `no embedder is reachable from this instance` and `the document was navigated to, not
+       opened by a script in another navigable` — and both were true exactly while one instance was one
        document. A §7.4 child realm in this agent HAS a creator, and a popup whose `opener` is null cannot post
        back to the page that opened it, which is the whole of what a popup is for. */
     idl_install_replaceable(ctx, g, "parent", js_win_parent, 0);   /* [Replaceable] readonly */
@@ -989,9 +993,9 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
     idl_install_accessor(ctx, g, "opener", js_win_opener, 0, g_id_opener_set);
     /* §7.2.2.5's six user-interface bars. */
     bar_prop_install(ctx, g);
-    /* §7.2.2.5's `status`, and its BASELINE record — "when the Window object is created, the attribute must be
-       set to the empty string" is this line, and it runs with the realm rather than on first touch so the
-       empty string belongs to the baseline every flow forks from instead of to whichever flow read first. */
+    /* HTML §7.2.2.5's `status`, and its BASELINE record — "when the Window object is created, the attribute
+       must be set to the empty string" is this line, and it runs with the realm rather than on first touch so
+       the empty string belongs to the baseline every flow forks from instead of to whichever flow read first. */
     {
         JSValue rec = JS_NewObjectProto(ctx, JS_NULL);
         CHECK(!JS_IsException(rec), "this realm's §7.2.2.5 status record could not be allocated");
@@ -1033,23 +1037,24 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
         url_record_free(&rec);
     }
 
-    /* HTML §8.1.7.1's other WindowOrWorkerGlobalScope answer about this environment, beside `origin` because
-       the two are the pair a page reads together — §8.1.7.1's own note tells developers to prefer `self.origin`
-       over `location.origin` for exactly the reason this one exists: they are facts about the ENVIRONMENT and
-       not about whatever URL the Document happens to be showing. */
+    /* HTML §8.2 The WindowOrWorkerGlobalScope mixin's other answer about this environment, beside `origin`
+       because the two are the pair a page reads together — §8.2's own note tells developers to prefer
+       `self.origin` over `location.origin` for exactly the reason this one exists: they are facts about the
+       ENVIRONMENT and not about whatever URL the Document happens to be showing. */
     idl_install_accessor(ctx, g, "isSecureContext", js_win_is_secure_context, 0, -1);
-    /* §7.1.2's `originAgentCluster` and §8.1.7.1's `crossOriginIsolated` — two answers about THIS AGENT'S
+    /* §7.1.2's `originAgentCluster` and §8.2's `crossOriginIsolated` — two answers about THIS AGENT'S
        CLUSTER, installed by the component that computes it (core/frame/agent_cluster.c) rather than written out
        here as two booleans, because §7.1.1.2's `document.domain` setter and HR-TIME §4's clock resolution read
        the same §7.1.4 mode, and one fact answered from four places is four places for it to drift. */
     agent_cluster_install(ctx, g);
 
     idl_install_accessor(ctx, g, "name", js_win_get_name, 0, g_id_name_set);
-    /* HTML §8.1.7.2: Window includes GlobalEventHandlers AND WindowEventHandlers, so `window.onload`,
-       `onerror`, `onmessage` and the rest are THIS interface's members and belong to this install — the same
-       reason §2.7's interface object is installed above. They were a separate line in each host's per-document
-       list, which is how the WPT runner came to have none of them: every unqualified `onload = f` in the
-       corpus wrote a plain own property that nothing ever fired. A member of Window is installed by Window. */
+    /* HTML §7.2.2 The Window object: its IDL block ends `Window includes GlobalEventHandlers; Window
+       includes WindowEventHandlers;`, so `window.onload`, `onerror`, `onmessage` and the rest are THIS
+       interface's members and belong to this install — the same reason DOM §2.7 Interface EventTarget's
+       members are installed above. They were a separate line in each host's per-document list, which is how
+       the WPT runner came to have none of them: every unqualified `onload = f` in the corpus wrote a plain own
+       property that nothing ever fired. A member of Window is installed by Window. */
     event_target_install_handlers(ctx, g, EH_GLOBAL | EH_WINDOW);
     idl_members_excluded(ctx, g, "Window", TOUCH_EXCLUDED,
                          (int)(sizeof(TOUCH_EXCLUDED) / sizeof(TOUCH_EXCLUDED[0])),
