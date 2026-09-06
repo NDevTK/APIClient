@@ -461,14 +461,14 @@ static const IdlDictMember REQUEST_INIT[] = {
        (it refuses a private-network target from a public page, reinstating the browser's own answer that the
        extension's host permissions would otherwise bypass). A second copy of that decision inside the engine
        is the layering violation, so the engine converts §3.2.18 and stops.
-       NAMED RESIDUAL: the step LOCAL NETWORK ACCESS §3.1.2 Fetch API appends to §5.4 — it opens "If
+       NAMED RESIDUAL: the step appended to Fetch §5.4 by LOCAL NETWORK ACCESS §3.1.2 Fetch API — it opens "If
        init["targetAddressSpace"] exists, then switch on init["targetAddressSpace"]" and its two arms are
        `public`, "Do nothing", and `local`, "Set request's targetAddressSpace to local" (the enumeration's
        third value, `loopback`, has no arm at all in that draft) — stores nothing here.
        AND THE ATTRIBUTE THE SAME PARTIAL DECLARES IS A DIFFERENT ROW, ABSENT ON PURPOSE, AND THE ENGINE NOW
        SAYS SO WHERE AN INSTRUMENT CAN READ IT — `idl_members_excluded` at this file's prototype build. This
        paragraph said the gap audit REPORTS it, and it did, as one of the four hundred-odd members whose verdict
-       line instructs a reader to "implement the member in its real component". For this member that instruction
+       line instructs a reader to `implement the member in its real component`. For this member that instruction
        is SPEC-WRONG, and a wrong instruction in an instrument every lane reads is the stale-DFAIL failure with
        nothing to grep: a decision reasoned out in prose is, to the auditor, indistinguishable from a member
        nobody has looked at. `partial interface Request { readonly attribute IPAddressSpace
@@ -589,8 +589,8 @@ static bool req_init_is_empty(JSContext *ctx, JSValueConst init)
    `dflt` IS THE VALUE STEP 12 CARRIED FORWARD, never a constant the call site picked: §5.4 sets a request's
    mode / credentials mode / cache mode / redirect mode / integrity metadata from the INIT MEMBER ONLY WHERE IT
    EXISTS, and from the input request otherwise. A `?:` PAST A FAILED CONVERSION IS GONE with it — the read
-   could only fail on OOM, and answering that with the default turned "this engine could not allocate" into
-   "the page asked for same-origin credentials", which is a plausible datum where a crash belonged. */
+   could only fail on OOM, and answering that with the default turned `this engine could not allocate` into
+   `the page asked for same-origin credentials`, which is a plausible datum where a crash belonged. */
 static char *init_str(JSContext *ctx, JSValueConst init, const char *name, const char *dflt)
 {
     JSValue v = idl_dict_get(ctx, init, name);
@@ -620,8 +620,8 @@ static char *init_str(JSContext *ctx, JSValueConst init, const char *name, const
      * record field that can BE the unknown. See that step's block below.
      *
      * A `?:` PAST THIS IS THE ONE ANSWER THAT IS NEVER RIGHT, for the reason the `dflt` paragraph above
-     * already gives about OOM: a default here turns "the page asked for something this engine cannot state"
-     * into "the page asked for same-origin credentials", which is a plausible datum where a crash belongs. */
+     * already gives about OOM: a default here turns `the page asked for something this engine cannot state`
+     * into `the page asked for same-origin credentials`, which is a plausible datum where a crash belongs. */
     if (concolic_is(v)) {
         dcheck_init_member_is_not_enum(name);
         DFAILF("Fetch §5.4 new Request(input, init) applied the RequestInit member `%s`, and its value is "
@@ -698,7 +698,7 @@ int request_init_apply(JSContext *ctx, JSValueConst init, const RequestRecord *f
        clauses are the reload/history-navigation flags and the origin, which this engine's request record does
        not hold, and the "navigate" mode it rewrites is asserted unreachable below.
        EVERY DEFAULT BELOW IS STEP 12'S CARRY-FORWARD, and the bare constant is what a STRING input starts
-       from. §5.4 spells each of these "If init[member] exists, then set request's <field> to it", over a
+       from. §5.4 spells each of these `If init[member] exists, then set request's <field> to it`, over a
        request that already holds the input's value — so a constant in the `dflt` position is a statement that
        the page asked for it, and for a Request input that statement is false. */
     /* EVERY init_str BELOW IS CHECKED AT ITS OWN STEP, AND THE ANSWER IT IS CHECKED FOR IS ITS REFUSAL AND
@@ -883,8 +883,8 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
 
         /* §5.4 step 5: a STRING input is parsed against the base URL, and a failure is a TypeError. A REQUEST
            input contributes its URL already parsed. THE TWO ARMS DIFFER HERE AND AT EVERY MEMBER BELOW, which
-           is the correction this comment used to be the whole of: it said "which is why the two arms differ
-           only here", and step 12 lists thirteen properties a Request input contributes — method, header
+           is the correction this comment used to be the whole of: it said `which is why the two arms differ
+           only here`, and step 12 lists thirteen properties a Request input contributes — method, header
            list, referrer, referrer policy, mode, CREDENTIALS MODE, cache mode, redirect mode, integrity
            metadata and keepalive among them. Taking only the URL meant `new Request(r)` — the request-wrapping
            idiom every fetch interceptor is written in — answered POST as GET, `include` as `same-origin` and
@@ -911,8 +911,9 @@ static int js_request_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int ar
                 JS_ThrowTypeError(ctx, "the Request input is not a valid URL");
                 return -1;
             }
-            /* §5.4 step 2.2: a URL with credentials is a TypeError — a page may not put a password on the
-               wire by writing it into a fetch. */
+            /* §5.4 step 5.3: a URL with credentials is a TypeError — a page may not put a password on the
+               wire by writing it into a fetch. Step 5 is the STRING-input arm and holds one list: 5.1 parses
+               against the base URL, 5.2 throws on failure, and this is 5.3. */
             if ((rec.username && *rec.username) || (rec.password && *rec.password)) {
                 url_record_free(&rec);
                 JS_ThrowTypeError(ctx, "the Request input URL includes credentials");

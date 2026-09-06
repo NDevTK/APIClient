@@ -45,8 +45,8 @@
  *   - AbortSignal.any(signals) IS a machine, and the most of one: `sequence<AbortSignal>` is Web IDL §3.2.21.1's
  *     iterator protocol, which is the page's code at the @@iterator read, the call, every `next()` and every
  *     `done`/`value` read off its result.
- *   - AbortController.abort() is NOT, and the reason is a spec correction rather than a concession: 3.2 uses
- *     `this.[[Signal]]`, an INTERNAL SLOT, not Get(this, "signal"). Reading the public property (which is what
+ *   - AbortController.abort() is NOT, and the reason is a spec correction rather than a concession: DOM §3.1 uses
+ *     `this's signal`, a SPEC-INTERNAL SLOT, not Get(this, "signal"). Reading the public property (which is what
  *     this file did) both ran a page getter from C and let a page that overrides `signal` redirect abort().
  *   - throwIfAborted() and the `aborted`/`reason` getters touch OWN SLOTS ONLY, read with JS_GetOwnSlot, which
  *     is by definition not a lookup and cannot reach an accessor or a proxy trap. */
@@ -76,7 +76,7 @@ static int g_ready;
    what makes `signal instanceof AbortSignal` true, what a page's `AbortSignal.prototype.throwIfAborted.call(x)`
    reaches, and what `Object.getOwnPropertyNames(signal)` correctly reports as EMPTY. Building the members onto
    each instance instead left the interface object with no `.prototype` at all, so `instanceof` threw
-   "operand 'prototype' property is not an object" — the page could not even ASK what a signal was. */
+   `operand 'prototype' property is not an object` — the page could not even ASK what a signal was. */
 /* PER REALM — §3.7, and here it decides ANSWERS: a C member runs in the realm that DEFINED it. Held in
    quickjs's per-context class-proto slots. */
 static JSClassID g_sig_class, g_ctrl_class;
@@ -168,8 +168,8 @@ static JSValue signal_slots(JSContext *ctx, JSValueConst sig)
  * states are indistinguishable through this one accessor, so the absence proves nothing about who wrote the
  * slot, and asserting over it crashed a run for taking an arm it was forced to take.
  *
- * WHAT ABSENCE ACTUALLY MEANS HERE IS SOLVER_NO_NONFORKING_ARM'S OWN SENTENCE — "this question has no answer
- * with only one world in it" — and the crash that belongs to it lives at the seam, where it can see the thing
+ * WHAT ABSENCE ACTUALLY MEANS HERE IS SOLVER_NO_NONFORKING_ARM'S OWN SENTENCE — `this question has no answer
+ * with only one world in it` — and the crash that belongs to it lives at the seam, where it can see the thing
  * this site cannot: whether the answer is NEEDED. The operand is computed at every call, including on every
  * flow the seam then answers from a REFINED or REPLAYED arm (solver/decide.h: it is consulted at exactly one
  * of the three ways a decision is reached), and the flow whose example was contradicted is by construction a
@@ -232,7 +232,7 @@ static JSValue abort_reason_default(JSContext *ctx, const char *name, const char
 
 /* §3.2 "signal abort" step 2: an UNDEFINED reason becomes a new "AbortError" DOMException. It lives here, in
    the one operation, rather than at each caller counting its own arguments — `controller.abort()`, Streams
-   §5.2's WritableStreamAbort and `AbortSignal.abort()` all reach the same step, and a caller that forgot it
+   §5.5.1's WritableStreamAbort and `AbortSignal.abort()` all reach the same step, and a caller that forgot it
    handed the page a signal whose `reason` was undefined AFTER it had aborted, which no real signal can be.
    `reason` is CONSUMED. */
 static JSValue abort_reason_or_default(JSContext *ctx, JSValue reason)
@@ -751,13 +751,15 @@ static void js_abort_visit(JSContext *ctx, void *st, JSStepVisit *v)
     abort_signal_work_visit(ctx, &s->w, v);
 }
 
-/* WHERE THIS MACHINE RESTS. DOM §3.2's abort() is one step — "signal abort on this's signal with reason" — and
-   that abstract operation is what runs the signal's abort algorithms and fires `abort` at it, which is the
-   page's code. So the operand is one stage and the operation is the other; `started` was a private flag
-   standing in for exactly that split, with no way to say which of the two a parked flow was at. */
+/* WHERE THIS MACHINE RESTS. DOM §3.1 "Interface AbortController"'s abort() is one step — "signal abort on
+   this with reason if it is given" — and DOM §3.1 states that controller-level operation as "signal abort on
+   controller's signal with reason if it is given", so what runs the signal's abort algorithms and fires
+   `abort` at it is that second operation, which is the page's code. So the operand is one stage and the
+   operation is the other; `started` was a private flag standing in for exactly that split, with no way to
+   say which of the two a parked flow was at. */
 #define ABORT_STAGES(X) \
-    X(ABORT_SIGNAL_SLOT, "DOM §3.2 AbortController.abort() (this's [[Signal]], the operand of step 1)") \
-    X(ABORT_SIGNAL_RUN,  "DOM §3.2 AbortController.abort() step 1 (signal abort on it: the abort algorithms, " \
+    X(ABORT_SIGNAL_SLOT, "DOM §3.1 AbortController.abort() (this's signal, the operand step 1 hands on)") \
+    X(ABORT_SIGNAL_RUN,  "DOM §3.1 AbortController.abort() step 1 (signal abort on it: the abort algorithms, " \
                          "then the `abort` event)")
 enum { ABORT_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const ABORT_STEPS[] = { ABORT_STAGES(JS_STEP_STAGE_LABEL) NULL };
@@ -796,9 +798,9 @@ static int js_abort_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **
 }
 
 static const JSTrampStepDef js_abort_def = {
-    sizeof(JSAbortState), js_abort_step, NULL, 0,   /* §3.2 abort() returns undefined whatever the listeners did */
+    sizeof(JSAbortState), js_abort_step, NULL, 0,   /* §3.1 abort() returns undefined whatever the listeners did */
     .visit = js_abort_visit,
-    .algorithm = "DOM §3.2 AbortController.abort(reason)", .steps = ABORT_STEPS
+    .algorithm = "DOM §3.1 AbortController.abort(reason)", .steps = ABORT_STEPS
 };
 static int g_abort_stepid = -1;
 
@@ -990,8 +992,8 @@ static int js_timeout_step(JSContext *ctx, void *st, JSValue cb_result, JSValue 
     /* DOM §3.2 STEP 3: "run steps after a timeout given global, \"AbortSignal-timeout\", milliseconds, and the
        following step: queue a global task on the timer task source given global to signal abort given signal
        and a new TimeoutError DOMException."
-       THE CONCOLIC FLAG ABOVE IS A DIFFERENT QUESTION and both are needed. It answers "has the deadline passed
-       by the time the code asks", which is unknown and forks; this schedules the abort that actually happens,
+       THE CONCOLIC FLAG ABOVE IS A DIFFERENT QUESTION and both are needed. It answers `has the deadline passed
+       by the time the code asks`, which is unknown and forks; this schedules the abort that actually happens,
        which RUNS THE PAGE'S CODE — the signal's abort algorithms and its `abort` listeners, with every
        dependent signal taking the reason first. Without it `AbortSignal.timeout(0).addEventListener('abort',f)`
        never ran f, a fetch's abort algorithm never shut the request down, and `AbortSignal.any([c.signal,
@@ -1022,7 +1024,7 @@ static const JSTrampStepDef js_timeout_def = {
  * `[NewObject] static AbortSignal any(sequence<AbortSignal> signals)`, and DOM states its steps as exactly one:
  * "return the result of creating a dependent abort signal from signals using AbortSignal and the current realm".
  * So the member IS the dependent-signal machinery above, which is why that had to exist first — an `any` written
- * as "add an algorithm to each input that aborts the result" would be a different algorithm wearing this one's
+ * as `add an algorithm to each input that aborts the result` would be a different algorithm wearing this one's
  * name, one turn late and page-visible (see abort.h).
  *
  * EVERYTHING BEFORE THAT ONE STEP IS WEB IDL §3.2.21's CONVERSION, AND IT IS THE PAGE'S CODE FROM END TO END —

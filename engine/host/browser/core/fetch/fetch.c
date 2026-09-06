@@ -102,7 +102,7 @@ bool fetch_is_destination_type(const char *destination)
    IT IS A STRICT SUBSET OF THE TABLE ABOVE AND IS NOT DERIVED FROM IT, because the two answer different
    questions: `document` and `style` are destination types and are not script-like, and `xslt` is a
    destination type that CAUSES script execution and is still not script-like (§2.2.5's note). A predicate
-   written as "a destination type that is not data" would be a third reading of a rule neither list states. */
+   written as `a destination type that is not data` would be a third reading of a rule neither list states. */
 bool fetch_is_script_like(const char *destination)
 {
     static const char *const SCRIPT_LIKE[] = {
@@ -275,9 +275,10 @@ struct JSFetchState {
        beside `headers` and `body`, with the other thirteen never read at all. */
     RequestRecord rec;
     BodyState body;     /* the bytes. A POST that dropped its body asked the server a different question */
-    /* §5.2's Content-Type for that body, as a JS STRING rather than a malloc'd one: a step state is BYTE-COPIED
-       at a deep fork and only what `visit` names is re-taken, so a heap pointer here would be freed by both
-       arms. JS_UNDEFINED for a body whose arm has no type. */
+    /* THE TYPE Fetch §5.2's extract a body RETURNS BESIDE THE BODY — Fetch §5.2 calls it `type` and never
+       `Content-Type`, which is the header a CALLER sets from it. As a JS STRING rather than a malloc'd one:
+       a step state is BYTE-COPIED at a deep fork and only what `visit` names is re-taken, so a heap pointer
+       here would be freed by both arms. JS_UNDEFINED for a body whose arm has no type. */
     JSValue   body_mime;
     /* A FLAG, not a test on the slot. A zeroed step state's JSValue is the INTEGER 0 and not JS_UNDEFINED, so
        "is this slot filled yet" asked of the slot answers YES for every request. The first stage can PARK — on
@@ -642,7 +643,7 @@ JSValue fetch_reply_new(JSContext *ctx, int status, const char *status_text, con
     CHECK(!JS_IsException(v), "fetch: OOM allocating a reply's status message");
     CHECK(JS_DefinePropertyValueStr(ctx, o, "statusText", v, JS_PROP_C_W_E) >= 0, "fetch: a reply record refused its status message");
     /* §2.2.5's BODY, AS THE BYTE SEQUENCE IT IS. This was `JS_NewStringLen`, and that call is a DECODE — the
-       lenient UTF-8 one cutils.h describes ("encoding errors are converted as 0xFFFD and use a single byte"),
+       lenient UTF-8 one cutils.h describes (`encoding errors are converted as 0xFFFD and use a single byte`),
        run by the record's BUILDER on bytes no standard had looked at yet. So every C host destroyed the
        evidence HTML §8.1.4.2's classic decode exists to read, a step before the extension's own `resp.text()`
        did: a `charset=windows-1252` script's 0x92 reached script_fetch.c as C2 92 at best and as EF BF BD when
@@ -920,8 +921,9 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, const RequestRecord 
            above already resolved the page's string against the API base URL, which is what step 2 says the
            request's URL IS; the record was then freed and the host was handed `u`, the RAW string the page
            wrote. So a bundle's ordinary `fetch('/api/users')` asked the trusted zone to fetch the nine
-           characters `/api/users`, and §4.1 — "the response's URL list is a clone of the request's URL list" —
-           gave the reply a list whose one member is a relative reference. `response.url` then runs the URL
+           characters `/api/users`, and Fetch §4.1 "Main fetch" — "If internalResponse's URL list is empty,
+           then set it to a clone of request's URL list" — gave the reply a list whose one member is a
+           relative reference. `response.url` then runs the URL
            parser back over that member with NO BASE, because every item of a URL list is absolute by the time
            it is in one, and refuses it: `a response's URL list held a string the URL parser refuses`, which is
            where the WPT corpus aborts. Every host was papering over it differently — the smoke fixture
@@ -972,8 +974,8 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, const RequestRecord 
                "Requests" gives a request a destination and says "unless stated otherwise it is the empty
                string"; §5.4's Request constructor states nothing otherwise, and §2.2.5's own table puts
                `fetch()` and XMLHttpRequest on the row whose destination is "" and whose CSP directive is
-               `connect-src`. So this is the request's real destination — the positive statement "these bytes
-               are data, not a resource of a type", which is what makes the trusted zone's CORB class a fact
+               `connect-src`. So this is the request's real destination — the positive statement `these bytes
+               are data, not a resource of a type`, which is what makes the trusted zone's CORB class a fact
                read off the request rather than a guess made about the address. It is READ off the record now
                rather than written here, because §2.2.5 puts it on the request and both of §5's entry points
                fill it through the one function that does. */
@@ -1213,7 +1215,7 @@ static int js_fetch_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
             /* §5.4 step 37's "with keepalive set to request's keepalive" — the value step 24 read out of the
                dictionary, not a constant. It WAS the constant `false`, with a comment beside it saying the
                member "is a member neither RequestInit nor Request installs here": that stopped being true when
-               the member was declared, and §5.2's ReadableStream arm opens "If keepalive is true, then throw a
+               the member was declared, and Fetch §5.2's ReadableStream arm opens "If keepalive is true, then throw a
                TypeError", so `fetch(u, {method:"POST", keepalive:true, body: stream})` built a request a
                browser refuses. */
             if (body_extract(ctx, &s->body, bv, s->rec.keepalive != 0, &mime) < 0) {
@@ -1302,18 +1304,18 @@ static int js_fetch_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
        DISPLAY SHAPE is what the @H surface records for exactly the reason fetch_park above records a concolic
        URL's; and BODY_STREAM has no bytes at all yet. */
     body_kind = body_state_content(&s->body, &body_bytes, &body_bytes_len);
-    /* A STREAM-BACKED BODY HAS NO BYTES YET, AND THE PARK TAKES BYTES. §5.2's ReadableStream arm sets the
+    /* A STREAM-BACKED BODY HAS NO BYTES YET, AND THE PARK TAKES BYTES. Fetch §5.2's ReadableStream arm sets the
        body's stream and leaves `source` null — there is nothing to send until the stream is READ — while every
        other arm produces the bytes during extraction. This park read `bytes`, which the stream arm never
        writes, so `fetch(u, {method:"POST", body: stream})` went to the host as a POST with an EMPTY body and
-       the endpoint surface recorded that request as the one the page made. What to build is §5.2's
+       the endpoint surface recorded that request as the one the page made. What to build is Fetch §5.2's
        transmission: fully read the body's stream BEFORE this point — a stage of this machine that acquires a
        reader and reads to the end, the way body.c's readers do, driven as a FLOW because each read answers a
        promise — and hand the park the bytes it produced.
        IT IS ASKED OF THE ARM AND NO LONGER OF `bytes == NULL`, which was true of an UNKNOWN body too — so the
        commonest POST a bundle writes aborted here under a message about a stream it does not have. */
     DCHECK(body_kind != BODY_STREAM,
-           "fetch() reached the host edge with a STREAM-BACKED request body: §5.2's ReadableStream arm leaves "
+           "fetch() reached the host edge with a STREAM-BACKED request body: Fetch §5.2's ReadableStream arm leaves "
            "the bytes in the stream and this edge takes bytes. Build the full read as a stage of this machine "
            "(acquire a reader, read to the end, accumulate) and park with those bytes");
     /* WHAT THIS REQUEST IS EVIDENCE OF, READ ONCE FOR THE WHOLE ACT. The outer endpoint below and the
@@ -1349,7 +1351,7 @@ static int js_fetch_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
            what testing `s->body.bytes` did, reported the POST as BODYLESS.
            NAMED RESIDUAL — the surface cannot tell a shape from bytes. WHAT IS NOT COVERED: solver/endpoint.h's
            EndpointBody is `{mime, bytes, len}` with no grade on it, so a display shape arrives at
-           body_params looking like a payload; it is read as an UNDECLARED body (§5.2's string arm type) and
+           body_params looking like a payload; it is read as an UNDECLARED body (Fetch §5.2's string arm type) and
            run through the real JSON parser, where `{cfg.payload}` fails to parse and records no fields —
            which is the true statement, reached by accident rather than by statement. WHAT THE NEXT DIFF
            BUILDS: the body's own provenance on EndpointBody beside its bytes, the way the record already
@@ -1408,7 +1410,7 @@ static int js_fetch_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
  *
  * IT IS REACHABLE ON THE ORDINARY SHAPE and not on an exotic one: the stages after FETCH_RECORD are exactly
  * the two that run the page's code — the §5.1 header fill's conversion of a `HeadersInit` (a getter, an
- * iterator, a Proxy trap, a `toString`) and §5.2's body extraction — so any concolic branch inside a page's
+ * iterator, a Proxy trap, a `toString`) and Fetch §5.2's body extraction — so any concolic branch inside a page's
  * own header or body value forks the flow with this machine on its frame chain.
  *
  * THE PREDICATE ASKS ALL THREE AND NEVER ONE STAGE'S PROXY FOR THE OTHERS. `rec.method != NULL` reads as
@@ -1422,7 +1424,7 @@ static int js_fetch_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
  * A FORK BEFORE ANY OF THE THREE — the `input` ToString at FETCH_URL_STR — copies a state whose every filled
  * slot the visit names, and stays allowed. `body.stream` is NOT tested directly: a zeroed step state's JSValue
  * is the INTEGER 0 rather than JS_UNDEFINED (see `captured` above), so `!JS_IsUndefined(stream)` is true for
- * every fresh state and would refuse that fork too; `body.has` is the flag §5.2's stream arm sets, and it is
+ * every fresh state and would refuse that fork too; `body.has` is the flag Fetch §5.2's stream arm sets, and it is
  * the question.
  *
  * WHAT THE NEXT DIFF BUILDS, AND IT IS THE SAME DIFF §5.4 STEP 25's METHOD IS WAITING FOR: the record's owned

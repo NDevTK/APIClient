@@ -22,8 +22,8 @@
  *
  * THE WHOLE ITEM GRAMMAR IS PARSED EVEN THOUGH ONLY TWO KINDS ARE READ. A parser that failed on an integer
  * would report "malformed" for a field that is perfectly well formed, and the two are different facts the
- * moment a fourth header arrives — a caller asking for a token must be able to tell "this is a valid field
- * carrying something else" from "this is not a structured field", because only the second means the sender is
+ * moment a fourth header arrives — a caller asking for a token must be able to tell `this is a valid field
+ * carrying something else` from `this is not a structured field`, because only the second means the sender is
  * broken. RFC 9651 §4.2.3.1's eight bare-item kinds are therefore all here, including the two that RFC 8941
  * did not have (Date and Display String), because Fetch normatively references RFC 9651.
  *
@@ -115,7 +115,7 @@ void sf_item_free(SfItem *it);
 /* FETCH §2.2.2's "get a structured field value given a header name `name` and a string type from a header
    list", with type fixed to "item" (see the file header). `name` must already be LOWERCASE, which is how a
    header list stores names and how every caller spells the constant.
-   Returns FALSE for BOTH "the list contains no such header" and "the value did not parse", which is Fetch's
+   Returns FALSE for BOTH `the list contains no such header` and `the value did not parse`, which is Fetch's
    own note and not a simplification — the two are deliberately indistinguishable so that every consumer on
    the platform handles them identically. */
 bool sf_header_item(const HeaderList *l, const char *name, SfItem *out);
@@ -169,8 +169,8 @@ typedef struct {
 bool sf_parse_dictionary(const char *input, size_t len, SfDictionary *out);
 
 /* FETCH §2.2.2's "get a structured field value given a header name `name` and a string type from a header
-   list", with type "dictionary". `name` must already be LOWERCASE. Returns FALSE for BOTH "the list contains
-   no such header" and "the value did not parse", for sf_header_item's reason and Fetch's own note. */
+   list", with type "dictionary". `name` must already be LOWERCASE. Returns FALSE for BOTH `the list contains
+   no such header` and `the value did not parse`, for sf_header_item's reason and Fetch's own note. */
 bool sf_header_dictionary(const HeaderList *l, const char *name, SfDictionary *out);
 
 /* §4.2.1.1's BARE ITEM, for the item arm. ASSERTS the arm — see SfMember. */

@@ -15,7 +15,7 @@
 typedef struct { char *name; char *value; } HeaderEntry;
 typedef struct { HeaderEntry *e; int n, cap; } HeaderList;
 
-/* §5.1: "A Headers object has an associated GUARD" — which of the page's writes the object refuses, and how.
+/* §5.1: "A Headers object also has an associated guard" — WHICH of the page's writes the object refuses, and how.
    "none" refuses nothing (a page's own `new Headers()`); "immutable" THROWS on every write (a Response the
    engine handed the page); "request"/"request-no-cors" and "response" SILENTLY drop the names the browser
    owns. The three answers are distinct in the spec and must stay distinct here. */
@@ -33,8 +33,8 @@ typedef enum {
    DOMException where §5.1's own members answer with a TypeError, and it answers a forbidden request-header
    with a silent return. So the grammar is stated once and the error stays each standard's own — a second copy
    of "what a header name is" is a second thing to keep in step with RFC 7230.
-     `header_name_valid` is "a header name is a NAME" (a token).
-     `header_value_normalize_valid` is "normalize a header value" followed by "a header value is a VALUE": it
+     `header_name_valid` is `a header name is a NAME` (a token).
+     `header_value_normalize_valid` is "normalize a header value" followed by `a header value is a VALUE`: it
    strips leading and trailing HTTP whitespace and then refuses NUL/CR/LF, returning the normalized value
    (caller frees, `*pn` is its length) or NULL for a value that is not one.
      `header_forbidden_request` is "forbidden request-header", over a LOWERCASED name. */
@@ -57,18 +57,20 @@ int   header_list_append_guarded(JSContext *ctx, HeaderList *l, HeadersGuard gua
 /* §5.1 set: replace every entry with this name by one. */
 void  header_list_set(HeaderList *l, const char *name, const char *value);
 void  header_list_delete(HeaderList *l, const char *name);
-/* Fetch §2.2.2 "get a header name from a header list": the values of EVERY header with this name, joined by
-   0x2C 0x20 in order (malloc'd; NULL when the list has none, which is what `get` returns null for). The join
-   is not a convenience — it is what makes two `Cross-Origin-Embedder-Policy: require-corp` headers a LIST that
-   an ITEM parse rejects, which is the row HTML §7.1.4.1 prints its table for. */
+/* Fetch §2.2.2 "get a header name name from a header list list": the values of EVERY header with this
+   name, joined by 0x2C 0x20 in order (malloc'd; NULL when the list has none, which is what `get` returns
+   null for). The join is not a convenience — it is what makes two
+   `Cross-Origin-Embedder-Policy: require-corp` headers a LIST that an ITEM parse rejects, which is the row
+   HTML §7.1.4.1 prints its table for. */
 char *header_list_get(const HeaderList *l, const char *name);
-/* THE VALUE OF THE LAST HEADER WITH THIS NAME, UNJOINED — MIME Sniffing §5.1's "set supplied-type to the value
-   of the LAST `Content-Type` header associated with the resource", which is a DIFFERENT algorithm from Fetch's
-   `get` above and not a shortcut through it. The join makes a string that is a LIST; §5.1 then sets its
-   check-for-apache-bug flag only when the value is EXACTLY one of four literals, and a joined list is never
-   any of them, so passing the join would silently answer a question nobody asked.
-   The returned string is the LIST's own and dies with it — unlike `get`, which mallocs. NULL is "the list has
-   no header with this name", which for §5.1 is a resource whose supplied MIME type is undefined. */
+/* THE VALUE OF THE LAST HEADER WITH THIS NAME, UNJOINED — MIME Sniffing §5.1's "Set supplied-type to the value
+   of the last `Content-Type` header associated with the resource", where THE LAST is the whole point: it is a
+   DIFFERENT algorithm from Fetch's `get` above and not a shortcut through it. The join makes a string that
+   is a LIST; §5.1 then sets its check-for-apache-bug flag only when the value is EXACTLY one of four
+   literals, and a joined list is never any of them, so passing the join would silently answer a question
+   nobody asked.
+   The returned string is the LIST's own and dies with it — unlike `get`, which mallocs. NULL is `the list has
+   no header with this name`, which for §5.1 is a resource whose supplied MIME type is undefined. */
 const char *header_list_get_last(const HeaderList *l, const char *name);
 /* Fetch §3.6 "`X-Content-Type-Options` header"'s DETERMINE NOSNIFF, over a response's header list: "If
    values[0] is an ASCII case-insensitive match for `nosniff`, then return true." It is here rather than at its

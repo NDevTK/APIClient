@@ -302,7 +302,7 @@ JSValue fetch_reply_new(JSContext *ctx, int status, const char *status_text, con
  *     (core/loader/script_fetch.h), whose whole job is to honour that label, was handed the wrong bytes;
  *   • `fetch_reply_new` ran `JS_NewStringLen`, which is quickjs's own UTF-8 decode, so EVERY C host destroyed
  *     the same evidence a step earlier than the extension did. cutils.h states its error mode outright —
- *     "encoding errors are converted as 0xFFFD and use a single byte" — so a lone 0x81 became U+FFFD, and
+ *     `encoding errors are converted as 0xFFFD and use a single byte` — so a lone 0x81 became U+FFFD, and
  *     `JS_ToCStringLen` on the other side re-encoded that as EF BF BD. The classic decode has therefore never
  *     once received a byte a server actually sent, on any host.
  *
