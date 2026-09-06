@@ -106,15 +106,66 @@ const _SR_APIKEY = _srRecord(
    all five of these on it. `metadata` and `scopes` are initialised to `null` there and assigned only when a
    rejection named them, so `null` MEANS "no probe answer carried a canonical service/method" and "no 403
    named a scope" — the two facts lib/popup-discovery.js guards on, read as themselves rather than defaulted. */
+/* WHETHER ONE VALUE OF `fields` IS IN THE GRAMMAR THIS BUILD'S CARD ASSERTS — the same question
+   `_srParkedSinkCurrent` asks of a parked @S entry, and the second and last place in this table where the
+   answer was no. `fields: _srObj` said "is a non-array object" and nothing about the field records inside it,
+   while lib/popup-discovery.js's `_discProbeFieldLabel` DCHECKs `f.name` on every one it labels and
+   `_discFieldProbeHtml` renders `f.type` with no guard at all. So a field probe stored by a build before
+   either name travelled passed this door and ABORTED the discovery card — abort for `name`, and a silent
+   `undefined` in the rendered list for `type`, which is the quieter half of the same skew.
+   TWO NAMES AND NOT SEVEN, BECAUSE THE CONSUMER DECIDES THE REQUIREMENT AND NOT THE PRODUCER. All five of
+   lib/req2proto.js's `fields.push` sites state `name`, `path`, `type`, `number` and more, and requiring all of
+   them would shed records this build reads perfectly well — a grammar stated for its own sake, which is the
+   fourth-copy mistake this table already declined to make once. `number` is READ (`f.number !== null &&
+   f.number !== undefined`) and deliberately not required: that test is the card reading a null as the positive
+   statement it is, so absence and null must stay tellable apart rather than being demanded here.
+   THESE TWO READS ARE NOT AUDITED, AND THAT IS MEASURED RATHER THAN ASSUMED — the assumption is the thing that
+   failed here and it is worth more than the fix. `_srParkedSinkCurrent` states its names as member reads
+   because engine/fieldgate.mjs walks reads, and the control there fires: a bogus name on `e` is reported as
+   `READ with no writer` within one run. THAT CONTROL DOES NOT TRANSFER TO THIS PREDICATE, and it was run
+   separately rather than argued: a bogus name on `f` here produces NO finding and leaves the gate at PASS,
+   landing instead in the AMBIGUOUS ANCHOR band as "`f` shares `name`, also names `zzFieldProbe`". The reason
+   is the anchor and not the construct — `e` reads fifteen names of solve.c's parked entry, so its receiver is
+   decidable; `f` reads two, one of which (`name`) several producers also write, so the gate cannot decide
+   whether this object is an emitted record and correctly refuses to judge the other name. This diff therefore
+   added exactly one row to that band, 65 → 66, and that row is this function.
+   WHAT THAT DOES AND DOES NOT COST. The door still refuses an older-grammar field record, so the abort at the
+   discovery card is closed either way — the check is CORRECT and merely UNWATCHED. What is absent is the
+   automatic notice if lib/req2proto.js later stops stating `name` or `type`: nothing would go red, and the
+   symptom would be probe records quietly shedding and re-probing forever. Reading more of the element's names
+   to strengthen the anchor is the obvious repair and is REFUSED here, because requiring a name the card does
+   not depend on sheds records this build reads perfectly well — the requirement is the consumer's, not the
+   anchor's convenience. The honest state is an unaudited row that says so. */
+function _srProbeFieldValue(f) {
+  return _srObj(f) && f.name !== undefined && f.type !== undefined;
+}
+function _srProbeFields(x) { return _srObj(x) && Object.values(x).every((f) => _srProbeFieldValue(f)); }
+
+/* THE OTHER FOUR NAMES ON THIS RECORD ARE NOT THIS QUESTION, AND SAYING SO HERE IS WHAT STOPS THE NEXT READER
+   RE-DERIVING IT. The test is whether a CONSUMER ASSERTS AN ELEMENT'S NAMES, never whether the element has any:
+     `probeDetails` — its elements DO carry names and lib/send.js:334 reads them, but as a GUARD
+                      (`pd.fieldCount > 0 && pd.contentType && …`), so a stale element is skipped rather than
+                      asserted. Not exposed to this failure. It is exposed to a quieter one — a short
+                      content-type list with nothing to say so — which is a DEFAULTED read and a different
+                      category with a different remedy, recorded here and deliberately not fixed by a shape.
+     `metadata`     — read only as `probe.metadata.service || "?"`, guarded and defaulted. No assert.
+     `scopes`       — `probe.scopes.join(" ")`. Elements are strings; no name is read off one.
+   A shape for any of these would be a copy of a grammar nothing checks against. */
+
 const _SR_PROBE_FIELDS = _srRecord(
   "a field-probe answer (lib/req2proto.js `probeApiEndpoint`)",
-  { url: _srStr, timestamp: _srNum, fieldCount: _srCount, fields: _srObj, probeDetails: _srArr },
+  { url: _srStr, timestamp: _srNum, fieldCount: _srCount, fields: _srProbeFields, probeDetails: _srArr },
   { metadata: _srObjOrNull, scopes: _srArrOrNull });
 
 /* WHAT AN ERROR-ENVELOPE PROBE NAMED — lib/req2proto.js `discoverServiceInfo`, also one return. `service`,
    `method` and `scopes` stay `null` when no content type's rejection named them, which is the whole outcome
    lib/popup-discovery.js prints in words ("the endpoint answered, and its error envelope named no service,
    method or scope"); `contentTypes` and `details` are built unconditionally and state what was tried. */
+/* NEITHER LIST HERE CARRIES A GRAMMAR A CONSUMER ASSERTS, and both were checked rather than assumed.
+   `contentTypes` is read as `svcInfo.contentTypes.join(", ")` — strings, no names. `details` is read by
+   nothing: every `.details` in lib/req2proto.js is on a DECODED ERROR ENVELOPE a server stated
+   (`decoded.error.details`), which is foreign input where §Offensive-programming makes an assert the forbidden
+   answer, and not this stored list at all. So both stay element-blind on purpose. */
 const _SR_PROBE_SVCINFO = _srRecord(
   "a service-info probe answer (lib/req2proto.js `discoverServiceInfo`)",
   { contentTypes: _srArr, details: _srArr },
@@ -248,7 +299,11 @@ const STORE_RECORD_KINDS = Object.freeze({
     adopt: (v) => ({ ...v, pageUrls: new Set(v.pageUrls || []), frameOrigins: new Set(v.frameOrigins || []) }),
   }),
   probeResults: Object.freeze({
-    statedFrom: 2, shape: (key) => _srProbeShape(key),
+    /* `4` AND NOT `2`, for the reason `securityFindings` is `3`: a store stamped `2` or `3` was written by a
+       door that asked only whether `fields` was an object, so it states nothing about the field records inside
+       it and must be ASKED. The recipe below is what makes that safe — a field probe names the address that
+       re-mints it, so a stale one is shed and re-probed rather than aborting the discovery card. */
+    statedFrom: 4, shape: (key) => _srProbeShape(key),
     /* THE ADDRESS THE PROBE WAS SENT TO, which re-probing re-mints. A SERVICE-INFO answer carries no address
        — its key names a service or a path, and neither is something `safeFetch` can be pointed at — so it is
        the only copy of itself and is reported as an overage rather than traded away. */

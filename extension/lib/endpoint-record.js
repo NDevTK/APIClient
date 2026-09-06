@@ -97,6 +97,21 @@ const PATH_PARAM_EXAMPLE_CAP = 20;
    first sighting is not an endpoint — a producer that cannot state one has nothing to register, so these are
    stated and never defaulted. `path` may be the empty STRING (a shape-origin address with no literal
    remainder); that is a stated fact, not an absence, and it is why this list checks TYPE rather than truth. */
+/* A STRING LIST HERE IS RIGHT, AND THAT IS A MEASURED VERDICT RATHER THAN THE ABSENCE OF A BETTER IDEA.
+   engine/fieldgate.mjs audits member READS and not strings — checked both ways: a bogus name added as a
+   declaration key produces no finding at all, while a bogus name read off a WELL-ANCHORED receiver is reported
+   within one run as `READ with no writer`. The anchoring qualifier is load-bearing and was measured: a read is
+   judged only where the gate can decide which record the receiver IS, so a receiver naming one or two widely
+   shared names lands in AMBIGUOUS ANCHOR and is not judged at all. A list of names is, in general, an unwatched
+   copy of a grammar; a read is watched only when its receiver is decidable.
+   THE DIFFERENCE HERE IS THAT EVERY NAME IN THIS LIST IS INDEPENDENTLY READ AS A MEMBER ELSEWHERE IN THE
+   CORPUS, so each one is already in the population that gate walks and a producer dropping any of them lights
+   up at those reads — not at this line, but it lights up. Counted at the time of writing, member reads outside
+   this file: `url` 282, `method` 172, `service` 60, `path` 44, `source` 44, `host` 15, `firstSeen` 5. Rewriting
+   this as reads would add a second spelling of names that are already watched and buy nothing.
+   WHAT WOULD CHANGE THE VERDICT is a name joining this list that NOTHING reads as a member — that one would be
+   genuinely unwatched, and it is the case to check before adding to this array rather than a reason to convert
+   what is here. */
 const _ENDPOINT_STATED = ["url", "method", "host", "path", "service", "source", "firstSeen"];
 
 /* THE PROVENANCE DOMAIN — which of lib/callsite-url.js's two arms produced the address. Asserted as a

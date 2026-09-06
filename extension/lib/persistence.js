@@ -130,8 +130,15 @@ function scheduleSave() {
    lib/store-record.js's `_srParkedSinkCurrent` asks the stored BYTES for the names rather than trusting this
    number, and states those names as member READS, which is the one form engine/fieldgate.mjs audits against
    solve.c in both directions. The stamp still decides ASSERT-versus-ASK; it is no longer the only thing
-   standing between an older engine's record and a card that asserts today's. */
-const _STORE_SHAPE = 3;
+   standing between an older engine's record and a card that asserts today's.
+
+   `4` IS THE SAME QUESTION ASKED OF THE SECOND AND LAST KIND IT WAS TRUE OF. Sweeping the table for every
+   element-blind predicate turned up seven candidates and exactly one more defect: `probeResults`' `fields`
+   was `_srObj`, while lib/popup-discovery.js DCHECKs `f.name` on every field it labels. The other five are
+   NOT defects and the sweep is recorded at their sites rather than here, because the test is whether a
+   CONSUMER ASSERTS an element's names and a kind that fails that test must not be given a shape it does not
+   need. */
+const _STORE_SHAPE = 4;
 
 /* WHAT THE RESTORE DID, AS NUMBERS — because a shed nobody can count is the silent truncation this whole
    section exists to end, and §NO BOUNDS is explicit that discarding work "with nothing to say so" is a cap
