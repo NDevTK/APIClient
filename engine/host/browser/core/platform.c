@@ -1270,6 +1270,20 @@ static const int PLATFORM_N = (int)(sizeof PLATFORM / sizeof PLATFORM[0]);
 static const struct { const char *name, *component; IdlExposure exposure; } PLATFORM_WITNESS[] = {
     { "console",               "console" },
     { "window",                "window" },
+    /* HTML §7.2.2.5 Historical browser interface element APIs' INTERFACE OBJECT, and it is the row that would
+       have caught its absence. `BarProp`'s Web IDL §3.7.3 interface prototype object was built and tagged per
+       realm and its Web IDL §3.8 property reference existed NOWHERE IN THIS TREE, so
+       `Object.prototype.toString.call(window.locationbar)` answered "[object BarProp]" while `window.BarProp`
+       was absent — a state no walk over the global can see, because that walk judges the properties that ARE
+       there. THE ABSENT DIRECTION IS THE WHOLE OF WHAT THIS ROW EARNS, and it earns it for `XMLSerializer`'s
+       reason one interface further down: `BarProp` is on browser/platform_names.h, so solver/absent.c
+       recognises the missed read as a name a standard owns and DECLINES to mint a concolic for it — the read
+       decides to a concrete `undefined` with no fork and no throw, and `if (window.BarProp)` is then taken
+       one way for ever with nothing anywhere saying so.
+       IT NAMES `window` BECAUSE A SUB-COMPONENT NAMES THE ROW THAT REACHES IT: core/frame/bar_prop.c has no
+       row of its own, bar_prop_install is called from core/frame/window.c's window_install, and bar_prop_free
+       is reached from window_free — which is the same name its agent state is declared under. */
+    { "BarProp",               "window" },
     { "onload",                "event_target" },
     { "document",              "document" },
     { "navigator",             "navigator" },

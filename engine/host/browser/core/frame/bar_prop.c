@@ -6,9 +6,9 @@
  * `window.toolbar.visible` to tell a popup from a tab gets a real answer in every browser.
  *
  * WHY THEY ARE NOT A SHRUG. Headless is not valueless: the spec defines what `visible` returns without any
- * screen at all. §7.2.2.5 says each returns true unless the navigable was created by `open()` with features
- * that suppressed that bar — so for the top-level navigable this engine hosts, the answer is TRUE, computed
- * from what the navigable IS rather than picked. That is the same reasoning `matchMedia` resolves a default
+ * screen at all. HTML §7.2.2.5 says each returns true unless the navigable was created by `open()` with
+ * features that suppressed that bar — so for the top-level navigable this engine hosts, the answer is TRUE,
+ * computed from what the navigable IS rather than picked. That is the same reasoning `matchMedia` resolves a default
  * viewport by: the missing piece is a physical device, and the spec's behaviour does not depend on one.
  *
  * SIX OBJECTS, NOT ONE. `window.locationbar !== window.menubar` is asserted by the spec's own tests, and it
@@ -31,11 +31,12 @@
 static JSClassID g_bar_class;
 static JSRuntime *g_bar_rt;
 
-/* §7.2.2.5: `visible` is true for a navigable whose chrome was not suppressed at creation, and that is now
-   read from the NAVIGABLE — §7.4's features argument decides it, navigable.c records the decision, and this
-   answers the negation. It was the constant `true`, which made every popup indistinguishable from a tab: the
-   corpus tells the two apart by reading exactly these six, and `allBarProps.every(x => !x)` is how it does it.
-   THE RECORD IS THE BRAND, not the answer. Six independent objects are what §7.2.2.5 declares and what
+/* HTML §7.2.2.5: `visible` is true for a navigable whose chrome was not suppressed at creation, and that is
+   now read from the NAVIGABLE — HTML §7.4 Navigation and session history's features argument decides it,
+   navigable.c records the decision, and this answers the negation. It was the constant `true`, which made
+   every popup indistinguishable from a tab: the corpus tells the two apart by reading exactly these six, and
+   `allBarProps.every(x => !x)` is how it does it.
+   THE RECORD IS THE BRAND, not the answer. Six independent objects are what HTML §7.2.2.5 declares and what
    `window.locationbar !== window.menubar` rests on, but what they answer is one fact about one navigable — so
    the state lives where the fact does and the instance exists to be a distinct object with a class to check. */
 typedef struct { uint8_t unused; } BarProp;
@@ -56,16 +57,17 @@ static void bar_finalizer(JSRuntime *rt, JSValue val)
     free(b);
 }
 
-/* §7.2.2.5's `visible`, answered for THE REALM THE GETTER BELONGS TO.
+/* HTML §7.2.2.5's `visible`, answered for THE REALM THE GETTER BELONGS TO.
  *
  * `ctx` HERE IS THE FUNCTION'S OWN REALM, NOT THE CALLER'S — js_call_c_function does `ctx = p->u.cfunc.realm`
- * before invoking a C function, which is §3.7's rule that every realm gets its own intrinsics doing its job.
- * So a getter installed ONCE, on a prototype built once at agent init, answers every realm's question with the
- * ROOT realm's `ctx` forever. That is not a subtlety to remember at this call site: it is what makes a shared
- * prototype WRONG rather than merely unfaithful, and it cost a whole feature — every popup read all six of
- * these as `true` and reported itself a tab, because the root navigable is not a popup and the root is whose
- * ctx arrived. The 51 subtests of window-open-popup-behavior.html split exactly along that line: every
- * "expect tab" passed and every "expect popup" failed.
+ * before invoking a C function, which is Web IDL §3.7 Interfaces' rule that every realm gets its own
+ * intrinsics doing its job. So a getter installed ONCE, on a prototype built once at agent init, answers
+ * every realm's question with the ROOT realm's `ctx` forever. That is not a subtlety to remember at this
+ * call site: it is what makes a shared prototype WRONG rather than merely unfaithful, and it cost a whole
+ * feature — every popup read all six of these as `true` and reported itself a tab, because the root
+ * navigable is not a popup and the root is whose ctx arrived. The 51 subtests of
+ * window-open-popup-behavior.html split exactly along that line: every "expect tab" passed and every
+ * "expect popup" failed.
  *
  * SO THE PROTOTYPE IS PER REALM, in quickjs's own per-context class-proto slot — the same place window.c keeps
  * Window.prototype and for the same reason. `frames[0].BarProp === BarProp` is false in a browser, and now
@@ -76,8 +78,9 @@ static JSValue js_bar_visible(JSContext *ctx, JSValueConst this_val, int magic)
     (void)magic;
     DCHECK(b != NULL, "BarProp.visible was read off something that is not a BarProp");
     /* THE ANSWER IS THE NAVIGABLE'S, and that is why there is no assert here that the realm's proxy names THIS
-       realm's document. There was one, and it was true only while nothing could navigate: §7.2.3's replace
-       moves the navigable's active document to a new realm while a flow parked in the superseded one keeps
+       realm's document. There was one, and it was true only while nothing could navigate: HTML §7.2.3 The
+       WindowProxy exotic object's replace moves the navigable's active document to a new realm while a flow
+       parked in the superseded one keeps
        running, and that flow reading `window.toolbar` is reading a fact about the NAVIGABLE — which has moved
        on — not about the document it is standing in. An assert that fires for a correct read is worse than
        none; the brand check above is the one that still says something. */
@@ -95,9 +98,9 @@ void bar_prop_init(JSContext *ctx)
     JS_NewClassID(rt, &g_bar_class);
     JS_NewClass(rt, g_bar_class, &d);
     /* WHAT THIS SUB-COMPONENT HOLDS FOR THE AGENT, DECLARED UNDER THE ROW THAT RELEASES IT — `window`, and
-       never this file's own name: core/platform.c's list is not a list of FILES, and §7.2.2.5's class is given
-       back by window_free, which reaches bar_prop_free (core/agent_state.h). Declaring nothing was not the
-       harmless half of that: a row with an empty release column and a component that declared nothing AGREE,
+       never this file's own name: core/platform.c's list is not a list of FILES, and HTML §7.2.2.5's class
+       is given back by window_free, which reaches bar_prop_free (core/agent_state.h). Declaring nothing was
+       not the harmless half of that: a row with an empty release column and a component that declared nothing AGREE,
        so the pairing read this file's silence and window.c's as one another's confirmation while the class id
        was carried into every successor agent this process could have had. */
     agent_state_ptr("window", &g_bar_rt,
@@ -108,10 +111,10 @@ void bar_prop_init(JSContext *ctx)
                       "slot and brand");
 }
 
-/* THE PROTOTYPE IS THE REALM'S — §3.7 gives every realm its own, and here that is load-bearing rather than
-   pedantic: the getter it carries runs in the realm that BUILT it (see js_bar_visible). Kept in quickjs's
-   per-context class-proto slot, which is where a per-realm prototype belongs and what makes the instances a
-   realm mints chain to the right one with no table here to keep. */
+/* THE PROTOTYPE IS THE REALM'S — Web IDL §3.7 Interfaces gives every realm its own, and here that is
+   load-bearing rather than pedantic: the getter it carries runs in the realm that BUILT it (see
+   js_bar_visible). Kept in quickjs's per-context class-proto slot, which is where a per-realm prototype
+   belongs and what makes the instances a realm mints chain to the right one with no table here to keep. */
 static JSValue bar_prop_build_proto(JSContext *ctx)
 {
     JSValue proto = JS_NewObject(ctx);
@@ -141,7 +144,7 @@ static JSValue bar_prop_new(JSContext *ctx)
 
 void bar_prop_install(JSContext *ctx, JSValueConst global)
 {
-    /* §7.2.2.5's six, in the order the IDL declares them. Each is [Replaceable] — an ACCESSOR that a write
+    /* HTML §7.2.2.5's six, in the order the IDL declares them. Each is [Replaceable] — an ACCESSOR that a write
        REPLACES with a data property (Web IDL §3.7.6), not a writable data property from the start: the two
        differ in what `Object.getOwnPropertyDescriptor(window, "toolbar")` answers before anything writes,
        which is what window-properties.https.html reads. A write is captured by the COW delta like any other. */
@@ -151,6 +154,30 @@ void bar_prop_install(JSContext *ctx, JSValueConst global)
     size_t i;
     JSValue proto = bar_prop_build_proto(ctx);
 
+    /* THE PROPERTY REFERENCE — Web IDL §3.8 Platform objects implementing interfaces' `define the global
+       property references`, for the interface whose Web IDL §3.7.3 interface prototype object the line above
+       has just built and TAGGED. THIS LINE DID NOT EXIST, and nothing else in this file was wrong: the six
+       MEMBERS below were installed, the
+       prototype was built, and `Object.prototype.toString.call(window.locationbar)` answered "[object
+       BarProp]" — while `window.BarProp` was absent, in a browser whose IDL for this section reads
+       `[Exposed=Window] interface BarProp`. A TAG IS NOT EVIDENCE OF A PLACEMENT and the two are separate
+       statements of two different sections: Web IDL §3.7.3 Interface prototype object says "There will exist
+       an interface prototype object for every interface defined", so an interface with no interface object
+       anywhere still has one of these, and Web IDL §3.8 is the only sentence that puts the NAME on a global.
+       WHAT THE ABSENCE COST IS NOT A ReferenceError, WHICH IS WHY NOTHING REPORTED IT. `BarProp` is on
+       browser/platform_names.h, so solver/absent.c recognises it as a name a standard owns and DECLINES to
+       mint a concolic for the missed read — the arm that file's own header calls correct and silent. The read
+       therefore decided to a concrete `undefined` with no fork and no throw, so `if (window.BarProp)` took
+       one arm for ever. §NO STUBS' forcing function for an honest absence is the page's own throw, and a
+       feature-detected absence has none: what is lost is not the line but every branch behind the guard.
+       IT IS PLACED FROM THIS COLUMN BECAUSE THIS IS WHERE ITS PROTOTYPE IS BUILT — bar_prop_install is
+       reached from core/frame/window.c's window_install, which is the `window` row's per-document half, and
+       HTML §7.2.2.5's IDL is `[Exposed=Window]`, so a realm that never reaches a document install is owed
+       nothing here. Web IDL §3.3.7 [Exposed] step 1 is asked INSIDE the door rather than at this line,
+       which is why there is no condition written here: the door is what refuses a realm whose global object
+       does not implement Window, and a condition re-spelled at this site would be a second copy of that
+       step. */
+    idl_define_global_property_reference(ctx, global, "BarProp", idl_interface_object(ctx, "BarProp", proto));
     JS_FreeValue(ctx, proto);   /* the realm's class-proto slot holds it */
     for (i = 0; i < sizeof NAMES / sizeof NAMES[0]; i++) {
         JSValue bar = bar_prop_new(ctx);
@@ -170,13 +197,13 @@ void bar_prop_free(JSRuntime *rt)
        runtime here is a host tearing down a browser it never built, and the silent return made that
        indistinguishable from a release that worked (core/agent_state.h). */
     DCHECK(g_bar_rt != NULL,
-           "§7.2.2.5's BarProp was released in an agent that never declared it — bar_prop_init is reached from "
-           "window_init, which is a row on core/platform.c's declare column, so getting here without it is a "
+           "HTML §7.2.2.5's BarProp was released in an agent that never declared it — bar_prop_init is "
+           "reached from window_init, which is a row on core/platform.c's declare column, so getting here is a "
            "teardown of a browser that was never brought up");
     DCHECK(g_bar_rt == rt,
-           "§7.2.2.5's BarProp was released against a RUNTIME other than the one its class was registered in — "
-           "a class id names a class in ONE runtime, and giving it back against another leaves the registering "
-           "runtime's id standing while zeroing nothing that runtime issued");
+           "HTML §7.2.2.5's BarProp was released against a RUNTIME other than the one its class was "
+           "registered in — a class id names a class in ONE runtime, and giving it back against another "
+           "leaves the registering runtime's id standing while zeroing nothing that runtime issued");
     /* THE CLASS ID COMES BACK, and this is the line the comment that stood here denied existed: it said
        "nothing to release here any more" because each realm's prototype goes with its realm — true, and not
        the whole of what this file holds. core/agent_state.h settles the rest: a class is registered in a
