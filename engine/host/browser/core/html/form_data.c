@@ -921,17 +921,32 @@ void form_data_init(JSContext *ctx)
 
     g_fd_ctor_stepid = idl_method_id_step(ctx, CTOR_ARGS, 2, NULL, 0, &js_fd_ctor_decl, 0);
     idl_optional_from(0);   /* §4: both constructor arguments are optional */
-    realm_declare_intrinsic(form_data_install_proto);
+    realm_declare_intrinsic(form_data_install_realm);
 }
 
-/* §4's INTERFACE PROTOTYPE OBJECT, FOR ONE REALM. */
-void form_data_install_proto(JSContext *ctx)
+/* XHR §4 "Interface FormData", FOR ONE REALM — its Web IDL §3.7.3 interface prototype object, its §3.7.1
+   interface object, and Web IDL §3.8's property reference for its name.
+
+   THE INTERFACE OBJECT IS HERE BECAUSE WEB IDL §3.8 IS GIVEN A REALM. `define the global property references`
+   is "To define the global property references on target, given realm realm", and its step 1 is "Let
+   interfaces be a list that contains every interface that is exposed in realm" — the population is a REALM's
+   and the algorithm names no Document. XHR §4 declares `[Exposed=(Window,Worker)]`, so a realm whose global
+   object implements a worker scope owes the name; while it was placed from core/platform.c's per-DOCUMENT
+   column, which such a realm never reaches, it got nothing, and nor did a Window realm until a Document was
+   installed over it. The prototype is in hand here, so the separate per-document entry's JS_GetClassProto
+   re-read is gone: re-reading it would be a second answer to a question this function has just settled.
+
+   THE COMPONENT IS IN core/html/ AND THE INTERFACE IS THE XMLHttpRequest STANDARD'S, which is why this one
+   was left standing when every other XHR §3/§5 placement moved: a conversion partitioned by DIRECTORY does
+   not see it from either side. The exposure set is what decides the column, and it is stated in `xhr.idl` and
+   generated into browser/idl_exposure.h — never read off which directory the file happens to sit in. */
+void form_data_install_realm(JSContext *ctx)
 {
     JSValue proto, prev;
 
     DCHECK(g_fd_class != 0, "a realm asked for FormData.prototype before the class was declared");
     prev = JS_GetClassProto(ctx, g_fd_class);
-    DCHECK(JS_IsNull(prev), "form_data_install_proto ran twice in one realm");
+    DCHECK(JS_IsNull(prev), "form_data_install_realm ran twice in one realm");
     JS_FreeValue(ctx, prev);
 
     proto = JS_NewObject(ctx);
@@ -944,22 +959,23 @@ void form_data_install_proto(JSContext *ctx)
     idl_install_method(ctx, proto, "has", g_fd_id[FD_HAS]);
     idl_install_method(ctx, proto, "set", g_fd_id[FD_SET]);
     idl_pair_iter_install(ctx, proto, g_fd_pair_handle);
-    JS_SetClassProto(ctx, g_fd_class, proto);
-}
 
-void form_data_install(JSContext *ctx, JSValueConst global)
-{
-    JSValue ctor;
-    DCHECK(g_fd_ctor_stepid >= 0, "FormData was installed before form_data_init declared its constructor");
-    ctor = idl_step_constructor(ctx, "FormData", g_fd_ctor_stepid);
-    CHECK(!JS_IsException(ctor), "the FormData interface object could not be allocated");
+    /* WEB IDL §3.7.1's INTERFACE OBJECT AND §3.8's STEP 3.1.3 FOR ITS NAME. XHR §4 declares no
+       [LegacyWindowAlias], so §3.8 step 3.1.4 has nothing to do for this interface, and no
+       [LegacyFactoryFunction], so neither does step 3.2. */
     {
-        JSValue proto = JS_GetClassProto(ctx, g_fd_class);
-        DCHECK(!JS_IsNull(proto), "FormData was installed into a realm that never ran its proto build");
+        JSValue ctor, global;
+
+        DCHECK(g_fd_ctor_stepid >= 0, "FormData was installed before form_data_init declared its constructor");
+        ctor = idl_step_constructor(ctx, "FormData", g_fd_ctor_stepid);
+        CHECK(!JS_IsException(ctor), "the FormData interface object could not be allocated");
         JS_SetConstructor(ctx, ctor, proto);
-        JS_FreeValue(ctx, proto);
+        global = JS_GetGlobalObject(ctx);
+        idl_define_global_property_reference(ctx, global, "FormData", ctor);
+        JS_FreeValue(ctx, global);
     }
-    idl_define_global_property_reference(ctx, global, "FormData", ctor);
+
+    JS_SetClassProto(ctx, g_fd_class, proto);   /* the realm owns it from here */
 }
 
 void form_data_free(JSContext *ctx)

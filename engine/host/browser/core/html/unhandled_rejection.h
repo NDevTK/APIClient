@@ -10,17 +10,21 @@
 
 /* Install the runtime's rejection tracker and build the baseline list. */
 void unhandled_rejection_init(JSContext *ctx);
-/* §8.1.4.7 Unhandled promise rejections' `PromiseRejectionEvent` prototype for ONE realm; run beside the
-   realm's other intrinsics, once per realm. (§8.1.7.2 stood here and is "Queuing tasks".) */
-void unhandled_rejection_install_proto(JSContext *ctx);
+/* Web IDL §3.7's per-realm objects for §8.1.4.7 Unhandled promise rejections' `PromiseRejectionEvent` — the
+   §3.7.3 interface prototype object, the §3.7.1 interface object, Web IDL §3.8's property reference for the
+   name, and this realm's two rejection drivers; run beside the realm's other intrinsics, once per realm.
+   (§8.1.7.2 stood here and is "Queuing tasks".)
+   IT IS ONE FUNCTION AND NOT TWO because Web IDL §3.8 Platform objects implementing interfaces is "To define
+   the global property references on target, given realm realm" and names no Document, and §8.1.4.7 declares
+   `PromiseRejectionEvent` `[Exposed=*]`: an interface object placed from core/platform.c's per-document
+   column reaches no realm that has no Document over it. */
+void unhandled_rejection_install_realm(JSContext *ctx);
 /* PER REALM — see event.h. OWNED: the caller frees. */
 JSValue unhandled_rejection_proto(JSContext *ctx);
 /* THE AGENT HALF, UNDONE — called ONLY from core/platform.c's release column, which is why it takes the
    RUNTIME: what it frees is agent state, and a host that has to remember the call is a host that can forget it
    (the WPT runner did, and every file in that gate ended on the runtime's own leak walk). */
 void unhandled_rejection_free(JSRuntime *rt);
-/* `PromiseRejectionEvent` as a global — §8.1.4.7 Unhandled promise rejections' own interface, chained to Event. */
-void unhandled_rejection_install(JSContext *ctx, JSValueConst global);
 
 /* WHAT AN UNREPORTED REJECTION MEANS is the SOLVER's answer, not this component's: the browser half fires
    `unhandledrejection` and honours preventDefault, and whatever survives that is handed here. Installed once,

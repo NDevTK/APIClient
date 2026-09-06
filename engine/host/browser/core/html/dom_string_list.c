@@ -228,16 +228,27 @@ void dom_string_list_init(JSContext *ctx)
     agent_state_atom("dom_string_list", &g_atom_strings, "that Symbol, interned");
     agent_state_id("dom_string_list", &g_id_item, "the `item` declaration");
     agent_state_id("dom_string_list", &g_id_contains, "the `contains` declaration");
-    realm_declare_intrinsic(dom_string_list_install_proto);
+    realm_declare_intrinsic(dom_string_list_install_realm);
 }
 
-void dom_string_list_install_proto(JSContext *ctx)
+/* HTML §2.6.5 The DOMStringList interface, FOR ONE REALM — its Web IDL §3.7.3 interface prototype object, its
+   §3.7.1 interface object, and Web IDL §3.8's property reference for its name.
+
+   THE INTERFACE OBJECT IS HERE BECAUSE WEB IDL §3.8 IS GIVEN A REALM. `define the global property references`
+   is "To define the global property references on target, given realm realm", and its step 1 is "Let
+   interfaces be a list that contains every interface that is exposed in realm" — the population is a REALM's
+   and the algorithm names no Document. §2.6.5 declares `[Exposed=(Window,Worker)]`, so a realm whose global
+   object implements a worker scope owes the name; while it was placed from core/platform.c's per-DOCUMENT
+   column, which such a realm never reaches, it got nothing, and nor did a Window realm until a Document was
+   installed over it. The prototype is in hand here, so the separate per-document entry's JS_GetClassProto
+   re-read is gone: re-reading it would be a second answer to a question this function has just settled. */
+void dom_string_list_install_realm(JSContext *ctx)
 {
     JSValue proto, prev;
 
     DCHECK(g_list_class != 0, "a realm asked for DOMStringList.prototype before the interface was declared");
     prev = JS_GetClassProto(ctx, g_list_class);
-    DCHECK(JS_IsNull(prev), "dom_string_list_install_proto ran twice in one realm");
+    DCHECK(JS_IsNull(prev), "dom_string_list_install_realm ran twice in one realm");
     JS_FreeValue(ctx, prev);
     proto = JS_NewObject(ctx);
     CHECK(!JS_IsException(proto), "DOMStringList.prototype could not be allocated");
@@ -249,18 +260,20 @@ void dom_string_list_install_proto(JSContext *ctx)
        %Array.prototype.values% as its @@iterator, which is what makes `[...db.objectStoreNames]` work. §2.6.5
        declares no `iterable<>`, so it gets that and NOT `entries`/`keys`/`forEach` — two different clauses. */
     idl_indexed_install_iterable(ctx, proto);
-    JS_SetClassProto(ctx, g_list_class, proto);
-}
 
-void dom_string_list_install(JSContext *ctx, JSValueConst global)
-{
-    JSValue proto = JS_GetClassProto(ctx, g_list_class);
+    /* WEB IDL §3.7.1's INTERFACE OBJECT AND §3.8's STEP 3.1.3 FOR ITS NAME. §2.6.5 declares no constructor, so
+       the interface object's call and construct both throw; it declares no [LegacyWindowAlias] either, so
+       §3.8 step 3.1.4 has nothing to do for this interface, and no [LegacyFactoryFunction], so neither does
+       step 3.2. */
+    {
+        JSValue global = JS_GetGlobalObject(ctx);
 
-    DCHECK(!JS_IsNull(proto), "DOMStringList was installed in a realm that never ran its prototype install");
-    /* §2.6.5 declares no constructor, so the interface object's call and construct both throw. */
-    idl_define_global_property_reference(ctx, global, "DOMStringList",
-                                         idl_interface_object(ctx, "DOMStringList", proto));
-    JS_FreeValue(ctx, proto);
+        idl_define_global_property_reference(ctx, global, "DOMStringList",
+                                             idl_interface_object(ctx, "DOMStringList", proto));
+        JS_FreeValue(ctx, global);
+    }
+
+    JS_SetClassProto(ctx, g_list_class, proto);   /* the realm owns it from here */
 }
 
 void dom_string_list_free(JSRuntime *rt)

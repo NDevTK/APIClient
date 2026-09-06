@@ -1,4 +1,10 @@
-/* THE FormData INTERFACE — XMLHttpRequest §5. See form_data.c. */
+/* THE FormData INTERFACE — XMLHttpRequest §4 "Interface FormData". See form_data.c.
+ *
+ * `XMLHttpRequest §5` STOOD HERE AND IS "Interface ProgressEvent", WHICH THIS COMPONENT DOES NOT DECLARE.
+ * The number was checkable and wrong, and nothing reported it because the citation stated no TITLE: a §5
+ * exists in that standard, so the section resolves and only a reader could have noticed it is about the wrong
+ * interface. The title is stated here for exactly that reason, and this file's own step declaration has said
+ * `XHR §4` all along — one equation at two sites with the checkable half wrong. */
 #ifndef ENGINE_HOST_BROWSER_CORE_HTML_FORM_DATA_H
 #define ENGINE_HOST_BROWSER_CORE_HTML_FORM_DATA_H
 #include <stddef.h>
@@ -9,8 +15,15 @@
 #include "core/url/url.h"
 
 void form_data_init(JSContext *ctx);
-void form_data_install_proto(JSContext *ctx);   /* §5's prototype, for ONE realm */
-void form_data_install(JSContext *ctx, JSValueConst global);
+/* Web IDL §3.7's per-realm objects for XHR §4 "Interface FormData" — the §3.7.3 interface prototype object,
+   the §3.7.1 interface object, and Web IDL §3.8's property reference for the name; declared into
+   core/realm.h's intrinsic list.
+   IT IS ONE FUNCTION AND NOT TWO because Web IDL §3.8 Platform objects implementing interfaces is "To define
+   the global property references on target, given realm realm" and names no Document, and §4 declares
+   `[Exposed=(Window,Worker)]`: an interface object placed from core/platform.c's per-document column reaches
+   no realm that has no Document over it. (`§5's prototype` stood on the deleted second line, and §5 is
+   "Interface ProgressEvent".) */
+void form_data_install_realm(JSContext *ctx);
 void form_data_free(JSContext *ctx);
 
 /* A FormData over an entry list the caller built — how `.formData()` hands back what it parsed out of a body

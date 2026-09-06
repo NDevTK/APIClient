@@ -654,7 +654,6 @@ static void r_simple_dialogs(JSRuntime *rt) { (void)rt; simple_dialogs_free(); }
 
 /* ---- the document half ---------------------------------------------------------------------------------- */
 
-static void i_form_data(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; form_data_install(c, g); }
 /* THE ADDRESS, NOT THE ORIGIN. `window.origin` is §4.7's serialization OF the address, so a host that handed
    this the origin got a `location`-free Window whose own `origin` was re-derived from a string that was
    already one — and the WPT runner, the one host whose whole job is measuring fidelity, did exactly that. */
@@ -664,7 +663,6 @@ static void i_timer(JSContext *c, JSValueConst g, const PlatformDocument *d) { (
 static void i_window_message(JSContext *c, JSValueConst g, const PlatformDocument *d) { window_message_install(c, g, d->origin); }
 static void d_structured_clone(JSContext *c, const PlatformAgent *a) { (void)a; structured_clone_init(c); }
 static void i_structured_clone(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; structured_clone_install(c, g); }
-static void i_unhandled_rejection(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; unhandled_rejection_install(c, g); }
 static void i_animation_frame(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; animation_frame_install(c, g); }
 static void i_idle_callback(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; idle_callback_install(c, g); }
 static void i_page_reveal(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; page_reveal_install(c, g); }
@@ -675,7 +673,6 @@ static void i_observable(JSContext *c, JSValueConst g, const PlatformDocument *d
 static void i_dom_rect_list(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; dom_rect_list_install(c, g); }
 static void i_intersection_observer(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; intersection_observer_install(c, g); }
 static void i_resize_observer(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; resize_observer_install(c, g); }
-static void i_dom_string_list(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; dom_string_list_install(c, g); }
 static void i_document(JSContext *c, JSValueConst g, const PlatformDocument *d)
 {
     document_install(c, g, d->dom, d->url, d->kind, d->policy, d->permissions_policy, d->sandbox_flags,
@@ -721,7 +718,16 @@ static const PlatformComponent PLATFORM[] = {
        platform_document_install gets both. */
     { "url",                 d_url,                 NULL },
     { "url_search_params",   d_usp,                 NULL },
-    { "form_data",           d_form_data,           i_form_data },
+    /* NO DOCUMENT HALF. XHR §4 "Interface FormData" declares `[Exposed=(Window,Worker)]`, and Web IDL §3.8
+       Platform objects implementing interfaces is "To define the global property references on target, given
+       realm realm" whose step 1 is "Let interfaces be a list that contains every interface that is exposed in
+       realm" — a REALM, with no Document in the algorithm — so form_data.c's own realm intrinsic places the
+       interface object beside the prototype it already built there.
+       THE ROW SITS BETWEEN TWO URL ROWS AND THE STANDARD IS THE XMLHttpRequest ONE. Its component is in
+       core/html/ because HTML §4.10.22.4 builds the entry list AS one, and the exposure set is `xhr.idl`'s;
+       neither the directory nor the neighbours decide the column, which is why this row outlived the
+       conversion that moved every other XHR placement. */
+    { "form_data",           d_form_data,           NULL },
     /* NO DOCUMENT HALF. The Streams Standard declares THIRTEEN interfaces and every one of them is
        `[Exposed=*]` — §4.2 "The ReadableStream class", §4.4 "The ReadableStreamDefaultReader class", §4.5 "The
        ReadableStreamBYOBReader class", §4.6 "The ReadableStreamDefaultController class", §4.7 "The
@@ -845,8 +851,15 @@ static const PlatformComponent PLATFORM[] = {
        §4.4, §4.5 and §4.10 each answer with one, and core/realm.h runs the per-realm installs in DECLARATION
        order, so its prototype must be in a realm before any member below can build a list in it. It is an HTML
        row and not an Indexed Database one because it is an HTML type; HTML §7.2.5's `ancestorOrigins` is the
-       next consumer and reaches the same component. */
-    { "dom_string_list",     d_dom_string_list,     i_dom_string_list, r_dom_string_list },
+       next consumer and reaches the same component.
+       NO DOCUMENT HALF. §2.6.5 "The DOMStringList interface" declares `[Exposed=(Window,Worker)]`, and Web IDL
+       §3.8 Platform objects implementing interfaces is "To define the global property references on target,
+       given realm realm" whose step 1 is "Let interfaces be a list that contains every interface that is
+       exposed in realm" — a REALM, with no Document in the algorithm — so dom_string_list.c's own realm
+       intrinsic places the interface object beside the prototype it already built there. The three §2.6.4
+       collections one section above it are each `[Exposed=Window]` and keep their per-document column; the
+       exposure sets decide, not the section family. */
+    { "dom_string_list",     d_dom_string_list,     NULL,        r_dom_string_list },
     /* INDEXED DATABASE, in the standard's own dependency order and no further. §2.4's KEY is what §2.2's list
        of records is sorted by, what §2.9's range is bounded by and what §2.10's cursor walks in, so it is the
        first thing that standard can have; §4.7's IDBKeyRange is the interface over it, and §4.3's IDBFactory
@@ -1026,7 +1039,14 @@ static const PlatformComponent PLATFORM[] = {
        prototype it already built there, so a realm that reaches no platform_document_install gets it. */
     { "broadcast_channel",   d_broadcast_channel,   NULL,        r_broadcast_channel },
     { "structured_clone",    d_structured_clone,    i_structured_clone, r_structured_clone },
-    { "unhandled_rejection", d_unhandled_rejection, i_unhandled_rejection, r_unhandled_rejection },
+    /* NO DOCUMENT HALF. HTML §8.1.4.7 Unhandled promise rejections declares `PromiseRejectionEvent`
+       `[Exposed=*]`, so Web IDL §3.3.7 [Exposed] step 1 returns before it looks at the realm and EVERY realm
+       owes the name; Web IDL §3.8 Platform objects implementing interfaces is "To define the global property
+       references on target, given realm realm" whose step 1 is "Let interfaces be a list that contains every
+       interface that is exposed in realm" — a REALM, with no Document in the algorithm — so
+       unhandled_rejection.c's own realm intrinsic places the interface object beside the prototype and the two
+       rejection drivers it already built there. */
+    { "unhandled_rejection", d_unhandled_rejection, NULL,        r_unhandled_rejection },
     /* §8.12 Animation frames's map before §8.1.7.3 step 14 consumes it, and §7.4.6.3's reveal after Event. */
     { "animation_frame",     d_animation_frame,     i_animation_frame, r_animation_frame },
     /* COOPERATIVE SCHEDULING OF BACKGROUND TASKS §4 and §5, BESIDE the row above because they are the same

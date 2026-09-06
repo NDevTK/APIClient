@@ -6764,6 +6764,103 @@ static void exposure_selftest(JSContext *ctx, const char *top_level_url)
            skips it and no property reference for it exists in any realm — while browser/idl_exposure.h
            carries it as IDL_EXPOSED_STAR and answers that it is exposed everywhere */
         { "EventListener",     false, false },
+        /* THE core/html GROUP, WHOSE VERDICT IS THREE `MOVE` AGAINST TWELVE `STAY` — the most lopsided split
+           any group here has had, and the reason is that nearly every interface HTML declares is
+           `[Exposed=Window]` and belongs exactly where it is. XHR §4 "Interface FormData" and HTML §2.6.5 "The
+           DOMStringList interface" both declare `[Exposed=(Window,Worker)]`, and HTML §8.1.4.7 "Unhandled
+           promise rejections" declares PromiseRejectionEvent `[Exposed=*]`, so a realm whose global names are
+           a DedicatedWorkerGlobalScope's owes all three and had none of them: every one was placed from
+           core/platform.c's per-document column, which such a realm never reaches. Those are the three
+           calibration rows.
+
+           `FormData` IS THE ONE A DIRECTORY-SHAPED CONVERSION CANNOT SEE FROM EITHER SIDE, and it is why this
+           group exists as a group. Its interface is the XMLHttpRequest Standard's and its component is
+           core/html/form_data.c — HTML §4.10.22.4 builds the entry list AS one — so the lane that moved XHR
+           §3's three interface objects and §5's ProgressEvent did not reach it, and a lane reading core/html/
+           as "the HTML element interfaces" would not think to. The exposure set is stated in `xhr.idl` and
+           generated into browser/idl_exposure.h, and it is the only thing that decides the column.
+
+           `FormDataEntryValue` AND `PromiseRejectionEventInit` ARE THE DISCRIMINATING ROWS, and they are
+           `TextDecoderCommon`'s test over the two Web IDL constructs no row here has asked about yet. Web IDL
+           §3.8 Platform objects implementing interfaces' step 1 population is "every interface that is exposed
+           in realm", and neither of these is an interface: `FormDataEntryValue` is a Web IDL §2.11 "Typedefs"
+           TYPEDEF, declared in `xhr.idl` on the line immediately above `interface FormData`, and Web IDL §2.11
+           says of one in its own words "This new name is not exposed by language bindings; it is purely used
+           as a shorthand for referencing the type in the IDL";
+           `PromiseRejectionEventInit` is a Web IDL §2.7 "Dictionaries" DICTIONARY, declared in `html.idl`
+           immediately BELOW `interface PromiseRejectionEvent` and physically converted by that component's own
+           constructor, so a conversion that placed what its component's IDL declares rather than what §3.8
+           enumerates has it in hand at the moment it mints. Both are blind to browser/idl_exposure.h for the
+           reason that header states in as many words — a name with no row is EXPOSED, and the generator keys
+           on the constructs §3.8 defines — so `idl_exposed_in_realm` answers TRUE for each and the door would
+           place both names in BOTH realms without a word. They pass at the parent revision and pass here.
+
+           `Image`, `Audio` AND `Option` ARE WEB IDL §3.8's OTHER ARM, WHICH NO ROW HERE HAS REACHED BEFORE.
+           They are not interface objects: HTML §4.8.3 "The img element", §4.8.9 "The audio element" and
+           §4.10.10 "The option element" declare `[LegacyFactoryFunction=Image(...)]`,
+           `[LegacyFactoryFunction=Audio(...)]` and `[LegacyFactoryFunction=Option(...)]` on their element
+           interfaces, and §3.8's step 3.2 is the arm that places them — a SIBLING of step 3.1 under step 3 and
+           not nested inside it, so unlike step 3.1.4's [LegacyWindowAlias] arm it carries NO "target
+           implements the Window interface" condition and the name's exposure is decided entirely by step 1's
+           exposure of the INTERFACE. All three interfaces are `[Exposed=Window]`, so all three names are a
+           Window realm's alone — which is what `webkitURL` and `SVGRect` say through a different arm, and this
+           is the first time the factory-function arm is stated as an assertion rather than as code.
+
+           ELEVEN OF THE TWELVE REFUSALS BELOW ARE PLACED BY A COMPONENT WITH NO core/platform.c ROW AT ALL,
+           which is this group's `ProgressEvent` fact and is worse than that one was because it is not one call
+           but eleven names across eight files. `CustomElementRegistry` and §4.13.7's three ride
+           core/dom/document.c's document_install; `DOMStringMap`, `FormDataEvent`, `MediaError`, `TimeRanges`
+           and the three legacy factory functions ride core/html/html_element.c's html_element_install, the
+           last three from inside its dedup LOOP. Only `XMLSerializer` has a row of its own. So the STAY
+           verdict for those eleven cannot be read off core/platform.c — the rows are not there to read — and
+           the next conversion of `document` or `html_element` is the one that would take them.
+           WHAT THESE ROWS CATCH AND WHAT THEY DO NOT, SAID PLAINLY RATHER THAN COUNTED TOGETHER. `false` in
+           the worker arm is what Web IDL §3.3.7 [Exposed] step 1 requires of `[Exposed=Window]` in a
+           DedicatedWorkerGlobalScope realm HOWEVER the name is placed. `false` in the Window arm is this
+           table's own moment — it runs before any document is installed over any realm — so a conversion that
+           moved any of these to the per-realm column reads `true` there and FAILS, which is the mistake this
+           group offers. A conversion that DELETED one of the eleven calls instead would leave the name absent
+           from both realms and these rows would pass; that direction is caught by core/platform.c's
+           PLATFORM_WITNESS probe for the names it has rows for, and by nothing at all for the ones it does
+           not, which is the honest state and is stated here rather than left to be assumed.
+
+           AT THE PARENT REVISION the three `MOVE` rows FAIL in BOTH arms, because this runs after
+           tf_agent_init and before tf_realm_install reaches platform_document_install, so no document column
+           has run over either realm. The twelve refusals, the typedef and the dictionary read the same at the
+           parent as here; they are discriminators against a wrong conversion, never calibration rows, and are
+           reported as such. Established by READING main's call order and core/platform.c's two columns, never
+           by a run — a subagent does not build. */
+        { "FormData",              true,  true  },  /* XHR §4 "Interface FormData", [Exposed=(Window,Worker)] */
+        /* HTML §2.6.5 "The DOMStringList interface", [Exposed=(Window,Worker)] */
+        { "DOMStringList",         true,  true  },
+        /* HTML §8.1.4.7 "Unhandled promise rejections", [Exposed=*] — every realm, by §3.3.7 step 1's return */
+        { "PromiseRejectionEvent", true,  true  },
+        /* THE TWELVE REFUSED: each `[Exposed=Window]`, so the worker arm is Web IDL §3.3.7 step 1's own answer,
+           and each still core/platform.c's per-document column, so the Window arm is this table's moment */
+        { "CustomElementRegistry", false, false },  /* HTML §4.13.4 "The CustomElementRegistry interface" */
+        { "ElementInternals",      false, false },  /* HTML §4.13.7.1 "The ElementInternals interface" */
+        { "CustomStateSet",        false, false },  /* HTML §4.13.7.5 "Custom state pseudo-class" */
+        { "ValidityState",         false, false },  /* HTML §4.10.21.3 "The constraint validation API" */
+        /* HTML §3.2.6.6 "Embedding custom non-visible data with the data-* attributes" — `[Exposed=Window,
+           LegacyOverrideBuiltIns]`, and the second attribute changes nothing about which realms owe the name */
+        { "DOMStringMap",          false, false },
+        { "FormDataEvent",         false, false },  /* HTML §4.10.22.11 "The FormDataEvent interface" */
+        { "MediaError",            false, false },  /* HTML §4.8.11.1 "Error codes" */
+        { "TimeRanges",            false, false },  /* HTML §4.8.11.14 "Time ranges" */
+        { "XMLSerializer",         false, false },  /* HTML §8.5.8 "The XMLSerializer interface" */
+        /* Web IDL §3.7.2 "Legacy factory functions", placed by §3.8's step 3.2 rather than its step 3.1.3 —
+           HTML §4.8.3 "The img element", §4.8.9 "The audio element" and §4.10.10 "The option element" declare
+           them on interfaces that are `[Exposed=Window]`, so step 1 never reaches those interfaces in a worker
+           realm and step 3 never runs for them there */
+        { "Image",                 false, false },
+        { "Audio",                 false, false },
+        { "Option",                false, false },
+        /* Web IDL §2.11 "Typedefs" — `typedef (File or USVString) FormDataEntryValue;` sits one line above
+           `interface FormData` in xhr.idl, and no Web IDL §3.8 property reference exists for a typedef */
+        { "FormDataEntryValue",    false, false },
+        /* Web IDL §2.7 "Dictionaries" — declared immediately below `interface PromiseRejectionEvent` in
+           html.idl and converted by that interface's own constructor; §3.8 defines no reference for one */
+        { "PromiseRejectionEventInit", false, false },
     };
     JSContext *worker = JS_NewContext(JS_GetRuntime(ctx));
     /* THE SECOND WORKER REALM IS THE OTHER ARM OF ONE STEP, and it is a second REALM because that is the only

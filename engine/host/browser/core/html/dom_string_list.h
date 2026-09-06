@@ -20,10 +20,16 @@
 #include "quickjs.h"
 
 /* Declared once per AGENT: the class, the slot key and the two operations' pool entries. It REGISTERS the
-   per-realm prototype install. */
+   per-realm install below. */
 void dom_string_list_init(JSContext *ctx);
-void dom_string_list_install_proto(JSContext *ctx);
-void dom_string_list_install(JSContext *ctx, JSValueConst global);
+/* Web IDL §3.7's per-realm objects for HTML §2.6.5 The DOMStringList interface — the §3.7.3 interface
+   prototype object, the §3.7.1 interface object, and Web IDL §3.8's property reference for the name; declared
+   into core/realm.h's intrinsic list.
+   IT IS ONE FUNCTION AND NOT TWO because Web IDL §3.8 Platform objects implementing interfaces is "To define
+   the global property references on target, given realm realm" and names no Document, and §2.6.5 declares
+   `[Exposed=(Window,Worker)]`: an interface object placed from core/platform.c's per-document column reaches
+   no realm that has no Document over it. */
+void dom_string_list_install_realm(JSContext *ctx);
 void dom_string_list_free(JSRuntime *rt);
 
 /* §2.6.5's list over `strings`, an Array of DOMString in the order the producer's algorithm put them in —

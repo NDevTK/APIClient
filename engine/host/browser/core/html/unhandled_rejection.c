@@ -644,19 +644,31 @@ void unhandled_rejection_init(JSContext *ctx)
        (solver/engine.c installs it, and the solver is released after the platform), so it is exactly the kind
        agent_state_ptr exists for. */
     agent_state_ptr("unhandled_rejection", &g_report, "the host edge an unreported rejection is reported through");
-    realm_declare_intrinsic(unhandled_rejection_install_proto);
+    realm_declare_intrinsic(unhandled_rejection_install_realm);
 }
 
-/* §8.1.7.2's PROTOTYPE FOR ONE REALM. `interface PromiseRejectionEvent : Event` — a real chain, so
-   `e instanceof Event` and every Event member hold on one of these, and it chains to THIS realm's
-   Event.prototype because a chain to another document's is the same defect one link up. */
-void unhandled_rejection_install_proto(JSContext *ctx)
+/* §8.1.4.7's INTERFACE FOR ONE REALM — its Web IDL §3.7.3 interface prototype object, its §3.7.1 interface
+   object, Web IDL §3.8's property reference for the name, and this realm's two rejection drivers.
+   `interface PromiseRejectionEvent : Event` — a real chain, so `e instanceof Event` and every Event member
+   hold on one of these, and it chains to THIS realm's Event.prototype because a chain to another document's
+   is the same defect one link up. (`§8.1.7.2's PROTOTYPE` stood on this banner and is "Queuing tasks".)
+
+   THE INTERFACE OBJECT IS HERE BECAUSE WEB IDL §3.8 IS GIVEN A REALM. `define the global property references`
+   is "To define the global property references on target, given realm realm", and its step 1 is "Let
+   interfaces be a list that contains every interface that is exposed in realm" — the population is a REALM's
+   and the algorithm names no Document. §8.1.4.7 declares `[Exposed=*]`, so Web IDL §3.3.7 [Exposed] step 1
+   returns before it ever looks at the realm and EVERY realm owes the name; while it was placed from
+   core/platform.c's per-DOCUMENT column it reached no realm without a Document over it, which is every worker
+   realm and every Window realm until one is installed. The prototype is in hand here, so the separate
+   per-document entry's unhandled_rejection_proto re-read is gone: it re-asked JS_GetClassProto for a value
+   this function had just built. */
+void unhandled_rejection_install_realm(JSContext *ctx)
 {
     JSValue proto, prev, base;
 
     DCHECK(g_ready, "a realm asked for PromiseRejectionEvent.prototype before the interface was declared");
     prev = JS_GetClassProto(ctx, g_pre_class);
-    DCHECK(JS_IsNull(prev), "unhandled_rejection_install_proto ran twice in one realm");
+    DCHECK(JS_IsNull(prev), "unhandled_rejection_install_realm ran twice in one realm");
     JS_FreeValue(ctx, prev);
     base = event_proto(ctx);
     proto = JS_NewObjectProto(ctx, base);
@@ -665,7 +677,6 @@ void unhandled_rejection_install_proto(JSContext *ctx)
     idl_interface_tag(ctx, proto, "PromiseRejectionEvent");
     idl_install_accessor(ctx, proto, "promise", js_pre_get, 0, -1);
     idl_install_accessor(ctx, proto, "reason", js_pre_get, 1, -1);
-    JS_SetClassProto(ctx, g_pre_class, proto);
     {
         JSValue fn = JS_NewCFunction2(ctx, NULL, "notifyRejected", 2, JS_CFUNC_step, g_notify_stepid);
         CHECK(!JS_IsException(fn), "the rejection-notification driver could not be allocated");
@@ -679,6 +690,24 @@ void unhandled_rejection_install_proto(JSContext *ctx)
         CHECK(!JS_IsException(fn), "the rejection-handled driver could not be allocated");
         realm_value_set(ctx, g_handled_slot, fn);
     }
+    {
+        /* WEB IDL §3.7.1's INTERFACE OBJECT AND §3.8's STEP 3.1.3 FOR ITS NAME. §8.1.4.7 declares no
+           [LegacyWindowAlias], so §3.8 step 3.1.4 has nothing to do for this interface, and no
+           [LegacyFactoryFunction], so neither does step 3.2. */
+        JSValue ctor = idl_step_constructor(ctx, "PromiseRejectionEvent", g_id_pre_ctor);
+        JSValue global;
+
+        CHECK(!JS_IsException(ctor), "the PromiseRejectionEvent interface object could not be allocated");
+        JS_SetConstructor(ctx, ctor, proto);
+        global = JS_GetGlobalObject(ctx);
+        idl_define_global_property_reference(ctx, global, "PromiseRejectionEvent", ctor);
+        JS_FreeValue(ctx, global);
+    }
+
+    /* THE HANDOVER IS LAST, for the reason 6dffb549 gives for xhr_install_realm's three: `proto` is this
+       function's own until JS_SetClassProto takes it, and moving the mint above the handover is what lets the
+       interface object be built out of the value in hand instead of re-read from the slot it was given to. */
+    JS_SetClassProto(ctx, g_pre_class, proto);   /* the realm owns it from here */
 }
 
 JSValue unhandled_rejection_proto(JSContext *ctx)
@@ -687,21 +716,6 @@ JSValue unhandled_rejection_proto(JSContext *ctx)
     DCHECK(!JS_IsNull(proto),
            "PromiseRejectionEvent.prototype was asked for in a realm that never ran its install");
     return proto;   /* OWNED */
-}
-
-void unhandled_rejection_install(JSContext *ctx, JSValueConst global)
-{
-    JSValue ctor;
-
-    DCHECK(g_ready, "PromiseRejectionEvent was installed before its prototype was built");
-    ctor = idl_step_constructor(ctx, "PromiseRejectionEvent", g_id_pre_ctor);
-    CHECK(!JS_IsException(ctor), "the PromiseRejectionEvent interface object could not be allocated");
-    {
-        JSValue proto = unhandled_rejection_proto(ctx);
-        JS_SetConstructor(ctx, ctor, proto);
-        JS_FreeValue(ctx, proto);
-    }
-    idl_define_global_property_reference(ctx, global, "PromiseRejectionEvent", ctor);
 }
 
 /* THE RUNTIME, NOT A REALM, and it is the platform's release column that calls it — see core/platform.h. What
