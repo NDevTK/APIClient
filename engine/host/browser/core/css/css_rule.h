@@ -1,5 +1,5 @@
 /* CSSOM §6.4's CSS RULES — §6.4.2 CSSRule, §6.4.5 CSSGroupingRule, §6.4.3 CSSStyleRule, §6.4.4 CSSImportRule,
- * §6.4.7 CSSPageRule, §6.4.8 CSSMarginRule and §6.4.9 CSSNamespaceRule, plus CSS Conditional §7.2's
+ * §6.4.7 CSSPageRule, §6.4.8 CSSMarginRule and §6.4.9 CSSNamespaceRule, plus CSS Conditional 3 §7.2's
  * CSSConditionRule, §7.3's CSSMediaRule and §7.4's CSSSupportsRule (the `@media` and `@supports` halves of the
  * same object), CSS Fonts 5 §9.1's CSSFontFaceRule, CSS Animations §6.2/§6.3's CSSKeyframeRule and
  * CSSKeyframesRule, CSS Cascade §8.1/§8.2's CSSLayerBlockRule and CSSLayerStatementRule, and CSS Properties and
