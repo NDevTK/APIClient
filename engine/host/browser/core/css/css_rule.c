@@ -1229,15 +1229,18 @@ static JSValue property_rule_new(JSContext *ctx, JSValueConst parent_style_sheet
            a rule writes it out. */
         star = css_property_syntax_definition("*", 1, &def);
         DCHECK(star && def.universal,
-               "§5.4.2 refused §3.1's own initial value for the syntax descriptor — `\"*\"` is step 3's lone "
-               "asterisk and IS §5.4.1's universal syntax definition, so this is that step no longer being "
-               "reachable rather than a rule that declared something wrong");
+               "CSS Properties and Values API 1 §3.1's own initial value for the syntax descriptor was "
+               "refused by §5.4.2 \"Consume a Syntax Definition\" — `\"*\"` is that algorithm's step 3 "
+               "lone asterisk and IS the universal syntax definition §5.4.1 \"Definitions\" defines, so "
+               "this is that step no longer being reachable rather than a rule that declared something "
+               "wrong");
         (void)star;
     }
     DCHECK(def.universal || syntax != NULL,
            "an `@property` rule holds a NON-universal syntax definition with no syntax string behind it — the "
-           "only definition this rule can have without one is §3.1's initial `\"*\"`, which IS §5.4.1's "
-           "universal syntax definition");
+           "only definition this rule can have without one is CSS Properties and Values API 1 "
+           "§3.1 \"The syntax Descriptor\"'s initial `\"*\"`, which IS the universal syntax definition "
+           "§5.4.1 \"Definitions\" defines");
     rule_set(ctx, r, &r->property_syntax, JS_NewString(ctx, syntax ? syntax : "*"));
     free(syntax);
 
@@ -1450,8 +1453,9 @@ static bool at_rule_defined(const char *name)
 }
 
 /* THE AT-RULES THAT ARE DROPPED RATHER THAN CRASHED ON, AND BOTH ARMS ARE POSITIVE STATEMENTS ABOUT THE
- * PLATFORM rather than gaps. `name` is the at-keyword as the builder resolved it — §3.1's aliases have already
- * been taken out of it, which is why this function never has to ask about one.
+ * PLATFORM rather than gaps. `name` is the at-keyword as the builder resolved it — the aliases of
+ * CSS Compatibility Standard §3.1 "CSS At-rules" have already been taken out of it, which is why this
+ * function never has to ask about one.
  *
  * `@charset`: CSSOM keeps the historical constant `CHARSET_RULE = 2` and declares NO CSSCharsetRule interface
  * at all, so there is no object an `@charset` could become and every user agent leaves it out of `cssRules`.
@@ -1568,7 +1572,7 @@ static JSValue rule_from_parse(RuleBuild *b, const CssomRule *pr, JSValueConst p
        the crash below, which would name a capability that is already built. */
     if (pr->at_name && css_page_margin_at_rule(pr->at_name)) return JS_UNDEFINED;
     /* A QUALIFIED RULE INSIDE A STYLE RULE IS CSS NESTING §3's NESTED STYLE RULE, and it differs from the one
-       below in exactly the way §3.1 "Syntax" says it does: "A nested style rule accepts a
+       below in exactly the way CSS Nesting 1 §3.1 "Syntax" says it does: "A nested style rule accepts a
        <relative-selector-list> as its prelude (rather than just a <selector-list>)". This engine's selector
        parser implements neither the nesting selector nor a relative selector list, so BOTH extra shapes reach
        here as a prelude it refused — `&:hover` and `> .baz` arrive exactly as `!!!` does — and telling them
@@ -1578,10 +1582,10 @@ static JSValue rule_from_parse(RuleBuild *b, const CssomRule *pr, JSValueConst p
        WHAT IS STORED IS §6 "CSSOM"'s ABSOLUTIZED FORM — "When serializing a relative selector in a nested style
        rule, the selector must be absolutized, with the implied nesting selector inserted" — so `.bar` nested
        inside `.foo` has a `selectorText` of `& .bar`, and every later reader (the cascade above all) has ONE
-       shape to resolve instead of three. Its VALIDITY is not decided here: §3.1's "An invalid nested style rule
-       is ignored, along with its contents" is discharged by the cascade, which parses the RESOLVED text and
-       emits nothing for a rule that is not a selector list — the same parse that decides validity for every
-       other selector in the sheet. */
+       shape to resolve instead of three. Its VALIDITY is not decided here: CSS Nesting 1 §3.1's "An invalid
+       nested style rule is ignored, along with its contents" is discharged by the cascade, which parses the
+       RESOLVED text and emits nothing for a rule that is not a selector list — the same parse that decides
+       validity for every other selector in the sheet. */
     if (!pr->at_name && !JS_IsNull(rule_nesting_parent(parent_rule))) {
         size_t plen = strlen(pr->prelude);
         char *absolutized;
@@ -2843,9 +2847,10 @@ static bool property_rule_serialize(JSContext *ctx, CssRuleData *r, RBuf *out)
     if (!name) return false;
     syntax = rule_text_copy(ctx, r->property_syntax, &sl);
     DCHECK(RULE_TEXT_FIELD_WAS_STRING(ctx, syntax),
-           "an `@property` rule's syntax is not a string, and nothing is pending. §3.1's descriptor is OPTIONAL "
-           "and its INITIAL is `\"*\"`, which the creator stores for a rule that declares none — so the field "
-           "is a string on every `@property` rule there is");
+           "an `@property` rule's syntax is not a string, and nothing is pending. "
+           "CSS Properties and Values API 1 §3.1 \"The syntax Descriptor\" is OPTIONAL and its INITIAL is "
+           "`\"*\"`, which the creator stores for a rule that declares none — so the field is a string on "
+           "every `@property` rule there is");
     if (!syntax) { free(name); return false; }
     DCHECK(JS_IsBool(r->property_inherits),
            "an `@property` rule's inherit flag is not a boolean — §3.2's descriptor is OPTIONAL with the INITIAL "
@@ -4248,7 +4253,8 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, 
        <keyframe-block> rules", and a keyframe block's prelude is a `<keyframe-selector>#` — a position along a
        duration, which selects no element and cannot. Its declarations reach an element only through the
        ANIMATION that names it (§4.1's `animation-name`), which is a step after the cascade rather than a rule
-       in it — CSS Cascade 5 §6.1 puts animations in an origin of their own, above every author declaration. */
+       in it — CSS Cascade 5 §6.1 "Cascade Sorting Order" puts animations in an origin of their own, above
+       every NORMAL author declaration and below every IMPORTANT one. */
     if (r->type == RULE_TYPE_KEYFRAMES) return true;
     /* NOR DOES AN `@property`, and for a FIFTH: CSS Properties and Values API 1 §3 makes it "a custom property
        REGISTRATION directly in a stylesheet", whose body declares §3.1's, §3.2's and §3.3's descriptors and no
