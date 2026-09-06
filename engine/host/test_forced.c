@@ -3349,7 +3349,19 @@ static const char *HTML =
        same reply from a program that ENDS in the step that starts it.
        SO THE TWO ROWS TOGETHER ARE THE EXPERIMENT AND NEITHER IS ALONE: this one reading 1 while
        the five read 0 says the gate is the frame and not the queue, the rank or the reply path.
-       This one reading 0 says the frame is NOT the mechanism and the account above is wrong. */
+       This one reading 0 says the frame is NOT the mechanism and the account above is wrong.
+       IT READ 0, SO THE FRAME ACCOUNT IS REFUTED AND THE PARAGRAPH ABOVE IS KEPT AS THE THING THAT WAS
+       WRONG. Three runs of one artifact, `pending` — the microtask-settled await, which shares every
+       part of this path except what settles the promise — reading 1 in all three, so the control armed
+       and the zero is about the subject. `hdrs` 1, jobs in the thousands, and `deliver-one-reply` 0 in
+       all three: a program that ends its own frame in the step that starts it does not get its reply
+       either. A FOURTH RUN IS WHY THE CONTROL IS QUOTED RATHER THAN ASSUMED — it read `pending` 0 and
+       `frame-ctl` 0 together, which is unscored and not a refutation, and reading it as one would have
+       confirmed this row's own message by luck.
+       WHAT SURVIVES OF THE ACCOUNT IS THE DOUBLE GATE ITSELF, which is real and verified at both sites;
+       what does not is that releasing the frame is SUFFICIENT. `resume-ended-its-frame` is nonzero while
+       `deliver-one-reply` stays 0, so frames are released and the arm still never runs, and the next
+       reader starts from the other conjunct rather than from the frame. */
     "<script>fetch('/api/config').then(function(r){ return r.json(); })"
             ".then(function(c){ fetch('/api/framectl?r=' + c.region); });</script>"
     /* THE LAST <script> OF THE DOCUMENT, and it exists only to REPORT — see the injection in script 1. It has
