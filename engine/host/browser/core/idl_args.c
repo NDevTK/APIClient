@@ -32,6 +32,11 @@
    this one decides which interface objects exist on a realm's global, which is the platform surface itself
    and is the same in every build. */
 #include "idl_exposure.h"
+/* GENERATED from @webref/idl — Web IDL §3.3.14 [Unscopable], as §3.7.3 Interface prototype object performs it.
+   UNCONDITIONAL for idl_exposure.h's reason and not idl_inheritance.h's: this table decides which names an
+   interface prototype object's %Symbol.unscopables% object carries, which is a property a page READS and a
+   `with` statement RESOLVES against, so it is the platform surface itself and is the same in every build. */
+#include "idl_unscopables.h"
 #include "core/realm.h"          /* §3.3.7 [Exposed] step 1: the global names THIS realm's global implements */
 #include "core/frame/secure_context.h"   /* §3.3.7 [Exposed]'s conditions: HTML §8.1.3.5 Secure contexts' answer
                                             for this realm */
@@ -6082,6 +6087,138 @@ static void idl_tag_write(JSContext *ctx, JSValueConst obj, const char *iface)
                            JS_NewString(ctx, iface), JS_PROP_CONFIGURABLE);
 }
 
+/* WEB IDL §3.3.14 [Unscopable], AS §3.7.3 Interface prototype object PERFORMS IT — the %Symbol.unscopables%
+ * object on the prototype being tagged, built from browser/idl_unscopables.h.
+ *
+ * §3.3.14 states the OUTCOME and defers the steps: "it indicates that an object that implements an interface
+ * with the given interface member will not include its property name in any object environment record with it
+ * as its base object … This is achieved by including the property name on the interface prototype object's
+ * %Symbol.unscopables% property's value", and then "See § 3.7.3 Interface prototype object for the specific
+ * requirements that the use of [Unscopable] entails." §3.7.3 is the algorithm, and it runs its [Unscopable]
+ * block immediately after OrdinaryObjectCreate(proto) and BEFORE "Define the regular attributes of interface
+ * on interfaceProtoObj" — which is why this is here rather than beside a member install: at this point in the
+ * engine's own sequence NOT ONE MEMBER IS ON THE OBJECT YET, exactly as in the standard.
+ *
+ * IT IS THE SAME CALL AS THE CLASS STRING BECAUSE IT IS THE SAME ALGORITHM. §3.7.3 mints ONE unscopables
+ * object per interface prototype object and defines ONE symbol-keyed property on it; the members contribute
+ * only their identifiers. An annotation on an install entry would make every member of an interface re-decide
+ * a fact about the INTERFACE, and it could not answer §3.7.3's outer condition at all — nothing standing at a
+ * member's install knows whether it is the last one. idl_interface_tag is where a prototype object states
+ * which interface it is, so it is the only place this question has an answer.
+ *
+ * THE MEMBER LIST IS DERIVED AND NEVER RESTATED. browser/idl_unscopables.h is generated from the real .idl by
+ * engine/idlgen.mjs — the same reader that emits §3.7.3's proto step and §3.3.7's exposure sets — so the day
+ * webref moves a [Unscopable] the table moves with it. A hand-kept list here would be the second copy of a
+ * fact whose first copy is the artifact this engine's whole IDL toolchain exists to read.
+ *
+ * WHAT A PAGE SEES, which is the only reason any of this is worth building: ECMAScript §9.1.1.2.1
+ * "HasBinding ( name )" step 5 reads %Symbol.unscopables% off the `with` binding object and step 6.b returns
+ * false for a blocked name, so `with (el) { append }` reaches the ENCLOSING scope's `append` in a browser and
+ * reached Element.prototype.append here. That is not a curiosity: seven of the nine members the corpus
+ * declares [Unscopable] come from DOM's ParentNode and ChildNode MIXINS, which post-date the interfaces they
+ * are included by, and the annotation is on them precisely because real pages already had bare identifiers of
+ * those names inside `with`.
+ *
+ * ── NAMED RESIDUAL: the ids are not checked against the members the engine installs ─────────────────────────
+ *   — WHAT IS NOT COVERED: §3.7.3's loop writes "member's identifier", so every id in a row NAMES A MEMBER of
+ *     that interface. Nothing here asserts the engine installs it. The table cannot be wrong on its own — it
+ *     is the corpus's own answer — so the divergence this leaves open is an id whose member this ENGINE has
+ *     not built, which would put a name in the unscopables object that is on no prototype. All 23 of this
+ *     corpus's placements are installed today, so the residual is about a member that goes AWAY rather than
+ *     one that was never there.
+ *   — WHAT THE NEXT DIFF BUILDS: the check needs the interface AND its finished prototype in one hand, and
+ *     §3.7.3 puts this block before the members, so it cannot be made here. core/realm.h's dev-only census is
+ *     the shape that has both ends: realm_note_interface_prototype_object is called from THIS function with
+ *     the identifier, realm_assert_interface_objects_asked is the entry a caller uses to state the realm is
+ *     finished, and the census currently records the identifier and not the object. Carrying the prototype
+ *     into that census — checked at `origin/main` before this was written: realm.c's realm_census_note takes a
+ *     key and no value — makes the end-of-realm walk able to ask JS_GetOwnSlotDesc for each id.
+ *   — HOW ITS ABSENCE WOULD SHOW: `Symbol.unscopables in Element.prototype` is true and
+ *     `Object.keys(Element.prototype[Symbol.unscopables]).filter(k => !(k in Element.prototype))` is non-empty
+ *     — a name declared unscopable for a member a page cannot reach. `node engine/idlgen.mjs` reports the same
+ *     member ABSENT on that interface's row on the same run, which is the cross-check that says the census is
+ *     measuring the engine rather than the table. */
+static int idl_unscopables_row_cmp(const void *key, const void *row)
+{
+    return strcmp((const char *)key, ((const IdlUnscopablesRow *)row)->iface);
+}
+
+static void idl_install_unscopables(JSContext *ctx, JSValueConst proto, const char *iface)
+{
+    const IdlUnscopablesRow *r;
+    JSValue unscopable_object;
+    unsigned k, here;
+    int ret;
+
+    r = bsearch(iface, IDL_UNSCOPABLES, sizeof IDL_UNSCOPABLES / sizeof IDL_UNSCOPABLES[0],
+                sizeof IDL_UNSCOPABLES[0], idl_unscopables_row_cmp);
+    /* §3.7.3's OUTER CONDITION — "If interface has any member declared with the [Unscopable] extended
+       attribute". A row exists exactly when the corpus declares one, so no row is no property at all, and that
+       is observably different from the empty object the loop below can still produce: a page reads
+       `Symbol.unscopables in Foo.prototype`. */
+    if (r == NULL) return;
+
+    /* "Let unscopableObject be OrdinaryObjectCreate(null)." */
+    unscopable_object = JS_NewObjectProto(ctx, JS_NULL);
+    CHECKF(!JS_IsException(unscopable_object),
+           "\"%s\"'s Web IDL §3.7.3 %%Symbol.unscopables%% object could not be allocated", iface);
+#if APICLIENT_DEV
+    {
+    JSValue had_proto;
+    /* THE NULL [[Prototype]] IS LOAD-BEARING AND NOT TIDINESS. ECMAScript §9.1.1.2.1 "HasBinding ( name )"
+       step 6.a is `Get(unscopables, name)`, which WALKS THE PROTOTYPE CHAIN — so an unscopables object built
+       over %Object.prototype% answers truthy for `toString`, `valueOf`, `constructor`, `hasOwnProperty`,
+       `isPrototypeOf`, `propertyIsEnumerable`, `toLocaleString` and `__proto__`, and `with (el) { toString }`
+       would then skip a binding a browser resolves. Every one of those is a name real code puts in a `with`. */
+    had_proto = JS_GetPrototype(ctx, unscopable_object);
+    DCHECKF(JS_IsNull(had_proto),
+            "\"%s\"'s Web IDL §3.7.3 %%Symbol.unscopables%% object was built with a [[Prototype]] — §3.7.3 says "
+            "OrdinaryObjectCreate(null), and ECMAScript §9.1.1.2.1 \"HasBinding ( name )\" step 6.a's "
+            "Get(unscopables, name) walks the chain, so every %%Object.prototype%% member would read as a "
+            "blocked name and `with` would stop resolving it", iface);
+    JS_FreeValue(ctx, had_proto);
+    }
+#endif
+
+    /* "For each EXPOSED member member of interface that is declared with the [Unscopable] extended attribute:
+       Let id be member's identifier. Perform ! CreateDataPropertyOrThrow(unscopableObject, id, true)."
+       CreateDataProperty gives { [[Writable]]: true, [[Enumerable]]: true, [[Configurable]]: true }, which is
+       JS_PROP_C_W_E — deliberately NOT the descriptor the symbol-keyed property below gets. The two are
+       different steps of one algorithm and the standard spells them differently.
+       THE EXPOSURE TEST IS PER MEMBER AND IT IS §3.3.7 step 1's, asked with the realm's own §3.3.8 global
+       names — the same intersection idl_member_exposed_in_realm makes, spelled here rather than routed through
+       it because that entry is keyed by IDENTIFIER over a table holding only [Global] interfaces' members, and
+       `remove` and `slot` are not those interfaces' members. Its own banner says so: a prototype member's name
+       looked up there would be answered out of an unrelated construct's exposure set. */
+    here = realm_global_names(ctx);   /* one realm, one answer — read once rather than per member */
+    for (k = 0; k < r->n; k++) {
+        if (r->members[k].set != IDL_EXPOSED_STAR && !(r->members[k].set & here))
+            continue;
+        ret = JS_DefinePropertyValueStr(ctx, unscopable_object, r->members[k].id, JS_TRUE, JS_PROP_C_W_E);
+        CHECKF(ret >= 0, "\"%s\"'s Web IDL §3.7.3 %%Symbol.unscopables%% object could not take `%s` — the "
+                         "algorithm's own step is `! CreateDataPropertyOrThrow`, so nothing but an allocation "
+                         "can refuse it on an object this function has just built", iface, r->members[k].id);
+    }
+
+    /* "Let desc be the PropertyDescriptor{[[Value]]: unscopableObject, [[Writable]]: false,
+       [[Enumerable]]: false, [[Configurable]]: true}. Perform ! DefinePropertyOrThrow(interfaceProtoObj,
+       %Symbol.unscopables%, desc)." That descriptor is JS_PROP_CONFIGURABLE and nothing else — the same one
+       §3.7.3 gives the class string, which is why idl_tag_write spells it the same way. */
+    ret = JS_DefinePropertyValue(ctx, (JSValue)proto,
+                                 JS_DupAtom(ctx, JS_WellKnownSymbolAtom(JS_WKS_UNSCOPABLES)),
+                                 unscopable_object, JS_PROP_CONFIGURABLE);
+    CHECKF(ret >= 0, "\"%s\"'s Web IDL §3.7.3 %%Symbol.unscopables%% property could not be defined on its "
+                     "interface prototype object", iface);
+    /* DefineProperty ANSWERING 0 IS NOT AN ALLOCATION FAILURE, it is a refusal — the object is not extensible,
+       or already carries a non-configurable %Symbol.unscopables%. §3.7.3 writes `!` on this step, so neither
+       can happen to an interface prototype object this engine has just created and has not yet frozen. */
+    DCHECKF(ret == 1,
+            "\"%s\"'s interface prototype object REFUSED Web IDL §3.7.3's %%Symbol.unscopables%% property "
+            "without throwing — §3.7.3 performs that define with `!`, so the object is either not extensible "
+            "or already carries a non-configurable one, and either means this object was tagged as an "
+            "interface prototype object after something else had finished with it", iface);
+}
+
 /* §3.7.3: EVERY INTERFACE PROTOTYPE OBJECT CARRIES @@toStringTag, whose value is the interface's IDENTIFIER and
    whose attributes are { writable: false, enumerable: false, configurable: true }. It is what makes
    `Object.prototype.toString.call(new Blob())` answer "[object Blob]" — the brand check a page performs without
@@ -6107,6 +6244,16 @@ void idl_interface_tag(JSContext *ctx, JSValueConst proto, const char *iface)
     realm_note_interface_prototype_object(ctx, iface);
 #endif
     idl_tag_write(ctx, proto, iface);
+    /* §3.7.3's [Unscopable] BLOCK, on the same object and in the same call. §3.7.3 runs it between
+       OrdinaryObjectCreate(proto) and "Define the regular attributes of interface on interfaceProtoObj", and
+       this call site is at exactly that point in the engine's own sequence — every component tags its
+       prototype immediately after allocating it and installs its members afterwards.
+       THE TWO SYMBOL-KEYED PROPERTIES' RELATIVE ORDER IS NOT THE STANDARD'S TO FIX, so nothing here depends on
+       it: the [Unscopable] block is a step of §3.7.3's numbered algorithm and the class string is a
+       declarative sentence about the finished object ("The class string of an interface prototype object is
+       the interface's qualified name"), stated outside the steps. The write goes second only so that the
+       assertion above still aborts naming the interface this object was ABOUT to become. */
+    idl_install_unscopables(ctx, proto, iface);
 }
 
 /* §3.7.3's CLASS STRING ON AN OBJECT THAT IS NOT AN INTERFACE PROTOTYPE OBJECT — the write above without the

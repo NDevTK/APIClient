@@ -143,26 +143,23 @@
  *   installed leniently are each a finding. The observable that was named here — `"use strict";
  *   document.fullscreenEnabled = 1` throwing where a browser ignores — is now the browser's answer.
  *
- * ── NAMED RESIDUAL: [Unscopable] ─────────────────────────────────────────────────────────────────────────────
- *   — WHAT IS NOT COVERED: `fullscreen` alone of the three carries `[Unscopable]`, and this engine has no
- *     mechanism for that annotation at all — DOM's `[CEReactions, Unscopable]` `prepend`, `append`,
- *     `replaceChildren` and `slot` are installed here without it too, so this member joins a platform-wide
- *     absence rather than opening one.
- *   — WHAT THE NEXT DIFF BUILDS: the `%Symbol.unscopables%` object on an interface prototype object, and it is
- *     a DIFFERENT MECHANISM from the [LegacyLenientSetter] one above rather than the same installer — this
- *     sentence used to say it was, and that was wrong. §3.3.14 [Unscopable] says where it lives ("This is
- *     achieved by including the property name on the interface prototype object's %Symbol.unscopables%
- *     property's value") and §3.7.3 Interface prototype object states the steps: ONE OrdinaryObjectCreate(null)
- *     per interface, a `CreateDataPropertyOrThrow(unscopableObject, id, true)` for each EXPOSED member that
- *     carries the attribute, and a `{[[Writable]]: false, [[Enumerable]]: false, [[Configurable]]: true}` own
- *     property keyed by a WELL-KNOWN SYMBOL. So it is per INTERFACE and not per member, it is built where the
- *     prototype is rather than where a member is installed, it is the only string-free property key any
- *     install form in this engine would place, and it carries §3.3.7 step 1's per-member exposure test that a
- *     no-op setter does not need. It is an ordered subproblem: the platform-wide population is nine members —
- *     DOM's ParentNode `prepend`/`append`/`replaceChildren`, ChildNode's `before`/`after`/`replaceWith`/
- *     `remove`, `Element.slot`, and this one.
- *   — HOW ITS ABSENCE WOULD SHOW: `with (document) { fullscreen }` reads the member here and reads the outer
- *     scope's binding in a browser. It is the same one-line test for `slot` and `append`.
+ * ── [Unscopable] IS BUILT, AND ITS RESIDUAL IS GONE ──────────────────────────────────────────────────────────
+ *   `fullscreen` alone of the three carries it, and it is not this component's to install: Web IDL §3.7.3
+ *   Interface prototype object mints ONE %Symbol.unscopables% object PER INTERFACE, before any member is
+ *   defined, so the work belongs at core/idl_args.c's idl_interface_tag — the one statement of §3.7.3 in this
+ *   tree — and Document.prototype's object now names `fullscreen` beside ParentNode's `append`, `prepend` and
+ *   `replaceChildren`. Nothing in this file states WHICH members carry the annotation, for the reason the
+ *   paragraph above gives about [LegacyLenientSetter]: engine/idlgen.mjs reads it off the real .idl into
+ *   browser/idl_unscopables.h, so a member gaining or losing it moves the table rather than this comment.
+ *   The observable that was named here — `with (document) { fullscreen }` reading the member where a browser
+ *   reads the enclosing scope's binding — is now the browser's answer, and the same one-line test holds for
+ *   `slot` and `append`.
+ *   WHAT THE RETIRED CLAUSE GOT WRONG IS WORTH MORE THAN THE FACT THAT IT IS SPENT. It said the population is
+ *   "nine members", which is the count of DECLARATIONS and not of placements: eight of the nine are declared
+ *   on the ParentNode and ChildNode MIXINS, and §3.7.3 mints an interface prototype object "for every
+ *   interface defined", which a mixin is not — Web IDL §2.3 "Interface mixins" puts their members on every
+ *   interface that includes them instead. The corpus's real answer is 5 interface prototype objects carrying
+ *   23 member placements, and a diff built to the clause's number would have stopped four interfaces short.
  */
 #ifndef ENGINE_HOST_BROWSER_CORE_FULLSCREEN_FULLSCREEN_H
 #define ENGINE_HOST_BROWSER_CORE_FULLSCREEN_FULLSCREEN_H

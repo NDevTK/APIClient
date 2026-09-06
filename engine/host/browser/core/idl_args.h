@@ -2261,7 +2261,15 @@ int64_t idl_step_total(long *count);
    this realm's %Object.prototype% / %Error.prototype% on §3.7.3's two intrinsic arms). That is the one fact
    engine/idlgen.mjs's gap audit STANDS ON and cannot itself check: it credits a base's installed members to
    everything that inherits it, so a prototype built over the wrong parent reads COMPLETE for every member of
-   the parent the IDL names while a page reaches none of them. */
+   the parent the IDL names while a page reaches none of them.
+   IT IS ALSO WHERE §3.7.3's [Unscopable] BLOCK RUNS, which is the one thing about this call a reader would not
+   guess from its name. §3.3.14 [Unscopable] defers its steps — "See § 3.7.3 Interface prototype object for the
+   specific requirements that the use of [Unscopable] entails" — and §3.7.3 mints ONE OrdinaryObjectCreate(null)
+   per interface prototype object, fills it with the identifiers of the interface's EXPOSED [Unscopable]
+   members, and defines it under %Symbol.unscopables%. That is per INTERFACE and not per member, and it runs
+   BEFORE the members are defined, so this call is the only point in this engine at which it can be asked:
+   nothing standing at a member's install knows which interface it is on or whether it is the last one. The
+   member list is browser/idl_unscopables.h, generated from the real .idl. */
 void idl_interface_tag(JSContext *ctx, JSValueConst proto, const char *iface);
 
 /* THE SAME CLASS STRING ON AN OBJECT THAT IS NOT AN INTERFACE PROTOTYPE OBJECT, so §3.7.3's proto step does not

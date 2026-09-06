@@ -2655,6 +2655,185 @@ emitGenerated("idl_exposure.h", exposureH,
               "absent from, or absent from one it is in.");
 
 /* ---------------------------------------------------------------------------------------------------------
+ * WEB IDL §3.3.14 [Unscopable], GENERATED — which members an interface prototype object's
+ * %Symbol.unscopables% object names, per interface, and the §3.3.7 exposure set each of them is filtered by.
+ *
+ * §3.3.14 says where the property lives and says nothing about how to build it: "This is achieved by including
+ * the property name on the interface prototype object's %Symbol.unscopables% property's value", and then
+ * "See § 3.7.3 Interface prototype object for the specific requirements that the use of [Unscopable] entails."
+ * §3.7.3 is the algorithm — "If interface has any member declared with the [Unscopable] extended attribute" is
+ * the OUTER condition, and "For each exposed member member of interface that is declared with the [Unscopable]
+ * extended attribute" is the loop. The two are different tests over different sets, and a table that collapses
+ * them is wrong in a way nothing observes in a Window realm: an interface every one of whose [Unscopable]
+ * members §3.3.7 refuses still gets an EMPTY unscopables object, because the outer condition asks what the
+ * interface DECLARES. So a row's EXISTENCE answers the outer condition and a row's per-member `set` answers the
+ * loop, and the engine reads them as two questions rather than one.
+ *
+ * IT IS PER INTERFACE AND NOT PER MEMBER, which is why it is a table here rather than a flag on an install
+ * entry. §3.7.3 mints ONE OrdinaryObjectCreate(null) per interface prototype object and defines ONE symbol-keyed
+ * property on it; the members only contribute their identifiers to that object. An install-site annotation
+ * would have every member of an interface re-deciding a fact about the interface, which is the shape
+ * CLAUDE.md's one-fact-answered-from-one-place rule is about, and it could not answer the outer condition at
+ * all — nothing at a member's install knows whether it is the last one.
+ *
+ * A MIXIN'S MEMBER IS THE INCLUDING INTERFACE'S, so eight of this corpus's nine declarations land on more
+ * interfaces than they are written on. §2.3 "Interface mixins": "An includes statement is a definition
+ * (matching IncludesStatement) used to declare that all objects implementing an interface I (identified by the
+ * first identifier) must additionally include the members of interface mixin M (identified by the second
+ * identifier)." And a mixin has no object of its own for them to go on — §3.7.3 mints one "for every interface
+ * defined", which a mixin is not, and §2.3 says in its own note that "unlike interfaces or dictionaries,
+ * interface mixins do not create types". Keying the table by DECLARATION would put `before` on ChildNode,
+ * which is not an object; keyed by placement it is on DocumentType, Element and CharacterData, which are the
+ * three prototypes a page reaches it through.
+ * THE QUOTATION ABOVE WAS CUT AND MIS-AIMED WHEN THIS BLOCK WAS FIRST WRITTEN, and engine/citegen.mjs is what
+ * said so. What stood here flattened "used to declare" to "declares", dropped both parenthetical identifiers
+ * with no elision mark, and hung the result under §3.7.3 — a section that does not contain the sentence at
+ * all; the words are §2.3's. Recorded rather than quietly repaired, because the two halves of that are ONE
+ * error written twice: an author who flattens a sentence has stopped reading the section, and the citation
+ * then names whichever section the surrounding paragraph happened to be about. The wrong text is deliberately
+ * not reproduced here — a quoted run in a note is a citation claim like any other, and this auditor would read
+ * it as a fresh one. */
+const unscopableOf = new Map();     /* iface -> Map(identifier -> exposure set), unioned across declarations */
+{
+  /* §3.3.7's union across several declarations of one identifier, which is the direction memberExposures
+     already takes and for its reason: taking the intersection would let a declaration that does not narrow
+     manufacture an exclusion. */
+  const add = (iface, id, set) => {
+    if (!unscopableOf.has(iface)) unscopableOf.set(iface, new Map());
+    const per = unscopableOf.get(iface), prev = per.get(id);
+    per.set(id, prev === undefined ? set
+                : prev === EXPOSED_STAR || set === EXPOSED_STAR ? EXPOSED_STAR
+                : new Set([...prev, ...set]));
+  };
+  /* §3.3.14's THREE CONFORMANCE REQUIREMENTS, checked rather than assumed — each of them is what makes an
+     emitted row mean what it says, and a corpus that broke one would emit a row that is silently a different
+     claim. That is the same argument the [LegacyWindowAlias] block above makes, and it is made again because
+     these are different requirements over a different construct. */
+  const unscopableMembers = (n) => (n.members || []).filter((m) => {
+    const ext = extOf(m, "Unscopable");
+    if (!ext) return false;
+    /* "The [Unscopable] extended attribute must take no arguments." An annotation with a right-hand side is
+       one webidl2 would hand over with `rhs` set, and this generator has no reading for what it would mean. */
+    if (ext.rhs || (ext.arguments && ext.arguments.length))
+      throw new Error(`[idl-audit] ${n.name}'s \`${m.name}\` carries a [Unscopable] with arguments — Web IDL ` +
+                      `§3.3.14 [Unscopable] says it "must take no arguments", and this generator has no ` +
+                      `reading for a right-hand side it would have to drop on the floor`);
+    /* "The [Unscopable] extended attribute must not appear on anything other than a regular attribute or
+       regular operation" — and "regular" is §3.7.6's and §3.7.7's word for NOT STATIC, so a `special` of any
+       kind (static, getter, setter, deleter, stringifier) is outside the population. A special operation has
+       no identifier to put in the unscopables object either, which is the same fact one step down. */
+    if (!m.name || (m.type !== "attribute" && m.type !== "operation") || m.special)
+      throw new Error(`[idl-audit] ${n.name} carries a [Unscopable] on a ${m.special || m.type} — Web IDL ` +
+                      `§3.3.14 [Unscopable] says it "must not appear on anything other than a regular ` +
+                      `attribute or regular operation", and §3.7.3's loop puts "member's identifier" in the ` +
+                      `unscopables object, which a special member does not have`);
+    return true;
+  });
+  for (const n of idl.declarations) {
+    if (!n.name || !(n.members || []).length) continue;
+    if (n.type === "interface") {
+      for (const m of unscopableMembers(n)) add(n.name, m.name, memberExposure(m, n, null));
+    } else if (n.type === "interface mixin") {
+      const ms = unscopableMembers(n);
+      for (const host of includedBy.get(n.name) || [])
+        for (const m of ms) add(host, m.name, memberExposure(m, n, host));
+    } else if (unscopableMembers(n).length) {
+      /* "The [Unscopable] extended attribute must not be used on an attribute declared on a namespace." A
+         callback interface has no interface prototype object at all (§3.7.1), so there is no object for
+         §3.7.3's property to be defined on and no arm below that could place one. */
+      throw new Error(`[idl-audit] the ${n.type} \`${n.name}\` declares a [Unscopable] member — Web IDL ` +
+                      `§3.3.14 [Unscopable] forbids it on a namespace, and §3.7.3 Interface prototype object ` +
+                      `is the only algorithm that defines %Symbol.unscopables% anywhere, so there is no ` +
+                      `object for this one to land on`);
+    }
+  }
+}
+/* §3.7.3 PUTS A [Global] INTERFACE'S MEMBERS ON THE INSTANCE AND ITS UNSCOPABLES OBJECT ON THE PROTOTYPE, and
+   this generator has no arm for that pair. The [Unscopable] block runs BEFORE §3.7.3's `[Global]` conditional
+   and is not inside it, so a [Global] interface with an [Unscopable] member gets the property on its interface
+   prototype object naming a member that is an own property of the GLOBAL — which is a real and coherent state,
+   and not one core/idl_args.c's install asserts, since that install's whole premise is that the identifier it
+   writes names a member of the object it is writing onto. No corpus interface is both, so the arm would be
+   code no run reaches; it crashes here instead, naming what to build the day webref ships one. */
+for (const iface of unscopableOf.keys())
+  if (globalNamesOf.has(iface))
+    throw new Error(`[idl-audit] \`${iface}\` is declared with Web IDL §3.3.8 [Global] and has a [Unscopable] ` +
+                    `member — §3.7.3 Interface prototype object runs its [Unscopable] block before the ` +
+                    `"If interface is not declared with the [Global] extended attribute" conditional, so the ` +
+                    `unscopables object goes on the PROTOTYPE while §3.7.6/§3.7.7 put the member itself on ` +
+                    `every object that implements the interface. core/idl_args.c's install has no arm for ` +
+                    `that split and asserts the identifier names a member of the object it is writing onto`);
+const unscopableRows = [...unscopableOf].map(([iface, per]) => [iface, [...per].sort((a, b) =>
+  (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))]);
+/* strcmp order, for the same reason IDL_INHERITS and IDL_EXPOSURE are sorted: the engine reaches a row with
+   bsearch, Web IDL identifiers are ASCII, and JS's code-unit comparison is then byte order. The MEMBERS are
+   sorted too and the engine does NOT bsearch them — it walks the whole list, because §3.7.3's loop is over all
+   of them — so that order is for a reader diffing two regenerations rather than for a lookup. */
+unscopableRows.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+const unscopableTotal = unscopableRows.reduce((n, [, ms]) => n + ms.length, 0);
+const unscopableH =
+  "/* GENERATED by engine/idlgen.mjs from @webref/idl — DO NOT EDIT.\n" +
+  " * Web IDL §3.3.14 [Unscopable] as §3.7.3 Interface prototype object performs it: for each interface that\n" +
+  " * declares any [Unscopable] member, the identifiers §3.7.3's loop puts in that prototype's\n" +
+  " * %Symbol.unscopables% object, and the §3.3.7 [Exposed] set each one is filtered by.\n" +
+  " *\n" +
+  " * A ROW'S EXISTENCE IS §3.7.3's OUTER CONDITION and a member's `set` is its INNER LOOP — \"If interface has\n" +
+  " * any member DECLARED with the [Unscopable] extended attribute\" against \"For each EXPOSED member member of\n" +
+  " * interface that is declared with the [Unscopable] extended attribute\". An interface every one of whose\n" +
+  " * [Unscopable] members this realm does not expose still carries an EMPTY unscopables object, because the\n" +
+  " * outer condition asks what the interface declares; an interface with no row carries no property at all.\n" +
+  " * The two are observably different — `Symbol.unscopables in Foo.prototype` — so they are two questions.\n" +
+  " *\n" +
+  " * A MIXIN HAS NO ROW. §3.7.3 mints an interface prototype object \"for every interface defined\", which an\n" +
+  " * interface mixin is not, and §2.3 \"Interface mixins\" makes its members the INCLUDING interface's — an\n" +
+  " * includes statement is \"used to declare that all objects implementing an interface I (identified by the\n" +
+  " * first identifier) must additionally include the members of interface mixin M (identified by the second\n" +
+  " * identifier)\". So a mixin's [Unscopable] member appears on every interface that includes it, and on no\n" +
+  " * row of its own.\n" +
+  " *\n" +
+  " * NO ROW MEANS NO PROPERTY, and that is the sound direction here rather than the usual one: everywhere\n" +
+  " * else in this engine's generated tables a missing row must not REMOVE something, and here a row is what\n" +
+  " * ADDS a property, so a name the corpus does not declare [Unscopable] keeps the ordinary `with` scoping it\n" +
+  " * has today. Regenerate after `npm install @webref/idl webidl2`, and commit the result — the build has no\n" +
+  " * network and this table is not optional. */\n" +
+  "#ifndef APICLIENT_IDL_UNSCOPABLES_H\n#define APICLIENT_IDL_UNSCOPABLES_H\n\n" +
+  "/* One member's contribution to §3.7.3's `CreateDataPropertyOrThrow(unscopableObject, id, true)`. The value\n" +
+  "   is not stored: §3.7.3 writes `true` for every one of them. */\n" +
+  "typedef struct IdlUnscopableMember {\n" +
+  "    const char *id;    /* §3.7.3's \"Let id be member's identifier\" */\n" +
+  "    unsigned    set;   /* §3.3.7's exposure set as §3.3.8 global-name bits; IDL_EXPOSED_STAR for `*` */\n" +
+  "} IdlUnscopableMember;\n\n" +
+  "typedef struct IdlUnscopablesRow {\n" +
+  "    const char                 *iface;   /* the §3.7.3 class string of the interface prototype object */\n" +
+  "    const IdlUnscopableMember  *members;\n" +
+  "    unsigned                    n;\n" +
+  "} IdlUnscopablesRow;\n\n" +
+  unscopableRows.map(([iface, ms]) => {
+    const w = Math.max(...ms.map(([i]) => i.length));
+    return `static const IdlUnscopableMember IDL_UNSCOPABLE_${iface}[] = {\n` +
+      ms.map(([id, set]) =>
+        /* THE SET IS SPELLED THROUGH `exposureMask` AND NOT HANDED TO `maskSpelling` DIRECTLY. maskSpelling
+           takes the MASK exposureMask returns — a number, or null for `*` — and a Set reaching it makes every
+           `m & exposureBit.get(n)` NaN, so the filter empties and the row is emitted as `{ "id", }`. That is
+           valid C: the field zero-fills, IDL_EXPOSED_STAR is 0, and every member reads as exposed in every
+           realm. Caught by reading the emitted table rather than by anything failing. */
+        `    { "${id}",${" ".repeat(w - id.length)} ` +
+        `${maskSpelling(exposureMask(set, `${iface}'s [Unscopable] \`${id}\``))} },`).join("\n") +
+      "\n};";
+  }).join("\n") + "\n\n" +
+  "static const IdlUnscopablesRow IDL_UNSCOPABLES[] = {\n" +
+  unscopableRows.map(([iface, ms]) =>
+    `    { "${iface}",${" ".repeat(Math.max(...unscopableRows.map(([i]) => i.length)) - iface.length)} ` +
+    `IDL_UNSCOPABLE_${iface}, ${ms.length} },`).join("\n") +
+  "\n};\n\n#endif\n";
+emitGenerated("idl_unscopables.h", unscopableH,
+              `${unscopableRows.length} interface prototype objects that carry §3.3.14 [Unscopable]'s ` +
+              `%Symbol.unscopables% property and the ${unscopableTotal} member placements they name`,
+              "core/idl_args.c builds the object at idl_interface_tag, the one statement of §3.7.3 in this " +
+              "tree, so a stale table is a `with` statement resolving a bare identifier to a member a browser " +
+              "skips, or skipping one a browser resolves.");
+
+/* ---------------------------------------------------------------------------------------------------------
  * THE VERDICT, PER INTERFACE FIRST. §Testing: a gate reports per AREA as well as in total, because one number
  * in which the widest base answers most of the count makes every other component invisible — and here the
  * inherited members make that literal, since one absent Element member is absent on every HTML interface. */
