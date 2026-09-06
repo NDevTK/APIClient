@@ -302,7 +302,16 @@ typedef struct {
        A SIZE AND NEVER A DISTANCE. decide.h keeps that pair apart by hand for exactly this reason — the
        cursor is the position, `entries` is the length — and records what conflating them cost once already:
        flow.h's `cand_dec_max` was fed from the LENGTH under a contract calling it how far the best of them
-       had GOT. This is the length, and the name says arms and not progress. */
+       had GOT. This is the length, and the name says arms and not progress.
+       ITS CONSUMER IS THE CARD AND IS DEFERRED, WHICH IS WHY THE FIELD GATE REPORTS THIS AS A WRITE WITH NO
+       READER AND IS RIGHT TO. Every sibling on this entry is read by extension/lib/popup-security.js and
+       required by lib/store-record.js's currency predicate; these three are in neither yet, because that JS
+       deploys on WRITE while this C is live only after a build (§A-CROSS-BOUNDARY-DIFF) and the currency
+       predicate SHEDS what it judges stale — so requiring them early would drop every parked @S record in the
+       store until the next install. THE OBSERVATION THAT RETIRES IT, and not the reason: these names occurring
+       in `extension/lib/qjs/qjs.wasm`, checked by CONTENT with `runwayPerMille` as the positive control and an
+       invented name as the negative one. Measured at this commit: the control PRESENT, all three ABSENT. When
+       the artifact carries them the reader and the requirement land together, in one diff. */
     int reinject_len;
     /* …AND THE POSITION ITSELF, HELD AS ITS TWO HALVES RATHER THAN AS THE THOUSANDTHS ABOVE — the same repair
        `surv_run`/`surv_len` is one rung up, and for the same stated reason: the report has to be able to say

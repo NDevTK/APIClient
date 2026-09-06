@@ -239,6 +239,27 @@ const _SR_SCOPES = _srList("a service's required OAuth scopes", "a scope name", 
    grammar that has already drifted once; these are member READS on the stored element, which puts them in the
    population that gate walks — the engine dropping one of them lights up as a read with no writer, and the
    engine ADDING one lights up as a write with no reader, which is exactly how this defect was found.
+   THREE NAMES ARE DELIBERATELY NOT IN THE LIST BELOW YET, AND THIS IS THE DEFERRAL RATHER THAN AN OVERSIGHT.
+   solve.c emits `runwayArms`, `runwayWalked` and `runwayOf` — the arm count of the search's frozen re-injection
+   path and the two halves of the best replay position — and they are what finally split `runwayPerMille`'s zero
+   into the three states it has been saying at once. Requiring them here is what the paragraph above prescribes
+   and it is owed. It is not taken YET because this file deploys on WRITE and the engine's C is live only after
+   a build (CLAUDE.md §A-CROSS-BOUNDARY-DIFF), and requiring a name the shipped artifact does not emit does not
+   merely fail to help: this predicate SHEDS what it judges not current, so it would shed every parked @S record
+   in the store until the next install.
+   THE OBSERVATION THAT RETIRES IT IS NAMED RATHER THAN THE REASON, so whoever finds this runs it instead of
+   re-deriving the argument — the same check the card's own runway note already uses, by CONTENT and never by
+   timestamp, with a negative control so a zero means absent rather than mis-addressed:
+     grep -ac runwayArms extension/lib/qjs/qjs.wasm   # and runwayWalked, runwayOf
+     grep -ac runwayPerMille extension/lib/qjs/qjs.wasm   # positive control: this one is PRESENT today
+     grep -ac NOT_A_REAL_FIELD_CONTROL extension/lib/qjs/qjs.wasm   # negative control: must be 0
+   Measured at this commit: `survivedOf` and `runwayPerMille` PRESENT, all three of the new names ABSENT, the
+   invented control absent. When the artifact carries them, the three names join the list below AND the card
+   reads them, in ONE diff — the currency gate is what makes that read safe, since a record reaching the card
+   has by then been judged to carry them.
+   THE FIELD GATE REPORTS THEM AS WRITES WITH NO READER IN THE MEANTIME AND THAT IS CORRECT. It is not a band to
+   be exempted into: a deferred consumer is a consumer that does not exist, the count is honest, and the entry
+   this paragraph is stops it reading as an oversight. It goes to zero on the diff above and not before.
    A FIRED ENTRY IS NOT THIS QUESTION. solve.h emits two entry shapes and only the parked one carries these
    names, so an entry that does not say `search: "parked"` is passed rather than judged — demanding them of a
    fire-verified PoC would shed a record that is perfectly current. */

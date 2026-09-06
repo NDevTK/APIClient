@@ -306,8 +306,21 @@ function _parkedProgress(item) {
   //   0     — no arm of a candidate's own recorded path has been OBSERVED consumed. TWO states under one
   //           reading, and this card cannot separate them: the replay was turned back at its first arm, or no
   //           arm was ever offered because the search has no recorded path. solve.c's own declaration now
-  //           records the measurement — every `location.hash` record reads 0 here across 76 logs — and names
-  //           the producer flag that would tell them apart. Until it exists, this is not a distance.
+  //           records the measurement — every `location.hash` record reads 0 here across 76 logs.
+  //           THE PRODUCER FLAG THIS USED TO WAIT FOR NOW EXISTS AND THE SENTENCE THAT SAID OTHERWISE IS GONE:
+  //           it read "names the producer flag that would tell them apart. Until it exists, this is not a
+  //           distance", and it went stale the moment solve.c gained `runwayArms` — the arm count of the frozen
+  //           re-injection path, where 0 IS "this search has no recorded path" and N beside a 0 here IS the
+  //           first-arm reading. `runwayWalked`/`runwayOf` split the same zero once more, since this field's
+  //           own conversion rounds any path past 2000 arms with one arm consumed down to 0.
+  //           WHAT IS STILL DEFERRED IS THE READ AND NOT THE FIELD, on §A-CROSS-BOUNDARY-DIFF: this file
+  //           deploys on WRITE and the engine's C is live only after a build, and the three names are ABSENT
+  //           from extension/lib/qjs/qjs.wasm today — checked by CONTENT with `runwayPerMille` as the positive
+  //           control (PRESENT) and an invented name as the negative one (absent), exactly as the note below
+  //           checks the same thing. lib/store-record.js carries the same deferral at the currency predicate
+  //           that would SHED every older record if it required them early, and the three land there and here
+  //           in ONE diff with the build: that gate is what makes this read safe, because a record reaching
+  //           this card will by then have been judged to carry them.
   //   1000  — SATURATED, which is not "nearly at the read". solve.c's own declaration is explicit that what
   //           this is a fraction of is DECISION ARMS and not statements, so a candidate whose recorded path is
   //           short saturates here while still far from its source read in program order: the bottom rung is
@@ -338,8 +351,9 @@ function _parkedProgress(item) {
               + 'was turned back, or no arm was ever offered because this search has no recorded path to '
               + 'walk. Measured across 76 smoke logs, every parked record on a `location.hash` source reads 0 '
               + 'here in every run that produced one, so the second state is the common one and the first has '
-              + 'not been observed at all — do NOT go hunting the gate that refuses an arm until the producer '
-              + 'says which of the two this is'
+              + 'not been observed at all — do NOT go hunting the gate that refuses an arm. The producer now '
+              + 'says which of the two it is (`runwayArms`), and this card will read it on the build that '
+              + 'ships it'
             : item.runwayPerMille >= 1000
               ? 'they consumed the WHOLE of their recorded path and the source read is still ahead of them. '
                 + 'That rung is SATURATED and is directing nothing further — and it is a fraction of decision '
