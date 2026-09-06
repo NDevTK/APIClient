@@ -303,9 +303,11 @@ function _parkedProgress(item) {
   // every switch-in and once more at the flow's end, ratcheted over the search), and it is the only number on
   // this record whose observation site is IN FRONT of the source read — every other one is at it or past it,
   // which is §@S(i)'s requirement that a rung be observed strictly before the thing it is a distance to.
-  //   0     — the candidates were given the thread and consumed NONE of their own recorded path. The replay is
-  //           being turned back at its FIRST ARM, so nothing here is a distance at all and the work is to find
-  //           what refuses that arm.
+  //   0     — no arm of a candidate's own recorded path has been OBSERVED consumed. TWO states under one
+  //           reading, and this card cannot separate them: the replay was turned back at its first arm, or no
+  //           arm was ever offered because the search has no recorded path. solve.c's own declaration now
+  //           records the measurement — every `location.hash` record reads 0 here across 76 logs — and names
+  //           the producer flag that would tell them apart. Until it exists, this is not a distance.
   //   1000  — SATURATED, which is not "nearly at the read". solve.c's own declaration is explicit that what
   //           this is a fraction of is DECISION ARMS and not statements, so a candidate whose recorded path is
   //           short saturates here while still far from its source read in program order: the bottom rung is
@@ -331,9 +333,13 @@ function _parkedProgress(item) {
          + 'have never been in the page\'s program at all. That is a question about the PATH in front of the '
          + 'source, and the runway says WHICH question: '
          + (item.runwayPerMille === 0
-            ? 'not one of these candidates consumed a single arm of its own recorded path, so the replay is '
-              + 'being turned back at its FIRST ARM — this is not a distance through the document at all, and '
-              + 'the work is to find what refuses that arm'
+            ? 'not one of these candidates has been observed consuming an arm of its own recorded path. That '
+              + 'is TWO states and this card cannot yet separate them: the replay reached its first arm and '
+              + 'was turned back, or no arm was ever offered because this search has no recorded path to '
+              + 'walk. Measured across 76 smoke logs, every parked record on a `location.hash` source reads 0 '
+              + 'here in every run that produced one, so the second state is the common one and the first has '
+              + 'not been observed at all — do NOT go hunting the gate that refuses an arm until the producer '
+              + 'says which of the two this is'
             : item.runwayPerMille >= 1000
               ? 'they consumed the WHOLE of their recorded path and the source read is still ahead of them. '
                 + 'That rung is SATURATED and is directing nothing further — and it is a fraction of decision '

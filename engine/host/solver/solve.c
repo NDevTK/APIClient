@@ -228,7 +228,31 @@ typedef struct {
        source read in program order. That is not a defect in the number, it is the same fact about the
        comparator — so `runwayPerMille:1000` standing beside `substituted:0` says the ladder's bottom rung is
        SATURATED and the remaining runway is unmeasured by it, which is §@S(i)'s objection one level out and
-       is exactly what this field exists to be able to state. */
+       is exactly what this field exists to be able to state.
+
+       AND `0` IS TWO STATES, NOT ONE, WHICH IS THIS RUNG'S OWN OBJECTION ARRIVING ONE LEVEL DOWN. The reading
+       above names 0 as "given the thread and consumed NONE of their own recorded path" — a question about
+       what turns a replay back at its FIRST ARM. That presumes an arm was offered. `flow_observe_replay` is
+       called from ONE line (decide.c, the only line in the engine that CONSUMES a recorded arm) and only for
+       a flow carrying a payload, so a candidate that never consumes one never reaches the observation site at
+       all and this field stays at its initial 0. "No arm was ever consumed" and "arm 0 was refused" are
+       therefore byte-identical here, and they take opposite work: the first is a question about whether this
+       search ever had a recorded path to walk, the second about what stands in front of its first branch.
+       That is §@S(i)'s tell — a rung whose ABSENCE and whose ZERO read alike — which is the defect the runway
+       was added to END for `substituted`, reproduced in the instrument that ended it.
+       MEASURED ACROSS 76 SMOKE LOGS AND THE SPLIT IS BY SOURCE, NOT BY SINK CLASS. Every parked record whose
+       source is `location.hash` or a derivative of it (`{location.hash}.slice(1)`) reads 0 here in EVERY run
+       that produced one — 1497 records over 51 runs, zero readings — while every `{state}.*` source reaches a
+       nonzero runway in some run. `eval` and `innerHTML` each appear on BOTH sides of that split, so it is
+       not a property of the sink class; the fixture's `s-loc`, `s-attr` and `s-park` rows never reach this
+       rung because all three are bound to `location.hash`; `s-attr`'s ATTR_SRC is `{location.hash}.slice(1)`.
+       WHAT WOULD SEPARATE THEM IS A DENOMINATOR AND IT IS NOT BUILT: this field is a fraction whose numerator
+       is published and whose denominator is not, so a reader cannot ask whether the path had any length. The
+       next diff states whether the observation site was ever REACHED — a flag set at the first
+       flow_observe_replay for this candidate, emitted beside this number — after which `0` beside "observed"
+       is the first-arm reading this comment already describes and `0` beside "never observed" is the search
+       having no recorded path to replay. Its absence shows as a card telling a reader to hunt the gate that
+       refuses an arm, for a search that was never offered one. */
     int replay_pm;
     /* …AND HOW MANY STRINGS A CODE-EXECUTION SINK WAS HANDED WHILE THEY WERE LIVE — the observation COUNT that
        `surv_run` is the best of, and the half a ratchet cannot state. A best-so-far records the furthest
