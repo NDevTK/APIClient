@@ -6541,6 +6541,113 @@ static void exposure_selftest(JSContext *ctx, const char *top_level_url)
         { "ResizeObserver",                   false, false },  /* Resize Observer §2.1 */
         { "ResizeObserverEntry",              false, false },  /* Resize Observer §2.3 */
         { "ResizeObserverSize",               false, false },  /* Resize Observer §2.3, beside the entry */
+        /* THE CSSOM, SCHEDULING AND RENDERING GROUP, WHOSE VERDICT IS `STAY` FOR EVERY ONE OF ITS TEN SITES
+           AND WHOSE WHOLE DELIVERABLE IS THEREFORE THIS TABLE. Web IDL §3.8 Platform objects implementing
+           interfaces is given a REALM, and its step 1's population is "every interface that is exposed in
+           realm", so the per-document column is wrong for an interface a realm with no Document is owed. NONE of the twenty-six identifiers below is one. Every exposure set here
+           was read TWICE and from two independent artifacts — node_modules/@webref/idl/{cssom,cssom-view,
+           css-conditional,css-conditional-5,css-cascade,css-animations,css-fonts-5,
+           css-properties-values-api,html,requestidlecallback}.idl, and browser/idl_exposure.h's generated
+           IDL_GLOBAL_WINDOW rows — and never from what the interface is FOR, which is the reasoning that
+           would have taken all ten sites. A Window-only interface object is owed by exactly the realms a
+           Document is installed over, so a per-document column for one is not this conversion's defect.
+
+           THE REFUSAL IS ASSERTED RATHER THAN ARGUED, AND THE TWO ARMS ARE TWO DIFFERENT CLAIMS. `false` in
+           the worker arm is what Web IDL §3.3.7 [Exposed] step 1 requires of `[Exposed=Window]` in a
+           DedicatedWorkerGlobalScope realm HOWEVER the name is placed; `false` in the Window arm is this
+           table's own moment, which the banner above states — an identifier installed from
+           core/platform.c's per-document column is absent from both realms here. Moved to the realm column
+           they would read `true` in the Window arm, because that is where the intrinsics have run, so every
+           row below fails under the one mistake this group offers.
+
+           THAT MISTAKE IS BIGGER HERE THAN A DIRECTORY, WHICH IS WHY THE ROWS ARE LISTED ONE PER INTERFACE.
+           Five of the eight CSSOM sites have NO core/platform.c row of their own: css_rule_install,
+           css_rule_list_install, css_style_sheet_install, media_list_install and style_sheet_list_install
+           are called from core/dom/document.c's per-document install, five adjacent lines under one comment,
+           so a conversion that reads a directory rather than an exposure table moves five components by
+           editing a file none of them is in. And the css_rule site places SEVENTEEN names from one table
+           whose entries are chained to each other by inheritance — the sibling-drop the `MessagePort` note
+           above records, offered seventeen ways in one loop.
+
+           `matchMedia`, `requestIdleCallback` AND `cancelIdleCallback` ARE THE DISCRIMINATING ROWS, AND THEY
+           ARE `fetch`'S SHAPE IN THIS GROUP: MEMBERS SHARING A THUNK WITH INTERFACE OBJECTS. CSSOM View §4
+           Extensions to the Window Interface declares matchMedia on a `partial interface Window`, and
+           Cooperative Scheduling of Background Tasks declares the other two the same way — so they are Web
+           IDL §3.7.7 Operations over a [Global] object's own interface chain and §3.8 defines no property
+           reference for any of them anywhere. `matchMedia` is the FIRST line of media_query_list_install and
+           the other two are the first two lines of idle_callback_install, which are the per-document entries
+           the two interface-object mints in each of those files would leave — so a conversion that moved
+           either function whole reads `true` in the Window arm and fails, exactly as it does on the
+           twenty-six rows above, and one that deleted the thunk takes the member out of EVERY realm. All
+           three carry an IDL_MEMBER_EXPOSURE row of IDL_GLOBAL_WINDOW, which idl_install_method asks through
+           idl_global_member_refused, so the worker arm is that gate's own answer and not this table's moment.
+
+           `CSS` IS THE ROW THAT ASSERTS THE PREMISE THE REFUSAL RESTS ON, AND IT IS A CONSTRUCT WEB IDL §3.8
+           DOES NOT REACH. Its step 1 population is interfaces, and a namespace is not one — Web IDL §3.13
+           Namespaces is where a namespace object's global property comes from, which core/css/css_namespace.c
+           already states and quotes. The reason it is here is the OTHER half: `CSS` is `[Exposed=Window]` and
+           is placed from the REALM column already, so it is the measurement that says a Window-only name
+           placed through §3.8's door is refused in a worker realm and kept in a Window one. Without it the
+           sentence four paragraphs up is prose. `DOMParser` at the head of this table asserts the same gate
+           for an INTERFACE; this adds the namespace construct, in the one directory of this group whose
+           realm column already holds Window-only names.
+
+           WHAT THIS TABLE CANNOT SEE, NAMED RATHER THAN LEFT AS A GAP. `IdleDeadline` reaches its global
+           through a TAIL CALL: idle_callback_install's last line is `idle_deadline_install(ctx, global)`, and
+           core/scheduling/idle_deadline.c has no core/platform.c row — its PLATFORM_WITNESS row is attributed
+           to `idle_callback`, which is that table working as designed and is also why the chain is invisible
+           from the row. That is `ProgressEvent`'s and `FileList`'s shape, and this table CANNOT catch the
+           deletion form of it: the name reads `false, false` before such a mistake and after it, because
+           `[Exposed=Window]` puts it outside both arms at this moment. WHAT WOULD CATCH IT is a Window-arm
+           reading taken AFTER platform_document_install, which this fixture does not take for any row.
+           HOW ITS ABSENCE WOULD SHOW: `new IdleDeadline` and `IdleDeadline` in a page would be undefined on
+           every document while every idle callback went on receiving a correctly-branded deadline object,
+           since idle_deadline_new mints over the class prototype its own realm intrinsic built. The row below
+           does discriminate against the MOVE, which is the mistake this group actually offers.
+
+           AT THE PARENT REVISION EVERY ROW BELOW READS EXACTLY AS IT DOES HERE, which is what a refusal means
+           and is reported as such: these are discriminators against a wrong conversion and never calibration.
+           Established by READING core/platform.c's two columns, core/dom/document.c's install and main's call
+           order — this fixture runs after tf_agent_init and before tf_realm_install reaches
+           platform_document_install — never by a run. */
+        { "CSSRule",                 false, false },  /* CSSOM §6.4.2 "The CSSRule Interface" */
+        { "CSSGroupingRule",         false, false },  /* CSSOM §6.4.5 "The CSSGroupingRule Interface" */
+        { "CSSStyleRule",            false, false },  /* CSSOM §6.4.3 "The CSSStyleRule Interface" */
+        { "CSSImportRule",           false, false },  /* CSSOM §6.4.4 "The CSSImportRule Interface" */
+        { "CSSNamespaceRule",        false, false },  /* CSSOM §6.4.9 "The CSSNamespaceRule Interface" */
+        { "CSSPageRule",             false, false },  /* CSSOM §6.4.7 "The CSSPageRule Interface" */
+        { "CSSMarginRule",           false, false },  /* CSSOM §6.4.8 "The CSSMarginRule Interface" */
+        { "CSSConditionRule",        false, false },  /* CSS Conditional §7.2 "The CSSConditionRule interface" */
+        { "CSSMediaRule",            false, false },  /* CSS Conditional §7.3 "The CSSMediaRule interface" */
+        { "CSSSupportsRule",         false, false },  /* CSS Conditional §7.4 "The CSSSupportsRule interface" */
+        { "CSSContainerRule",        false, false },  /* CSS Conditional 5 §9.1 "The CSSContainerRule interface" */
+        { "CSSLayerBlockRule",       false, false },  /* CSS Cascade 5 §8.1 "The CSSLayerBlockRule interface" */
+        { "CSSLayerStatementRule",   false, false },  /* CSS Cascade 5 §8.2 "The CSSLayerStatementRule interface" */
+        { "CSSKeyframeRule",         false, false },  /* CSS Animations 1 §6.2 "The CSSKeyframeRule Interface" */
+        { "CSSKeyframesRule",        false, false },  /* CSS Animations 1 §6.3 "The CSSKeyframesRule Interface" */
+        { "CSSFontFaceRule",         false, false },  /* CSS Fonts 5 §9.1 "The CSSFontFaceRule interface" */
+        { "CSSPropertyRule",         false, false },  /* CSS Properties and Values API 1 §6.1 "The CSSPropertyRule Interface" */
+        { "CSSRuleList",             false, false },  /* CSSOM §6.4.1 "The CSSRuleList Interface" */
+        { "StyleSheet",              false, false },  /* CSSOM §6.1.1 "The StyleSheet Interface" */
+        { "CSSStyleSheet",           false, false },  /* CSSOM §6.1.2 "The CSSStyleSheet Interface" */
+        { "MediaList",               false, false },  /* CSSOM §4.4 "The MediaList Interface" */
+        { "StyleSheetList",          false, false },  /* CSSOM §6.2.2 "The StyleSheetList Interface" */
+        { "MediaQueryList",          false, false },  /* CSSOM View §4.2 "The MediaQueryList Interface" */
+        /* CSSOM View §4.2 "The MediaQueryList Interface" declares this one beside the interface it names,
+           which is the pair core/css/media_query_list.c places from one thunk */
+        { "MediaQueryListEvent",     false, false },
+        { "PageRevealEvent",         false, false },  /* HTML §7.2.7.5 "The PageRevealEvent interface" */
+        /* Cooperative Scheduling of Background Tasks §4.3's IdleDeadline — the tail-call sibling with no
+           core/platform.c row, whose MOVE this row catches and whose DELETION it cannot */
+        { "IdleDeadline",            false, false },
+        /* THE THREE MEMBERS THAT SHARE THOSE THUNKS — no Web IDL §3.8 property reference exists for any of
+           them, and each is IDL_MEMBER_EXPOSURE's IDL_GLOBAL_WINDOW asked at idl_install_method */
+        { "matchMedia",              false, false },  /* CSSOM View §4 "Extensions to the Window Interface" */
+        { "requestIdleCallback",     false, false },  /* Background Tasks' `partial interface Window` */
+        { "cancelIdleCallback",      false, false },  /* the sibling of the line above, in one thunk */
+        /* Web IDL §3.13 "Namespaces" — NOT one of §3.8 step 1's interfaces, `[Exposed=Window]`, and the
+           realm column's already: the row that measures the gate every refusal above reasons from */
+        { "CSS",                     true,  false },
     };
     JSContext *worker = JS_NewContext(JS_GetRuntime(ctx));
     /* THE SECOND WORKER REALM IS THE OTHER ARM OF ONE STEP, and it is a second REALM because that is the only
