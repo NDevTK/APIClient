@@ -110,6 +110,41 @@ int navigable_realm_count(void) { return g_realms_n; }
 int navigable_realm_made(void)  { return g_realms_made; }
 int navigable_realm_peak(void)  { return g_realms_peak; }
 
+/* WHO IS HOLDING THE REALMS THE THREE COUNTERS ABOVE SAY ARE HELD — see navigable.h for what the reading is
+   for and which two hypotheses it separates. It asks the collector's own number and decides nothing. */
+void navigable_realm_refs(int *live, int *min, int *max, long *total)
+{
+    int i, lo = -1, hi = -1;
+    long sum = 0;
+
+    for (i = 0; i < g_realms_n; i++) {
+        int n = JS_ContextRefCount(g_realms[i]);
+        /* A MEMBER OF THIS LIST CANNOT BE AT ZERO, and that is what makes -1 usable as the empty-set answer
+           rather than a value the data could collide with: the list holds a RAW pointer and takes no reference
+           of its own, so the only thing that removes a realm from it is navigable_realm_teardown, which the
+           collector reaches only after the count has already fallen to zero. A zero here is therefore a realm
+           that was freed with this list still naming it, which is a dangling pointer this loop just read. */
+        DCHECK(n > 0,
+               "a live child realm reports no references at all — this list holds a raw pointer and takes no "
+               "reference of its own, so a realm leaves it only through the teardown the collector runs once "
+               "the count has reached zero. A zero here is a realm freed while this census still names it, "
+               "and the read above has already happened");
+        if (lo < 0 || n < lo) lo = n;
+        if (n > hi) hi = n;
+        sum += n;
+    }
+    /* THE EMPTY SET IS STATED AND NOT DEFAULTED. `lo`/`hi` stay -1 for a run that built no child realm, which
+       is 19 of the 66 measured runs — a min of 0 there would read as a realm held by nobody, which is the
+       absence-and-zero-read-alike defect in the one field whose whole job is to say who holds one. */
+    if (live)  *live  = g_realms_n;
+    if (min)   *min   = lo;
+    if (max)   *max   = hi;
+    if (total) *total = sum;
+    DCHECK(g_realms_n > 0 || (lo == -1 && hi == -1 && sum == 0),
+           "an empty child-realm census reported a refcount anyway — the loop above cannot have run, so a "
+           "min, max or total that is not the empty-set answer came from somewhere other than this walk");
+}
+
 /* A REALM OF THIS AGENT IS BEING TORN DOWN — quickjs's realm-teardown hook, and the one moment a Document can
    be released. It is reached from the phase-safe half of the realm's own teardown, which is where a host's
    reference releases belong; document_free releases exactly that (the Document object, the Window, the

@@ -426,6 +426,40 @@ int navigable_realm_count(void);
 int navigable_realm_made(void);
 int navigable_realm_peak(void);
 
+/* HOW MANY REFERENCES EACH LIVE CHILD REALM IS HELD BY, RIGHT NOW — the reading that says WHO is holding one,
+ * where the three counters above say only THAT one is held.
+ * WHY IT IS NEEDED AT ALL, stated as the measurement rather than as a suspicion: across 66 smoke logs whose
+ * revisions all carry BOTH halves of the mark hook — checked by CONTENT at each revision and not by ancestry,
+ * because that capability has a pure-deletion-then-restore in its history and every revision in the gap is a
+ * DESCENDANT of the fix and WITHOUT it — 60 of 60 heap samples read `childRealms == childRealmsMade ==
+ * childRealmsPeak`, at up to 71 realms made. So the documented cure is present in every measured run and not
+ * one realm has ever been given back, and the question stopped being "is the cycle visible" and became "what
+ * still names it".
+ * IT DISCRIMINATES TWO HYPOTHESES THAT COST DIFFERENT AMOUNTS TO BE WRONG ABOUT, which is the whole reason it
+ * is a reading and not a row. A refcount that is O(1) and flat while flows run to thousands says the holder is
+ * a SINGLE edge — a host record with counted references and no way to declare them, since JS_SetContextMarkHook
+ * is per-REALM and the per-flow COW delta dups values through no hook at all — and that repair is bounded. A
+ * refcount that SCALES with the flow count says the holders are the flows themselves, which the teardown's own
+ * assert names ("including a flow parked inside it (its heap frames hold that realm's function objects, and
+ * those hold the realm)"), and since §NO BOUNDS never terminates a flow that makes the ceiling STRUCTURAL and
+ * the repair §7.5.10's destroy dealing with what is parked inside the thing being destroyed. One number, two
+ * very different units of work.
+ * IT IS A GAUGE AND IT MAY NOT BE DIFFERENCED, like `childRealms` and unlike `childRealmsMade`: it states what
+ * is true at the instant of the call, so two samples of it are two readings and never a rate.
+ * IT FORCES NO COLLECTION AND MUST NOT. Whether a realm is collectable is the collector's question and asking
+ * it by running one would make this a decision input rather than a reading (quickjs.h says so of
+ * JS_ContextRefCount itself). It needs none: a run that allocates gigabytes collects many times unprompted, so
+ * a realm still live at any sample has already survived every collection before it. NAMED RESIDUAL — WHAT IS
+ * NOT COVERED: how many collections that is, because no collection count is exposed (JSMemoryUsage carries
+ * none). WHAT THE NEXT DIFF BUILDS: that counter on JSMemoryUsage. HOW ITS ABSENCE SHOWS: a reader can say a
+ * realm survived collections and cannot say how many, so a run that happened to collect zero times reads
+ * identically to one that collected a thousand and could not free it.
+ * `live` IS `navigable_realm_count()` and is returned beside the rest so a caller reads one instant rather
+ * than two. `min` and `max` are -1 when `live` is 0 — a value a live realm's refcount cannot take, because a
+ * realm whose count reached zero has already left this list through the teardown — so an empty set is a
+ * POSITIVE statement and not a zero that reads like one holder. Any out parameter may be NULL. */
+void navigable_realm_refs(int *live, int *min, int *max, long *total);
+
 /* §7.4's CREATE A NEW NAVIGABLE. `url` is the child's initial address; NULL, "" or "about:blank" all mean the
    initial about:blank Document, which inherits this document's origin and policy container. Returns the child's
    WindowProxy, or JS_UNDEFINED when `url` does not parse — the caller decides what that means, because §7.4

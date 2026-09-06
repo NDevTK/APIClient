@@ -2365,6 +2365,20 @@ function censusReading(out) {
                  : h.b.childRealmsMade > h.b.childRealmsPeak
                    ? ` — RECLAIMED: at least one realm died while others were being made`
                    : ` — NOT ONE RECLAIMED: every realm this run built was live at once, which is the ceiling`) +
+               /* AND WHO IS HOLDING THEM, WHICH THE THREE COUNTS ABOVE CANNOT SAY. They establish THAT a realm
+                  is held; this says by HOW MANY, and that separates two repairs of very different size — see
+                  core/frame/navigable.h. Flat and O(1) while flows run to thousands points at a single edge no
+                  hook can declare (JS_SetContextMarkHook is per-REALM and the per-flow COW delta dups through
+                  none), which is bounded work; scaling with the flow count points at the flows themselves,
+                  which §NO BOUNDS never terminates, and that makes the ceiling structural. Printed with the
+                  frontier's own size on the same line so the reader can ask which it is without a second run.
+                  -1 IS THE EMPTY SET AND IS SAID IN WORDS, never rendered as a refcount: a live realm cannot
+                  be at zero references, so the producer uses a value the data cannot take, and printing it raw
+                  would put a number that is not a count where a count belongs. */
+               (h.b.childRealms === 0
+                 ? `; no realm live to hold`
+                 : `; held by ${h.b.childRealmRefsMin}..${h.b.childRealmRefsMax} ref(s) each, ` +
+                   `${h.b.childRealmRefsTotal} in total`) +
                `; ${h.b.trampFrames} heap frame(s), ` +
                `${h.b.stepMachines} suspended builtin(s), ${h.b.unattributed} B the runtime cannot name`);
     /* WHICH KIND GREW, WHICH IS THE COMPARISON result_heap_json'S OWN COMMENT DESCRIBES AND NOTHING PERFORMED.

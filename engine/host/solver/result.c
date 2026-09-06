@@ -1609,17 +1609,27 @@ char *result_heap_json(JSContext *ctx) {
     JSMemoryUsage mem;
     JSRuntime *rt;
     long long attributed;
+    /* WHO HOLDS THE CHILD REALMS, taken in ONE call beside the three counts it explains — see navigable.h.
+       GAUGES, like `childRealms` and unlike `childRealmsMade`: they state what is true at this instant, so the
+       rule the banner above gives applies to them exactly — the identity holds WITHIN one sample and of no
+       pair taken at two moments, and none of the three may be differenced across samples.
+       -1 FOR min AND max IS THE EMPTY SET, which a live realm's refcount cannot be, so a run that built no
+       child realm says so positively here rather than reading as a realm nobody holds. */
+    int rmin = -1, rmax = -1;
+    long rtotal = 0;
 
     DCHECK(ctx != NULL, "the heap census was asked for against no realm — every row of it is a walk of ONE "
                         "runtime, so a census with no runtime to walk is a reading of nothing");
     rt = JS_GetRuntime(ctx);
     JS_ComputeMemoryUsage(rt, &mem);
+    navigable_realm_refs(NULL, &rmin, &rmax, &rtotal);   /* `live` is navigable_realm_count() one line down */
     attributed = (long long)mem.memory_used_size;
     return composef(
                  "{\"allocations\":%lld,\"atoms\":%lld,\"strings\":%lld,\"objects\":%lld,"
                  "\"shapes\":%lld,\"props\":%lld,\"funcs\":%lld,\"funcCode\":%lld,\"arrays\":%lld,"
                  "\"miscBytes\":%lld,\"miscParts\":%lld,\"childRealms\":%d,"
                  "\"childRealmsMade\":%d,\"childRealmsPeak\":%d,"
+                 "\"childRealmRefsMin\":%d,\"childRealmRefsMax\":%d,\"childRealmRefsTotal\":%lld,"
                  "\"objBytes\":%lld,\"propBytes\":%lld,\"shapeBytes\":%lld,\"strBytes\":%lld,"
                  "\"atomBytes\":%lld,\"funcBytes\":%lld,\"arrayElemBytes\":%lld,"
                  "\"unattributed\":%lld,\"stepMachines\":%d,\"trampFrames\":%d,"
@@ -1629,6 +1639,7 @@ char *result_heap_json(JSContext *ctx) {
                  (long long)mem.js_func_count, (long long)mem.js_func_code_size, (long long)mem.array_count,
                  (long long)mem.memory_used_size, (long long)mem.memory_used_count,
                  navigable_realm_count(), navigable_realm_made(), navigable_realm_peak(),
+                 rmin, rmax, (long long)rtotal,
                  (long long)mem.obj_size, (long long)mem.prop_size, (long long)mem.shape_size,
                  (long long)mem.str_size, (long long)mem.atom_size, (long long)mem.js_func_size,
                  (long long)mem.fast_array_elements * (long long)sizeof(JSValue),
