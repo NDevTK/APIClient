@@ -71,6 +71,7 @@
 #include "check.h"
 /* §6.7.1.1 step 1's gate is Fetch §2.2.5's SCRIPT-LIKE, and it is asked of Fetch — see fetch.h. */
 #include "core/fetch/fetch.h"
+#include "core/fetch/integrity_policy.h"
 #include "core/frame/csp_directive_list.h"
 #include "core/frame/csp_source_list.h"
 #include "core/frame/policy_container.h"
@@ -97,6 +98,20 @@ struct PolicyContainer {
        them, the free releases them. Adding a field here without visiting all three is the defect a clone-site
        assert exists to catch, and there is one below. */
     EmbedderPolicy embedder;
+    /* §7.1.7's INTEGRITY POLICY item, as the SAME PAIR the CSP list is: the TEXT the response's header stated
+       (owned, NULL for none) and the parse over it. They are one value with one lifetime for `csp_text`'s
+       reason exactly — the text is what the container TRAVELS as, so a clone across an instance re-parses it,
+       and the parsed form is what every reader wants. Subresource Integrity §3.8's own struct is three lists
+       of closed domains, so the parse is POD and neither half of it is freed separately.
+       THE REPORT-ONLY POLICY §7.1.7 ALSO LISTS IS NOT HERE, and that is a NAMED RESIDUAL rather than a
+       half-built item. WHAT IS NOT COVERED: `Integrity-Policy-Report-Only`. WHAT THE NEXT DIFF BUILDS: SRI
+       §3.8.3 "Report violations" over the Reporting standard, which is what would READ it — §3.8.2 computes
+       its BLOCK answer from the enforcing policy alone, so a report-only policy stored today would be a field
+       whose only consumer does not exist, which is the defect this file's own item rule is about. HOW ITS
+       ABSENCE SHOWS: a page that registers a ReportingObserver for `integrity-violation` is delivered nothing
+       on a document whose script was correctly refused. */
+    char           *integrity_policy_text;
+    IntegrityPolicy integrity_policy;
 };
 
 /* AND THAT SENTENCE IS TRUE OF AN OWNED FIELD AND BADLY MISLEADING ABOUT A §7.1.7 ITEM, WHICH IS THE THING
@@ -124,7 +139,8 @@ struct PolicyContainer {
    lands in those, and leaves the item absent from the producers nobody counted. */
 
 PolicyContainer *policy_container_new(const char *csp_text, const Origin *self_origin,
-                                      const char *referrer_policy, SerializedEmbedderPolicy embedder)
+                                      const char *referrer_policy, SerializedEmbedderPolicy embedder,
+                                      const char *integrity_policy_text)
 {
     PolicyContainer *p = calloc(1, sizeof *p);
 
@@ -146,6 +162,18 @@ PolicyContainer *policy_container_new(const char *csp_text, const Origin *self_o
        creating this Document — a response's header list that is freed the moment the Document is installed, or
        a `navigable.create` record — and a container outlives every one of them. */
     embedder_policy_adopt(&p->embedder, embedder);
+    /* §7.1.7's INTEGRITY POLICY item, taking its own copy for the embedder item's reason: the caller's bytes
+       belong to the operation creating this Document — a response's header list freed the moment the Document
+       is installed — and a container outlives every one of them. The PARSE runs unconditionally for the CSP
+       list's reason exactly: a container whose response stated no header still HAS an integrity policy (SRI
+       §3.8's "a new integrity policy"), so a container built with text and one built without are the same
+       shape and no reader has to ask which it is holding. */
+    if (integrity_policy_text && *integrity_policy_text) {
+        p->integrity_policy_text = strdup(integrity_policy_text);
+        CHECK(p->integrity_policy_text != NULL, "policy container: OOM copying an integrity policy");
+    }
+    p->integrity_policy = integrity_policy_parse(p->integrity_policy_text,
+                                                 p->integrity_policy_text ? strlen(p->integrity_policy_text) : 0);
     return p;
 }
 
@@ -178,7 +206,7 @@ PolicyContainer *policy_container_clone(const PolicyContainer *src)
            "EMPTY STRING and never null), so this container was built somewhere that does not go through "
            "policy_container_new, and the clone would carry an item the source does not have");
     return policy_container_new(src->csp_text, src->csp.self_origin, src->referrer_policy,
-                                serialized_embedder_policy_of(&src->embedder));
+                                serialized_embedder_policy_of(&src->embedder), src->integrity_policy_text);
 }
 
 void policy_container_enforce_policy(PolicyContainer *p, const char *serialized_policy)
@@ -270,6 +298,7 @@ void policy_container_free(PolicyContainer *p)
        is a leak that no gate names, because a container is freed once per Document and a document is not a
        loop. */
     embedder_policy_free(&p->embedder);
+    free(p->integrity_policy_text);   /* the parse points at nothing of its own — SRI §3.8's struct is POD */
     free(p);
 }
 
@@ -281,8 +310,14 @@ const Origin *policy_container_self_origin(const PolicyContainer *p) { return p 
 
 const EmbedderPolicy *policy_container_embedder(const PolicyContainer *p) { return p ? &p->embedder : NULL; }
 
+const struct IntegrityPolicy *policy_container_integrity_policy(const PolicyContainer *p)
+{
+    return p ? &p->integrity_policy : NULL;
+}
+
 SerializedPolicyContainer serialized_policy_container(const char *csp, const char *self_origin,
-                                                     SerializedEmbedderPolicy embedder)
+                                                     SerializedEmbedderPolicy embedder,
+                                                     const char *integrity_policy)
 {
     SerializedPolicyContainer out;
 
@@ -299,6 +334,7 @@ SerializedPolicyContainer serialized_policy_container(const char *csp, const cha
     out.csp = csp;
     out.self_origin = self_origin;
     out.embedder = embedder;
+    out.integrity_policy = integrity_policy;
     return out;
 }
 
@@ -315,11 +351,16 @@ SerializedPolicyContainer serialized_policy_container_none(void)
        member whose bytes mean nothing: a reader that reached it would get `unsafe-none`, which is the answer
        §7.1.7 gives a container built from no response, and never an uninitialized pointer. */
     out.embedder = serialized_embedder_policy_new();
+    /* SRI §3.8's "a new integrity policy" spelled as its own absence of text, for the embedder item's reason
+       above: every member is filled so that a reader who reaches one past the existence test gets the
+       standard's initial value rather than uninitialized bytes. */
+    out.integrity_policy = NULL;
     return out;
 }
 
 SerializedPolicyContainer serialized_policy_container_or_none(const char *csp, const char *self_origin,
-                                                              SerializedEmbedderPolicy embedder)
+                                                              SerializedEmbedderPolicy embedder,
+                                                              const char *integrity_policy)
 {
     /* THE ABSENCE IS AN ABSENT SELF-ORIGIN AND NEVER AN ABSENT POLICY. §2.2 gives every CSP list a self-origin
        whether or not it holds policies, so a relaying zone that has a container states one either way — and a
@@ -333,7 +374,7 @@ SerializedPolicyContainer serialized_policy_container_or_none(const char *csp, c
            "both), so this is a relay that stopped writing the origin field and not a document with no "
            "container; `'self'` would resolve against this document's own address instead of the creator's");
     if (!(self_origin != NULL && *self_origin)) return serialized_policy_container_none();
-    return serialized_policy_container(csp, self_origin, embedder);
+    return serialized_policy_container(csp, self_origin, embedder, integrity_policy);
 }
 
 SerializedPolicyContainer serialized_policy_container_of(const PolicyContainer *p)
@@ -354,7 +395,8 @@ SerializedPolicyContainer serialized_policy_container_of(const PolicyContainer *
            "was built somewhere that did not state it");
     return serialized_policy_container(policy_container_csp(p),
                                        origin_serialized(policy_container_self_origin(p)),
-                                       serialized_embedder_policy_of(policy_container_embedder(p)));
+                                       serialized_embedder_policy_of(policy_container_embedder(p)),
+                                       p->integrity_policy_text);
 }
 
 bool serialized_policy_container_exists(SerializedPolicyContainer c)

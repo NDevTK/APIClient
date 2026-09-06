@@ -50,6 +50,16 @@ typedef struct {
        report-only True beside §7.5.1's, so one response feeds two policies. */
     char        *permissions_policy;
     char        *permissions_policy_report_only;
+    /* SUBRESOURCE INTEGRITY §3.8.1 "Parse Integrity-Policy headers"' `Integrity-Policy` VALUE, as Fetch
+       §2.2.2's get returned it. NULL for a response that carried none, which SRI §3.8 answers with "a new
+       integrity policy" and not with a hole. Owned. IT TRAVELS RATHER THAN BEING RE-READ for the reason its
+       two neighbours above do: the algorithm that consumes it is HTML §7.1.7's policy container, which is
+       built after this engine has freed the header list on purpose.
+       §3.8.1 READS TWO HEADERS AND THIS CARRIES ONE, which is the residual named at
+       core/frame/policy_container.c's struct: the report-only policy's only reader is SRI §3.8.3 "Report
+       violations" over the Reporting standard, and §3.8.2 computes its BLOCK answer from the enforcing policy
+       alone — so carrying it today would be a field whose consumer does not exist. */
+    char        *integrity_policy;
     /* §7.4.5's FINAL SANDBOXING FLAG SET — the union described above. */
     SandboxFlags sandbox_flags;
     /* §7.1.7's EMBEDDER POLICY, the container item obtained from this response (§7.1.4). */

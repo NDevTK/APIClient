@@ -808,7 +808,10 @@ static JSContext *nav_create_finish(JSContext *ctx, NavCreateWork *w, JSValueCon
     policy = serialized_policy_container(w->csp, w->self_origin,
                                          serialized_embedder_policy(w->coep_value, w->coep_endpoint,
                                                                     w->coep_report_only_value,
-                                                                    w->coep_report_only_endpoint));
+                                                                    w->coep_report_only_endpoint),
+                                         /* the integrity policy item is not on this parked record — see the
+                                            §7.1.7 narrowing named at the `inherited` container below */
+                                         NULL);
     /* THE HOST IS HANDED THE SERIALIZATION, because a host builds a platform surface and does not decide a
        principal — and because the identity it would have to carry is this agent's, asserted at the begin. */
     cctx = g_realm_builder(JS_GetRuntime(ctx), w->dom, w->url, w->top_level_url, origin_serialized(w->origin),
@@ -1171,6 +1174,9 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        traversable's fetch, which is the only place §7.4.5 obtains one. See below. */
     OpenerPolicy response_coop;
     char *resp_csp = NULL;   /* owned by header_list_get and freed with free(), NOT a JS_ToCString */
+    /* SUBRESOURCE INTEGRITY §3.8.1 "Parse Integrity-Policy headers"' enforcing header, read off THIS response
+       beside its CSP for the same reason and with the same ownership. */
+    char *resp_integrity = NULL;
     /* PERMISSIONS POLICY §9.1 step 1 and Fetch's half of its step 2, for BOTH names — §7.5.1 runs §9.6 with the
        enforced value and §10.1 inserts a second call with the report-only one, so one response feeds two
        policies and this frame reads both. Same ownership as `resp_csp`, and freed with it. */
@@ -1325,6 +1331,7 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
            policy LIST, which policy_container.c splits apart again. The zone that used to extract this read
            one map entry and could not express two `Content-Security-Policy` headers at all. */
         resp_csp = header_list_get(&response_headers, "content-security-policy");
+        resp_integrity = header_list_get(&response_headers, "integrity-policy");
         /* THE SAME `get`, FOR THE HEADER THAT DECIDES WHAT THIS DOCUMENT MAY USE. It is read HERE, at the child
            navigable's own response, because §9.6 takes navigationParams's RESPONSE and this frame is where a
            child's response is read — the framing document's copy of this question is answered at
@@ -1422,7 +1429,16 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         inherited_ep = serialized_embedder_policy(v, inherited_coep_endpoint, ro,
                                                   inherited_coep_report_only_endpoint);
     }
-    inherited = serialized_policy_container(inherited_csp, inherited_self, inherited_ep);
+    /* §7.1.7's INTEGRITY POLICY ITEM IS NOT ON THIS RELAY YET, AND THAT IS A NAMED NARROWING RATHER THAN A
+       NULL NOBODY CHOSE. WHAT IS NOT COVERED: a container INHERITED across an instance — this argument list is
+       the navigate job's, and the creator's integrity policy has no slot on it, so a cross-origin or `data:`
+       child inherits its creator's CSP and not its integrity policy. WHAT THE NEXT DIFF BUILDS: the item as a
+       further job argument beside `inherited_csp`, written by the same producer that writes that one. HOW ITS
+       ABSENCE SHOWS: such a child loads a `<script src>` with no `integrity` that its creator's policy
+       refuses, where a same-instance sibling of the same document is refused it — the two disagree, and only
+       comparing them reveals it. The item IS on SerializedPolicyContainer and IS carried by
+       serialized_policy_container_of, so an IN-HEAP clone keeps it; what this line lacks is the WIRE. */
+    inherited = serialized_policy_container(inherited_csp, inherited_self, inherited_ep, NULL);
     /* §7.4.2.2 "Beginning navigation"'s ABOUT BASE URL for THIS navigation. For a url that matches
        `about:blank` or is `about:srcdoc`, its step is "Set documentState's about base URL to
        initiatorBaseURLSnapshot" — which is why the INITIATOR's base URL rides the job and is used only when
@@ -1510,7 +1526,7 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     /* §2.2.2's pair for this load's own response: its policies and that self-origin, beside §7.1.4's item
        obtained just above. */
     response = serialized_policy_container(resp_csp, response_self,
-                                           serialized_embedder_policy_of(&response_ep));
+                                           serialized_embedder_policy_of(&response_ep), resp_integrity);
     /* §7.1.7's DETERMINE NAVIGATION PARAMS POLICY CONTAINER, WHOSE FIRST ARGUMENT THE SECTION NAMES
        `responseURL` — "to determine navigation params policy container given a URL responseURL and four policy
        container-or-nulls". Its two remaining predicates are `responseURL is about:srcdoc` and `responseURL is
@@ -1737,6 +1753,7 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     JS_FreeCString(ctx, inherited_coep_report_only_endpoint);
     JS_FreeCString(ctx, about_base);
     free(resp_csp);
+    free(resp_integrity);
     free(resp_pp);
     free(resp_pp_report_only);
     /* AND THE LIST ITSELF, HERE RATHER THAN BEFORE THE CREATION ABOVE — see the note at the site it moved

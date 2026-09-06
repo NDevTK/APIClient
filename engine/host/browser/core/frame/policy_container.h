@@ -49,7 +49,8 @@ typedef struct PolicyContainer PolicyContainer;
    the standard's own words rather than an omission. It is COPIED — both endpoint strings — because a container
    owns its items and outlives the operation that built it. */
 PolicyContainer *policy_container_new(const char *csp_text, const Origin *self_origin,
-                                      const char *referrer_policy, SerializedEmbedderPolicy embedder);
+                                      const char *referrer_policy, SerializedEmbedderPolicy embedder,
+                                      const char *integrity_policy_text);
 
 /* §7.1.7's "clone a policy container" — §7.3.2.1 performs this for a navigable created with a creator, which is
    how an initial about:blank inherits its CSP. A DEEP copy: the child's policy is its own from the moment it
@@ -131,6 +132,18 @@ const Origin *policy_container_self_origin(const PolicyContainer *p);
    policy a real response stated. */
 const EmbedderPolicy *policy_container_embedder(const PolicyContainer *p);
 
+/* §7.1.7's INTEGRITY POLICY item, parsed — Subresource Integrity §3.8's struct, which
+   core/fetch/integrity_policy.h defines and which §3.8.2 reads to answer Fetch §4.1 "Main fetch" step 7's
+   fourth disjunct. NEVER NULL for a container that exists: a response that stated no `Integrity-Policy`
+   header gets §3.8's "a new integrity policy", which is a real value its own steps read as one and not an
+   absence any caller has to interpret.
+   FORWARD-DECLARED RATHER THAN INCLUDED, and the direction is forced rather than chosen: core/fetch/fetch.h
+   includes THIS header (§2.2.5's metadata rides the request) and integrity_policy.h includes fetch.h for the
+   request MODE its check reads, so including it here would close a cycle. A caller that dereferences the
+   answer includes that header, which it needs anyway for the algorithm. */
+struct IntegrityPolicy;
+const struct IntegrityPolicy *policy_container_integrity_policy(const PolicyContainer *p);
+
 /* ---- HTML §7.1.7 "Policy containers" — THE CONTAINER IN THE FORM IT CROSSES A SEAM -------------------------
  *
  * ONE VALUE, BECAUSE §7.1.7 MAKES IT ONE STRUCT. "A policy container is a struct containing policies that apply
@@ -181,6 +194,15 @@ typedef struct {
        would drop the one added next. It is ALWAYS present — a container that exists has an embedder policy,
        initially a new one — which is why nothing here spells its absence. */
     SerializedEmbedderPolicy embedder;
+    /* §7.1.7's INTEGRITY POLICY item, AS THE HEADER TEXT THAT STATED IT — NULL for a response that carried no
+       `Integrity-Policy`, which SRI §3.8 answers with "a new integrity policy" rather than with an absence.
+       IT IS ON THIS STRUCT AND NOT ONLY ON THE LIVE CONTAINER, and that is the half a lifetime rule does not
+       reach: a container crosses an instance as THIS value, so an item here and not there is dropped for
+       exactly the children that INHERIT rather than fetch — a `data:` frame, whose opaque origin is the
+       reason it is in a peer instance at all — and dropped silently, because a container missing an item is
+       wrong rather than broken. It travels as TEXT for `csp`'s reason: the parse points into bytes, and the
+       receiving instance re-parses rather than being handed a structure from a heap it cannot see. */
+    const char *integrity_policy;
 } SerializedPolicyContainer;
 
 /* A CONTAINER, stating every item. `self_origin` is REQUIRED and non-empty: a container that exists has a CSP
@@ -191,7 +213,8 @@ typedef struct {
    serialized_embedder_policy_new() — §7.1.4's own "a new embedder policy" — rather than by omitting an
    argument this function would then have to invent. */
 SerializedPolicyContainer serialized_policy_container(const char *csp, const char *self_origin,
-                                                      SerializedEmbedderPolicy embedder);
+                                                      SerializedEmbedderPolicy embedder,
+                                                      const char *integrity_policy);
 
 /* NO CONTAINER — §7.1.7's `null` for the initiator/parent/history containers its determine step tests against,
    which is a real state (a Document with no creator) and not a caller that forgot an argument. */
@@ -207,7 +230,8 @@ SerializedPolicyContainer serialized_policy_container_none(void);
    until the answer is known would put the §7.1.7 test in the caller — which is the second reading this
    function exists to prevent. An absent container discards it, exactly as it discards the policy text. */
 SerializedPolicyContainer serialized_policy_container_or_none(const char *csp, const char *self_origin,
-                                                              SerializedEmbedderPolicy embedder);
+                                                              SerializedEmbedderPolicy embedder,
+                                                              const char *integrity_policy);
 
 /* THE SERIALIZATION OF A LIVE CONTAINER — §7.1.7's clone, in the form it crosses a seam. It reads EVERY item
    off `p`, so a container that grows grows here once and no caller has to be told: this is the one place a

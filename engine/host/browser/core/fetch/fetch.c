@@ -28,6 +28,7 @@
 #include "solver/multipart_batch.h"
 #include "core/agent_state.h"
 #include "core/fetch/fetch.h"
+#include "core/fetch/integrity_policy.h"
 #include "core/fetch/scheme_fetch.h"
 #include "core/file/blob.h"
 #include "core/frame/location.h"
@@ -152,10 +153,30 @@ FetchCredentialsMode fetch_credentials_of_token(const char *token)
     }
     CHECK_FAIL("a request record's credentials mode is a word Fetch §2.2.5 \"Requests\" does not define — the "
                "only producer holding this field as TEXT is §5.4 \"Request class\"'s record, whose value came "
-               "through Web IDL §3.2.19 Enumeration types' conversion of `RequestCredentials` and is therefore "
+               "through Web IDL §3.2.18 Enumeration types' conversion of `RequestCredentials` and is therefore "
                "one of the three by the time the record is filled. An arrival here is this engine's own "
                "conversion having stopped, never a string a page reached this function with");
     return FETCH_CREDENTIALS_UNPLACED;
+}
+
+/* FETCH §2.2.5 "Requests"' MODE, from the word §5.4's record holds — see core/fetch/fetch.h for why there is
+   no direction back to text. */
+FetchMode fetch_mode_of_token(const char *token)
+{
+    if (token) {
+        if (!strcmp(token, "same-origin")) return FETCH_MODE_SAME_ORIGIN;
+        if (!strcmp(token, "cors"))        return FETCH_MODE_CORS;
+        if (!strcmp(token, "no-cors"))     return FETCH_MODE_NO_CORS;
+        if (!strcmp(token, "navigate"))    return FETCH_MODE_NAVIGATE;
+        if (!strcmp(token, "websocket"))   return FETCH_MODE_WEBSOCKET;
+        if (!strcmp(token, "webtransport")) return FETCH_MODE_WEBTRANSPORT;
+    }
+    CHECK_FAIL("a request record's MODE is a word Fetch §2.2.5 \"Requests\" does not define — the only "
+               "producer holding this field as TEXT is §5.4 \"Request class\"'s record, whose value came "
+               "through Web IDL §3.2.18 Enumeration types' conversion of `RequestMode` and is therefore one "
+               "of the six by the time the record is filled. An arrival here is this engine's own conversion "
+               "having stopped, never a string a page reached this function with");
+    return FETCH_MODE_UNPLACED;
 }
 
 /* THE SAME SEAM, FOR A COMPONENT WHOSE OWN STANDARD SAYS "FETCH REQUEST" — see fetch.h. `value` is the second
@@ -173,7 +194,8 @@ FetchCredentialsMode fetch_credentials_of_token(const char *token)
    owes it. The disjunction is written ONCE here; the four hand-written copies that stood at `fetch()`,
    §4.8.4.3.5, §4.6.8.20 and §3.5.2's send() are calls to it, and the fifth entry that had no copy at all —
    §4.12.1.1's `<script src>` — is reached through solver/engine.c's park. */
-int fetch_main_blocked(JSContext *ctx, const char *url, const char *destination, CspRequestMetadata metadata)
+int fetch_main_blocked(JSContext *ctx, const char *url, const char *destination,
+                       CspRequestMetadata metadata, FetchMode mode)
 {
     UrlRecord rec;
     int blocked;
@@ -187,11 +209,33 @@ int fetch_main_blocked(JSContext *ctx, const char *url, const char *destination,
     /* AN UNPARSEABLE ADDRESS IS NOT BLOCKED BY THIS STEP, which is what all four copies did (each guarded its
        disjunction with `url_parse(...) && (...)`) and is kept because it is right: §4.1 step 7 asks about a
        request's URL, and a string that names none is a failure the caller's own algorithm answers. */
+    /* THE MODE IS REFUSED WHERE IT IS UNSTATED, and this assert is the deliverable as much as the disjunct
+       below is. The integrity-policy check's early-allow arm is a CONJUNCTION with the mode, so a producer
+       that left it zero does not fail open here — it silently REFUSES a `<script src integrity crossorigin>`
+       a browser loads, the element fires `error` instead of `load`, and this engine explores a path the real
+       page never takes with an endpoint surface smaller than the real one. Nothing downstream would crash,
+       which is exactly why the check has to be here. */
+    DCHECK(mode != FETCH_MODE_UNPLACED,
+           "§4.1 step 7 was asked about a request stating no MODE — Fetch §2.2.5 \"Requests\" gives every "
+           "request one, and the fourth disjunct's early-allow arm is a conjunction with it, so an unstated "
+           "mode is not a missing detail: it flips that arm and refuses a request carrying integrity metadata "
+           "that a browser loads. State the mode the algorithm creating this request names (HTML §2.5.1's "
+           "create a potential-CORS request answers it from the element's `crossorigin` state)");
     url_record_init(&rec);
+    /* THE DISJUNCTION IS §4.1 STEP 7'S AND IS WRITTEN AS ONE — bad port, Content Security Policy, and
+       Subresource Integrity §3.8.2's Integrity Policy. MIXED CONTENT, THE SECOND OF THE FOUR, IS STILL ABSENT
+       and is the residual in core/fetch/fetch.h: it is gated by §4.1 step 6, which REWRITES the address this
+       step judges, so it cannot be added here without that step first.
+       C's `||` IS THE STANDARD'S OWN SHORT-CIRCUIT and not an optimisation: a request blocked by a bad port
+       is a network error whatever a policy would have said, so the later checks are not merely redundant but
+       are asked of a request the algorithm has already answered. */
     blocked = url_parse(&rec, url, strlen(url), NULL) &&
               (fetch_block_bad_port(&rec) == FETCH_PORT_BLOCKED ||
                policy_should_block_request(document_policy(ctx), &rec, destination, metadata,
-                                           /*redirect count*/ 0) == CSP_REQUEST_BLOCKED);
+                                           /*redirect count*/ 0) == CSP_REQUEST_BLOCKED ||
+               integrity_policy_should_block_request(
+                   ctx, policy_container_integrity_policy(document_policy(ctx)), &rec, destination,
+                   metadata.integrity, metadata.integrity_len, mode) == INTEGRITY_POLICY_BLOCKED);
     url_record_free(&rec);
     return blocked;
 }
@@ -227,6 +271,22 @@ void fetch_owe(JSContext *ctx, JSValueConst deliver, const FetchRequest *req)
            "names (`image` at §4.8.4.3.5, `script` at §8.1.4.2, the empty string at §5.6's fetch()), and if "
            "you hold an `as`-attribute keyword run Fetch §2.2.7 Miscellaneous' translate a potential "
            "destination over it first — `fetch` is a POTENTIAL destination and not a destination");
+    /* …AND ITS MODE, FOR THE SAME REASON AND WITH A SHARPER CONSEQUENCE. Fetch §2.2.5 "Requests" gives every
+       request one, and unlike the destination — whose wrong value reaches three consumers that fail loudly at
+       one of them — a wrong or unstated MODE fails at NONE of them: its single reader is §4.1 step 7's
+       Integrity Policy disjunct, whose early-allow arm is a conjunction with it, so a zero silently refuses a
+       request carrying integrity metadata that a browser loads. There is no downstream abort to catch it and
+       no gate here that would notice a slightly smaller endpoint surface, which is why the guard is at the
+       door rather than at the symptom. */
+    DCHECK(req->mode != FETCH_MODE_UNPLACED,
+           "a request was owed to the host without stating its MODE — Fetch §2.2.5 \"Requests\" gives every "
+           "request one, and §4.1 step 7's Integrity Policy check reads it in a conjunction with the "
+           "request's integrity metadata, so a request that does not say does not merely lose a detail: it "
+           "takes the arm that REFUSES a `<script src integrity crossorigin>` a browser loads, with nothing "
+           "downstream to crash. State the mode the algorithm creating this request names (HTML §2.5.1's "
+           "create a potential-CORS request answers it from the element's `crossorigin` state — "
+           "core/html/cors_settings_attribute.h; XHR states `cors`; §5.4's constructor `cors` for a request "
+           "built from a string)");
     /* …AND ITS CREDENTIALS MODE, ASSERTED HERE FOR THE DESTINATION'S REASON EXACTLY: this is the last line at
        which the component that built the request is still on the stack. Fetch §2.2.5 "Requests" gives every
        request one, and the party that knows which is the algorithm that CREATED it — HTML §2.5.1
@@ -834,6 +894,7 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, const RequestRecord 
        are written out rather than left to csp_request_metadata_unstated because the INTEGRITY beside them is
        stated, and this record's three fields do not all come from one claim. */
     CspRequestMetadata csp_meta;
+    FetchMode req_mode;
 
     promise = JS_NewPromiseCapability(ctx, resolving);
     if (JS_IsException(promise))
@@ -868,6 +929,10 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, const RequestRecord 
     csp_meta = csp_request_metadata(/*cryptographic nonce metadata*/ "", 0,
                                     rec->integrity, strlen(rec->integrity),
                                     /*parser metadata*/ CSP_PARSER_METADATA_EMPTY);
+    /* AND §2.2.5's MODE, READ HERE FOR csp_meta's REASON: the §4.3 block below declares its own `UrlRecord
+       rec`, which shadows the request record, so both facts this function takes OFF that record are taken
+       before the shadow rather than reached for inside it. */
+    req_mode = fetch_mode_of_token(rec->mode);
     if (u) {
         /* §4.3 SCHEME FETCH: "Switch on request's current URL's scheme". The scheme is what the URL PARSER
            says it is and not what the string starts with, so the URL is parsed ONCE here and every arm below
@@ -905,7 +970,8 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, const RequestRecord 
            predicate is that uncertainty KEEPS the arm. Blocking on the accident that a shape's text carried
            `:25` would delete a real endpoint from the surface. The same sentence covers §4.1.2: a policy is
            matched against a URL, and a shape is not the URL the request will go to. */
-        if (url_is_real && fetch_main_blocked(ctx, u, /*destination*/ "", csp_meta)) {
+        if (url_is_real && fetch_main_blocked(ctx, u, /*destination*/ "", csp_meta,
+                                              req_mode)) {
             JSValue value;
 
             JS_ThrowTypeError(ctx, "Failed to fetch");
@@ -991,6 +1057,12 @@ static JSValue fetch_park(JSContext *ctx, JSValueConst url, const RequestRecord 
                `request.credentials` since that diff, and it still reached the network as nothing at all,
                because this record had nowhere to put it. This line is the other half. */
             req.credentials = fetch_credentials_of_token(rec->credentials);
+            /* …AND FETCH §2.2.5's MODE, off the same record and for the identical reason. §5.4's constructor
+               steps set it — "Let mode be init["mode"] if it exists, and fallbackMode otherwise", where a
+               request built from a STRING has fallbackMode `cors`, which is what makes an ordinary
+               `fetch(url)` a CORS request. request_init_apply writes that word; this reads it back as the
+               domain, and its only consumer is §4.1 step 7's Integrity Policy disjunct. */
+            req.mode = req_mode;
             req.headers = hdrs;
             req.body = body;
             req.body_len = body_len;

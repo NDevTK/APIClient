@@ -493,7 +493,7 @@ JSValue document_create_element_internal(JSContext *ctx, const char *local, size
    `Cross-Origin-Embedder-Policy` has no `<meta>` form at all), so this function neither derives it nor defaults
    it — which is what keeps the two halves this function DOES merge from acquiring a silent third. */
 PolicyContainer *document_policy_new(lxb_html_document_t *dom, const char *csp, const Origin *self_origin,
-                                     SerializedEmbedderPolicy embedder);
+                                     SerializedEmbedderPolicy embedder, const char *integrity_policy);
 
 /* THIS DOCUMENT'S POLICY CONTAINER — HTML §7.2.6, built at install from the above. Built at install rather
    than on demand because §7.4 clones it for an about:blank child at the moment that child is created, which

@@ -876,7 +876,12 @@ static JSValue img_update_rest(JSContext *ctx, JSValueConst this_val, int argc, 
        What this site still states is what only it knows — the destination §4.8.4.3.5 creates the request with,
        and the metadata that algorithm sets. */
     csp_meta = csp_request_metadata_unstated();
-    if (fetch_main_blocked(ctx, abs, /*destination*/ "image", csp_meta)) {
+    /* §4.8.4.3.5 creates its request with "creating a potential-CORS request given urlString, `image`, and
+       the current state of the element's crossorigin content attribute", and HTML §2.5.1 answers a MODE out
+       of that third operand exactly as it answers the destination out of the second — so this states the mode
+       the algorithm names rather than a default, which §4.1 step 7's Integrity Policy disjunct reads. */
+    if (fetch_main_blocked(ctx, abs, /*destination*/ "image", csp_meta,
+                           cors_potential_request_mode(cors_settings_attribute_state(el)))) {
         /* A blocked request is a NETWORK ERROR, which is "no data could be obtained" — §4.8.4.3's own gloss on
            the broken state — so it takes the same arm the delivery does, without ever owing the host a reply. */
         st_set_int(ctx, st, "state", HTML_IMAGE_BROKEN);
@@ -930,6 +935,9 @@ static JSValue img_update_rest(JSContext *ctx, JSValueConst this_val, int argc, 
            the credential question from it. The attribute is READ rather than assumed for the same reason
            §4.8.4.3.5 lists `crossorigin` among the attributes whose change re-runs this algorithm. */
         req.credentials = cors_potential_request_credentials(cors_settings_attribute_state(el));
+        /* …AND §2.5.1's MODE, its third output, from the same state — see cors_settings_attribute.h for why
+           the two are separate entries rather than one call answering both. */
+        req.mode = cors_potential_request_mode(cors_settings_attribute_state(el));
         req.headers = NULL;
         req.body = NULL;
         req.body_len = 0;

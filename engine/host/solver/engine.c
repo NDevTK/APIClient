@@ -235,6 +235,28 @@ static FetchCredentialsMode script_credentials_mode(lxb_dom_element_t *el)
               : FETCH_CREDENTIALS_SAME_ORIGIN;
 }
 
+/* FETCH §2.2.5 "Requests"' MODE FOR A SCRIPT PARK, AND IT IS NOT THE SIBLING ABOVE'S ALGORITHM — which is the
+   whole reason it is a second function rather than a second return from that one.
+   THE TWO SPLIT ON THE SCRIPT'S TYPE AND THE CREDENTIALS DO NOT. HTML §8.1.4.2 "Fetching scripts"' fetch a
+   classic script says "Let request be the result of creating a potential-CORS request given url, `script`, and
+   corsSetting", so a CLASSIC script's mode is §2.5.1's — `no-cors` for an element with no `crossorigin`
+   attribute, which is the ordinary `<script src>` on every page. Its fetch a single module script instead says
+   "Let request be a new request whose URL is url, mode is `cors`", flatly, so a MODULE script's mode is `cors`
+   whatever the element says. The credentials mode agrees across the two because "set up the classic script
+   request" OVERWRITES it from the script fetch options (§2.5.4's answer) while leaving the mode alone.
+   READING §2.5.4's NOTE INSTEAD WOULD HAVE GOT THE CLASSIC ARM WRONG, and silently: that note says these are
+   "more modern features, where the request's mode is always `cors`", which is TRUE OF THE CREDENTIALS-ONLY
+   REPURPOSING it describes and false of the request classic-script fetching creates. `cors` here would make
+   SRI §3.8.2's early-allow arm fire for a `<script src integrity>` with no `crossorigin`, which is precisely
+   the no-CORS external script an integrity policy exists to refuse — and nothing would crash.
+   NO ELEMENT IS THE No CORS STATE and not a missing answer: §2.5.4's missing value default is No CORS, so a
+   park with no element creates its request with the same corsSetting an attribute-less element has. */
+static FetchMode script_request_mode(ScriptType stype, lxb_dom_element_t *el)
+{
+    if (stype == SCRIPT_TYPE_MODULE) return FETCH_MODE_CORS;
+    return el ? cors_potential_request_mode(cors_settings_attribute_state(el)) : FETCH_MODE_NO_CORS;
+}
+
 static void script_csp_meta_free(JSContext *ctx, ScriptCspMeta *h)
 {
     if (h->nonce) JS_FreeCString(ctx, h->nonce);
@@ -277,6 +299,21 @@ static void pending_park_request(JSContext *ctx, JSValue e, const FetchRequest *
        plumbed this" the same bytes on the wire. `fetch_owe` asserts the same thing at the other door
        (core/fetch/fetch.c) and this is the CONSUMER'S half of it, which is what reaches the three parks in
        this file that build their own record and never pass that door. */
+    /* AND ITS MODE, THE CONSUMER'S HALF OF THE GUARD `fetch_owe` MAKES AT THE OTHER DOOR — and the one field
+       on this record whose wrong value fails at NO consumer. The destination is refused by three of them and
+       the credentials mode is fatal at the wire spelling; the MODE has a single reader, §4.1 step 7's
+       Integrity Policy disjunct below, whose early-allow arm is a conjunction with it — so a zero here does
+       not produce a wrong wire value or an abort, it silently REFUSES a `<script src integrity crossorigin>`
+       that a browser loads, and the only trace is an endpoint surface smaller than the real page's. This is
+       the door the three parks in this file reach that never pass fetch_owe. */
+    DCHECK(req->mode != FETCH_MODE_UNPLACED,
+           "a request parked on an ADDRESS without stating its MODE — Fetch §2.2.5 \"Requests\" gives every "
+           "request one, and §4.1 step 7's Integrity Policy check reads it in a conjunction with the "
+           "request's integrity metadata, so a park that does not say takes the arm that REFUSES a request "
+           "carrying integrity metadata a browser loads, with nothing downstream to crash and no gate here "
+           "that would notice. State the mode the algorithm creating this request names "
+           "(core/html/cors_settings_attribute.h holds HTML §2.5.1's answer over an element's `crossorigin` "
+           "state, and §2.5.4's note fixes the mode at `cors` for the keywords on its path)");
     DCHECK(req->credentials != FETCH_CREDENTIALS_UNPLACED,
            "a request parked on an ADDRESS without stating its CREDENTIALS MODE — Fetch §2.2.5 Requests "
            "gives every request one and the trusted zone decides from it whether the person's session pays "
@@ -327,7 +364,7 @@ static void pending_park_request(JSContext *ctx, JSValue e, const FetchRequest *
            "value (core/frame/policy_container.h), so a NULL is a zero-filled FetchRequest whose producer "
            "never said which of the two claims it is making, and §4.1 step 7 below would compare a policy's "
            "nonce-source expressions against a pointer nobody wrote");
-    if (fetch_main_blocked(ctx, req->url, req->destination, req->metadata)) {
+    if (fetch_main_blocked(ctx, req->url, req->destination, req->metadata, req->mode)) {
         pending_set(e, PEND_VALUE, JS_NULL);
         pending_set(e, PEND_HAVE_VALUE, JS_TRUE);
         return;
@@ -458,6 +495,9 @@ void engine_pending_module_url(JSContext *ctx, JSValueConst resolve, JSValueCons
        element whose program this flow is running decides it, and a chunk imported from a row no `<script>`
        produced takes §8.1.4.2's default script fetch options. */
     req.credentials = script_credentials_mode(flow_dyn_el(f));
+    /* …AND ITS MODE. A dynamic `import()` is fetched by HTML §8.1.4.2's fetch a single module script, whose
+       request is created with `mode is "cors"` outright — so this is the module arm and never the element's. */
+    req.mode = script_request_mode(SCRIPT_TYPE_MODULE, flow_dyn_el(f));
     DCHECK(url != NULL && *url, "a dynamic import parked with no module URL for the host to fetch");
     e = pending_push(&f->pending, FLOW_PENDING_MODULE, flow_path_forced(f));
     pending_set(e, PEND_RESOLVE, JS_DupValue(ctx, resolve));
@@ -534,6 +574,10 @@ void engine_pending_script_url(JSContext *ctx, const char *url, ScriptType stype
        `script_credentials_mode`. `<script crossorigin=use-credentials src>` is the population this states
        for: without it the park carried a zero-fill and the chunk was fetched with the mode nobody named. */
     req.credentials = script_credentials_mode(el);
+    /* …AND ITS MODE, WHICH IS THE ONE FIELD THIS PARK'S `stype` DECIDES BESIDES THE DECODE. A classic external
+       script takes §2.5.1's mode off the element and a `<script type=module src>` is `cors` flatly — see
+       script_request_mode for why §2.5.4's note does not answer the classic arm. */
+    req.mode = script_request_mode(stype, el);
     e = pending_push(&f->pending, FLOW_PENDING_SCRIPT, flow_path_forced(f));
     pending_set_int(e, PEND_SCRIPT_TYPE, (int)stype);
     /* AND WHICH DOCUMENT'S PROGRAM THE REPLY WILL BE. The element was inserted into a tree, and the realm this
@@ -5953,6 +5997,10 @@ static void engine_pending_docscript(Flow *f, int at) {
        script's — see `script_credentials_mode`. A row a host SYNTHESIZED has no element and takes §8.1.4.2's
        default script fetch options, exactly as its metadata does one line up. */
     req.credentials = script_credentials_mode(f->dyn_el[at]);
+    /* …AND ITS MODE, off the element, because this park's own banner names its algorithm: "fetch a classic
+       script … creates a potential-CORS request". A document's own `<script src>` with no `crossorigin`
+       attribute is therefore `no-cors`, which is what makes an integrity policy refuse it. */
+    req.mode = script_request_mode(SCRIPT_TYPE_CLASSIC, f->dyn_el[at]);
     e = pending_push(&f->pending, FLOW_PENDING_DOCSCRIPT, flow_path_forced(f));
     /* WHICH ROW THIS PARK IS FOR, BY NAME — it is the row's `dyn_id` rather than its position because a
        position is a fact about the row only while the set is fixed (solver/flow.h), and this entry outlives

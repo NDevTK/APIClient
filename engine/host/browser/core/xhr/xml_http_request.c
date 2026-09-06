@@ -2045,7 +2045,13 @@ static bool xhr_main_fetch_local(JSContext *ctx, XhrData *d)
                               responsible for creating a request" — to draw from. Nor does it set a parser
                               metadata, which is that same note's other field. All three are the initial
                               empty string. */
-                           csp_request_metadata_unstated())) {
+                           csp_request_metadata_unstated(),
+                           /* AND THE MODE, WHICH THAT STANDARD STATES OUTRIGHT AND DOES NOT DERIVE. XHR
+                              §3.5.6 "The send() method" initializes its request with "mode `cors`" as a
+                              literal row of the list that builds it — beside the credentials mode, which IS
+                              conditional on this object's cross-origin credentials flag. So the two fields
+                              come from the same list and only one of them is a decision. */
+                           FETCH_MODE_CORS)) {
         url_record_free(&rec);
         JS_FreeCString(ctx, u);
         return true;
@@ -2072,6 +2078,9 @@ static bool xhr_main_fetch_local(JSContext *ctx, XhrData *d)
        Stating it here is also what keeps the field's zero meaning what core/fetch/fetch.h says it means: a
        producer that never wrote it, rather than a producer whose route happened not to need it. */
     req.credentials = xhr_credentials_mode(d);
+    /* …AND §3.5.6's MODE, the literal `cors` row of that same list — stated on the record for the credentials
+       mode's reason exactly: the park and the scheme-fetch route must carry one request, not two. */
+    req.mode = FETCH_MODE_CORS;
     switch (scheme_fetch(ctx, &req, JS_UNDEFINED, &reply)) {
     case SCHEME_FETCH_RESPONSE:
         /* Through the ONE reply object every answer to this component takes, exactly as a host reply is. */

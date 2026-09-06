@@ -50,13 +50,29 @@ int cors_settings_attribute_state(const lxb_dom_element_t *el);
    IT ANSWERS ONE OF THE ALGORITHM'S OUTPUTS AND NAMES THE REST. §2.5.1 also computes a MODE — "Let mode be
    `no-cors` if corsAttributeState is No CORS, and `cors` otherwise" — and returns "a new request whose URL is
    url, destination is destination, mode is mode, credentials mode is credentialsMode, and whose use-URL-
-   credentials flag is set". This engine's request record carries neither the mode nor that flag, because
-   neither has a reader: SECURITY.md gives the SOP/CORS decision to the trusted zone, which makes it from the
-   request's own origin and the reply's headers. A field a producer writes and nothing reads is the mirror of
-   the defect CLAUDE.md counts seven of, so each arrives with its first consumer.
+   credentials flag is set". THE MODE IS CARRIED NOW AND THE USE-URL-CREDENTIALS FLAG IS NOT, which is this
+   sentence's own rule coming true rather than an exception to it: it said a field a producer writes and
+   nothing reads is a defect, so each arrives with its first consumer — and the mode's first consumer turned
+   up — Subresource Integrity's integrity-policy check, which Fetch §4.1 "Main fetch" step 7 runs, reads it in
+   a conjunction with the request's integrity metadata. The flag still has none. SECURITY.md's division is
+   unchanged and is why the mode does NOT cross the wire: the trusted zone still makes the SOP/CORS decision
+   from the request's own origin and the reply's headers, and the mode's only reader is inside this engine.
    Callers: HTML §4.8.4.3.5 "Updating the image data", HTML §4.2.4.3 "Fetching and processing a resource from
    a link element"'s create a link request, and HTML §9.2.2 "The EventSource interface"' constructor. */
 FetchCredentialsMode cors_potential_request_credentials(int cors_attribute_state);
+
+/* HTML §2.5.1 "Terminology"'s CREATE A POTENTIAL-CORS REQUEST, as the MODE it computes — "Let mode be
+   `no-cors` if corsAttributeState is No CORS, and `cors` otherwise".
+   THIS IS THE ARRIVAL THE PARAGRAPH ABOVE PREDICTED, and it is worth saying so rather than quietly adding a
+   function: that paragraph says the mode is not carried "because neither has a reader … so each arrives with
+   its first consumer", and the consumer turned up — Subresource Integrity §3.8.2's integrity-policy check,
+   which Fetch §4.1 "Main fetch" step 7 runs, reads the request's mode in a CONJUNCTION with its integrity
+   metadata. The field is carried now because that is true, and for no other reason; nothing else in this
+   engine reads it, and SECURITY.md still gives the SOP/CORS decision to the trusted zone.
+   IT IS A SECOND ENTRY BESIDE THE CREDENTIALS ONE AND NOT A SECOND RETURN FROM IT, for the reason those two
+   are already two: one call answering two questions is read into a variable named for the other, and these
+   two do not even agree about the No CORS state — it is `include` credentials and `no-cors` mode. */
+FetchMode cors_potential_request_mode(int cors_attribute_state);
 
 /* HTML §2.5.4 "CORS settings attributes"' CORS SETTINGS ATTRIBUTE CREDENTIALS MODE — "we define the CORS
    settings attribute credentials mode for a given CORS settings attribute to be determined by switching on the

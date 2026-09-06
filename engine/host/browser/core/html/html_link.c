@@ -655,7 +655,7 @@ static char *link_url_absolute(JSContext *ctx, const char *href, size_t href_n)
  * after `fetch_owe` has copied what the park needs and not before. */
 static void link_fetch_request(JSContext *ctx, lxb_dom_element_t *el, JSValueConst wrap, const char *abs,
                                const char *destination, CspParserMetadata parser_metadata,
-                               FetchCredentialsMode credentials, JSCFunctionData *deliver)
+                               FetchCredentialsMode credentials, FetchMode mode, JSCFunctionData *deliver)
 {
     size_t integrity_n = 0;
     const char *integrity = link_attr(el, "integrity", &integrity_n);
@@ -737,7 +737,7 @@ static void link_fetch_request(JSContext *ctx, lxb_dom_element_t *el, JSValueCon
        THE DISJUNCTION AND THE URL PARSE ARE NOT WRITTEN HERE — they were one of FOUR hand-written copies of
        §4.1 step 7, and core/fetch/fetch.h's fetch_main_blocked is the one component they collapsed into. What
        this site still states is what only it knows: the caller's destination and §4.2.4.3's metadata. */
-    if (fetch_main_blocked(ctx, abs, destination, metadata)) {
+    if (fetch_main_blocked(ctx, abs, destination, metadata, mode)) {
         JS_FreeCString(ctx, nonce);
         JS_FreeValue(ctx, nonce_slot);
         link_queue_fire(ctx, wrap, "error");
@@ -778,6 +778,13 @@ static void link_fetch_request(JSContext *ctx, lxb_dom_element_t *el, JSValueCon
            decides the credential question from it; which of §2.5.1's and §2.5.4's two answers governs is a
            fact about WHICH `rel` keyword's algorithm is running, and only the caller knows that. */
         req.credentials = credentials;
+        /* …AND THE MODE, THE CALLER'S FOR THE CREDENTIALS MODE'S REASON AND NOT A SECOND READING OF IT.
+           §4.2.4.3's create a link request builds its request with HTML §2.5.1 "Terminology"'s create a
+           potential-CORS request, whose mode follows the element's `crossorigin` state; §4.6.8.12 Link type
+           "modulepreload" is on §2.5.4's path instead, whose note says in its own words that these are
+           "more modern features, where the request's mode is always `cors`". Two `rel` keywords, two
+           algorithms, and the same markup answers differently — which is exactly why this is passed. */
+        req.mode = mode;
         fetch_owe(ctx, d, &req);
         JS_FreeValue(ctx, d);
     }
@@ -914,7 +921,8 @@ static void link_preload(JSContext *ctx, lxb_dom_element_t *el)
        OPPOSITE of what its modulepreload sibling answers for the identical markup, and the reason this value
        is passed rather than computed inside the shared function. */
     link_fetch_request(ctx, el, wrap, abs, destination, CSP_PARSER_METADATA_EMPTY,
-                       cors_potential_request_credentials(cors_settings_attribute_state(el)), link_deliver);
+                       cors_potential_request_credentials(cors_settings_attribute_state(el)),
+                       cors_potential_request_mode(cors_settings_attribute_state(el)), link_deliver);
     JS_FreeValue(ctx, wrap);
     free(abs);
 }
@@ -1166,9 +1174,13 @@ static void link_modulepreload(JSContext *ctx, lxb_dom_element_t *el)
        STEP 14 IS THE CALL BELOW: this file's processResponse steps are `link_module_deliver`, which is step
        14's "following steps given result", and the graph's own module-map effect is the named residual at
        this function's banner. */
+    /* §2.5.4's MODE IS NOT READ OFF THE ATTRIBUTE, and that is the standard's sentence rather than a
+       simplification: its note says these are "more modern features, where the request's mode is always
+       `cors`", and the attribute has been "repurposed … wherein they only impact the request's credentials
+       mode". So the state decides the CREDENTIALS here and decides nothing about the mode. */
     link_fetch_request(ctx, el, wrap, abs, destination, CSP_PARSER_METADATA_NOT_PARSER_INSERTED,
                        cors_settings_attribute_credentials(cors_settings_attribute_state(el)),
-                       link_module_deliver);
+                       FETCH_MODE_CORS, link_module_deliver);
     JS_FreeValue(ctx, wrap);
     free(abs);
 }

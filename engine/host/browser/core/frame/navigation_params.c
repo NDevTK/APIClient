@@ -102,6 +102,9 @@ void navigation_params_from_response(NavigationParams *out, const HeaderList *he
      * decides from a response it already holds does not need a second door in from the trusted zone. */
     out->permissions_policy             = header_list_get(headers, "permissions-policy");
     out->permissions_policy_report_only = header_list_get(headers, "permissions-policy-report-only");
+    /* SRI §3.8.1 step 2's header, by the name that standard gives it. The report-only one its step 3 reads is
+       deliberately not taken — see the field's own note. */
+    out->integrity_policy               = header_list_get(headers, "integrity-policy");
 
     /* §7.1.4's obtain, which §7.1.7's create-a-policy-container-from-a-fetch-response step 4 makes the policy
        container's EMBEDDER POLICY item: "if environment is non-null, then set result's embedder policy to the
@@ -134,6 +137,8 @@ void navigation_params_free(NavigationParams *p)
     p->permissions_policy = NULL;
     free(p->permissions_policy_report_only);
     p->permissions_policy_report_only = NULL;
+    free(p->integrity_policy);
+    p->integrity_policy = NULL;
     embedder_policy_free(&p->embedder);
     opener_policy_free(&p->opener);
 }

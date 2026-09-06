@@ -79,3 +79,12 @@ FetchCredentialsMode cors_settings_attribute_credentials(int cors_attribute_stat
     return cors_attribute_state == CORS_USE_CREDENTIALS ? FETCH_CREDENTIALS_INCLUDE
                                                         : FETCH_CREDENTIALS_SAME_ORIGIN;
 }
+
+/* §2.5.1's MODE — see cors_settings_attribute.h. The switch is over §2.5.4's three states and the standard's
+   sentence names only one of them: "Let mode be `no-cors` if corsAttributeState is No CORS, and `cors`
+   otherwise", so Anonymous and Use Credentials share the `cors` arm because §2.5.1 groups them, not because
+   this file decided they were alike. */
+FetchMode cors_potential_request_mode(int cors_attribute_state)
+{
+    return cors_attribute_state == CORS_NO_CORS ? FETCH_MODE_NO_CORS : FETCH_MODE_CORS;
+}

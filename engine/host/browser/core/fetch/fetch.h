@@ -109,9 +109,54 @@ const char *fetch_credentials_token(FetchCredentialsMode m);
    the string §2.6.1-style reflection hands back to `request.credentials`. Mapping it here rather than at that
    producer is what keeps ONE vocabulary: a second switch beside the record would be free to answer a word
    this one does not. Fatal on a word §2.2.5 does not define, and that is an assertion about THIS engine and
-   not about a page — Web IDL §3.2.19 Enumeration types has already refused every other string before the
+   not about a page — Web IDL §3.2.18 Enumeration types has already refused every other string before the
    record was filled, so an arrival here is our own conversion having stopped. */
 FetchCredentialsMode fetch_credentials_of_token(const char *token);
+
+/* FETCH §2.2.5 "Requests"' MODE, AS ITS OWN DOMAIN — "A request has an associated mode, which is
+ * `same-origin`, `cors`, `no-cors`, `navigate`, `websocket`, or `webtransport`. Unless stated otherwise,
+ * it is `no-cors`." SIX, AND THE SIXTH IS WHY A QUOTATION IS PASTED RATHER THAN RECALLED: this enum was
+ * first written with FIVE, from memory of an older form of that sentence, and the citation auditor's
+ * quotation check is what said so. The cost of the miss was not the comment — it was a member missing from
+ * a DOMAIN, so `fetch_mode_of_token` would have refused a word §5.4 had already accepted.
+ *
+ * IT ARRIVES WITH ITS FIRST CONSUMER AND THIS IS THAT ARRIVAL, which is core/html/cors_settings_attribute.h's
+ * own prediction coming true rather than a new decision: that file computes §2.5.1's mode and says the field
+ * is not carried "because neither has a reader", and Subresource Integrity's integrity-policy check is the
+ * reader. Nothing else in this engine reads it — SECURITY.md gives the SOP/CORS decision to the trusted zone,
+ * which makes it from the request's own origin and the reply's headers — so it does NOT cross the wire, and a
+ * seam that started sending it would be stating a fact no consumer over there asked for.
+ *
+ * `_UNPLACED` IS THE ZERO AND IT IS THE WHOLE POINT OF THE ENUM, for the reason FETCH_CREDENTIALS_UNPLACED is:
+ * the failure this field has is SILENT. A producer that leaves it zero, or states the wrong one, does not
+ * crash anything — the integrity-policy check's early-allow arm simply stops firing, and a
+ * `<script src integrity crossorigin>` under `Integrity-Policy: blocked-destinations=(script)` is REFUSED
+ * where a browser loads it. The element then fires `error` instead of `load`, the page runs its error
+ * handler, and this engine explores a path the real page never takes with an endpoint surface smaller than
+ * the real one and nothing anywhere saying so. A `no-cors` default would have made that state unspellable
+ * from a legal one, so the zero is not a mode and the seams below refuse it. */
+typedef enum {
+    FETCH_MODE_UNPLACED = 0,
+    FETCH_MODE_SAME_ORIGIN,
+    FETCH_MODE_CORS,
+    FETCH_MODE_NO_CORS,
+    FETCH_MODE_NAVIGATE,
+    FETCH_MODE_WEBSOCKET,
+    FETCH_MODE_WEBTRANSPORT,
+} FetchMode;
+
+/* §2.2.5's five words, in the ONE direction anything needs them: a request record built by §5.4 "Request
+   class" holds this field as the TEXT Web IDL §3.2.18 "Enumeration types" already validated, and the engine
+   reads it back as the domain. There is no token direction because nothing serializes a mode: the wire does
+   not carry it.
+   THE WEB IDL NUMBER HERE WAS §3.2.19 AND IS A REPAIR AT FOUR SITES, TWO OF THEM PRE-EXISTING. "Enumeration
+   types" is §3.2.18; §3.2.19 is "Callback function types". The two older sites stated the title WITHOUT
+   quotation marks, so the auditor's title channel had nothing to compare and reported nothing for years —
+   this one stated it in quotes, was caught on the first run, and the grep that fixed it found the rest.
+   A correctly-numbered citation whose TITLE is unquoted is invisible to the one check
+   that would judge it. An unrecognised word is this engine's own conversion having stopped, never a string a page
+   reached here with — §5.4 rejects anything outside `RequestMode` before the record is filled. */
+FetchMode fetch_mode_of_token(const char *token);
 
 typedef struct {
     const char   *method;
@@ -176,6 +221,11 @@ typedef struct {
        script fetch options. A correctly-numbered, correctly-titled citation of a section that does not GOVERN
        is the one every instrument here confirms and only a reader can catch. */
     FetchCredentialsMode credentials;
+    /* Fetch §2.2.5 "Requests"' MODE. Stated by the algorithm that CREATES the request and never derived here:
+       §5.4's constructor gives a request built from a string `cors`, HTML §2.5.1's create a potential-CORS
+       request gives `no-cors` or `cors` off the element's `crossorigin` state, and XHR states `cors` outright.
+       Its only reader is §4.1 step 7's integrity-policy disjunct; it does not cross the wire. */
+    FetchMode mode;
 } FetchRequest;
 
 /* FETCH §4.1 "Main fetch" STEP 7, AS THE ONE COMPONENT IT IS A STEP OF — "If should request be blocked due to
@@ -183,9 +233,9 @@ typedef struct {
  * Security Policy, or should request be blocked by Integrity Policy Policy returns blocked, then set response
  * to a network error".
  *
- * WHAT IS NOT COVERED: the step is FOUR checks and this component runs TWO of them — bad port and CSP. The
- * two absent disjuncts are NOT one residual, and the difference is not their size: only ONE of them can be
- * built at this component at all.
+ * WHAT IS NOT COVERED: the step is FOUR checks and this component runs THREE of them — bad port, CSP, and
+ * Subresource Integrity's Integrity Policy. The ONE still absent is MIXED CONTENT, and it is absent for a
+ * reason rather than by order of arrival: it is the only one of the four gated by a DIFFERENT STEP.
  *
  * MIXED CONTENT (disjunct 2) IS GATED BY THE STEP ABOVE THIS ONE, WHICH IS THE FACT THAT DECIDES THE ORDER.
  * §4.1 step 6 is "Upgrade a mixed content request to a potentially trustworthy URL, if appropriate", and that
@@ -231,58 +281,25 @@ typedef struct {
  * editor's-draft base, so a citation of it is COUNTED AND NEVER CHECKED rather than clean. Its ED renders
  * with numbered headings, so the row is one fetch away and the silence is a gap rather than a limit.
  *
- * INTEGRITY POLICY (disjunct 4) is the disjunct §4.1 gained after the four copies this replaced were written
- * — every one of them quoted a three-check version of this sentence, and moving the quotation to a fresh site
- * is what made the auditor say so. HOW ITS ABSENCE SHOWS: a document served
- * `Integrity-Policy: blocked-destinations=(script)` loads a `<script src>` carrying no `integrity` attribute
- * here and is refused it by a browser — so an @S breakout measured against that document's policy reports a
- * sink the real page cannot reach.
+ * INTEGRITY POLICY (disjunct 4) IS BUILT AND THIS PARAGRAPH RECORDS WHAT IT COST, because the clause that
+ * stood here priced it at one call and it was four components. It is the disjunct §4.1 gained after the four
+ * copies this replaced were written — every one of them quoted a three-check version of the sentence above,
+ * and moving the quotation to a fresh site is what made the auditor say so.
+ * IT IS NOT A STANDARD OF ITS OWN: the algorithm is a subsection of SUBRESOURCE INTEGRITY, which is where
+ * Fetch's own cross-reference data resolves this disjunct, and §4.1's sentence renders that section's title
+ * with the word Policy DOUBLED — Fetch's rendering is redundant and the standard is not wrong, so a reader
+ * searching it for §4.1's exact phrase should not conclude either document is in error.
+ * WHAT IT TOOK, and the two that were not visible from here: the policy is an ITEM of the policy container,
+ * so it needed a field, a clone, a free AND a slot on the serialized form every producer states — and the
+ * check reads the request's MODE, which nothing on this path carried. Both are now built; every SRI number
+ * in this tree is still COUNTED AND NEVER CHECKED, because that standard has no committed corpus row.
  *
- * IT IS NOT A STANDARD OF ITS OWN, WHICH IS THE FIRST THING THE CLAUSE THAT STOOD HERE GOT WRONG. It said
- * `Integrity Policy's own` algorithm, which reads as a document to go and fetch, and there is none: the
- * algorithm is a SUBSECTION OF SUBRESOURCE INTEGRITY, which is where Fetch's own cross-reference data resolves
- * this disjunct to. Two plausible homes for a separate document both answer 404. The section is titled
- * `Should request be blocked by Integrity Policy` — §4.1's sentence renders it with the word Policy DOUBLED,
- * so a reader searching that standard for §4.1's exact phrase does not find it.
- * AND EVERY NUMBER THIS PARAGRAPH GIVES FOR IT IS COUNTED AND NEVER CHECKED: engine/specindex holds no row
- * for that standard, so no channel here reads its sections and no quotation of it is compared. Treat the
- * numbers as this comment's claim, not as an audited one, exactly as with mixed content above.
- *
- * WHAT IT ACTUALLY NEEDS, DERIVED BY READING THE ALGORITHM RATHER THAN BY PRICING IT. Two of its inputs are
- * NOT REACHABLE FROM THIS DIRECTORY, and neither was named by the clause that stood here:
- *   - THE POLICY ITSELF IS AN ITEM OF THE POLICY CONTAINER, and there are TWO of them — an enforcing one and
- *     a report-only one, from two response headers. core/frame/policy_container.c already states, with the
- *     citation, that a policy container's five items include both; the struct carries NEITHER, so they
- *     arrive with their field, their clone and their free, in that file and not this one.
- *     AND THE HEADERS REACH THE ENGINE ALREADY, WHICH IS THE PART A PRICING GUESS GETS WRONG IN THE
- *     ALARMING DIRECTION. A container is built from CSP *text* rather than from a header list, so the
- *     obvious reading is that a new item has to be extracted by the trusted zone and carried over the ABI —
- *     which would make this a cross-boundary diff, the one shape §Disposition rates worst because the JS
- *     half deploys on write and the C half only after a build. It is not one. The response's HEADER LIST
- *     arrives in this engine at navigation, and the component that reads it already carries the ENFORCED and
- *     REPORT-ONLY values of another two-header policy as owned strings, for the identical reason this one
- *     needs to: the algorithm that consumes them cannot run until the Document exists. So the route is
- *     entirely engine-side, and the pattern to copy is one field-pair over in the same struct.
- *   - AND ONE ITEM OF A CONTAINER MUST ALSO SURVIVE A CLONE ACROSS AN INSTANCE, which is the second half and
- *     is easy to miss: a container crosses as a SERIALIZED value, so an item added to the live struct and not
- *     to that one is silently dropped for exactly the children that inherit rather than fetch — a `data:`
- *     frame, whose opaque origin is why it is in a peer instance at all.
- *   - THE CHECK READS THE REQUEST'S MODE, and neither `FetchRequest` above nor `fetch_main_blocked` below
- *     carries one. Its early-allow arm is the conjunction `this request has integrity metadata AND its mode
- *     is cors or same-origin`, so a reader who cannot ask the mode must pick an arm: allowing on the metadata
- *     alone under-blocks the NO-CORS case, which that standard's own worked example names as half of what the
- *     feature is for, and skipping the arm over-blocks a `<script src integrity crossorigin>` the standard
- *     allows. The second is a REGRESSION, so the mode is a dependency and not a residual — and adding it is a
- *     signature change at five call sites in core/html, core/xhr and solver.
- * WHAT IS ALREADY HERE AND MAKES THE REST CHEAP, which is the half worth carrying: the header value is a
- * structured-field DICTIONARY OF INNER LISTS and core/fetch/structured_fields.h parses exactly that
- * (`sf_header_dictionary`); the metadata parse the early-allow arm needs is
- * core/fetch/subresource_integrity.h's `sri_parse_metadata`; and the local-URL arm is core/url/url.h's
- * Fetch §2.1 predicate. So the algorithm's own body is small and its two blockers are both PLUMBING.
- * ITS PLACE IN THE ORDER IS AFTER MIXED CONTENT AND NOT BEFORE IT: §4.1's disjunction puts mixed content
- * SECOND and this FOURTH. It is CHEAPER than mixed content — no step 6, no address rewrite — and that is not
- * the same as reachable, which is the reading the previous clause invited and which cost a dispatch: both
- * absent disjuncts need files outside core/fetch, and they need DIFFERENT ones.
+ * MIXED CONTENT (disjunct 2) REMAINS, AND ITS BLOCKER IS UNCHANGED BY ANY OF THAT. It is gated by §4.1 step
+ * 6, which REWRITES the address step 7 judges, so it cannot be added here until that step exists — and the
+ * ordered subproblems for it are above. What the Integrity Policy work DID remove from its path is the mode:
+ * that dependency is discharged, and what is left for mixed content is the settings test, the step-6 upgrade
+ * component, and Fetch §2.2.5's INITIATOR, which core/html/html_image.c still records as absent for want of a
+ * consumer and which §4.1 step 6's `imageset` arm would be.
  *
  * IT WAS FOUR HAND-WRITTEN COPIES, ONE PER ENTRY, and the fifth entry is what proved that shape wrong: a
  * `<script src>` ran NO CSP check at all, because §4.12.1.1's fetch is the one nobody remembered to add a copy
@@ -302,7 +319,8 @@ typedef struct {
  * a question about a request's URL and there is no request to ask it of.
  *
  * Answers non-zero for BLOCKED. `url` is the request's serialized current URL. */
-int fetch_main_blocked(JSContext *ctx, const char *url, const char *destination, CspRequestMetadata metadata);
+int fetch_main_blocked(JSContext *ctx, const char *url, const char *destination,
+                      CspRequestMetadata metadata, FetchMode mode);
 
 /* IS THIS ONE OF FETCH §2.2.5 "Requests"' DESTINATION TYPES — the enumeration quoted in the paragraph above,
  * as a predicate, in the component whose record carries the field.

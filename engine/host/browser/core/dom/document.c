@@ -3294,7 +3294,7 @@ static void document_install_members(JSContext *ctx, JSValueConst proto)
    list this function built. Reading the batch as the whole delivery is what left the scripted policy
    unenforced, and a Document judged under a more permissive list than the real page has. */
 PolicyContainer *document_policy_new(lxb_html_document_t *dom, const char *csp, const Origin *self_origin,
-                                     SerializedEmbedderPolicy embedder)
+                                     SerializedEmbedderPolicy embedder, const char *integrity_policy)
 {
     lxb_dom_node_t *cur;
     char *acc = NULL;
@@ -3361,7 +3361,7 @@ PolicyContainer *document_policy_new(lxb_html_document_t *dom, const char *csp, 
            AND §7.1.4'S ITEM PASSES THROUGH UNTOUCHED, which is a statement about CSP §3.3 rather than a
            shortcut: a `<meta http-equiv>` can deliver a CSP policy and nothing else, so there is no second
            half of the embedder policy for this walk to find and no merge for it to perform. */
-        PolicyContainer *p = policy_container_new(acc, self_origin, NULL, embedder);
+        PolicyContainer *p = policy_container_new(acc, self_origin, NULL, embedder, integrity_policy);
         free(acc);
         return p;
     }
@@ -4745,7 +4745,8 @@ void document_install(JSContext *ctx, JSValueConst global, lxb_html_document_t *
            "one cannot resolve `'self'` and would report every one of its own scripts as blocked by its own "
            "policy. §7.1.7's determine step answers this for every creating operation and always with a "
            "container, so an absence here is a caller that did not run it");
-    d->policy = document_policy_new(dom, policy.csp, origin_parse(policy.self_origin), policy.embedder);
+    d->policy = document_policy_new(dom, policy.csp, origin_parse(policy.self_origin), policy.embedder,
+                                    policy.integrity_policy);
     /* §7.1.5's ACTIVE SANDBOXING FLAG SET, as the creating operation decided it — §7.2's creation flags for
        the initial about:blank, §7.4.5's final flag set for a navigated Document. Beside the policy container
        because §7.5.1 hands the Document both in one breath, and NOT derived from it: the container's only

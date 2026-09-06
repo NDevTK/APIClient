@@ -844,7 +844,14 @@ JSValue window_proxy_new(JSContext *ctx, uint32_t doc, const char *url, const Or
                                                                proxy_strdup(creator_policy.embedder.endpoint),
                                                                creator_policy.embedder.report_only_value,
                                                                proxy_strdup(creator_policy.embedder
-                                                                                .report_only_endpoint)));
+                                                                                .report_only_endpoint)),
+                                    /* …AND §7.1.7's INTEGRITY POLICY ITEM, DEEP-COPIED LIKE THE POLICY TEXT
+                                       BESIDE IT. This record outlives the call that built it, so an item that
+                                       borrowed the creator's bytes would be a dangling pointer by the time a
+                                       deferred realm materializes — which is the same reason `csp` is
+                                       proxy_strdup'd here and not kept. */
+                                    creator_policy.integrity_policy && *creator_policy.integrity_policy
+                                        ? proxy_strdup(creator_policy.integrity_policy) : NULL);
     /* §7.4's `let creatorBaseURL be null` is the ABSENCE of a creator, so NULL here is a real state and not a
        caller that forgot: the root navigable has no creator, and a navigable created with an address takes its
        Document from a response, which §2.4.3 gives a null about base URL. */
@@ -993,7 +1000,11 @@ JSValue window_proxy_new_self(JSContext *ctx, uint32_t doc, const char *name, Op
            "positive statement that this navigable is a top-level traversable");
     obj = window_proxy_new(ctx, doc, NULL, origin_agent(), name, false, creation_sandbox_flags, opener_policy,
                            serialized_policy_container(NULL, origin_serialized(origin_agent()),
-                                                       serialized_embedder_policy_new()),
+                                                       serialized_embedder_policy_new(),
+                                                       /* a top-level navigable created from NO response
+                                                          states no integrity policy, which SRI §3.8 answers
+                                                          with "a new integrity policy" */
+                                                       NULL),
                            NULL, tlus, tlo, parent, JS_NULL);
     JS_FreeCString(ctx, tlus);
     JS_FreeValue(ctx, tlu);

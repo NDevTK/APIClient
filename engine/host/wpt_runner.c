@@ -1537,6 +1537,15 @@ static int wpt_issue_pending(void)
            that `fetch_owe` and `pending_park_request` both abort on, so leaving it is an uninitialised read
            waiting for the first consumer that grows one. */
         req.credentials = fetch_credentials_of_token(credentials);
+        /* …AND FETCH §2.2.5's MODE IS DELIBERATELY NOT STATED HERE, WHICH IS THE ONE FIELD THAT DIFFERS FROM
+           THE CREDENTIALS MODE ABOVE. The mode does not cross the wire (core/fetch/fetch.h: its only reader
+           is §4.1 step 7's Integrity Policy disjunct, inside the engine), so this host has nothing to restate
+           it from — and inventing one would be a value no algorithm chose, on a record whose zero is the
+           refusal that exists to catch exactly that. Nothing reads it on this path: `wpt_request_begin` is
+           this runner's own HTTP issuer and reaches neither `fetch_owe` nor `pending_park_request`, which are
+           the two seams that assert the field. The day one of them is reached from here, the abort names this
+           line rather than letting a fabricated mode through. */
+        req.mode = FETCH_MODE_UNPLACED;
         req.headers = rec >= 0 ? &g_owed[rec].headers : &none;
         req.body = rec >= 0 ? g_owed[rec].body : NULL;
         req.body_len = rec >= 0 ? g_owed[rec].body_len : 0;
@@ -2195,6 +2204,9 @@ static bool wpt_answer_host_requests(JSContext *ctx)
                    navigate algorithm is the `document` row of §2.2.5's own initiator/destination table. It is
                    not script-like, which is the whole of what a consumer reads it for. */
                 req.destination = "document";
+                /* A NAVIGATION'S MODE IS `navigate` — Fetch §2.2.5 "Requests" enumerates it and HTML §7.4.5's
+                   create-navigation-params-by-fetching creates its request with that mode. */
+                req.mode = FETCH_MODE_NAVIGATE;
                 req.headers = &none;
                 req.body = NULL;
                 req.body_len = 0;
@@ -2254,6 +2266,9 @@ static bool wpt_answer_host_requests(JSContext *ctx)
                initiator/destination table, the `connect-src` one it shares with `fetch()`. A value, not a
                hole: these bytes are data. */
             req.destination = "";
+            /* XHR §3.5.6 "The send() method" initializes its request with `mode` `cors` as a literal row —
+               the same value core/xhr/xml_http_request.c states, because this is the same request. */
+            req.mode = FETCH_MODE_CORS;
             req.headers = &hdrs;
             req.body = bodys;
             req.body_len = blen;
@@ -2459,6 +2474,9 @@ static char *wpt_get_headers(const char *url, size_t *plen, HeaderList *pheaders
     memset(&req, 0, sizeof req);
     memset(&h, 0, sizeof h);
     req.method = "GET";
+    /* THIS RUNNER'S OWN FETCH OF A TEST RESOURCE, which is not a request any page made: `no-cors` is Fetch
+       §2.2.5's own "unless stated otherwise" and is the honest answer for a fetch no algorithm created. */
+    req.mode = FETCH_MODE_NO_CORS;
     req.url = url;
     body = wpt_http(&req, plen, &status, &h);
     if (pheaders) *pheaders = h;   /* MOVED, not copied — the caller frees it */
@@ -3044,7 +3062,10 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
         inherited = serialized_policy_container_or_none(
             inherited_csp, inherited_csp_self_origin,
             serialized_embedder_policy(_coep, inherited_coep_endpoint, _coep_ro,
-                                       inherited_coep_report_only_endpoint));
+                                       inherited_coep_report_only_endpoint),
+            /* no integrity policy on this runner's inherited relay — the narrowing named at
+               core/frame/navigable.c's `inherited` container */
+            NULL);
         /* §7.5.1's OPENER POLICY ROW for this root Document — §7.1.3's policy obtained from the same response
            the params above came from — and §7.3.1.3's PARENT, which for a `--document` child is a navigable in
            the PARENT PROCESS and for the top-level test document is none. Both go to core/frame/navigable.c's
@@ -3068,7 +3089,8 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
         /* AND §7.1.4's ITEM OF THE RESPONSE'S OWN CONTAINER — §7.1.7's create-a-policy-container-from-a-fetch-
            response step 4, obtained where the response is read and handed to the constructor here. */
         response = serialized_policy_container(np.csp, origin,
-                                               serialized_embedder_policy_of(&np.embedder));
+                                               serialized_embedder_policy_of(&np.embedder),
+                                               np.integrity_policy);
         policy = policy_container_determine_navigation_params(g_base_url, response, inherited);
 
         wpt_realm_install(ctx, g_wpt_dom, g_base_url, origin, root_kind, policy,
