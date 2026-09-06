@@ -99,6 +99,30 @@ struct PolicyContainer {
     EmbedderPolicy embedder;
 };
 
+/* AND THAT SENTENCE IS TRUE OF AN OWNED FIELD AND BADLY MISLEADING ABOUT A §7.1.7 ITEM, WHICH IS THE THING
+   SOMEBODY IS ACTUALLY ARRIVING HERE TO ADD. "Three sites and nowhere else" prices the C lifetime — fill,
+   copy, release — and a §7.1.7 ITEM has to do one more thing that no lifetime rule mentions: it has to
+   SURVIVE A CLONE ACROSS AN INSTANCE. A container crosses as SerializedPolicyContainer, so an item on this
+   struct and not on that one is dropped for exactly the children that INHERIT rather than fetch — a `data:`
+   frame, whose opaque origin is the reason it is in a peer instance at all — and dropped SILENTLY, because a
+   container that is merely missing an item is wrong rather than broken. The embedder policy proves the real
+   rule rather than the stated one: it is on the serialized struct, and it is stated at EVERY producer.
+
+   SO THE PRICE OF AN ITEM IS THE PRODUCER COUNT, NOT THREE. The three doors an item must be stated at are
+   policy_container_new, serialized_policy_container and serialized_policy_container_or_none; grep those three
+   names across engine/host and the answer is the price. It is a DERIVATION here and not a figure, because a
+   figure rots and because a count over source text is a count of a SPELLING — two patterns for this very
+   population disagreed by one while this paragraph was being written, which is exactly why the NAMES are
+   here and a regex is not. Every producer states every item BY DESIGN — this file's own header refuses an
+   omitted argument the constructor "would then have to invent" — so there is no defaulting arm to hide
+   behind and no way to add an item to a subset of them. When this was written the answer was a little over
+   fifty lines across seven files, the large majority of them in ONE fixture; re-derive rather than trusting
+   that shape.
+
+   THE REASON THIS IS WRITTEN DOWN AT ALL is that the under-pricing is what a reader takes away from the
+   sentence above, and an under-priced item is not a slow diff — it is a diff that gets SCOPED to a few files,
+   lands in those, and leaves the item absent from the producers nobody counted. */
+
 PolicyContainer *policy_container_new(const char *csp_text, const Origin *self_origin,
                                       const char *referrer_policy, SerializedEmbedderPolicy embedder)
 {
