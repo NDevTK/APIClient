@@ -70,6 +70,18 @@ for (const path of paths) {
     for (const line of tables)
         for (const m of line.matchAll(/([a-z][a-z0-9-]*)=(\d+)/g)) {
             const k = m[1], v = Number(m[2]);
+            /* EVERY ROW IS A STATEMENT AND A STATEMENT IS ANSWERED OR IT IS NOT, so a value outside {0,1} is
+               a COUNTER that has leaked onto an @H line — and this tool would silently read any non-zero as
+               "answered", turning a magnitude into a boolean and reporting a row as reached because a
+               counter happened to be positive. The assumption was implicit until it was checked, and it
+               checked out (249 row names over 70 logs, no value but 0 or 1), which is exactly when to make
+               it explicit: an invariant confirmed once and left unasserted is one the next emitter breaks.
+               It throws rather than clamping, because the honest answer to a row this tool cannot classify
+               is not a smaller number. */
+            if (v !== 0 && v !== 1)
+                throw new Error(`${path}: row \`${k}\` has value ${v} — @H rows are statements answered or ` +
+                                `not, so a value outside {0,1} means a counter now shares the table and this ` +
+                                `tool would read any non-zero as answered. Separate them at the emitter.`);
             best.set(k, Math.max(best.get(k) ?? 0, v));
         }
     if (best.size === 0)
