@@ -2,7 +2,7 @@
  * §6.4.7 CSSPageRule, §6.4.8 CSSMarginRule and §6.4.9 CSSNamespaceRule, plus CSS Conditional 3 §7.2's
  * CSSConditionRule, §7.3's CSSMediaRule and §7.4's CSSSupportsRule (the `@media` and `@supports` halves of the
  * same object), CSS Fonts 5 §9.1's CSSFontFaceRule, CSS Animations §6.2/§6.3's CSSKeyframeRule and
- * CSSKeyframesRule, CSS Cascade §8.1/§8.2's CSSLayerBlockRule and CSSLayerStatementRule, and CSS Properties and
+ * CSSKeyframesRule, CSS Cascade 5 §8.1/§8.2's CSSLayerBlockRule and CSSLayerStatementRule, and CSS Properties and
  * Values API 1 §6.1's CSSPropertyRule.
  *
  * A CSSPropertyRule HAS NO `style`, AND THAT IS THE ONE STRUCTURAL THING TO KNOW ABOUT IT. §6.1's IDL is
@@ -19,7 +19,7 @@
  * the list is stored, and the ONE reader that both `name` and the serialization go through is where the shape
  * with no defined answer is refused rather than answered with an invented one.
  *
- * `CSSImportRule.styleSheet` IS ABSENT, AND IT IS THE ONE MEMBER OF THESE INTERFACES THAT IS. §6.4.4 defines it
+ * `CSSImportRule.styleSheet` IS ABSENT, AND IT IS THE ONE MEMBER OF THESE INTERFACES THAT IS. CSSOM §6.4.4 defines it
  * as "the associated CSS style sheet, if any, or null otherwise" and its own note gives the case that produces
  * null (an import whose `supports()` condition does not match). This engine loads no CSS subresource at all —
  * there is no `@import` fetch and no `<link rel=stylesheet>` sheet either, so `css_style_sheet_create` has
@@ -71,16 +71,16 @@
  * §6.6.1 write through `style`), which is what makes `selectorText`, `cssText`, `length` and
  * `getPropertyValue` agree without any of them asking for itself.
  *
- * ONE `@layer` KEYWORD IS TWO INTERFACES, AND THE BLOCK IS WHAT DECIDES WHICH. CSS Cascade §6.4.4 gives the
- * at-rule two grammars: §6.4.4.1's `@layer <layer-name>? { <rule-list> }` is §8.1's CSSLayerBlockRule and
- * §6.4.4.2's `@layer <layer-name>#;` is §8.2's CSSLayerStatementRule, so the builder's `has_block` fork — the
- * one `@import` and `@font-face` already take to tell a rule from a drop — here picks between two interfaces
- * instead. They differ in EVERYTHING the interfaces differ in: a block is a §6.4.5 grouping rule holding the
- * layer's rules ("such @layer block rules have the same restrictions and processing as a conditional group
+ * ONE `@layer` KEYWORD IS TWO INTERFACES, AND THE BLOCK IS WHAT DECIDES WHICH. CSS Cascade 5 §6.4.4 gives the
+ * at-rule two grammars: CSS Cascade 5 §6.4.4.1's `@layer <layer-name>? { <rule-list> }` is §8.1's CSSLayerBlockRule
+ * and * CSS Cascade 5 §6.4.4.2's `@layer <layer-name>#;` is §8.2's CSSLayerStatementRule, so the builder's `has_block`
+ * fork — the * one `@import` and `@font-face` already take to tell a rule from a drop — here picks between two
+ * interfaces * instead. They differ in EVERYTHING the interfaces differ in: a block is a §6.4.5 grouping rule holding
+ * the * layer's rules ("such @layer block rules have the same restrictions and processing as a conditional group
  * rule [CSS-CONDITIONAL-3] with a true condition"), a statement contains nothing at all; a block declares AT
  * MOST ONE name and a
- * statement ONE OR MORE; and they sit in different places in a sheet — §6.4.4.2 admits the statement before
- * `@import` and `@namespace` as well as wherever any rule may go, which is the ONE rule type with two
+ * statement ONE OR MORE; and they sit in different places in a sheet — CSS Cascade 5 §6.4.4.2 admits the statement
+ * before * `@import` and `@namespace` as well as wherever any rule may go, which is the ONE rule type with two
  * admissible positions and the reason css_rule.c states a sheet's prologue as a set of ZONES rather than as a
  * rank per type. What they SHARE is the `<layer-name>` grammar, so they share one storage: §8.2 requires
  * `nameList` "normalized following the same rule as the CSSLayerBlockRule's name attribute", and §8.1's `name`
@@ -175,7 +175,7 @@ void css_rule_set_block_text(JSContext *ctx, JSValueConst rule, const char *text
  * `list` is the Array the rules live in, `parent_sheet` the CSS style sheet every rule in it names, and
  * `parent_rule` the enclosing rule (JS_NULL at a sheet's top level). `nested` is the spec's own flag, and it is
  * what decides step 6: an `@import` or an `@namespace` cannot go inside a conditional group rule AT ALL, while
- * at a SHEET's top level step 6 is the RANK ORDER CSS Cascade §2 and CSS Namespaces §2 state (imports, then
+ * at a SHEET's top level step 6 is the RANK ORDER CSS Cascade 5 §2 and CSS Namespaces §2 state (imports, then
  * namespaces, then everything else), asked in BOTH directions — a style rule inserted before an existing
  * `@import` is refused by the same test that refuses an `@import` inserted after one.
  * `css_rule_list_insert` answers §6.4 step 9's index, or an exception with the right DOMException pending. */
@@ -304,12 +304,12 @@ void css_rule_build_sheet(JSContext *ctx, JSValueConst list, JSValueConst parent
  * PARENT'S EMITTED selector down, so depth needs no special case: `.a { .b { .c { } } }` comes out as three
  * rules ending in `:is(:is(.a) .b) .c`. §3.4 "Mixing Nesting Rules and Declarations" fixes their order —
  * "nested style rules and nested group rules are considered to come after their parent rule" — which is the
- * emission's own order, and CSS Cascade §6.1's Order of Appearance is that position.
+ * emission's own order, and CSS Cascade 5 §6.1's Order of Appearance is that position.
  * A RESOLVED SELECTOR IS PARSED BEFORE IT IS EMITTED and what goes in is the parse's own serialization, which
  * is what discharges §3.1 "Syntax"'s "An invalid nested style rule is ignored, along with its contents" and
  * what keeps the per-index correspondence below true by construction rather than by hope.
  *
- * IT IS TEXT AND A LAYER PER RULE, NOT TEXT ALONE, because CSS Cascade §6.1 puts Layers ABOVE Specificity and
+ * IT IS TEXT AND A LAYER PER RULE, NOT TEXT ALONE, because CSS Cascade 5 §6.1 puts Layers ABOVE Specificity and
  * a flat text cannot say which layer a rule was in. Flattening `@layer a { #x { color: red } }` beside
  * `p { color: blue }` produces a sheet that resolves to RED on a `<p id=x>` where the standard resolves BLUE,
  * and the wrongness is invisible because both are real values. So the walk carries §6.4.3's layer as it

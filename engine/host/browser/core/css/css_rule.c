@@ -78,12 +78,12 @@ enum { RULE_TYPE_STYLE = 1, RULE_TYPE_IMPORT = 3, RULE_TYPE_MEDIA = 4, RULE_TYPE
 
 /* WHERE A RULE MAY SIT IN A STYLE SHEET. A sheet's rules are a PROLOGUE followed by a body, and three standards
    write that prologue between them:
-     CSS Cascade §2 — "any @import rules must precede all other valid at-rules and style rules in a style sheet
+     CSS Cascade 5 §2 — "any @import rules must precede all other valid at-rules and style rules in a style sheet
        (ignoring @charset, @supports-condition, and @layer statement rules) and must not have any other valid
        at-rules or style rules between it and previous @import rules, or else the @import rule is invalid";
      CSS Namespaces §2 — "any @namespace rules must follow all @charset and @import rules and precede all other
        non-ignored at-rules and style rules";
-     CSS Cascade §6.4.4.2 — "such empty @layer rules are allowed BEFORE @import and @namespace rules (after the
+     CSS Cascade 5 §6.4.4.2 — "such empty @layer rules are allowed BEFORE @import and @namespace rules (after the
        @charset rule, if any) AS WELL AS everywhere @layer block at-rules are allowed", whose note spells out
        what that costs: "no @layer rules are allowed between @import and @namespace rules. Any @layer rule that
        comes after an @import or @namespace rule will cause any subsequent @import or @namespace rules to be
@@ -94,9 +94,9 @@ enum { RULE_TYPE_STYLE = 1, RULE_TYPE_IMPORT = 3, RULE_TYPE_MEDIA = 4, RULE_TYPE
    IT IS A SET OF ZONES PER RULE TYPE AND NOT A RANK, AND THE `@layer` STATEMENT IS WHY — it is the one type
    with TWO admissible positions, which a single rank per type cannot state. The comment this replaces
    PREDICTED that such a rule would simply take `@import`'s rank, and that was wrong in BOTH directions: a rank
-   shared with `@import` would have REFUSED `@layer a;` after a style rule, which §6.4.4.2 allows outright, and
-   ADMITTED one between an `@import` and an `@namespace`, which its note forbids. Stating the whole prologue is
-   what keeps both directions falling out of one walk — a style rule BEFORE an `@import` is refused
+   shared with `@import` would have REFUSED `@layer a;` after a style rule, which CSS Cascade 5 §6.4.4.2 allows
+   outright, and ADMITTED one between an `@import` and an `@namespace`, which its note forbids. Stating the whole
+   prologue is what keeps both directions falling out of one walk — a style rule BEFORE an `@import` is refused
    (css/cssom/insertRule-import-no-index.html) by the same walk that refuses an `@import` after one. */
 enum { ZONE_LEAD = 0, ZONE_IMPORT, ZONE_NAMESPACE, ZONE_BODY, ZONE_N };
 #define ZONE_BIT(z) (1u << (unsigned)(z))
@@ -132,17 +132,17 @@ typedef struct CssRuleData {
     /* §6.4.5's `[SameObject] readonly attribute CSSRuleList cssRules` over it, remembered for the same reason
        `style` is, and SHARING that very Array, which is what its liveness IS. (OWNED) */
     JSValue rule_list;
-    /* §7.3's `[SameObject] media` — a §4.4 MediaList. §6.4.4's `media` is the same field: "the value of the
+    /* §7.3's `[SameObject] media` — a §4.4 MediaList. CSSOM §6.4.4's `media` is the same field: "the value of the
        media attribute of the associated CSS style sheet", which for an `@import` is the media query list the
-       at-rule itself declared and is what CSS Cascade §2 says that sheet's media IS. JS_NULL on a rule that
+       at-rule itself declared and is what CSS Cascade 5 §2 says that sheet's media IS. JS_NULL on a rule that
        has neither. (OWNED) */
     JSValue media;
-    /* §6.4.4's three remaining texts, each JS_NULL on a rule that is not an `@import` — and `layer_name` and
+    /* CSSOM §6.4.4's three remaining texts, each JS_NULL on a rule that is not an `@import` — and `layer_name` and
        `supports_text` are JS_NULL on one that declares no layer and no supports condition, which is the
        attribute's own null and not an absence this record has to distinguish from it. (OWNED)
        `supports_text` IS ALSO CSS Conditional 3 §7.4's CONDITION, and that is one fact under two attribute
        names rather than two facts sharing a slot — the test `at_name` and `keyframes_name` failed one field
-       up and this one passes. §6.4.4's `supportsText` is "the <supports-condition> declared in the at-rule"
+       up and this one passes. CSSOM §6.4.4's `supportsText` is "the <supports-condition> declared in the at-rule"
        and §7.4's `conditionText` is the `<supports-condition>` an `@supports` rule's prelude IS: the same
        grammar (core/css/css_supports.h parses ONE production for both), the same evaluation, the same
        normalization rule (§7.4's "token stream simplifications are allowed ... logical simplifications are
@@ -182,7 +182,7 @@ typedef struct CssRuleData {
        rule of its own. One slot would have had to be read with the rule's type in hand at every site anyway,
        which is two facts wearing one name. */
     JSValue keyframes_name;
-    /* CSS Cascade §8.1's `name` and §8.2's `nameList` — the `<layer-name>`s the `@layer` at-rule ITSELF
+    /* CSS Cascade 5 §8.1's `name` and §8.2's `nameList` — the `<layer-name>`s the `@layer` at-rule ITSELF
        declares, as the FROZEN Array CSS Cascade 5 §8.2's `FrozenArray<CSSOMString>` value IS (Web IDL
        §2.13.35 "Frozen array types — FrozenArray<T>": a frozen array type is "a parameterized type whose
        values are references to objects that hold a fixed-length array of unmodifiable values", so the freeze
@@ -316,7 +316,7 @@ static CssRuleData *rule_of(JSValueConst v)
    WHO OWNS THE EXCEPTION CHANNEL. A rule record owns none, and the paths that fill one own none either — the
    sheet parse is `css_style_sheet_set_rules_from_text` → `css_rule_build_sheet` → `build_run`, all of them
    `void`, and its one driver `rule_built` folds `JS_IsException(rule) || JS_IsUndefined(rule)` into a single
-   arm, which is CSS Syntax §8 "CSS stylesheets"'s DROP. Propagating out of a creator therefore does not
+   arm, which is CSS Syntax 3 §8 "CSS stylesheets"'s DROP. Propagating out of a creator therefore does not
    propagate: it is laundered into "this rule was invalid CSS" and the OOM is gone. That is check.h's
    "memory-allocation success", and it is the answer this file already gives at every neighbouring mint with no
    channel — rule_new's calloc and its JS_NewArray, container_conditions_array's, layer_names_array's,
@@ -364,7 +364,7 @@ static CssRuleData *rule_of(JSValueConst v)
    BOTH ARE CHECKs AND THE DISCRIMINATOR IS `rule_set`'s: who owns the exception channel. Every caller of this
    macro stands in an array builder whose own `JS_NewArray` and freeze are already CHECKed for the same reason
    — its result is published by a creator, and the one driver over the creators folds `JS_IsException(rule) ||
-   JS_IsUndefined(rule)` into CSS Syntax §8 "CSS stylesheets"'s DROP, so a propagated OOM would be laundered
+   JS_IsUndefined(rule)` into CSS Syntax 3 §8 "CSS stylesheets"'s DROP, so a propagated OOM would be laundered
    into "this rule was invalid CSS". That is check.h's "memory-allocation success", now asked of the elements
    and not only of the array they go into.
    A CALLER THAT HAS A CHANNEL DOES NOT REACH THIS, exactly as above: it tests the mint BEFORE publishing and
@@ -549,9 +549,9 @@ static bool rule_type_has_child_rules(uint16_t type)
    OWN `cssRules`, `appendRule(CSSOMString)` and `deleteRule(CSSOMString)`, whose argument is a keyframe
    SELECTOR where §6.4.5's is an index. Answering both questions from one predicate would have put §6.4.5's
    index-taking `deleteRule` on a `@keyframes` beside the selector-taking one it really has.
-   CSS Cascade §8.1's CSSLayerBlockRule answers YES to BOTH, and that is stated twice over rather than assumed:
-   its IDL is `interface CSSLayerBlockRule : CSSGroupingRule`, and §6.4.4.1 gives the reason behind the IDL —
-   "such @layer block rules have the same restrictions and processing as a conditional group rule
+   CSS Cascade 5 §8.1's CSSLayerBlockRule answers YES to BOTH, and that is stated twice over rather than assumed:
+   its IDL is `interface CSSLayerBlockRule : CSSGroupingRule`, and CSS Cascade 5 §6.4.4.1 gives the reason behind the
+   IDL — "such @layer block rules have the same restrictions and processing as a conditional group rule
    [CSS-CONDITIONAL-3] with a true condition". A CSSConditionRule it is NOT: a layer has no condition, so
    §7.2's `conditionText` is not on it and this predicate is not that one. */
 static bool rule_type_is_grouping(uint16_t type)
@@ -774,7 +774,7 @@ static JSValue container_conditions_array(JSContext *ctx, const CssContainerCond
 
 /* A CSS Conditional 5 §9.1 CSSContainerRule over the `@container` at-rule's own prelude, which IS §5.4's
    `<container-condition>#`. JS_UNDEFINED — the builder's drop — when that prelude matches no production, which
-   is CSS Syntax §8 "CSS stylesheets"'s disposal for an at-rule "invalid according to its grammar": discard the
+   is CSS Syntax 3 §8 "CSS stylesheets"'s disposal for an at-rule "invalid according to its grammar": discard the
    rule, contents included, exactly as `@supports display:flex {}` is discarded one function up. */
 static JSValue container_rule_new(JSContext *ctx, JSValueConst parent_style_sheet, JSValueConst parent_rule,
                                   const char *prelude)
@@ -796,11 +796,11 @@ static JSValue container_rule_new(JSContext *ctx, JSValueConst parent_style_shee
     return obj;
 }
 
-/* A §6.4.4 CSSImportRule over the `@import` at-rule's own prelude. CSS Cascade §2's grammar decides every one
+/* A CSSOM §6.4.4 CSSImportRule over the `@import` at-rule's own prelude. CSS Cascade 5 §2's grammar decides every one
    of its four texts, and a prelude that does not MATCH that grammar is not an `@import` at all — CSS Syntax
    drops an at-rule whose grammar failed, which is JS_UNDEFINED here and the same answer lexbor gives for a
    `@media` it could not parse. The `media` is a §4.4 MediaList over the query-list tail for the reason §7.3's
-   is: §6.4.4 says `media` returns the associated sheet's media list, and CSS Cascade §2 says that sheet's
+   is: CSSOM §6.4.4 says `media` returns the associated sheet's media list, and CSS Cascade 5 §2 says that sheet's
    media list IS the one the at-rule declared. */
 static JSValue import_rule_new(JSContext *ctx, JSValueConst parent_style_sheet, JSValueConst parent_rule,
                                const char *prelude)
@@ -1087,7 +1087,7 @@ static JSValue layer_names_array(JSContext *ctx, const CssLayerNames *names)
     return a;
 }
 
-/* A CSS Cascade §8.1 CSSLayerBlockRule over the `@layer` BLOCK at-rule's prelude. §6.4.4.1's grammar is
+/* A CSS Cascade 5 §8.1 CSSLayerBlockRule over the `@layer` BLOCK at-rule's prelude. §6.4.4.1's grammar is
    `@layer <layer-name>? { <rule-list> }` — AT MOST ONE name — so a prelude carrying a list is an at-rule whose
    grammar failed, which CSS Syntax drops and which is JS_UNDEFINED here, the same answer `@keyframes none {}`
    gets. The EMPTY list is the other outcome and it IS a rule: §6.4.2.1's anonymous layer, whose `name` §8.1
@@ -1114,7 +1114,7 @@ static JSValue layer_block_rule_new(JSContext *ctx, JSValueConst parent_style_sh
     return obj;
 }
 
-/* A CSS Cascade §8.2 CSSLayerStatementRule over the `@layer` STATEMENT at-rule's prelude. §6.4.4.2's grammar is
+/* A CSS Cascade 5 §8.2 CSSLayerStatementRule over the `@layer` STATEMENT at-rule's prelude. §6.4.4.2's grammar is
    `@layer <layer-name>#;` — ONE OR MORE names, "unlike the block syntax, multiple comma-separated layer names
    can be provided in this syntax, declaring each of the layers in the order specified" — so the `#` multiplier
    has no zero-length arm and `@layer ;` is an at-rule whose grammar failed. That is the ONE thing this creator
@@ -1141,7 +1141,7 @@ static JSValue layer_statement_rule_new(JSContext *ctx, JSValueConst parent_styl
 
 /* THE `<custom-property-name>`s AN `@property` AT-RULE DECLARES, as the Array the record holds. It is an Array
    for the reason every other collection on this record is one — it has to park to the IDB cold tier and fork per
-   flow, which a malloc'd list of pointers cannot (css_rule.h). It is NOT frozen the way CSS Cascade §8.2's
+   flow, which a malloc'd list of pointers cannot (css_rule.h). It is NOT frozen the way CSS Cascade 5 §8.2's
    `nameList` is: the freeze there is Web IDL §2.13.35's, which belongs to a `FrozenArray<T>` VALUE a page
    holds, and CSS Properties and Values API 1 §6.1 hands no list to a page at all. */
 static JSValue property_names_array(JSContext *ctx, const CssPropertyNames *names)
@@ -1361,7 +1361,7 @@ static void rule_alias_unbuilt_fail(const char *written, const char *target)
  * A ROW IS NOT A CLAIM THAT THIS BUILD IMPLEMENTS THE RULE, and that split is the whole reason the table
  * exists. In the registry with no arm in `rule_from_parse` = a capability this build is missing, and it crashes
  * by name so the next reader builds it. NOT in the registry = no user agent has anything to build, ever, and
- * CSS Syntax §8 says DISCARD. `@counter-style` and `@medium` were one set before this table, and they are
+ * CSS Syntax 3 §8 says DISCARD. `@counter-style` and `@medium` were one set before this table, and they are
  * opposite facts.
  *
  * `@-webkit-keyframes` IS IN THE INDEX AND IS DELIBERATELY NOT A ROW HERE: CSS Compatibility §3.1 aliases it
@@ -1430,7 +1430,7 @@ static bool at_rule_defined(const char *name)
     unsigned i;
     bool found = false;
 
-    DCHECK(name != NULL, "CSS Syntax §8's recognized-at-rule registry was asked about no at-keyword");
+    DCHECK(name != NULL, "CSS Syntax 3 §8's recognized-at-rule registry was asked about no at-keyword");
     for (i = 0; i < n; i++) {
         DCHECK(i == 0 || strcmp(AT_RULES[i - 1].name, AT_RULES[i].name) < 0,
                "the CSS at-rule registry is not sorted by name, or holds one at-keyword twice. It is "
@@ -1630,14 +1630,14 @@ static JSValue rule_from_parse(RuleBuild *b, const CssomRule *pr, JSValueConst p
         return pr->has_block ? supports_rule_new(b->ctx, b->sheet, parent_rule, pr->prelude) : JS_UNDEFINED;
     /* CSS Conditional 5 §5.4 makes `@container` a BLOCK at-rule (`@container <container-condition># {
        <rule-list> }`) exactly as §6 does `@supports`, so `@container card (width > 0px);` is an at-rule whose
-       grammar failed and CSS Syntax §8 drops it — the same sentence and the same JS_UNDEFINED as the arm above.
+       grammar failed and CSS Syntax 3 §8 drops it — the same sentence and the same JS_UNDEFINED as the arm above.
        ITS BODY IS A RULE LIST AND NOTHING ELSE, so the declarations the parse reports for it are not read, for
        the reason `@supports` and `@layer` do not read theirs: a declaration written where §5.4 admits only
        rules would be CSSOM's CSSNestedDeclarations, a rule interface this build does not have and whose absence
        the parse walk already records. */
     if (strcmp(at, "container") == 0)
         return pr->has_block ? container_rule_new(b->ctx, b->sheet, parent_rule, pr->prelude) : JS_UNDEFINED;
-    /* CSS Cascade §2 makes `@import` a STATEMENT at-rule terminated by a semicolon, so `@import url(x) {}` is
+    /* CSS Cascade 5 §2 makes `@import` a STATEMENT at-rule terminated by a semicolon, so `@import url(x) {}` is
        an at-rule whose grammar failed and CSS Syntax DROPS it. It is dropped HERE and not asserted against,
        because the shape reaches this file from the PAGE: lexbor parses an at-rule it does not know as
        `_CUSTOM`, which accepts a block, so this is malformed author CSS and not an engine invariant. */
@@ -1650,9 +1650,10 @@ static JSValue rule_from_parse(RuleBuild *b, const CssomRule *pr, JSValueConst p
                "so a block here means that conversion did not happen");
         return namespace_rule_new(b->ctx, b->sheet, parent_rule, pr->prelude);
     }
-    /* And the mirror of it: CSS Fonts §12 makes `@font-face` a BLOCK at-rule, so `@font-face;` is invalid and
-       dropped. Lexbor keeps this one rather than converting it (its `font_face_end` stores the returned block
-       whether or not there is one, where `media_end` checks), so the drop is this file's. */
+    /* And the mirror of it: CSS Fonts 4 §4.1 "The @font-face rule" makes `@font-face` a BLOCK at-rule — "its
+       syntax is: @font-face { <declaration-list> }" — so `@font-face;` is invalid and dropped. Lexbor keeps
+       this one rather than converting it (its `font_face_end` stores the returned block whether or not there
+       is one, where `media_end` checks), so the drop is this file's. */
     if (strcmp(at, "font-face") == 0) {
         DCHECK(!pr->has_block || pr->block != NULL,
                "an `@font-face` rule reached the builder with a block whose DESCRIPTORS were not reported. "
@@ -1677,16 +1678,16 @@ static JSValue rule_from_parse(RuleBuild *b, const CssomRule *pr, JSValueConst p
     if (strcmp(at, "keyframes") == 0)
         return pr->has_block ? keyframes_rule_new(b->ctx, b->sheet, parent_rule, pr->at_name, pr->prelude)
                              : JS_UNDEFINED;
-    /* CSS Cascade §6.4.4 gives `@layer` TWO grammars and the BLOCK is what tells them apart: §6.4.4.1's block
-       at-rule is `@layer <layer-name>? { <rule-list> }` and §6.4.4.2's statement at-rule is
+    /* CSS Cascade 5 §6.4.4 gives `@layer` TWO grammars and the BLOCK is what tells them apart: §6.4.4.1's block
+       at-rule is `@layer <layer-name>? { <rule-list> }` and CSS Cascade 5 §6.4.4.2's statement at-rule is
        `@layer <layer-name>#;`. So `has_block` forks here as it does for `@import` and `@font-face` — and this
        is the one place in this builder where it chooses between two INTERFACES rather than between a rule and a
        drop, because both shapes are real rules.
-       ITS BODY IS A RULE LIST AND NOTHING ELSE (§6.4.4.1's `<rule-list>`), so the declarations the parse
+       ITS BODY IS A RULE LIST AND NOTHING ELSE (CSS Cascade 5 §6.4.4.1's `<rule-list>`), so the declarations the parse
        reports for it are not read — the same sentence `@keyframes` gets and for the same reason. A declaration
-       written where §6.4.4.1 admits only rules is invalid in that context and CSS Syntax drops it; inside a
-       NESTED `@layer` it would be CSSOM's CSSNestedDeclarations, a rule interface this build does not have and
-       whose absence the parse walk already records. */
+       written where CSS Cascade 5 §6.4.4.1 admits only rules is invalid in that context and CSS Syntax drops it;
+       inside a NESTED `@layer` it would be CSSOM's CSSNestedDeclarations, a rule interface this build does not have
+       and whose absence the parse walk already records. */
     /* CSS Properties and Values API 1 §3 makes `@property` a BLOCK at-rule (`@property <custom-property-name>#
        { <declaration-list> }`), so `@property --x;` is an at-rule whose grammar failed and CSS Syntax drops it
        — the same shape `@font-face;` and `@page;` have, and dropped here for the same reason.
@@ -1771,7 +1772,7 @@ static void *rule_built(void *ud, void *parent, const CssomRule *pr)
  *
  * THE THIRD STATE IS THE ONE A LIST OF INTERFACES CANNOT EXPRESS, AND IT IS NOT RARE. `@when`, `@else`,
  * `@private`, `@navigation`, `@location` and `@custom-selector` are at-rules a CSS specification DEFINES — so
- * CSS Syntax §8 forbids discarding them and `at_rule_defined` correctly answers yes — for which NO
+ * CSS Syntax 3 §8 forbids discarding them and `at_rule_defined` correctly answers yes — for which NO
  * specification declares a CSSOM interface at all. CSS Extensions 1 §3.2 "CSSOM" is, in its entirety, the words
  * "Fill in." Telling that reader to "build the interface" sends them looking for one that does not exist, which
  * is the same wrong-and-authoritative failure one level down; so those rows carry a NULL interface and the
@@ -1880,7 +1881,7 @@ static void rule_unbuilt_fail(const char *name)
    last sentence of the very crash that ends it. */
 #define RULE_UNBUILT_FMT                                                                                       \
     "CSSOM §6.4 has no interface built for the at-rule `@%s`, so a stylesheet containing one cannot be "        \
-    "represented. §6.4.4's CSSImportRule, §6.4.5's CSSGroupingRule, §6.4.7's CSSPageRule, §6.4.8's "            \
+    "represented. CSSOM §6.4.4's CSSImportRule, §6.4.5's CSSGroupingRule, §6.4.7's CSSPageRule, §6.4.8's "            \
     "CSSMarginRule and §6.4.9's CSSNamespaceRule, CSS Conditional 3 §7.2's CSSConditionRule, §7.3's "           \
     "CSSMediaRule and §7.4's CSSSupportsRule, CSS Conditional 5 §9.1's CSSContainerRule, CSS Fonts 5 §9.1's "   \
     "CSSFontFaceRule, CSS Animations 1 §6.2's CSSKeyframeRule and §6.3's CSSKeyframesRule, CSS Cascade 5 "      \
@@ -1893,7 +1894,7 @@ static void rule_unbuilt_fail(const char *name)
         "every index after it would then name a different rule than the page's";
     static const char ACT_NONE[] =
         "This is a STANDARDS gap and not a gap here, so there is no arm to write in rule_from_parse: the rule "
-        "is recognised (CSS Syntax §8 forbids discarding it) and has no object it can become. Do NOT invent an "
+        "is recognised (CSS Syntax 3 §8 forbids discarding it) and has no object it can become. Do NOT invent an "
         "interface, and do NOT skip the rule — skipping renumbers every rule after it. What this needs is the "
         "standard, so take it there";
     const unsigned n = (unsigned)(sizeof RULE_UNBUILT / sizeof RULE_UNBUILT[0]);
@@ -1907,13 +1908,13 @@ static void rule_unbuilt_fail(const char *name)
                "neighbours, which is how the duplicate gets in");
         DCHECK(at_rule_defined(RULE_UNBUILT[i].at),
                "the §6.4 unbuilt-interface table names an at-keyword `at_rule_defined`'s registry does NOT "
-               "recognise. The registry decides what CSS Syntax §8 discards, so a row here for a name it does "
+               "recognise. The registry decides what CSS Syntax 3 §8 discards, so a row here for a name it does "
                "not hold describes an interface for a rule that never reaches this crash — the row is a "
                "recollection rather than a reading, which is exactly what this table replaced");
         if (strcmp(RULE_UNBUILT[i].at, name) == 0) hit = i;
     }
     if (hit == n) {
-        DFAILF("`@%s` is in CSS Syntax §8's recognized-at-rule registry, has no arm in rule_from_parse, and "
+        DFAILF("`@%s` is in CSS Syntax 3 §8's recognized-at-rule registry, has no arm in rule_from_parse, and "
                "has NO ROW in the §6.4 unbuilt-interface table — so this crash cannot say what to build. Add "
                "the row (interface, spec, section NUMBER and section TITLE, read off the specification and "
                "never recalled; a NULL interface where no standard declares one) in the same diff that finds "
@@ -1976,8 +1977,8 @@ static unsigned rule_zones(uint16_t type)
 {
     if (type == RULE_TYPE_IMPORT) return ZONE_BIT(ZONE_IMPORT);
     if (type == RULE_TYPE_NAMESPACE) return ZONE_BIT(ZONE_NAMESPACE);
-    /* THE ONE TYPE WITH TWO, and the GAP between them is as load-bearing as the bits: §6.4.4.2 allows a `@layer`
-       statement before the prologue AND wherever a block at-rule is (which is wherever any rule is), and its
+    /* THE ONE TYPE WITH TWO, and the GAP between them is as load-bearing as the bits: CSS Cascade 5 §6.4.4.2 allows a
+       `@layer` statement before the prologue AND wherever a block at-rule is (which is wherever any rule is), and its
        note forbids exactly what lies between — "no @layer rules are allowed between @import and @namespace
        rules". */
     if (type == RULE_TYPE_LAYER_STATEMENT) return ZONE_BIT(ZONE_LEAD) | ZONE_BIT(ZONE_BODY);
@@ -2003,7 +2004,7 @@ static bool zone_take(unsigned zones, int *pfloor)
    constraints specified by CSS, then throw a HierarchyRequestError exception", whose own note is "For example,
    a CSS style sheet cannot contain an @import at-rule after a style rule."
      - `nested` set (§6.4.5's insertRule, into a grouping rule): an `@import` and an `@namespace` cannot go
-       inside one AT ALL — CSS Cascade §2 and CSS Namespaces §2 both state their position relative to a STYLE
+       inside one AT ALL — CSS Cascade 5 §2 and CSS Namespaces §2 both state their position relative to a STYLE
        SHEET, and neither is a rule a conditional group may contain.
      - `nested` unset: the sheet's rules must match the PROLOGUE the ZONE_ enum transcribes, so the constraint
        is that the insertion must not break it. Asking it of the RESULTING list is what makes both directions
@@ -2019,9 +2020,9 @@ static bool insert_position_ok(JSContext *ctx, JSValueConst list, uint32_t index
     uint32_t n, k;
     int zone_floor = ZONE_LEAD;
 
-    /* A `@layer` is not among the two, and both halves of §6.4.4 say so: §6.4.4.2 admits the statement
-       "everywhere @layer block at-rules are allowed", and §6.4.4.1 makes the block a conditional group rule
-       with a true condition — which is a rule a conditional group rule may contain. */
+    /* A `@layer` is not among the two, and both halves of CSS Cascade 5 §6.4.4 say so: CSS Cascade 5 §6.4.4.2 admits
+       the statement "everywhere @layer block at-rules are allowed", and CSS Cascade 5 §6.4.4.1 makes the block a
+       conditional group rule with a true condition — which is a rule a conditional group rule may contain. */
     if (nested) return type != RULE_TYPE_IMPORT && type != RULE_TYPE_NAMESPACE;
     n = array_len(ctx, list);
     DCHECK(index <= n,
@@ -2041,12 +2042,12 @@ static bool insert_position_ok(JSContext *ctx, JSValueConst list, uint32_t index
    than two spellings of one sentence.
    IT IS ASKED OF THE ZONE TABLE AND NOT OF A SECOND ENUMERATION, and that is what makes it right for a rule
    CSSOM's sentence could not name. The two at-rules CSSOM lists ARE the sheet prologue as CSSOM knew it, and
-   CSS Cascade §6.4.4.2 later put a third rule in that same prologue — "such empty @layer rules are allowed
+   CSS Cascade 5 §6.4.4.2 later put a third rule in that same prologue — "such empty @layer rules are allowed
    before @import and @namespace rules (after the @charset rule, if any)". Reading CSSOM's two names literally
    would refuse `insertRule('@namespace ...')` into a sheet whose own text `@layer a; @import url(x);` PARSES
    as valid, which is the parse and the CSSOM algorithm disagreeing about one fact; the standard that knows
-   `@layer` exists is the one that decides it. So the question asked is "can everything already in the list sit
-   at or before the `@namespace` zone", which answers CSSOM's own two names identically. */
+   `@layer` exists is the one that decides it. So the question asked is `can everything already in the list
+   sit at or before the @namespace zone`, which answers CSSOM's own two names identically. */
 static bool list_is_prologue_only(JSContext *ctx, JSValueConst list)
 {
     const unsigned before = ZONE_BIT(ZONE_LEAD) | ZONE_BIT(ZONE_IMPORT) | ZONE_BIT(ZONE_NAMESPACE);
@@ -2082,7 +2083,7 @@ JSValue css_rule_list_insert(JSContext *ctx, JSValueConst list, JSValueConst par
     b.top_list = scratch;
     n = build_run(&b, text, strlen(text));
     build_free(&b);
-    /* An at-rule with NO INTERFACE crashes here and does not become a refusal. Until §6.4.4 and §6.4.9 landed
+    /* An at-rule with NO INTERFACE crashes here and does not become a refusal. Until CSSOM §6.4.4 and §6.4.9 landed
        the two names steps 5 and 6 single out were themselves unbuilt, so this site had to answer for them from
        the at-rule's NAME; both are rules now, the constraint steps below run on the OBJECT the parse made, and
        what is left at this line is only ever a capability to build. */
@@ -2115,7 +2116,7 @@ JSValue css_rule_list_insert(JSContext *ctx, JSValueConst list, JSValueConst par
            IS `this` for the call this branch is reachable from.
            `!nested` IS WHAT KEEPS IT §6.1.2's AND NOT §6.4.5's. A grouping rule's insertRule is the nested
            call and CSSGroupingRule states no such step: an @import inside an `@media` is refused by step 6's
-           prologue rank instead (CSS Cascade §2 makes an @import valid only in a style sheet's prologue), and
+           prologue rank instead (CSS Cascade 5 §2 makes an @import valid only in a style sheet's prologue), and
            its `parent_sheet` is the CONTAINING sheet rather than the receiver, so reading the flag off it
            would be answering a question about a different object. */
         if (!nested && nr->type == RULE_TYPE_IMPORT && css_style_sheet_constructed(parent_sheet)) {
@@ -2522,13 +2523,13 @@ static bool keyframe_rule_serialize(JSContext *ctx, CssRuleData *r, RBuf *out)
    THE FINAL NEWLINE BELONGS TO THE ITEMS AND NOT TO THE CLOSING BRACE, which is what makes `@media print {}`
    serialize as "@media print {\n}" rather than "@media print {\n\n}" — the shape every engine produces and the
    one css/cssom/serialize-media-rule.html asserts byte for byte, `@media {}`'s two spaces included.
-   IT IS ALSO CSS Cascade §8.1's ARM, AND THAT IS A DERIVATION WITH A NORMATIVE SENTENCE UNDER IT rather than a
-   resemblance: §6.4 states no arm for CSSLayerBlockRule at all, and §6.4.4.1 says "such @layer block rules have
-   the same restrictions and PROCESSING as a conditional group rule [CSS-CONDITIONAL-3] with a true condition" —
-   of which §6.4 states exactly one. It is NOT `decls_and_rules_serialize`'s shape, and the difference is the
-   BODY: that arm is for a rule holding declarations BESIDE rules (§6.4.3's and §6.4.7's), and a `@layer`
-   block's body is §6.4.4.1's `<rule-list>` with no declarations in it at all. So the two rules differ only in
-   step 1's PREFIX, which is the caller's to build. */
+   IT IS ALSO CSS Cascade 5 §8.1's ARM, AND THAT IS A DERIVATION WITH A NORMATIVE SENTENCE UNDER IT rather than a
+   resemblance: §6.4 states no arm for CSSLayerBlockRule at all, and CSS Cascade 5 §6.4.4.1 says "such @layer block
+   rules have the same restrictions and PROCESSING as a conditional group rule [CSS-CONDITIONAL-3] with a true
+   condition" — of which §6.4 states exactly one. It is NOT `decls_and_rules_serialize`'s shape, and the difference is
+   the BODY: that arm is for a rule holding declarations BESIDE rules (§6.4.3's and §6.4.7's), and a `@layer`
+   block's body is CSS Cascade 5 §6.4.4.1's `<rule-list>` with no declarations in it at all. So the two rules differ
+   only in step 1's PREFIX, which is the caller's to build. */
 static bool group_rules_serialize(JSContext *ctx, JSValueConst rule, const char *prefix, size_t prefix_len,
                                   RBuf *out)
 {
@@ -2692,7 +2693,7 @@ static bool rule_layer_names(JSContext *ctx, CssRuleData *r, char ***pv, unsigne
     return true;
 }
 
-/* CSS Cascade §8.1's arm, DERIVED. §6.4 states none, so the pieces come from §6.4.4.1's own grammar
+/* CSS Cascade 5 §8.1's arm, DERIVED. §6.4 states none, so the pieces come from §6.4.4.1's own grammar
    (`@layer <layer-name>? { <rule-list> }`) laid over the one arm §6.4 does state for a conditional group rule:
    the at-keyword, the name when the rule declares one, and the group body above.
    THE SPACE IS INSIDE THE CONDITIONAL, which is the whole of why `@layer {}` reads back as "@layer {\n}" and
@@ -2722,7 +2723,7 @@ static bool container_rule_serialize(JSContext *ctx, CssRuleData *r, JSValueCons
     return ok;
 }
 
-/* CSS Conditional 3 §7.4's arm, DERIVED the same way CSS Cascade §8.1's below it is and from the same place:
+/* CSS Conditional 3 §7.4's arm, DERIVED the same way CSS Cascade 5 §8.1's below it is and from the same place:
    CSSOM §6.4's serialize-a-CSS-rule states no arm for CSSSupportsRule at all — its list runs CSSStyleRule,
    CSSImportRule, CSSMediaRule, CSSFontFaceRule, CSSPageRule, CSSNamespaceRule, CSSKeyframesRule,
    CSSKeyframeRule and stops — so the shape comes from the one arm it DOES state for a conditional group rule,
@@ -2752,8 +2753,8 @@ static bool layer_block_rule_serialize(JSContext *ctx, CssRuleData *r, JSValueCo
     bool ok;
 
     if (!rule_layer_names(ctx, r, &names, &n)) return false;
-    DCHECK(n <= 1, "a §8.1 layer block rule declares more than one `<layer-name>` — §6.4.4.1's grammar is "
-                   "`<layer-name>?`, and its creator refuses a prelude carrying a list");
+    DCHECK(n <= 1, "a §8.1 layer block rule declares more than one `<layer-name>` — CSS Cascade 5 §6.4.4.1's grammar "
+                   "is `<layer-name>?`, and its creator refuses a prelude carrying a list");
     rbuf_add(&prefix, "@layer");
     if (n) { rbuf_add(&prefix, " "); rbuf_add(&prefix, names[0]); }
     serialized_free(names, n);
@@ -2762,9 +2763,9 @@ static bool layer_block_rule_serialize(JSContext *ctx, CssRuleData *r, JSValueCo
     return ok;
 }
 
-/* CSS Cascade §8.2's arm, DERIVED the same way and from the same place: §6.4 states none, so the pieces are
-   §6.4.4.2's own grammar `@layer <layer-name>#;` — the at-keyword, a SPACE, the names through CSSOM §2.1's
-   serialize-a-comma-separated-list (", "), and the SEMICOLON that makes it a statement at-rule. The space is
+/* CSS Cascade 5 §8.2's arm, DERIVED the same way and from the same place: §6.4 states none, so the pieces are
+   CSS Cascade 5 §6.4.4.2's own grammar `@layer <layer-name>#;` — the at-keyword, a SPACE, the names through CSSOM
+   §2.1's serialize-a-comma-separated-list (", "), and the SEMICOLON that makes it a statement at-rule. The space is
    unconditional here and conditional in the arm above because the multipliers differ: `#` has no zero-length
    arm, so a statement rule always declares at least one name and its creator refuses a prelude that does not. */
 static bool layer_statement_rule_serialize(JSContext *ctx, CssRuleData *r, RBuf *out)
@@ -2773,8 +2774,8 @@ static bool layer_statement_rule_serialize(JSContext *ctx, CssRuleData *r, RBuf 
     unsigned n, i;
 
     if (!rule_layer_names(ctx, r, &names, &n)) return false;
-    DCHECK(n >= 1, "a §8.2 layer statement rule declares NO `<layer-name>` — §6.4.4.2's `#` multiplier has no "
-                   "zero-length arm, and its creator refuses a prelude with no name in it");
+    DCHECK(n >= 1, "a §8.2 layer statement rule declares NO `<layer-name>` — CSS Cascade 5 §6.4.4.2's `#` multiplier "
+                   "has no zero-length arm, and its creator refuses a prelude with no name in it");
     rbuf_add(out, "@layer ");
     for (i = 0; i < n; i++) {
         if (i) rbuf_add(out, ", ");
@@ -2873,7 +2874,7 @@ static bool property_rule_serialize(JSContext *ctx, CssRuleData *r, RBuf *out)
     return true;
 }
 
-/* One of the record's texts as a C string, or NULL when the field is JS_NULL — which for §6.4.4's `layerName`
+/* One of the record's texts as a C string, or NULL when the field is JS_NULL — which for CSSOM §6.4.4's `layerName`
    and `supportsText` is the attribute's own null and therefore a piece the serialization omits. */
 static char *rule_opt_text(JSContext *ctx, JSValueConst v)
 {
@@ -2885,7 +2886,7 @@ static char *rule_opt_text(JSContext *ctx, JSValueConst v)
 /* §6.4's CSSImportRule arm — `@import`, a SPACE, serialize-a-URL of the location, then the media query list
    preceded by a SPACE when it is not empty, then `;`.
    THE LAYER AND THE SUPPORTS CONDITION ARE IN IT, AND §6.4's PROSE DOES NOT MENTION THEM, because that prose
-   predates both: CSS Cascade §2 added `[ layer | layer(<layer-name>) ]?` and `supports(...)` to the at-rule's
+   predates both: CSS Cascade 5 §2 added `[ layer | layer(<layer-name>) ]?` and `supports(...)` to the at-rule's
    own grammar, and a serialization that dropped them would not re-parse as the rule it came from — which is
    the one property every serialize-a-CSS-rule arm has to have, and which the author cascade's round-trip
    assertion checks from the other side. They go where the GRAMMAR puts them, between the URL and the media
@@ -2897,8 +2898,8 @@ static bool import_rule_serialize(JSContext *ctx, CssRuleData *r, RBuf *out)
     char *layer, *supports, *media, *url;
 
     DCHECK(RULE_TEXT_FIELD_WAS_STRING(ctx, href),
-           "a §6.4.4 import rule's href is not a string, and nothing is pending. There is no partial answer: "
-           "CSS Cascade §2's grammar has no arm without the `<url>`, so import_rule_new refuses a prelude that "
+           "a CSSOM §6.4.4 import rule's href is not a string, and nothing is pending. There is no partial answer: "
+           "CSS Cascade 5 §2's grammar has no arm without the `<url>`, so import_rule_new refuses a prelude that "
            "lacks one");
     if (!href) return false;
     url = css_serialize_url(href, hl);
@@ -2962,9 +2963,9 @@ static bool namespace_rule_serialize(JSContext *ctx, CssRuleData *r, RBuf *out)
 
 /* §6.4's CSSFontFaceRule arm, and §6.4.8's, which is the same arm. The spec's own font-face steps name each
    descriptor in a fixed order and then admit, in §6.4's own words, "need to define how the CSSFontFaceRule
-   descriptors' values are serialized"; every step has the SAME shape — a SPACE, `name:`, a SPACE, the value, `;` — which is exactly
-   what §6.6's serialize-a-CSS-declaration-block produces for the block once the leading space and the closing
-   " }" are added. So the descriptors go through the ONE declaration-block serializer rather than through a
+   descriptors' values are serialized"; every step has the SAME shape — a SPACE, `name:`, a SPACE, the value, `;` —
+   which is exactly what §6.6's serialize-a-CSS-declaration-block produces for the block once the leading space and the
+   closing " }" are added. So the descriptors go through the ONE declaration-block serializer rather than through a
    second hand-listed loop that could disagree with it about `rule.style.cssText`, and the order is the rule's
    own (which is what Blink and WebKit report, and what css/cssom/CSSFontFaceRule.html declines to pin because
    engines differ).
@@ -3164,27 +3165,30 @@ static JSValue js_rule_get(JSContext *ctx, JSValueConst this_val, int magic)
     case CR_SUPPORTS_MATCHES:
         r = rule_here_typed(ctx, this_val, RULE_TYPE_SUPPORTS, "CSSSupportsRule");
         return r ? JS_NewBool(ctx, rule_supports_matches(ctx, r)) : JS_EXCEPTION;
-    /* §6.4.4: "The href attribute must return the URL specified by the @import at-rule" — the SPECIFIED one,
+    /* CSSOM §6.4.4: "The href attribute must return the URL specified by the @import at-rule" — the SPECIFIED one,
        which the spec's own note distinguishes from the resolved one ("to get the resolved URL use the href
        attribute of the associated CSS style sheet"). */
     case CR_HREF:
         r = rule_here_typed(ctx, this_val, RULE_TYPE_IMPORT, "CSSImportRule");
         return r ? JS_DupValue(ctx, r->href) : JS_EXCEPTION;
-    /* §6.4.4: "The media attribute must return the value of the media attribute of the associated CSS style
-       sheet." CSS Cascade §2 makes that sheet's media list the one the at-rule declared — the imported sheet
-       applies "exactly as if wrapped in @media with the given conditions" — so it is THIS rule's MediaList and
-       not a read through a sheet, which is also what makes the attribute answerable while the import has not
-       been fetched. [SameObject], so the object is the record's. */
+    /* CSSOM §6.4.4: "The media attribute must return the value of the media attribute of the associated CSS style
+       sheet." CSS Cascade 5 §2.1 "Conditional @import Rules" makes that sheet's media list the one the at-rule
+       declared — "if the import conditions do not match, the rules in the imported stylesheet do not apply,
+       exactly as if the imported stylesheet were wrapped in @media and/or @supports blocks with the given
+       conditions" — so it is THIS rule's MediaList and not a read through a sheet, which is also what makes
+       the attribute answerable while the import has not been fetched. The `@supports` half of that sentence is
+       the other conjunct and is why `supports_text` is a field beside this one rather than folded into it.
+       [SameObject], so the object is the record's. */
     case CR_IMPORT_MEDIA:
         r = rule_here_typed(ctx, this_val, RULE_TYPE_IMPORT, "CSSImportRule");
         return r ? JS_DupValue(ctx, r->media) : JS_EXCEPTION;
-    /* §6.4.4: "The layerName attribute must return the layer name declared in the at-rule itself, or an empty
+    /* CSSOM §6.4.4: "The layerName attribute must return the layer name declared in the at-rule itself, or an empty
        string if the layer is anonymous, or NULL if the at-rule does not declare a layer" — three answers, and
        the record stores all three because "" and null are different facts about the same rule. */
     case CR_LAYER_NAME:
         r = rule_here_typed(ctx, this_val, RULE_TYPE_IMPORT, "CSSImportRule");
         return r ? JS_DupValue(ctx, r->layer_name) : JS_EXCEPTION;
-    /* §6.4.4: "The supportsText attribute must return the <supports-condition> declared in the at-rule itself,
+    /* CSSOM §6.4.4: "The supportsText attribute must return the <supports-condition> declared in the at-rule itself,
        or null if the at-rule does not declare a supports condition." */
     case CR_SUPPORTS_TEXT:
         r = rule_here_typed(ctx, this_val, RULE_TYPE_IMPORT, "CSSImportRule");
@@ -3234,13 +3238,13 @@ static JSValue js_rule_get(JSContext *ctx, JSValueConst this_val, int magic)
     case CR_KEYFRAMES_LENGTH:
         r = rule_here_typed(ctx, this_val, RULE_TYPE_KEYFRAMES, "CSSKeyframesRule");
         return r ? JS_NewUint32(ctx, array_len(ctx, r->child_rules)) : JS_EXCEPTION;
-    /* CSS Cascade §8.1: "Its name attribute represents the layer name declared by the at-rule ITSELF, and is
+    /* CSS Cascade 5 §8.1: "Its name attribute represents the layer name declared by the at-rule ITSELF, and is
        an empty string if the layer is anonymous." The emphasis is §8.1's own, and its worked example is what
        it buys: inside `@layer outer { @layer foo.bar { } }` "the name of the inner @layer rule is 'foo.bar'
        (and not 'outer.foo.bar')" — so this is the rule's own prelude and never a concatenation with the
        enclosing layers', which is also why nothing here walks `parent_rule`.
-       It is index 0 of the ONE list both interfaces answer from: §6.4.4.1's `<layer-name>?` is a list of at
-       most one, and an EMPTY one is §6.4.2.1's anonymous layer — which is where the empty string comes from,
+       It is index 0 of the ONE list both interfaces answer from: CSS Cascade 5 §6.4.4.1's `<layer-name>?` is a list of
+       at most one, and an EMPTY one is §6.4.2.1's anonymous layer — which is where the empty string comes from,
        so the two are one storage and not a string beside a list that could disagree. */
     case CR_LAYER_BLOCK_NAME: {
         JSValue first;
@@ -3252,7 +3256,7 @@ static JSValue js_rule_get(JSContext *ctx, JSValueConst this_val, int magic)
         JS_FreeValue(ctx, first);
         return JS_NewString(ctx, "");
     }
-    /* CSS Cascade §8.2: "Its nameList attribute represents the list of layer names declared by the at-rule,
+    /* CSS Cascade 5 §8.2: "Its nameList attribute represents the list of layer names declared by the at-rule,
        NORMALIZED FOLLOWING THE SAME RULE as the CSSLayerBlockRule's name attribute." One normalization is
        therefore one storage, and core/css/css_at_rule_prelude.h is where it happens — for both at-rules, out
        of one grammar. The Array is the record's own and is already FROZEN, which is what a `FrozenArray<T>`
@@ -4191,7 +4195,7 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, 
         return true;
     }
     /* AN `@import` CONTRIBUTES NO STYLE RULE TO THIS SHEET AND STILL CONTRIBUTES TO THE LAYER ORDER. Its
-       declarations belong to the IMPORTED sheet — CSS Cascade §2 treats its contents "as if they were written
+       declarations belong to the IMPORTED sheet — CSS Cascade 5 §2 treats its contents "as if they were written
        in place of the @import rule" — and this build fetches no imported sheet, which css_rule.h records as the
        gap that `styleSheet` is absent for. But §6.4.1 lists it first among the three ways a cascade layer is
        DECLARED ("using an @import rule with the layer keyword or layer() function, assigning the contents of
@@ -4204,13 +4208,13 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, 
         CssLayerNames names = { NULL, 0 };
         bool named;
 
-        /* §6.4.4's `layerName` — NULL for an import that declares no layer, the EMPTY STRING for the anonymous
+        /* CSSOM §6.4.4's `layerName` — NULL for an import that declares no layer, the EMPTY STRING for the anonymous
            `layer` keyword (§6.4.2.1: "an @import rule uses the layer keyword (which does not provide a
            <layer-name>) ... its layer name gains a unique anonymous segment"), and the name otherwise. */
         if (!ln) return true;
         named = css_prelude_layer_names(ln, strlen(ln), &names);
         DCHECK(named,
-               "an `@import` rule's stored `layerName` is not a `<layer-name>`. CSS Cascade §2's grammar is "
+               "an `@import` rule's stored `layerName` is not a `<layer-name>`. CSS Cascade 5 §2's grammar is "
                "`[ layer | layer(<layer-name>) ]?` and a name outside that production makes the whole at-rule "
                "invalid, so the refusal belongs in the import prelude's own parse — core/css/"
                "css_at_rule_prelude.c takes the `layer()` function's RAW CONTENTS without putting them through "
@@ -4238,7 +4242,7 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, 
        <keyframe-block> rules", and a keyframe block's prelude is a `<keyframe-selector>#` — a position along a
        duration, which selects no element and cannot. Its declarations reach an element only through the
        ANIMATION that names it (§4.1's `animation-name`), which is a step after the cascade rather than a rule
-       in it — CSS Cascade §6.1 puts animations in an origin of their own, above every author declaration. */
+       in it — CSS Cascade 5 §6.1 puts animations in an origin of their own, above every author declaration. */
     if (r->type == RULE_TYPE_KEYFRAMES) return true;
     /* NOR DOES AN `@property`, and for a FIFTH: CSS Properties and Values API 1 §3 makes it "a custom property
        REGISTRATION directly in a stylesheet", whose body declares §3.1's, §3.2's and §3.3's descriptors and no
@@ -4246,30 +4250,33 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, 
        custom property's value is PARSED at computed-value time (§2.2 through §2.4), which is a step below the
        cascade and reads the registration rather than this rule list. */
     if (r->type == RULE_TYPE_PROPERTY) return true;
-    /* A §6.4.4.2 `@layer` STATEMENT CONTRIBUTES ONLY TO THE ORDER, which is the whole of what the at-rule is
-       for: it is "declaring a named layer WITHOUT ASSIGNING ANY RULES" (CSS Cascade §6.4.1), so there is
-       nothing inside it for a selector to match and nothing to emit. What it decides is where those layers sit
-       — §6.4.4.2's own note says so ("since layer ordering is defined by first occurrence of the layer name,
-       this rule allows a page to declare the order of its layers up front, so that their order is apparent
-       without having to read the entire style sheet") — and its names are declared LEFT TO RIGHT because
-       §6.4.4.2 says they are: "multiple comma-separated layer names can be provided in this syntax, declaring
-       each of the layers IN THE ORDER SPECIFIED." */
+    /* A CSS Cascade 5 §6.4.4.2 `@layer` STATEMENT CONTRIBUTES ONLY TO THE ORDER, which is the whole of what the
+       at-rule is for: CSS Cascade 5 §6.4.1 "Declaring Cascade Layers" lists it as "declaring a named layer
+       without assigning any rules", so there is nothing inside it for a selector to match and nothing to emit.
+       What it decides is where those layers sit — CSS Cascade 5 §6.4.4.2's own note says so ("since layer
+       ordering is defined by first occurrence of the layer name (see §6.4.3 Layer Ordering), this rule allows
+       a page to declare the order of its layers up front, so that their order is apparent without having to
+       read the entire style sheet") — and its names are declared LEFT TO RIGHT because CSS Cascade 5 §6.4.4.2
+       says they are: "multiple comma-separated layer names can be provided in this syntax, declaring each of
+       the layers in the order specified". The emphasis in this comment is this file's; neither quotation
+       carries any, and the parenthetical cross-reference inside the note is the standard's own. */
     if (r->type == RULE_TYPE_LAYER_STATEMENT) {
         char **names;
         unsigned n, i;
 
         if (!rule_layer_names(ctx, r, &names, &n)) return false;
-        DCHECK(n >= 1, "a §8.2 layer statement rule declares NO `<layer-name>` — §6.4.4.2's `#` multiplier has "
-                       "no zero-length arm, and its creator refuses a prelude with no name in it");
+        DCHECK(n >= 1, "a §8.2 layer statement rule declares NO `<layer-name>` — CSS Cascade 5 §6.4.4.2's `#` "
+                       "multiplier has no zero-length arm, and its creator refuses a prelude with no name in it");
         for (i = 0; i < n; i++) css_layer_order_declare(e->order, cur, names[i]);
         serialized_free(names, n);
         return true;
     }
-    /* A §6.4.4.1 `@layer` BLOCK DECLARES A LAYER AND THEN CONTRIBUTES ITS CHILDREN INTO IT. §6.4.4.1 makes the
-       second half exactly the `@media` arm above — "such @layer block rules have the same restrictions and
-       processing as a conditional group rule [CSS-CONDITIONAL-3] with a TRUE condition" — so the only thing
-       this arm adds to that one is the layer the children are walked under. A rule that declares NO name is
-       §6.4.2.1's anonymous layer and gets a node of its own every time, which is why the name is handed on as
+    /* A CSS Cascade 5 §6.4.4.1 `@layer` BLOCK DECLARES A LAYER AND THEN CONTRIBUTES ITS CHILDREN INTO IT.
+       CSS Cascade 5 §6.4.4.1 makes the second half exactly the `@media` arm above — "such @layer block rules
+       have the same restrictions and processing as a conditional group rule [CSS-CONDITIONAL-3] with a true
+       condition" — so the only thing this arm adds to that one is the layer the children are walked under.
+       A rule that declares NO name is CSS Cascade 5 §6.4.2.1's anonymous layer and gets a node of its own
+       every time, which is why the name is handed on as
        NULL rather than as an empty string: "each occurrence of an anonymous layer declaration represents a
        unique cascade layer". */
     if (r->type == RULE_TYPE_LAYER_BLOCK) {
@@ -4280,8 +4287,8 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, 
         bool ok;
 
         if (!rule_layer_names(ctx, r, &names, &n)) return false;
-        DCHECK(n <= 1, "a §8.1 layer block rule declares more than one `<layer-name>` — §6.4.4.1's grammar is "
-                       "`<layer-name>?`, and its creator refuses a prelude carrying a list");
+        DCHECK(n <= 1, "a §8.1 layer block rule declares more than one `<layer-name>` — CSS Cascade 5 §6.4.4.1's "
+                       "grammar is `<layer-name>?`, and its creator refuses a prelude carrying a list");
         node = css_layer_order_declare(e->order, cur, n ? names[0] : NULL);
         serialized_free(names, n);
         kids = rule_child_rules(ctx, rule);
@@ -4337,7 +4344,7 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, 
     /* AND THEN ITS OWN NESTED RULES, AFTER IT, which §3.4 "Mixing Nesting Rules and Declarations" requires
        rather than merely permits: "For the purpose of determining the Order Of Appearance, nested style rules
        and nested group rules are considered to come after their parent rule." So the parent's declarations go
-       in first and the children follow in document order, and CSS Cascade §6.1's Order of Appearance — which
+       in first and the children follow in document order, and CSS Cascade 5 §6.1's Order of Appearance — which
        the emission's own position IS — comes out right for `article { color: blue; & { color: red } }`.
        They resolve against THIS rule's emitted selector, and the recursion is the rule tree's own depth: CSS
        Nesting places no limit on it and neither does this walk. */
@@ -4471,9 +4478,9 @@ void css_rule_init(JSContext *ctx)
     g_proto_slot[PROTO_KEYFRAMES] = realm_value_declare(ctx, "CSS Animations §6.3 CSSKeyframesRule.prototype");
     g_proto_slot[PROTO_KEYFRAME] = realm_value_declare(ctx, "CSS Animations §6.2 CSSKeyframeRule.prototype");
     g_proto_slot[PROTO_LAYER_BLOCK] =
-        realm_value_declare(ctx, "CSS Cascade §8.1 CSSLayerBlockRule.prototype");
+        realm_value_declare(ctx, "CSS Cascade 5 §8.1 CSSLayerBlockRule.prototype");
     g_proto_slot[PROTO_LAYER_STATEMENT] =
-        realm_value_declare(ctx, "CSS Cascade §8.2 CSSLayerStatementRule.prototype");
+        realm_value_declare(ctx, "CSS Cascade 5 §8.2 CSSLayerStatementRule.prototype");
     g_proto_slot[PROTO_PROPERTY] =
         realm_value_declare(ctx, "CSS Properties and Values API 1 §6.1 CSSPropertyRule.prototype");
     g_id_set_selector = idl_setter_id(ctx, IDL_DOMSTRING, false, js_rule_set_selector, 0);
@@ -4585,10 +4592,10 @@ void css_rule_install_proto(JSContext *ctx)
     idl_install_accessor(ctx, container, "containerQuery", js_rule_get, CR_CONTAINER_QUERY, -1);
     idl_install_accessor(ctx, container, "conditions", js_rule_get, CR_CONTAINER_CONDITIONS, -1);
 
-    /* §6.4.4's CSSImportRule.prototype. It derives from CSSRule and NOT from CSSGroupingRule — an `@import`
+    /* CSSOM §6.4.4's CSSImportRule.prototype. It derives from CSSRule and NOT from CSSGroupingRule — an `@import`
        contains no rules — which is why `cssRules`, `insertRule` and `deleteRule` are unreachable on one and
        why the three grouping members brand-check their receiver.
-       `styleSheet` IS ABSENT, AND THAT IS THE HONEST ANSWER RATHER THAN A NULL. §6.4.4 declares
+       `styleSheet` IS ABSENT, AND THAT IS THE HONEST ANSWER RATHER THAN A NULL. CSSOM §6.4.4 declares
        `[SameObject] readonly attribute CSSStyleSheet? styleSheet` and defines it as "the associated CSS style
        sheet, if any, or null otherwise", with a note giving the one case that produces null: an import whose
        supports() condition does not match. This engine FETCHES NO IMPORTED SHEET — there is no CSS resource
@@ -4674,10 +4681,10 @@ void css_rule_install_proto(JSContext *ctx)
     idl_install_accessor(ctx, keyframe, "style", js_rule_style, STYLE_OF_KEYFRAME,
                          cssom_put_forwards_setter());
 
-    /* CSS Cascade §8.1's CSSLayerBlockRule.prototype. It derives from CSSGroupingRule — `interface
-       CSSLayerBlockRule : CSSGroupingRule` — and §6.4.4.1 gives the reason the IDL encodes: "such @layer block
-       rules have the same restrictions and processing as a conditional group rule [CSS-CONDITIONAL-3] with a
-       TRUE condition". So `cssRules`, `insertRule` and `deleteRule` are reachable on one and are exactly the
+    /* CSS Cascade 5 §8.1's CSSLayerBlockRule.prototype. It derives from CSSGroupingRule — `interface
+       CSSLayerBlockRule : CSSGroupingRule` — and CSS Cascade 5 §6.4.4.1 gives the reason the IDL encodes: "such @layer
+       block rules have the same restrictions and processing as a conditional group rule [CSS-CONDITIONAL-3]
+       with a true condition". So `cssRules`, `insertRule` and `deleteRule` are reachable on one and are exactly the
        right members for it. It is NOT a CSSConditionRule, and that is the half of the sentence that matters
        here: a layer has no condition to read back, so CSS Conditional 3 §7.2's `conditionText` is absent and the
        prototype chains to CSSGroupingRule directly, exactly as §6.4.7's CSSPageRule does. */
@@ -4686,7 +4693,7 @@ void css_rule_install_proto(JSContext *ctx)
     idl_interface_tag(ctx, layer_block, "CSSLayerBlockRule");
     idl_install_accessor(ctx, layer_block, "name", js_rule_get, CR_LAYER_BLOCK_NAME, -1);
 
-    /* CSS Cascade §8.2's CSSLayerStatementRule.prototype — from CSSRule directly, because §6.4.4.2's at-rule
+    /* CSS Cascade 5 §8.2's CSSLayerStatementRule.prototype — from CSSRule directly, because §6.4.4.2's at-rule
        has no block at all and therefore contains no rules: `interface CSSLayerStatementRule : CSSRule`. Its
        one member is a `FrozenArray<CSSOMString>`, whose freeze is on the stored VALUE (see the record). */
     layer_statement = JS_NewObjectProto(ctx, base);
@@ -4761,7 +4768,7 @@ void css_rule_install(JSContext *ctx, JSValueConst global)
            still not a CSSGroupingRule, which is the IDL's own statement and not a simplification. */
         { "CSSKeyframeRule",   PROTO_KEYFRAME,   0 },
         { "CSSKeyframesRule",  PROTO_KEYFRAMES,  0 },
-        /* CSS Cascade §8.1 derives from CSSGroupingRule (index 1) — §6.4.4.1 makes a `@layer` block a
+        /* CSS Cascade 5 §8.1 derives from CSSGroupingRule (index 1) — §6.4.4.1 makes a `@layer` block a
            conditional group rule with a true condition — while §8.2's derives from CSSRule, because a
            statement at-rule has no block and so contains nothing. */
         { "CSSLayerBlockRule",     PROTO_LAYER_BLOCK,     1 },
