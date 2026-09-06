@@ -134,28 +134,33 @@
  *     for EVERY document however the page tries to enter fullscreen — so the day it is not null is the day the
  *     writer exists, which is the one observation that distinguishes this residual from a walk that is wrong.
  *
- * ── NAMED RESIDUAL: [LegacyLenientSetter] ────────────────────────────────────────────────────────────────────
- *   — WHAT IS NOT COVERED: the IDL declares `[LegacyLenientSetter] readonly attribute boolean
- *     fullscreenEnabled`, `[LegacyLenientSetter, Unscopable] readonly attribute boolean fullscreen` and
- *     `[LegacyLenientSetter] readonly attribute Element? fullscreenElement`, and this installs three plain
- *     readonly accessors. Web IDL §3.4.2 "[LegacyLenientSetter]":
- *     "it indicates that a no-op setter will be generated for the attribute's accessor property. This results
- *     in erroneous assignments to the property in strict mode to be ignored rather than causing an exception to
- *     be thrown." A readonly accessor has no setter at all, so the exception is thrown.
- *   — WHAT THE NEXT DIFF BUILDS: an installer form that gives an attribute §3.7.6's no-op setter, driven off
- *     the extended attribute rather than restated per member — all three members of Fullscreen carry it, and
- *     it is the kind of §3.4 annotation that is one mechanism for the whole platform or N copies.
- *   — HOW ITS ABSENCE WOULD SHOW: `"use strict"; document.fullscreenEnabled = 1` throws a TypeError here and
- *     is silently ignored in a browser. Sloppy-mode assignment is already silent in both.
+ * ── [LegacyLenientSetter] IS BUILT, AND ITS RESIDUAL IS GONE ─────────────────────────────────────────────────
+ *   All three members carry it and all three (four placements, since `fullscreenElement` is the
+ *   DocumentOrShadowRoot mixin's and lands on Document AND ShadowRoot) install through
+ *   core/idl_args.h's idl_install_accessor_lenient_setter, which mints Web IDL §3.7.6 Attributes' setter with
+ *   §3.4.2's arm. Nothing in this file states WHICH members carry the annotation: engine/idlgen.mjs reads it
+ *   off the real .idl and reports both directions, so an annotated member installed plainly and a plain member
+ *   installed leniently are each a finding. The observable that was named here — `"use strict";
+ *   document.fullscreenEnabled = 1` throwing where a browser ignores — is now the browser's answer.
  *
  * ── NAMED RESIDUAL: [Unscopable] ─────────────────────────────────────────────────────────────────────────────
  *   — WHAT IS NOT COVERED: `fullscreen` alone of the three carries `[Unscopable]`, and this engine has no
  *     mechanism for that annotation at all — DOM's `[CEReactions, Unscopable]` `prepend`, `append`,
  *     `replaceChildren` and `slot` are installed here without it too, so this member joins a platform-wide
  *     absence rather than opening one.
- *   — WHAT THE NEXT DIFF BUILDS: the `@@unscopables` object on an interface prototype, populated from the
- *     extended attribute by the same installer the residual above describes — one mechanism for the platform,
- *     since five members across two standards already want it.
+ *   — WHAT THE NEXT DIFF BUILDS: the `%Symbol.unscopables%` object on an interface prototype object, and it is
+ *     a DIFFERENT MECHANISM from the [LegacyLenientSetter] one above rather than the same installer — this
+ *     sentence used to say it was, and that was wrong. §3.3.14 [Unscopable] says where it lives ("This is
+ *     achieved by including the property name on the interface prototype object's %Symbol.unscopables%
+ *     property's value") and §3.7.3 Interface prototype object states the steps: ONE OrdinaryObjectCreate(null)
+ *     per interface, a `CreateDataPropertyOrThrow(unscopableObject, id, true)` for each EXPOSED member that
+ *     carries the attribute, and a `{[[Writable]]: false, [[Enumerable]]: false, [[Configurable]]: true}` own
+ *     property keyed by a WELL-KNOWN SYMBOL. So it is per INTERFACE and not per member, it is built where the
+ *     prototype is rather than where a member is installed, it is the only string-free property key any
+ *     install form in this engine would place, and it carries §3.3.7 step 1's per-member exposure test that a
+ *     no-op setter does not need. It is an ordered subproblem: the platform-wide population is nine members —
+ *     DOM's ParentNode `prepend`/`append`/`replaceChildren`, ChildNode's `before`/`after`/`replaceWith`/
+ *     `remove`, `Element.slot`, and this one.
  *   — HOW ITS ABSENCE WOULD SHOW: `with (document) { fullscreen }` reads the member here and reads the outer
  *     scope's binding in a browser. It is the same one-line test for `slot` and `append`.
  */

@@ -421,6 +421,14 @@ const char *document_content_type_of(const lxb_dom_document_t *dom);
    has to hold both. */
 bool document_is_xml_of(const lxb_dom_document_t *dom);
 
+/* WEB IDL §3.7 Interfaces' implementation-check an object, step 3 — "If object does not implement interface,
+   then throw a TypeError." — as the PREDICATE core/idl_args' idl_this_iface and its [LegacyLenientSetter]
+   installer take. It was file-static here and is exported for one reason: §3.4.2's no-op setter runs §3.7.6's
+   validThis test before it does nothing, and the component installing that setter on `Document.prototype` has
+   to name the brand. A second copy in that component would be a second answer to a question this file already
+   answers — core/fullscreen/fullscreen.c had one (`fs_document_receiver`'s own node-type test) and it is gone. */
+bool document_is(JSValueConst v);
+
 /* …AND DOM §4.5's THIRD creation fact for ONE document: WHICH INTERFACE IT IMPLEMENTS — see DocumentInterface
    above. Its ONE consumer beyond this file is DOM §4.4 "Interface Node"'s clone a single node, whose document
    arm is "creating a document that implements THE SAME INTERFACES AS NODE": the copy is not re-classified, it

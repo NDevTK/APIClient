@@ -110,7 +110,11 @@ static lxb_dom_node_t *fs_document_receiver(JSContext *ctx, JSValueConst this_va
 {
     lxb_dom_node_t *n = node_of(this_val);
 
-    if (!n || n->type != LXB_DOM_NODE_TYPE_DOCUMENT) {
+    /* ONE ANSWER TO ONE QUESTION — core/dom/document.h's `document_is` is Web IDL §3.7's implementation-check
+       step 3 for this interface, and the node-type test that used to be written out here was a second copy of
+       it. The [LegacyLenientSetter] installs below hand that same predicate to §3.7.6's setter, so a member
+       reached through the getter and a member reached through the setter agree by construction. */
+    if (!document_is(this_val)) {
         JS_ThrowTypeError(ctx, "this is not a Document");
         return NULL;
     }
@@ -250,21 +254,32 @@ void fullscreen_free(JSRuntime *rt)
 
 void fullscreen_install_document_members(JSContext *ctx, JSValueConst document_proto)
 {
-    /* Three readonly accessors with NO setter, which is fullscreen.h's second named residual: Web IDL §3.4.2's
-       [LegacyLenientSetter] no-op setter is a platform-wide installer form this engine does not have, and a
-       readonly accessor throws in strict mode where a browser ignores. */
+    /* ALL THREE CARRY WEB IDL §3.4.2 [LegacyLenientSetter], so all three are installed through the form that
+       gives §3.7.6 Attributes' no-op setter. Nothing here states WHICH members carry it: engine/idlgen.mjs
+       reads the extended attribute off the real .idl and reports a member annotated there and installed
+       through the plain form, or installed through this form and not annotated. `document_is` is §3.7.6's
+       validThis test — a foreign receiver still gets its TypeError, and only an assignment through a real
+       Document is the one §3.4.2 ignores. */
     DCHECK(g_flag_atom != JS_ATOM_NULL,
            "FULLSCREEN §3 API's Document members were installed on a realm's prototype before fullscreen_init "
            "minted §2's flag key — two of the three are stated over the fullscreen element, which cannot be "
            "read without it");
-    idl_install_accessor(ctx, document_proto, "fullscreenEnabled", js_document_fullscreen_enabled, 0, -1);
-    idl_install_accessor(ctx, document_proto, "fullscreen", js_document_fullscreen, 0, -1);
-    idl_install_accessor(ctx, document_proto, "fullscreenElement", js_fullscreen_element, 0, -1);
+    idl_install_accessor_lenient_setter(ctx, document_proto, "fullscreenEnabled",
+                                        js_document_fullscreen_enabled, 0, document_is, "Document");
+    idl_install_accessor_lenient_setter(ctx, document_proto, "fullscreen",
+                                        js_document_fullscreen, 0, document_is, "Document");
+    idl_install_accessor_lenient_setter(ctx, document_proto, "fullscreenElement",
+                                        js_fullscreen_element, 0, document_is, "Document");
 }
 
 void fullscreen_install_shadow_root_members(JSContext *ctx, JSValueConst shadow_root_proto)
 {
     DCHECK(g_flag_atom != JS_ATOM_NULL,
            "FULLSCREEN §3 API's ShadowRoot member was installed before fullscreen_init minted §2's flag key");
-    idl_install_accessor(ctx, shadow_root_proto, "fullscreenElement", js_fullscreen_element, 0, -1);
+    /* THE MIXIN MEMBER, AND THE BRAND IS THIS INTERFACE'S. `fullscreenElement` is declared on the
+       DocumentOrShadowRoot mixin, so §3.7.6's validThis test is about whichever interface INCLUDES it —
+       Document three lines up, ShadowRoot here — which is why the predicate is an argument to the install
+       rather than a property of the member. */
+    idl_install_accessor_lenient_setter(ctx, shadow_root_proto, "fullscreenElement",
+                                        js_fullscreen_element, 0, shadow_root_is_value, "ShadowRoot");
 }

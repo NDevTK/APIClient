@@ -774,6 +774,13 @@ const CALL_FORMS = new Map(Object.entries({
      LANDS is what differs, and the attribution graph already follows the object. */
   idl_install_accessor_unforgeable: { target: 1, name: 2, fn: 3, kind: "accessor" },
   idl_install_accessor_step:     { target: 1, name: 2, kind: "accessor" },
+  /* WEB IDL §3.4.2 [LegacyLenientSetter] — the same §3.7.6 accessor as the plain form, plus the no-op setter
+     §3.4.2 asks for. It is registered with a MARK and not merely as another install spelling, because the mark
+     is what lets the caller ask the extended attribute's own question in both directions: a member the corpus
+     annotates that some component installed through a different form, and a member installed through this one
+     that the corpus does not annotate. Neither side of that is stateable from a member list, which is why the
+     annotation is read off the real .idl and never restated in C. */
+  idl_install_accessor_lenient_setter: { target: 1, name: 2, kind: "accessor", lenientSetter: true },
   idl_install_method:            { target: 1, name: 2, kind: "data" },
   /* §3.4.10's [LegacyUnforgeable] for an OPERATION, the twin of the accessor form two rows up and registered
      with it for the same reason: what differs is where the property LANDS (the object that implements the
@@ -2418,10 +2425,11 @@ export function installedMembers(paths, env) {
          caller cannot hold a second list of which helpers reach the door. A form this map has never heard of
          (an entry macro, a synthetic label) is not one. */
       const globalRef = !!(env.forms.get(form) || {}).globalRef;
+      const lenientSetter = !!(env.forms.get(form) || {}).lenientSetter;
       for (const name of names)
         records.push({ name, stubbed: !!stub, file: at.file, line: at.line, form,
                        ifaces: a.ifaces, candidates: a.candidates, why: a.why,
-                       nonInterface: a.nonInterface || null, kind: kind || null, globalRef });
+                       nonInterface: a.nonInterface || null, kind: kind || null, globalRef, lenientSetter });
     };
     const emit = (names, stub, f, targetExpr, off, form, kind) =>
       emitWith(names, stub, interfacesOf(path, f, targetExpr, off), off, form, null, kind);

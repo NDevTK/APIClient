@@ -673,6 +673,10 @@ const unattributed = [];
    The mark is DECLARED at the door (idl_installed.mjs's `globalRef`) and carried to every wrapper by the
    shared-helper derivation, so this list is not a set of file or function names anybody maintains. */
 const globalRefs = [];
+/* WEB IDL §3.4.2 [LegacyLenientSetter] — which members this engine installed through the form that gives
+   §3.7.6 Attributes' no-op setter, keyed by the interface the target is tagged with. The EXPECTED set is read
+   off the corpus below; nothing in C states it. */
+const lenientBy = new Map();
 const addTo = (map, iface, name) => {
   if (!map.has(iface)) map.set(iface, new Set());
   map.get(iface).add(name);
@@ -727,6 +731,7 @@ for (const r of world.records) {
   for (const iface of r.ifaces) {
     addTo(r.stubbed ? stubbedBy : installedBy, iface, r.name);
     addTo(landsIn, r.file, iface);
+    if (r.lenientSetter) addTo(lenientBy, iface, r.name);
     const declared = idlKinds(iface).get(r.name);
     if (!declared) continue;             /* not a member of this interface — the ABSENT side's question */
     if (!r.kind) { kindUndeclared.push({ ...r, iface }); continue; }
@@ -1662,6 +1667,93 @@ if (nonIface.length)
    does not have — a typo, a rename, or a class string the spec states in prose without an interface behind it.
    Reading it one way only would make that silent, and the whole point of reading a declaration is that reality
    can contradict it. */
+/* ---- WEB IDL §3.4.2 [LegacyLenientSetter], BOTH DIRECTIONS -----------------------------------------------
+   §3.4.2: "If the [LegacyLenientSetter] extended attribute appears on a read only regular attribute, it
+   indicates that a no-op setter will be generated for the attribute's accessor property. This results in
+   erroneous assignments to the property in strict mode to be ignored rather than causing an exception to be
+   thrown."
+   THE ANNOTATION IS READ OFF THE REAL .idl AND IS RESTATED NOWHERE. That is the whole reason this check exists
+   rather than a per-member comment in each component: a §3.4 extended attribute is one mechanism for the
+   platform or N copies that drift, and the corpus is the only side that cannot drift from itself. A member
+   this engine installs is looked up by (interface, name) in the interface's OWN members — its own IDL, its
+   partials and the mixins it includes, which is where an annotation is written — and never in the flattened
+   chain, because a member DECLARED on Document is installed on Document.prototype and INHERITED by
+   XMLDocument, and demanding a second install there would be an accusation about the prototype chain.
+   TWO DIRECTIONS, AND THEY ARE DIFFERENT DEFECTS. A member the corpus annotates and a component installs
+   through the plain form throws a TypeError in strict mode where a browser ignores the assignment. A member
+   installed through this form that the corpus does NOT annotate has a setter no standard asks for — §3.4.2
+   makes that an error rather than a preference ("It must not be used on anything other than a read only
+   regular attribute"), and a page's `"use strict"; x.member = 1` then silently does nothing where a browser
+   throws. Neither direction is visible in any member COUNT: both members are installed either way.
+   ONLY MEMBERS THIS ENGINE INSTALLS ARE ASKED. An annotated member on an interface with no component is
+   already the ABSENT category's, and charging it here would report one gap twice. */
+{
+  const isLenient = (m) => (m.extAttrs || []).some((a) => a.name === "LegacyLenientSetter");
+  /* §3.4.2's OWN CONFORMANCE REQUIREMENTS, asked of the corpus at the one place its answer is used — a
+     corpus that broke one would make every row below a different claim than the one this reads it as. */
+  for (const [, node] of byName)
+    for (const m of node.members || []) {
+      if (!isLenient(m)) continue;
+      /* the mixin's own node carries the same member declaration its hosts do — one declaration, judged once */
+      if (node.type !== "interface") continue;
+      if (m.type !== "attribute" || !m.readonly || m.special === "static")
+        throw new Error(`[idl-audit] \`${node.name}.${m.name}\` carries [LegacyLenientSetter] and is not a ` +
+                        `read only regular attribute — Web IDL §3.4.2 says "It must not be used on anything ` +
+                        `other than a read only regular attribute", and the no-op setter this generates ` +
+                        `would replace a setter the member is entitled to`);
+      for (const bad of ["PutForwards", "Replaceable"])
+        if ((m.extAttrs || []).some((a) => a.name === bad))
+          throw new Error(`[idl-audit] \`${node.name}.${m.name}\` carries [LegacyLenientSetter] and ` +
+                          `[${bad}] — Web IDL §3.4.2: "An attribute with the [LegacyLenientSetter] extended ` +
+                          `attribute must not also be declared with the [PutForwards] or [Replaceable] ` +
+                          `extended attributes", and §3.7.6's setter reaches ${bad}'s arm first, so one of ` +
+                          `the two would silently never run`);
+    }
+  const missing = [], stray = [];
+  for (const [iface, names] of installedBy) {
+    const node = byName.get(iface);
+    if (!node) continue;
+    const want = new Set((node.members || []).filter(isLenient).map((m) => m.name));
+    const have = lenientBy.get(iface) || new Set();
+    for (const n of names) if (want.has(n) && !have.has(n)) missing.push([iface, n]);
+    for (const n of have) if (!want.has(n)) stray.push([iface, n]);
+  }
+  const installedLenient = [...lenientBy.values()].reduce((a, set) => a + set.size, 0);
+  /* THE DENOMINATOR IS PLACEMENTS AND NOT DECLARATIONS, and the two differ by exactly the mixins. §3.7.3 gives
+     an interface mixin NO prototype object of its own — its members are placed on every interface that
+     includes it — and idl_members.mjs pushes them into each host's member list, so a mixin's own node is a
+     THIRD copy of a member that is placed twice. Counting it made this read 5 against an installed side of 4
+     and invited exactly the wrong conclusion: that a member was missing. The corpus's [LegacyLenientSetter]
+     DECLARATIONS number three (two on a partial Document, one on the DocumentOrShadowRoot mixin); the
+     PLACEMENTS number four, because the mixin's one lands on Document and on ShadowRoot; and four is what the
+     installed side counts, so four is what this must. */
+  const corpusLenient = [...byName.values()]
+    .filter((n) => n.type === "interface")
+    .reduce((a, n) => a + (n.members || []).filter(isLenient).length, 0);
+  console.log(`[idl-audit] ── Web IDL §3.4.2 [LegacyLenientSetter] ── ${installedLenient} member(s) ` +
+              `installed with §3.7.6's no-op setter, against the ${corpusLenient} the corpus annotates ` +
+              `platform-wide. The observable is STRICT MODE: a readonly accessor with no setter and one with ` +
+              `a no-op setter both ignore an ordinary assignment, and only \`"use strict"; d.member = 1\` ` +
+              `tells them apart`);
+  defect("members the IDL declares [LegacyLenientSetter] that are installed without §3.7.6's no-op setter",
+         missing.length);
+  for (const [iface, n] of missing)
+    console.log(`[idl-audit] ${iface}.${n} is declared [LegacyLenientSetter] and this engine installs it as a ` +
+                `plain readonly accessor — Web IDL §3.7.6 Attributes' create an attribute setter returns a ` +
+                `function for it ("If attribute is declared with a [LegacyLenientSetter] extended attribute, ` +
+                `then return undefined" is an ARM of that setter, not an absence of one), so ` +
+                `\`"use strict"; x.${n} = 1\` throws a TypeError here and is ignored in every browser. ` +
+                `Install it through core/idl_args.h's idl_install_accessor_lenient_setter, naming the ` +
+                `interface's own receiver predicate`);
+  defect("members installed with §3.7.6's no-op setter that the IDL does not declare [LegacyLenientSetter]",
+         stray.length);
+  for (const [iface, n] of stray)
+    console.log(`[idl-audit] ${iface}.${n} is installed with a Web IDL §3.4.2 no-op setter and the corpus ` +
+                `does not declare it [LegacyLenientSetter] — so a page's \`"use strict"; x.${n} = 1\` is ` +
+                `silently ignored here and throws a TypeError in every browser, which is the same divergence ` +
+                `as the category above with the sign reversed. Install it through idl_install_accessor`);
+}
+
 const tagged = new Set([...installedBy.keys(), ...stubbedBy.keys()]);
 const unknownTags = [...tagged].filter((n) => !byName.has(n)).sort();
 /* A SHARED INSTALLER WHOSE PER-CALL SUBSET COULD NOT BE COMPUTED. Neither credited (the false COMPLETE that

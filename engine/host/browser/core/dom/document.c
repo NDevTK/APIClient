@@ -524,7 +524,7 @@ static Document *doc_rec(const lxb_dom_document_t *dom)
    A body cannot ask it that early, which is why the members below state it and do not test it.
    ONE ANSWER TO ONE QUESTION: doc_receiver's own refusal is this predicate, so a member reached through either
    route agrees with the other by construction rather than by two tests being kept in step. */
-static bool document_is(JSValueConst v)
+bool document_is(JSValueConst v)
 {
     const lxb_dom_node_t *n = node_of(v);
 

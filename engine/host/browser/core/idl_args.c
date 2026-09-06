@@ -6218,6 +6218,11 @@ static bool idl_global_member_refused(JSContext *ctx, JSValueConst target, const
    machinery below, because routing a global attribute's read through it is the whole of what it decides. */
 static JSValue idl_mint_plain_getter(JSContext *ctx, JSValueConst target, const char *name,
                                      IdlGetter getter, int getter_magic);
+/* Web IDL §3.4.2 [LegacyLenientSetter]'s setter and its declaration table — defined beside the other §3.7.6
+   receiver machinery below for the same reason, and forward-declared here because the install form that mints
+   one stands above them. */
+static JSValue idl_lenient_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic);
+static int idl_lenient_setter_declare(IdlThisIs is, const char *iface, const char *member);
 
 /* IS THIS INSTALL PUTTING AN OWN PROPERTY ON THE REALM'S [Global] OBJECT? Web IDL §3.7.6's opening prose —
    "Regular attributes are exposed on the interface prototype object, unless the attribute is unforgeable or if
@@ -6695,6 +6700,40 @@ void idl_install_accessor_no_user_code_at(JSContext *ctx, JSValueConst target, c
 /* §3.4.10's [LegacyUnforgeable] — see idl_args.h. The property is defined at the SAME moment and with the same
    getter as any other attribute; what differs is the two things §3.7.6 and §3.4.10 state, and both are here:
    it is defined on the object the caller passes (its INSTANCE, not its prototype) and it is NOT configurable. */
+/* WEB IDL §3.4.2 [LegacyLenientSetter] — see idl_args.h for the extended attribute and the observable, and the
+   block above idl_lenient_set for why the no-op is the standard's own arm rather than a stub.
+   IT DEFINES THE PAIR ITSELF RATHER THAN GOING THROUGH idl_define_accessor, because that entry's setter is a
+   STEP member (§3.7.6's ordinary setter, with a pool entry, a derived length and a declared receiver) and this
+   one is §3.4.2's arm, which has no steps, no argument to convert and no pool entry to derive anything from.
+   Routing it through a `setter_stepid` would have meant minting a step whose body is `return undefined` and
+   declaring an argument the section states is never read — a member in the pool that no IDL declares. */
+void idl_install_accessor_lenient_setter_at(JSContext *ctx, JSValueConst target, const char *name,
+                                            IdlGetter getter, int getter_magic,
+                                            IdlThisIs this_is, const char *iface,
+                                            const char *at_file, int at_line)
+{
+    char nb[IDL_ACCESSOR_NAME_MAX];
+    JSAtom a;
+    JSValue g, st;
+
+    /* §3.7.6's CONTINUE-STEP, asked here for the reason every other member-placing entry asks it: this form
+       places a member exactly as they do, and a form that skipped the question would be a door §3.3.7 step 1
+       cannot see. */
+    if (idl_global_member_refused(ctx, target, name, at_file, at_line)) return;
+    g = idl_mint_plain_getter(ctx, target, name, getter, getter_magic);
+    st = JS_NewCFunction2(ctx, (JSCFunction *)idl_lenient_set,
+                          idl_accessor_name(nb, sizeof nb, name, IDL_ACCESSOR_SET), 1,
+                          JS_CFUNC_setter_magic, idl_lenient_setter_declare(this_is, iface, name));
+    CHECK(!JS_IsException(st), "a Web IDL §3.4.2 [LegacyLenientSetter] setter could not be allocated");
+    a = JS_NewAtom(ctx, name);
+    DCHECK(a != JS_ATOM_NULL, "an IDL accessor name could not be interned");
+    /* §3.7.6's descriptor, unchanged by §3.4.2: an accessor, enumerable, configurable. What §3.4.2 changes is
+       that the setter FIELD is a function rather than undefined, which is the whole of the difference a page
+       can see and is exactly what WPT's idlharness.js asserts (`typeof desc.set === "function"`). */
+    JS_DefinePropertyGetSet(ctx, (JSValue)target, a, g, st, JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
+    JS_FreeAtom(ctx, a);
+}
+
 void idl_install_accessor_unforgeable_at(JSContext *ctx, JSValueConst target, const char *name,
                                          IdlGetter getter, int getter_magic, int setter_stepid,
                                          const char *at_file, int at_line)
@@ -6952,6 +6991,116 @@ static JSValue idl_mint_plain_getter(JSContext *ctx, JSValueConst target, const 
                              JS_CFUNC_getter_magic, getter_magic);
     CHECK(!JS_IsException(f), "an IDL attribute's getter could not be allocated");
     return f;
+}
+
+/* ---- WEB IDL §3.4.2 [LegacyLenientSetter] ----------------------------------------------------------------
+ *
+ * §3.4.2: "If the [LegacyLenientSetter] extended attribute appears on a read only regular attribute, it
+ * indicates that a no-op setter will be generated for the attribute's accessor property. This results in
+ * erroneous assignments to the property in strict mode to be ignored rather than causing an exception to be
+ * thrown."
+ *
+ * IT IS NOT A `js_noop` MEMBER AND MUST NOT BE DELETED AS ONE. §NO STUBS bans a shape-only member whose body
+ * does nothing WHERE THE SPEC COMPUTES A VALUE, and names the one exception: a dedicated documented no-effect
+ * where the SPEC ITSELF STATES THE STEPS ARE TO DO NOTHING. This is that exception, stated by the standard in
+ * two places — §3.4.2 above says the setter is a no-op, and §3.7.6 Attributes' create an attribute setter
+ * reaches it as an arm of its own algorithm: "If attribute is declared with a [LegacyLenientSetter] extended
+ * attribute, then return undefined." A reader who deletes this as a stub reinstates a TypeError the standard
+ * spent a whole paragraph explaining why browsers cannot ship.
+ *
+ * AND IT IS NOT A FUNCTION THAT DOES NOTHING EITHER, WHICH IS THE HALF THAT MAKES IT WORTH SHARING. §3.7.6's
+ * setter runs its whole preamble before the arm above: the receiver is resolved, a platform object gets a
+ * security check, and "If validThis is false and attribute was not specified with the [LegacyLenientThis]
+ * extended attribute, then throw a TypeError" — so `Object.getOwnPropertyDescriptor(Document.prototype,
+ * "fullscreen").set.call({}, 1)` THROWS in a browser and only an assignment through a real receiver is
+ * ignored. A setter installed as an unconditional `return undefined` would fix the strict-mode divergence and
+ * open a brand one, which is why the interface's own receiver predicate is an ARGUMENT here rather than
+ * something this file could do without.
+ *
+ * THE BRAND IS THE COMPONENT'S OWN PREDICATE, NAMED AND NOT RESTATED — the same `…_is` function idl_this_iface
+ * takes, for the same sentence of §3.7 and with the same reason it cannot be a class comparison: a member
+ * declared on Document is reached on an XMLDocument, and a mixin member (§3.4.2's own population includes
+ * DocumentOrShadowRoot's `fullscreenElement`) is reached on every interface that includes the mixin, each with
+ * its own brand. So the predicate is per INSTALL and not per member, which is also why nothing here restates
+ * which members carry the extended attribute: engine/idlgen.mjs reads that from the real .idl and checks both
+ * directions against what the components install.
+ *
+ * THE SECURITY CHECK IS NOT ASKED HERE, AND THAT IS A NAMED RESIDUAL RATHER THAN AN OMISSION.
+ *   WHAT IS NOT COVERED: §3.7.6's "If jsValue is a platform object, then perform a security check, passing
+ *     jsValue, id, and \"setter\"" — the step HTML §7.2.1.1 Integration with IDL answers off
+ *     CrossOriginProperties. This engine asks it for an attribute on the realm's GLOBAL (idl_attribute_this)
+ *     and for no other, which is the same state every plain-C attribute getter in this file is in.
+ *   WHAT THE NEXT DIFF BUILDS: the security check as a step of the ordinary attribute preamble rather than of
+ *     the global one, at which point this mint calls it before the brand test below.
+ *   HOW ITS ABSENCE WOULD SHOW: a [LegacyLenientSetter] member on an interface §7.2.1.1's list governs — there
+ *     is none in the corpus today, all three being Document's and ShadowRoot's, so the step is unreachable
+ *     rather than skipped, and the day one is declared on Window or Location this residual is what says so.
+ *
+ * THE DECLARATION TABLE IS THE SHAPE idl_global_attr_declare ALREADY USES one screen up, for the identical
+ * reason: a C function's `magic` is an int, the two things §3.7.6's setter needs are a function pointer and an
+ * identifier, and the same member installed once per realm must find its entry rather than append a second. */
+typedef struct IdlLenientSetter {
+    IdlThisIs   is;                    /* §3.7 implementation-check step 3's "object does not implement" */
+    const char *iface;                 /* the identifier that TypeError names; a static, per the caller */
+    const char *member;                /* the identifier §3.7.6 keys the property by, for the same message */
+} IdlLenientSetter;
+static IdlLenientSetter *g_lenient;
+static int               g_lenient_n, g_lenient_cap;
+
+static int idl_lenient_setter_declare(IdlThisIs is, const char *iface, const char *member)
+{
+    int i;
+
+    DCHECK(is != NULL,
+           "a Web IDL §3.4.2 [LegacyLenientSetter] was installed with no receiver predicate — §3.7.6 "
+           "Attributes' setter throws a TypeError when validThis is false, and a setter that cannot ask has "
+           "no arm to take");
+    DCHECK(iface != NULL && *iface, "a §3.4.2 [LegacyLenientSetter] was installed naming no interface");
+    DCHECK(member != NULL && *member, "a §3.4.2 [LegacyLenientSetter] was installed naming no member");
+    for (i = 0; i < g_lenient_n; i++)
+        if (g_lenient[i].is == is && strcmp(g_lenient[i].iface, iface) == 0 &&
+            strcmp(g_lenient[i].member, member) == 0)
+            return i;
+    if (g_lenient_n == g_lenient_cap) {
+        int cap = g_lenient_cap ? g_lenient_cap * 2 : 8;
+        IdlLenientSetter *t = realloc(g_lenient, (size_t)cap * sizeof *t);
+
+        CHECK(t != NULL, "the Web IDL §3.4.2 [LegacyLenientSetter] declaration table could not grow");
+        g_lenient = t;
+        g_lenient_cap = cap;
+    }
+    g_lenient[g_lenient_n].is = is;
+    g_lenient[g_lenient_n].iface = iface;
+    g_lenient[g_lenient_n].member = member;
+    return g_lenient_n++;
+}
+
+void idl_lenient_setters_free(void)
+{
+    free(g_lenient);
+    g_lenient = NULL;
+    g_lenient_n = g_lenient_cap = 0;
+}
+
+/* §3.7.6 Attributes' create an attribute setter, for an attribute declared [LegacyLenientSetter]: the
+   receiver test, and then the arm that returns undefined. `V` is not read at all, which is §3.4.2's whole
+   content and is why this takes no conversion — there is no IDL type to convert to. */
+static JSValue idl_lenient_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
+{
+    (void)val;
+    DCHECK(magic >= 0 && magic < g_lenient_n,
+           "a Web IDL §3.4.2 [LegacyLenientSetter] ran with a magic no declaration in this agent's table "
+           "matches — the index is minted by idl_lenient_setter_declare and is the whole of what the mint "
+           "carries");
+    /* §3.7.6: "If validThis is false and attribute was not specified with the [LegacyLenientThis] extended
+       attribute, then throw a TypeError." No member of the corpus's [LegacyLenientSetter] population carries
+       [LegacyLenientThis], so the arm that would suppress this throw is unreachable and is not written as a
+       branch nobody can take. A THROW and never a DCHECK: the receiver is PAGE-SUPPLIED INPUT, and a page
+       writing `d.set.call(null, 1)` is asking a question the standard answers with a TypeError. */
+    if (!g_lenient[magic].is(this_val))
+        return JS_ThrowTypeError(ctx, "Illegal invocation: setting '%s' on an object that does not implement "
+                                      "%s", g_lenient[magic].member, g_lenient[magic].iface);
+    return JS_UNDEFINED;   /* §3.7.6: "…then return undefined." */
 }
 
 static JSValue idl_replaceable_set(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
@@ -7782,6 +7931,11 @@ void idl_args_pool_free(void)
     free(g_gattr);
     g_gattr = NULL;
     g_gattr_n = g_gattr_cap = 0;
+    /* AND §3.4.2's [LegacyLenientSetter] TABLE, which is the same kind of table for the same reason — malloc'd,
+       holding no JSValue and no atom, indexed by the `magic` of function objects the realms own. Released
+       through its own entry rather than by touching the statics from here, so the one file that owns the table
+       owns its lifetime. */
+    idl_lenient_setters_free();
     g_sealed = false;
     g_sealed_at = 0;
 }

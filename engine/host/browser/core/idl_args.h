@@ -2183,6 +2183,10 @@ void idl_install_value_attribute_at(JSContext *ctx, JSValueConst target, const c
 #define idl_install_value_attribute(ctx, target, name, value, forge) \
     idl_install_value_attribute_at((ctx), (target), (name), (value), (forge), IDL_SITE)
 
+/* Agent teardown for the §3.4.2 declaration table — the shape idl_args' other per-agent
+   tables already use. */
+void idl_lenient_setters_free(void);
+
 JSValue idl_interface_object(JSContext *ctx, const char *name, JSValueConst proto);
 
 /* WEB IDL §3.8's `define the global property references`, as the ONE door an interface's name reaches the
@@ -2642,6 +2646,55 @@ void idl_install_accessor_no_user_code_at(JSContext *ctx, JSValueConst target, c
  * member of Location unforgeable for that reason and says so — "required by legacy code that consulted the
  * Location interface, or stringified it, to determine the document URL, and then used it in a
  * security-sensitive way" — so `foo[location] = bar` and `location + ""` cannot be misdirected. */
+/* WEB IDL §3.7 Interfaces' implementation-check an object, step 3 — "If object does not implement interface,
+ * then throw a TypeError." — as a NAMED TYPE. It is the same predicate `idl_this_iface` takes one screen up,
+ * spelled once so the two entries that take it agree by construction rather than by two parameter lists being
+ * kept in step.
+ * IT IS A TYPEDEF AND NOT A RAW `bool (*)(JSValueConst)` FOR A SECOND REASON, WHICH IS THAT THE AUDIT COULD
+ * NOT READ THE RAW FORM. engine/idl_installed.mjs finds a function by matching its parameter list, and a
+ * parameter that is itself a parenthesised function type defeats that match — so a definition spelling the
+ * predicate raw is invisible to the reader, its own forwarding install is reported UNRESOLVED, and every
+ * member it places goes uncounted. Measured on the first form written here: one unresolved construct in
+ * core/idl_args.c, and both of its functions missing from the reader's index. `idl_this_iface` above spells it
+ * raw and is in exactly that state today — a NAMED OBSERVATION rather than a claim it does not matter: it
+ * DECLARES rather than installs, so no member is lost through it, and converting it is a separate diff. */
+typedef bool (*IdlThisIs)(JSValueConst v);
+
+/* WEB IDL §3.4.2 [LegacyLenientSetter] — the same readonly attribute as the plain form above, PLUS §3.7.6
+ * Attributes' no-op setter. §3.4.2: "If the [LegacyLenientSetter] extended attribute appears on a read only
+ * regular attribute, it indicates that a no-op setter will be generated for the attribute's accessor property.
+ * This results in erroneous assignments to the property in strict mode to be ignored rather than causing an
+ * exception to be thrown."
+ *
+ * THE OBSERVABLE IS STRICT MODE AND NOTHING ELSE. A readonly accessor with no setter and one with a no-op
+ * setter answer an ordinary `d.fullscreen = 1` identically — silently — because sloppy mode ignores a write to
+ * an accessor with no setter. `"use strict"` is where they part: no setter is a TypeError, a no-op setter is
+ * ignored. §3.4.2 says in its own words why that matters enough to be in the standard at all: "Pages have been
+ * observed where authors have attempted to polyfill an IDL attribute by assigning to the property … Without
+ * [LegacyLenientSetter], this could prevent a browser from shipping the feature."
+ *
+ * `this_is` IS THE INTERFACE THE RECEIVER MUST IMPLEMENT — the component's own `…_is` predicate, exactly as
+ * idl_this_iface takes, because §3.7.6's setter throws a TypeError for a foreign receiver BEFORE it reaches
+ * §3.4.2's arm. It is per INSTALL rather than per member: the corpus's population includes a
+ * DocumentOrShadowRoot mixin member, which lands on Document and on ShadowRoot and brands differently on each.
+ *
+ * NOTHING HERE STATES WHICH MEMBERS CARRY THE EXTENDED ATTRIBUTE, and that is the difference between one
+ * mechanism for the platform and N copies that drift: engine/idlgen.mjs reads it off the real .idl through
+ * webidl2 and checks BOTH directions — a member the corpus annotates that some component installs through the
+ * plain form, and a member installed through this one that the corpus does not annotate. §3.4.2 makes the
+ * second an error rather than a preference ("It must not be used on anything other than a read only regular
+ * attribute", and never together with [PutForwards] or [Replaceable]).
+ *
+ * IT IS NOT `js_noop` AND THE BAN DOES NOT REACH IT — see core/idl_args.c for the two sentences of the
+ * standard that make this §NO STUBS' documented exception rather than an instance of what it forbids. */
+void idl_install_accessor_lenient_setter_at(JSContext *ctx, JSValueConst target, const char *name,
+                                            IdlGetter getter, int getter_magic,
+                                            IdlThisIs this_is, const char *iface,
+                                            const char *at_file, int at_line);
+#define idl_install_accessor_lenient_setter(ctx, target, name, getter, magic, this_is, iface) \
+    idl_install_accessor_lenient_setter_at((ctx), (target), (name), (getter), (magic), (this_is), (iface), \
+                                           IDL_SITE)
+
 void idl_install_accessor_unforgeable_at(JSContext *ctx, JSValueConst target, const char *name,
                                          IdlGetter getter, int getter_magic, int setter_stepid,
                                          const char *at_file, int at_line);
