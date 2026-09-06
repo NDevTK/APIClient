@@ -36,7 +36,7 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/byte_reader.h"
-#include "core/encoding/encoding.h"   /* §6's UTF-8 decode — what BOTH specs' `text()` and `json()` name */
+#include "core/encoding/encoding.h"   /* Encoding §6 "Hooks for standards"'s UTF-8 decode — both readers run it */
 #include "core/streams/readable_stream.h"
 #include "solver/concolic.h"          /* the triple a byte sequence somebody else filled arrives as */
 
@@ -276,10 +276,18 @@ void byte_reader_install(JSContext *ctx, JSValueConst proto, int handle)
  * hold arrives with none, and both are opaque for control flow so the gate forks either way.
  *
  * IT IS NOT A SECOND JSON IMPLEMENTATION AND NOT A TAINT TRACKER. The value being wrapped is what the REAL
- * codec produced — §6's UTF-8 decode and 25.5.1's own parser, run on the real bytes — and nothing here derives
- * a transform expression from it or predicts what an operation would have made of it. The wrap states one
- * fact, provenance, and hands the computed value over as the example; every later operation over it runs for
- * real, which is what §Re-execution requires and what a recorded expression cannot do.
+ * codec produced — Encoding §6 "Hooks for standards"'s UTF-8 decode, then
+ * ECMAScript §25.5.2 "JSON.parse ( text [ , reviver ] )"'s own parser — run on the real bytes, and nothing
+ * here derives a transform expression from it or predicts what an operation would have made of it. The wrap
+ * states one fact, provenance, and hands the computed value over as the example; every later operation over
+ * it runs for real, which is what §Re-execution requires and what a recorded expression cannot do.
+ *
+ * THE PARSER'S NUMBER STOOD AS `25.5.1`, which the standard now titles JSON.isRawJSON ( obj ); the parser is
+ * ECMAScript §25.5.2 "JSON.parse ( text [ , reviver ] )". A retired number that still RESOLVES and still
+ * names a REAL section is the one shape no channel here can accuse — there is no title beside it to
+ * mismatch and no absent section to report — so it is read off the standard's text rather than recalled.
+ * The sibling move of JSON.stringify to ECMAScript §25.5.4 "JSON.stringify ( value [ , replacer [ , space ] ] )"
+ * is recorded in the engine at its own machine.
  *
  * THE OTHER READERS DO NOT ASK, and that is a fact about their VALUES rather than an omission. `arrayBuffer()`,
  * `bytes()` and `blob()` answer with a CONTAINER over the same bytes, not with the content: the page writes
