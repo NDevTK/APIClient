@@ -282,7 +282,7 @@ void node_set_element_resolver(JSValue (*fn)(JSContext *ctx, lxb_dom_element_t *
    entered the tree by insertBefore, by replaceChild, or by an innerHTML parse was never prepared and never
    upgraded. Eleven sites mutate the tree; one remembered. The chokepoint is the one place that cannot be
    forgotten, which is the same argument that put capture there. */
-/* §4.8's HOST OF A SHADOW ROOT, wrapped — the one climb the standard has that leaves a tree for the thing
+/* DOM §4.8's HOST OF A SHADOW ROOT, wrapped — the one climb the standard has that leaves a tree for the thing
    containing it, and TWO §4.8 sentences make it: a shadow root's get the parent answers with its host, and
    retargeting step 2 sets A to its root's host. Written once because the ASSERTION is the reason: node_wrap
    answers JS_NULL for no node, so a hostless shadow root would have made both of them return "nothing above
@@ -300,8 +300,8 @@ static JSValue node_shadow_host_wrap(JSContext *ctx, const lxb_dom_node_t *n)
 
 /* §2.9's GET THE PARENT, answered for the events layer one step at a time — DOM §4.4: "A node's get the parent
    algorithm, given an event, returns the node's assigned slot, if node is assigned; otherwise node's parent",
-   and HTML overrides it for a DOCUMENT: "returns null if event's type attribute value is `load` or document
-   does not have a browsing context; otherwise the document's relevant global object."
+   and DOM §4.5 "Interface Document" overrides it for a DOCUMENT: "returns null if event's type attribute value
+   is `load` or document does not have a browsing context; otherwise the document's relevant global object."
  *
  * IT REPLACED AN "ANCESTORS" LIST, and the list could not express either override. Its caller appended the
  * running realm's window above whatever it returned, so a DETACHED div's bubbling event propagated to the
@@ -334,7 +334,7 @@ static JSValue node_get_parent(JSContext *ctx, JSValueConst target, JSValueConst
                "a document answered its get the parent with something that is not a Window and is not null");
         return JS_DupValue(ctx, win);
     }
-    /* §4.8: "A shadow root's get the parent algorithm, given an event, returns null if event's composed flag is
+    /* DOM §4.8: "A shadow root's get the parent algorithm, given an event, returns null if event's composed flag is
        unset and shadow root is the root of event's path's FIRST event path item's invocation target; otherwise
        shadow root's host." That condition is the whole of what stops a non-composed event escaping the tree it
        was dispatched in — and its "first path item" half is why a non-composed event dispatched AT THE HOST
@@ -399,7 +399,7 @@ static bool node_event_is_assigned_slottable(JSContext *ctx, JSValueConst target
     return slot_assigned_slot(ctx, node_of(target)) != NULL;
 }
 
-/* §4.2's relation, over EventTargets — the relation itself is shadow_root.c's, because it is a fact about the
+/* DOM §4.8's relation, over EventTargets — the relation itself is shadow_root.c's, because it is a fact about the
    tree and has three callers with nothing else in common. */
 static bool node_event_is_shadow_including_inclusive_ancestor(JSContext *ctx, JSValueConst a, JSValueConst b)
 {
@@ -425,7 +425,7 @@ static bool node_default_passive_target(JSContext *ctx, JSValueConst target)
     return document_is_passive_default_node(n);
 }
 
-/* §4.8's HOST OF A SHADOW ROOT — retargeting step 2's "set A to A's root's host", and the only tree question in
+/* DOM §4.8's HOST OF A SHADOW ROOT — retargeting step 2's "set A to A's root's host", and the only tree question in
    this list whose answer is a node of a DIFFERENT tree than the node it was asked about. `root` climbs INSIDE a
    tree and stops at the shadow root; this is the step that leaves it, so the two together are what make the
    retargeting loop terminate at the document tree.
@@ -640,7 +640,7 @@ void node_add_moving_hook(NodeMovingHook fn)
  * every one of those is a plain C body with no flow base under it, so there is nothing here that COULD
  * suspend. What a page's tree can still do is make the walk as deep as its markup, and C recursion over that
  * is the overflow this project has removed from every other tree algorithm (see `clone a node`'s level stack,
- * declarative_shadow.c's list, §4.2's shadow-including walk). So the depth lives in a heap stack of FRAMES.
+ * declarative_shadow.c's list, DOM §4.8's shadow-including walk). So the depth lives in a heap stack of FRAMES.
  * A frame is one INVOCATION of `adopt`: step 3.4's adopting steps for a `<template>` adopt its contents into a
  * DIFFERENT document, which is a nested adopt with its own `document` and its own `oldDocument`, and the frame
  * carries both. The outer frame's cursor is advanced BEFORE the nested frame is pushed, so the nested walk
@@ -668,7 +668,7 @@ static lxb_dom_document_t *node_document_of(lxb_dom_node_t *n)
     return n->owner_document;
 }
 
-/* §4.5 adopt STEP 3.1 — "set inclusiveDescendant's node document to document", and step 3.3.1's same write
+/* DOM §4.5 adopt STEP 3.1 — "set inclusiveDescendant's node document to document", and step 3.3.1's same write
    over an element's attribute list. THE ONE PLACE A NODE'S NODE DOCUMENT CHANGES, which is what lets the two
    obligations below be stated once instead of at every caller of every mutation algorithm.
    A NODE DOCUMENT IS NOT ONE POINTER. Every NAME the node holds is an id into the hashes of the document it
@@ -734,7 +734,7 @@ static void node_adopt_push(NodeAdoptStack *s, lxb_dom_node_t *root, lxb_dom_doc
     f->old = node_document_of(root);     /* STEP 1 */
 }
 
-/* §4.5's STEP 3.4 — "run the adopting steps with inclusiveDescendant and oldDocument". HTML defines them for
+/* DOM §4.5's STEP 3.4 — "run the adopting steps with inclusiveDescendant and oldDocument". HTML defines them for
    exactly one element: a `<template>`, whose CONTENTS are a separate tree that no child link reaches, so
    without this an adopted template's markup keeps a node document its element no longer has.
    HTML §4.12.3 adopts them into the new node document's APPROPRIATE TEMPLATE CONTENTS OWNER DOCUMENT — an
@@ -837,9 +837,9 @@ static bool node_is_chardata(const lxb_dom_node_t *n);
  * so it is one node pointer rather than a list, and the DCHECK says which two it may be. Steps 9 and 11 are
  * where it is read, and reading it is the whole of the difference between the two algorithms' validity.
  *
- * STEP 2 IS HOST-INCLUDING, NOT PLAIN ANCESTOR (§4.2.2 "Shadow tree": "A is a host-including inclusive ancestor
- * of B if either A is an inclusive ancestor of B, or if B's root has a non-null host and A is a host-including
- * inclusive ancestor of B's root's host"). A shadow root is the only fragment this engine gives a host, so
+ * STEP 2 IS HOST-INCLUDING, NOT PLAIN ANCESTOR (DOM §4.7 "Interface DocumentFragment": "An object A is a
+ * host-including inclusive ancestor of an object B, if either A is an inclusive ancestor of B, or if B's root
+ * has a non-null host and A is a host-including inclusive ancestor of B's root's host"). A shadow root is the only fragment this engine gives a host, so
  * shadow_root_is_shadow_including_inclusive_ancestor IS that relation here — and it is the one that matters:
  * `host.shadowRoot.appendChild(host)` is a cycle a plain parent walk answers `false` for.
  *
@@ -1028,7 +1028,7 @@ void node_insert_at(lxb_dom_node_t *parent, lxb_dom_node_t *node, lxb_dom_node_t
     else     dom_cow_append_child(parent, node);
 }
 
-/* ---- DOM §4.2.3 "MOVE" ------------------------------------------------------------------------------------
+/* ---- DOM §4.2.3 "Mutation algorithms" ------------------------------------------------------------------------------------
  *
  * "To MOVE a node node into a node newParent before null or a node child" — the TWENTY-SIX steps, and the
  * algorithm §4.2.6's `moveBefore(node, child)` is three lines on top of.
@@ -1048,7 +1048,7 @@ void node_insert_at(lxb_dom_node_t *parent, lxb_dom_node_t *node, lxb_dom_node_t
  * counterpart:
  *   - step 1 (shadow-including roots must be the SAME) does not exist for pre-insert at all, and it is what
  *     makes every cross-document and connected↔disconnected move a HierarchyRequestError. The standard's own
- *     note states the consequence: "this has the side effect of ensuring that a move is only performed if
+ *     note states the consequence — DOM §4.2.3: "this has the side effect of ensuring that a move is only performed if
  *     newParent's connected is node's connected."
  *   - step 4 admits ONLY an Element or a CharacterData node, where pre-insert validity step 4 also admits a
  *     DocumentFragment and a DocumentType. `moveBefore(new DocumentFragment(), null)` throws.
@@ -1230,12 +1230,12 @@ static JSValue js_node_child_op(JSContext *ctx, JSValueConst this_val, int argc,
     return JS_DupValue(ctx, argv[0]);
 }
 
-/* §4.2.7/§4.2.8 THE ChildNode AND ParentNode CONVENIENCE MIXINS — `el.remove()`, `parent.append(a, b)`,
+/* DOM §4.2.8 "Mixin ChildNode" AND §4.2.6 "Mixin ParentNode" — THE CONVENIENCE MIXINS — `el.remove()`, `parent.append(a, b)`,
    `el.before(node, 'text')`, `el.replaceWith(x)`, `parent.replaceChildren()`. They are on Element, on
    CharacterData and on DocumentFragment, which is why they live here on the base rather than in element.c.
    THEY ARE NOT SUGAR IN THIS ENGINE. A bundle that builds its UI with `append` and tears it down with
    `remove()` had none of it: the page's own call threw, and every fetch behind that render never happened.
-   §4.2.4 "convert nodes into a node": a STRING argument becomes a Text node, which is the whole reason these
+   DOM §4.2.6's "convert nodes into a node": a STRING argument becomes a Text node, which is the whole reason these
    take `(Node or DOMString)...` — `el.append('hello')` is the ordinary way to write text.
    Every insertion and removal goes through the per-flow chokepoints, so the tree steps run (a custom element
    appended this way is upgraded) and the whole thing time-travels like any other DOM write.
@@ -1248,7 +1248,7 @@ static lxb_dom_node_t *node_from_arg(JSContext *ctx, lxb_dom_node_t *owner, JSVa
     lxb_dom_text_t *text;
 
     if (n) return n;
-    /* §4.2.4 "convert nodes into a node": anything that is not a Node is a DOMString, and became one in the
+    /* DOM §4.2.6's "convert nodes into a node": anything that is not a Node is a DOMString, and became one in the
        DECLARATION — `(Node or DOMString)...` is a variadic union the IDL machine converts, brand-checking each
        argument against the node class. It used to be a JS_ToCStringLen right here, which ran the page's
        toString FROM C with no flow base to park into: `el.append({toString(){ for(;;){} }})` was the
@@ -1624,29 +1624,29 @@ JSValue node_cd_replace_data(JSContext *ctx, lxb_dom_node_t *n, uint32_t offset,
 
    WHAT STOOD HERE, AND WHAT ITS "NEXT DIFF" CLAUSE PRESCRIBED — recorded at the site that made the claim,
    because a hand-off's mechanism clause is READ ONCE, BY SOMEONE WHO HAS ALREADY DECIDED TO DO THE WORK.
-   A `CD_UNSIGNED_LONG` macro DFAILed on an unknown operand and said, in full: "BUILD THE FORK: make this body
-   an IdlStepBody (core/idl_args.h, IDL_STEP_FIRST) so it can park, then ask step 2 through step_fork_run over
-   the unknown, taking the real arm from idl_number_of's example". The FIRST half was right and is what this
-   diff did. THE SECOND HALF WAS WRONG, and following it would have produced a machine that parks and then
+   A `CD_UNSIGNED_LONG` macro DFAILed on an unknown operand and said, in full: `BUILD THE FORK: make this
+   body an IdlStepBody (core/idl_args.h, IDL_STEP_FIRST) so it can park, then ask step 2 through
+   step_fork_run over the unknown, taking the real arm from idl_number_of's example`. The FIRST half was
+   right and is what this diff did. THE SECOND HALF WAS WRONG, and following it would have produced a machine that parks and then
    aborts one line later: `step_fork_run` over "is offset greater than length" answers the COMPARISON and
    leaves the operand UNKNOWN on the arm that continues, and every step after step 2 needs the NUMBER —
-   substring data step 4's "code units from the offsetth code unit to the offset+countth code unit", replace
-   data step 5's "insert data into node's data after offset code units", split a Text node step 3's
-   "length − offset". The body would have reached `cd_byte_of` still holding a concolic, which is the very
+   DOM §4.10 substring data step 4's `code units from the offsetth code unit to the offset+countth code
+   unit`, replace data step 5's "insert data into node's data after offset code units", and §4.11 split a
+   Text node step 3's `length − offset`. The body would have reached `cd_byte_of` still holding a concolic, which is the very
    defect the clause was written to end, moved two lines down. §3.2.4.6 unsigned long's
    ConvertToInt(V, 32, "unsigned") is TOTAL over [0, 2**32-1], so "is it past the end" and "which position is
    it" are ONE question — and the elimination chain is that question's decomposition, which is why it and not a
    bare two-armed outcome fork is what these members ask.
 
    WHAT EACH OPERAND'S CHAIN IS DRAWN OVER, per the standards' own bounds (verified against the fetched text):
-   `offset` — §4.10 substring data step 2 and replace data step 2 are both "If offset is greater than length,
+   `offset` — DOM §4.10 substring data step 2 and replace data step 2 are both "If offset is greater than length,
    then throw an "IndexSizeError" DOMException", and §4.11 split a Text node step 2 is the same sentence. It is
    `>` and not `>=`, because a position at the very END is legal, so the chain runs over `length + 1` positions
    and EXHAUSTION is step 2's throw. That is the same `npositions` parameterization CSSOM §6.4's insert a CSS
    rule needs, which is why the count of positions is the component's parameter and the bound is not.
-   `count` — substring data step 3 is "If offset + count is greater than length, then return a string whose
-   value is the code units from the offsetth code unit to the end of node's data" and replace data step 3 is
-   "If offset + count is greater than length, then set count to length − offset". Every `count` above
+   `count` — DOM §4.10 substring data step 3 returns everything from `offset` to the END of the data when
+   "offset + count is greater than length", and replace data step 3 is "If offset + count is greater than
+   length, then set count to length − offset". Every `count` above
    `length − offset` reaches ONE answer, so the chain runs over `length − offset + 1` and exhaustion is that
    answer. See core/idl_index_arg.c's banner for why an operand that names no position is still a member.
 
@@ -1736,8 +1736,8 @@ static void cd_index_visit(JSContext *ctx, void *st, JSStepVisit *v)
 /* §4.10's five members. magic: 0 substringData, 1 appendData, 2 insertData, 3 deleteData, 4 replaceData.
    THE `DOMString` ARGUMENT ARRIVES CONVERTED OR UNKNOWN and the splice below reads both; the `unsigned long`
    operands go through the elimination chain above for the same reason, which is the half this comment used
-   to deny. It said, in full: "Every argument arrives CONVERTED — `unsigned long` and `DOMString` are the
-   declaration's work — so nothing here runs the page's code and the body is ordinary C." Every clause of that
+   to deny. It said, in full: `Every argument arrives CONVERTED — unsigned long and DOMString are the
+   declaration's work — so nothing here runs the page's code and the body is ordinary C.` Every clause of that
    is true of the conversion the DECLARATION performs, and the sentence was still read as a licence for a raw
    JS_ToUint32 — on the very type it names first, and the one unknown external input crosses as itself.
    STEPS 2 AND 3 ARE STATED HERE, ONCE, FOR BOTH KINDS OF OPERAND. `node_cd_replace_data` states them too and
@@ -2064,16 +2064,16 @@ static JSValue js_pi_target(JSContext *ctx, JSValueConst this_val, int magic)
  * recursive C walk is an unbounded C stack in a engine whose whole point is that the C stack is flat. They are
  * explicit cursor walks with an explicit paired stack. */
 
-/* §4.4 "root": the topmost inclusive ancestor. A node inside a shadow tree roots at the SHADOW ROOT, whose own
-   parent is null — climbing out of it is §4.2's shadow-INCLUDING root, which is a different question and lives
-   in shadow_root.c beside the host it has to read. */
+/* DOM §1.1 "Trees" — the "root" of a node is the topmost inclusive ancestor. A node inside a shadow tree
+   roots at the SHADOW ROOT, whose own parent is null — climbing out of it is DOM §4.8's shadow-INCLUDING
+   root, which is a different question and lives in shadow_root.c beside the host it has to read. */
 lxb_dom_node_t *node_root(lxb_dom_node_t *n)
 {
     while (n->parent) n = n->parent;
     return n;
 }
 
-/* §4.4: "connected: a node is connected if its SHADOW-INCLUDING root is a document". The distinction is the
+/* DOM §4.2.2 "Shadow tree": "A node is connected if its shadow-including root is a document". The distinction is the
    whole of what makes a custom element inside a shadow tree receive `connectedCallback`: its own root is the
    shadow root, and only climbing to the host's root reaches the document. */
 bool node_is_connected(const lxb_dom_node_t *n)
@@ -2081,7 +2081,7 @@ bool node_is_connected(const lxb_dom_node_t *n)
     return n && shadow_root_shadow_including_root((lxb_dom_node_t *)n)->type == LXB_DOM_NODE_TYPE_DOCUMENT;
 }
 
-/* §4.2 "inclusive ancestor": walk UP from the descendant, which is O(depth) with no allocation, rather than
+/* DOM §1.1's "inclusive ancestor": walk UP from the descendant, which is O(depth) with no allocation, rather than
    down from the ancestor, which is O(subtree). */
 bool node_is_inclusive_ancestor(const lxb_dom_node_t *a, const lxb_dom_node_t *b)
 {
@@ -2172,13 +2172,13 @@ size_t node_cd_byte_of(const lxb_dom_node_t *n, uint32_t units)
     return cd_byte_of(cd->data.data, cd->data.length, units);
 }
 
-/* §4.2's "index": how many siblings precede this node. */
+/* DOM §1.1 Trees' index — how many siblings precede this node. */
 uint32_t node_index(const lxb_dom_node_t *n)
 {
     const lxb_dom_node_t *c;
     uint32_t k = 0;
 
-    DCHECK(n != NULL, "§4.2's index was asked of no node");
+    DCHECK(n != NULL, "DOM §1.1 Trees' index was asked of no node");
     for (c = n->prev; c; c = c->prev) k++;
     return k;
 }
@@ -2210,7 +2210,7 @@ static JSValue js_node_facts(JSContext *ctx, JSValueConst this_val, int magic)
            Document. `foreignDoc.createElement("a").baseURI` is `about:blank`, not the page's address. It is
            HTML §2.4.3's answer and NOT the address: this line read the ADDRESS, so `baseURI` in a page that
            ships `<base href>` reported a URL the page's own markup had replaced. Asked of the component that
-           owns it rather than re-derived here, because two answers to "what is this document's base URL" is
+           owns it rather than re-derived here, because two answers to `what is this document's base URL` is
            how they drift apart. */
         DCHECK(magic == 3, "a Node fact was declared with a magic this table does not name");
         return JS_NewString(ctx, document_base_url_of(n->owner_document));
@@ -2395,8 +2395,8 @@ static void node_pos_visit(JSContext *ctx, void *st, JSStepVisit *v)
 }
 
 /* WHERE THIS MACHINE RESTS, AS §4.4 NUMBERS IT — and the numbering caught a real disagreement with the spec:
-   the two containment tests ran in the order "is node1 a DESCENDANT of node2" then "is node1 an ANCESTOR of
-   node2", which is step 8 before step 7. They are mutually exclusive for the nodes this engine builds, so no
+   the two containment tests ran in the order `is node1 a DESCENDANT of node2` then `is node1 an ANCESTOR
+   of node2`, which is step 8 before step 7. They are mutually exclusive for the nodes this engine builds, so no
    answer changed; the ORDER of a spec's steps is the spec, and a machine whose stages run them backwards is a
    machine whose stage numbers cannot name the step they are at. They now run 7 then 8.
    §4.4 numbers `this` node2 and `other` node1, which is the opposite of how they read, so the state's two
@@ -2635,8 +2635,8 @@ static const IdlStepDecl NODE_NORM_STEP = {
    serialiser did.
    IT IS THE ALGORITHM AND NOT THE MEMBER: cloneNode is two steps over it and §5.5's extract and
    clone-the-contents are six more, so the state, the stage list and the body are all exported (node.h) and the
-   member below is one caller of them. A second copier beside this one is a second answer to "what is a copy of
-   this node", missing step 3 and step 6.
+   member below is one caller of them. A second copier beside this one is a second answer to `what is a copy
+   of this node`, missing step 3 and step 6.
    THE COPY IS A PRIVATE TREE. It is built by inserting into itself and it is in no document until the page
    inserts it, so those inserts are declared private rather than captured — capturing them would put the whole
    copy in the running flow's delta, when the delta exists to hold shared state the flow touched. */
@@ -2736,7 +2736,7 @@ lxb_dom_node_t *node_template_content_host(const lxb_dom_node_t *n)
    exists at all — recurse over the children (5), clone a clonable shadow root (6), and return (7). Each is its
    own stage because each is per node and the walk is the page's subtree.
    LEAVING A NODE IS ONE REST POINT, AND THAT IS WHAT STEP 7 IS. The cursor is flat over two trees, so the
-   moment "this node's subtree is finished" used to arrive in two unrelated places — the `src = src->next`
+   moment `this node's subtree is finished` used to arrive in two unrelated places — the `src = src->next`
    transition and the ascend loop — and neither was a stage, so there was nowhere to put a step that runs AFTER
    step 5 (which is what step 6 is). Step 7 is that moment stated once: the walk arrives at the LEAVE phase
    exactly when `clone a node` would RETURN for `src`, whether `src` is a leaf, the last child of its parent, or
@@ -2799,9 +2799,9 @@ static lxb_dom_node_t *clone_a_document(lxb_dom_document_t *src)
     DCHECK(cd->type == src->type, "a Document copy's lexbor dtype is not the source's — one of the two was "
                                   "built by something other than lxb_html_document_create, so the record and "
                                   "the tree beneath it do not have the shape this copy is about to write");
-    /* §4.4 "clone a single node" copies BOTH of §4.5's creation facts and names them in one list — "set
-       copy's encoding, content type, URL, origin, TYPE, mode, and allow declarative shadow roots to those of
-       node" — so the copy takes the source's type as well as its content type. Taking only the content type
+    /* DOM §4.4's "clone a single node" copies BOTH of the creation facts §4.5 states, and names them in
+       one list — §4.4: "Set copy's encoding, content type, URL, origin, type, mode, and allow declarative
+       shadow roots, to those of node" — so the copy takes the source's TYPE as well as its content type. Taking only the content type
        and re-deriving the type from it would make a clone of a `text/plain` document an XML document, which
        is the derivation DocumentKind exists to make unspellable. */
     /* AND THE INTERFACE IS THE SOURCE'S, WHICH IS THE ALGORITHM'S OWN FIRST CLAUSE AND NOT ONE OF THE SEVEN
@@ -2822,10 +2822,11 @@ static lxb_dom_node_t *clone_a_document(lxb_dom_document_t *src)
     return lxb_dom_interface_node(copy);
 }
 
-/* DOM §4.4 "clone a single node", THE ELEMENT ARM: "let copy be the result of CREATING AN ELEMENT, given
- * document, node's local name, node's namespace, node's namespace prefix and node's `is` value, with
- * synchronous custom elements set to false … for each attribute in node's attribute list, append a clone of it".
- * The standard says "creating an element", so the copy is created from the source's three NAMES and not
+/* DOM §4.4 "clone a single node", THE ELEMENT ARM: "Set copy to the result of creating an element, given
+ * document, node's local name, node's namespace, node's namespace prefix, node's is value, false, and
+ * registry. For each attribute of node's attribute list: Let copyAttribute be the result of cloning a single
+ * node given attribute, document, and null. Append copyAttribute to copy."
+ * THE STANDARD SAYS `creating an element`, so the copy is created from the source's three NAMES and not
  * produced by copying an element struct — and both halves of that turned out to matter.
  *
  * WHY IT IS NOT lxb_dom_document_import_node's, MEASURED. Its lxb_dom_element_interface_copy reaches
@@ -3691,7 +3692,7 @@ static JSValue js_node_element_children(JSContext *ctx, JSValueConst this_val, i
 
 /* §4.5/§4.9 getElementsByTagName / getElementsByClassName — over the RECEIVER, and LIVE. Document's copy did
    neither: it searched a global root and answered with a static Array, which its own comment named as a
-   fidelity gap ("the spec's collection re-walks the tree on every read... this does not"). It also did not
+   fidelity gap (`the spec's collection re-walks the tree on every read... this does not`). It also did not
    exist on Element at all, where §4.9 puts it. The gap closed by the collection component growing a descendant
    kind rather than by a second walk here. magic 0 = by tag name, 1 = by class name. */
 static JSValue js_node_by_name(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
@@ -3743,10 +3744,11 @@ static const JSCFunctionListEntry js_parent_node_reads[] = {
     JS_CGETSET_MAGIC_DEF("childElementCount", js_node_element_children, NULL, 3),
 };
 
-/* DOM §4.2.7 Mixin NonDocumentTypeChildNode — the sibling half of the tree walk, and the ONE §4.2 mixin this
-   engine had none of. Its two getters "return the first preceding/following sibling that is an element;
-   otherwise null", so they are the same walk as §4.2.6's firstElementChild in the other direction, over a tree
-   this engine already holds: no layout, no device, no unknown.
+/* DOM §4.2.7 Mixin NonDocumentTypeChildNode — the sibling half of the tree walk, and the ONE mixin under
+   §4.2 Node tree this engine had none of. In DOM §4.2.7's own words the two getters return "the first preceding
+   sibling that is an element; otherwise null" and "the first following sibling that is an element; otherwise
+   null", so they are the same walk as §4.2.6's firstElementChild in the other direction, over a tree this
+   engine already holds: no layout, no device, no unknown.
    IT IS THE SILENT KIND OF GAP, which is why it is built rather than left on a list. An absent ATTRIBUTE is
    `undefined` — JS_GetPropertyInternal's absent hook fires only for the global object, so a miss on an element
    is a plain undefined with nothing to say so — and real code reads these two through `?.` and `=== null`,
@@ -3755,7 +3757,7 @@ static const JSCFunctionListEntry js_parent_node_reads[] = {
    treats it as an element. Neither leaves an error for the frontier to learn from; the flow simply explores
    less than the page can do.
    NOT on DocumentType, which is the whole reason this is a separate mixin from §4.2.8's ChildNode beside it —
-   §4.2.7's own note: "Web compatibility prevents the previousElementSibling and nextElementSibling attributes
+   DOM §4.2.7's own note: "Web compatibility prevents the previousElementSibling and nextElementSibling attributes
    from being exposed on doctypes (and therefore on ChildNode)."
    magic 0 = previousElementSibling, 1 = nextElementSibling. */
 static JSValue js_node_element_sibling(JSContext *ctx, JSValueConst this_val, int magic)
@@ -3789,7 +3791,7 @@ void node_install_non_doctype_child_mixin(JSContext *ctx, JSValueConst proto)
                                      sizeof(js_non_doctype_child_reads[0])));
 }
 
-/* §4.2.4 THE NonElementParentNode MIXIN — getElementById, and nothing else is in it.
+/* DOM §4.2.4 "Mixin NonElementParentNode" — getElementById, and nothing else is in it.
    IT WAS TWO IMPLEMENTATIONS, and the second one's comment argued that it had to be: "same algorithm, different
    scope". That was a rationalisation of a duplicate. Different scope is exactly what a mixin member over its
    RECEIVER already is, which is what the ParentNode consolidation established — and the two had drifted in both
@@ -3798,7 +3800,7 @@ void node_install_non_doctype_child_mixin(JSContext *ctx, JSValueConst proto)
    EVERY match into a collection and then takes the first, so it walked the whole document after already having
    the answer — for a member whose entire definition is "the FIRST element in tree order".
    A MACHINE, because that walk is the document's size. One node per step, and the first match ends it. */
-/* WHERE THIS MACHINE RESTS. §4.2.4 states the member as a call into one algorithm — "The getElementById(elementId)
+/* WHERE THIS MACHINE RESTS. DOM §4.2.4 states the member as a call into one algorithm — "The getElementById(elementId)
    method steps are to return the result of getting an element by ID given this and elementId" — and that
    algorithm is one sentence: "return the first element, in tree order, within node's descendants, whose ID is
    elementId; otherwise, if there is no such element, null". So the two stages are its two halves: fixing what is
@@ -3994,10 +3996,10 @@ static void mixin_declare(JSContext *ctx, const NodeMixinMember *tab, unsigned n
 }
 
 /* WEB IDL §3.7.7 Operations' `length` FOR EVERY MEMBER OF BOTH MIXINS, WHICH IS 0, DERIVED AND NOT REMEMBERED.
-   §3.7.7's last three steps are verbatim: "Compute the effective overload set for regular operations … with
+   Web IDL §3.7.7's last three steps are verbatim: "Compute the effective overload set for regular operations … with
    identifier id on target and with argument count 0, and let S be the result. Let length be the length of the
    shortest argument list in the entries in S. Let F be CreateBuiltinFunction(steps, length, id, « », realm)."
-   §2.5.8 Overloading's compute-the-effective-overload-set is what puts a length-0 entry in S here, and the
+   Web IDL §2.5.8 Overloading's compute-the-effective-overload-set is what puts a length-0 entry in S here, and the
    load-bearing half is its trailing loop rather than its variadic expansion: step 5.7 only ever appends
    LONGER tuples (i runs n to max − 1), while step 5.9.1 breaks only when "arguments[i] is not optional (i.e.,
    it is not marked as optional and is not a final, variadic argument)" — so for a member whose only argument

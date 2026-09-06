@@ -457,14 +457,14 @@ static const char *HTML =
        to ABORT the author cascade outright — the `@WHY` there said so in as many words — so the first claim is
        that a document holding one resolves at all.
        THE PARENT IS A SELECTOR LIST WHOSE MEMBERS DISAGREE ABOUT SPECIFICITY, which is the design of the
-       fixture rather than decoration. §4 "Nesting Selector: the & selector": "The specificity of the nesting
-       selector is equal to the largest specificity among the complex selectors in the parent style rule's
-       selector list (identical to the behavior of :is())". The host matches through `.nstcls` and NEVER
+       fixture rather than decoration. CSS Nesting §4 "Nesting Selector: the & selector": "The specificity of
+       the nesting selector is equal to the largest specificity among the complex selectors in the parent style
+       rule's selector list (identical to the behavior of :is())". The host matches through `.nstcls` and NEVER
        through `#nstid`, so `& .nstkid` carries (1,1,0) while a FLATTENED `.nstcls .nstkid` would carry
        (0,2,0) — and `.nstwrap .nstkid` is (0,2,0) written LATER, so it wins on CSS Cascade §6.1's Order of
-       Appearance under the flattening and loses under the standard. §4's own worked example is this shape
-       ("The text will be blue, rather than red"); a build that concatenates the parent instead of wrapping it
-       in `:is()` answers `none` for `nstkid` here and is otherwise indistinguishable.
+       Appearance under the flattening and loses under the standard. CSS Nesting §4's own worked example is
+       this shape ("The text will be blue, rather than red"); a build that concatenates the parent instead of
+       wrapping it in `:is()` answers `none` for `nstkid` here and is otherwise indistinguishable.
        ALL THREE §3.1 "Syntax" PRELUDE SHAPES ARE PRESENT, because all three reach this engine differently: the
        implied descendant (`.nstkid`, which the selector parser ACCEPTS and which is nevertheless relative),
        the non-relative nest-containing compound (`&.nstself`) and the leading-combinator relative selector
