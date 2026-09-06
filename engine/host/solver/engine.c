@@ -1001,10 +1001,26 @@ uint32_t engine_host_request(JSContext *ctx, const char *op) {
     pending_set_int(e, PEND_REQ, id);
     JS_FreeValue(ctx, e);
     /* THE REQUEST IS WHAT MAKES THE FLOW BLOCKED, AND THE YIELD THAT FOLLOWS IS ONLY A PARK BECAUSE OF IT.
-       Every caller of this returns JS_STEP_YIELD, whose contract (quickjs-step.h) is "I have more work;
-       preempt me if you want" — the driver re-enters a machine that yields IMMEDIATELY unless the preempt hook
+       Every caller of this returns JS_STEP_YIELD, whose contract is written at quickjs.c's own arm for it:
+       "I have more work; re-enter me." and, in the sentence immediately after, "It ASKS NOTHING, and that is
+       the point". The driver therefore re-enters a machine that yields IMMEDIATELY unless the preempt hook
        says otherwise, so a machine using the yield to WAIT is a busy spin unless preempt_hook's clause (0)
-       sees this entry on the register. Nothing else ties the two together: they are a step code in the engine
+       sees this entry on the register.
+         THE ATTRIBUTION AND THE WORDS BOTH STOOD WRONG HERE, AND THE WORDS INVERTED THE ARGUMENT THIS
+       PARAGRAPH IS MAKING. It read `whose contract (quickjs-step.h) is "I have more work; preempt me if you
+       want"` — a file that does not contain the sentence, and a rendering of it that ASSERTS THE ASK the
+       source's next clause exists to DENY. quickjs.c records that this arm USED to ask and that the asking
+       was the defect: it made "the only C span this driver could be preempted inside the one a machine
+       explicitly declared", so a walk built out of keyed requests "had no rest point at all". The register
+       below is load-bearing PRECISELY BECAUSE the yield asks nothing — so the misquotation was arguing
+       against the very line it introduces, which is the shape a wrong quotation takes when the reasoning
+       around it is right, and the reason repairing it changes no code.
+         IT SURVIVED EVERY GATE BECAUSE NOTHING CHECKS A QUOTATION OF THE SUBMODULE AGAINST THE SUBMODULE.
+       The citation auditor compares a quoted run against a SPEC corpus, and its default targets are
+       engine/host, exactly quickjs.c and quickjs.h out of the fork, the two .md files and extension/ — so a
+       run attributed to any OTHER file in engine/qjs is neither compared against that file nor clearable as
+       this tree's own prose, and lands unremarked. It was found by grepping the quoted words at the file the
+       comment named, which is the check this site had never been given. Nothing else ties the two together: they are a step code in the engine
        and a pending kind in the scheduler, and a pending kind added without pending_blocked's agreement would
        turn every cross-instance read into a flow that burns the thread until the host answers — with the host
        only asked BETWEEN steps, so the answer can never arrive. Asserted here because this is where the
