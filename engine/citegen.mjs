@@ -4232,7 +4232,7 @@ function audit(argv, opts = {}) {
     return wholes.get(key);
   };
   const stat = { total: 0, bare: 0, anchored: 0, byTerm: 0, byFile: 0, other: 0, skipped: 0, quotedNumber: 0,
-                 confirmed: 0, confirmedByUse: 0, confirmedByContainment: 0, confirmedByRun: 0,
+                 confirmed: 0, confirmedByUse: 0, confirmedByContainment: 0, confirmedByAncestor: 0, confirmedByRun: 0,
                  confirmedByText: 0, confirmedByIdent: 0, textRefused: 0,
                  unverified: 0, multiSpec: 0,
                  foreignTerm: 0, titleRefused: 0, byTitle: 0, numberRefused: 0,
@@ -4469,6 +4469,9 @@ function audit(argv, opts = {}) {
       hits.push({ key, where,
         defAt: where.includes(no),
         underAt: where.some((d) => contains(no, d)),
+        /* THE OTHER DIRECTION OF THE SAME CONTAINMENT — see termCheck's OK-CONTAINED arm for why it is here
+         * and for the floor the second clause is. */
+        aboveAt: where.some((d) => d !== no && d.includes(".") && contains(d, no)),
         useAt: n2 >= USE_FLOOR, mentions: n2 });
     }
     return hits.length ? { phrase, hits } : null;
@@ -4887,6 +4890,61 @@ function audit(argv, opts = {}) {
         const termCheck = (ev) => {
           const ok = ev.hits.find((h) => h.defAt);
           const under = ev.hits.find((h) => h.underAt);
+          /* CONTAINMENT RUNS BOTH WAYS AND THIS CHECK ONLY ASKED ONE, WHICH CHECK (4) HAS BEEN SAYING IT DID
+           * NOT. `underAt` forgives a citation that names an ANCESTOR of the definition — "citing §4.9 for a
+           * thing defined at §4.9.5 is less precise and not wrong". The mirror is a citation that names a
+           * DESCENDANT of the definition, and it is not merely as forgivable, it is MORE precise: the reader
+           * sent to §4.10.5.1 arrives INSIDE the section §4.10.5 defines the thing in.
+           * THE RULE IS NOT INVENTED HERE — IT IS CHECK (4)'S, VERBATIM, AND CHECK (4) ALREADY CLAIMS IT IS
+           * OURS. Its refusal reads `tt.get(claim).some((t) => contains(t, no) || contains(no, t))` — both
+           * directions — under a comment saying it is "the identical rule check (3) applies to a term, applied
+           * to a title for the identical reason". It was not: check (3) had `contains(no, d)` and nothing else,
+           * so the file asserted a symmetry the code did not have and the ACCUSING channel was the narrow one.
+           * MEASURED, by reading every claim it retires rather than a sample: 14 of 213 tree-wide, and 13 are
+           * correct citations — eleven at HTML §4.10.5.1 "States of the type attribute" for the four per-state
+           * algorithms and the value sanitization algorithm that §4.10.5 "The input element" defines FOR those
+           * states, and two at an ECMAScript constructor's own clause (§25.3.2.1, §21.4.2.1) for the
+           * constructor its parent section is titled after. Not one of them is a section a reader would be
+           * sent to wrongly.
+           * THE FLOOR IS THAT THE DEFINITION MUST SIT BELOW ITS STANDARD'S TOP LEVEL, and it is the same floor
+           * keepTerm applies to a one-word term and check (4) applies to a one-word title, for the same
+           * reason: a claim that would be true of almost anything is a coincidence generator rather than
+           * evidence. A chapter contains every section under it, so "the definition is above you" EXCLUDES
+           * NOTHING there. It is the 14th claim, and it is REAL: `console.c` cites Web IDL §3.2 for the
+           * class-string rule, which Web IDL states in §3 itself — the comment even quotes §3's own words
+           * ("at the time it is created") — while §3.2 is the type mapping and says nothing about class
+           * strings. Without the floor that finding would have gone silently, which is the one failure this
+           * arm is not allowed to have.
+           * WHAT IT DOES NOT REACH, SO THE NEXT READER DOES NOT THINK IT DOES: a citation whose section
+           * PERFORMS an algorithm over a term some unrelated part of the standard defines — `§7.2.1's
+           * same-origin check`, where §7.2.1's own subsections run IsPlatformObjectSameOrigin and `same
+           * origin` is defined at §7.1.1. There is no containment either way, so nothing here fires and the
+           * site is still accused. That is deliberate: every rule tried for it — refusing an accusation whose
+           * phrase runs on into a longer noun phrase, and the same rule restricted to the possessive — was
+           * measured against this population and each destroyed dozens of TRUE findings, among them the
+           * ECMAScript iterator renumbering (`§7.4.9's IteratorClose`, which is §7.4.11) and the Streams
+           * abstract operations this file's own PASS-5 paragraph records as real. HOW ITS ABSENCE SHOWS: a
+           * correct citation of a section that OPERATES on a term defined elsewhere stays in MISATTRIBUTED,
+           * and the sites in core/frame naming the same-origin check are what that looks like. */
+          const above = ev.hits.find((h) => h.aboveAt && h.key === spec);
+          /* IT IS ASKED LAST OF THE CONFIRMATIONS AND THE REASON IS THE CENSUS RATHER THAN THE VERDICT. The
+           * arms are a disjunction, so where it sits does not change WHICH sites are confirmed — only which
+           * counter is credited, and a containment is the WEAKEST evidence here: `useAt`, the cited section's
+           * own words and its own identifiers are all statements about the cited section itself, while this is
+           * a statement about a section above it. Placed beside `under` it took 39 sites off
+           * `confirmedByUse` and `confirmedByText`, which is a census row moving for a reason that is not the
+           * tree changing — so the count would have read 57 while the arm rescued 13. Last, it counts exactly
+           * the sites nothing else could confirm, which is the number a reader wants.
+           * AND IT IS THE ONE CONFIRMATION HERE THAT DOES NOT QUANTIFY OVER EVERY STANDARD, which is a
+           * departure from the paragraph below and is argued rather than assumed. That paragraph is right that
+           * a confirmation costs nothing where it says "some standard does define this HERE" — an exact number
+           * two documents share is a claim either one can support. CONTAINMENT is not that claim: `§4.10.5
+           * contains §4.10.5.1` is arithmetic on the numerals, so it holds between ANY two documents that
+           * happen to number that deep, and the arm's whole argument — the reader is inside the section that
+           * defines the thing — means nothing across two documents. Measured: quantified over every standard
+           * it turned 4 FOREIGN-TERM refusals into confirmations, every one of them a numeral coincidence in a
+           * standard the citation does not name, and it retired no finding by doing so. Keyed to `spec` those
+           * 4 stay refusals, which is what the refusal counter is for. */
           const used = ev.hits.find((h) => h.useAt);
           /* AND THE SECTION'S OWN WORDS ANSWER THE SAME QUESTION THE LINK COUNT DOES, WHICH IS WHY THE THIRD
            * CLAUSE OF THIS FINDING WAS FALSE FOR NEARLY HALF OF WHAT IT ACCUSED. The claim a MISATTRIBUTED
@@ -4998,6 +5056,7 @@ function audit(argv, opts = {}) {
           if (used) return { kind: "OK-USE" };
           if (inText) return { kind: "OK-TEXT" };
           if (inIdent) return { kind: "OK-IDENT" };
+          if (above) return { kind: "OK-CONTAINED" };
           if (inRun) return { kind: "OK-RUN" };
           if (!owned) return { kind: "FOREIGN-TERM" };
           const where = ev.hits.map((h) => {
@@ -5358,7 +5417,8 @@ function audit(argv, opts = {}) {
         undecided.push(rec);
         continue;
       }
-      const COUNTED_OK = { "OK-USE": "confirmedByUse", "OK-CONTAINS": "confirmedByContainment", "OK-RUN": "confirmedByRun",
+      const COUNTED_OK = { "OK-USE": "confirmedByUse", "OK-CONTAINS": "confirmedByContainment",
+                           "OK-CONTAINED": "confirmedByAncestor", "OK-RUN": "confirmedByRun",
                            "OK-TEXT": "confirmedByText", "OK-IDENT": "confirmedByIdent" };
       if (COUNTED_OK[verdict.kind]) { stat.confirmed++; stat[COUNTED_OK[verdict.kind]]++; continue; }
       if (verdict.kind.startsWith("OK")) { stat.confirmed++; continue; }
@@ -6175,7 +6235,9 @@ function audit(argv, opts = {}) {
   console.log(`  ${stat.other} belong to a standard this audit does not index; ${stat.skipped} name no standard and no term it knows`);
   console.log(`  audited by standard (in parentheses, how many of them only a file vote placed there): ` +
     `${[...byKey].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}=${v}(${byKeyVoted.get(k) || 0})`).join(" ")}`);
-  console.log(`  ${stat.confirmed} confirmed (${stat.confirmedByContainment} by a subsection of the cited number, ${stat.confirmedByUse} by a prominent use rather than the definition site, ` +
+  console.log(`  ${stat.confirmed} confirmed (${stat.confirmedByContainment} by a subsection of the cited number, ` +
+    `${stat.confirmedByAncestor} by a below-chapter SECTION CONTAINING the cited number, which is the same containment read the other way, ` +
+    `${stat.confirmedByUse} by a prominent use rather than the definition site, ` +
     `${stat.confirmedByText} by the cited section's OWN WORDS using the term where its markup links it fewer than the floor, ` +
     `${stat.confirmedByIdent} by the cited section spelling the same concept as ONE IDENTIFIER rather than as spaced words, ` +
     `${stat.confirmedByRun} by another number in the same citation's own run), ` +
