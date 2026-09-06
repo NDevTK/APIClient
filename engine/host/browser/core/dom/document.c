@@ -59,7 +59,7 @@
 #include "core/css/css_rule_list.h"
 #include "core/css/css_style_sheet.h"
 #include "core/css/style_sheet_list.h"
-#include "core/encoding/encoding.h"   /* §3.1.1's encoding is an id in §4.2's registry, asked of it by name */
+#include "core/encoding/encoding.h"   /* DOM §4.5's encoding is an id in Encoding §4.2's registry, asked of it by name */
 #include "core/dom/document.h"
 #include "core/dom/document_current_script.h"
 #include "core/dom/document_domain.h"
@@ -261,8 +261,8 @@ typedef struct Document {
      * base URL, without which a relative URL in a srcless frame resolves against `about:blank` and fails to
      * parse at all. The ADDRESS is the third and is the fallback's last step.
      *
-     * `frozen_el` IS COMPARED AND NEVER DEREFERENCED. It answers one question — "is the element that is NOW
-     * first in tree order the one this URL was frozen for" — and §4.2.3's own situations keep it live: a
+     * `frozen_el` IS COMPARED AND NEVER DEREFERENCED. It answers one question — is the element that is NOW
+     * first in tree order the one this URL was frozen for — and §4.2.3's own situations keep it live: a
      * removal that takes the frozen element out of the document runs the removing steps, which recompute and
      * replace it. So the pointer can never outlive its element, and nothing here would notice if it did,
      * which is the design rather than an accident: reading through it is what would make this a lifetime
@@ -298,7 +298,7 @@ typedef struct Document {
        `type` and disagree about the interface, so the derivation would report every DOMParser XML document as
        an XMLDocument. It decides this document's wrapper's prototype, so it is read at node_wrap. */
     DocumentInterface    iface;
-    /* HTML §3.1.1's "Each Document has an encoding (an encoding), used for the document's character encoding"
+    /* DOM §4.5 Interface Document's "Each document has an associated encoding (an encoding)"
        — an id in the Encoding registry (core/encoding), and the fact HTML §4.12.1 falls back to when a
        `<script>` has no `charset` attribute: "let encoding be el's node document's the encoding". It is a
        FIELD and not a constant at each asker because it is per-document state that a navigation's response
@@ -596,7 +596,7 @@ enum { QS_FIRST = 0, QS_ALL, QS_MATCHES, QS_CLOSEST };
  * is asked there rather than at the end of the walk.
  * THE PARSE IS ONE STAGE BECAUSE LEXBOR'S SELECTOR PARSER HAS NO SMALLER ENTRY, and that is a stretch of
  * engine execution proportional to the SELECTOR'S LENGTH, which is the page's to choose. It is not defended by
- * "no page code runs between steps 1 and 2" — that argument is the one this file's own machine had to unlearn
+ * the claim that no page code runs between steps 1 and 2 — that argument is the one this file's own machine had to unlearn
  * (see the header above), and it would justify a span of any size. Splitting it means feeding the CSS
  * tokenizer through lxb_css_syntax_tokenizer_next_chunk and holding it across the rests — which puts a live
  * lexbor tokenizer back into this machine's state and makes it unforkable again. So the two are ONE
@@ -721,7 +721,7 @@ static const IdlStepDecl QS_STEP = { js_document_qs, sizeof(QsState), qs_visit, 
 const IdlStepDecl *document_qs_decl(void) { return &QS_STEP; }
 
 /* §3.1.7 DOM tree accessors' ELEMENT SHORTCUTS — forms, images, scripts, embeds and links. Every one is a LIVE
-   HTMLCollection the spec defines as "the elements of type X in the document", so each is the by-name
+   HTMLCollection the spec defines as the elements of a given type in the document, so each is the by-name
    collection over the document with a tag baked in, and `links` is the one that is a predicate instead
    (`a`/`area` WITH an href). A page uses these to find its own markup, and a bundle scanner uses
    `document.scripts` and `document.forms` in particular — with them absent the loop over them never ran and
@@ -1382,8 +1382,8 @@ JSValue document_create_element_internal(JSContext *ctx, const char *local, size
        the HTML namespace, so there is nothing conditional here and nothing to ask a document field about —
        see document.h's document_create_element_html for why asking would have been the wrong shape.
        §4.5 STEP 2's ASCII-LOWERCASE FOLD IS ABSENT AND THAT IS A CLAIM ABOUT THE CALLERS, so it is asserted
-       rather than argued. It used to be argued, from "a definition's local name is a valid custom element
-       name, which is lowercase ASCII by §4.13.3's own production" — and that reason is retired twice over:
+       rather than argued. It used to be argued, from the claim that a definition's local name is a valid
+       custom element name, which is lowercase ASCII by §4.13.3's own production — and that reason is retired twice over:
        §4.8.3's `new Image()` reaches here with the literal "img", which is no custom element name at all, and
        HTML §4.13.4 step 7.4 sets a definition's local name to `extends`, which names a BUILT-IN element.
        What is true of every caller is the CONCLUSION and not that reason: §4.13.3's production is lowercase,
@@ -1572,7 +1572,7 @@ static JSValue js_doc_create_comment(JSContext *ctx, JSValueConst this_val, int 
      - `strchr`/`strcmp` stop at U+0000, which DOM §1.4 treats as an ordinary code point a page may write, so
        `createElementNS(ns, "a\0:b")` found no colon and `createElementNS("http://…/xmlns/\0x", "xmlns")`
        compared equal to the XMLNS namespace it is not;
-     - it validated a prefix only by "non-empty and no second colon", where §1.4 step 4.3 is the valid-namespace-
+     - it validated a prefix only by `non-empty and no second colon`, where §1.4 step 4.3 is the valid-namespace-
        prefix predicate.
    The shared one also takes the CONTEXT — `createElementNS` is an ELEMENT context, and that is a real
    difference rather than a parameter for tidiness: `a=b` is a valid element local name and not a valid
@@ -1810,7 +1810,7 @@ lxb_dom_element_t *document_frozen_base_element(const lxb_dom_document_t *dom)
 }
 
 /* §4.2.3's FROZEN BASE URL, STORED — see the field, and core/html/html_base_element.c for the algorithm that
-   decides WHEN this is called. `el` NULL with `url` NULL is "this document has no base element with an href",
+   decides WHEN this is called. `el` NULL with `url` NULL means this document has no base element with an href,
    which §2.4.3 step 1 answers with the fallback base URL. */
 void document_set_frozen_base_url(lxb_dom_document_t *dom, lxb_dom_element_t *el, const char *url)
 {
@@ -1843,7 +1843,8 @@ void document_set_frozen_base_url(lxb_dom_document_t *dom, lxb_dom_element_t *el
            "pair has had one of them written outside this setter");
 }
 
-/* §7.4's ABOUT BASE URL, which "create a new browsing context and document" gives the initial `about:blank` as
+/* §7.4's ABOUT BASE URL, which HTML §7.3.2.1 "Creating browsing contexts"' "create a new browsing context
+ * and document" gives the initial `about:blank` as
  * `creatorBaseURL` and §7.4.5 gives an `about:` navigation from its initiator. WRITE-ONCE, at creation, by the
  * operation that created the Document — never by anything the page can reach.
  *
@@ -1873,7 +1874,7 @@ void document_set_about_base_url(JSContext *ctx, const char *url)
     d->base.about = doc_addr_intern(d, url);
 }
 
-/* HTML §3.1.1's "the encoding" of this realm's active document — see document.h. ONE component owns what a
+/* DOM §4.5's encoding, of this realm's active document — see document.h. ONE component owns what a
    document's encoding is, for the same reason it owns what its URL is: two answers to that question is how
    they drift apart, and this one decides how a `<script src>`'s bytes become source text. */
 int document_encoding(JSContext *ctx)
@@ -1881,7 +1882,7 @@ int document_encoding(JSContext *ctx)
     Document *d = doc_here(ctx);
 
     DCHECK(d->encoding >= 0,
-           "a document's encoding was read before the record carried one — §3.1.1 gives every Document an "
+           "a document's encoding was read before the record carried one — DOM §4.5 gives every Document an "
            "encoding and doc_rec_new writes it, so a negative id is a record some other path built");
     return d->encoding;
 }
@@ -1896,9 +1897,9 @@ int document_encoding_of(const lxb_dom_document_t *dom)
 {
     const Document *d = doc_rec(dom);
 
-    DCHECK(d != NULL, "HTML §3.1.1's encoding was asked of a document with no record");
+    DCHECK(d != NULL, "DOM §4.5's encoding was asked of a document with no record");
     DCHECK(d->encoding >= 0,
-           "a document's encoding was read before the record carried one — §3.1.1 gives every Document an "
+           "a document's encoding was read before the record carried one — DOM §4.5 gives every Document an "
            "encoding and doc_rec_new writes it, so a negative id is a record some other path built");
     return d->encoding;
 }
@@ -2260,8 +2261,8 @@ bool document_render_blocked(JSContext *ctx)
  * is built, in core/html/html_iframe.c, and the two do not overlap: the arm inside this function reads the
  * navigable's §7.4.4 "is initial about:blank" and returns, so a frame gets its `load` from exactly one of
  * them. A note here used to argue the opposite, that this path COVERED the initial-insertion case and building
- * that one would fire `load` twice. The premise was that the initial about:blank "reaches this algorithm
- * later, through document_lifecycle_step" — and it does not, because that walk lists only MATERIALIZED
+ * that one would fire `load` twice. The premise was that the initial about:blank reaches this algorithm
+ * later, through document_lifecycle_step — and it does not, because that walk lists only MATERIALIZED
  * navigables and nothing materializes a srcless frame until a read reaches through it, which is what the
  * missing `load` was carrying. The argument was self-sealing rather than wrong-in-detail: the case it claimed
  * to cover was the one case it could never see.
@@ -2620,9 +2621,9 @@ lxb_dom_node_t *document_document_element_of(const lxb_dom_node_t *doc)
     return NULL;
 }
 
-/* §3.1.1's `body`, AS A LOOKUP ANOTHER COMPONENT CAN MAKE. HTML §6.6.6's `activeElement` ends in exactly these
-   two steps ("if candidate has a body element, return that body element; if candidate's document element is
-   non-null, return that document element"), and a second walk written there would be a second answer to a
+/* §3.1.7's `body`, AS A LOOKUP ANOTHER COMPONENT CAN MAKE. HTML §6.6.6's `activeElement` ends in exactly these
+   two steps ("if candidate has a body element then return that body element; if candidate's document element
+   is non-null then return that document element"), and a second walk written there would be a second answer to a
    question this file already answers — which is what made `document.body` a latched data property once. */
 lxb_dom_node_t *document_body_of(const lxb_dom_node_t *doc)
 {
@@ -2679,15 +2680,15 @@ static JSValue js_doc_tree(JSContext *ctx, JSValueConst this_val, int magic)
     case 0:
         return node_wrap(ctx, root);
     case 1:
-        /* §3.1.1: "the first of the html element's children that is either a BODY or a FRAMESET element, or
-           null" — a frameset document has no body at all, which is the parser following the spec. */
+        /* §3.1.7: "the first of the html element's children that is either a body element or a frameset
+           element, or null" — a frameset document has no body at all, which is the parser following the spec. */
         return node_wrap(ctx, document_body_of(doc));
     case 2:
-        /* §3.1.1: "the first head element that is a child of the html element". */
+        /* §3.1.7: "the first head element that is a child of the html element". */
         return node_wrap(ctx, doc_child_named(root, "head", NULL));
     default:
         DCHECK(magic == 3, "a Document tree accessor was declared with a magic this table does not name");
-        /* §4.5 doctype: "the first DocumentType node child, in tree order, or null". */
+        /* DOM §4.5's doctype: "the child of this that is a doctype; otherwise null". */
         for (n = doc->first_child; n; n = n->next)
             if (n->type == LXB_DOM_NODE_TYPE_DOCUMENT_TYPE) return node_wrap(ctx, n);
         return JS_NULL;
@@ -3006,7 +3007,8 @@ static JSValue js_doc_create_traverser(JSContext *ctx, JSValueConst this_val, in
                       : tree_walker_new(ctx, root, what, filter);
 }
 
-/* §4.5 `[NewObject] Range createRange()` — "a new live range with (this, 0) as its start and end". It is the
+/* §4.5 `[NewObject] Range createRange()` — "a new live range with (this, 0) as its start an end", which is
+   the standard's own spelling. It is the
    same construction `new Range()` performs, and it is the Document's rather than the current global's: a page
    that calls `otherDoc.createRange()` gets a range rooted in THAT document. */
 static JSValue js_doc_create_range(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
@@ -3441,7 +3443,7 @@ void document_meta_csp_inserted(lxb_dom_element_t *el)
         return;
     }
     /* STEP 5, "Enforce the policy policy" — CSP §2.2's list GROWS BY ONE. The container asserts that at its
-       origin (core/frame/policy_container.h), which is where "every delivery appends and none replaces" is
+       origin (core/frame/policy_container.h), which is where the rule that every delivery appends and none replaces is
        checkable rather than described. */
     policy_container_enforce_policy(d->policy, delivered);
     free(delivered);
@@ -3477,8 +3479,8 @@ const PermissionsPolicy *document_permissions_policy(JSContext *ctx) { return do
  * tree — which is why the corpus asserts `['null']` and not `[]`.
  *
  * THE POLICY IS READ OFF THE CONTAINER ELEMENT AT THIS MOMENT, AND FOR A NAVIGATION THAT IS THE WRONG MOMENT.
- * This paragraph used to claim the read WAS the standard's snapshot and cite "§7.4.2's beginning-navigation
- * step 16" for it. All three parts were wrong: the section is §7.4.2.2 "Beginning navigation", its step 16 is
+ * This paragraph used to claim the read WAS the standard's snapshot and cited §7.4.2's beginning-navigation
+ * step 16 for it. All three parts were wrong: the section is §7.4.2.2 "Beginning navigation", its step 16 is
  * the is-delaying-load-events one, and the snapshot is its STEP 17 — "let targetSnapshotParams be the result of
  * snapshotting target snapshot params given navigable". §7.4.2.1 "Supporting concepts" defines that struct as
  * exactly two items, "sandboxing flags" and "IFRAME ELEMENT REFERRER POLICY", and says it "is snapshotted at
@@ -3495,7 +3497,7 @@ const PermissionsPolicy *document_permissions_policy(JSContext *ctx) { return do
  * back unmasked because the attribute was cleared while the response was still in flight.
  *
  * WHAT CLOSES IT IS THE STRUCT, AND THE STRUCT DOES NOT EXIST — an earlier version of this paragraph said this
- * engine "already carries target snapshot params for the sandboxing flags" and that the referrer policy was
+ * engine already carried target snapshot params for the sandboxing flags and that the referrer policy was
  * simply "the struct's OTHER field". That was false about this tree and it was written without grepping for the
  * type: every occurrence of `targetSnapshotParams` here is PROSE inside a comment, naming the spec's struct to
  * describe a computation done without it. A reader who trusted it would have gone looking for a record to add a
@@ -4058,7 +4060,7 @@ bool document_allowed_to_use(JSContext *ctx, PermissionsPolicyFeature feature)
        is one §9.5 never ran for, which is exactly the absence of a policy on this record. */
     if (d->permissions_policy == NULL)
         return false;
-    /* Step 2: "If document is not fully active, then return false." §7.3.1's walk, asked and not remembered —
+    /* Step 2: "If document is not fully active, then return false." §7.3.3's walk, asked and not remembered —
        removing an ancestor `<iframe>` stops this document being fully active with nothing done to its own
        navigable. */
     if (!document_fully_active(ctx))
@@ -4082,7 +4084,8 @@ JSValueConst document_window_proxy(JSContext *ctx)
     return d->proxy;
 }
 
-/* HTML §7.3.1 "FULLY ACTIVE": a Document is fully active when it is the active document of a navigable, and
+/* HTML §7.3.3 "Fully active documents": a Document is fully active when it is the active document of a
+ * navigable, and
  * that navigable is either a top-level traversable or its container document is itself fully active.
  *
  * WHY IT IS ITS OWN QUESTION AND NOT `!closed`. The two differ exactly where it matters: removing an
@@ -4112,7 +4115,7 @@ bool document_fully_active(JSContext *ctx)
         JSValue parent;
         if (window_proxy_closed(ctx, cur)) { ok = false; break; }
         parent = window_proxy_parent(ctx, cur);
-        /* §7.3.1's base case is a TOP-LEVEL traversable, and §7.2.2.4's `parent` of one is the navigable ITSELF —
+        /* §7.3.3's base case is a TOP-LEVEL traversable, and §7.2.2.4's `parent` of one is the navigable ITSELF —
            so the walk ends when the answer stops moving, or when it is not a navigable's proxy at all (a
            cross-instance parent this agent cannot walk into, which is answered by its own instance). */
         if (!window_proxy_is(parent) ||
@@ -4446,7 +4449,7 @@ static Document *doc_rec_new(JSContext *ctx, lxb_html_document_t *dom, const cha
     /* …AND DOM §4.5's THIRD, which the caller's own algorithm named: "create a document that implements an
        interface interface". Stored beside the pair above and never derived from `is_xml` — see document.h. */
     d->iface = iface;
-    /* §3.1.1's encoding. Every document this engine parses is decoded as UTF-8 — there is one source of bytes
+    /* DOM §4.5's encoding. Every document this engine parses is decoded as UTF-8 — there is one source of bytes
        and one decode of them — so this is the real answer rather than an initial value waiting to be
        overwritten, and it is asked of the REGISTRY rather than written as a table index so that the set of
        encodings has exactly one authority. */

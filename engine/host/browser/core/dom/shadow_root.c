@@ -1,5 +1,5 @@
 /* THE ShadowRoot INTERFACE AND "attach a shadow root" — DOM §4.8 Interface ShadowRoot, §4.9 Interface
- * Element (which is where "attach a shadow root", "valid shadow host name" and the two Element members are), and §4.2's
+ * Element (which is where "attach a shadow root", "valid shadow host name" and the two Element members are), and §4.8's
  * shadow-including root.
  *
  * IT WAS ABSENT ENTIRELY. `attachShadow` was not a function, `ShadowRoot` was not a global, and the engine's
@@ -123,24 +123,24 @@ bool shadow_root_is_open(const lxb_dom_node_t *n)
     return lxb_dom_interface_shadow_root((lxb_dom_node_t *)n)->mode == LXB_DOM_SHADOW_ROOT_MODE_OPEN;
 }
 
-/* §4.2's SHADOW-INCLUDING ROOT: "the root's host's shadow-including root, if the object's root is a shadow
+/* §4.8's SHADOW-INCLUDING ROOT: "its root's host's shadow-including root, if the object's root is a shadow
    root; otherwise its root". Iterative, because the nesting is the PAGE's — a component inside a component
    inside a component is three shadow roots deep and a C recursion here would be a page-controlled C stack. */
 lxb_dom_node_t *shadow_root_shadow_including_root(lxb_dom_node_t *n)
 {
     lxb_dom_node_t *r;
 
-    DCHECK(n != NULL, "§4.2's shadow-including root was asked of no node");
+    DCHECK(n != NULL, "§4.8's shadow-including root was asked of no node");
     for (r = node_root(n); shadow_root_is(r); r = node_root(r))
         r = lxb_dom_interface_node(shadow_root_host(r));
     return r;
 }
 
-/* §4.2's "A is a SHADOW-INCLUDING INCLUSIVE ANCESTOR of B", which the standard states the other way round —
+/* §4.8's SHADOW-INCLUDING INCLUSIVE ANCESTOR, asked of A and B, which the standard states the other way round —
    B is a shadow-including descendant of A if it is a descendant, or if B's ROOT is a shadow root whose HOST is
    one. So it is decided by climbing from B: parents while there are parents, and at a shadow root the climb
    continues at that root's host. A plain ancestor walk answers `false` for every node inside a shadow tree,
-   which is exactly the case each caller uses this to detect — §2.9's event path walk asks it to find the
+   which is exactly the case each caller uses this to detect — DOM §2.9's event path walk asks it to find the
    boundary the event must retarget at, and §4.13.7's `setValidity` asks it of an anchor element. */
 bool shadow_root_is_shadow_including_inclusive_ancestor(const lxb_dom_node_t *a, const lxb_dom_node_t *b)
 {
@@ -161,9 +161,10 @@ bool shadow_root_is_shadow_including_inclusive_ancestor(const lxb_dom_node_t *a,
     return false;
 }
 
-/* §4.2's SHADOW-INCLUDING TREE ORDER, as the one step every walk over it is made of: "tree order with the
-   addition of an element's shadow root's node tree inserted JUST AFTER the element is encountered". So a node's
-   successor is its shadow root if it has one, then its first child, and otherwise the climb — which, on leaving
+/* §4.8's SHADOW-INCLUDING TREE ORDER, as the one step every walk over it is made of: "with for each shadow
+   host encountered in tree, shadow-including preorder, depth-first traversal of that element's shadow root's
+   node tree just after it is encountered". So a node's successor is its shadow root if it has one, then its
+   first child, and otherwise the climb — which, on leaving
    a shadow tree, resumes at the HOST'S OWN CHILDREN rather than at the host's next sibling, because the shadow
    tree was inserted before them.
    Iterative and explicit, for the reason shadow_root_shadow_including_root is: the nesting is the page's. NULL
@@ -172,7 +173,7 @@ lxb_dom_node_t *shadow_root_next_in_shadow_including(JSContext *ctx, lxb_dom_nod
 {
     lxb_dom_node_t *u, *shadow;
 
-    DCHECK(n != NULL && root != NULL, "§4.2's shadow-including tree order walk was asked about no node");
+    DCHECK(n != NULL && root != NULL, "§4.8's shadow-including tree order walk was asked about no node");
     if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) {
         shadow = shadow_root_of_element(ctx, lxb_dom_interface_element(n));
         if (shadow)
@@ -660,7 +661,7 @@ IDL_ENUM_VALUES(SR_SLOT_VALUES, "manual", "named");
 static const IdlDictMember SHADOW_ROOT_INIT[] = {
     { "clonable",       IDL_BOOLEAN, false, NULL,           0 },
     /* `CustomElementRegistry? customElementRegistry;` — DECLARED, and the body below reads it. It was READ AND
-       NEVER DECLARED, which is not a member half-built: §3.2.17 places on the converted dictionary exactly the
+       NEVER DECLARED, which is not a member half-built: Web IDL §3.2.17 places on the converted dictionary exactly the
        members this list names, so `idl_dict_get(init, "customElementRegistry")` answered `undefined` for every
        call there has ever been, the override at step 2 was unreachable, and `attachShadow({mode: "open",
        customElementRegistry: r})` silently attached with the DOCUMENT's registry — the read-with-no-writer
@@ -674,7 +675,7 @@ static const IdlDictMember SHADOW_ROOT_INIT[] = {
        class id names. So nothing about the class system keeps this member at IDL_ANY any more; what keeps it
        here is that the diff has not been written.
        NAMED RESIDUAL, WITH ITS NEXT-DIFF CLAUSE CORRECTED AGAINST THE TREE. What is not covered: a declared
-       type would throw §3.2.15's TypeError DURING the member walk, before the getters of `delegatesFocus`,
+       type would throw Web IDL §3.2.15's TypeError DURING the member walk, before the getters of `delegatesFocus`,
        `mode`, `serializable` and `slotAssignment` — every one of which sorts after this member — while the
        check below throws after all five have run. What the next diff builds: this row becomes
        IDL_INTERFACE_NULLABLE carrying `.iface_is` and `.iface_name = "CustomElementRegistry"`, where the
@@ -710,12 +711,13 @@ static JSValue js_el_attach_shadow(JSContext *ctx, JSValueConst this_val, int ar
        THE BRAND TEST IS WEB IDL'S, NOT AN EXTRA STEP: the member's declared type is `CustomElementRegistry?`,
        so §3.2.15 Interface types refuses anything else with a TypeError. It is performed here because the
        declaration states this member IDL_ANY — see SHADOW_ROOT_INIT's note on why, and the residual it names.
-       STEP 2 ASKS WHETHER THE MEMBER EXISTS, NOT WHETHER IT IS AN OBJECT. "If init["customElementRegistry"]
+       STEP 2 ASKS WHETHER THE MEMBER EXISTS, NOT WHETHER IT IS AN OBJECT. DOM §4.9's attachShadow steps:
+       "If init["customElementRegistry"]
        exists, then set registry to it" — and the member is nullable, so an explicit `null` EXISTS and sets the
        registry to null, which step 3 then passes (it asks about a non-null registry) and which "attach a
        shadow root" takes as its "null or a CustomElementRegistry object registry". Reading the existence off
        object-ness collapses `{customElementRegistry: null}` into the absent case and hands the shadow root the
-       document's registry — the opposite of what the page asked for. §3.2.17 makes `undefined` the absence,
+       document's registry — the opposite of what the page asked for. Web IDL §3.2.17 makes `undefined` the absence,
        because this member declares no default value. */
     reg_v = idl_dict_get(ctx, init, "customElementRegistry");
     registry = custom_elements_document_registry(ctx);                                   /* step 1 */
@@ -752,7 +754,7 @@ static JSValue js_el_attach_shadow(JSContext *ctx, JSValueConst this_val, int ar
        machine that performs it; and `slotAssignment`'s ternary below did not report it at all — a crossed
        member is not a string, so it took the same road an ABSENT member takes and was pinned to "named" in
        both builds with nothing anywhere to say a world had been deleted.
-       AN ENUMERATION IS DIFFERENT FROM A STRING AND THE DIFFERENCE IS §3.2.18's SECOND STEP. Web IDL §3.2.18
+       AN ENUMERATION IS DIFFERENT FROM A STRING AND THE DIFFERENCE IS Web IDL §3.2.18's SECOND STEP. Web IDL §3.2.18
        Enumeration types is "Let S be the result of calling ? ToString(V)" and then "If S is not one of E's
        enumeration values, then throw a TypeError" — the type admits the listed strings and NOTHING else, so
        an unknown has no arm to cross as. What it has instead is a set of feasible worlds the IDL itself
@@ -770,7 +772,8 @@ static JSValue js_el_attach_shadow(JSContext *ctx, JSValueConst this_val, int ar
               "null in the other, so a flow handed the wrong arm cannot see the subtree it was about to "
               "inject into. The arm set is GIVEN by the enumeration rather than chosen, which is what makes "
               "the fork honest where a range's would not be: ask step_fork_run over SR_MODE_VALUES plus the "
-              "TypeError arm at the §3.2.18 conversion — outcome 0 the first listed value, since that is the "
+              "TypeError arm at the Web IDL §3.2.18 conversion — outcome 0 the first listed value, since that is "
+              "the "
               "arm a run with no forking policy takes — so every enumeration in the platform is answered "
               "once rather than once per member. Its subproblem — the two-armed §3.2.3 boolean, at the "
               "argument boundary AND at the dictionary member — is built, AT THE CONVERSION rather than in "
