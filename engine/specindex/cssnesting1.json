@@ -1,0 +1,131 @@
+{
+ "spec": "CSS Nesting Module Level 1",
+ "key": "cssnesting1",
+ "base": "https://drafts.csswg.org/css-nesting-1/",
+ "specUpdated": "5 February 2026",
+ "fetched": "2026-09-06",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "intro"
+  },
+  "2": {
+   "title": "Explainer",
+   "page": "",
+   "id": "explainer"
+  },
+  "3": {
+   "title": "Nesting Style Rules",
+   "page": "",
+   "id": "nesting"
+  },
+  "4": {
+   "title": "Nesting Selector: the & selector",
+   "page": "",
+   "id": "nest-selector"
+  },
+  "5": {
+   "title": "The Nested Declarations Rule",
+   "page": "",
+   "id": "nested-declarations"
+  },
+  "6": {
+   "title": "CSSOM",
+   "page": "",
+   "id": "cssom"
+  },
+  "7": {
+   "title": "Changes",
+   "page": "",
+   "id": "changes"
+  },
+  "1.1": {
+   "title": "Module Interactions",
+   "page": "",
+   "id": "placement"
+  },
+  "1.2": {
+   "title": "Values",
+   "page": "",
+   "id": "values"
+  },
+  "3.1": {
+   "title": "Syntax",
+   "page": "",
+   "id": "syntax"
+  },
+  "3.2": {
+   "title": "Examples",
+   "page": "",
+   "id": "syntax-examples"
+  },
+  "3.3": {
+   "title": "Nesting Other At-Rules",
+   "page": "",
+   "id": "conditionals"
+  },
+  "3.3.1": {
+   "title": "Nested @scope Rules",
+   "page": "",
+   "id": "nesting-at-scope"
+  },
+  "3.4": {
+   "title": "Mixing Nesting Rules and Declarations",
+   "page": "",
+   "id": "mixing"
+  },
+  "6.1": {
+   "title": "The CSSNestedDeclarations Interface",
+   "page": "",
+   "id": "the-cssnestrule"
+  }
+ },
+ "dfns": {
+  "contain the nesting selector": [
+   "3.1"
+  ],
+  "nested declarations rule": [
+   "5"
+  ],
+  "nested group rules": [
+   "3.3"
+  ],
+  "nested style rule": [
+   "3"
+  ],
+  "nested style rules": [
+   "3"
+  ],
+  "nesting selector": [
+   "4"
+  ],
+  "nesting style rule": [
+   "3"
+  ]
+ },
+ "ops": {},
+ "uses": {
+  "nested declarations rule": {
+   "7": 2,
+   "3.3": 2,
+   "3.4": 2,
+   "6.1": 2
+  },
+  "nested group rules": {
+   "5": 2,
+   "3.4": 2
+  },
+  "nested style rules": {
+   "4": 2,
+   "7": 2,
+   "3.1": 4,
+   "3.3": 2,
+   "3.4": 2
+  },
+  "nesting selector": {
+   "7": 2,
+   "3.1": 2
+  }
+ }
+}

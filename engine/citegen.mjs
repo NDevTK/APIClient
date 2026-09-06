@@ -720,6 +720,19 @@ const SPECS = [
   { key: "cssshadow1", label: "CSS Shadow Module Level 1", kind: "bikeshed",
     base: "https://drafts.csswg.org/css-shadow-1/", edition: "maintained",
     anchors: ["css scoping", "css shadow", "css-shadow-1", "css-scoping-1"] },
+  /* CSS NESTING, AND THIS ROW IS THE STANDING REPAIR FOR A JUDGED FALL ANOTHER LANE MEASURED AND COULD NOT
+     CLOSE. Naming the standard moved two of `test_forced.c`'s citations out of an audit that had been judging
+     them against WEB IDL — a wrong document — and into `standards seen but not indexed`, which is silent
+     rather than wrong; only an index makes them right, and that is this row. Verified against the sites
+     first: §3 "Nesting Style Rules", §4 "Nesting Selector: the & selector", §6 "CSSOM" — every number this
+     tree writes. Bikeshed-rendered: 15 `data-level` headings, a dt-updated, no `respecConfig`.
+     BOTH SPELLINGS ARE ANCHORS AND THE LEVELLED ONE IS WHY THE TOKENIZER WORK CAME FIRST: `CSS Nesting §4`
+     presents as `css nesting` and `CSS Nesting Module Level 1 §4` presents as `css-nesting-1`, and until
+     `Module` stopped ending the tail and the level stopped being trimmed, the second spelling — the
+     standard's OWN full published name — resolved to nothing at all. */
+  { key: "cssnesting1", label: "CSS Nesting Module Level 1", kind: "bikeshed",
+    base: "https://drafts.csswg.org/css-nesting-1/", edition: "maintained",
+    anchors: ["css nesting", "css-nesting-1"] },
   { key: "hrtime", label: "High Resolution Time", kind: "bikeshed",
     base: "https://w3c.github.io/hr-time/", edition: "maintained", anchors: ["hr-time", "hrtime", "high resolution time"] },
   /* THE THREE STANDARDS THAT SIT ON TOP OF THE ROW ABOVE, and they are here for the reason that row's own
@@ -2191,7 +2204,7 @@ const OTHER_SPECS = [
      claim about which standard it means outranks a phrase two documents share. An index row RAISES it; that is
      the next diff and not this one. */
   "css conditional",
-  "positioned layout", "css nesting", "css viewport", "har",
+  "positioned layout", "css viewport", "har",
   /* CSS modules, as this tree spells them when it does not use the levelled shortname */
   "css", "selectors", "cascade", "view", "values", "sizing", "fonts", "backgrounds", "text",
   "display", "position", "overflow", "images", "color", "transforms", "writing", "box", "inline",
