@@ -3090,10 +3090,21 @@ void element_init(JSContext *ctx)
     html_base_element_init(ctx);   /* §4.2.3's `href` setter, whose getter is not a reflection */
     cssom_init(ctx);          /* CSSStyleDeclaration, which HTMLElement's `style` attribute names */
     css_style_sheet_init(ctx);   /* CSSOM §6.1's StyleSheet and CSSStyleSheet, which a `<style>` element creates */
-    /* CSSOM §4.4's MediaList, BEFORE the rules: §7.3's `media` is [PutForwards=mediaText] and css_rule.c reads
-       that setter's id out of this component while installing CSSMediaRule.prototype. */
+    /* CSSOM §4.4 "The MediaList Interface", BEFORE the rules: CSS Conditional 3 §7.3 "The CSSMediaRule
+       interface" declares `media` as [SameObject, PutForwards=mediaText] and css_rule.c reads that setter's
+       id out of this component while installing CSSMediaRule.prototype. THE STANDARD IS NAMED BECAUSE CSSOM
+       HAS NO SUCH SECTION — its own §7 stops one number short — so a bare number beside a CSSOM anchor
+       resolves to a section that does not exist and reads as a wrong number rather than as an unstated
+       document. */
     media_list_init(ctx);
-    css_rule_init(ctx);          /* CSSOM §6.4's rules, §7.2/§7.3's conditional group rule, which a sheet holds */
+    /* CSSOM §6.4 "CSS Rules" for the rule interfaces a sheet holds, and CSS Conditional 3 §7.2 "The
+       CSSConditionRule interface" and CSS Conditional 3 §7.3 "The CSSMediaRule interface" for the conditional group rules among
+       them — `css-conditional.idl` is where both are declared, not `cssom.idl`. The term itself is CSS
+       Conditional 3 §2 "Processing of conditional group rules"; these two numbers are the INTERFACES, which is
+       what this line installs. Read against CSSOM the pair is wrong twice over — one of those numbers is
+       that standard's Window extensions and the other does not exist there at all — which is what an
+       unstated standard buys beside a neighbouring one. */
+    css_rule_init(ctx);
     css_rule_list_init(ctx);     /* CSSOM §6.4.1 CSSRuleList, the collection §6.1.2's cssRules hands back */
     style_sheet_list_init(ctx);  /* CSSOM §6.2's collections, which §6.1's create adds every sheet to */
     /* HTML §4.2.6's association between the two. AFTER the sheet interface it creates, and after
@@ -3209,8 +3220,12 @@ void element_free(JSRuntime *rt)
            "every atom the cascade below gives back would have its reference subtracted from a runtime that "
            "never took it, and JS_FreeValueRT reports nothing at all when it is the wrong one");
     /* THE TWO DOM-WRITE HOOKS THIS FILE CLAIMED, GIVEN BACK BEFORE THE CASCADE RUNS. Both live in
-       solver/dom_cow.c and name code in this group — §4.3's character-data record and §4.9's attribute-changed
-       steps — so a release that kept them would leave the DOM chokepoint calling into components the lines
+       solver/dom_cow.c and name code in this group — DOM §4.3 "Mutation observers"' character-data record and
+       DOM §4.9 "Interface Element"'s attribute-changed steps; the standard is named because the nearest
+       anchor in this file is XML, which numbers a different section under each of these and defines
+       character data elsewhere again, so the bare numbers read as a misattribution rather than as the right
+       sections of an unstated document — so a release that kept them would leave the DOM chokepoint calling
+       into components the lines
        below are freeing. It is the defect core/agent_state.h found in idb_transaction, and it is here rather
        than at the end because the very next call can run a finalizer that mutates the tree. */
     dom_cow_set_cdata_hook(NULL);
