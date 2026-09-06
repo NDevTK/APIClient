@@ -680,6 +680,14 @@ const SPECS = [
   { key: "securecontexts", label: "Secure Contexts", kind: "bikeshed",
     base: "https://w3c.github.io/webappsec-secure-contexts/", edition: "maintained",
     anchors: ["secure contexts"] },
+  /* REPORTING, AND THE SITE THAT NAMES ITS COST IS A CRASH MESSAGE. `embedder_policy.c` prints a bare §3.4.1
+     inside a DFAIL, which is Reporting's "Generate report of type with data" — and with this standard on no
+     list the file's own vote placed that number at HTML, so a crash a reader meets with no file open named
+     the wrong document. §3.4.1 is every numbered citation of this standard in the tree and it was verified
+     against the document first. Bikeshed-rendered: 42 `data-level` headings, a dt-updated, no `respecConfig`.
+     THE LABEL IS THE DOCUMENT'S OWN TITLE, `Reporting API`, and the anchor is the word this tree writes. */
+  { key: "reporting", label: "Reporting API", kind: "bikeshed",
+    base: "https://w3c.github.io/reporting/", edition: "maintained", anchors: ["reporting"] },
   { key: "hrtime", label: "High Resolution Time", kind: "bikeshed",
     base: "https://w3c.github.io/hr-time/", edition: "maintained", anchors: ["hr-time", "hrtime", "high resolution time"] },
   /* THE THREE STANDARDS THAT SIT ON TOP OF THE ROW ABOVE, and they are here for the reason that row's own
@@ -2150,7 +2158,7 @@ const OTHER_SPECS = [
      refusal does — an explicit `other:` anchor beats a term coincidence, by design, since the citation's own
      claim about which standard it means outranks a phrase two documents share. An index row RAISES it; that is
      the next diff and not this one. */
-  "parsing and serialization", "css conditional", "css scoping", "reporting",
+  "parsing and serialization", "css conditional", "css scoping",
   "positioned layout", "css nesting", "css viewport", "har",
   /* CSS modules, as this tree spells them when it does not use the levelled shortname */
   "css", "selectors", "cascade", "view", "values", "sizing", "fonts", "backgrounds", "text",

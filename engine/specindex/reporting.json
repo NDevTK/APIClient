@@ -1,0 +1,251 @@
+{
+ "spec": "Reporting API",
+ "key": "reporting",
+ "base": "https://w3c.github.io/reporting/",
+ "specUpdated": "2 January 2026",
+ "fetched": "2026-09-06",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "intro"
+  },
+  "2": {
+   "title": "Generic Reporting Framework",
+   "page": "",
+   "id": "generic-reporting"
+  },
+  "3": {
+   "title": "Document Centered Reporting",
+   "page": "",
+   "id": "document-reporting"
+  },
+  "4": {
+   "title": "Reporting Observers",
+   "page": "",
+   "id": "observers"
+  },
+  "5": {
+   "title": "Implementation Considerations",
+   "page": "",
+   "id": "implementation"
+  },
+  "6": {
+   "title": "Sample Reports",
+   "page": "",
+   "id": "sample-reports"
+  },
+  "7": {
+   "title": "Automation",
+   "page": "",
+   "id": "automation"
+  },
+  "8": {
+   "title": "Security Considerations",
+   "page": "",
+   "id": "security"
+  },
+  "9": {
+   "title": "Privacy Considerations",
+   "page": "",
+   "id": "privacy"
+  },
+  "10": {
+   "title": "IANA Considerations",
+   "page": "",
+   "id": "iana-considerations"
+  },
+  "1.1": {
+   "title": "Guarantees",
+   "page": "",
+   "id": "guarantees"
+  },
+  "1.2": {
+   "title": "Examples",
+   "page": "",
+   "id": "examples"
+  },
+  "2.1": {
+   "title": "Concepts",
+   "page": "",
+   "id": "concept"
+  },
+  "2.1.1": {
+   "title": "Endpoints",
+   "page": "",
+   "id": "concept-endpoints"
+  },
+  "2.1.2": {
+   "title": "Report Type",
+   "page": "",
+   "id": "concept-report-type"
+  },
+  "2.1.3": {
+   "title": "Reports",
+   "page": "",
+   "id": "concept-reports"
+  },
+  "2.2": {
+   "title": "Media Type",
+   "page": "",
+   "id": "media-type"
+  },
+  "2.3": {
+   "title": "Queue data as type for destination",
+   "page": "",
+   "id": "queue-report"
+  },
+  "2.4": {
+   "title": "Serialize Reports",
+   "page": "",
+   "id": "serialize-reports"
+  },
+  "3.1": {
+   "title": "Document configuration",
+   "page": "",
+   "id": "document-configuration"
+  },
+  "3.2": {
+   "title": "The Reporting-Endpoints HTTP Response Header Field",
+   "page": "",
+   "id": "header"
+  },
+  "3.3": {
+   "title": "Process reporting endpoints for response",
+   "page": "",
+   "id": "process-header"
+  },
+  "3.4": {
+   "title": "Report Generation",
+   "page": "",
+   "id": "report-generation"
+  },
+  "3.4.1": {
+   "title": "Generate report of type with data",
+   "page": "",
+   "id": "generate-report"
+  },
+  "3.5": {
+   "title": "Report Delivery",
+   "page": "",
+   "id": "report-delivery"
+  },
+  "3.5.1": {
+   "title": "Send reports",
+   "page": "",
+   "id": "send-reports"
+  },
+  "3.5.2": {
+   "title": "Attempt to deliver reports to endpoint",
+   "page": "",
+   "id": "try-delivery"
+  },
+  "3.6": {
+   "title": "Strip URL for use in reports",
+   "page": "",
+   "id": "strip-url-for-use-in-reports-heading"
+  },
+  "4.1": {
+   "title": "Interface ReportingObserver",
+   "page": "",
+   "id": "interface-reporting-observer"
+  },
+  "4.2": {
+   "title": "Notify reporting observers on scope with report",
+   "page": "",
+   "id": "notify-observers"
+  },
+  "4.3": {
+   "title": "Add report to observer",
+   "page": "",
+   "id": "add-report"
+  },
+  "4.4": {
+   "title": "Invoke reporting observers with notify list",
+   "page": "",
+   "id": "invoke-observers"
+  },
+  "5.1": {
+   "title": "Delivery",
+   "page": "",
+   "id": "delivery"
+  },
+  "5.2": {
+   "title": "Garbage Collection",
+   "page": "",
+   "id": "gc"
+  },
+  "7.1": {
+   "title": "Generate Test Report",
+   "page": "",
+   "id": "generate-test-report-command"
+  },
+  "8.1": {
+   "title": "Capability URLs",
+   "page": "",
+   "id": "capability-urls"
+  },
+  "9.1": {
+   "title": "Network Leakage",
+   "page": "",
+   "id": "network-leakage"
+  },
+  "9.2": {
+   "title": "Clock Skew",
+   "page": "",
+   "id": "fingerprinting-clock-skew"
+  },
+  "9.3": {
+   "title": "Cross-origin correlation",
+   "page": "",
+   "id": "correlation"
+  },
+  "9.4": {
+   "title": "Disabling Reporting",
+   "page": "",
+   "id": "disable"
+  },
+  "10.1": {
+   "title": "The Reporting-Endpoints Header",
+   "page": "",
+   "id": "header-field-registration"
+  },
+  "10.2": {
+   "title": "The application/reports+json Media Type",
+   "page": "",
+   "id": "media-type-registration"
+  }
+ },
+ "dfns": {
+  "generate and queue a report": [
+   "3.4.1"
+  ],
+  "generate test report": [
+   "7.1"
+  ],
+  "initialize a global endpoint list": [
+   "3.1"
+  ],
+  "report type": [
+   "2.1.2"
+  ],
+  "reporting endpoints": [
+   "3.2"
+  ],
+  "strip url for use in reports": [
+   "3.6"
+  ],
+  "user agent": [
+   "2.1.3"
+  ],
+  "visible to reportingobserver s": [
+   "2.1.2"
+  ]
+ },
+ "ops": {},
+ "uses": {
+  "reporting endpoints": {
+   "1.2": 2
+  }
+ }
+}
