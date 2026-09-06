@@ -123,9 +123,10 @@
  * §4.2 reserves it to CSS — so one this build has no arm for is a real interface that is missing here, and it
  * keeps crashing by name.
  *
- * WHAT A RULE HOLDS AND WHAT READS IT. The selector text is read by §6.4.3's `selectorText`, which is also
+ * WHAT A RULE HOLDS AND WHAT READS IT. The selector text is read by CSSOM §6.4.3 "The CSSStyleRule
+ * Interface"'s `selectorText`, which is also
  * SETTABLE — one of the reasons the record time-travels. The declaration block text is a style rule's BODY, and
- * §6.4.3's `style` is the CSS DECLARATION BLOCK over it: core/css/css_style_declaration.h owns §6.6 and reads
+ * CSSOM §6.4.3's `style` is the CSS DECLARATION BLOCK over it: core/css/css_style_declaration.h owns §6.6 and reads
  * and writes the text through the two entries below, so the rule's declarations have ONE storage rather than a
  * copy in each component that could disagree. That storage is the other reason: `rule.style.color = 'red'` is
  * precisely a mutation two flows must be able to disagree about, and it lands in a C record behind a class
@@ -314,9 +315,11 @@ void css_rule_build_sheet(JSContext *ctx, JSValueConst list, JSValueConst parent
  * IT IS TEXT AND A LAYER PER RULE, NOT TEXT ALONE, because CSS Cascade 5 §6.1 puts Layers ABOVE Specificity and
  * a flat text cannot say which layer a rule was in. Flattening `@layer a { #x { color: red } }` beside
  * `p { color: blue }` produces a sheet that resolves to RED on a `<p id=x>` where the standard resolves BLUE,
- * and the wrongness is invisible because both are real values. So the walk carries §6.4.3's layer as it
- * descends — declaring every layer it meets into `order`, in document order, which is what makes
- * first-declaration order the walk's own order — and reports the node each emitted rule belongs to.
+ * and the wrongness is invisible because both are real values. So the walk carries CSS Cascade 5 §6.4.3
+ * "Layer Ordering"'s layer as it descends — declaring every layer it meets into `order`, in document order,
+ * which is what makes first-declaration order the walk's own order — that section's rule in its own words,
+ * "cascade layers are sorted by the order in which they first are declared" — and reports the node each
+ * emitted rule belongs to.
  *
  * `layer[i]` PAIRS WITH THE i-TH RULE THE TEXT PARSES BACK TO, and NULL is a positive statement: the emitted
  * rule at that index is not a style rule (an `@namespace`, which is emitted for its prefix bindings and matches

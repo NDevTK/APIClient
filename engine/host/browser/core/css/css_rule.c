@@ -4,8 +4,8 @@
  * why a rule is made of text, why a grouping rule's child list is a JS Array, and why one class carries every
  * interface.
  *
- * THE RECORD TIME-TRAVELS BECAUSE ALMOST EVERYTHING ON IT IS SETTABLE. §6.4.3's `selectorText` is a setter,
- * §6.4.3's `style` writes the declaration block back through this record, §6.4.5's `insertRule`/`deleteRule`
+ * THE RECORD TIME-TRAVELS BECAUSE ALMOST EVERYTHING ON IT IS SETTABLE. CSSOM §6.4.3's `selectorText` is a setter,
+ * CSSOM §6.4.3's `style` writes the declaration block back through this record, §6.4.5's `insertRule`/`deleteRule`
  * mutate the child list and §7.3's `media` is `[PutForwards=mediaText]`. Every one of those lands in a C record
  * behind a class opaque where no property hook can see it, so one arm of a fork retargeting a rule would have
  * retargeted it for its sibling and for every flow the frontier resumes afterwards. The capture is in the
@@ -115,13 +115,13 @@ static uint32_t rule_legacy_type(uint16_t type)
 typedef struct CssRuleData {
     JSValue parent_style_sheet;  /* CSSOM §6.4.2 "parent CSS style sheet" (OWNED) */
     JSValue parent_rule;         /* CSSOM §6.4.2 "parent CSS rule" (OWNED) */
-    /* THE RULE'S PRELUDE, in the canonical form its own getter must answer — §6.4.3's selector list, §6.4.7's
+    /* THE RULE'S PRELUDE, in the canonical form its own getter must answer — CSSOM §6.4.3's selector list, §6.4.7's
        page selector list and CSS Animations §6.2.2's keyText are three grammars and one field, because each
        is that rule's prelude serialized and each is what its setter replaces. JS_NULL on a rule that has
        none. (OWNED) */
     JSValue selector_text;
     JSValue block_text;          /* the rule's declarations, serialized — JS_NULL on a rule that has none */
-    /* §6.4.3's `[SameObject] style` — the CSSStyleProperties over `block_text`, minted once because a page
+    /* CSSOM §6.4.3's `[SameObject] style` — the CSSStyleProperties over `block_text`, minted once because a page
        holds `rule.style` and compares it. JS_UNDEFINED until something asks. (OWNED) */
     JSValue style;
     /* §6.4's "CHILD CSS RULES" — an Array on a §6.4.5 GROUPING rule (`CSSStyleRule : CSSGroupingRule` and
@@ -643,7 +643,7 @@ static JSValue rule_new(JSContext *ctx, int proto_slot, uint16_t type, JSValueCo
     return obj;
 }
 
-/* A §6.4.3 CSSStyleRule over the two texts a parse produced for it. */
+/* A CSSOM §6.4.3 CSSStyleRule over the two texts a parse produced for it. */
 static JSValue style_rule_new(JSContext *ctx, JSValueConst parent_style_sheet, JSValueConst parent_rule,
                               const char *selector_text, const char *block_text)
 {
@@ -878,7 +878,7 @@ static CssomBlockContext rule_block_context(uint16_t type)
     if (type == RULE_TYPE_MARGIN) return CSSOM_BLOCK_MARGIN;
     if (type == RULE_TYPE_KEYFRAME) return CSSOM_BLOCK_KEYFRAME;
     DCHECK(type == RULE_TYPE_STYLE || type == RULE_TYPE_FONT_FACE,
-           "a rule type that has no declaration block was asked which restriction its block carries — §6.4.3's "
+           "a rule type that has no declaration block was asked which restriction its block carries — CSSOM §6.4.3's "
            "CSSStyleRule and CSS Fonts 5 §9.1's CSSFontFaceRule are the two whose blocks are unrestricted, and "
            "every other rule with a block is named above");
     return CSSOM_BLOCK_UNRESTRICTED;
@@ -1041,7 +1041,7 @@ static JSValue keyframes_rule_new(JSContext *ctx, JSValueConst parent_style_shee
    `<declaration-list>` restricted by §3's own sentence (core/css/css_keyframes.h), applied here so that every
    reader of the block sees the declarations the rule really has.
    The prelude is kept in `selector_text` because that is what it IS: §6.2.2 calls it "the keyframe selector",
-   and the field already carries §6.4.3's selector list and §6.4.7's page selector list for the same reason —
+   and the field already carries CSSOM §6.4.3's selector list and §6.4.7's page selector list for the same reason —
    it is the rule's prelude in the canonical form the getter must answer. */
 static JSValue keyframe_rule_new(JSContext *ctx, JSValueConst parent_style_sheet, JSValueConst parent_rule,
                                  const char *prelude, const char *block_text)
@@ -2347,7 +2347,7 @@ static void serialized_free(char **v, unsigned n)
    Paged Media §4.3's margin at-rules) and which nothing else in §6.4 is. Running it produces `@page { }` for
    `@page {}` and `@page :left { }` for `@page :left {}`, which is what css/cssom/cssom-pagerule.html asserts
    byte for byte and what every engine emits. So the two arms differ only in step 1's `s`, which is the caller's
-   to build: a selector list for §6.4.3 and `@page` plus its page selector list for §6.4.7. */
+   to build: a selector list for CSSOM §6.4.3 and `@page` plus its page selector list for §6.4.7. */
 static bool decls_and_rules_serialize(JSContext *ctx, CssRuleData *r, JSValueConst rule,
                                       const char *prefix, size_t prefix_len, RBuf *out)
 {
@@ -2380,8 +2380,10 @@ static bool decls_and_rules_serialize(JSContext *ctx, CssRuleData *r, JSValueCon
     return true;
 }
 
-/* §6.4.3's step 1 is "serialize a group of selectors on the rule's associated selectors", which is the text the
-   parse kept and `selectorText =` replaces. */
+/* CSSOM §6.4's serialize a CSS rule, in its CSSStyleRule arm, opens with "the result of performing serialize
+   a group of selectors on the rule's associated selectors" — the steps are §6.4's and not §6.4.3's, which
+   declares the interface and no serialization of its own. That is the text the parse kept and `selectorText =`
+   replaces. */
 static bool style_rule_serialize(JSContext *ctx, CssRuleData *r, JSValueConst rule, RBuf *out)
 {
     size_t sl = 0;
@@ -2389,7 +2391,7 @@ static bool style_rule_serialize(JSContext *ctx, CssRuleData *r, JSValueConst ru
     bool ok;
 
     DCHECK(RULE_TEXT_FIELD_WAS_STRING(ctx, sel),
-           "a §6.4.3 style rule's serialized selector list is not a string, and nothing is pending — so this is "
+           "a CSSOM §6.4.3 style rule's serialized selector list is not a string, and nothing is pending — so this is "
            "the RECORD and not a conversion that threw. Both things that write one, the parse and "
            "`selectorText =`, store only what lexbor accepted");
     if (!sel) return false;
@@ -2527,7 +2529,7 @@ static bool keyframe_rule_serialize(JSContext *ctx, CssRuleData *r, RBuf *out)
    resemblance: §6.4 states no arm for CSSLayerBlockRule at all, and CSS Cascade 5 §6.4.4.1 says "such @layer block
    rules have the same restrictions and PROCESSING as a conditional group rule [CSS-CONDITIONAL-3] with a true
    condition" — of which §6.4 states exactly one. It is NOT `decls_and_rules_serialize`'s shape, and the difference is
-   the BODY: that arm is for a rule holding declarations BESIDE rules (§6.4.3's and §6.4.7's), and a `@layer`
+   the BODY: that arm is for a rule holding declarations BESIDE rules (CSSOM §6.4.3's and §6.4.7's), and a `@layer`
    block's body is CSS Cascade 5 §6.4.4.1's `<rule-list>` with no declarations in it at all. So the two rules differ
    only in step 1's PREFIX, which is the caller's to build. */
 static bool group_rules_serialize(JSContext *ctx, JSValueConst rule, const char *prefix, size_t prefix_len,
@@ -3091,7 +3093,7 @@ static JSValue js_rule_get(JSContext *ctx, JSValueConst this_val, int magic)
         free(b.s);
         return out;
     }
-    /* §6.4.3: "on getting, must return the result of serializing the rule's associated selector list" — which
+    /* CSSOM §6.4.3: "on getting, must return the result of serializing the rule's associated selector list" — which
        is what the parse handed over and what the setter below replaces. */
     case CR_SELECTOR_TEXT:
         r = rule_here_typed(ctx, this_val, RULE_TYPE_STYLE, "CSSStyleRule");
@@ -3204,7 +3206,7 @@ static JSValue js_rule_get(JSContext *ctx, JSValueConst this_val, int magic)
         return r ? JS_DupValue(ctx, r->prefix) : JS_EXCEPTION;
     /* §6.4.7: "The selectorText attribute, on getting, must return the result of serializing the associated
        selector list" — a PAGE selector list, whose grammar and serialization are CSS Paged Media §4.3's and
-       not Selectors', which is why this is a second attribute rather than §6.4.3's reached from two
+       not Selectors', which is why this is a second attribute rather than CSSOM §6.4.3's reached from two
        prototypes. The record holds the serialization the parse (or the setter) already produced. */
     case CR_PAGE_SELECTOR_TEXT:
         r = rule_here_typed(ctx, this_val, RULE_TYPE_PAGE, "CSSPageRule");
@@ -3394,8 +3396,9 @@ static JSValue js_rule_set_css_text(JSContext *ctx, JSValueConst this_val, JSVal
 }
 
 /* The one thing a selector probe keeps: the SERIALIZED selector list lexbor accepted, which is the canonical
-   form §6.4.3's getter must answer afterwards. A parse that produced no top-level style rule leaves `*out`
-   NULL, which is the setter's "the algorithm returned null, do nothing" — and a qualified rule whose prelude
+   form CSSOM §6.4.3's getter must answer afterwards. A parse that produced no top-level style rule leaves `*out`
+   NULL, which is the setter's "if the algorithm returns a null value, do nothing" — and a qualified rule
+   whose prelude
    was NOT accepted as a selector list is exactly that case, which is why the probe asks. Without that test
    `rule.selectorText = '0%'` would store the raw `0%` the parse now reports for a keyframe block's prelude. */
 static void *css_rule_selector_probe(void *ud, void *parent, const CssomRule *pr)
@@ -3412,10 +3415,10 @@ static void *css_rule_selector_probe(void *ud, void *parent, const CssomRule *pr
 /* CSS Syntax's PARSE A GROUP OF SELECTORS over a span of text: the CANONICAL SERIALIZATION lexbor produced for
    it, or NULL when the text is not a selector list at all. OWNED: the caller frees.
    THE GROUP OF SELECTORS IS PARSED BY PARSING A RULE WITH AN EMPTY BODY, because that is the one entry the
-   agent's parser exposes and because it answers exactly the question §6.4.3 asks: a value lexbor accepts as a
+   agent's parser exposes and because it answers exactly the question CSSOM §6.4.3 asks: a value lexbor accepts as a
    selector list comes back as one style rule whose serialization is the canonical form the getter must then
    return, and a value it rejects produces no style rule at all.
-   IT IS ONE FUNCTION BECAUSE TWO CALLERS ASK THE SAME QUESTION FOR OPPOSITE REASONS. §6.4.3's setter must not
+   IT IS ONE FUNCTION BECAUSE TWO CALLERS ASK THE SAME QUESTION FOR OPPOSITE REASONS. CSSOM §6.4.3's setter must not
    STORE a value the parser rejected; the author cascade must not EMIT one — the flattened sheet is re-parsed
    and core/css/css_style_declaration.c asserts the emission against that parse AT EVERY INDEX, so a rule whose
    text comes back as a different kind of rule shifts every rule after it into a neighbour's cascade layer. */
@@ -3436,7 +3439,7 @@ static char *selector_list_reserialize(const char *sel, size_t len)
     return NULL;
 }
 
-/* §6.4.3's setter: "Run the parse a group of selectors algorithm on the given value. If the algorithm returns a
+/* CSSOM §6.4.3's setter: "Run the parse a group of selectors algorithm on the given value. If the algorithm returns a
    non-null value replace the associated selector list with the returned value. Otherwise, if the algorithm
    returns a null value, DO NOTHING." An invalid selector is silently ignored — not a throw, and not a stored
    invalid string, which is why the value goes back through the parser rather than into the slot. */
@@ -3459,9 +3462,9 @@ static JSValue js_rule_set_selector(JSContext *ctx, JSValueConst this_val, JSVal
            core/css/css_nesting.h's resolve asserts the same premise from the other side, so storing a bare
            `.bar` here would leave a nested rule whose text names no parent at all.
            WHAT IS NOT BUILT IS THE RELATIVE HALF OF THIS SETTER, and it is named rather than approximated:
-           §6.4.3's algorithm is "parse a group of selectors", which for a nested rule is a
+           CSSOM §6.4.3's algorithm is "parse a group of selectors", which for a nested rule is a
            `<relative-selector-list>`, and the parser above implements neither the nesting selector nor a
-           leading combinator — so `nested.selectorText = '&:hover'` takes §6.4.3's OWN null branch ("do
+           leading combinator — so `nested.selectorText = '&:hover'` takes CSSOM §6.4.3's OWN null branch ("do
            nothing") where a browser accepts it. The capability to build is a relative-selector-list parse;
            until it exists this write is refused rather than stored unparsed. */
         if (!JS_IsNull(rule_nesting_parent(r->parent_rule))) {
@@ -3491,7 +3494,7 @@ static JSValue js_rule_set_selector(JSContext *ctx, JSValueConst this_val, JSVal
            exception reaches the page. Publishing it instead would be worse than the creator's case rather than
            equal to it: `cow_record_set` releases the OLD value first, so a failed mint would DESTROY the
            selector the rule already had and then report success by returning JS_UNDEFINED. Leaving the rule
-           unchanged and throwing is also what §6.4.3 leaves behind for its own null branch. */
+           unchanged and throwing is also what CSSOM §6.4.3 leaves behind for its own null branch. */
         text = JS_NewString(ctx, reserialized);
         free(reserialized);
         if (JS_IsException(text)) return text;
@@ -3501,13 +3504,13 @@ static JSValue js_rule_set_selector(JSContext *ctx, JSValueConst this_val, JSVal
     return JS_UNDEFINED;
 }
 
-/* §6.4.7's setter, whose three steps are §6.4.3's three with ONE algorithm swapped: "run the PARSE A LIST OF
-   CSS PAGE SELECTORS algorithm on the given value. If the algorithm returns a non-null value replace the
-   associated selector list with the returned value. Otherwise, if the algorithm returns a null value, DO
-   NOTHING." So an invalid page selector is silently ignored — `rule.selectorText = ':notapagepseudo'` leaves
-   the rule exactly as it was, which css/cssom/cssom-pagerule.html asserts four times over — and the EMPTY
-   STRING is not that case: it parses to the empty list, which is a non-null value, so `selectorText = ''`
-   really does clear the list.
+/* CSSOM §6.4.7's setter, whose three steps are CSSOM §6.4.3's three with ONE algorithm swapped — and the
+   quotation is §6.4.7's own words, not §6.4.3's: "run the parse a list of CSS page selectors algorithm on the
+   given value. If the algorithm returns a non-null value replace the associated selector list with the
+   returned value. Otherwise, if the algorithm returns a null value, do nothing." So an invalid page selector is
+   silently ignored — `rule.selectorText = ':notapagepseudo'` leaves the rule exactly as it was, which
+   css/cssom/cssom-pagerule.html asserts four times over — and the EMPTY STRING is not that case: it parses
+   to the empty list, which is a non-null value, so `selectorText = ''` really does clear the list.
    IT IS A SECOND SETTER AND NOT A BRANCH IN THE ONE ABOVE, because the two attributes are two members of two
    interfaces over two grammars: a page selector list is CSS Paged Media §4.3's and is not a group of selectors
    at all — `named:first` is one and no Selectors production admits it. */
@@ -3525,7 +3528,7 @@ static JSValue js_rule_set_page_selector(JSContext *ctx, JSValueConst this_val, 
     parsed = css_prelude_page_selectors(v, strlen(v));
     JS_FreeCString(ctx, v);
     if (parsed) {
-        /* Tested before the record sees it, for the reason §6.4.3's setter above gives: this return reaches the
+        /* Tested before the record sees it, for the reason CSSOM §6.4.3's setter above gives: this return reaches the
            page, and publishing a failed mint would release the selector list the rule already had. */
         text = JS_NewString(ctx, parsed);
         free(parsed);
@@ -3537,7 +3540,7 @@ static JSValue js_rule_set_page_selector(JSContext *ctx, JSValueConst this_val, 
 
 /* CSS Animations §6.2.2's setter, and it is neither of the two above. "If keyText is updated with an INVALID
    keyframe selector, a SyntaxError exception must be THROWN and the value of keyText must remain unchanged" —
-   where §6.4.3's and §6.4.7's both do nothing at all. Three attributes, three sentences, three bodies; folding
+   where CSSOM §6.4.3's and §6.4.7's both do nothing at all. Three attributes, three sentences, three bodies; folding
    them would have to carry the difference in a flag, and the flag is the sentence. */
 static JSValue js_rule_set_key_text(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
@@ -3554,7 +3557,7 @@ static JSValue js_rule_set_key_text(JSContext *ctx, JSValueConst this_val, JSVal
     JS_FreeCString(ctx, v);
     if (!parsed)
         return JS_ThrowDOMException(ctx, "SyntaxError", "the value is not a keyframe selector list");
-    /* Tested before the record sees it, for the reason §6.4.3's setter above gives — and the sentence quoted
+    /* Tested before the record sees it, for the reason CSSOM §6.4.3's setter above gives — and the sentence quoted
        at this function's banner makes it sharper still: leaving the attribute unchanged is what CSS Animations
        §6.2.2 owes on a failure, and publishing a failed mint would leave it changed to a value that is not a
        string at all. */
@@ -3937,15 +3940,16 @@ static const IdlStepDecl RD_DECL = {
     "CSSOM §6.4.5 The CSSGroupingRule Interface deleteRule(index)", RD_STEPS, 0, NULL
 };
 
-/* ---- §6.4.3's `style`, and the DECLARATIONS behind it ----------------------------------------------------- */
+/* ---- CSSOM §6.4.3's `style`, and the DECLARATIONS behind it ----------------------------------------------------- */
 
-/* THE FOUR `style` ATTRIBUTES, WHICH ARE ONE MEMBER OVER ONE FIELD. §6.4.3 states it: "the style attribute
-   must return a CSSStyleProperties object for the style rule, with the following properties: computed flag
-   unset, readonly flag unset, declarations THE DECLARED DECLARATIONS IN THE RULE, parent CSS rule THIS, owner
-   node null" — and CSS Fonts 5 §9.1's, §6.4.7's and §6.4.8's say the same five things. [SameObject], so the
+/* THE FOUR `style` ATTRIBUTES, WHICH ARE ONE MEMBER OVER ONE FIELD. CSSOM §6.4.3 states it: "The style
+   attribute must return a CSSStyleProperties object for the style rule, with the following properties:
+   computed flag unset, readonly flag unset, declarations the declared declarations in the rule, in specified
+   order, parent CSS rule this, owner node null" — and CSS Fonts 5 §9.1's, CSSOM §6.4.7's and §6.4.8's say the
+   same five things (§6.4.7 over `the declared descriptors in the rule`). [SameObject], so the
    block is remembered on the record: a page holds `rule.style` and compares it, and a fresh object per read
    makes every such comparison false. A rule has exactly ONE block object, which is why they share `r->style`.
-   WHAT DIFFERS IS THE INTERFACE, and the table says so once: §6.4.3's and §6.4.8's hand back a
+   WHAT DIFFERS IS THE INTERFACE, and the table says so once: CSSOM §6.4.3's and §6.4.8's hand back a
    CSSStyleProperties, CSS Fonts 5 §9.1's a CSSFontFaceDescriptors, §6.4.7's a CSSPageDescriptors. §6.4.8's
    choice is the corpus's own — css/cssom/idlharness.html lists `sheet.cssRules[2].cssRules[0].style` under
    CSSStyleProperties, where it lists `sheet.cssRules[2].style` under CSSPageDescriptors. The IDL in
@@ -4023,7 +4027,7 @@ void css_rule_set_block_text(JSContext *ctx, JSValueConst rule, const char *text
     DCHECK(r->type == RULE_TYPE_STYLE || r->type == RULE_TYPE_FONT_FACE || r->type == RULE_TYPE_PAGE ||
            r->type == RULE_TYPE_MARGIN || r->type == RULE_TYPE_KEYFRAME,
            "§6.6's declaration block wrote its text back onto a rule that HAS no declaration block. A rule's "
-           "`style` attribute is the only thing that reaches this, and it is declared by §6.4.3's "
+           "`style` attribute is the only thing that reaches this, and it is declared by CSSOM §6.4.3's "
            "CSSStyleRule, CSS Fonts 5 §9.1's CSSFontFaceRule, §6.4.7's CSSPageRule, §6.4.8's CSSMarginRule and "
            "CSS Animations §6.2's CSSKeyframeRule and by nothing else in this build");
     /* THE RULE'S OWN RESTRICTION, ON THE WRITE SIDE. `setProperty`, `style.cssText =` and every descriptor
@@ -4046,7 +4050,8 @@ void css_rule_set_block_text(JSContext *ctx, JSValueConst rule, const char *text
 /* ---- the AUTHOR CASCADE's view ----------------------------------------------------------------------------- */
 
 /* The walk's own state: the text it is building, the per-emitted-rule layer it is building beside it, and the
-   §6.4.3 order it declares every layer it meets into. See css_rule.h for why the second and third exist. */
+   CSS Cascade 5 §6.4.3 order it declares every layer it meets into. See css_rule.h for why the second and
+   third exist. */
 typedef struct {
     RBuf                 out;
     const CssLayerNode **layer;
@@ -4082,12 +4087,12 @@ typedef struct { const char *sel; size_t len; } CascadeNest;
 static bool cascade_emit(JSContext *ctx, JSValueConst list, CascadeEmit *e, CssLayerNode *cur,
                          const CascadeNest *nest);
 
-/* One rule's contribution to the text the selector matcher re-parses, and to §6.4.3's layer order. A STYLE rule
-   contributes itself, in the layer it is nested in, FOLLOWED BY ITS OWN NESTED RULES; a CONDITIONAL GROUP rule
-   contributes its children when its condition holds and nothing when it does not, which is what `@media` MEANS
-   and is the whole reason the cascade cannot simply read a sheet's top level. `cur` is the cascade layer this
-   rule sits in — §6.4.3's implicit outer layer at a sheet's top level, and the layer a `@layer` block declares
-   inside it. `nest` is what a nested rule's `&` resolves to; see above. */
+/* One rule's contribution to the text the selector matcher re-parses, and to CSS Cascade 5 §6.4.3's layer
+   order. A STYLE rule contributes itself, in the layer it is nested in, FOLLOWED BY ITS OWN NESTED RULES;
+   a CONDITIONAL GROUP rule contributes its children when its condition holds and nothing when it does not, which
+   is what `@media` MEANS and is the whole reason the cascade cannot simply read a sheet's top level. `cur` is the
+   cascade layer this rule sits in — CSS Cascade 5 §6.4.3's implicit outer layer at a sheet's top level, and the layer
+   a `@layer` block declares inside it. `nest` is what a nested rule's `&` resolves to; see above. */
 static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, CssLayerNode *cur,
                              const CascadeNest *nest)
 {
@@ -4106,12 +4111,12 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, 
         bool ok;
 
         media_query_free(set);
-        /* §6.4.3: "Layers that are defined inside of a conditional group rule do not contribute to the layer
-           order unless the condition is true or unless the conditional group rule can evaluate differently for
-           different elements in the document." A `@media` is global to the document, so a false condition is
-           the first arm and the children — layers included — are simply not walked. The second arm is the
-           element-sensitive conditional, which `@container` below is and which is why that rule cannot reach
-           this shape however much its IDL resembles this one's. */
+        /* CSS Cascade 5 §6.4.3 "Layer Ordering": "Layers that are defined inside of a conditional group rule
+           do not contribute to the layer order unless the condition is true or unless the conditional group
+           rule can evaluate differently for different elements in the document." A `@media` is global to the document,
+           so a false condition is the first arm and the children — layers included — are simply not walked. The second
+           arm is the element-sensitive conditional, which `@container` below is and which is why that rule cannot
+           reach this shape however much its IDL resembles this one's. */
         if (!applies) return true;
         kids = rule_child_rules(ctx, rule);
         ok = cascade_emit(ctx, kids, e, cur, nest);
@@ -4122,8 +4127,8 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, 
        identically: "when the condition is true, CSS processors must apply the rules inside the group rule as
        though they were at the group rule's location; when the condition is false, CSS processors must not
        apply any of rules inside the group rule."
-       §6.4.3's layer sentence lands on the first arm here too — a feature query is global to the document, so
-       a false condition means the children, layers included, are simply not walked. It is not the
+       CSS Cascade 5 §6.4.3's layer sentence lands on the first arm here too — a feature query is global to
+       the document, so a false condition means the children, layers included, are simply not walked. It is not the
        element-sensitive conditional that sentence's second arm is about. */
     if (r->type == RULE_TYPE_SUPPORTS) {
         JSValue kids;
@@ -4148,10 +4153,10 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, 
        plausible answer that reads exactly like a right one, and §5.4 says the third possibility is the common
        case rather than an edge: "if no ancestor is an eligible query container, then the container query is
        UNKNOWN for that element."
-       AND SKIPPING IT IS WRONG EVEN FOR THE LAYERS. §6.4.3's sentence one arm up has a second clause written
-       for exactly this rule — layers inside a conditional group rule contribute "unless the conditional group
-       rule can evaluate differently for different elements in the document" — so a `@container`'s layers
-       contribute to the layer order UNCONDITIONALLY, which the `@media` arm's false branch does not do and
+       AND SKIPPING IT IS WRONG EVEN FOR THE LAYERS. CSS Cascade 5 §6.4.3's sentence one arm up has a second
+       clause written for exactly this rule — layers inside a conditional group rule contribute "unless the
+       conditional group rule can evaluate differently for different elements in the document" — so a `@container`'s
+       layers contribute to the layer order UNCONDITIONALLY, which the `@media` arm's false branch does not do and
        must not be reused for.
        WHAT TO BUILD, IN ORDER: §5.1 "Creating Query Containers: the container-type property" resolved on
        ancestors (so the query container can be SELECTED, which is a cascade result feeding a cascade input and
@@ -4171,10 +4176,10 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, 
               "which is neither. Build §5.1's `container-type` resolution so a query container can be "
               "selected, then §6.2's style container features (which need only a computed custom property on "
               "the container) and §6.1's size features (which need core/browser/layout); and note that "
-              "§6.4.3's layer sentence puts THIS rule in its second arm — a `@container`'s layers contribute "
-              "to the layer order whatever its condition says, so the `@media` arm's skip is not the shape to "
-              "copy. The CSSOM object is complete and is NOT what is missing: core/css/css_rule.c builds a "
-              "CSSContainerRule with §9.1's `conditions`, `containerName`, `containerQuery` and "
+              "CSS Cascade 5 §6.4.3's layer sentence puts THIS rule in its second arm — a `@container`'s "
+              "layers contribute to the layer order whatever its condition says, so the `@media` arm's skip "
+              "is not the shape to copy. The CSSOM object is complete and is NOT what is missing: core/css/css_rule.c "
+              "builds a  CSSContainerRule with §9.1's `conditions`, `containerName`, `containerQuery` and "
               "`conditionText`, so the rule, its children and its `cssText` are all readable by the page and "
               "only its CASCADED EFFECT is unbuilt");
     }
@@ -4199,10 +4204,10 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, 
        in place of the @import rule" — and this build fetches no imported sheet, which css_rule.h records as the
        gap that `styleSheet` is absent for. But §6.4.1 lists it first among the three ways a cascade layer is
        DECLARED ("using an @import rule with the layer keyword or layer() function, assigning the contents of
-       the imported file into that layer"), and §6.4.3 orders layers by where they are first declared — so
-       `@import url(a) layer(theme); @layer other { } @layer theme { }` puts `theme` FIRST, and an import whose
-       layer went unrecorded would order those two backwards for every rule in them. The sheet being unfetched
-       does not change where its layer sits. */
+       the imported file into that layer"), and CSS Cascade 5 §6.4.3 orders layers by where they are first
+       declared — so `@import url(a) layer(theme); @layer other { } @layer theme { }` puts `theme` FIRST,
+       and an import whose layer went unrecorded would order those two backwards for every rule in them. The sheet
+       being unfetched does not change where its layer sits. */
     if (r->type == RULE_TYPE_IMPORT) {
         char *ln = rule_opt_text(ctx, r->layer_name);
         CssLayerNames names = { NULL, 0 };
@@ -4300,11 +4305,11 @@ static bool cascade_emit_one(JSContext *ctx, JSValueConst rule, CascadeEmit *e, 
     sel = rule_text_copy(ctx, r->selector_text, &sl);
     /* A rule with NO selector text cannot be serialized into a sheet at all, and there is no partial answer
        worth giving: an empty prelude would make lexbor drop the rule and every index after it would name a
-       neighbour's declarations, and a `*` stand-in would make the rule match EVERY element. §6.4.3's selector
+       neighbour's declarations, and a `*` stand-in would make the rule match EVERY element. CSSOM §6.4.3's selector
        list is non-empty for every rule this build can make — both creators keep only what lexbor accepted — so
        this is the pending-exception path, and the whole sheet is abandoned. */
     DCHECK(RULE_TEXT_FIELD_WAS_STRING(ctx, sel),
-           "a §6.4.3 style rule's serialized selector list is not a string, and nothing is pending — so this is "
+           "a CSSOM §6.4.3 style rule's serialized selector list is not a string, and nothing is pending — so this is "
            "the RECORD and not a conversion that threw. Both things that write one — the parse and "
            "`selectorText =`, in css_rule.c — go through cssom_parse_rules and store only what lexbor "
            "accepted");
@@ -4396,8 +4401,8 @@ bool css_rule_cascade_sheet(JSContext *ctx, JSValueConst list, CssLayerOrder *or
 
     DCHECK(out != NULL, "the author cascade's view of a sheet was built with nowhere to report it");
     DCHECK(order != NULL,
-           "a sheet was flattened for the author cascade with no §6.4.3 LAYER ORDER to declare its layers "
-           "into. Every `@layer` rule the walk meets declares one, and the order is what §6.1's Layers "
+           "a sheet was flattened for the author cascade with no CSS Cascade 5 §6.4.3 LAYER ORDER to declare "
+           "its layers into. Every `@layer` rule the walk meets declares one, and the order is what §6.1's Layers "
            "criterion sorts by — a walk with nowhere to put them would answer every layer's rules as if they "
            "were unlayered, which inverts the cascade for the whole sheet");
     e.order = order;
@@ -4636,7 +4641,7 @@ void css_rule_install_proto(JSContext *ctx)
     /* §6.4.7's CSSPageRule.prototype. It derives from CSSGroupingRule and not from CSSRule, because an
        `@page` CONTAINS rules — CSS Paged Media §4.3's sixteen margin at-rules — so `cssRules`, `insertRule`
        and `deleteRule` are reachable on one and are exactly the right members for it.
-       ITS `selectorText` IS NOT §6.4.3's. The two are two attributes of two interfaces over two grammars: CSS
+       ITS `selectorText` IS NOT CSSOM §6.4.3's. The two are two attributes of two interfaces over two grammars: CSS
        Paged Media §4.3's `<page-selector-list>` is not a group of selectors and Selectors admits none of it,
        so the getter reads a different magic and the setter runs a different parse. */
     page = JS_NewObjectProto(ctx, grouping);
