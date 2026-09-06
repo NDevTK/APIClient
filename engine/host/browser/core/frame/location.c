@@ -26,9 +26,9 @@
  * §3.7.6's "define the regular attributes" REMOVES the unforgeable ones from the interface prototype object, so
  * `Location.prototype` legitimately carries nothing but §3.7.3's `constructor` and its @@toStringTag — which is
  * exactly what a browser reports. The spec gives the reason in the same section, and it is a security reason:
- * the mitigations exist "for legacy code that consulted the Location interface, or stringified it, to determine
- * the document URL, and then used it in a security-sensitive way", so that `foo[location] = bar` and
- * `location + ""` cannot be misdirected. A configurable member on a shared prototype is exactly the
+ * HTML §7.2.4 "The Location interface" says the mitigation "is required by legacy code that consulted the
+ * Location interface, or stringified it, to determine the document URL, and then used it in a
+ * security-sensitive way", so that `foo[location] = bar` and `location + ""` cannot be misdirected. A configurable member on a shared prototype is exactly the
  * misdirection, so this is not a placement detail — putting Location's members where Navigator's go would
  * IMPLEMENT THE WRONG INTERFACE.
  *
@@ -37,9 +37,10 @@
  * both non-writable and non-configurable, so ToPrimitive on a Location reaches the unforgeable stringifier and
  * nothing a page can install.
  *
- * THE INTERFACE IS ITS SETTERS, AND THIS FILE HAD NONE OF THEM. What stood here said every member's setter,
- * `assign`, `replace` and `reload` "all end in Location-object navigate, and navigation from a Location is not
- * built", and that `ancestorOrigins` is "a DOMStringList, an interface that does not exist here". BOTH HAD
+ * THE INTERFACE IS ITS SETTERS, AND THIS FILE HAD NONE OF THEM. What stood here said of every member's
+ * setter, of `assign`, `replace` and `reload`, that they
+ * `all end in Location-object navigate, and navigation from a Location is not built`
+ * — and of `ancestorOrigins`, that it is `a DOMStringList, an interface that does not exist here`. BOTH HAD
  * STOPPED BEING TRUE: core/frame/navigable.h has §7.4.2.2's navigate, reached by every hyperlink this engine
  * follows, and core/html/dom_string_list.h is HTML §2.6.5's DOMStringList with four consumers. It is the stale
  * claim this project's own §DFAIL rule is written about — accurate about the SPEC, wrong about THIS TREE — and
@@ -49,8 +50,9 @@
  *
  * WHY THOSE TWO ASSERTS ARE GONE RATHER THAN SATISFIED. They asked this file to build §7.2.4.5-.10's
  * cross-origin filtered Location before shipping the two members §7.2.1 puts on CrossOriginProperties(Location),
- * on the ground that "window_proxy.c's assert is the only thing standing between a cross-origin page and a
- * Location it can navigate". That IS the guard, and it is the RIGHT place for it: a filter is a property of the
+ * on this ground of its own:
+ * `window_proxy.c's assert is the only thing standing between a cross-origin page and a Location it can navigate`
+ * That IS the guard, and it is the RIGHT place for it: a filter is a property of the
  * object that CROSSES, and in this engine no Location crosses — window_proxy.c's WP_LOCATION answers out of
  * proxy_realm, whose first DCHECK is that the navigable's active document is this agent's, so a cross-origin
  * read aborts at the boundary rather than reaching a member here. A second copy of that guard, phrased as a
@@ -153,13 +155,14 @@ enum { LOC_ASSIGN, LOC_REPLACE };
    Location whose Document is in another instance, which §7.2.4.5 through §7.2.4.10's cross-origin arms filter
    down to exactly these two names — so this component is the list's OTHER reader: the assert below is that
    §7.2.4's IDL still declares both members, which is the one way the two sections can drift.
-   THE LIST USED TO BE A SECOND COPY, and the paragraph that stood here said this Location "has no cross-origin
-   surface at all" because "navigation from a Location is not built". Both halves are gone: the surface exists
-   (remote_location.c) and the assert that matters is no longer "the entries are absent" but "the interface
-   declares them", which is what a filter needs in order to have something to expose. */
+   THE LIST USED TO BE A SECOND COPY, and the paragraph that stood here said this Location
+   `has no cross-origin surface at all` because `navigation from a Location is not built`. Both halves are
+   gone: the surface exists (remote_location.c) and the assert that matters is no longer `the entries are
+   absent` but `the interface declares them`, which is what a filter needs in order to have something to
+   expose. */
 
 /* THE CLASS IS THE BRAND. Web IDL §3.7.6 Attributes' check is "If jsValue does not implement target" and
-   §3.7.7 Operations' is "If jsValue does not implement the interface target, throw a TypeError" — this
+   Web IDL §3.7.7 Operations' is "If jsValue does not implement the interface target, throw a TypeError" — this
    interface declares both kinds, so both apply. THE NUMBER READ §3.7.5, WHICH IS Constants, and the phrase
    quoted beside it named `esValue` — the identifier an OLDER edition used, so the quotation had gone stale
    with the number. The one object
@@ -395,8 +398,9 @@ static JSValue js_loc_get(JSContext *ctx, JSValueConst this_val, int magic)
        step 7 appends U+0023 (#) and the fragment when the fragment is non-null and the exclude-fragment
        boolean is false. That is url_serialize, which this component already owns and which §7.4.2.2's
        navigate below calls for exactly the same string.
-       IT USED TO BE ORIGIN+PATH, on the stated grounds that the query and the fragment "are the attacker's
-       and are read through their own getters, which is what keeps their source identities separate". Separate
+       IT USED TO BE ORIGIN+PATH, on stated grounds of its own — that the query and the fragment
+       `are the attacker's and are read through their own getters, which is what keeps their source identities
+       separate`. Separate
        identities are a real requirement and this was the wrong way to meet it: the getter is defined by §7.2.4
        to serialize the URL, so answering with a different string is a fidelity bug in EVERY host — a
        conformance run included, where no source is minted at all and the only thing this decided was that
@@ -455,8 +459,8 @@ static JSValue js_loc_get(JSContext *ctx, JSValueConst this_val, int magic)
    IT IS NOT A CORNER. A stringifier is what makes a Location usable ANYWHERE a USVString is expected:
    `new URL(path, location)` is how a page builds an absolute URL from a relative one, and WPT's own
    /common/dispatcher/dispatcher.js opens with exactly it. Without one, ToString found Object.prototype.toString
-   and handed the URL parser the eight characters `[object Object]`, so the constructor threw "the base URL is
-   not a valid URL" and four webmessaging files ended at their first import. */
+   and handed the URL parser the eight characters `[object Object]`, so the constructor threw url.c's own
+   `the base URL is not a valid URL` and four webmessaging files ended at their first import. */
 static JSValue js_loc_to_string(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv)
 {
     (void)argc; (void)argv;
@@ -496,9 +500,10 @@ static JSValue js_loc_to_string(JSContext *ctx, JSValueConst this_val, int argc,
  * fetched text — the algorithm has 24 steps, and eight of them (5, 6, 13, 15, 19, 21, 22, 24) hold a nested
  * list whose sub-items a flat `<li>` count promotes to peers. It is not one reader's recount: it lands
  * simultaneously on the two independent counts of this same algorithm already in the tree —
- * core/dom/document.c's 16 "if navigable's parent is non-null, then set navigable's is delaying load events to
- * true" and 17 "let targetSnapshotParams be the result of snapshotting target snapshot params given
- * navigable", and core/frame/navigable.c's 21 `javascript:` scheme test — and agreement on three numbers this
+ * core/dom/document.c's 16, HTML §7.4.2.2's "if navigable's parent is non-null, then set navigable's is
+ * delaying load events to true", and 17, HTML §7.4.2.2's "let targetSnapshotParams be the result of
+ * snapshotting target snapshot params given navigable", and core/frame/navigable.c's 21 `javascript:` scheme
+ * test — and agreement on three numbers this
  * count did not derive is what makes the fourth checkable.
  *
  * THE "steps 9-10" ABOVE IS NOT PART OF THAT CORRECTION AND IS LEFT AS IT STANDS, deliberately and not by
@@ -525,11 +530,14 @@ static JSValue js_loc_to_string(JSContext *ctx, JSValueConst this_val, int argc,
  * three later steps.
  *
  * STEP 9's SECOND CONJUNCT IS TRUE BY THIS FILE'S OWN PRECONDITION and is asserted rather than computed:
- * "initiatorOriginSnapshot is same origin with navigable's active document's origin", where the initiator is
- * the document whose script ran — which loc_assert_this_realm has already established is this one.
- * STEP 10's "THE NAVIGATION MUST BE A REPLACE given url and document" is two disjuncts and both are real here:
- * "url's scheme is `javascript`" (a `javascript:` URL never gets a history entry of its own) or "document's is
- * initial about:blank is true" (the Document a navigable is created with is replaced rather than pushed past). */
+ * HTML §7.4.2.2's "initiatorOriginSnapshot is same origin with navigable's active document's origin", where
+ * the initiator is the document whose script ran — which loc_assert_this_realm has already established is
+ * this one.
+ * STEP 10 ASKS AN ALGORITHM THAT LIVES ONE SECTION UP. The call is HTML §7.4.2.2's, "given url and
+ * navigable's active document"; the algorithm is HTML §7.4.2.1 "Supporting concepts"' "the navigation must be
+ * a replace given a url url and a document document", and its two disjuncts are both real here — "url's
+ * scheme is javascript" (a `javascript:` URL never gets a history entry of its own) or "document's is initial
+ * about:blank is true" (the Document a navigable is created with is replaced rather than pushed past). */
 static const char *loc_resolve_history_handling(JSContext *ctx, const UrlRecord *target, const char *requested)
 {
     const char *resolved = requested;
@@ -595,8 +603,9 @@ static bool loc_navigate_begin(JSContext *ctx, SessionHistoryFragmentNav *w, con
 /* WHICH OF §7.2.4's TWELVE ALGORITHMS IS A CODE-EXECUTION SINK, AND IT IS A PARTITION THE STANDARD DRAWS
  * RATHER THAN A NARROWING THIS FILE CHOSE. The @S URL class has ONE context and therefore one written-down
  * vector — solver/solve.h: "navigating executes the `javascript:` scheme and nothing else does" — so the
- * question "is this member a sink" is exactly "can the value the page assigned become the destination's
- * SCHEME", and §7.2.4 answers it per member in its own steps:
+ * question `is this member a sink` is exactly
+ * `can the value the page assigned become the destination's SCHEME`, and §7.2.4 answers it per member in its
+ * own steps:
  *   `href`, `assign` and `replace` ENCODING-PARSE THE WHOLE GIVEN VALUE ("let url be the result of
  *      encoding-parsing a URL given the given value, relative to the entry settings object"), so the scheme is
  *      the attacker's along with everything else. These three are the sink.
@@ -669,7 +678,7 @@ static const char *loc_value_bytes(JSContext *ctx, JSValueConst val, size_t *len
  * `href` setter, `assign` and `replace`.
  *
  * THE BASE IS THE API BASE URL AND NOT THIS LOCATION'S ADDRESS, and the two are different objects that happen
- * to be the same string until a page ships `<base href>`. §2.4.2 step: "let baseURL be environment's base URL,
+ * to be the same string until a page ships `<base href>`. HTML §2.4.2 step: "let baseURL be environment's base URL,
  * if environment is a Document object; otherwise environment's API base URL" (HTML §8.1.3.2 "Environment
  * settings objects" is where that field is declared), and HTML §7.2.2.6 "Script settings for Window objects"
  * gives a
@@ -722,9 +731,9 @@ static bool loc_encoding_parse(JSContext *ctx, const char *v, size_t vlen, UrlRe
  *      navigating when the result is not an HTTP(S) scheme;
  *   `search` parses in the relevant Document's CHARACTER ENCODING where §6.1's is always UTF-8;
  *   `hash` does NOT special-case the empty string (§6.1's sets the fragment to null; this one does not, and
- *      the standard's note says why: "to remain compatible with deployed scripts"), and it BAILS OUT when the
- *      fragment it computed equals the one already there — "necessary for compatibility with deployed content,
- *      which redundantly sets location.hash on scroll".
+ *      HTML §7.2.4's note says why: "to remain compatible with deployed scripts"), and it BAILS OUT when the
+ *      fragment it computed equals the one already there — HTML §7.2.4 again: "necessary for compatibility
+ *      with deployed content, which redundantly sets location.hash on scroll".
  * So url_member_set is deliberately NOT reused: it is the OTHER interface's algorithm, and the three
  * differences are the whole of what a Location is.
  *
@@ -917,13 +926,15 @@ static int js_loc_set(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValu
         }
         break;
     default: {
-        /* THE HASH SETTER, AND ITS TWO DEPARTURES FROM §6.1's ARE BOTH COMPATIBILITY RULES THE STANDARD
-           EXPLAINS. It does NOT special-case the empty string ("unlike the equivalent API for the a and area
-           elements, the hash setter does not special case the empty string, to remain compatible with deployed
-           scripts"), and it BAILS OUT when the fragment it computed is the one already there ("this bailout is
-           necessary for compatibility with deployed content, which redundantly sets location.hash on scroll").
-           THE BAILOUT IS COMPARED AGAINST thisURLFragment — "copyURL's fragment if it is non-null; OTHERWISE
-           THE EMPTY STRING" — so on a URL with no fragment at all, `location.hash = ""` computes the empty
+        /* THE HASH SETTER, AND ITS TWO DEPARTURES FROM §6.1's ARE BOTH COMPATIBILITY RULES HTML §7.2.4 "The
+           Location interface" EXPLAINS. It does NOT special-case the empty string ("unlike the equivalent API
+           for the a and area elements, the hash setter does not special case the empty string, to remain
+           compatible with deployed scripts"), and it BAILS OUT when the fragment it computed is the one
+           already there — §7.2.4's "this bailout is necessary for compatibility with deployed content, which
+           redundantly sets location.hash on scroll".
+           THE BAILOUT IS COMPARED AGAINST thisURLFragment — §7.2.4's "copyURL's fragment if it is non-null;
+           OTHERWISE THE EMPTY STRING" — so on a URL with no fragment at all, `location.hash = ""` computes the
+           empty
            fragment, finds it equal, and does not navigate. Folding null into "" anywhere else would be wrong;
            here the spec does it itself, in this one step, and only for the comparison. */
         const char *in = v[0] == '#' ? v + 1 : v;
@@ -1053,7 +1064,7 @@ static const IdlStepDecl LOC_ASSIGN_DECL = {
 
 /* §7.2.4's `reload()`: "let document be this's relevant Document; if document is null, then return; if
  * document's origin is not same origin-domain with the entry settings object's origin, then throw a
- * SecurityError; RELOAD document's node navigable."
+ * "SecurityError" DOMException; RELOAD document's node navigable."
  *
  * ITS LAST STEP IS HTML §7.4.3 "Reloading and traversing"'s RELOAD, WHICH RUNS THE PAGE'S CODE, so this member
  * is a machine like the setters and assign/replace above it. §7.4.3 step 1 fires a push/replace/reload navigate
@@ -1140,8 +1151,8 @@ static const IdlStepDecl LOC_RELOAD_DECL = {
 
 /* §7.2.4's `ancestorOrigins`: "if this's relevant Document is null, then return this's EMPTY DOMStringList; if
  * this's relevant Document's origin is not same origin-domain with the entry settings object's origin, then
- * throw a SecurityError; assert: this's relevant Document's ancestor origins list is not null; otherwise
- * return this's relevant Document's ancestor origins list."
+ * throw a "SecurityError" DOMException; assert: this's relevant Document's ancestor origins list is not null;
+ * otherwise return this's relevant Document's ancestor origins list."
  * THE FIRST ARM IS A REAL ANSWER AND NOT A DEGRADED ONE — the standard gives a Location "an associated empty
  * DOMStringList" precisely so this member has something to return, and notes that it "cannot carry state
  * across navigations because it is only returned when there is no relevant Document". */
