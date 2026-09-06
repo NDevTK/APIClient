@@ -377,7 +377,32 @@ JSValue byte_reader_json(JSContext *ctx, JSValueConst recv, const char *bytes, s
 
 /* A COPY, for both of these, because what the page gets is ITS OWN to detach, transfer or write through —
    handing out the object's storage would let one flow mutate a reply another is still reading, and a detach
-   would leave that flow reading freed memory. */
+   would leave that flow reading freed memory.
+
+   AND NEITHER OF THESE TWO CALLS byte_reader_content, WHICH IS THE ONE ASYMMETRY IN THIS TABLE AND WAS
+   UNSTATED. `text` and `json` hand their value through the provenance door and these hand back the raw
+   container, so ONE byte sequence answers a page as unknown through two readers and as concrete through
+   the other two. That is not an oversight and the `(void)recv` is not laziness: the solver's unknown is a
+   callable exotic whose [[Get]] answers every name before the prototype chain is walked, so wrapping an
+   ArrayBuffer in one would make `ab instanceof ArrayBuffer` and every typed-array operation over it answer
+   about the wrapper instead of the buffer — a Web IDL §3.2 brand this reader would be breaking to carry a
+   taint. The wrap is right for a STRING and a parsed RECORD, whose members a page reads by name, and wrong
+   for a container a page reads by index and brand.
+
+   NAMED RESIDUAL — THE BYTES' UNKNOWN-NESS IS LOST AT THE CONTAINER BOUNDARY.
+   WHAT IS NOT COVERED: a reply read as a container carries no provenance at all, so `ab.byteLength`,
+   `by.length` and `by[0]` are CONCRETE and a page's branch on any of them is DECIDED where the identical
+   bytes through `text()` or `json()` FORK. §Solver-half forbids collapsing a modelable value to
+   bare-concrete for exactly this reason — it deletes the fork and every arm behind it — and this is that
+   collapse, arriving at a container rather than at a scalar.
+   WHAT THE NEXT DIFF BUILDS: NOT a wrapped container, which the paragraph above rules out. It is a buffer
+   whose ELEMENTS are the unknown — the triple riding the storage the brand still describes — so `by[0]` is
+   unknown while `by instanceof Uint8Array` stays true. That is a change to what a byte sequence IS in this
+   engine and not a change to this table, which is why it is named here rather than attempted.
+   HOW ITS ABSENCE WOULD SHOW: a page that gates on a reply's length or leading byte takes exactly one arm,
+   with no sibling and nothing anywhere to say a world was lost. The fixture already asks it — the
+   `body-bytes` row asserts `len`, `n` and `b0` off one reply read two ways — so a run in which that row
+   answers while a byte-gated arm is still missing is this residual firing rather than being retired. */
 JSValue byte_reader_array_buffer(JSContext *ctx, JSValueConst recv, const char *bytes, size_t len)
 {
     (void)recv;
