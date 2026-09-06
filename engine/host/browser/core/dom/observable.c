@@ -1576,11 +1576,30 @@ void observable_init(JSContext *ctx)
     realm_declare_intrinsic(observable_install_protos);
 }
 
+/* Observable §2.1 "The Subscriber interface"'s AND §2.2 "The Observable interface"'s TWO INTERFACE PROTOTYPE
+   OBJECTS *AND* THEIR TWO INTERFACE OBJECTS, FOR ONE REALM. Web IDL §3.7.1 is cited at the two sites below
+   that mint them and deliberately NOT here: this paragraph quotes §3.8, and a §3.7.1 citation standing over
+   those quotations makes them §3.7.1's words, which they are not.
+   BOTH INTERFACES ARE `[Exposed=*]`, AND WEB IDL §3.8 "Platform objects implementing interfaces" IS GIVEN A
+   REALM. Its `define the global property references` is "To define the global property references on target,
+   given realm realm" and its step 1 is "Let interfaces be a list that contains every interface that is exposed
+   in realm" — a REALM, with no Document anywhere in the algorithm. The two interface objects used to be placed
+   from core/platform.c's per-DOCUMENT column through an `observable_install`, so a realm that reaches no
+   platform_document_install got neither name: a worker realm always, and a Window realm until a Document was
+   installed over it. They are minted here instead, beside the two prototypes this function has already built,
+   which is also what removes the two prototype re-reads that entry made — a JS_GetClassProto of g_obs_class
+   and one of g_sub_class, each a second answer to a question settled a few lines up.
+   §2.3.1's `from()` MOVED WITH ITS INTERFACE OBJECT, because it is a member OF that object: `static Observable
+   from(any value)` on an `Observable` minted without it is a static a page can feature-detect and not call.
+   THE THIRD COLUMN OF core/platform.c's ROW GOES WITH THEM AND NOTHING SURVIVES IN IT. This component's
+   per-document entry placed these two names and nothing else — unlike `fetch`, whose row keeps a document half
+   for §5.6's `fetch` MEMBER — so the row loses its install column outright rather than keeping one. */
 void observable_install_protos(JSContext *ctx)
 {
-    JSValue obs_p, sub_p, prev;
+    JSValue obs_p, sub_p, prev, obsctor, subctor, global;
 
     DCHECK(g_obs_class != 0, "a realm asked for Observable.prototype before the interfaces were declared");
+    DCHECK(g_ready, "a realm built §2.1's and §2.2's interfaces before observable_init");
     prev = JS_GetClassProto(ctx, g_obs_class);
     DCHECK(JS_IsNull(prev), "observable_install_protos ran twice in one realm");
     JS_FreeValue(ctx, prev);
@@ -1607,6 +1626,16 @@ void observable_install_protos(JSContext *ctx)
             realm_value_set(ctx, g_sub_fn_slot[k], fn);
         }
     }
+
+    /* Observable §2.1's Web IDL §3.7.1 "Interface object". §2.1 declares NO `constructor`, and §3.7.1 says of
+       exactly that case "Interface objects whose interfaces are not declared with a constructor operation will
+       throw when called both as a function and as a constructor" — which is the whole of js_illegal_ctor, and
+       the reason it is a plain C body rather than a machine: it reaches none of the page's code.
+       THE HANDOVER IS LAST: JS_SetClassProto TAKES the reference, so `sub_p` is this function's until the realm
+       owns it, and §3.7.1's pairing above it reads a LOCAL rather than a class slot already given away. */
+    subctor = JS_NewCFunction2(ctx, js_illegal_ctor, "Subscriber", 0, JS_CFUNC_constructor, 0);
+    CHECK(!JS_IsException(subctor), "the Subscriber interface object could not be allocated");
+    JS_SetConstructor(ctx, subctor, sub_p);
     JS_SetClassProto(ctx, g_sub_class, sub_p);
 
     obs_p = JS_NewObject(ctx);
@@ -1614,6 +1643,15 @@ void observable_install_protos(JSContext *ctx)
     idl_interface_tag(ctx, obs_p, "Observable");
     idl_install_step_method(ctx, obs_p, "subscribe", 0, g_op_stepid[OP_SUBSCRIBE]);
     obs_ops_install(ctx, obs_p);
+
+    /* Observable §2.2's Web IDL §3.7.1 "Interface object", WITH §2.3.1 "from()"'s static on it. §2.2 declares
+       `constructor(SubscribeCallback callback)`, whose one argument is what §3.7.1's `length` states, and the
+       callback it converts is the page's — so the constructor is a machine where `Subscriber`'s above is not. */
+    obsctor = JS_NewCFunction2(ctx, NULL, "Observable", 1, JS_CFUNC_step_ctor, g_op_stepid[OP_CTOR]);
+    CHECK(!JS_IsException(obsctor), "the Observable interface object could not be allocated");
+    JS_SetPropertyStr(ctx, obsctor, "from",
+                      JS_NewCFunction2(ctx, NULL, "from", 1, JS_CFUNC_step, g_op_stepid[OP_FROM]));
+    JS_SetConstructor(ctx, obsctor, obs_p);
     JS_SetClassProto(ctx, g_obs_class, obs_p);
 
     /* Observable §3 "EventTarget integration" declares `partial interface EventTarget { Observable
@@ -1640,34 +1678,13 @@ void observable_install_protos(JSContext *ctx)
         CHECK(JS_IsFunction(ctx, fn), "observable: §2.2.1's convert could not be minted");
         realm_value_set(ctx, g_from_fn_slot, fn);
     }
-}
 
-void observable_install(JSContext *ctx, JSValueConst global)
-{
-    JSValue ctor, proto;
-
-    DCHECK(JS_IsObject(global), "observable_install was given something that is not the global object");
-    DCHECK(g_ready, "observable_install ran before observable_init");
-
-    ctor = JS_NewCFunction2(ctx, NULL, "Observable", 1, JS_CFUNC_step_ctor, g_op_stepid[OP_CTOR]);
-    CHECK(!JS_IsException(ctor), "the Observable interface object could not be allocated");
-    proto = JS_GetClassProto(ctx, g_obs_class);
-    DCHECK(!JS_IsNull(proto), "Observable was installed into a realm with no proto build");
-    JS_SetConstructor(ctx, ctor, proto);
-    JS_FreeValue(ctx, proto);
-    /* §2.3.1 from(), declared `static Observable from(any value)` in §2.2's IDL, lives on the interface
-       object. */
-    JS_SetPropertyStr(ctx, ctor, "from",
-                      JS_NewCFunction2(ctx, NULL, "from", 1, JS_CFUNC_step, g_op_stepid[OP_FROM]));
-    idl_define_global_property_reference(ctx, global, "Observable", ctor);
-
-    ctor = JS_NewCFunction2(ctx, js_illegal_ctor, "Subscriber", 0, JS_CFUNC_constructor, 0);
-    CHECK(!JS_IsException(ctor), "the Subscriber interface object could not be allocated");
-    proto = JS_GetClassProto(ctx, g_sub_class);
-    DCHECK(!JS_IsNull(proto), "Subscriber was installed into a realm with no proto build");
-    JS_SetConstructor(ctx, ctor, proto);
-    JS_FreeValue(ctx, proto);
-    idl_define_global_property_reference(ctx, global, "Subscriber", ctor);
+    /* WEB IDL §3.8's TWO PROPERTY REFERENCES, IN THE ORDER THE DELETED PER-DOCUMENT ENTRY PLACED THEM. */
+    global = JS_GetGlobalObject(ctx);
+    DCHECK(JS_IsObject(global), "a realm's global object is not an object");
+    idl_define_global_property_reference(ctx, global, "Observable", obsctor);
+    idl_define_global_property_reference(ctx, global, "Subscriber", subctor);
+    JS_FreeValue(ctx, global);
 }
 
 void observable_free(JSContext *ctx)

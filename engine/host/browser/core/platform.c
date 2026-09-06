@@ -669,7 +669,6 @@ static void i_page_reveal(JSContext *c, JSValueConst g, const PlatformDocument *
 static void i_media_query_list(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; media_query_list_install(c, g); }
 static void i_simple_dialogs(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; simple_dialogs_install(c, g); }
 static void i_fetch(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; fetch_install(c, g); }
-static void i_observable(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; observable_install(c, g); }
 static void i_dom_rect_list(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; dom_rect_list_install(c, g); }
 static void i_intersection_observer(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; intersection_observer_install(c, g); }
 static void i_resize_observer(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; resize_observer_install(c, g); }
@@ -1097,7 +1096,18 @@ static const PlatformComponent PLATFORM[] = {
        the member from EVERY realm, which the PLATFORM_WITNESS row `{ "fetch", "fetch" }` below is what
        catches. */
     { "fetch",               d_fetch,               i_fetch,     r_fetch },
-    { "observable",          d_observable,          i_observable },
+    /* NO DOCUMENT HALF. Observable §2.1 "The Subscriber interface" and §2.2 "The Observable interface" both
+       declare `[Exposed=*]`, and Web IDL §3.8 Platform objects implementing interfaces is "To define the global
+       property references on target, given realm realm" whose step 1 is "Let interfaces be a list that contains
+       every interface that is exposed in realm" — a REALM, with no Document in the algorithm. Both interface
+       objects are minted by observable_install_protos beside the two prototypes it already built, so a realm
+       that reaches no platform_document_install gets both names. §2.3.1 "from()"'s static moved with §2.2's
+       interface object: `static Observable from(any value)` is a member OF that object, and one minted without
+       it is an `Observable` a page can feature-detect and not call.
+       THE COLUMN GOES ENTIRELY, unlike `fetch` above, whose row keeps a document half for a MEMBER §3.8 does
+       not define. This component's entry placed these two interface objects and nothing else, so there is
+       nothing left for a third column to do. */
+    { "observable",          d_observable,          NULL },
     /* GEOMETRY INTERFACES §3 and §4, before the component that returns one. Neither reads anything of the DOM's
        — a rectangle is four numbers — so their position is decided only by their CONSUMER: CSSOM VIEW §6's
        `getBoundingClientRect` is installed on Element.prototype by the row below, and it mints a DOMRect out of
@@ -1424,7 +1434,18 @@ static const struct { const char *name, *component; IdlExposure exposure; } PLAT
     { "IDBObjectStore",        "idb_object_store" },
     { "IDBIndex",              "idb_index_handle" },
     { "IDBVersionChangeEvent", "idb_version_change_event" },
+    /* THE OBSERVABLE STANDARD'S TWO, AND BOTH ARE HERE BECAUSE ONE FUNCTION PLACES BOTH. §2.1's and §2.2's
+       interface objects are two `idl_define_global_property_reference` calls three lines apart in one realm
+       intrinsic, so a change that carried one across and dropped the other leaves a component that still
+       installs `Observable` and no longer installs `Subscriber` — which is exactly the shape that has cost
+       this tree `ProgressEvent`, `ReadableByteStreamController` and `fetch` one interface object each. One row
+       per NAME is what makes that visible; a row per COMPONENT cannot see it.
+       WHAT THIS PAIR ASSERTS IS THE WINDOW ARM ALONE, and that is a fact about where this loop stands rather
+       than about the interfaces: it runs at the end of platform_document_install, which a worker realm never
+       reaches, so `[Exposed=*]` gets its worker arm asserted by test_forced.c's exposure_selftest and by
+       nothing here. */
     { "Observable",            "observable" },
+    { "Subscriber",            "observable" },
     { "DOMParser",             "domparser" },
     /* HTML §8.5.8 "The XMLSerializer interface", beside §8.5.1 "The DOMParser interface" above, and owed for
        exactly the reason `CSS` and `performance` are. `XMLSerializer` is on browser/platform_names.h, so

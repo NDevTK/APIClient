@@ -6719,15 +6719,28 @@ static void exposure_selftest(JSContext *ctx, const char *top_level_url)
            reported as such. Established by READING main's call order and core/platform.c's two columns, never
            by a run — a subagent does not build.
 
-           WHAT IS DELIBERATELY LEFT, AND IT IS NOT ASSERTED HERE. core/dom/observable.c's two sites are the
-           remaining `MOVE` in this directory: WICG Observable §2.2 "The Observable interface" and §2.1 "The
-           Subscriber interface" are both `[Exposed=*]` and both are still placed from the per-document column.
-           No row for either name appears below, in either direction — `true` would assert a name this
-           revision does not place and `false` would assert the defect as an expectation, and a fixture row
-           that states a gap as a correct answer is the one thing this table must never carry. They arrive
-           with the diff that moves them. */
+           WHAT WAS DELIBERATELY LEFT HAS ARRIVED, AND ITS TWO ROWS ARE BELOW. core/dom/observable.c's two
+           sites were the remaining `MOVE` in this directory and the diff that moves them is the one that adds
+           these rows — which is the whole of why they were absent before: `true` would have asserted a name
+           that revision did not place and `false` would have asserted the defect as an expectation, and a
+           fixture row stating a gap as a correct answer is the one thing this table must never carry. Observable
+           §2.1 "The Subscriber interface" and §2.2 "The Observable interface" are both `[Exposed=*]` and both
+           interface objects are now minted by observable_install_protos, so a DedicatedWorkerGlobalScope realm
+           owes both names and has both. THE STANDARD IS NAMED AT EACH and its section numbers are read off the
+           committed index in engine/specindex/observable.json, whose base is the editors' own
+           https://wicg.github.io/observable/ — this is the one standard in this group that is not the DOM
+           Standard, and a bare `§2.1` here would be placed by a file vote onto whichever standard this file
+           mostly cites.
+           THEY DO NOT DISCRIMINATE THE WAY THE PAIR BELOW DOES and are not offered as if they did: they are
+           two more calibration rows of exactly `AbortController`'s and `AbortSignal`'s kind, in a second
+           component and a second standard. What makes them worth adding rather than redundant is the pair
+           itself — two `idl_define_global_property_reference` calls three lines apart in ONE function, which is
+           the `MessagePort` mistake this table's banner already records: a change that carries one across and
+           drops its sibling passes every row that names only the other. */
         { "AbortController",   true,  true  },   /* DOM §3.1 "Interface AbortController", [Exposed=*] */
         { "AbortSignal",       true,  true  },   /* DOM §3.2 "Interface AbortSignal", [Exposed=*] */
+        { "Observable",        true,  true  },   /* Observable §2.2 "The Observable interface", [Exposed=*] */
+        { "Subscriber",        true,  true  },   /* Observable §2.1 "The Subscriber interface", [Exposed=*] */
         /* THE EIGHTEEN LISTED TOGETHER, ONE PER core/dom FILE THAT HOLDS A REFUSED Web IDL §3.8 SITE
            (`NodeFilter`, the nineteenth refusal, stands below with the pair it controls): each
            `[Exposed=Window]`, so the worker arm is Web IDL §3.3.7 step 1's own answer, and each still
