@@ -973,11 +973,14 @@ static void console_install_realm(JSContext *ctx)
     CHECK(!JS_IsException(ns), "console: the namespace object could not be allocated");
 
     /* Web IDL §3.13.1's last line: "The class string of a namespace object is the namespace's identifier."
-       §3.2's class-string rule makes that a %Symbol.toStringTag% property, non-writable, non-enumerable,
-       configurable — so `Object.prototype.toString.call(console)` is "[object console]".
-       IT IS WRITTEN BEFORE THE OPERATIONS, because §3.2 says an object with a class string carries it "at the
-       time it is created", and because engine/idl_installed.mjs reads this statement to decide which
-       definition the properties installed on this object belong to. */
+       Web IDL §3 "JavaScript binding" states the class-string rule, and it is §3's own words rather than
+       §3.2's: §3.2 is the JavaScript type mapping and says nothing about class strings, while §3 says an
+       object with one must, "at the time it is created", have a property whose name is the @@toStringTag
+       symbol — non-writable, non-enumerable, configurable — so `Object.prototype.toString.call(console)` is
+       "[object console]".
+       IT IS WRITTEN BEFORE THE OPERATIONS, because that is what "at the time it is created" requires, and
+       because engine/idl_installed.mjs reads this statement to decide which definition the properties
+       installed on this object belong to. */
     idl_namespace_tag(ctx, ns, "console");
 
     /* Web IDL §3.13.1 step 3 "Define the regular operations of namespace on namespaceObject", whose descriptor
