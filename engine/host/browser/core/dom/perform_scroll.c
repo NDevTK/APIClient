@@ -12,6 +12,8 @@
 #include "core/dom/perform_scroll.h"
 #include "core/dom/scroll_events.h"
 #include "core/frame/viewport.h"
+#include "core/idl_args.h"
+#include "solver/concolic.h"
 
 /* §3.1 STEP 5's FIRST CONJUNCT, WHICH IS ABOUT THE USER AGENT AND NOT ABOUT THE REQUEST: "If the user agent
    honors the scroll-behavior property and one of the following is true". Both of the things that could make
@@ -128,4 +130,65 @@ void perform_scroll(JSContext *ctx, lxb_dom_element_t *box, double x, double y,
            two are not collapsed even though an instant scroll puts them in the same frame. */
         scroll_events_viewport_scrollend(ctx);
     }
+}
+
+/* ---- THE REQUESTED POSITION, BETWEEN A SCROLL MEMBER AND THIS ALGORITHM — see perform_scroll.h ------------ */
+
+ScrollRequest scroll_request_px(double px)
+{
+    ScrollRequest r;
+
+    r.unknown = false;
+    r.px = px;
+    return r;
+}
+
+ScrollRequest scroll_request_member(JSContext *ctx, JSValueConst member, double current, bool relative)
+{
+    double v = 0.0;
+    int n;
+
+    if (concolic_is(member)) {
+        ScrollRequest u;
+
+        u.unknown = true;
+        u.px = 0.0;
+        return u;
+    }
+    /* THE CURRENT POSITION IS ASKED FOR ONLY WHERE A STEP ASKS FOR IT: §4's and §6's step 1 name it for an
+       absent dictionary member and their two-argument forms never mention it. */
+    if (JS_IsUndefined(member)) return scroll_request_px(current);
+    DCHECK(JS_IsNumber(member),
+           "a `left`/`top` dictionary member reached a CSSOM VIEW scroll member's steps as neither a Number nor "
+           "unknown external input — `ScrollToOptions` declares both `unrestricted double`, so the declaration "
+           "has already run §3.2.8's ToNumber and an absent member arrives as undefined rather than as some "
+           "other value");
+    n = idl_number_of(ctx, IDL_UNRESTRICTED_DOUBLE, member, &v);
+    DCHECK(n == 1, "§3.2.8's conversion produced no number for a value that is not unknown external input — "
+                   "idl_number_of answers 0 only for an unknown carrying no example, and that arm returned "
+                   "above");
+    /* §3.2's normalize non-finite values */
+    if (!isfinite(v)) v = 0.0;
+    return scroll_request_px(relative ? current + v : v);
+}
+
+double scroll_request_resolve(ScrollRequest r)
+{
+    if (r.unknown)
+        DFAIL("a CSSOM VIEW scroll member reached a step that PERFORMS A SCROLL — §4 \"Extensions to the "
+              "Window Interface\"'s `scroll()`/`scrollTo()`/`scrollBy()` step 12, or §6 \"Extensions to the "
+              "Element Interface\"'s `scrollTop`/`scrollLeft` setter step 8, 9 or 11 and the identical three of "
+              "its own scroll members — with a requested position that is UNKNOWN EXTERNAL INPUT, and CSSOM "
+              "VIEW §3.1 \"Scrolling\"'s perform a scroll can MOVE the box it lands on — so substituting the "
+              "box's current position would be this engine deciding that the page's request had no effect, "
+              "over a domain whose other members land elsewhere. Every step that could terminate without "
+              "consuming the position has already run, so this request really is one a scroll depends on. "
+              "BUILD THE CONCOLIC SCROLL POSITION: run §4's steps 7-8 (and §6.1's identical rows) as the real "
+              "max/min OPS on the value instead of as `double` arithmetic, store what they produce on the "
+              "per-realm record core/frame/viewport.c already holds as a JSValue, and widen "
+              "`viewport_scroll_x`/`_y` from `double` to that value — its readers are §4's `scrollX`/`scrollY`, "
+              "core/frame/visual_viewport.c's `pageLeft`/`pageTop` and core/dom/element_scrolling.c's box "
+              "constructor. IT IS NOT A FORK: a position is a VALUE with a domain, and the fork belongs at the "
+              "page's own branch over it");
+    return r.px;
 }

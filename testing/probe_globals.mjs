@@ -29,28 +29,20 @@
  * the result with the artifact's stamped revision beside it (`extension/lib/qjs/qjs.mjs.build.json`), and
  * with the run count and spread — a single run of anything is not a measurement. */
 
+import { createServer } from "node:http";
 import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { platformNames } from "./platform_names.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const header = join(root, "engine/host/browser/platform_names.h");
-const src = readFileSync(header, "utf8");
 
-/* The table is the ONE array in that header, and it is bounded by its own declaration and the brace that
- * closes it — anchored on both, so a second array added later cannot silently extend this list. */
-const open = src.indexOf("PLATFORM_NAMES[] = {");
-if (open < 0) throw new Error(`${header}: no PLATFORM_NAMES[] table — the generator's shape changed`);
-const close = src.indexOf("};", open);
-if (close < 0) throw new Error(`${header}: PLATFORM_NAMES[] is unterminated`);
+/* THE NAME TABLE IS PARSED IN ONE PLACE — testing/platform_names.mjs — and not here. This file used to hold
+ * that parse, and `rank_globals.mjs` needs the identical list to rank against: two copies of one derivation
+ * is the second copy of a fact, and the copy nobody regenerates is the one that drifts. */
+const names = platformNames();
 
-const names = [...src.slice(open, close).matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) => m[1]);
-if (names.length === 0) throw new Error(`${header}: PLATFORM_NAMES[] parsed empty`);
-
-/* The document asks with `in` rather than reading the value, because a member whose getter THROWS is still
- * present, and a member answering `undefined` may be a real own property. `in` is the question §3.7's
- * descriptor actually settles. It is asked of `this` at top level, which is the global object itself —
- * globalThis may legitimately be one of the names under test. */
 const doc = `<!doctype html><meta charset="utf-8"><title>absent-globals probe</title><script>
 var NAMES=${JSON.stringify(names)};
 var G=this, absent=[];
@@ -61,4 +53,118 @@ for(var j=0;j<absent.length;j+=30) console.log("PROBE-NAMES "+absent.slice(j,j+3
 console.log("PROBE-END");
 </script>`;
 
-process.stdout.write(doc);
+/* ---------------------------------------------------------------------------------------------------------
+ * DRIVING IT. Emitting the document was the whole of this file, and a document nobody can drive is half an
+ * instrument: the measurement it produced was quoted for a session precisely because the SECOND half lived in
+ * somebody's shell history. So the drive is here, beside the document, and it takes the browser as given —
+ * `testing/harness.js restart` owns launching Chrome and this connects to it over CDP, because a driver that
+ * launches its own browser is a second harness.
+ *
+ *   node testing/harness.js restart 9337            (once, and it is the main agent's artifact that loads)
+ *   node testing/probe_globals.mjs --drive --cdp 9337 --port 8971 --runs 3
+ *
+ * IT REPORTS THE RUN COUNT AND THE SPREAD, because a single run of anything is not a measurement, and it
+ * REFUSES to print a figure for a run that did not reach PROBE-END — an absent count and a zero count are
+ * different facts and averaging them is how a run that measured nothing is published as a clean page.
+ * It stamps every figure with the ARTIFACT the browser loaded — the sha256 of the wasm and the revision in
+ * its build stamp — because a number is a claim about a revision or it is a claim about nothing. */
+
+const argv = process.argv.slice(2);
+const flag = (n, d) => { const i = argv.indexOf(n); return i < 0 ? d : argv[i + 1]; };
+
+if (!argv.includes("--drive")) { process.stdout.write(doc); process.exit(0); }
+
+const cdp = Number(flag("--cdp", 9337));
+const port = Number(flag("--port", 8971));
+const runs = Number(flag("--runs", 3));
+const extDir = process.env.HARNESS_EXT_DIR ? process.env.HARNESS_EXT_DIR : join(root, "extension");
+/* THE STAMP IS A SIDECAR, so it is read from beside the artifact rather than out of it, and the ARTIFACT is
+   digested here: a stamp that names a revision and not the bytes cannot be checked by the reader who finds
+   it, and the two files are one directory apart with nothing binding them. */
+const wasm = join(extDir, "lib/qjs/qjs.wasm");
+const artifact = {
+    wasm, sha256: createHash("sha256").update(readFileSync(wasm)).digest("hex"),
+    stamp: JSON.parse(readFileSync(join(extDir, "lib/qjs/qjs.mjs.build.json"), "utf8")),
+};
+
+const { default: puppeteer } = await import("puppeteer");
+
+const server = createServer((_req, res) => {
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+    res.end(doc);
+});
+await new Promise((r) => server.listen(port, "127.0.0.1", r));
+const url = `http://127.0.0.1:${port}/`;
+
+const browser = await puppeteer.connect({ browserURL: `http://127.0.0.1:${cdp}` });
+const sink = [];
+/* Every chrome-extension target, its pages and their frames: the renderer host tees the renderer's stderr to
+   its document's console, and the engine's own `console.log` printer writes an `@LOG` line to stderr — so the
+   page's PROBE- lines arrive HERE and nowhere else. A hook installed once per target, marked so a re-attach
+   cannot double every line. */
+const hook = (e) => { if (e.__probeHooked) return; e.__probeHooked = 1; e.on("console", (m) => sink.push(m.text())); };
+const attach = async (t) => {
+    if (!t.url().startsWith("chrome-extension://")) return;
+    try {
+        if (t.type() === "service_worker") { const w = await t.worker(); if (w) hook(w); return; }
+        const p = await t.page().catch(() => null);
+        if (p) { hook(p); for (const f of p.frames()) hook(f); p.on("frameattached", hook); }
+    } catch { /* a target that went away between the listing and the attach is not an error */ }
+};
+browser.on("targetcreated", attach);
+for (const t of browser.targets()) await attach(t);
+
+const deadlineMs = Number(flag("--deadline-ms", 120000));
+const results = [];
+for (let r = 0; r < runs; r++) {
+    const mark = sink.length;
+    const page = (await browser.pages()).find((p) => !p.url().startsWith("chrome-extension://"))
+        || await browser.newPage();
+    await page.goto(url + "?run=" + r, { waitUntil: "domcontentloaded", timeout: 60000 });
+    const t0 = Date.now();
+    let done = false;
+    while (Date.now() - t0 < deadlineMs) {
+        await new Promise((z) => setTimeout(z, 500));
+        if (sink.slice(mark).some((l) => l.includes("PROBE-END"))) { done = true; break; }
+    }
+    const lines = sink.slice(mark);
+    /* The console line is the engine's `@LOG {…,"args":["PROBE-… "]}`; the payload is read out of that JSON
+       rather than off the raw text, so a level or a group depth changing shape cannot silently re-key it. */
+    const payload = [];
+    for (const l of lines) {
+        const at = l.indexOf("@LOG ");
+        if (at < 0) continue;
+        try {
+            const o = JSON.parse(l.slice(at + 5));
+            for (const a of o.args || []) if (typeof a === "string" && a.startsWith("PROBE-")) payload.push(a);
+        } catch { /* a truncated tee line is not a measurement and is not an error either */ }
+    }
+    const total = payload.find((p) => p.startsWith("PROBE-TOTAL "));
+    const absent = payload.find((p) => p.startsWith("PROBE-ABSENT "));
+    const names_ = payload.filter((p) => p.startsWith("PROBE-NAMES ")).flatMap((p) => p.slice(12).split(" ").filter(Boolean));
+    results.push({
+        run: r, reachedEnd: done, elapsedMs: Date.now() - t0,
+        total: total ? Number(total.slice(12)) : null,
+        absent: absent ? Number(absent.slice(13)) : null,
+        names: names_,
+    });
+    console.error(`run ${r}: reachedEnd=${done} total=${total ? total.slice(12) : "ABSENT"} absent=${absent ? absent.slice(13) : "ABSENT"} in ${Date.now() - t0}ms`);
+}
+await browser.disconnect();
+server.close();
+
+const good = results.filter((x) => x.reachedEnd && x.total !== null && x.absent !== null);
+const out = {
+    artifact: { sha256: artifact.sha256, head: artifact.stamp.head, dirty: artifact.stamp.dirty, at: artifact.stamp.at },
+    runs: results.length,
+    reachedEnd: good.length,
+    /* A run that did not reach PROBE-END is REPORTED and never averaged in: it is the absent count, not a
+       zero one, and the two are different facts. */
+    totals: [...new Set(good.map((x) => x.total))],
+    absentCounts: good.map((x) => x.absent),
+    spread: good.length ? Math.max(...good.map((x) => x.absent)) - Math.min(...good.map((x) => x.absent)) : null,
+    namesAgree: good.length > 1 && good.every((x) => x.names.join(" ") === good[0].names.join(" ")),
+};
+if (good.length === 0) { console.error("NO RUN REACHED PROBE-END — there is no figure to report"); process.exit(1); }
+process.stdout.write(JSON.stringify(out, null, 1) + "\n");
+process.stdout.write("PROBE-ABSENT-NAMES\n" + good[0].names.join("\n") + "\n");

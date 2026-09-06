@@ -45,6 +45,8 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_DOM_PERFORM_SCROLL_H
 #define ENGINE_HOST_BROWSER_CORE_DOM_PERFORM_SCROLL_H
 
+#include <stdbool.h>
+
 #include <lexbor/dom/dom.h>
 
 #include "quickjs.h"
@@ -65,5 +67,69 @@
  * is asserted rather than trusted. */
 void perform_scroll(JSContext *ctx, lxb_dom_element_t *box, double x, double y,
                     lxb_dom_element_t *element, const char *behavior);
+
+/* A REQUESTED SCROLL POSITION ON ONE AXIS, BETWEEN THE MEMBER THAT READ IT AND THE STEP THAT PERFORMS A SCROLL.
+ *
+ * WHY IT IS HERE AND NOT IN EITHER MEMBER'S FILE. Two sections declare the same six scroll members over the
+ * same two dictionary members — CSSOM VIEW §4 "Extensions to the Window Interface" for the VIEWPORT and §6
+ * "Extensions to the Element Interface" for an element's box — and both end at the one algorithm this file
+ * owns. A requested position is therefore ONE fact with two readers, and the decision it carries (below) is
+ * one this engine may make only once: it WAS made twice, with §6's scroll members substituting the box's
+ * current position at their read while §6's `scrollTop` setter crashed at its own, and the substitution's
+ * justification cited the site that had already retired it. §3.1's perform a scroll is what every one of them
+ * reaches, so the request that reaches it is declared beside it.
+ *
+ * CSSOM VIEW §3.2 "WebIDL values"' NORMALIZE NON-FINITE VALUES IS PART OF THE READ, not of the scroll: "When
+ * asked to normalize non-finite values for a value x, if x is one of the three special floating point literal
+ * values (Infinity, -Infinity or NaN), then x must be changed to the value 0". It is applied where the
+ * member's own step applies it (CSSOM VIEW §4 "Extensions to the Window Interface" step 3, and §6's step 3 for
+ * `scrollBy`), which is why the reader below performs it rather than `perform_scroll`.
+ *
+ * AN UNKNOWN IS CARRIED, NEVER SUBSTITUTED. §3.2.8's conversion crosses unknown external input AS ITSELF —
+ * core/idl_args.h's `idl_concolic_rule` answers IDL_CONCOLIC_CROSSES for `unrestricted double` — so what a
+ * member receives for `window.scrollTo(0, h)` with an opaque `h` is the page's own value. `unknown` is the
+ * whole of what a body knows about it, and `px` is meaningful only where `unknown` is false: it is not an
+ * example standing in for one, which is what `scroll_request_resolve` exists to enforce. */
+typedef struct {
+    bool unknown;
+    double px;
+} ScrollRequest;
+
+/* A position this flow DETERMINED — the page's number after §3.2, or one the algorithm supplied itself. */
+ScrollRequest scroll_request_px(double px);
+
+/* ONE AXIS OF A SCROLL MEMBER'S REQUESTED POSITION, resolved to the coordinate the later steps use. Three ways
+ * it arrives and each is the spec's or this engine's — none of them a zero standing in for a number:
+ *   ABSENT is §4 step 1's "or the viewport's current scroll position on the x axis otherwise" and §6 step 1's
+ *     identical sentence for an element, which is `current` and not a zero. A page writing
+ *     `window.scrollTo({top: 40})` is asking for the x it already has, and answering 0 there would be a
+ *     horizontal scroll it did not request. `relative` does NOT add to this arm: `scrollBy` with an absent
+ *     member asks for no movement on that axis, which IS the current position.
+ *   A NUMBER is the coordinate the page computed, with §3.2's normalize non-finite applied, plus `current`
+ *     where the caller is the relative algorithm (§4's `scrollBy` steps 3-4, §6's the same).
+ *   UNKNOWN EXTERNAL INPUT is carried, and a sum with an unknown addend is unknown — so `relative` needs no
+ *     arm of its own here, and the addition becomes work for the concolic position `scroll_request_resolve`
+ *     names rather than something this read can decide. */
+ScrollRequest scroll_request_member(JSContext *ctx, JSValueConst member, double current, bool relative);
+
+/* THE ONE PLACE ANY SCROLL MEMBER DECIDES WHAT AN UNKNOWN REQUESTED POSITION IS, reached only from a step that
+ * PERFORMS A SCROLL. It is a crash and not a substitution, and that is what §3.1's arrival changed: passing the
+ * box's CURRENT position in place of an unknown request made the write a no-op, which decided nothing while no
+ * box could move, and now decides that the page's request had no effect over a domain most of whose members
+ * land somewhere else. §RUN-DON'T-MATCH's rule against inventing a value cuts the same way against inventing
+ * the absence of one. perform_scroll.c's crash names what to build.
+ *
+ * WHAT TO BUILD IS A CONCOLIC POSITION AND NOT A FORK, and the distinction is the whole of the design. A fork
+ * asks a question with N answers; a scroll position is a VALUE with a domain, so the honest result of
+ * `window.scrollTo(0, h)` or `documentElement.scrollTop = h` for an opaque `h` is a position that is
+ * opaque-for-control-flow and carries the clamped example — after which `if (scrollY > 100)` forks at the
+ * BRANCH, which is where CLAUDE.md's solver half puts a fork, and a page that never branches on it needs none.
+ * A PREDECESSOR RECORDED THIS OBLIGATION AS A FORK, and that is written down as a correction rather than
+ * silently replaced, because the next reader to re-derive "the setter owes a fork" will reach for the primitive
+ * that cannot serve here: a plain C body has no machine state for a sibling to be snapshotted at, so a fork
+ * from one crashes at the seam naming the operation — solver/decide.h says so at `solver_outcome` — and the
+ * answer to that is `JS_CFUNC_STEP_DEF`, which is a large conversion bought for a question these sites do not
+ * have. */
+double scroll_request_resolve(ScrollRequest r);
 
 #endif

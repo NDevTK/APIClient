@@ -19,6 +19,7 @@
 #include "core/dom/element_scrolling.h"
 #include "core/dom/element_view.h"
 #include "core/dom/node.h"
+#include "core/dom/perform_scroll.h"
 #include "core/frame/viewport.h"
 #include "core/frame/window_proxy.h"
 #include "core/geometry/dom_rect.h"
@@ -432,75 +433,14 @@ static bool ev_has_overflow(const EvTarget *t)
    not ask on most of its own paths, and answering it with a crash that names an unbuilt mechanism the
    algorithm was never going to reach.
    So an unknown TRAVELS to the one step that consumes it, and is decided there or not at all. */
-typedef struct {
-    /* The requested position is UNKNOWN EXTERNAL INPUT. §3.2.8's conversion crosses it AS ITSELF — core/
-       idl_args.h's `idl_concolic_rule` answers IDL_CONCOLIC_CROSSES for `unrestricted double`, which is the
-       declaration this reads rather than a second policy stated here — so what the body receives is the page's
-       own value, and this flag is the whole of what the body knows about it. */
-    bool unknown;
-    /* §3.2 "WebIDL values"' normalized number, MEANINGFUL ONLY WHERE `unknown` IS FALSE. It is not an example
-       standing in for an unknown: nothing reads it without asking, which is what `ev_requested_scroll_px`
-       below is for. */
-    double px;
-} EvRequest;
-
-/* A position this flow DETERMINED — the two the algorithm supplies itself (§2's internal-API read of the axis
-   the setter does not write) as well as the one the page computed. */
-static EvRequest ev_request_px(double px)
-{
-    EvRequest r;
-
-    r.unknown = false;
-    r.px = px;
-    return r;
-}
-
-/* THE ONE PLACE ANY §6 MEMBER DECIDES WHAT AN UNKNOWN REQUESTED POSITION IS, and it is reached only from a
-   step that PERFORMS A SCROLL. It is a crash and not a substitution, and that is what §3.1's arrival changed.
-   THE SUBSTITUTION WAS DEFENSIBLE UNTIL IT WAS NOT. Passing the box's CURRENT position in place of an unknown
-   request made the write a no-op, which was the only outcome available while no box could move — so it decided
-   nothing. A box can move now, so the same line decides that the page's scroll request had no effect, over a
-   domain most of whose members land somewhere else. That is this engine picking an arm, and §RUN-DON'T-MATCH's
-   rule against inventing a value cuts the same way against inventing the absence of one.
-   IT IS ONE SITE FOR FOUR MEMBERS, which is why the pair above exists. The setter and `scroll()`/`scrollTo()`/
-   `scrollBy()` each read a requested position at their own step and each reach a scroll through steps 8, 9 and
-   11, so a decision written at any of those reads would be four decisions free to disagree — and it WAS two,
-   with the scroll members substituting the current position at their read while the setter crashed at its own.
-   That substitution's justification cited this site, which had already retired it.
-   WHAT TO BUILD IS A CONCOLIC POSITION AND NOT A FORK, and the distinction is the whole of the design. A fork
-   asks a question with N answers; a scroll position is a VALUE with a domain, so the honest result of
-   `documentElement.scrollTop = h` for an opaque `h` is a position that is opaque-for-control-flow and carries
-   the clamped example — after which `if (scrollY > 100)` forks at the BRANCH, which is where CLAUDE.md's solver
-   half puts a fork, and a page that never branches on it needs none. THE OBSTACLE IS THE `double`: §4's steps
-   7-8 and §6.1's identical rows are C arithmetic (`element_scrolling_clamp_position`), and `viewport_scroll_x`
-   answers a `double`, so clamping an unknown means running max/min as the REAL OPS on the value and letting the
-   per-realm record — which already holds a JSValue — carry the result. Its readers are what that seam changes:
-   §4's `scrollX`/`scrollY`, VisualViewport's `pageLeft`/`pageTop`, and §6.1's `EsBox.cur`.
-   (A PREDECESSOR RECORDED THIS OBLIGATION AS A FORK. It is written down as a correction rather than silently
-   replaced, because the next reader to re-derive "the setter owes a fork" will reach for the primitive that
-   cannot serve here: a plain C body has no machine state for a sibling to be snapshotted at, so a fork from one
-   crashes at the seam naming the operation — solver/decide.h says so at `solver_outcome` — and the answer to
-   that is `JS_CFUNC_STEP_DEF`, which is a large conversion bought for a question this site does not have.) */
-static double ev_requested_scroll_px(EvRequest r)
-{
-    if (r.unknown)
-        DFAIL("a CSSOM VIEW §6 \"Extensions to the Element Interface\" scroll member reached a step that "
-              "PERFORMS A SCROLL — the `scrollTop`/`scrollLeft` setter's step 8, 9 or 11, or the identical "
-              "three of `scroll()`/`scrollTo()`/`scrollBy()` — with a requested position that is UNKNOWN "
-              "EXTERNAL INPUT, and CSSOM VIEW §3.1 \"Scrolling\"'s perform a scroll can now MOVE the box it "
-              "lands on — so substituting the box's current position would be this engine deciding that the "
-              "page's write had no effect, over a domain whose other members land elsewhere. Every step that "
-              "could terminate without consuming the position has already run, so this request really is one "
-              "a scroll depends on. BUILD THE CONCOLIC "
-              "SCROLL POSITION: run §4's steps 7-8 (and §6.1's identical rows) as the real max/min OPS on the "
-              "value instead of as `double` arithmetic, store what they produce on the per-realm record "
-              "core/frame/viewport.c already holds as a JSValue, and widen `viewport_scroll_x`/`_y` from "
-              "`double` to that value — its readers are §4's `scrollX`/`scrollY`, "
-              "core/frame/visual_viewport.c's `pageLeft`/`pageTop` and core/dom/element_scrolling.c's box "
-              "constructor. IT IS NOT A FORK: a position is a VALUE with a domain, and the fork belongs at the "
-              "page's own branch over it");
-    return r.px;
-}
+/* THE TYPE AND THE DECISION BOTH MOVED TO core/dom/perform_scroll.h, AND THE MOVE IS WHAT KEEPS THEM ONE.
+   They were written here because §6 was the only section with scroll members in this engine; CSSOM VIEW §4
+   "Extensions to the Window Interface" declares the same six over the same two dictionary members for the
+   VIEWPORT, and a second copy of the decision about an unknown requested position is the shape this engine has
+   already got wrong once — two sites, one substituting and one crashing. That incident, the obligation the
+   crash names, and the correction of the predecessor who recorded that obligation as a FORK all moved with it
+   and are stated there; none of them was dropped. The request now lives beside §3.1's perform a scroll, which
+   is the step every one of the seven members reaches. */
 
 /* §6's LAST TWO STEPS FOR AN ELEMENT THAT IS NOT THE ROOT AND IS NOT A QUIRKS-MODE BODY — step 10's three-way
    termination and step 11's SCROLL THE ELEMENT. They are ONE statement here because §6 writes the same two
@@ -520,9 +460,10 @@ static double ev_requested_scroll_px(EvRequest r)
    THE REQUESTED POSITIONS ARRIVE UNRESOLVED AND ARE RESOLVED BETWEEN THE TWO STEPS, which is the ORDER of §6
    and not a convenience: step 10 terminates without consuming either coordinate, so an UNKNOWN request that
    this element was never going to scroll on has no question to answer here. Resolving them in the caller —
-   which is what the setter did — asked `ev_requested_scroll_px` on behalf of every element that terminates at
+   which is what the setter did — asked `scroll_request_resolve` on behalf of every element that terminates at
    step 10, which is nearly all of them. */
-static void ev_scroll_the_element_or_terminate(const EvTarget *t, EvRequest x, EvRequest y, const char *behavior)
+static void ev_scroll_the_element_or_terminate(const EvTarget *t, ScrollRequest x, ScrollRequest y,
+                                              const char *behavior)
 {
     /* Step 10 — "if the element does not have any associated box, the element has no associated scrolling box,
        or the element has no overflow, terminate these steps". */
@@ -530,8 +471,8 @@ static void ev_scroll_the_element_or_terminate(const EvTarget *t, EvRequest x, E
     if (!scroll_container_is(lxb_dom_interface_element(t->node))) return;
     if (!ev_has_overflow(t)) return;
     /* step 11 */
-    element_scrolling_scroll_element(lxb_dom_interface_element(t->node), ev_requested_scroll_px(x),
-                                     ev_requested_scroll_px(y), behavior);
+    element_scrolling_scroll_element(lxb_dom_interface_element(t->node), scroll_request_resolve(x),
+                                     scroll_request_resolve(y), behavior);
 }
 
 /* THE SETTER — the same algorithm, and it RUNS rather than dropping the write. What decides the write is §4's
@@ -545,8 +486,8 @@ static JSValue js_ev_set(JSContext *ctx, JSValueConst this_val, JSValueConst val
 {
     bool vertical = (magic == EV_SCROLL_TOP);
     /* STEP 1's "let y be the given value" — CARRIED and not resolved, because steps 3-7 and step 10 each
-       terminate without consuming it. See `EvRequest` above for why the decision travels to the scroll. */
-    EvRequest req;
+       terminate without consuming it. See `ScrollRequest` above for why the decision travels to the scroll. */
+    ScrollRequest req;
     EvTarget t;
     double v = 0.0;
 
@@ -577,12 +518,14 @@ static JSValue js_ev_set(JSContext *ctx, JSValueConst this_val, JSValueConst val
        scrolls the window, step 10 terminates), and the condition between them is now decided rather than
        approximated by the body's box existence, which is only the first of the definition's three conditions. */
     if (t.is_root || (t.is_body && t.quirks && ev_not_potentially_scrollable_in_some_axis(&t))) {
-        /* THE SCROLL IS PERFORMED ON THIS ARM WHATEVER THE POSITION IS, so this is a consumption site and the
-           request is resolved here — §4's `scroll()` is invoked with it and there is no step left to
-           terminate first. */
-        double p = ev_requested_scroll_px(req);
-        double x = vertical ? viewport_window_scroll(t.dctx, false) : p;
-        double y = vertical ? p : viewport_window_scroll(t.dctx, true);
+        /* §4's `scroll()` IS INVOKED WITH THE REQUEST, NOT WITH A NUMBER, and the request travels unresolved.
+           This used to resolve it here on the ground that the scroll is performed on this arm whatever the
+           position is — which is true of a realm that HAS a viewport and false of one that does not: §4's own
+           step 4 returns before step 7 reads either coordinate, so a decision made in front of the call was a
+           crash on a call that consumes nothing. The one site that decides an unknown is now §4's step 7
+           itself (core/frame/viewport.c). */
+        ScrollRequest x = vertical ? scroll_request_px(viewport_window_scroll(t.dctx, false)) : req;
+        ScrollRequest y = vertical ? req : scroll_request_px(viewport_window_scroll(t.dctx, true));
 
         /* §6 gives the setter's steps 8 and 9 no options dictionary to carry a `ScrollBehavior`, so §4's step
            12 hands §3.1 the `auto` its own declaration defaults to. */
@@ -598,8 +541,8 @@ static JSValue js_ev_set(JSContext *ctx, JSValueConst this_val, JSValueConst val
        with no box, no scrolling box or no overflow terminates exactly as §6 says and the unknown is never
        asked a question. Only step 11 consumes it, through the one site the arm above uses. */
     ev_scroll_the_element_or_terminate(&t,
-                                       vertical ? ev_request_px(ev_scroll_position_px(&t, false)) : req,
-                                       vertical ? req : ev_request_px(ev_scroll_position_px(&t, true)),
+                                       vertical ? scroll_request_px(ev_scroll_position_px(&t, false)) : req,
+                                       vertical ? req : scroll_request_px(ev_scroll_position_px(&t, true)),
                                        "auto");
     return JS_UNDEFINED;
 }
@@ -642,8 +585,8 @@ static JSValue ev_resolved_promise(JSContext *ctx)
  *     NaN), then x must be changed to the value 0". It is the member's own step and not the declaration's: the
  *     IDL type is `unrestricted double` precisely SO THAT those three reach the algorithm, which is why
  *     `el.scrollTo(NaN, 0)` is a scroll to the origin rather than a TypeError.
- *   UNKNOWN EXTERNAL INPUT is CARRIED, neither read nor substituted — see `EvRequest`, and see
- *     `ev_requested_scroll_px` for the one site that decides one and for why that decision is a crash.
+ *   UNKNOWN EXTERNAL INPUT is CARRIED, neither read nor substituted — see `ScrollRequest`, and see
+ *     `scroll_request_resolve` for the one site that decides one and for why that decision is a crash.
  *     WHAT STOOD HERE WAS THE RETIRED ARGUMENT ITSELF, and it is restated in capitals so that nobody
  *     re-derives it: §6.1's CLAMP LANDS EVERY VALUE OF THE DOMAIN ON THE POSITION THE SCROLLING BOX ALREADY
  *     HAS, SO THE TWO WORLDS ARE OBSERVATIONALLY THE SAME AND THERE IS NO ARM. That was true while §2's
@@ -661,38 +604,14 @@ static JSValue ev_resolved_promise(JSContext *ctx)
  * ABSENT member needs no addition, and that is a derivation rather than a skipped step: adding the current
  * position to an absent member gives the current position, which is exactly what step 1 then defaults an
  * absent member to. The two readings of the sentence coincide, which is why this is one function. */
-static EvRequest ev_scroll_axis(JSContext *ctx, const EvTarget *t, JSValueConst member, bool vertical,
-                                bool relative)
+static ScrollRequest ev_scroll_axis(JSContext *ctx, const EvTarget *t, JSValueConst member, bool vertical,
+                                    bool relative)
 {
-    double v = 0.0;
-    int r;
-
-    /* AN UNKNOWN IS CARRIED AS ONE, and `relative` needs no arm of its own: `scrollBy`'s steps 3 and 4 add the
-       current position to it, and a sum with an unknown addend is unknown, so the addition is what
-       `ev_requested_scroll_px`'s concolic position will have to perform rather than something this step can
-       decide. */
-    if (concolic_is(member)) {
-        EvRequest u;
-
-        u.unknown = true;
-        u.px = 0.0;
-        return u;
-    }
-    /* THE CURRENT POSITION IS ASKED FOR ONLY WHERE A STEP ASKS FOR IT, which is what keeps this a reading of
-       §6 rather than a convenience: step 2's two-argument form never mentions it, and reading it anyway would
-       run the quirks-body overflow questions on a call whose steps do not. */
-    if (JS_IsUndefined(member)) return ev_request_px(ev_scroll_position_px(t, vertical));
-    DCHECK(JS_IsNumber(member),
-           "a `left`/`top` dictionary member reached §6's scroll steps as neither a Number nor unknown external "
-           "input — ScrollToOptions declares both `unrestricted double`, so the declaration has already run "
-           "§3.2.8's ToNumber and an absent member arrives as undefined rather than as some other value");
-    r = idl_number_of(ctx, IDL_UNRESTRICTED_DOUBLE, member, &v);
-    DCHECK(r == 1, "§3.2.8's conversion produced no number for a value that is not unknown external input — "
-                   "idl_number_of answers 0 only for an unknown carrying no example, and that arm returned "
-                   "above");
-    /* §3.2's normalize non-finite values */
-    if (!isfinite(v)) v = 0.0;
-    return ev_request_px(relative ? ev_scroll_position_px(t, vertical) + v : v);
+    /* §6's read IS §4's read, over a different box's current position — the three arms and §3.2's normalize
+       are stated once (core/dom/perform_scroll.h) and what this file supplies is WHOSE position `current` is.
+       The paragraph above lists those arms; the reason they are not written here is that §4 asks the identical
+       question of the viewport and one question with two bodies is free to answer differently. */
+    return scroll_request_member(ctx, member, ev_scroll_position_px(t, vertical), relative);
 }
 
 /* §6's `scroll()`, which `scrollTo()` IS — "when the scrollTo() method is invoked, the user agent must act as
@@ -720,7 +639,7 @@ static JSValue js_ev_scroll(JSContext *ctx, JSValueConst this_val, int argc, JSV
     JSValue left, top, behavior_v = JS_UNDEFINED;
     const char *behavior = "auto";
     EvTarget t;
-    EvRequest x, y;
+    ScrollRequest x, y;
 
     DCHECK(magic == EV_SCROLL_ABSOLUTE || magic == EV_SCROLL_RELATIVE,
            "a CSSOM VIEW §6 scroll member was declared with a magic that is neither of the two algorithms — "
@@ -777,8 +696,8 @@ static JSValue js_ev_scroll(JSContext *ctx, JSValueConst this_val, int argc, JSV
            above, which quotes it), and resolving a request no step reads would crash on an unknown `left` that
            this member was never going to scroll by. `el.scrollTo({left: h, top: 0})` on the root element is
            exactly that call. */
-        viewport_scroll(t.dctx, viewport_window_scroll(t.dctx, /*vertical*/ false),
-                        ev_requested_scroll_px(y), behavior);
+        viewport_scroll(t.dctx, scroll_request_px(viewport_window_scroll(t.dctx, /*vertical*/ false)),
+                        y, behavior);
         goto resolved;
     }
     /* STEP 9 — "if the element is the body element, document is in quirks mode, and the element is not
@@ -792,7 +711,7 @@ static JSValue js_ev_scroll(JSContext *ctx, JSValueConst this_val, int argc, JSV
        scrollable in either axis" here and "not potentially scrollable in at least one axis" at the setter's
        step 9, and a body potentially scrollable in exactly one axis is on opposite sides of the two. */
     if (t.is_body && t.quirks && ev_not_potentially_scrollable_in_either_axis(&t)) {
-        viewport_scroll(t.dctx, ev_requested_scroll_px(x), ev_requested_scroll_px(y), behavior);
+        viewport_scroll(t.dctx, x, y, behavior);
         goto resolved;
     }
     /* Steps 10 and 11, which are the setter's own last two — stated once. An element that terminates at step
@@ -817,8 +736,8 @@ resolved:
  * SCROLL MEMBERS BESIDE THIS ONE ASK. What stood here contrasted the two by saying that an unknown `left`/`top`
  * needs no arm because §6.1's clamp lands every value of the domain where the box already is — a derivation
  * that §2's viewport row and §3.1's perform a scroll retired, and that those members no longer make: an
- * unknown POSITION is now CARRIED to the step that scrolls and decided there (`EvRequest`,
- * `ev_requested_scroll_px`). So the contrast is not between a real derivation and a missing one. It is
+ * unknown POSITION is now CARRIED to the step that scrolls and decided there (`ScrollRequest`,
+ * `scroll_request_resolve`). So the contrast is not between a real derivation and a missing one. It is
  * between a VALUE and a QUESTION, which is CLAUDE.md's own line and the reason the two owe different
  * mechanisms: a scroll position is a value with a domain whose fork belongs at the page's own branch over it,
  * while `block` is an ENUMERATION whose domain is finite and declared, so its worlds are the members
@@ -1511,12 +1430,12 @@ static JSValue js_ev_get(JSContext *ctx, JSValueConst this_val, int magic)
    value is §3.1 Scrolling's perform-a-scroll behavior argument, which is inside the crash
    `ev_scroll_the_element_or_terminate` names — so the member arrives with the algorithm that reads it, and
    until then the type is the entire member. */
-IDL_ENUM_VALUES(EV_SCROLL_BEHAVIOR, "auto", "instant", "smooth");
-static const IdlDictMember EV_SCROLL_TO_OPTIONS[] = {
-    { "behavior", IDL_ENUM, false, EV_SCROLL_BEHAVIOR, 0, NULL, IDL_DEFAULT_STRING, "auto" },
-    { "left",     IDL_UNRESTRICTED_DOUBLE, false, NULL, 1 },
-    { "top",      IDL_UNRESTRICTED_DOUBLE, false, NULL, 1 },
-};
+/* THE ENUM AND THE DICTIONARY MOVED TO core/frame/viewport.h, WHICH IS THE COMPONENT THAT OWNS §4. The
+   paragraph above already said what the move follows: "§4 states it as two dictionaries", and this file was
+   only "the only member list that carries it today". §4's own three Window scroll members carry it now too, so
+   a copy here would be one dictionary with two definitions — free to disagree about the READ ORDER §3.2.17
+   fixes, which is the order a page's getters observe. */
+
 /* §6's TWO OVERLOADS AS ONE DECLARATION — the longest type list the effective overload set has, with the
    position the entries split at carrying that split as its type:
 
@@ -1542,7 +1461,7 @@ static const IdlArgType EV_SCROLL_ARGS[2] = { IDL_UNRESTRICTED_DOUBLE_OR_DICT, I
    to the wrong arm. */
 IDL_ENUM_VALUES(EV_SCROLL_INTO_VIEW_CONTAINER, "all", "nearest");
 static const IdlDictMember EV_SCROLL_INTO_VIEW_OPTIONS[] = {
-    { "behavior",  IDL_ENUM, false, EV_SCROLL_BEHAVIOR,            0, NULL, IDL_DEFAULT_STRING, "auto" },
+    { "behavior",  IDL_ENUM, false, VIEWPORT_SCROLL_BEHAVIOR,            0, NULL, IDL_DEFAULT_STRING, "auto" },
     { "block",     IDL_ENUM, false, SCROLL_LOGICAL_POSITIONS,      1, NULL, IDL_DEFAULT_STRING, "start" },
     { "container", IDL_ENUM, false, EV_SCROLL_INTO_VIEW_CONTAINER, 1, NULL, IDL_DEFAULT_STRING, "all" },
     { "inline",    IDL_ENUM, false, SCROLL_LOGICAL_POSITIONS,      1, NULL, IDL_DEFAULT_STRING, "nearest" },
@@ -1556,8 +1475,8 @@ static const IdlArgType EV_SCROLL_INTO_VIEW_ARGS[1] = { IDL_BOOL_OR_DICT };
    them, differing only in which of the two algorithms the magic selects. */
 static int ev_declare_scroll(JSContext *ctx, EvScrollKind kind)
 {
-    int id = idl_method_id_dict(ctx, EV_SCROLL_ARGS, 2, EV_SCROLL_TO_OPTIONS,
-                                (int)(sizeof EV_SCROLL_TO_OPTIONS / sizeof EV_SCROLL_TO_OPTIONS[0]),
+    int id = idl_method_id_dict(ctx, EV_SCROLL_ARGS, 2, VIEWPORT_SCROLL_TO_OPTIONS,
+                                VIEWPORT_SCROLL_TO_OPTIONS_N,
                                 js_ev_scroll, (int)kind);
 
     /* §3.7.7's PROMISE RETURN TYPE. It is what makes `el.scrollTo(0)` — §3.2.17 step 1 refusing a value that

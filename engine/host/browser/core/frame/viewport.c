@@ -419,10 +419,10 @@ double viewport_scrolling_area_height(JSContext *ctx) { return vp_scrolling_area
    four steps and everything after it drifts. The drift began AT the clamp and not before it, which is why
    "step 3" and "steps 4-5" read as plausible while being wrong, and why the only safe way to check a cluster
    of these is from its LAST member backwards. */
-void viewport_scroll(JSContext *ctx, double x, double y, const char *behavior)
+void viewport_scroll(JSContext *ctx, ScrollRequest x, ScrollRequest y, const char *behavior)
 {
     lxb_dom_node_t *doc;
-    double vw, vh;
+    double vw, vh, xp, yp;
 
     /* step 4: "If there is no viewport, return a resolved Promise and abort the remaining steps." */
     if (!viewport_exists(ctx)) return;
@@ -453,10 +453,16 @@ void viewport_scroll(JSContext *ctx, double x, double y, const char *behavior)
        computed values and writing both arms; the reading was ALREADY BUILT one component over by the diff that
        built §2's viewport row, so what this needed was the CALL and not the mechanism. Grep the entry a crash
        names before building what it asks for. */
-    x = element_scrolling_clamp_position(x, viewport_scrolling_area_width(ctx), vw,
-                                         scrolling_area_viewport_ending_edge_at_higher_coordinate(doc, false));
-    y = element_scrolling_clamp_position(y, viewport_scrolling_area_height(ctx), vh,
-                                         scrolling_area_viewport_ending_edge_at_higher_coordinate(doc, true));
+    /* STEP 7 IS THE FIRST STEP THAT READS THE REQUESTED POSITION, so it is where an UNKNOWN one is decided —
+       after step 4 has already returned for a realm with no viewport, which is a call that consumes nothing.
+       core/dom/perform_scroll.h's `scroll_request_resolve` is that decision for every scroll member in this
+       engine, §6's included. */
+    xp = scroll_request_resolve(x);
+    yp = scroll_request_resolve(y);
+    xp = element_scrolling_clamp_position(xp, viewport_scrolling_area_width(ctx), vw,
+                                          scrolling_area_viewport_ending_edge_at_higher_coordinate(doc, false));
+    yp = element_scrolling_clamp_position(yp, viewport_scrolling_area_height(ctx), vh,
+                                          scrolling_area_viewport_ending_edge_at_higher_coordinate(doc, true));
     /* Step 9 — "let position be the scroll position the viewport would have by aligning the x-coordinate x of
        the viewport scrolling area with the left of the viewport and aligning the y-coordinate y of the viewport
        scrolling area with the top of the viewport" — is the IDENTITY here, derived rather than skipped: §2's
@@ -469,7 +475,7 @@ void viewport_scroll(JSContext *ctx, double x, double y, const char *behavior)
        the only thing that starts one and this user agent never takes it (core/dom/perform_scroll.h states the
        derivation and asserts it). THIS USED TO BE A TWO-SIDED DCHECK saying steps 12-13 had to be written; they
        are written, below, which is what retired it. */
-    if (x == viewport_scroll_x(ctx) && y == viewport_scroll_y(ctx)) return;
+    if (xp == viewport_scroll_x(ctx) && yp == viewport_scroll_y(ctx)) return;
     /* Step 11 — "Let document be the viewport's associated `Document`." — is `doc` above, and step 12's
        "document's root element as the associated element, if there is one, or null otherwise" is the element
        `vp_document_node` reached that document THROUGH, so it is taken from the same read rather than from a
@@ -486,7 +492,7 @@ void viewport_scroll(JSContext *ctx, double x, double y, const char *behavior)
        layout viewport, so maxX and maxY are zero, both visual deltas are zero and the whole of the request is
        the layout delta this line performs. A scale factor that is not 1 is what would separate them, and it is
        visual_viewport.c that would then own the second half. */
-    perform_scroll(ctx, NULL, x, y, lxb_dom_interface_element(document_root_node(ctx)), behavior);
+    perform_scroll(ctx, NULL, xp, yp, lxb_dom_interface_element(document_root_node(ctx)), behavior);
     /* Step 13 — "Return scrollPromise." This entry returns `void` and its callers mint a RESOLVED promise: §3.1
        resolves the promise it minted before it returns, because every scroll this user agent performs is an
        INSTANT one (core/dom/perform_scroll.h). */
@@ -810,6 +816,159 @@ bool viewport_resize_changed(JSContext *ctx)
     return changed;
 }
 
+/* ---- CSSOM VIEW §4's `scroll()`, `scrollTo()` and `scrollBy()` --------------------------------------------- */
+
+/* §4's OWN ENUMERATION AND DICTIONARY — see viewport.h for why they are exported and for §3.2.17's read order.
+   The names are string LITERALS so engine/idlgen.mjs's install audit can see them. */
+const char *const VIEWPORT_SCROLL_BEHAVIOR[] = { "auto", "instant", "smooth", NULL };
+const IdlDictMember VIEWPORT_SCROLL_TO_OPTIONS[] = {
+    { "behavior", IDL_ENUM, false, VIEWPORT_SCROLL_BEHAVIOR, 0, NULL, IDL_DEFAULT_STRING, "auto" },
+    { "left",     IDL_UNRESTRICTED_DOUBLE, false, NULL, 1 },
+    { "top",      IDL_UNRESTRICTED_DOUBLE, false, NULL, 1 },
+};
+const int VIEWPORT_SCROLL_TO_OPTIONS_N =
+    (int)(sizeof VIEWPORT_SCROLL_TO_OPTIONS / sizeof VIEWPORT_SCROLL_TO_OPTIONS[0]);
+
+/* §4's TWO OVERLOADS AS ONE DECLARATION — the longest type list the effective overload set has, with the
+   position the entries split at carrying that split as its type:
+
+       Promise<undefined> scroll(optional ScrollToOptions options = {});
+       Promise<undefined> scroll(unrestricted double x, unrestricted double y);
+
+   §3.6 steps 3-4 remove the dictionary entry the moment a second argument is passed, which is why position 0
+   is one row rather than a shape test in the body — see IDL_UNRESTRICTED_DOUBLE_OR_DICT. It is the same
+   declaration §6 makes for the element members, and it is written twice because it is a property of THESE
+   THREE members: an argument-type list is not a shared fact the way the dictionary is, and an `extern` array
+   of two enum values would cost a header entry to say nothing the IDL block above does not. */
+static const IdlArgType VP_SCROLL_ARGS[2] = { IDL_UNRESTRICTED_DOUBLE_OR_DICT, IDL_UNRESTRICTED_DOUBLE };
+
+typedef enum { VP_SCROLL_ABSOLUTE, VP_SCROLL_RELATIVE } ViewportScrollKind;
+
+static int g_id_scroll = -1;
+static int g_id_scroll_by = -1;
+
+/* §4's `scroll()`, WHICH `scrollTo()` IS — "when the scrollTo() method is invoked, the user agent must act as
+ * if the scroll() method was invoked with the same arguments", so the two share ONE declaration and there is no
+ * second body that could ever answer differently. `scrollBy` is the same algorithm with its own steps 3 and 4
+ * ahead of it — "add the value of scrollX to the left dictionary member", "add the value of scrollY to the top
+ * dictionary member" — which core/dom/perform_scroll.h's reader performs, and then §4's own step 5, "return the
+ * Promise returned from scroll() after the method is invoked with options as the only argument": the same
+ * steps, reached with the same two numbers, which is why it is this body under a magic rather than a second
+ * one.
+ *
+ * WHAT THIS MEMBER OWES AND WHAT IT DOES NOT. §4's thirteen steps are already written as an INTERNAL algorithm
+ * (`viewport_scroll` above), because §2 Terminology requires a caller "said to call another method or
+ * attribute" to invoke the internal API for it and §6's element members reach steps 4 to 13 that way. So this
+ * member is §4's ARGUMENT QUESTIONS — steps 1 and 2's overload arms, step 3's normalize, and `scrollBy`'s
+ * addition — and then that call. Nothing about the scroll itself is decided here, which is what makes the
+ * three members a diff with nothing deferred behind them: every observable they write already exists and is
+ * already written by that algorithm (§4's `scrollX`/`scrollY` and their `pageXOffset`/`pageYOffset` aliases
+ * above, and §13.2 Scrolling's `scroll` event through core/dom/scroll_events.c).
+ *
+ * THE OVERLOAD IS ALREADY RESOLVED and this body reads that answer back off the CONVERTED ARGUMENT COUNT,
+ * which is the machine's own output rather than a second resolution: §3.6 steps 3-4 decide `scroll` from the
+ * argument count ALONE, so a body seeing two positions is seeing the numeric entry and a body seeing one is
+ * seeing the dictionary the declaration built — including for `window.scrollTo()`, whose `optional
+ * ScrollToOptions options = {}` the machine materializes with every member at its default.
+ *
+ * STEP 4 IS THE CALLEE'S. CSSOM VIEW §4 "Extensions to the Window Interface"' "If there is no viewport,
+ * return a resolved Promise and abort the remaining steps" is `viewport_scroll`'s first line, and a realm
+ * with no viewport reaches this member's one exit with the promise
+ * §4 owes — which is why there is no `viewport_exists` test here. A second one would be the same question with
+ * two answers, and it is the question the CHECK inside that algorithm exists to catch coming apart. */
+static JSValue js_vp_scroll(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    bool relative = (magic == VP_SCROLL_RELATIVE);
+    JSValue left, top, behavior_v = JS_UNDEFINED;
+    const char *behavior = "auto";
+    ScrollRequest x, y;
+    JSValue funcs[2], promise;
+    int r;
+
+    (void)this_val;
+    DCHECK(magic == VP_SCROLL_ABSOLUTE || magic == VP_SCROLL_RELATIVE,
+           "a CSSOM VIEW §4 scroll member was declared with a magic that is neither of the two algorithms — "
+           "`scroll`/`scrollTo` is one and `scrollBy` is the other, and the magic IS which");
+    /* Steps 1 and 2, whose ONLY difference is where `left` and `top` come from. `scrollBy`'s step 1.3-1.4 —
+       "let the left dictionary member of options have the value x" — makes the two-argument form's arguments
+       those very members, so they are read as such and the rest of the algorithm has one shape. */
+    if (argc >= 2) {
+        DCHECK(argc == 2, "§4's scroll members declare two positions and the conversion converts no more than a "
+                          "member lists, so a body seeing a third is a declaration that grew without this");
+        left = JS_DupValue(ctx, argv[0]);
+        top  = JS_DupValue(ctx, argv[1]);
+    } else {
+        DCHECK(argc == 1 && JS_IsObject(argv[0]),
+               "§4's scroll members reached their body at the dictionary arity with something that is not the "
+               "engine-built options object — `optional ScrollToOptions options = {}` means an omitted argument "
+               "IS a dictionary carrying every member's default, which the argument machine materializes");
+        left = idl_dict_get(ctx, argv[0], "left");
+        top  = idl_dict_get(ctx, argv[0], "top");
+        /* CSSOM VIEW §4 "Extensions to the Window Interface" step 12 hands §3.1 "the scroll behavior being
+           the value of the behavior dictionary member of options" — §4's own words, so the member the
+           declaration converted is read HERE. `= "auto"` is its IDL default, which
+           the conversion places for a page that wrote none — and the two-argument overload above, whose steps
+           build `options` out of its two numbers and nothing else, keeps the initialiser. */
+        behavior_v = idl_dict_get(ctx, argv[0], "behavior");
+        behavior = JS_IsString(behavior_v) ? JS_ToCString(ctx, behavior_v) : "auto";
+        CHECK(behavior != NULL, "§4's ScrollBehavior keyword could not be read as a string");
+    }
+    /* Step 1.2-1.3's "or the viewport's current scroll position on the x axis otherwise" is `viewport_window_
+       scroll`, which is §4's `scrollX`/`scrollY` attribute as §2 requires it to be invoked — the INTERNAL one,
+       so a page overriding `window.scrollX` cannot change what this defaults to. Step 3's normalize and
+       `scrollBy`'s addition are the same reader's. */
+    x = scroll_request_member(ctx, left, viewport_window_scroll(ctx, /*vertical*/ false), relative);
+    y = scroll_request_member(ctx, top,  viewport_window_scroll(ctx, /*vertical*/ true),  relative);
+    JS_FreeValue(ctx, left);
+    JS_FreeValue(ctx, top);
+    /* Steps 4 to 13. */
+    viewport_scroll(ctx, x, y, behavior);
+    if (JS_IsString(behavior_v)) JS_FreeCString(ctx, behavior);
+    JS_FreeValue(ctx, behavior_v);
+    /* STEP 13's "return scrollPromise", and step 4's and step 10's "return a resolved Promise" — which are the
+       same object here because every scroll this user agent performs is an INSTANT one, so §3.1 resolves the
+       promise it minted before it returns (core/dom/perform_scroll.h states the derivation and asserts it).
+       THE RESOLVE CANNOT THROW, which is why the failure is an assert and not a swallow: the capability is
+       fresh, nothing has attached a reaction to it, and the value is `undefined` — so there is no `then` getter
+       of the page's for the resolve to reach. The call goes through JS_CallAsFlow rather than JS_Call because a
+       resolving function must run on a flow base and this is a C activation. */
+    promise = JS_NewPromiseCapability(ctx, funcs);
+    CHECK(!JS_IsException(promise),
+          "CSSOM VIEW §4's scroll members answer with a Promise on every path they have, and this one's "
+          "capability could not be allocated — a member that answers with neither a promise nor a throw is a "
+          "call a page can only hang on");
+    r = JS_CallAsFlow(ctx, funcs[0], JS_UNDEFINED);
+    DCHECK(r >= 0, "resolving a FRESH promise capability with `undefined` completed abruptly — nothing of the "
+                   "page's is reachable from there, so a throw means the capability is not the one this just "
+                   "created");
+    JS_FreeValue(ctx, funcs[0]);
+    JS_FreeValue(ctx, funcs[1]);
+    return promise;
+}
+
+/* ONE OF §4's THREE SCROLL METHODS, DECLARED — the same argument shape and the same dictionary for all of
+   them, differing only in which of the two algorithms the magic selects. */
+static int vp_declare_scroll(JSContext *ctx, ViewportScrollKind kind)
+{
+    int id = idl_method_id_dict(ctx, VP_SCROLL_ARGS, 2, VIEWPORT_SCROLL_TO_OPTIONS,
+                                VIEWPORT_SCROLL_TO_OPTIONS_N, js_vp_scroll, (int)kind);
+
+    /* §3.7.7's PROMISE RETURN TYPE. It is what makes `window.scrollTo(0)` — §3.2.17 step 1 refusing a value
+       that is not undefined, null or an Object — a REJECTED promise rather than a throw, which is what a page
+       wrapping the call in `.catch` is relying on. */
+    idl_returns_promise();
+    /* The dictionary entry declares position 0 optional (`optional ScrollToOptions options = {}`), so
+       `window.scrollTo()` is a legal call… */
+    idl_optional_from(0);
+    /* …AND THE NUMERIC ENTRY DECLARES NEITHER OF ITS TWO POSITIONS OPTIONAL, which is a different list of
+       optionality values for the same declaration and is why §3.6 step 15.3 needs both. Without it
+       `window.scrollTo(1, undefined)` would read `undefined` at position 1 as an ABSENT optional and default y
+       to the current position, where the surviving entry owes it ToNumber(undefined) and then §3.2's
+       normalized 0. */
+    idl_overload_split_optional_from(2);
+    return id;
+}
+
 /* ---- the declaration and the per-realm install ------------------------------------------------------------ */
 
 static void viewport_install(JSContext *ctx)
@@ -842,6 +1001,13 @@ static void viewport_install(JSContext *ctx)
     global = JS_GetGlobalObject(ctx);
     for (i = 0; i < VP_NAMES; i++)
         idl_install_replaceable(ctx, global, VP_NAME[i], js_vp_get, VP_MAGIC[i]);
+    /* §4's three scroll METHODS, on the same target and by the same rule — Web IDL §3.7.3: Window is [Global],
+       so its members are own properties of the global object rather than of a prototype. `scroll` and
+       `scrollTo` share ONE declaration because §4 says the second acts as if the first were invoked, so the
+       aliasing is in the install exactly as `pageXOffset`'s is above. */
+    idl_install_method(ctx, global, "scroll", g_id_scroll);
+    idl_install_method(ctx, global, "scrollTo", g_id_scroll);
+    idl_install_method(ctx, global, "scrollBy", g_id_scroll_by);
     JS_FreeValue(ctx, global);
 }
 
@@ -859,6 +1025,10 @@ void viewport_init(JSContext *ctx)
     agent_state_id("viewport", &g_scroll_slot,
                    "CSSOM VIEW §3.1 Scrolling's realm-value slot for the viewport's current scroll position — "
                    "the state §3.1's perform a scroll writes and §4's `scrollX`/`scrollY` read");
+    /* §4's three scroll members, declared ONCE PER AGENT like every other member declaration — the install
+       above is per realm and the declaration is not. */
+    g_id_scroll    = vp_declare_scroll(ctx, VP_SCROLL_ABSOLUTE);
+    g_id_scroll_by = vp_declare_scroll(ctx, VP_SCROLL_RELATIVE);
     realm_declare_intrinsic(viewport_install);
 }
 
@@ -868,4 +1038,9 @@ void viewport_free(void)
        slot id is a class id in a runtime that is going away with it. */
     g_resize_slot = -1;
     g_scroll_slot = -1;
+    /* §4's three scroll members' ids are the AGENT's too, and the pool they live in goes with the runtime. A
+       component that kept one would hand a second agent a member id from a runtime that no longer exists,
+       which is the same failure the slots above are reset for. */
+    g_id_scroll = -1;
+    g_id_scroll_by = -1;
 }

@@ -95,6 +95,8 @@
 #include <stdbool.h>
 #include "quickjs.h"
 #include "core/css/css_length.h"
+#include "core/dom/perform_scroll.h"
+#include "core/idl_args.h"
 
 /* Declared once per AGENT: the §4 members' names and the per-realm slot their §13.1 latch lives in. It also
    REGISTERS the per-realm install, so no host has a line to remember. */
@@ -220,11 +222,18 @@ double viewport_scrolling_area_height(JSContext *ctx);
    THESE NUMBERS ARE THE THIRTEEN TOP-LEVEL STEPS of the edition engine/specindex/cssomview.json is keyed to.
    They stood one lower from step 4 onward, because §4's clamp is TWO steps each holding a two-armed
    `<dl class="switch">` and a flat count of the arms reads that pair as four.
-   IT IS NOT `window.scroll` — that member is a separate question. §4's three Window members are §4's argument
-   questions plus a call to this algorithm, so installing them would give a page a second spelling of what
-   `documentElement.scrollTop = n` already reaches and would change nothing this file does. That is worth
+   IT IS NOT `window.scroll`, AND THAT MEMBER NOW EXISTS — it is installed below, and this paragraph used to
+   say installing it "would give a page a second spelling of what `documentElement.scrollTop = n` already
+   reaches and would change nothing this file does". Both halves were true OF THIS FILE and neither was the
+   question: a page that calls `window.scrollTo(x, y)` without a member gets a TypeError, which ends the flow
+   that called it, and no amount of `scrollTop` reaching the same algorithm answers for a name the page
+   actually wrote. The distinction the sentence was drawing survives and is why the two are still separate
+   entries: §2 requires an algorithm "said to call another method or attribute" to invoke the INTERNAL API,
+   so this entry is what `el.scrollTop = 10` on the root element reaches and the member below is what a page
+   reaches, and a page overriding `window.scroll` cannot change the first. That is worth
    stating because six sites in five files used to assert themselves against the NAME `scrollTo` on the global
-   as a stand-in for "a scrolling box can be MOVED", and this header used to name four of them as though the
+   as a stand-in for the question A SCROLLING BOX CAN BE MOVED, and this header used to name four of them as
+   though the
    member were the capability. It is not, and the sites ask core/dom/element_scrolling.h's
    `element_scrolling_box_can_move` instead — WHICH §3.1's ARRIVAL DID NOT RETIRE, and that is worth saying
    because it reads as though it should have. That question is about SLACK, not about whether a perform-a-scroll
@@ -232,7 +241,37 @@ double viewport_scrolling_area_height(JSContext *ctx);
    box cannot be anywhere else no matter how many algorithms are written; where it does not, one can. §3.1 is
    what makes that comparison LOAD-BEARING — it used to be the outer of two reasons, with "nothing reaches
    §3.1" behind it — and load-bearing is not retired. */
-void viewport_scroll(JSContext *ctx, double x, double y, const char *behavior);
+/* THE REQUEST IS A `ScrollRequest` AND NOT A `double`, AND THE ORDER IS WHY. §4's step 4 — "if there is no
+   viewport, return a resolved Promise and abort the remaining steps" — runs BEFORE step 7 reads x and y, so a
+   caller that resolved an UNKNOWN requested position on the way in would crash on a call the algorithm
+   terminates before it consumes anything. The decision belongs to the first step that READS the position,
+   which is inside these steps and not in front of them (core/dom/perform_scroll.h). */
+void viewport_scroll(JSContext *ctx, ScrollRequest x, ScrollRequest y, const char *behavior);
+
+/* CSSOM VIEW §4's OWN ENUMERATION AND DICTIONARY, DECLARED WHERE §4 IS.
+ *
+ *     enum ScrollBehavior { "auto", "instant", "smooth" };
+ *     dictionary ScrollOptions { ScrollBehavior behavior = "auto"; };
+ *     dictionary ScrollToOptions : ScrollOptions { unrestricted double left; unrestricted double top; };
+ *
+ * THEY ARE EXPORTED BECAUSE TWO SECTIONS' MEMBERS TAKE THEM AND ONE DECLARATION IS WHAT KEEPS THEM ONE. §4's
+ * three Window scroll members are declared in this file; §6 "Extensions to the Element Interface" declares the
+ * same three over an element's box, and §6's `ScrollIntoViewOptions` inherits `ScrollBehavior` — so
+ * core/dom/element_view.c reads these rather than restating them. A second member list would be free to
+ * disagree about §3.2.17 Dictionary types' READ ORDER, which is the inherited dictionary's members first and
+ * each dictionary's own lexicographically among themselves (`behavior` at level 0, then `left` and `top` at
+ * level 1) and is the order a page's getters observe.
+ * NEITHER `left` NOR `top` HAS A DEFAULT, and that is the whole of how §4 step 1 can say "or the viewport's
+ * current scroll position on the x axis otherwise": a member with no `= …` does not EXIST on the converted
+ * dictionary when the page did not write it, so absence is a state the body can read (core/dom/
+ * perform_scroll.h's `scroll_request_member` is the one reader of that state). Giving either one a `= 0` would
+ * turn `window.scrollTo({top: 40})` into a horizontal scroll to the origin.
+ * THE COUNT TRAVELS WITH THE LIST. A caller computing `sizeof … / sizeof …[0]` over an `extern` array cannot —
+ * the array's size is not in scope — and a caller that typed the number instead would be the second copy this
+ * export exists to prevent. */
+extern const char *const VIEWPORT_SCROLL_BEHAVIOR[];
+extern const IdlDictMember VIEWPORT_SCROLL_TO_OPTIONS[];
+extern const int VIEWPORT_SCROLL_TO_OPTIONS_N;
 
 /* CSSOM VIEW §13.1 step 1, as the one question the resize steps ask: "has doc's viewport had its width or
    height changed since the last time these steps were run". LATCHES what it saw, so a caller that asks twice

@@ -140,12 +140,14 @@ void element_scrolling_scroll_target_into_view(lxb_dom_element_t *target, const 
  * `viewport_scroll`, which could not MOVE a viewport at all. THAT CLAUSE HAS BEEN WRONG TWICE AND BOTH
  * RETIREMENTS ARE RESTATED IN CAPITALS: first ITS CLAMP LANDS ON THE POSITION THE VIEWPORT ALREADY HAS (which
  * §2's viewport row retired), then ITS STEPS 12-13 ARE UNWRITTEN AND ITS STEP 10 CRASHES RATHER THAN
- * PRETENDING (which §3.1 did). §4's Window members would move the viewport if they were installed; they are
- * still not the capability, because the capability is the ALGORITHM and a member is a spelling of a caller.
- * So the name test was neither necessary nor sufficient, and its failure was
- * PRE-LOADED rather than latent: installing §4's three members satisfies it, so the readers would have fired
- * announcing a capability that had not arrived — a probe that reports a capability as PRESENT is worse than no
- * probe, because the next reader builds on it. core/timing/hr_time.c records the identical defect over
+ * PRETENDING (which §3.1 did). §4's THREE WINDOW MEMBERS ARE NOW INSTALLED (core/frame/viewport.c) AND THEY
+ * MOVE THE VIEWPORT, and they are still not the capability, because the capability is the ALGORITHM and a
+ * member is a spelling of a caller. So the name test was neither necessary nor sufficient, and its failure was
+ * PRE-LOADED rather than latent: this said installing §4's three members WOULD satisfy it, and the diff that
+ * installed them is what turned that prediction into a fact — every reader still asking the name would now
+ * fire, and the earliest of them would have fired announcing a capability that had not yet arrived. A probe
+ * that reports a capability as PRESENT is worse than no probe, because the next reader builds on it.
+ * core/timing/hr_time.c records the identical defect over
  * `crossOriginIsolated` and states the cure this follows: it is a component's answer and not a probe of the
  * global. A producer that is an INTERNAL ALGORITHM has no name on the global to probe for, so `realm_awaits`
  * is the wrong instrument for it by construction — core/realm.h says so at the mechanism.
