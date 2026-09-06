@@ -643,6 +643,21 @@ const SPECS = [
      beside it. Bikeshed-rendered: 129 `data-level` headings, a dt-updated, no `respecConfig`. */
   { key: "uievents", label: "UI Events", kind: "bikeshed",
     base: "https://w3c.github.io/uievents/", edition: "maintained", anchors: ["ui events", "uievents"] },
+  /* CSS TYPED OM 1 — THE LARGEST SINGLE POPULATION IN THE FOREIGN TALLY, 94 citations under `typed-om-1`,
+     and the entry that proved a capitalised-token scan cannot derive this table: both available derivations
+     read the LAST WORD before the section sign, and this standard's name ENDS ON A DIGIT, so three sites were
+     predicted where ninety-three stand. Its numbering was checked against those sites first: §2 "CSSStyleValue
+     objects", §3 "The StylePropertyMap", §4.3 "Numeric Values", §4.3.1 "Common Numeric Operations, and the
+     CSSNumericValue Superclass", §4.3.2 "Numeric Value Typing", §4.3.3 "Value + Unit: CSSUnitValue objects",
+     §4.3.4 "Complex Numeric Values: CSSMathValue objects", §4.3.5 "Numeric Factory Functions", §6
+     "CSSStyleValue Serialization", §6.4 and §6.5 the two serializers — every number core/css writes.
+     ANCHORED BY THE FORM THE TOKENIZER PRODUCES AND BY THE ONE IT DOES NOT: `typed-om-1` is what the level
+     join builds from `CSS Typed OM 1`, and `css-typed-om-1` is the shortname, asked FIRST because the join
+     offers the three-word base before the two-word one. `typed om` LEAVES the foreign list for the reason the
+     webcrypto note gives — the rule that put it there is what takes it off. */
+  { key: "csstypedom1", label: "CSS Typed OM Level 1", kind: "bikeshed",
+    base: "https://drafts.css-houdini.org/css-typed-om-1/", edition: "maintained",
+    anchors: ["css-typed-om-1", "typed-om-1", "typed om", "css typed om"] },
   { key: "hrtime", label: "High Resolution Time", kind: "bikeshed",
     base: "https://w3c.github.io/hr-time/", edition: "maintained", anchors: ["hr-time", "hrtime", "high resolution time"] },
   /* THE THREE STANDARDS THAT SIT ON TOP OF THE ROW ABOVE, and they are here for the reason that row's own
@@ -842,8 +857,25 @@ function decodeEntities(s) {
   });
 }
 
+/* A `>` INSIDE A QUOTED ATTRIBUTE VALUE IS NOT THE END OF THE TAG, AND READING IT AS ONE PUTS A TOOL'S OWN
+ * DIAGNOSTIC INTO THE STANDARD'S TEXT. `<[^>]*>` stops at the first `>` it meets, so a tag carrying an
+ * attribute whose value contains one ends early and everything after it is read as PROSE — which is not a
+ * hypothetical shape: bikeshed emits an ambiguous-link error as `<u class="link-error" title="LINK ERROR: …
+ * please see <https://speced.github.io/bikeshed/#ambi-for> for instructions: Local references: spec:… ">`,
+ * and that title runs to hundreds of characters of reference listing.
+ * MEASURED, on the diff that indexed CSS Typed OM 1: §4.3.2's own sentence came into the corpus as "the
+ * ordering of a FOR INSTRUCTIONS LOCAL REFERENCES SPEC CSS TYPED OM 1 TYPE DFN FOR CSSNUMERICVALUE TEXT TYPE
+ * … type s entries always matches", and FIFTEEN quotations in core/css — every one of them pasted correctly
+ * from the document — were reported as diverging at the word the error marker swallowed. A corpus that holds
+ * a generator's error message is a corpus that accuses the tree of not matching it.
+ * THE PATTERN THEREFORE SKIPS QUOTED ATTRIBUTE VALUES, and it keeps the naive alternative behind it so that a
+ * stray `<` in prose still consumes to the next `>` exactly as it did before rather than running to the end of
+ * the document looking for a quote it will never find. */
+const TAG = "<[/!?]?[A-Za-z][^>\"']*(?:(?:\"[^\"]*\"|'[^']*')[^>\"']*)*>|<[^>]*>";
+const TAG_RE = new RegExp(TAG, "g");
+
 function stripTags(s) {
-  return decodeEntities(String(s).replace(/<[^>]*>/g, " ")).replace(/\s+/g, " ").trim();
+  return decodeEntities(String(s).replace(TAG_RE, " ")).replace(/\s+/g, " ").trim();
 }
 
 /* The spec's markup, a citation's prose and a citation's quoted title must all reduce to ONE spelling or a
@@ -851,7 +883,7 @@ function stripTags(s) {
  * for `determine the origin`), possessive `'s`, and the spec's own <code>/<var> wrappers all differ from the
  * plain phrase while naming the same thing. */
 function normTerm(s) {
-  return decodeEntities(String(s).replace(/<[^>]*>/g, " "))
+  return decodeEntities(String(s).replace(TAG_RE, " "))
     .replace(/[‘’“”]/g, "'")
     .replace(/[‐-―]/g, "-")
     .toLowerCase()
@@ -1031,9 +1063,9 @@ const STEP_MARKER = /\b\d+(?:\.\d+)*\.\s+(?=[A-Z])/g;
  * as diverging at its own `2`. A rule about markup that ignores what the markup MEANS is a rule that trades one
  * manufactured finding for another. */
 const SPLIT_TAG = /^<\/?(?:br|p|div|li|ul|ol|dl|dt|dd|tr|td|th|table|thead|tbody|tfoot|caption|col|colgroup|h[1-6]|pre|blockquote|section|article|aside|nav|figure|figcaption|hr|form|fieldset|legend|main|header|footer|address|details|summary|dialog|template|option|optgroup|body|html|head|sup|sub)\b/i;
-const ONE_TAG = /<[^>]*>/g;
+const ONE_TAG = new RegExp(TAG, "g");
 function stripMarkup(html) {
-  return html.replace(/(?:<[^>]*>)+/g, (run, at) => {
+  return html.replace(new RegExp("(?:" + TAG + ")+", "g"), (run, at) => {
     const before = html[at - 1], after = html[at + run.length];
     if (!before || !after || !/[A-Za-z0-9]/.test(before) || !/[A-Za-z0-9]/.test(after)) return " ";
     for (const t of run.match(ONE_TAG) || []) if (SPLIT_TAG.test(t)) return " ";
@@ -2098,7 +2130,7 @@ const OTHER_SPECS = [
      claim about which standard it means outranks a phrase two documents share. An index row RAISES it; that is
      the next diff and not this one. */
   "parsing and serialization", "css conditional", "css scoping", "secure contexts", "reporting",
-  "positioned layout", "css nesting", "css viewport", "typed om", "har",
+  "positioned layout", "css nesting", "css viewport", "har",
   /* CSS modules, as this tree spells them when it does not use the levelled shortname */
   "css", "selectors", "cascade", "view", "values", "sizing", "fonts", "backgrounds", "text",
   "display", "position", "overflow", "images", "color", "transforms", "writing", "box", "inline",

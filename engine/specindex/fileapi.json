@@ -3,7 +3,7 @@
  "key": "fileapi",
  "base": "https://w3c.github.io/FileAPI/",
  "specUpdated": "23 August 2026",
- "fetched": "2026-09-03",
+ "fetched": "2026-09-06",
  "sections": {
   "1": {
    "title": "Introduction",
@@ -282,27 +282,6 @@
   }
  },
  "dfns": {
-  "add an entry": [
-   "8.2"
-  ],
-  "add an entry to the blob url store": [
-   "8.2"
-  ],
-  "add the entry": [
-   "8.2"
-  ],
-  "add the entry to the blob url store": [
-   "8.2"
-  ],
-  "adding an entry to the blob url store": [
-   "8.2"
-  ],
-  "asynchronous read method": [
-   "6.2.3"
-  ],
-  "asynchronous read methods": [
-   "6.2.3"
-  ],
   "blob url": [
    "8.2"
   ],
@@ -315,59 +294,8 @@
   "blob urls": [
    "8.2"
   ],
-  "blob(blobparts options)": [
-   "3"
-  ],
-  "check for same partition blob url usage": [
-   "8.3.2"
-  ],
-  "constructor(blobparts options)": [
-   "3"
-  ],
-  "constructor(filebits filename options)": [
-   "4"
-  ],
-  "constructor(filebits filename)": [
-   "4"
-  ],
-  "convert line endings to native": [
-   "3.1.1"
-  ],
-  "converting line endings to native": [
-   "3.1.1"
-  ],
-  "createobjecturl( obj )": [
-   "8.4"
-  ],
-  "failure reason": [
-   "7.1"
-  ],
-  "file read error": [
-   "7"
-  ],
-  "file read errors": [
-   "7"
-  ],
-  "file reading task source": [
-   "6.1"
-  ],
   "file type guidelines": [
    "4"
-  ],
-  "file(filebits filename options)": [
-   "4"
-  ],
-  "file(filebits filename)": [
-   "4"
-  ],
-  "fire a progress event": [
-   "6.4"
-  ],
-  "generate a new blob url": [
-   "8.2"
-  ],
-  "generating a new blob url": [
-   "8.2"
   ],
   "get stream": [
    "3"
@@ -378,168 +306,21 @@
   "obtain a blob object": [
    "8.2"
   ],
-  "package data": [
-   "6.3"
-  ],
-  "process blob parts": [
-   "3.1.1"
-  ],
-  "processing blob parts": [
-   "3.1.1"
-  ],
-  "read method": [
-   "6.2.3"
-  ],
-  "read methods": [
-   "6.2.3"
-  ],
-  "read operation": [
-   "6.2"
-  ],
-  "readasarraybuffer( blob )": [
-   "6.2.3.3",
-   "6.5.1.4"
-  ],
-  "readasbinarystring( blob )": [
-   "6.2.3.4",
-   "6.5.1.5"
-  ],
-  "readasdataurl( blob )": [
-   "6.2.3.1",
-   "6.5.1.3"
-  ],
-  "readastext( blob encoding )": [
-   "6.2.3.2",
-   "6.5.1.2"
-  ],
-  "readastext(blob encoding)": [
-   "6.2.3.2",
-   "6.5.1.2"
-  ],
-  "remove an entry": [
-   "8.2"
-  ],
-  "remove an entry from the blob url store": [
-   "8.2"
-  ],
-  "remove the entry": [
-   "8.2"
-  ],
-  "remove the entry from the blob url store": [
-   "8.2"
-  ],
   "resolve a blob url": [
    "8.3"
   ],
-  "revokeobjecturl( url )": [
-   "8.4"
-  ],
   "slice blob": [
-   "2"
-  ],
-  "slice(start end contenttype)": [
-   "3.3.1"
-  ],
-  "slice(start end contenttype) slice(start end) slice(start) slice()": [
-   "3.3.1"
-  ],
-  "slice(start end)": [
-   "3.3.1"
-  ],
-  "snapshot state": [
-   "3"
-  ],
-  "synchronous read method": [
-   "6.5.1"
-  ],
-  "synchronously read": [
-   "6.5.1"
-  ],
-  "terminate an algorithm": [
-   "2"
-  ],
-  "terminate this algorithm": [
-   "2"
-  ],
-  "unix epoch": [
    "2"
   ]
  },
  "ops": {},
  "uses": {
-  "add an entry to the blob url store": {
-   "10": 5
-  },
   "blob urls": {
    "10": 2,
    "8.1": 2,
    "8.3.2": 3,
    "8.4": 4,
    "8.4.1": 6
-  },
-  "blob(blobparts options)": {
-   "10": 7,
-   "3.1": 2
-  },
-  "convert line endings to native": {
-   "10": 2
-  },
-  "createobjecturl( obj )": {
-   "10": 2
-  },
-  "file(filebits filename options)": {
-   "10": 5
-  },
-  "fire a progress event": {
-   "6.2": 7,
-   "6.2.3.5": 2
-  },
-  "generate a new blob url": {
-   "10": 2
-  },
-  "package data": {
-   "6.2": 2
-  },
-  "process blob parts": {
-   "10": 2
-  },
-  "read methods": {
-   "6.2.2": 4,
-   "6.4.2": 3
-  },
-  "readasarraybuffer( blob )": {
-   "10": 4
-  },
-  "readasbinarystring( blob )": {
-   "10": 4
-  },
-  "readasdataurl( blob )": {
-   "10": 4
-  },
-  "readastext( blob encoding )": {
-   "10": 6
-  },
-  "remove an entry from the blob url store": {
-   "10": 4
-  },
-  "revokeobjecturl( url )": {
-   "10": 2,
-   "8.4.1": 2
-  },
-  "slice(start end contenttype)": {
-   "10": 6
-  },
-  "snapshot state": {
-   "4": 6,
-   "7.1": 2
-  },
-  "terminate an algorithm": {
-   "10": 2,
-   "6.2.3.5": 2
-  },
-  "unix epoch": {
-   "4.1": 2,
-   "4.2": 2
   }
  }
 }

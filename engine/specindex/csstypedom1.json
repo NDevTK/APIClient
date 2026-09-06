@@ -1,0 +1,475 @@
+{
+ "spec": "CSS Typed OM Level 1",
+ "key": "csstypedom1",
+ "base": "https://drafts.css-houdini.org/css-typed-om-1/",
+ "specUpdated": "6 August 2026",
+ "fetched": "2026-09-06",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "intro"
+  },
+  "2": {
+   "title": "CSSStyleValue objects",
+   "page": "",
+   "id": "stylevalue-objects"
+  },
+  "3": {
+   "title": "The StylePropertyMap",
+   "page": "",
+   "id": "the-stylepropertymap"
+  },
+  "4": {
+   "title": "CSSStyleValue subclasses",
+   "page": "",
+   "id": "stylevalue-subclasses"
+  },
+  "5": {
+   "title": "CSSStyleValue Reification",
+   "page": "",
+   "id": "reify-stylevalue"
+  },
+  "6": {
+   "title": "CSSStyleValue Serialization",
+   "page": "",
+   "id": "stylevalue-serialization"
+  },
+  "7": {
+   "title": "Security Considerations",
+   "page": "",
+   "id": "security-considerations"
+  },
+  "8": {
+   "title": "Privacy Considerations",
+   "page": "",
+   "id": "privacy-considerations"
+  },
+  "9": {
+   "title": "Changes",
+   "page": "",
+   "id": "changes"
+  },
+  "2.1": {
+   "title": "Direct CSSStyleValue Objects",
+   "page": "",
+   "id": "direct-cssstylevalue"
+  },
+  "3.1": {
+   "title": "Computed StylePropertyMapReadOnly objects",
+   "page": "",
+   "id": "computed-stylepropertymapreadonly-objects"
+  },
+  "3.2": {
+   "title": "Declared & Inline StylePropertyMap objects",
+   "page": "",
+   "id": "declared-stylepropertymap-objects"
+  },
+  "4.1": {
+   "title": "CSSUnparsedValue objects",
+   "page": "",
+   "id": "unparsedvalue-objects"
+  },
+  "4.2": {
+   "title": "CSSKeywordValue objects",
+   "page": "",
+   "id": "keywordvalue-objects"
+  },
+  "4.3": {
+   "title": "Numeric Values:",
+   "page": "",
+   "id": "numeric-objects"
+  },
+  "4.3.1": {
+   "title": "Common Numeric Operations, and the CSSNumericValue Superclass",
+   "page": "",
+   "id": "numeric-value"
+  },
+  "4.3.2": {
+   "title": "Numeric Value Typing",
+   "page": "",
+   "id": "numeric-typing"
+  },
+  "4.3.3": {
+   "title": "Value + Unit: CSSUnitValue objects",
+   "page": "",
+   "id": "simple-numeric"
+  },
+  "4.3.4": {
+   "title": "Complex Numeric Values: CSSMathValue objects",
+   "page": "",
+   "id": "complex-numeric"
+  },
+  "4.3.5": {
+   "title": "Numeric Factory Functions",
+   "page": "",
+   "id": "numeric-factory"
+  },
+  "4.4": {
+   "title": "CSSTransformValue objects",
+   "page": "",
+   "id": "transformvalue-objects"
+  },
+  "4.5": {
+   "title": "CSSImageValue objects",
+   "page": "",
+   "id": "imagevalue-objects"
+  },
+  "4.6": {
+   "title": "CSSColorValue objects",
+   "page": "",
+   "id": "colorvalue-objects"
+  },
+  "5.1": {
+   "title": "Property-specific Rules",
+   "page": "",
+   "id": "reify-property"
+  },
+  "5.2": {
+   "title": "Unrepresentable Values",
+   "page": "",
+   "id": "reify-failure"
+  },
+  "5.3": {
+   "title": "Raw CSS tokens: properties with var() references",
+   "page": "",
+   "id": "reify-tokens"
+  },
+  "5.4": {
+   "title": "var() References",
+   "page": "",
+   "id": "reify-var"
+  },
+  "5.5": {
+   "title": "Identifier Values",
+   "page": "",
+   "id": "reify-ident"
+  },
+  "5.6": {
+   "title": "<number> , <percentage> , and <dimension> values",
+   "page": "",
+   "id": "reify-numeric"
+  },
+  "5.7": {
+   "title": "<color> Values",
+   "page": "",
+   "id": "reify-color"
+  },
+  "5.8": {
+   "title": "<transform-list> and <transform-function> Values",
+   "page": "",
+   "id": "reify-transformvalue"
+  },
+  "6.1": {
+   "title": "CSSUnparsedValue Serialization",
+   "page": "",
+   "id": "unparsedvalue-serialization"
+  },
+  "6.2": {
+   "title": "CSSKeywordValue Serialization",
+   "page": "",
+   "id": "keywordvalue-serialization"
+  },
+  "6.3": {
+   "title": "CSSNumericValue Serialization",
+   "page": "",
+   "id": "numericvalue-serialization"
+  },
+  "6.4": {
+   "title": "CSSUnitValue Serialization",
+   "page": "",
+   "id": "unitvalue-serialization"
+  },
+  "6.5": {
+   "title": "CSSMathValue Serialization",
+   "page": "",
+   "id": "calc-serialization"
+  },
+  "6.6": {
+   "title": "CSSTransformValue and CSSTransformComponent Serialization",
+   "page": "",
+   "id": "transformvalue-serialization"
+  },
+  "6.7": {
+   "title": "Serialization from CSSOM Values",
+   "page": "",
+   "id": "cssom-serialization"
+  },
+  "9.1": {
+   "title": "Changes since the 10 April 2018 Working Draft",
+   "page": "",
+   "id": "changes-20180410"
+  }
+ },
+ "dfns": {
+  "add two types": [
+   "4.3.2"
+  ],
+  "apply the percent hint": [
+   "4.3.2"
+  ],
+  "base type": [
+   "4.3.2"
+  ],
+  "base types": [
+   "4.3.2"
+  ],
+  "computed stylepropertymap": [
+   "3.1"
+  ],
+  "convert a cssunitvalue": [
+   "4.3.3"
+  ],
+  "create a cssunitvalue from a pair": [
+   "4.3.3"
+  ],
+  "create a cssunitvalue from a sum value item": [
+   "4.3.1"
+  ],
+  "create a sum value": [
+   "4.3.1"
+  ],
+  "create a type": [
+   "4.3.2"
+  ],
+  "create a type from a unit map": [
+   "4.3.1"
+  ],
+  "create an internal representation": [
+   "3"
+  ],
+  "creating a sum value": [
+   "4.3.1"
+  ],
+  "creating a type": [
+   "4.3.2"
+  ],
+  "custom property name string": [
+   "3"
+  ],
+  "declared stylepropertymap": [
+   "3.2"
+  ],
+  "equal numeric value": [
+   "4.3.1"
+  ],
+  "equal numeric values": [
+   "4.3.1"
+  ],
+  "internal representation": [
+   "1"
+  ],
+  "internal representations": [
+   "1"
+  ],
+  "invert a cssnumericvalue": [
+   "4.3.1"
+  ],
+  "invert a type": [
+   "4.3.2"
+  ],
+  "list valued properties": [
+   "3"
+  ],
+  "match a grammar": [
+   "3"
+  ],
+  "match the grammar": [
+   "3"
+  ],
+  "multiply two types": [
+   "4.3.2"
+  ],
+  "negate a cssnumericvalue": [
+   "4.3.1"
+  ],
+  "new unit value": [
+   "4.3.3"
+  ],
+  "parse a cssstylevalue": [
+   "2"
+  ],
+  "percent hint": [
+   "4.3.2"
+  ],
+  "product of two unit maps": [
+   "4.3.1"
+  ],
+  "rectify a keywordish value": [
+   "4.2"
+  ],
+  "rectify a numberish value": [
+   "4.3"
+  ],
+  "reified as a cssstylevalue": [
+   "5.2"
+  ],
+  "reify a list of component values": [
+   "5.3"
+  ],
+  "reify a math expression": [
+   "5.6"
+  ],
+  "reify a numeric value": [
+   "5.6"
+  ],
+  "reify a transform function": [
+   "5.8"
+  ],
+  "reify a transform list": [
+   "5.8"
+  ],
+  "reify a var() reference": [
+   "5.4"
+  ],
+  "reify an identifier": [
+   "5.5"
+  ],
+  "reify as a cssstylevalue": [
+   "5.2"
+  ],
+  "serialize a csskeywordvalue": [
+   "6.2"
+  ],
+  "serialize a cssmathvalue": [
+   "6.5"
+  ],
+  "serialize a cssmatrixcomponent": [
+   "6.6"
+  ],
+  "serialize a cssnumericvalue": [
+   "6.3"
+  ],
+  "serialize a cssperspective": [
+   "6.6"
+  ],
+  "serialize a cssrotate": [
+   "6.6"
+  ],
+  "serialize a cssscale": [
+   "6.6"
+  ],
+  "serialize a cssskew": [
+   "6.6"
+  ],
+  "serialize a cssskewx": [
+   "6.6"
+  ],
+  "serialize a cssskewy": [
+   "6.6"
+  ],
+  "serialize a csstransformvalue": [
+   "6.6"
+  ],
+  "serialize a csstranslate": [
+   "6.6"
+  ],
+  "serialize a cssunitvalue": [
+   "6.4"
+  ],
+  "serialize a cssunparsedvalue": [
+   "6.1"
+  ],
+  "serialize a cssvariablereferencevalue": [
+   "6.1"
+  ],
+  "single valued properties": [
+   "3"
+  ],
+  "stringification behavior": [
+   "2",
+   "4.4"
+  ],
+  "subdivide into iterations": [
+   "2"
+  ],
+  "sum value": [
+   "4.3.1"
+  ],
+  "unit map": [
+   "4.3.1"
+  ],
+  "valid css property": [
+   "3"
+  ]
+ },
+ "ops": {},
+ "uses": {
+  "add two types": {
+   "4.3.1": 4,
+   "4.3.4": 5,
+   "9.1": 3
+  },
+  "convert a cssunitvalue": {
+   "4.3.1": 2
+  },
+  "create a cssunitvalue from a pair": {
+   "4.4": 4,
+   "4.6": 4,
+   "9.1": 2
+  },
+  "create a sum value": {
+   "9.1": 2
+  },
+  "create a type": {
+   "4.3.1": 4,
+   "4.3.3": 2,
+   "9.1": 2
+  },
+  "custom property name string": {
+   "4.1": 2
+  },
+  "internal representations": {
+   "5": 3,
+   "2.1": 3
+  },
+  "invert a cssnumericvalue": {
+   "9.1": 2
+  },
+  "list valued properties": {
+   "9.1": 3
+  },
+  "match a grammar": {
+   "9.1": 2
+  },
+  "multiply two types": {
+   "4.3.1": 2,
+   "4.3.4": 2,
+   "9.1": 3
+  },
+  "negate a cssnumericvalue": {
+   "9.1": 2
+  },
+  "percent hint": {
+   "4.3.1": 2
+  },
+  "rectify a keywordish value": {
+   "4.6": 6
+  },
+  "rectify a numberish value": {
+   "4.3.1": 7,
+   "4.3.4": 3,
+   "4.4": 4
+  },
+  "reify a numeric value": {
+   "5.1": 21,
+   "5.8": 10
+  },
+  "reify an identifier": {
+   "5.1": 75,
+   "5.7": 2
+  },
+  "reify as a cssstylevalue": {
+   "9.1": 2
+  },
+  "single valued properties": {
+   "9.1": 2
+  },
+  "stringification behavior": {
+   "9.1": 4
+  },
+  "subdivide into iterations": {
+   "3": 3
+  }
+ }
+}

@@ -3,7 +3,7 @@
  "key": "cssomview",
  "base": "https://drafts.csswg.org/cssom-view/",
  "specUpdated": "12 July 2026",
- "fetched": "2026-09-03",
+ "fetched": "2026-09-06",
  "sections": {
   "1": {
    "title": "Background",
@@ -177,74 +177,10 @@
   }
  },
  "dfns": {
-  "addlistener( callback )": [
-   "4.2"
-  ],
   "adjust a point from the border box": [
    "11.1"
   ],
   "adjust a point to the border box": [
-   "11.1"
-  ],
-  "associated document": [
-   "2",
-   "11.1"
-  ],
-  "beginning edges": [
-   "2"
-  ],
-  "caret node": [
-   "5.1"
-  ],
-  "caret offset": [
-   "5.1"
-  ],
-  "caret position": [
-   "5.1"
-  ],
-  "caretpositionfrompoint( x y options )": [
-   "5"
-  ],
-  "caretpositionfrompoint(x y options)": [
-   "5"
-  ],
-  "caretpositionfrompoint(x y)": [
-   "5"
-  ],
-  "check the documents for coordinate conversion": [
-   "11.1"
-  ],
-  "checkvisibility( options )": [
-   "6"
-  ],
-  "constructor(type eventinitdict)": [
-   "4.2"
-  ],
-  "convertpointfromnode( point from options )": [
-   "11.1"
-  ],
-  "convertpointfromnode(point from options)": [
-   "11.1"
-  ],
-  "convertpointfromnode(point from)": [
-   "11.1"
-  ],
-  "convertquadfromnode( quad from options )": [
-   "11.1"
-  ],
-  "convertquadfromnode(quad from options)": [
-   "11.1"
-  ],
-  "convertquadfromnode(quad from)": [
-   "11.1"
-  ],
-  "convertrectfromnode( rect from options )": [
-   "11.1"
-  ],
-  "convertrectfromnode(rect from options)": [
-   "11.1"
-  ],
-  "convertrectfromnode(rect from)": [
    "11.1"
   ],
   "determine the device pixel ratio": [
@@ -252,15 +188,6 @@
   ],
   "determine the scroll into view position": [
    "6.1"
-  ],
-  "elementfrompoint( x y )": [
-   "5"
-  ],
-  "elementsfrompoint( x y )": [
-   "5"
-  ],
-  "ending edges": [
-   "2"
   ],
   "evaluate media queries and report changes": [
    "4.2"
@@ -271,59 +198,8 @@
   "get the complete transform": [
    "11.1"
   ],
-  "getboxquads( options )": [
-   "11.1"
-  ],
-  "id dom caretpositionfrompointoptions shadowroots shadowroots": [
-   "5"
-  ],
-  "instant scroll": [
-   "3.1"
-  ],
-  "matches state": [
-   "4.2"
-  ],
-  "matchmedia( query )": [
-   "4"
-  ],
-  "media query list": [
-   "4.2"
-  ],
-  "mediaquerylistevent(type eventinitdict)": [
-   "4.2"
-  ],
-  "moveby( x y )": [
-   "4"
-  ],
-  "moveto( x y )": [
-   "4"
-  ],
-  "normalize non finite values": [
-   "3.2"
-  ],
-  "overflow directions": [
-   "2"
-  ],
-  "page zoom": [
-   "2.2"
-  ],
-  "pending scroll events": [
-   "13.2"
-  ],
   "perform a scroll": [
    "3.1"
-  ],
-  "potentially scrollable": [
-   "2"
-  ],
-  "removelistener( callback )": [
-   "4.2"
-  ],
-  "resizeby( x y )": [
-   "4"
-  ],
-  "resizeto( width height )": [
-   "4"
   ],
   "run snapshot post layout state steps": [
    "14"
@@ -337,38 +213,14 @@
   "scroll a target into view": [
    "6.1"
   ],
-  "scroll an element": [
-   "6.1"
-  ],
-  "scroll completed": [
-   "3.1"
-  ],
   "scroll to the beginning of the document": [
    "3.1"
-  ],
-  "scroll(x y)": [
-   "4",
-   "6"
-  ],
-  "scrollby(x y)": [
-   "4",
-   "6"
   ],
   "scrolling area": [
    "2"
   ],
-  "scrolling area origin": [
-   "2"
-  ],
   "scrolling box": [
    "2"
-  ],
-  "scrollintoview( arg )": [
-   "6"
-  ],
-  "scrollto(x y)": [
-   "4",
-   "6"
   ],
   "set up browsing context features": [
    "4.1"
@@ -385,9 +237,6 @@
   "supported open() feature name": [
    "4.1"
   ],
-  "svg layout box": [
-   "2"
-  ],
   "web exposed available screen area": [
    "2.3"
   ],
@@ -397,101 +246,10 @@
  },
  "ops": {},
  "uses": {
-  "addlistener( callback )": {
-   "18": 2
-  },
-  "associated document": {
-   "4": 2,
-   "18": 2
-  },
-  "beginning edges": {
-   "6.1": 2
-  },
-  "caret node": {
-   "5": 2
-  },
-  "caret offset": {
-   "5": 2
-  },
-  "caret position": {
-   "5": 3
-  },
-  "caretpositionfrompoint( x y options )": {
-   "17": 3,
-   "18": 3
-  },
-  "checkvisibility( options )": {
-   "18": 3
-  },
-  "convertpointfromnode( point from options )": {
-   "18": 3
-  },
-  "convertquadfromnode( quad from options )": {
-   "18": 3
-  },
-  "convertrectfromnode( rect from options )": {
-   "18": 3
-  },
-  "elementfrompoint( x y )": {
-   "18": 2
-  },
-  "elementsfrompoint( x y )": {
-   "18": 2
-  },
-  "ending edges": {
-   "6.1": 2
-  },
-  "getboxquads( options )": {
-   "18": 3
-  },
-  "matchmedia( query )": {
-   "18": 2
-  },
-  "mediaquerylistevent(type eventinitdict)": {
-   "18": 5
-  },
-  "moveby( x y )": {
-   "18": 2
-  },
-  "moveto( x y )": {
-   "18": 2
-  },
-  "normalize non finite values": {
-   "4": 2,
-   "6": 6
-  },
-  "overflow directions": {
-   "4": 4,
-   "6.1": 4
-  },
   "perform a scroll": {
    "4": 3,
    "18": 4,
    "6.1": 3
-  },
-  "potentially scrollable": {
-   "6": 7
-  },
-  "removelistener( callback )": {
-   "18": 2
-  },
-  "resizeby( x y )": {
-   "18": 2
-  },
-  "resizeto( width height )": {
-   "17": 2,
-   "18": 2
-  },
-  "scroll an element": {
-   "6": 3
-  },
-  "scroll(x y)": {
-   "17": 3,
-   "18": 10
-  },
-  "scrollby(x y)": {
-   "17": 3,
-   "18": 10
   },
   "scrolling area": {
    "4": 5,
@@ -503,14 +261,6 @@
    "18": 2,
    "3.1": 7,
    "6.1": 3
-  },
-  "scrollintoview( arg )": {
-   "17": 4,
-   "18": 3
-  },
-  "scrollto(x y)": {
-   "17": 3,
-   "18": 10
   },
   "smooth scroll": {
    "6.1": 2
