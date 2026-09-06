@@ -2111,6 +2111,22 @@ const OTHER_SPECS = [
      counted and never checked — which is the honest state for a standard whose text this audit does not
      hold. */
   "compatibility",
+  /* CSS COUNTER STYLES, AND THE BASE IS LISTED UNLEVELLED BECAUSE THAT IS WHAT `joinLevel` ASKS FOR. This
+     tree writes `CSS Counter Styles 3 §N` — the number with its standard, exactly as CLAUDE.md requires —
+     and a name ENDING ON A LEVEL DIGIT reaches classifyAnchor only through the join, whose gate is a base
+     ANCHOR_TO_KEY or this list already holds. With neither, the site came back with NO TOKENS AT ALL: not
+     merely unanchored, but contributing nothing to the unknown-name census either, which is why it went
+     unnoticed until a lane reading its own component found it. The census sees it now (see joinLevel), and
+     this entry is what stops the vote answering for it.
+     WHAT IT WAS DOING WRONG, STATED PRECISELY, BECAUSE THE FIRST TWO RELAYS OF IT WERE NOT. `css_rule.c`
+     states this standard's §9.1 title, `Extensions to the CSSRule interface`, which titles ONE indexed
+     section — cssconditional3's §7.1 — and §7.1 is not in §9.1's neighbourhood, so the title path REFUSED
+     and the file vote placed the site. Check (4) is refused for a file-voted resolution, so the site landed
+     in TITLE-STATED-AND-UNPLACED, which that band's own header says is NOT A FINDING. The tool did not
+     accuse; it declined, and said so. The reading that reached this row called it a false accusation and was
+     right about the cause and wrong about the category — worth recording, because a band that explicitly
+     withholds a verdict being read as an accusation is how a correct refusal gets "fixed". */
+  "css counter styles",
   /* THE TWO STANDARDS THAT EXTEND Fetch's `RequestInit` BY A PARTIAL DICTIONARY, and they are here for the
      reason the whole list exists: a partial's member is declared beside Fetch's own, in a Fetch-dominant
      file, so a citation of the OTHER standard's numbering sits surrounded by evidence for Fetch. Their
@@ -2284,6 +2300,9 @@ const MODULE_BEFORE_LEVEL = /[ \t]+(?:Module|module)(?=[ \t]+(?:Level|level)[ \t
 const MODULE_BEFORE_VERSION = /[ \t]+(?:Module|module)(?=[ \t]+[0-9]+(?:\.[0-9]+)*$)/;
 
 function anchorTokens(before) {
+  /* THE LEVELLED NAMES `joinLevel` REFUSED, carried out with the tokens so the caller can census what it
+     could not place — see joinLevel for why they would otherwise vanish. */
+  const missed = [];
   const flat = before.replace(/[\n\r]+[ \t]*\*?[ \t]*/g, " ").replace(/["\\]+/g, " ");
   /* A LEVEL SUFFIX IS PART OF THE EDITION AND NOT PART OF THE NAME, AND LEAVING IT ON DOES NOT DEGRADE THE
    * ANSWER — IT ERASES THE QUESTION. The tail regex below requires its last token to START WITH A LETTER, so
@@ -2350,6 +2369,14 @@ function anchorTokens(before) {
       const j = base.replace(/\s+/g, "-") + "-" + ver.replace(/\./g, "-");
       if (ANCHOR_TO_KEY.has(j) || OTHER_SPECS.includes(base) ||
           (OTHER_SPECS.includes(bw[n - 1]) && nameStart(bw[0]))) joined.push(j);
+      /* AND THE ONES NO LIST HOLDS ARE KEPT RATHER THAN DROPPED, BECAUSE OTHERWISE A LEVELLED NAME IS
+       * INVISIBLE TO THE ONE REPORT THAT EXISTS TO FIND IT. The gate above is right and stays: an
+       * unconditional join hands `inline box CSS 2.2` to a foreign standard nobody has heard of. But a name
+       * that fails it leaves `toks` EMPTY, and the unknown-token census reads the LAST token of `toks` — so
+       * a standard whose name ends in a level digit contributes nothing to the census by construction. That
+       * is exactly the CSS module naming convention this tree writes, and it is why `CSS Counter Styles 3`
+       * sat unnoticed: not merely unindexed, but excluded from the list of things noticed as unindexed. */
+      if (n === w2.length && !joined.length) missed.push(base + " " + ver);
     }
   };
   /* AND THE SPELLED-OUT LEVEL IS THE SAME FACT A THIRD TIME, SO IT IS JOINED BEFORE IT IS TRIMMED. The trim
@@ -2371,6 +2398,7 @@ function anchorTokens(before) {
   const lv = /^(.*?)((?:[A-Za-z][A-Za-z0-9+-]*[ \t]+){0,2}[A-Za-z][A-Za-z0-9+-]*)[ \t]+([0-9]+(?:\.[0-9]+)*)$/
     .exec(tail.replace(MODULE_BEFORE_VERSION, ""));
   if (lv) joinLevel(lv[2], lv[3]);
+  joined.missed = missed;
   const m = /((?:[A-Za-z][A-Za-z0-9+-]*[ \t]+){0,2}[A-Za-z][A-Za-z0-9+-]*)$/.exec(tail);
   if (!m) return joined;
   const w = m[1].split(/[ \t]+/);
@@ -4306,6 +4334,13 @@ function audit(argv, opts = {}) {
    * to stand at one, and `n`/`blind`/`crash` are the counts the census reports. */
   const numberOnly = new Map();
   const unknownTok = new Map();
+  /* KEPT APART FROM `unknownTok` BECAUSE THE TWO ARE NOT THE SAME EVIDENCE AND POOLING THEM BURIES THE HALF
+     THAT IS ACTIONABLE. A capitalised token in front of a section sign is mostly ordinary prose — this tree
+     writes its banners in capitals, so that census reads `AND=213 NOT=95 DFAIL=52` and a reader cannot act on
+     it, which is what the floor of 8 is for. A name that matched the NAME-PLUS-LEVEL shape and then failed
+     `joinLevel`'s gate is different in kind: the shape is the evidence, `CSS Counter Styles 3` cannot be a
+     stray English word, and there is no floor to apply because a standard cited ONCE is exactly the case. */
+  const unknownLev = new Map();
   const SEC = "[0-9]+(?:\\.[0-9]+)*|[A-F](?:\\.[0-9]+)+";
   /* A CITATION THE READER CANNOT SEE IS WORSE THAN ONE IT REPORTS WRONG, BECAUSE IT APPEARS IN NO TOTAL. This
    * pattern demanded the number touch the §, and `§ 3.2.26` — a spelling a human reads as identical — was
@@ -4580,6 +4615,8 @@ function audit(argv, opts = {}) {
       seen.add(m.index + m[0].length - m[1].length);
       if (a) votes.set(a, (votes.get(a) || 0) + 1);
       else if (tok && /^[A-Z]/.test(tok) && tok.length > 2) unknownTok.set(tok, (unknownTok.get(tok) || 0) + 1);
+      else if (!a && toks.missed && toks.missed.length)
+        unknownLev.set(toks.missed[0], (unknownLev.get(toks.missed[0]) || 0) + 1);
     }
     BARE.lastIndex = 0;
     for (let m; (m = BARE.exec(src)); ) {
@@ -6531,12 +6568,38 @@ function audit(argv, opts = {}) {
       `so nothing here was counted and left unchecked on that ground. A standard MOVING into this line is a coverage loss ` +
       `however small the finding total gets.`);
   }
-  const gaps = [...unknownTok].filter(([, v]) => v >= 8).sort((a, b) => b[1] - a[1]);
-  if (gaps.length) {
-    const shown = full ? gaps : gaps.slice(0, 20);
-    console.log(`  capitalised tokens in front of a § that no list knows (a standard among these is coverage this audit is not getting): ` +
-      `${shown.map(([k, v]) => `${k}=${v}`).join(" ")}${tail(gaps, shown)}` +
-      `; tokens seen fewer than 8 times are not listed`);
+  /* AND THIS BAND PRINTS ON THE CLEAN DAY TOO, AND STATES WHAT ITS FLOOR HID, for the two reasons the
+     paragraph directly above already gives about its sibling — which it gave and then did not apply here.
+     A line that appears only when it is non-empty is furniture: nobody learns to look for it, so a standard
+     ARRIVING in it reads like nothing at all. And the floor is the sharper half. It exists because ordinary
+     capitalised prose stands in front of section signs constantly, which is true and is why the floor stays
+     — but a standard cited ONCE is exactly the population that goes unnoticed by construction, and reporting
+     only names seen eight times or more is a census that cannot see the case it is for. Measured twice in one
+     session under two spellings: `Mixed Content` had a foreign entry under the WRONG HALF of its name and was
+     audited as Fetch, and `CSS Counter Styles 3` was on no list at all. So the count below the floor is
+     STATED, and `--all` lists it — the difference between a blind spot and a silent one. */
+  /* THE LEVELLED NAMES FIRST AND WITH NO FLOOR, for the reason `unknownLev` is a separate map. */
+  const lev = [...unknownLev].sort((a, b) => b[1] - a[1]);
+  if (lev.length)
+    console.log(`  NAMES SHAPED LIKE A LEVELLED STANDARD THAT NO LIST HOLDS — each is a standard whose citations are being ` +
+      `judged as somebody else's, and one entry is enough: ${lev.map(([k, v]) => `${k}=${v}`).join(" ")}` +
+      `; an OTHER_SPECS entry for the UNLEVELLED base stops the guess, an index row answers instead`);
+  else
+    console.log(`  names shaped like a levelled standard that no list holds: none — every \`Name N §…\` this run read joins to a ` +
+      `base SPECS or OTHER_SPECS already has. One APPEARING here is a standard being audited as another.`);
+  const gaps = [...unknownTok].sort((a, b) => b[1] - a[1]);
+  const over = gaps.filter(([, v]) => v >= 8), under = gaps.length - over.length;
+  const pool = full ? gaps : over;
+  if (pool.length) {
+    const shown = full ? pool : pool.slice(0, 20);
+    console.log(`  names in front of a § that no list knows (a standard among these is coverage this audit is not getting): ` +
+      `${shown.map(([k, v]) => `${k}=${v}`).join(" ")}${tail(pool, shown)}` +
+      (full ? "" : `; a further ${under} name(s) stand under the floor of 8 and --all lists them — a standard cited ONCE is ` +
+        `exactly the shape this census exists to surface, so the number is stated rather than the names dropped`));
+  } else {
+    console.log(`  names in front of a § that no list knows: none${under ? ` above the floor of 8; ${under} stand under it and --all lists them` : ""}` +
+      ` — every capitalised name this run read before a section sign is either an indexed standard's or one SPECS/OTHER_SPECS holds. ` +
+      `A name APPEARING here is a standard whose citations are being judged as somebody else's.`);
   }
 
   /* ===== NUMBER-ONLY CITATIONS — A BAND, NOT A FINDING LIST ==================================================
