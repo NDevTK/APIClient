@@ -37,8 +37,9 @@
 //     one, which the shared 8899 already needed: two lanes ran the control at once and one lost its pass to
 //     EADDRINUSE.
 //
-//   - AND A DATA BLOCK PUTS A FLOW ON THE FRONTIER FOR THE SAME REASON THE SECURITY RUNGS DO. 25.5.1 over a
-//     text this engine does not have forks its two completions, so injected-state.html's rung competes with
+//   - AND A DATA BLOCK PUTS A FLOW ON THE FRONTIER FOR THE SAME REASON THE SECURITY RUNGS DO.
+//     ECMAScript §25.5.2 "JSON.parse ( text [ , reviver ] )" over a text this engine does not have forks
+//     its two completions, so injected-state.html's rung competes with
 //     index.html's orphan drive exactly as security.html's candidates do — the split is the same measurement
 //     and not a second convention.
 //
