@@ -658,6 +658,19 @@ const SPECS = [
   { key: "csstypedom1", label: "CSS Typed OM Level 1", kind: "bikeshed",
     base: "https://drafts.css-houdini.org/css-typed-om-1/", edition: "maintained",
     anchors: ["css-typed-om-1", "typed-om-1", "typed om", "css typed om"] },
+  /* TRUSTED TYPES, WHOSE CITATIONS DECIDE A SECURITY ANSWER AND WERE JUDGED BY NOTHING. `solver/solve.c` reads
+     this standard to decide whether an `innerHTML` sink throws before a payload can reach it, and CLAUDE.md
+     §@S puts Trusted Types beside CSP as the thing that separates a firing breakout from a working exploit —
+     so a wrong number here misleads exactly where it costs most. Verified against the sites: §3.4 "Get
+     Trusted Type compliant string", §3.7 "Get Trusted Type compliant attribute value", §3.8 "Get Trusted Type
+     data for attribute", §4.2 "Integration with Content Security Policy", §2 "Framework", §3 "Algorithms".
+     ITS ABBREVIATION IS AN ANCHOR AND IT IS THE ONE THIS TREE WRITES IN THE SOLVER, exactly as `fsa` and
+     `sri` are foreign rows under their four and three letters: `solve.c` writes `TT §3.8`, which classifyAnchor
+     lowercases, and a two-letter tail is admitted here because it is a whole word and this table holds no
+     other standard by it. */
+  { key: "trustedtypes", label: "Trusted Types", kind: "bikeshed",
+    base: "https://w3c.github.io/trusted-types/dist/spec/", edition: "maintained",
+    anchors: ["trusted types", "trusted", "tt"] },
   { key: "hrtime", label: "High Resolution Time", kind: "bikeshed",
     base: "https://w3c.github.io/hr-time/", edition: "maintained", anchors: ["hr-time", "hrtime", "high resolution time"] },
   /* THE THREE STANDARDS THAT SIT ON TOP OF THE ROW ABOVE, and they are here for the reason that row's own
@@ -1938,7 +1951,7 @@ const OTHER_SPECS = [
   /* `uievents` MOVED TO ITS OWN ROW, with `ui events`, for the reason the webcrypto note above gives: the
      rule that lists a name here is the rule that takes it off once the standard is indexed. */
   "svg", "mathml", "wasm", "console", "performance",
-  "workers", "websockets", "rfc", "unicode", "utf", "trusted", "clipboard",
+  "workers", "websockets", "rfc", "unicode", "utf", "clipboard",
   "notifications", "geolocation", "geometry", "fullscreen", "pointerevents", "webaudio", "webrtc",
   "beacon", "referrer", "mixed", "cors", "cookies",
   /* A MULTI-WORD NAME WHOSE LAST WORD IS AN INDEXED STANDARD'S ANCHOR MUST BE LISTED HERE OR IT IS AUDITED AS
@@ -2081,7 +2094,6 @@ const OTHER_SPECS = [
      `web cryptography api`, `cryptography api`, `webcrypto` — are that row's anchors, and the longest-tail
      order still does the work it did here: the three-word spelling is asked before the two-word one, so the
      API form cannot be shadowed by the form without it, and neither can be read as the File API. */
-  "trusted types", "tt",
   "media queries", "mq4", "referrer policy", "uax14",
   /* AND THE STANDARDS THIS TREE NAMES THAT NO LIST HELD UNDER ANY SPELLING. Each is a document with a real
      numbering that this audit holds no text for, cited with its name in front of the number exactly as CLAUDE.md

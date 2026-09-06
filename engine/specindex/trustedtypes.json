@@ -1,0 +1,310 @@
+{
+ "spec": "Trusted Types",
+ "key": "trustedtypes",
+ "base": "https://w3c.github.io/trusted-types/dist/spec/",
+ "specUpdated": "23 June 2026",
+ "fetched": "2026-09-06",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "introduction"
+  },
+  "2": {
+   "title": "Framework",
+   "page": "",
+   "id": "framework"
+  },
+  "3": {
+   "title": "Algorithms",
+   "page": "",
+   "id": "algorithms"
+  },
+  "4": {
+   "title": "Integrations",
+   "page": "",
+   "id": "integrations"
+  },
+  "5": {
+   "title": "Security Considerations",
+   "page": "",
+   "id": "security-considerations"
+  },
+  "6": {
+   "title": "Privacy Considerations",
+   "page": "",
+   "id": "privacy-considerations"
+  },
+  "7": {
+   "title": "Implementation Considerations",
+   "page": "",
+   "id": "implementation-considerations"
+  },
+  "1.1": {
+   "title": "Goals",
+   "page": "",
+   "id": "goals"
+  },
+  "1.2": {
+   "title": "Non-goals",
+   "page": "",
+   "id": "non-goals"
+  },
+  "1.3": {
+   "title": "Use cases",
+   "page": "",
+   "id": "use-cases"
+  },
+  "2.1": {
+   "title": "Injection sinks",
+   "page": "",
+   "id": "injection-sinks"
+  },
+  "2.1.1": {
+   "title": "DOM XSS injection sinks",
+   "page": "",
+   "id": "dom-xss-injection-sinks"
+  },
+  "2.2": {
+   "title": "Trusted Types",
+   "page": "",
+   "id": "trusted-types"
+  },
+  "2.2.1": {
+   "title": "TrustedHTML",
+   "page": "",
+   "id": "trusted-html"
+  },
+  "2.2.2": {
+   "title": "TrustedScript",
+   "page": "",
+   "id": "trusted-script"
+  },
+  "2.2.3": {
+   "title": "TrustedScriptURL",
+   "page": "",
+   "id": "trused-script-url"
+  },
+  "2.3": {
+   "title": "Policies",
+   "page": "",
+   "id": "policies-hdr"
+  },
+  "2.3.1": {
+   "title": "TrustedTypePolicyFactory",
+   "page": "",
+   "id": "trusted-type-policy-factory"
+  },
+  "2.3.2": {
+   "title": "TrustedTypePolicy",
+   "page": "",
+   "id": "trusted-type-policy"
+  },
+  "2.3.3": {
+   "title": "TrustedTypePolicyOptions",
+   "page": "",
+   "id": "trusted-type-policy-options"
+  },
+  "2.3.4": {
+   "title": "Default policy",
+   "page": "",
+   "id": "default-policy-hdr"
+  },
+  "2.4": {
+   "title": "Enforcement",
+   "page": "",
+   "id": "enforcement-hdr"
+  },
+  "2.4.1": {
+   "title": "Content Security Policy",
+   "page": "",
+   "id": "content-security-policy-hdr"
+  },
+  "3.1": {
+   "title": "Create a Trusted Type Policy",
+   "page": "",
+   "id": "create-trusted-type-policy-algorithm"
+  },
+  "3.2": {
+   "title": "Create a Trusted Type",
+   "page": "",
+   "id": "create-a-trusted-type-algorithm"
+  },
+  "3.3": {
+   "title": "Get Trusted Type policy value",
+   "page": "",
+   "id": "get-trusted-type-policy-value-algorithm"
+  },
+  "3.4": {
+   "title": "Get Trusted Type compliant string",
+   "page": "",
+   "id": "get-trusted-type-compliant-string-algorithm"
+  },
+  "3.5": {
+   "title": "Process value with a default policy",
+   "page": "",
+   "id": "process-value-with-a-default-policy-algorithm"
+  },
+  "3.6": {
+   "title": "Prepare the script text",
+   "page": "",
+   "id": "prepare-script-text"
+  },
+  "3.7": {
+   "title": "Get Trusted Type compliant attribute value",
+   "page": "",
+   "id": "validate-attribute-mutation"
+  },
+  "3.8": {
+   "title": "Get Trusted Type data for attribute",
+   "page": "",
+   "id": "get-trusted-type-data-for-attribute"
+  },
+  "4.1": {
+   "title": "Integration with HTML",
+   "page": "",
+   "id": "integration-with-html"
+  },
+  "4.1.1": {
+   "title": "Extensions to the WindowOrWorkerGlobalScope interface",
+   "page": "",
+   "id": "extensions-to-the-windoworworkerglobalscope-interface"
+  },
+  "4.1.2": {
+   "title": "Enforcement for scripts",
+   "page": "",
+   "id": "enforcement-in-scripts"
+  },
+  "4.1.2.1": {
+   "title": "Slots with trusted values",
+   "page": "",
+   "id": "slots-with-trusted-values"
+  },
+  "4.1.2.2": {
+   "title": "The innerText IDL attribute",
+   "page": "",
+   "id": "the-innerText-idl-attribute"
+  },
+  "4.1.2.3": {
+   "title": "The textContent IDL attribute",
+   "page": "",
+   "id": "the-textContent-idl-attribute"
+  },
+  "4.1.2.4": {
+   "title": "The text IDL attribute",
+   "page": "",
+   "id": "the-text-idl-attribute"
+  },
+  "4.1.2.5": {
+   "title": "The src IDL attribute",
+   "page": "",
+   "id": "the-src-idl-attribute"
+  },
+  "4.1.2.6": {
+   "title": "Setting slot values from parser",
+   "page": "",
+   "id": "setting-slot-values-from-parser"
+  },
+  "4.1.2.7": {
+   "title": "Slot value verification",
+   "page": "",
+   "id": "slot-value-verification"
+  },
+  "4.2": {
+   "title": "Integration with Content Security Policy",
+   "page": "",
+   "id": "integration-with-content-security-policy"
+  },
+  "4.2.1": {
+   "title": "require-trusted-types-for directive",
+   "page": "",
+   "id": "require-trusted-types-for-csp-directive"
+  },
+  "4.2.1.1": {
+   "title": "require-trusted-types-for Pre-Navigation check",
+   "page": "",
+   "id": "require-trusted-types-for-pre-navigation-check"
+  },
+  "4.2.2": {
+   "title": "trusted-types directive",
+   "page": "",
+   "id": "trusted-types-csp-directive"
+  },
+  "4.2.3": {
+   "title": "Does sink type require trusted types?",
+   "page": "",
+   "id": "does-sink-require-trusted-types"
+  },
+  "4.2.4": {
+   "title": "Should sink type mismatch violation be blocked by Content Security Policy?",
+   "page": "",
+   "id": "should-block-sink-type-mismatch"
+  },
+  "4.2.5": {
+   "title": "Should Trusted Type policy creation be blocked by Content Security Policy?",
+   "page": "",
+   "id": "should-block-create-policy"
+  },
+  "5.1": {
+   "title": "Cross-document vectors",
+   "page": "",
+   "id": "cross-document-vectors"
+  },
+  "5.2": {
+   "title": "Deprecated features",
+   "page": "",
+   "id": "deprecated-features"
+  },
+  "5.3": {
+   "title": "Script gadgets",
+   "page": "",
+   "id": "script-gadgets"
+  },
+  "5.4": {
+   "title": "Best practices for policy design",
+   "page": "",
+   "id": "best-practices-for-policy-design"
+  },
+  "7.1": {
+   "title": "Vendor-specific Extensions and Addons",
+   "page": "",
+   "id": "vendor-specific-extensions-and-addons"
+  }
+ },
+ "dfns": {
+  "does sink type require trusted types": [
+   "4.2.3"
+  ],
+  "get trusted type compliant attribute value": [
+   "3.7"
+  ],
+  "get trusted type compliant string": [
+   "3.4"
+  ],
+  "require trusted types for": [
+   "4.2.1"
+  ],
+  "require trusted types for directive": [
+   "4.2.1"
+  ],
+  "script text": [
+   "4.1.2.1"
+  ],
+  "trusted types": [
+   "4.2.2"
+  ],
+  "trusted types directive": [
+   "4.2.2"
+  ]
+ },
+ "ops": {},
+ "uses": {
+  "require trusted types for": {
+   "4.2.1.1": 2
+  },
+  "script text": {
+   "3.6": 2,
+   "4.1.2.6": 2
+  }
+ }
+}
