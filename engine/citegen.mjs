@@ -3227,6 +3227,41 @@ function stepMsg(f, parts, no, spec) {
  * assert plants a red nobody can clear. */
 const MENTION_RETIRED = /\b(?:stood(?: here)?|used to (?:be|say|read|stand|cite|carry)|previously (?:cited|read|said|stood)|formerly|this file cited|(?:was|were) (?:cited (?:as|at)|written here)|cited here as|mis-?cited|retired)\b[^.;]{0,100}$/i;
 const MENTION_RETIRED_AFTER = /^[^.;]{0,40}?\b(?:stood here|used to stand|stood at this site|was written here)\b/i;
+/* AND A SECOND FORM THAT MAY BE ASKED OF WORDS AND NEVER OF A NUMBER, which is a division the set above
+   turns out to have had all along without stating it. EVERY phrase in it says THIS NUMBER WAS THE CLAIM —
+   `stood here`, `was cited as`, `this file cited`, `used to be written`. That is what lets it disclaim a
+   citation. A site writing `THIS FILE USED TO COMPUTE THE ANSWER ITSELF as "…"` says something else: THIS
+   FILE USED TO BEHAVE THIS WAY, which withdraws the WORDS that follow and says nothing about any number.
+   WHY IT IS NOT A SEVENTH VERB IN THE SET ABOVE. The reflex repair is to add `compute` to
+   `used to (be|say|read|stand|cite|carry)`, which is keying on a second SPELLING of one idea, after which the
+   next site writes a third. The verb list is not arbitrary either: a bare `used to compute` admits "the value
+   used to compute the offset", where `used to` means EMPLOYED IN ORDER TO and the sentence is a live claim,
+   which is exactly why all six existing verbs are ones that reading cannot take. What removes the ambiguity
+   without enumerating anything is the SUBJECT — "this file used to compute" cannot be read that way — so the
+   two axes the set already had are combined here rather than either list being lengthened.
+   AND IT IS ASKED AT THE QUOTATION ONLY, WHICH IS MEASURED RATHER THAN CHOSEN. Put into the set above, where
+   all three readers share it, it disclaimed 6 further CITATIONS and TWO OF THEM WERE WRONG. In
+   `core/encoding/encoding.h` a clause retiring the engine's one-column table is followed, in the same
+   sentence, by a live DOM citation naming what three Document members return; in
+   `core/loader/module_loader.h` a clause retiring a deleted register is followed by a live Fetch citation
+   naming where the fact belongs instead. In both, the retirement clause governs the file's old BEHAVIOUR and
+   the citation after it is a LIVE claim about where the fact lives now — the sentence retires a behaviour and
+   then cites a standard to say why. (Neither is quoted here with its number: this file is inside the
+   population it audits, so an illustrative citation written out becomes a citation, which is how a previous
+   diff of mine moved a neighbouring row's resolution. Describe, never write.) At the quotation the same words retire
+   the quoted text itself, and there is no live claim behind them to lose. Two channels, two questions, and
+   the vocabulary is not one set.
+   THE POPULATION WAS READ BEFORE THIS LANDED, not after, because a deny's error is an UNDER-CLAIM and
+   CLAUDE.md rates that as the direction nobody discovers by acting on it: obeying a wrong deny means not
+   looking there. Built as a classifier and run whole-corpus, twice — once over every quotation and once over
+   the findings only, which is what showed that refusing at first sight would silence 51 CONFIRMATIONS. */
+const MENTION_RETIRED_TEXT = /\bthis (?:file|component|header|comment|engine|tree) used to [a-z]+\b[^.;]{0,100}$/i;
+/* ONE READER, AND IT REFERENCES THE SET RATHER THAN RESTATING IT — a quotation is disclaimed by everything
+   that disclaims a number AND by the text form above, so the shared half has exactly one spelling. */
+function mentionOfText(pre, after) {
+  return mentionOf(pre, after) ||
+    (MENTION_RETIRED_TEXT.test(pre.slice(-140)) ? `the prose before it says "${MENTION_RETIRED_TEXT.exec(pre.slice(-140))[0].trim().slice(0, 60)}"` : null);
+}
 /* THE RULE ITSELF TAKES THE TWO SIDES OF THE SITE AND NOTHING ELSE, so a second reader that has prose rather
  * than an offset asks the SAME question rather than a copy of it. The step channel is that reader: a step
  * number carries no § of its own, so it is not a citation and has no `at` in a citation's span, and its
@@ -4382,6 +4417,12 @@ function audit(argv, opts = {}) {
                   voted: 0, votedCrash: 0, foreign: 0, foreignCrash: 0, unresolved: 0, unresolvedCrash: 0,
                   ownProse: 0, ownProseCrash: 0 };
   const noCorpusBy = new Map();
+  /* THE QUOTATION FINDINGS THE PROSE ITSELF RETIRES — a counted band, never a silence. See the emit router. */
+  const quoteMentions = [];
+  /* MEASUREMENT ONLY — the rows two candidate denies WOULD silence, collected and printed and acting on
+     nothing, because a deny is an UNDER-CLAIM and CLAUDE.md rates that as the direction nobody discovers by
+     acting on it: obeying a wrong deny means not looking there. So the population is read before the rule
+     exists, never after. */
   const gapHist = [];
   const stepsOut = [], stepsAway = [], stepsSays = [], stepsSaysAmbig = [];
   /* THE STEP CENSUS PARTITIONS THE WHOLE POPULATION, INCLUDING EVERY REFUSAL, because CLAUDE.md's recurring
@@ -5848,6 +5889,21 @@ function audit(argv, opts = {}) {
                         /* carried so `quoteMsg` can say the site named two standards — see the rival scan */
                         rival: c.rival, rivalAt: c.rivalAt };
           if (q.mark === "'") { qstat.single++; if (rec.crash) qstat.singleCrash++; }
+          /* THE SAME RULE THE STEP CHANNEL ALREADY ASKS AT THE STEP, ASKED HERE AT THE QUOTATION — same
+           * function, same composition of the two sides, no second copy. The rule was reached at two of the
+           * three places a claim can stand and not at the third: `mentionNotClaim` asks it of the CITATION,
+           * the step channel asks it of the STEP saying in its own words "asked at the step and not at the
+           * citation", and nothing asked it of the QUOTATION. A quotation can be retired independently of the
+           * citation above it — a live citation of a section, followed by prose retiring what this file used
+           * to say about it, followed by the retired words in quotes — and that shape put this tree's own
+           * prose in a quotation-bearing band as though it were a spec claim.
+           * IT RIDES THE RECORD AND IS ACTED ON ONLY WHERE A FINDING WOULD BE EMITTED, and that placement is
+           * the whole design rather than a detail. Measured both ways on a frozen tree: asked HERE as a
+           * refusal it reaches 89 quotations and only 38 are findings — the other 51 are VERIFIED or
+           * confirmed-by-a-nearby-number, so refusing at this point would silence CONFIRMATIONS and turn
+           * judged quotations into unjudged ones, which is a coverage loss that reads as a falling finding
+           * count. So the flag is computed here, where the prose is in hand, and consumed at the push. */
+          rec.qMention = mentionOfText(precedingProse(src, spans, c.at) + prose.slice(0, q.at), prose.slice(q.at));
           /* BEFORE EVERY REFUSAL BELOW — the agreement channel is asked of the whole `qstat.seen` population,
              and half its value is the sites the resolver could not place. */
           agreeSeen.push({ ...rec, frags: f });
@@ -5889,6 +5945,13 @@ function audit(argv, opts = {}) {
            * and simply read by nobody. It is the one axis that orders the queue by who pays — a quotation
            * in a comment is read with the file open, and a quotation in a DFAIL message is read by whoever is
            * standing at the abort with nothing around it, which is the same reason --unanchored ranks on it. */
+          /* EVERY QUOTATION FINDING LEAVES THROUGH HERE, so the disclaim question is asked ONCE rather than
+             at each kind — and NOTHING IS DROPPED. The citation channel's own rule is that a disclaimed site
+             is REPORTED in its own counted category carrying the verdict the checker would have given it, so
+             a reader can see every one and disagree; a silent deny would be the under-claim this file refuses
+             everywhere else. The verdict is already built by the time it arrives, so the band prints the kind
+             and the message the finding would have carried. */
+          const emit = (q) => { if (rec.qMention) quoteMentions.push({ ...q, why: rec.qMention }); else quotes.push(q); };
           const refuse = (why) => {
             /* A TYPO'D NAME WOULD MAKE A COUNTER `NaN` AND PRINT IT, which is the plausible-datum shape this
              * census exists to end, so the field must already be declared in qstat. */
@@ -5945,7 +6008,7 @@ function audit(argv, opts = {}) {
              * is named and counted apart. */
             const anc = elsewhere.every((n) => contains(n, c.no));
             if (anc) qstat.wrongSectionAncestor++;
-            quotes.push({ ...rec, kind: "QUOTE-WRONG-SECTION", at: elsewhere, anc });
+            emit({ ...rec, kind: "QUOTE-WRONG-SECTION", at: elsewhere, anc });
             continue;
           }
           const foreign = [];
@@ -5954,7 +6017,7 @@ function audit(argv, opts = {}) {
             const hit = Object.keys(t2.sections).filter((n) => containsAnyForm(t2.sections[n], f)).sort(cmpNo);
             if (hit.length) foreign.push(`${k} §${hit.slice(0, 3).join(", §")}`);
           }
-          if (foreign.length) { qstat.wrongStandard++; quotes.push({ ...rec, kind: "QUOTE-WRONG-STANDARD", where: foreign }); continue; }
+          if (foreign.length) { qstat.wrongStandard++; emit({ ...rec, kind: "QUOTE-WRONG-STANDARD", where: foreign }); continue; }
           qstat.notFound++;
           /* THE WHOLE STANDARD IS THE HAYSTACK FOR THE DIVERGENCE, not the cited section, because the question
            * this evidence answers is "are these the standard's words at all" — and a section boundary is
@@ -6006,8 +6069,11 @@ function audit(argv, opts = {}) {
            * rule that cleared them would be the exemption swallowing the defect. Where the standard has none
            * of the words, it is not evidence about a standard at all. */
           const nf = { ...rec, kind: "QUOTE-NOT-FOUND", div: d, alt };
-          quotes.push(nf);
-          if (!divergedLate(nf)) ownCands.push({ q: nf, frags: f });
+          emit(nf);
+          /* AND A RETIRED QUOTATION IS NOT AN OWN-PROSE CANDIDATE EITHER: that band asks whether this tree
+             wrote the sentence somewhere ELSE, unquoted, and a note quoting what this file itself used to say
+             has already answered that question in its own words. */
+          if (!rec.qMention && !divergedLate(nf)) ownCands.push({ q: nf, frags: f });
         }
       }
     }
@@ -7363,6 +7429,17 @@ function audit(argv, opts = {}) {
    * the silent zero this file is written against, and it would be no better for being a category of refusals.
    * The verified split is stated first because it is the part that is a CHECK rather than a refusal. */
   const noteOK = mentions.filter((m) => m.note && m.note.ok);
+  /* THE MEASUREMENT BAND — what each candidate deny WOULD take, listed in full so every row can be read
+     before any of it acts. It is not a finding channel and it silences nothing. */
+  /* THE QUOTATIONS THE PROSE RETIRES, COUNTED AND LISTED WITH THE VERDICT THEY WOULD HAVE CARRIED. It is the
+     quotation-side twin of MENTION-NOT-CLAIM below and obeys the same rule: nothing is suppressed, so a
+     reader who thinks one of these IS a claim can see it, read the withheld verdict, and disagree. */
+  console.log(`\nQUOTATION RETIRED BY ITS OWN PROSE: ${quoteMentions.length} — NOT findings. The words are quoted in`);
+  console.log(`  order to WITHDRAW them: the prose immediately before each says this tree used to say it, or shows it as a`);
+  console.log(`  specimen. The withheld verdict is printed beside every one, because a disclaimed site is reported and`);
+  console.log(`  never dropped — the citation channel's own rule, asked at the quotation.`);
+  for (const r of quoteMentions) console.log(`  ${r.file}:${r.line}  ${r.kind}  ${quoteMsg(r)}\n      ${r.why}\n      "${r.quote}"`);
+
   console.log(`\nMENTION-NOT-CLAIM: ${mentions.length} — the prose is TALKING ABOUT this citation, not making it`);
   console.log(`  (${noteOK.length} of them are retirement notes whose OWN title claim this audit CONFIRMED against the index — checked in both directions, ` +
     `the strongest state a citation here reaches. A note naming a title its number does not carry is reported as RETIREMENT-NOTE-WRONG above, not here.)`);
