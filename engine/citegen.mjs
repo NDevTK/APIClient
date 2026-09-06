@@ -1889,6 +1889,68 @@ const OTHER_SPECS = [
      scheduling file otherwise cites. They remain COUNTED AND NEVER CHECKED, and that is a silence this list
      prints rather than a clean bill. */
   "background tasks",
+  /* THE SPELLING THIS TREE WRITES IS NOT ALWAYS THE SPELLING SOME LIST ALREADY HOLDS, AND A NEAR MISS IS A
+     WRONG ANSWER RATHER THAN A COVERAGE GAP. Every name in this first group has a foreign row above it under
+     ANOTHER spelling — `webcrypto`, `uievents`, `mimesniff`, `trusted`, `mediaqueries`/`media`, `referrer`,
+     `unicode` — so the standard had ALREADY been decided to be one this audit does not index, and the only
+     thing missing was the TAIL the citation actually ends on. anchorTokens reads at most three trailing words
+     and classifyAnchor stops at the last of them, so `Web Cryptography §12` never reaches `webcrypto` and
+     `MIME Sniffing §4.6` never reaches `mimesniff`: each came back with NO ANCHOR AT ALL and fell to its
+     file's dominant vote, which is the `file system access` failure with the near answer sitting in the same
+     table, two screens up, spelled by somebody who wrote the abbreviation and not the name.
+     MEASURED, AND IN THE ACCUSATION DIRECTION RATHER THAN THE SILENT ONE, which is the half this audit must
+     not fail in. `core/mime` votes `fetch` for every unanchored citation in it, and `mime_type.h` opens a
+     declaration with `§4.6's MIME TYPE GROUPS` — which is MIME Sniffing's own, in the component that
+     implements MIME Sniffing. That line was REPORTED as misattributed against `fetch §4.6` "HTTP-network-or-
+     cache fetch", a real section of a document that file never names. In `embedder_policy.c` a bare `§3.4.1`
+     inside a crash message is Reporting's "Generate report of type with data", and the same vote placed it at
+     HTML.
+     `web cryptography api` and `cryptography api` are ALREADY on this list and STAY: classifyAnchor takes the
+     longest tail that classifies, so the three-word spelling is asked before the two-word one and the API
+     form cannot be shadowed by the form without it. Both refuse either way, which is the point — this group
+     adds no resolution, it removes a guess. */
+  "web cryptography", "ui events", "mime sniffing", "trusted types", "tt",
+  "media queries", "mq4", "referrer policy", "uax14",
+  /* AND THE STANDARDS THIS TREE NAMES THAT NO LIST HELD UNDER ANY SPELLING. Each is a document with a real
+     numbering that this audit holds no text for, cited with its name in front of the number exactly as CLAUDE.md
+     asks — so every one of them was UNANCHORED and every one was decided by whichever standard its file
+     otherwise cites. They are counted and never checked, which is the honest state; three of them are worth
+     the sentence that says why an index row would NOT be the better answer today:
+     `css scoping` — the document MOVED AND WAS RENAMED. `drafts.csswg.org/css-scoping-1/` answers 200 with
+     315 bytes: a redirect stub titled "Moved to CSS Shadow Module Level 1" whose body sets `location.href` to
+     `drafts.csswg.org/css-shadow-1/`. A `CSS Scoping §4.1` is therefore not the same section of the document
+     that replaced it unless somebody checks, and indexing the successor under the predecessor's name would be
+     this table asserting a renumbering nobody verified. All six sites write `CSS Scoping §4.1` with the title
+     "Flattening the DOM into an Element Tree" and are the shadow-tree flat-tree walk in core/html.
+     `positioned layout` — the citation names the LEVEL and the tokenizer throws it away. This tree writes
+     `CSS Positioned Layout Level 4 §3 "Top Layer"`, and anchorTokens strips a trailing `Level N` before
+     classifyAnchor is asked, so the tail is `CSS Positioned Layout` — a name that answers for cssposition3
+     AND cssposition4, which are two documents with two numberings and both already indexed. An anchor here
+     would be the `css-images` hazard the SPECS table refuses by name: one index answering two levels
+     manufactures wrong answers rather than losing coverage. A foreign row refuses instead, and the ordered
+     repair is to make the level SURVIVE the tail rather than to guess which document it belonged to.
+     `css conditional` — CSS Conditional Rules is LEVELLED too, and the sites write no level at all
+     (`CSS Conditional §7.4`), so there is no evidence in the citation for which of Level 3, 4 or 5 numbers
+     the section those sites mean. The name is what the citation claims; the level is what an index needs, and
+     the citation does not carry it.
+     AND `typed om` IS THE ENTRY THAT PROVES A CAPITALISED-TOKEN SCAN CANNOT DERIVE THIS POPULATION, which is
+     worth more than the entry. The list above was derived from the audit's own "capitalised tokens in front of
+     a section sign that no list knows" line and from a grep for a name in front of one, and both read the
+     LAST WORD before the
+     section sign — so a standard this tree spells with a bare level, `CSS Typed OM 1 §6.4`, ends on a DIGIT and
+     is invisible to both. Three sites were predicted for it. The measured answer is NINETY-THREE, because
+     `typed om` on this list also arms anchorTokens' level JOIN — the same `(OTHER_SPECS.includes(bw[n-1]) &&
+     …)` gate that turns `CSS Color 4 §16.2` into `css-color-4` — so the whole of core/css's Typed OM
+     numbering stopped being decided by whichever standard those files otherwise cite. A derivation that reads
+     the last token undercounts exactly the names the SPECS table's own `css-color-4` comment is about.
+     MEASURED, both tool versions run back to back over ONE FROZEN SNAPSHOT at 391d3aa4 (submodule f2927c0a,
+     56 entries) so the corpus is identical and only this list differs: file-vote guesses 9677 -> 8798, the
+     judged population 34300 -> 34230, findings 1008 -> 1004. The judged count FALLS because that is what a
+     refusal does — an explicit `other:` anchor beats a term coincidence, by design, since the citation's own
+     claim about which standard it means outranks a phrase two documents share. An index row RAISES it; that is
+     the next diff and not this one. */
+  "parsing and serialization", "css conditional", "css scoping", "secure contexts", "reporting",
+  "positioned layout", "css nesting", "css viewport", "typed om", "har",
   /* CSS modules, as this tree spells them when it does not use the levelled shortname */
   "css", "selectors", "cascade", "view", "values", "sizing", "fonts", "backgrounds", "text",
   "display", "position", "overflow", "images", "color", "transforms", "writing", "box", "inline",
