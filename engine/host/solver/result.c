@@ -488,7 +488,22 @@ static char *errs_json_array(ErrsArray which) {
    stands, in the order's own points: 0 with `jobsReady > 0` is the top of the queue holding a runnable job and
    no ordering problem at all; a gap on the scale of `valMax - valMin` is the reward spread burying the backlog
    where the aging term — FLOW_AGE_QUANTUM per quantum of silence — cannot reach it inside a session. `jobsReady`
-   at 0 makes `jobWGap` 0 too, which is why the pair is read together and neither alone. `visZero` is the count
+   at 0 makes `jobWGap` 0 too, which is why the pair is read together and neither alone.
+   AND THAT SPLIT IS WHAT A ZERO JOB COUNT HAS TO BE READ THROUGH, WHICH IS THE ONE READING IT INVITES AND THE
+   ONE IT DOES NOT SUPPORT. A run reporting no job run at all looks like the scheduler failing to serve the
+   queue — §Every-runtime-job-is-a-scheduler-flow makes every reaction, microtask, timer and delivery a
+   first-class member, so a queue that never moves reads as an ORDERING result. The three rows above are what
+   refuse that: only `jobsReady` is the WFQ's to move, so a run whose jobs are all `jobsFramed` has nothing
+   rank-eligible for the order to have got wrong, and its zero is a statement about MEMBERS NOT FINISHING THEIR
+   OWN PROGRAMS — §8.1.4.4's clean-up step, one component away from anything this file orders. `jobsOwed` says
+   the same for the host. So the pair is read BEFORE a zero is charged to the ordering, and a reader who has
+   only the job count has not got the evidence to charge anything.
+   THE READING IS AVAILABLE HERE AND NOT WHERE THE ZERO IS PRINTED, which is the residual and not a note: the
+   `@HWORK` line a host prints carries the job count without these three, so a reader meeting the zero in a log
+   has to know to come to the frontier census for the split. WHAT THE NEXT DIFF BUILDS: `jobsReady` beside the
+   job count on that line, so the two arrive together. HOW ITS ABSENCE SHOWS: a zero job count read as a
+   starved queue for a run in which nothing was ever rank-eligible — which is the ABSENCE-and-ZERO-read-alike
+   shape §@S names, arriving in the one number a scheduler is most likely to be blamed by. `visZero` is the count
    `visMin` cannot give: how many members have completed NO unit of work, which is both the population
    `jobsFramed` belongs to and the population whose optimism bonus can never decay.
 
