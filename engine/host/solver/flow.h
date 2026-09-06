@@ -419,16 +419,55 @@ typedef struct Flow {
        a distance claimed. `g_c` advances on APPENDS as well as on replays, so a diverged candidate that forks
        nine hundred times would read a full path it never walked; dec_replay moves the cursor only on the far
        side of the key comparison — an arm whose recorded question the branch actually re-asked — so a reading
-       taken there is the path CONSUMED. The denominator is read live at that same site rather than stored,
-       which is sound for one reason worth stating: a divergence ENDS the vector at the cursor, and dec_replay
-       asserts `g_c < dec_total()` at entry, so no reading is ever taken after a truncation and the last one
-       taken was against the untruncated path.
+       taken there is the path CONSUMED. THE COMPARATOR HOLDS ONLY THE FRACTION and the two halves it was
+       computed from are kept beside it for the REPORT (the pair below); both are read live at that same site
+       rather than reconstructed, which is sound for one reason worth stating: a divergence ENDS the vector at
+       the cursor, and dec_replay asserts `g_c < dec_total()` at entry, so no reading is ever taken after a
+       truncation and the last one taken was against the untruncated path.
        MONOTONE WITHIN A RUN, for flow_observe_survival's reason exactly: a candidate's recorded path is fixed
        for its life, so the longest prefix any replay has consumed can only be discovered, never undone, and a
        lower reading is another sample of the same fixed question rather than a demotion.
        IT DOES NOT CROSS THE COLD TIER, like every other term of this comparator: a distance is an OBSERVATION
        of a re-execution and a resumed session has not made it. */
     double cand_replay;
+    /* …AND THE TWO HALVES THAT FRACTION WAS COMPUTED FROM, WHICH THE ROUNDED REPORT OF IT CANNOT RECOVER.
+       `cand_replay` is a double and the document carries thousandths of it, so `(int)(frac*1000+0.5)` is 0 for
+       any path longer than 2000 arms with one arm consumed — and decide.h records replay depths of 8000. A
+       report built on the rounded value alone therefore says "consumed NONE of its recorded path" about a
+       replay that walked arms, which is the ABSENCE-and-ZERO-read-alike defect §@S names, arriving through the
+       CONVERSION rather than through a guard. The pair is the same repair `surv_run`/`surv_len` already is one
+       rung up: a fraction held as its two halves, because the report has to be able to say WHICH numbers.
+       WRITTEN AT THE ONE SAMPLE THAT SET THE FRACTION and nowhere else, so the three describe ONE moment and
+       the identity `cand_replay == arms/of` is exact — the same division, on the same two values, computed
+       once. flow_observe_replay asserts it on the way in. `of` is 0 for a flow that has never had a reading,
+       which is the same statement as `cand_replay == 0.0` and is asserted as that biconditional rather than
+       left to a reader to infer.
+       IT IS NOT PINNED AT THE DELIVERY AND THE FRACTION IS. flow_observe_rung's pin is BY DEFINITION AND NOT
+       BY OBSERVATION — its own words — so pinning the pair would fabricate an arm count for a flow that may
+       have replayed nothing, and the identity would then have to carry an exception. Past the delivery the
+       fraction says where the COMPARATOR stands and the pair says what was last OBSERVED; those are different
+       questions and the report names them apart.
+       IT IS NOT A TERM OF THE ORDER, WHICH IS ESTABLISHED AND NOT ASSUMED: flow_distance sums exactly
+       `cand_replay + cand_surv + cand_rung`, and flow_weight's own derivation names those three and no fourth.
+       So the rank-neutrality assertion — written over the WHOLE weight — cannot see this pair, correctly, and
+       the two-instants test it would otherwise owe is answered below rather than by that assert.
+       IT IS STILL CARRIED BY A FORK, and for a reason that is NOT the rank-neutrality one. A sibling that
+       carried the FRACTION and not the pair would hold one flow's two statements about one sample
+       contradicting each other, and the identity above is asserted on that sibling's very next replayed arm —
+       so the omission would not be a quiet inconsistency, it would abort in a component that did nothing
+       wrong.
+       AND IT PASSES THE TWO-INSTANTS TEST BY CONSTRUCTION, for the reason flow.c's fork enumeration already
+       gives about the fraction rather than for a new one: a flow that FORKS has stopped REPLAYING. decide.c
+       reaches its fork arm only when `g_c >= dec_total()` or after dec_leave_path has truncated to the cursor,
+       and dec_fork_here's append moves the cursor with it, so from a flow's first fork onward `g_c <
+       dec_total()` is permanently false and dec_replay is never entered again. A parent therefore consumes NO
+       arm between two of its own forks, and two arms of it forked at two instants read this pair — and the
+       fraction it is the halves of — identically. It is not a prefix quantity that owes an exemption; it is
+       frozen before the first branch that could have separated two arms of one parent.
+       IT DOES NOT CROSS THE COLD TIER, like the fraction it is the halves of: a distance is an OBSERVATION of
+       a re-execution and a resumed session has not made it. */
+    long cand_replay_arms;   /* `consumed` at the sample that set `cand_replay` */
+    long cand_replay_of;     /* `total` at that same sample; 0 = no reading has ever been taken */
     /* RUNG ONE, HELD AS THE FRACTION IT IS: the best fraction of this flow's own payload that any re-execution
        has been observed to deliver to any code-execution sink, in [0,1]. It is not the only fractional rung any
        more — the runway above it is the other — and it is still not a boolean, because "how much of what the

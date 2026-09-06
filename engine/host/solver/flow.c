@@ -1113,6 +1113,24 @@ void flow_observe_replay(Flow *f, long consumed, long total) {
                "here is that pin having been missed and the ladder's bottom two bands now overlap");
         return;
     }
+    /* THE TRIPLE DESCRIBES ONE SAMPLE, ASSERTED ON THE WAY IN RATHER THAN TRUSTED. Below the delivery the
+       fraction is exactly the division of the pair beside it — same operands, same expression, computed once —
+       so a disagreement here is two writers having got at these fields separately, and the report built on the
+       pair would then contradict the comparator built on the fraction. Asserted AFTER the pin's early return
+       above, because past the delivery the fraction is a POLICY and the pair is the last OBSERVATION, and
+       those are deliberately allowed to differ (see the field). */
+    DCHECK((f->cand_replay_of == 0) == (f->cand_replay == 0.0),
+           "an @S candidate's runway fraction and the pair it was computed from disagree about whether any "
+           "reading has ever been taken — `of == 0` is this flow's word for 'never observed' and so is a zero "
+           "fraction, so one of the two was written without the other and the report would state that a replay "
+           "consumed nothing about a flow the comparator is already ranking as having moved");
+    DCHECK(f->cand_replay_of == 0 ||
+           f->cand_replay == (double)f->cand_replay_arms / (double)f->cand_replay_of,
+           "an @S candidate's runway fraction is not the division of the pair stored beside it — the three are "
+           "written together at one sample by the three assignments that end this function, and by nothing "
+           "else, so a mismatch means the report's two "
+           "halves and the comparator's one number are describing different moments, which is the exact "
+           "defect holding a fraction as its halves exists to remove");
     frac = (double)consumed / (double)total;
     /* MONOTONE, AND THAT IS THE INVARIANT AND NOT A CLAMP — flow_observe_survival's sentence, one rung down. A
        candidate's recorded path is FIXED for its life, so the longest prefix any replay has consumed can only
@@ -1120,7 +1138,12 @@ void flow_observe_replay(Flow *f, long consumed, long total) {
        it would demote a flow for a re-execution that diverged earlier than one before it. The early return is
        what keeps the frontier from re-ranking for a rank that did not move. */
     if (frac <= f->cand_replay) return;
+    /* ALL THREE, IN ONE PLACE, BECAUSE THE PAIR IS THE FRACTION AND NOT A SECOND OBSERVATION OF IT. Writing
+       the double here and the halves anywhere else is how the sample they describe drifts apart; the asserts
+       above are that statement made enforceable on every later call. */
     f->cand_replay = frac;
+    f->cand_replay_arms = consumed;
+    f->cand_replay_of = total;
     frontier_rank_changed();
 }
 
@@ -1200,7 +1223,12 @@ void flow_observe_rung(Flow *f, int rung) {
        consume all of its own path, which inverts the ladder at its first step. Pinned, the two bottom bands
        are disjoint — [0, 0.2] undelivered against [0.4, 0.6] delivered — which is the whole reason the rung
        below is worth having. Unconditional because a rung can only be reached once (the early return above),
-       and idempotent because 1.0 is the fraction's own ceiling. */
+       and idempotent because 1.0 is the fraction's own ceiling.
+       THE PAIR BESIDE IT IS DELIBERATELY NOT PINNED, and this sentence's own words are the reason: the pin is
+       BY DEFINITION AND NOT BY OBSERVATION, so writing an arm count here would invent one — a candidate can
+       reach its source read having replayed nothing at all, and there is no honest numerator to give it. Past
+       this line the fraction says where the COMPARATOR stands and the pair says what was last OBSERVED, which
+       is why flow_observe_replay asserts their identity only on the arm BELOW the delivery. */
     f->cand_replay = 1.0;
     frontier_rank_changed();
 }
@@ -1599,7 +1627,8 @@ void flow_fork_inherit(Flow *sib, const Flow *parent) {
        that ran the sibling — or credited it — before handing it its account would have run it at a rank nobody
        chose, and the assignment would then silently erase whatever that run produced. */
     DCHECK(sib->val == 0.0 && sib->cpu == 0 && sib->cpu_gen == 0 && sib->visits == 0 && sib->picks == 0 &&
-           sib->cand_replay == 0.0 && sib->cand_surv == 0.0 && sib->cand_rung == 0 && sib->path_forced == 0 &&
+           sib->cand_replay == 0.0 && sib->cand_replay_of == 0 && sib->cand_replay_arms == 0 &&
+           sib->cand_surv == 0.0 && sib->cand_rung == 0 && sib->path_forced == 0 &&
            sib->family == sib->acct && sib->family->fam_us == 0 && sib->family->emit_gen == 0 &&
            sib->family->base == 0.0 && sib->family->earned == 0.0 && !sib->family->placed,
            "a forked sibling was credited, charged, DISPATCHED or DECIDED before it inherited its parent's "
@@ -1655,6 +1684,21 @@ void flow_fork_inherit(Flow *sib, const Flow *parent) {
        left behind — a candidate that had ARRIVED and ESCAPED could then re-enter the queue as one that had
        merely survived, by branching, which is worth two thirds of the comparator's whole range. */
     sib->cand_replay = parent->cand_replay;
+    /* AND THE PAIR THAT FRACTION IS THE HALVES OF, CARRIED FOR A DIFFERENT REASON FROM EVERY OTHER LINE HERE.
+       The three assignments around it are carried because the ORDER reads them and a fork that dropped one
+       would let a flow re-rank by branching; nothing reads this pair, so the assertion below cannot see it and
+       is not what forces it. What forces it is the identity: the sibling is about to hold its parent's
+       FRACTION, and a sibling holding that fraction over a zeroed pair would be one flow making two
+       contradictory statements about one sample — which flow_observe_replay asserts against on its next arm,
+       so the omission would surface as an abort in a component that did nothing wrong.
+       IT IS ALSO TRUE RATHER THAN MERELY CONSISTENT: an arm IS its parent's execution with one more arm on it,
+       so it really has replayed that prefix. And two arms of one parent forked at TWO INSTANTS read it the
+       SAME, by the construction the enumeration below already states about the fraction: a flow that forks has
+       stopped replaying — decide.c reaches its fork arm only with the cursor at the end of the vector, or
+       after dec_leave_path has truncated it there — so a parent consumes no arm between two of its own forks
+       and there is no interval for the two readings to differ over. */
+    sib->cand_replay_arms = parent->cand_replay_arms;
+    sib->cand_replay_of = parent->cand_replay_of;
     sib->cand_surv = parent->cand_surv;
     sib->cand_rung = parent->cand_rung;
     /* AND THE FAMILY IT JOINS — the term the AGING reads AND the term the REWARD is, and the one line that

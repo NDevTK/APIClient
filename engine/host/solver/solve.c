@@ -261,16 +261,18 @@ typedef struct {
        the least valuable of the three splits. THE TELL WAS IN THE SENTENCE DIRECTLY ABOVE IT, which names the
        DENOMINATOR as the thing that would separate them and then prescribes something that is not one — a
        remedy clause disagreeing with its own diagnosis inside one paragraph.
-       WHAT IS STILL NOT COVERED, and it is smaller than what it replaces: with `runwayArms:N` in hand a 0
-       here is "no arm was consumed" OR "arms were consumed and the fraction rounded away" —
-       `(int)(cand_replay*1000.0+0.5)` is 0 for any path longer than 2000 arms with one arm consumed, and
-       decide.h records replay depths of 8000. WHAT THE NEXT DIFF BUILDS is the numerator as a COUNT, taken
-       from the one place dec_replay's own note says it is honest (`flow_observe_replay`'s `consumed`, honest
-       at that line "and not at the scheduler" because the cursor also advances on appends) — which means a
-       field on the Flow, and therefore the fork-carry and two-instants questions §ONE-WFQ-policy asks of
-       anything that rides one, neither of which this entry-side pair has to answer. HOW ITS ABSENCE SHOWS: a
-       card reading `runwayArms:8000, runwayPerMille:0` for a replay that walked three arms and for one that
-       walked none. */
+       AND THE ROUNDING THAT LEFT IS BUILT TOO — `replay_arms`/`replay_of` below, emitted as `runwayWalked`
+       and `runwayOf`. This conversion is `(int)(cand_replay*1000.0+0.5)`, which is 0 for any path longer than
+       2000 arms with one arm consumed while decide.h records replay depths of 8000, so a 0 here was ALSO
+       "arms were consumed and the fraction rounded away". The numerator is now carried as a COUNT from the one
+       place dec_replay's own note says it is honest — flow_observe_replay's `consumed`, honest at that line
+       "and not at the scheduler" because the cursor also advances on appends — so `runwayWalked:3` beside a 0
+       here is the rounding and `runwayWalked:0` beside it is a replay that took no arm.
+       THIS FIELD IS THEREFORE NO LONGER THE PRIMARY READING OF THE RUNG AND IS KEPT, WHICH IS A CHOICE. It is
+       not a second copy of the pair: it is the COMPARATOR's best, so it carries flow_observe_rung's delivery
+       PIN — a policy, by that function's own words "BY DEFINITION AND NOT BY OBSERVATION" — while the pair is
+       only ever an observation. Below the delivery the two reconcile exactly; past it they differ, and each
+       says which of the two questions it is answering. */
     int replay_pm;
     /* …AND HOW MANY ARMS THE PATH THAT FRACTION IS OF ACTUALLY HAS, WHICH IS WHAT SPLITS THE ZERO ABOVE.
        The re-injection point is frozen ONCE per search — add_pending, under the `opened` latch, at the one
@@ -302,6 +304,24 @@ typedef struct {
        flow.h's `cand_dec_max` was fed from the LENGTH under a contract calling it how far the best of them
        had GOT. This is the length, and the name says arms and not progress. */
     int reinject_len;
+    /* …AND THE POSITION ITSELF, HELD AS ITS TWO HALVES RATHER THAN AS THE THOUSANDTHS ABOVE — the same repair
+       `surv_run`/`surv_len` is one rung up, and for the same stated reason: the report has to be able to say
+       WHICH numbers, and a rounded ratio cannot. `replay_pm`'s conversion is 0 below one part in two thousand
+       and decide.h records replay depths of 8000, so the rung's own zero was still two states after
+       `runwayArms` split off the third.
+       ITS RATCHET IS THE PAIR'S OWN AND IS CROSS-MULTIPLIED, not a second reading of `replay_pm`. Ratcheting
+       on the rounded value is exactly what cannot record the case this pair exists for — a best fraction of
+       3/8000 rounds to 0, never exceeds a `replay_pm` of 0, and the sample is dropped. Integer throughout, so
+       no float enters this struct and none is emitted.
+       `replay_of` IS `dec_total()` AT THAT SAMPLE AND IS NOT `reinject_len`. The frozen path is what every
+       candidate STARTS on; the denominator of a reading is the vector as it stood when dec_replay took it,
+       which for an ARM forked off a candidate includes the slots its own fork appended. The two are emitted as
+       different keys because they answer different questions and a reader who took one for the other would
+       compute a progress along a path that flow never stood on.
+       0 IS "NO READING WAS EVER TAKEN" AND IS THE LOAD-BEARING VALUE, exactly as for the two fields above:
+       flow.h's pair carries that meaning in `of` and asserts it as a biconditional with the fraction, so an
+       `of` of 0 here is that statement travelling rather than a hole the ratchet never filled. */
+    long replay_arms, replay_of;
     /* …AND HOW MANY STRINGS A CODE-EXECUTION SINK WAS HANDED WHILE THEY WERE LIVE — the observation COUNT that
        `surv_run` is the best of, and the half a ratchet cannot state. A best-so-far records the furthest
        anything got and says nothing about how often it looked, so `surv_run:0` meant either "no sink ran at
@@ -885,6 +905,12 @@ static Cand *sink_search(const char *src, int sink, int *created) {
        so a garbage nonzero does not misreport a size, it states that arms were offered to candidates that
        were offered none, which is the confident-wrong-instruction direction the pair exists to remove. */
     e->reinject_len = 0;
+    /* AND THE PAIR ON THE SAME LINE AS THE RATCHET IT REPLACES THE READING OF, for that ratchet's own reason:
+       the array is realloc'd and never zeroed, and a best-so-far left holding garbage compares every real
+       observation against a maximum nothing reached, so the pair would never move again and would report a
+       replay that walked arms as one that walked none. `of` is additionally the "never observed" flag, so a
+       garbage nonzero there states that a reading was taken for a search that has never run. */
+    e->replay_arms = 0; e->replay_of = 0;
     /* SAME LINE AND SAME REASON AS `reach_credited`: the array is realloc'd and never zeroed, and a latch left
        holding whatever the allocator had spends a rung this search has never been paid. */
     e->escaped = 0; e->escape_credited = 0;
@@ -2644,6 +2670,32 @@ static void observe_runway(Cand *e, const Flow *f) {
            "than the fraction this record is about to publish as one");
     pm = (int)(f->cand_replay * 1000.0 + 0.5);
     if (pm > e->replay_pm) e->replay_pm = pm;
+    /* AND THE PAIR, RATCHETED ON ITSELF. It cannot be derived from the line above and it cannot ride that
+       line's condition: `pm` is the rounded value, so a best fraction of 3/8000 leaves it at 0, never exceeds
+       a stored 0, and the sample that is the whole reason this pair exists is the one that would be dropped.
+       CROSS-MULTIPLIED AND NOT DIVIDED, so the comparison is exact and no float is stored: with both
+       denominators positive, `a/b > c/d` is `a*d > c*b`. `of == 0` is this search's word for "no reading yet"
+       on the left and this flow's on the right, so each is tested rather than allowed to make a product of
+       zero decide anything. */
+    DCHECK(f->cand_replay_of >= 0 && f->cand_replay_arms >= 0 &&
+           f->cand_replay_arms <= f->cand_replay_of,
+           "an @S candidate's runway pair is not a position on its own path — flow_observe_replay writes the "
+           "two together from one sample and asserts `consumed <= total` at the write, so a numerator past its "
+           "denominator here is a pair assembled out of two different moments and the fraction it makes would "
+           "be published as a replay that walked further than the path it was walking");
+    DCHECK(f->cand_replay_of <= 0x3fffffff && e->replay_of <= 0x3fffffff &&
+           f->cand_replay_arms <= 0x3fffffff && e->replay_arms <= 0x3fffffff,
+           "a runway pair is large enough that the cross-multiplication below could overflow — the products "
+           "are formed in long long and are safe to a billion each, so a value past that is not a decision "
+           "vector's length but a field that has been written by something other than the one sample that "
+           "owns it");
+    if (f->cand_replay_of != 0 &&
+        (e->replay_of == 0 ||
+         (long long)f->cand_replay_arms * (long long)e->replay_of >
+         (long long)e->replay_arms * (long long)f->cand_replay_of)) {
+        e->replay_arms = f->cand_replay_arms;
+        e->replay_of   = f->cand_replay_of;
+    }
 }
 
 void solve_flow_begin(Flow *f) {
@@ -2992,6 +3044,17 @@ char *solve_json_array(JSContext *ctx) {
            the merged zero this pair exists to split. */
         json_buf_raw(&b, ","); json_buf_key(&b, "runwayArms");
         snprintf(t, sizeof t, "%d", g_pending[i].reinject_len); json_buf_raw(&b, t);
+        /* AND THE POSITION AS ITS TWO HALVES, WHICH IS WHAT THE THOUSANDTHS ABOVE ROUND AWAY. `runwayWalked:0`
+           beside `runwayPerMille:0` is a replay that consumed no arm; `runwayWalked:3` beside the same 0 is
+           three arms out of a path long enough that one part in a thousand does not resolve them. `runwayOf`
+           is the denominator of THAT reading — `dec_total()` when it was taken — and is not `runwayArms`,
+           which is the frozen path every candidate starts on; below the delivery
+           `runwayPerMille == round(runwayWalked/runwayOf*1000)` and past it the two diverge because the
+           thousandths carry flow_observe_rung's pin and the pair never does. */
+        json_buf_raw(&b, ","); json_buf_key(&b, "runwayWalked");
+        snprintf(t, sizeof t, "%ld", g_pending[i].replay_arms); json_buf_raw(&b, t);
+        json_buf_raw(&b, ","); json_buf_key(&b, "runwayOf");
+        snprintf(t, sizeof t, "%ld", g_pending[i].replay_of); json_buf_raw(&b, t);
         /* …AND THE TWO MIDDLE RUNGS, WHICH IS WHAT SPLITS `reached:0` AND `reached:N` INTO THE FOUR STATES THEY
            REALLY ARE. `survived`/`survivedOf` is the FURTHEST any candidate of this search has got its own
            bytes through the page's own transforms to ANY sink, so `turns:900,reached:0,survived:11,

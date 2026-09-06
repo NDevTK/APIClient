@@ -4819,7 +4819,14 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
        are in place. What it catches is a candidate identity that stops being copied while the rank still is:
        the arm would carry up to a full point of fitness — the comparator's entire range, one whole finding's
        worth of weight — into ordinary exploration, where nothing would ever move it again. */
-    DCHECK(sib->cand_payload != NULL || (sib->cand_surv == 0.0 && sib->cand_rung == 0),
+    /* WRITTEN OVER flow_distance AND NOT OVER A LIST OF RUNGS, which is flow_fork_inherit's own argument for
+       writing rank-neutrality over the whole weight, applied to the invariant one level down. As a field list
+       it named `cand_surv` and `cand_rung` and NOT `cand_replay` — the runway rung, added to the comparator
+       after this assert was written and copied by the fork like the other two — so a third of the ladder was
+       outside the one check whose message is "an arm stands on the @S ladder". That is the exact staleness a
+       list has and a derivation does not: `flow_distance` IS what "stands" means, so a rung added to it is
+       inside this assert on the day it is added and cannot be forgotten here. */
+    DCHECK(sib->cand_payload != NULL || flow_distance(sib) == 0.0,
            "an arm stands on the @S ladder while carrying no payload to have stood there with — the fitness is "
            "a reading of bytes THIS flow injected, so an arm that inherited the rank without the substitution "
            "outranks the whole frontier on a measurement belonging to an identity it does not have");

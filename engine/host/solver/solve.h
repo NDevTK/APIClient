@@ -279,6 +279,18 @@ const char *solve_resume_candidate(const char *src, const char *root, const char
    every other number here is a count. A FRACTION OF DECISION ARMS AND NOT OF STATEMENTS: a short recorded path
    saturates it while the source read is still far away in program order, which is a property of the comparator
    itself and is exactly what the saturated reading above says out loud.
+   `runwayArms`, `runwayWalked` AND `runwayOf` ARE WHAT MAKE THAT ZERO READABLE, and they are three different
+   questions rather than three spellings of one. `runwayArms` is the length of the path add_pending FROZE for
+   this search, so 0 says the detecting flow decided no branch at all and every candidate began on nothing —
+   the fraction above is then a tautology and the work is at the DETECTION. `runwayWalked`/`runwayOf` are the
+   best reading actually TAKEN, held as the two halves the thousandths round away: `(int)(frac*1000+0.5)` is 0
+   below one part in two thousand and decide.h records replay depths of 8000, so `runwayWalked:3` beside
+   `runwayPerMille:0` is the rounding and `runwayWalked:0` beside it is a replay that took no arm. `runwayOf`
+   is that reading's own denominator (`dec_total()` when it was taken) and is NOT `runwayArms`, which an arm
+   forked off a candidate can exceed by the slots its own fork appended. Below the delivery the three
+   reconcile — `runwayPerMille == round(runwayWalked/runwayOf*1000)` — and past it they part, because the
+   thousandths carry flow_observe_rung's pin (a policy, "BY DEFINITION AND NOT BY OBSERVATION") and the pair
+   is only ever an observation.
    `substituted` IS OBSERVED AT THE SOURCE READ, which is what §@S(i) asks for of everything above it; `sinkStrings` is observed where the survival fraction is, class-independently,
    so it counts every code-execution sink write during this search's candidate runs and not only its own class's.
    BOTH ARE COUNTS AND NEITHER IS A RUNG: nothing about the WFQ moves at either write, so §@S(ii)'s ledger and
