@@ -351,14 +351,21 @@ function _parkedProgress(item) {
   //           re-injection path, where 0 IS "this search has no recorded path" and N beside a 0 here IS the
   //           first-arm reading. `runwayWalked`/`runwayOf` split the same zero once more, since this field's
   //           own conversion rounds any path past 2000 arms with one arm consumed down to 0.
-  //           WHAT IS STILL DEFERRED IS THE READ AND NOT THE FIELD, on §A-CROSS-BOUNDARY-DIFF: this file
-  //           deploys on WRITE and the engine's C is live only after a build, and the three names are ABSENT
-  //           from extension/lib/qjs/qjs.wasm today — checked by CONTENT with `runwayPerMille` as the positive
-  //           control (PRESENT) and an invented name as the negative one (absent), exactly as the note below
-  //           checks the same thing. lib/store-record.js carries the same deferral at the currency predicate
-  //           that would SHED every older record if it required them early, and the three land there and here
-  //           in ONE diff with the build: that gate is what makes this read safe, because a record reaching
-  //           this card will by then have been judged to carry them.
+  //           THE READ IS NO LONGER DEFERRED, AND WHAT RETIRED IT IS THE OBSERVATION THE DEFERRAL NAMED
+  //           RATHER THAN AN ARGUMENT. It read "the three names are ABSENT from extension/lib/qjs/qjs.wasm
+  //           today", which was a claim about an ARTIFACT and went stale the moment one was produced —
+  //           §A-CROSS-BOUNDARY-DIFF's own asymmetry, since this file deploys on WRITE and the engine's C is
+  //           live only after a build. Re-checked by CONTENT and never by timestamp, with `runwayPerMille` as
+  //           the positive control and an invented name as the negative one: all three now occur, the positive
+  //           control occurs, the invented one does not. The branch above reads them.
+  //           THE CURRENCY GATE IS WHAT MAKES THAT READ SAFE, AND IT COST A STAMP BUMP THE DEFERRAL DID NOT
+  //           FORESEE. lib/store-record.js's `_srParkedSinkCurrent` now requires the three, so a record
+  //           reaching this card has been judged to carry them; but that predicate is only ASKED of a store
+  //           whose stamp predates the kind, and at the stamp every live store carries it would have been
+  //           ASSERTED — an abort of the whole restore rather than the shed the deferral predicted. The
+  //           deferral was right about the hazard and one category too small about its size. `_STORE_SHAPE`
+  //           and `securityFindings.statedFrom` move with the predicate in the same diff, which puts those
+  //           stores back on the ask arm where a short record is shed against its `pageUrl` recipe.
   //   1000  — SATURATED, which is not "nearly at the read". solve.c's own declaration is explicit that what
   //           this is a fraction of is DECISION ARMS and not statements, so a candidate whose recorded path is
   //           short saturates here while still far from its source read in program order: the bottom rung is
@@ -384,16 +391,32 @@ function _parkedProgress(item) {
          + 'have never been in the page\'s program at all. That is a question about the PATH in front of the '
          + 'source, and the runway says WHICH question: '
          + (item.runwayPerMille === 0
-            ? 'not one of these candidates has been observed consuming an arm of its own recorded path. Read '
-              + 'it with the arm count beside it: arms at 0 is a search that was never offered a path, and '
-              + 'arms above 0 is a path that WAS offered and not walked — which is a question about what '
-              + 'stands in front of the replay\'s first branch. THE SECOND IS WHAT HAS BEEN MEASURED. This '
-              + 'card used to say the opposite here, on a prediction, and told a reader not to hunt that '
-              + 'gate; the first build to publish the arm count refuted it — every `location.hash` record in '
-              + 'it carried an eleven-arm path with none of it walked. So the gate IS the thing to look at, '
-              + 'and what is still open is narrower: whether a zero was a refusal at the first arm or an '
-              + 'interval nobody sampled, since the producer samples a candidate only at its switch-in and '
-              + 'at its finish'
+            ? (item.runwayArms === 0
+               ? 'this search was never offered a recorded path at all — the flow that detected the sink '
+                 + 'decided no branch, so the frozen re-injection path is empty and there was nothing for any '
+                 + 'candidate to replay. The fraction beside it is a TAUTOLOGY and not a measurement, and a '
+                 + 'reader who takes it for one hunts a gate that refuses an arm for a search that was never '
+                 + 'offered one. The work is at the DETECTION'
+               : item.runwayOf === 0
+                 ? 'a path of ' + item.runwayArms + ' arm' + (item.runwayArms === 1 ? '' : 's') + ' WAS frozen '
+                   + 'for this search and NO REPLAY POSITION WAS EVER SAMPLED — the producer records the pair '
+                   + 'only from a candidate that had a denominator to be a fraction of, so this zero is the '
+                   + 'absence of an observation rather than an observation of nothing. Nothing here says the '
+                   + 'replay was turned back; it says nobody looked'
+                 : item.runwayWalked === 0
+                   ? 'a path of ' + item.runwayArms + ' arm' + (item.runwayArms === 1 ? '' : 's') + ' WAS '
+                     + 'frozen for this search and the best position anybody sampled consumed NONE of it '
+                     + '(0 of ' + item.runwayOf + ') — so the path was offered and not walked, which is a '
+                     + 'question about what stands in front of the replay\'s first branch. That gate IS the '
+                     + 'thing to look at: this card used to say the opposite on a prediction and the first '
+                     + 'build to publish these fields refuted it. What is still open is narrower — whether '
+                     + 'this was a refusal at the first arm or an interval nobody sampled, since the producer '
+                     + 'samples a candidate only at its switch-in and at its finish'
+                   : 'the fraction is ROUNDING and not a stop: ' + item.runwayWalked + ' of ' + item.runwayOf
+                     + ' arms were consumed, which is below the one part in two thousand this field\'s '
+                     + 'conversion can resolve, so it prints 0 for a replay that IS walking its path. Read '
+                     + 'the pair and not the fraction here; the frozen path was ' + item.runwayArms + ' arm'
+                     + (item.runwayArms === 1 ? '' : 's') + ' long')
             : item.runwayPerMille >= 1000
               ? 'they consumed the WHOLE of their recorded path and the source read is still ahead of them. '
                 + 'That rung is SATURATED and is directing nothing further — and it is a fraction of decision '
@@ -716,7 +739,7 @@ function renderSecurityPanel() {
     // THE CARD READS THE RECORD THE ENGINE ACTUALLY EMITS. `solve_json_array` (engine/host/solver/solve.c)
     // writes {sink, source, poc, firesOn, cspBlocks?, trustedTypes?, sourceEncodes?, delivery?,
     // deliveryPrefix?} for a fired sink and {sink, source, search:"parked", tried, resumed, resumedWithdrawn,
-    // reached, turns, substituted, sinkStrings, runwayPerMille, survived,
+    // reached, turns, substituted, sinkStrings, runwayPerMille, runwayArms, runwayWalked, runwayOf, survived,
     // survivedOf, survivedAt?, survivedTo?, escaped, fires?, witnessed?, deliveryProbed?, probes, payloads,
     // survivedBy, withdrawn, sourceEncodes?, sourceDelivers?, delivery?,
     // deliveryPrefix?}
@@ -944,6 +967,49 @@ function renderSecurityPanel() {
         + "this card is about to name WHICH question a search is stuck on out of a number that is not one "
         + "(sink=" + pit.sink + " source=" + pit.source + " substituted=" + JSON.stringify(pit.substituted)
         + " runwayPerMille=" + JSON.stringify(pit.runwayPerMille) + ")");
+      // …AND THE THREE NAMES THAT MAKE THAT ZERO READABLE, ASSERTED UNCONDITIONALLY BECAUSE THE PRODUCER WRITES
+      // THEM UNCONDITIONALLY. solve_json_array emits `runwayArms` immediately beside `runwayPerMille` and
+      // `runwayWalked`/`runwayOf` immediately beside that, on every parked entry and never on a fired one, so 0
+      // is the load-bearing reading of each and an ABSENCE is the relay broken. That is the opposite of
+      // `deliveryProbed` two blocks up, which the producer writes only where the search holds a delivery probe
+      // and which is therefore guarded on presence — the difference is the producer's, not this card's caution.
+      // NO DEFAULT, AND THE COST OF ONE IS SPECIFIC RATHER THAN STYLISTIC. The branch below reads `runwayArms`
+      // to decide between "this search was never offered a path" and "a path was offered and not walked", which
+      // take opposite work; `item.runwayArms || 0` would answer the FIRST for a record whose relay dropped the
+      // field, and the card would then send a reader to the detection for a search whose gate is the problem.
+      // THE RANGES ARE THE PRODUCER'S OWN AND NOTHING NARROWER IS CLAIMED HERE. `runwayArms` is
+      // `reinject_len`, which add_pending asserts is a slot count in [0, 0x7fffffff]; `runwayWalked`/`runwayOf`
+      // are `replay_arms`/`replay_of`, which observe_runway asserts non-negative, bounded by 0x3fffffff and
+      // ordered `arms <= of` at its own site — and which it assigns as a PAIR, so the ordering is an invariant
+      // of the record and not of one sample. It is re-asserted here for the reason the `sourceDelivers` pair is:
+      // a relay that drops or reorders a field produces precisely a violated implication.
+      // NO RELATION TO `runwayPerMille` IS ASSERTED, AND THAT IS THE PRODUCER'S STATEMENT RATHER THAN A GAP.
+      // solve.h says the three reconcile BELOW the delivery — `runwayPerMille == round(runwayWalked/runwayOf*
+      // 1000)` — and PART past it, because the thousandths carry flow_observe_rung's pin (a policy, "BY
+      // DEFINITION AND NOT BY OBSERVATION") and the pair is only ever an observation. An assert tying them
+      // would fire on every saturated record. NO RELATION TO `runwayArms` EITHER: solve.h is explicit that
+      // `runwayOf` is `dec_total()` at the sample and is NOT the frozen path, which an arm forked off a
+      // candidate can exceed by the slots its own fork appended.
+      DCHECK(typeof pit.runwayArms === "number" && pit.runwayArms >= 0
+             && pit.runwayArms === Math.floor(pit.runwayArms),
+        "a parked @S record reached the popup without its recorded-path ARM COUNT, or with one that is not a "
+        + "count — add_pending stores `reinject_len` at the freeze and asserts it is a slot count, and this "
+        + "card is about to tell the reader whether to hunt the DETECTION or the replay's first gate out of "
+        + "that number, which are opposite work (sink=" + pit.sink + " source=" + pit.source
+        + " runwayPerMille=" + JSON.stringify(pit.runwayPerMille)
+        + " runwayArms=" + JSON.stringify(pit.runwayArms) + ")");
+      DCHECK(typeof pit.runwayWalked === "number" && typeof pit.runwayOf === "number"
+             && pit.runwayWalked >= 0 && pit.runwayOf >= 0
+             && pit.runwayWalked === Math.floor(pit.runwayWalked)
+             && pit.runwayOf === Math.floor(pit.runwayOf)
+             && pit.runwayWalked <= pit.runwayOf,
+        "a parked @S record reached the popup without the two halves of its best replay position, or with a "
+        + "position past its own denominator — observe_runway asserts `cand_replay_arms <= cand_replay_of` at "
+        + "the sample and adopts the two TOGETHER, so a pair that fails it was assembled from two different "
+        + "samples by the relay, and the card is about to separate a rounded reading from a replay that took "
+        + "no arm using numbers that are not one measurement (sink=" + pit.sink + " source=" + pit.source
+        + " runwayWalked=" + JSON.stringify(pit.runwayWalked)
+        + " runwayOf=" + JSON.stringify(pit.runwayOf) + ")");
       DCHECK((pit.sinkStrings === 0 || pit.substituted > 0) && (pit.reached === 0 || pit.substituted > 0),
         "a parked @S record reports a sink observation or an arrival over a search that has never recorded a "
         + "substitution — bytes enter the program before any sink can be handed a string carrying them, and "

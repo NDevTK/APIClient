@@ -239,27 +239,43 @@ const _SR_SCOPES = _srList("a service's required OAuth scopes", "a scope name", 
    grammar that has already drifted once; these are member READS on the stored element, which puts them in the
    population that gate walks — the engine dropping one of them lights up as a read with no writer, and the
    engine ADDING one lights up as a write with no reader, which is exactly how this defect was found.
-   THREE NAMES ARE DELIBERATELY NOT IN THE LIST BELOW YET, AND THIS IS THE DEFERRAL RATHER THAN AN OVERSIGHT.
-   solve.c emits `runwayArms`, `runwayWalked` and `runwayOf` — the arm count of the search's frozen re-injection
-   path and the two halves of the best replay position — and they are what finally split `runwayPerMille`'s zero
-   into the three states it has been saying at once. Requiring them here is what the paragraph above prescribes
-   and it is owed. It is not taken YET because this file deploys on WRITE and the engine's C is live only after
-   a build (CLAUDE.md §A-CROSS-BOUNDARY-DIFF), and requiring a name the shipped artifact does not emit does not
-   merely fail to help: this predicate SHEDS what it judges not current, so it would shed every parked @S record
-   in the store until the next install.
-   THE OBSERVATION THAT RETIRES IT IS NAMED RATHER THAN THE REASON, so whoever finds this runs it instead of
-   re-deriving the argument — the same check the card's own runway note already uses, by CONTENT and never by
-   timestamp, with a negative control so a zero means absent rather than mis-addressed:
+   `runwayArms`, `runwayWalked` AND `runwayOf` ARE REQUIRED HERE, AND THE DEFERRAL THAT STOOD IN THIS PARAGRAPH
+   IS RETIRED BY THE OBSERVATION IT NAMED RATHER THAN BY AN ARGUMENT. They are the arm count of the search's
+   frozen re-injection path and the two halves of the best replay position, and they are what finally split
+   `runwayPerMille`'s zero into the three states it had been saying at once — so requiring them is what the
+   paragraph above prescribes. The deferral was correct when written (this file deploys on WRITE and the
+   engine's C is live only after a build, CLAUDE.md §A-CROSS-BOUNDARY-DIFF) and it named its own retiring
+   observation instead of its reason, by CONTENT and never by timestamp, with a negative control so a zero
+   means absent rather than mis-addressed. Re-run it before trusting any of this:
      grep -ac runwayArms extension/lib/qjs/qjs.wasm   # and runwayWalked, runwayOf
-     grep -ac runwayPerMille extension/lib/qjs/qjs.wasm   # positive control: this one is PRESENT today
+     grep -ac runwayPerMille extension/lib/qjs/qjs.wasm   # positive control: PRESENT before these three were
      grep -ac NOT_A_REAL_FIELD_CONTROL extension/lib/qjs/qjs.wasm   # negative control: must be 0
-   Measured at this commit: `survivedOf` and `runwayPerMille` PRESENT, all three of the new names ABSENT, the
-   invented control absent. When the artifact carries them, the three names join the list below AND the card
-   reads them, in ONE diff — the currency gate is what makes that read safe, since a record reaching the card
-   has by then been judged to carry them.
-   THE FIELD GATE REPORTS THEM AS WRITES WITH NO READER IN THE MEANTIME AND THAT IS CORRECT. It is not a band to
-   be exempted into: a deferred consumer is a consumer that does not exist, the count is honest, and the entry
-   this paragraph is stops it reading as an oversight. It goes to zero on the diff above and not before.
+   It now answers 1, 1, 1 over a positive control of 1 and a negative control of 0, against an artifact whose
+   sidecar states `dirty: []` and a `qjsPinned` equal to the gitlink — so the names are in the SHIPPED BYTES.
+   That is a claim about CONTENT and not an inference from source: the artifact measured is BEHIND `origin/main`
+   and nothing here says it reflects it.
+   THE DEFERRAL'S SPEC HALF WAS RIGHT AND ITS CONSEQUENCE HALF WAS WRONG, WHICH IS THE PART WORTH KEEPING
+   because the wrong half was the half a reader would have ACTED on. It said requiring a name early "would shed
+   every parked @S record in the store until the next install", and a shed is the benign outcome this file is
+   built around. At the CURRENT stamp it is not what happens. The door asks `storeRecordShapeStates` per kind
+   and this kind's `statedFrom` was at or below the stamp every live store carries, so the door ASSERTS rather
+   than asks — and a parked entry short of a name would have taken `checkStoreRecord`'s DCHECK and aborted the
+   restore of ALL SEVEN MAPS, which is the blast radius the table's own order comment names and strictly worse
+   than the loss the deferral was guarding against. The clause named the right hazard one category too small.
+   WHAT MAKES IT A SHED IS THE STAMP BUMP LANDING IN THE SAME DIFF, and that is this kind's own precedent
+   rather than a new mechanism: `statedFrom` was raised to `3` for exactly this reason when `_srParkedSinkCurrent`
+   first began describing the element, and the sentence recording that says raising it "is the difference between
+   those records being shed and re-derived and the card aborting on them". It is raised again here, with
+   lib/persistence.js's `_STORE_SHAPE`, so every store written before this diff is ASKED. A parked record short
+   of the three names is then shed against `securityFindings`' recipe — the `pageUrl` whose re-visit re-runs the
+   same bundle and makes solve.c emit again (§OOM/paging's re-derivable third category, §Time-travel-resume's
+   re-derived answer being the CURRENT one) — or STRANDED and NAMED where that recipe is `null`, which is a
+   record that could never have been live-verified either. The parked FLOWS are not in this store at all
+   (bridge.js keeps the frontier in its own `frontier` object store), so what a shed here trades is emitted
+   findings for a re-visit and never a suspended snapshot.
+   THE FIELD GATE REPORTED THEM AS WRITES WITH NO READER UNTIL THIS DIFF AND THAT WAS CORRECT — a deferred
+   consumer is a consumer that does not exist. The reads below and lib/popup-security.js's are what take that
+   count to zero, and they are member READS on the stored element for the reason the paragraph above gives.
    A FIRED ENTRY IS NOT THIS QUESTION. solve.h emits two entry shapes and only the parked one carries these
    names, so an entry that does not say `search: "parked"` is passed rather than judged — demanding them of a
    fire-verified PoC would shed a record that is perfectly current. */
@@ -268,7 +284,8 @@ function _srParkedSinkCurrent(e) {
   if (e.search !== "parked") return true;
   return e.tried !== undefined && e.resumed !== undefined && e.resumedWithdrawn !== undefined
       && e.reached !== undefined && e.turns !== undefined && e.substituted !== undefined
-      && e.sinkStrings !== undefined && e.runwayPerMille !== undefined && e.survived !== undefined
+      && e.sinkStrings !== undefined && e.runwayPerMille !== undefined && e.runwayArms !== undefined
+      && e.runwayWalked !== undefined && e.runwayOf !== undefined && e.survived !== undefined
       && e.survivedOf !== undefined && e.escaped !== undefined && e.probes !== undefined
       && e.payloads !== undefined && e.survivedBy !== undefined && e.withdrawn !== undefined;
 }
@@ -342,12 +359,22 @@ const STORE_RECORD_KINDS = Object.freeze({
     adopt: (v) => v,
   }),
   securityFindings: Object.freeze({
-    /* `3` AND NOT `2`, BECAUSE THE SHAPE THIS KIND STATES CHANGED WHEN `_srParkedSinkCurrent` BEGAN DESCRIBING
-       THE ELEMENT. A store stamped `2` was written by a door that asked only whether `securitySinks` was an
+    /* `5` AND NOT `3`, FOR THE SAME REASON `3` WAS NOT `2`, AND THE NUMBER MOVES EVERY TIME THE ELEMENT'S NAME
+       SET DOES. A store stamped `2` was written by a door that asked only whether `securitySinks` was an
        Array, so it makes no claim about the parked entries inside it and must be ASKED rather than asserted —
        which is precisely what raising this number does, and it is the difference between those records being
-       shed and re-derived and the card aborting on them. */
-    statedFrom: 3, shape: () => _SR_SECURITY_FINDING,
+       shed and re-derived and the card aborting on them.
+       IT IS RAISED AGAIN BECAUSE `_srParkedSinkCurrent` NOW REQUIRES `runwayArms`, `runwayWalked` AND
+       `runwayOf`, AND LEAVING IT AT `3` WOULD HAVE BEEN THE ABORT AND NOT THE SHED. A store stamped `3` or `4`
+       was written by a door that asserted this element against the name set of ITS day; the predicate has
+       gained three names since, so at `3` this kind would answer `states` for exactly the stores holding
+       records that no longer satisfy it, the door would take the assert arm, and `checkStoreRecord` would
+       abort the restore of every map in the table. Raising it to the new stamp puts those stores back on the
+       ASK arm, where a record short of a name meets the recipe below instead of a DCHECK. The rule is
+       therefore mechanical and not a judgement: THIS NUMBER MOVES WITH `_STORE_SHAPE` WHENEVER
+       `_srParkedSinkCurrent` GAINS OR LOSES A NAME, because the two are one contract — the stamp says which
+       stores are asserted and the predicate says what they are asserted against. */
+    statedFrom: 5, shape: () => _SR_SECURITY_FINDING,
     /* THE DOCUMENT WHOSE FORCED EXECUTION EMITTED THESE SINKS — the same recipe an endpoint has, for the same
        reason: re-visiting it runs the same bundle and solve.c emits again, and §Time-travel-resume makes the
        re-derived answer the CURRENT one rather than a reconstruction of the old. */

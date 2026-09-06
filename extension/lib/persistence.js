@@ -137,8 +137,27 @@ function scheduleSave() {
    was `_srObj`, while lib/popup-discovery.js DCHECKs `f.name` on every field it labels. The other five are
    NOT defects and the sweep is recorded at their sites rather than here, because the test is whether a
    CONSUMER ASSERTS an element's names and a kind that fails that test must not be given a shape it does not
-   need. */
-const _STORE_SHAPE = 4;
+   need.
+
+   `5` IS THE FIRST BUMP THIS COMMENT'S OWN RULE ACTUALLY COVERED, and it is worth saying so, because `3` and
+   `4` were both holes in it. The rule is to bump when a record GAINS OR LOSES A STATED NAME; `3` and `4` were
+   owed by a grammar this file could not see, so nothing here could have prompted them. This one is different:
+   lib/store-record.js's `_srParkedSinkCurrent` now STATES `runwayArms`, `runwayWalked` and `runwayOf`, so the
+   name set the store holds has changed inside a predicate this number's rule already reaches. The letter of
+   the rule fired, and this is what obeying it looks like.
+   WHAT THE BUMP BUYS IS THE ASK ARM, AND WITHOUT IT THE DIFF WOULD HAVE BEEN AN ABORT RATHER THAN A SHED.
+   `securityFindings` moves to `statedFrom: 5` beside it, and the pair is the whole mechanism: a store stamped
+   `3` or `4` holds parked entries asserted against the name set of ITS day, and leaving the kind at `3` would
+   have had `storeRecordShapeStates` answer TRUE for exactly those stores — the door would assert, the element
+   would fail, and `checkStoreRecord`'s DCHECK would take the restore of all seven maps. That is the blast
+   radius lib/store-record.js's table-order comment names, arriving through the number rather than through the
+   predicate. With the bump those stores are ASKED, and a record short of a name is shed against its `pageUrl`
+   recipe or STRANDED and named — §OOM/paging's third category, which is what this whole section is for.
+   THE PAIR IS ONE EDIT AND MUST NOT BE SPLIT. This number decides WHICH stores are asserted and the predicate
+   decides WHAT they are asserted against, so a bump here without the kind's `statedFrom` leaves every older
+   store on the assert arm, and a `statedFrom` raised without this number leaves it above the stamp this build
+   writes — after which the kind is never asserted at all and the save-side door stops being a door. */
+const _STORE_SHAPE = 5;
 
 /* WHAT THE RESTORE DID, AS NUMBERS — because a shed nobody can count is the silent truncation this whole
    section exists to end, and §NO BOUNDS is explicit that discarding work "with nothing to say so" is a cap
