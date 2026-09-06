@@ -2778,12 +2778,58 @@ function unescapeC(s) {
  * continuation", and with no later mark in the block the scan does not swallow, it STOPS. Both readings are
  * symptoms of one cause and the cause is here.
  *
- * THE SPAN IS BOUNDED TO ONE LINE, WHICH IS WHAT STOPS THIS BECOMING THE DEFECT IT REMOVES. A stray backtick
- * that could open a span running to the end of a comment would mask real quotation marks by the paragraph, so
- * a run that reaches a newline is not a code span and its backtick is ordinary punctuation. The double form is
- * tried FIRST because it is how this tree writes a code span whose CONTENT is a backtick (``` `` ` `` ```), and
- * reading that as two single spans would put the mask in the wrong place. */
-const CODE_SPAN = /``[^\n]*?``|`[^`\n]*`/g;
+ * THE SPAN CROSSES AT MOST ONE NEWLINE, AND THE ARGUMENT THAT USED TO BOUND IT TO ONE LINE IS KEPT RATHER
+ * THAN DELETED, because a reader who re-derives it will re-introduce it. A stray backtick that could open a
+ * span running to the end of a comment would mask real quotation marks by the paragraph, and a scanner that
+ * masks a paragraph is a way to HIDE a fabrication rather than a way to read a code span. That argument is
+ * right. The BOUND it was spent on was wrong, and the two failed together.
+ *
+ * WHERE THE BOUND ACTUALLY BIT, WHICH IS NOT WHERE IT LOOKS LIKE IT DOES. The quotation window contains no
+ * newline at all: `unitProse` replaces a comment's wrap and its gutter with a space before `governedProse`
+ * returns it, so for the CHECK a wrapped specimen is already one line and always has been — which means the
+ * convention this file prescribes for a wrongly-accused specimen, put it in backticks, has been followable at
+ * a wrapped site the whole time, and a report that it was not is a report about a different reader. The two
+ * readers whose text is RAW are the ones this bound governed: `treeProse`, which blanks quoted runs out of the
+ * corpus of what this tree itself wrote, and `quotedSrcRuns`, whose mask is the file at file length so the
+ * citation scan can tell a number in prose from a number inside a quotation. In both, a quotation mark inside
+ * a WRAPPED code span was a DELIMITER. `SPEC_STEPS.md` writes `{ns: null, prefix: null, local:` and
+ * `"xlink:href"}` as one span across a line break, 41 spans of that shape stand above its line 3457 carrying 8
+ * such marks, and each is free to open a run that swallows the paragraphs after it — which is this function's
+ * own IT ERRS TOWARD KEEPING THE FINDING clause firing in the accusing direction, since prose removed from the
+ * corpus is a site left accused.
+ *
+ * MEASURED AT 8c03eadd OVER THE DEFAULT TARGET SET, one newline against none, one frozen snapshot, every other
+ * input shared. VERIFIED 5249 both ways over 6369 quotations compared both ways: NOTHING LEFT THE COMPARISON,
+ * which is the hazard above and it did not materialise. Citations READ 58206 to 58220, with numbers standing
+ * inside a quotation 251 to 237 — `core/xml/xml_literal.h` writes `SystemLiteral ::=` and the grammar's own
+ * quote characters as one span across a line break, and its header's citations came back at six real lines
+ * and numbers instead of four collapsed onto line 4. Findings 1016 to 1013, and those three are
+ * `core/dom/range.c` quotations moving out of QUOTE-NOT-FOUND into OWN-PROSE with `SPEC_STEPS.md` named as the
+ * file whose own prose holds their words — a reclassification a reader can check in one command, not a
+ * suppression, and the site is still judged by every other channel.
+ *
+ * ONE NEWLINE AND NOT TWO, AND THE COUNTEREXAMPLE FOR THE WIDER RULE IS IN THE TREE. The spans that appear
+ * only at two or more newlines are stray-backtick artifacts, and they hold REAL spec quotations that would
+ * stop being read: `core/html/fragment_parser.c` carries HTML's `If el is not connected, then return` four
+ * newlines from one stray opener and its Fragment scripting mode note six from another. So the tree holds the
+ * counterexample for the wider rule and the counterexample for the narrower one, and one newline is the line
+ * between them. It is not a granularity anybody picked: a comment WRAPS, so a specimen that reaches the margin
+ * is written across two lines, and a specimen written across three is a block rather than an inline span.
+ *
+ * A WRAPPED SPECIMEN WAS ALREADY READ ONE CHANNEL OVER, which is what makes this a disagreement rather than a
+ * preference. `mentionOf` decides a displayed citation by backtick PARITY over the whole prose unit and has
+ * never cared about a newline, so a deliberately-wrapped specimen was a spelling being SHOWN to that reader
+ * and a claim being MADE to this one. Two answers to one question is the shape that drifts.
+ *
+ * The double form is tried FIRST because it is how this tree writes a code span whose CONTENT is a backtick
+ * (``` `` ` `` ```), and reading that as two single spans would put the mask in the wrong place. IT STAYS
+ * LINE-BOUNDED, and that is a residual with its three clauses rather than an oversight. NOT COVERED: a
+ * double-form specimen that wraps. WHAT THE NEXT DIFF BUILDS: the same one-newline allowance on the double
+ * alternative, bounded the same way. HOW ITS ABSENCE SHOWS: that specimen's own quotation marks arrive at
+ * `quotedRuns` as delimiters, exactly as the single form's did above. It is left alone because the double
+ * form's content class admits backticks, so a newline there lets one stray opener pair with a closer two lines
+ * down, and the whole population it would serve is the 6 double-form spans this corpus holds. */
+const CODE_SPAN = /``[^\n]*?``|`[^`\n]*(?:\n[^`\n]*)?`/g;
 function codeSpanMask(prose) {
   const mask = new Uint8Array(prose.length);
   if (prose.indexOf("`") < 0) return mask;

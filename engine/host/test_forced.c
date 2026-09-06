@@ -5301,8 +5301,8 @@ static const JSFlowControlHooks TF_DIFF_NONE    = { 0 };
    rest on stability, and n = 300 is not a power of two, so the last block of a width pass is the ragged lone
    run whose drain has no comparison in it at all. The program checks its own answer rather than being compared
    against a constant: strict sortedness is decided by page code that never touches the merge, and the
-   POSITIONAL checksum pins the exact permutation. -1 is "the sort's answer was wrong", which is a different
-   failure from "the two schedules disagree" and must not be able to look like one. */
+   POSITIONAL checksum pins the exact permutation. -1 is `the sort's answer was wrong`, which is a different
+   failure from `the two schedules disagree` and must not be able to look like one. */
 static const char *TF_SORT_SRC =
     "(function(){ var n = 300, a = [], i, h = 0, ok = 1;"
     " for (i = 0; i < n; i++) a[i] = (i * 337) % n;"
@@ -7466,8 +7466,8 @@ static void idb_key_path_selftest(JSContext *ctx, JSValueConst conn, JSValueCons
  * parts, so a value missing one has no key at all rather than a shorter one.
  *
  * THE TAINTED CASES ARE THE HALF A BROWSER'S OWN SUITE CANNOT HAVE. A bundle stores what it received —
- * `store.put(await res.json())` — so the value, or a field of it, is unknown external input. §7.1 asks "does it
- * have this own property" and "what is at it", and answering `failure` for an unknown would FORCE A BRANCH on
+ * `store.put(await res.json())` — so the value, or a field of it, is unknown external input. §7.1 asks `does it
+ * have this own property` and `what is at it`, and answering `failure` for an unknown would FORCE A BRANCH on
  * attacker-controlled input, toward the arm that takes the record out of the store and loses the code path and
  * the taint together. So a field that IS a concolic reaches §7.4 as one, and a VALUE that is a concolic answers
  * through its own exotic [[Get]] under the field-path identity ("{reply}.id") — which is what the pinned case
