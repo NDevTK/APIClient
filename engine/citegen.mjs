@@ -2296,8 +2296,20 @@ const LEVELLED = /^[a-z]+(-[a-z0-9]+)*-[0-9]+$/;
  * two-word tail `in xml` then falls through to XML 1.0 — which does not have a §6.2, so a correct citation of
  * Namespaces in XML was reported as a section the standard does not have. The AFTER text is already flattened
  * this way before its term is read; the BEFORE text was not, and that asymmetry was the bug. */
-const MODULE_BEFORE_LEVEL = /[ \t]+(?:Module|module)(?=[ \t]+(?:Level|level)[ \t]+[0-9]+(?:\.[0-9]+)*$)/;
-const MODULE_BEFORE_VERSION = /[ \t]+(?:Module|module)(?=[ \t]+[0-9]+(?:\.[0-9]+)*$)/;
+/* THE FOUR SHAPE PATTERNS THAT READ `Module` AND `Level` ARE CASE-INSENSITIVE, AND THAT IS NOT TIDINESS —
+   THEY ENUMERATED TWO CASINGS AND THIS TREE WRITES A THIRD. classifyAnchor lowercases every token it
+   compares, so the NAME half of the anchor layer has always been case-blind; only these SHAPE regexes were
+   not, and they spelled `(?:Module|module)` and `(?:Level|level)` — which is every casing except the one
+   this codebase uses for a banner. `event_target.c` writes `CSS ANIMATIONS MODULE LEVEL 1 §5.3` and `CSS
+   TRANSITIONS MODULE LEVEL 1 §6.3`, both citing a section those standards title exactly as HTML titles its
+   own; with `LEVEL` matching nothing, the join never ran, the citations came back unanchored, and the file
+   vote put them at HTML — whose §5.3 is "Sample microdata vocabularies" and whose §6.3 is "Inert subtrees".
+   The term `event handlers` then reported both as misattributed. Two accusations, a document neither comment
+   named, and the whole cause was an alternation with two arms.
+   IT IS THE `mixed` DEFECT AGAIN, ONE LAYER DOWN: a matcher keyed on a spelling the tree does not write
+   protects nothing, and an arm that never fires is indistinguishable from no arm at all. */
+const MODULE_BEFORE_LEVEL = /[ \t]+Module(?=[ \t]+Level[ \t]+[0-9]+(?:\.[0-9]+)*$)/i;
+const MODULE_BEFORE_VERSION = /[ \t]+Module(?=[ \t]+[0-9]+(?:\.[0-9]+)*$)/i;
 
 function anchorTokens(before) {
   /* THE LEVELLED NAMES `joinLevel` REFUSED, carried out with the tokens so the caller can census what it
@@ -2321,8 +2333,8 @@ function anchorTokens(before) {
    * 1 §4` classified NULL and fell to its file's vote — so writing the standard's own full name was the
    * spelling that lost the answer. The level was NOT the bound there and this is not the level fix below:
    * `CSS Nesting Module` is three words, inside the tail regex's reach, and still names nothing. */
-  const tail = trimmed.replace(/\s+(?:Level|level)\s+[0-9]+$/, "")
-    .replace(/\s+(?:Module|module|Standard|standard|spec|Spec)$/, "");
+  const tail = trimmed.replace(/\s+Level\s+[0-9]+$/i, "")
+    .replace(/\s+(?:Module|Standard|spec)$/i, "");
   /* AND IT IS REMOVED BEFORE THE JOIN RATHER THAN MADE OPTIONAL INSIDE IT, because the name group below is
    * GREEDY and reads up to three words: written as `(?:[ \t]+Module)?` it never backtracks, so `CSS Color
    * Module Level 4` takes `CSS Color Module` as the NAME, joins `css-color-module-4`, and the gate refuses a
@@ -2392,7 +2404,7 @@ function anchorTokens(before) {
    * base this file already decided is foreign — and the trimmed tail is still read after it, so a name whose
    * level joins to nothing (`high-resolution-time-3` is on no list) falls through to the answer it has today.
    * What changes is only that a levelled name a row DOES hold stops being decided by the unlevelled one. */
-  const spelled = /((?:[A-Za-z][A-Za-z0-9+-]*[ \t]+){0,2}[A-Za-z][A-Za-z0-9+-]*)[ \t]+(?:Level|level)[ \t]+([0-9]+(?:\.[0-9]+)*)$/
+  const spelled = /((?:[A-Za-z][A-Za-z0-9+-]*[ \t]+){0,2}[A-Za-z][A-Za-z0-9+-]*)[ \t]+Level[ \t]+([0-9]+(?:\.[0-9]+)*)$/i
     .exec(noModule);
   if (spelled) joinLevel(spelled[1], spelled[2]);
   const lv = /^(.*?)((?:[A-Za-z][A-Za-z0-9+-]*[ \t]+){0,2}[A-Za-z][A-Za-z0-9+-]*)[ \t]+([0-9]+(?:\.[0-9]+)*)$/
