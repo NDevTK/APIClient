@@ -2131,6 +2131,36 @@ typedef JSValue (*IdlGetter)(JSContext *ctx, JSValueConst this_val, int magic);
    a bare JS_SetPropertyStr is then visibly a site that did not ask. */
 #define IDL_INTERFACE_OBJECT_PROP_FLAGS  (JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE)
 
+/* THE INSTALL SITE, CAPTURED AT THE CALLER — the address every member-placing entry below carries, and the
+ * reason each of them is a MACRO over an `_at` function rather than a function.
+ *
+ * WHY IT EXISTS. Web IDL §3.7.6's and §3.7.7's continue-step is asked ONCE, inside idl_args.c, by every entry
+ * here; the DCHECK it now carries — a member being installed on the realm's global that no §3.3.8 [Global]
+ * interface declares — is therefore written at ONE line, and a DCHECK stamps the file and line it is WRITTEN
+ * at. With ~990 call sites reaching that one line, the crash named a remedy with no object: "route the
+ * install", with nowhere to route. CLAUDE.md's rule for exactly this shape is that the site TRAVELS WITH THE
+ * OPERATION, captured at the caller and threaded to the check.
+ *
+ * WHY A MACRO AND NOT A HELPER. A wrapper introduced to share the capture re-creates the defect it was
+ * reaching for: __FILE__ and __LINE__ inside a function are that FUNCTION's, so one more forwarding hop would
+ * name idl_args.c again for every caller. A function-like macro is expanded AT THE CALL, so the pair is the
+ * caller's by construction and no call site had to be edited to get it — the 988 existing calls are unchanged
+ * text and now carry their own address.
+ *
+ * WHY THE PAIR IS REQUIRED AND NOT DEFAULTED. Every `_at` entry takes both, so a caller that reaches one
+ * without a site DOES NOT COMPILE. A defaulted or optional site is what lets an unconverted caller masquerade
+ * as one with nothing to say, and the whole worth of this address is that it cannot be absent.
+ *
+ * A FORWARDER THAT CANNOT NAME ITS CALLER SAYS SO BY NAME. `IDL_SITE_INTERNAL` is what an idl_args.c-internal
+ * path types INSTEAD of IDL_SITE, and the difference is not cosmetic: IDL_SITE inside idl_args.c would stamp
+ * idl_args.c and read as an install site, which is a LIE in exactly the form this whole mechanism exists to
+ * remove. It has NO USER TODAY — every forwarder in the chain (the two [Exposed] gates here, the shared
+ * accessor definer, and core/events/event_target.h's handler installer) carries its own caller's pair — and
+ * it is declared anyway because the alternative a future forwarder reaches for is `IDL_SITE`, silently. NULL
+ * is not an option either way: the check DCHECKs the file pointer. */
+#define IDL_SITE           __FILE__, __LINE__
+#define IDL_SITE_INTERNAL  "core/idl_args.c (an internal path with no caller site to carry)", -1
+
 /* §3.7.6 computes ONE field from §3.4.10's [LegacyUnforgeable]: "Let configurable be false if attr is
    unforgeable and true otherwise". Nothing else about an attribute differs, so the extended attribute is this
    one argument rather than a second install function. */
@@ -2148,8 +2178,10 @@ typedef enum {
    forever) answers getOwnPropertyDescriptor wrongly and, from JS_SetPropertyStr, is WRITABLE, so a page can
    replace a member the spec does not let it touch. Not idl_install_replaceable_value: that installs §3.7.6's
    [Replaceable] setter and these members are readonly. Takes ownership of `value`. */
-void idl_install_value_attribute(JSContext *ctx, JSValueConst target, const char *name, JSValue value,
-                                 IdlAttrForge forge);
+void idl_install_value_attribute_at(JSContext *ctx, JSValueConst target, const char *name, JSValue value,
+                                    IdlAttrForge forge, const char *at_file, int at_line);
+#define idl_install_value_attribute(ctx, target, name, value, forge) \
+    idl_install_value_attribute_at((ctx), (target), (name), (value), (forge), IDL_SITE)
 
 JSValue idl_interface_object(JSContext *ctx, const char *name, JSValueConst proto);
 
@@ -2534,11 +2566,17 @@ const char *idl_accessor_name(char *buf, size_t cap, const char *id, IdlAccessor
 
 /* AN ATTRIBUTE THAT STATES ITS IDL'S EXPOSURE. This is the general form; the plain `idl_install_accessor`
    below is the same install for a member whose IDL carries no exposure condition, which is most of them. */
-void idl_install_accessor_exposed(JSContext *ctx, JSValueConst target, const char *name,
-                                  IdlGetter getter, int getter_magic, int setter_stepid, IdlExposure exposure);
+void idl_install_accessor_exposed_at(JSContext *ctx, JSValueConst target, const char *name,
+                                     IdlGetter getter, int getter_magic, int setter_stepid,
+                                     IdlExposure exposure, const char *at_file, int at_line);
+#define idl_install_accessor_exposed(ctx, target, name, getter, magic, setter, exposure) \
+    idl_install_accessor_exposed_at((ctx), (target), (name), (getter), (magic), (setter), (exposure), IDL_SITE)
 
-void idl_install_accessor(JSContext *ctx, JSValueConst target, const char *name,
-                          IdlGetter getter, int getter_magic, int setter_stepid);
+void idl_install_accessor_at(JSContext *ctx, JSValueConst target, const char *name,
+                             IdlGetter getter, int getter_magic, int setter_stepid,
+                             const char *at_file, int at_line);
+#define idl_install_accessor(ctx, target, name, getter, magic, setter) \
+    idl_install_accessor_at((ctx), (target), (name), (getter), (magic), (setter), IDL_SITE)
 
 /* AN INTERFACE OBJECT THAT STATES ITS IDL'S EXPOSURE — the same IdlExposure and the same one gate the two
  * member installers ask, applied to the OTHER half of what Web IDL §3.3.13 [SecureContext] removes.
@@ -2582,8 +2620,11 @@ void idl_install_interface_object_exposed(JSContext *ctx, JSValueConst target, c
  * does — a walk over every child of a large tree reaches no page code and still holds the scheduler for the
  * length of the walk, and the answer to that one is `idl_install_accessor_step` below, whose getter is a machine
  * that yields. The two are different questions and a member can need both answers at different times. */
-void idl_install_accessor_no_user_code(JSContext *ctx, JSValueConst target, const char *name,
-                                       IdlGetter getter, int getter_magic, int setter_stepid);
+void idl_install_accessor_no_user_code_at(JSContext *ctx, JSValueConst target, const char *name,
+                                          IdlGetter getter, int getter_magic, int setter_stepid,
+                                          const char *at_file, int at_line);
+#define idl_install_accessor_no_user_code(ctx, target, name, getter, magic, setter) \
+    idl_install_accessor_no_user_code_at((ctx), (target), (name), (getter), (magic), (setter), IDL_SITE)
 
 /* WEB IDL §3.4.10's [LegacyUnforgeable] ATTRIBUTE — the OTHER of the two places §3.7.6 puts an attribute, and
  * a different member of the platform rather than a different way of writing the same one.
@@ -2601,8 +2642,11 @@ void idl_install_accessor_no_user_code(JSContext *ctx, JSValueConst target, cons
  * member of Location unforgeable for that reason and says so — "required by legacy code that consulted the
  * Location interface, or stringified it, to determine the document URL, and then used it in a
  * security-sensitive way" — so `foo[location] = bar` and `location + ""` cannot be misdirected. */
-void idl_install_accessor_unforgeable(JSContext *ctx, JSValueConst target, const char *name,
-                                      IdlGetter getter, int getter_magic, int setter_stepid);
+void idl_install_accessor_unforgeable_at(JSContext *ctx, JSValueConst target, const char *name,
+                                         IdlGetter getter, int getter_magic, int setter_stepid,
+                                         const char *at_file, int at_line);
+#define idl_install_accessor_unforgeable(ctx, target, name, getter, magic, setter) \
+    idl_install_accessor_unforgeable_at((ctx), (target), (name), (getter), (magic), (setter), IDL_SITE)
 
 /* WEB IDL §3.7.6's [Replaceable] ATTRIBUTE. It is READONLY, and yet assigning to it works: the setter DEFINES
    an ordinary data property on the receiver, which replaces the accessor outright. So `window.length` is an
@@ -2624,14 +2668,19 @@ void idl_install_accessor_unforgeable(JSContext *ctx, JSValueConst target, const
    mint and a raw C getter cannot be wrapped without carrying a function pointer through the closure's data —
    which JSCFunctionType must never hold. Those getters answer per-realm and so answer correctly; what they do
    not do is THROW for a receiver that implements nothing. See the note on the resolution in idl_args.c. */
-void idl_install_replaceable(JSContext *ctx, JSValueConst target, const char *name,
-                             IdlGetter getter, int getter_magic);
+void idl_install_replaceable_at(JSContext *ctx, JSValueConst target, const char *name,
+                                IdlGetter getter, int getter_magic, const char *at_file, int at_line);
+#define idl_install_replaceable(ctx, target, name, getter, magic) \
+    idl_install_replaceable_at((ctx), (target), (name), (getter), (magic), IDL_SITE)
 /* The half of that setter a member with its OWN setter steps still needs: Web IDL's
    CreateDataPropertyOrThrow(receiver, name, V), which REPLACES the accessor on that object. HTML §7.2.5's
    `opener` setter ends in exactly this operation for a non-null value, so it is one implementation reached from
    two declarations rather than two that can drift. Returns <0 with an exception pending, like every define. */
 int  idl_replace_with_value(JSContext *ctx, JSValueConst obj, const char *name, JSValueConst v);
-void idl_install_replaceable_value(JSContext *ctx, JSValueConst target, const char *name, JSValue value);
+void idl_install_replaceable_value_at(JSContext *ctx, JSValueConst target, const char *name, JSValue value,
+                                      const char *at_file, int at_line);
+#define idl_install_replaceable_value(ctx, target, name, value) \
+    idl_install_replaceable_value_at((ctx), (target), (name), (value), IDL_SITE)
 
 /* AN ACCESSOR WHOSE GETTER IS A MACHINE. A getter takes no arguments, so it has nothing to CONVERT — and that
    is why it was a plain C function, which was the wrong conclusion: it may still have work of the PAGE'S size
@@ -2641,8 +2690,10 @@ void idl_install_replaceable_value(JSContext *ctx, JSValueConst target, const ch
    way by the property machinery, so it can yield at every step of its walk.
    The plain-C form above is what remains to be converted, not a second way of doing this. */
 int  idl_getter_id_step(JSContext *ctx, const IdlStepDecl *decl, int magic);
-void idl_install_accessor_step(JSContext *ctx, JSValueConst target, const char *name,
-                               int getter_stepid, int setter_stepid);
+void idl_install_accessor_step_at(JSContext *ctx, JSValueConst target, const char *name,
+                                  int getter_stepid, int setter_stepid, const char *at_file, int at_line);
+#define idl_install_accessor_step(ctx, target, name, getter_stepid, setter_stepid) \
+    idl_install_accessor_step_at((ctx), (target), (name), (getter_stepid), (setter_stepid), IDL_SITE)
 
 /* Install a declared member on `target`. The coercion is a request, so a page's `toString` — loop, await and
    all — suspends and resumes at the exact argument it was on.
@@ -2654,20 +2705,31 @@ void idl_install_accessor_step(JSContext *ctx, JSValueConst target, const char *
    about it: five said 1 and two said 0 for the identical arity, so `Element.prototype.append.length` was a
    number no reading of the IDL produces. `new Event()`'s interface object had the same defect one section over,
    carrying the declared arity 2 where §3.7.1 Interface object computes 1. See idl_member_length_of. */
-void idl_install_method(JSContext *ctx, JSValueConst target, const char *name, int stepid);
+void idl_install_method_at(JSContext *ctx, JSValueConst target, const char *name, int stepid,
+                           const char *at_file, int at_line);
+#define idl_install_method(ctx, target, name, stepid) \
+    idl_install_method_at((ctx), (target), (name), (stepid), IDL_SITE)
 /* §3.4.10's [LegacyUnforgeable] FOR AN OPERATION — the twin of idl_install_accessor_unforgeable, and it goes
    through §3.7.7's own descriptor: on the INSTANCE the caller passes rather than on a prototype, and
    {[[Writable]]: false, [[Enumerable]]: true, [[Configurable]]: false}. Two installers because §3.7.7 states
    two, not because a caller may pick. */
-void idl_install_method_unforgeable(JSContext *ctx, JSValueConst target, const char *name, int stepid);
+void idl_install_method_unforgeable_at(JSContext *ctx, JSValueConst target, const char *name, int stepid,
+                                       const char *at_file, int at_line);
+#define idl_install_method_unforgeable(ctx, target, name, stepid) \
+    idl_install_method_unforgeable_at((ctx), (target), (name), (stepid), IDL_SITE)
 /* THE SAME INSTALL FOR A METHOD THAT STATES ITS IDL'S EXPOSURE — §3.3.13's [SecureContext] REMOVES the member,
    for an operation exactly as for an attribute, and this is that one rule asked in the one place. */
-void idl_install_method_exposed(JSContext *ctx, JSValueConst target, const char *name, int stepid,
-                                IdlExposure exposure);
+void idl_install_method_exposed_at(JSContext *ctx, JSValueConst target, const char *name, int stepid,
+                                   IdlExposure exposure, const char *at_file, int at_line);
+#define idl_install_method_exposed(ctx, target, name, stepid, exposure) \
+    idl_install_method_exposed_at((ctx), (target), (name), (stepid), (exposure), IDL_SITE)
 /* The installer for a method whose algorithm is a step machine of its OWN (its own JSTrampStepDef) rather than
    a member of the args machine — `click` and `dispatchEvent` today. Separate from idl_install_method because
    they are separate things, and each asserts it was handed its own kind. */
-void idl_install_step_method(JSContext *ctx, JSValueConst target, const char *name, int length, int stepid);
+void idl_install_step_method_at(JSContext *ctx, JSValueConst target, const char *name, int length, int stepid,
+                                const char *at_file, int at_line);
+#define idl_install_step_method(ctx, target, name, length, stepid) \
+    idl_install_step_method_at((ctx), (target), (name), (length), (stepid), IDL_SITE)
 
 /* THE MEMBERS THIS USER AGENT MUST NOT HAVE — the other half of an install, and the one the IDL cannot state.
    A member whose existence the spec makes CONDITIONAL in prose (HTML §8.10.1.1's `taintEnabled()` and `oscpu`,

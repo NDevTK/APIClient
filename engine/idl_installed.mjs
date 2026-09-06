@@ -1546,6 +1546,49 @@ export function loadEnvironment(root) {
     fnsOf.set(path, fs);
     for (const f of fs) if (f.name && !byName.has(f.name)) byName.set(f.name, f.params);
   }
+  /* A CALL SITE MAY SPELL A MACRO, AND THE FUNCTION IT REACHES IS THE ONE THE MACRO NAMES. This reader keys
+     every edge it builds — the argument edge into a callee's parameter, the return edge out of it, the shared
+     installer's own form — by the identifier AT THE CALL. That is the same identifier the C compiler sees only
+     while no macro stands in front of the function, and core/idl_args.h now puts one in front of all twelve
+     member-placing entries (and core/events/event_target.h in front of its handler installer) so that each
+     call captures its own `__FILE__`/`__LINE__`: `idl_install_method(...)` expands to
+     `idl_install_method_at(..., __FILE__, __LINE__)`.
+     WITHOUT THIS THE READER LOSES THE FUNCTION ENTIRELY, and it loses it in the direction that reads as an
+     improvement. Measured on the diff that introduced the macros, before this resolver existed: ABSENT rose
+     455 → 629 and the BLIND SPOTS FELL 331 → 97, because a `byName` miss makes the argument edge vanish, the
+     shared installer's `target` parameter then reaches no interface tag, and every member it installs stops
+     being read at all — a member nobody reads is a member reported as a gap, and the blind-spot count falls
+     because there is nothing left to be undecided about. A falling blind-spot count beside a rising finding
+     count is this auditor going blind and never this auditor improving.
+     IT IS DERIVED FROM THE `#define` AND NOT FROM A SPELLING. A rule that stripped a trailing `_at` would be a
+     count of a spelling: this corpus already has ninety-odd functions whose names end that way — `list_remove_at`,
+     `node_insert_at`, `tr_char_at` — and not one of them is this convention. What is read instead is the macro
+     table this file already collects: a FUNCTION-LIKE macro whose whole replacement list is one call names the
+     function that call reaches, which is what the preprocessor does and is true of any such macro rather than
+     of these thirteen. Resolved to a fixed point, because a macro may name another. */
+  const MACRO_CALL_RE = /^([A-Za-z_]\w*)\s*\(/;
+  const callTarget = (n) => {
+    for (let i = 0; i < 8; i++) {
+      const d = macros.get(n);
+      if (!d || !d.params) return n;
+      const m = MACRO_CALL_RE.exec(d.body.trim());
+      if (!m || m[1] === n || !byName.has(m[1])) return n;
+      n = m[1];
+    }
+    return n;
+  };
+  /* THE SAME FACT READ BACKWARDS, computed once rather than by scanning the macro table per question: which
+     identifiers a call site may spell to reach one function. `callersOf` needs this direction — it is handed a
+     FUNCTION and must find every site that calls it — and a search for the function's own name alone finds
+     only the sites that bypass the macro, which for these entries is the shared installers and never the
+     components. */
+  const macroSpellings = new Map();
+  for (const [m, d] of macros) {
+    if (!d || !d.params) continue;
+    const t = callTarget(m);
+    if (t === m) continue;
+    macroSpellings.set(t, [...(macroSpellings.get(t) || []), m]);
+  }
   const tablesByFile = new Map(), headerTables = new Map();
   const constsByFile = new Map(), headerConsts = new Map();
   for (const [p, { masked }] of sources) {
@@ -1565,8 +1608,32 @@ export function loadEnvironment(root) {
      shapes are the same fact — the name comes from the caller — so both are derived here rather than listed,
      and a wrapper around a wrapper is reached by iterating to a fixed point. */
   const forms = new Map(CALL_FORMS);
+  /* AND THE FORM MAP IS KEYED BY WHAT A CALL SITE SPELLS, so it holds BOTH identifiers wherever a macro stands
+     in front of an install entry — see callTarget above. The two spellings are one form because the site pair
+     the macro appends is at the END of the argument list and every position read here (target, name, table,
+     field) is counted from the FRONT.
+     BOTH DIRECTIONS ARE NEEDED AND EACH ONE ALONE IS A REAL LOSS. A COMPONENT writes the macro, so the derived
+     wrappers must be findable under it; a SHARED INSTALLER that forwards its caller's pair writes the `_at`
+     function, because the macro would stamp the installer, so the fixed point must recognise that call as an
+     install too. Measured on the diff that introduced the macros, with the forms map left keyed on one
+     spelling: the `_exposed` and `no_user_code` wrappers stopped being derived at all and their members read
+     ABSENT — `length` on DOMTokenList and NamedNodeMap, `get` and `getAll` on CookieStore, `operator` and
+     `values` on the CSSMath interfaces — 48 members in total, reported as gaps in components that install
+     every one of them.
+     IT IS INSIDE THE FIXED POINT because a wrapper discovered on pass N is a form whose own two spellings pass
+     N+1 must know. */
+  const aliasSpellings = () => {
+    let made = false;
+    for (const [m] of macros) {
+      const t = callTarget(m);
+      if (t === m) continue;
+      if (forms.has(m) && !forms.has(t)) { forms.set(t, forms.get(m)); made = true; }
+      if (forms.has(t) && !forms.has(m)) { forms.set(m, forms.get(t)); made = true; }
+    }
+    return made;
+  };
   for (let pass = 0; pass < 4; pass++) {
-    let grew = false;
+    let grew = aliasSpellings();
     for (const { masked } of sources.values()) {
       for (const fn of functions(masked)) {
         if (!fn.name || forms.has(fn.name)) continue;
@@ -1936,7 +2003,7 @@ export function loadEnvironment(root) {
           if (inst && named(stripDup(inst[1])))
             tarrow(tagKey(path, f, stripDup(inst[1]), d.at - 1), at(lhs, d.at), null);
           const call = r.match(/^([A-Za-z_]\w*)\s*\(/);
-          if (call && byName.has(call[1])) {
+          if (call && byName.has(callTarget(call[1]))) {
             /* A CALL THAT NAMES AN INTERFACE GETS THAT INTERFACE'S OBJECT. `html_iface_proto(ctx,
                "HTMLInputElement")` hands back one of the sixty prototypes its table holds, and which one is
                the argument — so the literal picks it out of what the callee's return carries. Without this the
@@ -1947,7 +2014,7 @@ export function loadEnvironment(root) {
             const open = r.indexOf("("), end = matchAt(r, open);
             const lits = end < 0 ? [] : splitTop(r.slice(open + 1, end - 1))
               .map((a) => (a.trim().match(STRING_RE) || [])[1]).filter(Boolean);
-            tarrow(key("", call[1], "@return"), at(lhs, d.at), lits.length ? { only: lits } : null);
+            tarrow(key("", callTarget(call[1]), "@return"), at(lhs, d.at), lits.length ? { only: lits } : null);
           }
         }
       for (const m of f.body.matchAll(/\breturn\s+([^;]+);/g)) {
@@ -1964,7 +2031,8 @@ export function loadEnvironment(root) {
            it is those two — so hyperlink.c's twelve members reach HTMLAnchorElement and HTMLAreaElement and
            nothing else, which neither the old file-granular audit nor a plain "conditional, give up" could say. */
         const guard = guardAt(f.body, plainOf(f), site);
-        for (const callee of callees) {
+        for (const spelled of callees) {
+          const callee = callTarget(spelled);
           const params = byName.get(callee);
           if (!params) continue;
           args.forEach((a, k) => {
@@ -1978,7 +2046,7 @@ export function loadEnvironment(root) {
       let cm;
       while ((cm = CALL_RE.exec(f.body))) {
         const callee = cm[1];
-        if (!byName.has(callee) || forms.has(callee) || callee === f.name) continue;
+        if (!byName.has(callTarget(callee)) || forms.has(callee) || callTarget(callee) === f.name) continue;
         if (IFACE_SEEDS.some((s) => s.fn === callee) || callee === IFACE_OBJECT.fn) continue;
         argEdges([callee], f.body.indexOf("(", cm.index), cm.index);
       }
@@ -2001,7 +2069,7 @@ export function loadEnvironment(root) {
         const cells = R.column(im[1], im[2]);
         if (!cells) continue;
         const names = [...new Set(cells.map((c) => stripCast(c).trim())
-          .filter((c) => /^[A-Za-z_]\w*$/.test(c) && byName.has(c) && c !== f.name))];
+          .filter((c) => /^[A-Za-z_]\w*$/.test(c) && byName.has(callTarget(c)) && callTarget(c) !== f.name))];
         if (names.length) argEdges(names, im.index + im[0].length - 1, im.index);
       }
     }
@@ -2118,7 +2186,7 @@ export function loadEnvironment(root) {
       tagChecks.push({ kind: "contradicted", ifaces: o.ifaces, have, file: o.file, line: o.line });
   }
 
-  return { macros, typedefs, sources, resolver, forms, fnsOf,
+  return { macros, typedefs, sources, resolver, forms, fnsOf, callTarget, macroSpellings,
            tags, tagKey: (path, f, v, at) => tagKey(path, f, v, at), tagIssues, tagChecks, interfaceTables,
            joinedColumns, nonIfaceNodes,
            recordContradictions, declaresIface, ints, refusals, refuseUnread };
@@ -2227,11 +2295,16 @@ export function installedMembers(paths, env) {
      installer's subset is resolved against. */
   const callersOf = (name) => {
     const out = [];
+    /* EVERY IDENTIFIER THAT REACHES THIS FUNCTION, not only its own name — see loadEnvironment's callTarget
+       for why a call site may spell a macro instead. The self-exclusion stays keyed on the FUNCTION's own name,
+       because what it excludes is a body finding itself and a macro name is never a body's name. */
+    const spellings = [name, ...(env.macroSpellings.get(name) || [])];
     for (const p of paths) {
       if (!env.sources.get(p)) continue;
       for (const cf of env.fnsOf.get(p) || []) {
         if (cf.name === name) continue;
-        for (const site of callSites(cf.body, name)) out.push({ path: p, fn: cf, site });
+        for (const spelled of spellings)
+          for (const site of callSites(cf.body, spelled)) out.push({ path: p, fn: cf, site });
       }
     }
     return out;

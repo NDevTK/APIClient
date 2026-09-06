@@ -2987,7 +2987,8 @@ static void eh_assert_mask_named(int mask)
 #define EH_ASSERT_MASK_NAMED(m) ((void)0)
 #endif
 
-void event_target_install_handlers(JSContext *ctx, JSValueConst target, int mask)
+void event_target_install_handlers_at(JSContext *ctx, JSValueConst target, int mask,
+                                      const char *at_file, int at_line)
 {
     int i;
 
@@ -3008,7 +3009,11 @@ void event_target_install_handlers(JSContext *ctx, JSValueConst target, int mask
            the global with no such statement, so a cross-origin read of one answered out of the reading realm
            where a browser throws SecurityError. The consumer is idl_implementation_check, which calls
            window_proxy_security_check for every member whose mint stated a kind and for no other. */
-        idl_install_accessor_step(ctx, target, EH_NAME[i], g_handler_get_id[i], g_handler_set_id[i]);
+        /* THE CALLER'S PAIR AND NOT THIS LINE'S — the macro would expand IDL_SITE here and give all 120
+           handler members this loop's address, which is precisely the shared-helper stamp the pair exists to
+           replace. */
+        idl_install_accessor_step_at(ctx, target, EH_NAME[i], g_handler_get_id[i], g_handler_set_id[i],
+                                     at_file, at_line);
     }
 }
 

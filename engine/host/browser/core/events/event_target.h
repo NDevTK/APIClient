@@ -5,6 +5,11 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "quickjs.h"
+/* FOR `IDL_SITE`, WHICH THE INSTALL-SITE MACRO BELOW EXPANDS AT ITS CALLER. A macro body is expanded where it
+   is USED, so the convention has to be visible to every caller of this header rather than only to this file —
+   and spelling `__FILE__, __LINE__` here instead would be a second copy of a convention core/idl_args.h owns.
+   No cycle: idl_args.h names this header only in prose. */
+#include "core/idl_args.h"
 
 void event_target_init(JSContext *ctx);                          /* the private listener key (agent init) */
 /* §2.7's PROTOTYPE FOR ONE REALM. Run it where a realm's other intrinsics are added — at the realm's creation,
@@ -286,7 +291,16 @@ void event_target_install_click(JSContext *ctx, JSValueConst target);
    claimant at a time; the answer is a fact about the element's markup, so it runs none of the page's code and
    forks nothing. */
 void event_target_set_click_terms(bool (*is_disabled_form_control)(JSContext *ctx, JSValueConst el));
-void event_target_install_handlers(JSContext *ctx, JSValueConst target, int mask);
+/* THE INSTALL SITE TRAVELS THROUGH THIS HELPER, which is why it is a macro over an `_at` function exactly as
+   core/idl_args.h's twelve entries are. It is the SHARED INSTALLER for HTML §8.1.8.2's handler attributes —
+   one line of C installs up to a hundred and twenty members — so without the pair every one of them reports
+   its address as this file's own install loop, which is the shared-helper address idl_args.h's IDL_SITE block
+   exists to remove. On the realm's GLOBAL that is not a detail: core/frame/window.c's one call places 116 of
+   the members §3.7.6's [Global] arm puts there, and it is the caller that a reader needs named. */
+void event_target_install_handlers_at(JSContext *ctx, JSValueConst target, int mask,
+                                      const char *at_file, int at_line);
+#define event_target_install_handlers(ctx, target, mask) \
+    event_target_install_handlers_at((ctx), (target), (mask), IDL_SITE)
 /* IS THIS THE NAME OF AN EVENT HANDLER CONTENT ATTRIBUTE? Trusted Types §3.8 Get Trusted Type data for
    attribute step 2 is the caller: a name in this set maps to TrustedScript whatever the element is.
    IT IS NOT "IS THIS ONE OF THE HANDLER LIST'S NAMES", AND THE TWO ARE NOT THE SAME QUESTION — this used to
