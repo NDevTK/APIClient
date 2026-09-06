@@ -689,15 +689,23 @@ const SPECS = [
     base: "https://drafts.csswg.org/css-flexbox-1/", edition: "maintained", anchors: ["css-flexbox-1"] },
   { key: "cssgrid2", label: "CSS Grid Layout Module Level 2", kind: "bikeshed",
     base: "https://drafts.csswg.org/css-grid-2/", edition: "maintained", anchors: ["css-grid-2"] },
+  /* AND THE LEVELLED LONG NAME IS AN ANCHOR TOO, BECAUSE IT IS THE SPELLING THIS TREE ACTUALLY WRITES AND IT
+     NAMES A DOCUMENT. The row above says an unlevelled `CSS Positioned Layout §3` names neither level and is
+     normalized at the citation, and that stands. `CSS Positioned Layout Level 4 §3 "Top Layer"` is not that
+     citation: it says which document, in words, and anchorTokens now joins the level onto the name instead of
+     trimming it, so the joined form is what has to be here for the answer to be this table's rather than a
+     file vote's. Both spellings are listed because the tree writes both, with and without the leading `CSS`. */
   { key: "cssposition3", label: "CSS Positioned Layout Module Level 3", kind: "bikeshed",
-    base: "https://drafts.csswg.org/css-position-3/", edition: "maintained", anchors: ["css-position-3"] },
+    base: "https://drafts.csswg.org/css-position-3/", edition: "maintained",
+    anchors: ["css-position-3", "css-positioned-layout-3", "positioned-layout-3"] },
   /* LEVEL 4 IS A SEPARATE ROW FOR THE REASON THE css-images-3 ROW STATES: two levels of one module are two
      documents with two numberings, and the TOP LAYER is Level 4's — §3 "Top Layer" and §3.3 "Top Layer
      Manipulation" exist in css-position-4 and nowhere in css-position-3, whose §3 is a different heading
      entirely. Anchored only by the hyphenated levelled shortname, which is the one spelling that names a
      document; `CSS Positioned Layout §3` names neither and is normalized at the citation. */
   { key: "cssposition4", label: "CSS Positioned Layout Module Level 4", kind: "bikeshed",
-    base: "https://drafts.csswg.org/css-position-4/", edition: "maintained", anchors: ["css-position-4"] },
+    base: "https://drafts.csswg.org/css-position-4/", edition: "maintained",
+    anchors: ["css-position-4", "css-positioned-layout-4", "positioned-layout-4"] },
   { key: "cssbackgrounds3", label: "CSS Backgrounds and Borders Module Level 3", kind: "bikeshed",
     base: "https://drafts.csswg.org/css-backgrounds-3/", edition: "maintained", anchors: ["css-backgrounds-3"] },
   { key: "csstransforms1", label: "CSS Transforms Module Level 1", kind: "bikeshed",
@@ -2017,7 +2025,8 @@ function anchorTokens(before) {
    * needs an anchor — whether the standard HAS the number. A spelled-out level is the same fact as the
    * levelled shortname LEVELLED already reads out of `css-syntax-3`, so it is trimmed for the same reason
    * `Standard` is: the words after the name say which document, and the name is what decides which index. */
-  const tail = flat.replace(/[\s'"’(\[]+$/, "").replace(/\s+(?:Level|level)\s+[0-9]+$/, "")
+  const trimmed = flat.replace(/[\s'"’(\[]+$/, "");
+  const tail = trimmed.replace(/\s+(?:Level|level)\s+[0-9]+$/, "")
     .replace(/\s+(?:Standard|standard|spec|Spec)$/, "");
   /* AND A LEVEL WRITTEN WITHOUT THE WORD "Level" IS THE SAME FACT AGAIN, IN THE SPELLING THIS TREE ACTUALLY
    * USES — but it is JOINED to the name rather than trimmed off it, and that difference is the whole of why
@@ -2051,18 +2060,35 @@ function anchorTokens(before) {
    * and `css-2-2` is that shortname for a document whose own name is written with a dot. The join stays gated
    * on a name this file already knows, so widening the version cannot invent a standard — `at 8.4 §9.2` still
    * produces nothing, because `at` is on no list. */
-  const lv = /^(.*?)((?:[A-Za-z][A-Za-z0-9+-]*[ \t]+){0,2}[A-Za-z][A-Za-z0-9+-]*)[ \t]+([0-9]+(?:\.[0-9]+)*)$/.exec(tail);
   const joined = [];
-  if (lv) {
-    const w2 = lv[2].split(/[ \t]+/);
+  const joinLevel = (name, ver) => {
+    const w2 = name.split(/[ \t]+/);
     for (let n = w2.length; n >= 1; n--) {
       const bw = w2.slice(w2.length - n).map((x) => x.toLowerCase());
       const base = bw.join(" ");
-      const j = base.replace(/\s+/g, "-") + "-" + lv[3].replace(/\./g, "-");
+      const j = base.replace(/\s+/g, "-") + "-" + ver.replace(/\./g, "-");
       if (ANCHOR_TO_KEY.has(j) || OTHER_SPECS.includes(base) ||
           (OTHER_SPECS.includes(bw[n - 1]) && nameStart(bw[0]))) joined.push(j);
     }
-  }
+  };
+  /* AND THE SPELLED-OUT LEVEL IS THE SAME FACT A THIRD TIME, SO IT IS JOINED BEFORE IT IS TRIMMED. The trim
+   * above is what makes `HIGH RESOLUTION TIME Level 3 §4` resolve at all, and it is kept for exactly that
+   * population — a name whose ANCHOR is unlevelled. It is the wrong answer for a module this table indexes
+   * PER LEVEL: `CSS Positioned Layout Level 4 §3 "Top Layer"` and `CSS Positioned Layout Level 3 §1` trim to
+   * ONE name, which is the css-images hazard the SPECS table refuses by name — one anchor answering two
+   * documents with two numberings — so the tail was refused as `other:positioned layout` and fifteen sites of
+   * an INDEXED standard went unjudged. The level is not noise on the name; where the joined form is a name
+   * this table already holds, it is the only token that says WHICH document.
+   * IT IS ADDITIVE AND IT CANNOT TAKE A RESOLUTION AWAY, which is the whole reason both spellings run rather
+   * than one replacing the other: the join is emitted only through the gate above — an indexed anchor, or a
+   * base this file already decided is foreign — and the trimmed tail is still read after it, so a name whose
+   * level joins to nothing (`high-resolution-time-3` is on no list) falls through to the answer it has today.
+   * What changes is only that a levelled name a row DOES hold stops being decided by the unlevelled one. */
+  const spelled = /((?:[A-Za-z][A-Za-z0-9+-]*[ \t]+){0,2}[A-Za-z][A-Za-z0-9+-]*)[ \t]+(?:Level|level)[ \t]+([0-9]+(?:\.[0-9]+)*)$/
+    .exec(trimmed);
+  if (spelled) joinLevel(spelled[1], spelled[2]);
+  const lv = /^(.*?)((?:[A-Za-z][A-Za-z0-9+-]*[ \t]+){0,2}[A-Za-z][A-Za-z0-9+-]*)[ \t]+([0-9]+(?:\.[0-9]+)*)$/.exec(tail);
+  if (lv) joinLevel(lv[2], lv[3]);
   const m = /((?:[A-Za-z][A-Za-z0-9+-]*[ \t]+){0,2}[A-Za-z][A-Za-z0-9+-]*)$/.exec(tail);
   if (!m) return joined;
   const w = m[1].split(/[ \t]+/);
