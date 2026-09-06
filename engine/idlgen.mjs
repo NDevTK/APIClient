@@ -1593,9 +1593,18 @@ if (nonIface.length)
               `${[...new Set(nonIface.map((r) => `${r.name} (${r.nonInterface.kind})`))].join(", ")}`);
 /* THE TARGET THIS COULD NOT DECIDE, SPLIT BY WHY — because one number was answering two questions that take
    opposite work, and the larger of them is not a question about this reader at all.
-   §3.7.3 [Global] puts a [Global] interface's members ON THE GLOBAL OBJECT rather than on its interface
-   prototype object, so an install whose target is the realm's global is a MEMBER INSTALL whose interface is
-   whichever [Global] interface that realm's global implements. This engine mints two, and the C states which
+   §3.7.6 Attributes and §3.7.7 Operations put a [Global] interface's members ON THE GLOBAL OBJECT rather than
+   on its interface prototype object — each in the same words, "Regular attributes/operations are exposed on
+   the interface prototype object, unless the attribute is unforgeable or if the interface was declared with
+   the [Global] extended attribute, in which case they are exposed on every object that implements the
+   interface" — so an install whose target is the realm's global is a MEMBER INSTALL whose interface is
+   whichever [Global] interface that realm's global implements. (§3.7.3 Interface prototype object is the
+   NEGATIVE half of that split and not this citation: its arm reads "If interface is not declared with the
+   [Global] extended attribute, then: Define the regular attributes of interface on interfaceProtoObj", which
+   keeps them OFF the prototype and says nothing about where they go. This paragraph cited §3.7.3 for the
+   positive half in its first landed form, which is the mis-aimed citation this project rates as the harder
+   half of a fabrication — the section is real, the split is real, and the sentence the code rests on is one
+   subsection over.) This engine mints two, and the C states which
    one a realm is — core/realm.h's `realm_install_intrinsics(ctx, url, global_interface, secure)` takes the
    identifier as an argument, which is the fact §3.3.7 step 1 is asked with. What it does NOT state anywhere a
    source reader can follow is which of those realms a given install RUNS IN: every component reaches the
@@ -1609,7 +1618,7 @@ if (nonIface.length)
    so the shape that closes this category is the same one, one axis over: a per-realm record of the member
    names installed ON THE GLOBAL, asserted at the install (where the target object is in hand) and read back
    against the realm's own stated [Global] identifier. That is an assertion about a value this engine computed,
-   and it is what §3.7.3's split deserves; nothing a reader of the C can derive will do it.
+   and it is what §3.7.6/§3.7.7's [Global] arm deserves; nothing a reader of the C can derive will do it.
    The OTHER half stays as it was, and its zero is the armed state: a target this reader could not follow for
    any other reason is a construct to teach it. */
 {
@@ -1631,7 +1640,8 @@ if (nonIface.length)
     return byFile.size;
   };
   blind("members installed on the realm's global object, whose [Global] interface a source reader cannot " +
-        "decide — §3.7.3 puts them there and only the running realm says which global it is", onGlobal.length);
+        "decide — §3.7.6/§3.7.7's [Global] arm puts them there and only the running realm says which " +
+        "global it is", onGlobal.length);
   if (onGlobal.length) {
     const cands = [...new Set(onGlobal.flatMap((r) => r.candidates))].sort();
     console.log(`[idl-audit] ${onGlobal.length} member(s) installed on the realm's global object, which is ` +
