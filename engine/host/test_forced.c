@@ -13258,6 +13258,7 @@ static int probes_report(const char *js, bool final, char *unanswered, size_t ca
     {
         static long last_work = -1;
         long work = engine_work_done();
+        WfqCensus hw;
 
         DCHECK(work >= last_work,
                "the run's own progress clock went BACKWARD between two @H tables — `engine_work_done` is the "
@@ -13266,8 +13267,37 @@ static int probes_report(const char *js, bool final, char *unanswered, size_t ca
                "than one session in a process, or this line is reading a gauge; both make every difference "
                "taken across two samples of this stream arithmetic about nothing");
         last_work = work;
-        printf("@HWORK {\"workDone\":%ld,\"_switches\":%d,\"_flows\":%ld,\"_jobsRun\":%ld}\n",
-               work, engine_switch_count(), flow_created_count(), engine_jobs_run());
+        /* AND `_jobsReady` BESIDE THE JOB COUNT, BECAUSE A ZERO JOB COUNT ON THIS LINE HAS ALREADY BEEN
+           CHARGED TO THE WRONG COMPONENT. `_jobsRun` is a total, and solver/flow.h splits the backlog by
+           WHAT EACH JOB WAITS ON — the host (`jobs_owed`), the member finishing its own program
+           (`jobs_framed`, HTML §8.1.4.4 "Calling scripts" clean-up step 3's microtask checkpoint), or RANK
+           (`jobs_ready`) — of which only the last is the ordering's to move. A reader meeting `_jobsRun: 0`
+           in a log reaches for the scheduler, and the split says whether the scheduler was ever asked.
+           MEASURED, AND THE SEPARATION IS TOTAL: over 46 archived runs, every run reporting `_jobsRun: 0`
+           had `jobs_ready` at zero throughout and every run that ran jobs had it above zero, with
+           `jobs_owed` zero in both populations — and the zero-job runs are not small ones, reaching
+           hundreds of members over hundreds of switches with thousands of jobs FRAMED. So the zero is a
+           statement about members not finishing their own programs, one component away from the row it
+           invites blaming.
+           ONE OF THE THREE AND NOT ALL THREE: `jobs_ready` is the only one that decides which component a
+           zero belongs to, and this line is a work stream rather than a census — the other two are already
+           on the frontier census for a reader who needs the whole split. Its absence showed as a zero read
+           as a starved queue for a run in which nothing was ever rank-eligible.
+           A GAUGE BESIDE LIFETIME COUNTERS, AND THE DCHECK ABOVE IS ABOUT THE OTHERS: `workDone` cannot
+           decrease and is asserted so; `jobs_ready` is a reading of the backlog at this instant and MAY
+           fall, so it is never differenced across two samples of this stream. */
+        flow_wfq_census(&hw);
+        /* ONE STRING LITERAL, NOT TWO, AND THIS COMMENT MAY NOT QUOTE EITHER DELIMITER. build.mjs derives
+           this line's required field set by scanning THIS FILE from the opening of the composer below to the
+           end of its format string, so two things follow and the second cost a debugging round. A composer
+           split across adjacent literals puts a quote pair inside the span its reader parses. And PROSE
+           NAMING THOSE DELIMITERS BECOMES ONE: the scan takes the FIRST occurrence, and its strip-comments
+           step runs on the span AFTER the span has been chosen, so a comment quoting them cannot be saved by
+           it — the first draft of this paragraph quoted both and collapsed the derived span from 81
+           characters to 22, silently emptying another component's field contract. Describe them; do not
+           write them. */
+        printf("@HWORK {\"workDone\":%ld,\"_switches\":%d,\"_flows\":%ld,\"_jobsRun\":%ld,\"_jobsReady\":%ld}\n",
+               work, engine_switch_count(), flow_created_count(), engine_jobs_run(), hw.jobs_ready);
     }
     printf("@H ");
     for (i = 0; i < n; i++) {
