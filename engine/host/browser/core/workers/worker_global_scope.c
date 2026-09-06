@@ -48,13 +48,35 @@
  * all three objects — so a build that installs them is stricter than Chrome and correct, and a page's
  * `"ononline" in self` reads `false` there and will read `true` here. The spec is what this engine follows.
  *
- * A WORKER IS A DIFFERENT AGENT, AND NOTHING HERE CROSSES AN INSTANCE BOUNDARY. CLAUDE.md's
- * §AN-INSTANCE-IS-AN-ORIGIN-KEYED-AGENT-CLUSTER makes a worker global a separate instance from the Window that
- * owns it, and the closed set that may cross one is serialized TEXT carrying its TYPE. This file builds
+ * A WORKER IS A DIFFERENT AGENT, AND THE BOUNDARY IT WOULD CROSS IS AN AGENT'S AND NOT AN INSTANCE'S — THE
+ * SENTENCE THAT STOOD HERE SAID OTHERWISE AND WAS SPEC-WRONG. It read CLAUDE.md's
+ * §AN-INSTANCE-IS-AN-ORIGIN-KEYED-AGENT-CLUSTER as making a worker global a separate INSTANCE from the Window
+ * that owns it, and that inference does not follow from the standard. HTML §8.1.2.2 "Integration with the
+ * JavaScript agent cluster formalism" owns the allocation: "To obtain a dedicated/shared worker agent, given
+ * an environment settings object outside settings and a boolean isShared, return the result of obtaining a
+ * worker/worklet agent given outside settings, isShared, and true", so the isTopLevel argument IS isShared —
+ * false for a DEDICATED worker — and that arm reads "Set agentCluster to the agent cluster which contains
+ * ownerAgent". The section says it in its own note: "However, dedicated worker and worklet agents might be in
+ * the same cluster." SECURITY.md keys one WASM instance on the agent CLUSTER — `(browsing-context group,
+ * origin)` — so a dedicated worker of a same-origin script is a SECOND AGENT INSIDE THE OWNER'S INSTANCE, and
+ * the peer that §10.2.4's step 4 obtains is in this process and this instance.
+ * ONE ORIGIN GENUINELY CROSSES, AND IT IS NAMED RATHER THAN GENERALISED AWAY: §10.2.6.2 "Script settings for
+ * workers" makes the worker environment's origin "a unique opaque origin if worker global scope's url's
+ * scheme is" the string data, and the OWNER's origin otherwise — so a `data:` worker is a second ORIGIN,
+ * therefore a second cluster key, therefore a second instance. Every other dedicated worker is not. (The
+ * quotation stops one word short of the spec's own quoted literal on purpose: a nested quotation mark ends
+ * the run engine/citegen.mjs compares, and the half after it would then reach the corpus as a fragment with
+ * no opening mark.)
+ * THE CONCLUSION SURVIVES THE PREMISE, WHICH IS WHY THIS IS A CORRECTION AND NOT A REVERSAL. What may cross is
+ * still serialized TEXT carrying its TYPE and never a live JSValue — because an AGENT is a JSRuntime in this
+ * engine, and a JSValue crosses a runtime no better than it crosses an instance. What changes is WHO
+ * PROVISIONS THE PEER, and the old premise would have sent the next diff to build a cross-instance transport
+ * (a mojom hop, offscreen routing, a second WASM instance) for a peer that never leaves this one.
+ * NOTHING HERE CROSSES ANYTHING TODAY. This file builds
  * objects INSIDE one realm and sends nothing anywhere: the two interface objects, the two prototypes and the
  * members installed below are all reachable only from the realm they were minted in. §10.2.1.2's `postMessage` is the
  * member that would cross, and it is a named residual at the bottom of this file for exactly that reason —
- * there is no peer instance to post to, and this diff provisions none.
+ * there is no peer AGENT to post to, and this diff provisions none.
  *
  * WHICH REALM IT BUILDS INTO IS §3.3.7 [Exposed] STEP 1's OWN QUESTION, ASKED OF THE CORPUS. core/realm.h runs
  * every declared intrinsic for EVERY realm, Window realms included, and §3.8's define the global property
@@ -235,13 +257,20 @@ static void wgs_assert_placed(JSContext *ctx, const char *member, WgsPlacement w
  * seventh row given the bit is audited the day it lands rather than the day somebody remembers to add a line
  * here for it.
  *
- * HOW MANY MEMBERS THAT BIT NAMES IS NOT ASKED HERE, and the reason is that this function does not run. The
- * exposure gate at the top of the install returns first in a Window realm, so everything below it — this
- * audit included — waits on a realm whose global names contain `DedicatedWorkerGlobalScope`, which HTML
- * §10.2.4 Processing model's run a worker will build and nothing in this build does. A count kept here would
- * therefore be a check that has never executed. It lives in core/events/event_target.c's row validation
- * instead, beside the two §8.1.8.2 table counts it is the same kind of claim as, where it runs at every
- * agent's init today; what is left here is the PLACEMENT question, which needs the three objects this
+ * HOW MANY MEMBERS THAT BIT NAMES IS NOT ASKED HERE, and the REASON THAT STOOD HERE WAS FALSE WHEN IT WAS
+ * WRITTEN — the third site of one wrong claim, and the two that were repaired did not reach it. It said this
+ * function does not run, on the ground that the exposure gate at the top of the install returns first in a
+ * Window realm and that no realm in this build has `DedicatedWorkerGlobalScope` among its global names.
+ * test_forced.c's exposure_selftest builds two such realms through realm_install_intrinsics, so the gate does
+ * not return and this audit has run on every build since; and it did so AT THE COMMIT THAT WROTE THE SENTENCE,
+ * which is the part that makes this a method failure rather than drift. The check is one command and it
+ * answers at the writing revision as well as at today's: `git show <that-commit>:engine/host/test_forced.c |
+ * grep realm_install_intrinsics`.
+ * THE CONCLUSION IS KEPT AND IS NOW STOOD ON THE REASON THAT IS TRUE. The count lives in
+ * core/events/event_target.c's row validation, beside the two §8.1.8.2 table counts it is the same kind of
+ * claim as, because a count beside THIS install is silent in every agent that never builds a worker realm —
+ * it would answer for the fixture's two and for no production agent at all, which is the opposite of what a
+ * row-table invariant is for. What is left here is the PLACEMENT question, which needs the three objects this
  * function is holding and can be asked nowhere else. */
 static void wgs_assert_handlers_placed(JSContext *ctx, JSValueConst g, JSValueConst dwgs_p, JSValueConst wgs_p)
 {
@@ -522,27 +551,60 @@ void worker_global_scope_free(JSRuntime *rt)
  *     descriptor read can decide one. test_forced.c's exposure_selftest now runs a program in that realm as
  *     a flow, under two schedules, and asserts all seven.
  *     THE ORDERED REMAINDER IS HTML §10.2.4 Processing model's run a worker, IN THAT SECTION'S OWN ORDER, and
- *     it is FIVE subproblems rather than one — the sentence above called it ONE and that is the other half of
- *     what it got wrong:
- *       (i)   THE AGENT. "Run the rest of these steps in that agent". A dedicated worker is a DIFFERENT AGENT
- *             from its owner, so it is a separate instance and the closed set that may cross the boundary is
- *             serialized TEXT carrying its type — never a live JSValue. Nothing here provisions a peer, and a
- *             cross-instance design nothing provisions has never run.
- *       (ii)  THE SCRIPT FETCH. §10.2.4's obtain-script step, whose classic arm fetches a classic worker
- *             script — one load through the one chokepoint, stating its destination and its credentials mode,
- *             with no second transport and no carve-out.
- *       (iii) RUNNING IT. "If script is a classic script, then run the classic script script" — a preemptible
- *             frame on the one frontier, which is the shape test_forced.c now drives, with the source coming
- *             from (ii) instead of from a fixture.
- *       (iv)  THE PORT PAIR. §10.2.4's inside-port steps, which entangle a MessagePort in the worker's realm
- *             with the outside one. HTML §9.2 exists in this build; what does not is an entanglement whose
- *             two ends are in two instances.
- *       (v)   HTML §10.2.6.3 Dedicated workers and the Worker interface's `Worker`, LAST — "Returns a new
+ *     it is SIX subproblems rather than one — the sentence above called it ONE, and a later reading of this
+ *     list called it FIVE by folding §10.2.4's step 7 into nothing. Both are corrected here.
+ *     THE NUMBERING CONVENTION IS STATED ONCE BECAUSE STEP 12 HOLDS THREE LISTS AND A BARE SUB-NUMBER UNDER
+ *     IT NAMES NOTHING. Counted with list depth tracked, run a worker is TWELVE top-level steps — step 10,
+ *     "If is shared is true:", is ONE step holding five — and step 12 carries a switch on the options type,
+ *     then a performFetch list, then an onComplete list of eighteen. Every sub-number below therefore names
+ *     its list in the spec's own words.
+ *       (i)   THE AGENT — step 4, "Let agent be the result of obtaining a dedicated/shared worker agent given
+ *             outside settings and is shared", whose own second sentence is "Run the rest of these steps in
+ *             that agent". IT IS A SECOND AGENT INSIDE THIS INSTANCE and not a peer instance — see the banner
+ *             at the top of this file for §8.1.2.2's arm that decides it, and for the one origin (`data:`)
+ *             that does cross. What crosses is still serialized TEXT carrying its type and never a live
+ *             JSValue, because an agent is a JSRuntime here.
+ *             THE HOPS, NAMED RATHER THAN GUESSED, because a scope list is a claim about a call path: an
+ *             agent is per JSRuntime (core/platform.h states the split — platform_agent_init once per
+ *             JSRuntime, platform_document_install once per JSContext — and core/platform.c's own note says a
+ *             WorkerGlobalScope agent is a second entry beside that one, with its own install column); the
+ *             HOST creates the runtime, and `git grep JS_NewRuntime engine/host` answers three, one per host,
+ *             so no host in this tree has ever held two at once; solver/flow.c's flow_registry_init takes a
+ *             document name and no runtime, so a second agent of ONE instance shares the frontier that call
+ *             created and must not re-run it — which is the state test_forced.c's own main describes when it
+ *             refuses to root two INSTANCES in one process, and reading that refusal as forbidding a second
+ *             AGENT would forbid §10.2.4 step 4 itself; core/realm.c needs nothing new, since its worker arm
+ *             already takes NULL for the top-level creation URL; and core/agent_state.h's pre-init discipline
+ *             is the mechanism written FOR a second agent that no second agent has ever exercised.
+ *             THIS COMPONENT IS NOT ON THAT LIST, which is why (i) cannot land from this directory.
+ *       (ii)  THE ENVIRONMENT SETTINGS OBJECT — step 7, "Set up a worker environment settings object with
+ *             realm execution context, outside settings, and unsafeWorkerCreationTime, and let inside
+ *             settings be the result", which is §10.2.6.2 "Script settings for workers". TWO OF ITS FIELDS
+ *             EXIST: core/realm.c writes the null top-level creation URL and the owner's secure-context
+ *             answer, both asserted at the one call every realm goes through. The rest do not, and most of
+ *             them read the WorkerGlobalScope's own `url`, which (iii) is what sets — so §10.2.6.2's
+ *             accessor fields (the API base URL, the origin, the policy container) are legitimately defined
+ *             before that url exists, while its ONE COPY is not: it sets creation URL to the url at step 7
+ *             and §10.2.4's response step sets inside settings's creation URL again from the response's url,
+ *             so an implementation that treats creation URL as an accessor answers the second write early.
+ *       (iii) THE SCRIPT FETCH — step 12's classic arm, "Fetch a classic worker script given url, outside
+ *             settings, destination, inside settings, and with onComplete and performFetch as defined below"
+ *             — one load through the one chokepoint, stating its destination and its credentials mode, with
+ *             no second transport and no carve-out. Its response step is what unblocks residual (1): "set
+ *             worker global scope's url to response's url".
+ *       (iv)  RUNNING IT — step 12's onComplete list, "If script is a classic script, then run the classic
+ *             script script" — a preemptible frame on the one frontier, which is the shape test_forced.c now
+ *             drives, with the source coming from (iii) instead of from a fixture.
+ *       (v)   THE PORT PAIR — step 12's onComplete list again, "Let inside port be a new MessagePort object
+ *             in inside settings's realm" and "Entangle outside port and inside port". HTML §9.2 exists in
+ *             this build; what does not is an entanglement whose two ends are in two AGENTS — which, by (i),
+ *             is two JSRuntimes of ONE instance rather than two instances.
+ *       (vi)  HTML §10.2.6.3 Dedicated workers and the Worker interface's `Worker`, LAST — "Returns a new
  *             Worker object. scriptURL will be fetched and executed in the background, creating a new global
  *             environment for which worker represents the communication channel". It is last because
- *             installing the interface object before (i)-(iv) exist flips a bundle's `if (window.Worker)`
+ *             installing the interface object before (i)-(v) exist flips a bundle's `if (window.Worker)`
  *             guard TRUE and abandons the fallback branch that was working, which is worse than the absence in
- *             both arms — so the first four are not a decomposition OF (v), they are its precondition.
+ *             both arms — so the first five are not a decomposition OF (vi), they are its precondition.
  *     HOW ITS ABSENCE SHOWS: `Worker` is not a declared name in a Window realm, so a page's `new Worker(u)`
  *     throws ReferenceError on its first line and there is no object for any of this to be a member of.
  *     AND ONE ARM OF HTML §8.1.8.1 Event handlers STAYS UNEXERCISED FOR A THIRD REASON AGAIN, which is worth
@@ -616,12 +678,18 @@ void worker_global_scope_free(JSRuntime *rt)
  *           run a worker, which is what states it. ABSENCE SHOWS AS: `self.name`
  *           is `undefined` where a browser answers the string the `Worker` constructor was given.
  *       (c) `postMessage` HAS NO PEER, AND NOTHING IN THIS DIFF PROVISIONS ONE. §10.2.1.2 defines it as the
- *           port's own postMessage, and the other end of that port is in the OWNER's instance — a different
- *           agent by CLAUDE.md's §AN-INSTANCE-IS-AN-ORIGIN-KEYED-AGENT-CLUSTER, so what crosses is serialized
- *           TEXT carrying its type and never a live JSValue. NEXT DIFF: §10.2.6.3's `Worker` constructor, and
- *           a host that PROVISIONS the second instance — a design that has never run is what
- *           §A-HOST-THAT-CANNOT-PROVISION-A-SECOND-INSTANCE is about, and building the member before the peer
- *           would be exactly that. ABSENCE SHOWS AS: `typeof self.postMessage` is `"undefined"`, so a worker
+ *           port's own postMessage, and the other end of that port is in the OWNER's AGENT. What crosses is
+ *           serialized TEXT carrying its type and never a live JSValue — an agent is a JSRuntime here, and a
+ *           JSValue crosses one no better than it crosses an instance. THE SENTENCE THAT STOOD HERE SAID THE
+ *           OTHER END WAS IN THE OWNER'S INSTANCE and told the next diff to provision a SECOND INSTANCE; that
+ *           is the same conflation the banner at the top of this file now corrects out of HTML §8.1.2.2, and
+ *           it is recorded rather than deleted because a next-diff clause is read once, by someone who has
+ *           already decided to do the work, and this one named the wrong transport. NEXT DIFF: the ordered
+ *           remainder's (i) and (v) — a host that PROVISIONS THE SECOND AGENT and an entanglement across it —
+ *           before §10.2.6.3's `Worker` constructor. Building the member before the peer is what
+ *           §A-HOST-THAT-CANNOT-PROVISION-A-SECOND-INSTANCE is about, and that rule is unchanged by the
+ *           correction: an unprovisioned peer is an unprovisioned peer whichever boundary it sits behind.
+ *           ABSENCE SHOWS AS: `typeof self.postMessage` is `"undefined"`, so a worker
  *           cannot answer its owner at all.
  *       (d) `close` NEEDS A FLAG THAT HAS NOWHERE TO LIVE. §10.2.1.2's "The close() method steps are to close
  *           a worker given this", and close a worker's two steps are to "discard any tasks that have been
