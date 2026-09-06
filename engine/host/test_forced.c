@@ -412,9 +412,32 @@ static int fixture_provide(JSContext *ctx) {
    API: it read `init.method` with JS_GetPropertyStr from C — the exact drive-to-completion core/fetch/fetch.c
    was converted away from — and it knew nothing of `init.headers`, so the fixture could never have shown the
    endpoint's transport requirement no matter what the component did. The component is installed instead, which
-   is what the shipped build runs. A request it issues parks on the host's reply and this fixture provides none,
-   so a flow that fetches STALLS there; the endpoint is recorded before the park, which is why every existing
-   probe still reads it. */
+   is what the shipped build runs. A request it issues parks on the host's reply, and `fixture_provide` above
+   ANSWERS that park: `engine_set_provider` installs it unconditionally on this host, `run_scheduler` pays it
+   once per slice rather than only at a stall, and DCHECKs after every payment that BOTH registers are empty —
+   so a request this fixture is shown is a request it has already filled.
+   THIS SAID THE FIXTURE PROVIDED NONE AND THAT A FETCHING FLOW STALLED HERE, which was true before
+   `fixture_provide` and went on reading as the standing description of this host. It is the costly kind of
+   stale sentence, because it announces an ABSENCE: every other kind sends a reader to look, and this one tells
+   them not to, so the provider defined above it stays invisible however loudly it runs. It was read exactly
+   that way — the probe rows that AWAIT a reply standing at 0 were carried into a brief as a fetch whose reply
+   never arrived, and the rows named below were read afterwards and said the opposite.
+   WHERE A READER ASKS INSTEAD, named as INSTRUMENTS and not as numbers, because a number here would rot:
+   @COLD's `replyAsked`/`replyAnswered` are the reply door's LIFETIME pair (solver/pending_index.c keys each
+   record once and credits it once, and result.c asserts answered <= asked), and they say whether what was
+   ASKED was ANSWERED. The same line's `stepUnitRuns` carries `deliver-one-reply`, which says whether any flow
+   TOOK one — a different question, and the one these rows are actually about — with `canDeliver`, `stackEmpty`
+   and `pendReady` beside it as that arm's own guard and its denominator. pending_index.c states the reading in
+   as many words and engine/build.mjs prints it: `replyAnswered` climbing with that arm at zero is a document
+   being paid and consuming nothing, and build.mjs's job-backlog paragraph carries the three states a zero
+   there splits into (the holders are FRAMED, or HOST-OWED, or waiting on RANK, and only the last is the
+   order's).
+   AND THE FIXTURE ALREADY HOLDS THE CONTROLLED PAIR THAT TELLS `never issued` FROM `issued and not consumed`,
+   which is the half the old sentence hid. The endpoint is recorded BEFORE the park, so a fire-and-forget
+   `fetch(...)` — the §5 Headers statements — emits its record whatever becomes of the reply, while a statement
+   that AWAITS one emits only if the reply is delivered AND taken. `hdrs` and `fetch` are those two shapes over
+   one provider and one door, so reading them together answers which of the two happened; reading either alone
+   cannot. */
 
 /* the "page": a real 2-<script> HTML document. Script 1 reads injected `state` into a config; script 2 (sharing
    globals) branches on it + does a baseline mutation (globalThis.n) first. Exercises: real Lexbor boot,
