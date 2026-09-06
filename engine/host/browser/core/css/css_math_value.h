@@ -119,7 +119,17 @@ bool css_math_op_is_list(CssMathOp op);
  * slots, its type (§4.3.4 does state that one: "the result of adding the types of the lower, value, and upper
  * internal slots") and the two algorithm arms together.
  * HOW ITS ABSENCE WOULD SHOW: `new CSSMathClamp(...)` is the TypeError a browser without the interface gives,
- * which is the forcing function; it cannot show as a wrong answer, because nothing here mints one. */
+ * which is the forcing function; it cannot show as a wrong answer, because nothing here mints one — and that
+ * half is STRUCTURAL rather than a promise: `CssMathOp` has no clamp member, so a clamp cannot be represented
+ * at all, and every switch over that enum names each member with NO `default:`, so adding one reddens them
+ * instead of being swallowed.
+ * THE OBSERVATION THAT RETIRES THIS, so the next reader RUNS it rather than re-deriving the argument above:
+ * fetch the document engine/specindex/csstypedom1.json's own `base` field names and grep the two sections
+ * for `clamp`. While §6.5 CSSMathValue Serialization and §4.3.1's equal numeric values each answer ZERO, the
+ * residual stands; the day either answers, the arm it states is what this builds. Re-derived at the base
+ * that corpus row records, against the draft it stamps `6 August 2026`: §6.5 0, equal-numeric-values 0,
+ * while §4.3.4 names CSSMathClamp five times — so the draft still defines the constructor and neither
+ * algorithm it must take part in. */
 JSValue css_math_value_new(JSContext *ctx, CssMathOp op, JSValueConst *items, int n);
 
 /* §4.3.4's "The type of a CSSMathValue depends on its class", over an operator and the operand list a mint is
