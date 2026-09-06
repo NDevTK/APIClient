@@ -4595,7 +4595,37 @@ function audit(argv, opts = {}) {
        * cannot, and the census at check (5) carries the measurement that settles it. */
       c.quotedPossessive = !!qm && /^['’]s/.test(qm[0]);
       c.words = normTerm(after.replace(/^'s\b/, " ")).split(" ").filter(Boolean);
-      c.after = after;                       /* the raw prose, for the delimiter test in check (4) */
+      /* THE RAW PROSE, FOR THE DELIMITER TEST IN CHECK (4) — AND IT KEEPS THE POSSESSIVE ON PURPOSE, WHICH
+       * READS AS A BUG AND WAS BUILT AND MEASURED AS ONE BEFORE THIS COMMENT EXISTED. `words` has the leading
+       * `'s` stripped and this does not, so `delimited`'s `^[^A-Za-z0-9]*` anchor cannot step over that `s`
+       * and the match fails at word one: NO POSSESSIVE CITATION IS EVER CREDITED WITH AN UNQUOTED STATED
+       * TITLE. Probed at four spellings on one number whose title belongs to its neighbour — quoted and
+       * comma-delimited raise TITLE-MISMATCH, possessive and run-into-a-verb are silent.
+       *
+       * THAT ASYMMETRY IS THIS FILE'S OWN DISTINCTION AND NOT AN OVERSIGHT, whether or not it was written as
+       * one. `c.quotedPossessive` above says it in as many words: `§N's X` says X is IN §N, which is check
+       * (3)'s question, and `§N "X"` says §N is TITLED X, which is check (2)'s and check (4)'s. For the QUOTED
+       * form the possessive is RECORDED and check (5)'s census carries the measurement that keeps the
+       * accusation honest. For the unquoted form there is no such record, and this anchor is the only thing
+       * standing between the two claims.
+       *
+       * MEASURED, from a frozen snapshot, one corpus state, 59309 citations and 915 files on both sides, with
+       * the strip applied to both strings: judged 40726 -> 40852 and group-title placements 4601 -> 4705,
+       * bought with FOUR fresh accusations of which three are plainly a possessive of OWNERSHIP read as a
+       * title claim — `§4.2's UTF-8` (the entry in Encoding's names-and-labels table, accused because `UTF-8`
+       * titles §8.1), `§4.8.5's child navigables` (the iframe element's, accused because that titles
+       * §7.3.1.3), `CSS 2.1 §10's used values` (accused because that titles §6.1.3, which is where they are
+       * DEFINED and not where §10 computes them). The fourth is worse and rules out doing this for RESOLUTION
+       * alone: `§4.3.4's INTERNAL SLOTS` in a CSS Typed OM file resolved to STREAMS, because `Internal slots`
+       * titles FOURTEEN of its sections and §4.3.2 is a sibling of the cited number, so the neighbourhood
+       * test passed and check (1) then reported that streams has no §4.3.4 — a missing-section claim
+       * manufactured against a standard the citation never named. A two-word title can be a coincidence
+       * generator exactly as a one-word one can.
+       *
+       * WHAT IS REAL AND IS NOT THIS: an unquoted title that is NOT possessive IS judged, and the residual
+       * about one running straight into a verb is named at `delimited` itself. Only the possessive form is
+       * refused here, and it is refused because it is a different claim. */
+      c.after = after;
       /* AND THE WORDS A QUOTED TITLE LEAVES BEHIND, kept for the CENSUS and for nothing else. The probe below
        * reads the QUOTED run, so a citation written `Fetch §N "Fetch methods"' network error` puts its term
        * evidence on `fetch methods` and `network error` is never looked up at all — while the same claim
