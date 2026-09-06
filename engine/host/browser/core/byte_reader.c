@@ -332,15 +332,16 @@ static JSValue byte_reader_content(JSContext *ctx, JSValueConst recv, JSValue va
 
 JSValue byte_reader_text(JSContext *ctx, JSValueConst recv, const char *bytes, size_t len)
 {
-    /* Fetch §5.3 "Body mixin" / File API §3.3 "Methods and Parameters": "run consume body with this and
-       UTF-8 decode" — ENCODING §6's UTF-8 decode, which is a named algorithm and not a synonym for
-       whatever the host's string constructor does. This read
-       `JS_NewStringLen`, and quickjs's decoder is not that algorithm in either direction: cutils.h converts an
-       encoding error to U+FFFD "and uses a single byte" (Encoding consumes the whole maximal subpart) and it
-       "accepts UTF-8 encoded surrogates as JavaScript allows them in strings" (Encoding answers U+FFFD). It
-       also does not run §6's step 2, the three-byte peek that DROPS a leading UTF-8 BOM, so `res.text()` on a
-       BOM'd body answered a string starting U+FEFF. The difference was invisible while the body reaching this
-       reader was itself the output of a decode; it is not invisible now that a body is bytes. */
+    /* Fetch §5.3 "Body mixin": "the result of running consume body with this and UTF-8 decode" — and
+       File API §3.3 "Methods and Parameters" states the same algorithm for a Blob. ENCODING §6's UTF-8
+       decode, which is a named algorithm and not a synonym for whatever the host's string constructor does.
+       This read `JS_NewStringLen`, and quickjs's decoder is not that algorithm in either direction: cutils.h
+       converts an encoding error to U+FFFD "and uses a single byte" (Encoding consumes the whole maximal
+       subpart) and it "accepts UTF-8 encoded surrogates as JavaScript allows them in strings" (Encoding
+       answers U+FFFD). It also does not run §6's step 2, the three-byte peek that DROPS a leading UTF-8 BOM,
+       so `res.text()` on a BOM'd body answered a string starting U+FEFF. The difference was invisible while
+       the body reaching this reader was itself the output of a decode; it is not invisible now that a body
+       is bytes. */
     char *text;
     size_t n = 0;
     JSValue out;
@@ -354,11 +355,11 @@ JSValue byte_reader_text(JSContext *ctx, JSValueConst recv, const char *bytes, s
 
 JSValue byte_reader_json(JSContext *ctx, JSValueConst recv, const char *bytes, size_t len)
 {
-    /* Fetch §5.3 "Body mixin"'s `json()` is "run consume body with this and parse JSON from bytes", and
-       Infra's parse JSON FROM BYTES is TWO steps: "let string be the result of running UTF-8 decode on
-       bytes", then parse JSON from string. Handing the bytes straight to the parser ran quickjs's lenient
-       decoder instead, so a body whose bytes are not well-formed UTF-8 parsed as something Encoding's
-       decoder would have replaced.
+    /* Fetch §5.3 "Body mixin"'s `json()` is "the result of running consume body with this and parse JSON
+       from bytes", and Infra's parse JSON FROM BYTES is TWO steps: "let string be the result of running
+       UTF-8 decode on bytes", then parse JSON from string. Handing the bytes straight to the parser ran
+       quickjs's lenient decoder instead, so a body whose bytes are not well-formed UTF-8 parsed as something
+       Encoding's decoder would have replaced.
        The REAL parser runs on the decoded string, so a malformed body rejects with the SyntaxError the page
        would actually catch rather than a placeholder this engine invented. */
     char *text;
