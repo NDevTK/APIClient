@@ -233,17 +233,43 @@ typedef struct {
  *
  * INTEGRITY POLICY (disjunct 4) is the disjunct §4.1 gained after the four copies this replaced were written
  * — every one of them quoted a three-check version of this sentence, and moving the quotation to a fresh site
- * is what made the auditor say so. WHAT THE NEXT DIFF BUILDS: Integrity Policy's own "should request be
- * blocked by Integrity Policy Policy", over a policy parsed from the `Integrity-Policy` response header into
- * the policy container beside the CSP list, called as a further disjunct here. HOW ITS ABSENCE SHOWS: a
- * document served `Integrity-Policy: blocked-destinations=(script)` loads a `<script src>` carrying no
- * `integrity` attribute here and is refused it by a browser — so an @S breakout measured against that
- * document's policy reports a sink the real page cannot reach.
- * ITS PLACE IN THE ORDER IS AFTER MIXED CONTENT AND NOT BEFORE IT, which is the correction this paragraph
- * carries: the sentence that stood here named Integrity Policy as what the next diff builds, and §4.1's own
- * disjunction puts mixed content SECOND and Integrity Policy FOURTH. Integrity Policy is also the cheaper of
- * the two to reach, since it needs no step 6 and no address rewrite — so a reader who takes it first is
- * taking the easier disjunct, not the next one, and should say which they did.
+ * is what made the auditor say so. HOW ITS ABSENCE SHOWS: a document served
+ * `Integrity-Policy: blocked-destinations=(script)` loads a `<script src>` carrying no `integrity` attribute
+ * here and is refused it by a browser — so an @S breakout measured against that document's policy reports a
+ * sink the real page cannot reach.
+ *
+ * IT IS NOT A STANDARD OF ITS OWN, WHICH IS THE FIRST THING THE CLAUSE THAT STOOD HERE GOT WRONG. It said
+ * `Integrity Policy's own` algorithm, which reads as a document to go and fetch, and there is none: the
+ * algorithm is a SUBSECTION OF SUBRESOURCE INTEGRITY, which is where Fetch's own cross-reference data resolves
+ * this disjunct to. Two plausible homes for a separate document both answer 404. The section is titled
+ * `Should request be blocked by Integrity Policy` — §4.1's sentence renders it with the word Policy DOUBLED,
+ * so a reader searching that standard for §4.1's exact phrase does not find it.
+ * AND EVERY NUMBER THIS PARAGRAPH GIVES FOR IT IS COUNTED AND NEVER CHECKED: engine/specindex holds no row
+ * for that standard, so no channel here reads its sections and no quotation of it is compared. Treat the
+ * numbers as this comment's claim, not as an audited one, exactly as with mixed content above.
+ *
+ * WHAT IT ACTUALLY NEEDS, DERIVED BY READING THE ALGORITHM RATHER THAN BY PRICING IT. Two of its inputs are
+ * NOT REACHABLE FROM THIS DIRECTORY, and neither was named by the clause that stood here:
+ *   - THE POLICY ITSELF IS AN ITEM OF THE POLICY CONTAINER, and there are TWO of them — an enforcing one and
+ *     a report-only one, from two response headers. core/frame/policy_container.c already states, with the
+ *     citation, that a policy container's five items include both; the struct carries NEITHER, so they
+ *     arrive with their field, their clone and their free, in that file and not this one.
+ *   - THE CHECK READS THE REQUEST'S MODE, and neither `FetchRequest` above nor `fetch_main_blocked` below
+ *     carries one. Its early-allow arm is the conjunction `this request has integrity metadata AND its mode
+ *     is cors or same-origin`, so a reader who cannot ask the mode must pick an arm: allowing on the metadata
+ *     alone under-blocks the NO-CORS case, which that standard's own worked example names as half of what the
+ *     feature is for, and skipping the arm over-blocks a `<script src integrity crossorigin>` the standard
+ *     allows. The second is a REGRESSION, so the mode is a dependency and not a residual — and adding it is a
+ *     signature change at five call sites in core/html, core/xhr and solver.
+ * WHAT IS ALREADY HERE AND MAKES THE REST CHEAP, which is the half worth carrying: the header value is a
+ * structured-field DICTIONARY OF INNER LISTS and core/fetch/structured_fields.h parses exactly that
+ * (`sf_header_dictionary`); the metadata parse the early-allow arm needs is
+ * core/fetch/subresource_integrity.h's `sri_parse_metadata`; and the local-URL arm is core/url/url.h's
+ * Fetch §2.1 predicate. So the algorithm's own body is small and its two blockers are both PLUMBING.
+ * ITS PLACE IN THE ORDER IS AFTER MIXED CONTENT AND NOT BEFORE IT: §4.1's disjunction puts mixed content
+ * SECOND and this FOURTH. It is CHEAPER than mixed content — no step 6, no address rewrite — and that is not
+ * the same as reachable, which is the reading the previous clause invited and which cost a dispatch: both
+ * absent disjuncts need files outside core/fetch, and they need DIFFERENT ones.
  *
  * IT WAS FOUR HAND-WRITTEN COPIES, ONE PER ENTRY, and the fifth entry is what proved that shape wrong: a
  * `<script src>` ran NO CSP check at all, because §4.12.1.1's fetch is the one nobody remembered to add a copy
