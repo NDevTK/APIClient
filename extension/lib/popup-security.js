@@ -317,11 +317,22 @@ function _parkedProgress(item) {
   //           WHAT IS STILL OPEN IS NARROWER AND IS NOT THIS CARD'S: `observe_runway` samples a candidate at
   //           its switch-in and at its finish and nowhere between, so a walked of 0 is a refusal at the first
   //           arm OR an interval nobody sampled. Those take opposite work and the entry cannot separate them.
-  //           The frontier census can, one-directionally and with no new field: `distMax` is the max of
-  //           flow_distance over the WHOLE frontier at every census, and its three rungs are each
-  //           non-negative, so a `distMax` of 0 at every census forces every flow's replay fraction to have
-  //           been 0 at every one of them — far more sampling than the entry gets. A nonzero `distMax`
-  //           standing over a walked of 0 is the under-read caught in the act.
+  //           THE FIRST INSTRUMENT PROPOSED FOR THAT WAS `distMax` AND HALF OF IT WAS WRONG, recorded because
+  //           the wrong half was the half that would have been acted on. Its sound direction stands: `distMax`
+  //           is the max of flow_distance over the whole frontier at every census and its rungs are each
+  //           non-negative, so a `distMax` of 0 everywhere forces every flow's replay fraction to have been 0.
+  //           The claimed converse — that a NONZERO `distMax` over a walked of 0 catches the under-read — is
+  //           false, and by construction rather than by luck: it is a MAX, so any one search that walks its
+  //           whole path pins it and no value the other flows take can move it. Measured: a run read
+  //           `distMax` 0.200, which with FLOW_RUNGS_N of 5 is a rung sum of exactly 1.0, and since a nonzero
+  //           survival rung requires a delivered one (which would carry the sum past 2.0) the only
+  //           decomposition is one flow at a full replay — which that run had, in two records reading 1000.
+  //           WHAT ACTUALLY SEPARATES THEM IS ON THE ENTRY ALREADY AND IS PER-SEARCH, so no other search can
+  //           mask it: `tried` counts the candidate FLOWS seeded and `turns` counts their SWITCH-INS, and the
+  //           runway is sampled at exactly those switch-ins. So `turns > tried` means some flow was switched
+  //           in twice and was therefore sampled AFTER holding the thread for a whole turn — and a walked of 0
+  //           beside it is a real refusal at the first arm. `turns == tried` means every flow was sampled once,
+  //           before it ran, and the zero says nothing at all.
   //           THE PRODUCER FLAG THIS USED TO WAIT FOR NOW EXISTS AND THE SENTENCE THAT SAID OTHERWISE IS GONE:
   //           it read "names the producer flag that would tell them apart. Until it exists, this is not a
   //           distance", and it went stale the moment solve.c gained `runwayArms` — the arm count of the frozen

@@ -2765,7 +2765,23 @@ void solve_flow_begin(Flow *f) {
         if (e) e->turns++;
         /* AND THE RUNWAY THIS CANDIDATE HAD ALREADY WALKED WHEN IT LAST HELD THE THREAD — taken at the same
            moment `turns` is raised because they are the two halves of one reading: `turns` says the WFQ gave
-           this search the thread and this says how far the thread got it. Sampled BEFORE the quantum rather
+           this search the thread and this says how far the thread got it.
+           AND THAT PAIRING IS WHAT SAYS WHETHER A ZERO RUNWAY MEANS ANYTHING, which is the one question this
+           sampling cannot otherwise answer and which nothing else in the document can. The reading is taken
+           HERE and at the finish and nowhere between, so a flow that consumes arms and is then switched out
+           and never picked again contributes only what its FIRST switch-in saw — which is zero, because a
+           flow that has not run has replayed nothing. `tried` counts the candidate FLOWS this search seeded
+           and `turns` counts their switch-ins, so `turns > tried` means some flow was switched in twice and
+           was therefore sampled AFTER a whole turn of holding the thread: a zero runway beside it is a real
+           refusal at the flow's first arm. `turns == tried` means every flow was sampled exactly once, before
+           it ran, and the zero is the sampling and not the engine. The two take opposite work and the pair is
+           already emitted, so this is a reading a consumer performs rather than a field anyone owes.
+           IT IS PER-SEARCH AND THAT IS WHY IT IS THE RIGHT ONE. The frontier census's `distMax` looks like it
+           answers the same question and cannot: it is a MAX over every member, so one search that walks its
+           whole path pins it and no value the others take can move it. Measured on a run reading `distMax`
+           0.200 — with FLOW_RUNGS_N at 5 that is a rung sum of exactly 1.0, and a nonzero survival rung needs
+           a delivered one which would carry the sum past 2.0, so the only decomposition is a single flow at a
+           full replay, which that run had. A frontier-wide max cannot see a per-search under-read. Sampled BEFORE the quantum rather
            than after it, which is what makes it a fact about runs that have finished rather than a promise
            about the one about to start. */
         if (e) observe_runway(e, f);
