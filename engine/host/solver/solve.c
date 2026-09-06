@@ -246,14 +246,62 @@ typedef struct {
        nonzero runway in some run. `eval` and `innerHTML` each appear on BOTH sides of that split, so it is
        not a property of the sink class; the fixture's `s-loc`, `s-attr` and `s-park` rows never reach this
        rung because all three are bound to `location.hash`; `s-attr`'s ATTR_SRC is `{location.hash}.slice(1)`.
-       WHAT WOULD SEPARATE THEM IS A DENOMINATOR AND IT IS NOT BUILT: this field is a fraction whose numerator
-       is published and whose denominator is not, so a reader cannot ask whether the path had any length. The
-       next diff states whether the observation site was ever REACHED — a flag set at the first
-       flow_observe_replay for this candidate, emitted beside this number — after which `0` beside "observed"
-       is the first-arm reading this comment already describes and `0` beside "never observed" is the search
-       having no recorded path to replay. Its absence shows as a card telling a reader to hunt the gate that
-       refuses an arm, for a search that was never offered one. */
+       WHAT SEPARATES THEM IS A DENOMINATOR AND IT IS BUILT — `reinject_len` below, emitted as `runwayArms`.
+       The two are read together: `runwayArms:0` is the search having no recorded path to replay at all, and
+       `runwayArms:N` beside a 0 here is the first-arm reading this comment describes.
+       THE NEXT-DIFF CLAUSE THAT STOOD HERE NAMED A REACHED BIT — "a flag set at the first
+       flow_observe_replay for this candidate, emitted beside this number" — AND IT COULD NOT HAVE SEPARATED
+       THE TWO STATES THE PARAGRAPH ABOVE IT NAMES. It is recorded rather than deleted because its METHOD is
+       the reusable part: it was written from the OBSERVATION SITE, and both of those states are states in
+       which that site is never reached. `flow_observe_replay` is called from dec_replay on the far side of
+       `g_c++`, so a key mismatch at slot 0 returns -1 without ever reaching it, and a search with no recorded
+       path never enters dec_replay at all — decide_branch guards the whole arm with `g_c < dec_total()`. The
+       flag therefore reads "never observed" for BOTH, and true exactly when at least one arm was consumed,
+       which is what a nonzero here already says; its only marginal reading is the rounding case named below,
+       the least valuable of the three splits. THE TELL WAS IN THE SENTENCE DIRECTLY ABOVE IT, which names the
+       DENOMINATOR as the thing that would separate them and then prescribes something that is not one — a
+       remedy clause disagreeing with its own diagnosis inside one paragraph.
+       WHAT IS STILL NOT COVERED, and it is smaller than what it replaces: with `runwayArms:N` in hand a 0
+       here is "no arm was consumed" OR "arms were consumed and the fraction rounded away" —
+       `(int)(cand_replay*1000.0+0.5)` is 0 for any path longer than 2000 arms with one arm consumed, and
+       decide.h records replay depths of 8000. WHAT THE NEXT DIFF BUILDS is the numerator as a COUNT, taken
+       from the one place dec_replay's own note says it is honest (`flow_observe_replay`'s `consumed`, honest
+       at that line "and not at the scheduler" because the cursor also advances on appends) — which means a
+       field on the Flow, and therefore the fork-carry and two-instants questions §ONE-WFQ-policy asks of
+       anything that rides one, neither of which this entry-side pair has to answer. HOW ITS ABSENCE SHOWS: a
+       card reading `runwayArms:8000, runwayPerMille:0` for a replay that walked three arms and for one that
+       walked none. */
     int replay_pm;
+    /* …AND HOW MANY ARMS THE PATH THAT FRACTION IS OF ACTUALLY HAS, WHICH IS WHAT SPLITS THE ZERO ABOVE.
+       The re-injection point is frozen ONCE per search — add_pending, under the `opened` latch, at the one
+       moment a flow stands at this sink — and every candidate is seeded at cursor 0 over that same frozen
+       segment, so the segment's LENGTH is a property of the SEARCH: fixed from the freeze, known before any
+       candidate is seeded or scheduled, and already named by the accessor that reports it (decide.h: "the
+       length of the CHAIN ... fixed from the instant a blob is built and is the DENOMINATOR of any question
+       about progress").
+       `runwayArms:0`   — the detecting flow decided NO branch on its way to this sink, so there is nothing
+                          for a candidate to replay. Every candidate then begins on an empty vector and forks
+                          the document's own gate tree exactly as the design before the re-injection point did
+                          (the measurement at the capture: 2049 flows for one sink at K=10), and the 0 above
+                          is a tautology rather than an observation. A question about the DETECTION.
+       `runwayArms:N` beside `runwayPerMille:0` — N arms were offered to every candidate of this search and
+                          not one was consumed: what stands in front of the replay's FIRST branch. Those two
+                          take opposite work and were one number.
+       IT IS NOT `runwayPerMille`'s DENOMINATOR AND THE TWO DO NOT MULTIPLY, which is why it is not named
+       `runwayOf` after the `survived`/`survivedOf` pair it otherwise resembles. That fraction is a best-so-far
+       over samples and a sample's own denominator is `dec_total()` at the instant dec_replay took it — which
+       for an ARM forked off a candidate includes the slots its own fork appended, so it can exceed this
+       number. What this states is where every candidate STARTS; an arms-consumed count is a different field
+       and is not derivable from these two.
+       STORED AT THE FREEZE AND NOT READ OFF THE BLOB AT EMISSION, and that is not a convenience: record_sink
+       releases `reinject` the moment the search FIRES, so a length derived at the emitter would read 0 for
+       every search that succeeded — the same absence-and-zero defect one field over, pointing in the
+       direction that reports the searches which WORKED as the ones that had no path.
+       A SIZE AND NEVER A DISTANCE. decide.h keeps that pair apart by hand for exactly this reason — the
+       cursor is the position, `entries` is the length — and records what conflating them cost once already:
+       flow.h's `cand_dec_max` was fed from the LENGTH under a contract calling it how far the best of them
+       had GOT. This is the length, and the name says arms and not progress. */
+    int reinject_len;
     /* …AND HOW MANY STRINGS A CODE-EXECUTION SINK WAS HANDED WHILE THEY WERE LIVE — the observation COUNT that
        `surv_run` is the best of, and the half a ratchet cannot state. A best-so-far records the furthest
        anything got and says nothing about how often it looked, so `surv_run:0` meant either "no sink ran at
@@ -832,6 +880,11 @@ static Cand *sink_search(const char *src, int sink, int *created) {
     e->deliv_runs = 0;
     e->wit = NULL; e->nwit = e->witcap = 0;
     e->reinject = NULL;
+    /* AND ITS LENGTH ON THE SAME LINE AS THE POINTER, for the reason the ratchets above take: the array is
+       realloc'd and never zeroed, and this field is read as "did this search have a recorded path at all" —
+       so a garbage nonzero does not misreport a size, it states that arms were offered to candidates that
+       were offered none, which is the confident-wrong-instruction direction the pair exists to remove. */
+    e->reinject_len = 0;
     /* SAME LINE AND SAME REASON AS `reach_credited`: the array is realloc'd and never zeroed, and a latch left
        holding whatever the allocator had spends a rung this search has never been paid. */
     e->escaped = 0; e->escape_credited = 0;
@@ -1104,6 +1157,33 @@ static void add_pending(const char *src, const char *root, int sink) {
        silently-skipped payment. */
     flow_credit_emit(1.0);
     e->reinject = decide_freeze_path();
+    /* AND HOW MANY ARMS THAT PATH HOLDS, TAKEN HERE BECAUSE THIS IS WHERE THE PATH EXISTS AND IS OWNED. It is
+       a SIZE fixed from this instant (decide.h's `entries`), it is the whole of what `runwayArms` reports,
+       and it is stored rather than re-derived because record_sink gives the blob back at the fire — a length
+       read at the emitter would be 0 for exactly the searches that succeeded.
+       IT PROMOTES NOTHING, WHICH IS A QUESTION THIS LINE HAD TO ANSWER RATHER THAN A REASSURANCE: the
+       accessor's null guard is an always-fatal CHECK, so a NULL blob here would be a release-mode abort where
+       the DCHECK twenty lines down is the only thing that looks today. decide_freeze_path cannot hand one
+       over — it CHECKs its own allocation and returns that pointer unconditionally — so the argument is
+       non-NULL by construction and this call adds no failure mode to a release build.
+       AND A CHAIN OF ZERO LENGTH IS A LEGITIMATE ANSWER AND NOT ONE TO ASSERT AGAINST. A flow that has
+       decided nothing freezes a blob whose segment is absent, which the accessor reports as 0 entries — that
+       is exactly the `runwayArms:0` reading below, so a DCHECK demanding a nonzero here would abort on the
+       one state this field was added to be able to state. */
+    {
+        long arms = 0;
+        DCHECK(e->reinject_len == 0,
+               "a search's recorded path length was written twice — the freeze above is the ONE capture and "
+               "the `opened` latch is what makes it one, so a second write means this entry reached the "
+               "capture again and the first value described a path this search no longer stands on");
+        decide_blob_stats(e->reinject, &arms, NULL);
+        DCHECK(arms >= 0 && arms <= 0x7fffffff,
+               "a frozen decision path reports a length that is not a count of slots — `runwayArms` is read "
+               "as whether this search offered its candidates any arm at all, so a negative value or one "
+               "truncated by the store below would publish that answer on something that is not a length, "
+               "and 0 is the reading the whole pair turns on");
+        e->reinject_len = (int)arms;
+    }
     sc = sink_class(sink);
     /* A SINGLE-CONTEXT CLASS'S WRITTEN-DOWN VECTORS ARE ATTACKS, which is what `probes:0` beside a non-empty
        list states and what used to be spelled by leaving `nprobe` at 0 for this arm. Said rather than
@@ -2898,9 +2978,20 @@ char *solve_json_array(JSContext *ctx) {
            UNCONDITIONAL AND 0 IS THE LOAD-BEARING READING, exactly as for the two above — a search whose
            candidates have never been switched in reports 0 here beside `turns:0`, and one whose candidates
            ran and replayed nothing reports 0 beside `turns:N`. Those are told apart by `turns`, which is why
-           this field is emitted next to it and not instead of it. */
+           this field is emitted next to it and not instead of it.
+           AND THE THIRD READING OF THE SAME 0 IS TOLD APART BY `runwayArms` BELOW, which is emitted with it
+           and never without it: `turns` says whether the candidates RAN, and only the arm count says whether
+           there was anything for them to replay when they did. A 0 here over `runwayArms:0` is a search whose
+           detection decided no branch at all, and the number is then a tautology rather than a measurement —
+           a reader who acts on it hunts a gate that refuses an arm for a search that was never offered one. */
         json_buf_raw(&b, ","); json_buf_key(&b, "runwayPerMille");
         snprintf(t, sizeof t, "%d", g_pending[i].replay_pm); json_buf_raw(&b, t);
+        /* THE ARM COUNT THE FRACTION ABOVE IS SILENT ABOUT — see the field for what each of its two readings
+           means and why it is NOT that fraction's denominator. Emitted IMMEDIATELY beside it, because the
+           whole of what it adds is a joint reading and a consumer that finds one without the other is back to
+           the merged zero this pair exists to split. */
+        json_buf_raw(&b, ","); json_buf_key(&b, "runwayArms");
+        snprintf(t, sizeof t, "%d", g_pending[i].reinject_len); json_buf_raw(&b, t);
         /* …AND THE TWO MIDDLE RUNGS, WHICH IS WHAT SPLITS `reached:0` AND `reached:N` INTO THE FOUR STATES THEY
            REALLY ARE. `survived`/`survivedOf` is the FURTHEST any candidate of this search has got its own
            bytes through the page's own transforms to ANY sink, so `turns:900,reached:0,survived:11,
