@@ -2044,6 +2044,9 @@ const LEVELLED = /^[a-z]+(-[a-z0-9]+)*-[0-9]+$/;
  * two-word tail `in xml` then falls through to XML 1.0 — which does not have a §6.2, so a correct citation of
  * Namespaces in XML was reported as a section the standard does not have. The AFTER text is already flattened
  * this way before its term is read; the BEFORE text was not, and that asymmetry was the bug. */
+const MODULE_BEFORE_LEVEL = /[ \t]+(?:Module|module)(?=[ \t]+(?:Level|level)[ \t]+[0-9]+(?:\.[0-9]+)*$)/;
+const MODULE_BEFORE_VERSION = /[ \t]+(?:Module|module)(?=[ \t]+[0-9]+(?:\.[0-9]+)*$)/;
+
 function anchorTokens(before) {
   const flat = before.replace(/[\n\r]+[ \t]*\*?[ \t]*/g, " ").replace(/["\\]+/g, " ");
   /* A LEVEL SUFFIX IS PART OF THE EDITION AND NOT PART OF THE NAME, AND LEAVING IT ON DOES NOT DEGRADE THE
@@ -2054,8 +2057,22 @@ function anchorTokens(before) {
    * levelled shortname LEVELLED already reads out of `css-syntax-3`, so it is trimmed for the same reason
    * `Standard` is: the words after the name say which document, and the name is what decides which index. */
   const trimmed = flat.replace(/[\s'"’(\[]+$/, "");
+  /* AND `Module` IS THE SAME WORD AS `Standard`, WHICH IS NOT A GUESS ABOUT WHAT READS WELL — IT IS WHAT THE
+   * SHORTNAME SAYS. The CSS WG publishes `CSS Nesting Module Level 1` at `css-nesting-1` and `CSS Color
+   * Module Level 4` at `css-color-4`: the word is in the TITLE and in no shortname, so a citation that writes
+   * the full published title ends on a word no list here holds, every tail it offers ends on `Module`, and
+   * the site comes back with NO ANCHOR AT ALL. Measured before it was fixed, and the two spellings disagreed
+   * about the SAME standard: `CSS Nesting §4` classified `other:css nesting` while `CSS Nesting Module Level
+   * 1 §4` classified NULL and fell to its file's vote — so writing the standard's own full name was the
+   * spelling that lost the answer. The level was NOT the bound there and this is not the level fix below:
+   * `CSS Nesting Module` is three words, inside the tail regex's reach, and still names nothing. */
   const tail = trimmed.replace(/\s+(?:Level|level)\s+[0-9]+$/, "")
-    .replace(/\s+(?:Standard|standard|spec|Spec)$/, "");
+    .replace(/\s+(?:Module|module|Standard|standard|spec|Spec)$/, "");
+  /* AND IT IS REMOVED BEFORE THE JOIN RATHER THAN MADE OPTIONAL INSIDE IT, because the name group below is
+   * GREEDY and reads up to three words: written as `(?:[ \t]+Module)?` it never backtracks, so `CSS Color
+   * Module Level 4` takes `CSS Color Module` as the NAME, joins `css-color-module-4`, and the gate refuses a
+   * name no list holds — the same null the trim exists to prevent, arriving through the fix for it. */
+  const noModule = trimmed.replace(MODULE_BEFORE_LEVEL, "");
   /* AND A LEVEL WRITTEN WITHOUT THE WORD "Level" IS THE SAME FACT AGAIN, IN THE SPELLING THIS TREE ACTUALLY
    * USES — but it is JOINED to the name rather than trimmed off it, and that difference is the whole of why
    * this is allowed where the SPECS table's own comment refuses a trim. That comment is right: `CSS Images 3`
@@ -2113,9 +2130,10 @@ function anchorTokens(before) {
    * level joins to nothing (`high-resolution-time-3` is on no list) falls through to the answer it has today.
    * What changes is only that a levelled name a row DOES hold stops being decided by the unlevelled one. */
   const spelled = /((?:[A-Za-z][A-Za-z0-9+-]*[ \t]+){0,2}[A-Za-z][A-Za-z0-9+-]*)[ \t]+(?:Level|level)[ \t]+([0-9]+(?:\.[0-9]+)*)$/
-    .exec(trimmed);
+    .exec(noModule);
   if (spelled) joinLevel(spelled[1], spelled[2]);
-  const lv = /^(.*?)((?:[A-Za-z][A-Za-z0-9+-]*[ \t]+){0,2}[A-Za-z][A-Za-z0-9+-]*)[ \t]+([0-9]+(?:\.[0-9]+)*)$/.exec(tail);
+  const lv = /^(.*?)((?:[A-Za-z][A-Za-z0-9+-]*[ \t]+){0,2}[A-Za-z][A-Za-z0-9+-]*)[ \t]+([0-9]+(?:\.[0-9]+)*)$/
+    .exec(tail.replace(MODULE_BEFORE_VERSION, ""));
   if (lv) joinLevel(lv[2], lv[3]);
   const m = /((?:[A-Za-z][A-Za-z0-9+-]*[ \t]+){0,2}[A-Za-z][A-Za-z0-9+-]*)$/.exec(tail);
   if (!m) return joined;
