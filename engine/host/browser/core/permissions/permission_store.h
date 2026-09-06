@@ -139,9 +139,15 @@ bool permission_subject_is(int feature, JSValueConst v);
  * brand test is: the constraints are written over the feature's OWN objects.
  *
  * TWO ANSWERS, because that is what the two shapes of constraint the platform writes actually are. A constraint
- * may FIX the state ("if entry represents a file system entry in a bucket file system, this descriptor's
- * permission state must always be granted") — `*fixed` takes a PERMISSION_* value and §5.1 answers it without
- * reading the store and without asking the unknown. Or it may say a descriptor's state "must be EQUAL to the
+ * may FIX the state — File System Access §2.2 "Permissions" writes one, "if entry represents a file system
+ * entry in a bucket file system, this descriptor's permission state must always be granted" — and `*fixed`
+ * takes a PERMISSION_* value and §5.1 answers it without
+ * reading the store and without asking the unknown. THE STANDARD IS NAMED AT THAT QUOTATION BECAUSE THE WORDS
+ * ARE NOT THIS SECTION'S: they illustrate a §4 constraint and they are written in another document, so with
+ * only the §4 anchor in front of them the nearest named standard was Permissions and the sentence was measured
+ * against a document that does not contain it. It was invisible for as long as File System Access had no index
+ * row — a citation naming an unindexed standard is counted and never checked — and the run that added that row
+ * reported it on its first pass. Or it may say a descriptor's state "must be EQUAL to the
  * permission state for" ANOTHER descriptor — `*out` takes that one and §5.1 continues over it, which is what
  * makes an entry written for the canonical descriptor the answer for every descriptor constrained to equal it.
  * Returning false leaves §5.1's own steps to decide.

@@ -547,10 +547,55 @@ const SPECS = [
      word — the token scan requires whitespace between words, so `refs`/`prefs` can never present a bare `fs`.
      AND IT IS THE `database` HAZARD — a common noun this tree writes in prose — SO IT WAS CHECKED RATHER THAN
      ASSUMED: every `File System §` in engine/host is a citation of this standard, and the noun is written
-     without a number. `file system access` and `fsa` stay on the foreign list one screen below, and must: that
-     is a DIFFERENT document whose numbers collide with this one head-on. */
+     without a number. `file system access` and `fsa` STOOD ON THE FOREIGN LIST when this row landed, and the
+     sentence here said they must stay there. THE RULE THAT NOW HOLDS IS THE ONE THAT ROW ITSELF ARGUES: the
+     foreign entry ended a WRONG ANSWER and only an index ANSWERS, so they are anchors of the `fsa` row below
+     rather than refusals. What has not changed is WHY the abbreviation may never be unlisted on its own —
+     that is a DIFFERENT document whose numbers collide with this one head-on, so `fsa` comes off the foreign
+     list only into a row that can answer it, in the one diff, which is what happened. */
   { key: "fs", label: "File System Standard", kind: "bikeshed",
     base: "https://fs.spec.whatwg.org/", edition: "maintained", anchors: ["file system", "fs"] },
+  /* FILE SYSTEM ACCESS, PROMOTED OUT OF OTHER_SPECS BY THE ROUTE ITS OWN FOREIGN ROW ASKED FOR, and it is the
+     `sri` sequence exactly: a foreign row REFUSES a wrong answer, an index row ANSWERS, and both are needed in
+     that order. WHAT IS UNUSUAL HERE IS THAT THE REFUSAL WAS MEASURED WORKING BEFORE THIS ROW WAS WRITTEN, so
+     this row is justified by SILENCE and never by an accusation. A claim reached this component saying the two
+     documents' numbers collide and FSA's citations were therefore being mis-resolved to the File System
+     Standard; the first half is true and the second was CHECKED AND REFUTED. At the revision before this row,
+     the three FSA components reported ZERO file-vote placements between them — file_system_access.c 0 of 24
+     resolved, file_picker.c 0 of 10, file_system_handle.c 0 of 117 — because both spellings were on the
+     foreign list with the token counts this tree actually writes, and classifyAnchor asks the LISTED names
+     longest-suffix-first and returns on the first hit. Not one citation had leaked. The mechanism CLAUDE.md
+     warns about was real, was foreseen by the `fsa` foreign entry, and had already been closed by it.
+     SO THE DEFECT THIS ROW ENDS IS THE OTHER ONE: 85 citations tree-wide under "standards seen but not
+     indexed" and 38 step references under "names a standard this tool does not index" — counted and never
+     checked, which is the silent zero rather than a clean bill. It is worth more here than the count suggests,
+     because this component's citations are LABELS A CRASH PRINTS: file_picker.c's and file_system_access.c's
+     X-macro stage names ride a parked flow to the cold tier and come back in a `@WHY`.
+     WHAT THE INDEX BUYS WAS PRICED BEFORE IT WAS ADDED, AND THE UNKNOWN-SECTION HALF OF IT IS EMPTY: all 79
+     name-anchored FSA citations in the tree cite one of the 25 sections this document has, checked against the
+     fetched headings, so this row does not arrive holding a queue of numbers to repair. What it buys is the
+     TITLE and QUOTATION channels, which no foreign row can ask at all — and the standard ENDS AT §6, so a
+     `§7.x` written under its name is from now on a number the standard does not have rather than a citation
+     nothing looks at. That is the same argument the `fs` row above makes from its own §3 ceiling.
+     ITS ANCHORS ARE MOVED OFF THE FOREIGN LIST RATHER THAN COPIED, because an anchor on two lists is a second
+     copy of one decision and ANCHOR_TO_KEY is asked first. Both spellings are what this tree writes and both
+     were already load-bearing: core/file/file_system_handle.h writes `FS §2.2`/`FSA §2.2` on adjacent lines
+     precisely because the numbers collide, and that collision is REAL — verified against both fetched
+     documents, FSA §2.2 "Permissions" against FS §2.2 "The FileSystemHandle interface", and FSA §2.3 "The
+     FileSystemHandle interface" against FS §2.3 "The FileSystemFileHandle interface". Four claims, four
+     confirmations; the header that states them needs no repair.
+     ITS HOME WAS CHECKED RATHER THAN ASSUMED, because CLAUDE.md records a standard migrating out from under a
+     correct belief about who publishes it: `w3c.github.io/file-system-access/` answers 404 and
+     `wicg.github.io/file-system-access/` answers 200. IT IS BIKESHED AND THEREFORE INDEXABLE, which is the one
+     question a ReSpec editor's draft answers BACKWARDS — an unrendered ReSpec source carries `respecConfig`
+     and ZERO numbered headings, so that config's PRESENCE is proof a document cannot be indexed and the
+     natural reading of it concludes the opposite of the truth. This document carries no config and 25
+     `data-level` headings, the same signature as the `fs` row above (no config, 27). The probe was armed at
+     both ends rather than trusted: `w3c.github.io/screen-orientation/` answers `respecConfig=1` with zero
+     numbered headings, which is the negative control speaking. */
+  { key: "fsa", label: "File System Access", kind: "bikeshed",
+    base: "https://wicg.github.io/file-system-access/", edition: "maintained",
+    anchors: ["file system access", "fsa"] },
   /* THE ENCODING STANDARD, PROMOTED OUT OF OTHER_SPECS, AND IT IS THE SHARPEST CASE IN THIS TABLE FOR WHY A
      FOREIGN ROW IS A SILENT ZERO RATHER THAN A CLEAN BILL — because the blind spot was a WHOLE COMPONENT and
      the component is a table of section numbers. `core/encoding/encoding.c` is eleven decoders, and each one
@@ -2100,7 +2145,6 @@ const OTHER_SPECS = [
      sequences, §3.2.17 dictionary types, §3.3.13 [SecureContext]) and those anchored sites are what made IDL
      its dominant standard, so the vote answered `process accept types` with Web IDL §3.2.1 "any" and
      `remember a picked directory` with §3.2.2 "undefined". Both real numbers, neither the right document. */
-  "file system access",
   /* AND ITS ABBREVIATION, WHICH BECAME LOAD-BEARING THE MOMENT THE FILE SYSTEM STANDARD GAINED AN INDEX ROW.
      The two documents' numbers collide head-on: FS §2.2 is "The FileSystemHandle interface" and FSA §2.2 is
      "Permissions"; FS §2.3 is "The FileSystemFileHandle interface" and FSA §2.3 is "The FileSystemHandle
@@ -2111,7 +2155,16 @@ const OTHER_SPECS = [
      file's dominant anchor, so the four-letter sites keep falling to a vote and the vote now confidently
      answers FSA's numbers out of the File System Standard — a wrong answer manufactured by adding a right one.
      A foreign row is what refuses that: an `other:` anchor is never judged at all. */
-  "fsa",
+  /* AND BOTH ARE INDEXED NOW, WHICH IS WHAT THE TWO PARAGRAPHS ABOVE ASKED FOR — the `sri` note below says
+     it in the same words, "an index row would be better and is a fetch away", and this is that fetch. Both
+     spellings moved to the `fsa` row's anchors, by the same rule that listed them here, and they moved
+     TOGETHER for the reason the second paragraph gives: unlisting the abbreviation alone would hand FSA's
+     numbers to the File System Standard's vote, which is the wrong answer these two entries were added to
+     refuse. THE PARAGRAPHS STAY because the reasoning is why the anchors are two rather than one, and a
+     reader who re-derives it from scratch re-adds the entries. What was refuted, and is recorded where the
+     claim would otherwise be re-made: the entries WORKED — at the revision before the index row, the three
+     FSA components had ZERO file-vote placements between them, so the vote never got the chance the second
+     paragraph describes. The hazard was real and had already been closed here. */
   /* SUBRESOURCE INTEGRITY, AND ITS ABBREVIATION, WHICH IS THE ONE THIS TREE ACTUALLY WRITES. It arrived with
      CSP §6.7.2.4, whose step 4 hands a request's integrity metadata to SRI §3.3.2 "Parse metadata" and cites
      [SRI] for it — so a component reading that grammar cites a standard this audit does not index, and an

@@ -1,0 +1,137 @@
+{
+ "spec": "File System Access",
+ "key": "fsa",
+ "base": "https://wicg.github.io/file-system-access/",
+ "specUpdated": "10 October 2025",
+ "fetched": "2026-09-06",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "introduction"
+  },
+  "2": {
+   "title": "Files and Directories",
+   "page": "",
+   "id": "files-and-directories"
+  },
+  "3": {
+   "title": "Accessing Local File System",
+   "page": "",
+   "id": "local-filesystem"
+  },
+  "4": {
+   "title": "Accessibility Considerations",
+   "page": "",
+   "id": "accessibility-considerations"
+  },
+  "5": {
+   "title": "Privacy Considerations",
+   "page": "",
+   "id": "privacy-considerations"
+  },
+  "6": {
+   "title": "Security Considerations",
+   "page": "",
+   "id": "security-considerations"
+  },
+  "2.1": {
+   "title": "Concepts",
+   "page": "",
+   "id": "concepts"
+  },
+  "2.2": {
+   "title": "Permissions",
+   "page": "",
+   "id": "permissions"
+  },
+  "2.3": {
+   "title": "The FileSystemHandle interface",
+   "page": "",
+   "id": "api-filesystemhandle"
+  },
+  "2.3.1": {
+   "title": "The queryPermission() method",
+   "page": "",
+   "id": "api-filesystemhandle-querypermission"
+  },
+  "2.3.2": {
+   "title": "The requestPermission() method",
+   "page": "",
+   "id": "api-filesystemhandle-requestpermission"
+  },
+  "3.1": {
+   "title": "Local File System Permissions",
+   "page": "",
+   "id": "local-file-system-permissions"
+  },
+  "3.2": {
+   "title": "File picker options",
+   "page": "",
+   "id": "api-filepickeroptions"
+  },
+  "3.2.1": {
+   "title": "Accepted file types",
+   "page": "",
+   "id": "api-filepickeroptions-types"
+  },
+  "3.2.2": {
+   "title": "Starting Directory",
+   "page": "",
+   "id": "api-filepickeroptions-starting-directory"
+  },
+  "3.3": {
+   "title": "The showOpenFilePicker() method",
+   "page": "",
+   "id": "api-showopenfilepicker"
+  },
+  "3.4": {
+   "title": "The showSaveFilePicker() method",
+   "page": "",
+   "id": "api-showsavefilepicker"
+  },
+  "3.5": {
+   "title": "The showDirectoryPicker() method",
+   "page": "",
+   "id": "api-showdirectorypicker"
+  },
+  "3.6": {
+   "title": "Drag and Drop",
+   "page": "",
+   "id": "drag-and-drop"
+  },
+  "5.1": {
+   "title": "Users giving access to more, or more sensitive files than they intended.",
+   "page": "",
+   "id": "privacy-wide-access"
+  },
+  "5.2": {
+   "title": "Websites trying to use this API for tracking.",
+   "page": "",
+   "id": "privacy-tracking"
+  },
+  "5.3": {
+   "title": "First-party vs third-party contexts.",
+   "page": "",
+   "id": "privacy-third-party"
+  },
+  "6.1": {
+   "title": "Malware",
+   "page": "",
+   "id": "security-malware"
+  },
+  "6.2": {
+   "title": "Ransomware attacks",
+   "page": "",
+   "id": "security-ransomware"
+  },
+  "6.3": {
+   "title": "Filling up a users disk",
+   "page": "",
+   "id": "filling-up-disk"
+  }
+ },
+ "dfns": {},
+ "ops": {},
+ "uses": {}
+}
