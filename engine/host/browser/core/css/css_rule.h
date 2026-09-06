@@ -12,9 +12,11 @@
  * as this rule's declaration block: no member could read a block back, §6.1's serialization emits the three in
  * the SECTION'S order rather than the author's, and each descriptor has a grammar and an INITIAL of its own
  * that a declaration block knows nothing about. Its `type` is 0, for the reason the two CSSLayer* rules' is.
- * ITS `name` HAS AN UNRESOLVED CASE AND THE ASSERT IS WHERE THAT IS STATED. §3's prelude is
- * `<custom-property-name>#` and §3 makes a multi-name rule VALID ("a valid @property rule represents a custom
- * property registration for each <custom-property-name> in the rule's prelude"), while §6.1 declares one `name`
+ * ITS `name` HAS AN UNRESOLVED CASE AND THE ASSERT IS WHERE THAT IS STATED. CSS Properties and Values API 1
+ * §3 "The @property Rule"'s prelude is `<custom-property-name>#`, and CSS Properties and Values API 1 §3 makes
+ * a multi-name rule VALID ("a valid @property rule represents a custom property registration for each
+ * <custom-property-name> in the rule's prelude"), while CSS Properties and Values API 1 §6.1 declares one
+ * `name`
  * and carries the CSSWG's own note that the CSSOM for that shape "has not been resolved on". So the rule parses,
  * the list is stored, and the ONE reader that both `name` and the serialization go through is where the shape
  * with no defined answer is refused rather than answered with an invented one.
@@ -39,19 +41,19 @@
  * output crosses out of the arena as SERIALIZED TEXT (core/css/css_style_declaration.h's `cssom_parse_rules`),
  * and a rule holds JS strings that the COW delta captures, the snapshot carries and the cold tier writes.
  *
- * A GROUPING RULE'S CHILD LIST IS A JS ARRAY, for that same reason and for one more. §6.4 calls it the rule's
+ * A GROUPING RULE'S CHILD LIST IS A JS ARRAY, for that same reason and for one more. CSSOM §6.4 calls it the rule's
  * "child CSS rules ... the list can be mutated"; §6.4.5's `cssRules` is a `[SameObject]` CSSRuleList over it,
  * and §6.4.5 gives the rule an `insertRule` and a `deleteRule` of its own — so it is mutable cross-flow state
  * that has to park and fork, which an Array is and a `lxb_css_rule_list_t *` is not. The CSSRuleList SHARES that
  * very Array rather than copying it, because §6.1.2's liveness note requires the collection to track the list,
  * and sharing is also the only way `groupingRule.cssRules[0]` after an `insertRule` is the rule that was
  * inserted. It is the identical decision css_style_sheet.h records for a sheet's rules, and it is identical on
- * purpose: §6.4's insert and remove algorithms are stated ONCE over "a CSS rule list", so there must be one kind
+ * purpose: CSSOM §6.4's insert and remove algorithms are stated ONCE over "a CSS rule list", so there must be one kind
  * of thing for them to be stated over.
  *
- * ONE CLASS, ONE RECORD, MANY PROTOTYPES. §6.4's `type` is a STATE ITEM — "initialized when a rule is created
+ * ONE CLASS, ONE RECORD, MANY PROTOTYPES. CSSOM §6.4's `type` is a STATE ITEM — "initialized when a rule is created
  * and cannot change" — and it is also WHICH INTERFACE the rule is, so those are one field rather than two facts
- * that could disagree. It is what §6.4 steps 5 and 6 ask about a rule (an `@import` may not follow a style rule
+ * that could disagree. It is what CSSOM §6.4 steps 5 and 6 ask about a rule (an `@import` may not follow a style rule
  * and an `@namespace` may not join a sheet that holds one), what serialize-a-CSS-rule branches on, and what
  * §3.7.6 Attributes' and §3.7.7 Operations' brand check on a derived interface's member tests. It used to be
  * answered from the CLASS, on the stated ground that this build had exactly one rule interface; that stopped
@@ -112,7 +114,7 @@
  * (`@-webkit-keyframes` onto `@keyframes`), so the alias names the AT-KEYWORD and nothing else: one interface,
  * one prototype, one CSSOM §6.4.2 `type`, one prelude grammar, one body. A second arm would be a second creator able
  * to disagree with the first about any of those and no reader would see it. What the two spellings DO NOT
- * share is the at-keyword §6.4's serialize-a-CSS-rule emits — which is why the rule stores the one it was
+ * share is the at-keyword CSSOM §6.4's serialize-a-CSS-rule emits — which is why the rule stores the one it was
  * written with, and why that half is settled by measuring a real browser rather than by reading CSSOM's arm,
  * which names the literal `"@keyframes "` and predates §3.1 entirely.
  * AND THE REST OF THE PREFIXED CLASS IS NOT AN ABSENT CAPABILITY, WHICH IS WHY IT DROPS RATHER THAN CRASHING.
@@ -149,7 +151,7 @@
 #include "core/css/css_layer_order.h"
 
 void css_rule_init(JSContext *ctx);
-/* Every §6.4 and §7.x rule prototype for ONE realm — declared into core/realm.h's list. */
+/* Every CSSOM §6.4 and §7.x rule prototype for ONE realm — declared into core/realm.h's list. */
 void css_rule_install_proto(JSContext *ctx);
 /* `CSSRule`, `CSSGroupingRule`, `CSSStyleRule`, `CSSConditionRule`, `CSSMediaRule`, `CSSSupportsRule`,
    `CSSImportRule`, `CSSNamespaceRule`, `CSSFontFaceRule`, `CSSPageRule`, `CSSMarginRule`, `CSSKeyframeRule`,
@@ -170,7 +172,7 @@ char *css_rule_block_text(JSContext *ctx, JSValueConst rule, size_t *plen);
    delta exactly as `selectorText`'s does. */
 void css_rule_set_block_text(JSContext *ctx, JSValueConst rule, const char *text, size_t len);
 
-/* §6.4's "INSERT A CSS RULE rule in a CSS rule list list at index index, with a flag nested", and "REMOVE A CSS
+/* CSSOM §6.4's "INSERT A CSS RULE rule in a CSS rule list list at index index, with a flag nested", and "REMOVE A CSS
  * RULE from a CSS rule list list at index index", ENTIRE — the two algorithms §6.1.2's `insertRule`/`deleteRule`
  * and §6.4.5's are EACH stated over, so they are one implementation reached from two declarations rather than
  * two that can drift.
@@ -181,12 +183,12 @@ void css_rule_set_block_text(JSContext *ctx, JSValueConst rule, const char *text
  * at a SHEET's top level step 6 is the RANK ORDER CSS Cascade 5 §2 and CSS Namespaces §2 state (imports, then
  * namespaces, then everything else), asked in BOTH directions — a style rule inserted before an existing
  * `@import` is refused by the same test that refuses an `@import` inserted after one.
- * `css_rule_list_insert` answers §6.4 step 9's index, or an exception with the right DOMException pending. */
+ * `css_rule_list_insert` answers CSSOM §6.4 step 9's index, or an exception with the right DOMException pending. */
 JSValue css_rule_list_insert(JSContext *ctx, JSValueConst list, JSValueConst parent_sheet,
                              JSValueConst parent_rule, uint32_t index, const char *text, bool nested);
 JSValue css_rule_list_delete(JSContext *ctx, JSValueConst list, uint32_t index);
 
-/* §6.4's "REMOVE A CSS RULE" STEPS 2 AND 3 OVER AN UNKNOWN INDEX — the one thing either `deleteRule` needs
+/* CSSOM §6.4's "REMOVE A CSS RULE" STEPS 2 AND 3 OVER AN UNKNOWN INDEX — the one thing either `deleteRule` needs
  * that neither of their files can state, because the algorithm the steps belong to lives here and both members
  * are declared over it.
  *
@@ -196,7 +198,7 @@ JSValue css_rule_list_delete(JSContext *ctx, JSValueConst list, uint32_t index);
  * `sheet.deleteRule(location.hash.length - 1)` arrives holding the unknown, and a body owing C a `uint32_t`
  * for it has no number to give.
  *
- * IT IS ONE QUESTION. §6.4's remove-a-CSS-rule step 2 is "If index is greater than or equal to length, then
+ * IT IS ONE QUESTION. CSSOM §6.4's remove-a-CSS-rule step 2 is "If index is greater than or equal to length, then
  * throw an "IndexSizeError" exception", and step 3 is "Set old rule to the indexth item in list" — so the
  * algorithm needs the comparison AND the position, and answering only the first would leave step 3 holding an
  * unknown again. §3.2.4.6 unsigned long's ConvertToInt(V, 32, "unsigned") is TOTAL over [0, 2**32-1], which
@@ -207,7 +209,7 @@ JSValue css_rule_list_delete(JSContext *ctx, JSValueConst list, uint32_t index);
  * the loop first; the `item(index)` family then turned out to ask the identical question of the identical
  * type, so the chain — its cursor, its operation string, its one reading of the example, its arm numbering and
  * its named residual — became the component both use, and the state below is that component's type. What
- * stays §6.4's is the two facts the component takes as parameters and the one it refuses to decide: how many
+ * stays CSSOM §6.4's is the two facts the component takes as parameters and the one it refuses to decide: how many
  * positions the algorithm admits, what to call the question, and what the past-the-end world IS. Here that
  * world is step 2's IndexSizeError; for every `item(index)` it is an ordinary null.
  *
@@ -224,11 +226,11 @@ int css_rule_delete_index_run(JSContext *ctx, JSStepHdr *hdr, IdlIndexChain *c,
                               JSValueConst index_v, JSValueConst list, uint32_t *pindex);
 
 /* THE SAME `unsigned long index`, READ BY THE OTHER TWO MEMBERS — §6.1.2's and §6.4.5's `insertRule`, which are
- * declared over §6.4's INSERT a CSS rule. The KNOWN value is answered here, by the one copy of the arithmetic;
+ * declared over CSSOM §6.4's INSERT a CSS rule. The KNOWN value is answered here, by the one copy of the arithmetic;
  * the UNKNOWN is a fork these two bodies cannot yet perform, and it ABORTS naming what to build rather than
  * coercing.
  *
- * THEY ARE NOT MACHINES YET AND THE REASON IS THE STEP THE INDEX SHARES ITS BODY WITH. §6.4's insert-a-CSS-rule
+ * THEY ARE NOT MACHINES YET AND THE REASON IS THE STEP THE INDEX SHARES ITS BODY WITH. CSSOM §6.4's insert-a-CSS-rule
  * step 2 is "If index is greater than length, then throw an "IndexSizeError" exception" — `>` and not `>=`,
  * because appending at the very end is legal — so its chain runs over 0 … length, ONE position longer than
  * remove's; that part is a parameter and not an obstacle. What is an obstacle is that these bodies hold a
@@ -286,7 +288,7 @@ int css_rule_delete_index_run(JSContext *ctx, JSStepHdr *hdr, IdlIndexChain *c,
         }                                                                                                     \
     } while (0)
 
-/* CSS Syntax's PARSE A STYLESHEET'S CONTENTS, as §6.4 rule OBJECTS appended to `list` — what HTML §4.2.6's
+/* CSS Syntax's PARSE A STYLESHEET'S CONTENTS, as CSSOM §6.4 rule OBJECTS appended to `list` — what HTML §4.2.6's
    sheet creation runs. `parent_sheet` is the sheet every rule in it names. */
 void css_rule_build_sheet(JSContext *ctx, JSValueConst list, JSValueConst parent_sheet,
                           const char *text, size_t len);
