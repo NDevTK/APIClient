@@ -333,6 +333,18 @@ function _parkedProgress(item) {
   //           in twice and was therefore sampled AFTER holding the thread for a whole turn — and a walked of 0
   //           beside it is a real refusal at the first arm. `turns == tried` means every flow was sampled once,
   //           before it ran, and the zero says nothing at all.
+  //           AND THE READING HAS BEEN PERFORMED, so this is a note rather than an open question — but the
+  //           framing above is a DICHOTOMY and the pair has THREE states. Over the terminal `@S` list of
+  //           every log in the corpus, `turns < tried` is a large minority: more candidate flows were seeded
+  //           than switch-ins were counted, so some seeded candidate was never handed the thread at all, and
+  //           a record like that mixes flows that ran with flows that did not — NEITHER branch. It does not
+  //           bite here, measured rather than hoped: every record carrying a walked of 0 is in the
+  //           `turns > tried` bucket and none is in `turns == tried`, so the refusal reading holds. The
+  //           derivation travels as a command and not a count, because the counts move: take the LAST `@S`
+  //           line of each log — never every line, since a census series mixes one candidate before it ran
+  //           with the same candidate after — bucket by `turns` against `tried`, read `runwayWalked` in each.
+  //           WHAT DOES NOT MOVE: a two-branch pigeonhole over two counters is exhaustive only where one
+  //           cannot exceed the other, and nothing here guarantees that.
   //           THE PRODUCER FLAG THIS USED TO WAIT FOR NOW EXISTS AND THE SENTENCE THAT SAID OTHERWISE IS GONE:
   //           it read "names the producer flag that would tell them apart. Until it exists, this is not a
   //           distance", and it went stale the moment solve.c gained `runwayArms` — the arm count of the frozen

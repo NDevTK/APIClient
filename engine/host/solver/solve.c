@@ -2776,6 +2776,21 @@ void solve_flow_begin(Flow *f) {
            refusal at the flow's first arm. `turns == tried` means every flow was sampled exactly once, before
            it ran, and the zero is the sampling and not the engine. The two take opposite work and the pair is
            already emitted, so this is a reading a consumer performs rather than a field anyone owes.
+           AND THE READING HAS BEEN PERFORMED, WHICH IS WHY THIS IS A NOTE AND NOT AN OPEN QUESTION — but the
+           framing above is a DICHOTOMY and the pair has THREE states, which is the half worth keeping. Over
+           the terminal `@S` list of every log in the corpus, `turns < tried` is a large minority: more
+           candidate flows were seeded than switch-ins were ever counted, so some seeded candidate was never
+           handed the thread at all. That is NEITHER branch — such a record mixes samples from flows that ran
+           with flows that did not, so a zero over it is not a refusal and is not the sampling either. It does
+           not bite here, and that is a measurement rather than a hope: every record carrying a walked of 0
+           falls in the `turns > tried` bucket and none falls in `turns == tried`, so the refusal reading is
+           the one that holds and the seam this note was written to price is NOT owed. The derivation is
+           handed over as a command and not as a count, because the counts move: take the LAST `@S` line of
+           each log — never every line, since a census series mixes one candidate before it ran with the same
+           candidate after, which is the gauge-versus-lifetime error one directory up — bucket its records by
+           `turns` against `tried`, and read `runwayWalked` within each bucket. THE PART THAT DOES NOT MOVE:
+           a two-branch pigeonhole over two counters is exhaustive only where one counter cannot exceed the
+           other, and nothing here guarantees that.
            IT IS PER-SEARCH AND THAT IS WHY IT IS THE RIGHT ONE. The frontier census's `distMax` looks like it
            answers the same question and cannot: it is a MAX over every member, so one search that walks its
            whole path pins it and no value the others take can move it. Measured on a run reading `distMax`
