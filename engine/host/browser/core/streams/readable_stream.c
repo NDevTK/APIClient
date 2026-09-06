@@ -4027,8 +4027,19 @@ static int js_from_call_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc,
         if (r < 0) return -1;
         cb_result = JS_UNDEFINED;
         if (s->is_sync) {
-            /* 27.1.4.1: the sync record is WRAPPED, so `next` awaits each value — the engine's intrinsic,
-               because writing that unwrap here would be a second copy of one. */
+            /* ECMAScript §27.1.5.1 "CreateAsyncFromSyncIterator ( syncIteratorRecord )": the sync record is
+               WRAPPED, so `next` awaits each value — the engine's intrinsic, because writing that unwrap
+               here would be a second copy of one.
+               §27.1.4.1 STOOD HERE and is "%AsyncIteratorPrototype% [ %Symbol.asyncDispose% ] ( )", which
+               is a different operation. THE SAME WRONG NUMBER IS STILL IN THIS FILE'S FC_SYNC_CALL STAGE
+               LABEL AND CANNOT BE REPAIRED THE WAY THIS ONE WAS. A label is a parked machine's rest-point
+               IDENTITY — JSTrampStepDef.steps says a resume resolves the label back to an index in the
+               build doing the resuming — so editing those bytes renames a stage that snapshots in the
+               cold tier are parked at, which §NO BOUNDS calls a cap and bans. The citation channel reports
+               that label, correctly and permanently, and no edit at the site can drain it: the repair is a
+               stage declaration whose identity is a stable token distinct from its human-readable
+               citation. Until that exists, a reader who follows the label's number lands on the disposal
+               method rather than on the wrapper. */
             JSValue nextw;
             JSValue wrapped = JS_NewAsyncFromSyncIterator(ctx, s->iterator, s->next_fn, &nextw);
             s->iterator = s->next_fn = JS_UNDEFINED;   /* both were consumed */
