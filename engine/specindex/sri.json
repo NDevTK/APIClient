@@ -1,0 +1,191 @@
+{
+ "spec": "Subresource Integrity",
+ "key": "sri",
+ "base": "https://w3c.github.io/webappsec-subresource-integrity/",
+ "specUpdated": "20 March 2026",
+ "fetched": "2026-09-06",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "intro"
+  },
+  "2": {
+   "title": "Key Concepts and Terminology",
+   "page": "",
+   "id": "terms"
+  },
+  "3": {
+   "title": "Framework",
+   "page": "",
+   "id": "framework"
+  },
+  "4": {
+   "title": "Proxies",
+   "page": "",
+   "id": "proxies"
+  },
+  "5": {
+   "title": "Security and Privacy Considerations",
+   "page": "",
+   "id": "security-considerations"
+  },
+  "6": {
+   "title": "Acknowledgements",
+   "page": "",
+   "id": "acknowledgements"
+  },
+  "1.1": {
+   "title": "Goals",
+   "page": "",
+   "id": "goals"
+  },
+  "1.2": {
+   "title": "Use Cases/Examples",
+   "page": "",
+   "id": "examples"
+  },
+  "1.2.1": {
+   "title": "Resource Integrity",
+   "page": "",
+   "id": "resource-integrity"
+  },
+  "2.1": {
+   "title": "Grammatical Concepts",
+   "page": "",
+   "id": "grammar-concepts"
+  },
+  "3.1": {
+   "title": "Integrity metadata",
+   "page": "",
+   "id": "integrity-metadata-description"
+  },
+  "3.2": {
+   "title": "Cryptographic hash functions",
+   "page": "",
+   "id": "hash-functions"
+  },
+  "3.2.1": {
+   "title": "Agility",
+   "page": "",
+   "id": "agility"
+  },
+  "3.2.2": {
+   "title": "Priority",
+   "page": "",
+   "id": "priority"
+  },
+  "3.3": {
+   "title": "Response verification algorithms",
+   "page": "",
+   "id": "verification-algorithms"
+  },
+  "3.3.1": {
+   "title": "Apply algorithm to bytes",
+   "page": "",
+   "id": "apply-algorithm-to-response"
+  },
+  "3.3.2": {
+   "title": "Parse metadata",
+   "page": "",
+   "id": "parse-metadata-section"
+  },
+  "3.3.3": {
+   "title": "Get the strongest metadata from set",
+   "page": "",
+   "id": "get-the-strongest-metadata"
+  },
+  "3.3.4": {
+   "title": "Do bytes match metadataList ?",
+   "page": "",
+   "id": "does-response-match-metadatalist"
+  },
+  "3.4": {
+   "title": "Verification of HTML document subresources",
+   "page": "",
+   "id": "verification-of-html-document-subresources"
+  },
+  "3.5": {
+   "title": "The integrity attribute",
+   "page": "",
+   "id": "the-integrity-attribute"
+  },
+  "3.6": {
+   "title": "The integrity link processing option",
+   "page": "",
+   "id": "the-integrity-link-processing-option"
+  },
+  "3.7": {
+   "title": "Handling integrity violations",
+   "page": "",
+   "id": "handling-integrity-violations"
+  },
+  "3.8": {
+   "title": "Integrity-Policy",
+   "page": "",
+   "id": "integrity-policy-section"
+  },
+  "3.8.1": {
+   "title": "Parse Integrity-Policy headers",
+   "page": "",
+   "id": "parse-integrity-policy-headers-section"
+  },
+  "3.8.2": {
+   "title": "Should request be blocked by Integrity Policy",
+   "page": "",
+   "id": "should-request-be-blocked-by-integrity-policy-section"
+  },
+  "3.8.3": {
+   "title": "Report violations",
+   "page": "",
+   "id": "report-violations"
+  },
+  "5.1": {
+   "title": "Non-secure contexts remain non-secure",
+   "page": "",
+   "id": "non-secure-contexts"
+  },
+  "5.2": {
+   "title": "Hash collision attacks",
+   "page": "",
+   "id": "hash-collision-attacks"
+  },
+  "5.3": {
+   "title": "Cross-origin data leakage",
+   "page": "",
+   "id": "cross-origin-data-leakage"
+  }
+ },
+ "dfns": {
+  "hash expression": [
+   "3.5"
+  ],
+  "hash with options": [
+   "3.5"
+  ],
+  "integrity metadata": [
+   "3.5"
+  ],
+  "integrity policy": [
+   "3.8"
+  ],
+  "option expression": [
+   "3.5"
+  ],
+  "parse integrity policy headers": [
+   "3.8.1"
+  ],
+  "parse metadata": [
+   "3.3.2"
+  ],
+  "should request be blocked by integrity policy": [
+   "3.8.2"
+  ]
+ },
+ "ops": {},
+ "uses": {
+  "integrity policy": {
+   "3.8.3": 2
+  }
+ }
+}

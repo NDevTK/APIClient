@@ -1,0 +1,155 @@
+{
+ "spec": "Mixed Content",
+ "key": "mixedcontent",
+ "base": "https://w3c.github.io/webappsec-mixed-content/",
+ "specUpdated": "23 February 2023",
+ "fetched": "2026-09-06",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "intro"
+  },
+  "2": {
+   "title": "Key Concepts and Terminology",
+   "page": "",
+   "id": "terms"
+  },
+  "3": {
+   "title": "Content Categories",
+   "page": "",
+   "id": "categories"
+  },
+  "4": {
+   "title": "Algorithms",
+   "page": "",
+   "id": "algorithms"
+  },
+  "5": {
+   "title": "Integrations",
+   "page": "",
+   "id": "integration"
+  },
+  "6": {
+   "title": "Obsolescences",
+   "page": "",
+   "id": "obsolescences"
+  },
+  "7": {
+   "title": "Security and Privacy Considerations",
+   "page": "",
+   "id": "security-considerations"
+  },
+  "8": {
+   "title": "Acknowledgements",
+   "page": "",
+   "id": "acknowledgements"
+  },
+  "3.1": {
+   "title": "Upgradeable Content",
+   "page": "",
+   "id": "category-upgradeable"
+  },
+  "3.2": {
+   "title": "Blockable Content",
+   "page": "",
+   "id": "category-blockable"
+  },
+  "4.1": {
+   "title": "Upgrade a mixed content request to a potentially trustworthy URL , if appropriate",
+   "page": "",
+   "id": "upgrade-algorithm"
+  },
+  "4.2": {
+   "title": "Modifications to previous algorithms",
+   "page": "",
+   "id": "existing-mix-algorithms"
+  },
+  "4.3": {
+   "title": "Does settings prohibit mixed security contexts?",
+   "page": "",
+   "id": "categorize-settings-object"
+  },
+  "4.4": {
+   "title": "Should fetching request be blocked as mixed content?",
+   "page": "",
+   "id": "should-block-fetch"
+  },
+  "4.5": {
+   "title": "Should response to request be blocked as mixed content?",
+   "page": "",
+   "id": "should-block-response"
+  },
+  "5.1": {
+   "title": "Modifications to Fetch",
+   "page": "",
+   "id": "fetch"
+  },
+  "5.2": {
+   "title": "Modifications to HTML",
+   "page": "",
+   "id": "html"
+  },
+  "6.1": {
+   "title": "Strict Mixed Content Checking",
+   "page": "",
+   "id": "strict-checking"
+  },
+  "7.1": {
+   "title": "Form Submission",
+   "page": "",
+   "id": "requirements-forms"
+  },
+  "7.2": {
+   "title": "User Controls",
+   "page": "",
+   "id": "requirements-user-controls"
+  }
+ },
+ "dfns": {
+  "a priori authenticated url": [
+   "2"
+  ],
+  "blockable mixed content": [
+   "3.2"
+  ],
+  "embedding document": [
+   "2"
+  ],
+  "mixed content": [
+   "2"
+  ],
+  "mixed download": [
+   "2"
+  ],
+  "unauthenticated response": [
+   "2"
+  ],
+  "upgradeable mixed content": [
+   "3.1"
+  ]
+ },
+ "ops": {},
+ "uses": {
+  "a priori authenticated url": {
+   "8": 2
+  },
+  "blockable mixed content": {
+   "8": 3,
+   "4.5": 2
+  },
+  "embedding document": {
+   "8": 2
+  },
+  "mixed content": {
+   "8": 3
+  },
+  "unauthenticated response": {
+   "8": 3,
+   "4.5": 2
+  },
+  "upgradeable mixed content": {
+   "8": 3
+  }
+ }
+}

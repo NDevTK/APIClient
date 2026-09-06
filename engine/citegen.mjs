@@ -480,6 +480,51 @@ const SPECS = [
     base: "https://drafts.csswg.org/cssom/", edition: "maintained", anchors: ["cssom"] },
   { key: "csp", label: "Content Security Policy Level 3", kind: "bikeshed",
     base: "https://w3c.github.io/webappsec-csp/", edition: "maintained", anchors: ["csp"] },
+  /* MIXED CONTENT, AND THE COST OF ITS ABSENCE WAS WORSE THAN THE SILENCE A MISSING ROW USUALLY BUYS. Its
+     three numbers name its upgrade algorithm and its two prohibition predicates, and FETCH NUMBERS ALL THREE
+     of those coordinates under different algorithms — Main fetch, Scheme fetch and HTTP fetch — so with
+     nothing to resolve to, `core/fetch/mixed_content.h`'s citations were placed at Fetch by its file's vote
+     and the quotation channel compared this standard's sentences against Fetch's and reported them not found.
+     THE ROOT CAUSE WAS A SPELLING ON THE FOREIGN LIST RATHER THAN THE MISSING ROW, and that is worth more
+     than the repair: OTHER_SPECS held `mixed`, and this tree writes `Mixed Content`, whose longest tail is
+     `mixed content` — so classifyAnchor matched neither and those citations arrived with NO ANCHOR AT ALL. A
+     foreign entry would have bought the usual silence; the wrong half of the name bought an accusation
+     instead. A list keyed on a SPELLING protects nothing where that spelling never occurs, and an entry that
+     never fires is indistinguishable from no entry at all.
+     BIKESHED-RENDERED AND RE-DERIVED RATHER THAN TAKEN FROM THE SITE THAT ASKED FOR IT: no `respecConfig`,
+     a dt-updated of 23 February 2023, and TWENTY `data-level` headings — the component that asked for this
+     row said 46, which is the count of `class="secno"` spans and counts every heading twice, because the
+     table of contents carries one too. The dt-updated is the DOCUMENT's fact rather than a staleness here.
+     THE NUMBERS ARE WRITTEN WITHOUT A SECTION SIGN THROUGHOUT THIS NOTE AND THE NEXT, for the reason the
+     `c.tail` paragraph gives: this file audits itself, so a worked example carrying a real citation joins
+     that number's group here and helps decide how every other citation of it in this file resolves. Measured
+     — an earlier draft of these two notes spelled them out, and a CSS Typed OM number in a row below flipped
+     to this file's html vote, accusing a comment that had been correct for months. */
+  { key: "mixedcontent", label: "Mixed Content", kind: "bikeshed",
+    base: "https://w3c.github.io/webappsec-mixed-content/", edition: "maintained",
+    anchors: ["mixed content"] },
+  /* SUBRESOURCE INTEGRITY, INDEXED IN THE SAME DIFF AS MIXED CONTENT BECAUSE INDEXING ONE ALONE MOVED THE
+     DEFECT INSTEAD OF ENDING IT. Measured: with Mixed Content indexed and this standard not,
+     `subresource_integrity.c` states the title `Key Concepts and Terminology` — and Mixed Content's second
+     section carries THAT EXACT TITLE — so the citation, which nothing had placed before, resolved to the
+     newly-indexed neighbour and its two verbatim quotations were reported as diverging from a document they
+     never named. The neighbourhood corroboration cannot help there: the number is the same in both. That is
+     this table's own caveat arriving from the corpus side — "only one INDEXED standard uses this title" is
+     not "only one standard uses this title", and a boilerplate WebAppSec heading is unique only by accident
+     of which rows exist.
+     ITS OWN CITATIONS WERE QUIET FOR A REASON THAT IS NEITHER OF THE TWO USUALLY GIVEN. Not because their
+     numbers collide with nothing — Fetch numbers a section at the same coordinate as this standard's
+     Integrity-Policy one — and not because those sites carry nothing to compare. They were quiet because
+     `sri` and `subresource integrity` were BOTH already on OTHER_SPECS, so classifyAnchor marked every
+     citation naming them foreign and no channel ever looked. The unprotected population was the citations
+     that do NOT name the standard, which the file vote handed to Fetch.
+     BOTH SPELLINGS ARE ANCHORS BECAUSE THE TREE PREFERS THE ABBREVIATION FOUR TO ONE — `SRI` stands before a
+     section sign at 24 sites and `Subresource Integrity` at 5, so a row carrying only the full name would
+     leave the larger population unanchored and still deciding by vote.
+     Bikeshed-rendered: 30 `data-level` headings, a dt-updated of 20 March 2026, no `respecConfig`. */
+  { key: "sri", label: "Subresource Integrity", kind: "bikeshed",
+    base: "https://w3c.github.io/webappsec-subresource-integrity/", edition: "maintained",
+    anchors: ["subresource integrity", "sri"] },
   { key: "xhr", label: "XMLHttpRequest Standard", kind: "bikeshed",
     base: "https://xhr.spec.whatwg.org/", edition: "maintained", anchors: ["xhr", "xmlhttprequest"] },
   { key: "fileapi", label: "File API", kind: "bikeshed",
@@ -2015,7 +2060,11 @@ const OTHER_SPECS = [
   "svg", "mathml", "wasm", "console", "performance",
   "workers", "websockets", "rfc", "unicode", "utf", "clipboard",
   "notifications", "geolocation", "geometry", "fullscreen", "pointerevents", "webaudio", "webrtc",
-  "beacon", "referrer", "mixed", "cors", "cookies",
+  "beacon", "referrer", "cors", "cookies",
+  /* `mixed` STOOD HERE AND IS NOW AN ANCHOR OF ITS OWN ROW, retired rather than deleted for the reason the
+     webcrypto note above gives. It is the entry worth keeping the shape of: it was the WRONG HALF of the
+     name this tree writes, so it fired at no site and protected nothing, and the citations it was meant to
+     cover were audited as Fetch. See the Mixed Content row. */
   /* A MULTI-WORD NAME WHOSE LAST WORD IS AN INDEXED STANDARD'S ANCHOR MUST BE LISTED HERE OR IT IS AUDITED AS
      THAT STANDARD, which is a WRONG ANSWER rather than a coverage gap. "Namespaces in XML" numbers entirely
      different sections from XML 1.0, and "Selection API" is not the File API. "Web Cryptography API" was the
@@ -2049,7 +2098,8 @@ const OTHER_SPECS = [
      `file system access` failure exactly: a real number, the wrong document. A foreign row REFUSES to decide
      rather than deciding wrongly, which is the honest state for a standard whose text this audit does not
      hold; an index row would be better and is a fetch away. */
-  "sri", "subresource integrity",
+  /* AND THEY ARE INDEXED NOW, WHICH IS WHAT THE PARAGRAPH ABOVE ASKED FOR — "an index row would be better
+     and is a fetch away". Both spellings moved to that row's anchors, by the same rule that listed them. */
   /* THE COMPATIBILITY STANDARD, AND IT IS HERE FOR THE FSA REASON WITH THE VOTE POINTING SOMEWHERE ELSE. This
      tree writes `CSS Compatibility §3.1` — the number WITH its standard, which is what CLAUDE.md asks for —
      and the tail regex ends on a word neither this list nor ANCHOR_TO_KEY held, so every one of those sites
