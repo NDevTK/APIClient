@@ -34,7 +34,7 @@ import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { platformNames } from "./platform_names.mjs";
+import { platformNames, assertHeaderMatchesArtifact } from "./platform_names.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -86,6 +86,13 @@ const artifact = {
     wasm, sha256: createHash("sha256").update(readFileSync(wasm)).digest("hex"),
     stamp: JSON.parse(readFileSync(join(extDir, "lib/qjs/qjs.mjs.build.json"), "utf8")),
 };
+/* AND THE NAME LIST MUST BE THE ONE THAT ARTIFACT WAS BUILT FROM, asked BEFORE the browser is touched so a
+   refusal costs nothing and cannot be mistaken for a run that measured little. Reading the stamp and digesting
+   the wasm says WHICH artifact answered; it does not say the QUESTION was the one that artifact can be asked.
+   Those are two claims and only the first was being made — the probe would have derived today's table, asked a
+   realm compiled against a different one, and printed a figure stamped with a revision, which is the most
+   credible form a number belonging to nothing can take. `assertHeaderMatchesArtifact` states the second. */
+const tableAt = assertHeaderMatchesArtifact(artifact.stamp.head, names);
 
 const { default: puppeteer } = await import("puppeteer");
 
@@ -156,6 +163,12 @@ server.close();
 const good = results.filter((x) => x.reachedEnd && x.total !== null && x.absent !== null);
 const out = {
     artifact: { sha256: artifact.sha256, head: artifact.stamp.head, dirty: artifact.stamp.dirty, at: artifact.stamp.at },
+    /* THE AGREEMENT THAT LICENSED THE FIGURE, PRINTED RATHER THAN ASSUMED. The check above throws when the
+       table this probe derived is not the artifact's, so reaching here already means they agree — and a
+       guarantee nobody can see in the output is one the next reader has to take on trust. Stating the count
+       the artifact was built against is what lets a reader confirm the question and the realm were the same
+       size without re-deriving anything. */
+    nameTable: { count: tableAt.count, agreesWithArtifactAt: tableAt.head },
     runs: results.length,
     reachedEnd: good.length,
     /* A run that did not reach PROBE-END is REPORTED and never averaged in: it is the absent count, not a

@@ -15,19 +15,66 @@
  * surface rots, and the reader wants today's. */
 
 import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 
-export const PLATFORM_NAMES_HEADER =
-    join(dirname(fileURLToPath(import.meta.url)), "..", "engine/host/browser/platform_names.h");
+export const PLATFORM_NAMES_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+export const PLATFORM_NAMES_HEADER = join(PLATFORM_NAMES_ROOT, "engine/host/browser/platform_names.h");
+
+/* THE PARSE ITSELF, OVER TEXT, so the file on disk and a revision's blob go through ONE reader. Splitting the
+ * read from the parse is what lets the artifact check below ask the same question of an older commit without
+ * a second copy of this regex — the reason this module exists at all, one level down. */
+export function platformNamesFromText(src, label) {
+    const open = src.indexOf("PLATFORM_NAMES[] = {");
+    if (open < 0) throw new Error(`${label}: no PLATFORM_NAMES[] table — the generator's shape changed`);
+    const close = src.indexOf("};", open);
+    if (close < 0) throw new Error(`${label}: PLATFORM_NAMES[] is unterminated`);
+    const names = [...src.slice(open, close).matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) => m[1]);
+    if (names.length === 0) throw new Error(`${label}: PLATFORM_NAMES[] parsed empty`);
+    return names;
+}
 
 export function platformNames(header = PLATFORM_NAMES_HEADER) {
-    const src = readFileSync(header, "utf8");
-    const open = src.indexOf("PLATFORM_NAMES[] = {");
-    if (open < 0) throw new Error(`${header}: no PLATFORM_NAMES[] table — the generator's shape changed`);
-    const close = src.indexOf("};", open);
-    if (close < 0) throw new Error(`${header}: PLATFORM_NAMES[] is unterminated`);
-    const names = [...src.slice(open, close).matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) => m[1]);
-    if (names.length === 0) throw new Error(`${header}: PLATFORM_NAMES[] parsed empty`);
-    return names;
+    return platformNamesFromText(readFileSync(header, "utf8"), header);
+}
+
+/* THE SAME TABLE AS SOME REVISION STATED IT. A failed `git show` is RETURNED AS THE FAILURE it is rather than
+ * as an empty list, because a revision that cannot be read and a revision whose table is empty are different
+ * facts and only one of them is about the platform. */
+export function platformNamesAt(rev, root = PLATFORM_NAMES_ROOT, header = PLATFORM_NAMES_HEADER) {
+    const rel = relative(root, header);
+    const r = spawnSync("git", ["show", `${rev}:${rel}`], { cwd: root, encoding: "utf8", maxBuffer: 1 << 28 });
+    if (r.status !== 0)
+        throw new Error(`cannot read ${rel} at ${rev}: ${String(r.stderr || "").trim() || "git failed"}`);
+    return platformNamesFromText(r.stdout, `${rel}@${rev}`);
+}
+
+/* THE ADJACENT DOOR THE SHAPE CHECK ABOVE LEAVES OPEN, AND IT IS THE ONE THAT PRODUCES A PLAUSIBLE NUMBER.
+ * `platformNamesFromText` fails when the generator's SHAPE moves. This fails when the header's CONTENT
+ * disagrees with the ARTIFACT being measured — a different question, and the one that matters for a probe that
+ * asks a BUILT realm which of today's names it answers. The engine in that artifact was compiled against the
+ * header as it stood at its stamped revision; deriving the list from today's header and asking yesterday's
+ * realm produces a count belonging to NEITHER revision, and it is wrong in the direction this whole module
+ * exists to prevent — a shorter list reports a smaller absence and reads as progress.
+ * MEASURED, WHICH IS WHY THIS IS A THROW AND NOT A NOTE: at the artifact stamped e5a0a330 the table held 1338
+ * names and the working tree held 1285, a difference of 53 removed and none added, because idlgen stopped
+ * listing WebGL extension interfaces that are not [Exposed=Window] globals. That is a CORRECT generator fix
+ * and it still makes the pair unmeasurable together.
+ * THE COMPARISON IS OVER THE NAME SETS AND NOT THE FILE BYTES, deliberately: a comment or an ordering change
+ * in a generated header is not a change to the population, and refusing on it would make this fire for
+ * reasons that have nothing to do with what is being measured. */
+export function assertHeaderMatchesArtifact(stampHead, names = platformNames()) {
+    const at = platformNamesAt(stampHead);
+    const now = new Set(names), was = new Set(at);
+    const added = names.filter((n) => !was.has(n)), gone = at.filter((n) => !now.has(n));
+    if (!added.length && !gone.length) return { head: stampHead, count: at.length };
+    const show = (a) => a.slice(0, 8).join(" ") + (a.length > 8 ? ` … (+${a.length - 8})` : "");
+    throw new Error(
+        `the platform name table this probe derived is NOT the one the artifact under test was built from — ` +
+        `${names.length} names here against ${at.length} at the artifact's stamped revision ${stampHead}` +
+        (gone.length ? `; ${gone.length} present THERE and not here: ${show(gone)}` : "") +
+        (added.length ? `; ${added.length} present HERE and not there: ${show(added)}` : "") +
+        `. Asking that realm about this list measures a population no revision has, and a shorter list reports ` +
+        `a smaller absence, which reads as progress. Rebuild the artifact, or measure at the stamped revision.`);
 }
