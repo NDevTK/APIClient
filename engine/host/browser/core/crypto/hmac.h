@@ -172,37 +172,27 @@ typedef struct {
  * Returns the §13 CryptoKey, or JS_EXCEPTION with the DOMException the algorithm names live in the context:
  * a "DataError" for steps 1, 7 and 8, a "SyntaxError" for step 3, a "NotSupportedError" for step 5's Otherwise.
  *
- * A NAMED RESIDUAL — STEP 5's `format is "jwk"` ARM. WHAT IS NOT COVERED: a JWK import, whose nine sub-steps
- * decode the `k` field per Section 6.4 of JSON Web Algorithms and check `kty`, `alg`, `use`, `key_ops` and
- * `ext`. WHAT THE NEXT DIFF BUILDS, IN THIS ORDER AND AS ONE LANDING: an `IDL_BUFFERSOURCE_OR_DICT` row for
- * §14.3.9's `(BufferSource or JsonWebKey) keyData` position (no row of that shape exists — the enum's unions
- * are all string-, boolean-, double- or sequence-with-dictionary), THEN §15's dictionary as an
- * `IdlDictMember[]` table, THEN these nine sub-steps here.
- * THE TABLE GOES IN THIS COMPONENT AND NOT IN core/idl_args, WHICH THIS CLAUSE USED TO SAY. core/idl_args
- * owns the MECHANISM — the `IdlArgType` row and its conversion arm — while every dictionary's member table is
- * declared by the component that receives it, as `REQUEST_INIT` is in core/fetch/request.c and
- * `CSS_STYLE_SHEET_INIT` in core/css/css_style_sheet.c. A reader who obeyed the retired clause would have
- * written this table into another component's file.
- * AND THE ORDER IS NOT A PREFERENCE. The table has NO READER until the union row exists, because the position
- * that would reach it is declared IDL_BUFFERSOURCE; landing it alone turns the Web IDL gap audit's
- * `JsonWebKey: 20 of 20 UNDECLARED` row green while `importKey("jwk", …)` fails exactly as it does today —
- * a false COMPLETE bought for the price of the mechanism. Landing the first two without the third moves the
- * failure from a TypeError at the conversion to step 5's own NotSupportedError, which is a different wrong
- * answer and not a nearer one.
- * THE SURFACE IS 23 MEMBERS ACROSS TWO DICTIONARIES, NOT THE 20 THE AUDIT ROW NAMES. Web Cryptography API
- * §15 "JsonWebKey dictionary" declares EIGHTEEN;
- * the row's `pub` and `priv` come from a `partial dictionary JsonWebKey` in a WICG draft (Modern Algorithms
- * in the Web Cryptography API, whose own comment attributes them to RFC 9964), which is a correct flattening
- * and a different population from the shipped standard's. The remaining three are the element type of that
- * same section's `sequence<RsaOtherPrimesInfo> oth`, a NESTED dictionary of `r`, `d` and `t`: no audit row
- * names it, because that walk reaches a dictionary through the members this engine declares and `oth` is one
- * of the undeclared ones — so the audit cannot see one level past its own finding.
- * HOW ITS ABSENCE SHOWS: `importKey("jwk", {kty:"oct",k:"…"}, {name:"HMAC",hash:"SHA-256"},
- * false, ["sign"])` rejects with a TypeError raised by the ARGUMENT CONVERSION — because the position is
- * declared IDL_BUFFERSOURCE and a JWK is an ordinary object — where a browser resolves with a CryptoKey. That
- * is a WRONG answer and not merely a narrower one, and it is stated rather than crashed on for one reason: the
- * conversion boundary answers before any step of this algorithm runs, so there is no site inside it at which a
- * crash could fire. The row is what moves the decision to where a crash can live. */
+ * STEP 5's `format is "jwk"` ARM IS BUILT, AND ITS RESIDUAL IS GONE. All nine sub-steps are in hmac.c, and the
+ * three mechanisms the retired clause named landed with them and in its order: core/idl_args.h's
+ * IDL_BUFFERSOURCE_OR_DICT for §14.3.9's `(BufferSource or JsonWebKey) keyData` position, the two
+ * IdlDictMember tables in core/crypto/subtle_crypto.c, and these steps. The clause was right about all three
+ * and right that they are ONE landing: the table alone turns a gap audit's row green while
+ * `importKey("jwk", …)` fails exactly as before, and the first two without the third move the failure from a
+ * TypeError at the conversion to step 5's NotSupportedError, which is a different wrong answer.
+ * WHAT IT DID NOT NAME WAS TWO MORE MECHANISMS, and that is the part worth keeping rather than the part it got
+ * right. `sequence<RsaOtherPrimesInfo> oth` needed a row of its own — there was no sequence-of-bare-dictionary
+ * type at all, and the corpus declares eighty-five dictionary members and five argument positions of that
+ * shape, so IDL_SEQUENCE_DICT is a platform mechanism the crypto surface merely happened to need first. And
+ * that arm's step 4 decode needed base64url, which the engine's exported JS_Base64Decode is not; what closed it was
+ * reading the jwk arm's step 3's own requirement — JSON Web Algorithms §6.4.1 through RFC 7515 §2's definition — as the
+ * validation the ALGORITHM already owes, after which the decode is an alphabet substitution over an
+ * already-validated string handed to the engine's own codec. A next-diff clause is a claim about this tree
+ * written by someone who knew what was missing and was guessing at what fills it; this one guessed three of
+ * five, and the two it missed were each in a different file from the ones it named.
+ * THE SURFACE IT STATED WAS EXACT and is kept because it is the half that is easy to get wrong: 23 members
+ * across TWO dictionaries, not the 20 across one that a gap-audit row named — §15 "JsonWebKey dictionary"
+ * declares eighteen, a `partial dictionary JsonWebKey` in a WICG draft adds `pub` and `priv`, and the
+ * remaining three are RsaOtherPrimesInfo's `r`, `d` and `t`. */
 JSValue hmac_import_key(JSContext *ctx, const char *format, JSValueConst key_data, const HmacImportParams *p,
                         bool extractable, uint32_t usages);
 

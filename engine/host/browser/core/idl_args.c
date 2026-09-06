@@ -1085,6 +1085,16 @@ static bool idl_type_is_dictionary(IdlArgType t)
     return t == IDL_DICT || t == IDL_DICT_OR_BOOL_FIRST || t == IDL_BOOL_OR_DICT ||
            t == IDL_STRING_OR_DICT ||
            t == IDL_USVSTRING_OR_DICT || t == IDL_UNRESTRICTED_DOUBLE_OR_DICT ||
+           /* `(BufferSource or D)` CAN PRODUCE A DICTIONARY, which is the whole of what this predicate asks.
+              It changes nothing for the one position that declares it today — Web Cryptography API §14.3.9's
+              `keyData` is REQUIRED, so §3.6 never hands it the `undefined` an omitted dictionary position
+              gets — and it is stated anyway because the predicate is about the TYPE: the day an OPTIONAL
+              position declares this union, leaving it out would give that position the IDL's `undefined`
+              where §3.2.25 step 4 gives it the all-defaults dictionary.
+              `IDL_SEQUENCE_DICT` IS DELIBERATELY NOT HERE. A sequence produces a LIST whose elements are
+              dictionaries; the position's own type is not one, so an omitted `sequence<D>` argument is an
+              ABSENT argument exactly as any other sequence is. */
+           t == IDL_BUFFERSOURCE_OR_DICT ||
            t == IDL_SEQUENCE_OBJECT_OR_DICT;
 }
 
@@ -1793,6 +1803,15 @@ static int idl_conv_seq_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *w, IdlC
     DCHECK(f->kind == IDL_FRAME_SEQUENCE,
            "the sequence driver was handed a frame that is converting a plain dictionary — a dictionary level "
            "has no iterator and no list, and its whole drive is the member loop");
+    /* AND IT STATED WHAT ITS ELEMENTS ARE. idl_conv_push CLEARS the frame, so an unstated `elem` is zero —
+       which is IDL_DOMSTRING, a real type this driver would silently read as "not the bare-dictionary
+       element" and send down §3.2.25's clause chain. That is the defaulted-field shape: a hole that is
+       indistinguishable from an answer. The two types below are the whole population a sequence frame is ever
+       pushed for, so naming both is what makes a third one a crash rather than a wrong arm. */
+    DCHECK(f->elem == IDL_SEQUENCE_STRING_OR_DICT || f->elem == IDL_SEQUENCE_DICT,
+           "a §3.2.21 sequence frame was pushed without stating its ELEMENT type — the frame is cleared at the "
+           "push, so an unstated one reads as IDL_DOMSTRING and takes §3.2.25's arm chain for a sequence whose "
+           "elements have no arm at all");
     if (f->phase == IDL_CONV_PULL) {
         r = iter_cursor_run(ctx, hdr, &f->cur, f->src, in, out_cb, out_argc);
         if (r > 0) return r;          /* parked ON THIS ELEMENT, at THIS depth */
@@ -1836,6 +1855,25 @@ static int idl_conv_seq_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *w, IdlC
            OUTCOME 0 IS THE DICTIONARY ARM, per step_fork_run's rule that outcome 0 is what a run with no
            forking policy takes: it is the arm §3.2.25 gives the Object an unknown is represented BY, and the
            arm every consumer of the crossed value already reached. */
+        if (f->elem == IDL_SEQUENCE_DICT) {
+            /* `sequence<D>` — §3.2.17 IS the whole element conversion, so there is no clause chain to walk and
+               nothing about the element to test. THAT IS WHY A CONCOLIC ELEMENT IS NOT FORKED HERE and the arm
+               ask below is skipped rather than answered: a fork needs two worlds the conversion tells apart,
+               and this element type has one. An unknown element reaches §3.2.17 exactly as a known Object
+               does, and every member read off it yields another unknown — which is what IDL_DICT already does
+               at an argument position and why idl_concolic_rule leaves both alone.
+               §3.2.17 STEP 1 IS THE REFUSAL: "If jsDict is not an Object and jsDict is neither undefined nor
+               null, then throw a TypeError" — so null and undefined are admitted and become the element's
+               all-defaults dictionary, and every other non-object throws. */
+            if (!JS_IsObject(f->cur.value) && !JS_IsNull(f->cur.value) && !JS_IsUndefined(f->cur.value)) {
+                JS_ThrowTypeError(ctx, "a sequence<dictionary> element is neither an object, null nor "
+                                       "undefined");
+                return -1;
+            }
+            if (idl_level_start_decl(ctx, &f->lvl, f->cur.value, f->d) < 0) return -1;
+            f->phase = IDL_CONV_MEMBERS;
+            return 0;
+        }
         if (concolic_is(f->cur.value)) {
             f->phase = IDL_CONV_ARM;   /* the ASK is the resume point — the pull cannot be, it advances */
         } else if (JS_IsObject(f->cur.value) || JS_IsNull(f->cur.value) || JS_IsUndefined(f->cur.value)) {
@@ -2433,10 +2471,15 @@ static int idl_level_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *walk, IdlC
                    absent, so step 4.1.5's default or step 4.1.6's TypeError answered it above.) */
                 JS_FreeValue(ctx, in);
                 in = JS_UNDEFINED;
-            } else if (mt == IDL_SEQUENCE_STRING_OR_DICT) {
-                /* §3.2.21 whose element type is §3.2.25's `(DOMString or D)`. A value that is not an Object is
-                   a TypeError before anything is read, exactly as it is for every other sequence: the check is
-                   on the TYPE and not on iterability. */
+            } else if (mt == IDL_SEQUENCE_STRING_OR_DICT || mt == IDL_SEQUENCE_DICT) {
+                /* §3.2.21 Sequences — sequence<T> WHOSE ELEMENT TYPE NAMES A DICTIONARY, in the two shapes the
+                   platform writes: §3.2.25's `(DOMString or D)` and a bare `D`. ONE push, because the SEQUENCE
+                   half is identical — the same iterator, the same list, the same park at whatever element the
+                   cursor stands on — and the ELEMENT half is what differs, which is why the frame carries the
+                   element's declared type rather than a second frame kind.
+                   A value that is not an Object is a TypeError before anything is read, exactly as it is for
+                   every other sequence: the check is on the TYPE and not on iterability, so a string — which
+                   IS iterable — is refused here too. */
                 if (!JS_IsObject(w->mv)) {
                     JS_FreeValue(ctx, in);
                     JS_ThrowTypeError(ctx, "member `%s` of %s is not a sequence", dm->name,
@@ -2446,6 +2489,7 @@ static int idl_level_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *walk, IdlC
                 JS_FreeValue(ctx, in);
                 f = idl_conv_push(ctx, walk, frames, frames_cap, IDL_FRAME_SEQUENCE);
                 iter_cursor_init(&f->cur);
+                f->elem = mt;
                 f->d = dm->dict;
                 f->src = JS_DupValue(ctx, w->mv);
                 f->list = JS_NewArray(ctx);
@@ -4185,11 +4229,12 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
             }
         }
 
-        if (t == IDL_DICT || t == IDL_DICT_OR_BOOL_FIRST || t == IDL_BOOL_OR_DICT) {
+        if (t == IDL_DICT || t == IDL_DICT_OR_BOOL_FIRST || t == IDL_BOOL_OR_DICT ||
+            t == IDL_BUFFERSOURCE_OR_DICT) {
             /* WHICH ARM OF `(dictionary or boolean)` THIS FLOW IS ON — §3.2.25 step 11 against steps 12/18.
                For a dictionary type there is no union and no arm: undefined, null and an Object all reach
                §3.2.17, and anything else is that section's step 1 TypeError below. */
-            bool bool_arm = false;
+            bool bool_arm = false, buf_arm = false;
             /* A DICTIONARY ARGUMENT IS BUILT BY THE WALK and placed in the vector slot when the walk is TAKEN,
                rather than through `slot` and `placed:` — its members are written onto the object across many
                re-entries, so there is nothing to append at the end. That is why a VARIADIC member may not
@@ -4275,6 +4320,89 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                     if (rc) return rc;
                     bool_arm = (arm != 0);
                 }
+            }
+            if (t == IDL_BUFFERSOURCE_OR_DICT) {
+                /* §3.2.25's BUFFER-SOURCE CLAUSES, WHICH ARE THREE AND NOT ONE — step 6 "If V is an Object, V
+                   has an [[ArrayBufferData]] internal slot, and IsSharedArrayBuffer(V) is false", step 8's
+                   [[DataView]] clause and step 9's [[TypedArrayName]] clause. §4.2's typedef flattens to
+                   ArrayBuffer, DataView and the twelve typed arrays, so those three clauses are the whole of
+                   the arm and this is the same brand test the bare IDL_BUFFERSOURCE row makes.
+                   A SHARED ArrayBuffer FALLS THROUGH TO THE DICTIONARY AND THAT IS §3.2.25's ANSWER, not a
+                   gap: step 7 is the shared clause and its two sub-steps name `SharedArrayBuffer` and
+                   `object`, NEITHER of which this union includes, so the clause places nothing and execution
+                   reaches step 11. It needs no test here because a SharedArrayBuffer is its own class in this
+                   engine, so JS_IsArrayBuffer is already false for one — the fall-through is by construction
+                   rather than by an `if` that could be deleted. A typed-array VIEW over a shared buffer is a
+                   different value and takes step 9's arm, where §3.2.26's own refusal answers it below. */
+                buf_arm = JS_IsArrayBuffer(a) || JS_IsDataView(a) || JS_GetTypedArrayType(a) >= 0;
+                if (concolic_is(a)) {
+                    int arm = 0, rc;
+
+                    DCHECK(idl_concolic_rule(t) == IDL_CONCOLIC_FORKS,
+                           "this conversion forked §3.2.25's arm for a type idl_args.h does not declare as one "
+                           "it forks — the SITE and the rule are the two halves of one statement");
+                    /* THREE WORLDS, and the third is the one a two-armed fork drops. This union names no
+                       string, numeric, boolean or bigint type, so §3.2.25's clause chain RUNS OUT for a real
+                       primitive that is not null or undefined and step 20 "Throw a TypeError" is a world the
+                       standard reaches — which unknown external input, wearing an ordinary Object, hides.
+                       `cb_result` is this machine's outstanding answer and step_fork_run takes no `in` to hand
+                       it to, so it is released here: the sibling's snapshot is taken at this return. */
+                    JS_FreeValue(ctx, cb_result);
+                    cb_result = JS_UNDEFINED;
+                    rc = step_fork_run(ctx, &s->hdr, a, "§3.2.25 (BufferSource or dictionary) arm", 3,
+                                       JS_OUTCOME_REAL_UNSTATED, &arm);
+                    if (rc) return rc;
+                    if (arm == 2) {
+                        /* STEP 20 ITSELF, and it is the page's own TypeError rather than an assert: the
+                           standard reaches it for a real string too, so nothing about this engine's logic is
+                           wrong when a flow stands here. */
+                        JS_ThrowTypeError(ctx, "argument %d is neither a BufferSource nor a dictionary",
+                                          s->i + 1);
+                        return JS_STEP_ABRUPT;
+                    }
+                    if (arm == 1) {
+                        /* THE BUFFER-SOURCE WORLD, AND WHAT IT COSTS. §3.2.26 Buffer source types converts by
+                           reading the value's own bytes — "get a copy of the bytes held by the buffer source"
+                           reads [[ByteOffset]] and [[ByteLength]] off a real buffer — and an unknown has no
+                           bytes and no window, so there is nothing for the conversion to copy and no arm set
+                           the spec writes down. Placing the concolic instead would hand the body a value its
+                           every JS_GetBufferBytes fails by construction, which is the collapse this fork
+                           exists to prevent arriving one line later.
+                           THE OTHER TWO WORLDS DO NOT DEPEND ON IT, which is why the arm is asked rather than
+                           dropped: outcome 0 and outcome 2 are complete, and this crash names the one
+                           capability that is not. */
+                        DFAIL("§3.2.25 selected the BUFFER-SOURCE arm for UNKNOWN EXTERNAL INPUT and Web IDL "
+                              "§3.2.26 Buffer source types has no answer over one: its conversion copies the "
+                              "bytes a real buffer holds, and an unknown has none. Build §3.2.26 over unknown "
+                              "input AT THIS CONVERSION — a symbolic byte sequence with a symbolic length, "
+                              "which is what the dictionary arm's member reads already are one level up. "
+                              "Until it exists this world is the page's TypeError, which is what a release "
+                              "build answers");
+                        JS_ThrowTypeError(ctx, "a BufferSource cannot yet be built from unknown external "
+                                               "input");
+                        return JS_STEP_ABRUPT;
+                    }
+                    buf_arm = false;   /* outcome 0: §3.2.25 step 11's dictionary, which the walk below runs */
+                }
+            }
+            if (buf_arm) {
+                /* §3.2.26's TWO REFUSALS, on the arm that took them — a shared VIEW and a resizable buffer,
+                   neither of which §4.2's typedef admits. It is the same call the bare IDL_BUFFERSOURCE row
+                   makes and for the same reason: the conversion keeps one out of every position that did not
+                   ask for one, rather than each body asserting after the fact that its window still fits. */
+                if (idl_buffer_source_refuse(ctx, a, "BufferSource", false, false)) {
+                    JS_FreeValue(ctx, cb_result);
+                    return JS_STEP_ABRUPT;
+                }
+                JS_FreeValue(ctx, cb_result);
+                cb_result = JS_UNDEFINED;
+                JS_FreeValue(ctx, *idl_arg_slot(m, s, s->i));
+                *idl_arg_slot(m, s, s->i) = JS_DupValue(ctx, a);
+                /* THE OVERLOAD ARM IS PER POSITION, stated here for the reason the dictionary tail below
+                   states it: this branch does not pass through `placed:`. */
+                s->ovl_phase = IDL_UNI_ASK;
+                s->i++;
+                continue;
             }
             if (bool_arm) {
                 /* §2.7 "flatten": a value that is neither an Object nor step 4's undefined-or-null IS the

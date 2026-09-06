@@ -96,6 +96,18 @@ typedef enum {
 /* Every recognized value, which is the second operand of §9's "normalized value of a usages list". */
 #define CRYPTO_KEY_USAGES_ALL 0xFFu
 
+/* §14.1 Data Types' `enum KeyUsage`, AS ITS EIGHT STRINGS, NULL-terminated — the SAME list in the SAME order as
+ * the bit enum directly above, so `CRYPTO_KEY_USAGE_NAMES[k]` is the name of bit `1u << k` and nothing anywhere
+ * has to restate that pairing.
+ * IT LIVES BESIDE THE BITS BECAUSE IT IS THE SAME FACT. It was a file static in core/crypto/subtle_crypto.c,
+ * where §14.3.9's `sequence<KeyUsage>` position declares it to Web IDL §3.2.18 — and the day a SECOND reader
+ * needed it (§31.6.4 Import Key the jwk arm's step 8 compares the jwk `key_ops` field against the requested usages by
+ * NAME) the choice was between exporting the one list and writing a second copy of eight strings whose ORDER
+ * is load-bearing in release. RFC 7517 §4.3 "key_ops" (Key Operations) Parameter says the two vocabularies are
+ * deliberately one — "Note that the "key_ops" values intentionally match the "KeyUsage" values defined in the
+ * Web Cryptography API specification" — so the jwk reader and the IDL conversion are reading one list. */
+extern const char *const CRYPTO_KEY_USAGE_NAMES[];
+
 /* Declared ONCE PER AGENT; the per-realm install registers itself through core/realm.h. */
 void crypto_key_init(JSContext *ctx);
 void crypto_key_free(void);

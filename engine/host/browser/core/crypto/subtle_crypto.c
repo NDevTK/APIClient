@@ -1070,8 +1070,10 @@ static void ik_visit(JSContext *ctx, void *st, JSStepVisit *v)
  * lists, in two files, that had to stay in the same order with nothing saying so.
  * §14.1's own text writes the values in this order, so the list is the IDL's and the bit assignment reads off
  * it rather than the other way round. */
-IDL_ENUM_VALUES(IK_KEY_USAGES, "encrypt", "decrypt", "sign", "verify", "deriveKey", "deriveBits", "wrapKey",
-                "unwrapKey");
+/* §14.1's `enum KeyUsage`, which core/crypto/crypto_key.h now states beside the BITS it indexes — see there
+   for why one list serves the §3.2.18 conversion and §31.6.4 the jwk arm's step 8's `key_ops` comparison. */
+IDL_ENUM_VALUES_EXTERN(CRYPTO_KEY_USAGE_NAMES, "encrypt", "decrypt", "sign", "verify", "deriveKey",
+                       "deriveBits", "wrapKey", "unwrapKey");
 
 /* Web Cryptography API §9 Terminology's "normalized value of a usages list usages", whose result "shall be
  * the usage intersection of usages and a sequence containing all recognized key usage values" — and §9's
@@ -1116,14 +1118,14 @@ static void ik_usages_normalize(JSContext *ctx, JSValueConst list, uint32_t *out
         JS_FreeValue(ctx, e);
         CHECK(nm != NULL, "an element of a keyUsages sequence could not be read back as UTF-8 — §3.2.21's "
                           "conversion already produced a DOMString for every element");
-        for (k = 0; IK_KEY_USAGES[k]; k++)
-            if (strcmp(nm, IK_KEY_USAGES[k]) == 0) break;
+        for (k = 0; CRYPTO_KEY_USAGE_NAMES[k]; k++)
+            if (strcmp(nm, CRYPTO_KEY_USAGE_NAMES[k]) == 0) break;
         /* ALWAYS FATAL, and it is a CHECK rather than a DCHECK because `k` is LOAD-BEARING IN RELEASE: the
            shift below builds §13.3's [[usages]], which is the authorization every later operation asks (§14.3.3
            step 10's "does not contain an entry that is \"sign\""). A `k` that walked off this list would set a
            bit outside CRYPTO_KEY_USAGES_ALL in the one build where nothing checked, and a key would carry a
            permission no page asked for. */
-        CHECK(IK_KEY_USAGES[k] != NULL,
+        CHECK(CRYPTO_KEY_USAGE_NAMES[k] != NULL,
               "a keyUsages element is not one of §14.1's KeyUsage values — the position is declared "
               "IDL_SEQUENCE_ENUM over THIS list, so Web IDL §3.2.18 step 2 refused every other string before "
               "this body ran");
@@ -1416,16 +1418,31 @@ static int ik_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
 
         CHECK(format != NULL, "§14.1's KeyFormat could not be read back as UTF-8 — the argument conversion "
                               "already checked it against the enumeration's four values");
-        /* §14.3.9 STEP 4's Otherwise arm: "If the keyData parameter passed to the importKey() method is a
-           JsonWebKey dictionary, throw a TypeError" — and its jwk arm's converse. The position is declared
-           IDL_BUFFERSOURCE, so what arrives here is always a buffer source and never a JsonWebKey: the "jwk"
-           format therefore takes the jwk arm's TypeError, which is the RIGHT answer for the input that
-           reaches this engine and the wrong one for the input that cannot (see hmac.h's residual). */
-        if (strcmp(format, "jwk") == 0) {
-            JS_FreeCString(ctx, format);
-            JS_ThrowTypeError(ctx, "%s", "importKey was given a BufferSource for the \"jwk\" format, which "
-                                         "takes a JsonWebKey dictionary");
-            return sc_reject(ctx, &s->p, presult);
+        /* §14.3.9 STEP 4, BOTH ARMS, over the union the position now declares. The step is a pair of
+           converses — jwk: "If the keyData parameter passed to the importKey() method is not a JsonWebKey
+           dictionary, throw a TypeError"; otherwise: "If the keyData parameter passed to the importKey()
+           method is a JsonWebKey dictionary, throw a TypeError" — so what it needs is which arm §3.2.25 took,
+           and that is a fact the CONVERSION decided rather than one this body re-derives from a shape.
+           WHICH IS WHY THE TEST IS THE BUFFER BRAND AND NOT `JS_IsObject`. §3.2.25's dictionary arm produces
+           an engine-built plain object, so both arms arrive as objects and object-ness tells them apart from
+           nothing; the buffer arm's value is the page's own ArrayBuffer, DataView or typed array, which is
+           exactly what steps 6, 8 and 9 selected on. The same three clauses, read back.
+           THIS BLOCK USED TO BE A ONE-WAY TYPEERROR and it was a WRONG ANSWER rather than a narrower one: the
+           position was declared IDL_BUFFERSOURCE, so a JWK never survived the conversion to reach step 4 at
+           all and every `importKey("jwk", {kty:"oct",k:"…"}, …)` was refused where a browser resolves. */
+        {
+            bool is_buffer = JS_IsArrayBuffer(key_data) || JS_IsDataView(key_data) ||
+                             JS_GetTypedArrayType(key_data) >= 0;
+
+            if ((strcmp(format, "jwk") == 0) == is_buffer) {
+                JS_FreeCString(ctx, format);
+                JS_ThrowTypeError(ctx, "%s", is_buffer
+                                  ? "importKey was given a BufferSource for the \"jwk\" format, which takes "
+                                    "a JsonWebKey dictionary"
+                                  : "importKey was given a JsonWebKey dictionary for a format that takes a "
+                                    "BufferSource");
+                return sc_reject(ctx, &s->p, presult);
+            }
         }
         params.hash = (SecureHashAlgorithm)s->hash;
         params.has_length = s->has_length != 0;
@@ -1515,13 +1532,64 @@ void subtle_crypto_init(JSContext *ctx)
                                                  IDL_BUFFERSOURCE };
     /* §14's `Promise<CryptoKey> importKey(KeyFormat format, (BufferSource or JsonWebKey) keyData,
        AlgorithmIdentifier algorithm, boolean extractable, sequence<KeyUsage> keyUsages)`.
-       ONE OF THESE FIVE ROWS IS NARROWER THAN THE IDL AND IT IS NAMED WHERE IT BITES: the keyData union is
-       declared IDL_BUFFERSOURCE — see hmac.h's residual on §31.6.4 step 5's jwk arm, which is where the
-       missing `IDL_BUFFERSOURCE_OR_DICT` row is named. THE TWO ENUMERATIONS ON THIS LINE ARE BOTH DECLARED,
+       THE keyData UNION IS DECLARED WHOLE, and it is the only position in the platform's whole IDL with this
+       shape — `(BufferSource or D)` where D is a dictionary occurs here and nowhere else, which is why
+       core/idl_args.h's row for it says what it serves rather than what it might. It used to be declared
+       IDL_BUFFERSOURCE, and that was not a narrowing but a WRONG ANSWER: a JWK is an ordinary object, so
+       `importKey("jwk", {kty:"oct",k:"…"}, …)` was refused by the ARGUMENT CONVERSION with a TypeError before
+       step 1 of §14.3.9 ran, where a browser resolves with a CryptoKey. THE TWO ENUMERATIONS ON THIS LINE ARE BOTH DECLARED,
        which is what one value list per declaration could not do: §3.2.18's `E` is a fact about a POSITION, so
        `format` states KeyFormat and `keyUsages` states KeyUsage as its element type. */
-    static const IdlArgType IK_ARGS[] = { IDL_ENUM, IDL_BUFFERSOURCE, IDL_STRING_UNLESS_OBJECT, IDL_BOOLEAN,
-                                          IDL_SEQUENCE_ENUM };
+    static const IdlArgType IK_ARGS[] = { IDL_ENUM, IDL_BUFFERSOURCE_OR_DICT, IDL_STRING_UNLESS_OBJECT,
+                                          IDL_BOOLEAN, IDL_SEQUENCE_ENUM };
+    /* ---- §15 "JsonWebKey dictionary", AS THE IDL DECLARES IT ---------------------------------------------
+       `dictionary RsaOtherPrimesInfo { DOMString r; DOMString d; DOMString t; };` — the element type of
+       JsonWebKey's `oth`, and a dictionary NO OTHER declaration in this engine reaches. It is declared here
+       rather than beside HMAC because a dictionary's member table belongs to the component that RECEIVES the
+       argument, which is this member's declaration; §31.6.4's algorithm is what READS a few of the members.
+       §3.2.17's READ ORDER IS LEXICOGRAPHIC WITHIN A LEVEL, which is what these arrays are sorted by and what
+       a page with a getter on each member observes. Neither dictionary inherits, so every member is level 0. */
+    static const IdlDictMember RSA_OTHER_PRIMES_MEMBERS[] = {
+        { "d", IDL_DOMSTRING, false, NULL, 0, NULL, IDL_DEFAULT_NONE, NULL },
+        { "r", IDL_DOMSTRING, false, NULL, 0, NULL, IDL_DEFAULT_NONE, NULL },
+        { "t", IDL_DOMSTRING, false, NULL, 0, NULL, IDL_DEFAULT_NONE, NULL },
+    };
+    static const IdlDictDecl RSA_OTHER_PRIMES_DECL = {
+        "RsaOtherPrimesInfo", RSA_OTHER_PRIMES_MEMBERS,
+        (int)(sizeof RSA_OTHER_PRIMES_MEMBERS / sizeof *RSA_OTHER_PRIMES_MEMBERS)
+    };
+    /* `dictionary JsonWebKey { … };` — EIGHTEEN members in §15 plus the TWO a `partial dictionary JsonWebKey`
+       adds (`pub` and `priv`, which that partial's own comment attributes to RFC 9964). A partial is not
+       inheritance: its members are the same dictionary's at the same level, so all twenty sort together.
+       `ext` IS IDL_BOOLEAN_NO_DEFAULT AND THAT IS NOT A NICETY. §15 writes `boolean ext;` with no default, and
+       §31.6.4 Import Key's jwk arm, step 9, branches on PRESENCE — "If the ext field of jwk is present and has the value
+       false and extractable is true, then throw a DataError" — so absent and present-and-false are two states
+       the algorithm tells apart, which IDL_BOOLEAN's ToBoolean(undefined) folds into one.
+       `oth` IS THE FIRST MEMBER IN THIS ENGINE TO NEED `sequence<D>`, and core/idl_args.h's IDL_SEQUENCE_DICT
+       is that row: the corpus declares eighty-five dictionary members of that shape and until it existed not
+       one of them could be declared at all. */
+    static const IdlDictMember JWK_MEMBERS[] = {
+        { "alg",     IDL_DOMSTRING,           false, NULL, 0, NULL,                   IDL_DEFAULT_NONE, NULL },
+        { "crv",     IDL_DOMSTRING,           false, NULL, 0, NULL,                   IDL_DEFAULT_NONE, NULL },
+        { "d",       IDL_DOMSTRING,           false, NULL, 0, NULL,                   IDL_DEFAULT_NONE, NULL },
+        { "dp",      IDL_DOMSTRING,           false, NULL, 0, NULL,                   IDL_DEFAULT_NONE, NULL },
+        { "dq",      IDL_DOMSTRING,           false, NULL, 0, NULL,                   IDL_DEFAULT_NONE, NULL },
+        { "e",       IDL_DOMSTRING,           false, NULL, 0, NULL,                   IDL_DEFAULT_NONE, NULL },
+        { "ext",     IDL_BOOLEAN_NO_DEFAULT,  false, NULL, 0, NULL,                   IDL_DEFAULT_NONE, NULL },
+        { "k",       IDL_DOMSTRING,           false, NULL, 0, NULL,                   IDL_DEFAULT_NONE, NULL },
+        { "key_ops", IDL_SEQUENCE_DOMSTRING,  false, NULL, 0, NULL,                   IDL_DEFAULT_NONE, NULL },
+        { "kty",     IDL_DOMSTRING,           false, NULL, 0, NULL,                   IDL_DEFAULT_NONE, NULL },
+        { "n",       IDL_DOMSTRING,           false, NULL, 0, NULL,                   IDL_DEFAULT_NONE, NULL },
+        { "oth",     IDL_SEQUENCE_DICT,       false, NULL, 0, &RSA_OTHER_PRIMES_DECL, IDL_DEFAULT_NONE, NULL },
+        { "p",       IDL_DOMSTRING,           false, NULL, 0, NULL,                   IDL_DEFAULT_NONE, NULL },
+        { "priv",    IDL_DOMSTRING,           false, NULL, 0, NULL,                   IDL_DEFAULT_NONE, NULL },
+        { "pub",     IDL_DOMSTRING,           false, NULL, 0, NULL,                   IDL_DEFAULT_NONE, NULL },
+        { "q",       IDL_DOMSTRING,           false, NULL, 0, NULL,                   IDL_DEFAULT_NONE, NULL },
+        { "qi",      IDL_DOMSTRING,           false, NULL, 0, NULL,                   IDL_DEFAULT_NONE, NULL },
+        { "use",     IDL_DOMSTRING,           false, NULL, 0, NULL,                   IDL_DEFAULT_NONE, NULL },
+        { "x",       IDL_DOMSTRING,           false, NULL, 0, NULL,                   IDL_DEFAULT_NONE, NULL },
+        { "y",       IDL_DOMSTRING,           false, NULL, 0, NULL,                   IDL_DEFAULT_NONE, NULL },
+    };
     /* §14.1 Data Types: "enum KeyFormat { \"raw\", \"spki\", \"pkcs8\", \"jwk\" };" — the value list IS the
        type, so `importKey("RAW", …)` is a TypeError from §3.2.18 before any step of §14.3.9 runs. Written with
        IDL_ENUM_VALUES because that macro SUPPLIES the terminator both readers of a value list scan for; a
@@ -1567,13 +1635,14 @@ void subtle_crypto_init(JSContext *ctx)
     idl_returns_promise();
     idl_this_iface(subtle_crypto_is, "SubtleCrypto");
     idl_iface_brand(crypto_key_class());
-    g_id_import_key = idl_method_id_step(ctx, IK_ARGS, 5, NULL, 0, &IK_DECL, 0);
+    g_id_import_key = idl_method_id_step(ctx, IK_ARGS, 5, JWK_MEMBERS,
+                                        (int)(sizeof JWK_MEMBERS / sizeof *JWK_MEMBERS), &IK_DECL, 0);
     idl_returns_promise();
     idl_this_iface(subtle_crypto_is, "SubtleCrypto");
     /* §3.2.18's `E` AT EACH OF THE TWO POSITIONS §14.3.9's IDL declares one at — position 0's own type, and
        position 4's ELEMENT type. */
     idl_arg_enum(0, IK_FORMATS);
-    idl_arg_enum(4, IK_KEY_USAGES);
+    idl_arg_enum(4, CRYPTO_KEY_USAGE_NAMES);
     /* DECLARED UNDER THE ROW THAT RELEASES IT, which is `crypto` — §10's component declares this one and its
        release reaches this one's, so core/platform.c's two-sided check ("a row with a release that declared no
        agent state cannot be asserted to have undone anything") is asking about the pair. Naming a component

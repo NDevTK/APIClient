@@ -40,6 +40,7 @@
  * page's size; the KEY looks like a small constant and is not — `importKey("raw", new Uint8Array(1<<24), …)` is
  * a legal call, and a browser hashes all of it. So the key walk is preemptible on exactly the same terms as the
  * text walk, and the DCHECK in hmac_key_update is what keeps a caller from feeding it in one go. */
+#include <stdlib.h>
 #include <string.h>
 
 #include "check.h"
@@ -251,13 +252,285 @@ static JSValue hmac_key_algorithm_new(JSContext *ctx, SecureHashAlgorithm hash, 
     return alg;
 }
 
+/* ---- §31.6.4 Import Key STEP 5's `jwk` ARM ----------------------------------------------------------------
+ *
+ * A SUB-NUMBER IS NEVER WRITTEN BARE FOR THIS STEP, AND THAT IS THE STANDARD'S SHAPE RATHER THAN A HOUSE
+ * STYLE. §31.6.4's step 5 is a DISPATCH: it holds THREE sibling lists — the `raw` arm's, the `jwk` arm's and
+ * the `Otherwise` — each restarting at 1, so a bare "step 5.4" names three different steps and a reader cannot
+ * tell which. Every citation below therefore names the arm in the spec's own words ("the jwk arm's step 4"),
+ * which is the one form that resolves. engine/citegen.mjs is what caught the bare numbering: it reads step 5's
+ * FIRST list, which is the two-item `raw` arm, and reported that there is no step 5.4 — a correct finding
+ * about an ambiguous citation rather than a miscount.
+ *
+ * BASE64URL IS DELEGATED TO THE ENGINE'S OWN DECODER AND IS NOT A SECOND CODEC, and the reason is the order the
+ * algorithm already puts things in rather than a convenience. The jwk arm's step 3 is "If jwk does not meet the
+ * requirements of Section 6.4 of JSON Web Algorithms [JWA], then throw a DataError", and JWA §6.4.1 "k" (Key
+ * Value) Parameter says the value "is represented as the base64url encoding of the octet sequence containing
+ * the key value" — where RFC 7515 §2 Terminology defines base64url as "Base64 encoding using the URL- and
+ * filename-safe character set defined in Section 5 of RFC 4648 [RFC4648], with all trailing '=' characters
+ * omitted (as permitted by Section 3.2) and without the inclusion of any line breaks, whitespace, or other
+ * additional characters". So the host OWES that validation as a step of the algorithm: `-`/`_` and no padding,
+ * no whitespace, no `+`, no `/`, no `=`. Once it has been performed, what is left is an alphabet substitution
+ * over an already-validated string, and the DECODE ITSELF is JS_Base64Decode — the same forgiving-base64 the
+ * engine runs for `atob` and for a `data:` URL body. Nothing here re-implements base64: this is
+ * §Bind-before-build's "source it from an existing engine intrinsic", and the validation is a spec step rather
+ * than a guard invented to make the delegation safe.
+ * (The engine's `b64_flags_url` table is not reachable from a host — it feeds a static `from_base64` — so the
+ * alternative was a new export from the submodule for a decode this already performs.) */
+static int hmac_jwk_k_bytes(JSContext *ctx, const char *k, size_t n, uint8_t **out, uint32_t *out_len)
+{
+    char *padded;
+    size_t i, pad;
+    uint8_t *dst;
+    size_t cap, got;
+    int err = 0;
+
+    /* JWA §6.4.1's ALPHABET, refused character by character. `=` is refused with everything else: RFC 7515 §2
+       omits all trailing padding, so a `k` that carries any is not base64url. */
+    for (i = 0; i < n; i++) {
+        char c = k[i];
+        if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+              c == '-' || c == '_'))
+            return -1;
+    }
+    /* A LENGTH OF 4m+1 ENCODES NOTHING. RFC 4648 §4's groups are 2, 3 or 4 characters once the padding is
+       gone; one leftover character is 6 bits, which is fewer than the 8 a byte needs. RFC 7515 Appendix C is
+       where the same arithmetic is written for an implementer. */
+    if (n % 4 == 1) return -1;
+    /* RFC 7515 §2's "with all trailing '=' characters omitted (as permitted by Section 3.2)" READ BACKWARDS —
+       the engine's decoder is Infra's forgiving-base64, which requires the padding §3.2 permits, so it is put
+       back. The empty string is the empty octet sequence, which that section says in its own words: "Note that
+       the base64url encoding of the empty octet sequence is the empty string." */
+    pad = (n % 4) ? 4 - (n % 4) : 0;
+    padded = malloc(n + pad + 1);
+    CHECK(padded != NULL, "§31.6.4 the jwk arm's step 4: OOM translating a jwk `k` into the engine's base64 alphabet");
+    for (i = 0; i < n; i++) padded[i] = k[i] == '-' ? '+' : (k[i] == '_' ? '/' : k[i]);
+    for (i = 0; i < pad; i++) padded[n + i] = '=';
+    padded[n + pad] = '\0';
+
+    cap = JS_Base64DecodedMax(n + pad);
+    dst = malloc(cap ? cap : 1);
+    CHECK(dst != NULL, "§31.6.4 the jwk arm's step 4: OOM decoding a jwk `k`");
+    got = JS_Base64Decode(dst, cap, padded, n + pad, &err);
+    free(padded);
+    if (err) { free(dst); return -1; }
+    *out = dst;
+    *out_len = (uint32_t)got;
+    return 0;
+}
+
+/* §31.6.4 the jwk arm's step 6's per-hash `alg` value — SHA-1/256/384/512 against HS1/HS256/HS384/HS512, which is the
+   whole of that sub-step's four clauses. Its fifth clause ("Otherwise, if the name attribute of hash is
+   defined in another applicable specification") names no algorithm this engine registers, so a hash that
+   reached it would be one §18.4.4 never normalized. */
+static const char *hmac_jwk_alg_for(SecureHashAlgorithm hash)
+{
+    switch (hash) {
+    case SECURE_HASH_SHA1:   return "HS1";
+    case SECURE_HASH_SHA256: return "HS256";
+    case SECURE_HASH_SHA384: return "HS384";
+    default:
+        DCHECK(hash == SECURE_HASH_SHA512,
+               "§31.6.4 the jwk arm's step 6 was asked for the jwk `alg` of a hash §18.4.4 does not normalize — the four "
+               "SHA variants are the whole of what a registered HMAC hash can be");
+        return "HS512";
+    }
+}
+
+/* A DICTIONARY MEMBER OFF THE CONVERTED VALUE. §3.2.17 built a plain engine object carrying exactly the
+   declared members, so this is an ordinary property get with nothing of the page's on it — no accessor, no
+   trap, nothing that could suspend. An ABSENT member is `undefined`, which is what §3.2.17 leaves for a member
+   with no declared default, and every "is present" test below is that. */
+static JSValue hmac_jwk_get(JSContext *ctx, JSValueConst jwk, const char *name)
+{
+    return JS_GetPropertyStr(ctx, jwk, name);
+}
+
+/* The jwk arm's steps 1-3 and 6-9, plus its step 4's decode — every sub-step of that arm except its step 5,
+   which is the same
+   "Set hash to equal the hash member of normalizedAlgorithm" the raw arm performs and which this engine has
+   already done: `p->hash` IS that member, normalized by §18.4.4 step 10 before this function was called.
+   Returns 0 with `*out`/`*out_len` owning the decoded key material, or -1 with an exception pending. */
+static int hmac_jwk_import(JSContext *ctx, JSValueConst jwk, const HmacImportParams *p, bool extractable,
+                           uint32_t usages, uint8_t **out, uint32_t *out_len)
+{
+    JSValue v;
+    const char *str;
+    int bad;
+
+    /* THE JWK ARM'S STEP 1: "If keyData is a JsonWebKey dictionary: Let jwk equal keyData. Otherwise: Throw a DataError."
+       §14.3.9 step 4's jwk arm has already refused everything that is not one — with a TypeError, which is
+       that step's own error and not this one's — so what reaches here IS the dictionary and the DataError arm
+       is unreachable. It is a DCHECK rather than a throw for exactly that reason: a flow standing here holding
+       something else is this engine's own logic being wrong, never a page's input being unusual. */
+    DCHECK(JS_IsObject(jwk),
+           "§31.6.4 the jwk arm's step 1 was handed something that is not the JsonWebKey dictionary §3.2.17 built — "
+           "§14.3.9 step 4's jwk arm throws a TypeError for every other value before this algorithm runs");
+
+    /* THE JWK ARM'S STEP 2: "If the kty field of jwk is not \"oct\", then throw a DataError." An ABSENT `kty` is not "oct"
+       and takes the same arm, which is why the test is on the STRING and not on presence. */
+    v = hmac_jwk_get(ctx, jwk, "kty");
+    str = JS_IsString(v) ? JS_ToCString(ctx, v) : NULL;
+    bad = (str == NULL || strcmp(str, "oct") != 0);
+    if (str) JS_FreeCString(ctx, str);
+    JS_FreeValue(ctx, v);
+    if (bad)
+        return JS_ThrowDOMException(ctx, "DataError", "%s",
+                                    "an HMAC key can only be imported from a JSON Web Key whose `kty` is "
+                                    "\"oct\""),
+               -1;
+
+    /* THE JWK ARM'S STEPS 3 AND 4, WHICH ARE ONE READ. "If jwk does not meet the requirements of Section 6.4 of JSON Web
+       Algorithms [JWA], then throw a DataError" and "Let data be the byte sequence obtained by decoding the k
+       field of jwk". JWA §6.4 is the `kty`-is-"oct" section and §6.4.1 makes `k` that section's one member, so
+       an absent `k` fails step 3 and a `k` that is not base64url fails it too — the decode is what establishes
+       both, which is why one helper answers them. */
+    v = hmac_jwk_get(ctx, jwk, "k");
+    str = JS_IsString(v) ? JS_ToCString(ctx, v) : NULL;
+    bad = (str == NULL || hmac_jwk_k_bytes(ctx, str, strlen(str), out, out_len) < 0);
+    if (str) JS_FreeCString(ctx, str);
+    JS_FreeValue(ctx, v);
+    if (bad)
+        return JS_ThrowDOMException(ctx, "DataError", "%s",
+                                    "a JSON Web Key for an HMAC import must carry a `k` field holding the "
+                                    "base64url encoding of the key value, which JSON Web Algorithms §6.4 "
+                                    "requires of every \"oct\" key"),
+               -1;
+
+    /* THE JWK ARM'S STEP 6: the four hash clauses, each "If the alg field of jwk is present and is not \"HSn\", then throw
+       a DataError". PRESENT is the whole condition — an absent `alg` is permitted, which is JWA §6.4's own
+       "An "alg" member SHOULD also be present" read as the SHOULD it is. */
+    v = hmac_jwk_get(ctx, jwk, "alg");
+    if (!JS_IsUndefined(v)) {
+        const char *want = hmac_jwk_alg_for(p->hash);
+
+        str = JS_IsString(v) ? JS_ToCString(ctx, v) : NULL;
+        bad = (str == NULL || strcmp(str, want) != 0);
+        if (str) JS_FreeCString(ctx, str);
+        JS_FreeValue(ctx, v);
+        if (bad) {
+            free(*out); *out = NULL;
+            return JS_ThrowDOMException(ctx, "DataError",
+                                        "this JSON Web Key names an algorithm other than `%s`, which is the "
+                                        "one that matches the requested hash", want),
+                   -1;
+        }
+    } else {
+        JS_FreeValue(ctx, v);
+    }
+
+    /* THE JWK ARM'S STEP 7: "If usages is non-empty and the use field of jwk is present and is not \"sig\", then throw a
+       DataError." Three conjuncts, and the first is about the CALL rather than the key. */
+    v = hmac_jwk_get(ctx, jwk, "use");
+    if (usages != 0 && !JS_IsUndefined(v)) {
+        str = JS_IsString(v) ? JS_ToCString(ctx, v) : NULL;
+        bad = (str == NULL || strcmp(str, "sig") != 0);
+        if (str) JS_FreeCString(ctx, str);
+        JS_FreeValue(ctx, v);
+        if (bad) {
+            free(*out); *out = NULL;
+            return JS_ThrowDOMException(ctx, "DataError", "%s",
+                                        "this JSON Web Key is not marked for signature use, so it cannot be "
+                                        "imported with any key usage"),
+                   -1;
+        }
+    } else {
+        JS_FreeValue(ctx, v);
+    }
+
+    /* THE JWK ARM'S STEP 8: "If the key_ops field of jwk is present, and is invalid according to the requirements of JSON
+       Web Key [JWK] or does not contain all of the specified usages values, then throw a DataError."
+       WHAT "INVALID ACCORDING TO JWK" IS, read rather than guessed: RFC 7517 §4.3 "key_ops" (Key Operations)
+       Parameter states exactly one MUST — "Duplicate key operation values MUST NOT be present in the array" —
+       and explicitly permits unrecognized entries ("Other values MAY be used"), so a name outside §14.1's
+       eight is NOT invalid and must not be refused here. The two conjuncts are therefore duplicates, and
+       coverage of every requested usage.
+       THE NAMES COME FROM crypto_key.h's ONE LIST, which is the same list §14.3.9's `sequence<KeyUsage>`
+       position declares to §3.2.18 — RFC 7517 §4.3 says the two vocabularies are deliberately one. */
+    v = hmac_jwk_get(ctx, jwk, "key_ops");
+    if (!JS_IsUndefined(v)) {
+        uint32_t seen = 0, named = 0, extra = 0, i, n = 0;
+        JSValue len_v = JS_GetPropertyStr(ctx, v, "length");
+
+        JS_ToUint32(ctx, &n, len_v);
+        JS_FreeValue(ctx, len_v);
+        bad = 0;
+        for (i = 0; i < n && !bad; i++) {
+            JSValue e = JS_GetPropertyUint32(ctx, v, i);
+            const char *nm = JS_IsString(e) ? JS_ToCString(ctx, e) : NULL;
+            int k = -1, j;
+
+            if (nm) {
+                for (j = 0; CRYPTO_KEY_USAGE_NAMES[j]; j++)
+                    if (strcmp(nm, CRYPTO_KEY_USAGE_NAMES[j]) == 0) { k = j; break; }
+            }
+            /* RFC 7517 §4.3's duplicate MUST, over BOTH populations: a recognized name is a bit in `seen` and
+               an unrecognized one is counted in `extra`, because "Other values MAY be used" makes those legal
+               entries whose duplicates are just as forbidden. Two identical unrecognized strings are the one
+               case a bitmask alone cannot see, and this is where the count answers it. */
+            if (k >= 0) {
+                if (seen & (1u << k)) bad = 1;
+                seen |= 1u << k;
+                named++;
+            } else {
+                extra++;
+            }
+            if (nm) JS_FreeCString(ctx, nm);
+            JS_FreeValue(ctx, e);
+        }
+        /* THE UNRECOGNIZED HALF OF THE DUPLICATE TEST, stated as arithmetic rather than as a second walk: the
+           array's own length must be the recognized names it holds plus the unrecognized ones, and any
+           repetition of either makes the sum disagree. */
+        if (!bad && named + extra != n) bad = 1;
+        /* "does not contain all of the specified usages values" — every bit the CALL asked for must be one
+           this array named. */
+        if (!bad && (usages & ~seen) != 0) bad = 1;
+        JS_FreeValue(ctx, v);
+        if (bad) {
+            free(*out); *out = NULL;
+            return JS_ThrowDOMException(ctx, "DataError", "%s",
+                                        "this JSON Web Key's `key_ops` repeats an operation or does not "
+                                        "permit every usage the import asked for"),
+                   -1;
+        }
+    } else {
+        JS_FreeValue(ctx, v);
+    }
+
+    /* THE JWK ARM'S STEP 9: "If the ext field of jwk is present and has the value false and extractable is true, then
+       throw a DataError." PRESENCE is one of the three conjuncts, which is why `ext` is declared
+       IDL_BOOLEAN_NO_DEFAULT — with a default this test could not tell an absent `ext` from `ext: false`. */
+    v = hmac_jwk_get(ctx, jwk, "ext");
+    bad = (JS_IsBool(v) && !JS_ToBool(ctx, v) && extractable);
+    JS_FreeValue(ctx, v);
+    if (bad) {
+        free(*out); *out = NULL;
+        return JS_ThrowDOMException(ctx, "DataError", "%s",
+                                    "this JSON Web Key is marked non-extractable and the import asked for an "
+                                    "extractable key"),
+               -1;
+    }
+    return 0;
+}
+
+/* §31.6.4 Import Key — STEPS 1 AND 3, THEN STEP 5's FORMAT DISPATCH, whose two arms produce the `data` the
+   tail below consumes. The "raw" arm is two sub-steps — "Let data be keyData" and "Set hash to equal the hash
+   member of normalizedAlgorithm" — and both are in hand: `key_data` is step 2's keyData, which §14.3.9 step
+   4's Otherwise arm got a copy of the bytes of, and `p->hash` is what §18.4.4 step 10's
+   HashAlgorithmIdentifier arm normalized. The "jwk" arm is the nine sub-steps above. Everything else is the
+   standard's own "Otherwise: throw a NotSupportedError", which is the honest answer for a DER format an HMAC
+   key is never in. */
+/* Forward-declared rather than moved, so that §31.6.4's steps stand in the file in the standard's own order:
+   the entry below is steps 1, 3 and 5 and the tail beneath it is steps 6-15, which is how a reader checking
+   the numbering reads them. */
+static JSValue hmac_import_key_data(JSContext *ctx, const uint8_t *bytes, uint32_t byte_len,
+                                    const HmacImportParams *p, bool extractable, uint32_t usages);
+
 JSValue hmac_import_key(JSContext *ctx, const char *format, JSValueConst key_data, const HmacImportParams *p,
                         bool extractable, uint32_t usages)
 {
     uint32_t byte_len = 0;
-    uint64_t length;
     const uint8_t *bytes;
-    JSValue algorithm, handle;
 
     DCHECK(p != NULL, "§31.6.4 was given no normalizedAlgorithm");
     DCHECK(format != NULL, "§31.6.4 step 5 was given no format — §14.1's KeyFormat is a required argument of "
@@ -266,19 +539,6 @@ JSValue hmac_import_key(JSContext *ctx, const char *format, JSValueConst key_dat
     if (p->has_length && p->length == 0)
         return JS_ThrowDOMException(ctx, "DataError", "%s",
                                     "the HMAC import parameters name a key length of zero");
-    /* STEP 5, the format dispatch. Its "raw" arm is two sub-steps — "Let data be keyData" and "Set hash to
-       equal the hash member of normalizedAlgorithm" — and both are already in hand: `key_data` is step 2's
-       keyData as the byte copy §14.3.9 step 4's Otherwise arm made, and `p->hash` is what §18.4.4 step 10's
-       HashAlgorithmIdentifier arm normalized. The "jwk" arm is the residual hmac.h names; everything else is
-       the standard's own "Otherwise: throw a NotSupportedError", which is the honest answer for a DER format
-       an HMAC key is never in. */
-    if (strcmp(format, "raw") != 0)
-        return JS_ThrowDOMException(ctx, "NotSupportedError",
-                                    "an HMAC key cannot be imported from the '%s' format", format);
-    bytes = JS_GetBufferBytes(key_data, &byte_len);
-    DCHECK(bytes != NULL || byte_len == 0,
-           "§14.3.9 step 4's own copy of the key data is detached — nothing but this algorithm holds it, and "
-           "the whole reason that step copies is that the page cannot reach these bytes");
     /* §31.6.4 Import Key STEP 3: "If usages contains an entry which is not \"sign\" or \"verify\", then throw
        a SyntaxError." §9's normalized value is a mask, so the standard's contains-an-entry-which-is-not test
        is a bit outside the pair — that gloss is this file's own and is not in quotation marks, because a
@@ -288,10 +548,47 @@ JSValue hmac_import_key(JSContext *ctx, const char *format, JSValueConst key_dat
        here resolves against whichever section an auditor reaches first, which is a correct quotation of a
        section that does not govern this function. This one is `hmac_import_key`, and §31.6.4's own step order
        is what makes the numbering in this file check out: step 1 is the zero-length member, step 2 takes the
-       key data, step 3 is this. */
+       key data, step 3 is this — AND IT RUNS BEFORE STEP 5, WHICH IT DID NOT. It stood after the format
+       dispatch, so `importKey("pkcs8", buf, HMAC, false, ["encrypt"])` answered §31.6.4's step-5
+       NotSupportedError where the standard's own order reaches this SyntaxError first. Two different
+       exceptions for one call, and a page tells them apart. */
     if (usages & ~(uint32_t)(CRYPTO_KEY_USAGE_SIGN | CRYPTO_KEY_USAGE_VERIFY))
         return JS_ThrowDOMException(ctx, "SyntaxError", "%s",
                                     "an HMAC key may only be used to sign or to verify");
+    /* STEP 5's `jwk` ARM. The decoded key material is this function's for exactly as long as the tail needs
+       it, which is the whole reason the tail is a separate function: one owner, one free, and no throw
+       between them that could skip it. */
+    if (strcmp(format, "jwk") == 0) {
+        uint8_t *data = NULL;
+        JSValue r;
+
+        if (hmac_jwk_import(ctx, key_data, p, extractable, usages, &data, &byte_len) < 0)
+            return JS_EXCEPTION;
+        r = hmac_import_key_data(ctx, data, byte_len, p, extractable, usages);
+        free(data);
+        return r;
+    }
+    /* STEP 5's `raw` ARM, and then its Otherwise. */
+    if (strcmp(format, "raw") != 0)
+        return JS_ThrowDOMException(ctx, "NotSupportedError",
+                                    "an HMAC key cannot be imported from the '%s' format", format);
+    bytes = JS_GetBufferBytes(key_data, &byte_len);
+    DCHECK(bytes != NULL || byte_len == 0,
+           "§14.3.9 step 4's own copy of the key data is detached — nothing but this algorithm holds it, and "
+           "the whole reason that step copies is that the page cannot reach these bytes");
+    return hmac_import_key_data(ctx, bytes, byte_len, p, extractable, usages);
+}
+
+/* §31.6.4 STEPS 6-15, over the `data` step 5 produced — ONE TAIL FOR BOTH ARMS, which is what step 5 being a
+   dispatch means: its "raw" and "jwk" arms differ in how they obtain `data` and in nothing after that. It is a
+   function of its own so that the jwk arm's decoded key material has exactly ONE owner and exactly one free,
+   rather than a `free` before each of the five throws below. */
+static JSValue hmac_import_key_data(JSContext *ctx, const uint8_t *bytes, uint32_t byte_len,
+                                    const HmacImportParams *p, bool extractable, uint32_t usages)
+{
+    uint64_t length;
+    JSValue algorithm, handle;
+
     /* STEP 6: "Let length be the length in bits of data." */
     length = (uint64_t)byte_len * 8u;
     /* STEP 7: "If length is zero then throw a DataError." */

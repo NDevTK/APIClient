@@ -321,6 +321,22 @@ typedef enum {
        cursor just pulled: `{elements: [location.hash]}` has a real Array, a real length and one unknown
        ELEMENT, and that element's union is decided exactly as an argument position's is. See idl_conv_seq_run,
        which is where that ask lives. */
+    /* `sequence<D>` WHERE D IS A DICTIONARY — §3.2.21 Sequences — sequence<T> whose element type is §3.2.17
+       Dictionary types, with no union over it. It is the row below WITHOUT the arm: every element runs
+       §3.2.17's member walk, unconditionally, so there is nothing about an element to test and nothing to
+       fork. §3.2.17 step 1's own refusal is what an element that is not an Object takes — "If jsDict is not an
+       Object and jsDict is neither undefined nor null, then throw a TypeError" — which admits null and
+       undefined as the all-defaults dictionary exactly as a bare IDL_DICT position does.
+       IT IS A PLATFORM SHAPE AND NOT A CRYPTO CORNER, which is why it is a row rather than a special case at
+       one site: the corpus declares EIGHTY-FIVE dictionary members and FIVE argument positions of this type —
+       `CookieStoreManager.subscribe`, `Navigator.requestMediaKeySystemAccess`, `PaymentRequest`'s constructor,
+       `RTCRtpTransceiver.setCodecPreferences` and `CookieStoreManager.unsubscribe` — and until this row existed
+       not one of them could be declared at all. Web Cryptography API §15 "JsonWebKey dictionary"'s
+       `sequence<RsaOtherPrimesInfo> oth` is simply the first member that needed it.
+       THE DICTIONARY IS NAMED BESIDE THE MEMBER (IdlDictMember::dict), the same statement every row of this
+       shape makes — the element type is what `dict` names here, where for the union row below it names the
+       union's dictionary ARM. One field, one meaning: the dictionary this member's conversion can build. */
+    IDL_SEQUENCE_DICT,
     IDL_SEQUENCE_STRING_OR_DICT,
     /* `(DOMString or D)` where D is a DICTIONARY — §3.2.25 over the union HTML §8.6.2's seven name-taking
        modifiers take (`allowElement(SanitizerElementWithAttributes)` and its six siblings). Its rule is the
@@ -525,6 +541,31 @@ typedef enum {
        boolean" against "return the result of converting V to that dictionary type") rather than a shape test
        this file invented. An unknown external input FORKS, for the row above's reason and at the same site. */
     IDL_BOOL_OR_DICT,
+    /* `(BufferSource or D)` WHERE D IS A DICTIONARY — Web Cryptography API §14.3.9 "The importKey method"'s
+       `(BufferSource or JsonWebKey) keyData`, and the ONLY argument position in the whole corpus with this
+       shape. That is stated as a bound and not as a boast: the row serves one member today and nothing else
+       can reach it, so what it must be right about is that member's two arms and not a family of them.
+       §3.2.25 Union types DECIDES IT IN FOUR CLAUSES, and the order is the whole rule. `BufferSource` is
+       §4.2's `typedef (ArrayBufferView or ArrayBuffer)`, so the union's FLATTENED member types are ArrayBuffer,
+       DataView, the twelve typed arrays and the dictionary. Step 4 "If V is null or undefined, then:" sends
+       both to the DICTIONARY ("If types includes a dictionary type, then return the result of converting V to
+       that dictionary type"); step 6's [[ArrayBufferData]] clause, step 8's [[DataView]] clause and step 9's
+       [[TypedArrayName]] clause take the buffer arm; and step 11 "If V is an Object" sends every REMAINING
+       object to the dictionary. A primitive that is not null or undefined names no clause at all and reaches
+       the algorithm's own trailing TypeError.
+       A SHARED ArrayBuffer IS THE ONE ARM A READER GETS WRONG, and §3.2.25 answers it rather than this file:
+       step 7 is the `IsSharedArrayBuffer(V) is true` clause and its two sub-steps name `SharedArrayBuffer` and
+       `object`, NEITHER of which this union includes — so the clause matches, places nothing, and execution
+       continues to step 11, which sends the SAB to the DICTIONARY. It is not a TypeError and it is not a
+       buffer source. §4.2's typedef excludes a shared buffer, so there is no arm that could take it.
+       WHY IT IS A ROW AND NOT `IDL_BUFFERSOURCE` WITH A TEST IN THE BODY: the two arms differ in what the
+       CONVERSION PERFORMS. The dictionary arm runs §3.2.17's member walk — every member read is a request that
+       can be an accessor or a Proxy trap and can therefore PARK — and the buffer arm reads nothing at all. A
+       body handed the raw value would be running that walk itself, which is the second copy of §3.2.17 this
+       file's own header forbids, and it would run it after the conversion boundary rather than at it.
+       THE ARM IS FORKED FOR UNKNOWN EXTERNAL INPUT AND NEVER TESTED — see idl_concolic_rule, which is the one
+       statement of that. */
+    IDL_BUFFERSOURCE_OR_DICT,
     /* `(T or DOMString)` where T is an INTERFACE type — the union §4.2.4 writes for every member that takes
        "a node or some text", and `el.append('hi')` is the ordinary way to write the second half. Its rule is a
        brand check: an object of the interface's CLASS crosses as itself, anything else is a DOMString. The
@@ -802,6 +843,25 @@ static inline IdlConcolicRule idl_concolic_rule(IdlArgType t)
        which is where the ask is, and which is what makes the sequence world's own §3.2.21-over-unknown gap a
        named crash rather than an arm nobody chose. */
     case IDL_SEQUENCE_OBJECT_OR_DICT:
+    /* `(BufferSource or D)` — §3.2.25 over Web Cryptography API §14.3.9 "The importKey method"'s `keyData`,
+       and the union whose arms are furthest apart in what the conversion PERFORMS: the dictionary arm runs
+       §3.2.17's whole member walk and the buffer arm reads no property at all. A concolic wears an ordinary
+       Object in this engine, so step 11 "If V is an Object" claimed EVERY unknown external input for the
+       dictionary — the arm decided by a fact about this engine's value class rather than by the page's value,
+       which is the collapse the three unions above are here to prevent.
+       THREE WORLDS AND NOT TWO, which is what separates this row from `(dictionary or boolean)` one line up.
+       That union has a boolean arm and step 12 catches every non-object, so its clause chain never runs out;
+       this one names no string, numeric, boolean or bigint type, so a real primitive that is not null or
+       undefined reaches §3.2.25's OWN step 20 "Throw a TypeError" — `importKey("jwk", "abc", …)` throws where
+       `importKey("jwk", {…}, …)` converts. A two-armed fork would drop that world silently.
+       ITS OUTCOMES ARE (0) the dictionary arm, (1) the buffer-source arm, (2) step 20's TypeError. Outcome 0
+       is the dictionary per step_fork_run's one rule on the numbering — it is the arm §3.2.25 gives the Object
+       an unknown is represented BY, so a run with no forking policy answers exactly as it did and the other
+       two worlds are what the fork ADDS. Outcome 1 is a world this engine cannot yet execute and says so at
+       the site with a named crash rather than being quietly not chosen: §3.2.26 Buffer source types' "get a
+       copy of the bytes held by the buffer source" has no answer over an unknown, because an unknown has no
+       bytes. */
+    case IDL_BUFFERSOURCE_OR_DICT:
     /* Web IDL §3.2.3 boolean — the type whose CONVERSION is the fork, where the two rows above are unions
        whose ARM is. ECMAScript §7.1.2 ToBoolean ( arg )'s last step is "Return true" and a concolic wears an
        ordinary Object, so a crossing
@@ -955,6 +1015,12 @@ static inline bool idl_type_pushes_level(IdlArgType t)
     case IDL_DICT:
     case IDL_DICT_NULLABLE:
     case IDL_SEQUENCE_STRING_OR_DICT:
+    /* `sequence<D>` nests one for the same reason its union sibling above does, and for a reason the seal
+       states from the other side: a member whose type pushes a level MUST name its dictionary and a member
+       that names one MUST push a level. Leaving this out would have made every `sequence<D>` member fail that
+       pair — it names `dict` and would push nothing — which is the seal doing its job and is why this is one
+       predicate and not a list at each reader. */
+    case IDL_SEQUENCE_DICT:
         return true;
     default:
         return false;
@@ -1221,6 +1287,12 @@ typedef struct {
     JSValue     src;        /* SEQUENCE only: the value being iterated (owned) */
     JSValue     list;       /* SEQUENCE only: the elements converted so far (owned) */
     const IdlDictDecl *d;   /* SEQUENCE only: the element type's dictionary arm */
+    /* SEQUENCE only: THE ELEMENT'S DECLARED TYPE, which is what decides whether the pull has an arm to take at
+       all — `sequence<(DOMString or D)>` asks §3.2.25's clause chain of every element and `sequence<D>` asks
+       nothing, because §3.2.17 is the whole of its element conversion. It is the TYPE and not a bit meaning
+       "no union": a bit would answer one question and this answers the one question a third element type
+       would also need answered, which is what the element IS. */
+    IdlArgType  elem;
     uint32_t    n;          /* SEQUENCE only: how many elements `list` holds */
     uint8_t     kind;       /* IDL_FRAME_DICT / IDL_FRAME_SEQUENCE */
     uint8_t     phase;      /* SEQUENCE only */
