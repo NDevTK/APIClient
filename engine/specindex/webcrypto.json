@@ -1,0 +1,1565 @@
+{
+ "spec": "Web Cryptography API Level 2",
+ "key": "webcrypto",
+ "base": "https://w3c.github.io/webcrypto/",
+ "specUpdated": "11 August 2026",
+ "fetched": "2026-09-06",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "x1-introduction"
+  },
+  "2": {
+   "title": "Use Cases",
+   "page": "",
+   "id": "x2-use-cases"
+  },
+  "3": {
+   "title": "Conformance",
+   "page": "",
+   "id": "x3-conformance"
+  },
+  "4": {
+   "title": "Scope",
+   "page": "",
+   "id": "x4-scope"
+  },
+  "5": {
+   "title": "Concepts",
+   "page": "",
+   "id": "x5-concepts"
+  },
+  "6": {
+   "title": "Security considerations",
+   "page": "",
+   "id": "x6-security-considerations"
+  },
+  "7": {
+   "title": "Privacy considerations",
+   "page": "",
+   "id": "x7-privacy-considerations"
+  },
+  "8": {
+   "title": "Dependencies",
+   "page": "",
+   "id": "x8-dependencies"
+  },
+  "9": {
+   "title": "Terminology",
+   "page": "",
+   "id": "x9-terminology"
+  },
+  "10": {
+   "title": "Crypto interface",
+   "page": "",
+   "id": "x10-crypto-interface"
+  },
+  "11": {
+   "title": "Algorithm dictionary",
+   "page": "",
+   "id": "x11-algorithm-dictionary"
+  },
+  "12": {
+   "title": "KeyAlgorithm dictionary",
+   "page": "",
+   "id": "x12-keyalgorithm-dictionary"
+  },
+  "13": {
+   "title": "CryptoKey interface",
+   "page": "",
+   "id": "x13-cryptokey-interface"
+  },
+  "14": {
+   "title": "SubtleCrypto interface",
+   "page": "",
+   "id": "x14-subtlecrypto-interface"
+  },
+  "15": {
+   "title": "JsonWebKey dictionary",
+   "page": "",
+   "id": "x15-jsonwebkey-dictionary"
+  },
+  "16": {
+   "title": "BigInteger",
+   "page": "",
+   "id": "x16-biginteger"
+  },
+  "17": {
+   "title": "CryptoKeyPair dictionary",
+   "page": "",
+   "id": "x17-cryptokeypair-dictionary"
+  },
+  "18": {
+   "title": "Algorithms",
+   "page": "",
+   "id": "x18-algorithms"
+  },
+  "19": {
+   "title": "Algorithm Overview",
+   "page": "",
+   "id": "x19-algorithm-overview"
+  },
+  "20": {
+   "title": "RSASSA-PKCS1-v1_5",
+   "page": "",
+   "id": "x20-rsassa-pkcs1-v1_5"
+  },
+  "21": {
+   "title": "RSA-PSS",
+   "page": "",
+   "id": "x21-rsa-pss"
+  },
+  "22": {
+   "title": "RSA-OAEP",
+   "page": "",
+   "id": "x22-rsa-oaep"
+  },
+  "23": {
+   "title": "ECDSA",
+   "page": "",
+   "id": "x23-ecdsa"
+  },
+  "24": {
+   "title": "ECDH",
+   "page": "",
+   "id": "x24-ecdh"
+  },
+  "25": {
+   "title": "Ed25519",
+   "page": "",
+   "id": "x25-ed25519"
+  },
+  "26": {
+   "title": "X25519",
+   "page": "",
+   "id": "x26-x25519"
+  },
+  "27": {
+   "title": "AES-CTR",
+   "page": "",
+   "id": "x27-aes-ctr"
+  },
+  "28": {
+   "title": "AES-CBC",
+   "page": "",
+   "id": "x28-aes-cbc"
+  },
+  "29": {
+   "title": "AES-GCM",
+   "page": "",
+   "id": "x29-aes-gcm"
+  },
+  "30": {
+   "title": "AES-KW",
+   "page": "",
+   "id": "x30-aes-kw"
+  },
+  "31": {
+   "title": "HMAC",
+   "page": "",
+   "id": "x31-hmac"
+  },
+  "32": {
+   "title": "SHA",
+   "page": "",
+   "id": "x32-sha"
+  },
+  "33": {
+   "title": "HKDF",
+   "page": "",
+   "id": "x33-hkdf"
+  },
+  "34": {
+   "title": "PBKDF2",
+   "page": "",
+   "id": "x34-pbkdf2"
+  },
+  "35": {
+   "title": "JavaScript Example Code",
+   "page": "",
+   "id": "x35-javascript-example-code"
+  },
+  "36": {
+   "title": "IANA Considerations",
+   "page": "",
+   "id": "x36-iana-considerations"
+  },
+  "37": {
+   "title": "Acknowledgments",
+   "page": "",
+   "id": "x37-acknowledgments"
+  },
+  "2.1": {
+   "title": "Multi-factor Authentication",
+   "page": "",
+   "id": "x2-1-multi-factor-authentication"
+  },
+  "2.2": {
+   "title": "Protected Document Exchange",
+   "page": "",
+   "id": "x2-2-protected-document-exchange"
+  },
+  "2.3": {
+   "title": "Cloud Storage",
+   "page": "",
+   "id": "x2-3-cloud-storage"
+  },
+  "2.4": {
+   "title": "Document Signing",
+   "page": "",
+   "id": "x2-4-document-signing"
+  },
+  "2.5": {
+   "title": "Data Integrity Protection",
+   "page": "",
+   "id": "x2-5-data-integrity-protection"
+  },
+  "2.6": {
+   "title": "Secure Messaging",
+   "page": "",
+   "id": "x2-6-secure-messaging"
+  },
+  "2.7": {
+   "title": "JavaScript Object Signing and Encryption (JOSE)",
+   "page": "",
+   "id": "x2-7-javascript-object-signing-and-encryption-jose"
+  },
+  "3.1": {
+   "title": "Extensibility",
+   "page": "",
+   "id": "x3-1-extensibility"
+  },
+  "4.1": {
+   "title": "Level of abstraction",
+   "page": "",
+   "id": "x4-1-level-of-abstraction"
+  },
+  "4.2": {
+   "title": "Cryptographic algorithms",
+   "page": "",
+   "id": "x4-2-cryptographic-algorithms"
+  },
+  "4.3": {
+   "title": "Out of scope",
+   "page": "",
+   "id": "x4-3-out-of-scope"
+  },
+  "5.1": {
+   "title": "Underlying Cryptographic Implementation",
+   "page": "",
+   "id": "x5-1-underlying-cryptographic-implementation"
+  },
+  "5.2": {
+   "title": "Key Storage",
+   "page": "",
+   "id": "x5-2-key-storage"
+  },
+  "6.1": {
+   "title": "Security considerations for implementers",
+   "page": "",
+   "id": "x6-1-security-considerations-for-implementers"
+  },
+  "6.2": {
+   "title": "Security considerations for authors",
+   "page": "",
+   "id": "x6-2-security-considerations-for-authors"
+  },
+  "6.3": {
+   "title": "Security considerations for users",
+   "page": "",
+   "id": "x6-3-security-considerations-for-users"
+  },
+  "10.1": {
+   "title": "Methods and Parameters",
+   "page": "",
+   "id": "x10-1-methods-and-parameters"
+  },
+  "10.1.1": {
+   "title": "The getRandomValues method",
+   "page": "",
+   "id": "x10-1-1-the-getrandomvalues-method"
+  },
+  "10.1.2": {
+   "title": "The randomUUID method",
+   "page": "",
+   "id": "x10-1-2-the-randomuuid-method"
+  },
+  "10.2": {
+   "title": "Attributes",
+   "page": "",
+   "id": "x10-2-attributes"
+  },
+  "10.2.1": {
+   "title": "The subtle attribute",
+   "page": "",
+   "id": "x10-2-1-the-subtle-attribute"
+  },
+  "11.1": {
+   "title": "Algorithm Dictionary Members",
+   "page": "",
+   "id": "x11-1-algorithm-dictionary-members"
+  },
+  "12.1": {
+   "title": "Description",
+   "page": "",
+   "id": "x12-1-description"
+  },
+  "12.2": {
+   "title": "KeyAlgorithm dictionary members",
+   "page": "",
+   "id": "x12-2-keyalgorithm-dictionary-members"
+  },
+  "13.1": {
+   "title": "Description",
+   "page": "",
+   "id": "x13-1-description"
+  },
+  "13.2": {
+   "title": "Key interface data types",
+   "page": "",
+   "id": "x13-2-key-interface-data-types"
+  },
+  "13.3": {
+   "title": "CryptoKey internal slots",
+   "page": "",
+   "id": "x13-3-cryptokey-internal-slots"
+  },
+  "13.4": {
+   "title": "CryptoKey interface members",
+   "page": "",
+   "id": "x13-4-cryptokey-interface-members"
+  },
+  "13.5": {
+   "title": "Serialization and deserialization steps",
+   "page": "",
+   "id": "x13-5-serialization-and-deserialization-steps"
+  },
+  "14.1": {
+   "title": "Data Types",
+   "page": "",
+   "id": "x14-1-data-types"
+  },
+  "14.2": {
+   "title": "Task Source",
+   "page": "",
+   "id": "x14-2-task-source"
+  },
+  "14.3": {
+   "title": "Methods and Parameters",
+   "page": "",
+   "id": "x14-3-methods-and-parameters"
+  },
+  "14.3.1": {
+   "title": "The encrypt method",
+   "page": "",
+   "id": "x14-3-1-the-encrypt-method"
+  },
+  "14.3.2": {
+   "title": "The decrypt method",
+   "page": "",
+   "id": "x14-3-2-the-decrypt-method"
+  },
+  "14.3.3": {
+   "title": "The sign method",
+   "page": "",
+   "id": "x14-3-3-the-sign-method"
+  },
+  "14.3.4": {
+   "title": "The verify method",
+   "page": "",
+   "id": "x14-3-4-the-verify-method"
+  },
+  "14.3.5": {
+   "title": "The digest method",
+   "page": "",
+   "id": "x14-3-5-the-digest-method"
+  },
+  "14.3.6": {
+   "title": "The generateKey method",
+   "page": "",
+   "id": "x14-3-6-the-generatekey-method"
+  },
+  "14.3.7": {
+   "title": "The deriveKey method",
+   "page": "",
+   "id": "x14-3-7-the-derivekey-method"
+  },
+  "14.3.8": {
+   "title": "The deriveBits method",
+   "page": "",
+   "id": "x14-3-8-the-derivebits-method"
+  },
+  "14.3.9": {
+   "title": "The importKey method",
+   "page": "",
+   "id": "x14-3-9-the-importkey-method"
+  },
+  "14.3.10": {
+   "title": "The exportKey method",
+   "page": "",
+   "id": "x14-3-10-the-exportkey-method"
+  },
+  "14.3.11": {
+   "title": "The wrapKey method",
+   "page": "",
+   "id": "x14-3-11-the-wrapkey-method"
+  },
+  "14.3.12": {
+   "title": "The unwrapKey method",
+   "page": "",
+   "id": "x14-3-12-the-unwrapkey-method"
+  },
+  "14.4": {
+   "title": "Exceptions",
+   "page": "",
+   "id": "x14-4-exceptions"
+  },
+  "18.1": {
+   "title": "Overview",
+   "page": "",
+   "id": "x18-1-overview"
+  },
+  "18.2": {
+   "title": "Concepts",
+   "page": "",
+   "id": "x18-2-concepts"
+  },
+  "18.2.1": {
+   "title": "Naming",
+   "page": "",
+   "id": "x18-2-1-naming"
+  },
+  "18.2.2": {
+   "title": "Supported Operations",
+   "page": "",
+   "id": "x18-2-2-supported-operations"
+  },
+  "18.2.3": {
+   "title": "Normalization",
+   "page": "",
+   "id": "x18-2-3-normalization"
+  },
+  "18.3": {
+   "title": "Specification Conventions",
+   "page": "",
+   "id": "x18-3-specification-conventions"
+  },
+  "18.4": {
+   "title": "Algorithm Normalization",
+   "page": "",
+   "id": "x18-4-algorithm-normalization"
+  },
+  "18.4.1": {
+   "title": "Description",
+   "page": "",
+   "id": "x18-4-1-description"
+  },
+  "18.4.2": {
+   "title": "Internal State Objects",
+   "page": "",
+   "id": "x18-4-2-internal-state-objects"
+  },
+  "18.4.3": {
+   "title": "Defining an Algorithm",
+   "page": "",
+   "id": "x18-4-3-defining-an-algorithm"
+  },
+  "18.4.4": {
+   "title": "Normalizing an algorithm",
+   "page": "",
+   "id": "x18-4-4-normalizing-an-algorithm"
+  },
+  "18.5": {
+   "title": "Recommendations",
+   "page": "",
+   "id": "x18-5-recommendations"
+  },
+  "18.5.1": {
+   "title": "For Authors",
+   "page": "",
+   "id": "x18-5-1-for-authors"
+  },
+  "18.5.2": {
+   "title": "For Implementers",
+   "page": "",
+   "id": "x18-5-2-for-implementers"
+  },
+  "20.1": {
+   "title": "Description",
+   "page": "",
+   "id": "x20-1-description"
+  },
+  "20.2": {
+   "title": "Registration",
+   "page": "",
+   "id": "x20-2-registration"
+  },
+  "20.3": {
+   "title": "RsaKeyGenParams dictionary",
+   "page": "",
+   "id": "x20-3-rsakeygenparams-dictionary"
+  },
+  "20.4": {
+   "title": "RsaHashedKeyGenParams dictionary",
+   "page": "",
+   "id": "x20-4-rsahashedkeygenparams-dictionary"
+  },
+  "20.5": {
+   "title": "RSA key generation parameter validation",
+   "page": "",
+   "id": "x20-5-rsa-key-generation-parameter-validation"
+  },
+  "20.6": {
+   "title": "RsaKeyAlgorithm dictionary",
+   "page": "",
+   "id": "x20-6-rsakeyalgorithm-dictionary"
+  },
+  "20.7": {
+   "title": "RsaHashedKeyAlgorithm dictionary",
+   "page": "",
+   "id": "x20-7-rsahashedkeyalgorithm-dictionary"
+  },
+  "20.8": {
+   "title": "RsaHashedImportParams dictionary",
+   "page": "",
+   "id": "x20-8-rsahashedimportparams-dictionary"
+  },
+  "20.9": {
+   "title": "Operations",
+   "page": "",
+   "id": "x20-9-operations"
+  },
+  "20.9.1": {
+   "title": "Sign",
+   "page": "",
+   "id": "x20-9-1-sign"
+  },
+  "20.9.2": {
+   "title": "Verify",
+   "page": "",
+   "id": "x20-9-2-verify"
+  },
+  "20.9.3": {
+   "title": "Generate Key",
+   "page": "",
+   "id": "x20-9-3-generate-key"
+  },
+  "20.9.4": {
+   "title": "Import Key",
+   "page": "",
+   "id": "x20-9-4-import-key"
+  },
+  "20.9.5": {
+   "title": "Export Key",
+   "page": "",
+   "id": "x20-9-5-export-key"
+  },
+  "21.1": {
+   "title": "Description",
+   "page": "",
+   "id": "x21-1-description"
+  },
+  "21.2": {
+   "title": "Registration",
+   "page": "",
+   "id": "x21-2-registration"
+  },
+  "21.3": {
+   "title": "RsaPssParams dictionary",
+   "page": "",
+   "id": "x21-3-rsapssparams-dictionary"
+  },
+  "21.4": {
+   "title": "Operations",
+   "page": "",
+   "id": "x21-4-operations"
+  },
+  "21.4.1": {
+   "title": "Sign",
+   "page": "",
+   "id": "x21-4-1-sign"
+  },
+  "21.4.2": {
+   "title": "Verify",
+   "page": "",
+   "id": "x21-4-2-verify"
+  },
+  "21.4.3": {
+   "title": "Generate Key",
+   "page": "",
+   "id": "x21-4-3-generate-key"
+  },
+  "21.4.4": {
+   "title": "Import Key",
+   "page": "",
+   "id": "x21-4-4-import-key"
+  },
+  "21.4.5": {
+   "title": "Export Key",
+   "page": "",
+   "id": "x21-4-5-export-key"
+  },
+  "22.1": {
+   "title": "Description",
+   "page": "",
+   "id": "x22-1-description"
+  },
+  "22.2": {
+   "title": "Registration",
+   "page": "",
+   "id": "x22-2-registration"
+  },
+  "22.3": {
+   "title": "RsaOaepParams dictionary",
+   "page": "",
+   "id": "x22-3-rsaoaepparams-dictionary"
+  },
+  "22.4": {
+   "title": "Operations",
+   "page": "",
+   "id": "x22-4-operations"
+  },
+  "22.4.1": {
+   "title": "Encrypt",
+   "page": "",
+   "id": "x22-4-1-encrypt"
+  },
+  "22.4.2": {
+   "title": "Decrypt",
+   "page": "",
+   "id": "x22-4-2-decrypt"
+  },
+  "22.4.3": {
+   "title": "Generate Key",
+   "page": "",
+   "id": "x22-4-3-generate-key"
+  },
+  "22.4.4": {
+   "title": "Import Key",
+   "page": "",
+   "id": "x22-4-4-import-key"
+  },
+  "22.4.5": {
+   "title": "Export Key",
+   "page": "",
+   "id": "x22-4-5-export-key"
+  },
+  "23.1": {
+   "title": "Description",
+   "page": "",
+   "id": "x23-1-description"
+  },
+  "23.2": {
+   "title": "Registration",
+   "page": "",
+   "id": "x23-2-registration"
+  },
+  "23.3": {
+   "title": "EcdsaParams dictionary",
+   "page": "",
+   "id": "x23-3-ecdsaparams-dictionary"
+  },
+  "23.4": {
+   "title": "EcKeyGenParams dictionary",
+   "page": "",
+   "id": "x23-4-eckeygenparams-dictionary"
+  },
+  "23.5": {
+   "title": "EcKeyAlgorithm dictionary",
+   "page": "",
+   "id": "x23-5-eckeyalgorithm-dictionary"
+  },
+  "23.6": {
+   "title": "EcKeyImportParams dictionary",
+   "page": "",
+   "id": "x23-6-eckeyimportparams-dictionary"
+  },
+  "23.7": {
+   "title": "Operations",
+   "page": "",
+   "id": "x23-7-operations"
+  },
+  "23.7.1": {
+   "title": "Sign",
+   "page": "",
+   "id": "x23-7-1-sign"
+  },
+  "23.7.2": {
+   "title": "Verify",
+   "page": "",
+   "id": "x23-7-2-verify"
+  },
+  "23.7.3": {
+   "title": "Generate Key",
+   "page": "",
+   "id": "x23-7-3-generate-key"
+  },
+  "23.7.4": {
+   "title": "Import Key",
+   "page": "",
+   "id": "x23-7-4-import-key"
+  },
+  "23.7.5": {
+   "title": "Export Key",
+   "page": "",
+   "id": "x23-7-5-export-key"
+  },
+  "24.1": {
+   "title": "Description",
+   "page": "",
+   "id": "x24-1-description"
+  },
+  "24.2": {
+   "title": "Registration",
+   "page": "",
+   "id": "x24-2-registration"
+  },
+  "24.3": {
+   "title": "EcdhKeyDeriveParams dictionary",
+   "page": "",
+   "id": "x24-3-ecdhkeyderiveparams-dictionary"
+  },
+  "24.4": {
+   "title": "Operations",
+   "page": "",
+   "id": "x24-4-operations"
+  },
+  "24.4.1": {
+   "title": "Generate Key",
+   "page": "",
+   "id": "x24-4-1-generate-key"
+  },
+  "24.4.2": {
+   "title": "Derive Bits",
+   "page": "",
+   "id": "x24-4-2-derive-bits"
+  },
+  "24.4.3": {
+   "title": "Import Key",
+   "page": "",
+   "id": "x24-4-3-import-key"
+  },
+  "24.4.4": {
+   "title": "Export Key",
+   "page": "",
+   "id": "x24-4-4-export-key"
+  },
+  "25.1": {
+   "title": "Description",
+   "page": "",
+   "id": "x25-1-description"
+  },
+  "25.2": {
+   "title": "Registration",
+   "page": "",
+   "id": "x25-2-registration"
+  },
+  "25.3": {
+   "title": "Operations",
+   "page": "",
+   "id": "x25-3-operations"
+  },
+  "25.3.1": {
+   "title": "Sign",
+   "page": "",
+   "id": "x25-3-1-sign"
+  },
+  "25.3.2": {
+   "title": "Verify",
+   "page": "",
+   "id": "x25-3-2-verify"
+  },
+  "25.3.3": {
+   "title": "Generate Key",
+   "page": "",
+   "id": "x25-3-3-generate-key"
+  },
+  "25.3.4": {
+   "title": "Import Key",
+   "page": "",
+   "id": "x25-3-4-import-key"
+  },
+  "25.3.5": {
+   "title": "Export Key",
+   "page": "",
+   "id": "x25-3-5-export-key"
+  },
+  "26.1": {
+   "title": "Description",
+   "page": "",
+   "id": "x26-1-description"
+  },
+  "26.2": {
+   "title": "Registration",
+   "page": "",
+   "id": "x26-2-registration"
+  },
+  "26.3": {
+   "title": "Operations",
+   "page": "",
+   "id": "x26-3-operations"
+  },
+  "26.3.1": {
+   "title": "Derive Bits",
+   "page": "",
+   "id": "x26-3-1-derive-bits"
+  },
+  "26.3.2": {
+   "title": "Generate Key",
+   "page": "",
+   "id": "x26-3-2-generate-key"
+  },
+  "26.3.3": {
+   "title": "Import Key",
+   "page": "",
+   "id": "x26-3-3-import-key"
+  },
+  "26.3.4": {
+   "title": "Export Key",
+   "page": "",
+   "id": "x26-3-4-export-key"
+  },
+  "27.1": {
+   "title": "Description",
+   "page": "",
+   "id": "x27-1-description"
+  },
+  "27.2": {
+   "title": "Registration",
+   "page": "",
+   "id": "x27-2-registration"
+  },
+  "27.3": {
+   "title": "AesCtrParams dictionary",
+   "page": "",
+   "id": "x27-3-aesctrparams-dictionary"
+  },
+  "27.4": {
+   "title": "AesKeyAlgorithm dictionary",
+   "page": "",
+   "id": "x27-4-aeskeyalgorithm-dictionary"
+  },
+  "27.5": {
+   "title": "AesKeyGenParams dictionary",
+   "page": "",
+   "id": "x27-5-aeskeygenparams-dictionary"
+  },
+  "27.6": {
+   "title": "AesDerivedKeyParams dictionary",
+   "page": "",
+   "id": "x27-6-aesderivedkeyparams-dictionary"
+  },
+  "27.7": {
+   "title": "Operations",
+   "page": "",
+   "id": "x27-7-operations"
+  },
+  "27.7.1": {
+   "title": "Encrypt",
+   "page": "",
+   "id": "x27-7-1-encrypt"
+  },
+  "27.7.2": {
+   "title": "Decrypt",
+   "page": "",
+   "id": "x27-7-2-decrypt"
+  },
+  "27.7.3": {
+   "title": "Generate Key",
+   "page": "",
+   "id": "x27-7-3-generate-key"
+  },
+  "27.7.4": {
+   "title": "Import Key",
+   "page": "",
+   "id": "x27-7-4-import-key"
+  },
+  "27.7.5": {
+   "title": "Export Key",
+   "page": "",
+   "id": "x27-7-5-export-key"
+  },
+  "27.7.6": {
+   "title": "Get key length",
+   "page": "",
+   "id": "x27-7-6-get-key-length"
+  },
+  "28.1": {
+   "title": "Description",
+   "page": "",
+   "id": "x28-1-description"
+  },
+  "28.2": {
+   "title": "Registration",
+   "page": "",
+   "id": "x28-2-registration"
+  },
+  "28.3": {
+   "title": "AesCbcParams dictionary",
+   "page": "",
+   "id": "x28-3-aescbcparams-dictionary"
+  },
+  "28.4": {
+   "title": "Operations",
+   "page": "",
+   "id": "x28-4-operations"
+  },
+  "28.4.1": {
+   "title": "Encrypt",
+   "page": "",
+   "id": "x28-4-1-encrypt"
+  },
+  "28.4.2": {
+   "title": "Decrypt",
+   "page": "",
+   "id": "x28-4-2-decrypt"
+  },
+  "28.4.3": {
+   "title": "Generate Key",
+   "page": "",
+   "id": "x28-4-3-generate-key"
+  },
+  "28.4.4": {
+   "title": "Import Key",
+   "page": "",
+   "id": "x28-4-4-import-key"
+  },
+  "28.4.5": {
+   "title": "Export Key",
+   "page": "",
+   "id": "x28-4-5-export-key"
+  },
+  "28.4.6": {
+   "title": "Get key length",
+   "page": "",
+   "id": "x28-4-6-get-key-length"
+  },
+  "29.1": {
+   "title": "Description",
+   "page": "",
+   "id": "x29-1-description"
+  },
+  "29.2": {
+   "title": "Registration",
+   "page": "",
+   "id": "x29-2-registration"
+  },
+  "29.3": {
+   "title": "AesGcmParams dictionary",
+   "page": "",
+   "id": "x29-3-aesgcmparams-dictionary"
+  },
+  "29.4": {
+   "title": "Operations",
+   "page": "",
+   "id": "x29-4-operations"
+  },
+  "29.4.1": {
+   "title": "Encrypt",
+   "page": "",
+   "id": "x29-4-1-encrypt"
+  },
+  "29.4.2": {
+   "title": "Decrypt",
+   "page": "",
+   "id": "x29-4-2-decrypt"
+  },
+  "29.4.3": {
+   "title": "Generate Key",
+   "page": "",
+   "id": "x29-4-3-generate-key"
+  },
+  "29.4.4": {
+   "title": "Import Key",
+   "page": "",
+   "id": "x29-4-4-import-key"
+  },
+  "29.4.5": {
+   "title": "Export Key",
+   "page": "",
+   "id": "x29-4-5-export-key"
+  },
+  "29.4.6": {
+   "title": "Get key length",
+   "page": "",
+   "id": "x29-4-6-get-key-length"
+  },
+  "30.1": {
+   "title": "Description",
+   "page": "",
+   "id": "x30-1-description"
+  },
+  "30.2": {
+   "title": "Registration",
+   "page": "",
+   "id": "x30-2-registration"
+  },
+  "30.3": {
+   "title": "Operations",
+   "page": "",
+   "id": "x30-3-operations"
+  },
+  "30.3.1": {
+   "title": "Wrap Key",
+   "page": "",
+   "id": "x30-3-1-wrap-key"
+  },
+  "30.3.2": {
+   "title": "Unwrap Key",
+   "page": "",
+   "id": "x30-3-2-unwrap-key"
+  },
+  "30.3.3": {
+   "title": "Generate Key",
+   "page": "",
+   "id": "x30-3-3-generate-key"
+  },
+  "30.3.4": {
+   "title": "Import Key",
+   "page": "",
+   "id": "x30-3-4-import-key"
+  },
+  "30.3.5": {
+   "title": "Export Key",
+   "page": "",
+   "id": "x30-3-5-export-key"
+  },
+  "30.3.6": {
+   "title": "Get key length",
+   "page": "",
+   "id": "x30-3-6-get-key-length"
+  },
+  "31.1": {
+   "title": "Description",
+   "page": "",
+   "id": "x31-1-description"
+  },
+  "31.2": {
+   "title": "Registration",
+   "page": "",
+   "id": "x31-2-registration"
+  },
+  "31.3": {
+   "title": "HmacImportParams dictionary",
+   "page": "",
+   "id": "x31-3-hmacimportparams-dictionary"
+  },
+  "31.4": {
+   "title": "HmacKeyAlgorithm dictionary",
+   "page": "",
+   "id": "x31-4-hmackeyalgorithm-dictionary"
+  },
+  "31.5": {
+   "title": "HmacKeyGenParams dictionary",
+   "page": "",
+   "id": "x31-5-hmackeygenparams-dictionary"
+  },
+  "31.6": {
+   "title": "Operations",
+   "page": "",
+   "id": "x31-6-operations"
+  },
+  "31.6.1": {
+   "title": "Sign",
+   "page": "",
+   "id": "x31-6-1-sign"
+  },
+  "31.6.2": {
+   "title": "Verify",
+   "page": "",
+   "id": "x31-6-2-verify"
+  },
+  "31.6.3": {
+   "title": "Generate Key",
+   "page": "",
+   "id": "x31-6-3-generate-key"
+  },
+  "31.6.4": {
+   "title": "Import Key",
+   "page": "",
+   "id": "x31-6-4-import-key"
+  },
+  "31.6.5": {
+   "title": "Export Key",
+   "page": "",
+   "id": "x31-6-5-export-key"
+  },
+  "31.6.6": {
+   "title": "Get key length",
+   "page": "",
+   "id": "x31-6-6-get-key-length"
+  },
+  "32.1": {
+   "title": "Description",
+   "page": "",
+   "id": "x32-1-description"
+  },
+  "32.2": {
+   "title": "Registration",
+   "page": "",
+   "id": "x32-2-registration"
+  },
+  "32.3": {
+   "title": "Operations",
+   "page": "",
+   "id": "x32-3-operations"
+  },
+  "32.3.1": {
+   "title": "Digest",
+   "page": "",
+   "id": "x32-3-1-digest"
+  },
+  "33.1": {
+   "title": "Description",
+   "page": "",
+   "id": "x33-1-description"
+  },
+  "33.2": {
+   "title": "Registration",
+   "page": "",
+   "id": "x33-2-registration"
+  },
+  "33.3": {
+   "title": "HkdfParams dictionary",
+   "page": "",
+   "id": "x33-3-hkdfparams-dictionary"
+  },
+  "33.4": {
+   "title": "Operations",
+   "page": "",
+   "id": "x33-4-operations"
+  },
+  "33.4.1": {
+   "title": "Derive Bits",
+   "page": "",
+   "id": "x33-4-1-derive-bits"
+  },
+  "33.4.2": {
+   "title": "Import key",
+   "page": "",
+   "id": "x33-4-2-import-key"
+  },
+  "33.4.3": {
+   "title": "Get key length",
+   "page": "",
+   "id": "x33-4-3-get-key-length"
+  },
+  "34.1": {
+   "title": "Description",
+   "page": "",
+   "id": "x34-1-description"
+  },
+  "34.2": {
+   "title": "Registration",
+   "page": "",
+   "id": "x34-2-registration"
+  },
+  "34.3": {
+   "title": "Pbkdf2Params dictionary",
+   "page": "",
+   "id": "x34-3-pbkdf2params-dictionary"
+  },
+  "34.4": {
+   "title": "Operations",
+   "page": "",
+   "id": "x34-4-operations"
+  },
+  "34.4.1": {
+   "title": "Derive Bits",
+   "page": "",
+   "id": "x34-4-1-derive-bits"
+  },
+  "34.4.2": {
+   "title": "Import key",
+   "page": "",
+   "id": "x34-4-2-import-key"
+  },
+  "34.4.3": {
+   "title": "Get key length",
+   "page": "",
+   "id": "x34-4-3-get-key-length"
+  },
+  "35.1": {
+   "title": "Generate two key pairs, derive a shared key, encrypt some data",
+   "page": "",
+   "id": "x35-1-generate-two-key-pairs-derive-a-shared-key-encrypt-some-data"
+  },
+  "35.2": {
+   "title": "Generate a signing key pair, sign some data",
+   "page": "",
+   "id": "x35-2-generate-a-signing-key-pair-sign-some-data"
+  },
+  "35.3": {
+   "title": "Generate a symmetric key, encrypt some data",
+   "page": "",
+   "id": "x35-3-generate-a-symmetric-key-encrypt-some-data"
+  },
+  "35.4": {
+   "title": "Generate unique name for download",
+   "page": "",
+   "id": "x35-4-generate-unique-name-for-download"
+  },
+  "36.1": {
+   "title": "JSON Web Signature and Encryption Algorithms Registration",
+   "page": "",
+   "id": "x36-1-json-web-signature-and-encryption-algorithms-registration"
+  },
+  "36.2": {
+   "title": "JSON Web Key Parameters Registration",
+   "page": "",
+   "id": "x36-2-json-web-key-parameters-registration"
+  },
+  "A": {
+   "title": "Mapping between JSON Web Key / JSON Web Algorithm",
+   "page": "",
+   "id": "a-mapping-between-json-web-key-json-web-algorithm"
+  },
+  "A.1": {
+   "title": "Algorithm mappings",
+   "page": "",
+   "id": "a-1-algorithm-mappings"
+  },
+  "B": {
+   "title": "Mapping between Algorithm and SubjectPublicKeyInfo",
+   "page": "",
+   "id": "b-mapping-between-algorithm-and-subjectpublickeyinfo"
+  },
+  "C": {
+   "title": "Mapping between Algorithm and PKCS#8 PrivateKeyInfo",
+   "page": "",
+   "id": "c-mapping-between-algorithm-and-pkcs-8-privatekeyinfo"
+  },
+  "D": {
+   "title": "References",
+   "page": "",
+   "id": "d-references"
+  },
+  "D.1": {
+   "title": "Normative references",
+   "page": "",
+   "id": "d-1-normative-references"
+  },
+  "D.2": {
+   "title": "Informative references",
+   "page": "",
+   "id": "d-2-informative-references"
+  }
+ },
+ "dfns": {
+  "[[algorithm cached]]": [
+   "13.3"
+  ],
+  "[[usages cached]]": [
+   "13.3"
+  ],
+  "algorithm normalization": [
+   "18.4"
+  ],
+  "applicable specification": [
+   "3.1"
+  ],
+  "ascii case insensitive": [
+   "9"
+  ],
+  "byte sequence containing": [
+   "9"
+  ],
+  "byte sequence containing a bit sequence": [
+   "9"
+  ],
+  "cached ecmascript object": [
+   "9"
+  ],
+  "case insensitive": [
+   "9"
+  ],
+  "case sensitive": [
+   "9"
+  ],
+  "conforming user agent": [
+   "3"
+  ],
+  "convert a byte sequence to a non negative integer": [
+   "9"
+  ],
+  "convert a non negative integer i to a byte sequence of length n": [
+   "9"
+  ],
+  "crypto task source": [
+   "14.2"
+  ],
+  "decrypt(algorithm key data)": [
+   "14.3.2"
+  ],
+  "define an algorithm": [
+   "18.4.3"
+  ],
+  "derivebits(algorithm basekey length)": [
+   "14.3.8"
+  ],
+  "derivebits(algorithm basekey)": [
+   "14.3.8"
+  ],
+  "derivekey(algorithm basekey derivedkeytype extractable keyusages)": [
+   "14.3.7"
+  ],
+  "digest(algorithm data)": [
+   "14.3.5"
+  ],
+  "ecdh curve name": [
+   "24.1"
+  ],
+  "ecdh derivation steps": [
+   "24.1"
+  ],
+  "ecdh generation steps": [
+   "24.1"
+  ],
+  "ecdh key export steps": [
+   "24.1"
+  ],
+  "ecdh key import steps": [
+   "24.1"
+  ],
+  "ecdsa curve name": [
+   "23.1"
+  ],
+  "ecdsa generation steps": [
+   "23.1"
+  ],
+  "ecdsa key export steps": [
+   "23.1"
+  ],
+  "ecdsa key import steps": [
+   "23.1"
+  ],
+  "ecdsa signature steps": [
+   "23.1"
+  ],
+  "ecdsa verification steps": [
+   "23.1"
+  ],
+  "encrypt(algorithm key data)": [
+   "14.3.1"
+  ],
+  "exportkey(format key)": [
+   "14.3.10"
+  ],
+  "generate a random uuid": [
+   "10.1.2"
+  ],
+  "generatekey(algorithm extractable keyusages)": [
+   "14.3.6"
+  ],
+  "hexadecimal representation": [
+   "10.1.2"
+  ],
+  "hmac key export steps": [
+   "31.1"
+  ],
+  "hmac key import steps": [
+   "31.1"
+  ],
+  "importkey(format keydata algorithm extractable keyusages)": [
+   "14.3.9"
+  ],
+  "key export steps": [
+   "20.1",
+   "21.1",
+   "22.1",
+   "31.1"
+  ],
+  "key import steps": [
+   "20.1",
+   "21.1",
+   "22.1",
+   "31.1"
+  ],
+  "key ops": [
+   "15"
+  ],
+  "length in bits": [
+   "9"
+  ],
+  "normalize an algorithm": [
+   "18.4.4"
+  ],
+  "normalized value": [
+   "9"
+  ],
+  "normalized value of a usages list": [
+   "9"
+  ],
+  "parse a jwk": [
+   "9"
+  ],
+  "parse a privatekeyinfo": [
+   "9"
+  ],
+  "parse a subjectpublickeyinfo": [
+   "9"
+  ],
+  "parse an asn.1 structure": [
+   "9"
+  ],
+  "recognized algorithm name": [
+   "18.2.1"
+  ],
+  "recognized key format values": [
+   "14.1"
+  ],
+  "recognized key type values": [
+   "13.2"
+  ],
+  "recognized key usage value": [
+   "13.2"
+  ],
+  "recognized key usage values": [
+   "13.2"
+  ],
+  "rsa oaep key export steps": [
+   "22.1"
+  ],
+  "rsa oaep key import steps": [
+   "22.1"
+  ],
+  "rsa pss key export steps": [
+   "21.1"
+  ],
+  "rsa pss key import steps": [
+   "21.1"
+  ],
+  "rsassa pkcs1 v1 5 key export steps": [
+   "20.1"
+  ],
+  "rsassa pkcs1 v1 5 key import steps": [
+   "20.1"
+  ],
+  "serializable objects": [
+   "9"
+  ],
+  "sign(algorithm key data)": [
+   "14.3.3"
+  ],
+  "supported operation": [
+   "18.2.2"
+  ],
+  "supported operations": [
+   "18.2.2"
+  ],
+  "terminate the algorithm": [
+   "9"
+  ],
+  "the curve name": [
+   "23.1",
+   "24.1"
+  ],
+  "usage intersection": [
+   "9"
+  ],
+  "validate rsa key generation parameters": [
+   "20.5"
+  ],
+  "verify(algorithm key signature data)": [
+   "14.3.4"
+  ],
+  "wrapkey(format key wrappingkey wrapalgorithm)": [
+   "14.3.11"
+  ]
+ },
+ "ops": {},
+ "uses": {
+  "applicable specification": {
+   "20.9.4": 2,
+   "20.9.5": 2,
+   "21.4.4": 2,
+   "22.4.4": 2,
+   "23.7.4": 9,
+   "23.7.5": 4,
+   "24.4.3": 9,
+   "24.4.4": 4,
+   "31.6.4": 2,
+   "31.6.5": 2
+  },
+  "cached ecmascript object": {
+   "13.4": 2
+  },
+  "conforming user agent": {
+   "8": 3
+  },
+  "convert a byte sequence to a non negative integer": {
+   "23.7.2": 2
+  },
+  "convert a non negative integer i to a byte sequence of length n": {
+   "23.7.1": 2
+  },
+  "crypto task source": {
+   "14.3.1": 2,
+   "14.3.2": 2,
+   "14.3.3": 2,
+   "14.3.4": 2,
+   "14.3.5": 2,
+   "14.3.6": 2,
+   "14.3.7": 2,
+   "14.3.8": 2,
+   "14.3.9": 2,
+   "14.3.10": 2,
+   "14.3.11": 2,
+   "14.3.12": 2
+  },
+  "ecdh key export steps": {
+   "24.4.4": 4
+  },
+  "ecdh key import steps": {
+   "24.4.3": 4
+  },
+  "ecdsa key export steps": {
+   "23.7.5": 3
+  },
+  "ecdsa key import steps": {
+   "23.7.4": 3
+  },
+  "key export steps": {
+   "C": 4
+  },
+  "key import steps": {
+   "C": 4
+  },
+  "length in bits": {
+   "27.7.4": 4,
+   "28.4.4": 4,
+   "29.4.4": 4,
+   "30.3.4": 4
+  },
+  "normalize an algorithm": {
+   "14.3.7": 3,
+   "14.3.11": 2,
+   "14.3.12": 3
+  },
+  "parse an asn.1 structure": {
+   "20.9.4": 2,
+   "21.4.4": 2,
+   "22.4.4": 2
+  },
+  "recognized key usage values": {
+   "9": 3
+  },
+  "supported operations": {
+   "18.3": 2
+  },
+  "terminate the algorithm": {
+   "10.1.1": 2
+  },
+  "the curve name": {
+   "C": 2
+  },
+  "usage intersection": {
+   "20.9.3": 2,
+   "21.4.3": 2,
+   "22.4.3": 2,
+   "23.7.3": 2,
+   "25.3.3": 2
+  }
+ }
+}

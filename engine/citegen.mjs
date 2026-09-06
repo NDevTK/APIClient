@@ -616,6 +616,25 @@ const SPECS = [
      ITS ANCHOR IS THE HYPHENATED SHORT NAME AND THE THREE-WORD FULL NAME. `time` alone is a word this tree
      writes in prose constantly and would swallow every unanchored citation near it; both listed spellings are
      the ones the tree actually writes in front of a §. It is bikeshed, so it needs no reader of its own. */
+  /* WEB CRYPTOGRAPHY, AND IT IS THE LARGEST SINGLE POPULATION THIS TABLE HELD NO INDEX FOR — 57 citations
+     under `web cryptography` and `web cryptography api`, every one of them in `core/crypto`, every one
+     COUNTED AND NEVER CHECKED. A foreign row stops a guess and only an index can make anything right; the
+     `mimesniff` row one screen up is the same argument and this is the bigger half of it.
+     THE EDITION IS THE EDITOR'S DRAFT AND THE DRAFT IS LEVEL 2, which is a claim worth checking rather than
+     assuming, because a level is a renumbering and a renumbering nobody checked is the css-scoping hazard
+     this file refuses by name. It was checked against the sites before this row was written: the ED numbers
+     §10 "Crypto interface", §10.1.1 "The getRandomValues method", §10.1.2 "The randomUUID method", §10.2.1
+     "The subtle attribute", §13 "CryptoKey interface", §13.2 "Key interface data types", §13.3 "CryptoKey
+     internal slots", §14.3 "Methods and Parameters", §14.3.3/.4/.5/.9 sign/verify/digest/importKey, §18.4.4
+     "Normalizing an algorithm", §31 "HMAC", §31.6.4 "Import Key", §32 "SHA" and §32.2 "Registration" — which
+     is every number `core/crypto` writes, at the title it writes beside it.
+     IT IS `respec` AND NOT `bikeshed`, and the probe that decides that is for NUMBERED HEADINGS rather than
+     for a generator's marker: the page carries no `data-level` at all, 248 `<bdi class="secno">` openings
+     inside an `<hN>`, no `respecConfig` and a dt-published — which is the rendered shape the `permissions`
+     row reads, and the opposite of the requestidlecallback row's unrendered source. */
+  { key: "webcrypto", label: "Web Cryptography API Level 2", kind: "respec",
+    base: "https://w3c.github.io/webcrypto/", edition: "maintained",
+    anchors: ["web cryptography", "web cryptography api", "cryptography api", "webcrypto"] },
   { key: "hrtime", label: "High Resolution Time", kind: "bikeshed",
     base: "https://w3c.github.io/hr-time/", edition: "maintained", anchors: ["hr-time", "hrtime", "high resolution time"] },
   /* THE THREE STANDARDS THAT SIT ON TOP OF THE ROW ABOVE, and they are here for the reason that row's own
@@ -1803,15 +1822,22 @@ function regen(keys) {
  * unanchored citation in such a file is not mistaken for one of ours. */
 const OTHER_SPECS = [
   "namespaces", "infra", "storage",
-  "webcrypto", "svg", "mathml", "wasm", "uievents", "console", "performance",
+  /* `webcrypto` STOOD HERE AND IS NOW AN ANCHOR OF THE ROW ABOVE, along with `web cryptography`,
+     `web cryptography api` and `cryptography api`. The reason it was here was right while it was here — an
+     unindexed standard's citations must not be audited as somebody else's — and it is retired rather than
+     deleted because a reader who re-derives it will re-introduce it: the standard is INDEXED now, so the same
+     rule that put these four on this list is what takes them off it. */
+  "svg", "mathml", "wasm", "uievents", "console", "performance",
   "workers", "websockets", "rfc", "unicode", "utf", "trusted", "clipboard",
   "notifications", "geolocation", "geometry", "fullscreen", "pointerevents", "webaudio", "webrtc",
   "beacon", "referrer", "mixed", "cors", "cookies",
   /* A MULTI-WORD NAME WHOSE LAST WORD IS AN INDEXED STANDARD'S ANCHOR MUST BE LISTED HERE OR IT IS AUDITED AS
      THAT STANDARD, which is a WRONG ANSWER rather than a coverage gap. "Namespaces in XML" numbers entirely
-     different sections from XML 1.0, and "Selection API" and "Web Cryptography API" are not the File API.
+     different sections from XML 1.0, and "Selection API" is not the File API. "Web Cryptography API" was the
+     third example here and is now an ANCHOR rather than a refusal — the hazard it names is unchanged, and the
+     answer to it moved from "decide nothing" to "decide the right document" the day that standard got a row.
      anchorTokens tries the longest tail first, so a listed multi-word name wins over its own last word. */
-  "namespaces in xml", "selection api", "cryptography api", "web cryptography api",
+  "namespaces in xml", "selection api",
   /* FILE SYSTEM ACCESS, and it is here because the audit's own gap report asked for it: `Access=32` stood in
      the capitalised-tokens line — "a standard among these is coverage this audit is not getting" — while
      `core/file/file_picker.c`, whose banner reads "FILE SYSTEM ACCESS §3", had every one of its §3.x crash
@@ -1939,11 +1965,13 @@ const OTHER_SPECS = [
      cache fetch", a real section of a document that file never names. In `embedder_policy.c` a bare `§3.4.1`
      inside a crash message is Reporting's "Generate report of type with data", and the same vote placed it at
      HTML.
-     `web cryptography api` and `cryptography api` are ALREADY on this list and STAY: classifyAnchor takes the
-     longest tail that classifies, so the three-word spelling is asked before the two-word one and the API
-     form cannot be shadowed by the form without it. Both refuse either way, which is the point — this group
-     adds no resolution, it removes a guess. */
-  "web cryptography", "ui events", "trusted types", "tt",
+     `web cryptography` IS NO LONGER ON THIS LIST AND THE ARGUMENT THAT PUT IT HERE IS WHAT MOVED IT: the
+     paragraph above says a near miss is a wrong answer rather than a coverage gap, and a refusal only ever
+     removes a guess. The standard now has an index row, so all four of its spellings — `web cryptography`,
+     `web cryptography api`, `cryptography api`, `webcrypto` — are that row's anchors, and the longest-tail
+     order still does the work it did here: the three-word spelling is asked before the two-word one, so the
+     API form cannot be shadowed by the form without it, and neither can be read as the File API. */
+  "ui events", "trusted types", "tt",
   "media queries", "mq4", "referrer policy", "uax14",
   /* AND THE STANDARDS THIS TREE NAMES THAT NO LIST HELD UNDER ANY SPELLING. Each is a document with a real
      numbering that this audit holds no text for, cited with its name in front of the number exactly as CLAUDE.md
