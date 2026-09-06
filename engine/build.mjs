@@ -2104,7 +2104,16 @@ const COLDRESUME_FIELDS = ["segs", "flows", "cands", "orphans", "worlds", "orpha
    same two producers reach a reader twice (this line, and `result_json`'s `_orphansDriven`/`_orphansAsked`
    which bridge.js asserts and the popup renders), so a reader who learns the names off `@RESULT` reads them
    off the stream and a rename breaks in one place instead of drifting in two. */
-const OCENSUS_FIELDS = ["_orphansDriven", "_orphansAsked"];
+const OCENSUS_FIELDS = ["_orphansDriven", "_orphansAsked", "_sessionForks"];
+/* `_sessionForks` IS A REGIME AND NOT A COUNTER, and it is in this contract because the pair beside it has a
+   reading that is not in the pair. A session declared non-forking never reaches the ask at all, so its
+   `asked == 0` is guaranteed by POLICY and renders byte-identically to the SCHEDULE never reaching the
+   question — two states, opposite work, one zero. solver/engine.c names this file as one of the two places
+   that owe the regime, and until now this reader named the schedule as the cause of both.
+   IT IS NEVER DIFFERENCED. The other two names here are lifetime totals whose last-minus-first is the series
+   this reader is built on; doing that to a regime is the gauge-and-counter defect one key vocabulary invites.
+   That kind is not left to this comment — it is ASSERTED constant across a session's samples below, which is
+   the only statement about a quantity's kind a reader can check rather than believe. */
 /* ONE FIELD CONTRACT, ONE IMPLEMENTATION OF IT. Three readers here assert the same thing about a census line —
    every name in the contract is present and is a NUMBER — and the assertion had been written out twice
    already; a third copy is the drift this file's own record-field gate exists to catch, one level up in the
@@ -2628,12 +2637,25 @@ function censusReading(out) {
                              "test_forced.c's fixture_have_answers printf", OCENSUS_FIELDS);
   if (ocs) {
     const run = ocs[ocs.length - 1], first = run[0], last = run[run.length - 1];
+    /* THE REGIME'S KIND, ASSERTED RATHER THAN DOCUMENTED. `_sessionForks` rides a line whose other two names
+       are lifetime totals, and a shared key vocabulary is exactly what gets a regime differenced across
+       samples. A session may not change it: the ask's gate reads it, so a mid-session flip would give the two
+       counters two different meanings inside one series and every reading below would be of a quantity that
+       changed under it. This is the one statement about a quantity's KIND that a reader can check instead of
+       believe, which is why it is a line of code and not the sentence above it. It does not throw — this is a
+       reader over another process's stdout, and a stream that disagrees with itself is a finding to REPORT,
+       not a reason to stop composing the rest of the verdict. */
+    const forkFlip = ocs.filter((r) => r.some((x) => x._sessionForks !== r[0]._sessionForks));
     const dAsk = last._orphansAsked - first._orphansAsked, dDrv = last._orphansDriven - first._orphansDriven;
     /* THE FRONTIER'S OWN MOVEMENT, WHICH IS WHAT MAKES `asked == 0` A VERDICT RATHER THAN A SHRUG. A session
        that never reached the question and a session that barely ran are the same zero, and @COLD's `live` is
        the number that splits them. It is read as a POSITIVE statement and never defaulted: with no @COLD line
        there is no frontier reading to cite, and the sentence says that instead of implying a still frontier. */
     const liveMoved = c ? c.b.live - c.a.live : null;
+    if (forkFlip.length)
+      parts.push(`orphan census: ${forkFlip.length} session(s) on this stdout CHANGED their forking regime `
+        + `between samples, so this pair's counters do not have one meaning across their own series — the ask `
+        + `gate reads that bit. Nothing below about "never asked" is available for those sessions.`);
     parts.push(`orphan drive: ${last._orphansAsked} ask(s), ${last._orphansDriven} body(ies) driven` +
       (ocs.length > 1 ? ` — read off the LAST of ${ocs.length} sessions on this stdout, since solver/engine.c `
                       + `releases both counters with the agent and last-minus-first across a restart is a `
@@ -2643,7 +2665,20 @@ function censusReading(out) {
           + `question this reader exists to answer and a single sample cannot answer it`
         : `; over ${run.length} samples asked +${dAsk}, driven +${dDrv}` +
           (last._orphansAsked === 0
-            ? ` — NEVER ASKED. engine_orphan_seed sits at the last moment before the CLOCK may move, so it `
+            ? (run.some((r) => r._sessionForks !== run[0]._sessionForks)
+                 ? ` — NEVER ASKED, and this session's forking regime CHANGED across its own samples `
+                   + `(${run.map((r) => r._sessionForks).join(",")}), which no reading of this pair survives: `
+                   + `the counter's meaning is not constant over the series, so neither the policy reading nor `
+                   + `the schedule reading is available. That is a defect in whoever moved the bit mid-session, `
+                   + `not a fact about orphans`
+               : !run[0]._sessionForks
+                 ? ` — NEVER ASKED, AND THIS SESSION DOES NOT FORK, so the ask's own gate returns before the `
+                   + `counter and this zero is guaranteed by POLICY. It is NOT the schedule reading below and `
+                   + `must not be read as one: it says nothing whatever about whether flows ran out of their `
+                   + `own work, about the take, or about whether this bundle ships uncalled code. The `
+                   + `conformance host begins non-forking and the shipped host begins forking, so this is the `
+                   + `zero that changes meaning between the two streams a reader compares`
+                 : ` — NEVER ASKED. engine_orphan_seed sits at the last moment before the CLOCK may move, so it `
               + `is reached only by a member that is DISPATCHED, unframed, and has no program, job, delivery, `
               + `checkpoint or lifecycle stage left. (A timer, a rendering opportunity, an owed reply and a `
               + `close request are BELOW it and cannot hold a member back from the ask; that list stood here `
@@ -2660,7 +2695,7 @@ function censusReading(out) {
                     ? ` — and the frontier GREW by ${liveMoved} live member(s) across the same span, so the `
                       + `session was running and still never reached the question`
                     : ` — and @COLD's live count did not grow either, so this may be a session that barely ran `
-                      + `rather than one that ran and never asked`)
+                      + `rather than one that ran and never asked`))
             : dAsk === 0 && dDrv === 0
               ? ` — both counters FLAT across the whole span while the session went on sampling: the frontier `
                 + `has stopped reaching the question, which is neither the take nor the page`

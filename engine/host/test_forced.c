@@ -13356,11 +13356,26 @@ static int fixture_have_answers(void) {
        IT SPELLS THEM THE WAY THE DOCUMENT DOES for the reason stated directly above — one namespace, one
        spelling — so a reader who learns `_orphansDriven`/`_orphansAsked` off the result document, off
        bridge.js or off solvergate.mjs reads the same two names here. */
+    /* AND THE REGIME, BECAUSE THE PAIR HAS A FOURTH READING THAT IS BYTE-IDENTICAL TO ITS SECOND AND THIS IS
+       ONE OF THE TWO PLACES solver/engine.c NAMES AS OWING IT. The three readings above are the ones a series
+       of this pair can express. The fourth is not in the pair at all: the ask's own gate returns BEFORE the
+       counter, so a session declared non-forking reads `asked == 0` BY CONSTRUCTION however many flows ran out
+       of their own work — the schedule reading and the policy reading rendering as the same zero, and they
+       take opposite work, one being a scheduler question and the other not a question at all.
+       IT IS LIVE RATHER THAN HYPOTHETICAL: this conformance host begins its sessions non-forking and the
+       shipped host begins them forking, so the one stream a reader compares across hosts is exactly the one
+       where the two zeros mean different things. A consumer that says "the frontier never reached the
+       question" without reading this bit states the SCHEDULE as the cause of a zero the POLICY guaranteed.
+       IT IS A REGIME AND NOT A COUNTER, which is the distinction a shared key vocabulary erases: the numbers
+       beside it are lifetime totals a reader may difference across samples, and differencing this one is
+       meaningless. Its kind is not left to that comment — the consumer ASSERTS it constant across a session's
+       samples, which is the only statement about a quantity's kind a reader can actually check. */
     {
         long driven = 0, asked = 0;
 
         engine_orphan_census(&driven, &asked);
-        printf("@OCENSUS {\"_orphansDriven\":%ld,\"_orphansAsked\":%ld}\n", driven, asked);
+        printf("@OCENSUS {\"_orphansDriven\":%ld,\"_orphansAsked\":%ld,\"_sessionForks\":%d}\n",
+               driven, asked, engine_session_forks());
     }
     free(js);
     return ok;
