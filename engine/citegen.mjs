@@ -4234,7 +4234,7 @@ function audit(argv, opts = {}) {
   const stat = { total: 0, bare: 0, anchored: 0, byTerm: 0, byFile: 0, other: 0, skipped: 0, quotedNumber: 0,
                  confirmed: 0, confirmedByUse: 0, confirmedByContainment: 0, confirmedByAncestor: 0, confirmedByRun: 0,
                  confirmedByText: 0, confirmedByIdent: 0, textRefused: 0,
-                 unverified: 0, multiSpec: 0,
+                 unverified: 0, multiSpec: 0, byGroupTitle: 0,
                  foreignTerm: 0, titleRefused: 0, byTitle: 0, numberRefused: 0,
                  titled: 0, titledQuoted: 0, titledEv: 0, titledOK: 0, titledMis: 0, titledMisInTitle: 0,
                  titledTailEv: 0, titledTailMis: 0, titleDeclined: 0,
@@ -4652,11 +4652,30 @@ function audit(argv, opts = {}) {
      * occurrence of that same number in this same file is followed by spec vocabulary; on its own it is a
      * float. The same grouping is what lets an undiagnosable site be reported as sharing a diagnosed number
      * instead of being silently dropped or, worse, guessed at. */
+    /* THE PLACEMENT TEST A STATED TITLE HAS TO PASS, LIFTED OUT OF THE PER-SITE CHECK SO THERE IS ONE COPY.
+     * It is argued in full at that check below — one indexed standard, and that standard numbering the title
+     * in the cited number's own neighbourhood — and the group rule beneath uses it UNCHANGED rather than
+     * restating it, because a second spelling of the strongest resolution rule in this file is the copy that
+     * drifts the day the neighbourhood argument moves. */
+    const parentNo = (s) => (s.includes(".") ? s.slice(0, s.lastIndexOf(".")) : null);
+    const titlePlaces = (ev, no) => {
+      if (!ev || !idx.has(ev.key)) return false;
+      const at = titleToNo.get(ev.key).get(ev.claim);
+      return at.some((t) => t === no || contains(t, no) || contains(no, t) ||
+                            (parentNo(t) !== null && parentNo(t) === parentNo(no)));
+    };
+
     const group = new Map();
     for (const c of cites) {
       if (c.foreign) continue;
-      const g = group.get(c.no) || { evidence: false, keys: new Set(), members: [] };
+      const g = group.get(c.no) || { evidence: false, keys: new Set(), titleKeys: new Set(),
+                                     anchorKeys: new Set(), members: [] };
       if (c.ev) { g.evidence = true; for (const h of c.ev.hits) g.keys.add(h.key); }
+      /* AND THE TITLES ITS MEMBERS STATE, KEPT APART FROM `keys` ON PURPOSE — see the group-title rule below
+       * for why merging them would be the fetch/headers.c defect with better evidence in it. */
+      if (c.titleEv.length === 1 && titlePlaces(c.titleEv[0], c.no)) g.titleKeys.add(c.titleEv[0].key);
+      /* AND THE STANDARDS ITS MEMBERS NAME OUTRIGHT, WHICH IS THE ONE THING THAT CAN OVERRULE THE TITLE. */
+      if (c.anchor && idx.has(c.anchor)) g.anchorKeys.add(c.anchor);
       g.members.push(c);
       group.set(c.no, g);
     }
@@ -4719,12 +4738,51 @@ function audit(argv, opts = {}) {
        * demonstrably that standard with the NUMBER wrong. A title sitting nowhere near is the tell that the
        * STANDARD is wrong, which check (3)'s own `else` already refuses to judge past for the same reason.
        * What that refusal costs is disclosed rather than swallowed — see the number-exists counter below. */
-      if (!spec && c.titleEv.length === 1 && idx.has(c.titleEv[0].key)) {
-        const at = titleToNo.get(c.titleEv[0].key).get(c.titleEv[0].claim);
-        const parent = (s) => (s.includes(".") ? s.slice(0, s.lastIndexOf(".")) : null);
-        const near = (t) => t === c.no || contains(t, c.no) || contains(c.no, t) ||
-                            (parent(t) !== null && parent(t) === parent(c.no));
-        if (at.some(near)) { spec = c.titleEv[0].key; how = "title"; }
+      if (!spec && c.titleEv.length === 1 && titlePlaces(c.titleEv[0], c.no)) {
+        spec = c.titleEv[0].key; how = "title";
+      }
+      /* AND A TITLE STATED AT ONE SITE PLACES THE NUMBER FOR THE FILE, WHICH IS THE HALF THIS FILE'S OWN
+       * ADVICE MADE COSTLY. `g.keys` is fed by TERM evidence alone, so one term claim resolves every citation
+       * of that number in the file while a stated TITLE resolved only the site that stated it. Writing the
+       * title CLAUDE.md §Browser half asks for, at a number whose single term claim was its only evidence,
+       * therefore DROPPED that number's whole group to the file vote and out of every check — obeying the
+       * rule reduced coverage. MEASURED before this existed, on `window_proxy.c`: replacing the two words
+       * `property names` and changing nothing else moved term-resolution 448 -> 412 and the judged population
+       * 518 -> 487, and four different spellings of the repair — title alone, title with the standard named,
+       * title before the possessive, the standard's own term — all landed at the same number, so the loss was
+       * in removing the term claim rather than in how the replacement was written.
+       *
+       * IT IS A SEPARATE SET AND NOT A CONTRIBUTION TO `keys`, WHICH IS THE WHOLE OF WHY IT IS SAFE. The
+       * paragraph above `keys` records what merging costs: `fetch/headers.c` had one of forty-odd §5.1 sites
+       * run prose naming `interface prototype object`, the group went from {fetch} to {fetch, idl}, and
+       * ELEVEN real findings stopped being reported because a two-key group resolves to nothing. A key added
+       * to `keys` can silence; a key read HERE cannot, because this line is reached only where `spec` is
+       * still null — no anchor, no single-key term group, no title at this site — so it can only turn a
+       * citation that was about to be GUESSED by the file vote into one resolved on evidence.
+       *
+       * THE EVIDENCE IS THE SAME STRENGTH AS THE PER-SITE RULE AND ITS SCOPE IS NARROWER THAN A TERM'S. It
+       * runs `titlePlaces` unchanged, so a title still has to be used by exactly one indexed standard and to
+       * be numbered by that standard beside the cited §; and where a term hit says only that some standard
+       * defines the phrase SOMEWHERE, a title placed at §N is evidence about §N itself, which is the number
+       * every member of the group cites. Two members stating titles that resolve to two standards decide
+       * NOTHING here — no fallback rescue, unlike the term branch — because a disagreement about a number is
+       * the one thing this rule must not arbitrate.
+       *
+       * AND AN ANCHOR IN THE SAME GROUP OVERRULES IT, WHICH THE FIRST VERSION OF THIS RULE DID NOT DO AND WAS
+       * CAUGHT BY ITS OWN RETIRED LIST. One file can use one NUMBER for two standards, and then the group is
+       * ambiguous whatever a title says: `css_shorthand.c` writes `css-text-4 §7.1 "Text Alignment: the
+       * text-align shorthand"` at one site and cssflexbox1's §7.1 at others, and the title-only rule put
+       * THIRTY-THREE more §7.1 sites on cssflexbox1 "The flex Shorthand" while the file's own anchored site
+       * said css-text-4. The disambiguating evidence was there and this rule could not see it, because only
+       * titles fed the set. A stated title and a named standard are evidence of the SAME kind — the citation
+       * saying which document it means — so a title may speak for the group only where no member of the group
+       * names a different one; two anchors disagreeing likewise decides nothing. This is narrower than the
+       * term branch on purpose: `g.keys` may resolve past a disagreement via the file vote, and this may not,
+       * because a term hit says where a phrase is defined while an anchor says what the author meant. */
+      const anchorAgrees = g.anchorKeys.size === 0 ||
+        (g.anchorKeys.size === 1 && g.titleKeys.size === 1 && g.anchorKeys.has([...g.titleKeys][0]));
+      if (!spec && anchorAgrees && g.titleKeys.size === 1) {
+        spec = [...g.titleKeys][0]; how = "title"; stat.byGroupTitle++;
       }
       if (!spec && fallback && idx.has(fallback)) { spec = fallback; how = "file"; }
       /* LAST, AND ONLY WHERE EVERY OTHER RULE HAS GIVEN UP: the citation's OWN term evidence. It is placed here
@@ -6227,7 +6285,7 @@ function audit(argv, opts = {}) {
     console.log(`  NOT COLLECTED by this default run: engine/qjs beyond quickjs.c/.h and engine/lexbor — upstream, not this tree's to answer for; ` +
       `and generated bytes under out/ and .work/, which nobody wrote. Everything this project's own hands typed is collected, gates included.`);
   console.log(`  resolved: ${stat.anchored} by their own anchor, ${stat.byTerm} by the term they name, ` +
-    `${stat.byTitle} by a section TITLE they state that only one standard uses AND that that standard numbers beside the cited § ` +
+    `${stat.byTitle} by a section TITLE (${stat.byGroupTitle} of them stated at ANOTHER site citing the same number in the same file, which is the group rule) that only one standard uses AND that that standard numbers beside the cited § ` +
     `(the neighbourhood half is not caution — without it a title whose owner this audit does not index resolves to whichever indexed standard happens to reuse the heading)`);
   console.log(`  INFERRED: ${stat.byFile} name no standard, no term and no title, and were placed by their file's dominant anchor — a guess, ` +
     `so nothing below judges them (${stat.titleRefused} title check(s) and ${stat.numberRefused} number-exists check(s) refused on that ground); ` +
