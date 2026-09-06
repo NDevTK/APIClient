@@ -1896,6 +1896,17 @@ void platform_document_install(JSContext *ctx, JSValueConst global, lxb_html_doc
        is a defect in how the name got here rather than in whether it is here. */
     realm_assert_global_property_references(ctx);
 
+    /* AND THE OTHER DIRECTION OF THE SAME ALGORITHM, WHICH ONLY THIS LINE MAY STATE. The walk above enumerates
+       properties that EXIST, so an interface object that was never placed at all is not a property and it has
+       nothing to judge — Web IDL §3.7.3 Interface prototype object's census is what sees that one, and
+       core/realm.h carries the argument. What this CALL SITE states, and what no derivation inside that
+       function could, is that THIS REALM IS FINISHED: `owed` ⇒ `asked` is not monotone the way the two halves
+       above are, and at the end of realm_install_intrinsics a Window realm legitimately holds interface
+       prototype objects whose property reference this column has not placed yet. So the owed half is a
+       SEPARATE entry, called only where both columns have run, and realm_install_intrinsics deliberately does
+       not call it. A realm that reaches no document install is not audited by it at all — see core/realm.h. */
+    realm_assert_interface_objects_asked(ctx);
+
     for (i = 0; i < PLATFORM_WITNESS_N; i++) {
         JSAtom a = JS_NewAtom(ctx, PLATFORM_WITNESS[i].name);
         /* WHAT THIS REALM OWES, decided by Web IDL §3.3.7 [Exposed]'s own "is exposed in realm" and by nothing

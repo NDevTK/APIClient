@@ -6905,6 +6905,18 @@ static void exposure_selftest(JSContext *ctx, const char *top_level_url)
        standard never lets a WorkerGlobalScope reach. */
     realm_install_intrinsics(worker, NULL, "DedicatedWorkerGlobalScope", owner_secure);
     realm_install_intrinsics(worker_insecure, NULL, "DedicatedWorkerGlobalScope", !owner_secure);
+#if APICLIENT_DEV
+    /* AND THESE TWO REALMS ARE FINISHED, WHICH IS A STATEMENT ONLY THIS LINE CAN MAKE. core/realm.h's owed
+       half — every interface object a realm owes is one some component asked Web IDL §3.8 for — may be asked
+       only where no further placement will happen, and its other caller is core/platform.c's per-document
+       column, which a WorkerGlobalScope realm never reaches. So without these two calls the assertion has no
+       worker realm to run over at all, and the realm kind whose surface Web IDL §3.3.7 [Exposed] step 1 exists
+       to make different would be the one kind it never judges. The pair is also what exercises the step 1
+       skip: a Window-only interface whose prototype a per-realm intrinsic built here is owed no property, and
+       an assertion that demanded one would fire on a correct realm. */
+    realm_assert_interface_objects_asked(worker);
+    realm_assert_interface_objects_asked(worker_insecure);
+#endif
     win_global = JS_GetGlobalObject(ctx);
     worker_global = JS_GetGlobalObject(worker);
     for (i = 0; i < (int)(sizeof EXPECT / sizeof EXPECT[0]); i++) {

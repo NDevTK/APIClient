@@ -209,6 +209,146 @@ void realm_assert_global_property_references(JSContext *ctx)
     js_free(ctx, tab);
     JS_FreeValue(ctx, global);
 }
+
+/* ---- Web IDL §3.8's OTHER DIRECTION: every interface object this realm OWES was ASKED for ------------------
+   See realm.h for the argument — why §3.7.3's class string is the observation site, why the other side is
+   the ASK and not the placement, and why the caller and not this file states that a realm is finished. What
+   lives here is the STORE and the walk.
+
+   THE TWO CENSUSES ARE PER-REALM JS OBJECTS IN THE SLOT ARRAY THIS FILE ALREADY OWNS, and that is not a
+   convenience: an interface prototype object is built PER REALM, the property reference is asked PER REALM,
+   and a module static holding either would be one realm's answer to every realm's question — the defect the
+   whole of realm.h exists to prevent, arriving in the auditor rather than in the platform. Being a JS object
+   also means each identifier is COPIED into an atom rather than held as a pointer: every identifier reaching
+   the notes below is a string literal or a static table entry today, and a census that depended on that would
+   be a census with a lifetime rule nobody can see.
+   THE OBJECT'S [[Prototype]] IS NULL, so a membership question is a question about what was RECORDED and never
+   about %Object.prototype% — `toString` and `constructor` are not interface identifiers, but a set whose
+   answers depend on which names ECMAScript happens to define is a set that answers a different question than
+   the one asked.
+   DEV ONLY, with the walk. */
+static int g_proto_tagged_slot;      /* §3.7.3 — identifiers this realm built an interface prototype object for */
+static int g_reference_asked_slot;   /* §3.8   — identifiers some component asked this realm's global for */
+
+/* The per-realm census object, created on first note. `create` false is a PEEK: a realm that never noted has
+   no object, and the walk has to tell that apart from an empty one rather than mint one to read. */
+static JSValue realm_census(JSContext *ctx, int *slot, const char *what, bool create)
+{
+    JSValue set;
+
+    if (!*slot) {
+        if (!create) return JS_NULL;
+        *slot = realm_value_declare(ctx, what);
+    }
+    set = JS_GetClassProto(ctx, (JSClassID)*slot);
+    if (JS_IsNull(set) && create) {
+        set = JS_NewObjectProto(ctx, JS_NULL);
+        CHECK(!JS_IsException(set), "realm: a Web IDL §3.8 census object could not be allocated");
+        JS_SetClassProto(ctx, (JSClassID)*slot, JS_DupValue(ctx, set));
+    }
+    return set;   /* OWNED by the caller */
+}
+
+static void realm_census_note(JSContext *ctx, int *slot, const char *what, const char *name)
+{
+    JSValue set = realm_census(ctx, slot, what, true);
+
+    /* The VALUE is nothing: this is a set, and the key is the whole of what it records. CHECK rather than
+       DCHECK because the define consumes nothing a caller could retry with and the only way it fails is
+       allocation — a census that silently dropped an identifier would report a component as having asked when
+       it did not, which is the one direction this instrument must never fail in. */
+    CHECK(JS_DefinePropertyValueStr(ctx, set, name, JS_UNDEFINED, JS_PROP_C_W_E) >= 0,
+          "realm: an identifier could not be recorded in a Web IDL §3.8 census");
+    JS_FreeValue(ctx, set);
+}
+
+void realm_note_interface_prototype_object(JSContext *ctx, const char *iface)
+{
+    DCHECK(iface != NULL && *iface,
+           "Web IDL §3.7.3 Interface prototype object's census was told an interface prototype object had been "
+           "built for no identifier — §3.7.3 makes the class string the interface's own identifier, so a "
+           "prototype with nothing to be called is one nothing downstream can ask a question about");
+    realm_census_note(ctx, &g_proto_tagged_slot,
+                      "Web IDL §3.7.3 the interface prototype objects built in this realm", iface);
+}
+
+void realm_note_property_reference_asked(JSContext *ctx, const char *id)
+{
+    DCHECK(id != NULL && *id,
+           "Web IDL §3.8 Platform objects implementing interfaces' census was told a property reference had "
+           "been asked for with no identifier — §3.8 keys every one of its DefineMethodProperty calls by an "
+           "identifier and there is nothing else to record");
+    realm_census_note(ctx, &g_reference_asked_slot,
+                      "Web IDL §3.8 the identifiers asked of this realm's global", id);
+}
+
+void realm_assert_interface_objects_asked(JSContext *ctx)
+{
+    JSPropertyEnum *tab = NULL;
+    uint32_t n = 0, i;
+    JSValue tagged = realm_census(ctx, &g_proto_tagged_slot, NULL, false);
+    JSValue asked  = realm_census(ctx, &g_reference_asked_slot, NULL, false);
+    int ok;
+
+    /* BOTH POPULATIONS ARE NON-EMPTY, AND THAT IS THE ASSERT THAT KEEPS THE REST FROM BEING VACUOUS. A walk
+       over an empty census passes for every realm and every defect, so a recording that silently stopped
+       happening — an install path that no longer reaches idl_interface_tag, a note compiled out of one of the
+       two doors — would read as a clean audit. This is asked of a FINISHED realm, which by the time it gets
+       here has run the whole per-realm intrinsic list, so neither census can legitimately be absent. */
+    DCHECK(!JS_IsNull(tagged),
+           "a realm was declared FINISHED and Web IDL §3.7.3 built no interface prototype object in it — the "
+           "per-realm intrinsic list runs before any caller can say this, and every one of its components "
+           "builds at least one, so an empty census is this instrument having stopped recording rather than a "
+           "realm having nothing in it. The one recording site is core/idl_args' idl_interface_tag");
+    DCHECK(!JS_IsNull(asked),
+           "a realm was declared FINISHED and no Web IDL §3.8 property reference was ever asked of its global "
+           "— §3.8's door and core/idl_args' idl_install_interface_object_exposed are the two recording sites, "
+           "and a realm that reached neither has placed no interface object at all");
+    ok = JS_GetOwnPropertyNames(ctx, &tab, &n, tagged, JS_GPN_STRING_MASK);
+    DCHECK(ok == 0, "the Web IDL §3.7.3 census of this realm could not be enumerated");
+    for (i = 0; i < n; i++) {
+        const char *name = JS_AtomToCString(ctx, tab[i].atom);
+        const IdlExposureRow *row;
+        int has;
+
+        /* A SKIPPED NAME IS A HOLE IN A CENSUS — the same statement the walk above makes, for the same reason:
+           the worth of this is that its population is every interface prototype object this realm built. */
+        DCHECK(name != NULL,
+               "an identifier in this realm's Web IDL §3.7.3 census could not be materialized as a string, so "
+               "§3.8's question could not be asked of it — the only way this fails is allocation");
+        row = bsearch(name, IDL_EXPOSURE, sizeof IDL_EXPOSURE / sizeof IDL_EXPOSURE[0],
+                      sizeof IDL_EXPOSURE[0], idl_exposure_row_name_cmp);
+        /* §3.8 PLACES NOTHING FOR THIS IDENTIFIER, so nothing is owed and no bit is needed to say why — see
+           realm.h for the two readings this band carries here and why they take the same action. */
+        if (row == NULL) { JS_FreeCString(ctx, name); continue; }
+        /* AND §3.8's OWN STEP 1 DECIDES WHICH OF THEM THIS REALM IS OWED: "Let interfaces be a list that
+           contains every interface that is exposed in realm". A Window-only interface whose prototype a
+           per-realm intrinsic built in a WORKER realm is not in that list, so no component owes an ask for it
+           — asked of core/idl_args' idl_exposed_in_realm, which is §3.3.7 step 1's one statement in this tree
+           rather than a second copy of it written here. */
+        if (!idl_exposed_in_realm(ctx, name)) { JS_FreeCString(ctx, name); continue; }
+        has = JS_HasProperty(ctx, asked, tab[i].atom);
+        CHECK(has >= 0, "a Web IDL §3.8 census probe threw — [[HasProperty]] over a null-prototype object this "
+                        "file built runs no page code and has nothing to throw with");
+        DCHECKF(has == 1,
+                "Web IDL §3.7.3 Interface prototype object built `%s`.prototype in this realm and NOTHING ever "
+                "asked §3.8 Platform objects implementing interfaces for the matching `%s` property on its "
+                "global — so a page reads `[object %s]` off a live prototype while `%s` itself is undefined and "
+                "`x instanceof %s` throws. §3.8's step 1 is \"Let interfaces be a list that contains every "
+                "interface that is exposed in realm\", and §3.3.7 [Exposed] step 1 says this realm is one of "
+                "them, so the property is owed here. This is NOT the door refusing: the ask is recorded BEFORE "
+                "both of §3.3.7's steps, so what is missing is the CALL. The usual cause is an install whose "
+                "tail call went with a deleted thunk, leaving the prototype build behind. Route it: "
+                "`git grep '\\\"%s\\\"' engine/host/browser` lands on the component that built the prototype, "
+                "and the call it owes is core/idl_args' idl_define_global_property_reference",
+                name, name, name, name, name, name);
+        JS_FreeCString(ctx, name);
+    }
+    for (i = 0; i < n; i++) JS_FreeAtom(ctx, tab[i].atom);
+    js_free(ctx, tab);
+    JS_FreeValue(ctx, tagged);
+    JS_FreeValue(ctx, asked);
+}
 #endif
 
 void realm_install_intrinsics(JSContext *ctx, const char *top_level_creation_url,
@@ -410,6 +550,12 @@ void realm_intrinsics_free(void)
     g_top_level_url_slot = 0;
     g_global_names_slot = 0;
     g_owner_secure_slot = 0;
+#if APICLIENT_DEV
+    /* The two §3.8 censuses are slots like the three above and are released the same way — their CONTENTS are
+       the realms' and went with them; what the agent holds is the slot id. */
+    g_proto_tagged_slot = 0;
+    g_reference_asked_slot = 0;
+#endif
 }
 
 /* A slot IS a class id whose per-context prototype slot holds something that is not a prototype. Nothing is

@@ -159,6 +159,70 @@ JSValue realm_top_level_creation_url(JSContext *ctx);
 void realm_assert_global_property_references(JSContext *ctx);
 #endif
 
+/* WEB IDL §3.8 Platform objects implementing interfaces' OTHER DIRECTION — every interface object this realm
+ * OWES is one some component asked §3.8's door for. The walk above is the PRESENT ⇒ CORRECT half and is blind
+ * by construction to the failure below, because it enumerates properties that EXIST: an interface object that
+ * was never placed at all is not a property, so there is nothing for it to walk and nothing for it to judge.
+ *
+ * THE OBSERVATION SITE IS §3.7.3's CLASS STRING, AND IT IS THE ONE THING THAT SURVIVES THE DELETION. The
+ * failure this catches is a component whose per-realm install still BUILDS the interface prototype object and
+ * no longer asks for the property — a tail call that went with a deleted install thunk, which is how `BarProp`
+ * came to answer `[object BarProp]` off a live prototype while `window.BarProp` did not exist. Nothing about
+ * the global records that, so the census is taken where the object is still being built: §3.7.3 Interface
+ * prototype object is the step that mints it, core/idl_args' idl_interface_tag is this engine's one statement
+ * of that step, and it runs on the SAME per-realm path that stopped placing the name. §3.7.3 also makes the
+ * population the right one — "There will exist an interface prototype object for every interface defined,
+ * regardless of whether the interface was declared with the [LegacyNoInterfaceObject] extended attribute" — so
+ * an interface this engine has BUILT is one this census sees, and an interface it has not built is honestly
+ * outside the population rather than charged as a gap.
+ *
+ * THE OTHER SIDE IS THE ASK AND NOT THE PLACEMENT, which is what makes this independent of BOTH of §3.3.7
+ * [Exposed]'s steps. §3.8's door refuses on step 1 and core/idl_args' idl_install_interface_object_exposed
+ * refuses on step 2 one call above it, and both refusals are CORRECT — so a census of what LANDED would fire
+ * on every Window-only interface in a worker realm and on every [SecureContext] one in an insecure realm. What
+ * is recorded instead is that a component ASKED, before either gate, and whether the ask is then granted is
+ * the door's business and is already asserted from the other side by the walk above.
+ *
+ * A NO-ROW IDENTIFIER OWES NOTHING, AND THAT NEEDS NO SECOND BIT. browser/idl_exposure.h is keyed by the
+ * identifiers §3.8 puts on a global, and its generator emits no row for a construct §3.8 step 3.1 refuses —
+ * "If interface is not declared with the [LegacyNoInterfaceObject] or [LegacyNamespace] extended attributes,
+ * then:" — so within THIS census's population a missing row means §3.8 places nothing for the identifier,
+ * whatever the reason. The reasons do not have to be told apart, because they take the same action. One is a
+ * §3.7.4 Named properties object, which is not an interface at all and is tagged here only because §3.7.4
+ * gives it a class string built out of one: "The class string of a named properties object is the
+ * concatenation of the interface's identifier and the string" — and that string is Properties, which is
+ * exactly how core/frame/window.c comes to tag one WindowProperties. The other is an interface §3.8 step 3.1
+ * declines to place. Neither owes a property. The third reading a bare no-row carries elsewhere — a [Global] member, an ECMAScript intrinsic, an identifier no corpus declares
+ * — cannot arise in this population: idl_interface_tag's own §3.7.3 assertion refuses an identifier
+ * browser/idl_inheritance.h has no row for, one call before the census is taken.
+ *
+ * THE CALLER STATES THAT THE REALM IS FINISHED, AND THAT IS WHY THIS IS ITS OWN ENTRY RATHER THAN A SECOND
+ * QUESTION INSIDE THE WALK ABOVE. That walk's two halves are MONOTONE, so asking them at both ends of a
+ * realm's construction is free; owed ⇒ asked is not monotone, and at the end of realm_install_intrinsics a
+ * WINDOW realm legitimately holds interface prototype objects whose property reference core/platform.c's
+ * per-document column has not placed yet. `CSSRuleList` is one: tagged by a per-realm intrinsic, asked for by
+ * the document column. So there is no derivation inside this function that could tell the two ends apart —
+ * the fact lives in the caller, and the caller states it by calling THIS entry rather than the other one.
+ * Derive the split rather than trusting a number here: `node engine/placeaudit.mjs` prints how many identifier
+ * placements each column makes.
+ *
+ * DEV ONLY, and the two note entries with it: they build a per-realm census object per realm, which is work
+ * rather than a side-effect-free test, so the block and not merely the DCHECK is compiled out. A caller guards
+ * its call with APICLIENT_DEV. */
+#if APICLIENT_DEV
+/* WEB IDL §3.7.3 Interface prototype object — this realm built one for `iface`. Called from core/idl_args'
+   idl_interface_tag, which is the one statement of that step in this tree, so a component cannot build a
+   prototype outside the census without first inventing a second way to give it a class string. */
+void realm_note_interface_prototype_object(JSContext *ctx, const char *iface);
+/* WEB IDL §3.8's `define the global property references` — a component ASKED this realm's global for `id`.
+   Called at the two entries that can refuse: §3.8's door itself, before §3.3.7 step 1, and
+   idl_install_interface_object_exposed, before §3.3.7 step 2. Recorded BEFORE either refusal, because a
+   refusal is the standard answering and not a component failing to ask. */
+void realm_note_property_reference_asked(JSContext *ctx, const char *id);
+/* The assertion over the two. ONLY where no further §3.8 placement will happen in this realm — see above. */
+void realm_assert_interface_objects_asked(JSContext *ctx);
+#endif
+
 /* Agent teardown: the declarations are the agent's. */
 void realm_intrinsics_free(void);
 

@@ -6101,6 +6101,10 @@ void idl_interface_tag(JSContext *ctx, JSValueConst proto, const char *iface)
                                     "write and nothing below can name what this object's [[Prototype]] must be");
 #if APICLIENT_DEV
     idl_assert_inherits(ctx, proto, iface);
+    /* AND THE OBJECT IS COUNTED, because this call is the only observation of §3.7.3's mint that SURVIVES the
+       failure core/realm.h's owed-half assertion is about: a component that stops asking §3.8 for the property
+       goes on building the prototype, and the prototype is what is in hand here. */
+    realm_note_interface_prototype_object(ctx, iface);
 #endif
     idl_tag_write(ctx, proto, iface);
 }
@@ -7143,6 +7147,13 @@ void idl_install_interface_object_exposed(JSContext *ctx, JSValueConst target, c
     DCHECK(name != NULL && *name, "an interface object was installed with no identifier — §3.7 names the "
                                   "global's property after the interface, and there is nothing else to key it "
                                   "by");
+#if APICLIENT_DEV
+    /* THE ASK IS RECORDED BEFORE THE REFUSAL, and this is the entry where that matters: the door below records
+       its own, but a construct §3.3.7 step 2 excludes never reaches it, and a component that asked and was
+       refused by the standard is not a component that failed to ask. core/realm.h's owed-half assertion reads
+       both censuses and would otherwise fire on every [SecureContext] interface in an insecure realm. */
+    realm_note_property_reference_asked(ctx, name);
+#endif
     if (!idl_exposed(ctx, exposure)) return;   /* §3.3.13: "there will be no \"X\" property on Window" */
     idl_define_global_property_reference(ctx, target, name, idl_interface_object(ctx, name, proto));
 }
@@ -7189,6 +7200,13 @@ void idl_define_global_property_reference(JSContext *ctx, JSValueConst global, c
        whose global names exclude most of the platform still allocates every interface prototype object in it,
        so its heap looks like a Window's while its global does not — measurable as allocation, never as a
        property a page can read, since nothing names an object no global property points at. */
+#if APICLIENT_DEV
+    /* THE ASK, RECORDED BEFORE STEP 1 REFUSES IT — see the note at idl_install_interface_object_exposed above
+       and core/realm.h for why the census is of what was ASKED and never of what LANDED. Every §3.8 identifier
+       passes here, an alias and a factory function and a namespace object included, so the census is a
+       superset of the interface identifiers the owed-half assertion reads out of it. */
+    realm_note_property_reference_asked(ctx, id);
+#endif
     if (!idl_exposed_in_realm(ctx, id)) { JS_FreeValue(ctx, object); return; }
     defined = JS_DefinePropertyValueStr(ctx, global, id, object, IDL_INTERFACE_OBJECT_PROP_FLAGS);
     /* CHECK rather than DCHECK: the define consumes `object` on every path, so a release build that carried on
