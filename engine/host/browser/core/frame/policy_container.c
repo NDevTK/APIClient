@@ -205,8 +205,34 @@ PolicyContainer *policy_container_clone(const PolicyContainer *src)
            "filled in — every container has one (initially a new embedder policy, whose endpoints are the "
            "EMPTY STRING and never null), so this container was built somewhere that does not go through "
            "policy_container_new, and the clone would carry an item the source does not have");
-    return policy_container_new(src->csp_text, src->csp.self_origin, src->referrer_policy,
-                                serialized_embedder_policy_of(&src->embedder), src->integrity_policy_text);
+    {
+        /* THE ROUND TRIP, ASSERTED — and this is the check that would have made the wire gap VISIBLE instead
+           of leaving it to a comparison nobody runs. §7.1.7's clone must move a container WHOLE, and the way
+           an item goes missing is not that somebody deletes it: it is that an item is added to the struct and
+           to the CONSTRUCTOR and the clone keeps calling the constructor with one argument fewer, or that a
+           SEAM between two containers drops it. Both leave a clone that is merely WRONG rather than one that
+           crashes, which is why the sibling assert above exists for §7.1.4's item.
+           IT IS ASKED OF THE PARSED VALUE AND NOT OF THE TEXT, deliberately: comparing the text would pass
+           for a constructor that copied the bytes and never ran SRI §3.8 over them, which is the shape a
+           newly-added item takes on the day somebody wires the field and forgets the parse. Comparing what
+           every READER of this container will actually see is the only version of this question worth asking.
+           A clone whose source states no policy has none here either, and both sides are then §3.8's "a new
+           integrity policy" — equal, so the assert holds for that arm too rather than being skipped for it. */
+        PolicyContainer *clone = policy_container_new(src->csp_text, src->csp.self_origin,
+                                                     src->referrer_policy,
+                                                     serialized_embedder_policy_of(&src->embedder),
+                                                     src->integrity_policy_text);
+        DCHECK(clone->integrity_policy.sources_inline   == src->integrity_policy.sources_inline &&
+               clone->integrity_policy.blocks_script    == src->integrity_policy.blocks_script &&
+               clone->integrity_policy.blocks_style     == src->integrity_policy.blocks_style,
+               "§7.1.7's clone-a-policy-container produced a container whose Subresource Integrity §3.8 "
+               "INTEGRITY POLICY differs from the source's — the clone re-parses the item's text, so the two "
+               "agree unless the text was not carried or was not parsed. A clone that drops an item does not "
+               "crash and does not look wrong: the child simply loads a resource its creator's policy refuses "
+               "while a sibling built the other way is refused it, and only comparing the two would ever "
+               "show it. Carry the item at whichever seam lost it");
+        return clone;
+    }
 }
 
 void policy_container_enforce_policy(PolicyContainer *p, const char *serialized_policy)

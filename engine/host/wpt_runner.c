@@ -3063,8 +3063,13 @@ static JSContext *wpt_build_document(const char *doc_name, const char *origin, c
             inherited_csp, inherited_csp_self_origin,
             serialized_embedder_policy(_coep, inherited_coep_endpoint, _coep_ro,
                                        inherited_coep_report_only_endpoint),
-            /* no integrity policy on this runner's inherited relay — the narrowing named at
-               core/frame/navigable.c's `inherited` container */
+            /* §7.1.7's INTEGRITY POLICY ITEM IS NOT ON THIS RUNNER'S COMMAND-LINE RELAY, which is a third
+               carrier and not either of the two engine wires: those — the navigate job's arguments and the
+               parked navigable record — now carry it. This one is the runner writing a CHILD PROCESS's
+               inherited container onto its argv, so the field arrives with a new flag written at the parent
+               and read here. HOW ITS ABSENCE SHOWS: a WPT test whose document is created from a relayed
+               inherited container is judged without its creator's integrity policy, so an integrity-policy
+               subtest that passes in-instance would fail across the process boundary. */
             NULL);
         /* §7.5.1's OPENER POLICY ROW for this root Document — §7.1.3's policy obtained from the same response
            the params above came from — and §7.3.1.3's PARENT, which for a `--document` child is a navigable in

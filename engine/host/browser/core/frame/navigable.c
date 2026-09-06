@@ -578,6 +578,13 @@ typedef struct {
        it (policy_container.h), and this record outlives that frame — so the items are held rather than the
        struct, and the struct is rebuilt from them at the finish. */
     char *csp, *self_origin, *coep_endpoint, *coep_report_only_endpoint;
+    /* §7.1.7's INTEGRITY POLICY ITEM, held as the HEADER TEXT for `csp`'s reason exactly — the serialization
+       borrows it and this record outlives the frame that built one. IT IS HERE BECAUSE THIS RECORD IS ONE OF
+       THE TWO WIRES A CONTAINER CROSSES ON: SerializedPolicyContainer carries the item between a live
+       container and its bytes, and it is this struct and the navigate job's argument vector that carry it
+       between one OPERATION and the next. An item on the serialized struct and not on both of these is
+       dropped for exactly the documents whose container is INHERITED rather than obtained from a response. */
+    char *integrity_policy;
     /* PERMISSIONS POLICY §9.1's TWO RESPONSE HEADER FIELD VALUES, copied for the same reason `csp` is: HTML
        §7.5.1 creates the Document from them and the creation is finished on the far side of however many
        suspensions the parse takes, by which time the header list this frame read them out of is gone. NULL for
@@ -629,6 +636,7 @@ static void nav_create_free(NavCreateWork *w)
 {
     free(w->url); free(w->top_level_url); free(w->about_base_url);
     free(w->csp); free(w->self_origin); free(w->coep_endpoint); free(w->coep_report_only_endpoint);
+    free(w->integrity_policy);
     free(w->permissions_policy); free(w->permissions_policy_report_only);
     free(w->decoded);
     free(w);
@@ -732,6 +740,7 @@ static NavCreateWork *nav_create_begin(JSContext *ctx, uint32_t doc, const char 
     w->self_origin              = nav_strdup(policy.self_origin);
     w->coep_endpoint            = nav_strdup(policy.embedder.endpoint);
     w->coep_report_only_endpoint = nav_strdup(policy.embedder.report_only_endpoint);
+    w->integrity_policy         = nav_strdup(policy.integrity_policy);
     w->permissions_policy       = nav_strdup(permissions_policy.enforced);
     w->permissions_policy_report_only = nav_strdup(permissions_policy.report_only);
     w->coep_value               = policy.embedder.value;
@@ -809,9 +818,7 @@ static JSContext *nav_create_finish(JSContext *ctx, NavCreateWork *w, JSValueCon
                                          serialized_embedder_policy(w->coep_value, w->coep_endpoint,
                                                                     w->coep_report_only_value,
                                                                     w->coep_report_only_endpoint),
-                                         /* the integrity policy item is not on this parked record — see the
-                                            §7.1.7 narrowing named at the `inherited` container below */
-                                         NULL);
+                                         w->integrity_policy);
     /* THE HOST IS HANDED THE SERIALIZATION, because a host builds a platform surface and does not decide a
        principal — and because the identity it would have to carry is this agent's, asserted at the begin. */
     cctx = g_realm_builder(JS_GetRuntime(ctx), w->dom, w->url, w->top_level_url, origin_serialized(w->origin),
@@ -1147,6 +1154,7 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        actually created with, and the one §7.4.5 reads the CSP-derived sandboxing flags off. */
     SerializedPolicyContainer policy;
     const char *inherited_csp = NULL;
+    const char *inherited_integrity = NULL;
     const char *inherited_self = NULL;
     /* §7.1.4's EMBEDDER POLICY of the initiator's container, item by item, because the job carries the whole
        container and §7.1.7's clone moves every item at once. The two VALUES arrive as §7.1.4's own tokens
@@ -1399,6 +1407,12 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        behind at the enqueue is a clone that silently downgrades a `require-corp` creator's `about:blank` child
        to `unsafe-none` — the item is exactly as much a fact about the OPERATION as the CSP list is, and by the
        time this job runs the only document it could ask is the one being replaced. */
+    DCHECK(JS_IsString(step_arg(&s->hdr, 11)),
+           "a document load ran with no §7.1.7 INTEGRITY POLICY item on its job — the enqueue writes the "
+           "creator's as a string and the EMPTY one for a creator that stated none, so a non-string here is "
+           "an enqueue that stopped writing the slot rather than a container without the item. Read as an "
+           "absence it would silently drop the item for exactly the documents whose container is INHERITED, "
+           "which is the case this argument exists for");
     DCHECK(JS_IsString(step_arg(&s->hdr, 6)) && JS_IsString(step_arg(&s->hdr, 7)) &&
            JS_IsString(step_arg(&s->hdr, 8)) && JS_IsString(step_arg(&s->hdr, 9)),
            "a document load carried no §7.1.4 EMBEDDER POLICY for its initiator's §7.1.7 container — the "
@@ -1410,6 +1424,7 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     inherited_coep_endpoint = JS_ToCString(ctx, step_arg(&s->hdr, 7));
     inherited_coep_report_only = JS_ToCString(ctx, step_arg(&s->hdr, 8));
     inherited_coep_report_only_endpoint = JS_ToCString(ctx, step_arg(&s->hdr, 9));
+    inherited_integrity = JS_ToCString(ctx, step_arg(&s->hdr, 11));
     {
         EmbedderPolicyValue v = EMBEDDER_POLICY_UNSAFE_NONE, ro = EMBEDDER_POLICY_UNSAFE_NONE;
         /* §7.1.4's THREE STRINGS, READ BACK. A token this job carries was written by embedder_policy_value_token
@@ -1429,16 +1444,15 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         inherited_ep = serialized_embedder_policy(v, inherited_coep_endpoint, ro,
                                                   inherited_coep_report_only_endpoint);
     }
-    /* §7.1.7's INTEGRITY POLICY ITEM IS NOT ON THIS RELAY YET, AND THAT IS A NAMED NARROWING RATHER THAN A
-       NULL NOBODY CHOSE. WHAT IS NOT COVERED: a container INHERITED across an instance — this argument list is
-       the navigate job's, and the creator's integrity policy has no slot on it, so a cross-origin or `data:`
-       child inherits its creator's CSP and not its integrity policy. WHAT THE NEXT DIFF BUILDS: the item as a
-       further job argument beside `inherited_csp`, written by the same producer that writes that one. HOW ITS
-       ABSENCE SHOWS: such a child loads a `<script src>` with no `integrity` that its creator's policy
-       refuses, where a same-instance sibling of the same document is refused it — the two disagree, and only
-       comparing them reveals it. The item IS on SerializedPolicyContainer and IS carried by
-       serialized_policy_container_of, so an IN-HEAP clone keeps it; what this line lacks is the WIRE. */
-    inherited = serialized_policy_container(inherited_csp, inherited_self, inherited_ep, NULL);
+    /* §7.1.7's INTEGRITY POLICY ITEM, OFF THE JOB'S OWN ARGUMENT — the creator's, carried because §7.1.7's
+       clone moves a container WHOLE and this is one of the two wires such a clone crosses on. THE EMPTY
+       STRING AND AN ABSENT ITEM ARE ONE STATE HERE and deliberately so: SRI §3.8 answers a document that
+       stated no header with "a new integrity policy", which is what policy_container_new parses an empty text
+       into, so neither end has to tell them apart. This used to pass NULL, which dropped the item for exactly
+       the documents whose container is INHERITED rather than obtained from a response — a `data:` or
+       cross-origin child would load a script its creator's policy refuses while a SAME-INSTANCE sibling of
+       the same document was refused it, and the two disagreeing was the only way to see it. */
+    inherited = serialized_policy_container(inherited_csp, inherited_self, inherited_ep, inherited_integrity);
     /* §7.4.2.2 "Beginning navigation"'s ABOUT BASE URL for THIS navigation. For a url that matches
        `about:blank` or is `about:srcdoc`, its step is "Set documentState's about base URL to
        initiatorBaseURLSnapshot" — which is why the INITIATOR's base URL rides the job and is used only when
@@ -1746,6 +1760,7 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        unconditionally because the job always carries a container: the conversions above are the only
        producers of these pointers and none of them is conditional. */
     JS_FreeCString(ctx, inherited_csp);
+    JS_FreeCString(ctx, inherited_integrity);
     JS_FreeCString(ctx, inherited_self);
     JS_FreeCString(ctx, inherited_coep);
     JS_FreeCString(ctx, inherited_coep_endpoint);
@@ -1947,7 +1962,7 @@ static void navigable_load_enqueue(JSContext *ctx, JSValueConst proxy, const cha
 {
     JSValueConst argv[11];
     JSValue fn, url, org, csp, self, about, prov;
-    JSValue coep, coep_endpoint, coep_ro, coep_ro_endpoint;
+    JSValue coep, coep_endpoint, coep_ro, coep_ro_endpoint, integ;
 
     if (g_nav_load_stepid < 0)
         g_nav_load_stepid = JS_RegisterStepDef(JS_GetRuntime(ctx), &js_nav_load_def);
@@ -2010,6 +2025,14 @@ static void navigable_load_enqueue(JSContext *ctx, JSValueConst proxy, const cha
     coep_ro_endpoint = JS_NewString(ctx, inherit_policy.embedder.report_only_endpoint);
     CHECK(!JS_IsException(coep_ro_endpoint),
           "the document-load job's inherited report-only embedder endpoint could not be allocated");
+    /* …AND §7.1.7's INTEGRITY POLICY ITEM, ON THE SAME ARGUMENT VECTOR AND FOR THE SAME REASON THE EMBEDDER
+       POLICY IS ALL FOUR OF IT: §7.1.7's clone moves a container WHOLE, so an item this job does not carry is
+       an item the loaded Document does not inherit. It rides as the header TEXT, which is the form
+       core/frame/policy_container.h says a container travels in, and the EMPTY STRING is a creator that
+       stated no policy — the same spelling `csp` uses two screens up, so neither end has to tell an absent
+       item from an empty one. */
+    integ = JS_NewString(ctx, inherit_policy.integrity_policy ? inherit_policy.integrity_policy : "");
+    CHECK(!JS_IsException(integ), "the document-load job's inherited integrity policy could not be allocated");
     /* THE INITIATOR'S BASE URL, RESOLVED NOW AND NOT IN THE JOB — the same sentence the address above is
        resolved by: by the time the job runs, the document it would ask is the one being replaced. */
     DCHECK(about_base == NULL || *about_base,
@@ -2040,7 +2063,9 @@ static void navigable_load_enqueue(JSContext *ctx, JSValueConst proxy, const cha
     argv[8] = coep_ro;
     argv[9] = coep_ro_endpoint;
     argv[10] = prov;
-    JS_EnqueueCallTask(ctx, fn, 11, argv);   /* §7.4.2.2: the navigation and traversal task source */
+    argv[11] = integ;
+    JS_EnqueueCallTask(ctx, fn, 12, argv);   /* §7.4.2.2: the navigation and traversal task source */
+    JS_FreeValue(ctx, integ);
     JS_FreeValue(ctx, prov);
     JS_FreeValue(ctx, coep_ro_endpoint);
     JS_FreeValue(ctx, coep_ro);

@@ -456,9 +456,24 @@ static SerializedPolicyContainer qjs_inherited_container(const char *csp, const 
     return serialized_policy_container_or_none(csp, self_origin,
                                                serialized_embedder_policy(v, coep_endpoint, ro,
                                                                           coep_report_only_endpoint),
-                                               /* this host's relay carries no §7.1.7 integrity policy item —
-                                                  the narrowing named at core/frame/navigable.c's `inherited`
-                                                  container, which is the same wire */
+                                               /* §7.1.7's INTEGRITY POLICY ITEM IS NOT ON THIS ABI ENTRY,
+                                                  AND THIS IS A THIRD CARRIER RATHER THAN THE TWO ENGINE
+                                                  WIRES. Those two — the navigate job's arguments and the
+                                                  parked navigable record — now carry it, so a container
+                                                  INHERITED inside one instance keeps its item. What arrives
+                                                  HERE is a container a PEER INSTANCE stated, relayed by the
+                                                  trusted zone, so carrying it is a cross-boundary change:
+                                                  this signature gains a parameter and the zone must send the
+                                                  field. WHAT IS NOT COVERED: a document whose creator lives
+                                                  in another instance inherits its creator's CSP and not its
+                                                  integrity policy. WHAT THE NEXT DIFF BUILDS: the field on
+                                                  the `navigable.create` notice, written where the emitting
+                                                  engine serializes its container and read here. HOW ITS
+                                                  ABSENCE SHOWS: such a child loads a `<script src>` with no
+                                                  `integrity` that its creator's policy refuses, while a
+                                                  SAME-INSTANCE sibling of the same document is refused it —
+                                                  the two disagree, which is now the ONLY way this is
+                                                  visible, because the in-instance case is fixed. */
                                                NULL);
 }
 
