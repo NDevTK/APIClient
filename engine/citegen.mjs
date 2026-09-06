@@ -530,6 +530,32 @@ const SPECS = [
      `Encoding §7.2` are one spelling by the time classifyAnchor sees them. */
   { key: "encoding", label: "Encoding Standard", kind: "bikeshed",
     base: "https://encoding.spec.whatwg.org/", edition: "maintained", anchors: ["encoding"] },
+  /* THE MIME SNIFFING STANDARD, PROMOTED OUT OF OTHER_SPECS ONE COMMIT AFTER THE FOREIGN ROW THAT STOPPED THE
+     GUESS — which is the order the `file system` row argues for and the reason both diffs exist. A foreign row
+     REFUSES; only an index ANSWERS, and here the thing to answer is a whole component. `core/mime` is the
+     MIME Sniffing Standard written out: `mime_type.c` is `§4.4` parse and `§4.5` serialize, `mime_type.h`
+     declares the `§4.6` groups, and `mime_sniff.c` opens by naming `§5` "Handling a resource", `§6` "Matching
+     a MIME type pattern" and `§7` "Determining the computed MIME type of a resource" — every one of those an
+     exact heading of this document. Not one of them was checked against it. The file vote read the whole
+     directory as FETCH, which is not a near miss: this standard's `§4.6` is "MIME type groups" and Fetch's is
+     "HTTP-network-or-cache fetch", so the declaration that owns the groups table was REPORTED as misattributed
+     to a document `mime_type.h` never names. That is the accusation direction, manufactured by a vote, out of
+     a citation that was right.
+     THE NUMBERS COLLIDE WITH FETCH'S ALL THE WAY DOWN, which is why the vote was so confident and so wrong:
+     this document's `§4` is "MIME types" where Fetch's is "Fetching", `§5` is "Handling a resource" where
+     Fetch's is "Fetch API", `§6` is "Matching a MIME type pattern" where Fetch's is "data: URLs". Real
+     numbers, all of them, none of them the right document — and `core/mime` is not the only reader: `§5.2`
+     "Reading the resource header" and the `§7`/`§8` sniffing tables are cited from core/image, core/loader,
+     core/html and core/xhr, all of which vote for something else again.
+     ITS ANCHORS ARE THE NAME AND THE SHORTNAME AND NOT THE LAST WORD. `mimesniff` is the spelling that was on
+     the foreign list and is moved here rather than left behind, because an anchor on two lists is a second
+     copy of one fact and the copy that drifts is the one nobody runs. `sniffing` alone is deliberately NOT an
+     anchor: it is the word `safe-fetch.js` and SECURITY.md write for content-type sniffing as an activity, and
+     a one-word anchor there is the `database` hazard with a whole trusted-zone file behind it. anchorTokens
+     flattens a line break inside the name, so the split literal `"… MIME "` / `"Sniffing §5"` that
+     `mime_sniff.c` opens with presents as one spelling by the time classifyAnchor is asked. */
+  { key: "mimesniff", label: "MIME Sniffing Standard", kind: "bikeshed",
+    base: "https://mimesniff.spec.whatwg.org/", edition: "maintained", anchors: ["mime sniffing", "mimesniff"] },
   /* THE COOKIE STORE API, AND ITS BASE IS THE ONE THING ABOUT IT A READER MUST NOT RECALL. This standard
      MOVED ORGANISATION: the two addresses a search returns for it — `wicg.github.io/cookie-store/` and
      `w3c.github.io/webappsec-cookie-store/` — both answer 404 today, and the document lives at
@@ -1770,7 +1796,7 @@ function regen(keys) {
 const OTHER_SPECS = [
   "namespaces", "infra", "storage",
   "webcrypto", "svg", "mathml", "wasm", "uievents", "console", "performance",
-  "workers", "websockets", "mimesniff", "rfc", "unicode", "utf", "trusted", "clipboard",
+  "workers", "websockets", "rfc", "unicode", "utf", "trusted", "clipboard",
   "notifications", "geolocation", "geometry", "fullscreen", "pointerevents", "webaudio", "webrtc",
   "beacon", "referrer", "mixed", "cors", "cookies",
   /* A MULTI-WORD NAME WHOSE LAST WORD IS AN INDEXED STANDARD'S ANCHOR MUST BE LISTED HERE OR IT IS AUDITED AS
@@ -1909,7 +1935,7 @@ const OTHER_SPECS = [
      longest tail that classifies, so the three-word spelling is asked before the two-word one and the API
      form cannot be shadowed by the form without it. Both refuse either way, which is the point — this group
      adds no resolution, it removes a guess. */
-  "web cryptography", "ui events", "mime sniffing", "trusted types", "tt",
+  "web cryptography", "ui events", "trusted types", "tt",
   "media queries", "mq4", "referrer policy", "uax14",
   /* AND THE STANDARDS THIS TREE NAMES THAT NO LIST HELD UNDER ANY SPELLING. Each is a document with a real
      numbering that this audit holds no text for, cited with its name in front of the number exactly as CLAUDE.md
@@ -1929,10 +1955,16 @@ const OTHER_SPECS = [
      would be the `css-images` hazard the SPECS table refuses by name: one index answering two levels
      manufactures wrong answers rather than losing coverage. A foreign row refuses instead, and the ordered
      repair is to make the level SURVIVE the tail rather than to guess which document it belonged to.
-     `css conditional` — CSS Conditional Rules is LEVELLED too, and the sites write no level at all
-     (`CSS Conditional §7.4`), so there is no evidence in the citation for which of Level 3, 4 or 5 numbers
-     the section those sites mean. The name is what the citation claims; the level is what an index needs, and
-     the citation does not carry it.
+     `css conditional` — CSS Conditional Rules is LEVELLED, and the population SPLITS on whether the citation
+     says so. THE SENTENCE THAT STOOD HERE SAID THE SITES "write no level at all", AND IT WAS WRONG ABOUT MOST
+     OF THEM, WHICH IS RECORDED RATHER THAN DELETED because a reader who re-derives a retired reason will
+     re-introduce it: 35 sites write `CSS Conditional 5 §5.4`, one writes `CSS Conditional 3 §2.1`, and 28
+     write the bare name. This entry ARMS the level join for the first two — they classify apart as
+     `css-conditional-5` and `css-conditional-3`, on their own evidence — so what the row actually refuses is
+     the 28 that carry NO level, which are the only ones with nothing in the citation to say which document
+     numbers the section they mean. The levelled 35 are an index row away and that is the next diff for this
+     standard, not a refusal. The claim was one command from being checked when it was written
+     (`grep -c 'CSS Conditional [0-9]* §'`), and it was not.
      AND `typed om` IS THE ENTRY THAT PROVES A CAPITALISED-TOKEN SCAN CANNOT DERIVE THIS POPULATION, which is
      worth more than the entry. The list above was derived from the audit's own "capitalised tokens in front of
      a section sign that no list knows" line and from a grep for a name in front of one, and both read the

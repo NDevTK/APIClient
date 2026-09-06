@@ -1,0 +1,445 @@
+{
+ "spec": "MIME Sniffing Standard",
+ "key": "mimesniff",
+ "base": "https://mimesniff.spec.whatwg.org/",
+ "specUpdated": "17 July 2026",
+ "fetched": "2026-09-06",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "introduction"
+  },
+  "2": {
+   "title": "Conformance requirements",
+   "page": "",
+   "id": "conformance-requirements"
+  },
+  "3": {
+   "title": "Terminology",
+   "page": "",
+   "id": "terminology"
+  },
+  "4": {
+   "title": "MIME types",
+   "page": "",
+   "id": "understanding-mime-types"
+  },
+  "5": {
+   "title": "Handling a resource",
+   "page": "",
+   "id": "handling-a-resource"
+  },
+  "6": {
+   "title": "Matching a MIME type pattern",
+   "page": "",
+   "id": "matching-a-mime-type-pattern"
+  },
+  "7": {
+   "title": "Determining the computed MIME type of a resource",
+   "page": "",
+   "id": "determining-the-computed-mime-type-of-a-resource"
+  },
+  "8": {
+   "title": "Context-specific sniffing",
+   "page": "",
+   "id": "context-specific-sniffing"
+  },
+  "4.1": {
+   "title": "MIME type representation",
+   "page": "",
+   "id": "mime-type-representation"
+  },
+  "4.2": {
+   "title": "MIME type miscellaneous",
+   "page": "",
+   "id": "mime-type-miscellaneous"
+  },
+  "4.3": {
+   "title": "MIME type writing",
+   "page": "",
+   "id": "mime-type-writing"
+  },
+  "4.4": {
+   "title": "Parsing a MIME type",
+   "page": "",
+   "id": "parsing-a-mime-type"
+  },
+  "4.5": {
+   "title": "Serializing a MIME type",
+   "page": "",
+   "id": "serializing-a-mime-type"
+  },
+  "4.6": {
+   "title": "MIME type groups",
+   "page": "",
+   "id": "mime-type-groups"
+  },
+  "5.1": {
+   "title": "Interpreting the resource metadata",
+   "page": "",
+   "id": "interpreting-the-resource-metadata"
+  },
+  "5.2": {
+   "title": "Reading the resource header",
+   "page": "",
+   "id": "reading-the-resource-header"
+  },
+  "6.1": {
+   "title": "Matching an image type pattern",
+   "page": "",
+   "id": "matching-an-image-type-pattern"
+  },
+  "6.2": {
+   "title": "Matching an audio or video type pattern",
+   "page": "",
+   "id": "matching-an-audio-or-video-type-pattern"
+  },
+  "6.2.1": {
+   "title": "Signature for MP4",
+   "page": "",
+   "id": "signature-for-mp4"
+  },
+  "6.2.2": {
+   "title": "Signature for WebM",
+   "page": "",
+   "id": "signature-for-webm"
+  },
+  "6.2.3": {
+   "title": "Signature for MP3 without ID3",
+   "page": "",
+   "id": "signature-for-mp3-without-id3"
+  },
+  "6.3": {
+   "title": "Matching a font type pattern",
+   "page": "",
+   "id": "matching-a-font-type-pattern"
+  },
+  "6.4": {
+   "title": "Matching an archive type pattern",
+   "page": "",
+   "id": "matching-an-archive-type-pattern"
+  },
+  "7.1": {
+   "title": "Identifying a resource with an unknown MIME type",
+   "page": "",
+   "id": "identifying-a-resource-with-an-unknown-mime-type"
+  },
+  "7.2": {
+   "title": "Sniffing a mislabeled binary resource",
+   "page": "",
+   "id": "sniffing-a-mislabeled-binary-resource"
+  },
+  "8.1": {
+   "title": "Sniffing in a browsing context",
+   "page": "",
+   "id": "sniffing-in-a-browsing-context"
+  },
+  "8.2": {
+   "title": "Sniffing in an image context",
+   "page": "",
+   "id": "sniffing-in-an-image-context"
+  },
+  "8.3": {
+   "title": "Sniffing in an audio or video context",
+   "page": "",
+   "id": "sniffing-in-an-audio-or-video-context"
+  },
+  "8.4": {
+   "title": "Sniffing in a plugin context",
+   "page": "",
+   "id": "sniffing-in-a-plugin-context"
+  },
+  "8.5": {
+   "title": "Sniffing in a style context",
+   "page": "",
+   "id": "sniffing-in-a-style-context"
+  },
+  "8.6": {
+   "title": "Sniffing in a script context",
+   "page": "",
+   "id": "sniffing-in-a-script-context"
+  },
+  "8.7": {
+   "title": "Sniffing in a font context",
+   "page": "",
+   "id": "sniffing-in-a-font-context"
+  },
+  "8.8": {
+   "title": "Sniffing in a text track context",
+   "page": "",
+   "id": "sniffing-in-a-text-track-context"
+  },
+  "8.9": {
+   "title": "Sniffing in a cache manifest context",
+   "page": "",
+   "id": "sniffing-in-a-cache-manifest-context"
+  }
+ },
+ "dfns": {
+  "archive mime type": [
+   "4.6"
+  ],
+  "archive type pattern matching algorithm": [
+   "6.4"
+  ],
+  "audio or video mime type": [
+   "4.6"
+  ],
+  "audio or video type pattern matching algorithm": [
+   "6.2"
+  ],
+  "binary data byte": [
+   "3"
+  ],
+  "byte pattern": [
+   "6"
+  ],
+  "check for apache bug flag": [
+   "5"
+  ],
+  "compute an mp3 frame size": [
+   "6.2.3"
+  ],
+  "computed mime type": [
+   "5"
+  ],
+  "context specific sniffing algorithm": [
+   "8"
+  ],
+  "font mime type": [
+   "4.6"
+  ],
+  "font type pattern matching algorithm": [
+   "6.3"
+  ],
+  "html mime type": [
+   "4.6"
+  ],
+  "http quoted string token code point": [
+   "3"
+  ],
+  "http token code point": [
+   "3"
+  ],
+  "image mime type": [
+   "4.6"
+  ],
+  "image type pattern matching algorithm": [
+   "6.1"
+  ],
+  "javascript mime type": [
+   "4.6"
+  ],
+  "javascript mime type essence match": [
+   "4.6"
+  ],
+  "json mime type": [
+   "4.6"
+  ],
+  "match an mp3 header": [
+   "6.2.3"
+  ],
+  "matches the signature for mp3 without id3": [
+   "6.2.3"
+  ],
+  "matches the signature for mp4": [
+   "6.2.1"
+  ],
+  "matches the signature for webm": [
+   "6.2.2"
+  ],
+  "matching a padded sequence": [
+   "6.2.2"
+  ],
+  "mime type": [
+   "4.1"
+  ],
+  "mime type record": [
+   "4.1"
+  ],
+  "mime type sniffing algorithm": [
+   "7"
+  ],
+  "minimize a supported mime type": [
+   "4.2"
+  ],
+  "no sniff flag": [
+   "5"
+  ],
+  "parse a mime type": [
+   "4.4"
+  ],
+  "parse a mime type from bytes": [
+   "4.4"
+  ],
+  "parse a vint": [
+   "6.2.2"
+  ],
+  "parse an mp3 frame": [
+   "6.2.3"
+  ],
+  "pattern mask": [
+   "6"
+  ],
+  "pattern matching algorithm": [
+   "6"
+  ],
+  "read the resource header": [
+   "5.2"
+  ],
+  "resource header": [
+   "5.2"
+  ],
+  "rules for distinguishing if a resource is text or binary": [
+   "7.2"
+  ],
+  "rules for identifying an unknown mime type": [
+   "7.1"
+  ],
+  "rules for sniffing audio and video specifically": [
+   "8.3"
+  ],
+  "rules for sniffing fonts specifically": [
+   "8.7"
+  ],
+  "rules for sniffing images specifically": [
+   "8.2"
+  ],
+  "rules for sniffing in a plugin context": [
+   "8.4"
+  ],
+  "rules for sniffing in a script context": [
+   "8.6"
+  ],
+  "rules for sniffing in a style context": [
+   "8.5"
+  ],
+  "scriptable mime type": [
+   "4.6"
+  ],
+  "serialize a mime type": [
+   "4.5"
+  ],
+  "serialize a mime type to bytes": [
+   "4.5"
+  ],
+  "sniff scriptable flag": [
+   "7.1"
+  ],
+  "supplied mime type": [
+   "5"
+  ],
+  "supplied mime type detection algorithm": [
+   "5.1"
+  ],
+  "supported by the user agent": [
+   "4.2"
+  ],
+  "tag terminating byte": [
+   "3"
+  ],
+  "valid mime type string": [
+   "4.3"
+  ],
+  "valid mime type string with no parameters": [
+   "4.3"
+  ],
+  "whitespace byte": [
+   "3"
+  ],
+  "xml mime type": [
+   "4.6"
+  ],
+  "zip based mime type": [
+   "4.6"
+  ]
+ },
+ "ops": {},
+ "uses": {
+  "archive mime type": {
+   "6.4": 2
+  },
+  "audio or video mime type": {
+   "6.2": 2
+  },
+  "byte pattern": {
+   "6.1": 2,
+   "6.2": 2,
+   "6.3": 2,
+   "6.4": 2,
+   "7.1": 3
+  },
+  "computed mime type": {
+   "7": 6,
+   "8": 2,
+   "7.1": 4,
+   "7.2": 5,
+   "8.2": 4,
+   "8.3": 4,
+   "8.4": 3,
+   "8.5": 2,
+   "8.6": 2,
+   "8.7": 4,
+   "8.9": 2
+  },
+  "font mime type": {
+   "6.3": 2
+  },
+  "http token code point": {
+   "4.4": 3
+  },
+  "image mime type": {
+   "6.1": 2
+  },
+  "mime type": {
+   "5": 2,
+   "8": 2,
+   "4.2": 4,
+   "4.5": 2,
+   "4.6": 10,
+   "5.1": 4,
+   "7.1": 2,
+   "8.9": 2
+  },
+  "mime type sniffing algorithm": {
+   "5": 2
+  },
+  "no sniff flag": {
+   "7": 2
+  },
+  "pattern mask": {
+   "7.1": 2
+  },
+  "pattern matching algorithm": {
+   "7.1": 2
+  },
+  "resource header": {
+   "7": 2,
+   "7.1": 6,
+   "7.2": 4
+  },
+  "supplied mime type": {
+   "7": 8,
+   "5.1": 5,
+   "8.2": 3,
+   "8.3": 3,
+   "8.4": 2,
+   "8.5": 2,
+   "8.6": 2,
+   "8.7": 3
+  },
+  "supported by the user agent": {
+   "7": 2
+  },
+  "tag terminating byte": {
+   "7.1": 17
+  },
+  "whitespace byte": {
+   "7.1": 18
+  },
+  "xml mime type": {
+   "4.2": 2
+  }
+ }
+}
