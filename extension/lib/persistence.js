@@ -116,8 +116,22 @@ function scheduleSave() {
    assert those five against a population nobody ever checked, and the first refusal would take the whole
    cumulative frontier: the exact defect the stamp exists to end, re-created by trusting it too widely. So
    lib/store-record.js states a `statedFrom` per kind and the door asks `storeRecordShapeStates`. `2` is the
-   shape at which the other five began being described. */
-const _STORE_SHAPE = 2;
+   shape at which the other five began being described.
+
+   `3` IS THE SHAPE AT WHICH `securityFindings` BEGAN DESCRIBING WHAT IS INSIDE `securitySinks`, and the reason
+   is a hole this comment's own rule could not see. The rule above is to bump whenever a record GAINS OR LOSES A
+   STATED NAME, and at shape `2` this kind stated `securitySinks: _srArr` — "is an Array", and nothing about the
+   parked @S entries in it. So the ENGINE's serialized grammar for those entries moved twice, correctly owing no
+   bump under the letter of that rule, while lib/popup-security.js began asserting the new names on every card
+   it renders; a store stamped `2` then handed the card an entry from an older engine and the popup aborted.
+   THE GENERAL FACT, WHICH OUTLIVES THIS BUMP: A STAMP CANNOT COVER A GRAMMAR ANOTHER COMPONENT OWNS. This
+   number moves on an edit to this file and solve.h's parked grammar moves on a BUILD of the engine, so nothing
+   binds them and no discipline about bumping can — the two releases are independent. What closes it is that
+   lib/store-record.js's `_srParkedSinkCurrent` asks the stored BYTES for the names rather than trusting this
+   number, and states those names as member READS, which is the one form engine/fieldgate.mjs audits against
+   solve.c in both directions. The stamp still decides ASSERT-versus-ASK; it is no longer the only thing
+   standing between an older engine's record and a card that asserts today's. */
+const _STORE_SHAPE = 3;
 
 /* WHAT THE RESTORE DID, AS NUMBERS — because a shed nobody can count is the silent truncation this whole
    section exists to end, and §NO BOUNDS is explicit that discarding work "with nothing to say so" is a cap

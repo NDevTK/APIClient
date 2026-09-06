@@ -162,9 +162,49 @@ const _SR_SCOPES = _srList("a service's required OAuth scopes", "a scope name", 
    offscreen-brain.js resolves a live-verify's target from, so a hole there is a probe delivered nowhere.
      `securitySinks` is what solve.c emitted, whole. The element shape is lib/popup-security.js's, asserted
    where the panel reads it, and is not restated here: this door's subject is the RECORD the store holds. */
+/* WHETHER ONE ELEMENT OF `securitySinks` IS IN THE GRAMMAR THIS BUILD'S CARD ASSERTS, and it is a question
+   about the ENGINE's serialized shape rather than about this file's. The names below are solve.h's parked
+   entry, and lib/popup-security.js DCHECKs every one of them unconditionally when it renders the card.
+   WHY THE ELEMENT AND NOT JUST THE LIST. `securitySinks: _srArr` said "is an Array" and nothing whatever about
+   what is IN it, while the door's own contract one file along reads "a stamped store's records ARE the shape
+   it names". Both were true and they were about DIFFERENT OBJECTS: the stamp guaranteed the OUTER record and
+   the card asserts the ELEMENT, and the gap between the two objects had no guard at all. So a store stamped
+   `2` — the current, correct stamp — legitimately held parked entries of any older engine's grammar, the door
+   asserted the outer record and passed them through, and the card aborted on the first one it rendered. The
+   §ONE frontier is cross-session, persisted and NEVER reset, so a record written by an older engine is the
+   ORDINARY case here and not the exotic one.
+   THE OBLIGATION COULD NOT HAVE BEEN NOTICED, WHICH IS THE PART WORTH KEEPING. lib/persistence.js's stamp says
+   to bump "WHENEVER ANY RECORD IN THE STORE GAINS OR LOSES A STATED NAME" — and these names were not STATED
+   anywhere, so the two commits that added `resumedWithdrawn` and `runwayPerMille` owed no bump under the letter
+   of that contract and correctly made none. A version stamp cannot cover a grammar owned by a component with
+   its own release cadence: the engine's C moves on a build and this constant moves on an edit, and nothing
+   binds them. Stating the names HERE is what puts the grammar inside the contract, and asking the BYTES rather
+   than trusting the number is what keeps it honest when someone forgets.
+   READ, NEVER LISTED, AND THAT IS THE WHOLE REASON THIS IS A FUNCTION AND NOT AN ARRAY OF STRINGS. A name in a
+   `_srRecord` key or in a `_ENDPOINT_STATED`-style list is a STRING, and engine/fieldgate.mjs does not audit
+   strings — measured, with the control run both ways: a bogus name added as a declaration key produced NO
+   finding and left the gate at PASS/279 judged, while a bogus name READ off a record was reported within one
+   run as `READ with no writer` and turned the gate red. So a list here would be a fourth unwatched copy of a
+   grammar that has already drifted once; these are member READS on the stored element, which puts them in the
+   population that gate walks — the engine dropping one of them lights up as a read with no writer, and the
+   engine ADDING one lights up as a write with no reader, which is exactly how this defect was found.
+   A FIRED ENTRY IS NOT THIS QUESTION. solve.h emits two entry shapes and only the parked one carries these
+   names, so an entry that does not say `search: "parked"` is passed rather than judged — demanding them of a
+   fire-verified PoC would shed a record that is perfectly current. */
+function _srParkedSinkCurrent(e) {
+  if (!_srObj(e)) return false;
+  if (e.search !== "parked") return true;
+  return e.tried !== undefined && e.resumed !== undefined && e.resumedWithdrawn !== undefined
+      && e.reached !== undefined && e.turns !== undefined && e.substituted !== undefined
+      && e.sinkStrings !== undefined && e.runwayPerMille !== undefined && e.survived !== undefined
+      && e.survivedOf !== undefined && e.escaped !== undefined && e.probes !== undefined
+      && e.payloads !== undefined && e.survivedBy !== undefined && e.withdrawn !== undefined;
+}
+function _srSecuritySinks(x) { return Array.isArray(x) && x.every((e) => _srParkedSinkCurrent(e)); }
+
 const _SR_SECURITY_FINDING = _srRecord(
   "an @S security finding (lib/merge.js's security merge)",
-  { sourceUrl: _srStr, securitySinks: _srArr },
+  { sourceUrl: _srStr, securitySinks: _srSecuritySinks },
   { pageUrl: _srStrOrNull });
 
 /* ONE TIME A SERVICE'S PUBLISHED SURFACE CHANGED BETWEEN TWO FETCHES — lib/discovery-probe.js's diff, pushed
@@ -226,7 +266,12 @@ const STORE_RECORD_KINDS = Object.freeze({
     adopt: (v) => v,
   }),
   securityFindings: Object.freeze({
-    statedFrom: 2, shape: () => _SR_SECURITY_FINDING,
+    /* `3` AND NOT `2`, BECAUSE THE SHAPE THIS KIND STATES CHANGED WHEN `_srParkedSinkCurrent` BEGAN DESCRIBING
+       THE ELEMENT. A store stamped `2` was written by a door that asked only whether `securitySinks` was an
+       Array, so it makes no claim about the parked entries inside it and must be ASKED rather than asserted —
+       which is precisely what raising this number does, and it is the difference between those records being
+       shed and re-derived and the card aborting on them. */
+    statedFrom: 3, shape: () => _SR_SECURITY_FINDING,
     /* THE DOCUMENT WHOSE FORCED EXECUTION EMITTED THESE SINKS — the same recipe an endpoint has, for the same
        reason: re-visiting it runs the same bundle and solve.c emits again, and §Time-travel-resume makes the
        re-derived answer the CURRENT one rather than a reconstruction of the old. */
