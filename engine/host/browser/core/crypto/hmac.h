@@ -181,8 +181,10 @@ typedef struct {
  * TypeError at the conversion to step 5's NotSupportedError, which is a different wrong answer.
  * WHAT IT DID NOT NAME WAS TWO MORE MECHANISMS, and that is the part worth keeping rather than the part it got
  * right. `sequence<RsaOtherPrimesInfo> oth` needed a row of its own — there was no sequence-of-bare-dictionary
- * type at all, and the corpus declares eighty-five dictionary members and five argument positions of that
- * shape, so IDL_SEQUENCE_DICT is a platform mechanism the crypto surface merely happened to need first. And
+ * type at all, and the corpus declares a hundred dictionary members and five argument positions of that shape,
+ * so IDL_SEQUENCE_DICT is a platform mechanism the crypto surface merely happened to need first — see that
+ * row for the figure this file first carried as eighty-five, for why it was wrong, and for the far smaller
+ * number that is actually work. And
  * that arm's step 4 decode needed base64url, which the engine's exported JS_Base64Decode is not; what closed it was
  * reading the jwk arm's step 3's own requirement — JSON Web Algorithms §6.4.1 through RFC 7515 §2's definition — as the
  * validation the ALGORITHM already owes, after which the decode is an alphabet substitution over an

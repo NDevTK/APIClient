@@ -1988,9 +1988,17 @@ for (const r of world.records) {
      this arm reads the declared IdlArgType row for the argument's POSITION through idl_argdecl.mjs's
      declarations() — the one parse of `idl_method_id*` that argaudit.mjs and argtypegate.mjs already share, so
      no second copy is created — and counts the dictionary only where the declared type can produce one. HOW ITS
-     ABSENCE SHOWS: JsonWebKey's twenty members report UNDECLARED while §14.3.9's `(BufferSource or JsonWebKey)
-     keyData` position is declared IDL_BUFFERSOURCE, a narrowing that file names at the declaration and whose
-     jwk arm throws a TypeError by name — so the members could not be read however they were declared. */
+     ABSENCE SHOWS: a dictionary reported UNDECLARED at a position whose declared IdlArgType cannot build one,
+     so its members could not have been read however they were declared.
+     ITS EXAMPLE WAS JsonWebKey AND THAT EXAMPLE IS SPENT, which is worth recording rather than replacing
+     silently. It read: JsonWebKey's twenty members report UNDECLARED while §14.3.9's `(BufferSource or
+     JsonWebKey) keyData` is declared IDL_BUFFERSOURCE. Both halves are now false — the position declares
+     IDL_BUFFERSOURCE_OR_DICT and all twenty members are declared — and the residual itself is UNCHANGED,
+     because it was never about crypto. A next-diff clause outlives the case it was written from, so an example
+     is the part of one that rots first; this one is left NAMELESS on purpose, since naming a live instance
+     would only start the same clock again. Whether any instance is live today is one run of this audit: a row
+     whose "Reached by" names a member the engine installs with a type that cannot carry the dictionary is
+     one, and there is no reason to believe the population is empty merely because its first member left it. */
   for (const iface of r.ifaces || []) {
     /* An interface tag naming something the corpus does not declare is ALREADY its own category above
        ("interface tags naming something the IDL corpus does not declare"), so this arm skips it rather than

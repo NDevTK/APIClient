@@ -327,12 +327,25 @@ typedef enum {
        fork. §3.2.17 step 1's own refusal is what an element that is not an Object takes — "If jsDict is not an
        Object and jsDict is neither undefined nor null, then throw a TypeError" — which admits null and
        undefined as the all-defaults dictionary exactly as a bare IDL_DICT position does.
-       IT IS A PLATFORM SHAPE AND NOT A CRYPTO CORNER, which is why it is a row rather than a special case at
-       one site: the corpus declares EIGHTY-FIVE dictionary members and FIVE argument positions of this type —
-       `CookieStoreManager.subscribe`, `Navigator.requestMediaKeySystemAccess`, `PaymentRequest`'s constructor,
-       `RTCRtpTransceiver.setCodecPreferences` and `CookieStoreManager.unsubscribe` — and until this row existed
-       not one of them could be declared at all. Web Cryptography API §15 "JsonWebKey dictionary"'s
-       `sequence<RsaOtherPrimesInfo> oth` is simply the first member that needed it.
+       THE CORPUS POPULATION AND THE POPULATION THIS ENGINE CAN BE HANDED ARE DIFFERENT NUMBERS, and only the
+       second is work. The corpus DECLARES 100 dictionary members of this type (116 once inheritance is
+       flattened, which is what a per-dictionary walk counts) and FIVE argument positions —
+       `CookieStoreManager.subscribe` and `unsubscribe`, `Navigator.requestMediaKeySystemAccess`,
+       `PaymentRequest`'s constructor and `RTCRtpTransceiver.setCodecPreferences` — and until this row existed
+       not one of them could be declared at all. Of that population, exactly THREE sit on a dictionary this
+       engine can actually be handed, and all three are reached at an ARGUMENT position rather than through
+       another dictionary's member: Web Cryptography API §15 "JsonWebKey dictionary"'s
+       `sequence<RsaOtherPrimesInfo> oth`, which is what this row was built for, and File System Access's
+       `OpenFilePickerOptions.types` and `SaveFilePickerOptions.types`, which are ONE unit and are gated on
+       `record<K,V>` — core/file/file_picker.c's own crash names it.
+       THE FIRST OF THOSE NUMBERS WAS WRITTEN HERE AS EIGHTY-FIVE AND WAS WRONG, which is worth the sentence
+       because of HOW it was wrong: the count came from a walk that resolved a member's element dictionary only
+       within the .idl file the member was declared in, so every `sequence<D>` whose D lives in another spec was
+       invisible to it. A count over source text is a count of a SPELLING, and that one was scoped by FILE
+       without saying so. The figures above are re-derived with the corpus resolved WHOLE — loadIdl's dictByName
+       is the set every element type is tested against, not the one .idl file the member was written in — and
+       the reachable count is the audit's own: `node engine/idlgen.mjs` prints it on its §2.7 dictionaries line,
+       where 3 of them are the ones no argument position names directly.
        THE DICTIONARY IS NAMED BESIDE THE MEMBER (IdlDictMember::dict), the same statement every row of this
        shape makes — the element type is what `dict` names here, where for the union row below it names the
        union's dictionary ARM. One field, one meaning: the dictionary this member's conversion can build. */
