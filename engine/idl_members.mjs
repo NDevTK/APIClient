@@ -252,11 +252,57 @@ export const rhsNames = (ext) => {
 };
 export const extOf = (node, name) => (node && node.extAttrs || []).find((a) => a.name === name);
 
+/* THE INTERFACES WEB IDL §3.8 Platform objects implementing interfaces DOES NOT PUT ON A GLOBAL AT ALL.
+ * §3.8's `define the global property references` gates its interface-object step on the construct's own
+ * declaration — step 3.1: "If interface is not declared with the [LegacyNoInterfaceObject] or
+ * [LegacyNamespace] extended attributes, then:" — so for these the identifier is NEVER a property of any
+ * global, in any realm. §3.7 Interfaces states the same rule as prose one section up: "For every interface
+ * that is exposed in a given realm and that is not declared with the [LegacyNoInterfaceObject] or
+ * [LegacyNamespace] extended attributes, a corresponding property exists on the realm's global object."
+ *
+ * IT IS NOT "NOT BUILT YET" — IT IS "NOT THERE IN A REAL BROWSER", which is why this belongs in the
+ * derivation and not in a consumer. §3.4.4 [LegacyNamespace] says the interface object "will not be created
+ * as a property of the global object, but rather as a property of the namespace identified by the argument
+ * to the extended attribute", and §3.4.5 [LegacyNoInterfaceObject] says "it indicates that an interface
+ * object will not exist for the interface in the JavaScript binding". The corpus declares 53 such
+ * interfaces — 46 [LegacyNoInterfaceObject] (every WebGL extension, `SVGPathSegment`) and 7
+ * [LegacyNamespace=WebAssembly] (`Module`, `Instance`, `Memory`, `Table`, `Global`, `Tag`, `Exception`).
+ * Every one of them was in browser/platform_names.h, so solver/absent.c read `window.Module` as a name a
+ * standard owns on the global, LEFT THE READ ALONE, and answered a concrete `undefined` — which decides
+ * `var Module = window.Module || {}`, the canonical Emscripten shim, to its `{}` arm with no forked world.
+ * CLAUDE.md §The-symbolic/trust-boundary requires exactly that read to stay symbolic and FORK, because a
+ * name no standard places on the global is the server's to have injected. This is the one direction the
+ * table's own header calls a wrong answer and no gate here could see: the name resolved, so nothing threw.
+ *
+ * INTERFACE-SCOPED, BECAUSE BOTH ATTRIBUTES ARE. §3.4.4 and §3.4.5 each read "appears on an interface", and
+ * §3.8's other placement loops — step 4 for callback interfaces and step 5 for namespaces — carry no such
+ * condition, so a namespace or callback interface is placed however it is declared. `WebAssembly` itself is
+ * a namespace and stays; only the interfaces it owns leave.
+ *
+ * READ OFF EVERY DECLARATION RATHER THAN THE FIRST. A partial carries no [Exposed], so the node that admits
+ * a name to `windowGlobals` is normally the original — but 48 partials in this corpus DO carry [Exposed],
+ * and a guard read off the admitting node alone would miss an interface whose original holds the attribute
+ * and whose partial holds the exposure. No corpus declaration pairs them that way today, which is exactly
+ * why the check may not rest on it: a population that is empty by accident is the one a spot-check certifies
+ * and the next webref release fills. */
+export function unplacedInterfaces(idl) {
+  const out = new Set();
+  for (const n of idl.declarations) {
+    if (n.type !== "interface" || !n.name) continue;
+    if (extOf(n, "LegacyNoInterfaceObject") || extOf(n, "LegacyNamespace")) out.add(n.name);
+  }
+  return out;
+}
+
 /* EVERY GLOBAL NAME WEB IDL EXPOSES ON WINDOW. FOUR sources, all spec text, and each was missing from an
  * earlier answer to this question with a measured cost:
  *   1. Every interface / namespace / callback interface DECLARED `[Exposed=Window]` (or `[Exposed=*]`). Web IDL
  *      §3.7 Interfaces puts its interface OBJECT on the global, so `Node`, `Element`, `DOMException`,
- *      `WebSocket` are properties of Window that Window's own member list does not mention.
+ *      `WebSocket` are properties of Window that Window's own member list does not mention. MINUS the ones
+ *      §3.8 step 3.1 refuses — see `unplacedInterfaces` above, which is the same sentence's other half:
+ *      §3.7's rule reads "that is exposed in a given realm AND that is not declared with the
+ *      [LegacyNoInterfaceObject] or [LegacyNamespace] extended attributes", and this source asked only the
+ *      first conjunct for as long as it existed.
  *   2. Every member of the Window interface itself, flattened through its mixins — `fetch`, `setTimeout`,
  *      `onload`, `location`.
  *   3. §3.7.2 Legacy factory functions: `[LegacyFactoryFunction=Image(…)]` puts `Image` on the global as a
@@ -330,13 +376,28 @@ const legacyWindowAliasNames = (node) => {
    the map. A name is a global if ANY of its declarations says [Exposed=Window]. */
 export function windowGlobals(idl) {
   const out = new Set();
+  /* §3.8 step 3.1's condition, hoisted so it is asked of the INTERFACE and not of the declaration that
+     happened to carry [Exposed] — see unplacedInterfaces above for why those are not the same node. */
+  const unplaced = unplacedInterfaces(idl);
   for (const n of idl.declarations) {
     if (!((n.type === "interface" || n.type === "namespace" || n.type === "callback interface")
           && n.name && exposedOnWindow(n)))
       continue;
-    out.add(n.name);
+    /* §3.8 STEP 3.1 GATES THE IDENTIFIER AND STEP 3.1.4 IS NESTED INSIDE IT, so an unplaced interface
+       contributes neither its own name nor its aliases: the alias define sits at step 3.1.4.1.1, three
+       levels inside "If interface is not declared with the [LegacyNoInterfaceObject] or [LegacyNamespace]
+       extended attributes", and an interface with no interface object has nothing for an alias to name.
+       STEP 3.2 IS A SIBLING OF 3.1 AND NOT A CHILD, which is the one asymmetry a reader will get wrong from
+       the prose: a §3.7.2 legacy factory function is defined with no reference to the guard, so it is placed
+       even where the interface object is not. No corpus interface is both unplaced and a factory today, so
+       nothing separates the two readings by measurement — they are told apart by the algorithm's own list
+       nesting, which is why the distinction is spelled here rather than collapsed to whichever answer the
+       corpus currently makes indistinguishable. */
+    if (!unplaced.has(n.name)) {
+      out.add(n.name);
+      for (const a of legacyWindowAliasNames(n)) out.add(a);
+    }
     for (const f of legacyFactoryNames(n)) out.add(f);
-    for (const a of legacyWindowAliasNames(n)) out.add(a);
   }
   for (const m of idl.members("Window")) out.add(m);
   return out;

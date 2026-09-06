@@ -52,7 +52,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { loadEnvironment, installedMembers } from "./idl_installed.mjs";
-import { loadIdl, windowGlobals, iterationMembers, EXPOSED_STAR, rhsNames, extOf } from "./idl_members.mjs";
+import { loadIdl, windowGlobals, unplacedInterfaces, iterationMembers, EXPOSED_STAR, rhsNames, extOf } from "./idl_members.mjs";
 import { readDictDecls } from "./idl_dictdecl.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -1924,6 +1924,12 @@ const header =
   " * factory function names (Image, Option, Audio) and Web IDL 3.4.11 [LegacyWindowAlias]'s identifiers\n" +
   " * (webkitURL, SVGPoint, SVGRect, SVGMatrix, WebKitCSSMatrix). This sentence named the first two only, for\n" +
   " * as long as the derivation had three and then four.\n" +
+  " * MINUS what Web IDL 3.8 Platform objects implementing interfaces' step 3.1 refuses to place: an\n" +
+  " * interface declared [LegacyNoInterfaceObject] or [LegacyNamespace] gets NO property on any global, so\n" +
+  " * its identifier is not a name this engine owes. The corpus has 53 — every WebGL extension, and\n" +
+  " * WebAssembly's Module/Instance/Memory/Table/Global/Tag/Exception, which 3.4.4 puts on the WebAssembly\n" +
+  " * namespace instead. While they were here, absent.c answered `window.Module` with a concrete undefined\n" +
+  " * and `var Module = window.Module || {}` took its {} arm without forking.\n" +
   " * absent.c reads this to tell a Web API this engine OWES from server-injected app state. It does NOT throw\n" +
   " * on a name it finds here — it LEAVES THE READ ALONE, so an unguarded `new EventSource(u)` gets the\n" +
   " * ReferenceError that names the component to write and a guarded `if (window.EventSource)` gets\n" +
@@ -2138,9 +2144,17 @@ for (const n of idl.declarations) {
    alone would leave `Image`, `Audio` and `Option` in a worker — and every §3.4.11 [LegacyWindowAlias]
    IDENTIFIER, which is the one kind whose exposure set is NOT its interface's (see the derivation above). */
 const exposureRows = [];
+/* §3.8 STEP 3.1's CONDITION, WHICH THIS TABLE IS KEYED BY AND WAS NOT ASKING. Every row here claims to be
+   "the identifier §3.8 defines on the global" — that is this header's own words and core/realm.c's walk
+   rests its whole classification on it — and step 3.1 defines NO identifier for an interface declared
+   [LegacyNoInterfaceObject] or [LegacyNamespace]. The corpus has 53, so 53 rows asserted a placement the
+   algorithm they cite refuses. It is the same derivation browser/platform_names.h needs, so it is the same
+   reader: idl_members.mjs's `unplacedInterfaces`, never a second spelling of the two attribute names. */
+const unplaced = unplacedInterfaces(idl);
 for (const [name, node] of byName) {
   const kind = (originalOf.get(name) || node).type;
   if (!["interface", "namespace", "callback interface"].includes(kind)) continue;
+  if (unplaced.has(name)) continue;
   exposureRows.push([name, exposureMask(ifaceExposure(name), name)]);
 }
 for (const [factory, iface] of legacyFactoryOf)
@@ -2151,7 +2165,13 @@ for (const [factory, iface] of legacyFactoryOf)
    with the message that entry already carries rather than emitting a set of no bits, which is how `*` is
    spelled and would read as EXPOSED EVERYWHERE. */
 for (const [alias, iface] of legacyWindowAliasOf)
-  if (byName.has(iface))
+  /* AND STEP 3.1.4 IS NESTED INSIDE STEP 3.1, so an alias of an unplaced interface is not defined either —
+     its define sits at step 3.1.4.1.1, under the guard. The factory-function loop above is NOT gated,
+     because step 3.2 is a SIBLING of step 3.1 and states no such condition. Neither arm is separable by
+     measurement today (no corpus interface is both unplaced and aliased, or both unplaced and a factory);
+     they are told apart by the algorithm's list nesting, and writing them the same way would make one of
+     them silently wrong on the day webref ships the pairing. */
+  if (byName.has(iface) && !unplaced.has(iface))
     exposureRows.push([alias, exposureMask(new Set(["Window"]),
                                            `${iface}'s [LegacyWindowAlias=${alias}]`)]);
 /* THE NAMES MUST BE UNIQUE, AND THAT IS THE CONSUMER'S REQUIREMENT RATHER THAN A TIDINESS ONE: core/idl_args.c
@@ -2245,7 +2265,12 @@ const exposureH =
   " *\n" +
   " * IDL_EXPOSURE is the CONSTRUCT side, keyed by the identifier Web IDL §3.8 `define the global property\n" +
   " * references` puts on a global: every interface, namespace and callback interface, every §3.7.2 legacy\n" +
-  " * factory function name, and every §3.4.11 [LegacyWindowAlias] identifier. IDL_GLOBALS is the REALM side:\n" +
+  " * factory function name, and every §3.4.11 [LegacyWindowAlias] identifier. An interface §3.8 step 3.1\n" +
+  " * REFUSES has no row, because step 3.1 defines no identifier for one declared [LegacyNoInterfaceObject]\n" +
+  " * or [LegacyNamespace] — 53 in this corpus — and a row for it would claim a placement the algorithm this\n" +
+  " * table is keyed by does not make. Their §3.4.11 aliases go with them (step 3.1.4 is NESTED in 3.1);\n" +
+  " * their §3.7.2 factory functions would NOT (step 3.2 is a sibling), and no corpus interface is both.\n" +
+  " * IDL_GLOBALS is the REALM side:\n" +
   " * each §3.3.8 [Global] interface and the global names its global object implements. core/idl_args.c\n" +
   " * intersects them; core/realm.c is where a realm states which of the IDL_GLOBALS rows its global object\n" +
   " * is.\n" +
