@@ -179,14 +179,15 @@ typedef struct {
        serialized_policy_container_none for a navigable with an address (its container comes with its response)
        and for the root. */
     SerializedPolicyContainer creator_policy;
-    /* HTML §7.4's `creatorBaseURL` — "if creator is non-null, set creatorBaseURL to creator's DOCUMENT BASE
-       URL", which the create-a-new-browsing-context-and-document steps hand the initial `about:blank` as its
+    /* HTML §7.3.2.1 "Creating browsing contexts"' `creatorBaseURL` — "Set creatorBaseURL to creator's
+       document base URL", which the create-a-new-browsing-context-and-document steps hand the initial
+       `about:blank` as its
        ABOUT BASE URL. Without it a relative URL inside a srcless frame or a bare `open()` resolves against
        `about:blank`, which has an opaque path and cannot be a base, so the parse FAILS outright.
        IT IS TAKEN AT CREATION, for exactly the reason `creator_policy` above is: the Document is materialized
        lazily, by whichever same-origin document reads through this navigable first, and that reader's base
        URL is not the creator's. It is also the CREATOR's base URL and not the creator's ADDRESS — a creator
-       carrying `<base href>` passes on the base, which is the whole content of the word in §7.4.
+       carrying `<base href>` passes on the base, which is the whole content of the word in §7.3.2.1.
        NULL for the root navigable (nothing created it) and for a navigable created with a real address (its
        Document comes from a response and §2.4.3's about base URL is null for it). Owned. */
     char   *creator_base_url;
@@ -1189,7 +1190,8 @@ void window_proxy_set_destroyed(JSContext *ctx, JSValueConst proxy)
            "never be reclaimed, because this reference is the one the collector cannot get past");
 }
 
-/* §7.1.3.2 STEP 10's DISCARD — the OTHER writer of "this's browsing context is null", and it releases nothing.
+/* §7.1.3.2 STEP 10's DISCARD — the OTHER writer of the state §7.2.2 "The Window object" spells
+   "if this's browsing context is null then return null", and it releases nothing.
    §7.5.10's write above is a destruction and hands the Window back; this one records that a browsing context
    was LEFT BEHIND by a group swap while its Document goes on existing exactly as it was. That asymmetry is the
    spec's, not a shortcut: step 10's note says only that the user agent "might destroy it at this point", and

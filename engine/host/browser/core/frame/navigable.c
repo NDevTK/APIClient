@@ -229,8 +229,8 @@ static void navigable_realm_teardown(JSRuntime *rt, JSContext *cctx)
    state lowercases as it appends — and so is one written with leading C0 controls or spaces, which §4.4 step 1
    strips; core/html/hyperlink.c hands this the RAW attribute value, so a byte compare on the argument answered
    NO for both and sent them into the determine. The SERIALIZED url is the exact operand: URL §4.5's serializer
-   opens with "let output be url's scheme, followed by U+003A (:)", so the prefix test below is the scheme
-   comparison written once. */
+   opens with "Let output be url's scheme and U+003A (:) concatenated", so the prefix test below is the
+   scheme comparison written once. */
 static bool child_address(JSContext *ctx, const char *url, SandboxFlags sandbox_flags, char **out_url,
                           const Origin **out_origin, bool *out_javascript)
 {
@@ -1423,10 +1423,11 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
                                                   inherited_coep_report_only_endpoint);
     }
     inherited = serialized_policy_container(inherited_csp, inherited_self, inherited_ep);
-    /* §7.4.5's ABOUT BASE URL for THIS navigation — "if url matches about:blank or about:srcdoc, set
-       aboutBaseURL to initiatorBaseURL" — which is why the INITIATOR's base URL rides the job and is used only
-       when the destination is an `about:` URL. `fetches` is exactly that test already made, from the other
-       side: a destination with a response has one, and §2.4.3 gives its Document a null about base URL. */
+    /* §7.4.2.2 "Beginning navigation"'s ABOUT BASE URL for THIS navigation. For a url that matches
+       `about:blank` or is `about:srcdoc`, its step is "Set documentState's about base URL to
+       initiatorBaseURLSnapshot" — which is why the INITIATOR's base URL rides the job and is used only when
+       the destination is an `about:` URL. `fetches` is exactly that test already made, from the other side: a
+       destination with a response has one, and §2.4.3 gives its Document a null about base URL. */
     if (!fetches) {
         /* ASKED OF THE VALUE AND NOT OF THE STRING IT CONVERTS TO. `JS_ToCString(JS_NULL)` answers "null" —
            a five-character URL that parses — so a job that carried no base would have set one silently. The
@@ -1454,9 +1455,10 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
     DCHECK(tlu != NULL && *tlu,
            "a nested navigable was navigated with no top-level creation URL on its proxy — §7.4 gives every "
            "navigable one when it creates it, so a proxy without one was minted somewhere that did not");
-    /* §7.4.5's FINAL SANDBOXING FLAG SET, which is what §7.5.1 hands the new Document as its ACTIVE
-       SANDBOXING FLAG SET: "let finalSandboxFlags be the union of targetSnapshotParams's sandboxing flags and
-       policyContainer's CSP list's CSP-derived sandboxing flags". The first half is this navigable's creation
+    /* THE FINAL SANDBOXING FLAG SET, which is what §7.5.1 hands the new Document as its ACTIVE SANDBOXING
+       FLAG SET. §7.4.5 "Populating a session history entry" computes it: "Set finalSandboxFlags to the union
+       of targetSnapshotParams's sandboxing flags and responsePolicyContainer's CSP list's CSP-derived
+       sandboxing flags". The first half is this navigable's creation
        sandboxing flags (§7.4.2.1 snapshots them off the target), the second is the `sandbox` directive of the
        CONTAINER this Document is created with, which is §7.1.7's determine step's answer and not a third
        reading of "did the response carry a policy" — the flags follow the container, so they are read off the
@@ -1606,8 +1608,9 @@ static int js_nav_load_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
        TOP-LEVEL traversable's new environment the origin of the document it is loading — this document IS the
        top-level environment, and §7.3.2.1's answer for the response is the one just computed — while a NESTED
        navigable keeps the pair its creation gave it, which is what makes a cross-origin frame's permission key
-       its EMBEDDER's (Permissions §5.1: "Most powerful features grant permission to the top-level origin and
-       delegate access to the requesting document via Permissions Policy").
+       its EMBEDDER's (Permissions §4 "Specifying a powerful feature": "Most powerful features grant
+       permission to the top-level origin and delegate access to the requesting document via Permissions
+       Policy").
        IT IS READ HERE AND NOT BESIDE `tlu` BECAUSE ITS INPUT IS NOW THE RESPONSE'S ORIGIN, which does not
        exist until the line above; the pair is still one decision and the two halves still answer the same
        question about the navigable. */
@@ -2258,10 +2261,11 @@ JSValue navigable_navigate(JSContext *ctx, JSValueConst proxy, const char *url)
            "the CALLER: make it a step machine that asks session_history_is_fragment_navigation before it gets "
            "here and drives session_history_fragment_nav_run when the answer is yes, exactly as "
            "core/frame/location.c's setters and its assign/replace do");
-    /* §7.4.5: "if url matches about:blank or about:srcdoc, set aboutBaseURL to initiatorBaseURL" — the
-       INITIATOR is the document whose script ran, which is this realm, and its base URL is what a relative URL
-       inside the loaded `about:blank` Document must resolve against. It is decided HERE for the reason the
-       address above is decided here rather than in the job. */
+    /* §7.4.2.2 "Beginning navigation", for a url that matches `about:blank` or is `about:srcdoc`: "Set
+       documentState's about base URL to initiatorBaseURLSnapshot" — the INITIATOR is the document whose script
+       ran, which is this realm, and its base URL is what a relative URL inside the loaded `about:blank`
+       Document must resolve against. It is decided HERE for the reason the address above is decided here
+       rather than in the job. */
     /* AND SO IS THE PROVENANCE, WHICH IS THIS OPERATION'S AND NOT THE NAVIGABLE'S. §7.4.2.2's navigate is
        reached by RUNNING the page's code — a `location` assignment, a form submission, a link activation, an
        `open()` at a named navigable — so the only question left is whether the path that ran stood on an arm
@@ -2393,8 +2397,8 @@ static void nav_reload_enqueue(JSContext *ctx, const char *addr)
     /* §7.4.6.1's "let targetSnapshotParams be the result of SNAPSHOTTING TARGET SNAPSHOT PARAMS given
        navigable", whose sandboxing flags are determine-the-creation-sandboxing-flags over the navigable's
        CONTAINER — the same re-snapshot navigable_navigate owes and for the same reason (§4.8.5 lets a written
-       `sandbox` attribute and the set computed at creation disagree, and the attribute "only takes effect when
-       the content navigable is navigated", which a reload is). */
+       `sandbox` attribute and the set computed at creation disagree, and its flags "only take effect when the
+       content navigable of the iframe element is navigated", which a reload is). */
     DCHECK(window_proxy_creation_sandbox_flags(proxy) == 0,
            "a SANDBOXED navigable was RELOADED, and §7.4.6.1 re-snapshots its container's IFRAME SANDBOXING "
            "FLAG SET while this proxy carries only the set its creation computed — §4.8.5 lets the two "
@@ -3073,8 +3077,8 @@ JSValue navigable_create(JSContext *ctx, const char *url, const char *name, bool
                                     srcless child's realm is built later and by whichever same-origin document
                                     reads through it first, which need not be its creator. */
                                  creator_policy,
-                                 /* §7.4's `creatorBaseURL`: "if creator is non-null, set creatorBaseURL to
-                                    creator's DOCUMENT BASE URL" — this realm is the creator, and the initial
+                                 /* §7.3.2.1's `creatorBaseURL`: "Set creatorBaseURL to creator's document
+                                    base URL" — this realm is the creator, and the initial
                                     about:blank Document this navigable is created with takes it as its ABOUT
                                     BASE URL. Taken now rather than at materialization, for the reason the
                                     policy container is: a srcless child's realm is built later and by
@@ -3647,13 +3651,14 @@ JSValue navigable_open(JSContext *ctx, const char *url, const char *target, cons
        `new and unrestricted` for a document it does not apply to. "Let currentDocument be currentNavigable's
        active document. If currentDocument's opener policy's value is `same-origin` or `same-origin-plus-COEP`,
        and currentDocument's origin is not same origin with currentDocument's relevant settings object's
-       TOP-LEVEL ORIGIN: set noopener to true, set name to `_blank`, and set windowType to `new with no
+       top-level origin: set noopener to true, set name to `_blank`, set windowType to `new with no
        opener`." Three assignments, and every one of them changes what the caller does next — step 17's FIRST
        clause returns null on that windowType, so a page whose popup handle this engine hands back would be
        holding one real Chrome denies it.
        THE CONDITION IS ASKED, NOT ASSUMED. Only the policy half is testable from here — this agent is
-       origin-keyed, so `currentDocument`'s origin IS the agent's and "not same origin with the top-level
-       origin" is the same cross-origin-nested-document shape §7.3.2.1's inherited-opener-policy arm already
+       origin-keyed, so `currentDocument`'s origin IS the agent's and "not same origin with currentDocument's
+       relevant settings object's top-level origin" is the same cross-origin-nested-document shape §7.3.2.1's
+       inherited-opener-policy arm already
        resolves through window_proxy_opener_policy. Guarding on the policy alone makes the crash fire for a
        COOP document opening any window, which OVER-reports by exactly the same-origin-top case — and an
        over-reporting crash on a page nobody can serve yet is the right side to be wrong on, because the other
@@ -3678,8 +3683,8 @@ JSValue navigable_open(JSContext *ctx, const char *url, const char *target, cons
                   "step 8 — an empty target arriving here would mint an unnamed window where the spec navigates "
                   "this one, which is how `<a target=\"\">` used to open a popup");
     /* §7.3.1.3's container is JS_NULL here and that is the whole difference between step 8's navigable and
-       §4.8.5's: the rules for choosing a navigable are given a target NAME, never an element, so nothing
-       presents the traversable they create and §7.2.2.4's `frameElement` is null in it for ever. */
+       §4.8.5's. §7.3.1.7's rules for choosing a navigable are given a target NAME, never an element, so
+       nothing presents the traversable they create and §7.2.2.4's `frameElement` is null in it for ever. */
     return navigable_create(ctx, url, target_name_is(name, "_blank") ? NULL : name, false, feat, 0, JS_NULL);
 }
 
