@@ -9121,9 +9121,24 @@ static int s_sinkstrings(const char *js, const char *sink, const char *src, int 
  * THE FACT IS THE PRODUCER'S. solve.c emits `runwayPerMille` as the search's BEST reading of flow.h's
  * `cand_replay` — the fraction of a candidate's own recorded decision path that a run has REPLAYED, written by
  * flow.c's flow_observe_replay one arm at a time and pinned to 1.0 at the delivery — so this row is a read and
- * not a re-derivation. THE BOOLEAN IS `> 0` AND NOT `== 1000` because the two states that take opposite work
- * are "the replay was turned back at its first arm" and "it moved at all"; a saturation row would be a second
- * question and the number itself is in the document for whoever is asking it.
+ * not a re-derivation. THE BOOLEAN IS `> 0` AND NOT `== 1000` because a saturation row would be a
+ * second question and the number itself is in the document for whoever is asking it.
+ * THE SENTENCE HERE SAID THERE ARE TWO STATES THAT TAKE OPPOSITE WORK — "the replay was turned back at its
+ * first arm" and "it moved at all" — AND THERE ARE THREE. The third is a search that was never OFFERED an
+ * arm: flow_observe_replay is reached only from the one line that CONSUMES a recorded arm, so a candidate
+ * with no recorded path to replay never reaches the observation site at all and this fraction stays at its
+ * initial 0, byte-identical to a first-arm refusal. That is a question about the DETECTION rather than about
+ * any gate, and the two take opposite work.
+ * IT IS STILL CORRECT ABOUT THIS ROW, WHICH IS WHY IT IS REWRITTEN RATHER THAN DELETED: `> 0` over `== 1000`
+ * is an argument about the SATURATION end, and the third state sits at the zero end, so the boolean this row
+ * computes is unchanged. What was wrong is the count of what its 0 covers.
+ * THE DISCRIMINATORS ARE IN THE DOCUMENT AND NOT IN THIS ROW. solve.c emits `runwayArms` beside the fraction
+ * — the length of the frozen re-injection path, so 0 there is "no candidate had anything to replay" and N
+ * there beside a 0 fraction is the first-arm reading — and `runwayWalked`/`runwayOf`, the fraction's own
+ * operands, which separate a consumed arm from one the per-mille conversion rounded away.
+ * A ROW ASSERTING `runwayArms > 0` IS NOT ADDED, AND DELIBERATELY: for a source read with no gate in front of
+ * it a zero-length frozen path is the CORRECT answer, so such a row would fail by design on exactly the
+ * population this fixture binds to `location.hash`, which is the wrong shape for a gate.
  * THE FIRED AND UNSEEN ARMS ARE s_substituted's, on its ground exactly: a fired record carries the reproduction
  * envelope instead of the counters, and a search that fired has by construction delivered, which pins this rung
  * to its ceiling; S_UNSEEN has no record to ask and s_num would abort rather than default. */
