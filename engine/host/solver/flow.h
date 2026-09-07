@@ -2044,6 +2044,28 @@ typedef struct {
     long deliv_framed;
     long deliv_owed;
     double deliv_w_gap;
+    /* WHICH TERM `deliv_w_gap` IS MADE OF, AT THE TWO MEMBERS IT IS BETWEEN — the one reading that row cannot
+     * be given without them, and the reason it is the OPTIMISM term's operand rather than a decomposition of
+     * the whole weight. Every other summand of flow_weight already has a row a reader can price the gap
+     * against: the reward is `val_top` and moves in whole emissions, the aging is `top_svc`/`top_svc_fam` and
+     * moves at FLOW_AGE_QUANTUM per quantum, the fitness distance is `dist_max` and steps by 1/FLOW_RUNGS_N.
+     * The optimism bonus is 1/(1+`visits`), and its step SHRINKS with the count — so the same numeric gap is a
+     * different number of turns depending on where on the curve the two members stand, and `vis_min`/`vis_max`
+     * are extrema over the WHOLE frontier and are silent about these two. A reader holding only those rows can
+     * compute which term a gap COULD be and cannot say which it IS.
+     * A GAUGE, NEVER DIFFERENCED, like every row it sits beside: both members can be replaced between two
+     * samples, so the series falls as well as rises and a difference of two of them is arithmetic over no
+     * quantity. Read them as a PAIR and only where `deliv_ready` is non-zero — with no ready holder there is no
+     * gap to state and both are 0, exactly as `deliv_w_gap` is.
+     * WHY THIS PAIR AND NOT A PER-MEMBER DUMP: the question a reader brings to `deliv_w_gap` is whether the
+     * members holding an undelivered reply are behind the front by something the ORDER decided or by something
+     * they EARNED, and `visits` is the only term of the four that a member can only raise by FINISHING a turn
+     * (flow_credit_visit asserts `frame == NULL` and no owed checkpoint). A fork inherits its parent's count
+     * (flow_fork_inherit), so an arm that has never completed anything reads its parent's, and a member that
+     * completes one drops below every arm it forked by exactly one step of this curve. Whether that is what a
+     * given gap IS, is what these two rows say and nothing else here can. */
+    long deliv_w_gap_vis;     /* GAUGE: `visits` of the best READY holder — the member `deliv_w_gap` is from */
+    long w_top_vis;           /* GAUGE: `visits` of the member at `w_top` — the member `deliv_w_gap` is to */
 } WfqCensus;
 void flow_wfq_census(WfqCensus *out);
 

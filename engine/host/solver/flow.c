@@ -3983,6 +3983,10 @@ void flow_wfq_census(WfqCensus *out) {
        not be spelled the same way as "a ready holder at weight zero". */
     double deliv_w_max = 0.0;
     int have_deliv_holder = 0;
+    /* AND THE MEMBER ITSELF, because `deliv_w_gap`'s reading needs a TERM and a weight is a sum — see flow.h's
+       `deliv_w_gap_vis`. Held as a pointer rather than as a copied count so the row cannot come to be about a
+       different member than the maximum above it: one `if` writes both. */
+    const Flow *deliv_holder = NULL;
     /* THE BEST WEIGHT ANY NEVER-DISPATCHED MEMBER OFFERS, held the same way and for the same reason as the job
        holder's: `never_picked_gap` is a DIFFERENCE against a top this scan does not know until flow_best runs
        below, and "no such member" must not be spelled the same way as "one standing at weight zero". */
@@ -4059,6 +4063,10 @@ void flow_wfq_census(WfqCensus *out) {
     out->job_w_gap = 0.0;
     out->deliv_ready = out->deliv_framed = out->deliv_owed = 0;
     out->deliv_w_gap = 0.0;
+    /* …AND THE TWO ENDS OF THAT GAP, ZEROED BESIDE IT AND NOT SEPARATELY, because they are only ever WRITTEN
+       beside it: a frontier with no ready holder states no gap and states no counts, and a reader who found
+       one of the three set and the others not would be holding a gap about members this scan never found. */
+    out->deliv_w_gap_vis = out->w_top_vis = 0;
     for (i = 0; i < g_flows_n; i++) {
         const Flow *f = g_flows[i];
         int64_t s = flow_service_notch(f);
@@ -4242,7 +4250,9 @@ void flow_wfq_census(WfqCensus *out) {
                 /* THE BEST OF THEM, against which `deliv_w_gap` is taken below — a maximum and not a first
                    hit, for the reason the job holder's is: the question is how far the backlog's BEST claim
                    stands from the front of the queue, and every other holder is further still. */
-                if (!have_deliv_holder || w > deliv_w_max) { deliv_w_max = w; have_deliv_holder = 1; }
+                if (!have_deliv_holder || w > deliv_w_max) {
+                    deliv_w_max = w; have_deliv_holder = 1; deliv_holder = f;
+                }
             }
         }
         if (s > out->svc_max) out->svc_max = s;
@@ -4505,7 +4515,19 @@ void flow_wfq_census(WfqCensus *out) {
     /* …AND THE SAME DIFFERENCE FOR THE REPLY BACKLOG, taken here for the identical reason and left at 0.0 when
        nothing is waiting on rank, so `deliv_ready` beside it is what tells "no member is waiting on the order"
        from "the front of the queue is itself holding an undelivered reply". See flow.h for the pair. */
-    if (have_deliv_holder && top) out->deliv_w_gap = out->w_top - deliv_w_max;
+    if (have_deliv_holder && top) {
+        out->deliv_w_gap = out->w_top - deliv_w_max;
+        /* …AND THE TERM THE GAP IS MADE OF, AT BOTH ENDS, WRITTEN WHERE THE GAP IS — see flow.h. Both are set
+           in the SAME branch as the gap and nowhere else, so a reader that finds a non-zero `deliv_w_gap` is
+           holding two counts about the two members it is between, and a reader that finds a zero gap is
+           holding two zeros for the same reason the gap is zero: there was no ready holder to state one of. */
+        out->deliv_w_gap_vis = deliv_holder->visits;
+        out->w_top_vis = top->visits;
+        DCHECK(out->deliv_w_gap_vis >= 0 && out->w_top_vis >= 0,
+               "a WFQ census read a negative visit count at one end of the delivery gap — `visits` is raised "
+               "only by flow_credit_visit and reset by nothing, so a negative one is a member whose optimism "
+               "term has been computed from a count that cannot exist");
+    }
 
     /* …AND THE SAME DIFFERENCE FOR THE MEMBERS THE SCHEDULER HAS NEVER CHOSEN — taken here for the identical
        reason and left at 0.0 when there are none, so `never_picked` beside it is what tells "nobody is
