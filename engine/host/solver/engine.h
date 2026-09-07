@@ -1265,6 +1265,35 @@ typedef struct {
        which is a question about the schedule and not about the document's coverage. */
     int  deepest;           /* highest program this document has STARTED */
     int  completed;         /* highest program it has run to its END */
+    /* ─── AND THE COUNTS THOSE TWO MAXIMA CANNOT CARRY, WITH THE ASK THE CANDIDATE ARM IS MEASURED AGAINST ──
+     *
+     * `deepest` and `completed` are MAXIMA and answer how FAR, so neither can answer how MANY, or WHOSE.
+     * A run reading `deepest: 12` may have started twelve programs or twelve thousand, and nothing above says
+     * whether ONE of them was an @S candidate — which is the question §@S's only-firing rule turns into
+     * the whole standard of proof for a security finding, since a constructed PoC that is never STARTED cannot
+     * fire and reports exactly as one that ran and did not.
+     *
+     * THE PAIR THAT ANSWERS IT IS `progQueuedCand` AND `progStartsCand`, AND NEITHER IS READABLE ALONE. The
+     * queue side is the solver's ASK, raised where the row is created and therefore upstream of the pick, the
+     * compile and the destroyed-document walk — every one of which may decline a candidate for a good reason
+     * (a breakout that does not fit its sink's context correctly never parses). The start side is the same
+     * question asked of the scheduler. `0/0` says no breakout ever reached an executable position, so there
+     * was nothing to run; `0/N` says N were constructed and queued and the frontier never handed a member the
+     * thread at one of their rows. Those take opposite work — the first is solve_html.c's derivation and the
+     * second is the WFQ — and until both rows existed they were one silence.
+     *
+     * `progStarts` IS THE THIRD DISCRIMINATOR AND IT IS THE ONE FOR THE RUN RATHER THAN THE SEARCH. A run that
+     * started NO program of any kind has said nothing about candidates, and it reads identically to one that
+     * started thousands with no candidate among them.
+     *
+     * `progStartsCand` MAY EXCEED `progQueuedCand`. A fork copies the whole queue, so one ask can stand
+     * unstarted in N timelines and be started once by each — the same program on N paths, which is what a fork
+     * is. There is deliberately no assertion between the two sides; the one that holds is the partition, over
+     * a single event, and it is asserted at engine_frontier_census like the two above it. */
+    long prog_starts;       /* programs STARTED — `prog_starts_cand + prog_starts_other`, asserted */
+    long prog_starts_cand;  /* …the @S candidate programs among them: a constructed PoC that got its chance */
+    long prog_starts_other; /* …and every other kind: the document's own coverage */
+    long prog_queued_cand;  /* candidate programs the search ASKED to have run — the denominator of the above */
     long claims_met;        /* an inherited orphan drive whose body a take handed over */
     long claims_unmet;      /* …and one that FINISHED never having been handed one — the round trip's verdict */
     long host_asked;         /* rendezvous ids this instance MINTED — every one the host is shown and must pay */

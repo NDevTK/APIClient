@@ -1507,6 +1507,24 @@ char *result_cold_json(void) {
                  "{\"live\":%ld,\"framed\":%ld,\"blocked\":%ld,\"owed\":%d,"
                  "\"finished\":%ld,\"finishedFlows\":%ld,\"finishedCands\":%ld,"
                  "\"deepest\":%d,\"completed\":%d,"
+                 /* THE COUNTS BESIDE THOSE TWO MAXIMA, AND THE @S SEARCH'S OWN NUMERATOR AND DENOMINATOR. See
+                    solver/engine.h for the whole reading; the part a reader of THIS line needs is that
+                    `progStartsCand` alone means nothing. A `0` there is `no breakout was ever queued` and it
+                    is also `N were queued and the scheduler started none`, which take opposite work, and
+                    `progQueuedCand` is what tells them apart. `progStarts` is the third: a run that started no program at all
+                    has said nothing about candidates either way.
+                    THE PARTS ARE ROWS AND NOT A SUBTRACTION, for the reason `finishedCands` states above — a
+                    derived half cannot be checked, and `progStarts - progStartsCand` is exactly the arithmetic
+                    that would silently absorb a start path added without a label. Emitted as three, so the
+                    identity solver/engine.c asserts in dev is one a reader can also check off a release log.
+                    THEY ARE NOT COMPARABLE AS AN INEQUALITY: a fork copies unstarted rows into the arm it
+                    makes, so `progStartsCand` above `progQueuedCand` is one asked-for program started on
+                    several timelines and is not a broken count.
+                    AND `cand*` ON THE @WFQ LINE IS A DIFFERENT POPULATION — those rows count frontier MEMBERS
+                    carrying a payload substitution, and these count PROGRAMS. A grep for `cand` over a log
+                    returns both, which is worth knowing before either number is quoted as the other. */
+                 "\"progStarts\":%ld,\"progStartsCand\":%ld,\"progStartsOther\":%ld,"
+                 "\"progQueuedCand\":%ld,"
                  "\"sold\":%ld,\"soldFlows\":%ld,\"soldCands\":%ld,\"forks\":%ld,"
                  "\"resumed\":%d,\"resumedSegs\":%ld,\"resumedFlows\":%ld,\"resumedCands\":%ld,"
                  "\"resumedWorlds\":%ld,"
@@ -1556,6 +1574,7 @@ char *result_cold_json(void) {
                  c.flows, c.framed, c.blocked, flow_host_owed_count(),
                  e.finished, e.finished_flows, e.finished_cands,
                  e.deepest, e.completed,
+                 e.prog_starts, e.prog_starts_cand, e.prog_starts_other, e.prog_queued_cand,
                  e.sold, e.sold_flows, e.sold_cands, e.forks,
                  ran, resumed.segs, resumed.flows, resumed.cands, resumed.worlds,
                  rp_hits, rp_left, rp_left_arms,

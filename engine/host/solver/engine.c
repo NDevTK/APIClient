@@ -6061,6 +6061,24 @@ static int engine_close_request_fork(JSContext *ctx, Flow *f) {
 }
 
 
+/* THE @S SEARCH'S ASK, COUNTED AT THE ONE SITE A ROW IS BORN. `progStartsCand` (see g_prog_starts) is a
+   numerator and this is its denominator: how many candidate programs the solver ASKED to have run. Without it
+   a zero there is two runs at once — no breakout ever reached an executable position, so there was nothing to
+   start, and breakouts reached one and no member was ever handed the thread at its row — and those take
+   OPPOSITE work, one being a question for the derivation in solve_html.c and the other for the WFQ. §@S makes
+   FIRING the whole standard of proof for a finding, so the distance between these two rows is the security
+   half's own gap, and it was unmeasurable for as long as only one end of it existed.
+   IT IS THE ASK AND NOT THE OUTCOME (CLAUDE.md §AN-INVARIANT-OVER-A-GATED-OPERATION). A row's creation is
+   upstream of every step that may LEGITIMATELY decline to run it: the pick, the compile — a breakout that does
+   not fit its sink's context is a candidate that correctly never parses, which is the search working and is
+   what engine_queue_candidate's own entry says of it — and the destroyed-document walk in solver/flow.c, which
+   removes unstarted rows. Counted at any of those, each correct refusal would be reported as a candidate the
+   search failed to place.
+   KEYED ON THE ROW'S KIND AND NEVER ON WHICH ENTRY CALLED, so a second door to queuing one is counted by BEING
+   that kind rather than by its author remembering to — the same reason the kind is a column of the row.
+   A REPORT AND NEVER A BOUND (§NO BOUNDS): nothing reads it and no arm branches on it. */
+static long g_prog_queued_cand;
+
 /* HTML §4.12.1.1 "Processing model" STEP 33 — AN EXTERNAL SCRIPT'S FETCH BEGINS WHEN THE ELEMENT IS PREPARED,
    NOT WHEN ITS POSITION IS REACHED. Step 33 is "If el has a src content attribute:", and its `classic` arm is
    "Fetch a classic script given url, settings object, options, classic script CORS setting, encoding, and
@@ -6394,6 +6412,9 @@ static void engine_queue_into(Flow *f, uint32_t doc, DynBody *body, DynKind kind
        program and §8.1.4.4's checkpoint is owed only once that program's stack has emptied. */
     f->dyn_pos[at] = (unsigned char)pos;
     f->dyn_n++;
+    /* THE ASK, RAISED WHERE THE ROW EXISTS — see g_prog_queued_cand for why it is here and not at the entry
+       that called, and why it is deliberately not comparable as an inequality against the start side. */
+    if (kind == DYN_CANDIDATE) g_prog_queued_cand++;
     /* AND §4.12.1.1 "Processing model" STEP 33 IS OWED HERE, WHICH IS THE ONE PLACE IT CAN BE OWED ONCE PER
        ELEMENT. A row holding an ADDRESS is an element whose `src` branch has just been entered, and that
        branch FETCHES — see engine_pending_docscript, which states why the fetch and the execution slot are two
@@ -7606,6 +7627,26 @@ static int  g_deepest = -1;
    `deepest` alone cannot say that, because a flow that starts program i proves only that SOME flow completed
    i-1, and says nothing about how many programs the document has left to run. */
 static int  g_completed = -1;
+/* AND THE COUNTS THOSE TWO MAXIMA CANNOT CARRY, WRITTEN AT THE SAME LINE THEY ARE. `deepest` and `completed`
+   are MAXIMA over cursors — one member at program 5 and every member at program 5 read the same — so neither
+   can say HOW MANY starts a run has performed, nor whose. These are that count, partitioned by the KIND of the
+   row started: the @S search's candidate re-fires against every other program. Summed they are one number
+   answering neither question, and the two take opposite work — a page script starting is this document being
+   covered, and a candidate program starting is a constructed PoC getting its one chance to fire.
+   `progStarts` IS WHAT MAKES A ZERO IN THE CANDIDATE ARM READABLE IN THE OTHER DIRECTION. A run that started no
+   program of ANY kind has said nothing about candidates and reads identically to one that started thousands
+   with no candidate among them; those are a question about the run's reach and a question about the search.
+   THREE ROWS AND NOT TWO, for `g_finished`'s reason exactly: the total is written at the ONE line a program is
+   started and each arm on the line beside it, so the identity holds by inspection now and what it catches is a
+   SECOND start path added later that moves the total without saying which population it moved.
+   engine_frontier_census is where all three are read together and is where it fires.
+   `progStartsCand` MAY EXCEED `progQueuedCand`, AND THAT IS A FACT RATHER THAN A COUNT THAT CANNOT BE TRUE. A
+   fork COPIES the whole queue (engine_sibling_assemble), so one ask can stand unstarted in N timelines and be
+   started once by each — the same program on N paths, which is what a fork IS. An inequality asserted between
+   the queue side and the start side would fire on a healthy branch, so there is none: the only containment
+   these four rows have is the partition above, which is over ONE event and has nothing to inherit.
+   A REPORT AND NEVER A BOUND (§NO BOUNDS): nothing reads them and no arm branches on one. */
+static long g_prog_starts, g_prog_starts_cand, g_prog_starts_other;
 
 /* HTML §8.1.4.4 "Calling scripts", "run a module script" step 8: "If preventErrorReporting is false, then upon rejection of
  * evaluationPromise with reason, report an exception given by reason for script's settings object's global
@@ -8582,6 +8623,14 @@ static int flow_step(JSContext *ctx, Flow *f) {
                whichever flow starts it — a coverage fact about the document, not about the flow holding the
                thread (see g_deepest). */
             if (f->script_i > g_deepest) g_deepest = f->script_i;
+            /* …AND HOW MANY STARTS THAT IS, WHICH A MAXIMUM CANNOT SAY — see g_prog_starts. THE ARM IS READ
+               FROM THE ROW AT THE CURSOR AND NEVER FROM THE FLOW: a candidate SESSION (`Flow.cand_src`, the
+               label `finished_cands` partitions on) re-runs this document from the baseline and therefore
+               compiles the page's OWN programs too, so a per-flow label would count every page script an @S
+               re-fire started as a candidate program. Those are different populations, and this is the one
+               `progQueuedCand` is the ask for. */
+            g_prog_starts++;
+            if (flow_dyn_kind(f) == DYN_CANDIDATE) g_prog_starts_cand++; else g_prog_starts_other++;
             /* IN THE REALM OF THE DOCUMENT THE PROGRAM BELONGS TO — asked of the program, never of the
                session. A program compiled here is closed over the compiling realm's global (JS_FlowNew), so
                the realm is not a detail of where it happens to run: `globalThis[member]` compiled in the root
@@ -9857,7 +9906,10 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
        be a level again (see g_host_asked). g_reclaim_asks/g_reclaim_unarmed/g_reclaim_floor are on this list
        for the same reason and are named rather than left off it: they partition against g_flows_sold, which
        the assert above already requires to CARRY, so resetting three terms of that identity and not the fourth
-       would break it at the next census rather than at the line that did it.
+       would break it at the next census rather than at the line that did it. g_prog_starts/g_prog_starts_cand/
+       g_prog_starts_other/g_prog_queued_cand are on it for that same second reason and are named for it: the
+       first three partition against each other, so zeroing some of them would break the identity at the next
+       census instead of at the line that did it, and the fourth is the ask the candidate arm is read against.
        AND THIS LINE IS WHY "A COUNTER SURVIVED A SESSION BOUNDARY" IS NOT A HYPOTHESIS THE CENSUS'S PAIRING
        ASSERT CAN BE ANSWERED WITH. All of them are on this list together, so a total carried into a second
        session carries every term of the inequality and preserves its ORDER; there is no reading of a survival
@@ -11088,6 +11140,10 @@ void engine_frontier_census(EngineFrontierCensus *out)
     out->forks             = decide_fork_total();
     out->deepest           = g_deepest;
     out->completed         = g_completed;
+    out->prog_starts       = g_prog_starts;
+    out->prog_starts_cand  = g_prog_starts_cand;
+    out->prog_starts_other = g_prog_starts_other;
+    out->prog_queued_cand  = g_prog_queued_cand;
     out->claims_met        = g_orphan_claims_met;
     out->claims_unmet      = g_orphan_claims_unmet;
     out->host_asked        = g_host_asked;
@@ -11138,6 +11194,17 @@ void engine_frontier_census(EngineFrontierCensus *out)
             "it, so a sale path that reads it afterwards gets freed memory rather than a wrong count and this "
             "is where that shows",
             out->sold_flows, out->sold_cands, out->sold);
+    /* AND THE PROGRAM-START PARTITION, asserted for the reason the two above are and at the same place. It is
+       the ONLY identity these four rows have, which is stated here because the missing one is the tempting
+       one: `prog_queued_cand` is an ASK and `prog_starts_cand` counts STARTS ACROSS TIMELINES, and a fork
+       copies an unstarted row into the arm it makes — so a started count above the asked count is that copy
+       and not a broken number, and an inequality between them would fire on a healthy branch. */
+    DCHECKF(out->prog_starts_cand + out->prog_starts_other == out->prog_starts,
+            "the frontier census's program-start rows do not partition its start total (%ld candidate + %ld "
+            "other against %ld starts) — a start is of exactly ONE row and that row's kind is read on the line "
+            "beside the total, so a difference is a second place a program can start that moved the total "
+            "without saying which population it moved",
+            out->prog_starts_cand, out->prog_starts_other, out->prog_starts);
     /* AND THE REFUSAL EDGE'S OWN PARTITION, which is the row that makes a zero `sold` READABLE. Every call to
        engine_reclaim_tail leaves by exactly one of three doors — declined because the safepoint is not armed,
        answered at the frontier's floor, or a sale that gives back exactly one flow — so the three arms are the
