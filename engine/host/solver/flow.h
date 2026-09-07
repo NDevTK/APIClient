@@ -2063,9 +2063,12 @@ typedef struct {
      * (flow_credit_visit asserts `frame == NULL` and no owed checkpoint). A fork inherits its parent's count
      * (flow_fork_inherit), so an arm that has never completed anything reads its parent's, and a member that
      * completes one drops below every arm it forked by exactly one step of this curve. Whether that is what a
-     * given gap IS, is what these two rows say and nothing else here can. */
-    long deliv_w_gap_vis;     /* GAUGE: `visits` of the best READY holder — the member `deliv_w_gap` is from */
-    long w_top_vis;           /* GAUGE: `visits` of the member at `w_top` — the member `deliv_w_gap` is to */
+     * given gap IS, is what these two rows say and nothing else here can.
+     * THE TYPE IS `Flow::visits`'S AND NOT A NARROWER ONE, for `vis_min`/`vis_max`'s reason exactly: this host
+     * compiles for wasm32, where `long` is 32 bits and the field is 64, so a `long` row here would be a silent
+     * narrowing of the one quantity the pair exists to state. */
+    int64_t deliv_w_gap_vis;  /* GAUGE: `visits` of the best READY holder — the member `deliv_w_gap` is from */
+    int64_t w_top_vis;        /* GAUGE: `visits` of the member at `w_top` — the member `deliv_w_gap` is to */
 } WfqCensus;
 void flow_wfq_census(WfqCensus *out);
 

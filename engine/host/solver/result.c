@@ -774,7 +774,7 @@ char *result_wfq_json(void) {
                         extrema over the WHOLE frontier and these are about two named members; a reader who
                         met them there would be one row away from subtracting quantities taken over
                         different populations. */
-                     "\"delivWGapVis\":%ld,\"wTopVis\":%ld,"
+                     "\"delivWGapVis\":%lld,\"wTopVis\":%lld,"
                      /* AND WHAT ASKING THIS ORDER COST, which every row above is silent about because every
                         row above is about what the order DECIDED. solver/flow.h's FLOW_SCANS states why the
                         three entries are counted apart and why the quantity is a count rather than a clock;
@@ -920,7 +920,7 @@ char *result_wfq_json(void) {
                      w.nonreward_max,
                      w.jobs_ready, w.jobs_framed, w.jobs_owed, w.job_w_gap,
                      w.deliv_ready, w.deliv_framed, w.deliv_owed, w.deliv_w_gap,
-                     w.deliv_w_gap_vis, w.w_top_vis,
+                     (long long)w.deliv_w_gap_vis, (long long)w.w_top_vis,
                      flow_scan_runs(FLOW_SCAN_NEXT),  flow_scan_weights(FLOW_SCAN_NEXT),
                      flow_scan_runs(FLOW_SCAN_RIVAL), flow_scan_weights(FLOW_SCAN_RIVAL),
                      flow_scan_runs(FLOW_SCAN_OTHER), flow_scan_weights(FLOW_SCAN_OTHER),
