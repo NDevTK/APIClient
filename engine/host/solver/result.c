@@ -322,6 +322,70 @@ void result_page_error_value_retract(JSContext *ctx, JSValueConst reason) {
     free(at);
 }
 
+/* THIS COMPONENT'S EIGHT SLOTS, GIVEN BACK — solver/engine.c's release column. There was no release at all.
+ *
+ * THE ROWS WERE FREED BY NOBODY, AND NOTHING IN THIS TREE COULD SAY SO: a malloc'd block appears in neither
+ * of JS_FreeRuntime's censuses, so the one detector every host runs at teardown is blind to it by
+ * construction and the leak was silent in dev AND release. Same shape core/agent_state.h records for
+ * core/file/file_system_handle.c, in the solver half.
+ *
+ * AND `g_err_route_declared` IS NOT A LEAK BUT THE COSTLIER HALF. It is the latch a host sets once at its
+ * agent bring-up, and the whole of what it buys is the DCHECK at `result_page_error`: a host reaching an
+ * uncaught page error having declared neither route aborts there, because a page's throw is the forcing
+ * function naming an unbuilt capability and a host in which that name cannot be READ reports whatever surface
+ * it happened to reach instead. Carried past its agent it hands the NEXT one that answer for free, so the
+ * host that never considered the question passes the check that exists to ask it — core/agent_state.h's
+ * `fetch_init` in miniature, and the only reader of the stale number is the next bring-up.
+ *
+ * WHY THIS IS NOT DECLARED TO core/agent_state.h, since that header is where a reader will go next: two
+ * aborts, each one grep. `platform_check_agent_state` requires every declaration's `component` to be A ROW OF
+ * core/platform.c's LIST, and this component has none — so a declaration fires at agent BRING-UP. And
+ * `agent_state_check_released` runs at the END of `platform_agent_free`, which every host runs BEFORE
+ * `solver_agent_free`: even under a row, the registry would assert these slots released strictly before the
+ * call that releases them, on every run that recorded one page error. That registry is the browser half's;
+ * this half's release column is `solver_agent_free`. Retired the day the solver half gets a registry of its own.
+ *
+ * ALL EIGHT SLOTS OR NONE. `errs_json_array` walks `g_errs[0 .. g_errs_n)` and dereferences both halves of
+ * every row, so giving back the array and keeping the count is not a partial fix — it is a use-after-free
+ * with a plausible table in front of it. Free, assert, then undo the handles, which is that header's order. */
+void result_free(void)
+{
+    /* Every host declares the route in its AGENT init, unconditionally, beside `platform_agent_init`. */
+    DCHECK(g_err_route_declared,
+           "the page-error console was released in an agent that never declared where an uncaught page error "
+           "is READ. A host states that once, at its agent bring-up, so this is either a SECOND release of one "
+           "agent's console — the first reset this latch, and the rows it would free are already given back — "
+           "or a teardown reached without the bring-up that answers for this component at all");
+
+    for (int i = 0; i < g_errs_n; i++) {
+        DCHECK(g_errs[i].msg != NULL && g_errs[i].at != NULL,
+               "a page-error row reached the release owning only half its key — `result_page_error` frees and "
+               "ABANDONS a half-allocated pair rather than committing one, so a row visible here with a null "
+               "half was committed by some other path, and it is the row the dedupe compares equal on "
+               "whichever half did allocate");
+        free(g_errs[i].msg);
+        free(g_errs[i].at);
+    }
+    free(g_errs); g_errs = NULL; g_errs_n = g_errs_cap = 0;
+
+    for (int i = 0; i < g_expl_n; i++) {
+        DCHECK(g_expl[i].msg != NULL && g_expl[i].at != NULL,
+               "an exploration declaration reached the release owning only half its key — `explored_add` frees "
+               "and ABANDONS a half-allocated pair for the reason the row beside it does, so a null half here "
+               "is a declaration filed under a key nobody made");
+        free(g_expl[i].msg);
+        free(g_expl[i].at);
+    }
+    free(g_expl); g_expl = NULL; g_expl_n = g_expl_cap = 0;
+
+    /* THE HANDLES LAST, AND THE LATCH'S RESET IS WHAT MAKES A POST-RELEASE REPORT LOUD. With both tables
+       nulled, a `result_page_error` arriving after this would `realloc(NULL, …)` and rebuild a console for an
+       agent that has ended, publishing rows nothing will free or read; down, that entry's own route DCHECK
+       fires instead. */
+    g_err_hook = NULL;
+    g_err_route_declared = 0;
+}
+
 /* Append RAW (a delimiter this file controls) or ESCAPED (page-supplied text). Escaping the delimiters too was
    a bug: the quotes around each message came out as \" inside the JSON string. */
 static void errs_raw(char **buf, size_t *cap, size_t *len, const char *s) {

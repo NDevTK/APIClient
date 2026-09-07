@@ -286,4 +286,11 @@ void result_set_page_error_hook(void (*fn)(const char *msg, const char *filename
    handler — a page error's reader is an edge of exactly that kind. */
 void result_page_errors_ride_the_document(void);
 
+/* AND GIVEN BACK — a row of solver/engine.c's release column, not a declaration to core/agent_state.h. The
+   whole of this component's agent state is the two page-error tables and the route above them: both tables
+   are `strdup`'d rows that nothing freed, and the route is a LATCH whose stale `1` would tell the next agent
+   in a process that a host it never asked had already answered where an uncaught page error is read. See the
+   release itself for the two aborts that make the browser half's registry the wrong home for it. */
+void result_free(void);
+
 #endif

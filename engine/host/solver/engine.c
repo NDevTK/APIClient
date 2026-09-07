@@ -11542,6 +11542,17 @@ void solver_agent_free(JSContext *ctx)
     g_orphan_claims_met = 0; g_orphan_claims_unmet = 0; g_orphan_claims_closed = 0;
     attr_shadow_free(ctx);
     endpoint_free();
+    /* THE PAGE-ERROR CONSOLE, BESIDE THE OTHER EMISSION TABLE AND AFTER THE WHOLE PLATFORM. It had no release
+       at all, so both its tables leaked their rows on every run of every host and its route LATCH would have
+       handed a second agent an answer no host of that agent ever gave. WHAT MAKES THIS POSITION SAFE is that
+       every writer of that console is already gone, and there are only two kinds: a FLOW (`flow_step`,
+       `flow_run_one_job`, a module's rejection reaction), all released by `solver_frontier_free` above this
+       column; and a BROWSER HOST EDGE — HTML §8.1.4.6 "Runtime script errors"'s console hook in
+       core/events/report_exception.c, §8.1.4.7/§8.1.6.4's report hook in core/html/unhandled_rejection.c —
+       each a slot its component declares to core/agent_state.h and nulls on core/platform.c's release column,
+       which `platform_agent_free` has already run in full. So nothing left in this agent can report a page
+       error into a table this line is about to free. */
+    result_free();
     /* THE CONCOLIC VALUE COMPONENT IS LAST, and the position is the argument. Its SOURCE REGISTRY is what a
        report asks for a source's browser delivery — the encode set, the address component, the reproduction
        mechanism — so every line above may still read it while it renders and releases what it holds. It is
