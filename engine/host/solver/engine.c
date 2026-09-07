@@ -11520,14 +11520,16 @@ void solver_agent_free(JSContext *ctx)
        correct rather than the aliasing an ordinal was avoiding. A reader who re-derived the retired reason
        would conclude the opposite of the design, which is why it is rewritten here rather than deleted.
        WHAT SURVIVES IS THE SENTENCE `g_orphan_asks` ALREADY HAD, and it covers both: they are per-SESSION
-       numbers that the result document spells per document. The GENERATION is a different fact and keeps its
+       numbers, and the result document is the AGENT's rather than any one document's — engine_sched_begin
+       asserts that a host opens exactly ONE session per instance, so the two boundaries coincide and this
+       release is what keeps them coinciding. The GENERATION is a different fact and keeps its
        own reason — it is a memo about ONE runtime's heap, so a second agent that kept it would skip a walk
        over a heap it never walked. All are single words: the release is what makes them a session's rather
        than a process's.
        `g_orphan_asks` IS ON THIS LINE AND WAS NOT, which was a defect in the commit that introduced it rather
        than an omission with no consequence. The hosts that take a runtime down and bring another up per file
        run many sessions in one process, so a counter left standing reports the PROCESS's total under a name
-       the result document spells per document — and this one in particular: the whole of what `asked` is for
+       the result document spells per AGENT — and this one in particular: the whole of what `asked` is for
        is that `asked == 0` means NO FLOW IN THIS SESSION ever reached the end of its own work. A carried-over
        count makes that read `asked > 0` for a session that never asked at all, which is the exact reading the
        pair exists to distinguish, inverted, in the direction that looks healthy. */

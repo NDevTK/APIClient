@@ -1897,14 +1897,32 @@ char *result_json(JSContext *ctx) {
                                 and may fall. `_worldSegmentsHeld`'s pair is `_worldSegmentsMade` beside it,
                                 which is the lifetime half and the one to difference; `_routedZeroDelivery`
                                 has no lifetime half at all and is read at a drained receiver or not read.
-                                AND "LIFETIME" MEANS THIS SESSION'S: `_candidates`, `_sourceReads`
-                                and the three `_sink*` rows are zeroed by solve_init/concolic_init,
-                                `_orphansDriven`/`_orphansAsked` at the agent's release, and
-                                `_worldSegmentsMade`/`_worldSegmentsForked` with the world registry — so on a
-                                host that runs several documents in one process (the native WPT runner) every
-                                one of those falls at a document boundary and only there. `_switches`,
-                                `_flows`, `_jobsQueued`, `_jobsRun`, `_unitsDone` and the routed rows are
-                                reset by nothing and are the instance's own. */
+                                AND "LIFETIME" MEANS THIS AGENT'S, NEVER A DOCUMENT'S. The sentence here
+                                said these rows fall "at a document boundary and only there" on a host that
+                                runs several documents in one process, naming the native WPT runner, and that
+                                was FALSE AT BIRTH rather than stale: that host calls `solve_init` nowhere and
+                                composes this document nowhere, and its several-documents case is
+                                `wpt_child_realm`, which calls no `_init` at all. The boundary is read off
+                                CALLS and never off a host — solve_init zeroes `_candidates` and the three
+                                `_sink*` rows, concolic_init `_sourceReads`, world_registry_free's
+                                world_segment_counts_reset the two `_worldSegments` totals, solver_agent_free
+                                `_orphansDriven`/`_orphansAsked` and `_absent`'s rows — and every one of those
+                                runs EXACTLY ONCE in an agent's life, at its bring-up or its release, on all
+                                three hosts, while `_switches`, `_flows`, `_jobsQueued`, `_jobsRun`,
+                                `_unitsDone` and the routed rows are reset by nothing at all. So the whole
+                                block has ONE boundary and no arithmetic across it is wrong.
+                                WHICH MAKES THESE TOTALS THE CLUSTER'S AND NOT THE PAGE'S, the fact a consumer
+                                needs and the one the retired sentence denied: the single host that composes
+                                this document takes a SECOND DOCUMENT through `qjs_join`, which calls none of
+                                those inits (main.c holds `g_joined_ctx`/`g_joined_dom` for exactly those
+                                documents), so a same-origin frame's reads are summed into the root's. That is
+                                correct — an instance IS an origin-keyed agent cluster and this document is
+                                the instance's, composed per ASK by `qjs_result` — and it is the opposite of
+                                what a reader told "per document" would compute.
+                                RETIRED BY a second call site for any of those inits within one agent, or a
+                                host that brings up two agents in one process; both are one grep
+                                (`git grep -n 'solve_init\|concolic_init' -- engine/host`), and either would
+                                show here as a row FALLING between two `qjs_result` calls of one instance. */
                              "\"_orphansDriven\":%ld,\"_orphansAsked\":%ld,\"_wfq\":%s,"
                              /* THE THREE SUBSYSTEM CENSUSES, EACH ONE NESTED OBJECT, for the reason `_wfq`
                                 is one: spreading them into siblings would put a cumulative switch count
