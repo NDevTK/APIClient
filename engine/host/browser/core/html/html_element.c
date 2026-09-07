@@ -1247,6 +1247,21 @@ void html_element_install_protos(JSContext *ctx)
     }
 }
 
+/* THE ONE NAME IN THE ELEMENT-INTERFACE TABLE WHOSE INTERFACE OBJECT DOES NOT CONSTRUCT.
+   HTML §3.2.3 HTML element constructors says every HTML element interface carries [HTMLConstructor] — "To
+   support the custom elements feature, all HTML elements have special constructor behavior" — and the HTML
+   Standard's own IDL declares exactly one of them without it, under a comment saying so in as many words:
+   `// Note: intentionally no [HTMLConstructor]`. So `new HTMLUnknownElement()` is
+   Web IDL §3.7.1 Interface object's TypeError and not §3.2.3's sixteen steps, which is what
+   node_install_interface gives it below.
+   IT IS DECLARED HERE RATHER THAN LEFT TO THE `continue` THAT PERFORMS IT, because the filter is C: a reader of
+   the minting loop — and the Web IDL gap audit, which reads the same source — sees a shared minting helper
+   handed one cell of this column and cannot evaluate which cells reach it. The audit's three readings of that
+   silence are that the identifier misspells an interface, that the mint needs its justification written against
+   the IDL, or that the row filter removes the row and the engine is already right; this is the third, said as
+   code that asserts itself per realm rather than as the comment a reader has to find. */
+static const char *const HTML_IFACE_NO_CONSTRUCTOR[] = { "HTMLUnknownElement" };
+
 void html_element_install(JSContext *ctx, JSValueConst global)
 {
     int i, j;
@@ -1343,6 +1358,25 @@ void html_element_install(JSContext *ctx, JSValueConst global)
                               "naming HTMLElement and HTMLUnknownElement, which this same function installs "
                               "above under those very names because one of them must carry §3.2.3's "
                               "[HTMLConstructor]");
+    /* AND WHICH OF THOSE NAMES A PAGE CAN `new`, which is the other half of what the loop above decides and the
+       half the declaration before this one cannot express: Web IDL §3.7.1 Interface object gives a property to
+       every exposed interface and construct steps only to one declaring a constructor, so the interface object
+       HTMLUnknownElement got from node_install_interface and the ones this loop minted through §3.2.3's machine
+       are the same answer to a presence lookup and opposite answers to `new`. The loop hands the mint
+       one cell of this column, so the same `continue` that decides coverage decides this — and the audit that
+       reads this file can no more evaluate it here than it could there. Break the first filter and a name
+       crosses into the constructing population; break the second and one crosses out; either fires here naming
+       it. */
+    idl_install_constructs_column(ctx, global, IDL_NAME_COLUMN(HTML_IFACE, iface),
+                                  HTML_IFACE_NO_CONSTRUCTOR,
+                                  (int)(sizeof(HTML_IFACE_NO_CONSTRUCTOR) /
+                                        sizeof(HTML_IFACE_NO_CONSTRUCTOR[0])),
+                                  "the loop's two row filters move no name across §3.7.1's partition: the "
+                                  "first is a first-occurrence dedup on this same name column, so an interface "
+                                  "several tags share is minted by its first row, and the second skips the two "
+                                  "rows naming the base interfaces — of which HTMLElement is minted with "
+                                  "§3.2.3's [HTMLConstructor] by name above and HTMLUnknownElement is the one "
+                                  "element interface the HTML Standard declares without it");
 }
 
 bool html_element_is(JSValueConst v)

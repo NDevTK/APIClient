@@ -8291,6 +8291,58 @@ JSValue idl_step_function(JSContext *ctx, const char *name, int stepid)
     return idl_mint_step(ctx, name, stepid, JS_CFUNC_step, IDL_SEC_METHOD);
 }
 
+/* THE IDENTIFIERS THIS AGENT HAS MINTED WEB IDL §3.7.1 Interface object's CONSTRUCT STEPS UNDER, so that a
+   claim about which cells of a row-filtered column reached the mint has something to be checked AGAINST rather
+   than a second spelling of the loop that made it. It is read by idl_install_constructs_column below.
+   IT IS RECORDED AT THE MINT BECAUSE THE MINT IS WHAT DECIDES THE QUESTION. A §3.7.1 interface object is a
+   property on the global whichever population it belongs to, and what separates them is which callback the
+   function object carries — a thing nothing downstream can ask it, and a thing `JS_IsConstructor` answers true
+   for on both. engine/idl_installed.mjs's static reader of this engine keys its own answer on this same call
+   for that same reason, so the two derivations cannot drift apart: one reads the source of the mint, this one
+   watches it run.
+   AN IDENTIFIER AND NOT AN INTERFACE, deliberately: Web IDL §3.7.2's legacy factory functions reach here under
+   names no interface has (`Image`, `Audio`, `Option`), and each is exactly as much a statement that this engine
+   gives that global name construct steps. The static reader's set holds them for the same reason.
+   ONE ENTRY PER IDENTIFIER AND NOT ONE PER REALM — every realm this agent builds mints its own interface
+   objects, and what is recorded is a fact about the ENGINE. That is also the limit of what it can be asked, and
+   it is stated at the consumer rather than left for a reader to notice.
+   THE NAMES ARE COPIED. Every caller today hands a string literal or a static table cell, but this entry's
+   contract is that `name` NAMES THE FUNCTION OBJECT — it is consumed by the mint and nothing says it outlives
+   the call — so storing the pointer would place a lifetime requirement on every existing call site after the
+   fact, which is how a table comes to hold a pointer into something that has gone. */
+#if APICLIENT_DEV
+static char **g_ctor_minted;
+static int    g_ctor_minted_n, g_ctor_minted_cap;
+
+static bool idl_construct_minted(const char *id)
+{
+    int i;
+
+    for (i = 0; i < g_ctor_minted_n; i++)
+        if (strcmp(g_ctor_minted[i], id) == 0) return true;
+    return false;
+}
+
+static void idl_note_construct_mint(const char *id)
+{
+    char *copy;
+
+    if (idl_construct_minted(id)) return;
+    if (g_ctor_minted_n == g_ctor_minted_cap) {
+        int cap = g_ctor_minted_cap ? g_ctor_minted_cap * 2 : 64;
+        char **t = realloc(g_ctor_minted, (size_t)cap * sizeof *t);
+        CHECK(t != NULL, "idl: OOM recording a §3.7.1 constructor mint — this record is what a column's "
+                         "constructor-axis declaration is checked against, and a short one certifies a name "
+                         "nothing minted");
+        g_ctor_minted = t;
+        g_ctor_minted_cap = cap;
+    }
+    copy = strdup(id);
+    CHECK(copy != NULL, "idl: OOM copying a §3.7.1 constructor mint's identifier");
+    g_ctor_minted[g_ctor_minted_n++] = copy;
+}
+#endif
+
 /* The same mint for a member reached with `new` — Web IDL §3.7.1 Interface object's `length`, which is the
    same sentence §3.7.7 states over the effective overload set for CONSTRUCTORS. JS_CFUNC_step_ctor differs
    only in how the receiver slot carries new.target; the pool entry and its name are the same thing. */
@@ -8316,6 +8368,11 @@ JSValue idl_step_constructor(JSContext *ctx, const char *name, int stepid)
            "object's construct steps run no implementation-check, and the receiver slot of a "
            "JS_CFUNC_step_ctor call carries new.target rather than a `this` value, so the brand would be "
            "asked of the wrong object");
+#if APICLIENT_DEV
+    /* THE RECORD ABOVE, WRITTEN WHERE THE DECISION IS MADE — after the checks, so a name no caller could have
+       stated cannot enter it, and before the mint, which cannot fail in a way that unmakes this. */
+    idl_note_construct_mint(name);
+#endif
     return idl_mint_step(ctx, name, stepid, JS_CFUNC_step_ctor, IDL_SEC_NONE);
 }
 
@@ -8495,6 +8552,106 @@ void idl_install_covers_column(JSContext *ctx, JSValueConst target, const char *
 #endif
 }
 
+/* THE SAME COLUMN'S CONSTRUCTOR AXIS — see idl_args.h for what this declares and why the loop cannot be read
+   for it. What is asserted here is the PARTITION the caller states: each name the column holds is a property of
+   the object the loop installed onto, and it went through Web IDL §3.7.1 Interface object's declared
+   constructor mint exactly when `refuses` does not name it.
+   THE PRESENCE LOOKUP IS THIS CLAIM'S OWN PRECONDITION AND NOT A SECOND COPY OF THE COVERAGE AXIS. The record
+   the mint keeps is a fact about the AGENT — an identifier minted in some realm — and this claim is about an
+   interface object on THE TARGET IN FRONT OF IT, so a name with no property here carries no interface object
+   for a construct-axis claim to be about and crediting it would be the false COMPLETE in a second costume. It
+   is the same OWN and no-user-code lookup idl_install_covers_column performs, for the same two reasons: a
+   member is filed under the interface its TARGET is, and the object a realm's own install loop wrote on is one
+   the engine built, so the query may not run a trap in a C activation with no flow base under it.
+   WHAT IS NOT LOOKED AT IS THE OBJECT'S OWN [[Construct]], because nothing can: both populations are minted
+   with a constructing cproto and answer `JS_IsConstructor` true, and CALLING one to find out would run a
+   sixteen-step algorithm from inside an assert. The engine's statement that an identifier has §3.7.1's
+   construct steps is the MINT, so the mint is what is recorded and what is read back.
+   NAMED RESIDUAL — THE AUDIT DOES NOT YET READ THIS CALL, and the code is CORRECT for what it does rather than
+   unfinished: the assertion holds per realm and fires at the origin today. WHAT IS NOT COVERED: this engine's
+   own Web IDL gap audit still abstains over every name a filtered column hands to a shared constructing mint, so
+   such a name is neither charged as a stray construct nor credited as constructing. WHAT THE NEXT DIFF BUILDS:
+   a form in engine/idl_installed.mjs beside COVERS_FORM that reads this call's column and its `refuses`, so
+   that `constructsForwarded` resolves for a declared column and engine/idlgen.mjs's `strayForwarded` stops
+   holding those names back — matched to the loop by the install's own arguments, exactly as COVERS_FORM is, so
+   a declaration no minting loop answers to stays an error. HOW ITS ABSENCE WOULD SHOW: that audit's BLIND-SPOT
+   band still counts the names of a column this engine has now declared, so its FINDINGS remain a floor by that
+   much while the C beneath them is already checked. */
+void idl_install_constructs_column(JSContext *ctx, JSValueConst target, const char *const *column,
+                                   int n, size_t stride, const char *const *refuses, int n_refuses,
+                                   const char *why)
+{
+    DCHECK(why != NULL,
+           "a constructor-axis column declaration carries no reason — the reason is the sentence saying why "
+           "this loop's row filter cannot move a name across the partition, and without it the declaration is "
+           "an assertion of itself");
+    DCHECK(column != NULL, "a constructor-axis column declaration named no column");
+    DCHECK(n > 0, "a constructor-axis column declaration named an empty column — a loop that mints nothing has "
+                  "no partition to state");
+    DCHECK(stride >= sizeof(const char *),
+           "a constructor-axis column declaration strides by less than the pointer it strides over, so it reads "
+           "one row's name out of two rows' bytes");
+    DCHECK(n_refuses >= 0 && (refuses != NULL) == (n_refuses > 0),
+           "a constructor-axis column declaration's refusal list and its count disagree — a NULL list with a "
+           "count would read names out of nothing, and a list with no count states nothing at all; a column "
+           "where every name constructs passes NULL and 0");
+    DCHECK(JS_IsObject(target), "a constructor-axis column declaration was made against something that is not "
+                                "an object, so there is nothing the loop can have installed on");
+#if APICLIENT_DEV
+    {
+        int i, j;
+
+        /* THE REFUSALS ARE CHECKED BACK AGAINST THE COLUMN FIRST. A refusal for a name the column does not hold
+           is a claim about a loop that never sees it, and it is the shape that rots silently: the row leaves
+           the table, the exception outlives it, and the declaration goes on excusing nothing. */
+        for (j = 0; j < n_refuses; j++) {
+            int found = 0;
+            CHECK(refuses[j] != NULL,
+                  "a constructor-axis column declaration's refusal list holds a NULL where a name is");
+            for (i = 0; i < n && !found; i++) {
+                const char *cell;
+                memcpy(&cell, (const unsigned char *)column + (size_t)i * stride, sizeof cell);
+                if (cell != NULL && strcmp(cell, refuses[j]) == 0) found = 1;
+            }
+            DCHECKF(found,
+                    "%s is declared to carry Web IDL §3.7.1's throw instead of construct steps, and the column "
+                    "this declaration is about does not hold that name at all — the refusal outlived the row",
+                    refuses[j]);
+        }
+        for (i = 0; i < n; i++) {
+            const char *name;
+            JSAtom a;
+            int has, refused = 0;
+
+            /* the column is a FIELD of a wider row, so it is read by stride out of the row's bytes — through
+               memcpy, because a pointer read out of a byte cursor is the strict-aliasing violation that passes
+               at -O0 and segfaults a directory at -O1 */
+            memcpy(&name, (const unsigned char *)column + (size_t)i * stride, sizeof name);
+            CHECK(name != NULL,
+                  "a constructor-axis column declaration's column holds a NULL where a member name is");
+            for (j = 0; j < n_refuses; j++)
+                if (strcmp(name, refuses[j]) == 0) { refused = 1; break; }
+            a = JS_NewAtom(ctx, name);
+            CHECK(a != JS_ATOM_NULL, "a covered interface object's name could not be interned");
+            has = JS_GetOwnPropertyNoUserCode(ctx, NULL, target, a);
+            JS_FreeAtom(ctx, a);
+            DCHECKF(has == 1,
+                    "%s: this column's constructor-axis declaration is about the interface object under this "
+                    "name and the target does not answer with one, so there is nothing for it to be about",
+                    name);
+            DCHECKF(idl_construct_minted(name) == (refused == 0),
+                    "%s: the loop's row filter moved this name across Web IDL §3.7.1 Interface object's "
+                    "partition — it %s reach the declared constructor mint and this declaration says it %s, so "
+                    "what a page gets from `new %s()` is the opposite of what this file states about it",
+                    name, refused ? "DID" : "did NOT", refused ? "does not" : "does", name);
+        }
+    }
+#else
+    (void)ctx; (void)target; (void)column; (void)n; (void)stride;
+    (void)refuses; (void)n_refuses; (void)why;
+#endif
+}
+
 /* THE POOL IS RELEASED IN TWO HALVES, BECAUSE THE TWO THINGS IT HOLDS HAVE DIFFERENT LIFETIMES and one call
  * could only ever get one of them right. It was one call, it ran BEFORE the frontier and before the runtime in
  * two of the three hosts, and both halves were wrong there at once:
@@ -8625,6 +8782,18 @@ void idl_args_pool_free(void)
        through its own entry rather than by touching the statics from here, so the one file that owns the table
        owns its lifetime. */
     idl_lenient_setters_free();
+#if APICLIENT_DEV
+    /* AND THE §3.7.1 CONSTRUCTOR-MINT RECORD, which is the same kind of table again — malloc'd, holding no
+       JSValue and no atom, and its entries naming a previous agent's identifiers. The strings are COPIES this
+       file made (see idl_note_construct_mint), so they go back with it. */
+    {
+        int m;
+        for (m = 0; m < g_ctor_minted_n; m++) free(g_ctor_minted[m]);
+    }
+    free(g_ctor_minted);
+    g_ctor_minted = NULL;
+    g_ctor_minted_n = g_ctor_minted_cap = 0;
+#endif
     g_sealed = false;
     g_sealed_at = 0;
 }

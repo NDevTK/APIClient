@@ -3008,4 +3008,37 @@ void idl_install_covers_column(JSContext *ctx, JSValueConst target, const char *
 #define IDL_NAME_COLUMN(tbl, field) \
     ((const char *const *)&(tbl)[0].field), (int)(sizeof(tbl) / sizeof((tbl)[0])), sizeof((tbl)[0])
 
+/* THE SAME COLUMN'S CONSTRUCTOR AXIS — the counterpart of the coverage declaration above, and the OTHER thing a
+   row-filtered loop hides. The two are different questions and the one above answers only the first:
+   Web IDL §3.7 Interfaces puts a property on the realm's global object for every exposed interface, and
+   Web IDL §3.7.1 Interface object gives that object construct steps only where the interface declares a
+   constructor operation — "Interface objects whose interfaces are not declared with a constructor operation
+   will throw when called, both as a function and as a constructor". So an interface object that CONSTRUCTS and
+   one carrying that throw are the SAME answer to idl_install_covers_column and OPPOSITE answers to `new`, and a
+   loop minting its column's interface objects through a shared helper leaves the second question unsaid. A
+   reader of the source cannot recover it for the same reason it cannot recover the first: the `continue`
+   deciding which cells reach the mint is C rather than a declaration.
+   SO THE ENGINE STATES THIS RESULT TOO, AND IT IS A PARTITION RATHER THAN A CLAIM ABOUT ALL OF THEM: every name
+   the column holds reached §3.7.1's declared constructor mint, EXCEPT the ones `refuses` names, which carry the
+   throw instead. A uniform column passes NULL and 0, which is the ordinary case and not a weaker declaration.
+   `JS_IsConstructor` IS NOT THE DISCRIMINATOR AND MUST NOT BE REACHED FOR: both populations are minted with a
+   constructing cproto, so it answers true for the interface object that runs an algorithm and for the one whose
+   whole body is §3.7.1's TypeError. What separates them is WHICH MINT the identifier went through, which is a
+   fact about this engine and not a property anything can ask the finished object — so that is what is recorded
+   and that is what is checked. THE RECEIVER OF `new` IS NEVER ASSERTED ON, here or anywhere near here: a page
+   supplies it, §3.7.1 answers it with a TypeError, and an abort would hand a page a switch on this engine.
+   THE TWO SIDES ARE COMPUTED BY DIFFERENT CODE, which is what makes it a check rather than a restatement. This
+   declaration is a static claim about a column; the other side is the set of identifiers idl_step_constructor
+   was actually handed. A filter that STOPS minting a name therefore fires here naming that name — the direction
+   nothing else can see, because a mint's own precondition guard catches a name that ARRIVES and is silent about
+   one that stops arriving, and because that is exactly the direction in which a credited column becomes a false
+   COMPLETE: the audit reports an interface constructible and the page gets a TypeError.
+   AND `refuses` IS CHECKED BACK AGAINST THE COLUMN, so a refusal naming a name the column no longer holds is an
+   error rather than a line nobody revisits — the two-sidedness idl_members_excluded has, for the same reason.
+   `why` is the sentence that says why the loop's filter cannot move a name across that partition unseen. See
+   idl_args.c. */
+void idl_install_constructs_column(JSContext *ctx, JSValueConst target, const char *const *column,
+                                   int n, size_t stride, const char *const *refuses, int n_refuses,
+                                   const char *why);
+
 #endif
