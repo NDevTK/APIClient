@@ -9279,19 +9279,21 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
  * one flow has ever completed" is a strong enough claim about a scheduler that it should not be a subtraction
  * anyone has to trust.
  *
- * AND ITS COMPANION IN THE SAME CENSUS IS BIMODAL, WHICH MAKES A RUN'S HEALTH READABLE WITHOUT A LONG RUN.
- * Measured over every log on disk carrying an `@COLD` line — 145 runs, both census schemas, the older one
- * spelling the frontier size `flows` where the newer says `live`, which is a trap worth naming because a
- * reader keyed on one silently drops the whole population that used the other:
+ * AND ITS COMPANION IN THE SAME CENSUS IS A GAUGE THAT DECAYS, SO COMPARING IT ACROSS RUNS OF DIFFERENT
+ * LENGTH COMPARES POSITIONS IN A TRANSIENT. `framed / live` reads EXACTLY 1.000 at the first census of every
+ * run ever measured — healthy and broken alike — because a flow that has just started holds a frame. It then
+ * decays at a rate that does differ: measured, census 1 / 2 / 5 / 20, one healthy run 1.000 / 0.480 / 0.289 /
+ * 0.413 and another 1.000 / 0.857 / 0.517 / 0.264, against a broken one 1.000 / 0.970 / 0.965 / 0.892.
  *
- *     framed / live   at the TERMINAL census      `finished` at that census
- *     0.173 .. 0.551  (n=9)                        29,550 .. 80,229
- *     0.704 .. 1.000  (n=136)                      0
+ * THIS PARAGRAPH FIRST CLAIMED A CLEAN GAP AT THE TERMINAL CENSUS — 0.173..0.551 for the nine runs that ever
+ * finished a flow against 0.704..1.000 for the other 136, "nothing between" — AND THAT WAS THE TRANSIENT
+ * READ AS A PROPERTY. The broken population is dominated by SHORT runs, a short run's terminal census IS an
+ * early census, and the separation was mostly run length. Corrected by matching the index: over the 43 runs
+ * that reach census 20, healthy is 0.173..0.796 and broken 0.788..0.947, which OVERLAP. Eight of the nine
+ * healthy runs sit at or below 0.552 and all 34 broken at or above 0.788, so this is a strong indicator with
+ * one known false positive at the boundary — not a gap, and not a test any single run passes or fails.
  *
- * Nothing lands between 0.551 and 0.704. The two are NOT independent — a flow holding a frame has by
- * definition not finished — so the correlation is partly definitional and is not the finding. THE FINDING IS
- * THE GAP: a definitional link alone would give a continuum, and this is two clusters with empty space
- * between them, which says the frontier is in one of two REGIMES rather than on a spectrum.
+ * WHAT SURVIVES IS THE COMPARISON AT A MATCHED INDEX, AND ONLY BETWEEN RUNS THAT BOTH REACHED IT.
  *
  * WHY THIS ROW AND NOT `deepest` OR `domHeadEntries`: `deepest` is a high-water mark and says nothing on a
  * short run (see its own note above). `domHeadEntries` was proposed as the discriminator and DOES NOT
@@ -9300,8 +9302,10 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
  * SUM OVER EVERY LIVE FLOW (cold.c's `out->dom_head_entries += f->dom_n`) and not the running flow's own
  * delta, which is how it came to be read as a per-flow quantity.
  *
- * The derivation, so a reader gets today's answer rather than this one: read `framed`, `live` (or `flows`)
- * and `finished` from the LAST `@COLD` line of a log, all three from that ONE line, and divide.
+ * THE DERIVATION, so a reader gets today's answer rather than this one: read `framed`, `live` (the OLDER
+ * schema spells it `flows`, and a reader keyed on one silently drops the whole population that used the
+ * other) and `finished` from the SAME `@COLD` line, at the SAME census index in every log compared, and
+ * discard any log that did not reach that index.
  *
  * `g_deepest` — the highest program index this DOCUMENT has ever compiled, across every flow. The progress
  * line's `script` is the CURRENT flow's cursor, which says what the flow holding the thread is doing and
