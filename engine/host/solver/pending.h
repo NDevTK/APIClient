@@ -400,10 +400,21 @@ int  pending_blocked(JSValueConst reg);
    without the kind it made the register "ready", flow_step called the reply delivery, and it swap-removed
    the answer and pushed it through a `resolve` capability the record does not have — the asking flow then
    parked at the call site that asked, forever, with its answer converted into somebody's fetch reply.
-   THAT IS WHY THE SMOKE HOST PAYS ONLY AT A STALL. The shape is unreachable while the host is asked only when
-   the whole frontier is blocked (the asking machine consumes its answer on the very next step), and it is
-   reachable the moment the host pays per slice — which is the schedule §scheduler actually requires, and which
-   run_scheduler had to leave switched off because of this line.
+   AND THE PAYMENT THAT WAITED ON IT IS ON: run_scheduler pays the provider UNCONDITIONALLY after every
+   engine_sched_step, which is the schedule §scheduler requires and the one the extension's bridge has always
+   spoken. RETIRED, and stated rather than deleted because a reader who re-derives it will re-introduce it:
+   this paragraph used to end "THAT IS WHY THE SMOKE HOST PAYS ONLY AT A STALL … which run_scheduler had to
+   leave switched off because of this line", and that was an argument for a stall-only seam resting on the
+   defect the sentences above have just described as FIXED. The reasoning was sound and its conclusion is
+   spent: the shape is unreachable at a stall because the asking machine consumes its answer on the very next
+   step, so a stall-only host could not meet it — and a per-slice host CAN, which is why the predicate had to
+   ask the kind BEFORE the seam could move, not why the seam had to stay put. Both halves landed; solver/
+   engine.h's `engine_set_provider` and solver/engine.c's payment say so from the other side, and
+   host/test_forced.c and host/wpt_runner.c pay on that schedule too.
+   WHAT WOULD SHOW THIS GOING BACKWARDS, since a retired argument is worth no more than the observation that
+   retires it: an answered HOSTREQ reaching flow_deliver_one_reply. Its answer is TAKEN at the call site that
+   asked, so a delivery that swap-removes it leaves the asking flow parked for ever — the state the paragraph
+   above is about. Nothing here may be read as licence to drop the kind test.
    WHAT IS NOT COVERED: this predicate and five others in this header — `pending_count_kind`,
    `pending_owed_replies`, `pending_deliverable_count`, `pending_outstanding` and `pending_outstanding_kind` —
    still WALK, over the same register that only grows. This one is the hottest of the six: flow_step asks it at
