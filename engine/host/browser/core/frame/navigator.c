@@ -110,7 +110,19 @@
     X(WEBDRIVER,             "webdriver",            IDL_EXPOSED)                  \
     /* NavigatorDeviceMemory — Device Memory §3, and the mixin is `[SecureContext]` */ \
     X(DEVICE_MEMORY,         "deviceMemory",         IDL_SECURE_CONTEXT)           \
-    /* partial interface Navigator — Pointer Events §12 */                         \
+    /* partial interface Navigator — Pointer Events 4 §6 "Extensions to the Navigator interface".        \
+       THE NAME, THE NUMBER AND THE QUOTED TITLE ARE ON ONE LINE ON PURPOSE: a resolver reads a          \
+       standard's name from the words before the section sign and a title from the quoted run after      \
+       it, so a wrap between any two of them separates the citation from its anchor.                     \
+       THIS SAID `§12`, AND THAT SECTION IS "Wheel Events and interfaces" — it owns no member of         \
+       Navigator at all. §6 is where `maxTouchPoints` carries its own dfn and its own getter steps.      \
+       NOTHING HERE COULD HAVE CAUGHT IT AND NOTHING HERE EVER WILL. Pointer Events has no committed     \
+       corpus row and cannot get one: the edition its editors maintain is unrendered ReSpec source,      \
+       which carries a section number on no heading of either shape, so there is nothing to index.       \
+       It is a FOREIGN entry — counted, and openly never checked — and this line is what that band       \
+       costs. The other six numbers this tree writes for this standard were re-derived against the       \
+       rendered edition at the same time and are right; this was the one that was not, which is why      \
+       a band nothing judges is read entry by entry rather than trusted for being quiet. */              \
     X(MAX_TOUCH_POINTS,      "maxTouchPoints",       IDL_EXPOSED)
 
 #define NAV_ENUM_ONE(id, str, exposure) NAV_##id,
