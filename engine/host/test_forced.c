@@ -6053,14 +6053,42 @@ static int g_id_host_read, g_id_append_child;   /* declared once per agent — a
  * of the two edges rather than a literal 2. Forced multi-path execution runs the chunk in as many flows as
  * reach it, and how many that is is the scheduler's answer and never the fixture's — so `stands == 2` would be
  * a row about the frontier's shape, and `stands > retracted` is a row about the latch. */
-typedef struct { const char *tok; int stands; int retracted; } TfErrEdges;
+/* …AND WHERE THE STANDING ONES WERE REPORTED FROM, which is the half a token cannot answer and the ONLY half
+ * that can be asserted for a throw this document raises itself. `stands` says the stream announced the pair;
+ * `stands_here` says how many of those announcements carried THIS DOCUMENT'S OWN ADDRESS as the throw site.
+ * The two together are what let a row assert a document-raised error WITHOUT the address ever becoming a
+ * staged token: a staged declaration over `https://x.test/p` would cover every statement of a
+ * two-thousand-statement program, which the printer's own paragraph below refuses and rightly.
+ * IT IS A COUNT AND NOT A FLAG, so the row can say `stands_here == stands` — every announcement came from
+ * here — rather than `at least one did`, which is true the moment one flow gets it right and says nothing
+ * about the rest. It is meaningful for every token: for a chunk-staged one it reads 0, correctly, because a
+ * chunk's throw site is the chunk's address. */
+typedef struct { const char *tok; int stands; int retracted; int stands_here; } TfErrEdges;
 static TfErrEdges g_tf_err_edges[] = {
-    { "rejNOHANDLER", 0, 0 },   /* never handled — announced, never corrected */
-    { "rejTAKEBACK",  0, 0 },   /* handled a task later — announced, then corrected */
-    { "rejMUTE",      0, 0 },   /* cancelled, then handled — announced at NEITHER edge */
-    { "rejRELAPSE",   0, 0 },   /* corrected and then announced AGAIN — the latch's rising edge */
-    { "rejTWICE",     0, 0 },   /* two occurrences, one taken back — the row still stands, so no correction */
+    { "rejNOHANDLER", 0, 0, 0 },   /* never handled — announced, never corrected */
+    { "rejTAKEBACK",  0, 0, 0 },   /* handled a task later — announced, then corrected */
+    { "rejMUTE",      0, 0, 0 },   /* cancelled, then handled — announced at NEITHER edge */
+    { "rejRELAPSE",   0, 0, 0 },   /* corrected and then announced AGAIN — the latch's rising edge */
+    { "rejTWICE",     0, 0, 0 },   /* two occurrences, one taken back — the row still stands, so no correction */
+    /* …AND THE ONE THIS DOCUMENT RAISES ITSELF, which no chunk can stage. DOM §4.2.3's move step 24.3 enqueues
+       a reaction — that section holds nine lists and exactly one of them reaches step 24, whose single
+       sub-list has three items, so the sub-number is unambiguous. And HTML §4.13.6's
+       `enqueue a custom element callback reaction` list, step 3, synthesizes a
+       disconnected-then-connected body for a class
+       declaring no `connectedMoveCallback`. THE LIST IS NAMED BECAUSE §4.13.6 HOLDS EIGHT OF THEM and four
+       have a step 3, so a bare sub-number there is the unfalsifiable kind rather than the wrong kind.
+       So `x-throwmoved`'s `disconnectedCallback` runs on `moveBefore` and
+       its throw is CORRECT behaviour rather than a defect. The token is the fixture's own — the string this
+       document throws — and never a word of any engine message, which is the line the printer's paragraph
+       draws and the side of it a fixture-owned marker sits on. */
+    { "synmove",      0, 0, 0 },
 };
+/* THIS DOCUMENT'S OWN ADDRESS, TAKEN FROM THE ONE CALL THAT ESTABLISHES IT rather than spelled a sixth time.
+   `https://x.test/p` is already a literal at several sites and one of their comments complains about it, so a
+   fresh copy here would be a seventh answer to `where is this document` that could drift from the one the
+   agent was actually built with. Written at tf_agent_init and read only by the edge counter below. */
+static const char *g_tf_doc_url;
+
 /* THE ROW FOR ONE TOKEN, ASSERTED PRESENT: a probe that asked about a token no edge is counted for would read
    0 for ever with nothing to say the question was never wired up, which is the defect the table exists to
    avoid rather than to reproduce. */
@@ -6075,11 +6103,25 @@ static const TfErrEdges *tf_err_edges(const char *tok) {
 /* EXHAUSTIVE OVER THE EDGE, like the printer below it and for the same reason: a third edge added to
    ResultPageErrorEdge is a fact this census has not been told which column to put in, and -Wswitch is what
    makes that the compiler's problem rather than a silently uncounted announcement. */
-static void tf_err_edge_seen(const char *msg, ResultPageErrorEdge edge) {
+static void tf_err_edge_seen(const char *msg, const char *filename, ResultPageErrorEdge edge) {
+    /* THE ADDRESS THIS FIXTURE COMPARES AGAINST HAS TO EXIST BEFORE A PAGE ERROR CAN BE COUNTED, and a NULL
+       here would make `stands_here` read 0 for a document-raised throw that was reported perfectly — the
+       defaulted-field defect one column over, turning a broken order of initialisation into a plausible
+       datum. tf_agent_init runs during setup and every program of this document runs after it. */
+    DCHECK(g_tf_doc_url != NULL,
+           "a page error was counted before this fixture knew its own document's address — tf_agent_init "
+           "writes it and nothing can raise a page error before the agent exists, so this is an ordering "
+           "change that would silently make every document-raised throw read as raised somewhere else");
     for (unsigned i = 0; i < sizeof(g_tf_err_edges) / sizeof(g_tf_err_edges[0]); i++) {
         if (!strstr(msg, g_tf_err_edges[i].tok)) continue;
         switch (edge) {
-        case RESULT_PAGE_ERROR_STANDS:    g_tf_err_edges[i].stands++;    return;
+        case RESULT_PAGE_ERROR_STANDS:
+            g_tf_err_edges[i].stands++;
+            /* `filename` is REQUIRED and never NULL at this hook (solver/result.h asserts it at
+               result_page_error), so it is compared as it arrived rather than defaulted past. */
+            if (filename && g_tf_doc_url && !strcmp(filename, g_tf_doc_url))
+                g_tf_err_edges[i].stands_here++;
+            return;
         case RESULT_PAGE_ERROR_RETRACTED: g_tf_err_edges[i].retracted++; return;
         }
     }
@@ -6100,7 +6142,10 @@ static void tf_err_edge_seen(const char *msg, ResultPageErrorEdge edge) {
  * the error itself is still announced, still stands, still retracts. Nothing here suppresses anything. */
 static void tf_page_error(const char *msg, const char *filename, ResultPageErrorEdge edge) {
     const char *at = filename && *filename ? filename : "-";
-    tf_err_edge_seen(msg, edge);
+    /* THE COUNTER IS GIVEN `filename` AND NOT `at`, for the reason the explored ask below is: the recorded
+       pair carries §8.1.4.6's own "" for a value with no backtrace and the `-` is this line's DISPLAY token,
+       so counting with it would compare a throw site against a string no producer ever wrote. */
+    tf_err_edge_seen(msg, filename, edge);
     switch (edge) {
     case RESULT_PAGE_ERROR_STANDS:
         printf("@PAGEERR at=%s %s\n", at, msg);
@@ -6133,6 +6178,10 @@ static void tf_declare_staged_page_errors(void) {
 
 static void tf_agent_init(JSContext *ctx, const char *origin, const char *top_level_url)
 {
+    /* WHERE THIS DOCUMENT IS, RECORDED WHERE IT IS DECIDED — the page-error edge counter reads it to say which
+       standing announcements carried this document's own address as their throw site, and deriving it from the
+       argument the agent is actually built with is what stops it becoming another copy of the literal. */
+    g_tf_doc_url = top_level_url;
     static const IdlArgType HR_ARGS[1] = { IDL_DOMSTRING };
     static const IdlArgType ONE_STR[1] = { IDL_DOMSTRING };
 
@@ -11709,7 +11758,10 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "/api/movebeforethrow",
           "HierarchyRequestError%3AHierarchyRequestError%3ANotFoundError%3AHierarchyRequestError" },
         { "/api/movebeforece",    "ispreserved" },   /* connectedMoveCallback ONLY — not the c/d pair */
-        /* §4.13.6 enqueue step 3 — the SAME move for a class with no connectedMoveCallback. `pair` is step
+        /* §4.13.6's `enqueue a custom element callback reaction` list, step 3 — the ALGORITHM is named
+           because that section holds EIGHT lists and four of them have a step 3, so a bare sub-number there
+           is the unfalsifiable kind (every candidate reading confirms it) rather than the wrong kind. The
+           SAME move for a class with no connectedMoveCallback. `pair` is step
            3.4's synthesis in order (append 'c', move 'd' then 'c'); `none` is step 3.3's return, which
            enqueues nothing; `abandon` is 3.4.1's rethrow ending the synthesized callback, so 3.4.2 does not
            run and the trace stops at 'd' — 'cdc' there would be two queued reactions instead of one. */
@@ -11862,6 +11914,59 @@ static int probes_eval(const char *js, Probe *out, int cap) {
      * that survives the multiplication: `stands == retracted` for a pair every report of which was taken back,
      * `stands > retracted` for one that was announced again after a correction, `retracted == 0` for one whose
      * row never fell to zero. A literal 2 would be a row about the frontier's shape wearing the latch's name. */
+    /* THE ONE PAGE ERROR THIS DOCUMENT RAISES ITSELF, ASSERTED WHERE IT IS RATHER THAN RELOCATED.
+     *
+     * `x-throwmoved`'s `disconnectedCallback` throws on `moveBefore`, and that is the STANDARD's own
+     * compatibility default rather than a defect: DOM §4.2.3's move step 24.3 enqueues a reaction, and
+     * HTML §4.13.6's `enqueue a custom element callback reaction` list, step 3 — it holds eight lists,
+     * so the algorithm is named rather than the sub-number left bare — synthesizes a disconnected-then-
+     * connected body for a class declaring no
+     * `connectedMoveCallback`, and §4.13.2.1 says by default a custom element resets its state as if removed
+     * and re-inserted, with preserving it the author's opt-in. So the throw is correct and the fixture owes it
+     * an assertion, not a repair.
+     * IT MAY NOT BE MOVED INTO A STAGED CHUNK, and this is measured rather than argued. `stages_page_error`
+     * covers an ADDRESS, and the only address that could cover this throw is the document's own — which the
+     * printer's paragraph refuses, because it would swallow every statement of a two-thousand-statement
+     * program. The remaining relocation is into a chunk, and across five runs at the artifact stamped
+     * 1d666bda every run printed exactly four page-error lines with the identical split: THREE staged
+     * DECLARATIONS (cethrow.js, rejthrow.js, rejretract.js), printed from the table whatever happened, and
+     * exactly ONE observed announcement — this one. Not one of the three staged chunks has ever raised its
+     * error, and the rows that assert them — `rej-retract`, `rej-mute`, `rej-relapse`, `rej-count`,
+     * `rej-nohandler`, `lazy` — read 0 in every run. Relocating this throw would move the only working
+     * observation into a population that has produced none, and by the declaration's own contract that is not
+     * a quiet loss: the chunk would carry a claim it does not meet, making a FOURTH row of a kind three are
+     * already in.
+     * WHY THE COUNT IS `> 0` AND NOT `== 1`: this table's own paragraph settles it — the counts are aggregated
+     * over every flow that ran the statement, and how many that is is the scheduler's answer and never the
+     * fixture's, so a literal would be a row about the frontier's shape. It reads 1 in all five runs measured
+     * and that is a fact about those runs, not a claim this row is entitled to make.
+     * AND THE ADDRESS IS THE HALF THE TOKEN CANNOT CARRY. `stands_here == stands` says every announcement of
+     * this pair named THIS DOCUMENT as the throw site, which is what `report_exception_position`'s derivation
+     * from the thrown value's own backtrace is FOR — a regression that reports a document throw from nowhere,
+     * or from a chunk, passes a token check and fails this one. */
+    const TfErrEdges *e_move = tf_err_edges("synmove");
+    const char *movethrow_why = NULL; int movethrow_tt = 1;
+    fold_row(&movethrow_tt, &movethrow_why, e_move->stands > 0,
+             "NOT REACHED: the stream never announced `synmove`, so `x-throwmoved`'s disconnectedCallback "
+             "did not throw on `moveBefore` — DOM §4.2.3 step 24.3 enqueues the reaction and HTML §4.13.6's "
+             "`enqueue a custom element callback reaction` list, step 3, synthesizes the disconnected body "
+             "for a class with no `connectedMoveCallback`, "
+             "so an absent announcement is the move failing to run the reaction, never the move preserving "
+             "state it is not asked to preserve");
+    fold_row(&movethrow_tt, &movethrow_why, e_move->retracted == 0,
+             "the stream printed a CORRECTION for `synmove` — an uncaught throw out of a custom-element "
+             "reaction is not a rejection and has no handler that could arrive later, so a retraction here "
+             "is this engine withdrawing a report the page's own code made");
+    fold_row(&movethrow_tt, &movethrow_why, e_move->stands_here == e_move->stands,
+             "`synmove` was announced from an address that is NOT this document's own — the throw is raised "
+             "in a class this document defines, so §8.1.4.6 \"Runtime script errors\"' throw site is this "
+             "document and a different one means the position was derived from something other than the "
+             "thrown value's own backtrace");
+    fold_row(&movethrow_tt, &movethrow_why, tf_err_listed(js, "pageErrors", "synmove"),
+             "the stream announced `synmove` and the result document does not carry it in `pageErrors` — the "
+             "two routes disagree about an error that stands, and a consumer reading only the document would "
+             "be told this page raised nothing");
+
     const TfErrEdges *e_take = tf_err_edges("rejTAKEBACK");
     const TfErrEdges *e_mute = tf_err_edges("rejMUTE");
     const TfErrEdges *e_lapse = tf_err_edges("rejRELAPSE");
@@ -12986,6 +13091,10 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "rej-count", rejcount_tt, "/chunk/rejretract.js", SESS_EXPLORE, rejcount_why },
         { "rej-count-doc", rejcountdoc_tt, "/chunk/rejretract.js", SESS_EXPLORE, rejcountdoc_why },
         { "rej-nohandler", rejnone_tt, "/chunk/rejthrow.js", SESS_EXPLORE, rejnone_why },
+        /* THE UNSTAGED ONE, AND ITS ADDRESS COLUMN IS THE DOCUMENT'S BECAUSE THAT IS WHERE IT IS RAISED —
+           the five rows above name a chunk, and naming one here would be the relocation this row exists to
+           refuse. See its fold_row block for why staging it is measured to be wrong. */
+        { "move-throw", movethrow_tt, "https://x.test/p", SESS_EXPLORE, movethrow_why },
         { "pushfork", pushfork_tt, "/api/pushfork", SESS_EXPLORE, pushfork_why },
         { "mapfork", mapfork_tt, "/api/mapfork", SESS_EXPLORE, mapfork_why },
         { "fefork", fefork_tt, "/api/fefork", SESS_EXPLORE, fefork_why },
