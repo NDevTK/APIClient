@@ -9,6 +9,19 @@
 // The manifest records, per resource: absolute URL, HTTP status, content-type, byte length, sha256, and the
 // UTC instant it was read. That triple (url, date, hash) is the whole point: a census row that changes
 // against an unchanged hash is the engine; against a changed hash it is the site.
+//
+// AND THE DOCUMENT'S `Content-Security-Policy`, WHICH IS PART OF WHAT WAS SERVED AND WAS THE ONE PART THIS
+// RECORD THREW AWAY. The header was already in hand — `get` writes the whole response header block to a dump
+// and reads `content-type` out of it — and the policy beside it was dropped, so a site whose CSP changed
+// looked identical here to one whose CSP did not, which is the single class of change this file exists to
+// separate: CLAUDE.md §@S(a) measures EVERY breakout against the document's actual policy, so a policy edit
+// alone can flip every security verdict on a row while the bytes, the status and every hash hold.
+// IT IS ALSO WHAT A FAITHFUL REPLAY NEEDS AND DOES NOT YET GET — see the residual at `rec.csp` below.
+//
+// THE FIELD IS ALWAYS WRITTEN, `""` FOR A RESPONSE THAT STATED NONE, because absent and empty are different
+// facts and a reader must not merge them: `""` is "this response carried no policy", and ABSENT is "this row
+// was captured before this field existed and says nothing about the policy either way". A row re-mirrored
+// after this diff gains the field; the rows already in provenance.json keep neither claim.
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -41,13 +54,33 @@ function get(url) {
   const final = (tail.match(/@@FINAL@@(.*)/) || [, url])[1];
   const code = Number((tail.match(/@@CODE@@(\d+)/) || [, 0])[1]);
   const buf = Buffer.from(s.slice(0, mF), 'binary');
-  let ct = '';
+  let ct = '', csp = '';
   try {
     const h = readFileSync(hdr, 'utf8');
     const all = [...h.matchAll(/^content-type:\s*(.*)$/gim)];
     ct = all.length ? all[all.length - 1][1].trim() : '';
+    /* THE FINAL RESPONSE'S BLOCK AND NOT THE WHOLE DUMP. `-L` writes one header block per hop, and a proxied
+       run writes the tunnel's `200 Connection Established` block ahead of all of them, so a match taken over
+       the dump is a match against whichever hop happened to state a policy — and a redirect's CSP governs the
+       redirect, never the document that was finally served. The `content-type` read above is deliberately NOT
+       moved onto this block: it answers correctly today for every mirrored row (checked against the recorded
+       `contentType`), and narrowing it would change a value already frozen in provenance.json for a reason
+       that has nothing to do with this field. */
+    const hops = h.split(/^HTTP\/\S+ /m);
+    /* Fetch §2.2.2 "get a header name name from a header list list": the values of EVERY header with this
+       name, in order, joined by 0x2C 0x20 — which core/fetch/headers.h implements with that exact join and
+       which for CSP §2.2 "Policies" is precisely a policy LIST, U+002C being its delimiter. So two
+       `Content-Security-Policy` headers stay TWO INDEPENDENTLY ENFORCED POLICIES rather than collapsing to
+       the last one, which is the direction that matters: a page narrowed by a second policy would otherwise
+       replay as a page that never sent it.
+       `-Report-Only` IS EXCLUDED BY THE ANCHOR, deliberately and not incidentally: core/frame/
+       navigation_params.c does not read it either ("every policy this engine parses has disposition
+       ENFORCE"), so capturing it would put a policy into the record that nothing enforces and that a reader
+       would take for one that does. */
+    csp = [...hops[hops.length - 1].matchAll(/^content-security-policy:[ \t]*(.*)$/gim)]
+      .map(m => m[1].trim()).join(', ');
   } catch { }
-  return { buf, final, code, ct };
+  return { buf, final, code, ct, csp };
 }
 const sha = (b) => createHash('sha256').update(b).digest('hex');
 const now = () => new Date().toISOString();
@@ -66,9 +99,23 @@ for (const [id, url, stack] of rows) {
   if (doc.err || !doc.buf) { put({ id, stack, requestedUrl: url, error: doc.err || 'no body', fetchedAt: now() }); console.log(id, 'FAILED', doc.err); continue; }
   const html = doc.buf.toString('utf8');
   writeFileSync(join(dir, 'index.html'), doc.buf);
+  /* THE DOCUMENT'S POLICY, AND ONLY THE DOCUMENT'S. HTML §7.1.7 "Policy containers" gives a policy container
+     to a DOCUMENT; a subresource's own `Content-Security-Policy` governs nothing about the page that loaded
+     it, so a `csp` on a `resources` entry would be a field whose only possible reading is the wrong one.
+     NAMED RESIDUAL — this is CAPTURED and not yet REPLAYED. serve-faithful.mjs serves the document with
+     `content-type` alone, so a mirrored run still reaches the engine with no policy and every @S finding on
+     it is judged under "no CSP" — which by CLAUDE.md §A-SHAPE-STATES-TWO-FACTS is read as the positive
+     statement that the policy allowed the vector. Replaying it is NOT a one-line `writeHead` addition and
+     that is why it is not here: this server rewrites every script's ORIGIN (`/_m/<host><path>`), and a
+     policy's source expressions name origins too, so a verbatim replay judges the rewritten scripts against
+     the ORIGINAL hosts — for a `script-src` that names hosts without `'self'`, every mirrored script is then
+     blocked and the fixture runs no bundle at all. The next diff is the source-expression rewrite that
+     `localize()` already performs for URLs, applied to the policy's host-sources. HOW ITS ABSENCE SHOWS: a
+     mirrored document whose captured `csp` is non-empty produces @S findings carrying no `cspBlocks`, so the
+     record and the report disagree about the same response in the same run. */
   const rec = {
     id, stack, requestedUrl: url, finalUrl: doc.final, status: doc.code,
-    contentType: doc.ct, bytes: doc.buf.length, sha256: sha(doc.buf), fetchedAt: now(),
+    contentType: doc.ct, csp: doc.csp, bytes: doc.buf.length, sha256: sha(doc.buf), fetchedAt: now(),
     resources: [],
   };
   /* AN ATTRIBUTE VALUE IS HTML-ESCAPED AND THE URL IS WHAT IT DECODES TO. Read raw, twitch's preload href
