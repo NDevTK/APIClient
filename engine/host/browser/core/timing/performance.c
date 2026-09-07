@@ -194,8 +194,11 @@ static void performance_install(JSContext *ctx)
 
     /* `interface Performance : EventTarget` — a real prototype chain, so `addEventListener` on the object is
        DOM §2.7's and not a second listener list. The interface declares no event handler IDL attributes of its
-       own in HR-TIME §7; the ones a browser carries (`onresourcetimingbufferfull`) are Resource Timing's
-       partial, and they arrive with the timeline that fires them. */
+       own in HR-TIME §7; the one a browser carries (`onresourcetimingbufferfull`) is Resource Timing's partial.
+       IT DOES NOT ARRIVE WITH THE PERFORMANCE TIMELINE, which this used to say: Resource Timing §3.4 gives the
+       global a resource timing buffer of its OWN, and it is that buffer filling — not the performance entry
+       buffer map — that fires the event. It arrives with the resource timing entries this build does not mint.
+       See the header, which states that decision beside the other three it was wrongly folded in with. */
     proto = event_target_derived_proto(ctx);
     idl_interface_tag(ctx, proto, "Performance");
     idl_install_accessor(ctx, proto, "timeOrigin", js_perf_time_origin, 0, -1);
