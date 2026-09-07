@@ -5028,6 +5028,30 @@ static Flow *engine_sibling_assemble(JSContext *ctx, Flow *parent, JSValue *clon
         }
         JS_FreeValue(ctx, p);
     }
+    /* AND THE ARM'S REGISTER IS THE PARENT'S ENTRY FOR ENTRY — the one property flow_step's networking-first
+       arm rests on, asserted where a fork could break it rather than left as a property of `pending_fork` that
+       no reader of that arm can see. That arm defers this flow's script sequence by the length of THIS register
+       and argues the bound is "what this flow itself asked for"; the argument holds only because a fork
+       DUPLICATES a register instead of lengthening one, so every naming an arm inherits was pushed by the
+       prefix the two arms share. A fork that pruned, merged or appended would leave that sentence true of the
+       parent and false of the arm — the arm's sequence deferred by replies no flow on its path ever asked for,
+       with nothing anywhere to say so, because a longer register is a perfectly well-formed register and every
+       entry in it delivers correctly. It is NOT a restatement of `pending_fork`'s own loop: the two sides are
+       computed by different code, and what this names is the CONSUMER's precondition rather than the
+       producer's shape, which is why it stands here and not there.
+       READ OUTSIDE THE CONDITION UNDER THE DEV GUARD because `pending_count` reads the register's `length`,
+       which INTERNS AN ATOM, and check.h forbids a side effect inside a DCHECK — the same rule and the same
+       shape as the external-script row's `pending_ready` read below. */
+#if APICLIENT_DEV
+    {
+        int par_pend_n = pending_count(parent->pending);
+        int sib_pend_n = pending_count(sib->pending);
+        DCHECK(sib_pend_n == par_pend_n,
+               "a fork left the arm's pending register a different length from its parent's — the arm is that "
+               "timeline continued, so it names the same records in the same order, and a fork that lengthens "
+               "one defers that arm's script sequence by replies no flow on its path ever asked for");
+    }
+#endif
     engine_reclaim_set(prev_reclaim);   /* the sibling is fully assembled: it may be paged like any other member */
     DCHECK(g_genfork_n == 0,
            "a fork finished with generator-state swaps still in the stash — the sibling's cloned gen_data was "
@@ -7136,12 +7160,24 @@ static int preempt_hook(int kind) {
  * CHECKPOINT THAT DRAINS AFTER IT, and that is the unit an event loop rests at.
  *
  * WHAT THE LADDER RESTED AT INSTEAD WAS ONE RUNG, WHICH IS FINER THAN ANY SENTENCE OF THE STANDARD. Every arm
- * of flow_step returns, so a reply delivery cost one scheduler visit and each microtask its own — one iteration
- * of step 2 spread over 1 + N picks of a frontier that shares its picks among every member. That is what makes
- * the delivery debt unpayable rather than merely large: the debt is Θ(records × registers naming them) because
- * a fork copies a flow's undelivered backlog and §8.1.4.4 "Calling scripts"' empty-execution-context-stack
- * guard (flow_stack_empty) rightly forbids delivering while a program runs, so the backlog is multiplied before
- * it is drained once — and the drain then ran at a fraction of one entry per pick.
+ * of flow_step RETURNED, so a reply delivery cost one scheduler visit and each microtask its own — one
+ * iteration of step 2 spread over 1 + N picks of a frontier that shares its picks among every member, so the
+ * drain ran at a FRACTION of one entry per pick. That is the half this call retires and the reason it exists:
+ * a pick that reaches the delivery arm now carries the whole turn, so it is one entry per pick. The retired
+ * reason is kept rather than deleted because a reader who re-derives it will re-introduce the rung.
+ *
+ * WHAT IT DOES NOT RETIRE IS THE SIZE OF THE DEBT, AND THE TWO ARE DIFFERENT POPULATIONS — which is the whole
+ * reason this paragraph now says which. The debt is Θ(records × registers naming them) because a fork COPIES a
+ * flow's undelivered backlog (engine_sibling_assemble's `pending_fork`, which shares the RECORD and copies the
+ * NAMING — solver/pending.h) and §8.1.4.4 "Calling scripts"' empty-execution-context-stack guard
+ * (flow_stack_empty) rightly forbids delivering while a program runs, so the backlog is multiplied before it is
+ * drained once. Every clause of that is present tense and true of this tree; only the drain RATE above moved.
+ *
+ * AND THE POPULATION IT IS Θ() OF IS THE FRONTIER'S, NEVER ONE MEMBER'S, which is the sentence whose absence
+ * made this paragraph read as a refutation of the networking-first arm below. This counts the NAMINGS summed
+ * over every live register; that arm's bound is the length of ONE register, and a fork DUPLICATES a register
+ * rather than lengthening one. Neither figure bounds the other and neither refutes the other: they share the
+ * noun "the backlog" and nothing else. The arm states its own half at its own site.
  *
  * IT IS A GRANULARITY AND NOT A BOUND, WHICH IS A TEST AND NOT A CLAIM. A bound decides work will not happen;
  * this decides only how often a flow OFFERS to rest, and every offer it declines costs exactly one predicate —
@@ -7874,6 +7910,31 @@ static int flow_step(JSContext *ctx, Flow *f) {
              * for, and never by an amount the page can extend. §scheduler's razor is what settles which of the
              * two the engine may take: "drops, starves, skips, reorders, or forgets ANY flow — it is a CAP,
              * banned".
+             *
+             * AND "WHAT THIS FLOW ITSELF ASKED FOR" IS THIS REGISTER'S LENGTH AND NOT THE FRONTIER'S DEBT,
+             * which is the one reading of the sentence above that a fork could refute and does not. A fork
+             * COPIES an undelivered backlog — engine_sibling_assemble's `pending_fork` — so the naming count
+             * SUMMED OVER THE LIVE FRONTIER is multiplied by branching and is bounded by nothing of the sort,
+             * which is what the paragraph at turn_continues states and what solver/pending.h means by counting
+             * NAMINGS rather than RECORDS. NEITHER OF THOSE IS THIS ARM'S DEFERRAL. What defers the sequence is
+             * the length of THIS register, and a fork duplicates a register instead of lengthening one: the
+             * arm's array is the parent's entry for entry (asserted in engine_sibling_assemble), and every
+             * naming in it was pushed by the prefix the two arms SHARE — the `pending_push(&f->pending, …)`
+             * sites are all this flow's own execution issuing a request, and an arm is its parent's timeline
+             * continued, so an inherited entry IS one this flow's own path asked for. The bound is exactly as
+             * stated above.
+             *
+             * WHICH LEAVES THE ASYMMETRY WHERE IT WAS, ONE STEP MORE PRECISELY. A sequence row is appended for
+             * FREE by a program and no arm above consumes it, so one row keeps `script_i < dyn_n` true and the
+             * exclusion is permanent. A unit of delivery deferral costs the page a request it issued AND a
+             * host answer for it, and THIS arm consumes that entry: `pending_ready` is answered-and-not-a-
+             * synchronous-rendezvous (solver/pending.h), so a page that only ASKS defers nothing here at all.
+             *
+             * AND A PER-MEMBER RATE OVER `live` IS NOT A MEASUREMENT OF EITHER POPULATION: this whole task
+             * ladder is inside `if (!f->frame)`, so a FRAMED member's steps never reach this line and a
+             * backlog divided by the live count is a fraction of a population most of which no ordering could
+             * serve. The split that can be read is solver/flow.h's `deliv_ready`/`deliv_framed`/`deliv_owed`,
+             * argued there and deliberately not restated here.
              *
              * AND THE GUARD IS §8.1.4.4 "Calling scripts"'S, NOT A PRIORITY OF ITS OWN. A task may not begin
              * while the JavaScript execution context stack is non-empty, and a DYN_POS_IMMEDIATE row at the
