@@ -83,6 +83,10 @@ typedef struct CssStyleSheetData {
 static JSClassID g_sheet_class;
 static int       g_stylesheet_proto_slot = -1;   /* StyleSheet.prototype, per realm */
 static int       g_id_set_disabled = -1, g_id_insert_rule = -1, g_id_delete_rule = -1;
+/* CSSOM §6.1.2.1 Deprecated CSSStyleSheet members' two OPERATIONS. `rules` is not here because it is not a
+   declaration of its own: §6.1.2.1 states it over `cssRules`, so it is that getter installed under a second
+   name. `removeRule` IS here and shares SD_DECL with `deleteRule` — see the declaration for why one machine. */
+static int       g_id_add_rule = -1, g_id_remove_rule = -1;
 static int       g_id_ctor = -1;                 /* §6.1's `constructor(optional CSSStyleSheetInit options)` */
 
 /* WHAT THE RECORD OWNS. One list, three readers: the COW layout below, the finalizer, and the gc_mark. */
@@ -572,12 +576,19 @@ static int js_sheet_delete_rule(JSContext *ctx, JSStepHdr *hdr, void *state, int
            "step 3, and the chain of questions that step may ask is a cursor on this machine's own state "
            "rather than a stage apiece, so a second stage means a resume landed in another algorithm's "
            "numbering");
-    /* §6.1.2 declares no `optional` on this member, so a short call is the DECLARATION's to refuse. An equality
-       and not a `>=`, so the day this member's IDL grows a position the assert names the line that assumes one. */
+    /* ONE COUNT, TWO MEMBERS, AND THE TWO REACH IT FOR DIFFERENT REASONS — which is why it stays an equality
+       rather than being relaxed when the second arrived. §6.1.2's `deleteRule(unsigned long index)` declares no
+       `optional`, so a short call is refused by §3.6's argument-count check before this body is entered;
+       §6.1.2.1's `removeRule(optional unsigned long index = 0)` accepts one, and its DECLARED default is PLACED
+       by §3.6 steps 15.4.1 and 16.1, so the body is handed a real zero at full arity rather than an absence to
+       fill in. This comment used to say "§6.1.2 declares no `optional` on this member", which was true of the
+       one member the file then had and would have read as a licence to relax the count for the other.
+       An equality and not a `>=`, so the day either IDL grows a position the assert names the line that assumes
+       one. */
     DCHECK(argc == 1,
-           "§6.1.2's deleteRule reached its body with an argument count its declaration does not produce — its "
-           "one `unsigned long index` is required, so §3.6's argument-count check refuses a shorter call before "
-           "this body is entered");
+           "§6.1.2's deleteRule — or §6.1.2.1's removeRule, which runs its steps — reached this body with an "
+           "argument count neither declaration produces: the first's one `unsigned long index` is required and "
+           "the second's carries a declared `= 0`, so §3.6 hands this body exactly one position either way");
     /* Re-derived on every entry rather than held across the fork: no line between the entry and the ask runs
        the page's code — step_fork_run only clones and re-enters — so re-deriving cannot answer differently,
        and holding the record on a state that PARKS would keep a raw C pointer across a park. The accessor is
@@ -606,11 +617,169 @@ static int js_sheet_delete_rule(JSContext *ctx, JSStepHdr *hdr, void *state, int
 /* The last two are STATED rather than left to the initializer, because both are declarations and not padding:
    `catches_abrupt` 0 says this algorithm does NOT handle an abrupt request result itself — it makes no request
    that can deliver one, so the epilogue's handling is the right one — and `unforkable` NULL says this machine
-   may ALWAYS be forked, which is the whole of what it exists for. */
+   may ALWAYS be forked, which is the whole of what it exists for.
+   IT BACKS TWO MEMBERS AND THE ALGORITHM NAME BELOW IS RIGHT FOR BOTH. §6.1.2.1's `removeRule(index)` "must run
+   the same steps as deleteRule()", so it is a SECOND ENTRY IN THE ARGUMENT POOL OVER THIS ONE DECLARATION and
+   not a second machine — the shape core/frame/location.c's `assign`/`replace` and core/crypto/subtle_crypto.c's
+   `sign`/`verify` already have. A parked `removeRule` therefore rests at a stage label naming `deleteRule`, and
+   that is the truth rather than an approximation: the standard says these ARE deleteRule's steps, so a second
+   label would be a second name for one rest point and the two would be free to drift. */
 static const IdlStepDecl SD_DECL = {
     js_sheet_delete_rule, sizeof(IdlIndexChain), sd_visit, NULL,
     "CSSOM §6.1.2 The CSSStyleSheet Interface deleteRule(index)", SD_STEPS, 0, NULL
 };
+
+/* A NAMED RESIDUAL — §6.1.2's `replaceSync`, WHICH IS NOT ABSENT FOR `replace`'s REASON. The banner above
+ * retires `replace` because its steps settle a promise from work done in parallel, which is a scheduler flow
+ * and not a member body. `replaceSync` runs the same content steps on the CALLING flow — §6.1.2: "To
+ * synchronously replace the rules of a CSSStyleSheet on sheet given text, run these steps" — so that argument
+ * does not reach it and it needs one of its own.
+ *   WHAT IS NOT COVERED: all four of those steps. Step 1's "If the constructed flag is not set, or the
+ *     disallow modification flag is set, throw a NotAllowedError DOMException" is the only one this file could
+ *     write today — `css_style_sheet_constructed` answers the first half, and no sheet in this build has ever
+ *     had the second flag set, for the reason the deleteRule banner gives (only `replace` sets it, and
+ *     `replaceSync`'s own steps do not). Steps 3 and 4 are the whole of the gap.
+ *   WHAT THE NEXT DIFF BUILDS, in two halves because neither exists today and each was grepped for:
+ *     (i) a SET of a sheet's CSS rules. `css_style_sheet_set_rules_from_text` is an APPEND — its own DCHECK
+ *     requires the list to be empty and says in its message that a second call would append to the first — so
+ *     step 4's "Set sheet's CSS rules to rules" needs the existing rules removed first, through
+ *     `css_rule_list_delete` (core/css/css_rule.h), which is already the one copy of §6.4's remove a CSS rule
+ *     and is what keeps the [SameObject] CSSRuleList and the cascade reading the same live Array.
+ *     (ii) step 3's "If rules contains one or more @import rules, remove those rules from rules", which needs a
+ *     test for an @import rule over a rule object: core/css/css_rule.c holds `RULE_TYPE_IMPORT` as an internal
+ *     enum and exports no predicate over it.
+ *   HOW ITS ABSENCE WOULD SHOW: a page that constructs a sheet and fills it reaches a TypeError naming the
+ *     operation on the line after the constructor — `new CSSStyleSheet()` itself succeeds, because §6.1's
+ *     constructor is built and installed below — where a browser fills the sheet and carries on. */
+
+/* ---- CSSOM §6.1.2.1 "Deprecated CSSStyleSheet members" ----------------------------------------------------
+ *
+ * A PARTIAL INTERFACE ON CSSStyleSheet IN CSSOM'S OWN TEXT, which is why it is in this file and not beside a
+ * standard of its own: `[SameObject] readonly attribute CSSRuleList rules`, `long addRule(optional DOMString
+ * selector = "undefined", optional DOMString style = "undefined", optional unsigned long index)` and
+ * `undefined removeRule(optional unsigned long index = 0)`. §6.1.2.1 says why they exist — "These members are
+ * required for compatibility with existing sites" — and closes by saying what an author should write instead:
+ * "Authors should not use these members and should instead use and teach the standard CSSStyleSheet interface
+ * defined earlier". Neither sentence is a reason to leave them out; a user agent that omits them is one those
+ * existing sites take a different branch on.
+ *
+ * WHAT THEIR ABSENCE COST, WHICH IS NOT THE OBVIOUS THING. Each of the three has a modern twin this build
+ * already had, so `sheet.cssRules || sheet.rules` got its answer from the first operand and lost nothing at
+ * all. What was lost is the OTHER arm: `sheet.addRule ? sheet.addRule(sel, decl) : sheet.insertRule(…)` is the
+ * shape shipped compatibility code actually writes, and `addRule` is a name the platform owns — so the read
+ * was DECIDED, with no fork, to the arm where the member is missing, and the forced execution never entered
+ * the branch a real browser takes. Nothing threw and nothing was wrong; a whole arm of the page simply never
+ * ran, which is the shape of an absence that a feature detector converts from a crash into a silence.
+ *
+ * NONE OF THE THREE INVENTS ANYTHING, WHICH IS WHY ALL THREE LAND TOGETHER RATHER THAN ONE AT A TIME. §6.1.2.1
+ * states every one of them OVER A MEMBER THIS FILE ALREADY HAS — `rules` over `cssRules`, `removeRule` over
+ * `deleteRule`, `addRule` over `insertRule` — so each is the composition the standard writes and not a second
+ * implementation of anything that could disagree with the first. It is also what makes the branch a page's
+ * guard now takes survivable at every step: the member each one ends in is one this build already runs, so a
+ * bundle that takes the compatibility arm reaches the same rule list the modern arm would have.
+ *
+ * §6.1.2.1's `rules` NEEDS NO BODY AND GETS NONE. "The rules attribute must follow the same steps as cssRules,
+ * and return the same object cssRules would return" — so it is `js_sheet_css_rules` installed under a second
+ * name, which is the literal reading and the only spelling that cannot drift. `[SameObject]` makes the
+ * identity observable, and `sheet.rules === sheet.cssRules` holds here for the same reason it holds in a
+ * browser: one getter, and one collection remembered on the record behind both. */
+
+/* §6.1.2.1's `addRule(selector, block, optionalIndex)` — EIGHT STEPS, of which the first five build a rule's
+ * text and the last three hand it to §6.1.2's `insertRule`.
+ *
+ * THE PROSE AND THE IDL DISAGREE ABOUT THE SECOND ARGUMENT'S NAME AND THE IDL IS THE ONE THAT BINDS. §6.1.2.1's
+ * steps call it `block`; its own IDL declares `optional DOMString style = "undefined"`. They are one position.
+ * The comments here spell the prose's name, because the steps are written in it; the declaration's list is the
+ * IDL's, because that is what a page's arguments are converted against.
+ *
+ * BOTH DEFAULTS ARE THE LITERAL STRING "undefined" AND NOT AN ABSENCE, which is the one place this member
+ * surprises its reader: `sheet.addRule()` inserts the rule text `undefined { }` in a browser, because the IDL
+ * writes `= "undefined"` at both positions. They are DECLARED (idl_arg_default, at the declaration below) and
+ * never substituted here — a body filling the absence itself would be the consumer-side default
+ * §Offensive-programming names, and it would answer differently from the declaration the day the IDL moves one
+ * of them. `index` HAS NO DEFAULT, and that omission is a declaration too: step 6 is "Let index be
+ * optionalIndex if provided, or the number of CSS rules in the stylesheet otherwise", which is §3.6's "is
+ * there a value here" and is asked through `idl_arg_given` rather than off `argc` — core/idl_args.h states why
+ * a count cannot answer it, in both directions.
+ *
+ * IT CALLS THE MEMBER AND NOT THE ALGORITHM, because step 7 says so in those words: "Call insertRule(), with
+ * rule and index as arguments". So §6.1.2's step 5 — the constructed-flag refusal of an `@import` rule — and
+ * its SyntaxError on an unparsable one are this member's behaviour too, without a line here restating either,
+ * and the day `insertRule` grows a step this member has it. Step 7's return value is DISCARDED and step 8 is
+ * "Return -1", which is not a failure code and not this engine's choice: it is what §6.1.2.1 states, and a
+ * page that reads it gets the same number a browser gives.
+ *
+ * ITS TWO STRING OPERANDS REACH C BYTES HERE RATHER THAN AT `insertRule`, AND THAT IS NOT A NEW LAUNDERING
+ * POINT. `selector` and `block` are DOMString positions, so each arrives either as the string §3.2.5 produced
+ * or as unknown external input crossing that boundary as itself; the assembled text is what step 7 hands to
+ * `insertRule`, whose own `JS_ToCString` would have read the same operand one frame later. What is genuinely
+ * absent is an append over an unknown that KEEPS the unknown — and the day `insertRule`'s string half carries
+ * one, this member inherits it, because it composes the member rather than re-implementing the algorithm. */
+static JSValue js_sheet_add_rule(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    CssStyleSheetData *s = sheet_here(ctx, this_val);
+    const char *sel, *block;
+    size_t sel_len = 0, block_len = 0, n = 0;
+    char *rule;
+    JSValue args[2], out;
+
+    (void)magic;
+    if (!s) return JS_EXCEPTION;
+    /* TWO OR THREE, AND THE PAIR IS THE DECLARATION SPEAKING. §3.6 step 16.1 places a declared default at every
+       position BEHIND the ones the page reached, so positions 0 and 1 are always there and the count is never
+       below 2 — `sheet.addRule()` is a two-position call whose two strings are the IDL's own `"undefined"`.
+       Position 2 declares NO default, so step 16.2's "missing" arm stops the extension there and the count
+       stays 2 unless the page itself reached it. That is exactly why step 6's "if provided" is asked through
+       `idl_arg_given` and not off this number: at argc 3 the page may still have passed `undefined`, which
+       step 15.4.2 calls missing, and no count can tell those apart. */
+    DCHECK(argc == 2 || argc == 3,
+           "§6.1.2.1's addRule reached its body with an argument count its declaration cannot produce — its "
+           "first two positions carry declared defaults, so §3.6 step 16.1 places both and the count is 2, or "
+           "3 when the page reached the undefaulted `index` itself");
+
+    sel = JS_ToCStringLen(ctx, &sel_len, argv[0]);
+    if (!sel) return JS_EXCEPTION;
+    block = JS_ToCStringLen(ctx, &block_len, argv[1]);
+    if (!block) { JS_FreeCString(ctx, sel); return JS_EXCEPTION; }
+
+    /* STEPS 1-5, which are one allocation because the standard's five appends have one result: step 1's empty
+       string, step 2's selector, step 3's " { ", step 4's "If block is not empty, append block, followed by a
+       space, to rule" — the emptiness test is the step's own and is the whole reason the block's space is
+       conditional — and step 5's "}". `addRule("p","color:red")` is therefore `p { color:red }` and
+       `addRule("p")` is `p { }`, both of them byte-for-byte what a browser inserts. */
+    n = sel_len + 3 + (block_len ? block_len + 1 : 0) + 1;
+    rule = malloc(n + 1);
+    CHECK(rule != NULL, "cssom: OOM building the rule text of §6.1.2.1's addRule");
+    memcpy(rule, sel, sel_len);
+    memcpy(rule + sel_len, " { ", 3);
+    if (block_len) {
+        memcpy(rule + sel_len + 3, block, block_len);
+        rule[sel_len + 3 + block_len] = ' ';
+    }
+    rule[n - 1] = '}';
+    rule[n] = '\0';
+    JS_FreeCString(ctx, sel);
+    JS_FreeCString(ctx, block);
+
+    args[0] = JS_NewStringLen(ctx, rule, n);
+    free(rule);
+    if (JS_IsException(args[0])) return JS_EXCEPTION;
+    /* STEP 6. The unknown half needs nothing here: an `optionalIndex` a page computed from external input is
+       passed STRAIGHT THROUGH to `insertRule`, whose CSS_RULE_INSERT_INDEX is the one copy of that arithmetic
+       and the one place the fork it cannot yet perform is named. `rules_len` is the "number of CSS rules in
+       the stylesheet" and is asked of the same live Array the collection and the cascade read. */
+    args[1] = idl_arg_given(argc, argv, 2) ? JS_DupValue(ctx, argv[2])
+                                           : JS_NewUint32(ctx, rules_len(ctx, s->rules));
+    /* STEP 7 — the MEMBER, so its receiver is this one's and its two arguments are the ones just built. */
+    out = js_sheet_insert_rule(ctx, this_val, 2, (JSValueConst *)args, 0);
+    JS_FreeValue(ctx, args[0]);
+    JS_FreeValue(ctx, args[1]);
+    if (JS_IsException(out)) return JS_EXCEPTION;
+    /* §6.1.2's `insertRule` returns the inserted index and step 7 does not read it; step 8 states what THIS
+       member returns, and it is not that number. */
+    JS_FreeValue(ctx, out);
+    return JS_NewInt32(ctx, -1);   /* STEP 8 — "Return -1." */
+}
 
 /* ---- CSSOM §6.1's CONSTRUCTOR ---------------------------------------------------------------------------- */
 
@@ -781,6 +950,9 @@ void css_style_sheet_init(JSContext *ctx)
            converts anything", under which both bodies converted. */
         static const IdlArgType INSERT[2] = { IDL_DOMSTRING, IDL_UNSIGNED_LONG };
         static const IdlArgType ONE_ULONG[1] = { IDL_UNSIGNED_LONG };
+        /* §6.1.2.1's `addRule`. `DOMString` and not `CSSOMString` at the first two, because that is what its
+           partial declares — §6.1.2's `insertRule` takes the `CSSOMString` and this member hands it one. */
+        static const IdlArgType ADD_RULE[3] = { IDL_DOMSTRING, IDL_DOMSTRING, IDL_UNSIGNED_LONG };
 
         g_id_insert_rule = idl_method_id(ctx, INSERT, 2, js_sheet_insert_rule, 0);
         idl_optional_from(1);
@@ -789,6 +961,26 @@ void css_style_sheet_init(JSContext *ctx)
            against. Its one `unsigned long index` can be unknown external input, and asking §6.4's step 2 over
            one needs a state to snapshot. */
         g_id_delete_rule = idl_method_id_step(ctx, ONE_ULONG, 1, NULL, 0, &SD_DECL, 0);
+        /* §6.1.2.1's `undefined removeRule(optional unsigned long index = 0)`. THE SAME MACHINE, DECLARED
+           AGAIN — §6.1.2.1 says it "must run the same steps as deleteRule()", so the two entries differ only
+           where the two IDLs do, which is the optionality and the default. The default is DECLARED and the
+           conversion PLACES it: `sheet.removeRule()` reaches the body holding a real zero, which is why the
+           body needs no line telling the two members apart and why its argument-count assert is the same
+           equality for both. */
+        g_id_remove_rule = idl_method_id_step(ctx, ONE_ULONG, 1, NULL, 0, &SD_DECL, 0);
+        idl_optional_from(0);
+        idl_arg_default(0, IDL_DEFAULT_ZERO, NULL);   /* §3.6 steps 15.4.1 and 16.1's `= 0` */
+        /* §6.1.2.1's `long addRule(optional DOMString selector = "undefined", optional DOMString style =
+           "undefined", optional unsigned long index)`. EVERY POSITION IS OPTIONAL, which is what makes the
+           function object's `length` 0 (Web IDL §3.7.7 Operations over the effective overload set at argument
+           count 0), and the THIRD HAS NO DEFAULT — that omission is what makes step 6's "if provided"
+           answerable, exactly as HTML §4.10.5's `Option`'s undefaulted `value` makes its step 4's. The two
+           string defaults are the IDL's own literal `"undefined"` and are stated here rather than in the
+           body, so the body reads the IDL's value instead of inventing one from an absence. */
+        g_id_add_rule = idl_method_id(ctx, ADD_RULE, 3, js_sheet_add_rule, 0);
+        idl_optional_from(0);
+        idl_arg_default(0, IDL_DEFAULT_STRING, "undefined");
+        idl_arg_default(1, IDL_DEFAULT_STRING, "undefined");
     }
     {
         /* §6.1.2's `constructor(optional CSSStyleSheetInit options = {})`. The dictionary's members are declared
@@ -840,6 +1032,13 @@ void css_style_sheet_install_proto(JSContext *ctx)
     idl_install_accessor(ctx, proto, "cssRules", js_sheet_css_rules, 0, -1);
     idl_install_method(ctx, proto, "insertRule", g_id_insert_rule);
     idl_install_method(ctx, proto, "deleteRule", g_id_delete_rule);
+    /* §6.1.2.1 Deprecated CSSStyleSheet members — a PARTIAL on this same interface in this same standard, so
+       its three members go on this same prototype. `rules` is `js_sheet_css_rules` under a second name and
+       not a second body, which is §6.1.2.1's own statement of it: "The rules attribute must follow the same
+       steps as cssRules, and return the same object cssRules would return." */
+    idl_install_accessor(ctx, proto, "rules", js_sheet_css_rules, 0, -1);
+    idl_install_method(ctx, proto, "addRule", g_id_add_rule);
+    idl_install_method(ctx, proto, "removeRule", g_id_remove_rule);
     JS_SetClassProto(ctx, g_sheet_class, proto);
     realm_value_set(ctx, g_stylesheet_proto_slot, base);
 }
