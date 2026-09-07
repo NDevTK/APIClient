@@ -3350,6 +3350,14 @@ static const char *HTML =
        SO THE TWO ROWS TOGETHER ARE THE EXPERIMENT AND NEITHER IS ALONE: this one reading 1 while
        the five read 0 says the gate is the frame and not the queue, the rank or the reply path.
        This one reading 0 says the frame is NOT the mechanism and the account above is wrong.
+       IT READ 0 AND THAT SETTLES NOTHING, BECAUSE THIS ROW'S OWN PROGRAM NEVER RAN. This <script> is the
+       tenth of the document's fourteen, and `programCursors` tops out at 6 in every run measured — so
+       the statement above has never been executed and its 0 is the row not running. The retraction is
+       recorded here rather than the paragraph deleted, because the mistake is worth more than the row:
+       a control WAS run and it DID arm, and it was a control for the wrong proposition. `pending`
+       reading 1 proves the await machinery works; it says nothing about whether THIS program was
+       reached, and reachability is the one thing a newly-added row has not got. The census that would
+       have said so was already being printed. What follows is kept as the reasoning that was WRONG:
        IT READ 0, SO THE FRAME ACCOUNT IS REFUTED AND THE PARAGRAPH ABOVE IS KEPT AS THE THING THAT WAS
        WRONG. Three runs of one artifact, `pending` — the microtask-settled await, which shares every
        part of this path except what settles the promise — reading 1 in all three, so the control armed
