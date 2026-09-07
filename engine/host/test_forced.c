@@ -3366,7 +3366,16 @@ static const char *HTML =
        So cursor 6 is not a point SHORT of this program — IT IS THIS PROGRAM'S OWN DOOR. solver/cold.h
        states the domain: `script_i` runs over [0, dyn_n] CLOSED, one wider than the program indices, and
        a cursor of `c` above zero means the member LEFT the program at `c - 1`. Members at 6 have finished
-       the quarter-megabyte row above and are standing HERE, unframed, waiting to be handed the thread.
+       the quarter-megabyte row above and none of them has started this one.
+       AND `UNFRAMED, WAITING TO BE HANDED THE THREAD` IS WHAT THAT SENTENCE FIRST SAID, WHICH IS AN
+       OVER-CLAIM THE SAME CENSUS REFUTES ONE FIELD OVER — recorded rather than quietly narrowed, because
+       the arithmetic that catches it is free and nobody ran it. A cursor says which program a member has
+       LEFT and is silent about what it is inside NOW: a member can stand at 6 and hold a frame that is not
+       a document program at all — a reaction job, an orphan drive, a task — and `deepest` at 5 forbids only
+       the program reading. `live - framed` is the bound, and in the longest run it BITES: 172 members at
+       cursor 6 against 108 unframed in the WHOLE frontier, so at least 64 of them are inside a frame of the
+       other kind. So the cursor bucket names a population that has finished the row above; it does NOT name
+       an idle one, and the two questions need the two rows read together.
        THE ROW THAT ACTUALLY DECIDES IT IS `deepest`, AND IT IS A DIFFERENT ROW THAT WAS BEING PRINTED ON
        THE SAME LINE. It is the highest program index this DOCUMENT has ever COMPILED across every flow —
        engine.c raises it at the one line a program is started — so `deepest` at 5 says program 6 was
@@ -10093,8 +10102,10 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "flow, and this <script> is index 6 of the thirteen the document ships. At `deepest` "
              "5 this 0 is the row not running and says nothing whatever about the frame, the "
              "queue, the rank or the reply path; only at 6 or above is it about the subject. The "
-             "cursor bucket at 6 beside it is this program's DOOR and not a point short of it: "
-             "those members have finished the quarter-megabyte row above and are waiting here");
+             "cursor bucket at 6 beside it is this program's DOOR and not a point short of it: those "
+             "members have finished the quarter-megabyte row above. Whether any of them is IDLE is a "
+             "second question the cursor does not answer — read `live` minus `framed` beside it, which "
+             "bounds the idle population of the whole frontier and has been smaller than this bucket");
     fold_row(&frame_ctl, &frame_ctl_why, param_value_is(js, "/api/framectl", "r", "us-west-2"),
              "the reply WAS delivered to a program that ended its own frame, and json()'s field did "
              "not reach this endpoint — so the frame gate is not the whole of it");
