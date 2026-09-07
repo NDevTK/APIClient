@@ -41,8 +41,9 @@ uint32_t event_path_length(JSContext *ctx, JSValueConst path)
 }
 
 void event_path_append(JSContext *ctx, JSValueConst path, JSValueConst invocation_target,
-                       JSValueConst shadow_adjusted_target, JSValueConst related_target,
-                       JSValueConst touch_targets, bool root_of_closed_tree, bool slot_in_closed_tree)
+                       bool invocation_target_in_shadow_tree, JSValueConst shadow_adjusted_target,
+                       JSValueConst related_target, JSValueConst touch_targets, bool root_of_closed_tree,
+                       bool slot_in_closed_tree)
 {
     JSValue item = idl_slots_new(ctx);
 
@@ -63,6 +64,8 @@ void event_path_append(JSContext *ctx, JSValueConst path, JSValueConst invocatio
            "empty list. Anything else is a list step 6.11 cannot look inside and `invoke` step 5 cannot set");
     CHECK(!JS_IsException(item), "§2.9's event path item could not be allocated");
     JS_SetPropertyStr(ctx, item, "invocationTarget", JS_DupValue(ctx, invocation_target));
+    JS_SetPropertyStr(ctx, item, "invocationTargetInShadowTree",
+                      JS_NewBool(ctx, invocation_target_in_shadow_tree));
     JS_SetPropertyStr(ctx, item, "shadowAdjustedTarget", JS_DupValue(ctx, shadow_adjusted_target));
     JS_SetPropertyStr(ctx, item, "relatedTarget", JS_DupValue(ctx, related_target));
     JS_SetPropertyStr(ctx, item, "touchTargets", JS_DupValue(ctx, touch_targets));
@@ -130,11 +133,18 @@ static bool item_flag(JSContext *ctx, JSValueConst item, const char *field)
 
     DCHECK(JS_IsObject(item), "an event path item's flag was read off something that is not an item");
     v = JS_GetPropertyStr(ctx, item, field);
-    DCHECK(JS_IsBool(v), "an event path item's closed-tree flag is not a boolean — composedPath counts hidden "
-                         "levels with it, and a missing field would count as false and expose a closed tree");
+    DCHECK(JS_IsBool(v), "an event path item's boolean field is not a boolean — composedPath counts hidden "
+                         "levels with the closed-tree pair, and §2.9's inner invoke step 2.8.2 decides DOM "
+                         "§2.3's `event` with the shadow-tree one; a missing field would read as false and "
+                         "both of those answer WRONGLY in the exposing direction");
     b = JS_ToBool(ctx, v);
     JS_FreeValue(ctx, v);
     return b;
+}
+
+bool event_path_invocation_target_in_shadow_tree(JSContext *ctx, JSValueConst item)
+{
+    return item_flag(ctx, item, "invocationTargetInShadowTree");
 }
 
 bool event_path_root_of_closed_tree(JSContext *ctx, JSValueConst item)

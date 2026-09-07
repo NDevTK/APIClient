@@ -21,6 +21,7 @@
 #include "core/events/broadcast_channel.h"
 #include "core/events/event.h"
 #include "core/events/input_device_capabilities.h"
+#include "core/events/current_event.h"
 #include "core/events/event_target.h"
 #include "core/events/message_port.h"
 #include "core/workers/worker_global_scope.h"
@@ -208,6 +209,7 @@ static void d_user_timing(JSContext *c, const PlatformAgent *a) { (void)a; user_
 static void d_input_device_capabilities(JSContext *c, const PlatformAgent *a)
 { (void)a; input_device_capabilities_init(c); }
 static void d_event(JSContext *c, const PlatformAgent *a) { (void)a; event_init(c); }
+static void d_current_event(JSContext *c, const PlatformAgent *a) { (void)a; current_event_init(c); }
 static void d_report_exception(JSContext *c, const PlatformAgent *a) { (void)a; report_exception_init(c); }
 static void d_message_port(JSContext *c, const PlatformAgent *a) { (void)a; message_port_init(c); }
 static void d_worker_global_scope(JSContext *c, const PlatformAgent *a)
@@ -472,6 +474,7 @@ static void r_scroll_events(JSRuntime *rt) { (void)rt; scroll_events_free(); }
    per-realm prototype slot. Where it does not collide, the class registers at a SPARSE id past
    `js_class_id_alloc`, which the allocator will hand out again to somebody else. */
 static void r_event(JSRuntime *rt) { event_free(rt); }
+static void r_current_event(JSRuntime *rt) { current_event_free(rt); }
 /* HTML §8.1.4.6 Runtime script errors, the LAST hand-copied `report_exception_free(ctx);` in each of those same
    three teardowns — the line immediately above the `event_free(ctx);` the note above describes, and the same
    defect one row over. Its row's release column was empty, so its four slots (§8.1.4.6 step 6's private Symbol,
@@ -658,6 +661,7 @@ static void r_simple_dialogs(JSRuntime *rt) { (void)rt; simple_dialogs_free(); }
    this the origin got a `location`-free Window whose own `origin` was re-derived from a string that was
    already one — and the WPT runner, the one host whose whole job is measuring fidelity, did exactly that. */
 static void i_window(JSContext *c, JSValueConst g, const PlatformDocument *d) { window_install(c, g, d->url); }
+static void i_current_event(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; current_event_install(c, g); }
 static void i_navigable(JSContext *c, JSValueConst g, const PlatformDocument *d) { navigable_install(c, g, d->origin); }
 static void i_timer(JSContext *c, JSValueConst g, const PlatformDocument *d) { (void)d; timer_install(c, g); }
 static void i_window_message(JSContext *c, JSValueConst g, const PlatformDocument *d) { window_message_install(c, g, d->origin); }
@@ -931,6 +935,17 @@ static const PlatformComponent PLATFORM[] = {
     { "input_device_capabilities", d_input_device_capabilities, NULL,
                                                           r_input_device_capabilities },
     { "event",               d_event,               NULL,        r_event },
+    /* DOM §2.3 Legacy extensions to the Window interface' `event`, and it is a row of its own rather than a
+       line in `window` because the member is DOM's and not HTML §7.2.2's — @webref/idl carries that one
+       `[Replaceable] readonly attribute (Event or undefined) event` line in `dom.idl` and in no other file.
+       AFTER `event` for the reason that decides every position in this list, and it is a weaker reason than
+       most: nothing in its install touches Event.prototype — the record it builds holds §2.3's initial
+       `undefined` — but the value it will later hold IS an Event, and a row that reads as independent of the
+       interface whose objects it stores would invite being moved somewhere the two could come apart.
+       ITS WRITER IS DOM §2.9's inner invoke (core/events/event_target.c steps 2.8.1, 2.8.2 and 2.13) and it
+       has no other, which is what makes this member landable at all: its one observable is written by an
+       algorithm this engine already runs, not by a subsystem it does not have. */
+    { "current_event",       d_current_event,       i_current_event, r_current_event },
     /* §4.2's IDBVersionChangeEvent, and it is HERE rather than beside the other Indexed Database rows for the
        one reason that decides every position in this list: its prototype chains to Event.prototype, which the
        row above builds, and core/realm.h runs the per-realm installs in declaration order. §5.1's own
@@ -1284,6 +1299,15 @@ static const struct { const char *name, *component; IdlExposure exposure; } PLAT
        row of its own, bar_prop_install is called from core/frame/window.c's window_install, and bar_prop_free
        is reached from window_free — which is the same name its agent state is declared under. */
     { "BarProp",               "window" },
+    /* DOM §2.3's `event`. THE ABSENT DIRECTION IS WHAT THIS ROW EARNS, and for this member that direction is
+       silent twice over: `window.event` is not feature-detected by real code — the frozen corpus reaches it as
+       `n || window.event`, a FALLBACK — so an install that stopped running would restore the exact
+       `undefined` the member had before it existed, with no throw, no guard flipping and no walk over the
+       global able to see it. `event` is on browser/platform_names.h, so solver/absent.c would recognise the
+       missed read as a name a standard owns and DECLINE to mint a concolic for it: the read decides to a
+       concrete `undefined`, and the handler's very next property access throws for a reason that names
+       nothing. */
+    { "event",                 "current_event" },
     { "onload",                "event_target" },
     { "document",              "document" },
     { "navigator",             "navigator" },

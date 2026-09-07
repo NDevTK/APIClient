@@ -28,6 +28,7 @@
 #include "core/realm.h"
 #include "solver/concolic.h"   /* §2.7's flattening decides C booleans out of values the page may not know */
 #include "core/dom/abort.h"
+#include "core/events/current_event.h"  /* DOM §2.3's `event`, which inner invoke steps 2.8/2.13 write */
 #include "core/events/event.h"
 #include "core/events/event_handler.h"
 #include "core/events/event_path.h"
@@ -3183,6 +3184,16 @@ typedef struct JSDispatchState {
        listener flag before the listener runs and lowers it after, so the machine has to remember which way to
        put it back when it resumes — the record it read it from is gone by then. */
     uint8_t   in_passive;
+    /* §2.9 "invoke" step 9's `invocationTargetInShadowTree`, read off the path item once and handed to inner
+       invoke for every listener on it. It lives on the STATE and not in a local for the same reason `in_passive`
+       does: the listener list is walked across suspensions, and the item it was read from is freed at step 7. */
+    uint8_t   in_shadow_tree;
+    /* §2.9 "inner invoke" step 2.7's `currentEvent`, held across the call. Step 2.8.1 saves the Window's
+       current event into it and step 2.13 puts that back, so it is per LISTENER rather than per dispatch —
+       and a listener can park, so the saved value has to survive the suspension exactly as `in_passive` does.
+       It is OWNED and js_dispatch_visit names it: a JSValue on this state is dup'd by a fork and released by
+       tramp_step_state_free_1, and a field missing from that one declaration is a value the fork never dups. */
+    JSValue   cur_event_saved;
     /* THE CALLBACK'S OPERATION LOOKUP. A callback INTERFACE that is not callable has `handleEvent` read off it
        per invocation, and that read is the page's code — so the object survives the suspension on the state and
        `lphase` says a read is outstanding. Two markers rather than one because a listener can suspend TWICE: on
@@ -3264,6 +3275,7 @@ static void js_dispatch_visit(JSContext *ctx, void *st, JSStepVisit *v)
     v->val(ctx, &s->ev);
     v->val(ctx, &s->result);
     v->val(ctx, &s->click_el);
+    v->val(ctx, &s->cur_event_saved);
     /* DERIVED FROM THE ARRAY, never a literal beside it: quickjs-step.h's paragraph on this is about exactly
        the buffer below, which has now grown once — a visit one slot short leaves a live value the fork never
        dups, and it fails nowhere near here. */
@@ -3323,6 +3335,42 @@ static JSValue dispatch_get_parent(JSContext *ctx, JSValueConst target, JSValueC
 static bool dispatch_is_window(JSContext *ctx, JSValueConst t)
 {
     return g_tree != NULL && g_tree->is_window(ctx, t);
+}
+
+/* §2.9 "inner invoke" step 2.6's `global`, and step 2.8's question about it, asked as ONE predicate because the
+   two steps that USE it here — 2.8 and 2.13 — ask nothing else of it than whether this realm has a Window for
+   the current event to live on. A realm's global is not worth a field on the state when `ctx` names it at every
+   resume, and taking it fresh is what keeps the two sides of the save/restore reading one thing.
+   STEP 2.10 ASKS THE SAME QUESTION AND IS NOT BUILT: "If global is a Window object, then record timing info for
+   event listener given event and listener" is Long Animation Frames', and this engine has no such timing, so
+   the step has no work here rather than a caller of this predicate.
+   WHICH realm this is, and which one the standard asks for, is the named residual at step 2.8; that gap is
+   about the CALLBACK's realm and not about this reading of THIS realm's global. */
+static bool dispatch_global_is_window(JSContext *ctx)
+{
+    JSValue g = JS_GetGlobalObject(ctx);
+    bool w = dispatch_is_window(ctx, g);
+
+    JS_FreeValue(ctx, g);
+    return w;
+}
+
+/* §2.9 "inner invoke" step 2.13: "If global is a Window object, then set global's current event to
+   currentEvent." It is a FUNCTION and not a line because the walk leaves a listener at TWO labels — the
+   ordinary return and the throw — and both must perform it: a listener that throws is reported and the walk
+   carries on, so a step 2.13 written only on the returning path would leave the thrower's event standing as
+   `window.event` for every listener after it and for the rest of the page's turn.
+   IT IS IDEMPOTENT, which is what lets the throwing path run it after the returning path already has: the
+   saved value is not consumed, so a second call writes the same value. The next listener's step 2.8.1 frees it
+   and saves its own.
+   THIS ENGINE PERFORMS STEP 2.11.1's REPORT AFTER 2.12 AND 2.13 RATHER THAN BEFORE, which is pre-existing and
+   is unobservable for this member: the report fires an `error` event, and that dispatch's own steps 2.8.1 and
+   2.13 save and restore around each of ITS listeners, so an `onerror` handler reads the ErrorEvent either
+   way. Nothing runs between the throw and that dispatch. */
+static void dispatch_restore_current_event(JSContext *ctx, JSDispatchState *s)
+{
+    if (dispatch_global_is_window(ctx))
+        current_event_set(ctx, s->cur_event_saved);
 }
 
 static bool dispatch_is_slot(JSContext *ctx, JSValueConst t)
@@ -3586,6 +3634,8 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         cb_result = JS_UNDEFINED;
         s->path = s->type = s->lcb = s->exc = s->cur = s->act = s->arr = s->ev = s->result = JS_UNDEFINED;
         s->tgt = s->slottable = s->click_el = JS_UNDEFINED;
+        /* §2.9 "inner invoke" step 2.7: "Let currentEvent be undefined." */
+        s->cur_event_saved = JS_UNDEFINED;
         {
             int k;
             STEP_CB_FOREACH(s->cb, k)
@@ -3720,7 +3770,9 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
                 JSValueConst override = JS_IsUndefined(given) ? target : given;
 
                 s->path = event_path_new(ctx);
-                event_path_append(ctx, s->path, target, override, related, touch,
+                event_path_append(ctx, s->path, target,
+                                  dispatch_root_is_shadow_root(ctx, target, /*want_closed*/ false),
+                                  override, related, touch,
                                   dispatch_is_closed_shadow_root(ctx, target), /*slotInClosedTree*/ false);
                 /* THE SIZE IS THE PATH'S, never a counter kept beside it: the two are read together at every
                    step of the two passes, and a counter that drifts by one walks off the end or drops the
@@ -3817,7 +3869,9 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
                     if (s->is_activation && !JS_IsObject(s->act) && event_bubbles(ctx, s->ev) &&
                         g_has_activation && g_has_activation(ctx, parent))
                         s->act = JS_DupValue(ctx, parent);
-                    event_path_append(ctx, s->path, parent, JS_NULL, related, touch,
+                    event_path_append(ctx, s->path, parent,
+                                      dispatch_root_is_shadow_root(ctx, parent, /*want_closed*/ false),
+                                      JS_NULL, related, touch,
                                       dispatch_is_closed_shadow_root(ctx, parent), s->slot_in_closed_tree);
                 } else if (same_target(parent, related)) {
                     /* step 6.9.7: the walk has reached the retargeted relatedTarget itself. "Set parent to
@@ -3835,7 +3889,9 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
                     if (s->is_activation && !JS_IsObject(s->act) && g_has_activation &&
                         g_has_activation(ctx, parent))
                         s->act = JS_DupValue(ctx, parent);
-                    event_path_append(ctx, s->path, parent, parent, related, touch,
+                    event_path_append(ctx, s->path, parent,
+                                      dispatch_root_is_shadow_root(ctx, parent, /*want_closed*/ false),
+                                      parent, related, touch,
                                       dispatch_is_closed_shadow_root(ctx, parent), s->slot_in_closed_tree);
                 }
                 JS_FreeValue(ctx, related);
@@ -4008,6 +4064,37 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
                 const char *t = JS_IsString(s->type) ? JS_ToCString(ctx, s->type) : NULL;
                 if (t) { listener_remove_record(ctx, s->cur, t, rec); JS_FreeCString(ctx, t); }
             }
+            /* §2.9 "inner invoke" steps 2.6 and 2.8: "Let global be listener callback's associated realm's
+               global object", then "If global is a Window object:" — 2.8.1 "Set currentEvent to global's
+               current event", 2.8.2 "If invocationTargetInShadowTree is false, then set global's current event
+               to event". DOM §2.3's `event` is the one member that reads what these write.
+               STEP 2.8.2's CONDITION IS THE WHOLE OF WHY THE PATH CARRIES THAT FLAG, and it is observable:
+               measured on Chrome 148.0.7778.167, a listener on a node INSIDE a shadow tree reads
+               `window.event` as undefined while the shadow HOST's listener and an ancestor's read the event —
+               which is §2.3's own note that this attribute "is inaccurate for events dispatched in shadow
+               trees", rather than a subtlety of the standard's prose.
+               NAMED RESIDUAL — CORRECT for a same-realm listener callback, NARROWER than step 2.6.
+                 NOT COVERED: a callback whose associated realm is not the realm this dispatch is running in.
+                   `ctx` here is the dispatching realm, and the standard asks for the CALLBACK's — which for a
+                   same-origin pair of documents is a real difference, since they are one agent and one heap and
+                   a function minted in a child navigable can be added as a listener on its parent's element.
+                 WHAT THE NEXT DIFF BUILDS: an exported `JS_GetFunctionRealm` — ECMAScript §7.3.24's walk over
+                   the bound and Proxy chains, which quickjs.c has as a `static` and quickjs.h does not declare.
+                   core/html/custom_elements.c's own residual asks for exactly that export for §4.13.3 step
+                   11.1, so the two are ONE piece of work and whichever lands it retires both; that export must
+                   land with the submodule gitlink bump and its host hunks in one commit.
+                 HOW ITS ABSENCE SHOWS: a listener function minted in one same-origin realm and dispatched at a
+                   target in another reads the current event out of the DISPATCHING Window rather than its own,
+                   so the callback's own `window.event` stays at whatever that realm last set — undefined, for
+                   a realm not dispatching — where a browser has it name the event being handled.
+               STEP 2.7's `currentEvent` is the state's `cur_event_saved`, initialised to undefined with the
+               state; this is the SAVE, and step 2.13 below is the restore. */
+            if (dispatch_global_is_window(ctx)) {
+                JS_FreeValue(ctx, s->cur_event_saved);
+                s->cur_event_saved = current_event_get(ctx);
+                if (!s->in_shadow_tree)
+                    current_event_set(ctx, s->ev);
+            }
             /* §2.9 "inner invoke" step 2.9: a PASSIVE listener raises the event's in-passive listener flag for
                the duration of the call, which is what makes its preventDefault() do nothing. */
             s->in_passive = rec_flag(ctx, rec, "passive");
@@ -4143,6 +4230,7 @@ listener_returned:
                 event_set_in_passive(ctx, s->ev, false);
                 s->in_passive = 0;
             }
+            dispatch_restore_current_event(ctx, s);
             JS_FreeValue(ctx, s->lcb);
             s->lcb = JS_UNDEFINED;
             /* §2.9 "inner invoke" step 2.11: "If this throws an exception exception: report exception". THE
@@ -4156,6 +4244,7 @@ listener_threw:
                 /* Reached from the operation lookup as well, which has not run the cleanup above — both are
                    idempotent, which is why one label serves both arrivals. */
                 if (s->in_passive) { event_set_in_passive(ctx, s->ev, false); s->in_passive = 0; }
+                dispatch_restore_current_event(ctx, s);
                 JS_FreeValue(ctx, s->lcb);
                 s->lcb = JS_UNDEFINED;
                 /* §2.9 "inner invoke" step 2.11's OTHER half: "set legacyOutputDidListenersThrowFlag". It is
@@ -4258,6 +4347,11 @@ report_throw:
             JS_FreeValue(ctx, s->cur);
             JS_FreeValue(ctx, s->arr);
             s->cur = event_path_invocation_target(ctx, item);   /* "invoke" step 7 */
+            /* "invoke" step 9: "Let invocationTargetInShadowTree be pathItem's invocation-target-in-shadow-
+               tree." Read HERE, off the item, because step 10 hands it to inner invoke and the item is freed on
+               the next line — and step 11.3's LEGACY re-invoke passes the same value, so it must outlive the
+               first call too. Its one reader is inner invoke step 2.8.2, which decides DOM §2.3's `event`. */
+            s->in_shadow_tree = event_path_invocation_target_in_shadow_tree(ctx, item);
             JS_FreeValue(ctx, item);
             event_set_current(ctx, s->ev, s->cur);
             type = JS_IsString(s->type) ? JS_ToCString(ctx, s->type) : NULL;
