@@ -3,7 +3,7 @@
  "key": "cssvalues4",
  "base": "https://drafts.csswg.org/css-values-4/",
  "specUpdated": "20 August 2026",
- "fetched": "2026-09-03",
+ "fetched": "2026-09-07",
  "sections": {
   "1": {
    "title": "Introduction",
@@ -450,23 +450,14 @@
   "a b": [
    "2.3"
   ],
-  "absolute length": [
-   "6.2"
-  ],
-  "absolute length unit": [
-   "6.2"
-  ],
-  "absolute length units": [
-   "6.2"
-  ],
   "accumulation procedure": [
    "3"
   ],
   "addition procedure": [
    "3"
   ],
-  "anchor unit": [
-   "6.2"
+  "advance measure": [
+   "6.1.1"
   ],
   "angle percentage": [
    "5.6"
@@ -477,14 +468,8 @@
   "bearing angle": [
    "7.1"
   ],
-  "between zero and b": [
-   "10.3"
-  ],
   "calc keyword": [
    "10.8"
-  ],
-  "calc operator nodes": [
-   "10.10"
   ],
   "calc product": [
    "10.8"
@@ -555,200 +540,11 @@
   "dashed ident": [
    "4.3"
   ],
-  "data dfn type dfn data export id length advance measure advance measure": [
-   "6.1.1"
-  ],
-  "data dfn type dfn data export id url local url flag local url flag": [
-   "4.5.1.1"
-  ],
-  "data dfn type value data export data lt cap cap unit id cap cap": [
-   "6.1.1"
-  ],
-  "data dfn type value data export data lt ch ch unit id ch ch": [
-   "6.1.1"
-  ],
-  "data dfn type value data export data lt em em unit id em em": [
-   "6.1.1"
-  ],
-  "data dfn type value data export data lt ex ex unit id ex ex": [
-   "6.1.1"
-  ],
-  "data dfn type value data export data lt ic ic unit id ic ic": [
-   "6.1.1"
-  ],
-  "data dfn type value data export data lt lh lh unit id lh lh": [
-   "6.1.1"
-  ],
-  "data dfn type value data export data lt rcap rcap unit id rcap rcap": [
-   "6.1.1"
-  ],
-  "data dfn type value data export data lt rch rch unit id rch rch": [
-   "6.1.1"
-  ],
-  "data dfn type value data export data lt rem rem unit id rem rem": [
-   "6.1.1"
-  ],
-  "data dfn type value data export data lt rex rex unit id rex rex": [
-   "6.1.1"
-  ],
-  "data dfn type value data export data lt ric ric unit id ric ric": [
-   "6.1.1"
-  ],
-  "data dfn type value data export data lt rlh rlh unit id rlh rlh": [
-   "6.1.1"
-  ],
-  "data dfn type value data export id cm cm": [
-   "6.2"
-  ],
-  "data dfn type value data export id deg deg": [
-   "7.1"
-  ],
-  "data dfn type value data export id dpcm dpcm": [
-   "7.4"
-  ],
-  "data dfn type value data export id dpi dpi": [
-   "7.4"
-  ],
-  "data dfn type value data export id dppx dppx": [
-   "7.4"
-  ],
-  "data dfn type value data export id dvb dvb": [
-   "6.1.2.2"
-  ],
-  "data dfn type value data export id dvh dvh": [
-   "6.1.2.2"
-  ],
-  "data dfn type value data export id dvi dvi": [
-   "6.1.2.2"
-  ],
-  "data dfn type value data export id dvmax dvmax": [
-   "6.1.2.2"
-  ],
-  "data dfn type value data export id dvmin dvmin": [
-   "6.1.2.2"
-  ],
-  "data dfn type value data export id dvw dvw": [
-   "6.1.2.2"
-  ],
-  "data dfn type value data export id grad grad": [
-   "7.1"
-  ],
-  "data dfn type value data export id hz hz": [
-   "7.3"
-  ],
-  "data dfn type value data export id in in": [
-   "6.2"
-  ],
-  "data dfn type value data export id khz khz": [
-   "7.3"
-  ],
-  "data dfn type value data export id lvb lvb": [
-   "6.1.2.2"
-  ],
-  "data dfn type value data export id lvh lvh": [
-   "6.1.2.2"
-  ],
-  "data dfn type value data export id lvi lvi": [
-   "6.1.2.2"
-  ],
-  "data dfn type value data export id lvmax lvmax": [
-   "6.1.2.2"
-  ],
-  "data dfn type value data export id lvmin lvmin": [
-   "6.1.2.2"
-  ],
-  "data dfn type value data export id lvw lvw": [
-   "6.1.2.2"
-  ],
-  "data dfn type value data export id mm mm": [
-   "6.2"
-  ],
-  "data dfn type value data export id ms ms": [
-   "7.2"
-  ],
-  "data dfn type value data export id pc pc": [
-   "6.2"
-  ],
-  "data dfn type value data export id pt pt": [
-   "6.2"
-  ],
-  "data dfn type value data export id px px": [
-   "6.2"
-  ],
-  "data dfn type value data export id q q": [
-   "6.2"
-  ],
-  "data dfn type value data export id rad rad": [
-   "7.1"
-  ],
-  "data dfn type value data export id s s": [
-   "7.2"
-  ],
-  "data dfn type value data export id svb svb": [
-   "6.1.2.2"
-  ],
-  "data dfn type value data export id svh svh": [
-   "6.1.2.2"
-  ],
-  "data dfn type value data export id svi svi": [
-   "6.1.2.2"
-  ],
-  "data dfn type value data export id svmax svmax": [
-   "6.1.2.2"
-  ],
-  "data dfn type value data export id svmin svmin": [
-   "6.1.2.2"
-  ],
-  "data dfn type value data export id svw svw": [
-   "6.1.2.2"
-  ],
-  "data dfn type value data export id turn turn": [
-   "7.1"
-  ],
-  "data dfn type value data export id valdef rounding strategy down down": [
-   "10.3"
-  ],
-  "data dfn type value data export id valdef rounding strategy line width line width": [
-   "10.3"
-  ],
-  "data dfn type value data export id valdef rounding strategy nearest nearest": [
-   "10.3"
-  ],
-  "data dfn type value data export id valdef rounding strategy to zero to zero": [
-   "10.3"
-  ],
-  "data dfn type value data export id valdef rounding strategy up up": [
-   "10.3"
-  ],
-  "data dfn type value data export id vb vb": [
-   "6.1.2.2"
-  ],
-  "data dfn type value data export id vh vh": [
-   "6.1.2.2"
-  ],
-  "data dfn type value data export id vi vi": [
-   "6.1.2.2"
-  ],
-  "data dfn type value data export id vmax vmax": [
-   "6.1.2.2"
-  ],
-  "data dfn type value data export id vmin vmin": [
-   "6.1.2.2"
-  ],
-  "data dfn type value data export id vw vw": [
-   "6.1.2.2"
-  ],
-  "data dfn type value data export id x x": [
-   "7.4"
-  ],
   "default viewport percentage units": [
    "6.1.2.1"
   ],
   "degenerate ratio": [
    "5.7"
-  ],
-  "determine the type of a calculation": [
-   "10.9"
   ],
   "device pixel": [
    "6.2"
@@ -798,6 +594,9 @@
   "local font relative lengths": [
    "6.1.1"
   ],
+  "local url flag": [
+   "4.5.1.1"
+  ],
   "log(a b )": [
    "10.5"
   ],
@@ -830,9 +629,6 @@
   ],
   "not additive": [
    "3"
-  ],
-  "numeric data types": [
-   "5"
   ],
   "numeric function": [
    "9.1"
@@ -873,20 +669,8 @@
   "reference pixel": [
    "6.2"
   ],
-  "relative length": [
-   "6.1"
-  ],
-  "relative length unit": [
-   "6.1"
-  ],
-  "relative length units": [
-   "6.1"
-  ],
   "rem(a b)": [
    "10.3"
-  ],
-  "resolve a style resource url": [
-   "4.5.4"
   ],
   "root font relative lengths": [
    "6.1.1"
@@ -951,9 +735,6 @@
   "snap as a line width": [
    "6"
   ],
-  "sort a calculation children": [
-   "10.13"
-  ],
   "specified length": [
    "6"
   ],
@@ -999,11 +780,8 @@
  },
  "ops": {},
  "uses": {
-  "absolute length units": {
-   "10.14": 2
-  },
-  "anchor unit": {
-   "10.14": 2
+  "advance measure": {
+   "6.1": 2
   },
   "atan2(a b)": {
    "10.14": 2
@@ -1074,6 +852,9 @@
    "8.3": 5,
    "8.3.3": 2
   },
+  "local url flag": {
+   "10.14": 2
+  },
   "log(a b )": {
    "10.14": 2
   },
@@ -1106,9 +887,6 @@
    "10.14": 4
   },
   "pow(a b)": {
-   "10.14": 2
-  },
-  "relative length units": {
    "10.14": 2
   },
   "rem(a b)": {
