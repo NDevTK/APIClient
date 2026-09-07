@@ -794,13 +794,14 @@ IntrinsicInlineSizes intrinsic_inline_sizes(lxb_dom_element_t *el)
                   "producer of `IntrinsicInlineSizes` for a table box. WHAT IS LEFT AS A LAYOUT IS THE GRID, "
                   "AND ITS SECTION NUMBER USED TO BE WRONG HERE — this line said css-grid-2 §11.5, which is "
                   "\"Aligning the Grid: the justify-content and align-content properties\" and decides nothing "
-                  "about a size. The sentence that governs is §5.2 \"Sizing Grid Containers\": \"The "
+                  "about a size. The sentence that governs is css-grid-2 §5.2 \"Sizing Grid Containers\": \"The "
                   "max-content size (min-content size) of a grid container is the sum of the grid container's "
                   "track sizes (including gutters) in the appropriate axis, when the grid is sized under a "
                   "max-content constraint (min-content constraint).\" So the operand is the TRACKS, which is "
-                  "§12.5 \"Resolve Intrinsic Track Sizes\" inside §12.3 \"Track Sizing Algorithm\" — a whole "
-                  "chapter away from where this crash pointed. That arm needs its own box tree and its own "
-                  "track list first and is not this walk with a different accumulator");
+                  "css-grid-2 §12.5 \"Resolve Intrinsic Track Sizes\", which is a step of "
+                  "css-grid-2 §12.3 \"Track Sizing Algorithm\" — a whole chapter away from where this "
+                  "crash pointed. That arm needs its own box tree and its own track list first and is "
+                  "not this walk with a different accumulator");
     }
     /* CSS 2.2 §9.2.1 "Block-level elements and block boxes"' ALTERNATIVE, ASKED ONCE OVER THE WHOLE CHILD LIST
        AND BEFORE EITHER ALGORITHM RUNS: "A block container box either contains only block-level boxes or

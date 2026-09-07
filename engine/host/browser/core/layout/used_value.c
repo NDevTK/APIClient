@@ -121,15 +121,15 @@ static bool uv_display_is_flex_or_grid(const char *d)
                          strcmp(d, "grid") == 0 || strcmp(d, "inline-grid") == 0);
 }
 
-/* AND WHICH HALF OF THE ONE PAIR IT IS. §3 and §5.1 define each pair as the SAME container box differing only
-   in its outer display type — "block-level when placed in flow layout" against "inline-level" — and both
-   modules then size the container "using the rules of the formatting context in which it participates"
+/* AND WHICH HALF OF THE ONE PAIR IT IS. §3 and css-grid-1 §5.1 define each pair as the SAME container box
+   differing only in its outer display type — "block-level when placed in flow layout" against "inline-level" —
+   and both modules then size the container "using the rules of the formatting context in which it participates"
    (css-grid-1 §5.2 "Sizing Grid Containers", css-flexbox-1 §9.2 "Line Length Determination"), so the outer
    half is the whole of what this component has to know. IT IS DERIVED FROM THE LIST ABOVE AND NOT A SECOND
    COPY OF IT: a fifth spelling added there is inline-level or block-level by the same test rather than by
    being remembered in two places, which is the failure the box-type list's own comment describes. The `inline-`
-   prefix is exact over that list and nowhere near a guess about a name — §3 and §5.1 write the inline-level
-   half of each pair and no other member of the list carries it. */
+   prefix is exact over that list and nowhere near a guess about a name — §3 and css-grid-1 §5.1 write
+   the inline-level half of each pair and no other member of the list carries it. */
 static bool uv_display_is_inline_flex_or_grid(const char *d)
 {
     return uv_display_is_flex_or_grid(d) && strncmp(d, "inline-", 7) == 0;
@@ -1326,10 +1326,10 @@ static UvCb uv_cb(lxb_dom_element_t *el)
            containing block for their contents exactly like block containers do. [CSS2]" That is an ELEMENT's
            content edge, stated in the module's own words, so a flex container IS this case's answer even
            though CSS 2 §9.2.1 does not call it a block container box; §3 defines the pair as one container
-           differing only in outer display type, so both spellings answer. css-grid-1 says the OPPOSITE of a
-           grid container in its own §5.1, which is why the two are split here rather than sharing
-           `uv_display_is_flex_or_grid`'s single predicate — that predicate answers "is this box a flex or grid
-           CONTAINER", a question with one answer, and this is a question with two. */
+           differing only in outer display type, so both spellings answer. css-grid-1 §5.1 says the OPPOSITE
+           of a grid container, which is why the two are split here rather than sharing
+           `uv_display_is_flex_or_grid`'s single predicate — that predicate answers
+           `is this box a flex or grid CONTAINER`, a question with one answer, and this is a question with two. */
         bool flex = strcmp(d, "flex") == 0 || strcmp(d, "inline-flex") == 0;
         bool grid = strcmp(d, "grid") == 0 || strcmp(d, "inline-grid") == 0;
         /* `table-cell` and `table-caption` are block containers (CSS 2 §9.2.1: "non-replaced inline blocks and
@@ -1764,20 +1764,20 @@ static bool uv_limit(lxb_dom_element_t *el, UvBox box, bool vertical, bool is_ma
        used at computed value time if possible, and at used value time otherwise" — so `max-width: calc(100px -
        200px)` is VALID CSS whose used value is 0, and a page writing it would have crashed an assert about the
        engine's own invariants. The two are told apart by that derivation and not by a flag on the value: a
-       negative that reaches here is a top-level calculation's result, because nothing else survives §5.1.
-       `css_px_max` and not an `if`: the clamped-away operand's environment facts are part of the value's
-       domain at every viewport, including the ones where it floors. */
+       negative that reaches here is a top-level calculation's result, because nothing else survives
+       css-values-4 §5.1. `css_px_max` and not an `if`: the clamped-away operand's environment facts are
+       part of the value's domain at every viewport, including the ones where it floors. */
     if (len.kind == CSS_LENGTH_ABSOLUTE) {
         *out = css_px_max(len.px, css_px(0.0));
         return true;
     }
     if (len.kind == CSS_LENGTH_PERCENTAGE || len.kind == CSS_LENGTH_CALCULATED) {
         DCHECK(len.kind != CSS_LENGTH_PERCENTAGE || len.pct >= 0.0,
-               "a NEGATIVE percentage `min-`/`max-` size. §5.1's dropped declaration is what makes this "
-               "unreachable for a LITERAL — the two grammars forbid it in the same sentence the length arm "
-               "above quotes — and a math function's negative percentage term is CSS_LENGTH_CALCULATED, which "
-               "this assert deliberately does not cover because §9.1 clamps that one after the basis resolves "
-               "it rather than refusing it here");
+               "a NEGATIVE percentage `min-`/`max-` size. css-values-4 §5.1's dropped declaration is what "
+               "makes this unreachable for a LITERAL — the two grammars forbid it in the same sentence the "
+               "length arm above quotes — and a math function's negative percentage term is "
+               "CSS_LENGTH_CALCULATED, which this assert deliberately does not cover because §9.1 clamps that "
+               "one after the basis resolves it rather than refusing it here");
         if (!vertical) {
             /* §10.4: "the percentage is calculated with respect to the width of the generated box's
                containing block." */
@@ -1850,8 +1850,8 @@ static bool uv_limit(lxb_dom_element_t *el, UvBox box, bool vertical, bool is_ma
        measurement (its max-content block size is "the block size of the content after layout"), but the sizing
        VALUE does not reach for it — §3.2 sends both keywords to the automatic size in that axis, which is what
        `auto` would have produced and which §3.2's own `auto` entry names ("for width/height, specifies an
-       automatic size"). So the inline axis reads §5.1's two sizes and the block axis reads CSS 2.2 §10.6.3's
-       content-based height, and neither is the other turned sideways.
+       automatic size"). So the inline axis reads css-sizing-3 §5.1's two sizes and the block axis reads
+       CSS 2.2 §10.6.3's content-based height, and neither is the other turned sideways.
        §3.3's `box-sizing` conversion is applied to both for the reason every other arm applies it: each of the
        three is a CONTENT size and the used value css-sizing-3 §3.3 exposes is the border box's. */
     if (strcmp(len.keyword, "min-content") == 0 || strcmp(len.keyword, "max-content") == 0) {
