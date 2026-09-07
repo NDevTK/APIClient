@@ -727,7 +727,30 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                       Its sibling `html/semantics/popovers` IS here and gave the popover half an oracle all
                       along, which is exactly how a missing entry hides: the neighbouring area reports
                       normally and the total looks complete. */
-                   "html/semantics/interactive-elements"];
+                   "html/semantics/interactive-elements",
+                   /* POINTER EVENTS — THE THIRD ENTRY FOUND THE SAME WAY, AND THE ONE THAT SHOWS WHY THE
+                      TWO ABOVE ARE NOT ENOUGH ON THEIR OWN. A lane landed `PointerEvent` — the interface a
+                      real bundle feature-detects and this engine answered false for — and the interface has
+                      no oracle here: `pointerevents/` holds 214 files at the pinned revision, 191 of them
+                      loading `resources/testharness.js`, and NOT ONE is checked out.
+                      WHAT IT DOES HAVE IS ONE ROW OF SOMEBODY ELSE'S TABLE, which is the shape that makes an
+                      absence look covered. `dom/nodes/Document-createEvent.https.html` lists "PointerEvent"
+                      among its factory names and asserts the prototype identity and the initial Event state,
+                      so `window.PointerEvent` existing is scored — and its constructor, its members, its
+                      property attributes and its `[Exposed]` are scored by nothing. `interfaces/pointerevents.idl`
+                      IS checked out and reads like the missing oracle and is not: `css/cssom-view/idlharness.html`
+                      names it in `idl_test`'s SECOND argument, and `internal_add_dependency_idls` builds
+                      `{ only: [] }` and marks what it pulls `untested` — a dependency IDL resolves types for
+                      the specs under test and asserts nothing about itself. Read out of the corpus's own
+                      `resources/idlharness.js` rather than assumed.
+                      NOTHING IS PREDICTED HERE ABOUT WHAT IT SCORES, and the `fullscreen` entry above says
+                      why that sentence is written rather than a number: 169 of the 191 reference
+                      `testdriver` and 22 do not, so most of this area wants synthetic pointer input from an
+                      engine that has no device — expect what that does, and read the work queue off what
+                      each abort
+                      NAMES. Per §A-DIRECTORY-THAT-ABORTS a count arriving where there was no result is the
+                      first honest measurement of an area and never a regression to revert. */
+                   "pointerevents"];
 
 /* AND THE DIRECTORIES WHOSE OWN LEVEL CONE MODE HAS ALREADY PUT ON DISK. A cone-mode checkout materializes every
    file of every directory ON THE PATH to a listed one, so naming one helper's `resources` lands its standard's

@@ -2215,11 +2215,75 @@ const OTHER_SPECS = [
      THESE ARE FOREIGN AND NOT INDEXED ROWS ON PURPOSE. An index row would answer more, and it would also
      make each of these a NEIGHBOUR of every standard already here — which is how indexing Mixed Content
      alone moved a defect onto Subresource Integrity rather than ending it. A refusal only ever removes a
-     guess, so it is the change that cannot manufacture an accusation; an index row for any of them is a
-     later diff with its own whole-corpus measurement. */
-  "pointer events", "pointer lock", "css mixins", "css extensions",
-  "css anchor positioning", "css color adjust",
-  /* CSS NAVIGATION, HELD OUT OF THE SIX ABOVE AND LANDED ALONE BECAUSE ITS NAME STARTS WITH A WORD AN INDEXED
+     guess, so it is the change that cannot manufacture an accusation.
+     AND "AN INDEX ROW FOR ANY OF THEM IS A LATER DIFF" WAS TRUE OF FOUR AND FALSE OF TWO, WHICH IS WHY THE
+     SIX ARE NOW TWO ENTRIES. That sentence stood here and was written without asking the servers; asked,
+     the six SPLIT. The four CSS drafts serve rendered bikeshed with a dt-updated and no `respecConfig` —
+     `drafts.csswg.org/css-mixins-1/`, `css-extensions-1`, `css-anchor-position-1`, `css-color-adjust-1`,
+     at 31, 9, 40 and 21 `data-level` headings — so for those four the sentence is exactly right and an
+     index row is a fetch away. The two Pointer standards are the entry below, and for them it is false.
+     THE PROBE WAS ARMED AT BOTH ENDS BEFORE ANY OF THAT WAS BELIEVED, because a zero here is the answer a
+     mis-addressed question also gives: the `permissions` row's base answers 49 `<bdi class="secno">`
+     openings inside an `<hN>` and the `fsa` row's answers 25 `data-level`, neither carrying a
+     `respecConfig`, so the probe SPEAKS for a document either reader can read. Both negative controls this
+     file already names — `w3c.github.io/requestidlecallback/` and `w3c.github.io/screen-orientation/` —
+     answer zero of both shapes with a `respecConfig`. It separates them, so its zeros mean something. */
+  "css mixins", "css extensions", "css anchor positioning", "css color adjust",
+  /* POINTER EVENTS AND POINTER LOCK, SPLIT OUT OF THE FOUR ABOVE BECAUSE THEIR INDEX ROW IS NOT A FETCH
+     AWAY — the `background tasks` category, which until now had one member on this list. The claim is
+     about what the servers send rather than about this tool, and it is the same four facts for each.
+     THE MAINTAINED DOCUMENT IS UNRENDERED ReSpec SOURCE. `w3c.github.io/pointerevents/` answers 200 with
+     267 KB and `w3c.github.io/pointerlock/` with 50 KB, and each carries a `respecConfig`, no
+     `<time class="dt-published">`, and ZERO numbered headings of EITHER shape — no `data-level` for the
+     bikeshed reader and no `<bdi class="secno">` for the respec one. ReSpec numbers a document IN THE
+     BROWSER, so the config's PRESENCE is what proves the bytes cannot be indexed, which reads exactly like
+     evidence that the respec reader is the right one and is the opposite. Pointer Lock's `<title>` is
+     empty for the same reason: ReSpec fills it at render time.
+     AND THERE IS NO OTHER RENDERED FORM OF IT. `index.html` is BYTE-IDENTICAL to the directory for both
+     (273594 and 50925 bytes either way), and `labs.w3.org/spec-generator` answers 503, exactly as the
+     `background tasks` entry above records for its own standard.
+     AND NEITHER REMAINING ANSWER IS HONEST. `www.w3.org/TR/pointerevents4/` and
+     `www.w3.org/TR/pointerlock-2/` ARE rendered — 116 and 35 numbered headings, each with a dt-published —
+     so either would parse. Both are /TR/ paths, which the edition assertion at the head of this file
+     refuses for a "maintained" row and refuses correctly; and "final" would be a claim that the editors
+     have STOPPED, which each document's own Status section contradicts in its own words: both are a W3C
+     Working Draft, dated 26 August 2026 and 25 February 2026, each naming that same unrendered Editor's
+     Draft as its "Latest editor's draft". Writing a reader that numbered the ReSpec SOURCE by document
+     order would be this codebase restating ReSpec's own numbering algorithm — the second copy CLAUDE.md
+     refuses, and the one that manufactures wrong answers rather than losing coverage.
+     SO A FOREIGN ROW IS THE HONEST STATE FOR BOTH, and the honest state is not the same as a working one
+     unless somebody checks which — so this is the check, and BOTH ENTRIES FIRE. Measured over
+     `core/events/pointer_event.c` alone: 33 citations resolved on their own evidence of 75 read, ZERO
+     placed only by a file vote, and 39 naming an unindexed standard. Not one leaked to a vote, which is
+     what an `other:` anchor is for. THE TWO SPELLINGS REACH IT BY DIFFERENT ROUTES AND BOTH NEED THE
+     UNLEVELLED BASE: `Pointer Events 4 §N` ends on a DIGIT, which the tail regex refuses outright, so its
+     only token is the one `joinLevel` builds — and joinLevel's gate is `OTHER_SPECS.includes(base)`, which
+     this entry is what satisfies; `LEVELLED` then classifies the joined `pointer-events-4`. The bare
+     `Pointer Events §N` beside it never reaches the join at all and hits this entry in classifyAnchor's
+     first pass. Delete the entry and the levelled sites lose not their answer but their TOKENS, which is
+     the failure the `css counter styles` note above describes and the one no census can report.
+     AND THE COUNT THAT STANDS ABOVE — "the twelve sites write TWO" — IS WHY A FIGURE DOES NOT GO IN A
+     COMMENT. Twelve was exact when it was written and is a claim about a tree that moves: the same grep
+     at that commit and at origin/main answers 12 and 55, because PointerEvent landed in between. The
+     census key for the levelled spelling is `pointer-events-4`, and the reader who wants today's number
+     runs this file and reads its "standards seen but not indexed" line. The sentence above keeps its
+     twelve because it is a statement about the day that entry was added; this one is the derivation that
+     stops it being read as a statement about now.
+     AND THE SILENCE HAS A DEFECT IN IT, WHICH IS WHAT A COUNTED-AND-NEVER-CHECKED BAND COSTS AND WHAT NO
+     ROW HERE CAN BUY BACK. Every distinct number this tree writes for Pointer Events was checked by hand
+     against the rendered edition at a4be744b — seven of them, which is the whole population and not a
+     sample — and six are exactly right at the subject they are written beside. The seventh was not:
+     `core/frame/navigator.c` cited this standard for `maxTouchPoints` at a section that is `Wheel Events
+     and interfaces`, where the one that carries it is titled `Extensions to the Navigator interface` —
+     confirmed in BOTH editions, since the maintained source has that heading with the member's own dfn
+     under it and the rendered one numbers it. A wrong number reading as authoritative is the failure this
+     whole file exists to catch, and here nothing could: the citation names a standard with no row, so it
+     is counted in the band above and asked nothing. That is the honest state of a foreign row and it is
+     not a harmless one. They remain COUNTED AND NEVER CHECKED, which is a silence this list prints rather
+     than a clean bill. */
+  "pointer events", "pointer lock",
+  /* CSS NAVIGATION, HELD OUT OF THE LEVELLED BATCH ABOVE (six entries when it landed, now split into four
+     and two) AND LANDED ALONE BECAUSE ITS NAME STARTS WITH A WORD AN INDEXED
      STANDARD'S ANCHOR ALSO STARTS WITH, which makes it a COLLISION CANDIDATE like `xml` rather than another
      member of that batch — and a batch would have hidden that. BOTH POPULATIONS WERE GREPPED BEFORE THIS
      ENTRY WAS WRITTEN, because the question an entry like this has to answer is not "does my name resolve"
