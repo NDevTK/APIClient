@@ -77,6 +77,25 @@
  * (`LengthOfArrayLike>0` 2761 hits, `>1` 28, `>2` absent). Their PRODUCT was not, and no term reads a
  * product. The document emitted four endpoints in ninety-one seconds.
  *
+ * AND THAT CENSUS IS SATURATED ON A REAL PAGE, WHICH IS ONE CLAUSE MORE THAN THE PARAGRAPH ABOVE SAYS.
+ * "All sixty-four predicate rows decoded to" one name is true of the rows the table NAMED, and a reader takes
+ * it for a complete accounting. Re-measured at a later artifact on the same document: error bound 59..74 with
+ * the OVERFLOW row LEADING at 53..98% of the mass — and decide.c states that reading itself, an overflow row
+ * that leads being "the table saying it has not answered". So the IDENTITY of the top rows travels and their
+ * SHARE does not, which is the distinction the paragraph above draws and then stops one clause short of.
+ *
+ * AND THE FIXTURE AND A REAL PAGE FAN THROUGH DIFFERENT HOOKS, WHICH DECIDES WHERE A REPAIR MAY BE AIMED.
+ * The smoke fixture's mass is `present`: its top four rows are members an inline program ASSIGNED six lines
+ * above the comparison, so a value is in hand. A real page's mass is `absent` — `webpackJsonp` read where
+ * nothing has defined it. Measured at ONE artifact, same build for both sides: the fixture's named rows carry
+ * 16 distinct sources and its top four are inline-record members; the real bundle's carry ONE, `webpackJsonp`,
+ * in all four censuses, with no inline-record row in any of them. SO A NARROWING OF `present` WOULD RETIRE THE
+ * FIXTURE'S TOP FOUR AND TOUCH NOTHING OF A REAL PAGE'S FAN. The subproblems recorded below at
+ * `absent_present_hook` are aimed at `present`, so that is the reading they must be weighed against before
+ * one is built: the shape they describe IS in the real document (`window.gon={}`, `gl = window.gl || {}`) and
+ * contributes no named row, and bound-aware any such site the table does not hold took <= 59..74 forks
+ * against `webpackJsonp`'s 1458..3074.
+ *
  * SO THE HONEST STATEMENT OF WHAT WOULD HAVE TO EXIST IS ABOUT THE ACCOUNTING UNIT AND NOT ABOUT A WEIGHT,
  * AND THIS FILE IS NOT THE PLACE IT WOULD BE BUILT. flow.h's own T/P row says of exactly this reading — the
  * thread reaching a fresh member nearly every time — that "no term of flow_weight reaches it, and a weight
