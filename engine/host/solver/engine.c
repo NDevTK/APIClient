@@ -7644,8 +7644,28 @@ static int flow_step(JSContext *ctx, Flow *f) {
            cross-instance read has an answer per peer timeline; the arm is a clone of the frame this flow is
            SUSPENDED in, and the first resume below takes the answer off the register and leaves that call site
            behind. It is also the first moment in the whole round at which a fork is even meaningful: the flow
-           is switched in, so its delta, its DOM head and its decision state are the ones an arm inherits. */
-        g_step_unit = STEP_UNIT_FORK_PEER_ANSWER;
+           is switched in, so its delta, its DOM head and its decision state are the ones an arm inherits.
+           AND A PASS THIS FUNCTION'S OWN `continue` CREATED MAY NOT RENAME THE STEP, WHICH IS WHY THE THREE
+           ASSIGNMENTS AT THE TOP OF THIS LOOP CARRY THE SAME GUARD THE CHECKPOINT ARM ALREADY CARRIES. The
+           loop used to run once, so an arm that named itself and returned was the last writer by construction;
+           the turn continuation at the reply delivery made it ITERATE, and these three run again on every pass
+           with nothing to stop them. A step that performed its task and continued into step 2.8's checkpoint
+           therefore left through `if (turn_task_done) return 0;` carrying `resume-parked-continuation` — the
+           name of an arm it never took — so `deliver-one-reply` could only ever be credited to a delivery whose
+           `turn_continues()` answered NO, which is the case the policy takes least often.
+           THE ROW WAS THEREFORE A FLOOR WEARING A COUNT'S CLOTHES, and its zero could not tell "the arm never
+           ran" from "the arm ran and the turn continued" — the two readings this engine's whole reply question
+           turns on. THAT THE RELABELLING CHANNEL IS LIVE NEEDS NO BUILD TO ESTABLISH, and the derivation is
+           arithmetic over rows the census already prints: `flow_run_one_job` has exactly two call sites, so a
+           run whose `run-a-task` row is 0 ran every one of its jobs through the checkpoint arm; a checkpoint
+           step that does NOT continue runs ONE job and returns still named `microtask-checkpoint`; therefore
+           (jobsRun − microtask-checkpoint) is a FLOOR on the number of passes this loop's own `continue`
+           created. Measured on the smoke at the artifact stamped e3e5f80d: 94 jobs run against 2 steps in that
+           row over 1610 steps, so at least 92 passes reached these three lines with a name already set.
+           `turn_task_done` IS THE SETTLED-NAME PREDICATE AND NOT A SECOND SPELLING OF ONE: its only writer in
+           this function is the reply-delivery arm, and what it means there is exactly that this step has
+           performed its §8.1.7.3 "Processing model" step 2.6 task — which is what `g_step_unit` names. */
+        if (!turn_task_done) g_step_unit = STEP_UNIT_FORK_PEER_ANSWER;
         if (flow_answer_fork(ctx, f)) return 0;
         /* AND ONE ARM PER DECLINED REQUEST, BESIDE IT AND FOR THE SAME REASON — a fork over a VALUE that
            arrived rather than over a predicate, and the same three things (the frame this flow is SUSPENDED
@@ -7653,14 +7673,26 @@ static int flow_step(JSContext *ctx, Flow *f) {
            before anything else this flow could do. What differs is only what arrived: there, a peer's second
            true answer; here, the trusted zone stating it will not ask at all — which is TWO feasible outcomes
            and no observation of either, so both arms run (flow_decline_fork). */
-        g_step_unit = STEP_UNIT_FORK_DECLINED_REQ;
+        if (!turn_task_done) g_step_unit = STEP_UNIT_FORK_DECLINED_REQ;
         if (flow_decline_fork(ctx, f)) return 0;
         /* THE PARKED CONTINUATION OUTRANKS EVERYTHING ELSE THIS FLOW COULD DO — that is the park's whole
            contract: a forced preempt must be transparent to observable ordering, so the flow resumes BEFORE any
            job it has queued. Yielding after one resume keeps the scheduler in charge of fairness; the park (if
            it parks again immediately) rides the switch-out with the flow. Without this the solver host never
            pumped the slot at all: the continuation sat there until a second flow parked and asserted. */
-        g_step_unit = STEP_UNIT_RESUME_PARKED;
+        if (!turn_task_done) g_step_unit = STEP_UNIT_RESUME_PARKED;
+        /* AND NOTHING ELSE MAY MOVE THE NAME EITHER, ASSERTED HERE RATHER THAN LEFT AS A PROPERTY OF THE THREE
+           LINES ABOVE. The delivery arm is the only writer of `turn_task_done`, and it writes it on the line
+           after it names the step, so the two are one statement and this is that statement checkable: on any
+           pass this function's own `continue` created, the step is already named for the task it performed. A
+           fourth assignment added above the `turn_task_done` return without this guard CRASHES here instead of
+           silently emptying the row it renames — which is the failure this assert is a repair OF, arriving
+           through an edit rather than through the loop. */
+        DCHECK(!turn_task_done || g_step_unit == STEP_UNIT_DELIVER_REPLY,
+               "a continued pass of one step carries a unit name that is not the task it performed — "
+               "`turn_task_done` is written only by the reply-delivery arm, on the line after it names the "
+               "step, so any other name here is an assignment that ran on a pass created by this function's "
+               "own `continue` and the step is about to be reported as an arm it never took");
         /* Resuming a parked continuation is progress ONLY if the flow can still get somewhere: a flow blocked
            on the host resumes into the same wait, so reporting progress spins it against the park. */
         /* AND ITS COMPLETION IS TAKEN HERE, which is the ONE place it can be. A parked continuation is the LATE
