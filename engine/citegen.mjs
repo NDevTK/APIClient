@@ -900,6 +900,51 @@ const SPECS = [
     base: "https://drafts.csswg.org/css-display-3/", edition: "maintained", anchors: ["css-display-3"] },
   { key: "cssflexbox1", label: "CSS Flexible Box Layout Module Level 1", kind: "bikeshed",
     base: "https://drafts.csswg.org/css-flexbox-1/", edition: "maintained", anchors: ["css-flexbox-1"] },
+  /* GRID LEVEL 1 IS ITS OWN ROW FOR THE REASON THE css-images-3 AND css-position-4 ROWS ALREADY GIVE, AND
+     THIS MODULE IS THE SHARPEST INSTANCE OF IT IN THIS TABLE: Level 2 does not extend Level 1's numbering,
+     it INSERTS A WHOLE CHAPTER — `Subgrids`, which Level 1 has no counterpart for — so every top-level
+     number from that point to the end of the document names a DIFFERENT SUBJECT in the two drafts.
+     `Absolute Positioning`, `Alignment and Spacing`, `Grid Layout Algorithm` and `Fragmenting Grid Layout`
+     each sit one number lower at Level 1 than at Level 2, and their subsections go with them: the track
+     sizing algorithm under the layout chapter, and the grid container baselines under the alignment one,
+     which Level 2 does not carry at the number Level 1 gives it at all. A citation resolved to the wrong
+     level here is not off by a subsection — it names another subject and the title beside it disagrees.
+     The levelled shortname is the only spelling that names a document, so it is the only anchor.
+     WHAT THE MISSING ROW WAS DOING WAS NOT COUNTING THE SITES — IT WAS LEAVING THEM UNCHECKED, which reads
+     exactly like a clean bill. `css-grid-1` anchored to nothing, so every site writing it fell through to
+     OTHER_SPECS, and the layout files write it across six translation units. They are right as written, and
+     several of them state a number whose title belongs to another subject one level up, so the silence was
+     covering the population most able to prove the row necessary.
+     AND THE INDEX DIFF WAS MEASURED ON THE WHOLE CORPUS RATHER THAN ON THIS STANDARD, because indexing a
+     standard makes it a NEIGHBOUR of every other one and a row that ends a finding in its own component by
+     starting one elsewhere has MOVED a defect rather than closed it. What the title channel LOSES is asked
+     first, and it is asked of every index rather than of Grid: measured on one frozen pair, every one of
+     Level 1's normalized headings is ALREADY carried by some indexed standard, so this row makes no title
+     newly resolvable and cannot steal a citation the way a genuinely new heading can; the headings carried
+     by several are the boilerplate ones that name a dozen standards each and were never evidence; and every
+     heading held by EXACTLY ONE standard is held by Level 2 and by no other standard in the table. The same
+     holds of the terms: the handful this document defines that no index had are phrases that occur nowhere
+     in the audited tree, and every term that stops being unique was Level 2's. So the uniqueness this row
+     spends is GRID'S OWN.
+     WHAT THAT DOES NOT MEAN IS THAT NO SITE OUTSIDE THE MODULE MOVES, and the difference is the whole
+     reason the diff is measured over the corpus instead of reasoned about. A file whose own dominant
+     standard is another module can QUOTE a Grid sentence under a bare number, and such a site was being
+     resolved by the very uniqueness this row ends — so it stops being answered by a heading only one
+     standard used and falls to its file's vote, where the quoted words then read as Grid's rather than as
+     that file's module's. Measured over the whole corpus on one frozen pair: the judged population, the
+     quotations compared and the VERIFIED count all ROSE and the finding total did not, and the entire
+     adverse movement is one such quotation. That is an honest undecided replacing a confident answer that
+     rested on a standard nobody indexed — the css-sizing-3 row's argument arriving at Grid — and its
+     repair is one standard name at the site rather than anything in this table.
+     AND ONE FILE'S TWO STANDARDS AT ONE NUMBER STOP BEING ARBITRATED, WHICH IS THE SAME TRADE AND LOOKS
+     LIKE A LOSS UNTIL THE SITES ARE READ. A layout file that writes one low chapter number for BOTH this
+     module and a units module had every such site handed to the units module, because Grid was not there to
+     disagree; with the row the group holds two anchors, the group rule refuses to decide, and the sites the
+     file anchors explicitly go to Grid while the rest go to the file vote unjudged. A confident answer that
+     was wrong for some of them becomes an undecided that is wrong for none, and a quotation finding raised
+     against a correctly-written Grid citation goes with it. */
+  { key: "cssgrid1", label: "CSS Grid Layout Module Level 1", kind: "bikeshed",
+    base: "https://drafts.csswg.org/css-grid-1/", edition: "maintained", anchors: ["css-grid-1"] },
   { key: "cssgrid2", label: "CSS Grid Layout Module Level 2", kind: "bikeshed",
     base: "https://drafts.csswg.org/css-grid-2/", edition: "maintained", anchors: ["css-grid-2"] },
   /* AND THE LEVELLED LONG NAME IS AN ANCHOR TOO, BECAUSE IT IS THE SPELLING THIS TREE ACTUALLY WRITES AND IT
