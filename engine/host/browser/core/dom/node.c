@@ -67,6 +67,10 @@
 #include "core/dom/node_heap.h"    /* …and whose arenas the node's BYTES are in, which §4.5 also decides */
 #include "core/dom/node_interface.h" /* …and which C struct those names mean, on create AND on destroy */
 #include "core/dom/text_content.h" /* §4.4's "switching on the interface node implements", answered in ONE place */
+#include "core/dom/names.h"   /* DOM §1.4 Name validation's "valid attribute local name" — §4.13's setAttribute
+                                and toggleAttribute step 1, and NOT the XML `Name` production a target is */
+#include "core/xml/xml_pseudo_attr.h" /* DOM §4.13's "update attributes from data" step 2, "the parsing result
+                                         of invoking the rules for parsing pseudo-attributes from a string" */
 /* §4.5 adopt's step 3 arm. The DOM defines a node's custom element registry and the standard states the
    re-derivation right here, in §4.5; HTML owns what a registry IS. shadow_root.c reaches across the same
    boundary for the same reason. */
@@ -1589,6 +1593,10 @@ static JSValue js_cd_get_length(JSContext *ctx, JSValueConst this_val)
     return JS_NewInt32(ctx, (int)cd_units(cd->data.data, cd->data.length));
 }
 
+/* DOM §4.13's "update attributes from data given pi", forward-declared because §4.10's replace data is step
+   12's caller and stands above the §4.13 component that owns it. */
+static void pi_update_attributes_from_data(JSContext *ctx, lxb_dom_node_t *n);
+
 /* §4.10 "REPLACE DATA", and the four members that ARE it with different operands — appendData is
    (length, 0, data), insertData is (offset, 0, data), deleteData is (offset, count, "") and replaceData is
    itself. Written once because they are one algorithm; four bodies would be four places for the IndexSizeError
@@ -1599,9 +1607,30 @@ static JSValue js_cd_get_length(JSContext *ctx, JSValueConst this_val)
    the operands they need are exactly this algorithm's: the offset and the count AFTER step 3's clamp, and the
    replacement's length in CODE UNITS, never in bytes. That last one is why the call belongs here and not at
    each of the five members — `insertData(0, "é")` moves a boundary point by ONE, and a member handing over
-   `data_len` would move it by two. */
+   `data_len` would move it by two.
+
+   STEP 12 IS A PROCESSING INSTRUCTION'S, AND IT IS WHY THIS ALGORITHM HAS AN OPTIONAL BOOLEAN. DOM §4.10
+   Interface CharacterData writes the operand list as "an integer offset, integer count, string data, and an
+   optional boolean piAttributesAlreadyUpdated (default false)", and step 12 is "If node is a
+   ProcessingInstruction node and piAttributesAlreadyUpdated is false, then update attributes from data given
+   node". Every caller in the standard passes the default EXCEPT §4.13's "update data from attributes", whose
+   last step is "Replace data of pi with 0, pi's length, data, and true" — because that algorithm has just
+   BUILT the data out of the map, so re-deriving the map from it would be a round trip through a grammar the
+   map is not required to survive (see the attribute-map component below).
+   THE EXPORTED ENTRY SUPPLIES THE STANDARD'S OWN DEFAULT and the flag stays inside this file, which is what
+   keeps this ONE algorithm rather than two: `node_cd_replace_data` is §4.10's four-operand form that every
+   §4.10 member and §5.5's extract are stated over, and nothing outside this component has a `true` to pass. */
+static JSValue cd_replace_data(JSContext *ctx, lxb_dom_node_t *n, uint32_t offset, uint32_t count,
+                               const char *data, size_t data_len, bool pi_attrs_already_updated);
+
 JSValue node_cd_replace_data(JSContext *ctx, lxb_dom_node_t *n, uint32_t offset, uint32_t count,
-                               const char *data, size_t data_len)
+                             const char *data, size_t data_len)
+{
+    return cd_replace_data(ctx, n, offset, count, data, data_len, /*piAttributesAlreadyUpdated*/false);
+}
+
+static JSValue cd_replace_data(JSContext *ctx, lxb_dom_node_t *n, uint32_t offset, uint32_t count,
+                               const char *data, size_t data_len, bool pi_attrs_already_updated)
 {
     lxb_dom_character_data_t *cd = lxb_dom_interface_character_data(n);
     const lxb_char_t *s = cd->data.data;
@@ -1628,6 +1657,11 @@ JSValue node_cd_replace_data(JSContext *ctx, lxb_dom_node_t *n, uint32_t offset,
     free(out);
     /* STEPS 8-11 — §5.5's, over the operands this algorithm settled on. */
     range_replace_data_steps(ctx, n, offset, count, cd_units((const lxb_char_t *)data, data_len));
+    /* STEP 12 — §4.13's "update attributes from data", for the one node kind that has attributes to update.
+       The data these bytes just became is the map's definition again, which is exactly the state the map
+       component reads an ABSENT slot as, so the whole of this step is to give the slot back. */
+    if (!pi_attrs_already_updated && n->type == LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION)
+        pi_update_attributes_from_data(ctx, n);
     /* THE LAST STEP — "if node's parent is non-null, then run the children changed steps for node's parent".
        It is §4.2.3's third caller and the ONLY one no tree hook can stand in for: nothing moved in the tree, so
        `styleEl.firstChild.data = '…'` is invisible to every mutation chokepoint and visible here. */
@@ -2077,6 +2111,433 @@ static JSValue js_pi_target(JSContext *ctx, JSValueConst this_val, int magic)
         return JS_ThrowTypeError(ctx, "target read on a node that is not a ProcessingInstruction");
     pi = lxb_dom_interface_processing_instruction(n);
     return JS_NewStringLen(ctx, (const char *)pi->target.data, pi->target.length);
+}
+
+/* ---- DOM §4.13 Interface ProcessingInstruction's ATTRIBUTE MAP ------------------------------------------
+ *
+ * §4.13's own words: "ProcessingInstruction nodes have an associated attribute map, which is a map, initially
+ * empty." Seven members are stated over it — hasAttributes, getAttributeNames, getAttribute, setAttribute,
+ * removeAttribute, toggleAttribute, hasAttribute — and every one of them was absent, so a page that read the
+ * pseudo-attributes of an `<?xml-stylesheet href="…" type="…"?>` called `undefined` and threw.
+ *
+ * THE MAP IS STATE AND NOT A VIEW OF `data`, WHICH IS THE ONE THING A READER MUST NOT TALK THEMSELVES OUT OF.
+ * DOM §1.4 Name validation says "A string is a valid attribute local name if its length is at least 1 and it
+ * does not contain ASCII whitespace, U+0000 NULL, U+002F (/), U+003D (=), or U+003E (>)", so
+ * `setAttribute("0", "x")` is legal — and `0` does not begin XML 1.0 §2.3's `Name` production, which
+ * xml-stylesheet §3's [2] PseudoAtt requires, so the `0="x"` that §4.13's "update data from attributes" writes
+ * into `data` does not parse back. A map re-derived at every read would answer false to a `hasAttribute("0")`
+ * a browser answers true to, and it is exactly the round trip §4.10's `piAttributesAlreadyUpdated` exists to
+ * skip.
+ *
+ * SO THE SLOT'S ABSENCE IS A POSITIVE STATEMENT AND NOT A HOLE, and it is the whole design: an ABSENT slot
+ * means the map is "update attributes from data" of the node's CURRENT data, and a PRESENT slot means the map
+ * is the stored list. Every writer maintains that, which is what makes deriving-on-absence exact rather than
+ * the re-derivation forbidden above:
+ *   — §4.13's "initialize a ProcessingInstruction" step 5 IS "update attributes from data given pi", so a node
+ *     nothing has written since it was created satisfies the invariant with no slot at all;
+ *   — §4.10's replace data step 12 runs the same algorithm, so it GIVES THE SLOT BACK rather than recomputing
+ *     into it (pi_update_attributes_from_data);
+ *   — setAttribute / removeAttribute / toggleAttribute write the slot, and each then runs "update data from
+ *     attributes", whose own last step passes `piAttributesAlreadyUpdated` TRUE so step 12 does not undo it;
+ *   — §4.4's "clone a single node" writes an EMPTY slot, because its per-interface switch is "Set copy's
+ *     target and data to those of node" and says nothing about the map, so a copy's map is the initially-empty
+ *     one and NOT a derivation of the data it just copied.
+ * WHAT THIS BUYS OVER MATERIALIZING AT CREATION is every processing instruction in the engine rather than the
+ * ones one component makes: the XML parser builds a PI straight from the Lexbor factory (core/xml/xml_tree.c),
+ * as does §4.5's createProcessingInstruction, and neither runs an initialize this file could hook. A map
+ * materialized only where §4.13's constructor runs would answer an empty map for every PI a document was
+ * PARSED with — which is the entire population these members exist for.
+ *
+ * IT IS A JS VALUE ON THE NODE'S WRAPPER, which is the two things CLAUDE.md's platform-state rule asks for at
+ * once: its mutations are property writes the per-flow COW delta already captures (so two arms of a fork read
+ * their own map and a parked flow carries its own), and it parks to the cold tier with the wrapper rather than
+ * as C bytes nothing can serialize. The slot key is a SYMBOL minted once per agent, so the map is not a
+ * property a page can see, enumerate or overwrite.
+ *
+ * AND IT IS AN ARRAY OF ALTERNATING NAME, VALUE — NOT AN OBJECT — because §4.13's map is ORDERED and
+ * `getAttributeNames()` is "the result of getting the keys" of it. An object's own-property order puts every
+ * ARRAY-INDEX key first in numeric order, so the one name §1.4 admits and XML's `Name` production does not —
+ * `0` — is also the one an object would silently move to the front. The pair layout has no such rule.
+ *
+ * A VALUE IS STORED AS THE PAGE'S OWN JSValue rather than as bytes, for the reason solver/attr_shadow.h gives
+ * for an element's attributes: `pi.setAttribute("href", location.hash)` puts unknown external input into the
+ * DOM, and storing the ToString'd concrete string is what loses the provenance a later `getAttribute` read
+ * needs to carry to a sink. The NAME is stored as a string because it is a KEY and is compared as one. */
+
+#define PI_ATTRS_SLOT_FLAGS (JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE)
+
+/* THE SLOT KEY — one Symbol per AGENT, minted at node_init and released at node_free, exactly as
+   core/html/html_script.c's three §4.12.1 flags are and for the same reason: a second key would leave a map
+   written under the first invisible under the second. */
+static JSValue g_pi_attrs_key = JS_UNDEFINED;
+static JSAtom  g_atom_pi_attrs = JS_ATOM_NULL;
+
+/* THE RECEIVER OF A §4.13 MEMBER. A TypeError and never a DCHECK: the receiver is whatever the page called
+   with, so it is INPUT, and `ProcessingInstruction.prototype.getAttribute.call(null)` must throw the way
+   Web IDL §3.7.7 Operations says rather than abort the engine. */
+static lxb_dom_node_t *pi_receiver(JSContext *ctx, JSValueConst this_val)
+{
+    lxb_dom_node_t *n = node_of(this_val);
+
+    if (!n || n->type != LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION) {
+        JS_ThrowTypeError(ctx, "a ProcessingInstruction member was called on a node that is not one");
+        return NULL;
+    }
+    return n;
+}
+
+/* THE STORED MAP, OWNED, or JS_UNDEFINED where the slot is absent — which is the invariant's other arm and
+   never a failure. node_wrap_peek rather than node_wrap: a node nothing has written cannot have a slot, so
+   asking must not build a wrapper for every processing instruction a document was parsed with. */
+static JSValue pi_attrs_stored(JSContext *ctx, const lxb_dom_node_t *n)
+{
+    JSValueConst wrap = node_wrap_peek(n);
+    JSValue v;
+
+    DCHECK(g_atom_pi_attrs != JS_ATOM_NULL,
+           "a processing instruction's attribute map was asked for before node_init minted its slot key");
+    if (!JS_IsObject(wrap)) return JS_UNDEFINED;
+    if (JS_GetOwnSlot(ctx, &v, wrap, g_atom_pi_attrs) <= 0) return JS_UNDEFINED;
+    DCHECK(JS_IsArray(v), "a processing instruction's attribute-map slot holds something that is not the "
+                          "name/value array — the slot is written by this component and by nothing else");
+    return v;
+}
+
+/* §4.13's "update attributes from data", EVALUATED: steps 1-4 with no map to write into, so the answer is the
+   list itself. Step 3 is "If result is an error, then return" — which returns having already run step 1,
+   "Clear pi's attribute map", so an unparseable `data` yields the EMPTY map and never a partial one. */
+static JSValue pi_attrs_derive(JSContext *ctx, const lxb_dom_node_t *n)
+{
+    const lxb_dom_character_data_t *cd = lxb_dom_interface_character_data((lxb_dom_node_t *)n);
+    const char *s = (const char *)cd->data.data;
+    XmlPseudoAttrs a;
+    JSValue arr = JS_NewArray(ctx);
+    uint32_t k = 0;
+    size_t i;
+
+    CHECK(!JS_IsException(arr), "a processing instruction's attribute map could not be allocated");
+    memset(&a, 0, sizeof a);
+    /* xml_pseudo_attr_parse's contract is that `s` is a valid pointer even at length zero — an empty string is
+       a thing [1a] PseudoAtts answers about (every part of it is optional) and not the absence of one. */
+    if (xml_pseudo_attr_parse(s ? s : "", cd->data.length, &a) == XML_PSEUDO_OK) {
+        for (i = 0; i < a.n; i++) {
+            JS_SetPropertyUint32(ctx, arr, k++, JS_NewStringLen(ctx, a.items[i].name, a.items[i].name_len));
+            JS_SetPropertyUint32(ctx, arr, k++, JS_NewStringLen(ctx, a.items[i].value, a.items[i].value_len));
+        }
+    }
+    xml_pseudo_attrs_free(&a);
+    return arr;
+}
+
+/* THE MAP, OWNED, either way — the stored list or the derivation the absent slot stands for. */
+static JSValue pi_attrs_read(JSContext *ctx, const lxb_dom_node_t *n)
+{
+    JSValue v = pi_attrs_stored(ctx, n);
+
+    if (!JS_IsUndefined(v)) return v;
+    return pi_attrs_derive(ctx, n);
+}
+
+/* WRITE THE MAP, taking `arr`. This one DOES mint the wrapper, because there is nowhere else for the map to
+   live and it is reached only for a node some member actually wrote. */
+static void pi_attrs_store(JSContext *ctx, lxb_dom_node_t *n, JSValue arr)
+{
+    JSValue wrap = node_wrap(ctx, n);
+
+    DCHECK(g_atom_pi_attrs != JS_ATOM_NULL,
+           "a processing instruction's attribute map was written before node_init minted its slot key");
+    CHECK(JS_IsObject(wrap), "a processing instruction could not be wrapped to carry its §4.13 attribute map — "
+                             "a dropped map is a node whose getAttribute disagrees with the setAttribute that "
+                             "just ran on it");
+    JS_DefinePropertyValue(ctx, wrap, g_atom_pi_attrs, arr, PI_ATTRS_SLOT_FLAGS);
+    JS_FreeValue(ctx, wrap);
+}
+
+/* §4.13's "UPDATE ATTRIBUTES FROM DATA, given a ProcessingInstruction node pi" — §4.10's replace data step 12.
+   Giving the slot back IS the algorithm under this component's invariant: an absent slot denotes exactly the
+   parse of the node's current data, which is what steps 1-4 would have written. */
+static void pi_update_attributes_from_data(JSContext *ctx, lxb_dom_node_t *n)
+{
+    JSValueConst wrap = node_wrap_peek(n);
+
+    DCHECK(n->type == LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION,
+           "§4.13's update attributes from data was run on a node that is not a ProcessingInstruction");
+    if (!JS_IsObject(wrap)) return;   /* no wrapper is no slot, which is already the derived state */
+    JS_DeleteProperty(ctx, wrap, g_atom_pi_attrs, 0);
+}
+
+/* §4.4 "CLONE A SINGLE NODE"'s ProcessingInstruction ARM — "Set copy's target and data to those of node", and
+   NOTHING about the attribute map, so the copy keeps the initially-empty one §4.13 gives every PI node. Under
+   this component's invariant an absent slot means the map is the PARSE of the copy's data, which is what the
+   copy just inherited — so the empty map has to be written down. It is the one place a PI's map is stored
+   without a member having written it, and the one place the invariant would otherwise be false. */
+static void pi_attrs_note_cloned(JSContext *ctx, lxb_dom_node_t *copy)
+{
+    JSValue arr;
+
+    if (copy == NULL || copy->type != LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION) return;
+    arr = JS_NewArray(ctx);
+    CHECK(!JS_IsException(arr), "a cloned processing instruction's empty §4.13 attribute map could not be "
+                                "allocated");
+    pi_attrs_store(ctx, copy, arr);
+}
+
+/* THE INDEX OF `name`'s PAIR in the map, or -1. Even indices are names, odd ones their values. */
+static int pi_attrs_find(JSContext *ctx, JSValueConst arr, const char *name, size_t name_len)
+{
+    int64_t len = 0, i;
+
+    if (JS_GetLength(ctx, arr, &len) < 0) return -1;
+    for (i = 0; i + 1 < len; i += 2) {
+        JSValue k = JS_GetPropertyUint32(ctx, arr, (uint32_t)i);
+        size_t kl = 0;
+        const char *ks = JS_ToCStringLen(ctx, &kl, k);
+        bool hit;
+
+        JS_FreeValue(ctx, k);
+        if (!ks) return -1;
+        hit = (kl == name_len && memcmp(ks, name, name_len) == 0);
+        JS_FreeCString(ctx, ks);
+        if (hit) return (int)i;
+    }
+    return -1;
+}
+
+/* REMOVE `at`'s PAIR, closing the gap — §4.13's "Remove this's attribute map[name]" over an ORDERED map, so
+   every later pair keeps its relative position and `getAttributeNames()` still answers in the order the page
+   wrote them. */
+static void pi_attrs_splice_out(JSContext *ctx, JSValueConst arr, int at)
+{
+    int64_t len = 0, i;
+
+    if (JS_GetLength(ctx, arr, &len) < 0) return;
+    DCHECK(at >= 0 && (int64_t)at + 2 <= len,
+           "§4.13's attribute map was asked to remove a pair that is not in it");
+    for (i = at; i + 2 < len; i++)
+        JS_SetPropertyUint32(ctx, arr, (uint32_t)i, JS_GetPropertyUint32(ctx, arr, (uint32_t)(i + 2)));
+    JS_SetPropertyStr(ctx, arr, "length", JS_NewInt32(ctx, (int)(len - 2)));
+}
+
+/* ONE ATTRIBUTE VALUE'S BYTES, for §4.13's "update data from attributes" only. OWNED, freed with
+   JS_FreeCString; NULL having thrown.
+   THE TWO ARMS ARE js_cd_ctor's AND FOR ITS REASON: unknown external input reaches a body UNCONVERTED so that
+   a later branch on it still forks, and JS_ToCStringLen on one would run ToString into ToPrimitive and
+   collapse the very thing that was preserved — so an unknown denotes its SHAPE and everything else converts.
+   The stored value keeps the unknown itself; only the serialization into `data` takes the shape. */
+static const char *pi_attr_value_bytes(JSContext *ctx, JSValueConst v, size_t *len)
+{
+    if (concolic_is(v)) {
+        const char *s = concolic_name_cstr(ctx, v);
+        *len = s ? strlen(s) : 0;
+        return s;
+    }
+    return JS_ToCStringLen(ctx, len, v);
+}
+
+/* §4.13's "UPDATE DATA FROM ATTRIBUTES, given a ProcessingInstruction node pi" — the nine sub-steps of its
+   step 2 loop and then step 3.
+   THE ESCAPES ARE ITS OWN FOUR AND IN ITS OWN ORDER: "&" first, so the ampersand each later replacement
+   introduces is not escaped a second time. §4.13 writes the third of them as "Replace any U+003D (>) in value
+   with "&gt;"" — the code point named is U+003E and the standard's parenthesised character, `>`, and its
+   replacement, `&gt;`, both say so; the number is an upstream typo and is quoted here as written rather than
+   silently corrected, because a reader checking this against the text must find the same thing this file did.
+   STEP 3 IS "Replace data of pi with 0, pi's length, data, and TRUE" — the flag §4.10's replace data step 12
+   reads, and the reason this algorithm does not undo itself. */
+static void pi_update_data_from_attributes(JSContext *ctx, lxb_dom_node_t *n, JSValueConst arr)
+{
+    int64_t len = 0, i;
+    char *out = NULL;
+    size_t out_len = 0, out_cap = 0;
+    lxb_dom_character_data_t *cd = lxb_dom_interface_character_data(n);
+
+    if (JS_GetLength(ctx, arr, &len) < 0) return;
+    for (i = 0; i + 1 < len; i += 2) {
+        JSValue kv = JS_GetPropertyUint32(ctx, arr, (uint32_t)i);
+        JSValue vv = JS_GetPropertyUint32(ctx, arr, (uint32_t)(i + 1));
+        size_t kl = 0, vl = 0, j, want;
+        const char *ks = JS_ToCStringLen(ctx, &kl, kv);
+        const char *vs = ks ? pi_attr_value_bytes(ctx, vv, &vl) : NULL;
+
+        JS_FreeValue(ctx, kv);
+        JS_FreeValue(ctx, vv);
+        if (!ks || !vs) { if (ks) JS_FreeCString(ctx, ks); free(out); return; }
+        /* The worst case per value byte is the six of `&quot;`, plus the name, the space, the `=` and the two
+           quotes — grown once per pair rather than once per byte. */
+        want = out_len + kl + vl * 6 + 4;
+        if (want > out_cap) {
+            char *nb = (char *)realloc(out, want + 1);
+            CHECK(nb != NULL, "OOM building a processing instruction's data from its §4.13 attribute map — a "
+                              "dropped write is a node whose data disagrees with the map that produced it");
+            out = nb;
+            out_cap = want;
+        }
+        if (out_len) out[out_len++] = ' ';                  /* "append U+0020 SPACE to data" */
+        memcpy(out + out_len, ks, kl); out_len += kl;
+        out[out_len++] = '=';
+        out[out_len++] = '"';
+        for (j = 0; j < vl; j++) {
+            switch (vs[j]) {
+            case '&':  memcpy(out + out_len, "&amp;",  5); out_len += 5; break;
+            case '<':  memcpy(out + out_len, "&lt;",   4); out_len += 4; break;
+            case '>':  memcpy(out + out_len, "&gt;",   4); out_len += 4; break;
+            case '"':  memcpy(out + out_len, "&quot;", 6); out_len += 6; break;
+            default:   out[out_len++] = vs[j]; break;
+            }
+        }
+        out[out_len++] = '"';
+        JS_FreeCString(ctx, ks);
+        JS_FreeCString(ctx, vs);
+    }
+    {
+        JSValue r = cd_replace_data(ctx, n, 0, cd_units(cd->data.data, cd->data.length),
+                                    out ? out : "", out_len, /*piAttributesAlreadyUpdated*/true);
+        JS_FreeValue(ctx, r);
+    }
+    free(out);
+}
+
+/* §4.13's FOUR READS over the map. magic: 0 hasAttributes, 1 getAttributeNames, 2 getAttribute,
+   3 hasAttribute. One body because they are one lookup with four answers, which is the same reason element.c
+   states §4.9's family once. */
+static JSValue js_pi_attr_read(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    lxb_dom_node_t *n = pi_receiver(ctx, this_val);
+    JSValue arr, r;
+    const char *name = NULL;
+    int64_t len = 0;
+    int at;
+
+    if (!n) return JS_EXCEPTION;
+    arr = pi_attrs_read(ctx, n);
+    if (magic == 0) {
+        /* "return false if this's attribute map is empty; otherwise true" */
+        JS_GetLength(ctx, arr, &len);
+        JS_FreeValue(ctx, arr);
+        return JS_NewBool(ctx, len != 0);
+    }
+    if (magic == 1) {
+        /* "return the result of getting the keys of this's attribute map" — the EVEN entries, in order. */
+        int64_t i;
+        uint32_t k = 0;
+        r = JS_NewArray(ctx);
+        JS_GetLength(ctx, arr, &len);
+        for (i = 0; i + 1 < len; i += 2)
+            JS_SetPropertyUint32(ctx, r, k++, JS_GetPropertyUint32(ctx, arr, (uint32_t)i));
+        JS_FreeValue(ctx, arr);
+        return r;
+    }
+    /* getAttribute and hasAttribute both key on the name. The declaration passes UNKNOWN input through as
+       itself, so an unknown name denotes its SHAPE — concolic_name_cstr, the same accessor element.c's
+       §4.9 family reaches for. */
+    DCHECK(argc >= 1, "§4.13's getAttribute/hasAttribute reached its body with no name — both declare a "
+                      "REQUIRED DOMString, so Web IDL §3.6 Overload resolution algorithm's arity check has "
+                      "already thrown for a call that passed none");
+    name = concolic_name_cstr(ctx, argv[0]);
+    if (!name) { JS_FreeValue(ctx, arr); return JS_EXCEPTION; }
+    at = pi_attrs_find(ctx, arr, name, strlen(name));
+    JS_FreeCString(ctx, name);
+    if (magic == 3) {
+        /* "return true if this's attribute map[name] exists; otherwise false" */
+        JS_FreeValue(ctx, arr);
+        return JS_NewBool(ctx, at >= 0);
+    }
+    DCHECK(magic == 2, "a §4.13 attribute-map read was declared with a magic this file does not name");
+    /* "get a processing instruction attribute ... return pi's attribute map[name] with DEFAULT NULL" */
+    r = (at >= 0) ? JS_GetPropertyUint32(ctx, arr, (uint32_t)(at + 1)) : JS_NULL;
+    JS_FreeValue(ctx, arr);
+    return r;
+}
+
+/* §4.13's THREE WRITES. magic: 0 setAttribute, 1 removeAttribute, 2 toggleAttribute.
+   EACH ENDS IN "update data from attributes given this", so the map and `data` cannot come to disagree — and
+   that algorithm's own step 3 passes §4.10's `piAttributesAlreadyUpdated` true, which is what stops replace
+   data step 12 immediately throwing the map away again. */
+static JSValue js_pi_attr_write(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    lxb_dom_node_t *n = pi_receiver(ctx, this_val);
+    const char *name;
+    size_t name_len;
+    JSValue arr;
+    int at;
+    JSValue r = JS_UNDEFINED;
+
+    if (!n) return JS_EXCEPTION;
+    DCHECK(argc >= 1, "a §4.13 attribute-map write reached its body with no name — every one of the three "
+                      "declares a REQUIRED DOMString first, so the arity check has already thrown");
+    DCHECK(magic != 0 || argc >= 2, "§4.13's setAttribute reached its body with no value — its IDL is "
+                                    "`setAttribute(DOMString name, DOMString value)` and both are required");
+    name = concolic_name_cstr(ctx, argv[0]);
+    if (!name) return JS_EXCEPTION;
+    name_len = strlen(name);
+    /* STEP 1 of setAttribute and of toggleAttribute — and NOT of removeAttribute, which §4.13 states with no
+       validity check at all. DOM §1.4's ATTRIBUTE predicate and not the ELEMENT one: `a=b` is a valid element
+       local name and an illegal attribute one, which is why core/dom/names.h keeps them apart. */
+    if (magic != 1 && !dom_valid_attribute_local_name(name, name_len)) {
+        JS_FreeCString(ctx, name);
+        return JS_ThrowDOMException(ctx, "InvalidCharacterError",
+                                    "a processing instruction attribute name must be a valid attribute local "
+                                    "name");
+    }
+    arr = pi_attrs_read(ctx, n);
+    at = pi_attrs_find(ctx, arr, name, name_len);
+    switch (magic) {
+    case 0: {
+        /* "Set this's attribute map[name] to value" — an ordered map, so an existing key KEEPS its position
+           and a new one is appended. The value is the page's own, stored as itself. */
+        JSValue v = JS_DupValue(ctx, argv[1]);
+        if (at >= 0) {
+            JS_SetPropertyUint32(ctx, arr, (uint32_t)(at + 1), v);
+        } else {
+            int64_t len = 0;
+            JS_GetLength(ctx, arr, &len);
+            JS_SetPropertyUint32(ctx, arr, (uint32_t)len, JS_NewStringLen(ctx, name, name_len));
+            JS_SetPropertyUint32(ctx, arr, (uint32_t)(len + 1), v);
+        }
+        break;
+    }
+    case 1:
+        /* "Remove this's attribute map[name]", then update data from attributes — UNCONDITIONALLY, which is
+           what §4.13 says and is why removing a name the map does not hold still rewrites `data`. */
+        if (at >= 0) pi_attrs_splice_out(ctx, arr, at);
+        break;
+    default:
+        DCHECK(magic == 2, "a §4.13 attribute-map write was declared with a magic this file does not name");
+        {
+            /* STEPS 3-5. `force` not given and `force` undefined are the same absence: the declaration makes
+               position 1 optional, so an absent one never reaches here as a value. */
+            bool given = (argc > 1 && !JS_IsUndefined(argv[1]));
+            bool force = given && JS_ToBool(ctx, argv[1]);
+
+            if (at < 0) {
+                if (!given || force) {
+                    int64_t len = 0;
+                    JS_GetLength(ctx, arr, &len);
+                    JS_SetPropertyUint32(ctx, arr, (uint32_t)len, JS_NewStringLen(ctx, name, name_len));
+                    JS_SetPropertyUint32(ctx, arr, (uint32_t)(len + 1), JS_NewStringLen(ctx, "", 0));
+                    r = JS_TRUE;
+                    break;
+                }
+                /* STEP 3.2: "Return false" — no write, so no update and no stored map. */
+                JS_FreeCString(ctx, name);
+                JS_FreeValue(ctx, arr);
+                return JS_FALSE;
+            }
+            if (!given || !force) {
+                pi_attrs_splice_out(ctx, arr, at);
+                r = JS_FALSE;
+                break;
+            }
+            /* STEP 5: "Return true" — the attribute is there and force is true, so nothing changes. */
+            JS_FreeCString(ctx, name);
+            JS_FreeValue(ctx, arr);
+            return JS_TRUE;
+        }
+    }
+    JS_FreeCString(ctx, name);
+    pi_attrs_store(ctx, n, JS_DupValue(ctx, arr));
+    pi_update_data_from_attributes(ctx, n, arr);
+    JS_FreeValue(ctx, arr);
+    return r;
 }
 
 /* ---- §4.4 THE NODE ALGORITHMS ---------------------------------------------------------------------------
@@ -2975,6 +3436,7 @@ int node_clone_run(JSContext *ctx, JSStepHdr *hdr, NodeCloneState *s, int base)
             s->doc = n->owner_document;      /* the argument's default: node's node document */
             s->copy = clone_a_single_node(s->doc, n);
             dom_cow_note_created(s->copy);   /* the clone ROOT only — its descendants are reachable through it */
+            pi_attrs_note_cloned(ctx, s->copy);   /* §4.4's switch copies target and data and NOT the map */
         }
         /* NO EARLY RETURN FOR A SHALLOW CLONE. `subtree` gates step 5 and HTML §4.12.3, and step 6 is not
            conditioned on it at all: a clonable shadow root is cloned — deeply, because 6.7 passes TRUE — for
@@ -2989,6 +3451,7 @@ int node_clone_run(JSContext *ctx, JSStepHdr *hdr, NodeCloneState *s, int base)
     if (phase == NODE_CLONE_PHASE_COPY) {
         /* ONE NODE PER STEP: copy it into `document` and hang it under the copy of its parent. */
         s->cnode = clone_a_single_node(s->doc, s->src);
+        pi_attrs_note_cloned(ctx, s->cnode);   /* §4.4's switch copies target and data and NOT the map */
         dom_cow_insert_private(s->croot, s->dst, s->cnode);
         hdr->stage = base + NODE_CLONE_PHASE_TEMPLATE;
         return JS_STEP_YIELD;
@@ -4560,6 +5023,10 @@ static int g_id_cd[5] = { -1, -1, -1, -1, -1 };   /* §4.10's five splice member
 static int g_id_nodevalue = -1, g_id_textcontent = -1, g_id_textcontent_get = -1, g_id_data = -1,
            g_id_lookup_prefix = -1, g_id_lookup_ns = -1, g_id_default_ns = -1, g_id_root = -1,
            g_id_split_text = -1, g_id_text_ctor = -1, g_id_comment_ctor = -1;
+/* DOM §4.13's seven attribute-map members. Four reads over one body and three writes over another, each
+   declaring its own magic out of the ONE pool declaration this file makes per member. */
+static int g_id_pi_read[4] = { -1, -1, -1, -1 };    /* hasAttributes, getAttributeNames, getAttribute, hasAttribute */
+static int g_id_pi_write[3] = { -1, -1, -1 };       /* setAttribute, removeAttribute, toggleAttribute */
 
 /* DOM §4.11 Interface Text's and DOM §4.14 Interface Comment's CONSTRUCTORS — "The new Text(data) constructor
  * steps are to set this's data to data and this's node document to current global object's associated
@@ -4661,6 +5128,16 @@ void node_init(JSContext *ctx)
         return;    /* element.c asks for the base before declaring Element on top of it */
     }
     g_agent_rt = JS_GetRuntime(ctx);
+    /* DOM §4.13's ATTRIBUTE-MAP SLOT KEY — one Symbol per AGENT, so the map is not a property a page can see,
+       enumerate or overwrite, and so a map written under one key cannot read as absent under another. */
+    DCHECK(g_atom_pi_attrs == JS_ATOM_NULL,
+           "node_init ran twice in one runtime — §4.13's attribute-map slot key is a Symbol, so a second one "
+           "would leave every map written under the first invisible under the second");
+    g_pi_attrs_key = JS_NewSymbol(ctx, "processingInstructionAttributeMap", false);
+    CHECK(!JS_IsException(g_pi_attrs_key),
+          "§4.13's attribute-map slot key allocation failed");
+    g_atom_pi_attrs = JS_ValueToAtom(ctx, g_pi_attrs_key);
+    CHECK(g_atom_pi_attrs != JS_ATOM_NULL, "§4.13's attribute-map slot key could not be interned");
     /* §2.9's dispatch walks the tree, and this is the file that has one. */
     event_target_set_tree(&NODE_EVENT_TREE);
     engine_set_wrap_stats(node_wrap_stats);
@@ -4726,6 +5203,33 @@ void node_init(JSContext *ctx)
         idl_optional_from(0);
         g_id_comment_ctor = idl_method_id(ctx, CD_STR, 1, js_cd_ctor, 1);
         idl_optional_from(0);
+    }
+    {
+        /* DOM §4.13 Interface ProcessingInstruction's SEVEN attribute-map members, declared exactly as its IDL
+           writes them:
+             boolean hasAttributes();
+             sequence<DOMString> getAttributeNames();
+             DOMString? getAttribute(DOMString name);
+             undefined setAttribute(DOMString name, DOMString value);
+             undefined removeAttribute(DOMString name);
+             boolean toggleAttribute(DOMString name, optional boolean force);
+             boolean hasAttribute(DOMString name);
+           `force` IS DECLARED IDL_BOOLEAN AND NOT IDL_ANY, for the reason element.c's §4.9 `toggleAttribute`
+           states at its own declaration: IDL_BOOLEAN is IDL_CONCOLIC_FORKS, so `pi.toggleAttribute(n, cfg.on)`
+           explores the removed world as well, where a body's own JS_ToBool over unknown external input would
+           be pinned to the set arm by ECMAScript §7.1.2 ToBoolean's last step. */
+        static const IdlArgType PI_NAME[1]   = { IDL_DOMSTRING };
+        static const IdlArgType PI_NAME_VAL[2] = { IDL_DOMSTRING, IDL_DOMSTRING };
+        static const IdlArgType PI_TOGGLE[2] = { IDL_DOMSTRING, IDL_BOOLEAN };
+
+        g_id_pi_read[0]  = idl_method_id(ctx, NULL, 0, js_pi_attr_read, 0);   /* hasAttributes */
+        g_id_pi_read[1]  = idl_method_id(ctx, NULL, 0, js_pi_attr_read, 1);   /* getAttributeNames */
+        g_id_pi_read[2]  = idl_method_id(ctx, PI_NAME, 1, js_pi_attr_read, 2);   /* getAttribute */
+        g_id_pi_read[3]  = idl_method_id(ctx, PI_NAME, 1, js_pi_attr_read, 3);   /* hasAttribute */
+        g_id_pi_write[0] = idl_method_id(ctx, PI_NAME_VAL, 2, js_pi_attr_write, 0);   /* setAttribute */
+        g_id_pi_write[1] = idl_method_id(ctx, PI_NAME, 1, js_pi_attr_write, 1);       /* removeAttribute */
+        g_id_pi_write[2] = idl_method_id(ctx, PI_TOGGLE, 2, js_pi_attr_write, 2);     /* toggleAttribute */
+        idl_optional_from(1);   /* §4.13: `toggleAttribute(name, optional force)` */
     }
     /* §4.4 the three namespace lookups. Each takes a `DOMString?`, so each goes on the shared IDL machine —
        `n.lookupPrefix({toString(){ … }})` is the page's code exactly like every other DOMString argument. */
@@ -4822,37 +5326,30 @@ void node_install_protos(JSContext *ctx)
         idl_interface_tag(ctx, comment_proto, "Comment");
         {
             /* §4.12 `interface CDATASection : Text` — no members of its own.
-               §4.13 Interface ProcessingInstruction — NAMED RESIDUAL, and the code below is CORRECT for what it
-               covers rather than unfinished: `target` is the whole of what this prototype claims, and it
-               answers exactly §4.13's "return this's target".
-               WHAT IS NOT COVERED: §4.13 also declares `constructor(DOMString target, optional DOMString data
-               = "")` and SEVEN members over a per-node "attribute map" — hasAttributes, getAttributeNames,
-               getAttribute, setAttribute, removeAttribute, toggleAttribute, hasAttribute — none of which are
-               installed here. The map is real state and not a view of `data`: DOM §1.4 Name validation says "A
-               string is a valid attribute local name if its length is at least 1" and forbids only whitespace,
-               NUL, `/`, `=` and `>`, so `setAttribute("0", "x")` is legal, while `0` does not match XML's Name
-               production and so cannot be read back out of the serialized `data` — re-deriving the map would
-               answer false to a hasAttribute() a browser answers true to.
-               WHAT THE NEXT DIFF BUILDS: a COW-captured named-slot store keyed by a NODE, holding the map as
-               one JS value so it forks per flow and parks to the cold tier. It does not exist — the only
-               named-slot write in this engine is solver/dom_cow.h's `dom_cow_set_prop_taint`, whose owner
-               parameter is an `lxb_dom_element_t *`, and a ProcessingInstruction is not an element — which is
-               why this is a residual rather than a call. The GRAMMAR half is already landed and is not what is
-               missing: core/xml/xml_pseudo_attr.h is §4.13's "update attributes from data" step 2, "the parsing
-               result of invoking the rules for parsing pseudo-attributes from a string". Two hooks follow the
-               store: every site that creates a processing instruction runs "initialize a ProcessingInstruction"
-               step 5, and §4.10 Interface CharacterData's "replace data" step 12 — "and
-               piAttributesAlreadyUpdated is false, then update attributes from data given node" — needs the
-               flag §4.10 spells "an optional boolean piAttributesAlreadyUpdated (default false)", which
-               node_cd_replace_data does not take.
-               HOW ITS ABSENCE WOULD SHOW: `new ProcessingInstruction("a","b")` is a TypeError — the interface
-               object node_install_interface builds carries the shared Illegal-constructor throw — and
-               `pi.getAttribute` and its six siblings are `undefined`, so a page that reads one calls undefined
-               and throws. On a real document it shows as an `<?xml-stylesheet href="…" type="…"?>` whose
-               pseudo-attributes nothing can read.
-               `sheet` IS A DIFFERENT QUESTION AND NOT PART OF THIS RESIDUAL: it is not DOM's at all. CSSOM
+               §4.13 Interface ProcessingInstruction — `target` and the SEVEN attribute-map members, which is
+               everything §4.13 declares on the prototype. The map itself is the component above.
+               WHAT THE RESIDUAL THAT STOOD HERE GOT WRONG, recorded because its reasoning is what the next
+               reader would otherwise copy. Its WHAT-IS-NOT-COVERED clause was exactly right, quotation
+               included, and its WHAT-THE-NEXT-DIFF-BUILDS clause was two claims of which one was true and one
+               was a wrong conclusion drawn from it. TRUE: solver/dom_cow.h's `dom_cow_set_prop_taint` takes an
+               `lxb_dom_element_t *`, so a processing instruction cannot reach it. FALSE: that no store existed.
+               Per-node platform state in this engine is a hidden slot on the node's WRAPPER — the store
+               core/html/html_script.c keeps §4.12.1's three flags in and core/html/custom_elements.c keeps
+               DOM §4.9's is value in — and a JS value in a slot is a property write the per-flow COW delta
+               captures already, which is the whole of what the clause asked a new mechanism to provide.
+               ITS SECOND CLAIM WAS THAT THE MAP MUST BE MATERIALIZED AT EVERY CREATION SITE, and that is
+               unbuildable from this file and would have been wrong if it were not: a processing instruction is
+               created by the Lexbor factory at three places, and two of them — core/xml/xml_tree.c's XML parse
+               and document.c's createProcessingInstruction — are outside this component. A map materialized
+               only where §4.13's own constructor runs would answer the EMPTY map for every PI a document was
+               parsed with, which is the entire population these members exist for. The component above states
+               the invariant that makes an absent slot exact instead.
+               WHAT IS STILL NOT COVERED, and is a residual of its own at the interface object below:
+               §4.13's `constructor(DOMString target, optional DOMString data = "")`. It is NOT blocked on
+               anything here — see node_install_interfaces.
+               `sheet` IS A DIFFERENT QUESTION AND NEVER WAS PART OF THIS ONE: it is not DOM's at all. CSSOM
                declares `ProcessingInstruction includes LinkStyle`, so it is a mixin member owned by the
-               stylesheet component, and it would be absent here even with every §4.13 member above built. */
+               stylesheet component, and it would be absent here even with every §4.13 member built. */
             JSValue cdata_proto = JS_NewObjectProto(ctx, text_proto);
             JSValue pi_proto = JS_NewObjectProto(ctx, cd);
             CHECK(!JS_IsException(cdata_proto) && !JS_IsException(pi_proto),
@@ -4860,6 +5357,16 @@ void node_install_protos(JSContext *ctx)
             idl_interface_tag(ctx, cdata_proto, "CDATASection");
             idl_interface_tag(ctx, pi_proto, "ProcessingInstruction");
             idl_install_accessor(ctx, pi_proto, "target", js_pi_target, 0, -1);
+            DCHECK(g_id_pi_read[0] >= 0 && g_id_pi_write[0] >= 0,
+                   "a realm asked for ProcessingInstruction.prototype before node_init declared §4.13's "
+                   "attribute-map members");
+            idl_install_method(ctx, pi_proto, "hasAttributes", g_id_pi_read[0]);
+            idl_install_method(ctx, pi_proto, "getAttributeNames", g_id_pi_read[1]);
+            idl_install_method(ctx, pi_proto, "getAttribute", g_id_pi_read[2]);
+            idl_install_method(ctx, pi_proto, "hasAttribute", g_id_pi_read[3]);
+            idl_install_method(ctx, pi_proto, "setAttribute", g_id_pi_write[0]);
+            idl_install_method(ctx, pi_proto, "removeAttribute", g_id_pi_write[1]);
+            idl_install_method(ctx, pi_proto, "toggleAttribute", g_id_pi_write[2]);
             JS_SetClassProto(ctx, g_cdata_class, cdata_proto);
             JS_SetClassProto(ctx, g_pi_class, pi_proto);
         }
@@ -4975,12 +5482,24 @@ void node_install_interfaces(JSContext *ctx, JSValueConst global)
            constructor and DOM §4.5's createProcessingInstruction — "To initialize a ProcessingInstruction node
            pi, with target and data" — and this engine has it INLINE in document.c's js_doc_create_xml_node
            under `magic == 1`, so the constructor cannot be written without lifting it out to the one place
-           both reach. A second copy here is what CLAUDE.md forbids, and it would be a copy that is ALSO
-           missing the algorithm's last step ("Update attributes from data given pi"), which the inline one
-           does not run either — so the lift has to carry that step, not just move what is there.
-           HOW ITS ABSENCE SHOWS: the audit's own `interfaces a page cannot new` category still names
-           ProcessingInstruction, and a page writing `new ProcessingInstruction("xml-stylesheet", "href='x'")`
-           gets a TypeError where every browser gives it a node. */
+           both reach. A second copy here is what CLAUDE.md forbids, which is why the diff that built §4.13's
+           attribute map above did NOT also write this constructor: the lift is a document.c edit and the map
+           was not.
+           WHAT THE LIFT OWES IS SMALLER THAN THIS RESIDUAL USED TO SAY, and the correction is recorded here
+           because a next-diff clause is read once, by whoever has decided to do the work. It said the lift
+           "has to carry" the algorithm's step 5, "Update attributes from data given pi", which the inline copy
+           does not run. That step is now discharged by the invariant the attribute-map component states: an
+           ABSENT map slot means the map is the parse of the node's current data, which is exactly what step 5
+           writes, so a freshly created node satisfies step 5 by having no slot. What the lift owes instead is
+           to leave it that way — it must not store a map — and to carry steps 1 and 2 (the XML `Name`
+           production and the "?>" test) and the factory call, which is what the inline copy already is.
+           THE CALL THAT CONSUMES IT is the one line below: `node_install_interface(ctx, global,
+           "ProcessingInstruction", pip)` becomes `node_install_interface_ctor(ctx, global,
+           "ProcessingInstruction", pip, idl_step_constructor(ctx, "ProcessingInstruction", <the id>))`, the
+           same pairing §4.11's and §4.14's constructors take four lines above.
+           HOW ITS ABSENCE SHOWS: the Web IDL gap audit's own `interfaces a page cannot new` category still
+           names ProcessingInstruction, and a page writing `new ProcessingInstruction("xml-stylesheet",
+           "href='x'")` gets a TypeError where every browser gives it a node. */
         node_install_interface(ctx, global, "ProcessingInstruction", pip);
         JS_FreeValue(ctx, np); JS_FreeValue(ctx, cdp);
         JS_FreeValue(ctx, tp); JS_FreeValue(ctx, cmp);
@@ -5015,6 +5534,13 @@ void node_free(JSRuntime *rt)
            "map holds a reference per node belonging to that other runtime, and this release would free them "
            "through this one");
     g_agent_rt = NULL;
+    /* §4.13's attribute-map slot key, given back BELOW the runtime assert above and beside the wrapper walk
+       below, because both are the same kind of release: a reference belonging to the runtime that declared
+       this layer. A map written under it lives on a wrapper the walk releases. */
+    JS_FreeAtomRT(rt, g_atom_pi_attrs);
+    g_atom_pi_attrs = JS_ATOM_NULL;
+    JS_FreeValueRT(rt, g_pi_attrs_key);
+    g_pi_attrs_key = JS_UNDEFINED;
     for (i = 0; i < g_wrap_cap; i++)
         if (g_wraps[i].n)
             JS_FreeValueRT(rt, g_wraps[i].obj);
