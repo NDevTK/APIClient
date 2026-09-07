@@ -97,6 +97,18 @@ typedef enum {
        unrestricted would hand the seek algorithm a position no step of it is written for. The check belongs to
        the TYPE and not to the four setters that share it, for the reason every other row here does. */
     IDL_DOUBLE,
+    /* `float` — Web IDL §3.2.5 "float", which is the RESTRICTED double above plus a ROUNDING the wider type
+       does not perform: "Let y be the number in S that is closest to x, selecting the number with an even
+       significand if there are two equally close values", over a set §3.2.5 builds out of the finite
+       single-precision values. NaN and the infinities are refused exactly as IDL_DOUBLE refuses them, AND a
+       FINITE double outside the single-precision range is refused too — §3.2.5's own step over the two
+       special values it added to S — which IDL_DOUBLE accepts. So a member declared `double` where the IDL
+       writes `float` takes a `1e40` that every browser rejects at the type.
+       THE ROUNDING IS THE OTHER HALF AND IT IS PAGE-VISIBLE. Pointer Events 4 §3.1 "PointerEvent interface"'s
+       `float pressure` answers 0.10000000149011612 for a page that wrote 0.1, because the value the attribute
+       holds is the single-precision one; a `double` member would answer 0.1. That is a number a page can read
+       back and compare, not a rounding nobody sees. */
+    IDL_FLOAT,
     /* A CALLBACK FUNCTION type — §3.2.19. The conversion is a brand check and nothing more: a callable crosses
        as itself and anything else is a TypeError. Declared rather than checked in the body because an optional
        member that is absent must NOT be rejected, and every body that wrote that test by hand is a body that

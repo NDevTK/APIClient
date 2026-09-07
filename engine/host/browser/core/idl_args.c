@@ -132,7 +132,23 @@ int64_t idl_integer_of(IdlArgType t, double x)
    done with the double it answers, which is what makes them one branch rather than two. */
 static bool idl_is_numeric(IdlArgType t)
 {
-    return idl_is_integer(t) || t == IDL_UNRESTRICTED_DOUBLE || t == IDL_DOUBLE;
+    return idl_is_integer(t) || t == IDL_UNRESTRICTED_DOUBLE || t == IDL_DOUBLE || t == IDL_FLOAT;
+}
+
+/* WEB IDL §3.2.5 "float"'s ROUNDING, AND ITS REFUSAL, over the double ToNumber produced. Steps 3 and 4 are the
+   round-to-nearest-even the C cast performs on every target this engine builds for — IEEE 754 says the default
+   rounding is roundTiesToEven and `-frounding-math` is not in the flags — so the cast IS the step rather than
+   an approximation of it, and what has to be written out is step 5: a finite `x` whose nearest single is an
+   infinity is a TypeError and not an infinity. `isfinite(x)` above has already refused NaN and the infinities,
+   so the only way `(float)x` is non-finite here is that step. */
+static bool idl_float_round(double x, double *out)
+{
+    float y = (float)x;
+
+    if (!isfinite((double)y))
+        return false;
+    *out = (double)y;
+    return true;
 }
 
 /* §3.2.4.8's `unsigned long long` AS THE MAGNITUDE IT IS. Public because a conversion that happens OUTSIDE this
@@ -156,6 +172,19 @@ static JSValue idl_num_of(JSContext *ctx, IdlArgType t, double x)
         if (!isfinite(x))
             return JS_ThrowTypeError(ctx, "the provided double value is non-finite");
         return JS_NewFloat64(ctx, x);
+    }
+    /* Web IDL §3.2.5 "float" — the restricted refusal above and then the rounding into single precision. The
+       two throws are ONE sentence to a page (each says `the value is not a float`) and two different steps, so
+       the message says which: a non-finite input is step 2 and a finite one whose nearest single is not finite
+       is step 5, and only the second is a value a `double` member would have accepted. */
+    if (t == IDL_FLOAT) {
+        double y;
+
+        if (!isfinite(x))
+            return JS_ThrowTypeError(ctx, "the provided float value is non-finite");
+        if (!idl_float_round(x, &y))
+            return JS_ThrowTypeError(ctx, "the provided float value is outside the range of a float");
+        return JS_NewFloat64(ctx, y);
     }
     /* §3.3.6 [EnforceRange]'s ARM of §3.2.4.9 Abstract operations' ConvertToInt, which is four of that
        algorithm's own steps and not a bound this file chose: "If x is NaN, +∞, or −∞, then throw a TypeError";
@@ -2811,14 +2840,24 @@ static int idl_level_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *walk, IdlC
                        crosses as itself and anything else is a TypeError. It runs none of the page's
                        code, so it is decided here rather than being a rest point of its own. */
                     if (mt == IDL_SEQUENCE_INTERFACE) {
-                        DCHECK(w->iface != 0,
-                               "a dictionary declared a sequence of an interface type with no class to "
-                               "brand against — idl_iface_brand is the other half of that type");
-                        if (!idl_is_iface(w->seq.value, w->iface) ||
-                            (w->narrow && !w->narrow(w->seq.value))) {
+                        /* THROUGH idl_member_implements, WHICH IS THE ONE RESOLUTION OF §3.2.15's `I`, and
+                           this arm used to be a SECOND one: it read `w->iface`/`w->narrow` — the
+                           DECLARATION's class — by hand, so a member stating `I` as its own class or as its
+                           own PREDICATE (IdlDictMember::iface_is) had that statement silently ignored here
+                           while the scalar interface arm one type over honoured it. That is one question
+                           with two answers, and the answers differ: a predicate is the ONLY spelling
+                           available to an interface no class id names, which idl_args.h's own field comment
+                           enumerates three shapes of, and every Event subclass in this engine is a FOURTH —
+                           nothing WEARS their class (each exists for its per-realm prototype slot and every
+                           event is minted through JS_NewObjectProto), so `sequence<PointerEvent>` cannot be
+                           branded by a class at all and this arm could not express it.
+                           THE REFUSAL FOR A DECLARATION THAT NAMES NEITHER IS NOT LOST, it MOVES: the
+                           DCHECKF inside idl_member_implements states it, and states it for both spellings
+                           at once rather than for the class alone. */
+                        if (!idl_member_implements(ctx, dm, w, w->seq.value)) {
                             JS_ThrowTypeError(ctx, "an element of member `%s` of %s does "
-                                              "not implement the declared interface", dm->name,
-                                              idl_dict_where(w));
+                                              "not implement %s", dm->name,
+                                              idl_dict_where(w), idl_member_iface_subject(dm));
                             return -1;
                         }
                         JS_SetPropertyUint32(ctx, w->seq_list, w->seq_n++,

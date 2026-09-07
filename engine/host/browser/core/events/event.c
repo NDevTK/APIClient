@@ -56,6 +56,7 @@
 #include "core/events/storage_event.h"
 #include "core/events/ui_event.h"
 #include "core/events/mouse_event.h"
+#include "core/events/pointer_event.h"
 #include "core/events/keyboard_event.h"
 #include "core/events/focus_event.h"
 #include "core/events/event_path.h"
@@ -1053,6 +1054,11 @@ static void event_declare_subclasses(JSContext *ctx)
        `FocusEvent : UIEvent : Event`. */
     ui_event_init(ctx);
     mouse_event_init(ctx);
+    /* `PointerEvent : MouseEvent`, so it declares AFTER the interface it extends and directly beside it — the
+       same rule the three below obey, and the reason the chain is what orders this list. HTML §8.1.8.3
+       "Event firing"'s fire a synthetic pointer event is this component's too, so `element.click()` reaches
+       PointerEvent through it. */
+    pointer_event_init(ctx);
     keyboard_event_init(ctx);
     focus_event_init(ctx);
 }
@@ -1067,6 +1073,7 @@ static void event_free_subclasses(JSRuntime *rt)
 {
     focus_event_free(rt);
     keyboard_event_free(rt);
+    pointer_event_free(rt);
     mouse_event_free(rt);
     ui_event_free(rt);
     storage_event_free(rt);

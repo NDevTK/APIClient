@@ -28,9 +28,12 @@ JSValue event_proto(JSContext *ctx);
    exactly the difference from one the page constructs. Returns a new owned Event. */
 JSValue event_new(JSContext *ctx, const char *type, bool bubbles, bool cancelable);
 /* The same, isTrusted FALSE — a synthetic event the PAGE caused. It is NOT what HTML §6.5 Activation behavior
-   of elements' click() fires: that method's step 4 fires a synthetic POINTER event, so the object it builds
-   has to answer DOM §2.9 step 6.4's MouseEvent brand and comes from mouse_event_new_synthetic instead. (The
-   number this line used to give for click() was §3.2.2, which is "Elements in the DOM".) */
+   of elements' click() fires: that method's step 4 fires a synthetic POINTER event, so the object it builds is
+   HTML §8.1.8.3 "Event firing" step 1's "creating an event using PointerEvent" and comes from
+   pointer_event_new_synthetic instead — which still answers DOM §2.9 step 6.4's MouseEvent brand, because
+   PointerEvent inherits MouseEvent and carries its slot record. (The number this line used to give for click()
+   was §3.2.2, which is "Elements in the DOM"; and it named mouse_event_new_synthetic for as long as this
+   engine had no PointerEvent to create.) */
 JSValue event_new_untrusted(JSContext *ctx, const char *type, bool bubbles, bool cancelable);
 
 /* §2.2's INITIALISE, with a DERIVED interface's prototype in place of Event.prototype — the base half of a

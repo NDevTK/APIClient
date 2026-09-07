@@ -31,7 +31,8 @@
 #include "core/events/event.h"
 #include "core/events/event_handler.h"
 #include "core/events/event_path.h"
-#include "core/events/mouse_event.h"   /* §2.9 step 6.4 asks a BRAND, and §6.5's click() fires a MouseEvent */
+#include "core/events/mouse_event.h"   /* §2.9 step 6.4 asks a BRAND, which a PointerEvent answers too */
+#include "core/events/pointer_event.h" /* §6.5's click() fires a synthetic POINTER event — §8.1.8.3 step 1 */
 #include "core/events/report_exception.h"
 #include "solver/result.h"   /* §3.2.15's refusal on a forked arm is this engine's own throw — see the AEL_SIGNAL stage */
 
@@ -3560,14 +3561,14 @@ static bool dispatch_target_root_contains(JSContext *ctx, JSValueConst target, J
    so a host without them has no node documents at all and therefore no Window for one to have. That is the
    same reading handler_determine_target makes of the same null at step 1, and it is why this is a positive
    statement rather than an `if` past a broken invariant. What must not be guessed is the SHAPE of the answer,
-   and mouse_event_new_synthetic asserts that: a Window or null, never anything else. */
+   and pointer_event_new_synthetic asserts that: a Window or null, never anything else. */
 static JSValue dispatch_synthetic_click(JSContext *ctx, JSValueConst target)
 {
     /* BORROWED — the realm owns its global, exactly as §8.1.8.1 step 4's reader treats it. */
     JSValueConst view = g_handler_terms == NULL ? JS_NULL
                                                 : g_handler_terms->node_document_global(ctx, target);
 
-    return mouse_event_new_synthetic(ctx, "click", view);
+    return pointer_event_new_synthetic(ctx, "click", view);
 }
 
 static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
