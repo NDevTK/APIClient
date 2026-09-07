@@ -3880,12 +3880,24 @@ regardless-list step 3 pops the entry either way.
   adopt has NO deferred half for it to hide in. Step 3.3.3 fires from inside the tree walk,
   synchronously, so there is no queued job anywhere naming the adoption — the reaction is the only
   trace it leaves.
-- **§3.2.3 step 11.1's `GetFunctionRealm(NewTarget)`** — a NAMED RESIDUAL at the site, not an absent
-  feature: step 11's fallback prototype is taken from the ACTIVE FUNCTION OBJECT's realm, which the
-  spec's own note says "might not be" NewTarget's. Correct for a same-realm NewTarget, wrong for a
-  class minted in realm A and defined into realm B's registry. ECMAScript §7.3.24
-  "GetFunctionRealm ( func )" already exists in the fork as a loop over the bound/Proxy chains, but
-  `static`; the diff exports it and this becomes `html_element_proto(realm)`.
+- ~~**HTML §3.2.3 step 11.1's `GetFunctionRealm(NewTarget)`**~~ — **built.** `JS_GetFunctionRealm` is
+  exported and step 11 takes NewTarget's realm, then asks THAT realm for the interface prototype
+  object by the definition's local name. The reasoning this entry recorded was right and is why it
+  is kept rather than cut: step 11's fallback used the ACTIVE FUNCTION OBJECT's realm, which the
+  spec's own note says "might not be" NewTarget's — correct for a same-realm NewTarget, wrong for a
+  class minted in realm A and defined into realm B's registry.
+  **ITS REMEDY CLAUSE WAS WRONG, AND THAT IS THE PART WORTH KEEPING.** It said the site "becomes
+  `html_element_proto(realm)`", and that function takes a context and NO NAME — it can only ever
+  answer HTMLElement's prototype, for every interface — so building to the clause would have made
+  `class B extends HTMLButtonElement {}` fall back to the wrong prototype, which is the exact defect
+  the site's own comment warns against. A reader who obeyed it would have introduced a regression
+  under the authority of a document this tree points at. What the realm is actually asked is
+  `html_element_interface_proto(ctx, name, n)`, which is per-realm and keyed on a realm-independent
+  name; the name is sound because HTML §3.2.3 steps 7.1/8.2 have already thrown unless the active function
+  object's interface is the one that local name resolves to. This is the standing case for reading a
+  clause as a HYPOTHESIS about the tree rather than as an instruction: the spec half of this entry
+  was exact and its remedy half named a function whose signature refutes it, and the signature was
+  one grep away the whole time.
 - ~~form-associated custom elements~~ — **built; see §16.**
 - ~~**customized built-ins** (`extends`)~~ — **built.** §4.13.4 steps 7.1-7.4 register an `extends`,
   §4.13.3's lookup step 4 finds the definition by IS VALUE, §3.2.3's `[HTMLConstructor]` is minted
