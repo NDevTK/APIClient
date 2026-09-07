@@ -9230,6 +9230,30 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
  * one flow has ever completed" is a strong enough claim about a scheduler that it should not be a subtraction
  * anyone has to trust.
  *
+ * AND ITS COMPANION IN THE SAME CENSUS IS BIMODAL, WHICH MAKES A RUN'S HEALTH READABLE WITHOUT A LONG RUN.
+ * Measured over every log on disk carrying an `@COLD` line — 145 runs, both census schemas, the older one
+ * spelling the frontier size `flows` where the newer says `live`, which is a trap worth naming because a
+ * reader keyed on one silently drops the whole population that used the other:
+ *
+ *     framed / live   at the TERMINAL census      `finished` at that census
+ *     0.173 .. 0.551  (n=9)                        29,550 .. 80,229
+ *     0.704 .. 1.000  (n=136)                      0
+ *
+ * Nothing lands between 0.551 and 0.704. The two are NOT independent — a flow holding a frame has by
+ * definition not finished — so the correlation is partly definitional and is not the finding. THE FINDING IS
+ * THE GAP: a definitional link alone would give a continuum, and this is two clusters with empty space
+ * between them, which says the frontier is in one of two REGIMES rather than on a spectrum.
+ *
+ * WHY THIS ROW AND NOT `deepest` OR `domHeadEntries`: `deepest` is a high-water mark and says nothing on a
+ * short run (see its own note above). `domHeadEntries` was proposed as the discriminator and DOES NOT
+ * SEPARATE — normalised per live flow at the terminal census it runs 0.00..4.63 for the healthy runs and
+ * 0.00..1240.00 for the rest, so the ranges overlap and a value of 2.35 appears on both sides. It is also a
+ * SUM OVER EVERY LIVE FLOW (cold.c's `out->dom_head_entries += f->dom_n`) and not the running flow's own
+ * delta, which is how it came to be read as a per-flow quantity.
+ *
+ * The derivation, so a reader gets today's answer rather than this one: read `framed`, `live` (or `flows`)
+ * and `finished` from the LAST `@COLD` line of a log, all three from that ONE line, and divide.
+ *
  * `g_deepest` — the highest program index this DOCUMENT has ever compiled, across every flow. The progress
  * line's `script` is the CURRENT flow's cursor, which says what the flow holding the thread is doing and
  * nothing about the document's coverage: a run reporting `script: 1` forever may be one where no flow has ever
