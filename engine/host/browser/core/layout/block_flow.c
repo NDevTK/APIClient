@@ -1540,13 +1540,15 @@ CssPx block_flow_auto_height(lxb_dom_element_t *el)
     grid = strcmp(d, "grid") == 0 || strcmp(d, "inline-grid") == 0;
     free(d);
     if (flex)
-        DFAIL("css-flexbox §9.4 determines a FLEX CONTAINER's auto cross size and CSS 2.1 §10.6.3 does not: the "
-              "container collects its items into FLEX LINES, each line's cross size is the largest hypothetical "
-              "cross size of the items on it, and the container's content-box cross size is the sum of the "
-              "lines'. None of that is a stack of block-level boxes with collapsing margins, so this walk would "
-              "answer a number from the wrong algorithm. BUILD css-flexbox §9's layout algorithm, which needs "
-              "the container's own used main size first — the same §10.3.3 subproblem core/layout/used_value.c "
-              "already solves, one level up");
+        DFAIL("css-flexbox-1 §9.6 \"Cross-Axis Alignment\" determines a FLEX CONTAINER's auto cross size and "
+              "CSS 2.1 §10.6.3 does not — it is §9.6 and not §9.4 because the CONTAINER's cross size is the "
+              "step that reads the lines rather than the one that sizes them: §9.3 \"Main Size Determination\" "
+              "collects the items into FLEX LINES, §9.4 \"Cross Size Determination\" calculates each line's "
+              "cross size from the items on it, and §9.6 then sums the flex lines' cross sizes wherever a "
+              "content-based one is needed. None of that is a stack of block-level boxes with collapsing "
+              "margins, so this walk would answer a number from the wrong algorithm. BUILD "
+              "css-flexbox-1 §9 \"Flex Layout Algorithm\", which needs the container's own used main size "
+              "first — the same §10.3.3 subproblem core/layout/used_value.c already solves, one level up");
     if (grid)
         DFAIL("css-grid-1 §11 \"Grid Layout Algorithm\" sizes a GRID CONTAINER's ROWS and its auto height is "
               "the sum of the row track sizes plus the gutters, not CSS 2.1 §10.6.3's stack of block-level "

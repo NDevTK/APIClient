@@ -65,7 +65,8 @@ typedef enum {
                                 Intrinsic Main Sizes", css-grid-1 §5.2 "Sizing Grid Containers" — which are not
                                 the ones §10.3.5's formula reads */
     UV_BOX_TABLE,            /* CSS 2.1 §17.5 — the table's own width and height algorithms, not §10's */
-    UV_BOX_ITEM              /* a flex or grid item: css-flexbox §9.7 / css-grid sizes it, and §10 does not */
+    UV_BOX_ITEM              /* a flex or grid item, whose used sizes come from its container:
+                                css-flexbox-1 §9.7 "Resolving Flexible Lengths" or css-grid, not CSS 2.1 §10 */
 } UvBox;
 
 static char *uv_computed(lxb_dom_element_t *el, const char *name)
@@ -230,8 +231,8 @@ static bool uv_display_is_block_level_flow(const char *d)
        `table_box_kind`'s and not a second spelling of the value, so the day §17.2's list changes this arm
        changes with it;
      - a child of a flex or grid container is an ITEM, and being one is what makes `float` compute to `none`
-       for it (css-flexbox §3), so the item test precedes the float test;
-     - an ABSOLUTELY POSITIONED child of a flex container is NOT a flex item (css-flexbox §4.1), so the
+       for it (css-flexbox-1 §3), so the item test precedes the float test;
+     - an ABSOLUTELY POSITIONED child of a flex container is NOT a flex item (css-flexbox-1 §4.1), so the
        out-of-flow test precedes the item test;
      - and `display` is read last because css_computed_value.c has already BLOCKIFIED it for a float, for an
        absolutely positioned box and for a flex item, so by here it can no longer say `inline` for any of them.
@@ -2203,9 +2204,9 @@ static CssPx uv_margin(lxb_dom_element_t *el, const char *name, const char *oppo
               "block-level-in-normal-flow section and it is the only one that gives `margin-top: auto` a used "
               "value of 0 outright; §10.6.4 solves the vertical `auto` margins of an ABSOLUTELY POSITIONED box "
               "from its own constraint equation (they centre the box between `top` and `bottom` when both are "
-              "given), §10.6.1 says nothing at all about an INLINE box's vertical margins, and css-flexbox §9.6 "
-              "gives a flex item's `auto` cross-axis margins the free space. BUILD the section this box's type "
-              "names — uv_box_kind above says which it is");
+              "given), §10.6.1 says nothing at all about an INLINE box's vertical margins, and "
+              "css-flexbox-1 §9.6 \"Cross-Axis Alignment\" gives a flex item's `auto` cross-axis margins the "
+              "free space. BUILD the section this box's type names — uv_box_kind above says which it is");
         return css_px(0.0);
     }
     /* THREE SECTIONS STATE THE MARGIN OUTRIGHT and the rest solve an equation instead, which is why the box
@@ -2303,10 +2304,11 @@ static CssPx uv_margin(lxb_dom_element_t *el, const char *name, const char *oppo
         }
     }
     if (box == UV_BOX_ITEM)
-        DFAIL("a horizontal `auto` margin on a FLEX or GRID ITEM, which css-flexbox §9.5 answers before "
-              "alignment does: 'if the remaining free space is positive and at least one main-axis auto margin "
-              "is on the line, distribute it equally among those margins'. It is the container's FREE SPACE "
-              "and not §10.3.3's slack — the two differ because the container has already flexed every item. "
+        DFAIL("a horizontal `auto` margin on a FLEX or GRID ITEM, which css-flexbox-1 §9.5 "
+              "\"Main-Axis Alignment\" answers before alignment does: \"If the remaining free space is "
+              "positive and at least one main-axis margin on this line is auto, distribute the free space "
+              "equally among these margins\". It is the container's FREE SPACE and not §10.3.3's slack — the "
+              "two differ because the container has already flexed every item. "
               "BUILD the flex layout algorithm over the container's own used content size");
     DFAIL("a HORIZONTAL margin computes to `auto` on an ABSOLUTELY POSITIONED box, whose used value CSS 2.1 "
           "§10.3.7 solves from its own constraint equation — 'left + margin-left + border-left-width + "
@@ -2619,10 +2621,12 @@ static CssPx uv_replaced_size(lxb_dom_element_t *el, const ReplacedElement *rep,
               "'display' values are treated as their given display types during layout\"");
     if (box == UV_BOX_ITEM)
         DFAIL("a REPLACED element that is a FLEX or GRID ITEM, whose used main and cross sizes come from its "
-              "container's algorithm. css-flexbox §9.7 makes a declared size the FLEX BASE SIZE and then "
-              "flexes it, and for an `auto` one §9.2 makes the item's natural size its content contribution — "
-              "so §10.3.2's arms are an INPUT to that algorithm rather than the answer, and returning one here "
-              "would report an unflexed size as the used value. BUILD the flex layout over the container's own "
+              "container's algorithm. css-flexbox-1 §9.2 \"Line Length Determination\" makes a declared size "
+              "the FLEX BASE SIZE, and for an `auto` one it makes the item's natural size its content "
+              "contribution; §9.7 \"Resolving Flexible Lengths\" then flexes that base against the "
+              "container's free space — so §10.3.2's arms are an INPUT to that algorithm rather than the "
+              "answer, and returning one here would report an unflexed size as the used value. BUILD the flex "
+              "layout over the container's own "
               "used content size");
     content = vertical ? uv_replaced_height(el, rep) : uv_replaced_width(el, rep);
     DCHECK(content.px >= 0.0,
@@ -2794,9 +2798,10 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
            The crash that stood here told its reader to build §17.5.3, which is built. */
         if (box == UV_BOX_ITEM)
             DFAIL("this box is a FLEX or GRID ITEM, so its used main and cross sizes come from its container's "
-                  "algorithm and not from CSS 2.1 §10 at all — css-flexbox §9.7 resolves the flexible lengths "
-                  "(a declared `width` is only the FLEX BASE SIZE that `flex-grow` and `flex-shrink` then "
-                  "adjust against the container's free space), and css-grid-1 §11 \"Grid Layout Algorithm\" "
+                  "algorithm and not from CSS 2.1 §10 at all — css-flexbox-1 §9.7 \"Resolving Flexible "
+                  "Lengths\" is what sizes it (a declared `width` is only the FLEX BASE SIZE that `flex-grow` "
+                  "and `flex-shrink` then adjust against the container's free space), and css-grid-1 §11 "
+                  "\"Grid Layout Algorithm\" "
                   "sizes a grid item to its track. BUILD the flex layout algorithm, which needs the "
                   "container's own used content size "
                   "first — the same §10.3.3 subproblem, one level up");
@@ -2863,8 +2868,10 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
            table's height under any value of the property. */
         if (box == UV_BOX_ITEM)
             DFAIL("a FLEX or GRID ITEM with `height: auto`. Its cross size is its CONTAINER's algorithm — "
-                  "css-flexbox §9.4 collects the items into flex lines and §9.7 resolves the flexible lengths, "
-                  "css-grid-1 §11 \"Grid Layout Algorithm\" sizes the item to its TRACK — and "
+                  "css-flexbox-1 §9.3 \"Main Size Determination\" collects the items into flex lines, §9.7 "
+                  "resolves the flexible lengths on each, and §9.4 \"Cross Size Determination\" then gives "
+                  "the item its used cross size from the cross size of the line it is on; css-grid-1 §11 "
+                  "\"Grid Layout Algorithm\" sizes the item to its TRACK — and "
                   "CSS 2.1 §10.6.3's stack of block-level children is not it. BUILD the flex layout over "
                   "the container's own used content size");
         if (box == UV_BOX_INLINE_FLEX_GRID)
@@ -2943,8 +2950,9 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
         uv_table_non_cell_width_fail(el, kind);
     }
     if (box == UV_BOX_ITEM)
-        DFAIL("a FLEX or GRID ITEM with `width: auto`. css-flexbox §9.7 makes the FLEX BASE SIZE the item's "
-              "max-content contribution and then flexes it against the container's free space; "
+        DFAIL("a FLEX or GRID ITEM with `width: auto`. css-flexbox-1 §9.2 \"Line Length Determination\" makes "
+              "the FLEX BASE SIZE the item's max-content contribution and §9.7 \"Resolving Flexible Lengths\" "
+              "then flexes it against the container's free space; "
               "css-grid-1 §11 \"Grid Layout Algorithm\" sizes the item to its TRACK, which is itself sized "
               "from the items in it. Both are intrinsic "
               "sizes and neither is §10.3.3's equation. BUILD the flex layout over the container's own used "

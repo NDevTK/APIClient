@@ -348,8 +348,9 @@ typedef struct {
    establishes ONE inline formatting context with its OWN element to name it (the predicate above, and the run
    is then the whole child list); a container with no inline-level content has nothing to wrap; and an element
    that is not a block container at all is outside the section's sentence — an inline box's inline content is
-   on its ANCESTOR's lines, and a flex or grid container's is css-flexbox §4's anonymous flex ITEM, which is a
-   different box this engine does not build. A caller that needs the difference asks the predicate above too.
+   on its ANCESTOR's lines, and a flex or grid container's is the anonymous flex ITEM of
+   css-flexbox-1 §4 "Flex Items", which is a different box this engine does not build. A caller that needs the
+   difference asks the predicate above too.
    IT IS A SECOND ENTRY BESIDE THAT PREDICATE BECAUSE §9.2.1's TWO SHAPES OF ONE CONTEXT ARE REACHED
    DIFFERENTLY, and the header states why the predicate deliberately does not answer for this one: a MIXED
    container answers FALSE there, because the contexts inside it belong to boxes the ELEMENT TREE DOES NOT
