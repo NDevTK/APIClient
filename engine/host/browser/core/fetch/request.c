@@ -516,11 +516,29 @@ static const IdlDictMember REQUEST_INIT[] = {
    exactly a user agent that does not ship the API, which is a state real browsers are in and a page can handle.
    So the honest answer is the absence, and it is not silent: `node engine/idlgen.mjs` names `RequestInit:
    privateToken` on every run, which is the row that keeps this decision visible instead of forgotten.
-   WHAT WOULD CHANGE IT is the FEATURE, not the type. If it is ever built, the one declared type still missing
-   is `sequence<USVString>` for `issuers` — there is no such row in the IdlArgType enum, and the DOMString
-   spelling is a different type: §3.2.12 USVString replaces every unpaired surrogate with U+FFFD, and an issuer
-   is an origin that goes on the wire. The other three members are declarable today (two `required` §3.2.18
-   enumerations and one carrying a `= "none"` default, all three shapes already in use above). */
+   WHAT WOULD CHANGE IT is the FEATURE, AND NOW NOTHING ELSE — every one of `PrivateToken`'s four members is
+   declarable today. PRIVATE STATE TOKEN API §6.1 Definitions writes `required TokenVersion version;
+   required OperationType operation; RefreshPolicy refreshPolicy = "none"; sequence<USVString> issuers;`, and
+   this engine has a declared type for each: two `required` §3.2.18 enumerations, one §3.2.18 enumeration
+   carrying a string default, and `IDL_SEQUENCE_USVSTRING`.
+   THIS CLAUSE SAID THE OPPOSITE AND WAS TRUE WHEN IT WAS WRITTEN, which is recorded rather than deleted
+   because a reader who re-derives the retired reason will re-introduce it. It said `sequence<USVString>` had
+   no row in the IdlArgType enum — correct at the commit that wrote it, and retired four days later by the
+   diff that added `IDL_SEQUENCE_USVSTRING` for File System Access's accepted file types. Its REASONING was
+   right and is why that row exists at all: §3.2.12 USVString replaces every unpaired surrogate with U+FFFD,
+   an issuer is an origin that goes on the wire, and `IDL_SEQUENCE_DOMSTRING` is therefore a DIFFERENT type
+   rather than a spelling of this one. Only the claim about THIS TREE moved. The same clause named the three
+   remaining shapes as "already in use above", and they are not: no member of REQUEST_INIT is `required` and
+   none carries a default, so a reader checking that table found nothing and had one grep's worth of reason to
+   distrust the whole paragraph. The shapes are in the engine, at other components' dictionaries, which is
+   what "declarable" needed to mean.
+   RETIRING IT STRENGTHENS THE DECISION RATHER THAN CHANGING IT. The absence now rests on the FEATURE alone —
+   the three unbuilt things the WHAT IS ACTUALLY ABSENT paragraph above names, none of which is a conversion —
+   so there is no longer a second reason a reader could repair instead.
+   THIS DECISION HAS TWO HALVES AND THEY STATE ONE ARGUMENT. core/xhr/xml_http_request.c declines
+   `setPrivateToken` for this same reason and says so by name, citing this table as its other half. The
+   argument is therefore not this file's to change alone: a diff that retires a reason here retires it there,
+   and leaving one half saying what the other no longer says is how a single decision becomes two answers. */
 #define REQUEST_INIT_N ((int)(sizeof(REQUEST_INIT) / sizeof(REQUEST_INIT[0])))
 
 /* THE INVARIANT THE §3.2.18 FORK AT THE DECLARATION NOW GUARANTEES, MADE TO FIRE — a `RequestInit` member
