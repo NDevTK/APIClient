@@ -14,11 +14,18 @@
  * spec sections — a field written by a creator and read by nobody is dead weight that reads as modelled. §6.1
  * lists thirteen. The CONSTRUCTED FLAG is modelled because it has a reader: §6.1.2's `insertRule` step 5 is "If
  * parsed rule is an @import rule, and the constructed flag is set, throw a SyntaxError DOMException", and that
- * member is built. The origin-clean flag, the disallow modification flag, the constructor document and the
- * stylesheet base URL are not, and each is waiting on a DIFFERENT reader: the first two on `replace` /
- * `replaceSync`, the constructor document on DOM's `adoptedStyleSheets`, and the stylesheet base URL on any
+ * member is built. The origin-clean flag, the constructor document and the stylesheet base URL are not, and
+ * each is waiting on a DIFFERENT reader: the origin-clean flag on a cross-origin `<link>` sheet, which nothing
+ * here can make; the constructor document on DOM's `adoptedStyleSheets`; and the stylesheet base URL on any
  * resolution of a relative `url()` — of which this build has none at all, so storing it would model nothing a
  * page can observe.
+ *
+ * THE DISALLOW MODIFICATION FLAG IS THE ONE THAT IS WAITING ON A WRITER RATHER THAN A READER, which is why it
+ * is named apart from the three above and why the same sentence no longer covers it. §6.1.2's `replaceSync` is
+ * built and its step 1 READS it; the ONE algorithm in CSSOM whose steps say "Set the disallow modification
+ * flag" is `replace`, which is absent for a reason of its own (its steps settle a promise from work done in
+ * parallel). So a latch here would be one nothing can ever set, and every read of it would answer a constant —
+ * the mirror of the read-with-no-writer defect rather than a fix for it. It lands WITH `replace`.
  *
  * `media` IS A STATE ITEM AND NOT A LIVE READ, AND THAT IS THE ONE PLACE THIS COMPONENT PARTS COMPANY WITH THE
  * TITLE. §6.1 says both are "specified when created" and says of both that a value specified to an ATTRIBUTE of
@@ -93,8 +100,13 @@ bool css_style_sheet_is(JSValueConst v);
    node created). */
 lxb_dom_node_t *css_style_sheet_owner_node(JSValueConst sheet);
 
-/* CSS Syntax's "PARSE A STYLESHEET'S CONTENTS" over `text`, with the result becoming this sheet's CSS RULES —
-   the operation §6.1.2's `replaceSync` is stated over, minus the constructed-flag check that member adds.
+/* CSS Syntax's "PARSE A STYLESHEET'S CONTENTS" over `text`, with the result becoming this sheet's CSS RULES.
+   IT IS AN APPEND INTO AN EMPTY LIST AND IT IS NOT WHAT §6.1.2's `replaceSync` RUNS — this line used to say it
+   was that operation "minus the constructed-flag check that member adds", and the member that then got built
+   shares no step with it: §6.1.2's algorithm parses into a list of its OWN (its step 2), drops the `@import`
+   rules (step 3) and SETS the sheet's rules to what is left (step 4), where this appends into a list its own
+   assert requires to be empty. What the two share is CSS Syntax's parse, which is `css_rule_build_sheet` and
+   is where the sharing belongs.
    HTML §4.2.6 The style element's create-a-CSS-style-sheet table says the CSS rules are "left
    uninitialized", and its own note says that "doesn't seem right. Presumably we should be using the element's
    child text content?" (whatwg/html issue #2997). Every engine uses the child text content, and HTML §4.2.7

@@ -83,6 +83,7 @@ typedef struct CssStyleSheetData {
 static JSClassID g_sheet_class;
 static int       g_stylesheet_proto_slot = -1;   /* StyleSheet.prototype, per realm */
 static int       g_id_set_disabled = -1, g_id_insert_rule = -1, g_id_delete_rule = -1;
+static int       g_id_replace_sync = -1;         /* §6.1.2's `undefined replaceSync(USVString text)` */
 /* CSSOM §6.1.2.1 Deprecated CSSStyleSheet members' two OPERATIONS. `rules` is not here because it is not a
    declaration of its own: §6.1.2.1 states it over `cssRules`, so it is that getter installed under a second
    name. `removeRule` IS here and shares SD_DECL with `deleteRule` — see the declaration for why one machine. */
@@ -629,28 +630,144 @@ static const IdlStepDecl SD_DECL = {
     "CSSOM §6.1.2 The CSSStyleSheet Interface deleteRule(index)", SD_STEPS, 0, NULL
 };
 
-/* A NAMED RESIDUAL — §6.1.2's `replaceSync`, WHICH IS NOT ABSENT FOR `replace`'s REASON. The banner above
- * retires `replace` because its steps settle a promise from work done in parallel, which is a scheduler flow
- * and not a member body. `replaceSync` runs the same content steps on the CALLING flow — §6.1.2: "To
- * synchronously replace the rules of a CSSStyleSheet on sheet given text, run these steps" — so that argument
- * does not reach it and it needs one of its own.
- *   WHAT IS NOT COVERED: all four of those steps. Step 1's "If the constructed flag is not set, or the
- *     disallow modification flag is set, throw a NotAllowedError DOMException" is the only one this file could
- *     write today — `css_style_sheet_constructed` answers the first half, and no sheet in this build has ever
- *     had the second flag set, for the reason the deleteRule banner gives (only `replace` sets it, and
- *     `replaceSync`'s own steps do not). Steps 3 and 4 are the whole of the gap.
- *   WHAT THE NEXT DIFF BUILDS, in two halves because neither exists today and each was grepped for:
- *     (i) a SET of a sheet's CSS rules. `css_style_sheet_set_rules_from_text` is an APPEND — its own DCHECK
- *     requires the list to be empty and says in its message that a second call would append to the first — so
- *     step 4's "Set sheet's CSS rules to rules" needs the existing rules removed first, through
- *     `css_rule_list_delete` (core/css/css_rule.h), which is already the one copy of §6.4's remove a CSS rule
- *     and is what keeps the [SameObject] CSSRuleList and the cascade reading the same live Array.
- *     (ii) step 3's "If rules contains one or more @import rules, remove those rules from rules", which needs a
- *     test for an @import rule over a rule object: core/css/css_rule.c holds `RULE_TYPE_IMPORT` as an internal
- *     enum and exports no predicate over it.
- *   HOW ITS ABSENCE WOULD SHOW: a page that constructs a sheet and fills it reaches a TypeError naming the
- *     operation on the line after the constructor — `new CSSStyleSheet()` itself succeeds, because §6.1's
- *     constructor is built and installed below — where a browser fills the sheet and carries on. */
+/* ---- CSSOM §6.1.2's `replaceSync` --------------------------------------------------------------------------
+ *
+ * §6.1.2: "The replaceSync(text) method must run the steps to synchronously replace the rules of a
+ * CSSStyleSheet on this CSSStyleSheet given text." So the member is one line and the algorithm is a separate
+ * definition — "To synchronously replace the rules of a CSSStyleSheet on sheet given text, run these steps" —
+ * of FOUR steps in ONE flat list, none of them holding a nested one.
+ *
+ * IT IS NOT ABSENT FOR `replace`'s REASON, WHICH IS WHY IT IS HERE AND `replace` IS NOT. The deleteRule banner
+ * above retires `replace` because its steps settle a promise from work done in parallel, which is a scheduler
+ * flow and not a member body. THESE steps run on the CALLING flow — the standard says so by giving the
+ * synchronous algorithm its own name and having `replaceSync` invoke it directly — so that argument does not
+ * reach this member and a decision covers exactly what its reason reaches.
+ *
+ * IT IS A PLAIN BODY AND NOT A STEP MACHINE, on the same test §6.1's constructor states: the one value that
+ * could have run the page's code is `text`, and `USVString`'s §3.2.6 conversion has finished with it before
+ * this body is entered. Everything below is this engine's own C — a parse, a predicate, Array writes — and
+ * none of it can reach the page, so there is nothing for a machine to suspend at.
+ *
+ * STEP 1's SECOND DISJUNCT IS UNREACHABLE AND THAT IS A FACT ABOUT THIS BUILD, NOT A DEFAULT. "If the
+ * constructed flag is not set, or the disallow modification flag is set, throw a NotAllowedError
+ * DOMException." The first half is `css_style_sheet_constructed`'s flag. The second is the flag whose ONE
+ * writer in CSSOM is `replace` — see the deleteRule banner above, which owns that argument — so no sheet in
+ * this build has ever had it set, and modelling it today would be a latch nothing can ever write, which is the
+ * mirror of the read-with-no-writer defect rather than a fix for it. It lands WITH `replace`, in the diff that
+ * gives it a writer.
+ *
+ * STEP 3 IS §6.4's REMOVE A CSS RULE AND STEP 4 IS NOT — THE RESIDUAL THIS REPLACED HAD THAT THE OTHER WAY
+ * ROUND, AND IT IS RECORDED HERE BECAUSE ITS NEXT-DIFF CLAUSE WOULD HAVE BEEN EXECUTED ONCE. That clause said
+ * step 4's "Set sheet's CSS rules to rules" needs the existing rules removed first "through
+ * `css_rule_list_delete` ... already the one copy of §6.4's remove a CSS rule". The standard puts that
+ * algorithm at STEP 3: step 3's "remove those rules" is a LINK to §6.4's remove a CSS rule, and step 4 is a
+ * plain assignment that links to nothing. The difference is not bookkeeping, because §6.4's algorithm carries
+ * two steps §6.1.2 never states — its step 4 throws an InvalidStateError when the rule being removed is an
+ * `@namespace` and the list holds anything that is not an `@import` or an `@namespace`, and its step 6 sets the
+ * removed rule's parent CSS rule and parent CSS style sheet to null. Run over the OLD rules to clear them,
+ * the first would make `replaceSync` throw on a sheet holding `@namespace ns url(u); p { }` — a refusal this
+ * algorithm has no step for — and the second would null a state item §6.4 says "can be changed to null" only
+ * where an algorithm says so, which step 4 does not. So the SET below empties the list and §6.4's removal is
+ * used for exactly the rules step 3 names.
+ *
+ * THE ARRAY IS MUTATED IN PLACE AND IS NEVER REPLACED, which is what makes step 4 a set of CONTENTS rather
+ * than of the slot. `cssRules` is `[SameObject]` and the collection minted for it holds THIS Array, so
+ * rebinding `rules` to the scratch would keep the CSSRuleList's identity and leave it reading the old list —
+ * one right answer and one wrong one where the platform computes a single one. WPT's
+ * css/cssom/CSSStyleSheet-constructable-cssRules.html asserts that identity across a `replaceSync` directly.
+ *
+ * THE STRING HALF OF `text` IS `insertRule`'s RESIDUAL AND NOT A SECOND ONE. A `USVString` reaches this body
+ * either as the string §3.2.6 produced or as unknown external input crossing that boundary as itself, and a
+ * `JS_ToCStringLen` of the second is the shape core/css/css_rule.h names beside CSS_RULE_INSERT_INDEX. This
+ * member composes the same absence rather than restating it: the day a rule text carries an unknown, a sheet
+ * replaced from one does too. */
+static JSValue js_sheet_replace_sync(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
+                                     int magic)
+{
+    CssStyleSheetData *s = sheet_here(ctx, this_val);
+    const char *text;
+    size_t len = 0;
+    JSValue rules;
+    uint32_t i, n, removed = 0;
+
+    (void)magic;
+    if (!s) return JS_EXCEPTION;
+    /* `undefined replaceSync(USVString text)` declares no `optional` and no default, so §3.6's argument-count
+       check refuses a short call before this body is entered. An equality and not a `>=`, so the day the IDL
+       grows a position the assert names the line that assumes one. */
+    DCHECK(argc == 1,
+           "§6.1.2's replaceSync reached its body with an argument count its declaration cannot produce — its "
+           "one `USVString text` is required and undefaulted, so §3.6 hands this body exactly one position");
+    /* STEP 1 — the constructed half. The disallow-modification half is the banner's. */
+    if (!s->constructed)
+        return JS_ThrowDOMException(ctx, "NotAllowedError",
+                                    "replaceSync was called on a style sheet whose constructed flag is not "
+                                    "set — only a sheet built by `new CSSStyleSheet()` may have its rules "
+                                    "replaced");
+    text = JS_ToCStringLen(ctx, &len, argv[0]);
+    if (!text) return JS_EXCEPTION;
+    /* STEP 2 — "Let rules be the result of running parse a stylesheet's contents from text." A LIST OF ITS
+       OWN and not the sheet's, because step 3 runs over it BEFORE step 4 makes it the sheet's: parsing
+       straight into the sheet's Array would put the `@import` rules step 3 discards into the list `cssRules`
+       and the cascade read, for as long as no page code can observe it — which is an ordering nothing here
+       would be asserting, rather than one the standard states. Every rule it builds names THIS sheet, which is
+       what step 4 is about to make true of the list as well. */
+    rules = JS_NewArray(ctx);
+    CHECK(!JS_IsException(rules), "cssom: §6.1.2's replaceSync could not allocate the list its parse fills");
+    css_rule_build_sheet(ctx, rules, this_val, text, len);
+    JS_FreeCString(ctx, text);
+    /* STEP 3 — "If rules contains one or more @import rules, remove those rules from rules", whose "remove
+       those rules" is §6.4's REMOVE A CSS RULE. Tail-first so an index is never invalidated under the walk.
+       Neither of that algorithm's throwing steps can fire here: step 2's index is one this loop read out of
+       the same list, and step 4 guards an `@namespace` while every rule this loop removes is an `@import`. */
+    n = rules_len(ctx, rules);
+    for (i = n; i-- > 0; ) {
+        JSValue rule = JS_GetPropertyUint32(ctx, rules, i);
+        bool is_import = css_rule_is_import(rule);
+        JSValue out;
+
+        JS_FreeValue(ctx, rule);
+        if (!is_import) continue;
+        removed++;
+        out = css_rule_list_delete(ctx, rules, i);
+        if (JS_IsException(out)) {
+            /* A DFAIL AND THEN THE THROW, never a swallow: in dev this names the arm that cannot be reached,
+               and in release the DOMException §6.4 already put on `ctx` is the defined answer rather than a
+               `replaceSync` that returns having half-replaced a list nobody can see. */
+            DFAIL("CSSOM §6.4 \"CSS Rules\"'s remove a CSS rule threw while §6.1.2's synchronously replace the "
+                  "rules of a CSSStyleSheet step 3 was removing an @import rule. Both of its throwing steps "
+                  "are unreachable from here — step 2's \"index is greater than or equal to length\" over an "
+                  "index this loop read out of the same list, and step 4's InvalidStateError over an "
+                  "@namespace at-rule where css_rule_is_import has just answered true. So one of those two "
+                  "premises has stopped holding: either the list is being mutated under the walk, or the "
+                  "predicate and the algorithm disagree about what an @import rule is");
+            JS_FreeValue(ctx, rules);
+            return JS_EXCEPTION;
+        }
+        JS_FreeValue(ctx, out);
+    }
+    /* PARSED MINUS REMOVED IS KEPT, asserted where all three are in one hand — the one thing about step 3 a
+       reader cannot check by reading it, since the walk's predicate and §6.4's splice are two mechanisms and
+       a list that lost a rule neither of them named would leave both of them looking right. */
+    DCHECK(rules_len(ctx, rules) == n - removed,
+           "§6.1.2's replaceSync step 3 left its list a length that is not the parse's count minus the "
+           "@import rules it removed — every removal is one §6.4 remove a CSS rule over an index this walk "
+           "read, so the two can only disagree if something else mutated the list");
+    /* STEP 4 — "Set sheet's CSS rules to rules." The CONTENTS, for the reason the banner gives: the Array is
+       the state item AND is what the `[SameObject]` collection holds, so the set is a truncation followed by
+       the new list's members. Both are property writes on an Array, which is what makes this step ride the
+       running flow's COW delta exactly as `insertRule`'s and `deleteRule`'s do. */
+    n = rules_len(ctx, rules);
+    JS_SetPropertyStr(ctx, s->rules, "length", JS_NewUint32(ctx, 0));
+    for (i = 0; i < n; i++)
+        JS_SetPropertyUint32(ctx, s->rules, i, JS_GetPropertyUint32(ctx, rules, i));
+    DCHECK(rules_len(ctx, s->rules) == n,
+           "§6.1.2's replaceSync step 4 left the sheet's CSS rules a different length from the list it was "
+           "told to set them to — the truncation and the copy are the whole of the set, so the two can only "
+           "disagree if the Array refused a write");
+    JS_FreeValue(ctx, rules);
+    return JS_UNDEFINED;   /* `undefined replaceSync(USVString text)` */
+}
 
 /* ---- CSSOM §6.1.2.1 "Deprecated CSSStyleSheet members" ----------------------------------------------------
  *
@@ -953,6 +1070,8 @@ void css_style_sheet_init(JSContext *ctx)
         /* §6.1.2.1's `addRule`. `DOMString` and not `CSSOMString` at the first two, because that is what its
            partial declares — §6.1.2's `insertRule` takes the `CSSOMString` and this member hands it one. */
         static const IdlArgType ADD_RULE[3] = { IDL_DOMSTRING, IDL_DOMSTRING, IDL_UNSIGNED_LONG };
+        /* §6.1.2's `replaceSync(USVString text)`. */
+        static const IdlArgType ONE_USVSTRING[1] = { IDL_USVSTRING };
 
         g_id_insert_rule = idl_method_id(ctx, INSERT, 2, js_sheet_insert_rule, 0);
         idl_optional_from(1);
@@ -981,6 +1100,12 @@ void css_style_sheet_init(JSContext *ctx)
         idl_optional_from(0);
         idl_arg_default(0, IDL_DEFAULT_STRING, "undefined");
         idl_arg_default(1, IDL_DEFAULT_STRING, "undefined");
+        /* §6.1.2's `undefined replaceSync(USVString text)`. NO `idl_optional_from`, because the position is
+           neither optional nor defaulted — which is what makes §3.6's argument-count check refuse
+           `sheet.replaceSync()` before the body, and what the body's argument-count equality assumes.
+           `USVString` and not `CSSOMString`: the two `insertRule`-family members take the second and this one
+           takes the first, which is what the declaration says and is the only place the difference lives. */
+        g_id_replace_sync = idl_method_id(ctx, ONE_USVSTRING, 1, js_sheet_replace_sync, 0);
     }
     {
         /* §6.1.2's `constructor(optional CSSStyleSheetInit options = {})`. The dictionary's members are declared
@@ -1032,6 +1157,9 @@ void css_style_sheet_install_proto(JSContext *ctx)
     idl_install_accessor(ctx, proto, "cssRules", js_sheet_css_rules, 0, -1);
     idl_install_method(ctx, proto, "insertRule", g_id_insert_rule);
     idl_install_method(ctx, proto, "deleteRule", g_id_delete_rule);
+    /* §6.1.2's `replaceSync`. `replace` is NOT beside it and is not the same absence — see the banner over the
+       body for why the reason that retires one does not reach the other. */
+    idl_install_method(ctx, proto, "replaceSync", g_id_replace_sync);
     /* §6.1.2.1 Deprecated CSSStyleSheet members — a PARTIAL on this same interface in this same standard, so
        its three members go on this same prototype. `rules` is `js_sheet_css_rules` under a second name and
        not a second body, which is §6.1.2.1's own statement of it: "The rules attribute must follow the same

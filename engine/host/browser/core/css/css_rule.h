@@ -155,6 +155,15 @@ void css_rule_free(JSRuntime *rt);
 /* Is `v` a CSSRule? The class brand, for a caller holding something it took out of a rule list. */
 bool css_rule_is(JSValueConst v);
 
+/* IS `v` AN `@import` RULE? CSSOM §6.1.2 "The CSSStyleSheet Interface"'s synchronously replace the rules of a
+   CSSStyleSheet step 3 is the one asker — "If rules contains one or more @import rules, remove those rules from
+   rules" — and it is in another file because the algorithm is §6.1.2's while the TYPE is §6.4's. What crosses is
+   the PREDICATE and never the numbering: CSSOM §6.4.2 "The CSSRule Interface"'s constants live in one enum in
+   css_rule.c, and a caller that compared a rule's `type` against a `3` of its own would be the second copy of
+   that table. The receiver is a CSS rule or this asserts — the one caller walks a list css_rule_build_sheet
+   filled. */
+bool css_rule_is_import(JSValueConst v);
+
 /* THE RULE'S DECLARATIONS, as the text they are stored as — CSSOM §6.6's declaration block reads them through here,
    and so does the CASCADE, which resolves the author layer from these objects rather than from the `<style>`
    element's bytes. OWNED: the caller frees. NULL, with `*plen` zero, for a rule whose body declares nothing and

@@ -428,6 +428,22 @@ bool css_rule_is(JSValueConst v)
     return JS_GetOpaque(v, g_rule_class) != NULL;
 }
 
+/* IS THIS RULE AN `@import` RULE — the question CSSOM §6.1.2's synchronously replace the rules of a
+   CSSStyleSheet step 3 asks of every rule a parse produced. THE PREDICATE IS EXPORTED AND THE NUMBERING IS NOT:
+   CSSOM §6.4.2 "The CSSRule Interface"'s type constants are this file's own enum, and a caller comparing
+   against a `3` of its own would be a second copy of a table CSSOM §6.4.4 "The CSSImportRule Interface" owns.
+   Through the capturing accessor like every other read of a rule's state.
+   THE BRAND IS ASSERTED, NOT ANSWERED FALSE: the one caller walks a list this file's own build filled, and
+   `rule_type_at` asserts the same premise from the other side. */
+bool css_rule_is_import(JSValueConst v)
+{
+    CssRuleData *r = rule_of(v);
+
+    DCHECK(r != NULL, "CSSOM §6.1.2's step 3 asked whether something that is not a CSS rule is an @import rule "
+                      "— the list it walks is one css_rule_build_sheet filled, and nothing else goes into one");
+    return r->type == RULE_TYPE_IMPORT;
+}
+
 /* Through JS_GetOpaque, never the accessor: a capture during collection would dup values on an object being
    torn down. */
 static void rule_finalizer(JSRuntime *rt, JSValue val)
