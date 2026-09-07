@@ -1471,13 +1471,46 @@ const strayAll = [...world.constructs]
    anything. This is the opposite direction: the name is PRESENT, and what is unproven is only whether the
    filtered loop reaches THAT cell — a question about one column, answerable for the names in it and nobody
    else's. So the two abstentions have different scopes because they are abstaining about different things.
-   WHAT WOULD DECIDE ONE. Nothing in this tree lets a filtered loop state which of its column's names it gave
-   [[Construct]] to: `idl_install_covers_column` asserts every name of a column is an OWN PROPERTY of the
-   target, which is the PRESENCE axis and answers the same for an interface object that constructs and one that
-   throws. A constructor-axis counterpart — a declaration the C makes at the minting loop, asserting of each
-   covered name that its interface object's [[Construct]] is §3.2.3's rather than the shared throw — is what
-   would move these names out of this band, and it does not exist yet. Until it does, ABSTAIN: a wrong
-   accusation here costs a reader a hunt for a bug that is not there, and this one already did. */
+   WHAT DECIDES ONE — AND IT IS BUILT. THE ABSENCE CLAIM THAT STOOD HERE WAS TRUE WHEN WRITTEN AND WENT STALE.
+   It said that nothing in this tree lets a filtered loop state which of its column's names it gave
+   [[Construct]] to, named the constructor-axis counterpart it wanted, and ended `it does not exist yet`. That
+   was EXACT at the revision that wrote it — core/idl_args.h carried no such entry there — and the counterpart
+   landed three days later. It is REWRITTEN rather than deleted, because an announced ABSENCE is the one stale
+   claim that does not correct itself: a comment saying a mechanism is MISSING sends its reader to look and
+   they find out, while a comment saying one DOES NOT EXIST closes the question, so nobody greps and the next
+   author builds a second copy of a declaration this tree already has.
+   THE COUNTERPART IS `idl_install_constructs_column(ctx, target, IDL_NAME_COLUMN(TBL, field), refuses,
+   n_refuses, why)` — declared in core/idl_args.h, defined in core/idl_args.c beside the mint's own record of
+   which identifiers this agent has given §3.7.1's construct steps, and MADE AT THE MINTING LOOP
+   (core/html/html_element.c makes it over its element-interface table). It declares the PARTITION and not the
+   filter: every name the column holds reached the declared constructor mint EXCEPT the ones `refuses` names,
+   and the engine checks that per realm against the object in front of it. `idl_install_covers_column` remains
+   the PRESENCE axis and still answers the same for an interface object that constructs and one that throws —
+   two declarations over one column, because they are two questions about it.
+   AND IT IS READ BEFORE THIS RUNS: engine/idl_installed.mjs's `CONSTRUCTS_COLUMN_FORM` matches the declaration
+   to the forwarded READ the loop hands the mint — same function, same names in the same order — and a REFUSED
+   name comes back OUT of `world.constructs` rather than merely losing its unproven mark. That is why a name
+   this declaration answers is charged NOWHERE: not in the band below, and not as a stray construct either.
+   SO THE BAND BELOW IS EMPTY WHILE EVERY FORWARDED COLUMN IS DECLARED, AND IT IS NOT DEAD. A name reaches it
+   again the moment some forwarded read has NO matching declaration — a row-filtered minting loop that landed
+   without one, or two declarations over a single read, which that reader abstains on rather than arbitrating
+   — and the corpus declares that name with no constructor operation. That is a reachable state and not a
+   hypothetical one: it is the state this very column was in three days ago.
+   THE EMPTINESS IS ALSO NOT SILENT, which is what stops a zero here reading as though everything were decided
+   when the reader has in fact stopped seeing forwarded reads at all. The names held back here are held back
+   FROM `constructs`, while the credit side puts the rest of the column INTO it — so a forwarded-read detector
+   that broke would not quietly empty this row; it would empty `constructs` of the whole column and light the
+   [HTMLConstructor] category above with the column at once, less whatever the loop's own file mints beside it
+   as a literal. The two rows cannot go quiet together, which is the check to make before reading this band's
+   zero as an answer.
+   AND ALL OF THAT IS RUNNABLE RATHER THAN ARGUED, which is why this paragraph may be trusted and the one it
+   replaced could not: `--host` points the SUBJECT at a copy while the corpus stays beside this file, so a
+   reader settles every sentence above with three runs over a copied tree and no build. Rename the DECLARATION
+   away and this band arms with the name it was holding, FINDINGS unchanged. Rename the MINT the column feeds
+   and this band stays at zero while the [HTMLConstructor] category takes the column. Change nothing and the
+   copy reproduces the in-tree run byte for byte, which is the control that says the first two mean anything.
+   UNTIL A COLUMN IS DECLARED, ABSTAIN: a wrong accusation here costs a reader a hunt for a bug that is not
+   there, and this one already did. */
 const strayForwarded = (n) => world.constructsForwarded.has(n) && !world.constructsDirect.has(n);
 const strayConstructs = strayAll.filter((n) => !strayForwarded(n));
 const strayUnproven = strayAll.filter(strayForwarded);
@@ -1504,7 +1537,15 @@ for (const n of strayConstructs)
 /* THE ABSTENTION'S OWN ROWS — a work queue for the reader and never an accusation, which is the difference the
    counter above now keeps. Each says exactly what was read and where, so the one command that settles it (open
    the loop and look at its `continue`) is obvious, and so that a name whose loop really does mint it is still
-   visible rather than dropped. */
+   visible rather than dropped.
+   WHEN THIS PRINTS, stated because it is silent while every forwarded column carries a partition declaration
+   and a reader meeting a silent loop cannot tell that from a loop that can no longer fire at all. One row here
+   is a name put into `constructs` by a forwarded read that NO `idl_install_constructs_column` declaration
+   answers — a row-filtered minting loop landing without one, or two declarations over a single read, which
+   engine/idl_installed.mjs abstains on rather than arbitrating — AND that the corpus declares with no
+   constructor operation, since a name whose IDL declares a constructor never reaches `strayAll`. Its silence
+   is therefore a statement about the DECLARATIONS and not about this code, and what makes it speak again is a
+   filtered minting loop landing without declaring its partition. */
 for (const n of strayUnproven) {
   const via = world.constructsForwarded.get(n);
   console.log(`[idl-audit] ${n}: ${strayWhat(n)}, and this engine's mint for it CANNOT BE DECIDED from the ` +
@@ -1515,9 +1556,13 @@ for (const n of strayUnproven) {
               `reach the name; a \`continue\` in that loop is C this scan does not evaluate, so the readings ` +
               `are three and not two — the identifier misspells an interface, the mint needs its justification ` +
               `written against the IDL, or the loop's row filter removes this row and the engine is already ` +
-              `right. Deciding it needs the C to state the CONSTRUCTOR-axis counterpart of ` +
-              `idl_install_covers_column, which asserts presence and answers the same for an interface object ` +
-              `that constructs and one that throws.`);
+              `right. Deciding it is ONE DECLARATION AT THAT LOOP and not a mechanism to design: ` +
+              `idl_install_constructs_column states which of the column's names reached §3.7.1's construct ` +
+              `mint and names the rest in its refusal list; this audit already consumes it (see ` +
+              `CONSTRUCTS_COLUMN_FORM in engine/idl_installed.mjs), and a name it answers leaves this band — ` +
+              `refused, out of the constructing set altogether, or covered, credited exactly like a name ` +
+              `written beside the mint. The PRESENCE-axis idl_install_covers_column cannot decide this and ` +
+              `never could: it answers the same for an interface object that constructs and one that throws.`);
 }
 if (totalMissing)
   console.log(`[idl-audit] ${distinct.size} distinct spec members this engine does not install (${totalMissing} ` +
