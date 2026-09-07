@@ -3350,14 +3350,37 @@ static const char *HTML =
        SO THE TWO ROWS TOGETHER ARE THE EXPERIMENT AND NEITHER IS ALONE: this one reading 1 while
        the five read 0 says the gate is the frame and not the queue, the rank or the reply path.
        This one reading 0 says the frame is NOT the mechanism and the account above is wrong.
-       IT READ 0 AND THAT SETTLES NOTHING, BECAUSE THIS ROW'S OWN PROGRAM NEVER RAN. This <script> is the
-       tenth of the document's fourteen, and `programCursors` tops out at 6 in every run measured — so
-       the statement above has never been executed and its 0 is the row not running. The retraction is
+       IT READ 0 AND THAT SETTLES NOTHING, BECAUSE THIS ROW'S OWN PROGRAM NEVER RAN. The retraction is
        recorded here rather than the paragraph deleted, because the mistake is worth more than the row:
        a control WAS run and it DID arm, and it was a control for the wrong proposition. `pending`
        reading 1 proves the await machinery works; it says nothing about whether THIS program was
        reached, and reachability is the one thing a newly-added row has not got. The census that would
-       have said so was already being printed. What follows is kept as the reasoning that was WRONG:
+       have said so was already being printed.
+       AND THAT RETRACTION WAS RIGHT ABOUT THE CONCLUSION AND WRONG ABOUT EVERY COORDINATE IT REACHED IT
+       BY, WHICH IS THE WORSE HALF — a correct answer from a wrong argument points the next reader at the
+       wrong instrument, and this one inverted what its instrument's number MEANS. It said this <script>
+       is the tenth of the document's fourteen and that `programCursors` topping out at 6 is what shows
+       the statement was never executed. The document has THIRTEEN static programs: `dynBodies` reads 13
+       at the first census of every run, before any chunk or injection has added a row, and enumerating
+       the fixture's own `<script>` openers gives the same 13. This is the SEVENTH of them, at index 6.
+       So cursor 6 is not a point SHORT of this program — IT IS THIS PROGRAM'S OWN DOOR. solver/cold.h
+       states the domain: `script_i` runs over [0, dyn_n] CLOSED, one wider than the program indices, and
+       a cursor of `c` above zero means the member LEFT the program at `c - 1`. Members at 6 have finished
+       the quarter-megabyte row above and are standing HERE, unframed, waiting to be handed the thread.
+       THE ROW THAT ACTUALLY DECIDES IT IS `deepest`, AND IT IS A DIFFERENT ROW THAT WAS BEING PRINTED ON
+       THE SAME LINE. It is the highest program index this DOCUMENT has ever COMPILED across every flow —
+       engine.c raises it at the one line a program is started — so `deepest` at 5 says program 6 was
+       never started by anybody, which is the claim, stated directly instead of inferred from a cursor.
+       cold.h's own identity binds the two: every live member's cursor is at most `deepest + 1`, so
+       `deepest` 5 with a bucket at 6 is ONE statement and not two. Measured at the artifact stamped
+       1d666bda, three runs: `deepest` 5 at every census of all three, with 6, 172 and 0 members standing
+       at cursor 6 — a hundred and seventy-two members at this program's door in the longest of them, and
+       not one of them ever dispatched to start it.
+       SO THE READING TO CARRY IS NOT `the row did not run` BUT `the row is where the members are stuck`,
+       and those are different findings: the first says the fixture cannot reach its own statement, the
+       second says the scheduler is not handing the thread to members that have nothing left to do but
+       take it. Only the second is actionable, and only `deepest` beside `programCursors` distinguishes
+       them. What follows is kept as the reasoning that was WRONG:
        IT READ 0, SO THE FRAME ACCOUNT IS REFUTED AND THE PARAGRAPH ABOVE IS KEPT AS THE THING THAT WAS
        WRONG. Three runs of one artifact, `pending` — the microtask-settled await, which shares every
        part of this path except what settles the promise — reading 1 in all three, so the control armed
@@ -3367,9 +3390,28 @@ static const char *HTML =
        `frame-ctl` 0 together, which is unscored and not a refutation, and reading it as one would have
        confirmed this row's own message by luck.
        WHAT SURVIVES OF THE ACCOUNT IS THE DOUBLE GATE ITSELF, which is real and verified at both sites;
-       what does not is that releasing the frame is SUFFICIENT. `resume-ended-its-frame` is nonzero while
-       `deliver-one-reply` stays 0, so frames are released and the arm still never runs, and the next
-       reader starts from the other conjunct rather than from the frame. */
+       what does not is that releasing the frame is SUFFICIENT.
+       AND THE SENTENCE THAT SURVIVED THE FIRST RETRACTION DOES NOT SURVIVE THE SECOND, WHICH IS WHY IT IS
+       QUOTED HERE RATHER THAN EDITED AWAY. It read, in these words: resume-ended-its-frame is nonzero
+       while deliver-one-reply stays 0, so frames are released and the arm still never runs, and the next
+       reader starts from the other conjunct rather than from the frame. THE ARM RUNS. At the artifact
+       stamped 1d666bda — the first that carries engine.c's fix for a continued pass renaming the step it
+       performed, without which a delivery whose turn continued left under `resume-parked-continuation`'s
+       name — `deliver-one-reply` reads 0, 9, 9, 9, 57, 101, 101 across one run's seven censuses, 110
+       across another's fifteen, and 11 across a third's six. A row that reported 0 for a reason with
+       nothing to do with the mechanism anyone was hunting is what three readings were built on, this
+       comment's included, and the whole of what it took to see that was making the row a measurement.
+       SO THE QUESTION MOVED DOWNSTREAM OF THE DELIVERY RATHER THAN UPSTREAM OF IT: replies ARE delivered,
+       and no reply-consuming row answers. What this row still cannot say is whether ANY of those
+       deliveries was a `fetch()` reply — NAMED RESIDUAL. Not covered: the census pair `replyAsked` /
+       `replyAnswered` counts RECORDS with no partition by kind, and solver/result.c names the four that
+       share it (a fetch, an injected `<script src>`, the document's own script slots, a dynamic
+       `import()`), so a run in which every delivery served a script slot and a run in which every one
+       served a fetch print the identical pair. What the next diff builds: the same pair split by kind —
+       the record already CARRIES one (solver/pending.h's `KIND` entry) and `pending_count_kind` already
+       reads it, so this is a census row over an existing field and not a new mechanism. How its absence
+       shows: a reader holding a non-zero `deliver-one-reply` beside six zeroed reply-consuming rows and
+       no way to tell a delivery that could have answered them from one that never could. */
     "<script>fetch('/api/config').then(function(r){ return r.json(); })"
             ".then(function(c){ fetch('/api/framectl?r=' + c.region); });</script>"
     /* THE LAST <script> OF THE DOCUMENT, and it exists only to REPORT — see the injection in script 1. It has
@@ -10034,12 +10076,25 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     /* THE CONTROL FOR THE FIVE REPLY ROWS — same reply, same await machinery, one difference: the
        program issuing it ENDS in the step that starts it, so `f->frame` is released and the
        delivery arm is reachable. See the frame-control <script> for why the pair is the
-       experiment and why either row alone answers nothing. */
+       experiment and why either row alone answers nothing — AND for why this row has never yet
+       been about the frame at all: its program is index 6 of the document's thirteen and
+       `deepest`, the highest index any flow has ever compiled, reads 5 in every run measured, so
+       the statement has not been executed and the message below says so instead of concluding.
+       THE MESSAGE IS WHERE THAT MATTERS RATHER THAN THE COMMENT, because a comment is read by
+       whoever opens this file and a row's own text is read by everyone who reads a report. The
+       one it replaced ended `and it says the frame is not what gates the delivery`, which is a
+       CONCLUSION drawn from a program that never ran — the same mistake the <script>'s own
+       paragraph records, emitted into every log instead of sitting in one file. */
     const char *frame_ctl_why = NULL; int frame_ctl = 1;
     fold_row(&frame_ctl, &frame_ctl_why, !!strstr(js, "\"/api/framectl\""),
-             "NOT REACHED: there is no /api/framectl record, so the reply this short program asked "
-             "for was not delivered to it either — which is the SAME reading the five long-program "
-             "rows give, and it says the frame is not what gates the delivery");
+             "NOT REACHED: there is no /api/framectl record — and this row cannot say WHY, because "
+             "its own program has not been started. Read `deepest` beside it, on the same @COLD "
+             "line: it is the highest program index this document has ever compiled across every "
+             "flow, and this <script> is index 6 of the thirteen the document ships. At `deepest` "
+             "5 this 0 is the row not running and says nothing whatever about the frame, the "
+             "queue, the rank or the reply path; only at 6 or above is it about the subject. The "
+             "cursor bucket at 6 beside it is this program's DOOR and not a point short of it: "
+             "those members have finished the quarter-megabyte row above and are waiting here");
     fold_row(&frame_ctl, &frame_ctl_why, param_value_is(js, "/api/framectl", "r", "us-west-2"),
              "the reply WAS delivered to a program that ended its own frame, and json()'s field did "
              "not reach this endpoint — so the frame gate is not the whole of it");
