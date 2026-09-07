@@ -3,7 +3,7 @@
  "key": "cssgrid2",
  "base": "https://drafts.csswg.org/css-grid-2/",
  "specUpdated": "30 October 2023",
- "fetched": "2026-09-03",
+ "fetched": "2026-09-07",
  "sections": {
   "1": {
    "title": "Introduction",
@@ -467,21 +467,6 @@
   }
  },
  "dfns": {
-  "[ auto flow dense ] grid auto rows grid template columns": [
-   "7.8"
-  ],
-  "augmented grid": [
-   "10.1"
-  ],
-  "auto fill": [
-   "7.2.3.2"
-  ],
-  "auto fit": [
-   "7.2.3.2"
-  ],
-  "auto placement": [
-   "7.7"
-  ],
   "auto placement cursor": [
    "8.5"
   ],
@@ -503,9 +488,6 @@
   "automatic grid span": [
    "8"
   ],
-  "automatic placement": [
-   "7.7"
-  ],
   "automatic position": [
    "8"
   ],
@@ -518,47 +500,11 @@
   "automatic span": [
    "8"
   ],
-  "available grid space": [
-   "12.2"
-  ],
-  "base size": [
-   "12.3"
-  ],
-  "clamp a grid area": [
-   "5.4"
-  ],
   "collapsed grid track": [
    "7.2.3.2"
   ],
   "collapsed gutter": [
    "11.1"
-  ],
-  "computed repeat notation": [
-   "7.2.5"
-  ],
-  "computed track list": [
-   "7.2.5"
-  ],
-  "computed track size": [
-   "7.2.5"
-  ],
-  "content based minimum size": [
-   "6.6"
-  ],
-  "content size suggestion": [
-   "6.6"
-  ],
-  "data dfn type function data export id funcdef track repeat repeat repeat()": [
-   "7.2.3"
-  ],
-  "data dfn type value data export data lt fr fr unit id valdef flex fr fr": [
-   "7.2.4"
-  ],
-  "data dfn type value data export id grid placement auto auto": [
-   "8.3"
-  ],
-  "data dfn type value data export id grid placement slot custom ident": [
-   "8.3"
   ],
   "definite column position": [
    "8"
@@ -572,32 +518,14 @@
   "definite row position": [
    "8"
   ],
-  "distribute extra space": [
-   "12.5.1"
-  ],
   "explicit column span": [
    "8"
   ],
   "explicit grid": [
    "7.1"
   ],
-  "explicit grid column": [
-   "7.1"
-  ],
-  "explicit grid properties": [
-   "7.1"
-  ],
-  "explicit grid row": [
-   "7.1"
-  ],
   "explicit grid span": [
    "8"
-  ],
-  "explicit grid track": [
-   "7.1"
-  ],
-  "explicit grid tracks": [
-   "7.1"
   ],
   "explicit row span": [
    "8"
@@ -607,12 +535,6 @@
   ],
   "explicit track list": [
    "7.2"
-  ],
-  "explicitly assigned": [
-   "7.2.2"
-  ],
-  "explicitly assigned line name": [
-   "7.2.2"
   ],
   "fit content( length percentage )": [
    "7.2.1"
@@ -629,32 +551,8 @@
   "fixed size": [
    "7.2"
   ],
-  "fixed sizing function": [
-   "12.1"
-  ],
-  "flex [0 ]": [
-   "7.2.1"
-  ],
-  "flex factor": [
-   "7.2.1"
-  ],
-  "flex factor sum": [
-   "12.7.1"
-  ],
-  "flex fraction": [
-   "7.2.4"
-  ],
   "flexible length": [
    "7.2.4"
-  ],
-  "flexible sizing function": [
-   "12.1"
-  ],
-  "flexible tracks": [
-   "7.2.4"
-  ],
-  "free space": [
-   "12.2"
   ],
   "grid area": [
    "3.3",
@@ -762,20 +660,8 @@
   "grid template rows": [
    "7.2"
   ],
-  "grid template rows [ auto flow dense ] grid auto columns": [
-   "7.8"
-  ],
-  "grid template rows grid template columns": [
-   "7.4"
-  ],
   "grid track": [
    "3.2"
-  ],
-  "growth limit": [
-   "12.3"
-  ],
-  "hypothetical fr size": [
-   "12.7.1"
   ],
   "implicit column span": [
    "8"
@@ -784,12 +670,6 @@
    "7.5"
   ],
   "implicit grid column": [
-   "7.5"
-  ],
-  "implicit grid lines": [
-   "7.5"
-  ],
-  "implicit grid properties": [
    "7.5"
   ],
   "implicit grid row": [
@@ -822,29 +702,8 @@
   "implicitly named areas": [
    "7.3.3"
   ],
-  "infinitely growable": [
-   "12.5"
-  ],
   "inflexible breadth": [
    "7.2"
-  ],
-  "inline grid": [
-   "5.1"
-  ],
-  "intrinsic sizing function": [
-   "12.1"
-  ],
-  "leftover space": [
-   "12.7.1"
-  ],
-  "limited max content contribution": [
-   "12.5"
-  ],
-  "limited min content contribution": [
-   "12.5"
-  ],
-  "limited min max content contribution": [
-   "12.5"
   ],
   "line name": [
    "7.2.2"
@@ -852,27 +711,9 @@
   "line name list": [
    "7.2"
   ],
-  "line name set": [
-   "7.2.5"
-  ],
   "line names": [
    "7.2",
    "7.2.2"
-  ],
-  "max content": [
-   "7.2.1"
-  ],
-  "max track sizing function": [
-   "12.2"
-  ],
-  "min content": [
-   "7.2.1"
-  ],
-  "min track sizing function": [
-   "12.2"
-  ],
-  "minimum contribution": [
-   "12.5"
   ],
   "minmax( min max )": [
    "7.2.1"
@@ -880,47 +721,14 @@
   "name repeat": [
    "7.2.3.1"
   ],
-  "named cell token": [
-   "7.3"
-  ],
   "named grid area": [
    "7.3"
   ],
   "named grid areas": [
    "7.3"
   ],
-  "nested grid": [
-   "3.4"
-  ],
-  "null cell token": [
-   "7.3"
-  ],
-  "parent grid": [
-   "3.4"
-  ],
-  "sizing function": [
-   "7.2"
-  ],
-  "space to fill": [
-   "12.7.1"
-  ],
-  "span count": [
-   "12.2"
-  ],
-  "specified size suggestion": [
-   "6.6"
-  ],
-  "standalone axis": [
-   "7.2"
-  ],
   "standalone grid": [
    "3.4"
-  ],
-  "subgrid line name list": [
-   "7.2"
-  ],
-  "subgridded axis": [
-   "7.2"
   ],
   "track breadth": [
    "7.2"
@@ -928,29 +736,11 @@
   "track list": [
    "7.2"
   ],
-  "track list auto track list": [
-   "7.2"
-  ],
   "track repeat": [
    "7.2.3.1"
   ],
-  "track section": [
-   "7.2.5"
-  ],
   "track size": [
    "7.2"
-  ],
-  "track sizing algorithm": [
-   "12.3"
-  ],
-  "track sizing function": [
-   "7.2"
-  ],
-  "transferred size suggestion": [
-   "6.6"
-  ],
-  "trash token": [
-   "7.3"
   ]
  },
  "ops": {},
@@ -965,33 +755,12 @@
   "automatic grid span": {
    "17": 4
   },
-  "automatic placement": {
-   "17": 2
-  },
-  "available grid space": {
-   "12.7": 2
-  },
-  "base size": {
-   "12.4": 3,
-   "12.5": 12,
-   "12.5.1": 6,
-   "12.7": 2
-  },
-  "clamp a grid area": {
-   "17": 2
-  },
   "collapsed grid track": {
    "17": 3
-  },
-  "computed track list": {
-   "7.2": 2
   },
   "definite grid position": {
    "17": 4,
    "8.5": 7
-  },
-  "distribute extra space": {
-   "12.5": 6
   },
   "explicit grid": {
    "9": 3,
@@ -1005,14 +774,8 @@
   "explicit grid span": {
    "17": 4
   },
-  "explicit grid tracks": {
-   "17": 3
-  },
   "explicit track list": {
    "7.4": 2
-  },
-  "explicitly assigned": {
-   "9": 2
   },
   "fit content( length percentage )": {
    "12.2": 2,
@@ -1024,32 +787,6 @@
   },
   "fixed size": {
    "7.2.3.1": 2
-  },
-  "fixed sizing function": {
-   "6.6": 2,
-   "12.4": 2,
-   "12.5": 3
-  },
-  "flex factor": {
-   "7.2.4": 3,
-   "12.7": 2,
-   "12.7.1": 2
-  },
-  "flex fraction": {
-   "12.7": 6
-  },
-  "flexible sizing function": {
-   "12.5": 4
-  },
-  "flexible tracks": {
-   "12.5": 4,
-   "12.7": 2,
-   "12.7.1": 2
-  },
-  "free space": {
-   "7.2.1": 2,
-   "12.6": 2,
-   "12.7": 4
   },
   "grid area": {
    "8": 3,
@@ -1235,19 +972,11 @@
    "11.5": 2,
    "12.7.1": 2
   },
-  "growth limit": {
-   "12.4": 3,
-   "12.5": 8,
-   "12.5.1": 6
-  },
   "implicit grid": {
    "17": 2,
    "8.3": 2,
    "8.5": 13,
    "11.1": 2
-  },
-  "implicit grid lines": {
-   "8.3": 2
   },
   "implicit grid span": {
    "17": 4
@@ -1259,49 +988,12 @@
   "implicitly assigned line names": {
    "9": 3
   },
-  "infinitely growable": {
-   "12.5.1": 2
-  },
-  "inline grid": {
-   "6.1": 2
-  },
-  "intrinsic sizing function": {
-   "12.4": 2,
-   "12.5": 2
-  },
-  "leftover space": {
-   "7.2.1": 2,
-   "7.2.4": 3
-  },
-  "limited min max content contribution": {
-   "17": 2
-  },
-  "line name set": {
-   "7.2.6.2": 2
-  },
   "line names": {
    "9": 3,
    "17": 2,
    "7.2.3.1": 9,
    "7.4": 2,
    "8.1.3": 2
-  },
-  "max content": {
-   "12.2": 2,
-   "12.5": 7,
-   "12.5.1": 2
-  },
-  "max track sizing function": {
-   "6.6": 2,
-   "12.1": 2,
-   "12.5": 7,
-   "12.5.1": 5
-  },
-  "min content": {
-   "12.5": 3
-  },
-  "min track sizing function": {
-   "12.5": 7
   },
   "minmax( min max )": {
    "12.2": 2
@@ -1311,20 +1003,6 @@
    "8.1.1": 2,
    "8.3": 2
   },
-  "parent grid": {
-   "9": 6,
-   "7.2": 3
-  },
-  "space to fill": {
-   "12.7": 2
-  },
-  "standalone axis": {
-   "7.2.3.2": 2
-  },
-  "subgridded axis": {
-   "9": 9,
-   "17": 2
-  },
   "track list": {
    "17": 2,
    "7.2.3.1": 3
@@ -1332,13 +1010,6 @@
   "track size": {
    "7.2.3.1": 2,
    "7.4": 3
-  },
-  "track sizing algorithm": {
-   "12.1": 2
-  },
-  "track sizing function": {
-   "17": 2,
-   "12.5": 2
   }
  }
 }
