@@ -573,12 +573,28 @@
           body = uint8ToBase64(new Uint8Array(this.response));
           base64Encoded = true;
         } else if (this.responseType === "" || this.responseType === "text") {
+          /* AN EMPTY BODY IS A RESPONSE AND NOT AN ABSENCE, AND `if (!body) return;` DROPPED THE WHOLE RECORD
+             FOR ONE. This line is reached in the `done` state, where XMLHttpRequest §3.6.10 "The responseText
+             getter" ends "Return the result of getting a text response for this" — so `""` is what a 204, a
+             `Content-Length: 0` 200 and every empty DELETE/PUT reply MEAN, and a truthiness test read the
+             commonest real answer as no observation at all. The fetch wrapper above emits its own `""`
+             unconditionally and lib/response-decode.js types this field `string | null`, so the CONSUMER had
+             already been hardened to accept exactly what this producer refused to send, and the two transports
+             disagreed about the same round trip. This is the half CLAUDE.md calls a thermometer: what it
+             declines to log is subtracted from the number that exists to embarrass the solver.
+             HOW ITS ABSENCE SHOWS: an endpoint the network panel lists and the request log does not, for any
+             XHR whose reply carried no bytes. */
           body = this.responseText;
-          if (!body) return;
         } else if (this.responseType === "json") {
+          /* AND THE COPY THAT STOOD HERE WAS ASSERTING AN IMPOSSIBLE STATE RATHER THAN LOSING ANYTHING.
+             XMLHttpRequest §3.6.9 "The response getter"'s json arm reads "Let jsonObject be the result of
+             running parse JSON from bytes on" its received bytes, and returns null both for a null body and
+             for a parse that threw — so `this.response` is a JSON value or null and never `undefined`, and
+             `JSON.stringify(null)` is the truthy string "null", which no `!body` test can reach. A non-string
+             `body` now fails `_relayMessageUnserved` and is dropped BY NAME, with the field and the transport
+             on the console, which is where a producer that stopped writing one belongs. */
           try {
             body = JSON.stringify(this.response);
-            if (!body) return;
           } catch (_) {
             return;
           }
