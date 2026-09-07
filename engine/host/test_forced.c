@@ -10098,10 +10098,22 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     fold_row(&frame_ctl, &frame_ctl_why, param_value_is(js, "/api/framectl", "r", "us-west-2"),
              "the reply WAS delivered to a program that ended its own frame, and json()'s field did "
              "not reach this endpoint — so the frame gate is not the whole of it");
+    /* AND THIS ROW'S NOT-REACHED ARM MADE THE SAME UNSUPPORTED CLAIM THE FRAME CONTROL'S DID, ONE ENDPOINT
+       OVER, SO IT IS RETIRED IN THE SAME BREATH. It read: so `await fetch('/api/config')` never delivered
+       its reply and json() never ran. That names a CAUSE from the absence of a record two steps downstream
+       of it, and the census refutes the cause outright — `deliver-one-reply` is non-zero in every run at
+       the artifact stamped 1d666bda. What the row can see is that /api/user is absent; what it cannot see
+       is which of three things produced that, and they take different work. See the frame control's own
+       residual for the row that would separate them rather than a second copy of it here. */
     const char *fetch_await_why = NULL; int fetch_await = 1;
     fold_row(&fetch_await, &fetch_await_why, !!strstr(js, "\"/api/user\""),
-             "NOT REACHED: there is no /api/user record at all, so `await fetch('/api/config')` never "
-             "delivered its reply and json() never ran. That is the SCHEDULE");
+             "NOT REACHED: there is no /api/user record at all, and this row does not say why. Three "
+             "readings produce it and they are not shades of one: this flow's reply was never delivered "
+             "to it, or it was and json()'s own promise never settled (the then-chain row below names "
+             "that signature), or it settled and the continuation was never dispatched again. "
+             "`deliver-one-reply` on the same @COLD line refutes only the strongest form of the first — "
+             "it is non-zero, so replies ARE being delivered somewhere in this frontier, and the row "
+             "that would say whether any of them was a fetch() reply is not built");
     fold_row(&fetch_await, &fetch_await_why, param_value_is(js, "/api/user", "region", "us-west-2"),
              "the reply WAS delivered and /api/user's `region` does not carry `us-west-2` — §6.4.3 json() "
              "parsed the host's bytes and its field did not flow into this endpoint as a concrete example");
