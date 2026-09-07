@@ -593,8 +593,32 @@ void worker_global_scope_free(JSRuntime *rt)
  *             no second transport and no carve-out. Its response step is what unblocks residual (1): "set
  *             worker global scope's url to response's url".
  *       (iv)  RUNNING IT — step 12's onComplete list, "If script is a classic script, then run the classic
- *             script script" — a preemptible frame on the one frontier, which is the shape test_forced.c now
- *             drives, with the source coming from (iii) instead of from a fixture.
+ *             script script" — the source (iii) fetched, as a member of the ONE frontier, which is what
+ *             §THERE-IS-NO-GRIND requires of every program this engine runs.
+ *             THE CLAUSE THAT STOOD HERE SAID THIS WAS ALREADY THE SHAPE test_forced.c DRIVES, AND THAT WAS A
+ *             CLAIM ABOUT THIS TREE RATHER THAN ABOUT THE SPEC — the half of a next-diff clause CLAUDE.md's
+ *             §THE-MEASURED-RATE rates as wrong more often than the spec reasoning above it, and the half a
+ *             reader EXECUTES rather than checks. It is retired rather than deleted, because the fixture does
+ *             run a program in a worker realm and a reader who sees that and stops will re-derive it. What the
+ *             fixture drives is `JS_FlowNew` and `JS_FlowResume` in a loop of its own: a quickjs flow, so
+ *             preemptible and suspendable, and deliberately NOT a frontier member — it measures one program's
+ *             step differential under two yield policies, so it has to own the resume. That is the standalone
+ *             drive loop §C-stack bans in PRODUCTION, and a fixture is not production; what it establishes is
+ *             that a worker realm can COMPILE and STEP, never that the scheduler can hold what it built.
+ *             SO (iv) HAS A PREREQUISITE THE LIST DID NOT STATE — NAMING A REALM THAT IS NOT A DOCUMENT — and
+ *             every link of it is one grep. Every production route from SOURCE TEXT to a frontier flow is an
+ *             `engine_queue_` entry (solver/engine.c states that every JS_FlowNew in this engine is below one
+ *             line of it), and each of those entries names the realm to compile in as a `uint32_t doc` handle,
+ *             which solver/engine.h says outright is WHERE THE PROGRAM IS COMPILED. solver/flow.h carries that
+ *             handle and refuses a JSContext for it, because a handle survives a park and a realm does not.
+ *             solver/world.h's `world_doc_realm` is written from exactly one place, core/dom/document.c's
+ *             document_install, whose own header states the identity this subproblem has to break: a realm IS
+ *             a document. And a WorkerGlobalScope realm has no Document, so `document_doc` of one reaches that
+ *             file's DCHECK about a document member running in a realm with no Document.
+ *             IT IS NOT THIS DIRECTORY'S, AND IT IS NOT (i)'S EITHER. The handle blocks (iii)'s fetched source
+ *             whether the worker realm belongs to a second agent or to the fixture, so it is independent of
+ *             the runtime question and lands in solver/world and core/dom/document — which is why (iv) cannot
+ *             be read as work this directory unblocks by finishing (i).
  *       (v)   THE PORT PAIR — step 12's onComplete list again, "Let inside port be a new MessagePort object
  *             in inside settings's realm" and "Entangle outside port and inside port". HTML §9.2 exists in
  *             this build; what does not is an entanglement whose two ends are in two AGENTS — which, by (i),
