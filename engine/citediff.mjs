@@ -37,10 +37,27 @@
  *     sight but ORDERING: it puts the disagreeing siblings on one line, so a reader can see that the tree
  *     contradicts itself without resolving anything, which is a cheaper prompt to go and read than a single
  *     verdict in a long list. Where the two disagree, citegen is the one with evidence.
- *   — THE STEP BAND IS THE UNSEEN ONE. citegen indexes SECTIONS and not the list items inside them, so a claim
- *     about a numbered step within an algorithm is a claim it cannot resolve — its own header says so. This
- *     band is the only mechanical statement anything here makes about that population, and it makes it without
- *     reading a standard at all, which is precisely why it can.
+ *   — THE STEP BAND IS NOT AN UNSEEN AXIS EITHER, AND THIS PARAGRAPH SAID IT WAS. It read: citegen indexes
+ *     SECTIONS and not the list items inside them, so a step claim is one it cannot resolve, and this band is
+ *     the only mechanical statement anything here makes about that population. THAT IS FALSE, and it was false
+ *     when it was written: citegen carries a STEP CHECK that walks a cited section's own lists and reports a
+ *     component no reading of that section admits, under two headings of its own. A lane resolving this band
+ *     found several of its groups already standing as citegen findings, one of them naming the very pair the
+ *     group put on one line. The claim cost nothing here only because it was checked; what it WOULD have cost
+ *     is the redundant second auditor CLAUDE.md forbids, argued for by a tool's own prose.
+ *
+ *     WHAT THIS BAND ACTUALLY ADDS IS THE HALF citegen'S OWN CHANNEL SAYS IT CANNOT DO: that channel asks
+ *     whether a written component CAN EXIST in the section named, so a component that exists and is the WRONG
+ *     one is admitted — where an algorithm's step holds several sub-items, two different sub-numbers are both
+ *     in range and only MEANING separates them. This band is evidence about exactly that population, because
+ *     two sites making ONE claim at two IN-RANGE coordinates cannot both be right and neither is out of range.
+ *     So the two instruments partition rather than overlap: citegen falsifies a component against the list,
+ *     and this falsifies a pair against each other. Neither says which member is wrong.
+ *
+ *     THE GENERAL LESSON, WHICH IS WHY THIS IS A CORRECTION AND NOT A DELETION: a tool's header stating what
+ *     ANOTHER tool cannot see is a claim about THIS TREE, and it rots exactly like a stale crash — worse here,
+ *     because its only reader is somebody deciding whether to build an instrument. Before writing that nothing
+ *     else speaks about a population, RUN THE OTHER TOOL AND READ ITS CHANNEL LIST.
  *
  * A MEASURED BLIND-SPOT BOUNDARY, RECORDED AS AN OBSERVATION RATHER THAN AS A RULE. With a section coordinate
  * corrected, a shallow lettered sub-step stayed silent in citegen's step channel while a sub-step lettered far
