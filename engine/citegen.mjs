@@ -1108,7 +1108,42 @@ function decodeEntities(s) {
  * THE PATTERN THEREFORE SKIPS QUOTED ATTRIBUTE VALUES, and it keeps the naive alternative behind it so that a
  * stray `<` in prose still consumes to the next `>` exactly as it did before rather than running to the end of
  * the document looking for a quote it will never find. */
-const TAG = "<[/!?]?[A-Za-z][^>\"']*(?:(?:\"[^\"]*\"|'[^']*')[^>\"']*)*>|<[^>]*>";
+/* AND THE SAME QUESTION IS ASKED BY EVERY READER THAT WANTS A TAG'S ATTRIBUTES RATHER THAN THE WHOLE TAG,
+ * SO THE QUOTED-RUN IS A CONSTANT AND THE READERS ROUTE TO IT. A fix of the form "this is not how to ask Q"
+ * is not finished at the site that met the defect: the whole-tag pattern below was repaired for exactly this
+ * hazard and the five definition readers went on asking the same question the naive way, each capturing an
+ * attribute span as everything-up-to-the-first-close. That is not a lesser case of the same bug, because for
+ * a definition reader the capture is what the type and owner gates are read out of: a truncated span makes
+ * `attrOf` answer null for every attribute past the cut, so SCOPED_SURFACE_DFN and NOEXPORT both read a
+ * definition that declares itself scoped as an unqualified concept, `data-lt`'s alternate spellings are lost,
+ * and the closing quote and the remaining attributes fall into the TERM — so the index gains a row spelled
+ * out of this tool's own reading of the markup, under a section that really is about something else.
+ * MEASURED, on the committed corpus at the revision this landed: 373 terms across eight standards begin with
+ * an attribute fragment — 194 csscolor4, 62 cssvalues4, 42 cssanchorposition1, 28 cssdisplay3, 25 cssfonts4,
+ * 16 cssinline3, 4 cssgrid2, 2 cssimages3. The number is a fact about one corpus and moves with the next
+ * regen; the derivation does not, so it is the derivation that is written down:
+ *   node -e 'const fs=require("fs"), d="engine/specindex/";
+ *     const S=/(^| )data (dfn type|export|noexport|lt|local lt|plurals)( |$)/;
+ *     for (const f of fs.readdirSync(d).filter(f=>f.endsWith(".json"))) { const j=JSON.parse(fs.readFileSync(d+f));
+ *       const n=Object.keys(j.dfns||{}).filter(t=>S.test(t)).length; if (n) console.log(n, f); }'
+ * THE SECTION-NUMBER READERS ASK THE SAME QUESTION AND ARE NOT SILENT ABOUT IT, which is why this landed at
+ * the definition readers rather than as a sweep over every naive attribute read in the file. Each of those is
+ * paired with a count of what the page carries and THROWS when the two disagree — `grep -cE "^  if .parsed"`
+ * answers 6 — so a span truncated THERE refuses to write an index at all. The definition readers carry no
+ * count, so in them the identical defect WRITES ROWS instead of refusing to, and that is the discriminator
+ * for the naive reads left standing in this file: a truncation some count already turns into a refusal is a
+ * loud gap, not a silent one.
+ * TWO THINGS ABOUT THAT COMMAND, BOTH OF WHICH BIT WHILE IT WAS BEING WRITTEN. Counting the guard MESSAGE
+ * rather than the construct answers 12, the other six being a comment and five throws about something else —
+ * a name is not a construct. And the line anchor is load-bearing rather than tidiness: without it the command
+ * answers 7, the seventh hit being THIS COMMENT: a command written into prose joins the population it counts.
+ * THE NAIVE ALTERNATIVE STAYS BEHIND IT, for the same reason the whole-tag pattern keeps one: against an
+ * unbalanced quote the strict form matches nothing at all, so without a fallback a definition would VANISH
+ * from the index rather than arrive misspelled — which is the one way a stricter pattern is worse than the
+ * loose one it replaces, and it is the direction that leaves no row to notice. */
+const ATTRS = "[^>\"']*(?:(?:\"[^\"]*\"|'[^']*')[^>\"']*)*";
+const ATTRS_CAP = "(" + ATTRS + "|[^>]*)";
+const TAG = "<[/!?]?[A-Za-z]" + ATTRS + ">|<[^>]*>";
 const TAG_RE = new RegExp(TAG, "g");
 
 function stripTags(s) {
@@ -1670,7 +1705,7 @@ function regenWhatwgMultipage(spec) {
     const marks = [];
     const headRe = /<h[2-6][^>]*>\s*<span class=secno>([\d.]+)<\/span>/g;
     for (let m; (m = headRe.exec(body)); ) marks.push({ at: m.index, no: m[1] });
-    const dfnRe = /<dfn\b([^>]*)>([\s\S]{0,400}?)<\/dfn>/g;
+    const dfnRe = new RegExp("<dfn\\b" + ATTRS_CAP + ">([\\s\\S]{0,400}?)<\\/dfn>", "g");
     for (let m; (m = dfnRe.exec(body)); ) {
       const sec = secAt(marks, m.index);
       if (!sec) continue;
@@ -1784,7 +1819,7 @@ function regenW3cChapters(spec) {
      * and `<dfn><a name="x0">…</a></dfn>` are both spellings this document uses, and a use site links whichever
      * one it was given — so both are recorded, or half the standard's own cross-references count as uses of
      * nothing. */
-    const dfnRe = /<dfn\b([^>]*)>([\s\S]{0,400}?)<\/dfn\s*>/gi;
+    const dfnRe = new RegExp("<dfn\\b" + ATTRS_CAP + ">([\\s\\S]{0,400}?)<\\/dfn\\s*>", "gi");
     for (let m; (m = dfnRe.exec(body)); ) {
       const sec = secAt(marks, m.index);
       if (!sec || IMPORTED.test(m[2])) continue;
@@ -1864,7 +1899,7 @@ function regenBikeshed(spec) {
   marks.sort((a, b) => a.at - b.at);
 
   const defs = new Map(), uses = new Map(), idToTerm = new Map(), ops = new Map();
-  const dfnRe = /<dfn\b([^>]*)>([\s\S]{0,400}?)<\/dfn>/g;
+  const dfnRe = new RegExp("<dfn\\b" + ATTRS_CAP + ">([\\s\\S]{0,400}?)<\\/dfn>", "g");
   for (let m; (m = dfnRe.exec(body)); ) {
     const sec = secAt(marks, m.index);
     if (!sec) continue;
@@ -1936,7 +1971,7 @@ function regenRespec(spec) {
   marks.sort((a, b) => a.at - b.at);
 
   const defs = new Map(), uses = new Map(), idToTerm = new Map(), ops = new Map();
-  const dfnRe = /<dfn\b([^>]*)>([\s\S]{0,400}?)<\/dfn>/g;
+  const dfnRe = new RegExp("<dfn\\b" + ATTRS_CAP + ">([\\s\\S]{0,400}?)<\\/dfn>", "g");
   for (let m; (m = dfnRe.exec(body)); ) {
     const sec = secAt(marks, m.index);
     if (!sec || IMPORTED.test(m[2])) continue;
@@ -2066,7 +2101,10 @@ function regenTc39(spec) {
   /* The attribute scan must tolerate a `>` INSIDE a quoted attribute value: three clause titles are shift
    * operators (`The Signed Right Shift Operator ( >> )`) and an unquoted-attribute scan ends the tag on the
    * first `>` it meets, dropping those sections silently. The count check below is what caught it. */
-  const A = /<a\s+((?:"[^"]*"|'[^']*'|[^>"'])*)>\s*<span class=secnum>((?:[^<]|<span[^>]*>[\s\S]*?<\/span>)*)<\/span>([\s\S]*?)<\/a>/g;
+  /* The same question again, and it already had a SECOND correct answer here — a character alternation
+   * denoting the same language as the constant above. Two right answers to one question is the shape that
+   * drifts, so this routes rather than keeping its own. */
+  const A = new RegExp("<a\\s+(" + ATTRS + ")>\\s*<span class=secnum>((?:[^<]|<span[^>]*>[\\s\\S]*?<\\/span>)*)<\\/span>([\\s\\S]*?)<\\/a>", "g");
   let parsed = 0;
   for (let m; (m = A.exec(toc)); ) {
     parsed++;
@@ -2125,7 +2163,7 @@ function regenTc39(spec) {
         if (!idToTerm.has(id)) idToTerm.set(id, t);
       }
     }
-    const dfnRe = /<dfn\b([^>]*)>([\s\S]{0,400}?)<\/dfn>/g;
+    const dfnRe = new RegExp("<dfn\\b" + ATTRS_CAP + ">([\\s\\S]{0,400}?)<\\/dfn>", "g");
     for (let m; (m = dfnRe.exec(body)); ) {
       const sec = secAt(marks, m.index);
       if (!sec || IMPORTED.test(m[2])) continue;
