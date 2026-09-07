@@ -7582,6 +7582,18 @@ static long g_finished;
    a binary partition. Both are written at the ONE line `g_finished` is, from `Flow.cand_src`, and the identity
    between the three is asserted where they are read together. */
 static long g_finished_flows, g_finished_cands;
+/* AND A THIRD MISREADING OF THE ROW BELOW, CROSS-RUN WHERE THE ONE UNDER IT IS WITHIN-RUN. `g_deepest` is a
+   HIGH-WATER MARK: it SATURATES and then reads flat for every remaining census, and a flat tail is the exact
+   shape of a ceiling. Read off the TERMINAL census of several short runs it was reported as a gate — "nothing
+   compiles past program 5" — and dispatched as one into three briefs before a lane refuted it. The refutation
+   is within a single run and needs no work proxy: at ONE revision inside the era being blamed, ONE run reads
+   5 for its first FIFTEEN censuses, then 12 at the sixteenth and 15 at the next four. Same run, same binary.
+   This row needs roughly twenty censuses to speak and reads the same low number on ANY short run at ANY
+   revision in that window, so every cross-revision comparison made of it compared RUN LENGTHS.
+   WHAT TO READ INSTEAD IS CATEGORICAL RATHER THAN A MAGNITUDE: `g_finished` crossing zero says whether this
+   document ever finished a flow AT ALL, which does not depend on how far a run got — where "how far did it
+   get" is nothing but that. So quote this row with the LENGTH of its census series beside it, or not at all,
+   and never as a claim about what the engine CAN reach. */
 static int  g_deepest = -1;
 /* AND THE OTHER END OF THE SAME PROGRAM — the highest index this document has ever run to COMPLETION. It is a
    separate fact from `g_deepest` and the difference between them is the whole diagnosis, which is exactly why
