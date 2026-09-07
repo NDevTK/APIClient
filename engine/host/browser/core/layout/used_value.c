@@ -1322,7 +1322,7 @@ static UvCb uv_cb(lxb_dom_element_t *el)
         lxb_dom_element_t *anc = lxb_dom_interface_element(a);
         char *d = uv_computed(anc, "display");
         bool container = block_flow_display_is_block_container(d);
-        /* css-flexbox-1 §3 Flex Containers: the flex and inline-flex display values — "Flex containers form a
+        /* css-flexbox-1 §3 "Flex Containers: the flex and inline-flex display values" — "Flex containers form a
            containing block for their contents exactly like block containers do. [CSS2]" That is an ELEMENT's
            content edge, stated in the module's own words, so a flex container IS this case's answer even
            though CSS 2 §9.2.1 does not call it a block container box; §3 defines the pair as one container
@@ -1444,16 +1444,16 @@ static UvCb uv_cb(lxb_dom_element_t *el)
                   box_subject(el, nbuf, sizeof nbuf), box_subject(anc, abuf, sizeof abuf));
         if (grid)
             DFAILF("%s, whose ancestor %s is a GRID CONTAINER: "
-                  "css-grid-1 §5.1 Establishing Grid Containers: the grid and inline-grid display values says "
+                  "css-grid-1 §5.1 \"Establishing Grid Containers: the grid and inline-grid display values\" says "
                   "outright that \"Grid containers are not block containers\", so §10.1's second case does not "
                   "stop here — and unlike a flex container it does not answer this case by a sentence of its "
                   "own either, because the rectangle it establishes is not its content edge. css-grid-1 §3.3 "
-                  "Grid Areas states where it is: \"A grid item's grid area forms the containing block into "
+                  "\"Grid Areas\" states where it is: \"A grid item's grid area forms the containing block into "
                   "which it is laid out.\" A grid area is a rectangle INSIDE the container that no element's "
                   "content edge is — the same shape §10.1's fourth case is blocked on — and its four edges are "
                   "grid lines that only css-grid-1's track sizing produces. THAT IS THE ONE DIFFERENCE FROM "
                   "THE FLEX ARM ABOVE, and it is the modules' own disagreement rather than a distinction drawn "
-                  "here: css-flexbox-1 §3 Flex Containers: the flex and inline-flex display values says a flex "
+                  "here: css-flexbox-1 §3 \"Flex Containers: the flex and inline-flex display values\" says a flex "
                   "container forms the containing block \"for their contents exactly like block containers "
                   "do\", which IS an element's content edge and is answered. BUILD css-grid-1's track sizing "
                   "and the grid area as a rectangle this entry can report; until then a grid item's "
