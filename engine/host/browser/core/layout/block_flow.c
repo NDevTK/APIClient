@@ -1548,10 +1548,10 @@ CssPx block_flow_auto_height(lxb_dom_element_t *el)
               "the container's own used main size first — the same §10.3.3 subproblem core/layout/used_value.c "
               "already solves, one level up");
     if (grid)
-        DFAIL("css-grid §11 sizes a GRID CONTAINER's ROWS and its auto height is the sum of the row track sizes "
-              "plus the gutters, not CSS 2.1 §10.6.3's stack of block-level children: a grid item is placed in "
-              "a TRACK, and two items in the same row do not stack at all. BUILD css-grid §11's track sizing "
-              "algorithm");
+        DFAIL("css-grid-1 §11 \"Grid Layout Algorithm\" sizes a GRID CONTAINER's ROWS and its auto height is "
+              "the sum of the row track sizes plus the gutters, not CSS 2.1 §10.6.3's stack of block-level "
+              "children: a grid item is placed in a TRACK, and two items in the same row do not stack at all. "
+              "BUILD css-grid-1 §11.3 \"Track Sizing Algorithm\"");
     if (!container)
         DFAIL("CSS 2.1 §10.6.3's content-based height was asked for a box that is not a BLOCK CONTAINER — "
               "§9.2.1's box that 'either contains only block-level boxes or establishes an inline formatting "

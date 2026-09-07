@@ -2796,8 +2796,9 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
             DFAIL("this box is a FLEX or GRID ITEM, so its used main and cross sizes come from its container's "
                   "algorithm and not from CSS 2.1 §10 at all — css-flexbox §9.7 resolves the flexible lengths "
                   "(a declared `width` is only the FLEX BASE SIZE that `flex-grow` and `flex-shrink` then "
-                  "adjust against the container's free space), and css-grid §11 sizes a grid item to its "
-                  "track. BUILD the flex layout algorithm, which needs the container's own used content size "
+                  "adjust against the container's free space), and css-grid-1 §11 \"Grid Layout Algorithm\" "
+                  "sizes a grid item to its track. BUILD the flex layout algorithm, which needs the "
+                  "container's own used content size "
                   "first — the same §10.3.3 subproblem, one level up");
         /* css-sizing-3 §3.3 decides which BOX EDGE the declared length is on, and the used value it exposes.
            It runs on §10.4's SUBSTITUTED limit too — §3.3 says the property "affects the interpretation of ALL
@@ -2863,8 +2864,9 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
         if (box == UV_BOX_ITEM)
             DFAIL("a FLEX or GRID ITEM with `height: auto`. Its cross size is its CONTAINER's algorithm — "
                   "css-flexbox §9.4 collects the items into flex lines and §9.7 resolves the flexible lengths, "
-                  "css-grid §11 sizes the item to its TRACK — and CSS 2.1 §10.6.3's stack of block-level "
-                  "children is not it. BUILD the flex layout over the container's own used content size");
+                  "css-grid-1 §11 \"Grid Layout Algorithm\" sizes the item to its TRACK — and "
+                  "CSS 2.1 §10.6.3's stack of block-level children is not it. BUILD the flex layout over "
+                  "the container's own used content size");
         if (box == UV_BOX_INLINE_FLEX_GRID)
             DFAIL("an INLINE-LEVEL FLEX OR GRID CONTAINER with `height: auto`. Both modules give the container "
                   "the same automatic block size and neither of them is §10.6.3's walk: css-grid-1 §5.2 "
@@ -2942,8 +2944,9 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
     }
     if (box == UV_BOX_ITEM)
         DFAIL("a FLEX or GRID ITEM with `width: auto`. css-flexbox §9.7 makes the FLEX BASE SIZE the item's "
-              "max-content contribution and then flexes it against the container's free space; css-grid §11 "
-              "sizes the item to its TRACK, which is itself sized from the items in it. Both are intrinsic "
+              "max-content contribution and then flexes it against the container's free space; "
+              "css-grid-1 §11 \"Grid Layout Algorithm\" sizes the item to its TRACK, which is itself sized "
+              "from the items in it. Both are intrinsic "
               "sizes and neither is §10.3.3's equation. BUILD the flex layout over the container's own used "
               "content size, which §10.1 and §10.3.3 answer now");
     if (box == UV_BOX_INLINE_FLEX_GRID)

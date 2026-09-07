@@ -1593,7 +1593,8 @@ static LbContext lb_establishing_context(lxb_dom_element_t *el)
                   "through. Its computed `display` makes it a table box, a table row or row group, a flex or "
                   "grid container, or a box that generates none at all — and each of those puts this box in a "
                   "formatting context a DIFFERENT module owns: CSS 2.1 §17.5 \"Visual layout of table "
-                  "contents\" for the first three, css-flexbox §4 and css-grid §9 for the next two, which "
+                  "contents\" for the first three, css-flexbox-1 §4 \"Flex Items\" and "
+                  "css-grid-1 §6.1 \"Grid Item Display\" for the next two, which "
                   "BLOCKIFY their children so an `inline` child of one is not an inline box at all. Fix the "
                   "blockification where the child's `display` is computed (css-display §2.7's "
                   "blockification), or BUILD the module that owns the container",
