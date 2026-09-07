@@ -1,0 +1,229 @@
+{
+ "spec": "CSS Custom Functions and Mixins Module Level 1",
+ "key": "cssmixins1",
+ "base": "https://drafts.csswg.org/css-mixins-1/",
+ "specUpdated": "21 October 2025",
+ "fetched": "2026-09-07",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "intro"
+  },
+  "2": {
+   "title": "Defining Custom Functions",
+   "page": "",
+   "id": "defining-custom-functions"
+  },
+  "3": {
+   "title": "Using Custom Functions",
+   "page": "",
+   "id": "using-custom-functions"
+  },
+  "4": {
+   "title": "Execution Model of Custom Functions",
+   "page": "",
+   "id": "execution-model"
+  },
+  "5": {
+   "title": "Defining Mixins",
+   "page": "",
+   "id": "defining-mixins"
+  },
+  "6": {
+   "title": "Private Custom Properties: the @private rule",
+   "page": "",
+   "id": "private"
+  },
+  "7": {
+   "title": "CSSOM",
+   "page": "",
+   "id": "cssom"
+  },
+  "8": {
+   "title": "Privacy Considerations",
+   "page": "",
+   "id": "privacy"
+  },
+  "9": {
+   "title": "Security Considerations",
+   "page": "",
+   "id": "security"
+  },
+  "10": {
+   "title": "Changes",
+   "page": "",
+   "id": "changes"
+  },
+  "2.1": {
+   "title": "The @function Rule",
+   "page": "",
+   "id": "function-rule"
+  },
+  "2.1.1": {
+   "title": "The Function Prelude",
+   "page": "",
+   "id": "function-prelude"
+  },
+  "2.1.2": {
+   "title": "The Function Body",
+   "page": "",
+   "id": "function-body"
+  },
+  "2.2": {
+   "title": "The result Descriptor",
+   "page": "",
+   "id": "the-result-descriptor"
+  },
+  "2.3": {
+   "title": "Arguments & Local Variables",
+   "page": "",
+   "id": "args"
+  },
+  "3.1": {
+   "title": "Evaluating Custom Functions",
+   "page": "",
+   "id": "evaluating-custom-functions"
+  },
+  "4.1": {
+   "title": "Conditional Rules",
+   "page": "",
+   "id": "conditional-rules"
+  },
+  "5.1": {
+   "title": "The @mixin rule",
+   "page": "",
+   "id": "mixin-rule"
+  },
+  "5.1.1": {
+   "title": "The Mixin Prelude",
+   "page": "",
+   "id": "mixin-prelude"
+  },
+  "5.1.2": {
+   "title": "The Mixin Body",
+   "page": "",
+   "id": "mixin-body"
+  },
+  "5.2": {
+   "title": "Arguments and Local Variables",
+   "page": "",
+   "id": "mixin-args"
+  },
+  "5.3": {
+   "title": "The @contents Rule",
+   "page": "",
+   "id": "contents-rule"
+  },
+  "5.4": {
+   "title": "The @apply Rule",
+   "page": "",
+   "id": "apply-rule"
+  },
+  "5.5": {
+   "title": "Evaluating Mixins",
+   "page": "",
+   "id": "evaluating-mixins"
+  },
+  "7.1": {
+   "title": "The CSSFunctionRule Interface",
+   "page": "",
+   "id": "the-function-interface"
+  },
+  "7.2": {
+   "title": "The CSSFunctionDeclarations Interface",
+   "page": "",
+   "id": "the-function-declarations-interface"
+  },
+  "7.3": {
+   "title": "The CSSMixinRule Interface",
+   "page": "",
+   "id": "the-mixin-interface"
+  },
+  "7.4": {
+   "title": "The CSSApplyBlockRule Interface",
+   "page": "",
+   "id": "the-apply-block-interface"
+  },
+  "7.5": {
+   "title": "The CSSApplyStatementRule Interface",
+   "page": "",
+   "id": "the-apply-statement-interface"
+  },
+  "7.6": {
+   "title": "The CSSContentsBlockRule Interface",
+   "page": "",
+   "id": "the-contents-block-interface"
+  },
+  "7.7": {
+   "title": "The CSSContentsStatementRule Interface",
+   "page": "",
+   "id": "the-contents-statement-interface"
+  }
+ },
+ "dfns": {
+  "css type": [
+   "2.1"
+  ],
+  "dashed function": [
+   "3"
+  ],
+  "default value": [
+   "2.1"
+  ],
+  "function parameter": [
+   "2.1"
+  ],
+  "private property": [
+   "6"
+  ],
+  "private property names": [
+   "6"
+  ],
+  "serialize a css type": [
+   "7.1"
+  ],
+  "serialize a cssapplyblockrule": [
+   "7.4"
+  ],
+  "serialize a cssapplystatementrule": [
+   "7.5"
+  ],
+  "serialize a csscontentsblockrule": [
+   "7.6"
+  ],
+  "serialize a csscontentsstatementrule": [
+   "7.7"
+  ],
+  "serialize a cssfunctionrule": [
+   "7.1"
+  ],
+  "serialize a cssmixinrule": [
+   "7.3"
+  ],
+  "serialize a function argument": [
+   "7.4"
+  ],
+  "serialize a function parameter": [
+   "7.1"
+  ],
+  "serialize an @apply prelude": [
+   "7.4"
+  ]
+ },
+ "ops": {},
+ "uses": {
+  "css type": {
+   "2.1.1": 2
+  },
+  "dashed function": {
+   "2": 2,
+   "2.2": 2,
+   "5.4": 3
+  },
+  "private property": {
+   "10": 2,
+   "5.2": 5
+  }
+ }
+}

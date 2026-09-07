@@ -1,0 +1,212 @@
+{
+ "spec": "CSS Color Adjustment Module Level 1",
+ "key": "csscoloradjust1",
+ "base": "https://drafts.csswg.org/css-color-adjust-1/",
+ "specUpdated": "7 May 2026",
+ "fetched": "2026-09-07",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "intro"
+  },
+  "2": {
+   "title": "Preferred Color Schemes",
+   "page": "",
+   "id": "preferred"
+  },
+  "3": {
+   "title": "Forced Color Palettes",
+   "page": "",
+   "id": "forced"
+  },
+  "4": {
+   "title": "Performance-based Color Adjustments",
+   "page": "",
+   "id": "perf"
+  },
+  "5": {
+   "title": "Emulation",
+   "page": "",
+   "id": "color-adjust-emulation"
+  },
+  "6": {
+   "title": "Privacy Considerations",
+   "page": "",
+   "id": "privacy"
+  },
+  "7": {
+   "title": "Security Considerations",
+   "page": "",
+   "id": "security"
+  },
+  "8": {
+   "title": "Acknowledgements",
+   "page": "",
+   "id": "acknowledgements"
+  },
+  "9": {
+   "title": "Changes",
+   "page": "",
+   "id": "changes"
+  },
+  "1.1": {
+   "title": "Value Definitions",
+   "page": "",
+   "id": "values"
+  },
+  "2.1": {
+   "title": "Opting Into a Preferred Color Scheme",
+   "page": "",
+   "id": "color-scheme-page"
+  },
+  "2.2": {
+   "title": "Overriding the Page Color Scheme: the color-scheme property",
+   "page": "",
+   "id": "color-scheme-prop"
+  },
+  "2.3": {
+   "title": "Resolving Color Schemes",
+   "page": "",
+   "id": "color-scheme-resolution"
+  },
+  "2.4": {
+   "title": "Effects of the Used Color Scheme",
+   "page": "",
+   "id": "color-scheme-effect"
+  },
+  "2.5": {
+   "title": "Overriding the Color Scheme",
+   "page": "",
+   "id": "color-scheme-override"
+  },
+  "3.1": {
+   "title": "Properties Affected by Forced Colors Mode",
+   "page": "",
+   "id": "forced-colors-properties"
+  },
+  "3.2": {
+   "title": "Opting Out of a Forced Color Palette: the forced-color-adjust property",
+   "page": "",
+   "id": "forced-color-adjust-prop"
+  },
+  "4.1": {
+   "title": "Ink Economy: the print-color-adjust property",
+   "page": "",
+   "id": "print-color-adjust"
+  },
+  "4.2": {
+   "title": "The color-adjust Shorthand",
+   "page": "",
+   "id": "color-adjust"
+  },
+  "5.1": {
+   "title": "Emulate Forced Colors Mode",
+   "page": "",
+   "id": "emulate-forced-colors-mode"
+  },
+  "5.2": {
+   "title": "Forced Colors Mode Color Palettes",
+   "page": "",
+   "id": "forced-color-palettes"
+  }
+ },
+ "dfns": {
+  "color adjust": [
+   "4.2"
+  ],
+  "color scheme": [
+   "2",
+   "2.2"
+  ],
+  "color scheme preference": [
+   "2.3"
+  ],
+  "color scheme support": [
+   "2.3"
+  ],
+  "dark color scheme": [
+   "2"
+  ],
+  "element color scheme": [
+   "2"
+  ],
+  "forced color adjust": [
+   "3.2"
+  ],
+  "forced colors mode": [
+   "3"
+  ],
+  "light color scheme": [
+   "2"
+  ],
+  "page color scheme": [
+   "2"
+  ],
+  "page supported color scheme": [
+   "2.1"
+  ],
+  "page supported color schemes": [
+   "2.1"
+  ],
+  "preferred color scheme": [
+   "2"
+  ],
+  "print color adjust": [
+   "4.1"
+  ],
+  "set emulated forced colors theme data": [
+   "5.1"
+  ]
+ },
+ "ops": {},
+ "uses": {
+  "color adjust": {
+   "9": 2
+  },
+  "color scheme": {
+   "1": 2,
+   "9": 3,
+   "2.1": 5,
+   "2.3": 12,
+   "2.5": 3
+  },
+  "color scheme support": {
+   "2.2": 4
+  },
+  "dark color scheme": {
+   "9": 2,
+   "2.2": 2,
+   "2.3": 3,
+   "2.5": 4
+  },
+  "element color scheme": {
+   "2.2": 3,
+   "2.4": 3
+  },
+  "forced color adjust": {
+   "9": 2
+  },
+  "forced colors mode": {
+   "9": 4,
+   "3.1": 5,
+   "3.2": 5
+  },
+  "light color scheme": {
+   "9": 2,
+   "2.2": 2,
+   "2.3": 2
+  },
+  "page color scheme": {
+   "2.1": 5,
+   "2.2": 2
+  },
+  "preferred color scheme": {
+   "2.1": 2
+  },
+  "print color adjust": {
+   "9": 2,
+   "4.2": 3
+  }
+ }
+}

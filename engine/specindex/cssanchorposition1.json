@@ -1,0 +1,512 @@
+{
+ "spec": "CSS Anchor Positioning Module Level 1",
+ "key": "cssanchorposition1",
+ "base": "https://drafts.csswg.org/css-anchor-position-1/",
+ "specUpdated": "8 May 2026",
+ "fetched": "2026-09-07",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "intro"
+  },
+  "2": {
+   "title": "Determining the Anchor",
+   "page": "",
+   "id": "determining"
+  },
+  "3": {
+   "title": "Anchor-Based Positioning",
+   "page": "",
+   "id": "positioning"
+  },
+  "4": {
+   "title": "Anchor-Based Alignment",
+   "page": "",
+   "id": "alignment"
+  },
+  "5": {
+   "title": "Anchor-Based Sizing",
+   "page": "",
+   "id": "sizing"
+  },
+  "6": {
+   "title": "Overflow Management",
+   "page": "",
+   "id": "fallback"
+  },
+  "7": {
+   "title": "Accessibility Implications",
+   "page": "",
+   "id": "accessibility"
+  },
+  "8": {
+   "title": "DOM Interfaces",
+   "page": "",
+   "id": "interfaces"
+  },
+  "9": {
+   "title": "Appendix: Style & Layout Interleaving",
+   "page": "",
+   "id": "interleaving"
+  },
+  "10": {
+   "title": "Security Considerations",
+   "page": "",
+   "id": "sec"
+  },
+  "11": {
+   "title": "Privacy Considerations",
+   "page": "",
+   "id": "priv"
+  },
+  "12": {
+   "title": "Changes",
+   "page": "",
+   "id": "changes"
+  },
+  "1.1": {
+   "title": "Value Definitions",
+   "page": "",
+   "id": "values"
+  },
+  "2.1": {
+   "title": "Creating an Anchor: the anchor-name property",
+   "page": "",
+   "id": "name"
+  },
+  "2.2": {
+   "title": "Scoping Anchor Names: the anchor-scope property",
+   "page": "",
+   "id": "anchor-scope"
+  },
+  "2.3": {
+   "title": "Finding an Anchor",
+   "page": "",
+   "id": "target"
+  },
+  "2.4": {
+   "title": "Default Anchors: the position-anchor property",
+   "page": "",
+   "id": "position-anchor"
+  },
+  "2.4.1": {
+   "title": "Implicit Anchor Elements",
+   "page": "",
+   "id": "implicit"
+  },
+  "2.5": {
+   "title": "Anchor Relevance",
+   "page": "",
+   "id": "anchor-relevance"
+  },
+  "3.1": {
+   "title": "The position-area Property",
+   "page": "",
+   "id": "position-area"
+  },
+  "3.1.1": {
+   "title": "Resolving the Position Area Grid",
+   "page": "",
+   "id": "position-area-grid-resolution"
+  },
+  "3.1.2": {
+   "title": "Syntax of <position-area> Values",
+   "page": "",
+   "id": "position-area-syntax"
+  },
+  "3.1.3": {
+   "title": "Computed Value and Serialization of <position-area>",
+   "page": "",
+   "id": "position-area-computed"
+  },
+  "3.2": {
+   "title": "Anchor-relative Insets: the anchor() function",
+   "page": "",
+   "id": "anchor-pos"
+  },
+  "3.2.1": {
+   "title": "Resolution of anchor()",
+   "page": "",
+   "id": "anchor-resolution"
+  },
+  "3.3": {
+   "title": "Taking Scroll Into Account",
+   "page": "",
+   "id": "scroll"
+  },
+  "4.1": {
+   "title": "Area-specific Default Alignment",
+   "page": "",
+   "id": "position-area-alignment"
+  },
+  "4.2": {
+   "title": "Centering on the Anchor: the anchor-center alignment value",
+   "page": "",
+   "id": "anchor-center"
+  },
+  "5.1": {
+   "title": "The anchor-size() Function",
+   "page": "",
+   "id": "anchor-size-fn"
+  },
+  "5.1.1": {
+   "title": "Resolution of anchor-size()",
+   "page": "",
+   "id": "anchor-size-resolution"
+  },
+  "6.1": {
+   "title": "Giving Fallback Options: the position-try-fallbacks property",
+   "page": "",
+   "id": "position-try-fallbacks"
+  },
+  "6.2": {
+   "title": "Determining Fallback Order: the position-try-order property",
+   "page": "",
+   "id": "position-try-order-property"
+  },
+  "6.3": {
+   "title": "The position-try Shorthand",
+   "page": "",
+   "id": "position-try-prop"
+  },
+  "6.4": {
+   "title": "The @position-try Rule",
+   "page": "",
+   "id": "fallback-rule"
+  },
+  "6.5": {
+   "title": "Applying Position Fallback",
+   "page": "",
+   "id": "fallback-apply"
+  },
+  "6.5.1": {
+   "title": "Maintaining and Clearing Fallback Choices",
+   "page": "",
+   "id": "statefulness"
+  },
+  "6.5.1.1": {
+   "title": "Recording the last successful position option",
+   "page": "",
+   "id": "last-successful-recording"
+  },
+  "6.5.2": {
+   "title": "Applying Position Options",
+   "page": "",
+   "id": "applying-options"
+  },
+  "6.6": {
+   "title": "Conditional Hiding: the position-visibility property",
+   "page": "",
+   "id": "position-visibility"
+  },
+  "8.1": {
+   "title": "The CSSPositionTryRule interface",
+   "page": "",
+   "id": "om-position-try"
+  }
+ },
+ "dfns": {
+  "@position try": [
+   "6.4"
+  ],
+  "acceptable anchor element": [
+   "2.3"
+  ],
+  "accepted @position try properties": [
+   "6.4"
+  ],
+  "align self": [
+   "4.2"
+  ],
+  "anchor functions": [
+   "1"
+  ],
+  "anchor name": [
+   "2.1"
+  ],
+  "anchor positioning": [
+   "1"
+  ],
+  "anchor reference": [
+   "1"
+  ],
+  "anchor references": [
+   "1"
+  ],
+  "anchor scope": [
+   "2.2"
+  ],
+  "anchor side": [
+   "3.2"
+  ],
+  "anchor size": [
+   "5.1"
+  ],
+  "anchor size()": [
+   "5"
+  ],
+  "compensate for scroll": [
+   "3.3"
+  ],
+  "compensates for scroll": [
+   "3.3"
+  ],
+  "data dfn type value data export id valdef position area block end block end": [
+   "3.1.2"
+  ],
+  "data dfn type value data export id valdef position area block start block start": [
+   "3.1.2"
+  ],
+  "data dfn type value data export id valdef position area bottom bottom": [
+   "3.1.2"
+  ],
+  "data dfn type value data export id valdef position area center center": [
+   "3.1.2"
+  ],
+  "data dfn type value data export id valdef position area end end": [
+   "3.1.2"
+  ],
+  "data dfn type value data export id valdef position area inline end inline end": [
+   "3.1.2"
+  ],
+  "data dfn type value data export id valdef position area inline start inline start": [
+   "3.1.2"
+  ],
+  "data dfn type value data export id valdef position area left left": [
+   "3.1.2"
+  ],
+  "data dfn type value data export id valdef position area right right": [
+   "3.1.2"
+  ],
+  "data dfn type value data export id valdef position area self block end self block end": [
+   "3.1.2"
+  ],
+  "data dfn type value data export id valdef position area self block start self block start": [
+   "3.1.2"
+  ],
+  "data dfn type value data export id valdef position area self end self end": [
+   "3.1.2"
+  ],
+  "data dfn type value data export id valdef position area self inline end self inline end": [
+   "3.1.2"
+  ],
+  "data dfn type value data export id valdef position area self start self start": [
+   "3.1.2"
+  ],
+  "data dfn type value data export id valdef position area self x end self x end": [
+   "3.1.2"
+  ],
+  "data dfn type value data export id valdef position area self x start self x start": [
+   "3.1.2"
+  ],
+  "data dfn type value data export id valdef position area self y end self y end": [
+   "3.1.2"
+  ],
+  "data dfn type value data export id valdef position area self y start self y start": [
+   "3.1.2"
+  ],
+  "data dfn type value data export id valdef position area span all span all": [
+   "3.1.2"
+  ],
+  "data dfn type value data export id valdef position area span block end span block end": [
+   "3.1.2"
+  ],
+  "data dfn type value data export id valdef position area span block start span block start": [
+   "3.1.2"
+  ],
+  "data dfn type value data export id valdef position area span bottom span bottom": [
+   "3.1.2"
+  ],
+  "data dfn type value data export id valdef position area span end span end": [
+   "3.1.2"
+  ],
+  "data dfn type value data export id valdef position area span inline end span inline end": [
+   "3.1.2"
+  ],
+  "data dfn type value data export id valdef position area span left span left": [
+   "3.1.2"
+  ],
+  "data dfn type value data export id valdef position area span right span right": [
+   "3.1.2"
+  ],
+  "data dfn type value data export id valdef position area span self end span self end": [
+   "3.1.2"
+  ],
+  "data dfn type value data export id valdef position area span self start span self start": [
+   "3.1.2"
+  ],
+  "data dfn type value data export id valdef position area span self x end span self x end": [
+   "3.1.2"
+  ],
+  "data dfn type value data export id valdef position area span self y end span self y end": [
+   "3.1.2"
+  ],
+  "data dfn type value data export id valdef position area span start span start": [
+   "3.1.2"
+  ],
+  "data dfn type value data export id valdef position area span top span top": [
+   "3.1.2"
+  ],
+  "data dfn type value data export id valdef position area span x end span x end": [
+   "3.1.2"
+  ],
+  "data dfn type value data export id valdef position area span x start span x start": [
+   "3.1.2"
+  ],
+  "data dfn type value data export id valdef position area span y end span y end": [
+   "3.1.2"
+  ],
+  "data dfn type value data export id valdef position area span y start span y start": [
+   "3.1.2"
+  ],
+  "data dfn type value data export id valdef position area start start": [
+   "3.1.2"
+  ],
+  "data dfn type value data export id valdef position area top top": [
+   "3.1.2"
+  ],
+  "data dfn type value data export id valdef position area x end x end": [
+   "3.1.2"
+  ],
+  "data dfn type value data export id valdef position area x start x start": [
+   "3.1.2"
+  ],
+  "data dfn type value data export id valdef position area y end y end": [
+   "3.1.2"
+  ],
+  "data dfn type value data export id valdef position area y start y start": [
+   "3.1.2"
+  ],
+  "fallback base styles": [
+   "6.1"
+  ],
+  "justify self": [
+   "4.2"
+  ],
+  "last successful position option": [
+   "6.5.1.1"
+  ],
+  "position anchor": [
+   "2.4"
+  ],
+  "position area": [
+   "3.1",
+   "3.1.2"
+  ],
+  "position area grid": [
+   "3.1.1"
+  ],
+  "position options list": [
+   "6.1"
+  ],
+  "position try": [
+   "6.3"
+  ],
+  "position try fallbacks": [
+   "6.1"
+  ],
+  "position try order": [
+   "6.2"
+  ],
+  "position visibility": [
+   "6.6"
+  ],
+  "record the last successful position option": [
+   "6.5.1.1"
+  ],
+  "style layout interleave": [
+   "9"
+  ],
+  "style layout interleaving": [
+   "9"
+  ],
+  "try size": [
+   "6.2"
+  ],
+  "try tactic": [
+   "6.1"
+  ]
+ },
+ "ops": {},
+ "uses": {
+  "@position try": {
+   "6.1": 3,
+   "8.1": 2
+  },
+  "accepted @position try properties": {
+   "6.5.1.1": 2
+  },
+  "align self": {
+   "12": 2,
+   "6.5.2": 4
+  },
+  "anchor name": {
+   "12": 3,
+   "2.2": 3,
+   "2.3": 2,
+   "2.4": 3,
+   "3.2": 3
+  },
+  "anchor positioning": {
+   "3.3": 3
+  },
+  "anchor references": {
+   "3.3": 6
+  },
+  "anchor scope": {
+   "12": 2,
+   "2.3": 2
+  },
+  "anchor size()": {
+   "5.1": 5,
+   "5.1.1": 3
+  },
+  "fallback base styles": {
+   "12": 2,
+   "6.2": 2
+  },
+  "justify self": {
+   "12": 2
+  },
+  "position anchor": {
+   "1": 2,
+   "12": 4,
+   "6.4": 2
+  },
+  "position area": {
+   "12": 7,
+   "2.4": 2,
+   "3.1.3": 2,
+   "4.1": 3,
+   "6.1": 3,
+   "6.5.2": 2
+  },
+  "position area grid": {
+   "3.1": 2
+  },
+  "position options list": {
+   "12": 2,
+   "6.5": 3
+  },
+  "position try": {
+   "12": 2
+  },
+  "position try fallbacks": {
+   "12": 3,
+   "6.2": 2,
+   "6.3": 2,
+   "6.4": 2
+  },
+  "position try order": {
+   "12": 4,
+   "6.3": 2
+  },
+  "position visibility": {
+   "12": 2
+  },
+  "style layout interleaving": {
+   "12": 2
+  }
+ }
+}

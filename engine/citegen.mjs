@@ -967,6 +967,57 @@ const SPECS = [
     base: "https://drafts.csswg.org/css-fonts-4/", edition: "maintained", anchors: ["css-fonts-4"] },
   { key: "csscolor4", label: "CSS Color Module Level 4", kind: "bikeshed",
     base: "https://drafts.csswg.org/css-color-4/", edition: "maintained", anchors: ["css-color-4"] },
+  /* THE FOUR CSS DRAFTS THE LEVELLED FOREIGN ENTRY BELOW DEFERRED, AND THE DEFERRAL IS RETIRED BY ASKING THE
+     SERVERS RATHER THAN BY ARGUING. That entry's own note records the split: of the six standards it named,
+     four are served as RENDERED bikeshed and two only as unrendered ReSpec source, and a row is what the
+     first half of that sentence asks for. The probe was re-run and REPRODUCED to the digit before these rows
+     were written — 31, 9, 40 and 21 `data-level` headings, a `dt-updated` and no `respecConfig` on any of the
+     four — against the same two positive controls (the `permissions` row's base, which answers with
+     `secno` headings, and the `fsa` row's, which answers with `data-level`) and the same two negative
+     controls, which answer zero of both shapes. A probe that separates is what makes its zeros mean anything,
+     and the zeros here are on the OTHER two.
+     ANCHOR POSITIONING NEEDS TWO SPELLINGS AND THE OTHER THREE NEED ONE, which is the `css-values-4` shape
+     and is a fact about this tree rather than about the standard. The shortname is `css-anchor-position-1`
+     and every site here writes `CSS Anchor Positioning 1`, which is what `joinLevel` builds
+     `css-anchor-positioning-1` out of; a row carrying only the shortname would be keyed on a spelling nobody
+     writes, which is the `mixed` defect this file has now measured four times. The other three names join to
+     their own shortname exactly, so one anchor each is the whole of what the tree can produce: every site is
+     LEVELLED, so none of them reaches the trailing-name path at all.
+     EVERY NUMBER THIS TREE WRITES FOR THE FOUR WAS CHECKED AGAINST THE FETCHED HEADINGS BEFORE THE ROWS WERE
+     WRITTEN, AND IT IS A POPULATION RATHER THAN A SAMPLE: nine sites name one of the four, they carry
+     fifteen numbers between them, and every one of the fifteen is right at the subject it stands beside —
+     eight of the nine state the section's own title word for word, and the numbers a site writes bare after
+     naming its standard once were read with it rather than left out. That is what an index row buys: all of
+     them were counted and asked nothing, and they are now answered rather than trusted.
+     AND THE ONE TITLE THAT STOPS RESOLVING IS NAMED HERE RATHER THAN LEFT TO BE DISCOVERED. Indexing a
+     standard makes it a NEIGHBOUR of every other, and the resolver acts on a stated title only where exactly
+     ONE indexed standard holds it — so a title these four share with a standard already in this table
+     collapses to no evidence at all. Eight of their titles are held elsewhere and seven of the eight were
+     ALREADY ambiguous across several standards, which is to say they resolved nothing before either. The
+     eighth is `Conditional Rules`, unique to `cssproperties1` until now and shared with `cssmixins1` from
+     here on. It costs nothing today because no site in this tree states that title, and it is written down
+     because the day one does, this row is the reason its title says nothing.
+     AND WHAT THE ROWS COST IS RECORDED HERE BECAUSE IT IS WHAT AN INDEX ROW DOES RATHER THAN WHAT THESE
+     FOUR DID. A group is a union over ONE NUMBER in ONE FILE, so a bare number carrying no evidence of its
+     own inherits the group's answer only while the group holds exactly ONE anchored standard. `css_rule.c`
+     cites CSS Conditional Rules 3 and CSS Mixins 1 side by side and BOTH number a subsection of their
+     interface chapter alike, so the moment the second is indexed that group holds two keys, no single
+     answer, and every bare number in it falls to its file vote — which may RESOLVE and may not JUDGE, so
+     those quotations stop being compared at all. That is the `cssproperties1` row's mechanism running in
+     the direction that costs coverage rather than the direction that manufactured thirty-three confident
+     wrong answers, and it is the honest state: the ambiguity is real, it is in the tree, and the tool
+     declines it instead of guessing. THE REPAIR IS AT THE SITES AND IT IS ONE NAME EACH — write the
+     standard in front of the bare number — and a run already says WHICH standard, because its own
+     CORROBORATED-ELSEWHERE row names whose words those are. */
+  { key: "cssmixins1", label: "CSS Custom Functions and Mixins Module Level 1", kind: "bikeshed",
+    base: "https://drafts.csswg.org/css-mixins-1/", edition: "maintained", anchors: ["css-mixins-1"] },
+  { key: "cssextensions1", label: "CSS Extensions Module Level 1", kind: "bikeshed",
+    base: "https://drafts.csswg.org/css-extensions-1/", edition: "maintained", anchors: ["css-extensions-1"] },
+  { key: "cssanchorposition1", label: "CSS Anchor Positioning Module Level 1", kind: "bikeshed",
+    base: "https://drafts.csswg.org/css-anchor-position-1/", edition: "maintained",
+    anchors: ["css-anchor-position-1", "css-anchor-positioning-1"] },
+  { key: "csscoloradjust1", label: "CSS Color Adjustment Module Level 1", kind: "bikeshed",
+    base: "https://drafts.csswg.org/css-color-adjust-1/", edition: "maintained", anchors: ["css-color-adjust-1"] },
   /* THE TWO EDITIONS OF CSS 2, AND THEY ARE THE FIRST STANDARD HERE WHOSE DOCUMENT IS SPLIT ACROSS CHAPTERS AND
      WHOSE PIPELINE PREDATES EVERY GENERATOR ABOVE — see regenW3cChapters for how a multi-document standard is
      indexed and why the chapter list is READ rather than listed.
@@ -2228,7 +2279,15 @@ const OTHER_SPECS = [
      `respecConfig`, so the probe SPEAKS for a document either reader can read. Both negative controls this
      file already names — `w3c.github.io/requestidlecallback/` and `w3c.github.io/screen-orientation/` —
      answer zero of both shapes with a `respecConfig`. It separates them, so its zeros mean something. */
-  "css mixins", "css extensions", "css anchor positioning", "css color adjust",
+  /* AND THE FOUR ARE GONE FROM THIS LIST BECAUSE THEY ARE ROWS NOW, WHICH IS THE ONLY WAY A FOREIGN ENTRY IS
+     ALLOWED TO LEAVE IT — the `web cryptography` move two screens up, made a second time. A refusal is
+     retired by an ANSWER and never by a deletion: the four names above sit in the SPECS table beside
+     `css-color-4`, each anchored on the levelled spelling `joinLevel` actually builds, so every site that
+     reached this list through the gate below now reaches an index instead. Nothing keyed on the SPACED,
+     UNLEVELLED name was lost, because no site in this tree writes one — checked over every spelling of the
+     four names before the entries were removed, and all nine are levelled with the section sign next to the
+     level. THE GATE THIS LIST ARMED IS ARMED BY THE ANCHOR NOW: `joinLevel` joins where the joined form is an
+     indexed anchor OR the base is on this list, and the four joined forms are anchors. */
   /* POINTER EVENTS AND POINTER LOCK, SPLIT OUT OF THE FOUR ABOVE BECAUSE THEIR INDEX ROW IS NOT A FETCH
      AWAY — the `background tasks` category, which until now had one member on this list. The claim is
      about what the servers send rather than about this tool, and it is the same four facts for each.

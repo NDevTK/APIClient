@@ -1,0 +1,74 @@
+{
+ "spec": "CSS Extensions Module Level 1",
+ "key": "cssextensions1",
+ "base": "https://drafts.csswg.org/css-extensions-1/",
+ "specUpdated": "5 November 2025",
+ "fetched": "2026-09-07",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "intro"
+  },
+  "2": {
+   "title": "Extension Names",
+   "page": "",
+   "id": "extension-name"
+  },
+  "3": {
+   "title": "Custom Selectors",
+   "page": "",
+   "id": "custom-selectors"
+  },
+  "4": {
+   "title": "Custom Properties",
+   "page": "",
+   "id": "custom-property"
+  },
+  "5": {
+   "title": "Custom Functions",
+   "page": "",
+   "id": "custom-functions"
+  },
+  "6": {
+   "title": "Custom Selector Combinators",
+   "page": "",
+   "id": "custom-combinators"
+  },
+  "7": {
+   "title": "Custom At-Rules",
+   "page": "",
+   "id": "custom-atrules"
+  },
+  "3.1": {
+   "title": "Script-based Custom Selectors",
+   "page": "",
+   "id": "script-custom-selectors"
+  },
+  "3.2": {
+   "title": "CSSOM",
+   "page": "",
+   "id": "custom-selectors-cssom"
+  }
+ },
+ "dfns": {
+  "@custom selector": [
+   "3"
+  ],
+  "custom arg": [
+   "3"
+  ],
+  "custom selector": [
+   "3"
+  ],
+  "extension name": [
+   "2"
+  ]
+ },
+ "ops": {},
+ "uses": {
+  "extension name": {
+   "3": 3
+  }
+ }
+}
