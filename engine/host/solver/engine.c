@@ -9302,6 +9302,15 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
  * SUM OVER EVERY LIVE FLOW (cold.c's `out->dom_head_entries += f->dom_n`) and not the running flow's own
  * delta, which is how it came to be read as a per-flow quantity.
  *
+ * AND IT SEPARATES CLEANLY ON A DIFFERENT PARTITION, WHICH IS THIS PARAGRAPH'S OWN TRAP AND NOT A
+ * COUNTEREXAMPLE TO IT. Split the 42 fixed-rlimit smoke runs by work-per-CPU-second instead of by whether a
+ * flow ever finished, and `domHeadEntries / live` at the TERMINAL census is gap-free — 2.3..11.5 against
+ * 41.2..171.1 — which is how it came to be proposed a second time. It is the same transient. `live` ALREADY
+ * separates on that partition (2491..6144 against 178..899) while `domHeadEntries` itself OVERLAPS, so the
+ * quotient is separating on its denominator; and at MATCHED census indices 1..4 it overlaps outright,
+ * 20.7..907 against 22.2..674. A per-flow delta that tells two populations apart only once one of them holds
+ * ten times the flows is not a cause of anything, and no counter in this census separates them any earlier.
+ *
  * THE DERIVATION, so a reader gets today's answer rather than this one: read `framed`, `live` (the OLDER
  * schema spells it `flows`, and a reader keyed on one silently drops the whole population that used the
  * other) and `finished` from the SAME `@COLD` line, at the SAME census index in every log compared, and
@@ -9329,6 +9338,27 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
  * AND A THIRD CONSUMER, which is why engine.h declares it: a HOST that reports on its own run needs the same
  * quantity to decide WHEN to report, and a host carrying a cadence of its own would be the second definition
  * this paragraph exists to prevent. */
+/* AND THE FOUR ARE NOT ONE CURRENCY, SO THIS TOTAL OVER ANY CLOCK MEASURES COMPOSITION AND NEVER A RATE.
+ * Recorded here because the quotient was read as a throughput and dispatched as one. 42 archived smoke runs,
+ * every one killed by the kernel at the same rlimit — a denominator fixed to a tenth of a percent — split
+ * into 0.0..3.4 and 11.4..38.8 units per CPU-second with nothing between, 21 runs a side, which reads as one
+ * engine running at two speeds. It is not. Over those same runs the count of turns that RAN A PROGRAM
+ * overlaps (162..2595 against 395..1602) and one such turn's cost overlaps with the FAST side's median 3.8x
+ * HIGHER (1.413 s against 0.370 s). What is gap-free is the count of turns that merely ended a frame or
+ * drained microtasks (1..119 against 358..1597) and the jobs those make rank-eligible (@WFQ `jobsReady`,
+ * 0..184 against 4276..17211). Measured inside ONE run, where nothing else can differ: a bookkeeping turn ran
+ * ~0.004 s against ~4 s for a program turn. So a run that mints jobs scores an order of magnitude more
+ * `work` for the same thread time while doing no more of the expensive thing, and the slow side is not
+ * slower — it is running almost nothing but programs.
+ * THE READING IS THE FOUR ADDENDS, AND BOTH CONSUMERS ALREADY PRINT THEM — the verdict line spells them out
+ * and `@HWORK` carries them as separate keys. Take the one your question is about. The sum stays right for
+ * what the paragraph above built it for, because a cadence wants a quantity that always moves and is
+ * indifferent to what its parts cost; that indifference is exactly what makes it a bad numerator.
+ * THE DERIVATION, so a reader gets today's numbers instead of these: over a set of build logs take the SMOKE
+ * stage's own `CPU consumed`, keep only runs killed at the same rlimit, and compare `_jobsRun` and the
+ * `stepUnitRuns` histogram across the halves rather than `workDone`.
+ * IT RETIRES when a census publishes what a turn of each KIND costs, since the quotient is then no longer the
+ * only reading on offer and nobody has to be warned off it. */
 long engine_work_done(void) {
     return decide_fork_total() + flow_created_count() + g_jobs_run + g_switches;
 }
