@@ -3420,7 +3420,18 @@ static const char *HTML =
        the record already CARRIES one (solver/pending.h's `KIND` entry) and `pending_count_kind` already
        reads it, so this is a census row over an existing field and not a new mechanism. How its absence
        shows: a reader holding a non-zero `deliver-one-reply` beside six zeroed reply-consuming rows and
-       no way to tell a delivery that could have answered them from one that never could. */
+       no way to tell a delivery that could have answered them from one that never could.
+       AND TWO OF THOSE FOUR ARE EXCLUDED BY THIS DOCUMENT'S OWN SOURCE, WHICH NARROWS THE RESIDUAL WITHOUT
+       BUILDING ANYTHING. Every one of the thirteen static programs above is INLINE — the fixture ships no
+       `<script src>` at all — so this document's own script slots cannot produce a reply record, and it
+       holds no dynamic `import()`, so that kind cannot arise either. What is left is FLOW_PENDING_RESOLVE
+       (a `fetch()`, of which the document holds 348 call sites) and FLOW_PENDING_SCRIPT (an INJECTED
+       `<script src>`, of which it holds five: four `loadScript` and one `.src` assignment).
+       THAT IS A NARROWING AND NOT AN ANSWER, and the per-flow register is why: a fork COPIES its parent's
+       undelivered backlog, so ONE injected-chunk record is named by every member that inherits it and can
+       be delivered once per member. A hundred deliveries therefore do not imply a hundred records and no
+       count follows from five sites. It also says nothing about a CHILD navigable's document, whose own
+       script slots would be the excluded kind the day one ships a `src`. */
     "<script>fetch('/api/config').then(function(r){ return r.json(); })"
             ".then(function(c){ fetch('/api/framectl?r=' + c.region); });</script>"
     /* THE LAST <script> OF THE DOCUMENT, and it exists only to REPORT — see the injection in script 1. It has
