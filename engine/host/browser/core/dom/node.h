@@ -133,9 +133,17 @@ void node_add_children_changed_hook(NodeChildrenChangedHook fn);
  * A FOURTH LIST, and it exists because the move algorithm's own note says the other lists must not run: "Because
  * the move algorithm is a separate primitive from insert and remove, it does not invoke the insertion steps or
  * removing steps for inclusiveDescendant." A move that reused the tree-hook list would destroy an `<iframe>`'s
- * child navigable, reset the document's focused area and fire a custom element's disconnected/connected pair —
- * every piece of state `moveBefore()` exists to preserve. So the two lists are disjoint by construction, which
- * is the only way that guarantee can be made rather than remembered.
+ * child navigable and reset the document's focused area — BROWSER-owned state `moveBefore()` exists to
+ * preserve. So the two lists are disjoint by construction, which is the only way that guarantee can be made
+ * rather than remembered.
+ *
+ * A CUSTOM ELEMENT'S disconnectedCallback/connectedCallback PAIR IS NOT ONE OF THEM AND THIS LIST USED TO NAME
+ * IT, which is a guarantee this list cannot make and no spec step asks it to. That pair is AUTHOR-owned state
+ * and the move does not decline to fire it: move step 24.3 ENQUEUES a `connectedMoveCallback` reaction, and
+ * HTML §4.13.6 "Custom element reactions"'s enqueue step 3 synthesizes the disconnected-then-connected pair for
+ * a class that declares no such callback — the compatibility default that
+ * HTML §4.13.2.1 "Preserving custom element state when moved" exists to explain.
+ * node.c's move banner carries the argument, the standards' own words, and what naming it here cost.
  *
  * THE THREE ARGUMENTS ARE THE SPEC'S OWN. `is_subtree_root` is move step 24.1 ("true if inclusiveDescendant is
  * node; otherwise false") and `old_ancestor` is the move's oldParent — HTML §2.1.4's moving steps and the per-

@@ -1037,11 +1037,36 @@ void node_insert_at(lxb_dom_node_t *parent, lxb_dom_node_t *node, lxb_dom_node_t
  * standard says so in its own note, at step 24.2: "Because the move algorithm is a separate primitive from
  * insert and remove, it does not invoke the insertion steps or removing steps for inclusiveDescendant." Those
  * are the steps that DESTROY the state a page uses `moveBefore` to keep — HTML §4.8.5's `iframe` removing steps
- * destroy the child navigable (so `frame.contentDocument` becomes a fresh blank document), HTML §2.1.4's
- * removing steps clear the document's focused area, and §4.13.3's disconnected/connected pair resets a custom
- * element. A `moveBefore` written as remove-then-insert therefore ends with the tree in the right SHAPE and the
- * state gone, and nothing throws: the plausible wrong answer, which is why this is its own algorithm down to
- * its own chokepoint pair (solver/dom_cow.h's move_out/move_in, which fire no tree hook at all).
+ * destroy the child navigable (so `frame.contentDocument` becomes a fresh blank document) and HTML §2.1.4's
+ * removing steps clear the document's focused area. A `moveBefore` written as remove-then-insert therefore ends
+ * with the tree in the right SHAPE and the state gone, and nothing throws: the plausible wrong answer, which is
+ * why this is its own algorithm down to its own chokepoint pair (solver/dom_cow.h's move_out/move_in, which
+ * fire no tree hook at all).
+ *
+ * A CUSTOM ELEMENT'S disconnectedCallback/connectedCallback PAIR IS NOT ON THAT LIST, AND THIS PARAGRAPH USED
+ * TO PUT IT THERE. The two examples above are BROWSER-owned state, the pair is AUTHOR-owned, and the standard
+ * treats the two oppositely. It is step 24.3 of this same DOM §4.2.3 algorithm that reaches it —
+ * "If inclusiveDescendant is custom and newParent is connected, then enqueue a custom element callback reaction"
+ * — with the callback name `connectedMoveCallback` and no arguments; and HTML §4.13.6 "Custom element
+ * reactions"'s enqueue then SYNTHESIZES, at its step 3, a body calling disconnectedCallback and then
+ * connectedCallback for exactly the class that declares no `connectedMoveCallback`.
+ * HTML §4.13.2.1 "Preserving custom element state when moved" states the intent in its own words:
+ * "by default the disconnectedCallback and connectedCallback would be called on the element one after the other"
+ * and "this is done to maintain compatibility with existing custom elements that predate the moveBefore method",
+ * so "by default custom elements reset their state as if they were removed and re-inserted" — and keeping it is
+ * the AUTHOR'S OPT-IN, since
+ * "to opt in to a state preserving behavior while moving the author can implement a connectedMoveCallback".
+ * SO A `disconnectedCallback` REACHED FROM `moveBefore` IS THIS ALGORITHM WORKING RATHER THAN THE THING IT
+ * EXISTS TO AVOID, and it arrives by a DIFFERENT MECHANISM from the one this note is about: a reaction step
+ * 24.3 ENQUEUES, never a removing step step 24.2 declines to run. The two are INDISTINGUISHABLE IN THE
+ * OBSERVABLE — a `d` then a `c`, in that order, at the same moment — and they take opposite work, which is why
+ * the wrong sentence survived: it was TRUE about the mechanism it named and wrong about the consequence every
+ * reader draws from it, so nothing it said could be falsified by reading it. Measured, and the reason this is a
+ * paragraph rather than a one-word deletion: the sentence was quoted into a brief as evidence that a
+ * `disconnectedCallback` firing under `moveBefore` was a root-level fidelity bug, and a lane was dispatched on
+ * it. What tells the two apart is not prose but the ENQUEUE — the pair a move fires is ONE reaction holding two
+ * calls (core/html/custom_elements.c), so it abandons its second call when the first throws, where a genuine
+ * remove-then-insert would run connectedCallback anyway.
  *
  * ITS VALIDITY IS NOT `ensure pre-insert validity`, AND THE DIFFERENCE IS NOT A SUBSET. Steps 1-6 are the move's
  * own six, and three of them have no pre-insert counterpart while three pre-insert steps have no move
