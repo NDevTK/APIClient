@@ -401,8 +401,17 @@ int  pending_blocked(JSValueConst reg);
    the answer and pushed it through a `resolve` capability the record does not have — the asking flow then
    parked at the call site that asked, forever, with its answer converted into somebody's fetch reply.
    AND THE PAYMENT THAT WAITED ON IT IS ON: run_scheduler pays the provider UNCONDITIONALLY after every
-   engine_sched_step, which is the schedule §scheduler requires and the one the extension's bridge has always
-   spoken. RETIRED, and stated rather than deleted because a reader who re-derives it will re-introduce it:
+   engine_sched_step, which is the schedule §scheduler requires. The extension's bridge pays on it too, and
+   that is READ AT THAT FILE rather than taken from engine.c's sentence about it: at its step-code arm
+   ENGINE_STEP_YIELD and ENGINE_STEP_STALLED take ONE arm together and pay the whole owed list, "the payment
+   does not differ, and the two codes differ in what they say about RANK".
+   THIS SAID THAT BRIDGE HAD "ALWAYS" SPOKEN IT, and that absolute is retired here rather than quietly cut
+   because its own file refutes it TWICE — servicing only the REQUESTS once left the fetch half of the same
+   owed list unpaid, and before that the whole qjs_pending->safeFetch->qjs_provide path was unreachable behind
+   a NEED_FETCH code no engine_sched_step has ever returned. What the two hosts share is the schedule TODAY,
+   which is what makes this driver a fair oracle for the product; neither has always had it, and an absolute
+   about another zone is the one clause a reader of this one cannot check.
+   RETIRED, and stated rather than deleted because a reader who re-derives it will re-introduce it:
    this paragraph used to end "THAT IS WHY THE SMOKE HOST PAYS ONLY AT A STALL … which run_scheduler had to
    leave switched off because of this line", and that was an argument for a stall-only seam resting on the
    defect the sentences above have just described as FIXED. The reasoning was sound and its conclusion is
