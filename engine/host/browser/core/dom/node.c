@@ -3237,9 +3237,12 @@ static const char *const NODE_NS_STEPS[] = { NODE_NS_STAGES(JS_STEP_STAGE_LABEL)
    snapshot is what makes the parent and the sibling forked at link k ask about the same string.
    `cands` HOLDS ATOM REFERENCES and `ncands` is how many — the pair the `props` visit copies and frees, so
    they are written together and never separately. `taken` IS NOT REDUNDANT WITH A NON-NULL `cands`, which is
-   the reading a snapshot that always holds at least one candidate invites: quickjs-step.h's props visit
-   answers a failed fork COPY by leaving the slot NULL and saying so — "the copy walks no keys rather than
-   sharing the original's" — so a sibling can arrive holding `taken` and a count with no array, and a chain
+   the reading a snapshot that always holds at least one candidate invites: the props visit quickjs-step.h
+   DECLARES answers a failed fork COPY by leaving the slot NULL, and the file that SAYS SO is quickjs.c,
+   whose js_step_visit_dup_props reads "the copy walks no keys rather than sharing the original's". The
+   header's own props paragraph states what the snapshot IS — one allocation of n entries each holding an
+   atom reference — and never what a failed copy answers, so attributing that sentence to the header was a
+   claim the header does not carry. So a sibling can arrive holding `taken` and a count with no array, and a chain
    that re-derived "have I started" from the pointer would silently re-snapshot with a cursor into the old
    set. `taken` says the set was fixed; the array is asserted separately, where its absence is fatal rather
    than answered. `key` is the composed constraint key and belongs to core/idl_name_chain.h. */

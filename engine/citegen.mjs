@@ -4205,33 +4205,58 @@ function lineIndex(src) {
  *
  * THE SET IS DERIVED FROM `defaultTargets` AND NEVER LISTED, for the reason every derived rule here is: a
  * hand-kept list of which `engine/qjs` files this audit already reads would be a second copy of a fact the
- * walk holds, and the copy that drifts is the one nobody runs. The derivation also makes the haystack DISJOINT
- * from the audited population by construction, in ONE line below — and that is what lets this channel keep
- * quoted runs in its haystack where `treeProse` must blank them. `treeProse` blanks because a fabrication
- * written at one AUDITED site would otherwise find itself at another; a file this audit never reads can hold
- * no accused site, so there is nothing here for a fabrication to find, and blanking anyway would delete
- * exactly the sentences an author is likeliest to quote — a file's own quoted terms — for nothing.
+ * walk holds, and the copy that drifts is the one nobody runs. The derivation also makes the ATTRIBUTION SET
+ * DISJOINT from the audited population by construction, in ONE line below — and that is what lets a HELD
+ * verdict keep quoted runs in its haystack where `treeProse` must blank them. `treeProse` blanks because a
+ * fabrication written at one AUDITED site would otherwise find itself at another; a file this audit never
+ * reads can hold no accused site, so there is nothing there for a fabrication to find, and blanking anyway
+ * would delete exactly the sentences an author is likeliest to quote — a file's own quoted terms — for
+ * nothing.
+ * THE ENGINE HAYSTACK IS NOT DISJOINT AND MUST NOT BE, WHICH IS WHY IT IS A SECOND FUNCTION. `engineSources`
+ * holds every source under engine/qjs, `quickjs.c` and `quickjs.h` included, because what an author may be
+ * QUOTING does not change because this audit started READING the file they quoted — and the wrong-file answer
+ * measured in this tree is `quickjs.c`, the one engine source the exclusion would hide. That set never decides
+ * an ANCHOR and never grants a HELD verdict; it is read only by the sub-partition of the banded half, where
+ * its answer is a file to open rather than a clearance. The `treeProse` corpus stays out of this channel
+ * entirely, and the measurement that settled that is at the band.
  *
  * ABSENT AND ZERO ARE DIFFERENT FACTS HERE TOO. `engine/qjs` is a submodule and a plain clone leaves it EMPTY,
  * which is the hole `defaultTargets` already announces for `quickjs.c`. With no directory this map is empty,
  * every attribution answers "no fork source named", and the channel reads clean while being blind — so the
  * census prints the size of this set on every run, including the clean one. */
+/* THE ENGINE'S OWN SOURCES, ALL OF THEM — the haystack for "whose words ARE these", which is a strictly wider
+ * question than `does the named file hold them` and is asked of a strictly wider set. `quickjs.c` and
+ * `quickjs.h` are ENGINE files that this audit also READS, so they are absent from `forkSources` below and
+ * must not be absent from here: the defect this whole channel exists for is an attribution naming the wrong
+ * engine file, and the wrong-file answer measured in this tree is `quickjs.c` — the one engine source that
+ * exclusion would hide. Two sets and one directory read, so neither can drift from the other. */
+let ENGINE_SOURCES = null;
+function engineSources() {
+  if (ENGINE_SOURCES) return ENGINE_SOURCES;
+  ENGINE_SOURCES = new Map();
+  let names = [];
+  try { names = readdirSync(join(HERE, "qjs")); } catch { return ENGINE_SOURCES; }
+  /* SORTED, because the elsewhere-in-the-engine answer below NAMES the first file it finds and a report whose
+   * rows change with a directory's on-disk order is one no before/after pair can be run against. */
+  for (const e of names.sort()) if (/\.[ch]$/.test(e)) ENGINE_SOURCES.set(e, join(HERE, "qjs", e));
+  return ENGINE_SOURCES;
+}
+
 let FORK_SOURCES = null;
 function forkSources() {
   if (FORK_SOURCES) return FORK_SOURCES;
   FORK_SOURCES = new Map();
   const audited = new Set(defaultTargets());
-  let names = [];
-  try { names = readdirSync(join(HERE, "qjs")); } catch { return FORK_SOURCES; }
-  for (const e of names) {
-    if (!/\.[ch]$/.test(e)) continue;
-    const p = join(HERE, "qjs", e);
-    /* THE ONE LINE THAT MAKES THE HAYSTACK DISJOINT FROM THE ACCUSED POPULATION. An assert beside it would be
-     * one whose two sides cannot disagree — the vacuous check CLAUDE.md names, which reports as a passing
-     * check and is not one — so the property is stated here and held by the `continue`, not by a condition
-     * that can never be false. What a later widening of `defaultTargets` does is SHRINK this set, which is the
-     * safe direction: a file that becomes audited stops being a fork source and its quotations fall to
-     * `treeAuthored`, which is where an audited file's prose belongs. */
+  for (const [e, p] of engineSources()) {
+    /* THE ONE LINE THAT MAKES THE ATTRIBUTION SET DISJOINT FROM THE ACCUSED POPULATION. An assert beside it
+     * would be one whose two sides cannot disagree — the vacuous check CLAUDE.md names, which reports as a
+     * passing check and is not one — so the property is stated here and held by the `continue`, not by a
+     * condition that can never be false. What a later widening of `defaultTargets` does is SHRINK this set,
+     * which is the safe direction: a file that becomes audited stops being a fork ANCHOR and its quotations
+     * fall to `treeAuthored`, which is where an audited file's prose belongs.
+     * IT SHRINKS THE ANCHOR SET AND NOT THE ENGINE HAYSTACK, and that separation is the point of splitting
+     * these two functions: what an author may be quoting does not change because this audit started reading
+     * the file they quoted. */
     if (audited.has(p)) continue;
     FORK_SOURCES.set(e, p);
   }
@@ -4341,7 +4366,7 @@ function forkAttribution(pre) {
 const FORK_TEXT = new Map();
 function forkText(name) {
   if (FORK_TEXT.has(name)) return FORK_TEXT.get(name);
-  const p = forkSources().get(name);
+  const p = engineSources().get(name);
   let out = null;
   try {
     const s = readFileSync(p, "utf8");
@@ -4362,6 +4387,32 @@ function forkHeld(name, frags) {
   const hay = forkText(name);
   if (hay === null) return null;
   return containsAnyForm(hay, frags) ? "held" : "unheld";
+}
+
+/* WHICH OTHER FILE OF THE ENGINE HOLDS THESE WORDS, or none — the question `forkHeld` does NOT ask, asked only
+ * of rows it answered "unheld" for. It is the same corpus and the same comparison, widened from ONE file to the
+ * fifty-odd the engine has, and its answer is the shape of the incident that created this channel: an
+ * attribution that names an engine file, of a sentence that IS the engine's and is a DIFFERENT file's.
+ *
+ * IT IS A NAME AND NOT A CLEARANCE, which is what keeps it on the right side of CLAUDE.md's coupling rule. The
+ * row does not leave the band; it gains a file to open. So the failure direction is benign in both halves: an
+ * engine edit that REMOVES the sentence drops the row back into the unaccounted residue, which is the more
+ * suspicious band and not the less, and one that ADDS a matching sentence hands the reader a file to check in
+ * one grep rather than a verdict to trust.
+ * `except` IS THE NAMED FILE, AND IT CANNOT CHANGE TODAY'S ANSWER — SAID HERE RATHER THAN LEFT TO BE TAKEN FOR
+ * A CHECK. This function is only ever asked of a row `forkHeld` answered "unheld" for, and that answer is this
+ * same `containsAnyForm` over this same `forkText`, so the named file could not match anyway. It is therefore
+ * NOT a guard and nothing branches on it — CLAUDE.md's vacuous-assert shape is exactly a condition whose two
+ * sides cannot disagree being read as a passing check, and the way out of it is to say which one this is. What
+ * it does buy is that ELSEWHERE means elsewhere in the CODE and not only in the heading, so the band stays
+ * honest if those two comparisons ever stop being the same one. */
+function engineHolding(frags, except) {
+  for (const [name] of engineSources()) {
+    if (name === except) continue;
+    const hay = forkText(name);
+    if (hay !== null && containsAnyForm(hay, frags)) return name;
+  }
+  return null;
 }
 
 let TREE_PROSE = null;
@@ -4708,6 +4759,15 @@ function audit(argv, opts = {}) {
       wholes.set(key, Object.keys(sx).sort(cmpNo).map((n) => sx[n]).join(" "));
     }
     return wholes.get(key);
+  };
+  /* WHICH INDEXED STANDARD, IF ANY, WRITES THIS SPELLING ANYWHERE IN ITS OWN TEXT. ONE OWNER, because two
+   * channels ask it and a second copy is the one that drifts: the agreement channel asks it of a passage's
+   * several sites, and the fork-source band asks it of a single banded row. Whole-document rather than
+   * section-scoped on purpose — both callers are asking about WORDS and neither has a number it may trust. */
+  const standardHolding = (fragsList) => {
+    for (const [k] of txt)
+      if (fragsList.some((f) => containsAnyForm(wholeOf(k), f))) return k;
+    return null;
   };
   const stat = { total: 0, bare: 0, anchored: 0, byTerm: 0, byFile: 0, other: 0, skipped: 0, quotedNumber: 0,
                  confirmed: 0, confirmedByUse: 0, confirmedByContainment: 0, confirmedByAncestor: 0, confirmedByRun: 0,
@@ -6831,6 +6891,25 @@ function audit(argv, opts = {}) {
            * in is the one that says out loud it cannot separate that case. */
           const pre = prose.slice(0, q.at);
           const anchor = sourceAnchor(pre);
+          /* NAMED RESIDUAL — AN ATTRIBUTION NAMING A FILE THIS AUDIT *DOES* READ GETS NO VERDICT FROM ANY
+           * CHANNEL, AND THE DEFERRAL ON THIS LINE IS WHERE IT IS DROPPED.
+           * NOT COVERED: `sourceAnchor` already establishes that the nearest source claim is an AUDITED file's
+           *   name and says so with `audited`; this `continue` then discards the quotation rather than asking
+           *   the held/unheld question of THAT file. So the channel answers for attributions to the engine
+           *   sources outside `defaultTargets` and for no others, and the population it drops is the one whose
+           *   text this run has most certainly already read. The quotation is not picked up elsewhere either:
+           *   PASS 4 and `treeAuthored` are keyed on a CITATION, so a file attribution carrying no section
+           *   number reaches neither.
+           * WHAT MUST EXIST AFTERWARD: the same held/unheld comparison asked of an audited file's own prose,
+           *   built as `forkText` builds an engine source's — `proseSpans` then `quoteTokens` — with its own
+           *   verdict and its own band beside these, and priced over the WHOLE corpus before it lands, because
+           *   `auditedNames` is hundreds of names where `forkSources` is tens and an accusation is what a wider
+           *   anchor set buys.
+           * HOW ITS ABSENCE WOULD SHOW: repairing a row of the band below — moving an attribution off a
+           *   submodule header and onto the file that actually holds the words — takes the quotation OUT of
+           *   every channel that could read it, because the file it now names is one this audit reads. A
+           *   correct repair therefore presents as a row DRAINING rather than as a claim that is now checked,
+           *   and the population that has been repaired is exactly the population nothing is watching. */
           if (!anchor || !anchor.isFork) continue;
           if (pre.lastIndexOf("§") > anchor.at) continue;
           const held = forkHeld(anchor.name, f);
@@ -6842,7 +6921,7 @@ function audit(argv, opts = {}) {
            * comment or message a row names is the thing a reader opens, and the quotation printed beneath it
            * is what they search for inside it. PASS 4 already reports the CITATION'S line rather than the
            * quotation's for the same reason. */
-          forkSites.push({ file: relative(ROOT, file), line: lineOf(spans[u.lo][0]), fork: name,
+          forkSites.push({ file: relative(ROOT, file), line: lineOf(spans[u.lo][0]), fork: name, frags: f,
                            quote: q.text.trim(), held, crash: inCrashMessage(src, spans, spans[u.lo][0]) });
         }
       }
@@ -6966,10 +7045,7 @@ function audit(argv, opts = {}) {
   const holdsCache = new Map();
   const heldBy = (sp) => {
     if (holdsCache.has(sp.key)) return holdsCache.get(sp.key);
-    let at = null;
-    for (const [k] of txt) {
-      if (sp.sites.some((site) => containsAnyForm(wholeOf(k), site.frags))) { at = k; break; }
-    }
+    const at = standardHolding(sp.sites.map((site) => site.frags));
     holdsCache.set(sp.key, at);
     return at;
   };
@@ -7484,32 +7560,103 @@ function audit(argv, opts = {}) {
         console.log(`      "${q.quote.length > 150 ? q.quote.slice(0, 150) + "…" : q.quote}"`);
       }
       elided([...held].sort((a, b) => rank(a) - rank(b)), qlimit, "FORK-SOURCE / HELD");
-      /* NAMED RESIDUAL — THE BANDED HALF IS NOT SEPARATED, AND IT COULD BE, FROM CORPORA THIS RUN ALREADY HOLDS.
-       * NOT COVERED: a row whose ANCHOR is wrong and a row whose ATTRIBUTION is wrong print under one heading,
-       *   so the band names this instrument's limit rather than the tree's defects — the shape CLAUDE.md rates
-       *   as a poor work index, and the reason banding is not by itself an answer.
-       * WHAT MUST EXIST AFTERWARD: a sub-partition asking of each banded row whether its words are some INDEXED
-       *   STANDARD's — the probe UNJUDGEABLE runs a few lines down already asks exactly that — or occur in this
-       *   tree's authored prose, which `treeProse` holds. A row either accounts for is a FALSE ANCHOR and
-       *   belongs under that name; a row NEITHER accounts for is the candidate for a real mis-attribution, and
-       *   is the only kind worth a reader's time.
-       * HOW ITS ABSENCE SHOWS: a reader meeting this band cannot tell which line to open, so a genuine wrong
-       *   attribution arrives as one more row among rows that are each a quotation of something else standing
-       *   after a mention of a file — and the more of those the tree accumulates, the less the band is read. */
+      /* THE BANDED HALF IS SEPARATED, WHICH IS THE RESIDUAL THIS BAND CARRIED — AND ITS SECOND ARM WAS WRONG,
+       * WHICH IS THE FINDING RATHER THAN A FOOTNOTE ON ONE.
+       *
+       * The residual named the gap correctly: a wrong ANCHOR and a wrong ATTRIBUTION printed under one heading,
+       * so the band named this instrument's limit rather than the tree's defects. Its remedy clause named two
+       * corpora — an indexed standard's own text, and this tree's authored prose out of `treeProse` — and said
+       * a row EITHER accounts for is a false anchor. That is CLAUDE.md's §A-CLAUSE-THAT-NAMES-A-MECHANISM
+       * exactly: the observation half right, the mechanism half a hypothesis, and the hypothesis refuted by the
+       * population it was written about.
+       *
+       * MEASURED, BUILT AS A CLASSIFIER AND RUN OVER ALL SIX ROWS BEFORE ANY OF IT WAS LANDED. The `treeProse`
+       * arm fires on exactly ONE row of the six, and that row is the ONE REAL MIS-ATTRIBUTION IN THE BAND: a
+       * comment naming `quickjs-step.h` as the source of a sentence about a props visit answering a failed fork
+       * copy, which is `quickjs.c`'s and no other file's. THE SENTENCE ITSELF IS NOT REPRODUCED HERE, and that
+       * is this file obeying the rule it prints three paragraphs down: a run that is a SPELLING BEING SHOWN
+       * goes outside the quotation channel by construction, and quoting it here — in a paragraph that names
+       * two engine files — put an eighth row in the very band this comment documents. Measured, in the pair
+       * that landed this. The row is `engine/host/browser/core/dom/node.c` and the grep is one command. The arm
+       * would have moved the only row
+       * worth reading OUT of the queue and left the three that are not defects in it — the exoneration
+       * inverted, on 1 of 1, in the direction CLAUDE.md calls an UNDER-CLAIM: nobody finds it by acting on it,
+       * because acting on it means not looking there. It is also f800f1f1's coupling firing at its sharpest,
+       * since the exonerating file is the TRUE source, so the very evidence that identifies the defect is what
+       * the arm would have used to dismiss it.
+       *
+       * SO THE SECOND CORPUS IS THE ENGINE AND NOT THE TREE, and that is the site's own claim rather than a
+       * coincidence: the row says the words are some named engine file's, and the two ways that can fail are that
+       * they are NO engine file's, or that they are a DIFFERENT engine file's. `engineHolding` asks the second,
+       * over every source under engine/qjs including the two this audit also reads — the exclusion in
+       * `forkSources` is about which name may ANCHOR a quotation and must not narrow what an author may be
+       * QUOTING, which is why those two functions are now separate.
+       *
+       * THE STANDARDS ARM IS KEPT AND IS ASKED WHOLE-DOCUMENT, not at a number. These rows carry no citation
+       * nearer than the file mention by construction, so there is no §N for UNJUDGEABLE's probe to use;
+       * `standardHolding` is the same comparison the agreement channel already makes over `wholeOf`, and it is
+       * ONE owner rather than a second copy. It cannot be moved by an edit anywhere in this tree, which is
+       * exactly what disqualified `treeProse`.
+       *
+       * BOTH ANSWERS PRINT ON EVERY ROW EVEN WHERE THE BANDING TOOK THE OTHER ONE, because a row can be both
+       * and collapsing that is the shape this file refuses everywhere else. The banding asks the engine FIRST:
+       * where both hold, the engine answer names a file one grep away and the standard answer names a document
+       * the site never cited.
+       *
+       * WHAT IS LEFT IS A RESIDUE NEITHER CORPUS CAN ACCOUNT FOR, and it is not empty and is not uniform — the
+       * three rows in it at the revision this landed are a quoted COMMIT MESSAGE, a quoted CANDIDATE RULE the
+       * author states in order to reject it, and a quoted run of this driver's OWN FORMER OUTPUT. Each is a
+       * spelling being SHOWN rather than a source being named, which is the case CLAUDE.md's authoring rule
+       * already answers: such a run goes in backticks and leaves this channel by construction. That is the
+       * repair those rows want, and it is one at each SITE rather than anything here. */
+      const unheldEv = unheld.map((q) => ({ q, eng: engineHolding(q.frags, q.fork), std: standardHolding([q.frags]) }));
+      const bands = [
+        [`ELSEWHERE IN THE ENGINE`, unheldEv.filter((e) => e.eng),
+          ` — these words ARE the engine's and are ANOTHER FILE'S. This is the shape of the incident that created` +
+          ` this channel, and the row names the file that holds them, so it is one grep from being settled. It is` +
+          ` still not a finding: the anchor is loose, so the site may be quoting that other file deliberately with` +
+          ` this one merely mentioned nearer.`],
+        [`A STANDARD'S WORDS`, unheldEv.filter((e) => !e.eng && e.std),
+          ` — no engine file holds these words and an indexed STANDARD does, anywhere in its own text. A FALSE` +
+          ` ANCHOR: the author is quoting a standard and a file mention stands earlier in the same prose unit,` +
+          ` with nothing wrong at the site. Asked whole-document because these rows carry no section number for a` +
+          ` number-keyed probe to use, and named rather than adopted.`],
+        [`NEITHER — THE RESIDUE`, unheldEv.filter((e) => !e.eng && !e.std),
+          ` — no engine file and no indexed standard holds these words. Nothing here has a document to read this` +
+          ` against, so this is the band that says out loud it cannot separate its rows: a wrong attribution, and` +
+          ` a run that is a SPELLING BEING SHOWN — an output string, a commit message, a rule stated in order to` +
+          ` be rejected — which is a quotation of nobody's document at all. The second wants backticks at the` +
+          ` site, which takes it out of this channel by construction.`]];
       console.log(`\n  FORK-SOURCE / NOT IN THE NAMED FILE: ${unheld.length} (${qstat.forkUnheldCrash} in a crash message)` +
-        ` — NOT findings. The named file does not hold these words, and that is consistent with TWO things this` +
-        ` channel cannot separate: an attribution that is wrong, and a quotation of something else standing after` +
-        ` a mention of that file. The anchor is NEAREST-PRECEDING over a whole prose unit, so a unit that names a` +
-        ` file early and quotes a standard late lands here with nothing wrong at the site. Reading one is what` +
-        ` separates them — and a wrong attribution IS a defect this tree has had: a comment named a submodule` +
-        ` header as the source of a sentence that file does not contain, and its rendering of that sentence` +
-        ` asserted the very thing the real source's next clause exists to deny.`);
-      for (const q of head([...unheld].sort((a, b) => rank(a) - rank(b)), qlimit)) {
-        console.log(`  ${q.file}:${q.line}${q.crash ? "  [in a crash message]" : ""}` +
-                    ` — the comment or message here names engine/qjs/${q.fork}, which does not hold these words`);
-        console.log(`      "${q.quote.length > 150 ? q.quote.slice(0, 150) + "…" : q.quote}"`);
+        ` — NOT findings. The named file does not hold these words, which is consistent with an attribution that is` +
+        ` WRONG and with a quotation of something else standing after a mention of that file. The anchor is` +
+        ` NEAREST-PRECEDING over a whole prose unit, so a unit that names a file early and quotes a standard late` +
+        ` lands here with nothing wrong at the site. THE THREE SUB-BANDS BELOW SEPARATE THOSE READINGS by asking` +
+        ` two corpora this run already holds — the ${engineSources().size} source(s) under engine/qjs, ALL of them` +
+        ` and not just the ${srcN} an attribution may name, and the ${txt.size} indexed standard(s) with text —` +
+        ` and they sum to this number. Both sizes print because an EMPTY corpus answers "no" for every row and` +
+        ` files the whole band into the residue, which is a SILENCE and not a result. A wrong attribution IS a` +
+        ` defect this tree has had: a comment named a submodule header as the source of a sentence that file does` +
+        ` not contain, and its rendering of that sentence asserted the very thing the real source's next clause` +
+        ` exists to deny.`);
+      /* THE SUM IS ASSERTED AND NOT ASSUMED. Three bands built from two predicates over one array can be made to
+       * drop a row by one edit to either, and a sub-partition that silently loses rows is this instrument
+       * shrinking a queue it has not drained — the one direction CLAUDE.md says invites no scrutiny. */
+      const banded = bands.reduce((n, b) => n + b[1].length, 0);
+      if (banded !== unheld.length)
+        throw new Error(`the fork-source sub-partition covers ${banded} of ${unheld.length} banded rows`);
+      for (const [label, g, why] of bands) {
+        console.log(`\n    FORK-SOURCE / NOT IN THE NAMED FILE / ${label}: ${g.length}` +
+                    ` (${g.filter((e) => e.q.crash).length} in a crash message)${why}`);
+        for (const e of head([...g].sort((a, b) => rank(a.q) - rank(b.q)), qlimit)) {
+          console.log(`    ${e.q.file}:${e.q.line}${e.q.crash ? "  [in a crash message]" : ""}` +
+                      ` — names engine/qjs/${e.q.fork}, which does not hold these words` +
+                      (e.eng ? `; engine/qjs/${e.eng} DOES` : ``) +
+                      (e.std ? `; these words are also ${e.std}'s` : ``));
+          console.log(`        "${e.q.quote.length > 150 ? e.q.quote.slice(0, 150) + "…" : e.q.quote}"`);
+        }
+        elided([...g].sort((a, b) => rank(a.q) - rank(b.q)), qlimit, `FORK-SOURCE / NOT IN THE NAMED FILE / ${label}`);
       }
-      elided([...unheld].sort((a, b) => rank(a) - rank(b)), qlimit, "FORK-SOURCE / NOT IN THE NAMED FILE");
     }
 
     /* THE QUOTATIONS THIS CHECK REFUSED, AS A CATEGORY WITH SITES IN IT RATHER THAN A CLAUSE IN A SENTENCE.
