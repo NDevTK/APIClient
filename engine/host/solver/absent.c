@@ -304,13 +304,21 @@ const char *absent_standard_name(const char *name, AbsentVocab *vocab)
  * on the same result document and NOT with `_switches`, which is the instance's own.
  *
  * THE DENOMINATOR IS EMITTED BESIDE THE ROWS, because a count of unanswered names states nothing on its own:
- * seven is a different fact out of ten global misses than out of ten thousand. The reads this hook was asked
+ * seven is a different fact out of ten global misses than out of ten thousand. The reads this file was told
  * about with the GLOBAL as base partition into exactly three, and all three are emitted:
  *   owed        — a standard owns the name and this realm has none: the rows below, summed.
  *   index       — an integer key on the global, refused by the arm that cites HTML §7.2.2.2 Indexed access on
  *                 the Window object.
- *   app state   — everything else, minted as an unknown because no vocabulary claimed it.
+ *   app state   — everything else: no vocabulary claimed the name.
  * `owed + index + appState == globalReads` is asserted in the composer, where all four are in one hand.
+ * THE THIRD ARM IS NAMED FOR THE DECISION AND NOT FOR THE MINT, which it used to be and which stopped being
+ * true the day a second entry reached this partition: a `typeof` read is classified by the same three arms
+ * and mints nothing, so a counter called "mints" would have been a verb its own accessor no longer performs
+ * (CLAUDE.md §READ-THE-ACCESSOR). What a reader who wants the mints does instead is subtract, which is what
+ * the fourth member is for and why it is a SEPARATE CUT of the same denominator rather than a fourth arm:
+ *   typeof      — of those reads, the ones the typeof operator answered, which performed no [[Get]] and left
+ *                 nothing behind. `typeof <= globalReads` is asserted beside the identity.
+ * A fourth ARM would have broken the partition; a second CUT states the fact the partition cannot.
  *
  * WHAT THIS IS NOT A FRACTION OF, STATED SO NOBODY READS IT AS ONE: it is not the fraction of the platform
  * surface this document uses. The hook is reached ONLY on a miss, so a name this engine DOES answer never
@@ -318,25 +326,49 @@ const char *absent_standard_name(const char *name, AbsentVocab *vocab)
  * figure over the document's ask would need a count of global reads that HIT, which is a hook on the fast path
  * of every property read in the engine and is not this instrument.
  *
- * NAMED RESIDUAL — NOT COVERED: the two feature-detect spellings that never perform a [[Get]] that misses.
- * `typeof EventSource` is OP_get_var_undef, which quickjs.c answers `undefined` at the opcode without asking
- * this hook at all (ECMAScript §13.5.3 The typeof Operator is defined on an unresolvable Reference), and
- * `"EventSource" in window` is [[HasProperty]], which has no absent seam. Both are ordinary spellings and the
- * first is the DOMINANT one in transpiled code.
- * WHAT THE NEXT DIFF BUILDS: a recording-only entry on this file — never the minting hook, since minting at
- * `typeof` would change what §13.5.3 answers — called from those two miss arms in the engine, which is a
- * submodule change and therefore a diff of its own.
- * HOW ITS ABSENCE SHOWS: a bundle whose whole feature detection is written `typeof X !== "undefined"` emits
- * `_absent` with the members present and ZERO rows while taking the false arm on every one of them — this
- * census reading clean on exactly the page it was built to describe. The check is one line of a fixture:
- * a document that reads `window.X` and one that reads `typeof X` for the SAME absent X must produce the same
- * row, and today only the first does.
+ * AND `typeof X` IS ONE OF THEM AND IS RECORDED, WHICH IS WHY THE DENOMINATOR IS NOT THIS HOOK'S ASK. A read
+ * spelled `typeof EventSource` compiles to OP_get_var_undef — the parser patches the identifier's own
+ * OP_scope_get_var into it at `una_typeof_done`, which is that opcode's only producer — and the engine answers
+ * ECMAScript §13.5.3 The typeof Operator's §13.5.3.1 Runtime Semantics: Evaluation step 2.a, "If
+ * IsUnresolvableReference(value) is true, return "undefined".", at the opcode. Step 2.a settles it BEFORE
+ * step 2.b's GetValue, so no [[Get]] is performed and this hook is not asked; minting there would make step
+ * 2.b run and the operator say "object" where every browser says "undefined". So the engine RECORDS on its way
+ * past that arm (JSConcolicHooks.absent_unresolved -> absent_unresolved_note below) and decides nothing, and a
+ * name read both ways raises ONE row. The population these numbers are a fraction of is therefore "reads of a
+ * global name this file was told about", by either entry, and `_of those, answered by the typeof operator`
+ * splits the two — because the mint happens on only one of them, so a reader who wants the count of unknowns
+ * minted on the global needs that number and cannot get it from the app-state arm alone.
+ *
+ * NAMED RESIDUAL — NOT COVERED: the OTHER feature-detect spelling, `"EventSource" in window`. It is
+ * [[HasProperty]], and there is no arm to record it at — which is a stronger statement than "no absent seam"
+ * and is the reason this half was not landed with the `typeof` half. Its request is `gp_op = GP_HAS` on
+ * `ctx->global_obj`, and that is the SAME request every identifier resolution issues (the with-machinery's
+ * HasBinding phase raises one for OP_get_var, OP_get_var_undef, OP_put_var and the OP_with_* forms), so a
+ * recording site at the HAS miss would count every unresolved identifier a second time and the three-arm
+ * identity below would fire on the first document. The operator's own placement cannot host it either:
+ * `do_opkeyed_place` is shared by every keyed operator, its JSOpKeyed carries `atom`, `pop`, `push` and
+ * `throw_on_false` and no opcode, and by then the base operand is gone.
+ * WHAT THE NEXT DIFF BUILDS: an `in`-only discriminator on that request — a field on JSOpKeyed naming the
+ * operator, which is a struct copied field-by-field by js_op_keyed_clone and so carries an obligation there —
+ * plus the base carried to the placement, so the recording can ask "was this `in`, on the global, answered
+ * false" and reach absent_unresolved_note. A submodule change, and a larger one than the `typeof` arm was.
+ * HOW ITS ABSENCE SHOWS: a document whose feature detection is written `"X" in window` raises no row for X
+ * and no member of this census moves, while a document writing `typeof X` or `window.X` for the same absent X
+ * raises one — so the census answers differently for one question depending on which of three spellings the
+ * bundle happened to use, and the `in` spelling is the one it is silent about. Measured on the mirrored corpus
+ * at the revision this was written, which is why this half is second rather than first: the bare-identifier
+ * `typeof` guard is the dominant shape by an order of magnitude, and the derivation is one command —
+ *   grep -rohE '"undefined"!=typeof [A-Za-z_$][A-Za-z0-9_$]*' --include='*.js' testing/corpus | wc -l
+ *   grep -rohE '"[A-Za-z_$][A-Za-z0-9_$]*" *in *(window|self|globalThis)' --include='*.js' testing/corpus | wc -l
  *
  * NAMED RESIDUAL — NOT COVERED: whether a recorded read was the SILENT one. `js_absent_ask` has exactly two
- * callers (grep: engine/qjs/quickjs.c 13100 and 48178) and both hand this file the same base and the same
- * atom: the property-read miss that degrades to `undefined`, and the unresolvable Reference that goes on to
- * throw. The outcome differs entirely AFTER this hook returns, so a row of twelve reads cannot be read as
- * twelve silent degradations.
+ * callers — derive them rather than taking a line number, which has already gone stale here once:
+ *   git grep -n --recurse-submodules 'js_absent_ask(ctx' -- engine/qjs/quickjs.c
+ * (the plain `git grep` does not descend into the submodule and answers that the interpreter has no such
+ * call). Both hand this file the same base and the same atom: the property-read miss that degrades to
+ * `undefined`, and the unresolvable Reference that goes on to throw. The `typeof` entry beside them is a
+ * THIRD outcome and is separated by its own member, which the other two are not. The outcome differs entirely
+ * AFTER this hook returns, so a row of twelve reads cannot be read as twelve silent degradations.
  * WHAT THE NEXT DIFF BUILDS: the ask carrying which of its two callers asked, so the row splits into the arm
  * that degraded and the arm that threw — again a submodule change.
  * HOW ITS ABSENCE SHOWS: a page that only ever writes `new EventSource(…)` is FULLY diagnosed by its own
@@ -348,10 +380,17 @@ static OwedRow *g_owed;
 static int g_owed_n, g_owed_cap;
 /* THE THREE ARMS OF THE GLOBAL MISS, EACH RAISED AT THE SITE THAT DECIDES IT — never one counter incremented
    in three places, because the whole value of the partition is that a reader can see WHICH arm moved. */
-static long g_owed_reads, g_index_refused, g_appstate_mints;
+static long g_owed_reads, g_index_refused, g_appstate_reads;
 /* AND THE POPULATION THEY PARTITION, RAISED SEPARATELY AT THE TOP OF THAT ARM. It is not the sum of the three
    — see the raise for why deriving it would make the composer's identity a restatement instead of a check. */
 static long g_global_reads;
+/* AND A SECOND CUT OF THAT SAME POPULATION, WHICH IS NOT AN ARM AND MAY NOT BE ONE. The three arms answer
+   "what was the name"; this answers "which operator asked", and the two questions are independent — a
+   `typeof` read lands in whichever of the three arms its name decides. Kept as a cut rather than folded into
+   the arms because the mint happens on exactly one of the two entries, so this is the only number from which
+   a reader can recover how many unknowns were actually minted on the global. Containment is asserted in the
+   composer, where both are in one hand (CLAUDE.md §a-count-offered-as-a-share). */
+static long g_unresolved_reads;
 /* AND THE SAME OWED READS SPLIT BY WHICH STANDARD OWES THEM, which is the fact absent_standard_name exists to
    carry: an unbuilt Web IDL interface is a browser component to write and an uninstalled ECMAScript §19 name
    is a language intrinsic this build did not link, and those are two different pieces of work. */
@@ -410,6 +449,85 @@ static void owed_note(const char *name, AbsentVocab vocab)
     g_owed_n++;
 }
 
+/* WHAT A MISS ON THE GLOBAL WAS, IN ONE FUNCTION, BECAUSE TWO ENTRIES ASK IT AND ONLY ONE OF THEM PERFORMS A
+   [[Get]]. The read hook asks so it can decide what to answer; absent_unresolved_note asks so it can record a
+   `typeof` the engine has already answered. The classification is IDENTICAL for both — it is a question about
+   the NAME and about nothing else — and a second copy of it would be two answers to one question, which is
+   the shape this file's own header says drifts. So the arms are here, each still raised where it is decided,
+   and the denominator is raised here too: derived as the sum of the arms it could not disagree with them
+   under any state of this function, and an assert whose two sides cannot disagree is not a weak check but a
+   NON-check that certifies whatever it never examined. Raised at the top, it fires the day an arm is added
+   that leaves this function without classifying its read.
+   IT COUNTS WHAT THIS FILE WAS TOLD ABOUT and not "every global miss": both entries gate on the key rule
+   first (js_absent_ask, and the identifier grammar at the typeof arm), so a symbol never arrives and is in
+   neither the numerator nor this.
+   Returns 1 when the read is LEFT ALONE — a standard owes the name, or it is an integer key on the global —
+   and 0 when no vocabulary claimed it, which is the arm the read hook mints an unknown on and the `typeof`
+   entry simply records. `key` is the atom already spelled by ns_key_str. */
+static int global_miss_note(const char *key, JSAtom name)
+{
+    /* THE POISON IS THE VALUE owed_note'S OWN ASSERT NAMES, so a vocabulary that is read without having been
+       written aborts at the record with the name in hand rather than filing one standard's work under the
+       other's. `absent_standard_name` writes it on every hit and leaves it alone on the miss, and the miss is
+       the arm where nothing reads it. */
+    AbsentVocab vocab = ABSENT_VOCAB_N;
+    const char *owed;
+
+    g_global_reads++;
+    /* A name a STANDARD owns on the global object is a component this engine owes; leave the read alone
+       so its throw names it. Asked ONLY of the global, because those names live there: `gon.Node` is a
+       field of an app record that happens to be spelled like an interface, and suppressing it would
+       answer a real unknown with `undefined`.
+       TWO VOCABULARIES, BECAUSE TWO STANDARDS OWN NAMES HERE AND THIS ARM USED TO ASK ABOUT ONE. See this
+       file's header for what asking about only Web IDL left falling through. */
+    owed = absent_standard_name(key, &vocab);
+    if (owed) {
+        /* AND IT IS RECORDED ON THE WAY PAST, which is the whole of this file's answer to the silence the
+           suppression creates. The decision is UNCHANGED — nothing forks, nothing is minted, the read is
+           left exactly as alone as it was — and what the census gains is the one population that says
+           something about a run: the names THIS DOCUMENT asked a standard for that this realm did not
+           answer. See the census banner above owed_note for the population and the denominator. */
+        owed_note(owed, vocab);
+        return 1;
+    }
+    /* AND AN INDEX IS NOT A FIELD OF A RECORD AT ALL, WHICH IS A QUESTION ABOUT THE KEY SPACE AND NOT
+       ABOUT WHICH VOCABULARY OWNS A NAME. The channel's key rule admits array indices because a server's
+       state tree is records inside LISTS and the walk reaches an element by its index —
+       `__STATE__.users[0]` — and THE GLOBAL IS NOT A LIST. An integer key on it is HTML §7.2.2.2 Indexed
+       access on the Window object, which says of it that "Indexed access to document-tree child navigables
+       is defined through the [[GetOwnProperty]] internal method of the WindowProxy object": the
+       extent is the INTERFACE'S, exactly as Web IDL §3.8 Platform objects implementing interfaces makes a
+       platform object's member list the interface's rather than the document's. THIS ENGINE OWNS THE
+       NAVIGABLE TREE, so an index past the child-navigable count has a real answer that this run computed
+       — §10.1.8.1 OrdinaryGet ( O, P, Receiver ) step 2.b's `undefined` — and minting an unknown for it is
+       the "record wrongly ON the channel" direction this file's header calls the silent one: nothing
+       throws, and a `for (i = 0; i < window.length; i++) window[i]` walk performs it once per iteration
+       past the end.
+       IT IS THIS ARM'S RULE AND NOT ns_join'S. A document that writes `window[0] = {…}` in an inline
+       script publishes a record there in its own right, and that record's members are read through the
+       RECORD arm of the read hook — which is why the composer still spells an index off the root and why
+       refusing one HERE takes nothing away: a server that injected at an integer key made it PRESENT, and a
+       present key never reaches either entry.
+       THE `typeof` ENTRY CANNOT REACH THIS ARM and it is not carved out of it, which is the difference
+       between a fact and a special case: `typeof` takes an IDENTIFIER, ECMAScript §12.7 Names and Keywords
+       gives no IdentifierStart that is a decimal digit, and an atom is a tagged integer only for the
+       canonical numeric string §6.1.7 The Object Type defines — so the arm is unreachable from there by the
+       grammar rather than by a test. Writing that test at the caller would be a second spelling of a rule
+       this function already owns. */
+    if (JS_AtomIsIndexName(name)) {
+        g_index_refused++;
+        return 1;
+    }
+    /* THE THIRD ARM, COUNTED WHERE IT IS DECIDED AND NOT WHERE IT IS PERFORMED — which is what lets a second
+       entry share it at all. The mint is the read hook's and is shared with the record arm, so raising it
+       there would count a published record's absent member among the global's — two populations under one
+       name, which is the defect this partition exists to end one level up — and it would also count nothing
+       for a `typeof`, which decides this same arm and mints nothing. Reaching this line IS the global arm
+       deciding that no vocabulary claimed the name, which is the decision the row reports. */
+    g_appstate_reads++;
+    return 0;
+}
+
 /* ONE APPEND, TWO PASSES, AND NO HAND-COUNTED SIZE — solver/compose.h's rule applied to a LOOP, which is the
    one shape `composef` cannot serve because the row count is a fact about the document. `out == NULL` is the
    MEASURING pass: C99 §7.19.6.5 "The snprintf function" — "If n is zero, nothing is written, and s may be a
@@ -464,7 +582,11 @@ char *absent_json(void)
     static const char KEY_READS[] = "_reads of the global object this file was asked about";
     static const char KEY_OWED[]  = "_of those, reads of a name below — a standard owns it and this realm has none";
     static const char KEY_INDEX[] = "_of those, refused as an integer key on the global";
-    static const char KEY_APP[]   = "_of those, minted as unknown server-injected app state";
+    static const char KEY_APP[]   = "_of those, no standard owns the name — server-injected app state";
+    /* THE SECOND CUT OF THE SAME DENOMINATOR, AND IT IS NOT ONE OF THE ARMS ABOVE — see g_unresolved_reads.
+       It is what a reader subtracts to get the unknowns actually MINTED on the global, which the app-state
+       arm alone stopped being able to say the day a second entry reached this partition. */
+    static const char KEY_TYPEOF[] = "_of those, answered by the typeof operator with no [[Get]] performed";
     /* ONE PER VOCABULARY AND INDEXED BY THE ENUM, which is what the header's `ABSENT_VOCAB_N` promise buys: a
        third standard adds a row to this array and to `g_owed_by_vocab`, and nothing else here changes. */
     static const char *const KEY_VOCAB[ABSENT_VOCAB_N] = {
@@ -511,12 +633,22 @@ char *absent_json(void)
            "that leaks hands back a fraction of a denominator that is not the number of reads. Every raise of "
            "the total is owed_note's and owed_note raises exactly one row with it, so a mismatch is a row "
            "dropped by the grow path or a total raised by a second writer");
-    DCHECK(g_owed_reads + g_index_refused + g_appstate_mints == g_global_reads,
+    DCHECK(g_owed_reads + g_index_refused + g_appstate_reads == g_global_reads,
            "the three arms of the global miss do not sum to the reads this hook was asked about — the "
            "denominator is raised ONCE at the top of that arm and each arm raises its own counter, so this "
            "fires exactly when a fourth way out of the block was added without classifying its read. Every "
            "number in this census is a fraction of that denominator, so an unclassified arm does not make one "
            "row wrong, it makes the whole object a partition of a population it no longer covers");
+    /* AND THE SECOND CUT IS CONTAINED IN THE POPULATION IT IS A CUT OF, which is the one property of a share
+       a reader can check without re-deriving the mechanism (CLAUDE.md §a-count-offered-as-a-share). The two
+       are raised at DIFFERENT events — the denominator once per classified read in global_miss_note, this one
+       once per `typeof` entry before it classifies — so they part company exactly when an entry raises this
+       without going through that function, which is the way a second recording site would be added wrongly. */
+    DCHECKF(g_unresolved_reads <= g_global_reads,
+            "the typeof cut of the owed-name census (%ld) is larger than the population it is a cut of (%ld) "
+            "— every read this file is told about is classified by global_miss_note, which raises the "
+            "denominator, so a larger cut is a caller that recorded a typeof read and never classified it",
+            g_unresolved_reads, g_global_reads);
     for (v = 0; v < ABSENT_VOCAB_N; v++)
         DCHECKF(rowsby[v] == g_owed_by_vocab[v],
                 "the per-standard split of the owed reads disagrees with the rows it is a split OF (standard "
@@ -533,7 +665,8 @@ char *absent_json(void)
         len = absent_emitf(out, cap, 0, "{\"%s\":%ld", KEY_READS, g_global_reads);
         len = absent_emitf(out, cap, len, ",\"%s\":%ld", KEY_OWED, g_owed_reads);
         len = absent_emitf(out, cap, len, ",\"%s\":%ld", KEY_INDEX, g_index_refused);
-        len = absent_emitf(out, cap, len, ",\"%s\":%ld", KEY_APP, g_appstate_mints);
+        len = absent_emitf(out, cap, len, ",\"%s\":%ld", KEY_APP, g_appstate_reads);
+        len = absent_emitf(out, cap, len, ",\"%s\":%ld", KEY_TYPEOF, g_unresolved_reads);
         for (v = 0; v < ABSENT_VOCAB_N; v++)
             len = absent_emitf(out, cap, len, ",\"%s\":%ld", KEY_VOCAB[v], g_owed_by_vocab[v]);
         for (i = 0; i < g_owed_n; i++) {
@@ -618,7 +751,8 @@ void absent_free(void)
     free(g_owed);
     g_owed = NULL;
     g_owed_n = g_owed_cap = 0;
-    g_owed_reads = g_index_refused = g_appstate_mints = g_global_reads = 0;
+    g_owed_reads = g_index_refused = g_appstate_reads = g_global_reads = 0;
+    g_unresolved_reads = 0;
     for (i = 0; i < ABSENT_VOCAB_N; i++)
         g_owed_by_vocab[i] = 0;
 }
@@ -854,6 +988,35 @@ done:
     return r;
 }
 
+/* THE SAME MISS ON THE GLOBAL, REACHED BY AN OPERATOR THAT PERFORMED NO [[Get]] — `typeof X` where nothing
+   binds X. RECORDING ONLY, and the void return is the contract rather than a convenience: ECMAScript §13.5.3
+   The typeof Operator's §13.5.3.1 Runtime Semantics: Evaluation step 2.a is "If IsUnresolvableReference(value)
+   is true, return "undefined".", which settles the operator BEFORE step 2.b's GetValue — so there is no read
+   to answer, and a value handed back here would make step 2.b run and the operator say "object" where every
+   browser says "undefined". The engine calls this on its way past that arm and decides nothing.
+   WHY IT IS THE SAME CENSUS AND NOT A SECOND ONE: `window.EventSource` and `typeof EventSource` are one
+   question about one name, and this file's whole answer is which names a document asked a standard for and
+   this realm did not answer. Two censuses would be two rows for one name, and a reader summing either would
+   have a number about which OPCODE the bundle happened to use. So the classification is global_miss_note's,
+   the row is the same row, and what separates the two entries is one member of the object rather than a
+   second object.
+   THE KEY RULE IS ASSERTED AND NOT FILTERED, which is ns_key_str's own argument: the atom is an identifier's,
+   which the grammar makes a string atom, so a symbol or an index arriving here is the engine having routed
+   something that is not an identifier and not a case to default past. */
+void absent_unresolved_note(JSContext *ctx, JSAtom name)
+{
+    const char *s = ns_key_str(ctx, name);
+
+    /* RAISED BEFORE THE CLASSIFICATION AND NOT INSIDE IT, so the cut and the denominator are raised at two
+       different events and the composer's containment assert has two sides that can actually disagree. */
+    g_unresolved_reads++;
+    /* THE ANSWER IS DISCARDED AND THAT IS THE WHOLE DIFFERENCE FROM THE READ HOOK: the arms decide what the
+       READ hook returns, and this entry has already been answered by the operator. Every arm's counter and
+       every row is raised inside, so there is nothing here left to do with the verdict. */
+    (void)global_miss_note(s, name);
+    JS_FreeCString(ctx, s);
+}
+
 JSValue absent_read_hook(JSContext *ctx, JSValueConst obj, JSAtom name)
 {
     JSValue g = JS_GetGlobalObject(ctx);
@@ -862,68 +1025,20 @@ JSValue absent_read_hook(JSContext *ctx, JSValueConst obj, JSAtom name)
     const char *base = NULL;
     JSValue r = JS_UNINITIALIZED;
     char *shape = NULL, *src = NULL;
-    /* THE POISON IS THE VALUE owed_note'S OWN ASSERT NAMES, so a vocabulary that is read without having been
-       written aborts at the record with the name in hand rather than filing one standard's work under the
-       other's. `absent_standard_name` writes it on every hit and leaves it alone on the miss, and the miss is
-       the arm where nothing reads it. */
-    AbsentVocab vocab = ABSENT_VOCAB_N;
-    const char *owed;
 
     JS_FreeValue(ctx, g);
     if (is_global) {
-        /* THE DENOMINATOR, RAISED ONCE AND INDEPENDENTLY OF THE THREE ARMS BELOW — which is what makes the
-           identity the composer asserts a CHECK rather than a restatement. Derived as the sum of the arms it
-           could not disagree with them under any state of this function, and an assert whose two sides cannot
-           disagree is not a weak check but a NON-check that certifies whatever it never examined; raised here,
-           it fires the day an arm is added that leaves this block without classifying its read. It counts what
-           this HOOK was asked about with the global as base and not "every global miss": js_absent_ask gates
-           on the key rule first, so a symbol never arrives and is in neither the numerator nor this. */
-        g_global_reads++;
-        /* A name a STANDARD owns on the global object is a component this engine owes; leave the read alone
-           so its throw names it. Asked ONLY of the global, because those names live there: `gon.Node` is a
-           field of an app record that happens to be spelled like an interface, and suppressing it would
-           answer a real unknown with `undefined`.
-           TWO VOCABULARIES, BECAUSE TWO STANDARDS OWN NAMES HERE AND THIS ARM USED TO ASK ABOUT ONE. See this
-           file's header for what asking about only Web IDL left falling through. */
-        owed = absent_standard_name(s, &vocab);
-        if (owed) {
-            /* AND IT IS RECORDED ON THE WAY PAST, which is the whole of this file's answer to the silence the
-               arm above creates. The decision is UNCHANGED — nothing forks, nothing is minted, the read is
-               left exactly as alone as it was — and what the census gains is the one population that says
-               something about a run: the names THIS DOCUMENT asked a standard for that this realm did not
-               answer. See the census banner above owed_note for the population, the denominator and the two
-               spellings of a guard this cannot see. */
-            owed_note(owed, vocab);
+        /* WHAT THE NAME WAS, ANSWERED WHERE BOTH ENTRIES ANSWER IT. The three arms, their counters and the
+           denominator are global_miss_note's, because the classification is a question about the NAME and
+           the same for a read this hook answers and for a `typeof` the engine already answered; what is left
+           HERE is the only part that differs, which is what to return. `1` is "the read is left alone" — a
+           standard owes the name so its throw names the component, or the key is an integer on a global that
+           is not a list — and JS_UNINITIALIZED is the positive statement the engine reads as "this read is
+           not on the channel", which completes §10.1.8.1 OrdinaryGet ( O, P, Receiver ) step 2.b's
+           `undefined`. Falling through is the third arm: no vocabulary claimed the name, so it is
+           server-injected app state and the mint below is what this entry has that the other does not. */
+        if (global_miss_note(s, name))
             goto done;
-        }
-        /* AND AN INDEX IS NOT A FIELD OF A RECORD AT ALL, WHICH IS A QUESTION ABOUT THE KEY SPACE AND NOT
-           ABOUT WHICH VOCABULARY OWNS A NAME. The channel's key rule admits array indices because a server's
-           state tree is records inside LISTS and the walk reaches an element by its index —
-           `__STATE__.users[0]` — and THE GLOBAL IS NOT A LIST. An integer key on it is HTML §7.2.2.2 Indexed
-           access on the Window object, which says of it that "Indexed access to document-tree child navigables
-           is defined through the [[GetOwnProperty]] internal method of the WindowProxy object": the
-           extent is the INTERFACE'S, exactly as Web IDL §3.8 Platform objects implementing interfaces makes a
-           platform object's member list the interface's rather than the document's. THIS ENGINE OWNS THE
-           NAVIGABLE TREE, so an index past the child-navigable count has a real answer that this run computed
-           — §10.1.8.1 OrdinaryGet ( O, P, Receiver ) step 2.b's `undefined` — and minting an unknown for it is
-           the "record wrongly ON the channel" direction this file's header calls the silent one: nothing
-           throws, and a `for (i = 0; i < window.length; i++) window[i]` walk performs it once per iteration
-           past the end.
-           IT IS THIS ARM'S RULE AND NOT ns_join'S. A document that writes `window[0] = {…}` in an inline
-           script publishes a record there in its own right, and that record's members are read through the
-           RECORD arm below — which is why the composer still spells an index off the root and why refusing one
-           HERE takes nothing away: a server that injected at an integer key made it PRESENT, and a present key
-           never reaches this hook. */
-        if (JS_AtomIsIndexName(name)) {
-            g_index_refused++;
-            goto done;
-        }
-        /* THE THIRD ARM, COUNTED WHERE IT IS DECIDED AND NOT WHERE IT IS PERFORMED. The mint itself is below
-           and is shared with the record arm, so raising it there would count a published record's absent
-           member among the global's — two populations under one name, which is the defect this partition
-           exists to end one level up. Reaching this line IS the global arm deciding that no vocabulary claimed
-           the name, which is the decision the row reports. */
-        g_appstate_mints++;
     } else {
         base = ns_path_of(obj);
         /* THE ENGINE HAS ALREADY DECIDED THIS RECORD IS PUBLISHED — it does not ask otherwise — so a record

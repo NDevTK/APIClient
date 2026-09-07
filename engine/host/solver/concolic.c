@@ -5340,6 +5340,13 @@ void concolic_install_source_overlay(void)
            "concolic_declare_browser_only for why the two answers cannot both stand in one process");
     g_source_overlay = SOURCE_OVERLAY_EXPLORING;
     g_hooks.absent = absent_read_hook;
+    /* AND THE SPELLING OF THAT SAME MISS THAT NEVER PERFORMS A [[Get]], installed with it and never without
+       it. `typeof X` on an unresolved name is answered at the opcode (ECMAScript §13.5.3 The typeof
+       Operator's §13.5.3.1 Runtime Semantics: Evaluation step 2.a), so `.absent` is not asked at all — a host
+       that took one and not the other would have a census whose zero is a fact about which opcode the bundle
+       happened to use rather than about what this realm could not answer. It records and decides nothing, so
+       it changes no arm of any run; what it changes is whether the run can say so. */
+    g_hooks.absent_unresolved = absent_unresolved_note;
     /* AND THE HIT HALF OF THAT SAME QUESTION, installed with it and never without it. A published record's
        members are unknown whether or not the record HOLDS them — the server chose its extent against this
        visitor's credentials either way — so a host that took one of these would answer one spelling of one

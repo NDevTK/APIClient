@@ -8,6 +8,15 @@
    record (the engine has already established it is one of the two). */
 JSValue absent_read_hook(JSContext *ctx, JSValueConst obj, JSAtom name);
 
+/* Install as JSConcolicHooks.absent_unresolved — THE SAME QUESTION REACHED BY AN OPERATOR THAT PERFORMS NO
+   [[Get]]. `typeof X` on a name nothing binds is answered at the opcode by ECMAScript §13.5.3 The typeof
+   Operator's §13.5.3.1 Runtime Semantics: Evaluation step 2.a, so the read hook above is never asked and the
+   census would read clean on a bundle whose whole feature detection is written that way. This RECORDS the
+   read into the same population and the same row and decides nothing — the void return is the contract, since
+   answering would make step 2.b's GetValue run and change what the operator says. See absent.c for why it
+   shares the classification rather than keeping a census of its own. */
+void absent_unresolved_note(JSContext *ctx, JSAtom name);
+
 /* Install as JSConcolicHooks.present — THE SAME QUESTION FOR A MEMBER THE RECORD HOLDS. A published record's
    extent was chosen against THIS visitor's credentials, so `__FLAGS.admin === false` is a fact about this
    session and not about the program: it is unknown for control flow exactly as a missing member is, and it
@@ -57,8 +66,8 @@ const char *absent_standard_name(const char *name, AbsentVocab *vocab);
 /* THE NAMES THIS DOCUMENT ASKED FOR AND THIS ENGINE DID NOT ANSWER — solver/result.c's `_absent`, as one JSON
    object on the heap (caller frees; NULL only on allocation failure, which every composer on that seam treats
    as "this census is absent" rather than as a reason to fail a run). The composer in absent.c states the
-   population, the denominator every number in it is a fraction of, the KIND of every row, the identity they
-   close over, and the two spellings of a feature detect this census structurally cannot see. */
+   population, the denominator every number in it is a fraction of, the KIND of every row, the identities they
+   close over, and the one spelling of a feature detect this census still cannot see. */
 char *absent_json(void);
 
 #endif

@@ -2213,6 +2213,33 @@ static const char *HTML =
     " : lfaFn(Option, HTMLOptionElement);"
     "fetch('/api/lfafnopt?v=' + (lfaFo === 'lpcdt' ? 'isfnopt' : 'fo' + lfaFo));"
 
+    /* ONE NAME, READ BOTH WAYS, AND IT IS NOT A PROBE ROW — it is the REACHABILITY WITNESS for solver's
+       owed-name census, which no document in this corpus had. Every `typeof` guard above names an interface
+       this build INSTALLS, so all of them HIT and none of them reaches the arm that records an unanswered
+       name; without a name this realm does not answer, the census reads clean here whatever it is capable of
+       and a run proves nothing about it. `EventSource` is the file's own worked example and this build has no
+       such interface.
+       THE TWO SPELLINGS ARE THE POINT AND ARE WHY THIS IS TWO STATEMENTS. `window.EventSource` is a [[Get]]
+       that misses the whole prototype chain of the global (`window` IS the global object — window.c installs
+       it as an unforgeable value attribute holding `global` itself), so it reaches JSConcolicHooks.absent;
+       `typeof EventSource` is an unresolvable Reference that ECMAScript §13.5.3 The typeof Operator's
+       §13.5.3.1 Runtime Semantics: Evaluation step 2.a answers at the opcode, BEFORE step 2.b's GetValue, so
+       it reaches no read hook at all and is recorded by JSConcolicHooks.absent_unresolved instead. They are
+       one question about one name and must raise ONE row.
+       WHAT TO OBSERVE, since this asserts nothing: in the run's `_absent`, the row `"EventSource"` reads 2 —
+       one per spelling — and `_of those, answered by the typeof operator with no [[Get]] performed` reads at
+       least 1. Both are emitted on every census including zero, so a 0 there is the positive statement that no
+       `typeof` reached an unresolved name rather than an absent member.
+       NEITHER STATEMENT THROWS AND NEITHER FORKS: the read misses on a name a vocabulary owns, so the census
+       records it and the suppression leaves it alone — §10.1.8.1 OrdinaryGet ( O, P, Receiver ) step 2.b's
+       `undefined` — and the `typeof` was already `"undefined"`. NO PROBE ROW is added for them on purpose:
+       this fixture's rows are scoped over ENDPOINTS and their params (param_value_is), a census member is
+       neither, and a bare `strstr` needle over a census key is one engine/probegate.mjs cannot resolve to any
+       document token this file emits — so asserting it here would move that gate's unresolved-needle count
+       rather than measure this one. The observation is the `@RESULT` line. */
+    "var absTy = typeof EventSource;"
+    "var absRd = window.EventSource;"
+
     /* HTML §4.8.9 "The audio element"'s five top-level steps, counted with list depth tracked against the
        standard's own <ol> so a nested item cannot be promoted to a peer. STEP 3 IS UNCONDITIONAL and is the
        whole reason this is not `createElement('audio')` — every element the factory makes carries
