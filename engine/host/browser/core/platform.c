@@ -1712,9 +1712,47 @@ void platform_agent_init(JSContext *ctx, const char *origin, const char *top_lev
            "an agent was brought up with no TOP-LEVEL CREATION URL — HTML §8.1.3.5 reads it to decide whether "
            "the first realm is a SECURE CONTEXT, and Web IDL §3.3.13's members are installed or absent by that "
            "answer, so this agent's platform surface is undecided");
-    DCHECK(g_declared_in == NULL || g_declared_in != JS_GetRuntime(ctx),
-           "the platform was declared twice in one agent — a declaration is per JSRuntime, and the second one "
-           "re-mints every class id the first realm's objects are already branded with");
+    /* AT MOST ONE AGENT HAS DECLARED THIS PLATFORM, AND THAT IS A NARROWER CLAIM THAN THE ONE THAT STOOD HERE.
+       The condition was `g_declared_in == NULL || g_declared_in != JS_GetRuntime(ctx)` under a message reading
+       that a declaration is per JSRuntime. Both halves were wrong in the same direction, and the message is
+       why: the agent half of this list is declared into FILE-SCOPE STATICS — core/agent_state.h holds every
+       one of their addresses, and `git grep -l JS_SetRuntimeOpaque engine/host` answers nothing — so it is
+       held once per PROCESS, and `once per JSRuntime` was an INTENTION written in the present tense and then
+       read as a mechanism in place. The condition followed the message: it asked whether this runtime had
+       declared already, which is silent about the state that matters, a SECOND agent declaring while a first
+       is still live. That state PASSED the old disjunct, and what it reached was not a near miss —
+       `g_declared_in` is overwritten on the next line, so the FIRST agent's release column would later run
+       every `PLATFORM[i].release(g_declared_in)` against the SECOND agent's runtime. Eight releases record
+       their declaring runtime and DCHECK it; the floor for how many hand a runtime-scoped free the argument
+       the column gives them is `git grep -lE 'JS_(FreeAtomRT|FreeValueRT)\(rt' -- engine/host`, and the ones
+       that do neither subtract a reference from a runtime that never took it, silently. So the guard is asked
+       the question the code can actually answer — has ANY agent declared — which is also the only one whose
+       two arms this file can tell apart.
+
+       NOT COVERED: HTML §10.2.4 Processing model's run a worker, step 4 of its twelve top-level steps —
+       "Let agent be the result of obtaining a dedicated/shared worker agent given outside settings and is
+       shared" — whose own next sentence is "Run the rest of these steps in that agent". That agent is
+       CONCURRENT with its owner, since the same algorithm's onComplete list reaches "Entangle outside port
+       and inside port" and both ends of that pair are live — so it is not the sequential successor
+       core/agent_state.h's pre-init discipline is for. That discipline guarantees every declared slot is back
+       at its pre-init value AFTER a release, which is exactly the guarantee a concurrent second agent cannot
+       use: the first agent is still running, so its slots are still set.
+       WHAT THE NEXT DIFF BUILDS: agent-state slots reached through the runtime that declared them rather than
+       through a file-scope static, so that two live agents hold two sets. The registry that must exist
+       afterward is the one this engine already has the addresses in — core/agent_state.h's declarations are
+       the complete derived census of what is keyed per process today, which is why the work is enumerable
+       without anybody maintaining a list of it.
+       HOW ITS ABSENCE SHOWS: every host in this build brings up one agent, so this assert is evaluated once
+       per `platform_agent_init` and stays silent. The day a host brings up a second while the first is live,
+       it fires HERE, at the declaration, naming the platform — rather than in whichever component's release or
+       `_init` latch happens to notice first, which would report a defect of THIS file against the port
+       machinery or the fetch machinery, an unrelated subsystem failing on input it should never have seen. */
+    DCHECK(g_declared_in == NULL,
+           "a second agent tried to declare the platform while one is already live. The agent half of this "
+           "list lives in file-scope statics, so it is held once per PROCESS — this browser can host one "
+           "agent at a time, and the second declaration would overwrite the runtime the FIRST agent's release "
+           "column is going to be run against. Key the slots core/agent_state.h declares on their declaring "
+           "runtime before bringing up a second agent");
     platform_check_table();
     g_declared_in = JS_GetRuntime(ctx);
     /* THE PRINCIPAL BECOMES A RECORD BEFORE ANY COMPONENT IS DECLARED, and it is not a row on the list because

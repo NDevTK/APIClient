@@ -26,9 +26,15 @@
  * platform_document_install, and what it gets is what this browser is.
  *
  * A COMPONENT IS ONE ROW, WITH BOTH HALVES ON IT. The agent half (declare the class, the slots and the pool
- * entries, once per JSRuntime) and the document half (install the members on one realm's global, once per
+ * entries, once per AGENT) and the document half (install the members on one realm's global, once per
  * JSContext) are two lists everywhere else, and a component present in one and absent from the other is the
  * next shape of this bug. On a row they cannot separate.
+ * THE AGENT HALF USED TO SAY `once per JSRuntime` AND THAT WAS AN INTENTION READ AS A MECHANISM — corrected
+ * rather than deleted, because it is the more useful sentence and a reader will re-derive it. Nothing in this
+ * layer is keyed on a runtime: a component declares into FILE-SCOPE STATICS, so the agent half is held once
+ * per PROCESS, and the two readings are indistinguishable while there has only ever been one JSRuntime. The
+ * difference is the whole of what a second LIVE agent costs, so it is stated where the split is stated —
+ * core/platform.c's declaration guard is where the narrower claim is asserted, and it names what to build.
  *
  * WHAT IS *NOT* HERE IS THE HOST'S EDGES, and that boundary is the whole reason this file can be one list.
  * A component is WHAT THE PLATFORM IS; an edge is WHO ANSWERS — the network provider (fetch_set_provider),
