@@ -93,15 +93,31 @@
  * EVENT TIMING §2.3 "Extensions to the Performance interface"'s `eventCounts` and `interactionCount` are
  * absent for that standard's own processing model and reach nothing in this component.
  *
- * AND ONE OF THEM IS NOT A GAP AND MUST NOT BE BUILT. The Measure Memory API declares
- * `measureUserAgentSpecificMemory` `[CrossOriginIsolated]` — its harvested IDL is
- * node_modules/@webref/idl/performance-measure-memory.idl, the same artifact the gap audit reads — and
- * WEB IDL §3.3.4 "[CrossOriginIsolated]" says such a construct "is exposed only within an environment whose
- * cross-origin isolated capability is true". The renderer frame this engine runs in is not one, so a real
- * browser exposes the member here no more than this one does: installing it would flip a page's guard TRUE and
- * abandon a fallback branch that works, which is CLAUDE.md §NO STUBS' defect wearing an audit row. It charges
- * it because it walks WEB IDL §3.3.7 "[Exposed]" and does not walk §3.3.4; a finding about the audit, not
- * about this file, and the reason this member is grouped apart from the four decisions above.
+ * AND ONE OF THEM IS A CONDITIONALLY-EXPOSED MEMBER, WHICH IS A GAP LIKE ANY OTHER AND NOT A FINDING ABOUT
+ * THE AUDIT. The Measure Memory API declares `measureUserAgentSpecificMemory` `[CrossOriginIsolated]` — its
+ * harvested IDL is node_modules/@webref/idl/performance-measure-memory.idl, the same artifact the gap audit
+ * reads — and WEB IDL §3.3.4 "[CrossOriginIsolated]" says such a construct "is exposed only within an
+ * environment whose cross-origin isolated capability is true".
+ *
+ * THIS PARAGRAPH USED TO SAY THE MEMBER "MUST NOT BE BUILT" BECAUSE "the renderer frame this engine runs in is
+ * not one", AND THAT SUBSTITUTED THE HOST FRAME FOR THE MODELLED REALM — two environments one level apart. The
+ * capability this engine answers is the ANALYSED PAGE'S: core/frame/agent_cluster.c's getter reads
+ * browsing_context_group_isolation_mode(), and core/frame/browsing_context_group.c sets that from the
+ * `navigation_coop` it is created with, which core/frame/opener_policy.c computes from the fetched document's
+ * own COOP and COEP headers. Nothing in that chain asks anything about the real frame the WASM runs in. So the
+ * member's condition is a per-realm RUNTIME question here exactly as `[SecureContext]` is, and an exclusion
+ * argued from the host frame is an answer to a question the engine never asks.
+ *
+ * WHAT THE §NO STUBS HAZARD ACTUALLY ARGUES FOR IS THE GATE, NEVER THE ABSENCE. An UNCONDITIONAL install would
+ * flip a page's `performance.measureUserAgentSpecificMemory` guard TRUE and abandon a fallback branch that
+ * works; a CONDITIONAL one cannot, and this engine already states that condition as DATA rather than as an
+ * `if` at the install — core/idl_args.h's `IdlExposure` and the `_exposed` installers, of which
+ * core/crypto/crypto.c's `subtle` and `randomUUID` are the worked examples. That header's own text predicts
+ * this member: the condition is absent from the enum "because no member in this build carries the attribute,
+ * not because the capability cannot be asked: the day one does, it is a value here calling that component".
+ * This is that day. So the audit charging the member is CORRECT, the walk over WEB IDL §3.3.7 "[Exposed]" is
+ * not the reason it appears, and the member is grouped with the four decisions above rather than apart from
+ * them — what it awaits is the enum value, not a repair to the audit.
  *
  * AND THE CITATIONS OF Resource Timing, Event Timing AND THE Measure Memory API ABOVE ARE READ, COUNTED AND
  * JUDGED BY NOTHING, because those are not standards this tree's citation audit holds a corpus for. It reports
