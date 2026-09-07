@@ -3276,6 +3276,33 @@ static JSValue concolic_call(JSContext *ctx, JSValueConst func_obj, JSValueConst
         if (subj) {
             char **spelled = NULL;
             int ok = 1;
+            /* NAMED RESIDUAL - A REGEX GATE FILES NOTHING, and it is the third of the three domain kinds
+               CLAUDE.md's @H names by name ("range/prefix/regex"). The drop below is RIGHT and is not what is
+               narrow: a claim missing one of its operands is a different claim, so `x.startsWith(someObject)`
+               has no statement to file. What is narrower than the spec is the CLA§IFICATION that reaches it.
+               operand_kind answers CONCOLIC_LIT_NONE for every Object, and its comment says why - a value
+               whose only name would be its ADDRE§. A RegExp is the one such operand with a SECOND name
+               source, exactly as literal_ident's intrinsic arm has one: the pattern and flags the page itself
+               wrote, which carry no address and so survive the park a resumed flow replays through.
+               WHAT IS NOT COVERED: a call over an unknown RECEIVER whose argument is a RegExp. The gate is
+               evaluated and the branch forks, the receiver's hole is named, and the observation is discarded -
+               so endpoint.c omits `predicates`, and that omission is read everywhere as the positive statement
+               "no call predicate survived every observed path" on a path where one did. A PINNED receiver
+               never reaches here (the real builtin runs over real bytes), so the loss is exactly the unpinned
+               population.
+               WHAT THE NEXT DIFF BUILDS: an entry point in engine/qjs answering a RegExp's [[OriginalSource]]
+               and [[OriginalFlags]] off the internal slots, for operand_kind and literal_tok to spell a kind
+               by. It does NOT exist today - quickjs.h exports JS_IsRegExp and no accessor for either slot -
+               and it belongs there rather than here because those slots are JSRegExp's private fields.
+               IT MAY NOT BE REACHED THROUGH A PROPERTY GET, which is the trap this clause exists to close:
+               ECMAScript §22.2.6.17 "RegExp.prototype.toString ( )" composes the literal out of Get of
+               `source` and Get of `flags`, and §22.2.6.4 "get RegExp.prototype.flags" is itself a series of
+               Gets - each overridable on a subclass, so either would run the page's own code from a C
+               activation with no flow base under it, which is the abort operand_kind's own comment names.
+               §22.2.6.13 "get RegExp.prototype.source" is the one that reads the slots.
+               HOW ITS ABSENCE SHOWS: an @H param whose receiver hole IS named renders `validValues` and no
+               `predicates` key at all, while the flow's fork count moves at that same branch - a parameter a
+               regex gate narrowed, reported with the bytes of one nothing ever tested. */
             if (argc) {
                 spelled = reclaim_calloc((size_t)argc, sizeof *spelled);
                 CHECK(spelled, "concolic: OOM spelling the arguments a gate passed over an unknown");
