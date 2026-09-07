@@ -4930,7 +4930,13 @@ function audit(argv, opts = {}) {
       if (fragsList.some((f) => containsAnyForm(wholeOf(k), f))) return k;
     return null;
   };
-  const stat = { total: 0, bare: 0, anchored: 0, byTerm: 0, byFile: 0, other: 0, skipped: 0, quotedNumber: 0,
+  /* `lettered` IS THE POPULATION THE BARE READER COULD NOT LEX UNTIL IT GREW ITS SECOND ALTERNATIVE, counted
+     apart from `bare` and not folded into it — an annex coordinate written without a § was in no count at all,
+     and a widening that ends an invisibility by making the population invisible inside a larger one has moved
+     the silence rather than closed it. `letteredBare` is the half this reader admits on its own evidence; the
+     difference between the two is what a § already carried. Both are counts of ADMITTED citations, so a
+     lettered candidate the group rule declined raises neither, exactly as a numeric one does not. */
+  const stat = { total: 0, bare: 0, lettered: 0, letteredBare: 0, anchored: 0, byTerm: 0, byFile: 0, other: 0, skipped: 0, quotedNumber: 0,
                  confirmed: 0, confirmedByUse: 0, confirmedByContainment: 0, confirmedByAncestor: 0, confirmedByRun: 0,
                  confirmedByText: 0, confirmedByIdent: 0, textRefused: 0,
                  unverified: 0, multiSpec: 0, byGroupTitle: 0, byRunAnchor: 0,
@@ -4996,7 +5002,65 @@ function audit(argv, opts = {}) {
   /* The trailing guard must reject a LONGER number (`7.4.9.1`) without rejecting a citation that ends a
    * SENTENCE (`… is not 7.4.9.`) — a `.` alone is punctuation, a `.` before a digit is another component.
    * The first spelling of this lookahead dropped every sentence-final citation silently. */
-  const BARE = /(?<![\w.§])([1-9][0-9]?(?:\.[1-9][0-9]*){1,4})(?!\w)(?!\.\d)/g;
+  /* AND A COORDINATE MAY BEGIN WITH A LETTER, WHICH THIS READER REQUIRED A DIGIT OF UNTIL THIS LINE — so an
+   * ANNEX citation written without a § was not unjudged, not refused and not ambiguous: it was NEVER
+   * ENUMERATED. It appeared in no finding, no band, no count and no total, which is BELOW the floor the
+   * header promises when it says the findings are a floor by at most the bands it names. `CITE` admits
+   * `§B.2.2.1` through `SEC`'s second alternative, so the gap was only ever in the BARE reader — which is
+   * exactly where this tree writes them: `22.1.3.22 slice / B.2.2.1 substr` and `B.2.3.2 step 4 / 21.4.4.21
+   * step 5` read the numeric half and dropped the lettered one standing beside it in the same sentence, and
+   * quickjs.c's `js_str_*_steps` stage labels are lettered from their first character.
+   * WHY THE SILENCE IS THE EXPENSIVE KIND, read off the committed index rather than argued: ECMAScript numbers
+   * `B.2.2` "Additional Properties of the String.prototype Object" and `B.2.3` "Additional Properties of the
+   * Date.prototype Object", so a stale `B.2.3.x` written for a String method does not merely fail to resolve —
+   * it names a REAL Date section, which is the half a checker would otherwise catch and the half this reader
+   * could not see. Measured on the run this widening was landed against: the string `B.2.3` occurred ZERO
+   * times in the whole report, while `git grep -c 'B\.2\.3'` over the audited set answered a two-digit number.
+   * The figure is not written down here because it moves as those sites are repaired; the DERIVATION is, and
+   * the property that does not move is that a report can print none of a coordinate the tree writes.
+   * WHAT THE LETTERED BRANCH DEMANDS, AND WHY IT IS STRICTER THAN THE NUMERIC ONE RATHER THAN ITS MIRROR. The
+   * numeric branch's head carries information — `7` is a chapter — so ONE dotted part after it is enough.
+   * A LETTER'S HEAD CARRIES NONE: `B` is "Annex B" and names no section anybody cites bare, so the letter is
+   * worth nothing as evidence and the NUMERIC PART must reach two components on its own. Measured over the
+   * audited set, that floor is what separates the two populations at one numeric part, and they are not the
+   * same kind of thing: `ITU-T T.81` and `Table B.1` are a RECOMMENDATION NUMBER and a TABLE LABEL, which are
+   * not section coordinates at all, while `RFC 5892 A.1` and `A.2` genuinely ARE appendix coordinates — of a
+   * standard this audit does not index, so admitting them would hand them to whichever indexed standard the
+   * file vote happens to own. Both readings end in the same place and it is worth saying which is which,
+   * because a reader who re-derives only the first will widen the floor for the second. Either way it is the
+   * tool inventing the citation it then judges, the sentence RANGE_OPERAND and STEP_LEAD below already use
+   * about themselves. `ASN.1`, `POSIX.1-2001` and `BT.1886` never reach this branch at all — the LOOKBEHIND
+   * excludes them, because the letter they would open on is preceded by another word character.
+   * THE LETTER RANGE IS NOT THE DISCRIMINATOR AND IS DELIBERATELY NOT NARROWED TO ONE. `SEC` says `[A-F]` and
+   * the committed corpora number dotted sections under A through H, so any bound written here would be read
+   * off which indexes happen to be committed — a LEXER that depends on the corpus cannot see a citation of an
+   * unindexed standard's appendix, which is the shielding this file spends a paragraph on elsewhere. Over
+   * this tree the two spellings admit the IDENTICAL population, so the wider one costs nothing measured.
+   * The depth is letter + up to four parts, which is the numeric branch's five components exactly; a deeper
+   * coordinate is REFUSED whole by the trailing guard rather than truncated, as a deeper number already is.
+   * AND `SEC` IS DELIBERATELY LEFT AT `[A-F]`, WHICH IS THE SAME QUESTION ANSWERED THE OTHER WAY AND MEASURED
+   * THE SAME WAY. A `§G.3` or `§H.1.1` would be invisible to `CITE` for exactly the reason an annex was
+   * invisible to `BARE` — and this tree writes ZERO of them: the only `§`-plus-letter-plus-dotted-number
+   * spellings here are `§X.1`, `§X.2` and `§X.3`, which are a PLACEHOLDER inside a quoted worked example and
+   * not citations of anything. So widening there buys nothing and costs three candidates, and the refusal is
+   * recorded rather than left as an omission a reader has to re-derive. The bare letter is a separate matter
+   * and is why the `.` is not optional: `§A`, `§C`, `§N`, `§S` are how the design notes in this audit's own
+   * file set reference their OWN headings, in the hundreds, and a pattern admitting a lone capital would read
+   * every one of them as a section number.
+   * RESIDUAL — LEXING A SHAPE IS NOT ADMITTING IT, AND THE GROUP RULE STILL DECIDES. What is NOT covered: a
+   * bare lettered coordinate whose number's group carries no evidence anywhere in its file is lexed here and
+   * then declined by PASS 3 exactly as a bare NUMBER is, so it enters no count — which is correct for a bare
+   * number and leaves one real cluster invisible. Measured at the revision this landed, and checkable in two
+   * commands rather than taken on trust: `B.3.2.1`, `B.3.3.4` and `B.3.3.5` occur in quickjs.c and name
+   * sections the maintained edition does not have (its Annex B.3 runs B.3.1 through B.3.9 with nothing
+   * beneath), and they appear in NO line of a `--titles --steps --all` report. That they were DECLINED rather
+   * than admitted-and-silent follows from the census itself: the `naming no standard and no term` figure did
+   * not move across this widening, so every citation it DID admit resolved somewhere. WHAT MUST BE TRUE
+   * AFTERWARD: a bare coordinate that no group evidence admits is COUNTED as a declined candidate rather than
+   * dropped, so the reader can see the size of what it lexed and refused — the number this file already
+   * prints for quoted numbers and for nothing else. HOW ITS ABSENCE SHOWS: a `git grep` finds a dotted
+   * coordinate the report does not mention anywhere, in any band, with no line saying it was seen. */
+  const BARE = /(?<![\w.§])((?:[1-9][0-9]?(?:\.[1-9][0-9]*){1,4})|(?:[A-Z](?:\.[1-9][0-9]*){2,4}))(?!\w)(?!\.\d)/g;
   /* AND THE RIGHT OPERAND OF A RANGE IS NOT A CITATION CANDIDATE AT ALL, for the same reason a float literal is
    * not: it is not a number this tree is naming a section by. `steps 1-4.1` and `steps 4.2-4.4` are how every
    * stage label in this tree writes a span of STEPS, and the lookbehind above admits `4.1` and `4.4` out of
@@ -5526,6 +5590,9 @@ function audit(argv, opts = {}) {
        * mark is set here, where a candidate becomes a citation, and not where it resolves. */
       c.admitted = true;
       if (c.bare) stat.bare++;
+      /* ASKED OF THE NUMBER RATHER THAN OF THE READER THAT FOUND IT, so the two counts stay one fact: which
+         pattern matched is this file's business, and whether a coordinate is lettered is the citation's. */
+      if (/^[A-Z]/.test(c.no)) { stat.lettered++; if (c.bare) stat.letteredBare++; }
 
       /* RESOLUTION, in order of how much the citation itself proves. */
       let spec = null, how = null;
@@ -7267,6 +7334,12 @@ function audit(argv, opts = {}) {
       `${Object.keys(ix.uses).length} with a prominent use site — index fetched ${ix.fetched}, standard updated ${ix.specUpdated}`);
   }
   console.log(`  ${stat.total} citations in ${files.length} files (${stat.bare} written without a §, admitted by group evidence)`);
+  /* THE ANNEX POPULATION, PRINTED BECAUSE IT WAS ONCE UNCOUNTABLE. A coordinate whose first component is a
+   * LETTER is an appendix of some standard, and until BARE grew its second alternative the ones written with
+   * no § were in no total, no band and no finding — so this line is the standing proof that the reader can
+   * see them, and it is the line that goes to zero first if anything ever narrows that pattern again. */
+  if (stat.lettered)
+    console.log(`  ${stat.lettered} of those cite a LETTERED coordinate — an appendix rather than a numbered chapter — ${stat.letteredBare} of them written without a §, which is the shape this reader could not lex at all before the bare pattern's second alternative`);
   /* THE EXCLUSION IS REPORTED WITH A NUMBER BECAUSE ITS OWN ERROR RUNS IN THE DENY DIRECTION — see the
    * quoted-number paragraph in PASS 1. A number this reader declines is a number no channel below judges, so
    * a silent exclusion would be the same invisibility it exists to end, one door over. */
