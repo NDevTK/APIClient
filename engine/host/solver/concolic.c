@@ -4715,8 +4715,22 @@ static JSClassExoticMethods g_concolic_exotic = {
 };
 
 /* HOW MANY VALUES THE SOURCE OVERLAY HAS MINTED — see concolic_source_wrap for what the number is for. Reset
-   with the agent, because it is a fact about ONE document's run and the result document that reports it is per
-   document; a counter that survived would make the second page in an instance report the first one's reading.
+   with the agent, which makes it the AGENT'S number and not one document's.
+   THE SENTENCE HERE PROMISED A GUARANTEE THIS RESET DOES NOT GIVE — that the row is "a fact about ONE
+   document's run", reported "per document", and that "a counter that survived would make the second page in
+   an instance report the first one's reading". The last names as PREVENTED a state the tree exhibits: the
+   second page in an instance arrives through `qjs_join`, which joins a LIVE agent and calls no `_init`, so
+   this counter DOES survive into it and `_sourceReads` DOES sum both documents. That is correct — an instance
+   is an origin-keyed agent cluster — and it is the reading the retired sentence denied. It is rewritten here
+   rather than dropped because re-deriving "the report is per document" restores the promise along with it.
+   READ OFF THE CALLS AND NEVER OFF A HOST: `concolic_init` is an agent's bring-up, `qjs_init` refuses a
+   second rooting with an always-fatal `CHECK(g_dom == NULL)`, and the native runner builds one top-level
+   document per process — its cross-origin child is a FORKED process re-executed with `--document`, and its
+   same-origin one is `wpt_child_realm`, which calls no `_init` either.
+   RETIRED BY a second `concolic_init` reached within one agent, or a host that roots two agents in one
+   process; both are one grep (`git grep -n 'concolic_init' -- engine/host`), and either would show as
+   `_sourceReads` FALLING between two `qjs_result` calls of one instance. That boundary and that retirement
+   condition are `_candidates`' and `_absent`'s too — result.c's grouping paragraph derives the whole block.
    DECLARED HERE, ABOVE ITS FIRST USE, and not beside the overlay flag it belongs with three hundred lines
    down: `concolic_init` zeroes it, so a declaration after that line does not compile at all. The accessor
    stays beside the overlay, where the reader looking for "who mints these" will be. */
@@ -4724,7 +4738,7 @@ static long g_source_reads;
 
 void concolic_init(JSContext *ctx) {
     JSRuntime *rt = JS_GetRuntime(ctx);
-    g_source_reads = 0;   /* per document: see the counter's declaration above */
+    g_source_reads = 0;   /* the agent's, not one document's: see the counter's declaration above */
     if (g_concolic_class == 0) {
         JS_NewClassID(rt, &g_concolic_class);
         DCHECK(g_concolic_class != 0, "concolic: class id allocation returned 0 — runtime class table exhausted");

@@ -760,13 +760,20 @@ void absent_free(void)
     free(g_ns);
     g_ns = NULL;
     g_ns_n = g_ns_cap = 0;
-    /* AND THE OWED-NAME CENSUS WITH IT, WHICH IS WHAT MAKES IT A PER-DOCUMENT READING RATHER THAN A PER-PROCESS
+    /* AND THE OWED-NAME CENSUS WITH IT, WHICH IS WHAT MAKES IT A PER-AGENT READING RATHER THAN A PER-PROCESS
        ONE. The rows hold no allocation of their own — every `name` is a generated table's static entry — so
        only the vector goes; the counters are zeroed BESIDE it, because a table emptied under counters that
        kept counting would publish an `owed` total that no row sums to and the identity the composer asserts
-       would fire on the next census of the next document. On a host that runs several documents in one process
-       (the native WPT runner) this is the boundary at which `_absent` starts again, and it is the same
-       boundary `_orphansDriven` uses. */
+       would fire on the next census of the next agent. THAT ORDERING IS WHAT THIS COMMENT IS FOR and it holds
+       whatever any host does.
+       IT SAID PER-DOCUMENT, and named "a host that runs several documents in one process (the native WPT
+       runner)" as the boundary at which `_absent` starts again. False when written: that runner builds one
+       top-level document per process, and the host that DOES take a second one — the extension's, through
+       `qjs_join` — reaches neither an init nor a release, so its two documents share these rows. This file's
+       own KIND banner already said `agent`, and it is the sentence that was right.
+       THE LAST CLAUSE SURVIVES AND IS CHECKABLE RATHER THAN ASSERTED: this IS the boundary `_orphansDriven`
+       uses, because solver_agent_free zeroes that pair and then calls concolic_free, which calls this — one
+       function, one boundary (`git grep -n 'absent_free\|concolic_free' -- engine/host`). */
     free(g_owed);
     g_owed = NULL;
     g_owed_n = g_owed_cap = 0;

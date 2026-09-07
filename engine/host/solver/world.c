@@ -291,13 +291,22 @@ void world_registry_free(JSContext *ctx)
     free(g_minted);
     g_minted = NULL;
     g_minted_n = g_minted_cap = 0;
-    /* AND THE TWO WIRE-FORM BUFFERS, which belong to the registry for the reason the counts below do: a host
-       that runs several documents in one process would otherwise carry one instance's scratch into the next. */
+    /* AND THE TWO WIRE-FORM BUFFERS, which belong to the registry because the registry ALLOCATED them: they
+       are malloc'd rather than GC objects, so nothing in the runtime's own walk would ever name them and this
+       release column is the only thing that can give them back. The reason stated here was a host running
+       several documents in one process carrying "one instance's scratch into the next", and that is wrong
+       twice — no host reaches a second one of these registries (the counts at the end of this function carry
+       the derivation and its retirement condition), and CONTENT COULD NOT CROSS ONE ANYWAY, because every
+       reader rewrites before it reads: world_ancestry sets `g_anc_n` to 0 at its head, and world_parse_into
+       fills its out-buffer and returns the count. What survives a carry is CAPACITY, which is what these
+       buffers are for. */
     free(g_anc);    g_anc = NULL;    g_anc_n = g_anc_cap = 0;
     free(g_parsed); g_parsed = NULL; g_parsed_cap = 0;
     /* …AND THE RELATION'S PAIR, by the same sentence. They are a THIRD and FOURTH buffer rather than a second
-       use of g_parsed because the question they answer is about two vectors at once; a host that ran several
-       documents would otherwise carry one instance's interned handles into the next instance's comparison. */
+       use of g_parsed because the question they answer is about two vectors at once — world_vec_relate parses
+       into both in adjacent statements and then reads the FIRST answer, so one buffer would have the second
+       parse overwrite it. The clause about a host carrying "one instance's interned handles into the next
+       instance's comparison" went with the one above, for the two reasons given there. */
     free(g_rel_a);  g_rel_a = NULL;  g_rel_a_cap = 0;
     free(g_rel_b);  g_rel_b = NULL;  g_rel_b_cap = 0;
     world_gone_reset();
@@ -309,8 +318,24 @@ void world_registry_free(JSContext *ctx)
     g_doc = 0;
     g_next_serial = 0;
     g_session = 0;
-    /* THE COUNTS GO WITH THE REGISTRY, because they say what THIS instance's seam did and a host that runs
-       several documents in one process (the native WPT runner) would otherwise report the previous one's. */
+    /* THE COUNTS GO WITH THE REGISTRY, because they say what THIS instance's seam did — and this reset is
+       what makes them the AGENT's rather than the PROCESS's.
+       THE HOST NAMED HERE WAS THE WRONG ONE, and the sentence was false when it was written rather than
+       overtaken: it said "a host that runs several documents in one process (the native WPT runner) would
+       otherwise report the previous one's", and that runner builds exactly ONE top-level document per process
+       — `main` and `wpt_child_main` each reach `wpt_build_document` once, its cross-origin child is a FORKED
+       process re-executed with `--document`, and its same-origin child is `wpt_child_realm`, which calls no
+       `_init`. The host that does take a second document in one process is the extension's, through
+       `qjs_join`, and that path reaches neither an init nor a release — so those two documents SHARE these
+       counts by construction, which is the opposite of what the retired sentence promised.
+       READ OFF THE CALLS: `world_registry_free` has one caller, `flow_registry_free`, and `qjs_init` refuses
+       a second rooting with an always-fatal `CHECK(g_dom == NULL)`. This line is also the ONLY thing that
+       could ever let a second, differently-named document name this registry, because world_registry_init
+       asserts `g_doc == 0 || g_doc == doc` and `g_doc` is cleared just above — so the counts reset is bound
+       to that same event rather than to any host's habits.
+       RETIRED BY a world_registry_init reached after this free within one process, which is one grep
+       (`git grep -n 'flow_registry_init\|world_registry_init' -- engine/host`) and would show as
+       `_worldSegmentsMade`/`_worldSegmentsForked` FALLING between two `qjs_result` calls of one instance. */
     world_segment_counts_reset();
 }
 
