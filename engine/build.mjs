@@ -22,7 +22,7 @@ import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { stampArtifact, gateRevision, revisionLines, revisionMoved } from "./gate_revision.mjs";
 import { lexborSourceId, lexborNativeArchive } from "./lexbor_source.mjs";
-import { childCpuSeconds, cpuText } from "./gate_cpu.mjs";
+import { childCpuSeconds, childCpuDelta, cpuText } from "./gate_cpu.mjs";
 
 /* A RUN THAT NEVER RETURNS IS NOT A VERDICT, AND A WALL CLOCK CANNOT SAY WHY. Every program this file
    launches gets ONE budget and ONE backstop, and they measure DIFFERENT THINGS through DIFFERENT SIGNALS so
@@ -3288,7 +3288,11 @@ function runChild(label, prog, args, hint) {
   }
   finally { closeSync(fd); }
   const cpuAfter = childCpuSeconds();
-  t.cpuSeconds = (cpuBefore === null || cpuAfter === null) ? null : cpuAfter - cpuBefore;
+  /* THE SUBTRACTION IS THE METER'S, NOT THIS FILE'S — `childCpuDelta` exists because "JavaScript will do it
+     wrong for free" (`null - null` is 0, `after - null` is `after`), and solvergate, features, test262 and wpt
+     all route to it while this one driver open-coded the same null check. Two right answers to one question is
+     the shape that drifts, and the copy that drifts is the one nobody re-derives. */
+  t.cpuSeconds = childCpuDelta(cpuBefore, cpuAfter);
   t.wallSeconds = (Date.now() - wallBefore) / 1000;
   /* Best-effort convenience only: a failure here must never change the verdict below. */
   try { rmSync(stable, { force: true }); symlinkSync(log, stable); } catch { /* not fatal */ }
@@ -3317,14 +3321,69 @@ function runChild(label, prog, args, hint) {
    throws rather than reaching `quantumText` as `undefined` — which is not `null`, so the arm written for "this
    stage opened no engine slice" would be skipped and the next line would read `.sliceMs` off nothing. A
    consumer that defaults a producer's field is the defect this file is largely about; this is its own. */
-const runNumbers = (t, q) => {
+/* WHAT THE FIXED BUDGET BOUGHT — the one figure on this block whose DENOMINATOR nothing on this box can move,
+   and the one this file held both halves of and never divided. The CPU is on the line above; the work total is
+   inside `standingText`'s verdict; nothing put them in one sentence, so a reader wanting to know whether a
+   small total means a SLOW run or a SHORT one had to write a script over archived logs — and until somebody
+   did, the budget itself was the suspect.
+   THAT SUSPICION IS WHAT THIS LINE RETIRES, AND THE MEASUREMENT IS THE POINT. Over 42 archived builds whose
+   smoke the KERNEL killed at the rlimit — every one between 899.5 and 901.5 s of CPU, the identical budget to
+   a tenth of a percent — the work those budgets bought splits 0.0-3.4 and 11.4-38.8 units per CPU-second WITH
+   NOTHING BETWEEN. So this stage's famous bimodality is fully present at a FIXED CPU denominator, and no
+   re-denomination of the budget can reach it: the budget is already RLIMIT_CPU, enforced by the kernel around
+   the child, and emscripten's blindness to a CPU clock governs the ENGINE'S 12 ms SLICE (solver/quantum.h) and
+   not this. Those are two budgets in two denominations and one row names both; conflating them has cost a
+   brief. `wall/cpu` was 0.984 in BOTH halves at overlapping load, so the box was descheduling neither.
+   WHAT IT SEPARATES, AND WHAT IT DOES NOT. It separates "this total is small because the run was slow" from
+   "small because the run stopped early", which the bare total cannot and which is what makes two runs
+   comparable at all — two that both reached the budget share a denominator, and a difference between them is
+   entirely in the numerator. It does NOT say what a run ACHIEVED: measured on two terminal runs one commit
+   apart, 2009 and 2002 units at the same rate answered 85 and 25 of the fixture's statements, and what moved
+   was `_jobsRun` 94 -> 0 while `_switches` moved the OTHER way. The achievement discriminator is the job count
+   `standingText` already prints; this is the one that says whether the budget was the constraint.
+   IT IS A FLOOR. The numerator stands at the LAST census the fixture composed and the run continues past it,
+   so the tail up to the next sample is uncounted — which matters only where the count is small, and the two
+   clusters above are three-and-a-half fold apart with a whole sample interval of slack between them.
+   AND THE TWO HALVES ARE NOT RAISED AT THE SAME EVENT, which this line may not hide: the kernel counts from
+   `exec` and the engine's work clock starts at init, so node's startup and the wasm instantiation are in the
+   denominator and in nothing else. At the 15 min budget that is noise; at fifteen seconds it is most of it.
+   Two rates are comparable when both runs reached comparable CPU and are not otherwise.
+   IT DECIDES NOTHING (§NO BOUNDS) — no arm branches on it and no exit code moves. It retires when a reader can
+   get the same statement off the stage-table row without dividing anything by hand. */
+const workRateText = (t, stand) => {
+  const pre = `[build]   what that budget bought: `;
+  if (stand === null || stand.work === null)
+    return pre + `NOT STATED — this stage printed no @HWORK line, so it makes no claim about how much engine ` +
+                 `work its CPU bought and there is no rate to take. That is an absence, never a zero.\n`;
+  const w = stand.work.workDone;
+  if (t.cpuSeconds === null || !(t.cpuSeconds > 0))
+    return pre + `${w} unit(s) of engine work, but the CPU was ${cpuText(t.cpuSeconds)} — NO RATE: the ` +
+                 `denominator is not a positive measured number, and a rate over an unmeasured budget is a ` +
+                 `figure about nothing.\n`;
+  return pre + `${w} unit(s) of engine work for ${t.cpuSeconds.toFixed(1)} s of CPU = AT LEAST ` +
+               `${(w / t.cpuSeconds).toFixed(1)} unit(s) per CPU-second — a FLOOR, and the only figure in this ` +
+               `block whose denominator a loaded box cannot move. It says whether the budget was the ` +
+               `constraint; the job count in the verdict says what the run achieved.\n`;
+};
+
+/* `stand` IS REQUIRED AND ITS ABSENCE THROWS, on the identical rule as `q` directly below it: `null` is the
+   positive statement "this stage has no @H probe stream" and `undefined` is a caller that stopped passing it,
+   and the two must never render the same. Both call sites are inside `runOutcome`, where `stand` is hoisted
+   above `bad` for exactly this reason. */
+const runNumbers = (t, q, stand) => {
+  if (stand !== null && (typeof stand !== "object" || !("work" in stand)))
+    throw new Error(`[build] runNumbers was handed ${JSON.stringify(stand)} where probeStanding's reading ` +
+                    `belongs — that function returns either a record carrying \`work\` or \`null\` for a run ` +
+                    `with no @H probe stream, and anything else is a caller that has stopped passing it.`);
   if (q !== null && (typeof q !== "object" || typeof q.sliceMs !== "number" || typeof q.measure !== "string"))
     throw new Error(`[build] runNumbers was handed ${JSON.stringify(q)} where quantumDenomination's reading ` +
                     `belongs — that function returns either its {measure, sliceMs, isCpu, instances} record ` +
                     `or \`null\` for a stage that opened no engine slice, and anything else is a caller that ` +
                     `has stopped passing it rather than a run with nothing to say.`);
   return `[build]   CPU consumed: ${cpuText(t.cpuSeconds)} of the ${RUN_CPU_BUDGET_S / 60} min budget — THIS IS THE ` +
-  `MEASURE THE VERDICT IS IN\n` +
+  `MEASURE THE VERDICT IS IN, and it is the KERNEL's RLIMIT_CPU around this child rather than any clock the ` +
+  `engine can read\n` +
+  workRateText(t, stand) +
   `[build]   elapsed ${t.wallSeconds.toFixed(1)} s against a ${RUN_DEADLOCK_MS / 60000} min deadlock ` +
   `backstop, at load ${loadNow()} on ${cpus().length} cores — CONTEXT, never the verdict\n` +
   quantumText(q);
@@ -3726,7 +3785,7 @@ function runOutcome(label, t, hint) {
                       `no STAGE_KIND — every non-zero stage states what its verdict is a statement about, or ` +
                       `report() cannot rank it and would have to guess a category for it.`);
     console.error(`[build] ${label} ${why}`);
-    console.error(runNumbers(t, q));
+    console.error(runNumbers(t, q, stand));
     if (hint) console.error(`[build]   ${hint}`);
     if (stand && stand.unanswered.length)
       console.error(`[build]   the rows still 0 (${stand.unanswered.length} of ${stand.asked}): ` +
@@ -3844,7 +3903,7 @@ function runOutcome(label, t, hint) {
      statement it makes and a stage that makes none both used to read `PASS`, and the CPU a passing smoke
      spends is the one number that says a revision made the fixture cheaper or dearer to answer — which is
      invisible if it is only ever printed on the runs that failed. */
-  console.log(runNumbers(t, q));
+  console.log(runNumbers(t, q, stand));
   /* `stand` IS THE ONE HOISTED TO THE TOP OF THIS FUNCTION — the second `probeStanding(t.captured)` that stood
      here was a fourth reading of one input, taken in the arm least likely to disagree with the other three. */
   /* THE PASS ARM CARRIES IT TOO, AND IT IS THE ARM THAT NEEDS IT MOST — see pageErrorText. A run that answers
