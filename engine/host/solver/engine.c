@@ -7950,6 +7950,24 @@ static int flow_step(JSContext *ctx, Flow *f) {
              * still exactly one reply per call, still never two settles without a checkpoint between them —
              * that ordering is flow_deliver_one_reply's own invariant and this continuation is what carries the
              * flow to the checkpoint that discharges it, in front of any second delivery. */
+            /* AND THIS ARM IS NOT WHY THE DOCUMENT'S LATER PROGRAMS DO NOT RUN, WHICH IS THE READING A
+             * READER OF `deepest` ARRIVES AT AND THE ONE THIS PARAGRAPH INVITES. Standing above the sequence,
+             * it is the visible candidate for a frontier whose `deepest` freezes, and the per-arm LIFETIME
+             * step histogram refutes it outright rather than by argument: measured on two smoke runs at
+             * stamped artifacts, `resume-program` takes 1250 of 1435 steps in one and 643 of 763 in the
+             * other, this arm takes 101 and ZERO, and `deepest` reads the SAME in both — so the run in which
+             * this arm never executed at all had identical reach. Read `stepUnitRuns` beside @COLD's
+             * `live`/`framed` before spending a lane here: those two converge to within ten members at every
+             * census of every run measured, and the whole ladder below `if (!f->frame)` is unreachable for the
+             * population they name, so no ordering of the arms inside it can be its first cause.
+             * AND THE BOUND THE PARAGRAPH ABOVE RESTS ON IS COUNTED IN ENTRIES AND PAID IN DISPATCHES, which
+             * is a correction to the argument and not to the position. "Deferred by at most what this flow
+             * itself asked for" is exact about the ENTRIES: a fork duplicates a register rather than
+             * lengthening one, and an inherited naming was pushed by the prefix the arms share. What it does
+             * not say is that the deferral is spent one entry per DISPATCH, while a fork also duplicates the
+             * member that has to spend them — so a branching frontier divides one shared pick budget among
+             * every arm, and a register whose length exceeds a member's whole lifetime dispatch count defers
+             * the sequence for that member's entire life. The bound holds and does not bind. */
             if (flow_stack_empty(f) && flow_pending_ready(f)) {
                 g_step_unit = STEP_UNIT_DELIVER_REPLY;
                 flow_deliver_one_reply(ctx, f);   /* §8.1.7.3 step 2.6 */

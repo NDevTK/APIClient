@@ -780,6 +780,49 @@ static void ns_member_spell(const char *base, JSAtom name, const char *key, char
    hook's. The value the slot holds becomes the EXAMPLE, so the flow keeps forking on the gate over it AND the
    report keeps the bytes the server sent; the mint goes through concolic_new like every other source read, so
    an @S candidate substitutes at `__FLAGS.admin` exactly as it does at a member nothing wrote. */
+/* WHAT THIS HOOK COSTS, AND THE HALF OF ITS OWN PREMISE THE CODE DOES NOT ASK — recorded here because the
+   premise is stated in JSConcolicHooks.present/.publish's own contract and the implementation serves a wider
+   population than the channel that contract names — which is the one shape a reader stops checking, because
+   the paragraph they arrive at is right.
+   THE CHANNEL IS NAMED IN quickjs.h'S OWN WORDS AS "the document's INLINE half handing a RECORD to its
+   EXTERNAL half, which is the one channel a server has for injecting per-visitor state into a bundle it ships
+   unchanged to everybody". Membership is decided by js_publish_document_member, which admits any container an
+   INLINE script built and left reachable from the global. That is every top-level `var x = {...}` of every
+   inline `<script>`, including the ones a script uses as its OWN WORKING STATE and reads back three lines
+   later — and this hook then answers those reads with an unknown, so a comparison over a value THIS RUN
+   COMPUTED forks. §Solver-half makes concrete execution the ground truth; the inline half reading its own
+   record is not the inline->external channel and there is no server choice in it.
+   THE COST IS FAN-OUT AND IT IS THE FRONTIER'S FIRST CAUSE, NOT A ROUNDING TERM. A `&&` chain of N such
+   comparisons fans 2^N per arriving arm, every arm is born holding a live frame, and §Offensive-programming's
+   whole task ladder in solver/engine.c sits under `if (!f->frame)` — so the arms this manufactures can run no
+   job, take no reply and start no program until each one individually finishes the program it was forked
+   inside. Measured at the artifact stamped head 1d666bda (dirty []), on the smoke: the four heaviest fork
+   sites are `mo.threw`, `mo.ran`, `vo.threw`, `vo.ran` at 125 forks each — 500 of 761, TWO THIRDS — and all
+   four are members of two object literals the same inline program assigns five lines above the comparison.
+   THE DERIVATION, so the next reader gets today's set rather than this sentence:
+     grep '^@FORKAT ' <smoke log> | tail -1   — the Space-Saving fork census, keyed by predicate; a key
+     spelled `s<len>:<path>` with no leading `1:.` derivation is a bare SOURCE, and a source whose path is a
+     record an inline script built is one of these.
+   Read it against @COLD's `live`/`framed` on the same census: this hook's output is what makes those two
+   numbers converge.
+   THE CHEAP HOST-SIDE NARROWING IS WRONG AND IS REFUTED HERE SO IT IS NOT RE-DERIVED. Asking the SOLVER which
+   row the running flow compiled (flow_dyn_kind: DYN_PAGE_SCRIPT is inline, DYN_SCRIPT_SRC is external) answers
+   about the TOP-LEVEL PROGRAM and not about the code executing, and quickjs.h says the property rides the
+   whole nest — "a function declared inside an inline script is inline-script code too, and a DIRECT eval
+   inherits it from its caller". A bundle function CALLED from an inline program would then read as inline and
+   its `__FLAGS.admin` would concretize, which is the exact loss the channel exists to prevent. The
+   discriminator is the READER's JS_EVAL_FLAG_INLINE_SCRIPT, which only the engine holds.
+   AND THAT NARROWING IS NOT ESTABLISHED EITHER — its counterexample is two inline scripts of one document,
+   one writing `window.__FLAGS={admin:false}` and the next reading it, which is an ordinary SSR shape and would
+   concretize under it. So the question is open rather than answered, and it is stated as a question.
+   THE ORDERED SUBPROBLEMS, WITH THE CALL THAT CONSUMES EACH. (1) Decide whether an inline reader is off the
+   channel, against the two-inline-scripts counterexample above — consumed by js_present_ask/js_absent_ask in
+   the SUBMODULE, so it is a cross-boundary diff and not a solver one. (2) If it is, carry the reader's
+   inline-script flag to both ask sites and add it as a conjunct — consumed by the same two call sites, and the
+   ABI change and this file's arm land together or not at all (§A-CROSS-BOUNDARY-DIFF). (3) If it is not, the
+   fan is legitimate and what must change is the frontier's ability to carry it,
+   which is CLAUDE.md §ONE-WFQ-POLICY's stated open question about what mints an ACCOUNT — consumed by
+   flow_fork_inherit, and explicitly NOT by a weight term, which fork rank-neutrality already refuses. */
 JSValue absent_present_hook(JSContext *ctx, JSValueConst holder, JSAtom name, JSValueConst value)
 {
     const char *s = ns_key_str(ctx, name);
