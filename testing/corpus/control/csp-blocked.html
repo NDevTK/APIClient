@@ -1,0 +1,126 @@
+<!doctype html><html><head><title>csp control — policy arm</title>
+<!-- THE ONE VARIABLE. This document and csp-open.html are byte-identical from the `body` element onward; the
+     only difference between the two rows is the `meta` on the last line of this head. Check it, do not
+     believe it:
+
+         cd testing/corpus/control && diff <(sed -n '/^<body>$/,$p' csp-blocked.html) \
+                                           <(sed -n '/^<body>$/,$p' csp-open.html)
+
+     must print nothing. A pair whose arms drifted is one document measured twice.
+
+     WHY `'unsafe-inline'` AND NOT `'self'`, WHICH IS THE POLICY EVERY READER WILL REACH FOR. Both block
+     eval — core/frame/policy_container.c's policy_permits_compilation takes `script-src` (falling back to
+     `default-src`) and returns true ONLY for `'unsafe-eval'`, so any script directive without it blocks
+     string compilation, and test_forced.c asserts BOTH cases by name ("'self' must not permit eval",
+     "'unsafe-inline' must not permit eval"). They differ in whether THIS DOCUMENT'S OWN `script` BLOCK RUNS.
+     Under `'self'` a real browser refuses to execute an inline script block, so the rung would never run on a
+     faithful engine; it runs here only because CSP_INLINE_SCRIPT has no enforcement caller — grep
+     policy_allows_inline and the two callers are core/html/event_handler_attribute.c (script attribute) and
+     core/html/html_style_element.c (style). A control resting on an unbuilt capability goes SILENT the day
+     that capability lands, and it goes silent as `securitySinks: []`, which reads exactly like "the CSP path
+     broke". `'unsafe-inline'` permits the block on a faithful engine and on this one, so the rung's own
+     execution stops being a variable and the only thing the policy decides is the thing under test.
+
+     AND IT IS THE SHARPER STATEMENT ANYWAY: the emitted `cspBlocks` string then names a policy that permits
+     everything this page does EXCEPT string compilation, so a reader can see that the missing `'unsafe-eval'`
+     is the whole of what killed the vector.
+
+     MEASURED IN REAL CHROME RATHER THAN REASONED, because "does the inline block run under this policy" is
+     the one assumption the choice above rests on and a clean read cannot settle it. Headless Chrome, no
+     extension, this document served from this directory's own server:
+         policy arm  — the `meta` parses as a DIRECT CHILD of `head` (`m.parentElement === document.head`),
+                       the inline block RUNS, and the eval then throws TWICE over: "This document requires
+                       'TrustedScript' assignment. The action has been blocked." and "EvalError: … because
+                       'unsafe-eval' is not an allowed source of script: script-src 'unsafe-inline'".
+         open arm    — no `meta`, the block runs, `window.cspEvalRung === ""`, no errors.
+     The head-child result is what HTML §4.2.5.3 step 1 requires and what core/html/html_meta_csp.c refuses
+     without ("If the meta element is not a child of a head element, return"), so it is checked here rather
+     than assumed from the source text.
+
+     AND THAT MEASUREMENT NAMES THE CONSTRAINT THIS DOCUMENT IS THE STANDING REPRODUCTION OF, WHICH IS NOT A
+     RESIDUAL AND MUST NOT BE WRITTEN AS ONE. Real Chrome refuses the eval on both counts; this engine
+     performs it, because `policy_allows_string_compilation` has NO enforcement caller (its only non-test
+     caller is solver/solve.c's emission) and no eval path calls trusted_types_compliant_string — the
+     §19.2.1.2 HostEnsureCanCompileStrings seam in engine/qjs is the @S ANNOUNCEMENT and decides nothing.
+     THE OBVIOUS REPAIR IS THE ONE THING THAT MUST NOT BE DONE: routing the eval seam through either refusal
+     makes the compile throw, so the arrival is never detected, so no entry is recorded — and `cspBlocks` and
+     `trustedTypes` are fields OF an entry. Enforcing at the sink DELETES the finding the fields exist to
+     annotate, and solve.c says exactly that in its own words: "reporting nothing would hide a sink that IS
+     real. So the finding stays, and it CARRIES what blocks it". The report and the enforcement are in
+     tension by design, this document is where that tension is observable, and a diff that resolves it in the
+     enforcement's favour has to say first where the detection then comes from. No remedy is named here
+     because none has been established, and a next-diff clause invented to fill the slot is a clause that
+     gets executed once. -->
+<meta http-equiv="Content-Security-Policy" content="script-src 'unsafe-inline'; require-trusted-types-for 'script'">
+</head>
+<body>
+<div id="c-out"></div>
+<script>
+  // INSTRUMENT CONTROL, @S POLICY ENVELOPE. It is a PAIR — csp-blocked.html and csp-open.html — and neither
+  // arm proves anything alone: a field that is non-empty here and non-empty there is a field that does not
+  // depend on the policy, and a field that is empty in both is a path that never ran.
+  //
+  // WHAT IT EXISTS FOR. solver/solve.c emits three fields onto every @S record: `firesOn` always,
+  // `cspBlocks` only when the document's policy kills the vector, and `trustedTypes` only when the document
+  // requires a Trusted Type at that sink's group. The engine reads CSP from the response header
+  // (core/frame/navigation_params.c) and from a `meta http-equiv` (core/dom/document.c's document_policy_new
+  // walking HTML §4.2.5.3 "Pragma directives"), the container reaches emission, and the popup reads both
+  // names. Every part of that was correct and NO DOCUMENT IN THE TRACKED CORPUS CARRIED A POLICY:
+  //
+  //     grep -rniE "content-security-policy|require-trusted-types|script-src" testing/corpus/
+  //
+  // answered only in mirror.mjs's own prose and one `X-UA-Compatible` meta in a mirrored page, and
+  // control/serve.mjs sends `content-type` and nothing else on every route — measured at these two routes
+  // rather than assumed: `curl -D -` on both returns `content-type` and no `Content-Security-Policy`. So
+  // `cspBlocks` and `trustedTypes` had never been non-empty in any run, and a correct path nobody has seen
+  // fire is a path nobody has measured.
+  //
+  // WHAT A READER OBSERVES, and it is a field in a record rather than a belief. site.mjs's PROBE reads the
+  // offscreen's `state.docs`, and solver/result.c composes each analysis as
+  // `{"fetchCallSites":…,"securitySinks":…,"pageErrors":…}`. So the observable is
+  //
+  //     doc._astResults[].securitySinks[]  where .sink === "eval"
+  //
+  // and the pair's claim is exactly:
+  //     csp-blocked.html  -> that entry HAS `cspBlocks` and HAS `trustedTypes`
+  //     csp-open.html     -> the SAME entry has NEITHER
+  // `cspBlocks` carries the serialized policy text (core/frame/policy_container.c's policy_container_csp,
+  // which returns what document_policy_new merged), and `trustedTypes` carries the string "script".
+  // site.mjs's `sinks` column is a COUNT of that array and cannot see either field — reading the two names
+  // needs the array itself, which is why the row is stated here as a field and not as a number.
+  //
+  // WHY THE RUNG IS AN EVAL, AND IT IS NOT A PREFERENCE — IT IS THE ONLY SINK CLASS THAT CAN CARRY EITHER
+  // FIELD ON THIS ENGINE. solver/solve.c's SINKS table has three rows. SINK_URL declares `tt` -1, so it can
+  // never carry `trustedTypes` at all. SINK_HTML declares `tt` TRUSTED_TYPE_HTML, and core/dom/element.c
+  // routes innerHTML through core/html/trusted_types.c's trusted_types_compliant_string, which THROWS on a
+  // document that requires a Trusted Type and has no default policy — so on a page carrying
+  // `require-trusted-types-for 'script'` the assignment never happens, no arrival is recorded, and the
+  // finding the field would have annotated does not exist. SINK_EVAL declares `tt` TRUSTED_TYPE_SCRIPT and
+  // NO eval path calls trusted_types_compliant_string, so it is the one sink whose finding survives to be
+  // annotated. `cspBlocks` splits the same way and for a different reason: SINK_HTML's `policy` column is
+  // CSP_INLINE_SCRIPT_ATTRIBUTE, which `'unsafe-inline'` PERMITS, while SINK_EVAL's is -1 and routes to
+  // policy_allows_string_compilation — the §4.4 question about string compilation, which has no element, no
+  // inline type and no §6.8.2 mapping, and which no script directive answers without `'unsafe-eval'`.
+  //
+  // AND THE SINK ONLY HAS TO BE DETECTED, NOT SOLVED. solve_json_array's own banner: "EVERY DETECTED SINK IS
+  // REPORTED — the ones with a fire-verified PoC, AND the ones whose search has not solved", and the policy
+  // question is asked on every entry before the PoC is ever consulted. So this control does not depend on the
+  // @S search firing, only on the arrival being recorded.
+  //
+  // WHAT THIS DOCUMENT MUST PRODUCE, as FLOORS so a solver that learns more never fails its own control:
+  //     sinkTainted  >= 1   — `location.hash` is a declared attacker source and this is the JS-context sink
+  //     sinks        >= 1   — one search opened per tainted arrival
+  //     runOutcomesMine {complete:1}, why []
+  // and the two field claims above, which are the whole reason the document exists.
+  //
+  // THE RUNG IS WRITTEN AT A BARE URL ON PURPOSE, for the reason security.html states: the harness drives
+  // with no fragment and `location.hash` is still attacker-controlled, because the attacker chooses the
+  // address the victim loads. A control that needed a crafted URL would be testing the harness's URL.
+  //
+  // THERE IS DELIBERATELY NO GATE IN FRONT OF THE SINK. security.html keeps one because it is the standing
+  // reproduction of a decide.c segment-ordering abort and says so; this document is not that reproduction,
+  // and its own comment records that the same sink with no branch in front of it completed. Adding one here
+  // would import a second failure mode into a control whose whole value is that exactly one thing varies.
+  eval('var cspEvalRung = "' + location.hash + '";');
+</script>
+</body></html>

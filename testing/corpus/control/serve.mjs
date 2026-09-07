@@ -64,7 +64,18 @@
 //     solver/reply_decode.c at engine_provide rather than by anything the document does, so this row is also
 //     the only one here whose rungs do not depend on the page's own code reaching them.
 //
-// Seven rows, and a census wants all seven (PORT sets the base; the others follow it):
+//   - AND THE POLICY ENVELOPE IS A PAIR OF ORIGINS RATHER THAN ONE, BECAUSE ITS ROW IS A DIFFERENCE AND NOT A
+//     NUMBER. solver/solve.c emits `cspBlocks` only where the document's policy kills the vector and
+//     `trustedTypes` only where the document requires one, so the claim is that a field is PRESENT on one row
+//     and ABSENT on another — and a single row cannot state it. csp-blocked.html and csp-open.html are
+//     byte-identical from the `body` element onward and differ in one `meta http-equiv`; sharing an origin
+//     would put both documents' records in one union and destroy the only comparison they exist to make.
+//     Until this pair landed, `grep -rniE "content-security-policy|require-trusted-types|script-src"` over
+//     this corpus answered only in mirror.mjs's prose and one `X-UA-Compatible` meta, and every route below
+//     sends `content-type` and nothing else — so both fields had never been non-empty in any run, and a
+//     correct path nobody has seen fire is a path nobody has measured.
+//
+// Nine rows, and a census wants all nine (PORT sets the base; the others follow it):
 //     node site.mjs control      http://127.0.0.1:8899/ <pass>
 //     node site.mjs control-sec  http://127.0.0.1:8900/ <pass>
 //     node site.mjs control-url  http://127.0.0.1:8901/ <pass>
@@ -72,6 +83,8 @@
 //     node site.mjs control-cfg  http://127.0.0.1:8903/ <pass>
 //     node site.mjs control-xhr  http://127.0.0.1:8904/ <pass>
 //     node site.mjs control-flight http://127.0.0.1:8905/ <pass>
+//     node site.mjs control-csp  http://127.0.0.1:8906/ <pass>
+//     node site.mjs control-csp-open http://127.0.0.1:8907/ <pass>
 import { createServer } from 'node:http';
 import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -95,6 +108,12 @@ const DOCS = [
   ['loaded-config.html', 'control-cfg'],
   ['xhr-config.html', 'control-xhr'],
   ['flight-chunks.html', 'control-flight'],
+  /* APPENDED, NEVER INSERTED. A row's port is BASE + its index in this list, and every port is written down
+     in the header above, in README.md and in whatever a lane has already scripted — so inserting a document
+     in the middle silently re-points every row after it at a document it was never measuring, and nothing
+     downstream is keyed by anything that would notice. New documents go on the end. */
+  ['csp-blocked.html', 'control-csp'],
+  ['csp-open.html', 'control-csp-open'],
 ];
 
 /* THE ONE NON-SCRIPT SUBRESOURCE ANY ROW FETCHES, and it is answered by every origin for the same reason the

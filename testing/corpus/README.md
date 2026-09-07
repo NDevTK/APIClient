@@ -56,6 +56,8 @@ second copy of it that goes quiet when the next document lands:
     node site.mjs control-cfg  http://127.0.0.1:8903/ <pass>  # the same state over the NETWORK channel
     node site.mjs control-xhr  http://127.0.0.1:8904/ <pass>  # the same reply through the OTHER interface
     node site.mjs control-flight http://127.0.0.1:8905/ <pass>  # a reply whose BODY names addresses
+    node site.mjs control-csp  http://127.0.0.1:8906/ <pass>  # a document that carries a POLICY
+    node site.mjs control-csp-open http://127.0.0.1:8907/ <pass>  # the same document with none
 
 ONE PORT PER DOCUMENT AND NOT ONE PATH PER DOCUMENT, because `site.mjs` isolates a row by ORIGIN: it selects
 the row's runs and documents with `d.url.startsWith(origin)`, so three documents on one origin make every
