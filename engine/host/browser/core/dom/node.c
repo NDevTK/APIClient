@@ -46,6 +46,7 @@
 #include "solver/dom_cow.h"
 #include "solver/concolic.h"
 #include "solver/attr_shadow.h"
+#include "core/agent_state.h"
 #include "core/dom/mutation_observer.h"
 #include "core/dom/node.h"
 #include "core/dom/shadow_root.h"
@@ -5245,6 +5246,48 @@ void node_init(JSContext *ctx)
     node_declare_walkers(ctx);
     node_declare_mixins(ctx);
     realm_declare_intrinsic(node_install_protos);
+    /* THIS COMPONENT'S AGENT-LIFETIME HANDLES — core/agent_state.h. The name is core/platform.c's ROW whose
+       release reaches this one, and node.c has none of its own: element_free calls node_free as the last
+       member of the DOM group's cascade and then runs agent_state_undo("element"), so `element` is whose
+       release undoes these and that call is now what does it.
+
+       DECLARED HERE RATHER THAN BESIDE THE LINE THAT SETS EACH ONE, which is that header's usual rule, because
+       three of them are not set by this function at all: a hook-list LENGTH is written by its registrar, which
+       runs once per REGISTRANT, and a declaration must run once per AGENT. node_init is this component's
+       once-per-agent point — it is latched on g_protos_ready above — so it is the only place a registrar's
+       slot can be named exactly once.
+
+       THE TWO THAT WERE NEVER GIVEN BACK, WHICH IS WHY THIS IS NOT BOOKKEEPING. node_free reset g_tree_hook_n
+       by hand and reset neither of the other two lists, though all three are the same state written by three
+       copies of one registrar — so a second agent in one process appended its registrations to the first
+       agent's. §4.2.3's children-changed list carries TWO registrants (core/html/html_style_element.c and
+       core/html/html_script.c) against a table of four: agent two fills it and runs BOTH hooks TWICE at every
+       children-changed step, silently, and agent three meets node_add_children_changed_hook's ALWAYS-FATAL
+       `CHECK` with the table full and aborts IN RELEASE. The moving list carries one against four — doubled at
+       agent two, fatal at agent five. The tree list carries SEVEN against eight and would have aborted on
+       agent two's SECOND registration; it did not, because it is the one of the three somebody remembered.
+       That is the argument for deriving the undo from the declarations rather than writing it out a second
+       time: the hand-maintained member is the one that stayed right and its two siblings are what a
+       hand-maintained list does.
+
+       NO AGENT HAS EVER BEEN SECOND, so nothing here fires today and this is armed rather than exercised:
+       `git grep JS_NewRuntime engine/host` answers one per host, and main.c's shipped entry refuses a second
+       root outright ("qjs_init ran twice in one WASM instance"). HTML §10.2.4 "Processing model" step 4 is the
+       arrival — obtaining a dedicated or shared worker agent is a SECOND agent INSIDE this instance, and
+       core/workers/worker_global_scope.c already names this header as the mechanism written for it.
+       ALL OF THEM OR NONE: core/dom/selection.c records what a short count buys — a release that is the
+       inverse of five of seventeen slots leaves the other twelve with no check at all, wearing the same number
+       a component holding nothing would produce. */
+    agent_state_flag("element", &g_protos_ready, "the DOM interface table, and this component's declaration latch");
+    agent_state_ptr("element", &g_agent_rt, "the one runtime §4.4's classes and the wrapper map were declared in");
+    agent_state_atom("element", &g_atom_pi_attrs, "DOM §4.13's attribute-map slot key, interned");
+    agent_state_value("element", &g_pi_attrs_key, "DOM §4.13's attribute-map slot key, the Symbol itself");
+    agent_state_ptr("element", &g_wraps, "the wrapper identity table — one entry per node this agent wrapped");
+    agent_state_flag("element", &g_wrap_n, "how many nodes of this agent hold a wrapper");
+    agent_state_flag("element", &g_wrap_cap, "the wrapper identity table's extent");
+    agent_state_flag("element", &g_tree_hook_n, "DOM §4.2.3's insertion- and removing-steps list, its length");
+    agent_state_flag("element", &g_cc_hook_n, "DOM §4.2.3's children-changed-steps list, its length");
+    agent_state_flag("element", &g_moving_hook_n, "DOM §4.2.3's moving-steps list, its length");
 }
 
 /* §4.4's INTERFACE PROTOTYPE OBJECTS, FOR ONE REALM — Node, CharacterData, Text and Comment. */
@@ -5524,7 +5567,12 @@ void node_free(JSRuntime *rt)
            "the element-interface resolver was still registered when the node layer was released — "
            "core/html/html_element.c claimed it and gives it back at html_element_free, which the DOM group's "
            "own cascade runs first");
-    g_tree_hook_n = 0;
+    /* §4.2.3's THREE HOOK-LIST LENGTHS ARE NOT RESET HERE. `g_tree_hook_n = 0` stood on this line and its two
+       siblings stood nowhere, which is the drift a release written as a second copy of a declaration produces;
+       all three are declared to core/agent_state.h in node_init, so agent_state_undo("element") puts them back
+       and agent_state_check_released asserts it. Being later costs nothing: the sole reader of any of the three
+       is node_tree_hooks_run, whose only registration is the dom_cow_set_tree_hook above, and that call has
+       already handed it back — so nothing between this line and that undo can read one. */
     /* BEFORE the walk, because the walk is what would do the damage: every entry below holds a reference
        belonging to the runtime that declared this layer, and freeing them through a different one is a heap
        corruption the walk cannot report afterwards. `g_agent_rt == NULL` is the idempotent second call
