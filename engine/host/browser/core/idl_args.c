@@ -8567,16 +8567,55 @@ void idl_install_covers_column(JSContext *ctx, JSValueConst target, const char *
    with a constructing cproto and answer `JS_IsConstructor` true, and CALLING one to find out would run a
    sixteen-step algorithm from inside an assert. The engine's statement that an identifier has §3.7.1's
    construct steps is the MINT, so the mint is what is recorded and what is read back.
-   NAMED RESIDUAL — THE AUDIT DOES NOT YET READ THIS CALL, and the code is CORRECT for what it does rather than
-   unfinished: the assertion holds per realm and fires at the origin today. WHAT IS NOT COVERED: this engine's
-   own Web IDL gap audit still abstains over every name a filtered column hands to a shared constructing mint, so
-   such a name is neither charged as a stray construct nor credited as constructing. WHAT THE NEXT DIFF BUILDS:
-   a form in engine/idl_installed.mjs beside COVERS_FORM that reads this call's column and its `refuses`, so
-   that `constructsForwarded` resolves for a declared column and engine/idlgen.mjs's `strayForwarded` stops
-   holding those names back — matched to the loop by the install's own arguments, exactly as COVERS_FORM is, so
-   a declaration no minting loop answers to stays an error. HOW ITS ABSENCE WOULD SHOW: that audit's BLIND-SPOT
-   band still counts the names of a column this engine has now declared, so its FINDINGS remain a floor by that
-   much while the C beneath them is already checked. */
+   ── THE NAMED RESIDUAL THAT STOOD HERE IS SPENT, AND TWO OF ITS THREE CLAUSES WERE WRONG ────────────────────
+   What stood here said this engine's own Web IDL gap audit does not yet read this call, and named the reader it
+   wanted. That reader is built. This is the RETIRED REASON REWRITTEN rather than deleted, because a reader who
+   re-derives the clause it carried will build the mechanism it named, in the one direction that regresses.
+   THE AUDIT READS THIS CALL. engine/idl_installed.mjs declares `CONSTRUCTS_COLUMN_FORM` beside `COVERS_FORM`
+   and consumes THE DECLARATION rather than the filter: it matches this install's own arguments to the
+   forwarded read the loop hands the mint — same function, same names in the same order, which is the same
+   column — and resolves after the whole walk rather than inside one file, because the mint and the read sit in
+   different files by construction. The TARGET is deliberately absent from that match key: a forwarded read is
+   an argument to a mint and carries no target, so the per-realm presence lookup above is the ENGINE's half and
+   is not restatable from source at all. Nothing on this axis is unfinished; the rest of this is the record of
+   how the residual described what it was asking for, because the description was the part that was wrong.
+
+   ITS `WHAT IS NOT COVERED` CLAUSE WAS FALSE OF THE LARGER HALF OF ITS OWN POPULATION. It said the audit
+   abstains over EVERY name a filtered column hands to a shared constructing mint, so such a name is neither
+   charged as a stray construct nor credited as constructing. Measured over the one such column in this tree at
+   a5bd70b1, and re-derived from the C since: this file's element-interface table holds 71 DISTINCT interface
+   names, of which HTMLElement is minted BY NAME beside the loop and is therefore a direct construct, leaving
+   70 that reach the audit's constructing set through the forwarded read. Exactly ONE of those 70 was abstained
+   on, because the abstention is reached only for a name the corpus declares with no constructor operation —
+   and HTMLUnknownElement is the only one of the 70 the corpus so declares. The other 69 were CREDITED as
+   constructing, on exactly the unproven read this declaration exists to prove. So the clause was false of 69
+   of its own 70, and false in the direction that costs the most: crediting reports an interface constructible
+   that a page cannot `new`. Its tell is the one this project names for a NOT-COVERED clause — it stated a
+   POPULATION where the fact was a PROPERTY, and the population it named was not the one it described.
+   RE-DERIVE IT RATHER THAN TRUSTING THOSE FIGURES, which is two reads and no build: the distinct cells of this
+   file's interface-name column, less the names minted beside the loop, against whether the corpus declares
+   each of them with a constructor operation.
+
+   ITS `WHAT THE NEXT DIFF BUILDS` CLAUSE WAS NOT MERELY WRONG — FOLLOWED LITERALLY IT IS A REGRESSION. It said
+   to make the audit's forwarded record resolve so that its abstention stops holding those names back, and
+   being held back is the ONLY thing standing between that audit and a false charge against the one name in the
+   band. That name sits in the constructing set on a read THIS declaration proves wrong for it, so clearing its
+   unproven mark without also taking it out of that set hands it to the stray-construct category, whose two
+   readings are a misspelled identifier and a legacy factory name the index does not carry — the population of
+   Web IDL §3.7.2 "Legacy factory functions" — and neither is what happened here. Built and priced as a control
+   at that same revision: FINDINGS 3 categories / 455 items became 4 / 456, against an engine already right.
+   SO BOTH HALVES OF THIS PARTITION ARE LOAD-BEARING, which is the sentence the next reader actually needs. The
+   refused half REMOVES the name from the audit's constructing set and does not merely un-hold it, and a name
+   leaves that set only where EVERY forwarded read that contributed it is answered by a declaration refusing it
+   AND no mint named it directly; anything else abstains, because a cell of two columns is a question about
+   both.
+
+   ITS `HOW ITS ABSENCE WOULD SHOW` CLAUSE HELD, and it is the clause this project rates reliable for the
+   reason it held: it stated an OBSERVATION rather than a mechanism or a population. The band did carry a name
+   of this declared column, and reading the declaration emptied it — at that revision BLIND SPOTS went 4
+   categories / 341 items to 3 / 340 with FINDINGS unchanged at 3 / 455, the whole run diff being that row and
+   its single line. It held at a scale of ONE rather than of a column, and that difference is the other two
+   clauses' error rather than this one's. */
 void idl_install_constructs_column(JSContext *ctx, JSValueConst target, const char *const *column,
                                    int n, size_t stride, const char *const *refuses, int n_refuses,
                                    const char *why)
