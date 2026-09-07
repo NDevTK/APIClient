@@ -4078,11 +4078,37 @@ static int js_dispatch_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
                    `ctx` here is the dispatching realm, and the standard asks for the CALLBACK's — which for a
                    same-origin pair of documents is a real difference, since they are one agent and one heap and
                    a function minted in a child navigable can be added as a listener on its parent's element.
-                 WHAT THE NEXT DIFF BUILDS: an exported `JS_GetFunctionRealm` — ECMAScript §7.3.24's walk over
-                   the bound and Proxy chains, which quickjs.c has as a `static` and quickjs.h does not declare.
-                   core/html/custom_elements.c's own residual asks for exactly that export for §4.13.3 step
-                   11.1, so the two are ONE piece of work and whichever lands it retires both; that export must
-                   land with the submodule gitlink bump and its host hunks in one commit.
+                 WHAT THE NEXT DIFF BUILDS: the SAVE AND THE RESTORE READING ONE GLOBAL, chosen once per
+                   listener. `JS_GetFunctionRealm` is no longer the missing piece — it is exported and declared
+                   in quickjs.h — and taking the realm is not the work. Two things are. (a) WHICH OBJECT is the
+                   listener callback at step 2.6: this save runs BEFORE `compile_handler:` below, and for a slot
+                   whose HTML §8.1.8.1 "Event handlers" step 3 compile is still owed `s->lcb` is then the RAW
+                   UNCOMPILED HANDLER, which is not a function and has no realm to ask for — so step 2.6 is
+                   being asked of a value the callback is not yet. (b) WHERE THE ANSWER LIVES: that compile
+                   PARKS, and step 3.12 REPLACES `s->lcb` with the compiled function, so a realm re-derived at
+                   step 2.13's restore names a different object than the one step 2.8 saved from. The realm
+                   therefore has to be decided once and carried on the state, and (a) has to be settled first
+                   because it decides what it is a realm OF. Moving the save past the compile is OBSERVABLE and
+                   is what `event-global-set-before-handleEvent-lookup` is about, so it is a spec question and
+                   not a reordering to make quietly.
+                 AND THE CLAUSE THIS REPLACES WAS WRONG IN THE WAY A NEXT-DIFF CLAUSE USUALLY IS — recorded here
+                   because the next reader would otherwise build what it named. It said the export WAS the work,
+                   and called this residual and core/html/custom_elements.c's `ONE piece of work` whose lander
+                   would retire both — shown in backticks because it is this tree's retired prose and not a
+                   standard's, which is the one thing that keeps the quotation channel from judging it against
+                   whichever standard the line last named. The export landed WITH that file's conversion and did
+                   not retire this one, because the two consumers do not want the same operation.
+                   HTML §3.2.3 "HTML element constructors" step 11.1 — which that clause miscited as
+                   HTML §4.13.3, a section titled "Core concepts" that holds no such step — writes
+                   `? GetFunctionRealm(NewTarget)` in the standard's own words, so there the walk IS the step.
+                   THIS site wants Web IDL's ASSOCIATED
+                   REALM, which Web IDL §3.1 "JavaScript environment" defines only "for non-exotic function
+                   objects (i.e. not callable proxies, and not bound functions)", as "the value of the function
+                   object's [[Realm]] internal slot" — that is ECMAScript §7.3.24 "GetFunctionRealm ( func )"
+                   step 1 alone, and for the two exotic kinds its steps 2 and 3 walk a population that
+                   Web IDL declines to associate at all. So the export answers this site's question for every
+                   callback the standard defines an answer for, and the bound/Proxy walk here is a CHOICE to
+                   be stated rather than a step being performed.
                  HOW ITS ABSENCE SHOWS: a listener function minted in one same-origin realm and dispatched at a
                    target in another reads the current event out of the DISPATCHING Window rather than its own,
                    so the callback's own `window.event` stays at whatever that realm last set — undefined, for

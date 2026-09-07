@@ -2129,42 +2129,53 @@ static int js_ce_html_ctor(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, J
     }
     DCHECK(hdr->stage == HC_FINISH, "HTML §3.2.3 resumed into a stage it does not have");
     JS_FreeValue(ctx, cb_result);
-    /* Step 11: a prototype that is not an Object is replaced by step 11.2's "the interface prototype object of
-       realm whose interface is the same as the interface of the active function object", where step 11.1's
-       `realm` is `? GetFunctionRealm(NewTarget)` — ECMAScript §7.3.24 "GetFunctionRealm ( func )", which
-       forwards through a bound function's target (its step 2) and a Proxy's target (its step 3) before falling
-       back to the current realm (its step 4).
-       IT IS "THE INTERFACE OF THE ACTIVE FUNCTION OBJECT" AND NOT HTMLElement's, which is a distinction with no
-       difference while one interface carries this machine and a wrong answer the moment sixty-nine do:
-       `class B extends HTMLButtonElement {}` with a non-object `prototype` must fall back to
-       HTMLButtonElement.prototype, and falling back to HTMLElement.prototype would hand the page an element
-       missing every member of the interface it asked for. ce_interface_proto_of reads it off the active
-       function object itself, so the answer is the interface's by construction rather than by a table.
-       `ctx` HERE IS THE ACTIVE FUNCTION OBJECT'S REALM, not the caller's: a step machine is entered through
-       `step_realm`/`js_callee_realm`, which answers `p->u.cfunc.realm` for the callee, so this is the
-       interface prototype object of the realm the interface object was installed in. That is
-       exactly `realm` whenever NewTarget's function realm IS the active function
-       object's — and HTML §3.2.3's own note on step 11 says those two can differ ("The realm of the active
-       function object might not be realm, so we are using the more general concept of 'the same interface'
-       across realms").
-       NAMED RESIDUAL — CORRECT for a same-realm NewTarget, NARROWER than step 11.1.
-         NOT COVERED: a NewTarget whose function realm is not this one. Reached by defining a class minted in
-           realm A into realm B's registry (`B.customElements.define('x-r', A.R)`) and then making its
-           `prototype` a non-Object, which is the only way step 11 fires at all.
-         WHAT THE NEXT DIFF BUILDS: an exported `JS_GetFunctionRealm` — ECMAScript §7.3.24's walk over the bound
-           and Proxy chains, which quickjs.c has as a `static` — and a way to reach ANOTHER realm's interface
-           prototype object for the interface this one's active function object names. The second half is the
-           work: `ce_interface_proto_of` reads the active function object's own `prototype`, which is this
-           realm's by construction, so a cross-realm answer needs the realm's own interface OBJECT first. What
-           must exist afterward is a per-realm lookup from an interface identity to that realm's interface
-           object. The quickjs export must land with the submodule gitlink bump and its host hunks in ONE commit.
-         HOW ITS ABSENCE SHOWS: with `A.R.prototype = 5` and `B.customElements.define('x-r', A.R)`, a real
-           browser gives the constructed element A's `HTMLElement.prototype`, so `el instanceof A.HTMLElement`
-           is true and `el instanceof B.HTMLElement` is false. This engine hands out B's, inverting BOTH — an
-           `instanceof` that answers wrong across the boundary, not a missing member. */
+    /* Step 11: "If prototype is not an Object:" — 11.1 "Let realm be ? GetFunctionRealm(NewTarget)." and 11.2
+       "Set prototype to the interface prototype object of realm whose interface is the same as the interface of
+       the active function object."
+       THE REALM IS NEWTARGET'S AND NOT THIS ONE. `ctx` is the ACTIVE FUNCTION OBJECT's realm — a step machine is
+       entered through `step_realm`/`js_callee_realm`, which answers `p->u.cfunc.realm` for the callee — and
+       §3.2.3's own note on this step says the two can differ: "The realm of the active function object might not
+       be realm". So it is taken from NewTarget, which is the page's value, through ECMAScript §7.3.24
+       "GetFunctionRealm ( func )": step 1 reads a function's own [[Realm]], steps 2 and 3 forward through a
+       bound function's and a Proxy's target, step 4 falls back to `ctx`. NULL is its step 3.a
+       "Perform ? ValidateNonRevokedProxy(func)" having thrown, which is the `?` step 11.1 itself writes.
+       THE KEY THAT CROSSES THE SEAM IS THE DEFINITION'S LOCAL NAME, AND THAT IS THE SPEC'S INSTRUCTION RATHER
+       THAN A CONVENIENCE. Web IDL §3.7.3 Interface prototype object gives an interface exactly one object per
+       realm, so realm A's object cannot NAME realm B's, and §3.2.3's note says exactly that — "we are not
+       looking for equality of interface objects". What survives the seam is WHICH INTERFACE, and the local name
+       states it: HTML §3.2.2 Elements in the DOM's element-interface lookup is a pure function of the name, so
+       asking it in `realm` answers with that realm's object for the same interface.
+       THAT LOCAL NAME IS THE ACTIVE FUNCTION OBJECT'S INTERFACE BY THE TIME THIS RUNS — PROVEN ABOVE, NOT
+       ASSUMED, which is what makes the substitution sound. A customized built-in reached here only through step
+       8.2, which THROWS unless this realm's `html_element_interface_proto(local)` IS
+       `ce_interface_proto_of(func_obj)`; an autonomous one only through step 7.1, which throws unless the active
+       function object is HTMLElement, and §3.2.2's step 6 resolves every valid custom element name to
+       HTMLElement. Both arms ask for the interface the active function object already had to be.
+       A REALM WITH NO ELEMENT INTERFACES CANNOT ARRIVE HERE, which is why the lookup's answer is asserted rather
+       than tested: every constructor §3.2.3 is entered through is itself an HTML interface object, and the only
+       realms this agent builds without them hand out no constructors at all — a ShadowRealm's callables are
+       JS_CLASS_WRAPPED_FUNCTION, which is wired with a `call` and no constructor bit, so `Reflect.construct`
+       refuses one before NewTarget could reach this. Such a realm's slot holds JS_NULL rather than an object,
+       so the impossible state is nameable and is named. */
     if (!JS_IsObject(s->proto)) {
+        JSContext *realm = JS_GetFunctionRealm(ctx, ntgt);              /* step 11.1 */
+        const char *local;
+        JSValue lo, ip;
+        size_t llen = 0;
+
+        if (!realm) return -1;          /* step 11.1's `?` — a revoked Proxy on NewTarget's chain has thrown */
+        lo = JS_GetProperty(ctx, s->def, g_atom_local);
+        local = JS_ToCStringLen(ctx, &llen, lo);
+        JS_FreeValue(ctx, lo);
+        if (!local) return -1;
+        ip = html_element_interface_proto(realm, local, llen);          /* step 11.2 */
+        JS_FreeCString(ctx, local);
+        DCHECK(JS_IsObject(ip),
+               "HTML 3.2.3 step 11.2 asked NewTarget's realm for the element interface prototype object of the "
+               "definition's local name and that realm has none — it was built without the element interfaces, "
+               "which no constructor this step can be entered through belongs to");
         JS_FreeValue(ctx, s->proto);
-        s->proto = ce_interface_proto_of(ctx, hdr->func_obj);
+        s->proto = ip;
     }
     {
         JSValue stack = JS_GetProperty(ctx, s->def, g_atom_stack);
