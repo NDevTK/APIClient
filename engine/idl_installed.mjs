@@ -907,6 +907,70 @@ const COVERS_FORM = { fn: "idl_install_covers_column", target: 1, column: 2, why
    declaration and is refused with it — the same rule the exclusion's table argument gets. */
 const NAME_COLUMN_RE = /^\s*IDL_NAME_COLUMN\s*\(\s*([A-Za-z_]\w*)\s*,\s*([A-Za-z_]\w*)\s*\)\s*$/;
 
+/* THE SAME COLUMN'S CONSTRUCTOR AXIS — `idl_install_constructs_column(ctx, target, IDL_NAME_COLUMN(TBL, field),
+   refuses, n_refuses, why)`, and the SECOND thing a row-filtered minting loop hides. Web IDL §3.7 Interfaces
+   puts a property on the realm's global for every exposed interface and Web IDL §3.7.1 Interface object gives
+   that object construct steps only where the interface declares a constructor operation — so an interface
+   object that CONSTRUCTS and one whose whole body is §3.7.1's TypeError are the SAME answer to COVERS_FORM and
+   OPPOSITE answers to `new`. The `continue` deciding which cells reach the mint is C exactly as it is for
+   coverage, so this reader does not evaluate it and must not: what it consumes is the C's DECLARATION OF THE
+   PARTITION — every name the column holds reached §3.7.1's declared constructor mint EXCEPT the ones `refuses`
+   names, which carry the throw. Reading the declaration is the whole of the job; re-deriving the filter is the
+   "installation inferred from text" the coverage form's own banner exists to have removed.
+   IT IS MATCHED TO THE READ THE LOOP HANDS THE MINT, not to an install. Section 1b already records, per
+   forwarded name, WHICH FUNCTION read the column and WHAT THE WHOLE COLUMN RESOLVED TO, so the match is the
+   one COVERS_FORM makes — same function, same names in the same order, which is the same column, read by the
+   same `strings()` — with the TARGET absent from the key because a forwarded read is an ARGUMENT TO A MINT and
+   carries no target. That half is the ENGINE's and not this reader's: idl_install_constructs_column asserts
+   per realm that each name is an own property of the object in front of it, which is the one fact here that is
+   about an OBJECT and so cannot be checked against source at all.
+   AND IT IS RESOLVED AFTER THE WHOLE WALK RATHER THAN INSIDE THE FILE, because the two halves live in
+   different files BY CONSTRUCTION: the mint is a shared helper's `idl_step_constructor` and the read is its
+   caller's column, so the forwarded record is created while the MINT's file is scanned and the declaration
+   while the READ's is. Matching per file, as the coverage form can, would answer differently depending on the
+   order of `paths`.
+   THE REFUSED HALF REMOVES THE NAME FROM `constructs` AND DOES NOT MERELY STOP HOLDING IT BACK. That is the
+   whole difference between reading this declaration and mis-reading it, and the mis-reading is the one a
+   reader arrives with: a forwarded read put EVERY cell of the column into `constructs`, and for a refused cell
+   that read is now KNOWN WRONG — so clearing only its unproven mark leaves the name in `constructs` and hands
+   it straight to the stray-construct charge, which is the accusation engine/idlgen.mjs's own banner records as
+   having already cost a reader a hunt for a bug that is not there. A name leaves `constructs` only where EVERY
+   forwarded read that contributed it is answered by a declaration that refuses it AND no mint named it
+   directly; anything else abstains exactly as before, because a cell of two columns is a question about both.
+   THE REFUSAL LIST IS NOT CHECKED BACK AGAINST THE COLUMN HERE, deliberately: idl_install_constructs_column
+   does that itself, per realm, and a refusal the column does not hold changes nothing this reader computes —
+   the partition it states is over the column's own names. The two-sidedness THIS side owes is the other one,
+   below: a declaration no minting read answers to.
+   THE RESIDUAL THAT ASKED FOR THIS READER WAS WRONG ABOUT WHAT IT WOULD CLOSE, AND WRONG IN BOTH DIRECTIONS.
+   idl_args.c's named residual states, as its WHAT IS NOT COVERED, that this audit still abstains over EVERY
+   name a filtered column hands to a shared constructing mint, so that such a name is neither charged as a
+   stray construct nor credited as constructing. MEASURED over the one such column in the tree, at a5bd70b1:
+   SEVENTY names reached `constructs` through a forwarded read and exactly ONE was abstained on, because the
+   abstention is `strayForwarded`, which idlgen.mjs reaches only for a name the corpus declares with NO
+   constructor operation. The other SIXTY-NINE are audited interfaces whose IDL declares [HTMLConstructor], so
+   `constructs.has(n)` made `ctorMissing` false for each: they were CREDITED as constructing, on exactly the
+   read this declaration exists to prove, with `htmlCtorAbsent` and `ctorUnproven` both zero. The clause is
+   therefore false of 69 of its own 70, and it is false in the direction that matters — the credit side is the
+   larger half AND the one whose wrong answer reports an interface constructible that a page cannot `new`. The
+   tell is the one this project already names for a NOT-COVERED clause: it stated a POPULATION rather than a
+   property, and the population it named is not the population it described.
+   AND ITS NEXT-DIFF CLAUSE, FOLLOWED LITERALLY, IS A REGRESSION AND NOT A PARTIAL FIX. It says to make
+   `constructsForwarded` resolve so that `strayForwarded` "stops holding those names back" — and for the ONE
+   name in that band, being held back is the only thing between this audit and the charge idlgen.mjs's own
+   banner records as having already cost a reader a hunt for a bug that is not there. The name sits in
+   `constructs` on a read the declaration now proves wrong FOR IT, so clearing its unproven mark without taking
+   it out moves it straight into the stray-construct category, whose row offers a misspelled identifier and an
+   unindexed §3.7.2 legacy factory name as its two readings and neither is what happened. Measured by building
+   exactly that reading: FINDINGS 3 categories / 455 items becomes 4 / 456, against an engine already right.
+   WHAT THE RESIDUAL WAS RIGHT ABOUT is its HOW-ITS-ABSENCE-WOULD-SHOW clause — the band did hold a name of the
+   declared column, and reading the declaration empties it — which held at a scale of one rather than of a
+   column. That is the clause this project rates reliable and it was; the two that named a mechanism and a
+   population are the two that moved. */
+const CONSTRUCTS_COLUMN_FORM = { fn: "idl_install_constructs_column", target: 1, column: 2, refuses: 3, why: 5 };
+/* A column where every name constructs passes NULL and 0, which the C's own DCHECK pairs — so an empty refusal
+   list is the ORDINARY declaration and not one this could not read, and the two must not answer alike. */
+const NO_REFUSALS_RE = /^\(?\s*(?:const\s+char\s*\*\s*const\s*\*\s*\)\s*)?NULL\s*$/;
+
 /* The member names one COLUMN of a table holds, in row order. Every cell must resolve, because a column with a
    hole in it is a name list this does not know. */
 function columnStrings(R, table, field) {
@@ -2258,6 +2322,17 @@ export function installedMembers(paths, env) {
      difference can matter. */
   const constructsDirect = new Set();
   const constructsForwarded = new Map();
+  /* THE DISTINCT READS BEHIND THOSE NAMES, AND WHICH READ CONTRIBUTED EACH — the two things a constructor-axis
+     column declaration is matched against (see CONSTRUCTS_COLUMN_FORM). `constructsForwarded` keeps ONE record
+     per name because the row it prints wants one address; whether the mint reaches a name that is a cell of
+     TWO columns is a question about both, so the resolution after the walk reads every contributor rather than
+     the first. Keyed by the read's own file, line and expression, because one read pushes one entry per ROW
+     and a table naming an interface under two tags pushes that name twice. */
+  const forwardedReads = new Map();
+  const forwardedOf = new Map();
+  /* The constructor-axis partitions the corpus declares, collected across the whole walk for the reason the
+     form's banner gives: the read a declaration answers is recorded while a different file is scanned. */
+  const constructsColumns = [];
   const { forms } = env;
   /* which GENERATED_FORMS installers the corpus calls at all — see the loop after the file walk */
   const called = new Set();
@@ -2366,7 +2441,17 @@ export function installedMembers(paths, env) {
       const direct = R.strings(arg, localsFor(c.fn));
       const names = direct || throughCallers(c.fn, arg, seen, via);
       if (!names) return null;
-      if (direct) for (const n of names) via.push({ name: n, ...where });
+      if (direct) {
+        /* WHICH FUNCTION READ THE COLUMN AND WHAT THE WHOLE READ RESOLVED TO, carried with every name it
+           produced — a `via` entry is one NAME and a constructor-axis declaration is about the COLUMN, so the
+           column has to travel with the name or the two could only be matched by re-reading the expression,
+           which is a second copy of `strings()` free to disagree with this one. `key` is the READ's identity:
+           one read pushes one entry per row, so a name is not a key. */
+        where.fn = c.fn.name;
+        where.names = direct;
+        where.key = `${where.file}:${where.line}:${where.expr}`;
+        for (const n of names) via.push({ name: n, ...where });
+      }
       out.push(...names);
     }
     return out.length ? out : null;
@@ -2375,9 +2460,20 @@ export function installedMembers(paths, env) {
   const noteConstructs = (got, file, line, form) => {
     for (const n of got.names) constructs.add(n);
     if (!got.via) { for (const n of got.names) constructsDirect.add(n); return; }
-    for (const v of got.via)
+    for (const v of got.via) {
       if (!constructsForwarded.has(v.name))
         constructsForwarded.set(v.name, { mint: { file, line, form }, read: v });
+      /* Every `via` entry comes from the branch above, which sets all three — so a missing key would mean that
+         branch had stopped being the only writer, and merging two reads under `undefined` is exactly the
+         silent wrong answer this whole file refuses. */
+      if (v.key === undefined)
+        throw new Error(`[idl-audit] a forwarded constructing mint recorded ${v.name} with no read identity — ` +
+                        `throughCallers is meant to be the only writer of a via entry`);
+      if (!forwardedReads.has(v.key)) forwardedReads.set(v.key, v);
+      let ks = forwardedOf.get(v.name);
+      if (!ks) forwardedOf.set(v.name, ks = new Set());
+      ks.add(v.key);
+    }
   };
 
   /* The one reader both constructing-mint sites use, so the two cannot disagree about what a name is. */
@@ -2488,6 +2584,41 @@ export function installedMembers(paths, env) {
                   `reason is the sentence saying why the loop's row filter cannot remove a NAME`;
       if (rec.bad) rec.names = null;
       covers.push(rec);
+    }
+
+    /* 0c. THE CONSTRUCTOR-AXIS PARTITIONS this file declares — see CONSTRUCTS_COLUMN_FORM. Read here, where the
+       declaration's own scope resolves its two tables, and ANSWERED after the whole walk, where the forwarded
+       reads it is about have all been recorded. */
+    for (const site of callSites(masked, CONSTRUCTS_COLUMN_FORM.fn)) {
+      const f = fnAt(site.at);
+      if (!f) continue;                       /* a site outside every body is the form's own declaration */
+      const R = scoped(f);
+      const colExpr = String(site.args[CONSTRUCTS_COLUMN_FORM.column] || "");
+      const col = colExpr.match(NAME_COLUMN_RE);
+      const refExpr = String(site.args[CONSTRUCTS_COLUMN_FORM.refuses] || "").trim().replace(/\s+/g, " ");
+      const why = R.strings(site.args[CONSTRUCTS_COLUMN_FORM.why] || "", null);
+      const rec = { file: path, fn: f.name, line: lineOf(orig, site.at),
+                    target: stripCast(site.args[CONSTRUCTS_COLUMN_FORM.target] || ""),
+                    table: col ? col[1] : null, field: col ? col[2] : null,
+                    names: null, refuses: [], bad: null, used: false };
+      if (!col) {
+        rec.bad = `the constructing column \`${colExpr.trim().replace(/\s+/g, " ")}\` is not ` +
+                  `IDL_NAME_COLUMN(table, field), so which names this declares reach §3.7.1's mint is unknown`;
+      } else if (!(rec.names = columnStrings(R, col[1], col[2]))) {
+        rec.bad = `the constructing column \`${col[1]}[].${col[2]}\` could not be read as a list of names`;
+      } else {
+        const refuses = NO_REFUSALS_RE.test(refExpr) ? [] : columnStrings(R, refExpr, null);
+        if (!refuses)
+          rec.bad = `the refusal list \`${refExpr}\` could not be read as a list of names, so which cells of ` +
+                    `\`${col[1]}[].${col[2]}\` carry §3.7.1's throw instead of construct steps is unknown`;
+        else if (!why || why.length !== 1)
+          rec.bad = `the constructor-axis declaration for \`${col[1]}[].${col[2]}\` states no readable reason ` +
+                    `— the reason is the sentence saying why the loop's row filter cannot move a name across ` +
+                    `§3.7.1's partition`;
+        else rec.refuses = refuses;
+      }
+      if (rec.bad) { rec.names = null; rec.refuses = []; }
+      constructsColumns.push(rec);
     }
 
     /* 1. the call forms */
@@ -2849,6 +2980,61 @@ export function installedMembers(paths, env) {
                              `that object — a coverage declaration is checked by the install it answers, so ` +
                              `one that answers nothing is a claim nothing tests` });
     }
+  }
+  /* THE CONSTRUCTOR-AXIS PARTITIONS, ANSWERED — see CONSTRUCTS_COLUMN_FORM for why this is here and not in the
+     file loop. A declaration is matched to a READ and marked used by that read rather than by a name, so a
+     column whose every name some other component also mints directly still answers its own declaration. */
+  const declOf = new Map();
+  for (const [key, r] of forwardedReads) {
+    const ds = constructsColumns.filter((c) => !c.bad && c.file === r.file && c.fn === r.fn &&
+                                               c.names.length === r.names.length &&
+                                               c.names.every((n, k) => n === r.names[k]));
+    for (const d of ds) d.used = true;         /* answered, so none of them is a claim nothing tests */
+    if (ds.length === 1) { declOf.set(key, ds[0]); continue; }
+    /* TWO PARTITIONS OVER ONE READ ARE A DISAGREEMENT AND NOT A CHOICE. They can name different refusals, and
+       picking one is this reader arbitrating between two things the engine said — so it abstains, which leaves
+       the names exactly as unproven as they were before either declaration existed, and says so. */
+    if (ds.length > 1)
+      unselected.push({ file: r.file, line: r.line, fn: r.fn,
+                        why: `${ds.length} constructor-axis declarations in this function state a partition ` +
+                             `over the column \`${r.expr}\` this read hands a constructing mint — they can ` +
+                             `name different refusals, so which of its names reach §3.7.1's mint is what the ` +
+                             `engine says twice and this cannot arbitrate` });
+  }
+  for (const [name, keys] of forwardedOf) {
+    /* A name some mint spells as a LITERAL is already proven by that mint, and no partition over a column it
+       also happens to sit in can unsay it. */
+    if (constructsDirect.has(name)) continue;
+    let proven = false, refusedByAll = keys.size > 0;
+    for (const key of keys) {
+      const d = declOf.get(key);
+      if (!d) { refusedByAll = false; continue; }
+      if (d.refuses.includes(name)) continue;
+      proven = true;
+      refusedByAll = false;
+    }
+    /* THE MINT DOES NOT REACH THIS CELL. The forwarded read that put the name in `constructs` is known wrong
+       for it, so the name comes back OUT — leaving it there and only clearing its unproven mark is the false
+       accusation the form's banner names, and it is a charge against an engine that is already right. */
+    if (refusedByAll) { constructs.delete(name); constructsForwarded.delete(name); }
+    /* THE MINT REACHES IT AND THE ENGINE SAYS SO. The name is now evidence about the engine exactly as a
+       literal beside the mint is, so nothing downstream has anything left to hold back. */
+    else if (proven) constructsForwarded.delete(name);
+  }
+  /* THE OTHER SIDE OF THE PAIR. A partition declaration no minting read answers to is stated over a loop that
+     is not there, so it is a claim nothing tests — the same failure the unanswered coverage declaration is, and
+     it is named in the same category for that reason.
+     WITH A MINT THIS SCAN COULD NOT READ THERE IS NOTHING TO CONCLUDE: `constructsUnread` makes the whole
+     constructor axis abstain, and an unread mint is exactly a read that would have answered this declaration —
+     so naming it stale then reports the scan's own stopping point as the engine's error. A declaration whose
+     OWN arguments could not be read is a different fact and is named either way. */
+  for (const d of constructsColumns) {
+    if (d.used || (!d.bad && constructsUnread.length)) continue;
+    unselected.push({ file: d.file, line: d.line, fn: d.fn,
+                      why: d.bad || `declares \`${d.table}[].${d.field}\` minted through Web IDL §3.7.1's ` +
+                           `construct steps on \`${d.target}\`, and no constructing mint in this corpus is ` +
+                           `handed that column by this function — a partition declaration is checked by the ` +
+                           `mint it answers, so one that answers nothing is a claim nothing tests` });
   }
   /* A DECLARED INSTALLER NOTHING CALLS. The three §6.6.1 partial interfaces are three contracts that can go
      absent one at a time, and an installer with no call site installs nothing — so crediting its hundred names
