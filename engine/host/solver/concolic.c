@@ -3279,9 +3279,9 @@ static JSValue concolic_call(JSContext *ctx, JSValueConst func_obj, JSValueConst
             /* NAMED RESIDUAL - A REGEX GATE FILES NOTHING, and it is the third of the three domain kinds
                CLAUDE.md's @H names by name ("range/prefix/regex"). The drop below is RIGHT and is not what is
                narrow: a claim missing one of its operands is a different claim, so `x.startsWith(someObject)`
-               has no statement to file. What is narrower than the spec is the CLA§IFICATION that reaches it.
+               has no statement to file. What is narrower than the spec is the CLASSIFICATION that reaches it.
                operand_kind answers CONCOLIC_LIT_NONE for every Object, and its comment says why - a value
-               whose only name would be its ADDRE§. A RegExp is the one such operand with a SECOND name
+               whose only name would be its ADDRESS. A RegExp is the one such operand with a SECOND name
                source, exactly as literal_ident's intrinsic arm has one: the pattern and flags the page itself
                wrote, which carry no address and so survive the park a resumed flow replays through.
                WHAT IS NOT COVERED: a call over an unknown RECEIVER whose argument is a RegExp. The gate is
