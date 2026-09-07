@@ -430,12 +430,54 @@ int  pending_blocked(JSValueConst reg);
    the top of its arm chain on EVERY step, and again on the external-script row (once as that arm's own assert
    under -DAPICLIENT_DEV=1, once as the scheme-answered re-read). They are correct; they are not cheap, and the
    paragraph at `pending_blocked` says exactly why the cure that reached that one does not reach these.
-   WHAT THE NEXT DIFF BUILDS: the record-to-registers inversion inside solver/pending_index.c. Its member
-   struct holds `namers` as an int and `pending_index_ref`/`_unref` take only the record, so a settled record
-   cannot reach the registers that name it; holding the NAMING (register, member) rather than counting it lets
-   the `haveValue` write decrement each naming register's own deliverable count, at O(namers) once per answer
-   instead of O(entries) per consultation. That is the same trade this diff makes for the synchronous kind,
-   paid at the one moment the classification changes.
+   WHAT THE NEXT DIFF BUILDS — AND THE CLAUSE THAT STOOD HERE WAS RIGHT ABOUT ITS TWO FACTS AND WRONG ABOUT
+   THE MECHANISM, WHICH IS RECORDED RATHER THAN REPLACED BECAUSE A NEXT-DIFF CLAUSE IS READ ONCE, BY SOMEBODY
+   WHO HAS ALREADY DECIDED TO DO THE WORK. It said: build the record-to-registers inversion inside
+   solver/pending_index.c, whose "member struct holds `namers` as an int and `pending_index_ref`/`_unref` take
+   only the record, so a settled record cannot reach the registers that name it; holding the NAMING (register,
+   member) rather than counting it lets the `haveValue` write decrement each naming register's own deliverable
+   count, at O(namers) once per answer instead of O(entries) per consultation".
+   BOTH FACTS CHECK OUT — the member does hold `int namers`, and both doors do take only the record. The
+   DIRECTION is inverted (an answer makes an entry deliverable, so the naming registers count UP; it is the
+   DELIVERY that counts down, and that one already has its register in hand). And the mechanism has a hole
+   that loses a flow, which is worse than the cost it was written to remove.
+   WHY IT DOES NOT REACH: `pend_index_sync` returns at its first line for a record the index does not TRACK,
+   and the trusted zone's REFUSAL path answers exactly such a record. `pending_unshare` copies a declined
+   record and deliberately does not track the copy — its own assert admits only the two kinds that are outside
+   the set, "one was never tracked, the other stopped being tracked at its refusal" — and the decline arm then
+   writes `PEND_HAVE_VALUE` on that copy to answer it with a Fetch §2.2.6 "Responses" NETWORK ERROR, which
+   flow_deliver_one_reply DOES deliver. (That number is checked, and is not the one the decline arm itself
+   cites: §5.6 is "Fetch methods" and defines no such thing, while §2.2.6 is where "A network error is a
+   response whose type is 'error'" is stated. The bare §5.6 one file over is reported, not edited here.)
+   That entry is `pend_deliverable` by the predicate above and would be
+   invisible to a count maintained through the index: `pending_ready` would answer NO for a register holding a
+   real answer, and its flow would park for ever with the answer in hand — §scheduler's razor, reached by the
+   optimisation.
+   THE ROOT IS THAT MEMBERSHIP AND NAMING ARE TWO LIFETIMES AND `namers` IS ASKED ONLY ONE QUESTION. It is
+   read at `> 0` and `== 0` and nowhere else — "has every register dropped this" — so it is a MEMBERSHIP fact,
+   and both doors already no-op silently (`if (!m) return;`) the moment membership ends. A record leaves
+   membership at its answer or its refusal and goes on being NAMED by registers until they drop it, so a
+   naming list hung on the member is empty at exactly the moment an answer needs it. It has to outlive
+   membership the way `PendIndexNode` already outlives its members. That is
+   §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS with the two questions separated by TIME rather than by meaning.
+   AND IT DOES NOT LAND IN THIS FILE'S FOUR. Every membership call site is in solver/pending.c and every one
+   has its register in hand, so the signatures are ours; the write that must reach the registers is not. Of
+   the five `PEND_HAVE_VALUE` writers, four are on tracked records and the refusal's is not, so that one has
+   to go through a door that is HANDED the register — which is what `pending_answer_sync` already is, for the
+   one other kind whose count no index can reach. In landing order, and it is ONE landing because a count that
+   misses a transition is worse than a walk:
+     (1) the register-carrying answer door, plus the widening of `pending_set`'s existing refusal so
+         `PEND_HAVE_VALUE` through the generic door CRASHES for any record the index does not track, plus the
+         refusal path's call site — solver/pending.{c,h} AND solver/engine.c together. The crash is what
+         names any sixth writer this enumeration missed, and it is the consumer of (1).
+     (2) the naming list, moved off the member onto something that outlives membership, and the per-register
+         count maintained at push, remove, release, fork and answer — solver/pending_index.{c,h} and
+         solver/pending.c. Its consumer exists today and is the reason any of this is worth doing:
+         `pending_ready`, asked by flow_step at the top of its arm chain on EVERY step.
+   The count itself is already modelled here and needs no invention: `pend_sync_owed` is a JS own-slot on the
+   register, written under cow_engine_write_begin/end, copied at the fork, and audited against
+   `pend_sync_owed_walk` by a DCHECK at the release and at the fork. A deliverable count is that pattern with
+   a different predicate, and that audit is the one thing that keeps an incrementally-maintained number honest.
    HOW ITS ABSENCE SHOWS: the census already prints both halves. `pend` per live flow rises without bound while
    `pendReady` — the deliverable population, which is what these predicates are actually looking for — stays
    small, so the cost of a step tracks a number that has nothing to do with the work the step does. It shows as
