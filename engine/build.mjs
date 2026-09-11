@@ -76,8 +76,17 @@ const BUDGET_NOT_INSTALLED = "@BUDGET-NOT-INSTALLED";
    because a declaration moved inside the function that reads it is invisible to the module-level reader
    below and the DEFAULT target dies instead. Both failures were made here, in that order, and neither is
    a syntax error: `node --check` passes on both, so only running each target catches them. */
+/* -Wno-array-bounds IS NOT IN THIS LIST AND MUST NOT BE RE-ADDED. It was, with no stated reason, and what it
+   silenced was a REAL out-of-bounds stack write: a twelve-argument enqueue assigning into an eleven-slot
+   `JSValueConst argv[11]`, in a file this build compiles, through every build that has ever run. The
+   diagnostic names that line exactly. Muting a memory-safety check is the `?:`-past-a-broken-invariant this
+   project bans, arriving in a compiler flag instead of in C — and an entry here with no reason beside it is
+   how it survived. Measured before removal, with a positive control (a synthetic index-past-end warns), a
+   negative control (the in-bounds form is silent) and the real pre-fix revision of that file (warns): every
+   host source, quickjs and lexbor answer ZERO, so this entry was protecting nothing. If a future warning here
+   is a FALSE positive, narrow it at the site with the reason written down; do not re-mute the class. */
 const QUIET_WARNINGS = ["-Wno-unknown-warning-option", "-Wno-unused", "-Wno-sign-compare", "-Wno-parentheses",
-  "-Wno-format-overflow", "-Wno-array-bounds", "-Wno-stringop-overflow", "-Wno-maybe-uninitialized",
+  "-Wno-format-overflow", "-Wno-stringop-overflow", "-Wno-maybe-uninitialized",
   "-Wno-misleading-indentation", "-Wno-dangling-pointer", "-Wno-char-subscripts", "-Wno-implicit-fallthrough",
   "-Werror=implicit-function-declaration"];
 
