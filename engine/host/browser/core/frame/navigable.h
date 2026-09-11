@@ -435,15 +435,29 @@ int navigable_realm_peak(void);
  * childRealmsPeak`, at up to 71 realms made. So the documented cure is present in every measured run and not
  * one realm has ever been given back, and the question stopped being "is the cycle visible" and became "what
  * still names it".
- * IT DISCRIMINATES TWO HYPOTHESES THAT COST DIFFERENT AMOUNTS TO BE WRONG ABOUT, which is the whole reason it
- * is a reading and not a row. A refcount that is O(1) and flat while flows run to thousands says the holder is
- * a SINGLE edge — a host record with counted references and no way to declare them, since JS_SetContextMarkHook
- * is per-REALM and the per-flow COW delta dups values through no hook at all — and that repair is bounded. A
- * refcount that SCALES with the flow count says the holders are the flows themselves, which the teardown's own
- * assert names ("including a flow parked inside it (its heap frames hold that realm's function objects, and
- * those hold the realm)"), and since §NO BOUNDS never terminates a flow that makes the ceiling STRUCTURAL and
- * the repair §7.5.10's destroy dealing with what is parked inside the thing being destroyed. One number, two
- * very different units of work.
+ * IT WAS BUILT TO DISCRIMINATE TWO HYPOTHESES AND IT HAS ANSWERED A THIRD, on the cheaper side of both. The
+ * two were a count O(1) and flat, meaning ONE undeclared edge and a bounded repair; or a count SCALING with
+ * the flow count, meaning the holders are the flows, which the teardown's own assert names ("including a flow
+ * parked inside it (its heap frames hold that realm's function objects, and those hold the realm)") and which
+ * §NO BOUNDS makes STRUCTURAL, the repair being §7.5.10's destroy dealing with what is parked inside.
+ * MEASURED, over the two smoke runs whose logs carry this reading — three samples hold a live realm at all:
+ * `min == max` EXACTLY in every one, the per-realm count is CONSTANT WITHIN A RUN (one run reads it at both a
+ * two-realm and a three-realm sample), and the total is exactly N times it. Between those two samples the
+ * engine advanced, neither standing realm gained a reference, and the realm created in between arrived
+ * holding the same constant.
+ * THAT RULES OUT THE FLOWS BY AN IDENTITY RATHER THAN A MAGNITUDE, which is what makes it worth quoting off a
+ * corpus this small: flows park in PARTICULAR realms, so holders that were flows would make per-realm counts
+ * DIVERGE and GROW — `min == max` forbids the first, a constant across samples forbids the second. It is not
+ * the single edge either: it is some thousands, all taken at realm CONSTRUCTION and none accumulated by
+ * execution, which is why every realm reads alike. So the repair is bounded and it is about what the
+ * intrinsic install itself leaves naming the realm.
+ * NAMED RESIDUAL — WHAT IS NOT COVERED: WHICH edges those are. The reading says how many hold a realm and
+ * still not who, so the constant is attributable to no population a reader can enumerate. WHAT THE NEXT DIFF
+ * BUILDS: a per-realm breakdown counted WHERE THE REFERENCES ARE TAKEN, never inferred from the total. HOW
+ * ITS ABSENCE SHOWS: a reader can say the holders are structural to construction and cannot name one, so a
+ * repair has nothing to aim at and no way to score itself. AND THE CONSTANTS BELONG TO RUNS RATHER THAN TO
+ * COMMITS — those logs carry no head stamp — so the difference between two runs' constants is attributable
+ * to no diff.
  * IT IS A GAUGE AND IT MAY NOT BE DIFFERENCED, like `childRealms` and unlike `childRealmsMade`: it states what
  * is true at the instant of the call, so two samples of it are two readings and never a rate.
  * IT FORCES NO COLLECTION AND MUST NOT. Whether a realm is collectable is the collector's question and asking
