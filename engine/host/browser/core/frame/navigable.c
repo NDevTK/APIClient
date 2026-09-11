@@ -1995,7 +1995,12 @@ static void navigable_load_enqueue(JSContext *ctx, JSValueConst proxy, const cha
                                    SerializedPolicyContainer inherit_policy, const char *about_base,
                                    const char *provenance)
 {
-    JSValueConst argv[11];
+    /* TWELVE, and COUNTOF BELOW so the size and the count cannot disagree again: this read
+       `argv[11]` against twelve assignments and an enqueue of 12, so `argv[11] = integ` wrote one
+       JSValue PAST the end of the stack array and the enqueue then read past it too. The step's own
+       `step_arg(&s->hdr, 11)` is what says twelve is the right number. -Warray-bounds names this
+       exactly and the shipped build silences it — see build.mjs's quiet list. */
+    JSValueConst argv[12];
     JSValue fn, url, org, csp, self, about, prov;
     JSValue coep, coep_endpoint, coep_ro, coep_ro_endpoint, integ;
 
@@ -2099,7 +2104,7 @@ static void navigable_load_enqueue(JSContext *ctx, JSValueConst proxy, const cha
     argv[9] = coep_ro_endpoint;
     argv[10] = prov;
     argv[11] = integ;
-    JS_EnqueueCallTask(ctx, fn, 12, argv);   /* §7.4.2.2: the navigation and traversal task source */
+    JS_EnqueueCallTask(ctx, fn, COUNTOF(argv), argv);   /* §7.4.2.2: the navigation and traversal task source */
     JS_FreeValue(ctx, integ);
     JS_FreeValue(ctx, prov);
     JS_FreeValue(ctx, coep_ro_endpoint);
