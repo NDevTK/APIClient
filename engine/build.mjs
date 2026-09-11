@@ -1199,6 +1199,22 @@ function wfqReading(out) {
                     `visMax ${w.visMax} — those are one walk's two answers about the same visit counts, so ` +
                     `"every member has completed no unit of work" and "the largest visit count is zero" are ` +
                     `the same statement and disagree only if the composer lost a member.`);
+  /* AND THE SAME PAIR FOR THE ROW THAT SEPARATES `jobsReady`'s TWO ZEROES. Containment first, because
+     `memUnframed` and `members` are one walk's two answers about the same members; then the IMPLICATION, which
+     is one-sided ON PURPOSE — solver/flow.h states that `memUnframed > 0` with no ready job is the SECOND
+     silence, the very state the row was added to name, so writing this as a biconditional would throw on the
+     reading it exists for. That is the distinction the `jobsReady`/`jobWGap` guard above already had to be
+     corrected on once, and it is being written out here rather than left to be re-derived. */
+  if (w.memUnframed < 0 || w.memUnframed > w.members)
+    throw new Error(`[build] the @WFQ census reports memUnframed ${w.memUnframed} of ${w.members} members — ` +
+                    `both are raised on one walk, so a count outside the frontier means they are no longer ` +
+                    `one sample and the pair that tells jobsReady's two zeroes apart is not a pair.`);
+  if (w.jobsReady > 0 && w.memUnframed === 0)
+    throw new Error(`[build] the @WFQ census reports ${w.jobsReady} job(s) waiting on RANK ALONE while every ` +
+                    `one of ${w.members} members holds a frame — the ready arm is reached only through ` +
+                    `!frame, so these are the same predicate asked twice in one loop and one of them has ` +
+                    `been re-spelled.`);
+
   /* EACH TERM OF flow_weight AGAINST THE SPREAD IT COULD ORDER — the reading that says which term is deciding
      this run, rather than which one is largest. A term's magnitude and a term's RANGE take opposite actions:
      an aging term of 856 points whose two ends are identical orders nothing at all and is a common offset.
@@ -1288,7 +1304,14 @@ function wfqReading(out) {
     : w.jobsReady === 0
       ? `${jobsTotal} queued job(s) and NOT ONE waits on rank — ${w.jobsFramed} on its member finishing its ` +
         `own program (HTML §8.1.4.4 "Calling scripts", clean up after running script step 3: a spec ` +
-        `precondition, not an ordering problem) and ${w.jobsOwed} on the host. None of it is the WFQ's to move`
+        `precondition, not an ordering problem) and ${w.jobsOwed} on the host. None of it is the WFQ's to ` +
+        `move, and ` + (w.memUnframed === 0
+          ? `NOT ONE of ${w.members} member(s) holds an empty stack — so no member is in the state that ` +
+            `takes a job at all, which is the resume seam not ending frames rather than the queue being ` +
+            `outranked: read flow_step`
+          : `${w.memUnframed} of ${w.members} member(s) DO hold an empty stack and none of them holds a ` +
+            `job — so the backlog sits on members inside programs while the members that could take one ` +
+            `have nothing: read where jobs are queued`)
       : `${w.jobsReady} of ${jobsTotal} queued job(s) wait on RANK ALONE (${w.jobsFramed} framed, ` +
         `${w.jobsOwed} owed by the host)` +
         (w.jobWGap === 0

@@ -835,6 +835,15 @@ char *result_wfq_json(void) {
                         states the pair. `valTop / topForgiven` is points per finding on the leading account. */
                      "\"topSvc\":%lld,\"topSvcFam\":%lld,\"topForgiven\":%lld,\"nonrewardMax\":%.3f,"
                      "\"jobsReady\":%ld,\"jobsFramed\":%ld,\"jobsOwed\":%ld,\"jobWGap\":%.3f,"
+                     /* AND THE DENOMINATOR `jobsReady` HAS ALWAYS NEEDED — how many members hold no
+                        frame, taken on the same walk as `members` so the two are ONE SAMPLE. A reader
+                        who has correctly declined to charge `jobsReady: 0` to the ordering needs this
+                        to say WHICH silence it is: with `memUnframed: 0` the resume seam is not ending
+                        frames and the reader goes to flow_step, and with `memUnframed > 0` the jobs sit
+                        on framed members while the unframed hold none, and the reader goes to where
+                        jobs are queued. Printed beside the split rather than beside `visZero` because it
+                        is that split's denominator and not a second extremum over the frontier. */
+                     "\"memUnframed\":%ld,"
                      "\"delivReady\":%ld,\"delivFramed\":%ld,\"delivOwed\":%ld,\"delivWGap\":%.3f,"
                      /* AND WHICH TERM THAT GAP IS, AT THE TWO MEMBERS IT IS BETWEEN — solver/flow.h states
                         why the OPTIMISM operand is the one of flow_weight's four summands that has no row
@@ -988,6 +997,7 @@ char *result_wfq_json(void) {
                      (long long)w.top_svc, (long long)w.top_svc_fam, (long long)w.top_forgiven,
                      w.nonreward_max,
                      w.jobs_ready, w.jobs_framed, w.jobs_owed, w.job_w_gap,
+                     w.mem_unframed,
                      w.deliv_ready, w.deliv_framed, w.deliv_owed, w.deliv_w_gap,
                      (long long)w.deliv_w_gap_vis, (long long)w.w_top_vis,
                      flow_scan_runs(FLOW_SCAN_NEXT),  flow_scan_weights(FLOW_SCAN_NEXT),

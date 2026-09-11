@@ -1954,23 +1954,16 @@ typedef struct {
      *   `jobs_ready`  — neither: an empty stack and no mark, so the member reaches its jobs at the very next
      *                   pick it wins. These jobs wait on RANK ALONE, and they are the population §scheduler's
      *                   WFQ sentence is about.
-     *                   AND ITS ZERO IS TWO STATES, WHICH THIS SCAN'S OWN SHAPE DECIDES AND NO ROW ON THIS
-     *                   CENSUS REPORTS. The arm is reached only inside `if (jn > 0)`, so 0 is written both
-     *                   when NO member has `frame == NULL` at all and when unframed members exist and hold no
-     *                   jobs. The first says the resume seam is not ending frames and sends a reader to
-     *                   flow_step; the second says the jobs sit on members inside programs while the members
-     *                   outside them hold nothing, and sends a reader to where jobs are queued. Both are
-     *                   silences of the ORDER — the split above is right that neither is the WFQ's to move —
-     *                   and they are not one finding.
-     *                   NOT COVERED: this scan counts members by `frame` only among those holding a pending
-     *                   reply (`deliv_framed`, through flow_stack_empty, whose first test is `frame`), never
-     *                   over the frontier — so the count that separates the two is `live - framed` off the
-     *                   COLD line, which is a different walk at a different instant and therefore not a
-     *                   reading of this one. WHAT THE NEXT DIFF BUILDS: a count of members with `frame ==
-     *                   NULL` on THIS scan, beside `members`, so the pair is one sample from one walk. HOW ITS
-     *                   ABSENCE SHOWS: a reader who has correctly declined to charge a zero job count to the
-     *                   ordering, and then has nothing on the line that says which of the two silences it
-     *                   was, pairing this row with a cold-line count taken at another moment to guess.
+     *                   AND ITS ZERO IS TWO STATES, WHICH THIS SCAN'S OWN SHAPE DECIDES AND WHICH
+     *                   `mem_unframed` BELOW IS WHAT SEPARATES. The arm is reached only inside `if (jn > 0)`,
+     *                   so 0 is written both when NO member has `frame == NULL` at all and when unframed
+     *                   members exist and hold no jobs. The first says the resume seam is not ending frames
+     *                   and sends a reader to flow_step; the second says the jobs sit on members inside
+     *                   programs while the members outside them hold nothing, and sends a reader to where
+     *                   jobs are queued. Both are silences of the ORDER — the split above is right that
+     *                   neither is the WFQ's to move — and they are not one finding. Read the two together:
+     *                   `jobs_ready: 0` with `mem_unframed: 0` is the first, and with `mem_unframed > 0` the
+     *                   second.
      *
      * Disjoint and exhaustive by construction (two booleans over every member), which is the point: a fourth
      * reason cannot be folded silently into one of the three, because there is nowhere for it to go.
@@ -1998,6 +1991,21 @@ typedef struct {
     long jobs_owed;
     double job_w_gap;
     long vis_zero;
+
+    /* HOW MANY MEMBERS HOLD NO FRAME — the denominator `jobs_ready` has always needed and never had, taken on
+     * THIS walk beside `members` so the pair is ONE SAMPLE. It exists because a zero job count that has
+     * correctly been declined to the ordering then has nowhere to go: the reader knows the backlog is not the
+     * WFQ's to move and cannot say which of the two silences above it is looking at, and the count that would
+     * have told them (`live - framed` off the COLD line) is a different walk at a different instant, so
+     * pairing with it is a guess wearing two real numbers.
+     * IT IS OVER MEMBERS AND `jobs_ready` IS OVER JOBS, deliberately, exactly as `vis_zero` stands beside
+     * `jobs_framed`: the question is not how much backlog there is but whether there is anybody standing in
+     * the state that could take it. The containment (`<= members`) and the implication (`jobs_ready > 0`
+     * requires a member with no frame, because that arm is reached only through `!f->frame`) are asserted at
+     * the scan, which is what keeps the two spellings of "unframed" from drifting apart at the two sites.
+     * THE CONVERSE IS NOT ASSERTED AND MUST NOT BE: `mem_unframed > 0` with `jobs_ready == 0` is the SECOND
+     * silence, which is the whole reason this row is here. */
+    long mem_unframed;
 
     /* THE DELIVERY BACKLOG, SPLIT THE SAME WAY AND FOR THE SAME REASON — the missing twin of the four rows
      * above. The cold census says how many register entries are ANSWERED AND UNTAKEN (`pendReady`) and how

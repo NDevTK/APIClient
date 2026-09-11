@@ -4060,6 +4060,7 @@ void flow_wfq_census(WfqCensus *out) {
        exactly why it can be trusted as the denominator of a reading about members. */
     out->nonreward_max = FLOW_NONREWARD_MAX;
     out->jobs_ready = out->jobs_framed = out->jobs_owed = out->vis_zero = 0;
+    out->mem_unframed = 0;
     out->job_w_gap = 0.0;
     out->deliv_ready = out->deliv_framed = out->deliv_owed = 0;
     out->deliv_w_gap = 0.0;
@@ -4212,6 +4213,11 @@ void flow_wfq_census(WfqCensus *out) {
         if (f->visits > out->vis_max) out->vis_max = f->visits;
         /* …AND HOW MANY MEMBERS STAND AT ZERO OF IT, which `vis_min` cannot say — see flow.h. */
         if (f->visits == 0) out->vis_zero++;
+        /* AND HOW MANY HOLD NO FRAME, taken HERE rather than off the cold line so that it and `members` are
+           one sample from one walk — it is what separates `jobs_ready`'s two zeroes, and a count from another
+           instant cannot separate anything. Spelled with the same predicate the job arm below is written
+           against, which is the whole content of the assert at the end of this scan. */
+        if (f->frame == NULL) out->mem_unframed++;
         /* THE JOB BACKLOG SPLIT BY WHAT IT IS WAITING ON — the three states flow.h names, decided by the two
            predicates the engine already asks and in the order it asks them. flow_pick refuses a host-owed
            member outright, so that question comes first; among the members the pick will consider, HTML
@@ -4692,6 +4698,25 @@ void flow_wfq_census(WfqCensus *out) {
            "the two has acquired a second writer, or a member joined or left `g_flows` without going through "
            "flow_new or flow_remove, and `arrivals / picksLifetime` is about to be published as the rate at "
            "which THIS frontier grows when it is a rate about some other population");
+    /* THE TWO SPELLINGS OF "UNFRAMED" ARE ONE QUESTION, AND THIS IS THE ONLY THING THAT KEEPS THEM SO. The
+       job split's third arm is reached through `!flow_host_owed(f) && !f->frame`, and `mem_unframed` counts
+       `f->frame == NULL` — the same predicate written at two sites in one loop, so a member holding a ready
+       job and no frame must be inside the count. An edit that re-spells either arm (flow_stack_empty, say,
+       which is what the DELIVERY arm is written against and which asks a wider question) drifts them apart
+       silently, and the row that exists to separate `jobs_ready`'s two zeroes then separates nothing.
+       ONE-SIDED ON PURPOSE, and flow.h says why: `mem_unframed > 0` with no ready job is the SECOND silence,
+       which is the state this row was added to name, so the converse is not an invariant and asserting it
+       would fire on exactly the reading the row is for. */
+    DCHECK(out->mem_unframed >= 0 && out->mem_unframed <= (long)out->members,
+           "the count of members holding no frame is outside the frontier it was taken over — it is raised "
+           "once per member on the same walk that sets `members`, so a figure outside [0, members] means the "
+           "two are no longer one sample and the pair that separates `jobsReady`'s two zeroes is not a pair");
+    DCHECK(out->jobs_ready == 0 || out->mem_unframed > 0,
+           "this census reports jobs waiting on RANK ALONE while reporting that every member holds a frame — "
+           "the ready arm is reached only through `!f->frame`, so the two are the same predicate asked twice "
+           "in one loop and cannot disagree unless one of them has been re-spelled. Whichever moved, "
+           "`jobsReady: 0` can no longer be told from `mem_unframed: 0`, which is the one reading this row "
+           "was added for");
     /* AND THE TWO IDENTITIES THAT DEFINE THE BRANCH ROWS, ASSERTED WHERE BOTH HALVES OF EACH ARE IN ONE HAND.
        They are the only property of a per-bucket number a reader can check without re-deriving the mechanism
        that produced it, and both are exact rather than one-sided because each event has exactly one writer.
