@@ -1714,6 +1714,22 @@ lxb_dom_node_t *document_root_node(JSContext *ctx)
     return d ? lxb_dom_interface_node(d->dom->dom_document.element) : NULL;
 }
 
+/* THIS REALM'S ASSOCIATED DOCUMENT, AND WHY IT IS NOT REACHED THROUGH THE ROOT NODE ABOVE.
+   `document_root_node` answers with the DOCUMENT ELEMENT, so `root->owner_document` is a way of spelling "this
+   realm's document" that first asks a DIFFERENT QUESTION — does this document have a document element — and is
+   then decided by the stricter one. The two part company on a document whose element has been REMOVED, which
+   is ordinary DOM (`ChildNode.remove()` on `document.documentElement`) and leaves the realm, its global and its
+   Document exactly where they were: the element-shaped spelling then answers null for a Document that is
+   perfectly present, and every caller of it either refuses or reads through the null. So a caller that wants
+   the Document asks for the Document. NULL here means the REALM never had one, which is this engine's own
+   invariant rather than a state a page can reach. */
+lxb_dom_document_t *document_associated(JSContext *ctx)
+{
+    Document *d = doc_of(ctx);
+
+    return d ? lxb_dom_interface_document(d->dom) : NULL;
+}
+
 /* ---- HTML §2.4.3 "DOCUMENT BASE URLS" -------------------------------------------------------------------
  *
  * THREE ALGORITHMS, AND THE ENGINE ANSWERED ALL OF THEM WITH THE ADDRESS. §2.4.3 defines a Document's

@@ -477,6 +477,13 @@ JSValue document_create_element_ns(JSContext *ctx, JSValueConst doc, int argc, J
    document yet, which `window.document` is entitled to see. */
 lxb_dom_node_t *document_root_node(JSContext *ctx);
 
+/* THIS REALM'S ASSOCIATED DOCUMENT — "current global object's associated Document", the operand DOM §4.7
+   "Interface DocumentFragment", §4.11 "Interface Text", §4.13 "Interface ProcessingInstruction" and §4.14
+   "Interface Comment" each name in their constructor's own first step. A document with no DOCUMENT ELEMENT
+   still answers, which is the whole reason this is not `document_root_node(ctx)->owner_document`; NULL means
+   the realm never had a document at all. */
+lxb_dom_document_t *document_associated(JSContext *ctx);
+
 /* DOM §4.9 "CREATE AN ELEMENT INTERNAL" — the half of element creation that runs NO page code: a node
    implementing the interface for `local`, in THIS REALM'S associated Document, in the HTML namespace,
    DETACHED, with an empty attribute list. HTML §3.2.3 "HTML element constructors" step 9 is its second caller

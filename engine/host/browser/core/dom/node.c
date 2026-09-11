@@ -5125,7 +5125,8 @@ static int g_id_pi_write[3] = { -1, -1, -1 };       /* setAttribute, removeAttri
  * magic 0 = Text (DOM §4.11), 1 = Comment (DOM §4.14). */
 static JSValue js_cd_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv, int magic)
 {
-    lxb_dom_node_t *root = document_root_node(ctx), *made;
+    lxb_dom_document_t *doc = document_associated(ctx);
+    lxb_dom_node_t *made;
     const char *s = "";
     size_t len = 0;
     JSValue r;
@@ -5133,9 +5134,17 @@ static JSValue js_cd_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSV
     (void)new_target;
     DCHECK(magic == 0 || magic == 1, "§4.11's and §4.14's shared constructor body was reached with a magic "
                                      "naming neither Text nor Comment");
-    DCHECK(root != NULL, "a CharacterData constructor ran before the document existed — its own step is \"set "
-                         "this's node document to current global object's associated Document\", and there is "
-                         "no document for that step to name");
+    /* THE OPERAND IS THE DOCUMENT AND NEVER THE DOCUMENT ELEMENT — see document_associated for what asking
+       through the root node costs on a document whose element has been removed.
+       AND IT IS A `CHECK`, BECAUSE THE POINTER IS DEREFERENCED IN THE SHIPPED BUILD. A realm with no associated
+       Document is this engine's own invariant, so the natural spelling is a should-never-happen — and a
+       should-never-happen is compiled out of exactly the build where the read below happens, which trades a
+       named dev abort for a null dereference in release. The two Lexbor allocations further down already refuse
+       to hand back a null the page cannot tell from a node it never asked for; refusing to READ through one is
+       that same refusal, one line earlier. */
+    CHECK(doc != NULL, "a CharacterData constructor ran in a realm with no associated Document — its own step "
+                       "is \"set this's node document to current global object's associated Document\", and "
+                       "there is no document for that step to name");
     /* Already a STRING by the time it arrives: the position is declared IDL_DOMSTRING, so §3.2.10 DOMString's
        ToString — and any `toString` the page hung on the argument — ran on the IDL machine, where it can
        suspend, before this body was entered.
@@ -5160,14 +5169,12 @@ static JSValue js_cd_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSV
         }
     }
     if (magic == 0) {
-        lxb_dom_text_t *t = lxb_dom_document_create_text_node(root->owner_document,
-                                                             (const lxb_char_t *)s, len);
+        lxb_dom_text_t *t = lxb_dom_document_create_text_node(doc, (const lxb_char_t *)s, len);
         CHECK(t != NULL, "new Text(): the Lexbor node allocation failed — handing back a null the page cannot "
                          "tell from a node it never asked for is not an option");
         made = lxb_dom_interface_node(t);
     } else {
-        lxb_dom_comment_t *c = lxb_dom_document_create_comment(root->owner_document,
-                                                              (const lxb_char_t *)s, len);
+        lxb_dom_comment_t *c = lxb_dom_document_create_comment(doc, (const lxb_char_t *)s, len);
         CHECK(c != NULL, "new Comment(): the Lexbor node allocation failed — handing back a null the page "
                          "cannot tell from a node it never asked for is not an option");
         made = lxb_dom_interface_node(c);
@@ -5225,15 +5232,17 @@ static JSValue js_cd_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSV
  * does not catch ends the flow rather than marking it. */
 static JSValue js_pi_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv, int magic)
 {
-    lxb_dom_node_t *root = document_root_node(ctx);
+    lxb_dom_document_t *doc = document_associated(ctx);
     const char *target = NULL, *data = "";
     size_t tlen = 0, dlen = 0;
     JSValue r;
 
     (void)new_target; (void)magic;
-    DCHECK(root != NULL, "§4.13's constructor ran before the document existed — its own step 1 is \"set this's "
-                         "node document to current global object's associated Document\", and there is no "
-                         "document for that step to name");
+    /* STEP 1's OPERAND, AND A `CHECK` FOR js_cd_ctor's REASON — the document element is a different question
+       from the Document, and the answer below is read through in release. */
+    CHECK(doc != NULL, "§4.13's constructor ran in a realm with no associated Document — its own step 1 is "
+                       "\"set this's node document to current global object's associated Document\", and there "
+                       "is no document for that step to name");
     DCHECK(argc >= 1, "§4.13's constructor reached its body with no target — it declares a REQUIRED DOMString "
                       "at position 0, so Web IDL §3.6 Overload resolution algorithm's arity check has already "
                       "thrown for a call that passed none");
@@ -5259,8 +5268,8 @@ static JSValue js_pi_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSV
             if (!data) { JS_FreeCString(ctx, target); return JS_EXCEPTION; }
         }
     }
-    /* STEP 1 is `root->owner_document`; STEP 2 is the call. */
-    r = node_pi_create(ctx, root->owner_document, target, tlen, data, dlen);
+    /* STEP 1 is `doc`; STEP 2 is the call. */
+    r = node_pi_create(ctx, doc, target, tlen, data, dlen);
     if (argc >= 2) JS_FreeCString(ctx, data);
     JS_FreeCString(ctx, target);
     return r;

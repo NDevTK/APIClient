@@ -44,12 +44,17 @@ static int     g_ready;
    walk, which only sees GC objects. */
 static JSValue js_frag_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv)
 {
-    lxb_dom_node_t *root = document_root_node(ctx);
+    lxb_dom_document_t *doc = document_associated(ctx);
     lxb_dom_document_fragment_t *frag;
 
     (void)new_target; (void)argc; (void)argv;
-    DCHECK(root != NULL, "new DocumentFragment() ran before the document existed");
-    frag = lxb_dom_document_fragment_interface_create(root->owner_document);
+    /* §4.7's own step is "set this's node document to current global object's associated Document", so the
+       operand is the DOCUMENT — asking through the document element answers null for a document whose element
+       has been removed, which is a Document that is perfectly present (see document_associated). A `CHECK`
+       rather than a should-never-happen because the pointer is read through in the shipped build, which is the
+       same reason the allocation below is one. */
+    CHECK(doc != NULL, "new DocumentFragment() ran in a realm with no associated Document");
+    frag = lxb_dom_document_fragment_interface_create(doc);
     CHECK(frag != NULL, "DocumentFragment: the Lexbor fragment allocation failed — handing back a null the page "
                         "cannot tell from a node it never asked for is not an option");
     dom_cow_note_created(lxb_dom_interface_node(frag));   /* this flow made it: the delta owns it */
