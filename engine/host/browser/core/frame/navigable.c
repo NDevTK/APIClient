@@ -145,6 +145,111 @@ void navigable_realm_refs(int *live, int *min, int *max, long *total)
            "min, max or total that is not the empty-set answer came from somewhere other than this walk");
 }
 
+/* HOW MANY OF THIS REALM'S REFERENCES ONE ORIGIN TOOK — 0 for an origin this realm never reached, which is a
+   real answer and not a missing one: the origins are a union over every live realm, so a realm that took none
+   from one of them holds zero of it. */
+static int realm_taken_at(JSContext *c, const char *site)
+{
+    int j, n = JS_ContextRefSiteCount(c);
+
+    for (j = 0; j < n; j++) {
+        int t = 0;
+        const char *s = JS_ContextRefSite(c, j, &t);
+        if (s == site || !strcmp(s, site))
+            return t;
+    }
+    return 0;
+}
+
+/* WHICH EDGES HOLD THE REALMS — see navigable.h for what the breakdown is for and what it may not be read as.
+   It asks the engine for what it already counted and decides nothing, exactly like the census above. */
+int navigable_realm_ref_sites(NavigableRealmRefSite *out, int cap, long *released)
+{
+    int i, j, k, n = 0;
+    long gross = 0, rel = 0, live_sum = 0;
+
+    DCHECK(out != NULL && cap > 0,
+           "the per-origin realm census was given nowhere to write — every row it produces is a fact about a "
+           "live realm at this instant, so a call with no room is a reading nobody can receive");
+    if (released) *released = 0;
+    if (g_realms_n == 0) return 0;
+    /* A BUILD THAT DOES NOT WATCH REFERENCES SAYS SO, and says it with a value a population cannot take — see
+       quickjs.h. The alternative is 0 rows, which is exactly what a run whose realms nobody holds would
+       produce, and those are opposite facts. */
+    if (JS_ContextRefSiteCount(g_realms[0]) < 0) {
+        if (released) *released = -1;
+        return -1;
+    }
+
+    /* PASS ONE — the UNION of origins and the gross takes. A row is found by pointer first and by `strcmp`
+       behind it, for the reason the engine interns them that way: one image gives each function its own
+       literal, so the pointer hits, and the compare is what stops a duplicated one opening a second row. */
+    for (i = 0; i < g_realms_n; i++) {
+        JSContext *c  = g_realms[i];
+        int        sn = JS_ContextRefSiteCount(c);
+
+        DCHECK(sn >= 0,
+               "one live child realm carries the per-origin reference attribution and another does not — it "
+               "is compiled in or out for the whole build, so a mixed answer here is a realm from a different "
+               "image in this agent's list, and every row below it would be a union of two programs");
+        rel      += JS_ContextRefReleased(c);
+        live_sum += JS_ContextRefCount(c);
+        for (j = 0; j < sn; j++) {
+            int         taken = 0;
+            const char *site  = JS_ContextRefSite(c, j, &taken);
+
+            gross += taken;
+            for (k = 0; k < n; k++)
+                if (out[k].site == site || !strcmp(out[k].site, site)) break;
+            if (k == n) {
+                DCHECK(n < cap,
+                       "the live child realms took references from more distinct origins than this census was "
+                       "given room for — dropping a row would publish parts that do not add up to the total "
+                       "printed beside them, which is a breakdown a reader cannot tell from a wrong one. "
+                       "Raise NAVIGABLE_REALM_REF_SITES_MAX at every caller; nothing is derived from it");
+                out[n].site  = site;
+                out[n].total = 0;
+                /* THE IMPOSSIBLE VALUE UNTIL PASS TWO WRITES IT — a spread is a fact about every live realm
+                   and pass one has only reached some of them, so a row published from here would state a
+                   plausible 0 for a question nothing had asked yet. */
+                out[n].min   = -1;
+                out[n].max   = -1;
+                n++;
+            }
+            out[k].total += taken;
+        }
+    }
+
+    /* PASS TWO — the SPREAD of each origin across the realms, which pass one cannot accumulate: a row opened
+       at the third realm knows nothing about the two before it, and their answer for it is 0 rather than
+       absent. Two passes over a handful of realms and a handful of origins, and the alternative is a
+       back-fill whose correctness depends on the order the rows were opened in. */
+    for (k = 0; k < n; k++) {
+        int lo = -1, hi = 0;
+
+        for (i = 0; i < g_realms_n; i++) {
+            int t = realm_taken_at(g_realms[i], out[k].site);
+            if (lo < 0 || t < lo) lo = t;
+            if (t > hi) hi = t;
+        }
+        out[k].min = lo;
+        out[k].max = hi;
+    }
+
+    /* THE PARTS AGAINST THE TOTAL, WITH BOTH IN ONE HAND. A realm's count is `1 + taken - released` and this
+       file's census publishes the SUM of those counts, so the breakdown is reconciled and never merely
+       plausible: an origin whose takes went uncounted, or a release nobody charged, breaks this and nothing
+       else would. A reader of the published census can redo the same addition from the same three rows. */
+    DCHECK(live_sum == (long)g_realms_n + gross - rel,
+           "the per-origin realm breakdown does not add up to the reference total beside it — a live realm's "
+           "count is one (its birth) plus every reference taken minus every one given back, so the sum over "
+           "the live realms is their number plus the gross takes minus the releases. A disagreement here "
+           "means a reference was taken or released through a spelling the engine's attribution never saw, "
+           "and the rows this call is about to publish are parts of a different total");
+    if (released) *released = rel;
+    return n;
+}
+
 /* A REALM OF THIS AGENT IS BEING TORN DOWN — quickjs's realm-teardown hook, and the one moment a Document can
    be released. It is reached from the phase-safe half of the realm's own teardown, which is where a host's
    reference releases belong; document_free releases exactly that (the Document object, the Window, the

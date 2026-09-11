@@ -1729,19 +1729,65 @@ char *result_heap_json(JSContext *ctx) {
        child realm says so positively here rather than reading as a realm nobody holds. */
     int rmin = -1, rmax = -1;
     long rtotal = 0;
+    /* AND WHICH EDGES THOSE ARE — the same instant, broken down by the FUNCTION that took each reference. The
+       three numbers above say a realm is held and by how many; this says by WHOM, which is the difference
+       between a repair that can be aimed and one that cannot. See core/frame/navigable.h.
+       A MAP KEYED BY ORIGIN, WHOSE KEYS ARE DATA AND NOT FIELD NAMES. The origins are whatever take sites the
+       engine contains — discovered, never declared — so they cannot be literals in a format string, and each
+       one's value is the `[min, max, total]` the line above already names once for the whole census rather
+       than three key names repeated per row. A positional triple is safe here for the one reason a position
+       is ever safe: the set is fixed at its definition and is this file's own, so nothing can renumber it.
+       THE ROWS ARE COMPOSED SEPARATELY AND SPLICED, because their NUMBER is not known to a format string
+       either. It is a bounded handful, so composing one row and carrying the accumulation forward costs a
+       handful of measured allocations — and the alternative is a second buffer-sizing scheme of exactly the
+       kind solver/compose.h exists to end. */
+    NavigableRealmRefSite rsites[NAVIGABLE_REALM_REF_SITES_MAX];
+    long rreleased = 0;
+    int  rsites_n, ri;
+    char *rsites_json, *heap;
 
     DCHECK(ctx != NULL, "the heap census was asked for against no realm — every row of it is a walk of ONE "
                         "runtime, so a census with no runtime to walk is a reading of nothing");
     rt = JS_GetRuntime(ctx);
     JS_ComputeMemoryUsage(rt, &mem);
     navigable_realm_refs(NULL, &rmin, &rmax, &rtotal);   /* `live` is navigable_realm_count() one line down */
+    rsites_n = navigable_realm_ref_sites(rsites, NAVIGABLE_REALM_REF_SITES_MAX, &rreleased);
+    /* `null` FOR A BUILD THAT WATCHES NO REFERENCES, never `[]`. An empty array is what a run holding no live
+       realm produces, and "this build does not attribute" and "there is nothing to attribute" are opposite
+       facts about the same row — the absence-and-zero-read-alike defect in the one field whose whole job is to
+       name holders. */
+    rsites_json = composef("%s", rsites_n < 0 ? "null" : "{");
+    for (ri = 0; ri < rsites_n; ri++) {
+        char *next;
+        /* THE ORIGIN IS A C IDENTIFIER AND IS EMITTED UNESCAPED, which is an assertion rather than an
+           assumption: it comes from the engine's own `__func__`, so a byte JSON would have to escape means
+           the row was composed from something else and this census line stops being parseable at it. */
+        DCHECK(rsites[ri].site != NULL && strcspn(rsites[ri].site, "\"\\") == strlen(rsites[ri].site),
+               "a realm's reference origin is not a plain identifier — the origins are the engine's own "
+               "function names, so a quotation mark or a backslash here is a row that came from somewhere "
+               "else and would close this census's JSON string in the middle of a key");
+        next = composef("%s%s\"%s\":[%d,%d,%lld]",
+                        rsites_json, ri ? "," : "", rsites[ri].site,
+                        rsites[ri].min, rsites[ri].max, (long long)rsites[ri].total);
+        free(rsites_json);
+        rsites_json = next;
+    }
+    if (rsites_n >= 0) {
+        char *closed = composef("%s}", rsites_json);
+        free(rsites_json);
+        rsites_json = closed;
+    }
     attributed = (long long)mem.memory_used_size;
-    return composef(
+    /* THE SPLICED ROWS ARE THIS FUNCTION'S OWN AND DIE HERE. composef measures and allocates, so the
+       accumulation above is a chain of exact buffers and the last one is the only survivor; the census it is
+       spliced into is a fresh allocation and the caller's. */
+    heap = composef(
                  "{\"allocations\":%lld,\"atoms\":%lld,\"strings\":%lld,\"objects\":%lld,"
                  "\"shapes\":%lld,\"props\":%lld,\"funcs\":%lld,\"funcCode\":%lld,\"arrays\":%lld,"
                  "\"miscBytes\":%lld,\"miscParts\":%lld,\"childRealms\":%d,"
                  "\"childRealmsMade\":%d,\"childRealmsPeak\":%d,"
                  "\"childRealmRefsMin\":%d,\"childRealmRefsMax\":%d,\"childRealmRefsTotal\":%lld,"
+                 "\"childRealmRefsReleased\":%lld,\"childRealmRefSites\":%s,"
                  "\"objBytes\":%lld,\"propBytes\":%lld,\"shapeBytes\":%lld,\"strBytes\":%lld,"
                  "\"atomBytes\":%lld,\"funcBytes\":%lld,\"arrayElemBytes\":%lld,"
                  "\"unattributed\":%lld,\"stepMachines\":%d,\"trampFrames\":%d,"
@@ -1751,13 +1797,15 @@ char *result_heap_json(JSContext *ctx) {
                  (long long)mem.js_func_count, (long long)mem.js_func_code_size, (long long)mem.array_count,
                  (long long)mem.memory_used_size, (long long)mem.memory_used_count,
                  navigable_realm_count(), navigable_realm_made(), navigable_realm_peak(),
-                 rmin, rmax, (long long)rtotal,
+                 rmin, rmax, (long long)rtotal, (long long)rreleased, rsites_json,
                  (long long)mem.obj_size, (long long)mem.prop_size, (long long)mem.shape_size,
                  (long long)mem.str_size, (long long)mem.atom_size, (long long)mem.js_func_size,
                  (long long)mem.fast_array_elements * (long long)sizeof(JSValue),
                  (long long)mem.malloc_size - attributed,
                  JS_StepMachineCount(rt), JS_TrampFrameCount(rt),
                  (long long)engine_c_alloc_live() / 1024, (long long)engine_c_alloc_arena() / 1024);
+    free(rsites_json);
+    return heap;
 }
 
 /* The composition, and nothing else. Each surface serializes itself — endpoint.c walks its deduped endpoints,

@@ -453,16 +453,22 @@ int navigable_realm_peak(void);
  * THAT RULES OUT THE FLOWS BY AN IDENTITY RATHER THAN A MAGNITUDE, which is what makes it worth quoting off a
  * corpus this small: flows park in PARTICULAR realms, so holders that were flows would make per-realm counts
  * DIVERGE and GROW — `min == max` forbids the first, a constant across samples forbids the second. It is not
- * the single edge either: it is some thousands, all taken at realm CONSTRUCTION and none accumulated by
- * execution, which is why every realm reads alike. So the repair is bounded and it is about what the
- * intrinsic install itself leaves naming the realm.
- * NAMED RESIDUAL — WHAT IS NOT COVERED: WHICH edges those are. The reading says how many hold a realm and
- * still not who, so the constant is attributable to no population a reader can enumerate. WHAT THE NEXT DIFF
- * BUILDS: a per-realm breakdown counted WHERE THE REFERENCES ARE TAKEN, never inferred from the total. HOW
- * ITS ABSENCE SHOWS: a reader can say the holders are structural to construction and cannot name one, so a
- * repair has nothing to aim at and no way to score itself. AND THE CONSTANTS BELONG TO RUNS RATHER THAN TO
- * COMMITS — those logs carry no head stamp — so the difference between two runs' constants is attributable
- * to no diff.
+ * the single edge either: it is some thousands. WHAT A CONSTANT DOES NOT ESTABLISH IS WHERE THEY WERE TAKEN,
+ * and this paragraph read "all taken at realm CONSTRUCTION and none accumulated by execution" for as long as
+ * the breakdown below did not exist. It is rewritten rather than deleted, because it is the reading anyone
+ * re-derives from `min == max` and it is wrong in a way no total can show. The take population is CLOSED and
+ * readable: JS_NewContextRaw sets a realm's count to 1, JS_DupContext is the engine's ONLY increment and
+ * JS_FreeContext its only decrement, and one of those increments sits in the function that finishes a
+ * COMPILE — so a realm that runs a script accumulates references for as long as its bytecode lives, and
+ * `min == max` across realms says only that those realms took the SAME number. "Construction dominates" and
+ * "these realms executed nothing" both produce that, and the identity separates neither: a child navigable
+ * whose Document has no scripts seeds none, which is the initial about:blank by construction. THE ARGUMENT
+ * RETIRES the day a run shows a compile origin at a nonzero count, or shows it at zero beside a realm whose
+ * document had scripts — either way it is the breakdown that says so and never the total.
+ * WHO TOOK THEM IS ANSWERED BY navigable_realm_ref_sites BELOW — per ORIGIN, counted where the reference is
+ * taken and never inferred from a total, so a repair has something to aim at and an edge REMOVED is
+ * distinguishable from an edge never taken. AND THE CONSTANTS BELONG TO RUNS RATHER THAN TO COMMITS — those
+ * logs carry no head stamp — so the difference between two runs' constants is attributable to no diff.
  * IT IS A GAUGE AND IT MAY NOT BE DIFFERENCED, like `childRealms` and unlike `childRealmsMade`: it states what
  * is true at the instant of the call, so two samples of it are two readings and never a rate.
  * IT FORCES NO COLLECTION AND MUST NOT. Whether a realm is collectable is the collector's question and asking
@@ -478,6 +484,42 @@ int navigable_realm_peak(void);
  * realm whose count reached zero has already left this list through the teardown — so an empty set is a
  * POSITIVE statement and not a zero that reads like one holder. Any out parameter may be NULL. */
 void navigable_realm_refs(int *live, int *min, int *max, long *total);
+
+/* WHICH EDGES HOLD THEM — the reading above broken down by the ORIGIN that took each reference, which is the
+ * question `min`/`max`/`total` answer nothing about: a census can report every live child realm held by some
+ * thousands and name not one of them, so nobody can aim a repair and nobody can score one, an edge REMOVED
+ * reading exactly like an edge never taken.
+ * AN ORIGIN IS THE FUNCTION THAT TOOK THE REFERENCE, AND THE SET OF THEM IS DERIVED. quickjs.h states the
+ * mechanism: a realm's count has exactly one increment in the engine, and that increment carries its caller's
+ * own name, so a take site added later opens its own row and there is no list here or anywhere for a reader to
+ * keep in step. That is the same reason idlgen reads the real IDL and the type-crossing audit parses the
+ * switch that owns its rule — a restated rule is a second copy, and the copy nobody runs is the one that
+ * drifts.
+ * `min` AND `max` ARE ACROSS LIVE REALMS AND AN ABSENT ORIGIN COUNTS AS 0 FOR THAT REALM, which is what makes
+ * the rows comparable: a realm that never reached some origin holds zero of its references, and rendering
+ * that as "no row" would let one realm's silence read as every realm's.
+ * `total` IS GROSS TAKES AND `*released` IS WHAT WAS GIVEN BACK. Neither is the live per-origin attribution,
+ * because a release is charged to no origin — quickjs.h says why — so the parts reconcile against the total
+ * beside them rather than equalling it: `live_realms + Σ total − released == childRealmRefsTotal`, which this
+ * function ASSERTS with both halves in one hand and a reader of the published census can redo. Where
+ * `*released` is 0 the breakdown IS the live attribution; a reader who does not check it is reading gross
+ * takes as live holders.
+ * IT IS ONE INSTANT, LIKE THE READING ABOVE, and it is a GAUGE for the same reason: two samples of it are two
+ * readings and never a rate. It forces no collection and asks the engine for nothing but what it already
+ * counted.
+ * ANSWERS the number of rows written, 0 when no child realm is live, and -1 when THIS BUILD CARRIES NO
+ * ATTRIBUTION (a release build) — a value a population cannot take, so "not watched" is a positive statement
+ * and never a zero that reads as "held by nobody". `*released` is -1 in that same case. `out` holds at least
+ * `cap` rows and `cap` short of the origins present ABORTS rather than truncating, because a dropped row
+ * publishes parts that do not add up to the total printed beside them. */
+#define NAVIGABLE_REALM_REF_SITES_MAX 32
+typedef struct NavigableRealmRefSite {
+    const char *site;   /* the engine's own literal; outlives the realm */
+    int         min;    /* fewest taken by any ONE live realm, 0 where a realm never reached this origin */
+    int         max;    /* most taken by any one live realm */
+    long        total;  /* gross takes summed over every live realm */
+} NavigableRealmRefSite;
+int navigable_realm_ref_sites(NavigableRealmRefSite *out, int cap, long *released);
 
 /* §7.4's CREATE A NEW NAVIGABLE. `url` is the child's initial address; NULL, "" or "about:blank" all mean the
    initial about:blank Document, which inherits this document's origin and policy container. Returns the child's

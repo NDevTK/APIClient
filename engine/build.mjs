@@ -2404,6 +2404,26 @@ function censusReading(out) {
                  ? `; no realm live to hold`
                  : `; held by ${h.b.childRealmRefsMin}..${h.b.childRealmRefsMax} ref(s) each, ` +
                    `${h.b.childRealmRefsTotal} in total`) +
+               /* AND BY WHOM, which none of the numbers above can say: they establish THAT a realm is held and
+                  by how many, and a reader who wants to give one back needs an ORIGIN to aim at — an edge
+                  removed and an edge never taken read alike in a total. The map is keyed by the engine
+                  function that took the reference (core/frame/navigable.h), its value is that origin's
+                  `[min, max, total]` across the live realms, and `null` is a build that watches no references
+                  at all, which is a different fact from a run with nothing to attribute.
+                  ORDERED BY WEIGHT AND SPREAD ONLY WHERE IT DIFFERS, because the whole reading so far is that
+                  every realm holds the identical count: a row printing `4001` for every realm says more by
+                  saying it once, and a row whose ends differ is the first thing that would refute it. */
+               (h.b.childRealms === 0
+                 ? ``
+                 : h.b.childRealmRefSites === null
+                   ? `; this build watches no references, so no origin is named`
+                   : `; taken by ` +
+                     Object.entries(h.b.childRealmRefSites)
+                       .sort((a, b) => b[1][2] - a[1][2])
+                       .map(([site, [lo, hi, tot]]) =>
+                            `${site} ${tot}` + (lo === hi ? `` : ` (${lo}..${hi} each)`))
+                       .join(", ") +
+                     `; ${h.b.childRealmRefsReleased} given back`) +
                `; ${h.b.trampFrames} heap frame(s), ` +
                `${h.b.stepMachines} suspended builtin(s), ${h.b.unattributed} B the runtime cannot name`);
     /* WHICH KIND GREW, WHICH IS THE COMPARISON result_heap_json'S OWN COMMENT DESCRIBES AND NOTHING PERFORMED.
