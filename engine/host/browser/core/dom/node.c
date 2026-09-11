@@ -54,6 +54,7 @@
 #include "core/dom/collections.h"
 #include "core/dom/range.h"
 #include "core/dom/node_iterator.h"   /* §6.1's pre-remove steps, which §4.2.3's move runs at its step 10 */
+#include "core/xml/xml_name.h"   /* §4.13 step 1's `Name` production is XML's, referenced by the DOM */
 #include "quickjs-step.h"
 #include "core/idl_args.h"
 #include "core/idl_index_arg.h"   /* §4.10 / §4.11's `unsigned long` operands, known and unknown */
@@ -2541,6 +2542,69 @@ static JSValue js_pi_attr_write(JSContext *ctx, JSValueConst this_val, int argc,
     return r;
 }
 
+/* DOM §4.13's "CREATE A PROCESSING INSTRUCTION NODE" — see node.h, which states which of "initialize a
+   ProcessingInstruction node"'s five steps land where and why step 5 is the ABSENT slot.
+   IT WAS INLINE IN document.c's `js_doc_create_xml_node` AND IS HERE BECAUSE A SECOND COPY IS FORBIDDEN, not
+   because the factory was in the wrong file: DOM §4.5 Interface Document's
+   `createProcessingInstruction(target, data)` "method steps are to return the result of creating a processing
+   instruction node given this, target, and data", so that member's whole body is this call — and §4.13's
+   constructor's step 2 is the same call once its own step 1 has chosen the document. Lifting is what let the
+   constructor be written at all.
+   THE `?>` TEST IS OVER `dlen` BYTES AND NOT OVER A C STRING, which is a REPAIR the lift carries rather than a
+   move. The inline copy asked `strstr(data, "?>")`, and a DOMString may contain U+0000 — js_cd_ctor's own
+   comment is why the byte count is read at all — so `document.createProcessingInstruction("t", "\u0000?>")`
+   answered that its data does not contain `?>` and built a node whose serialization cannot survive. `memmem`
+   is this tree's spelling of the question (core/html/form_data.c and core/html/html_encoding_sniff.c ask it
+   that way); the sibling `]]>` test in document.c asked it the same wrong way and is repaired in the same
+   diff, because one wrong way of asking a question is never one site. */
+JSValue node_pi_create(JSContext *ctx, lxb_dom_document_t *document,
+                       const char *target, size_t tlen, const char *data, size_t dlen)
+{
+    lxb_dom_processing_instruction_t *pi;
+    lxb_dom_node_t *made;
+
+    DCHECK(document != NULL, "§4.13's create-a-processing-instruction-node was given no document — its own "
+                             "step 1 creates the node IN one, and both callers hold a document before they "
+                             "reach here");
+    DCHECK(target != NULL && data != NULL,
+           "§4.13's create-a-processing-instruction-node was given a null string — both are required "
+           "DOMStrings the CALLER has already read, so a null is this engine's own missing read and not a "
+           "value the page supplied");
+    /* STEP 1. XML 1.0 §2.3 [5] `Name` — the DOM REFERENCES that production (its step links
+       https://www.w3.org/TR/xml/#NT-Name) rather than restating it, and core/dom/names.h's own §1.4 predicates
+       are a different, deliberately looser set that would accept `0` and `\A` here. core/xml/xml_name.h owns
+       the production because every name an XML parser scans is it. `xml:fail` IS a legal target — §2.3 requires
+       a processor to accept the colon as a name character, and narrowing it to an NCName is the namespace
+       layer's job, not this one's. */
+    if (!xml_name_is_name(target, tlen))
+        return JS_ThrowDOMException(ctx, "InvalidCharacterError",
+                                    "a processing instruction target must match the XML Name production");
+    /* STEP 2: "If data contains the string "?>", then throw an "InvalidCharacterError" DOMException" — the
+       one sequence the node's own serialization cannot survive. */
+    if (dlen >= 2 && memmem(data, dlen, "?>", 2) != NULL)
+        return JS_ThrowDOMException(ctx, "InvalidCharacterError",
+                                    "a processing instruction cannot contain \"?>\"");
+    /* STEPS 3 AND 4, and the node "create a processing instruction node" step 1 makes: one call, because the
+       factory takes the target and the data together. */
+    pi = lxb_dom_document_create_processing_instruction(document, (const lxb_char_t *)target, tlen,
+                                                        (const lxb_char_t *)data, dlen);
+    CHECK(pi != NULL, "§4.13's create-a-processing-instruction-node: the Lexbor node allocation failed — "
+                      "handing back a null the page cannot tell from a node it never asked for is not an "
+                      "option");
+    made = lxb_dom_interface_node(pi);
+    /* STEP 5 IS THE LINE THAT IS NOT HERE — see node.h. Nothing stores a map, so the slot stays absent and
+       denotes the parse of the data just written, which is what "update attributes from data given pi" would
+       have produced.
+       THERE IS NO ASSERT ON THAT, AND THE REASON IS THE ASSERT ITSELF: `pi_attrs_stored` on a node the factory
+       returned one line above reads through `node_wrap_peek`, which answers non-object for a node nothing has
+       ever wrapped — so the condition holds under every state of the program, including the one it would be
+       written to forbid. A check whose two sides cannot disagree is not a weak check, it is a NON-check that
+       reports as a passing one; the invariant is asserted where it CAN be violated, at pi_attrs_stored's own
+       DCHECK on what the slot holds. */
+    dom_cow_note_created(made);   /* this flow made it; detached until the page inserts it */
+    return node_wrap(ctx, made);
+}
+
 /* ---- §4.4 THE NODE ALGORITHMS ---------------------------------------------------------------------------
  *
  * Every one of these is a pure walk over the flow's own tree, so they are ordinary C: no page code is reachable
@@ -5023,7 +5087,7 @@ JSRuntime *node_agent_runtime(void)
 static int g_id_cd[5] = { -1, -1, -1, -1, -1 };   /* §4.10's five splice members */
 static int g_id_nodevalue = -1, g_id_textcontent = -1, g_id_textcontent_get = -1, g_id_data = -1,
            g_id_lookup_prefix = -1, g_id_lookup_ns = -1, g_id_default_ns = -1, g_id_root = -1,
-           g_id_split_text = -1, g_id_text_ctor = -1, g_id_comment_ctor = -1;
+           g_id_split_text = -1, g_id_text_ctor = -1, g_id_comment_ctor = -1, g_id_pi_ctor = -1;
 /* DOM §4.13's seven attribute-map members. Four reads over one body and three writes over another, each
    declaring its own magic out of the ONE pool declaration this file makes per member. */
 static int g_id_pi_read[4] = { -1, -1, -1, -1 };    /* hasAttributes, getAttributeNames, getAttribute, hasAttribute */
@@ -5038,9 +5102,14 @@ static int g_id_pi_write[3] = { -1, -1, -1 };       /* setAttribute, removeAttri
  * every exposed interface a property on the global and gives it [[Construct]] steps only where the interface
  * is declared with a constructor operation — so `Text` and `Comment` were on the global, answered
  * `instanceof`, carried DOM §4.4's constants, and threw "Illegal constructor" on the one thing a page writes
- * them for. `node_install_interface` is for the interfaces that declare NO constructor, which is what
- * CDATASection (DOM §4.12 declares none) and ProcessingInstruction still reach it as — the second of those
- * for the reason stated at its install below, not because it declares none.
+ * them for. `node_install_interface` is for the interfaces that declare NO constructor, which among this
+ * file's five is CDATASection and nothing else: DOM §4.12 Interface CDATASection declares none, so its throw
+ * IS the spec.
+ * THIS PARAGRAPH USED TO NAME ProcessingInstruction BESIDE IT, "not because it declares none" but for a
+ * reason stated at its install — and that reason was that §4.13's shared initialize algorithm was inline in
+ * document.c, so the constructor could not be written without lifting it. It has been lifted (node_pi_create)
+ * and §4.13's constructor is js_pi_ctor below. The sentence is rewritten rather than deleted because a reader
+ * who re-derives "PI reaches the shared throw" from the install will re-introduce it.
  *
  * THE DEFAULT IS THE SPEC'S AND NOT `undefined`. `constructor(optional DOMString data = "")`, so a page
  * writing `new Text()` gets a node whose data is the EMPTY STRING. Stringifying the absent argument would give
@@ -5106,6 +5175,94 @@ static JSValue js_cd_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSV
     dom_cow_note_created(made);   /* this flow made it; detached until the page inserts it */
     if (argc >= 1) JS_FreeCString(ctx, s);
     r = node_wrap(ctx, made);
+    return r;
+}
+
+/* DOM §4.13 Interface ProcessingInstruction's CONSTRUCTOR — "The new ProcessingInstruction(target, data)
+ * constructor steps are: 1. Set this's node document to current global object's associated Document.
+ * 2. Initialize this with target and data." Both sentences are fetched from the standard, not recalled.
+ *
+ * STEP 1 IS THE `document_root_node` READ AND NOTHING ELSE, and that is the whole difference from DOM §4.5
+ * Interface Document's `createProcessingInstruction`, which takes its document from the RECEIVER. Two
+ * members, one algorithm, and the argument that separates them is which document it is handed — which is why
+ * node_pi_create takes one rather than deriving one.
+ *
+ * THE SPEC ALLOCATES `this` BEFORE STEP 1 AND THIS BODY ALLOCATES IT IN STEP 2, WHICH IS NOT OBSERVABLE AND IS
+ * SAID HERE RATHER THAN LEFT TO BE NOTICED. Web IDL §3.7.1 Interface object's [[Construct]] gives the platform
+ * object first, step 1 sets its node document, and step 2's initialize may then THROW — so the standard's
+ * order leaves a node that nothing ever sees, while Lexbor's factory takes the target and the data together
+ * and cannot make one before the two refusals have run. A page can tell the two apart only by observing a node
+ * that was never returned and never inserted, which is no observation at all; what it CAN tell apart is which
+ * document the node ends up in, and that is the same document either way.
+ *
+ * THERE IS NO HTML-DOCUMENT REFUSAL HERE AND THAT IS THE SPEC, not an omission. §4.5's SIBLING factory,
+ * `createCDATASection`, begins "If this is an HTML document, then throw a NotSupportedError"; §4.13's
+ * constructor and `createProcessingInstruction` carry no such step, so `new ProcessingInstruction("a","b")`
+ * in an ordinary HTML page is a node, exactly as it is in a browser.
+ *
+ * `target` AND `data` ARE READ THE WAY js_cd_ctor READS ITS `data`, and for its reason: the positions are
+ * declared IDL_DOMSTRING, idl_concolic_rule answers CROSSES for it, so unknown external input reaches this
+ * body UNCONVERTED and `JS_ToCStringLen` on one would run ToString into ToPrimitive and collapse the very
+ * thing that was preserved. `new ProcessingInstruction("x", location.hash)` is the case the DATA arm is for —
+ * the taint has to survive into the node.
+ *
+ * NAMED RESIDUAL — AN UNKNOWN `target`.
+ *   WHAT IS NOT COVERED: unknown external input at the TARGET position. §4.13's step 1 is a PREDICATE over
+ * that string ("does not match the Name production"), so an unknown target stands for two worlds a page can
+ * tell apart — the InvalidCharacterError and the node — and this body takes the first for every unknown,
+ * because the shape a concolic denotes (`concolic_name_cstr`, the key_name rule) is bytes the `Name`
+ * production refuses. That is a DEFINED narrowing and not a wrong value: the throw is what the standard says
+ * of the bytes this engine actually holds, and §Solver-half names a forced-exec flow throwing on opaque input
+ * as explicitly NOT a broken invariant.
+ *   WHAT THE NEXT DIFF BUILDS: the two-completion ask at the seam idl_enum_fork already stands at, over §4.13
+ * step 1's predicate rather than over a conversion — this is a member's OWN step branching on an unknown, so
+ * it is the BRANCH seam and not the outcome seam, which is the discriminator quickjs-step.h states at both.
+ * `js_doc_create_xml_node`'s target read reaches the same step and gains the same arm; it does not have this
+ * body's concolic read at all today, which is a SEPARATE and smaller gap in the same step.
+ *   HOW ITS ABSENCE WOULD SHOW: a page whose PI target is derived from a source this engine does not know
+ * gets an InvalidCharacterError where a real session gets a node, so every endpoint and sink behind that
+ * construction is unreachable — and nothing is emitted to say a world was declined, because a throw a page
+ * does not catch ends the flow rather than marking it. */
+static JSValue js_pi_ctor(JSContext *ctx, JSValueConst new_target, int argc, JSValueConst *argv, int magic)
+{
+    lxb_dom_node_t *root = document_root_node(ctx);
+    const char *target = NULL, *data = "";
+    size_t tlen = 0, dlen = 0;
+    JSValue r;
+
+    (void)new_target; (void)magic;
+    DCHECK(root != NULL, "§4.13's constructor ran before the document existed — its own step 1 is \"set this's "
+                         "node document to current global object's associated Document\", and there is no "
+                         "document for that step to name");
+    DCHECK(argc >= 1, "§4.13's constructor reached its body with no target — it declares a REQUIRED DOMString "
+                      "at position 0, so Web IDL §3.6 Overload resolution algorithm's arity check has already "
+                      "thrown for a call that passed none");
+    if (concolic_is(argv[0])) {
+        target = concolic_name_cstr(ctx, argv[0]);
+        if (!target) return JS_EXCEPTION;
+        tlen = strlen(target);
+    } else {
+        target = JS_ToCStringLen(ctx, &tlen, argv[0]);
+        if (!target) return JS_EXCEPTION;
+    }
+    /* §4.13's OWN DEFAULT: `optional DOMString data = ""`, so `new ProcessingInstruction("t")` is a node whose
+       data is the EMPTY STRING. Stringifying the absent argument would give it the nine characters "undefined"
+       — a real value, plausible, and wrong. idl_optional_from(1) at the declaration is what stops the machine
+       converting an absent position; this is what supplies §4.13's default in its place. */
+    if (argc >= 2) {
+        if (concolic_is(argv[1])) {
+            data = concolic_name_cstr(ctx, argv[1]);
+            if (!data) { JS_FreeCString(ctx, target); return JS_EXCEPTION; }
+            dlen = strlen(data);
+        } else {
+            data = JS_ToCStringLen(ctx, &dlen, argv[1]);
+            if (!data) { JS_FreeCString(ctx, target); return JS_EXCEPTION; }
+        }
+    }
+    /* STEP 1 is `root->owner_document`; STEP 2 is the call. */
+    r = node_pi_create(ctx, root->owner_document, target, tlen, data, dlen);
+    if (argc >= 2) JS_FreeCString(ctx, data);
+    JS_FreeCString(ctx, target);
     return r;
 }
 
@@ -5222,6 +5379,12 @@ void node_init(JSContext *ctx)
         static const IdlArgType PI_NAME[1]   = { IDL_DOMSTRING };
         static const IdlArgType PI_NAME_VAL[2] = { IDL_DOMSTRING, IDL_DOMSTRING };
         static const IdlArgType PI_TOGGLE[2] = { IDL_DOMSTRING, IDL_BOOLEAN };
+        /* §4.13's `constructor(DOMString target, optional DOMString data = "")`. Its own array although its
+           two positions have the same types as PI_NAME_VAL's: document.c's IDL_NSSTR_STR states the rule this
+           follows — an array is read as a claim about the positions it describes, so one shared across two
+           members says whatever the members happen to agree on TODAY, and the day either moves the other is
+           silently re-declared. These two are also the only pair here that is optional from position 1. */
+        static const IdlArgType PI_CTOR[2]   = { IDL_DOMSTRING, IDL_DOMSTRING };
 
         g_id_pi_read[0]  = idl_method_id(ctx, NULL, 0, js_pi_attr_read, 0);   /* hasAttributes */
         g_id_pi_read[1]  = idl_method_id(ctx, NULL, 0, js_pi_attr_read, 1);   /* getAttributeNames */
@@ -5231,6 +5394,11 @@ void node_init(JSContext *ctx)
         g_id_pi_write[1] = idl_method_id(ctx, PI_NAME, 1, js_pi_attr_write, 1);       /* removeAttribute */
         g_id_pi_write[2] = idl_method_id(ctx, PI_TOGGLE, 2, js_pi_attr_write, 2);     /* toggleAttribute */
         idl_optional_from(1);   /* §4.13: `toggleAttribute(name, optional force)` */
+        /* §4.13's CONSTRUCTOR — see js_pi_ctor. One declared position beyond the required target, optional
+           FROM position 1, so `new ProcessingInstruction("t")` reaches the body with argc 1 rather than one
+           whose absent argument was stringified to "undefined". */
+        g_id_pi_ctor = idl_method_id(ctx, PI_CTOR, 2, js_pi_ctor, 0);
+        idl_optional_from(1);   /* §4.13: `constructor(DOMString target, optional DOMString data = "")` */
     }
     /* §4.4 the three namespace lookups. Each takes a `DOMString?`, so each goes on the shared IDL machine —
        `n.lookupPrefix({toString(){ … }})` is the page's code exactly like every other DOMString argument. */
@@ -5504,8 +5672,10 @@ void node_install_interfaces(JSContext *ctx, JSValueConst global)
            [[Construct]] steps rather than with the shared throw — see js_cd_ctor. Everything else about the
            object is unchanged: node_install_interface_ctor is the same call the throwing ones reach, so
            `Text.ELEMENT_NODE` still reads §4.4's constants off Node's interface object exactly as before.
-           CharacterData, CDATASection and the rest keep the throw because their IDL declares no constructor,
-           which is what makes `node_install_interface` the right call for them and not a default. */
+           CharacterData and CDATASection keep the throw because their IDL declares no constructor, which is
+           what makes `node_install_interface` the right call for them and not a default. §4.13's
+           ProcessingInstruction WAS listed beside them and is not one: its IDL declares a constructor and it
+           now gets one — see the install below, and js_pi_ctor. */
         DCHECK(g_id_text_ctor >= 0 && g_id_comment_ctor >= 0,
                "Text and Comment were installed before node_init declared §4.11's and §4.14's constructors");
         node_install_interface_ctor(ctx, global, "Text", tp,
@@ -5515,35 +5685,20 @@ void node_install_interfaces(JSContext *ctx, JSValueConst global)
         node_install_interface_ctor(ctx, global, "Comment", cmp,
                                     idl_step_constructor(ctx, "Comment", g_id_comment_ctor));
         node_install_interface(ctx, global, "CDATASection", csp);
-        /* DOM §4.12 Interface CDATASection declares no constructor, so its throw is the SPEC. DOM §4.13
-           Interface ProcessingInstruction's is NOT — a NAMED RESIDUAL, and the code here is right for what it
-           does rather than unfinished.
-           WHAT IS NOT COVERED: `new ProcessingInstruction(target, data)`, whose DOM §4.13 steps are "Set
-           this's node document to current global object's associated Document" and then "Initialize this with
-           target and data".
-           WHAT THE NEXT DIFF BUILDS: that second step is a NAMED algorithm DOM §4.13 shares between this
-           constructor and DOM §4.5's createProcessingInstruction — "To initialize a ProcessingInstruction node
-           pi, with target and data" — and this engine has it INLINE in document.c's js_doc_create_xml_node
-           under `magic == 1`, so the constructor cannot be written without lifting it out to the one place
-           both reach. A second copy here is what CLAUDE.md forbids, which is why the diff that built §4.13's
-           attribute map above did NOT also write this constructor: the lift is a document.c edit and the map
-           was not.
-           WHAT THE LIFT OWES IS SMALLER THAN THIS RESIDUAL USED TO SAY, and the correction is recorded here
-           because a next-diff clause is read once, by whoever has decided to do the work. It said the lift
-           "has to carry" the algorithm's step 5, "Update attributes from data given pi", which the inline copy
-           does not run. That step is now discharged by the invariant the attribute-map component states: an
-           ABSENT map slot means the map is the parse of the node's current data, which is exactly what step 5
-           writes, so a freshly created node satisfies step 5 by having no slot. What the lift owes instead is
-           to leave it that way — it must not store a map — and to carry steps 1 and 2 (the XML `Name`
-           production and the "?>" test) and the factory call, which is what the inline copy already is.
-           THE CALL THAT CONSUMES IT is the one line below: `node_install_interface(ctx, global,
-           "ProcessingInstruction", pip)` becomes `node_install_interface_ctor(ctx, global,
-           "ProcessingInstruction", pip, idl_step_constructor(ctx, "ProcessingInstruction", <the id>))`, the
-           same pairing §4.11's and §4.14's constructors take four lines above.
-           HOW ITS ABSENCE SHOWS: the Web IDL gap audit's own `interfaces a page cannot new` category still
-           names ProcessingInstruction, and a page writing `new ProcessingInstruction("xml-stylesheet",
-           "href='x'")` gets a TypeError where every browser gives it a node. */
-        node_install_interface(ctx, global, "ProcessingInstruction", pip);
+        /* DOM §4.12 Interface CDATASection declares no constructor, so its throw is the SPEC — which is what
+           makes `node_install_interface` the right call for it and not a default.
+           DOM §4.13 Interface ProcessingInstruction's IS NOT, AND THE RESIDUAL THAT SAID SO IS RETIRED HERE
+           BECAUSE ITS THING IS BUILT. It named the block: §4.13 shares "initialize a ProcessingInstruction
+           node pi, with target and data" between its own constructor and §4.5's createProcessingInstruction,
+           this engine had that algorithm INLINE in document.c's js_doc_create_xml_node, and a second copy is
+           what CLAUDE.md forbids — so the constructor could not be written until the lift was. It is
+           node_pi_create, node.h states which of the algorithm's five steps land where, and its step 5 is
+           discharged by the ABSENT attribute-map slot exactly as that residual's own recorded correction said
+           it would be: nothing here stores a map, and that is the whole of what the lift owed. */
+        DCHECK(g_id_pi_ctor >= 0,
+               "ProcessingInstruction was installed before node_init declared §4.13's constructor");
+        node_install_interface_ctor(ctx, global, "ProcessingInstruction", pip,
+                                    idl_step_constructor(ctx, "ProcessingInstruction", g_id_pi_ctor));
         JS_FreeValue(ctx, np); JS_FreeValue(ctx, cdp);
         JS_FreeValue(ctx, tp); JS_FreeValue(ctx, cmp);
         JS_FreeValue(ctx, csp); JS_FreeValue(ctx, pip);

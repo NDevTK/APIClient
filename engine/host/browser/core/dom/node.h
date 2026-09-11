@@ -188,6 +188,25 @@ size_t node_cd_byte_of(const lxb_dom_node_t *n, uint32_t units);
    or NULL having thrown "IndexSizeError". It carries the live-range steps a substringData+insertBefore
    composition cannot. */
 lxb_dom_node_t *node_split_text(JSContext *ctx, lxb_dom_node_t *node, uint32_t offset);
+/* DOM §4.13 Interface ProcessingInstruction's "CREATE A PROCESSING INSTRUCTION NODE, given a document
+   `document`, a string `target`, and a string `data`" — its step 1's node creation and its step 2's "initialize
+   pi with target and data", which is the algorithm §4.13 SHARES between DOM §4.5's `createProcessingInstruction`
+   and its own `new ProcessingInstruction(target, data)` constructor. It is here, in §4.13's component, because
+   it is §4.13's algorithm; document.c's factory calls it for its whole body, and two callers is what an
+   algorithm named by the standard is entitled to.
+     WHICH OF ITS FIVE STEPS ARE WHERE. Steps 1 and 2 are the two refusals — XML 1.0 §2.3 [5] `Name` and the
+   `?>` test — and they run here, in that order, because the order decides which DOMException a page sees when
+   both are wrong. Steps 3 and 4 ("set pi's target", "set pi's data") are the Lexbor factory, which takes both
+   at once, so there is no state between them for anything to observe. STEP 5, "update attributes from data
+   given pi", IS DISCHARGED BY HAVING NO SLOT: this component's invariant is that an ABSENT attribute-map slot
+   denotes the parse of the node's current data, which is exactly what step 5 writes — so a node this returns
+   satisfies it by construction, and storing a map here would be the one thing that could make it false.
+     `target` and `data` are BORROWED UTF-8 with their own byte lengths, both of which may contain U+0000, so
+   the caller reads them and this never asks for a length. The node is DETACHED and belongs to the flow that
+   made it. Returns the wrapper, or JS_EXCEPTION with an "InvalidCharacterError" DOMException pending — a page
+   supplies both strings, so a malformed one is that page's TypeError-shaped answer and never an assertion. */
+JSValue node_pi_create(JSContext *ctx, lxb_dom_document_t *document,
+                       const char *target, size_t tlen, const char *data, size_t dlen);
 /* DOM §4.5 "ADOPT A NODE", given `node` and `document` — the whole algorithm, which is what §4.2.3's insert
    reaches at its step 7.1 and what `Document.adoptNode()`/`importNode()` are stated over.
    IT IS NOT A "SET THE OWNER DOCUMENT": step 3 walks `node`'s SHADOW-INCLUDING inclusive descendants in

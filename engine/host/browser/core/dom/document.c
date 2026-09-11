@@ -79,7 +79,6 @@
 #include "core/dom/slot.h"
 #include "core/dom/document_type.h"
 #include "core/dom/dom_implementation.h"
-#include "core/xml/xml_name.h"   /* §4.13 step 1's `Name` production is XML's, referenced by the DOM */
 #include "core/dom/names.h"      /* §1.4's validate-and-extract — createElementNS's step 1, ONE implementation */
 #include "core/idl_args.h"
 #include "core/realm.h"
@@ -1461,12 +1460,31 @@ static JSValue js_doc_ctor(JSContext *ctx, JSValueConst new_target, int argc, JS
                         document_kind(/*is_xml*/true, "application/xml"));
 }
 
-/* §4.5.1 `createCDATASection(data)` and `createProcessingInstruction(target, data)` — the two node factories
-   an XML document has and an HTML one does not, and the reason they are here rather than absent: dom/common.js
-   builds `paras[5]` out of two CDATA sections and `xmlDoc` out of two processing instructions, so EVERY
-   §5 and §6 test file that includes it threw inside its own setup and reported zero subtests. That is the
-   excluded-test defect wearing a page's TypeError: fifteen files ERRORed at load, and the count looked like
-   fifteen rather than like the hundreds of subtests they contain.
+/* DOM §4.5 Interface Document's `createCDATASection(data)` and `createProcessingInstruction(target, data)` —
+   the two node factories an XML document has and an HTML one does not, and the reason they are here rather
+   than absent: dom/common.js builds `paras[5]` out of two CDATA sections and `xmlDoc` out of two processing
+   instructions, so EVERY §5 and §6 test file that includes it threw inside its own setup and reported zero
+   subtests. That is the excluded-test defect wearing a page's TypeError: fifteen files ERRORed at load, and
+   the count looked like fifteen rather than like the hundreds of subtests they contain.
+   THE NUMBER IS §4.5 AND STOOD HERE AS §4.5.1, WHICH IS A DIFFERENT INTERFACE: §4.5.1 is Interface
+   DOMImplementation, whose members are createDocumentType, createDocument, createHTMLDocument and hasFeature,
+   and it declares NEITHER of these two — fetched and counted, zero occurrences of either name under that
+   heading. Every §4.5.1 left in this file names one of DOMImplementation's own factories and is RIGHT; what
+   was repaired is the sites that named a DOCUMENT member at DOMImplementation's number. It was found by the
+   quotation channel, which placed these words at §4.5 while the citation said §4.5.1 — and the two
+   pre-existing members of the cluster had stood because a citation carrying no quotation has nothing for any
+   channel to fail on, which is the shape a wrong number takes when nobody quotes beside it.
+   THE PI ARM IS ONE CALL AND USED TO BE THIS FUNCTION'S OTHER HALF. §4.5's own words are that
+   `createProcessingInstruction(target, data)` "method steps are to return the result of creating a processing
+   instruction node given this, target, and data" — a §4.13 algorithm, which core/dom/node.c owns because it
+   owns §4.13. It was inline here, which is why `new ProcessingInstruction(target, data)` could not be written:
+   §4.13's constructor shares that same algorithm, and a second copy of it is what CLAUDE.md forbids. The lift
+   is node_pi_create; nothing about this member's behaviour moved with it except the `?>` test, which is
+   repaired — see there.
+   THE TWO ARMS ARE NOT SYMMETRIC AFTER THE LIFT, and that is the standards' asymmetry rather than this file's:
+   §4.5's createCDATASection has its own HTML-document refusal and its own `]]>` test and is defined
+   NOWHERE ELSE, so it has no shared algorithm to be lifted into. One body still, because the magic is what
+   keeps a parked flow able to say which of the two members it is inside.
    magic 0 = createCDATASection, 1 = createProcessingInstruction. */
 static JSValue js_doc_create_xml_node(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
                                       int magic)
@@ -1475,66 +1493,59 @@ static JSValue js_doc_create_xml_node(JSContext *ctx, JSValueConst this_val, int
     lxb_dom_document_t *dom;
     const char *data, *target = NULL;
     size_t dlen = 0, tlen = 0;
+    lxb_dom_cdata_section_t *c;
     lxb_dom_node_t *made = NULL;
     JSValue r;
 
     if (!d) return JS_EXCEPTION;
     dom = lxb_dom_interface_document(d->dom);
-    if (magic == 0) {
-        /* STEP 1. `createCDATASection` on an HTML document is a NotSupportedError, and §4.5's own words are
-           "if this is an HTML document" — which §4.5 defines over the document's TYPE alone ("A document is
-           said to be an XML document if its type is `xml`; otherwise an HTML document"). This asked the
-           CONTENT TYPE instead, which answers the same for §4.5.1's factories and differently for a Document
-           a load created: HTML §7.5.4 "Loading text documents" creates an HTML document whose content type is
-           the response's, so every `text/plain` document was treated as XML here and allowed a CDATA section
-           that a browser refuses. */
-        if (!d->is_xml)
-            return JS_ThrowDOMException(ctx, "NotSupportedError",
-                                        "an HTML document has no CDATA sections");
-    } else {
+    DCHECK(argc >= (magic == 0 ? 1 : 2),
+           "a §4.5 XML node factory reached its body short of its declared arguments — both declare every "
+           "position REQUIRED, so Web IDL §3.6 Overload resolution algorithm's arity check has already thrown "
+           "for a call that passed fewer");
+    if (magic == 1) {
+        /* "Return the result of creating a processing instruction node given this, target, and data" — the
+           whole of the member. `this` is the receiver's document, which is the ONE thing that separates this
+           member from §4.13's constructor; §4.13 carries no HTML-document refusal, so a processing instruction
+           in an ordinary HTML page is a node here exactly as it is in a browser. */
         target = JS_ToCStringLen(ctx, &tlen, argv[0]);
         if (!target) return JS_EXCEPTION;
-        /* STEP 1 of §4.13's "initialize a ProcessingInstruction node", which this algorithm reaches through
-           "create a processing instruction". It is XML 1.0 §2.3's `Name` production — the DOM REFERENCES that
-           production (its step links https://www.w3.org/TR/xml/#NT-Name) rather than restating it, and its own
-           §1.4 predicates in core/dom/names.h are a different, deliberately looser set that would accept `0`
-           and `\A` here. core/xml/xml_name.h owns the production for the same reason: every name an XML parser
-           scans is it. `xml:fail` IS a legal target — §2.3 requires a processor to accept the colon as a name
-           character, and narrowing it to an NCName is the namespace layer's job, not this one's.
-           It runs BEFORE the "?>" test below because that is the order the two steps are written in, and the
-           order decides which of the two DOMExceptions a page sees when both are wrong. */
-        if (!xml_name_is_name(target, tlen)) {
-            JS_FreeCString(ctx, target);
-            return JS_ThrowDOMException(ctx, "InvalidCharacterError",
-                                        "a processing instruction target must match the XML Name production");
-        }
-    }
-    data = JS_ToCStringLen(ctx, &dlen, argv[magic == 0 ? 0 : 1]);
-    if (!data) { if (target) JS_FreeCString(ctx, target); return JS_EXCEPTION; }
-    /* createCDATASection's STEP 2, and "initialize a ProcessingInstruction node"'s: the one sequence the
-       node's own serialization cannot survive. */
-    if (magic == 0 ? (strstr(data, "]]>") != NULL) : (strstr(data, "?>") != NULL)) {
+        data = JS_ToCStringLen(ctx, &dlen, argv[1]);
+        if (!data) { JS_FreeCString(ctx, target); return JS_EXCEPTION; }
+        r = node_pi_create(ctx, dom, target, tlen, data, dlen);
         JS_FreeCString(ctx, data);
-        if (target) JS_FreeCString(ctx, target);
+        JS_FreeCString(ctx, target);
+        return r;
+    }
+    /* STEP 1. `createCDATASection` on an HTML document is a NotSupportedError, and §4.5's own words are
+       "if this is an HTML document" — which §4.5 defines over the document's TYPE alone ("A document is
+       said to be an XML document if its type is `xml`; otherwise an HTML document"). This asked the
+       CONTENT TYPE instead, which answers the same for §4.5's factories and differently for a Document
+       a load created: HTML §7.5.4 "Loading text documents" creates an HTML document whose content type is
+       the response's, so every `text/plain` document was treated as XML here and allowed a CDATA section
+       that a browser refuses. */
+    if (!d->is_xml)
+        return JS_ThrowDOMException(ctx, "NotSupportedError", "an HTML document has no CDATA sections");
+    data = JS_ToCStringLen(ctx, &dlen, argv[0]);
+    if (!data) return JS_EXCEPTION;
+    /* STEP 2: "If data contains the string "]]>", then throw an "InvalidCharacterError" DOMException" — the
+       one sequence the node's own serialization cannot survive.
+       OVER `dlen` BYTES AND NOT OVER A C STRING. This asked `strstr(data, "]]>")`, and a DOMString may contain
+       U+0000 — which is why JS_ToCStringLen's byte count is read at all — so `createCDATASection("\u0000]]>")`
+       answered that its data does not contain `]]>` and built a section that closes itself. It is repaired in
+       the same diff as the identical defect in §4.13's `?>` test, which was the other operand of the ternary
+       these two used to share: one wrong way of asking a question is never one site. `memmem` is this tree's
+       spelling of it — core/html/form_data.c and core/html/html_encoding_sniff.c ask it that way. */
+    if (dlen >= 3 && memmem(data, dlen, "]]>", 3) != NULL) {
+        JS_FreeCString(ctx, data);
         return JS_ThrowDOMException(ctx, "InvalidCharacterError",
-                                    magic == 0 ? "a CDATA section cannot contain \"]]>\""
-                                               : "a processing instruction cannot contain \"?>\"");
+                                    "a CDATA section cannot contain \"]]>\"");
     }
-    if (magic == 0) {
-        lxb_dom_cdata_section_t *c =
-            lxb_dom_document_create_cdata_section(dom, (const lxb_char_t *)data, dlen);
-        CHECK(c != NULL, "createCDATASection: the Lexbor node allocation failed");
-        made = lxb_dom_interface_node(c);
-    } else {
-        lxb_dom_processing_instruction_t *pi =
-            lxb_dom_document_create_processing_instruction(dom, (const lxb_char_t *)target, tlen,
-                                                           (const lxb_char_t *)data, dlen);
-        CHECK(pi != NULL, "createProcessingInstruction: the Lexbor node allocation failed");
-        made = lxb_dom_interface_node(pi);
-    }
+    c = lxb_dom_document_create_cdata_section(dom, (const lxb_char_t *)data, dlen);
+    CHECK(c != NULL, "createCDATASection: the Lexbor node allocation failed");
+    made = lxb_dom_interface_node(c);
     dom_cow_note_created(made);   /* this flow made it; detached until the page inserts it */
     JS_FreeCString(ctx, data);
-    if (target) JS_FreeCString(ctx, target);
     r = node_wrap(ctx, made);
     return r;
 }
@@ -4598,7 +4609,7 @@ lxb_html_document_t *document_template_contents_owner(JSContext *ctx, lxb_dom_do
 
         CHECK(dom != NULL, "HTML §4.12.3: OOM creating an inert template document");
         /* "If document is an HTML document, then mark newDocument as an HTML document also." What makes a
-           Document an HTML document is §4.5's TYPE — the same fact §4.5.1's createCDATASection refuses on —
+           Document an HTML document is §4.5's TYPE — the same fact §4.5's createCDATASection refuses on —
            so the owner takes `document`'s type and NOT a compare against its content type, which HTML §7.5.4's
            text documents answer backwards. A document that is not an HTML document gets what "creating a
            document that implements Document" produces: §4.5's defaults, `application/xml` at `about:blank`
