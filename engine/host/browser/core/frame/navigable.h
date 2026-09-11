@@ -445,6 +445,11 @@ int navigable_realm_peak(void);
  * two-realm and a three-realm sample), and the total is exactly N times it. Between those two samples the
  * engine advanced, neither standing realm gained a reference, and the realm created in between arrived
  * holding the same constant.
+ * AND IT WAS THEN PREDICTED RATHER THAN DESCRIBED, which is the whole of why it is worth this much space: the
+ * identity above was read off two runs, written down as a claim about every run, and a later build's smoke —
+ * at a revision its own stamp names, and carrying MORE live realms than either earlier run reached — read
+ * `min == max` again and a total again exactly N times it. A sample that generates an identity cannot also
+ * test it; this one was tested on a count it had never seen.
  * THAT RULES OUT THE FLOWS BY AN IDENTITY RATHER THAN A MAGNITUDE, which is what makes it worth quoting off a
  * corpus this small: flows park in PARTICULAR realms, so holders that were flows would make per-realm counts
  * DIVERGE and GROW — `min == max` forbids the first, a constant across samples forbids the second. It is not
