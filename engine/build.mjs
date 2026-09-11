@@ -83,12 +83,20 @@ const BUDGET_NOT_INSTALLED = "@BUDGET-NOT-INSTALLED";
    project bans, arriving in a compiler flag instead of in C — and an entry here with no reason beside it is
    how it survived. Measured before removal, with a positive control (a synthetic index-past-end warns), a
    negative control (the in-bounds form is silent) and the real pre-fix revision of that file (warns): every
-   host source, quickjs and lexbor answer ZERO, so this entry was protecting nothing. If a future warning here
-   is a FALSE positive, narrow it at the site with the reason written down; do not re-mute the class. */
+   host source, quickjs and lexbor answer ZERO, so this entry was protecting nothing.
+   AND IT IS `-Werror=array-bounds` RATHER THAN A WARNING, WHICH IS A CLAIM A BUILD ANSWERED AND NOT A
+   PREFERENCE. Un-muting it first was deliberate: an optimizing build performs more of this analysis than
+   `-fsyntax-only`, so whether the class could be made fatal was a question only a full build could settle,
+   and promoting on the strength of a syntax check would have been the cure-validated-on-a-short-example
+   shape — right by the evidence available and unchecked against the case that can actually differ. A whole
+   build at real -O then reported ZERO of them, so the promotion costs nothing today and the class cannot be
+   reintroduced in silence tomorrow. That order is the point: measure, then make impossible.
+   If a future finding here is a FALSE positive, narrow it at the site with the reason written down; do not
+   re-mute the class, and do not demote it to a warning — a warning nobody reads is how this started. */
 const QUIET_WARNINGS = ["-Wno-unknown-warning-option", "-Wno-unused", "-Wno-sign-compare", "-Wno-parentheses",
   "-Wno-format-overflow", "-Wno-stringop-overflow", "-Wno-maybe-uninitialized",
   "-Wno-misleading-indentation", "-Wno-dangling-pointer", "-Wno-char-subscripts", "-Wno-implicit-fallthrough",
-  "-Werror=implicit-function-declaration"];
+  "-Werror=implicit-function-declaration", "-Werror=array-bounds"];
 
 /* THE CHILD-CPU METER MOVED TO engine/gate_cpu.mjs, WHOLE, because this file's copy was the CORRECT one of
    THREE and the other two were not — engine/wpt.mjs and engine/solvergate.mjs each carried a hand-copy that
