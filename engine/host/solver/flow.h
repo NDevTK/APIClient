@@ -1935,10 +1935,42 @@ typedef struct {
      *                   now empty, perform a microtask checkpoint" — is what every job arm of flow_step is
      *                   under, and `Flow::frame` IS that stack here. So these jobs wait on the member
      *                   COMPLETING its unit of work, which is also what advances the optimism term's `visits`.
-     *                   This row is NOT a defect on its own: it is the spec's precondition, measured.
+     *                   This row is not a defect ON ITS OWN — it is the spec's precondition, measured — AND
+     *                   THAT COVERS ONE OF ITS TWO READINGS, which is why the other is written here rather
+     *                   than left to whoever meets it. A frontier some of whose members are part-way through a
+     *                   program, and one in which not a single member is FINISHING one, produce the same row
+     *                   and take opposite work. Framing is benign while frames END, and this is a gauge over
+     *                   the members standing NOW, so a frame that ended leaves nobody standing to be counted
+     *                   and this row cannot say whether they do. An unconditional clearance was therefore an
+     *                   under-claim of the kind nobody discovers by acting on it, because acting on it means
+     *                   not looking. THE DISCRIMINATOR IS ALREADY PUBLISHED AND IT IS NOT THIS ROW:
+     *                   `stepUnitRuns`' `resume-ended-its-frame` against `resume-program` is the rate at which
+     *                   a program that has survived at least one preempt ever completes, with `finished`
+     *                   beside it — the same pair, and the same correction, that `deliv_framed` already
+     *                   carries below and that this row was missing for longer. Read them before reading a
+     *                   large `jobs_framed` as the precondition working.
+     *                   RETIRES when this row can no longer be read without that rate — that is, when a
+     *                   frame-ending count stands on this census beside it and the pairing is one sample.
      *   `jobs_ready`  — neither: an empty stack and no mark, so the member reaches its jobs at the very next
      *                   pick it wins. These jobs wait on RANK ALONE, and they are the population §scheduler's
      *                   WFQ sentence is about.
+     *                   AND ITS ZERO IS TWO STATES, WHICH THIS SCAN'S OWN SHAPE DECIDES AND NO ROW ON THIS
+     *                   CENSUS REPORTS. The arm is reached only inside `if (jn > 0)`, so 0 is written both
+     *                   when NO member has `frame == NULL` at all and when unframed members exist and hold no
+     *                   jobs. The first says the resume seam is not ending frames and sends a reader to
+     *                   flow_step; the second says the jobs sit on members inside programs while the members
+     *                   outside them hold nothing, and sends a reader to where jobs are queued. Both are
+     *                   silences of the ORDER — the split above is right that neither is the WFQ's to move —
+     *                   and they are not one finding.
+     *                   NOT COVERED: this scan counts members by `frame` only among those holding a pending
+     *                   reply (`deliv_framed`, through flow_stack_empty, whose first test is `frame`), never
+     *                   over the frontier — so the count that separates the two is `live - framed` off the
+     *                   COLD line, which is a different walk at a different instant and therefore not a
+     *                   reading of this one. WHAT THE NEXT DIFF BUILDS: a count of members with `frame ==
+     *                   NULL` on THIS scan, beside `members`, so the pair is one sample from one walk. HOW ITS
+     *                   ABSENCE SHOWS: a reader who has correctly declined to charge a zero job count to the
+     *                   ordering, and then has nothing on the line that says which of the two silences it
+     *                   was, pairing this row with a cold-line count taken at another moment to guess.
      *
      * Disjoint and exhaustive by construction (two booleans over every member), which is the point: a fourth
      * reason cannot be folded silently into one of the three, because there is nowhere for it to go.

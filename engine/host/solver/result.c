@@ -562,12 +562,17 @@ static char *errs_json_array(ErrsArray which) {
    OWN PROGRAMS — §8.1.4.4's clean-up step, one component away from anything this file orders. `jobsOwed` says
    the same for the host. So the pair is read BEFORE a zero is charged to the ordering, and a reader who has
    only the job count has not got the evidence to charge anything.
-   THE READING IS AVAILABLE HERE AND NOT WHERE THE ZERO IS PRINTED, which is the residual and not a note: the
-   `@HWORK` line a host prints carries the job count without these three, so a reader meeting the zero in a log
-   has to know to come to the frontier census for the split. WHAT THE NEXT DIFF BUILDS: `jobsReady` beside the
-   job count on that line, so the two arrive together. HOW ITS ABSENCE SHOWS: a zero job count read as a
-   starved queue for a run in which nothing was ever rank-eligible — which is the ABSENCE-and-ZERO-read-alike
-   shape §@S names, arriving in the one number a scheduler is most likely to be blamed by. `visZero` is the count
+   THE READING IS AVAILABLE HERE AND IS NOW ALSO WHERE THE ZERO IS PRINTED — the residual that stood here is
+   SPENT, and it is REWRITTEN RATHER THAN DELETED because a reader who re-derives its reason would re-add a
+   second copy of a row that already has one. It said the `@HWORK` line a host prints carried the job count
+   without these three, so a reader meeting the zero in a log had to know to come to the frontier census for
+   the split, and that the next diff would put `jobsReady` beside the job count on that line. It did: the host
+   composes `_jobsReady` into `@HWORK` off this same census, and deliberately ONE of the three rather than all
+   of them, because `jobsReady` is the only one whose value decides which component a zero belongs to.
+   `jobsOwed` and `jobsFramed` stay here, on the line that carries the rest of the split. A RESIDUAL LEFT
+   STANDING AFTER ITS THING IS BUILT IS THE ONE FAILURE THIS RECORD KIND HAS: it is read once, by someone who
+   has already decided to do the work, so a spent one is not disbelieved — it is executed, and what it buys is
+   a second spelling of a row whose first spelling is what made the reader able to find it. `visZero` is the count
    `visMin` cannot give: how many members have completed NO unit of work, which is both the population
    `jobsFramed` belongs to and the population whose optimism bonus can never decay.
 
