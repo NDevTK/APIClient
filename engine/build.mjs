@@ -1795,6 +1795,53 @@ function wfqReading(out) {
    a break has to say which kind it was looking at. It is emptiness that both kinds agree on and that is not an
    accident either — solver/cold.c gives an empty frontier program 0 precisely so that no reader has to hold a
    second rule about a shape it cannot tell apart from the outside. */
+/* THE @HEAP CENSUS'S ONE OBJECT, AND THE IDENTITY THAT MAKES IT A PARTITION RATHER THAN A DECORATION.
+   `childRealmRefSites` maps the engine function that TOOK a reference to that origin's `[min, max, total]`
+   across the live realms, and the reason it is checked here rather than merely rendered is that a row lost
+   between the engine and this document reads exactly like an origin that never took one — an edge REMOVED and
+   an edge never taken are the two facts the map exists to separate, so a map that does not add up cannot do
+   the one job it has. The engine asserts `1 + taken - released == ref_count` per realm where both halves are
+   in one hand (quickjs.c's take and release, re-checked at core/frame/navigable.c's union); summed over the
+   live realms that is the identity below, and a difference visible HERE and not there is a row lost in the
+   composer. NULL IS A POSITIVE STATEMENT and not an absence: it says this build watches no references at all,
+   which is a different fact from a run with nothing to attribute, and `{}` is the latter. */
+function censusRefSites(b) {
+  const u = b.childRealmRefSites;
+  if (u === undefined)
+    throw new Error("[build] the @HEAP census carries no `childRealmRefSites` — solver/result.c composes it " +
+                    "on every census, so its absence is that composer having changed rather than a run with " +
+                    "no origin to name.");
+  if (u === null) return null;
+  if (typeof u !== "object" || Array.isArray(u))
+    throw new Error("[build] the @HEAP census's `childRealmRefSites` is neither an object nor null — null is " +
+                    "the positive statement that this build watches no references, and an object is the map; " +
+                    "anything else is a composer this reader cannot take apart.");
+  const rows = Object.entries(u);
+  for (const [k, v] of rows) {
+    if (!Array.isArray(v) || v.length !== 3 || v.some((x) => typeof x !== "number"))
+      throw new Error(`[build] the @HEAP census's \`childRealmRefSites.${k}\` is not a [min, max, total] ` +
+                      "triple of numbers — the map's value is that origin's spread across the live realms, " +
+                      "and a row of another shape is a composer that changed under this reader.");
+    if (v[0] > v[1])
+      throw new Error(`[build] the @HEAP census's \`childRealmRefSites.${k}\` has min ${v[0]} above max ` +
+                      `${v[1]}, which no spread can have.`);
+  }
+  if (rows.length === 0 && b.childRealms > 0)
+    throw new Error(`[build] the @HEAP census names no origin while ${b.childRealms} realm(s) are live and ` +
+                    `held by ${b.childRealmRefsTotal} reference(s) — every live reference was taken by some ` +
+                    "engine function, so an empty map here is the attribution having stopped rather than a " +
+                    "run in which nobody took one.");
+  const taken = rows.reduce((t, r) => t + r[1][2], 0);
+  const lhs = b.childRealms + taken - b.childRealmRefsReleased;
+  if (lhs !== b.childRealmRefsTotal)
+    throw new Error(`[build] the @HEAP census's reference attribution does not add up: ` +
+                    `${b.childRealms} live realm(s) + ${taken} taken - ${b.childRealmRefsReleased} released ` +
+                    `= ${lhs}, against \`childRealmRefsTotal\` ${b.childRealmRefsTotal}. Each realm begins ` +
+                    "at one reference and every later one is taken or given back, so these are two spellings " +
+                    "of one number and a difference is a row lost between the engine's own assert and this " +
+                    "census.");
+  return rows;
+}
 function censusHistRows(b, name, totalName, extent) {
   const u = b[name];
   if (u === null || typeof u !== "object" || Array.isArray(u))
@@ -2297,7 +2344,7 @@ function coldRoundTrip(v1, v2, store) {
    object — see `censusRowSet`, which is what refuses the day one does. */
 let g_heapFields = null;
 const heapFields = () => (g_heapFields ??= censusRowSet(
-  "solver/result.c", "char *result_heap_json(JSContext *ctx)", "\n}\n", [],
+  "solver/result.c", "char *result_heap_json(JSContext *ctx)", "\n}\n", ["childRealmRefSites"],
   "the @HEAP reader states which rows it requires of the runtime's memory census, and it takes that set " +
   "from the composer rather than from a list beside it"));
 let g_swapFields = null;
@@ -2409,7 +2456,7 @@ function censusReading(out) {
                   -1 IS THE EMPTY SET AND IS SAID IN WORDS, never rendered as a refcount: a live realm cannot
                   be at zero references, so the producer uses a value the data cannot take, and printing it raw
                   would put a number that is not a count where a count belongs. */
-               (h.b.childRealms === 0
+               ((censusRefSites(h.a), censusRefSites(h.b), h.b.childRealms === 0)
                  ? `; no realm live to hold`
                  : `; held by ${h.b.childRealmRefsMin}..${h.b.childRealmRefsMax} ref(s) each, ` +
                    `${h.b.childRealmRefsTotal} in total`) +
