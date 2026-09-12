@@ -119,6 +119,29 @@ const ENGINE = dirname(fileURLToPath(import.meta.url));
 const SELF = fileURLToPath(import.meta.url);
 const CORPUS = join(ENGINE, "tests", "solver");
 
+/* FETCH §2.2.5 "Requests"' SCRIPT-LIKE DESTINATIONS, DERIVED FROM THE FILE THAT OWNS THE RULE.
+   extension/lib/safe-fetch.js states the predicate in the spec's own words and is the zone that DECIDES from
+   it; a second list here would be the hand-kept copy this project keeps paying for, so this reads that
+   function's body and takes the quoted values out of it. It THROWS rather than falling back, because the
+   silent direction is a SHORT set: a destination that stopped being recognised would make this gate serve a
+   minted JSON body to a compiler again, which is the exact failure it was added to refuse. */
+function scriptLikeDestinations() {
+  const src = readFileSync(join(ENGINE, "..", "extension", "lib", "safe-fetch.js"), "utf8");
+  const fn = src.match(/function _isScriptLike\(d\)\s*\{([\s\S]*?)\}/);
+  if (!fn)
+    throw new Error("[solvergate] extension/lib/safe-fetch.js no longer declares `_isScriptLike` — that " +
+                    "function is Fetch \u00a72.2.5's script-like predicate and the only place this tree states " +
+                    "it. A gate that guessed the set instead would answer a minted JSON body to a request " +
+                    "whose reply is COMPILED.");
+  const set = [...fn[1].matchAll(/"([a-z]+)"/g)].map((m) => m[1]);
+  if (set.length < 2)
+    throw new Error(`[solvergate] \`_isScriptLike\` yielded ${set.length} destination(s) — its shape moved, ` +
+                    "and a short set is the silent direction: every destination it no longer names would be " +
+                    "served a minted body.");
+  return new Set(set);
+}
+const SCRIPT_LIKE = scriptLikeDestinations();
+
 /* THE SCHEDULES, AND EACH ONE IS A TRIPLE RATHER THAN A NAME. Every knob is one the production host already
    has and uses, so none of them is a test hook grown into the engine for this gate's benefit. A schedule
    declares ALL THREE of its policies — when the ENGINE hands the thread back, when the HOST answers what it is
@@ -622,12 +645,31 @@ async function child(docPath, schedName) {
                  "qjs_pending joins the six and the reply is delivered against the (method, url) pair, so a " +
                  "short line makes a token the address. The empty DESTINATION is Fetch §2.2.5's own default " +
                  "and is the one field that may be empty");
-      /* THE DESTINATION IS NOT NAMED, for route.mjs's reason: it is the class a reply may be INGESTED under
-         and this gate ingests nothing — MOCK_BODY is minted here. Its vocabulary is asserted where it is
-         written, at the join. Fetch §2.2.5's CREDENTIALS MODE joined the line after the
-         provenance and says WHOSE SESSION PAYS; its vocabulary is asserted at the door that DECIDES from it
-         (safe-fetch.js's `_credentialedOf`), which is one check for every host rather than a copy here. */
-      const [method, , initiator, provenance, , u] = t;
+      /* THE DESTINATION IS NAMED NOW, AND THE ARGUMENT IT REPLACES IS REWRITTEN RATHER THAN DELETED because a
+         reader who re-derives it will re-introduce it. It said the destination need not be named "for
+         route.mjs's reason: it is the class a reply may be INGESTED under and this gate ingests nothing —
+         MOCK_BODY is minted here". The FACT is right and the conclusion inverts: minting the body is exactly
+         why the destination decides, because it says whether a minted JSON document is a legal answer. For a
+         data fetch it is; for a request whose reply is COMPILED it is not, and the engine then reports a
+         compile error at the PAGE's own URL — which reads as a parser defect in this engine and is this
+         gate's reply policy. Measured: driving a mirrored real bundle aborted at `flow_step` with "its source
+         did not COMPILE … expecting ';'" at column 6 of a script, and character 6 of MOCK_BODY is the `:` of
+         `{"ok":`.
+         Fetch §2.2.5's CREDENTIALS MODE joined the line after the provenance and says WHOSE SESSION PAYS; its
+         vocabulary is asserted at the door that DECIDES from it (safe-fetch.js's `_credentialedOf`), which is
+         one check for every host rather than a copy here. */
+      const [method, destination, initiator, provenance, , u] = t;
+      /* A DOCUMENT WHOSE REPLY IS COMPILED IS REFUSED BY NAME, which is this gate's own idiom for a corpus
+         document it cannot serve. It is not a solver finding and must not be reported as one: the refusal
+         names the gate, so a reader is sent to the reply policy rather than to the compiler. */
+      if (SCRIPT_LIKE.has(destination))
+        gateFail(`this document parks a request whose destination is \`${destination}\` — Fetch \u00a72.2.5 ` +
+                 "calls that script-like, so its reply is COMPILED, and this gate MINTS one body " +
+                 "(`MOCK_BODY`, a JSON object) for every request it answers. Serving it here hands a JSON " +
+                 "document to the program compiler, which aborts naming the PAGE's URL and reads as a parser " +
+                 "defect in the engine. This gate's subject is that one document's finding set is invariant " +
+                 "across schedules; a document that needs its scripts INGESTED needs a host that has them, " +
+                 "so it is refused here rather than measured wrongly");
       /* THIS GATE ANSWERS EVERY PARK WHATEVER IT SAYS ABOUT ITSELF, and that is what it MUST do: its subject
          is that one document's finding set is the same under several schedules, so a reply policy that varied
          with a request's provenance would be a fourth schedule the comparison cannot see. The fields are
