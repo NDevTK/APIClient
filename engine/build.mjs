@@ -2563,7 +2563,24 @@ function censusReading(out) {
        that is long and a chain that is heavy have different causes, and `decEntries` in particular is the
        number that was QUADRATIC before the decision vector was shared — so a run where it climbs with the
        frontier's size rather than with its depth is that sharing having stopped working. */
-    parts.push(`frontier shape: ${c.b.framed} framed of ${c.b.live} live, ` +
+    /* THE CENSUS INDEX IS PART OF THE `framed/live` READING AND NOT DECORATION, and solver/engine.c's
+       `g_finished` banner is where that was established — by retracting a claim this line would otherwise
+       invite. It reported a clean terminal-census gap between the runs that ever finished a flow and the runs
+       that did not, and corrected itself: `framed/live` reads EXACTLY 1.000 at the first census of every run
+       ever measured, healthy and broken alike, because a flow that has just started holds a frame. It then
+       DECAYS. So the ratio is a position in a transient, a short run's terminal census IS an early census, and
+       a separation taken at the terminal census is mostly run LENGTH. Corrected at a matched index the two
+       populations OVERLAP — a strong indicator with a known false positive at the boundary, never a test one
+       run passes.
+       This line renders the terminal census, so without the index it hands a reader exactly the number that
+       retraction is about, with nothing saying which point of the decay it is. Stating `n` costs one field
+       lastTwo already returns and makes the one legitimate comparison — against another run AT THE SAME
+       INDEX — the only one the line invites. No band is printed: the indices those bands were measured at
+       live in that banner's prose and not in any define, so a threshold here would be a second copy of a
+       number with no reader to keep it honest. */
+    parts.push(`frontier shape (at census ${c.n} of this run — \`framed/live\` is a position in a DECAYING ` +
+               `transient, 1.000 at census 1 of every run ever measured, so it compares only against another ` +
+               `run at the SAME index): ${c.b.framed} framed of ${c.b.live} live, ` +
                `${c.b.decEntries} decision + ${c.b.headEntries} heap + ${c.b.domHeadEntries} DOM head ` +
                /* `pend` IS A REGISTER LENGTH AND NOT A DEBT, and rendering it as one cost a reading. It sums
                   every entry of every live flow's register whatever state it is in — outstanding, ALREADY
