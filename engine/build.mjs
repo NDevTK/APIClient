@@ -93,9 +93,44 @@ const BUDGET_NOT_INSTALLED = "@BUDGET-NOT-INSTALLED";
    reintroduced in silence tomorrow. That order is the point: measure, then make impossible.
    If a future finding here is a FALSE positive, narrow it at the site with the reason written down; do not
    re-mute the class, and do not demote it to a warning — a warning nobody reads is how this started. */
-const QUIET_WARNINGS = ["-Wno-unknown-warning-option", "-Wno-unused", "-Wno-sign-compare", "-Wno-parentheses",
-  "-Wno-format-overflow", "-Wno-stringop-overflow", "-Wno-maybe-uninitialized",
-  "-Wno-misleading-indentation", "-Wno-dangling-pointer", "-Wno-char-subscripts", "-Wno-implicit-fallthrough",
+/* SIX ENTRIES LEFT THIS LIST ON ONE MEASUREMENT, AND WHAT THEY WERE SUPPRESSING WAS NOTHING.
+   A mute list is read as a set of decisions — these classes were considered and silenced — and three of these
+   were never asked of any compiler this project runs. `-Wno-stringop-overflow`, `-Wno-maybe-uninitialized` and
+   `-Wno-dangling-pointer` are GCC spellings; clang REJECTS all three as unknown warning options, and they were
+   accepted only because `-Wno-unknown-warning-option` stands first in the list and swallows them. The build
+   spawns exactly two compilers and neither is gcc (`clang`, and `emcc`, which IS clang), so they muted nothing
+   anywhere — while reading as a considered decision to silence three MEMORY-SAFETY classes, which is the worst
+   thing a dead entry can pretend to be. Re-derive with: feed clang a trivial program with `-W<name>` and look
+   for "unknown warning option".
+   THREE MORE WERE LIVE AND EMPTY, which is the half worth measuring rather than assuming. Over every `.c` in
+   `engine/host` (406 files) AND `engine/qjs` (14), `-Wparentheses`, `-Wchar-subscripts` and
+   `-Wmisleading-indentation` each report ZERO. So removing them silences nothing and turns three real checks
+   back on, which is the direction this list should only ever move. Re-derive by running `clang -fsyntax-only`
+   over those trees with the flag un-negated and counting `warning: …[-W<name>]` — a front-end pass, no codegen.
+   THE ZERO WAS CHECKED BEFORE IT WAS BELIEVED (five reading zero at once is the shape of a pass that never
+   ran): the same command reports `-Wcomment` from real files, compiles them with zero errors, and a two-line
+   control, `if (a & b == 1)`, makes `-Wparentheses` speak. IT WAS TAKEN UNDER THE NATIVE DIALECT, so code
+   behind the wasm build's own defines was not seen by it and the build is what settles that.
+   WHAT IS DELIBERATELY STILL HERE. `-Wno-unused` and `-Wno-sign-compare` were EXCLUDED from that measurement
+   (passed as `-Wno-` to quiet the pass), so nothing above is a claim about them. `-Wno-format-overflow`
+   measured zero over `engine/host` and that is a front-end answer to a question clang may only decide under
+   optimisation, so it is not the same evidence as the three that went. Neither is a decision; both are
+   unmeasured, and saying so is the difference between a list of choices and a list of habits.
+
+   NAMED RESIDUAL — `-Wno-implicit-fallthrough` IS A LIVE SUPPRESSION PROTECTING CODE THAT IS NOT OURS.
+   WHAT IS NOT COVERED: this project's own 406 host sources are compiled with a real defect class muted, at
+   zero cost to them, because the flag set is GLOBAL and the population needing it is entirely upstream. The
+   same pass measures `-Wimplicit-fallthrough` at ZERO over `engine/host` and FORTY-FOUR over `engine/qjs`,
+   where a switch-based interpreter falls through on purpose. WHAT THE NEXT DIFF BUILDS: a per-source warning
+   set at the compile spawn — host sources get `-Werror=implicit-fallthrough`, `engine/qjs` does not — which is
+   admissible here and nowhere else because the object cache already keys a name on (source path, FLAGS), so a
+   per-source flag changes an object's identity rather than silently reusing one compiled under a different
+   set. It is not done in the same diff as this comment because it edits that naming path, and a change to the
+   one invariant the whole memo scheme rests on is not one to land without a build behind it. HOW ITS ABSENCE
+   WOULD SHOW: a `case` in a host switch that falls into the next one compiles silently, in a tree whose
+   exhaustive-`switch` discipline is what several of its asserts are made of. */
+const QUIET_WARNINGS = ["-Wno-unknown-warning-option", "-Wno-unused", "-Wno-sign-compare",
+  "-Wno-format-overflow", "-Wno-implicit-fallthrough",
   "-Werror=implicit-function-declaration", "-Werror=array-bounds"];
 
 /* THE CHILD-CPU METER MOVED TO engine/gate_cpu.mjs, WHOLE, because this file's copy was the CORRECT one of
