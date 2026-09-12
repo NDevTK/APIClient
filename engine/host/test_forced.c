@@ -13490,6 +13490,7 @@ static int probes_report(const char *js, bool final, char *unanswered, size_t ca
     Probe rows[PROBE_MAX];
     int n = probes_eval(js, rows, PROBE_MAX), ok = 1, i;
     size_t at = 0;
+    long work_at;
 
     /* A CHECK AND NOT A DCHECK, because the write on the very next line is unconditional in EVERY build: a
        dev-only guard over a pointer a release build dereferences trades a named abort for a segfault, and the
@@ -13503,8 +13504,23 @@ static int probes_report(const char *js, bool final, char *unanswered, size_t ca
        own rule is that the LAST line of a killed run is the verdict — the file already carries the measurement
        that 177 of 179 samples of a passing run were read backwards by a `tail`, and appending sentences after
        it would put that back. A row with no `why` prints nothing: it already names itself. */
+    /* AND EACH ONE CARRIES THE PROGRESS TOTAL IT WAS COMPOSED AT, for the reason the paragraph below gives
+       for the TABLE line — a 0's two readings are "answered wrongly" and "never reached", and the number that
+       decides which is how far the run had got. The table line gained that and these did not, and these are
+       the lines a reader actually meets: a `why` is the only human-readable sentence in this stream, so it is
+       what a grep for a row's name returns, and a grep returns the EARLIEST one.
+       THAT IS THE LEAST INFORMATIVE MOMENT, AND IT IS NOT A SMALL EFFECT. A row stops being narrated once it
+       answers, so the last narration of a row is the informative one and the first is composed when almost
+       nothing has happened. Measured on one frozen-snapshot smoke: 240 narration lines over 8 tables, 107
+       distinct rows narrated at some point, and 50 of those 107 answer 1 in the TERMINAL table — so nearly
+       half of what a grep surfaces as an explained failure is a row that went on to pass, under a sentence
+       that names a CAUSE. That is what `move-throw` did: its first narration says the reaction did not run,
+       the same log carries the `@PAGEERR` proving it did, and the terminal table reads 1.
+       The total goes after the NAME rather than at the end of the sentence, because a `why` is long and a
+       reader looking at a truncated line must still be able to see when it was taken. */
+    work_at = engine_work_done();
     for (i = 0; i < n; i++)
-        if (!rows[i].ok && rows[i].why) printf("@H   %s: %s\n", rows[i].name, rows[i].why);
+        if (!rows[i].ok && rows[i].why) printf("@H   %s @%ld: %s\n", rows[i].name, work_at, rows[i].why);
     /* HOW FAR THIS RUN HAD GOT WHEN THE TABLE BELOW WAS COMPOSED — the one fact that decides which of a 0
        row's TWO READINGS the WHOLE table has, and it was on no line of this stream.
        A row's 0 is "a statement this run answered wrongly" or "one it never reached", and those send a reader
@@ -13551,7 +13567,8 @@ static int probes_report(const char *js, bool final, char *unanswered, size_t ca
        cannot decrease, so the series itself is the check. */
     {
         static long last_work = -1;
-        long work = engine_work_done();
+        long work = work_at;   /* the SAME reading the `why` lines above carry — one call, so a row's stated
+                                  moment and the table's cannot disagree */
         WfqCensus hw;
 
         DCHECK(work >= last_work,

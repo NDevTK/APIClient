@@ -529,7 +529,8 @@ function forkReading(t) {
 function probeFlips(out) {
   const rows = [];
   /* THE TABLE, AND NEVER PROSE ABOUT THE TABLE. test_forced.c's `probes_report` prints TWO shapes under this
-     one marker: `@H   <row>: <why>` for each folded 0, and then `@H ` + the whole table + `=> OK|FAIL|
+     one marker: `@H   <row> @<workDone>: <why>` for each folded 0 — the progress total being what
+     says whether that 0 was answered wrongly or never reached — and then `@H ` + the whole table + `=> OK|FAIL|
      INCOMPLETE`. A `why` is a SENTENCE, so it carries whatever `k=0` pairs its author needed to make the
      sentence say something — `(engine_orphan_census: asked=0, driven=0)`, `forked=0` — and a bare
      `(\S+)=([01])` reads those as tables. Measured on one smoke log: NINE rows where the run printed ONE,
