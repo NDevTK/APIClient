@@ -662,14 +662,32 @@ async function child(docPath, schedName) {
       /* A DOCUMENT WHOSE REPLY IS COMPILED IS REFUSED BY NAME, which is this gate's own idiom for a corpus
          document it cannot serve. It is not a solver finding and must not be reported as one: the refusal
          names the gate, so a reader is sent to the reply policy rather than to the compiler. */
+      /* AND THE REFUSAL NAMES THE DRIVER THAT DOES IT, WHICH IS THE HALF IT WAS MISSING. This sentence used
+         to end "a document that needs its scripts INGESTED needs a host that has them" — a next-diff clause
+         naming a MECHANISM and not naming the one that exists, which is the shape CLAUDE.md rates as EXECUTED
+         rather than caught: a crash is read by everyone it stops, a remedy clause by ONE person, once, who has
+         already decided to do the work. It sent one to design a second driver from scratch while the serving
+         half of what it asked for was three directories away, tracked, and working.
+         WHY THE REMEDY IS ANOTHER DRIVER AND NOT A MODE HERE, so the question is not re-derived. Two reasons
+         and either alone decides it. (1) This gate's ORACLE is set-equality of a document's FINDINGS across
+         schedules, and the header above drops `_wfq`, `_cold`, `_heap`, `_swap` and `_forkAt` from that
+         comparison BY NAME as readings of an instant — so the CENSUS, which is what a real page is driven for,
+         is the one thing this gate deliberately does not produce. (2) Its precondition is a frontier that
+         DRAINS, and a real bundle's does not: measured on a mirrored one under the ingesting driver, the
+         frontier grew monotonically for the whole of a bounded run with `finished` at zero, which this loop
+         would answer with `the frontier STALLED…` or never reach the end of — a true statement about the
+         precondition and a useless one about the document. What stays here is the refusal and its address. */
       if (SCRIPT_LIKE.has(destination))
         gateFail(`this document parks a request whose destination is \`${destination}\` — Fetch \u00a72.2.5 ` +
                  "calls that script-like, so its reply is COMPILED, and this gate MINTS one body " +
                  "(`MOCK_BODY`, a JSON object) for every request it answers. Serving it here hands a JSON " +
                  "document to the program compiler, which aborts naming the PAGE's URL and reads as a parser " +
                  "defect in the engine. This gate's subject is that one document's finding set is invariant " +
-                 "across schedules; a document that needs its scripts INGESTED needs a host that has them, " +
-                 "so it is refused here rather than measured wrongly");
+                 "across schedules, and a census is not that. A document whose scripts must be INGESTED is " +
+                 "driven by `node engine/pagecensus.mjs <document-url>`, which answers every park by fetching " +
+                 "that park's own URL from the origin the document came from; put a frozen mirror behind it " +
+                 "with `node testing/corpus/serve-faithful.mjs <id> <port>`, or drive the same bytes through " +
+                 "the shipped extension in a real browser with testing/corpus/run.sh");
       /* THIS GATE ANSWERS EVERY PARK WHATEVER IT SAYS ABOUT ITSELF, and that is what it MUST do: its subject
          is that one document's finding set is the same under several schedules, so a reply policy that varied
          with a request's provenance would be a fourth schedule the comparison cannot see. The fields are
