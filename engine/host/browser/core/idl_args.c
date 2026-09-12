@@ -1571,29 +1571,55 @@ static void idl_seal_check_enums(void)
  * still run in. Leaving the loop live would trade a dev abort for a release segfault, so the read lives where
  * the statement that makes it safe lives.
  *
- * NAMED RESIDUAL — COVERAGE IS THE HALF THIS CANNOT ASK, AND IT IS THE HALF THAT MATTERS MOST WHILE THE
- * PLATFORM IS BEING CONVERTED. WHAT IS NOT COVERED: whether a member of an interface whose OTHER members
- * declare a receiver declares one itself. The pool holds no member→interface link for a member that declared
- * nothing, so the next member added to a converted component is silently unchecked — and it is WORSE than an
- * unconverted member, because converting a component DELETES the body's own brand test, so the member that
- * forgets has no test at all rather than a late one. WHAT THE NEXT DIFF BUILDS: the receiver predicate
- * recorded against the INTERFACE PROTOTYPE OBJECT where the component already names it — idl_interface_tag,
- * which §3.7.3 makes every interface prototype call — and read at idl_install_method, the one point every
+ * ── HALF OF THAT RESIDUAL IS DISCHARGED AND ITS NEXT-DIFF CLAUSE WAS WRONG TWICE ────────────────────────────
+ * What stood here said the pool holds no member→interface link, and named as the next diff "the receiver
+ * predicate recorded against the INTERFACE PROTOTYPE OBJECT … read at idl_install_method, the one point every
  * installed operation converges on, so an unbranded member installed on a converted prototype aborts naming
- * itself. HOW ITS ABSENCE WOULD SHOW: a member added to a component that has converted takes EVERY receiver,
- * and `Iface.prototype.<new>.call({})` reaches the body where its converted neighbours throw.
- * AND THAT DIFF OWES A MEASUREMENT RATHER THAN AN ASSUMPTION, because the prototype is not always there and a
- * check that skips a target in silence is the zero this file spends its length warning about: an install
- * target that carries no §3.7.3 tag — a [Global] object, a namespace object, the instance an unforgeable
- * operation is installed on — has no interface for that read to find, and a handful of interface prototypes
- * are tagged AFTER their first install rather than before it, which is an ordering to fix at those components
- * rather than a case to skip.
- * AND THAT MEASUREMENT IS A RUNTIME ONE, WHICH IS WORTH SAYING BECAUSE THE CHEAP SUBSTITUTE ANSWERS THE
- * OPPOSITE. Install order is a property of the CALL GRAPH, and a line-number pass over the source reads
- * LEXICAL order — so a component whose installs sit in a helper DEFINED ABOVE THE FUNCTION THAT TAGS AND THEN
- * CALLS IT reads as tagging late when the tag precedes the call by one line. The tell is that the finding
- * names a target whose installs are not in the function that allocates the prototype. Ask the question where
- * the tag and the install both actually run.
+ * itself". The LINK is built — idl_assert_receiver_is_target resolves an install target to the interface whose
+ * §3.7.3 object it is, and asks the half of the question that needs no convention: a member that DOES state a
+ * receiver must state the interface §3.7.6 Attributes and §3.7.7 Operations call `target`, which is the
+ * definition whose members are being defined on that object. Both of the clause's other halves are RECORDED
+ * HERE RATHER THAN DELETED, because a reader who re-derives them will write them again.
+ *   IT IS NOT ONE POINT. `idl_install_method` expands to idl_install_method_at, and idl_install_method_exposed_at
+ *   forwards to it — but idl_install_method_unforgeable_at is a SECOND operation entry that calls neither, and
+ *   §3.7.6's two accessor forms are two more. The address is therefore threaded from the caller and the
+ *   question asked at each, exactly as idl_global_member_refused's is.
+ *   AND `ABORTS NAMING ITSELF` IS THE WRONG SEVERITY, WHICH IS THE HALF THAT WOULD HAVE BEEN EXECUTED. A
+ *   component converts PER MEMBER and not per component: a member that states no receiver still carries the
+ *   receiver test its own body always had, while a converted neighbour's body carries a DCHECK where that test
+ *   was — so an abort over an interface's unbranded members fires on members this engine answers CORRECTLY,
+ *   which §Offensive-programming calls guarding an EXPECTATION rather than an error. Derive it rather than
+ *   taking a count: `git grep -l idl_this_iface engine/host/browser` names the converted components, and in any
+ *   one of them a declared member's body and an undeclared member's body differ by exactly that.
+ *
+ * NAMED RESIDUAL — COVERAGE IS STILL THE HALF THIS CANNOT ASK, AND IT IS THE HALF THAT MATTERS MOST WHILE THE
+ * PLATFORM IS BEING CONVERTED. WHAT IS NOT COVERED: whether a member installed on an interface's §3.7.3 object
+ * states a receiver AT ALL. Nothing in this engine can tell a member that has not been converted yet — correct,
+ * and refusing its own receivers one step later than §3.7 does — from one whose component finished converting
+ * and which simply forgot, because the difference is a test in a C BODY and no engine-side derivation reaches
+ * it. WHAT THE NEXT DIFF BUILDS: the component's own STATEMENT that an interface's conversion is finished,
+ * `idl_receivers_complete(ctx, proto, iface)` called where the component has just installed that interface's
+ * members, asserting against a per-prototype record written where idl_assert_receiver_is_target returns for a
+ * member with no receiver — a record and not a walk of the finished object, because a step function carries its
+ * pool entry in a magic no public entry reads back (there is no JS_StepIdOf and quickjs-step.h declares none),
+ * so the members on a prototype cannot be recovered from the prototype. Each conversion diff then ends in that
+ * one line, and from that line on the interface cannot gain an unbranded member. HOW ITS ABSENCE WOULD SHOW:
+ * the observation is over an INTERFACE and not over a member — call each of an interface's own operations on a
+ * plain object; a converted interface answers uniformly with §3.7's TypeError, and a member that states nothing
+ * is the one that reaches its body instead, with nothing in the engine disagreeing.
+ * AND THAT DIFF OWES A MEASUREMENT RATHER THAN AN ASSUMPTION — how many installs reach a §3.7.3 object at all,
+ * against how many land on the targets §3.7.6 Attributes' and §3.7.7 Operations' unforgeable-and-[Global] arm
+ * sends elsewhere, and how many of the first state nothing. It is a RUNTIME measurement, and the cheap substitute
+ * answers the opposite: install order is a property of the CALL GRAPH and a line-number pass over the source
+ * reads LEXICAL order, so a component whose installs sit in a helper DEFINED ABOVE THE FUNCTION THAT TAGS AND
+ * THEN CALLS IT reads as tagging late when the tag precedes the call by one line. Ask it where the tag and the
+ * install both actually run.
+ * THE ORDERING IS NO LONGER A PRECONDITION, which retires the other half of that clause: this once said that a
+ * prototype tagged AFTER its first install was an ordering to be fixed at those components rather than a case
+ * this check could skip. A target whose §3.7.3 census row does not exist yet takes the same arm as a [Global]
+ * object — it is not an interface prototype object AS FAR AS THIS REALM HAS BEEN TOLD — so the check answers
+ * the same either way and no component owes an ordering for it. What that costs is coverage and not
+ * correctness, and it is part of the measurement above rather than a separate question.
  */
 static void idl_seal_check_receivers(void)
 {
@@ -6943,6 +6969,96 @@ static bool idl_target_is_realm_global(JSContext *ctx, JSValueConst target)
     return same;
 }
 
+/* ---- WEB IDL §3.7.6 Attributes' AND §3.7.7 Operations' `target`, ASKED AT THE INSTALL ----------------------
+ *
+ * A MEMBER'S RECEIVER INTERFACE IS NOT THE MEMBER'S TO CHOOSE — IT IS THE OBJECT IT IS BEING PUT ON. §3.7.7's
+ * create an operation function reads "If jsValue does not implement the interface target, throw a TypeError",
+ * and §3.7.6's create an attribute getter reads "If jsValue does not implement target, then:" before its own
+ * throw; `target` in both is the "interface or namespace definition" whose members are being defined on this
+ * object, never a fact the member states. idl_this_iface lets a member state it BY HAND, so the two can
+ * disagree, and an install is the one moment both halves are in scope at once.
+ *
+ * IT IS THE DEFECT idl_seal_check_receivers CANNOT SEE, and that function's own comment is what names it: a
+ * member "branded against a NEIGHBOURING component's predicate … is the only kind of receiver bug that makes a
+ * member refuse a receiver a browser accepts". The seal compares members that name ONE identifier; a
+ * copy-paste that took the predicate AND the identifier together is self-consistent, so the seal's pairing
+ * agrees with itself and every receiver of that member is refused with nothing in this engine to say so.
+ *
+ * THE TARGET NAMES ITSELF AND THE ROUND TRIP IS WHAT MAKES THAT SOUND. §3.7.3 Interface prototype object says
+ * "The class string of an interface prototype object is the interface's qualified name", so the tag
+ * idl_interface_tag wrote IS the identifier — but three other entries in this file write that same property on
+ * objects that are NOT interface prototype objects (idl_namespace_tag, idl_async_iterator_tag,
+ * idl_class_string), so reading it alone answers a different question from the one asked. Asking the realm's
+ * §3.7.3 census for the object it recorded under that name and requiring it to BE this object rejects all
+ * three by IDENTITY rather than by naming them, which is what keeps this from being a fourth list to maintain.
+ *
+ * A TARGET THAT IS NOT ONE IS OUTSIDE THE POPULATION AND NOT A FAILURE, and that is Web IDL §3.7.7 Operations'
+ * own opening sentence: "Regular operations are exposed on the interface prototype object, unless the operation
+ * is unforgeable or the interface was declared with the [Global] extended attribute, in which case they are
+ * exposed on every object that implements the interface". §3.7.6 Attributes states the same of an attribute, in
+ * its own words. So a [Global] object, the instance a [LegacyUnforgeable] operation is defined on and the
+ * interface object a static goes on all carry members and none of them is a §3.7.3 object. A prototype whose
+ * census row does not exist YET is skipped by the same arm, which is what makes this answer the same whether a
+ * component tags before or after its first install — the ordering is not a precondition of this check and no
+ * component owes it one.
+ *
+ * THE ADDRESS TRAVELS WITH THE INSTALL, as it does at idl_global_member_refused and for its reason: a DCHECK
+ * stamps the line it is WRITTEN at, every install that carries a pool member reaches this one line, and a
+ * remedy with no site to apply it at is a crash nobody can act on. */
+#if APICLIENT_DEV
+static void idl_assert_receiver_is_target(JSContext *ctx, JSValueConst target, const char *name, int stepid,
+                                          const char *at_file, int at_line)
+{
+    int idx = idl_member_of_step(stepid);
+    JSPropertyDescriptor d;
+    JSValue tag, recorded;
+    const char *on;
+    int got;
+
+    /* A member with no pool entry declares nothing (idl_install_step_method's population), and a member that
+       states no receiver is the residual at idl_seal_check_receivers and not this question. */
+    if (idx < 0 || idl_member(idx)->this_is == NULL) return;
+    /* OWN, not inherited: every interface prototype object in a chain carries §3.7.3's tag, and one found a
+       link up is the PARENT interface's answer to a question asked about this object. */
+    got = JS_GetOwnSlotDesc(ctx, &d, target, JS_WellKnownSymbolAtom(JS_WKS_TO_STRING_TAG));
+    /* A THROW IS NOT AN ABSENCE — the same reading realm_interface_prototype_object states for its own read.
+       This is an own-slot read of a plain data property, so the only way it fails is allocation, and taking
+       that for "no tag" would leave the exception PENDING on the context for whatever runs next. */
+    CHECK(got >= 0, "idl: OOM reading a Web IDL §3.7.3 class string at a member install");
+    if (got != 1) return;
+    tag = d.value;
+    JS_FreeValue(ctx, d.getter);
+    JS_FreeValue(ctx, d.setter);
+    /* The tag is a STRING by construction — idl_tag_write and its two siblings write JS_NewString — but the
+       property is [[Configurable]], so a later define could have replaced it with something else; a non-string
+       is not this realm's §3.7.3 statement and is nothing to ask the census about. */
+    if (!JS_IsString(tag)) { JS_FreeValue(ctx, tag); return; }
+    on = JS_ToCString(ctx, tag);
+    JS_FreeValue(ctx, tag);
+    CHECK(on != NULL, "idl: OOM reading a Web IDL §3.7.3 class string at a member install");
+    recorded = realm_interface_prototype_object(ctx, on);
+    if (JS_IsObject(recorded) && JS_IsSameValue(ctx, recorded, target)) {
+        DCHECKF(strcmp(on, idl_member(idx)->this_iface) == 0,
+                "%s:%d installs `%s` on \"%s\"'s Web IDL §3.7.3 Interface prototype object, and that member's "
+                "declaration names \"%s\" as the interface §3.7 Interfaces' implementation-check is against — "
+                "§3.7.7 Operations' create an operation function is \"If jsValue does not implement the "
+                "interface target, throw a TypeError\" and §3.7.6 Attributes states the same of `target`, "
+                "which is the definition whose members are being defined on THIS object, so the two cannot "
+                "differ. Every receiver a page reaches this member on implements \"%s\" and is refused for not "
+                "implementing \"%s\": the member is DEAD on every call, and the TypeError names an interface "
+                "the page never touched. Either the idl_this_iface call copied a neighbouring component's "
+                "predicate and identifier together, or this install was handed the wrong prototype",
+                at_file, at_line, name ? name : "(unnamed member)", on, idl_member(idx)->this_iface,
+                on, idl_member(idx)->this_iface);
+    }
+    JS_FreeValue(ctx, recorded);
+    JS_FreeCString(ctx, on);
+}
+#define IDL_RECEIVER_IS_TARGET(c, t, n, s, f, l) idl_assert_receiver_is_target((c), (t), (n), (s), (f), (l))
+#else
+#define IDL_RECEIVER_IS_TARGET(c, t, n, s, f, l) ((void)0)
+#endif
+
 /* WEB IDL §3.7.6 Attributes' NAME FOR AN ACCESSOR'S FUNCTION OBJECT — the step every mint in this file used to
  * skip, and the reason it went unseen for as long as it did.
  *
@@ -7023,11 +7139,16 @@ void idl_install_accessor_step_at(JSContext *ctx, JSValueConst target, const cha
     DCHECK(a != JS_ATOM_NULL, "an IDL accessor name could not be interned");
     DCHECK(getter_stepid >= 0, "idl_install_accessor_step with no getter — a write-only attribute installs "
                                "through idl_install_accessor, which is the form that takes no getter at all");
+    /* §3.7.6's `target`, asked of BOTH pool members: an accessor's getter and its setter each state their own
+       receiver, so each is its own answer to the same question about the same object. */
+    IDL_RECEIVER_IS_TARGET(ctx, target, name, getter_stepid, at_file, at_line);
     /* Through the ONE mint, like every other member — an accessor's getter and setter are pool members too, and
        minting them by hand here is what left an attribute reporting itself as "(none)" in a diagnostic. */
     g = idl_mint_accessor(ctx, name, getter_stepid, 0);
-    if (setter_stepid >= 0)
+    if (setter_stepid >= 0) {
+        IDL_RECEIVER_IS_TARGET(ctx, target, name, setter_stepid, at_file, at_line);
         st = idl_mint_accessor(ctx, name, setter_stepid, 1);
+    }
     JS_DefinePropertyGetSet(ctx, (JSValue)target, a, g, st,
                             JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
     JS_FreeAtom(ctx, a);
@@ -7365,8 +7486,10 @@ static void idl_define_accessor(JSContext *ctx, JSValueConst target, const char 
     /* The GETTER here is a plain C function with no pool entry (this is the form for an attribute whose read
        runs none of the page's code), but the SETTER is a step member exactly like any other, so it is minted
        the same way and named the same way. It was the fourth hand-written mint. */
-    if (setter_stepid >= 0)
+    if (setter_stepid >= 0) {
+        IDL_RECEIVER_IS_TARGET(ctx, target, name, setter_stepid, at_file, at_line);
         st = idl_mint_accessor(ctx, name, setter_stepid, 1);
+    }
     JS_DefinePropertyGetSet(ctx, (JSValue)target, a, g, st, flags);
     JS_FreeAtom(ctx, a);
 }
@@ -8403,6 +8526,9 @@ void idl_install_method_at(JSContext *ctx, JSValueConst target, const char *name
     /* §3.7.7's CONTINUE-STEP — see idl_global_member_refused. The [SecureContext] operation form reaches it
        through here, so the two ask it once. */
     if (idl_global_member_refused(ctx, target, name, at_file, at_line)) return;
+    /* §3.7.7's `target`. The [SecureContext] form reaches this entry, so the two ask it once; the
+       [LegacyUnforgeable] form below does NOT — it is the second operation entry, not a caller of this one. */
+    IDL_RECEIVER_IS_TARGET(ctx, target, name, stepid, at_file, at_line);
     JS_SetPropertyStr(ctx, (JSValue)target, name,
                       idl_mint_step(ctx, name, stepid, JS_CFUNC_step, IDL_SEC_METHOD));
 }
@@ -8428,6 +8554,10 @@ void idl_install_method_unforgeable_at(JSContext *ctx, JSValueConst target, cons
     /* §3.7.7's CONTINUE-STEP — see idl_global_member_refused. §3.7.7 asks it of every operation it places,
        and [LegacyUnforgeable] changes the DESCRIPTOR rather than the question. */
     if (idl_global_member_refused(ctx, target, name, at_file, at_line)) return;
+    /* §3.7.7's `target`, asked here as well as at the entry above: §3.7.7 puts an unforgeable operation on the
+       INSTANCE, which carries no §3.7.3 class string, so this call is normally skipped — and a component that
+       reaches for this installer with a PROTOTYPE gets the same question every other operation gets. */
+    IDL_RECEIVER_IS_TARGET(ctx, target, name, stepid, at_file, at_line);
     JS_DefinePropertyValueStr(ctx, (JSValue)target, name,
                               idl_mint_step(ctx, name, stepid, JS_CFUNC_step, IDL_SEC_METHOD),
                               JS_PROP_ENUMERABLE);
