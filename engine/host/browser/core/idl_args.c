@@ -1588,6 +1588,12 @@ static void idl_seal_check_enums(void)
  * operation is installed on — has no interface for that read to find, and a handful of interface prototypes
  * are tagged AFTER their first install rather than before it, which is an ordering to fix at those components
  * rather than a case to skip.
+ * AND THAT MEASUREMENT IS A RUNTIME ONE, WHICH IS WORTH SAYING BECAUSE THE CHEAP SUBSTITUTE ANSWERS THE
+ * OPPOSITE. Install order is a property of the CALL GRAPH, and a line-number pass over the source reads
+ * LEXICAL order — so a component whose installs sit in a helper DEFINED ABOVE THE FUNCTION THAT TAGS AND THEN
+ * CALLS IT reads as tagging late when the tag precedes the call by one line. The tell is that the finding
+ * names a target whose installs are not in the function that allocates the prototype. Ask the question where
+ * the tag and the install both actually run.
  */
 static void idl_seal_check_receivers(void)
 {
