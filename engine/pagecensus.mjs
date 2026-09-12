@@ -49,12 +49,12 @@
  * driver that stopped itself would be choosing which part of the frontier never got measured.
  *
  * NAMED RESIDUAL — the sniff. `computedType` is what the ZONE THAT READ THE BYTES decided, and
- * extension/lib/safe-fetch.js is where this tree states Fetch §5 "Determining the computed MIME type of a
- * resource". This driver states its own decision instead, and that decision is the response's own
- * `Content-Type` essential MIME with no sniffing. NOT COVERED: a resource whose bytes disagree with the type
+ * extension/lib/safe-fetch.js is where this tree states MIME Sniffing §7 "Determining the computed MIME
+ * type of a resource". This driver states its own decision instead, and that decision is the response's
+ * own `Content-Type` essence with no sniffing. NOT COVERED: a resource whose bytes disagree with the type
  * its server stated — a browser sniffs, this takes the server at its word. WHAT THE NEXT DIFF BUILDS: one
- * statement of §5 that a Node driver can call, so this seam and the extension's read the same rule. HOW ITS
- * ABSENCE WOULD SHOW: a run in which a resource the origin labels `text/plain` reaches the engine as data
+ * statement of MIME Sniffing §7 a Node driver can call, so this seam and the extension read one rule. HOW
+ * ITS ABSENCE WOULD SHOW: a run in which a resource the origin labels `text/plain` reaches the engine as data
  * where a browser would have compiled it, visible as a `_cold.replyAnswered` that advanced with no program
  * start behind it. It is narrower rather than wrong for a MIRROR replay, because serve-faithful answers the
  * content type the capture RECORDED, which is what the real server said on the day the bytes were frozen.
@@ -69,7 +69,7 @@
  *
  * Usage:  node engine/pagecensus.mjs <document-url> [transcript.jsonl]
  *   e.g.  node testing/corpus/serve-faithful.mjs gitlab 8977 &
- *         timeout 400 sh -c 'ulimit -S -t 300; node engine/pagecensus.mjs http://127.0.0.1:8977/ /tmp/gl.jsonl'
+ *         `timeout 400 sh -c "ulimit -S -t 300; node engine/pagecensus.mjs http://127.0.0.1:8977/ /tmp/gl.jsonl"`
  */
 import { appendFileSync, existsSync } from "node:fs";
 import { GLUE_PATH as WASM, abiOperands } from "./renderer_abi.mjs";
@@ -99,7 +99,7 @@ const emit = (o) => {
   if (transcript) appendFileSync(transcript, line + "\n");
 };
 
-/* FETCH §4.4 "HTTP-network-or-cache fetch"'s reply, as THIS zone read it — and the two not-a-reply answers
+/* THE REPLY RECORD extension/bridge.js DECLARES, as THIS zone read it — and the two not-a-reply answers
    kept apart, because extension/bridge.js keeps them apart and the engine branches on the difference. A
    response that arrived is a reply WHATEVER its status: a 404 is a real answer and the page's own error path
    is a path worth exploring. A fetch that THREW never reached a server, and Fetch §5.6's network error is what
@@ -110,9 +110,10 @@ async function readReply(u) {
   catch (e) { return { meta: null, bytes: null, note: "network-error: " + String(e && e.message || e) }; }
   const buf = new Uint8Array(await res.arrayBuffer());
   const headers = [...res.headers.entries()];
-  /* §4.4.1 "MIME type"'s ESSENTIAL MIME — the type and subtype with the parameters dropped. See the sniff
+  /* MIME Sniffing §4.2 "MIME type miscellaneous"'s ESSENCE — the type and subtype with the parameters
+     dropped, which is the term extension/lib/safe-fetch.js states for this same field. See the sniff
      residual in the banner: this is what this zone DECIDED, stated by the zone that read the bytes, and it is
-     narrower than extension/lib/safe-fetch.js's §5. `""` is a positive answer (the response stated no type),
+     narrower than extension/lib/safe-fetch.js's §7. `""` is a positive answer (the response stated no type),
      never a producer that stopped writing the field. */
   const ct = res.headers.get("content-type");
   const computedType = ct === null ? "" : ct.split(";")[0].trim().toLowerCase();
@@ -125,10 +126,12 @@ const factory = await import(WASM);
 const boot = factory.default ?? factory;
 
 /* THE DOCUMENT, FETCHED THE WAY EVERY OTHER RESOURCE IS. Its FINAL url is what the engine is told, because
-   HTML §7.4 makes the document's address the one the response came back at and every park this driver answers
-   is resolved against it. A document that did not arrive is fatal HERE rather than at the parser: an engine
-   handed a 404 body compiles it, and testing/corpus/serve-faithful.mjs's own header records what that costs
-   ("a fixture that answers 200-with-prose where it means 404 manufactures engine bugs"). */
+   HTML §7.4 "Navigation and session history" makes the document's address the one the response came back
+   at, and every park this driver answers is resolved against it. A document that did not arrive is fatal
+   HERE rather than at the parser: an engine handed a 404 body compiles it. testing/corpus/serve-faithful.mjs
+   records what that costs, in its own words and not a standard's — `a fixture that answers 200-with-prose
+   where it means 404 manufactures engine bugs` — having watched the abort it raises rank as a corpus-wide
+   engine defect across five sites. */
 let docRes;
 try { docRes = await fetch(docUrl, { redirect: "follow" }); }
 catch (e) { fail(`the document at ${docUrl} could not be fetched (${String(e && e.message || e)}) — this ` +
@@ -243,8 +246,9 @@ for (;;) {
     const abs = new URL(u, finalUrl).href;
     const rep = await readReply(abs);
     /* BOTH CHANNELS IN ONE CALL, so no path here can deliver the record and forget the bytes. A network error
-       crosses as the JSON `null` with no body at all, which is extension/bridge.js's own spelling of Fetch
-       §5.6's network error and is what makes the flow keep its park AND fork the page's `catch` arm. */
+       crosses as the JSON `null` with no body at all — extension/bridge.js's own spelling of
+       Fetch §5.6 "Fetch methods"' network error, which is what makes the flow keep its park AND fork the
+       page's `catch` arm. */
     if (rep.meta === null) {
       emit({ n, at: "reply", method, url: abs, networkError: rep.note });
       M.ccall("qjs_provide", "void", ["number", "number", "number", "number", "number"],
