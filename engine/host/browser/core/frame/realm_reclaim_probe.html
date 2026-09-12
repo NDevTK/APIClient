@@ -1,0 +1,105 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>realm reclaim probe</title>
+<!--
+  THE DERIVATION FOR EVERY CHILD-REALM NUMBER navigable.h STATES, as a command rather than as a figure.
+
+    node engine/solvergate.mjs --run engine/host/browser/core/frame/realm_reclaim_probe.html direct
+
+  It prints one @EMIT line whose `.result._heap` carries `childRealms`, `childRealmsMade`, `childRealmsPeak`,
+  `childRealmRefsMin`/`Max`/`Total`/`Released` and the per-origin `childRealmRefSites` map. Read those
+  accessors in navigable.c and solver/result.c before quoting one: `childRealmsMade` is the only row of the
+  three a reader may DIFFERENCE, `childRealmsPeak` is a high-water mark, and everything else here is a GAUGE.
+
+  NOTHING RUNS THIS AUTOMATICALLY AND THAT IS THE ANSWER RATHER THAN AN OVERSIGHT. It is an INSTRUMENT and not
+  a test: it asserts nothing, and the two gates that could have collected it would each have been told a
+  falsehood by its presence.
+    - engine/tests/solver/ is the SOLVER DIFFERENTIAL's corpus, whose oracle is set-equality of a document's
+      FINDINGS across schedules. That gate DROPS `_heap` from the comparison BY NAME, as a reading of an
+      instant — so the one row this document exists to produce is the one it deliberately does not compare, and
+      a realm probe sitting in that directory would read as coverage of a reclamation nothing there watches.
+      Measured, so the exclusion rests on a number and not on the argument alone: this document's census is
+      IDENTICAL under `direct`, `preempt`, `park`, `eager` and `stream` (live = made = peak = 4 in all five),
+      because it forks nowhere — there is no schedule disagreement here for that gate to find.
+    - engine/tests/ at large is walked by engine/gate_collect.mjs, which runs `.js` and requires anything else
+      to name its runner in a GATE file IN ITS OWN DIRECTORY. No runner enumerates this document, so a GATE
+      line claiming one would be the excluded-test defect arriving THROUGH the accounting that exists to end
+      it: a claim that passes `existsSync` and is false.
+  WHAT DOES ASSERT ON THIS AXIS is engine/host/test_forced.c's `realm-reclaim` row, which folds
+  `navigable_realm_made() > 0` and then `made > peak`. This document does not duplicate it; it answers the
+  question that row says in its own words it cannot ("the collector broke the cycle or did not … this row
+  cannot tell you which").
+
+  READ WITH THE WORK COUNTERS. `_flows`, `_jobsRun` and `_unitsDone` sit on the same @EMIT line, and a run
+  whose `_unitsDone` is near 1 never entered this document at all — a reach column is then a fact about the
+  scheduler's luck. Three consecutive runs on one artifact are byte-identical in every field below.
+-->
+<body>
+<div id="frames"></div>
+<script>
+/* (1) THE COLLECTOR CONTROL, FIRST, BECAUSE EVERY OTHER READING HERE IS UNINTERPRETABLE WITHOUT IT. "The
+   realm was not reclaimed" and "no collection ran" are opposite facts that render identically in a realm
+   count, so this probe shows a CYCLE being freed in the SAME RUN: `a` and `b` reference each other and
+   nothing outside the call holds either, so the only thing that can empty this WeakRef is a mark-sweep.
+   A WeakRef AND NOT A FinalizationRegistry, which is the obvious reach and is unusable here: quickjs drains
+   its pending finalizers from JS_IsJobPending, which enqueues a callback from OUTSIDE every flow, and this
+   engine aborts by name at solver/engine.c's "a job was enqueued with no flow running". A registry version of
+   this control kills the run instead of answering it. `deref()` reads and enqueues nothing. */
+let cycle = null;
+(function () {
+  const a = {}, b = {};
+  a.b = b; b.a = a;
+  if (typeof WeakRef === "function") cycle = new WeakRef(a);
+})();
+
+const host = document.getElementById("frames");
+
+/* (2) ONE CHILD NAVIGABLE, MATERIALIZED AND THEN DESTROYED.
+   THE READ MUST REACH THE CHILD'S GLOBAL AND NOT ITS WindowProxy. `f.contentWindow` alone answers the
+   navigable's own record and builds NO realm — measured: a document that only touches `contentWindow` emits
+   `childRealmsMade: 0`, so it measures nothing while looking like it measures this. `.document` on it is what
+   materializes the initial about:blank.
+   `f.remove()` is HTML §7.3.1.6 "Navigable destruction"'s destroy-a-child-navigable. Its step 3 clears the
+   container's content navigable, so `contentWindow === null` afterwards is the CONTROL that says the destroy
+   was reached at all — without it an unchanged realm count is equally consistent with a removal that did
+   nothing. The document half is §7.5.10 "Destroying documents", queued as a job.
+   NOTHING OUTSIDE THIS CALL NAMES THE FRAME, deliberately: a retained `f` or a retained proxy would be a root
+   this probe supplied itself, and the question is what roots the realm when the page holds nothing. */
+function buildDropFrame(runScript) {
+  const f = document.createElement("iframe");
+  host.appendChild(f);
+  const materialized = typeof f.contentWindow.document;
+  let ran = "none";
+  /* THE COMPILE ORIGIN, WHICH IS WHY ONE FRAME RUNS A SCRIPT. A realm's reference count has exactly one
+     increment in the engine and it carries its caller's own name, so an origin row appears only if some code
+     path took one — and the row that finishes a COMPILE (`js_create_function_post`) is absent from every
+     realm holding the initial about:blank, which has no scripts by construction. Running one function in the
+     child is what makes that row nonzero, and its SPREAD across realms is what a total cannot show. */
+  if (runScript) {
+    try { ran = "" + f.contentWindow.eval("(function probeFn(n){ return n + 1; })(41)"); }
+    catch (e) { ran = "threw-" + e.name; }
+  }
+  f.remove();
+  return materialized + "/" + (f.contentWindow === null ? "slot-cleared" : "SLOT-STILL-SET") + "/" + ran;
+}
+
+let plain = "";
+for (let i = 0; i < 3; i++) plain = buildDropFrame(false);
+const scripted = buildDropFrame(true);
+fetch("/api/realmprobe/plain/" + plain);
+fetch("/api/realmprobe/scripted/" + scripted);
+
+/* (3) THE PRESSURE THAT MAKES THE CONTROL ABOVE ARM. quickjs triggers a collection from js_trigger_gc when the
+   allocator's live size crosses a threshold it then raises to 1.5x — so the array is RETAINED rather than
+   churned: a churn loop is freed by refcount before the bar ever moves, and a probe built that way asks for a
+   collection it never gets. Concrete operands throughout, so nothing forks and the frontier still drains. */
+const retain = [];
+for (let i = 0; i < 30000; i++) retain.push({ i: i, pad: "pad" + i });
+fetch("/api/realmprobe/grew/" + retain.length);
+
+/* (4) THE CONTROL'S ANSWER, LAST, SO IT IS READ AFTER THE PRESSURE. `NO-WEAKREF-probe-unarmed` is a POSITIVE
+   statement that this build could not run the control — never a silence that reads like a negative. */
+fetch("/api/realmprobe/collector/" + (cycle === null ? "NO-WEAKREF-probe-unarmed"
+      : cycle.deref() === undefined ? "RAN-cycle-freed" : "DID-NOT-RUN-cycle-intact"));
+</script>
+</body>

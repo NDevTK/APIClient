@@ -453,18 +453,36 @@ int navigable_realm_peak(void);
  * THAT RULES OUT THE FLOWS BY AN IDENTITY RATHER THAN A MAGNITUDE, which is what makes it worth quoting off a
  * corpus this small: flows park in PARTICULAR realms, so holders that were flows would make per-realm counts
  * DIVERGE and GROW — `min == max` forbids the first, a constant across samples forbids the second. It is not
- * the single edge either: it is some thousands. WHAT A CONSTANT DOES NOT ESTABLISH IS WHERE THEY WERE TAKEN,
- * and this paragraph read "all taken at realm CONSTRUCTION and none accumulated by execution" for as long as
- * the breakdown below did not exist. It is rewritten rather than deleted, because it is the reading anyone
- * re-derives from `min == max` and it is wrong in a way no total can show. The take population is CLOSED and
- * readable: JS_NewContextRaw sets a realm's count to 1, JS_DupContext is the engine's ONLY increment and
- * JS_FreeContext its only decrement, and one of those increments sits in the function that finishes a
- * COMPILE — so a realm that runs a script accumulates references for as long as its bytecode lives, and
- * `min == max` across realms says only that those realms took the SAME number. "Construction dominates" and
- * "these realms executed nothing" both produce that, and the identity separates neither: a child navigable
- * whose Document has no scripts seeds none, which is the initial about:blank by construction. THE ARGUMENT
- * RETIRES the day a run shows a compile origin at a nonzero count, or shows it at zero beside a realm whose
- * document had scripts — either way it is the breakdown that says so and never the total.
+ * the single edge either: it is some thousands. WHERE THEY WERE TAKEN IS NOW MEASURED, WHICH RETIRES THE
+ * READING THIS PARAGRAPH USED TO PRESERVE — "all taken at realm CONSTRUCTION and none accumulated by
+ * execution", the thing anyone re-derives from `min == max` and the thing no total can refute, since a realm
+ * that runs a script accumulates a reference for as long as its bytecode lives and two realms that took the
+ * SAME number produce the identity either way. Its stated retirement was a run showing a COMPILE origin at a
+ * nonzero count, and realm_reclaim_probe.html beside this header is one: three realms holding the initial
+ * about:blank and a fourth that ran one function read `js_create_function_post` as `[0,2,2]` — zero across
+ * the plain realms, two on the scripted one — beside `JS_NewCFunction3` at 3868 per realm. So execution DOES
+ * accumulate and construction outweighs it by three orders of magnitude, and the SPREAD is what said so where
+ * the realm total could not: that total is 4359 on BOTH kinds, the scripted realm having taken three more
+ * references and given three more back. A row whose `min` and `max` differ is this census answering a
+ * question `min == max` on the whole realm had made look settled.
+ * AND WHAT THE BREAKDOWN SETTLES IS LARGER THAN THE ORIGIN OF A REFERENCE: every origin it names is INSIDE the
+ * cycle the list note in navigable.c says the collector breaks — the realm's own C function objects, its
+ * auto-init property records and its own bytecode. There is no undeclared JS_DupContext edge left to find, so
+ * a realm reference is not the lever, and neither is the collector: the probe carries a WeakRef to a pure
+ * cycle nothing outside holds, and a `deref()` that answers undefined in the SAME RUN is a mark-sweep having
+ * run and having declined to free a realm whose frame was removed. It reads so under five schedules while
+ * every realm stands. That eliminates two of the three candidates test_forced.c's `realm-reclaim` row names
+ * and says in its own words it "cannot tell you which", and the third — this file's teardown forgetting a
+ * member — cannot be it either, because a hook the collector reaches only at a zero count was never reached.
+ * SO WHAT IS LEFT IS A COUNTED REFERENCE TO THE CHILD'S WINDOW RATHER THAN TO ITS REALM. The Window roots the
+ * function objects and they root the realm, so a root there is invisible in every row printed here, and a
+ * repair aimed at this census is aimed at the wrong object. NAMED RESIDUAL — WHAT IS NOT COVERED: this
+ * census attributes references to the REALM and none to the child's GLOBAL, so it can say the root is not a
+ * realm reference and cannot say whose it is. WHAT THE NEXT DIFF BUILDS: the same take-site attribution over a
+ * GC object, so a host record holding a counted reference of another realm's Window is nameable the way
+ * JS_DupContext's callers already are. HOW ITS ABSENCE SHOWS: a reader running the probe can state that the
+ * collector ran and left the realm standing, and cannot name one holder — every row sums to the realm's own
+ * graph and the census reconciles exactly, so there is nothing in the output to point a repair at.
  * WHO TOOK THEM IS ANSWERED BY navigable_realm_ref_sites BELOW — per ORIGIN, counted where the reference is
  * taken and never inferred from a total, so a repair has something to aim at and an edge REMOVED is
  * distinguishable from an edge never taken. AND THE CONSTANTS BELONG TO RUNS RATHER THAN TO COMMITS — those

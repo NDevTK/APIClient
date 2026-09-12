@@ -49,6 +49,10 @@ static RealmBuilder g_realm_builder;
    `p->u.cfunc.realm`) — and those are reachable from the Window that the navigable's WindowProxy holds. So a
    realm lives exactly as long as its NAVIGABLE is reachable, which is the spec's answer, and when the navigable
    goes the realm is a garbage CYCLE that the collector breaks.
+   THAT LAST CLAUSE IS THE DESIGN AND IT IS NOT WHAT A RUN DOES — stated here because a reader takes it for a
+   statement about this engine. A removed frame's realm stands through a collection that demonstrably RAN in
+   the same run; the evidence, what it eliminates and what is left to find are beside navigable_realm_ref_sites
+   in navigable.h, and the command that produces them is realm_reclaim_probe.html in this directory.
    THE AGENT MUST NOT OWN ONE, and that is the whole mechanism rather than a preference. An agent-held reference
    is an EXTERNAL ROOT: gc_decref answers "reachable" for the realm and therefore for everything the realm can
    reach — which includes, through the child Document's own `proxy` field, the very WindowProxy whose collection
