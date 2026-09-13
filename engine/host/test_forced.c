@@ -8834,12 +8834,31 @@ static int param_value_count(const char *js, const char *url, const char *pname)
    read the same 1. A row whose claim really is about a substring of a RECORD says so through emitted_record_has,
    which names the scope it is asking in; there is no substring reader over a VALUE.
    The escape check is `param_value_only`'s and is here for the same reason — a `val` needing a JSON escape is
-   being compared against a spelling json_buf_str never writes, which reads as a row stuck at 0. */
+   being compared against a spelling json_buf_str never writes, which reads as a row stuck at 0.
+   IT IS A QUESTION ASKED OF THE COUNTER BELOW AND NOT A SECOND WALK, because "is this value here" and "how
+   many times is it here" over one array is one question with two answers, and two right answers to one
+   question is the shape that drifts. */
+static int param_value_count_of(const char *js, const char *url, const char *pname, const char *val);
 static int param_value_is(const char *js, const char *url, const char *pname, const char *val) {
+    return param_value_count_of(js, url, pname, val) > 0;
+}
+
+/* HOW MANY OF ONE PARAM'S VALUE ENTRIES ARE `val` — summed over the statement's records for the reason
+   `param_value_count` is, that an arm told apart by its provenance grade lands on its OWN record.
+   WHAT THE COUNT BUYS THAT THE BOOLEAN CANNOT IS THE THIRD STATE, and it is the state a two-armed claim is
+   most often actually in. A param carrying one arm's literal ALONE and one carrying that literal ALONGSIDE
+   something else read the same 1 from `param_value_is` and the same 0 from a `both arms` conjunction — so a
+   ladder built out of those two primitives prints "only one arm reached the sink" for both, and they take
+   OPPOSITE work: one is a gate that was DECIDED (a branch that never forked, which is what §Solver-half
+   forbids for server-injected absent state) and the other is a gate that FORKED whose sibling's value never
+   became a literal (a concretization failure, one mechanism further on, with the fork working). Neither the
+   total nor the membership test can separate them; the difference is entries that are NEITHER literal, which
+   is this count subtracted from `param_value_count` and has no other spelling in this file. */
+static int param_value_count_of(const char *js, const char *url, const char *pname, const char *val) {
     EmittedRec r[EMITTED_REC_MAX];
     const char *v, *b, *c;
     size_t n, m = strlen(val);
-    int cnt, i, plain = 1;
+    int cnt, i, k = 0, plain = 1;
 
     for (c = val; *c; c++)
         if (*c == '"' || *c == '\\' || (unsigned char)*c < 0x20) plain = 0;
@@ -8848,8 +8867,8 @@ static int param_value_is(const char *js, const char *url, const char *pname, co
     cnt = emitted_records(js, url, r, EMITTED_REC_MAX);
     for (i = 0; i < cnt; i++)
         for (v = param_values_in(&r[i], pname); v && (v = param_value_next(v, &b, &n)) != NULL; )
-            if (n == m && memcmp(b, val, m) == 0) return 1;
-    return 0;
+            if (n == m && memcmp(b, val, m) == 0) k++;
+    return k;
 }
 
 /* MEMBERSHIP IN ONE OF THE RESULT DOCUMENT'S TWO DISJOINT PAGE-ERROR ARRAYS, SCOPED TO THE ARRAY — because
@@ -12665,8 +12684,19 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     int getter_fork = (param_value_is(js, "/api/getfork", "v", "gxADMIN") &&
                        param_value_is(js, "/api/getfork", "v", "gxPUBLIC"));
     /* Rung 4: and exactly two — a third value is a flow that got there some way this fixture does not
-       describe, which is a finding rather than a stronger pass. */
-    int getter_arms = (param_value_count(js, "/api/getfork", "v") == 2);
+       describe, which is a finding rather than a stronger pass.
+       IT IS `ONE OF EACH` AND NOT `TWO OF ANYTHING`, AND THE DIFFERENCE IS VISIBLE WITHOUT RUNNING ANYTHING:
+       A LADDER'S TOP RUNG MUST IMPLY THE RUNG BELOW IT, or the lowest 0 stops being the localisation and the
+       rows stop being readable in order. `param_value_count(...) == 2` does not imply rung 3 — one arm's
+       literal beside a value that is neither arm satisfies it while rung 3 refuses — so the two rungs could
+       read 1 above 0, which is not a weaker claim standing on a stronger one but two claims about different
+       things printed as a ladder. Spelled as a count OF EACH ARM it implies rung 3 by construction, it says
+       what the sentence above it always said it said, and the state it used to certify is one this document
+       has been measured in: at one revision, in 38 consecutive censuses of one run, the OLD spelling of this
+       row read 1 while rung 3 read 0. That figure is a fact about that run and not about the tree — what is
+       durable is the implication, which needs no run and cannot go stale. */
+    int getter_arms = (param_value_count_of(js, "/api/getfork", "v", "gxADMIN") == 1 &&
+                       param_value_count_of(js, "/api/getfork", "v", "gxPUBLIC") == 1);
     /* AND THE CONTROL, WHICH IS WHAT MAKES THE LADDER ABOVE MEAN THE ACCESSOR. The same ternary over the same
        source in the same frame with no accessor in the way: `base_fork` at 1 while `getter_fork` is 0 isolates
        the difference to the accessor, and `base_fork` at 0 says `cfg.admin` is not two-armed at this point in
@@ -12685,12 +12715,35 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        the concretized gate §Solver-half forbids and is the finding.
        IT WAS THE ONLY ROW IN THIS FAMILY WITH NO TEXT, which is how it went unnoticed: `fold_row` asserts
        that a 0 row carries a diagnostic, and a row that never folds never reaches that assert. */
+    /* AND THE RUNG THAT MADE THE SENTENCE BELOW A READING RATHER THAN A GUESS. The `exactly ONE of its two
+       arms` clause was folded on `adm && pub` over two MEMBERSHIP tests, and membership cannot see a third
+       entry: one arm's literal ALONE and that literal ALONGSIDE some other value both answer `adm=1, pub=0`,
+       so the row printed a DECIDED gate for a statement whose sink more than one thing had reached. The two
+       readings take opposite work — a decided gate is a branch that never forked, a third value beside one
+       arm is a branch that DID fork whose sibling's value never became a literal — and the second is the
+       state its own sibling statement was in while this sentence was being read as the first: `/api/getfork`
+       answered `getter-concrete` 1 with `getter-fork` 0 while its total stood at TWO — one arm's literal and
+       one entry that is neither arm — in the same document, over the same source, in the same run. (That
+       total was `getter-arms`' old spelling, which this diff retires, so the row no longer reads that way;
+       the STATE is what the sentence is about and the row that named it is not the one to grep for.)
+       So the fold counts instead of asking, and `other` is the quantity that separates them. */
     const char *base_fork_why = NULL;
     int base_fork = 1;
     {
-        const int adm = param_value_is(js, "/api/getbase", "v", "gbADMIN");
-        const int pub = param_value_is(js, "/api/getbase", "v", "gbPUBLIC");
-        const int n   = param_value_count(js, "/api/getbase", "v");
+        const int adm   = param_value_count_of(js, "/api/getbase", "v", "gbADMIN");
+        const int pub   = param_value_count_of(js, "/api/getbase", "v", "gbPUBLIC");
+        const int n     = param_value_count(js, "/api/getbase", "v");
+        const int other = n - adm - pub;
+
+        /* THE PARTS SUM TO THE TOTAL, which is the one property of this ladder a reader can check without
+           re-deriving it — and it is what makes `other` a count rather than an inference. Both counters walk
+           ONE array through ONE reader, so a negative residue is those two having stopped counting the same
+           thing and every rung below it would then be arithmetic over a quantity that means nothing. */
+        DCHECK(other >= 0,
+               "this statement's `v` entries matching the two arm literals OUTNUMBER its entries: "
+               "param_value_count and param_value_count_of walk one validValues array with one entry reader, "
+               "so the parts cannot exceed the total unless one of them has stopped counting what the other "
+               "counts, after which every rung of this ladder is arithmetic over a residue that is not a count");
 
         fold_row(&base_fork, &base_fork_why, n > 0,
                  "NOT REACHED: `/api/getbase` carries no `v` at all, so the control statement never ran. The "
@@ -12701,12 +12754,29 @@ static int probes_eval(const char *js, Probe *out, int cap) {
                  "value equality on purpose (a shape could satisfy a laxer test while the claim above could "
                  "not), so a `v` that is some third thing means the statement ran and produced a value this "
                  "row cannot recognise, which is a claim about the fixture and not about the engine");
+        fold_row(&base_fork, &base_fork_why, other == 0,
+                 "`/api/getbase` carries an arm's literal AND at least one `v` that is neither arm's, so more "
+                 "than one thing reached this sink and only some of them are values this row can name. THIS "
+                 "IS NOT THE RUNG BELOW: a ternary that was DECIDED emits one arm and nothing else, so a "
+                 "third entry says the branch FORKED and a sibling's value never became a literal — a "
+                 "concretization failure, which is one mechanism further on than a gate that never forked and "
+                 "is fixed somewhere else. Read the unnamed entry itself: `param_value_count` counts it, no "
+                 "row prints it, and whether it is a derived display shape or a duplicate of the arm beside "
+                 "it is the question that decides which of the two mechanisms this is");
         fold_row(&base_fork, &base_fork_why, adm && pub,
                  "the same ternary over the same source in the same frame, with NO accessor in the way, "
                  "produced exactly ONE of its two arms — so `cfg.admin` is not two-armed at this point in the "
                  "document at all. That is the concretized gate §Solver-half forbids for server-injected "
                  "absent state, and it is UPSTREAM of every `getter-*` row above: those assert something no "
-                 "run can satisfy while this is 0, so the accessor is not what needs fixing");
+                 "run can satisfy while this is 0, so the accessor is not what needs fixing. EXACTLY ONE IS "
+                 "ENTAILED AND NOT ASSUMED: the rung above has established that no entry here is anything but "
+                 "an arm's literal, which is what a membership test could not say and is why that rung exists");
+        fold_row(&base_fork, &base_fork_why, adm == 1 && pub == 1,
+                 "BOTH arms reached the sink and one of them reached it MORE THAN ONCE: every `v` is an arm's "
+                 "literal and the two do not appear once each, so a flow got to this statement some way the "
+                 "fixture does not describe. That is a finding rather than a stronger pass, and it is the "
+                 "claim `getter-arms` makes about the accessor asked of the control — a control that "
+                 "accepts a document its subject's own ladder would refuse isolates nothing");
     }
 
     /* THE CONSTRUCT-TIME THROW HAPPENED. Without this row a green `con_shape` below is also what a statement
