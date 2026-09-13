@@ -335,12 +335,13 @@ for (;;) {
   let filled = 0;
   for (const line of pending) {
     const t = line.split("\t");
-    if (t.length !== 6 || t.some((x, i) => i !== 1 && x === ""))
-      fail("a pending line is not `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>CREDENTIALS<TAB>" +
-           "URL` — qjs_pending joins the six and the reply is delivered against the (method, url) pair, so a " +
+    if (t.length !== 7 || t.some((x, i) => i !== 1 && x === ""))
+      fail("a pending line is not `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>" +
+           "CREDENTIALS<TAB>URL` — qjs_pending joins the seven and the reply is delivered against the " +
+           "(method, url) pair, so a " +
            "short line makes a token the address. The empty DESTINATION is Fetch §2.2.5's own default and is " +
            "the one field that may be empty");
-    const [method, , initiator, provenance, , u] = t;
+    const [method, , initiator, provenance, , , u] = t;
     if (initiator !== "parser" && initiator !== "script")
       fail(`a pending line states the initiator \`${initiator}\`, which is neither token solver/engine.h ` +
            "declares — the vocabulary moved under every host that reads it");

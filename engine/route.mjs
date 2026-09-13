@@ -199,7 +199,7 @@ async function makeEngine(html, url, docId, headers, topLevelUrl, recipes, inher
     M.HEAPU8[p + u8.length] = 0;
     return [p, u8.length];
   };
-  /* KEYED ON THE REQUEST, WHICH IS THE PAIR: `qjs_pending` answers `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>CREDENTIALS<TAB>URL` lines and
+  /* KEYED ON THE REQUEST, WHICH IS THE PAIR: `qjs_pending` answers `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>URL` lines and
      the delivery matches both halves, so a GET and a POST to one address are two questions with two replies. */
   const provide = (method, u, reply, body) => {
     const [p, n] = bs(body);
@@ -415,9 +415,9 @@ async function service(e) {
   let paid = 0;
   for (const line of e.str('qjs_pending').split('\n').filter(Boolean)) {
     const t = line.split('\t');
-    if (t.length !== 6 || t.some((x, i) => i !== 1 && x === ''))
+    if (t.length !== 7 || t.some((x, i) => i !== 1 && x === ''))
       fail('a pending line is not ' +
-           `\`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>CREDENTIALS<TAB>URL\`: ${line} — ` +
+           `\`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>URL\`: ${line} — ` +
            'the empty DESTINATION is Fetch §2.2.5\'s own default and is the one field that may be empty');
     /* THE DESTINATION IS NOT NAMED HERE, AND THAT IS A STATEMENT. It is the CORB class — whether a reply may
        be ingested as code — and this driver ingests nothing: it mints its own reply out of a literal, so
@@ -425,8 +425,12 @@ async function service(e) {
        (the join's `destination_is_type`) and where bytes are actually classified by it; a driver that
        re-checked it here would be a third speller of Fetch §2.2.5's enumeration. The CREDENTIALS MODE beside
        it is skipped for the identical reason and one step further: it says whose session pays, this driver
-       has no session, and its vocabulary is asserted at the door that decides from it. */
-    const [method, , initiator, provenance, , u] = t;
+       has no session, and its vocabulary is asserted at the door that decides from it. THE PINNED MARK is
+       skipped on the same ground and it is the sharpest of the three: it exists so a FIRING policy can tell a
+       data request whose address rests on a witness this engine chose from one the app's own text spells, and
+       this driver fires nothing — it answers every park out of a literal. Its vocabulary is checked below all
+       the same, for the reason the other two vocabularies are. */
+    const [method, , initiator, provenance, pinned, , u] = t;
     /* THIS DRIVER ANSWERS EVERY PARK WHATEVER IT SAYS ABOUT ITSELF — its fixtures' fetches are named `/hold`,
        `/resume`, `/got` and `/closed` and the reply is `{}` served out of a literal, so there is no network
        here for a firing policy to be about. The vocabularies are checked because a driver that read a field it
@@ -436,6 +440,10 @@ async function service(e) {
     if (provenance !== 'observed' && provenance !== 'derived' && provenance !== 'forced')
       fail(`a pending line states the provenance \`${provenance}\`, which is none of the three tokens ` +
            'solver/engine.h declares');
+    if (pinned !== 'pinned' && pinned !== 'unpinned')
+      fail(`a pending line states the pinned mark \`${pinned}\`, which is neither token solver/engine.h ` +
+           'declares — a third value would be answered by whichever arm a firing policy happens to have as ' +
+           'its else, which is the permissive one');
     if (u.includes('/hold')) continue;
     if (u.includes('/resume') && resumeOwed) continue;
     if (u.includes('/got')) { got.push(u); console.log(`  [${e.docId}] DELIVERED: ${u}`); }

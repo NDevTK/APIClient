@@ -117,6 +117,17 @@
    stood on); a caller states the half it owns and this states the other. It is not a policy — the engine
    decides nothing about firing here, it names what the request IS, and the trusted zone decides. */
 int pending_prov_compose(int kind, int path_forced);
+/* …AND THE NARROWER FACT THE SAME PARK STAMPS BESIDE IT: may this request's ADDRESS rest on a value the
+ * parking flow itself DETERMINED on an arm nothing observed? Composed here rather than read off the flow at
+ * the join for `pending_prov_compose`'s reason exactly — the walk that joins the register runs arbitrarily
+ * later, over a flow that may have pinned a source since, and a request built before that pin cannot carry its
+ * bytes.
+ * IT ASSERTS THE NESTING, WHICH IS THE ONE INVARIANT ITS CONSUMER RESTS ON. solver/flow.h declares this bit
+ * strictly inside `path_forced`; that is what makes the trusted zone's reading of it a NARROWING of the forced
+ * set rather than a reach outside it, so a pair that disagreed would have the chokepoint decide a request the
+ * path bit refuses. Both halves arrive here together, from one park, which is the only place they can be
+ * compared at all. */
+int pending_pinned_compose(int kind, int path_forced, int path_pinned);
 
 /* THE RECORD'S FIELDS, IN ONE PLACE, WITH WHAT THE FORK DOES WITH EACH.
  *   SHARE  — the sibling takes a REFERENCE. Right for an immutable value (a JS string, the request body's
@@ -310,6 +321,9 @@ int pending_prov_compose(int kind, int path_forced);
     /* what this request is evidence of, composed from the kind and the pusher's path */ \
     X(PROV,       "prov",      PEND_SHARE,                                             \
       JS_NewInt32(pend_ctx(), pending_prov_compose(kind, path_forced)))                \
+    /* …and whether the ADDRESS may rest on a witness this engine chose, which PROV cannot say */ \
+    X(PINNED,     "pinned",    PEND_SHARE,                                             \
+      JS_NewBool(pend_ctx(), pending_pinned_compose(kind, path_forced, path_pinned)))  \
     X(SCRIPT_ROW, "scriptRow", PEND_SHARE,  JS_NewInt64(pend_ctx(), 0))                \
     /* §4.12.1.1's NULL type: a park owing a PROGRAM with no type crashes at the delivery */ \
     X(SCRIPT_TYPE, "scriptType", PEND_SHARE, JS_NewInt32(pend_ctx(), SCRIPT_TYPE_NONE))  \
@@ -570,7 +584,7 @@ int  pending_entry_declined(JSValueConst e);
    two reasons that both matter: this file is below flow.c and must not reach up into it, and the provenance is
    a fact about the path AT THE PUSH — a parameter is what makes "read it now, not later" a thing the compiler
    enforces at every park site instead of a rule each one is asked to remember. */
-JSValue pending_push(JSValue *reg, int kind, int path_forced);
+JSValue pending_push(JSValue *reg, int kind, int path_forced, int path_pinned);
 
 /* Set a field. `v` is consumed. `pending_set_int` is the same for the numeric ones.
    IT REFUSES ONE WRITE: `PEND_HAVE_VALUE` on a SYNCHRONOUS request. See `pending_answer_sync` below — this

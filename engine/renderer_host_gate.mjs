@@ -656,7 +656,7 @@ try {
     const st = await opener.renderer.step();
     steps++;
     /* THE REQUESTS FLOWS ARE PARKED ON, ANSWERED THE WAY THE PRODUCTION CONSUMER ANSWERS THEM — one
-       `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>CREDENTIALS<TAB>URL` line each, and the reply record crossing
+       `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>URL` line each, and the reply record crossing
        as JSON with the BODY BESIDE
        IT as bytes, because §2.2.5 makes a response's body a byte sequence and every way of putting one inside JSON is an
        encode or a decode run by the zone that fetched. `computedType` is this zone's own decision and is
@@ -672,14 +672,15 @@ try {
        the two fields tested for content are the ends. The CREDENTIALS MODE joined the line after the
        provenance and this gate answers every park whatever it says, for the reason it answers every
        provenance: it serves an opener of its own making over a loopback socket, where there is no session
-       to spend — what it owes is the FIELD COUNT, which is the half a grammar change breaks. */
+       to spend — what it owes is the FIELD COUNT, which is the half a grammar change breaks. The WITNESS MARK
+       joined the line after the provenance and is answered the same way and for the same reason. */
     for (const line of (await opener.renderer.getPending()).requests.split('\n').filter(Boolean)) {
       const t = line.split('\t');
-      if (t.length !== 6 || t[0] === '' || t[5] === '')
+      if (t.length !== 7 || t[0] === '' || t[6] === '')
         fail('a pending line is not ' +
-             '`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>CREDENTIALS<TAB>URL`, and the ' +
+             '`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>URL`, and the ' +
              `reply is delivered against the (method, url) pair it names: ${line}`);
-      const method = t[0], u = t[5];
+      const method = t[0], u = t[6];
       console.log(`${TAG}   pending: ${method} ${u}`);
       await opener.renderer.provide({
         method, url: u,

@@ -668,6 +668,50 @@ typedef struct Flow {
      * example VALUES from CURRENT sources"). A serialized bit would state last session's answer about this
      * session's server. */
     int   path_forced;
+    /* …AND WHETHER THIS PATH DETERMINED A VALUE ON ONE OF THOSE ARMS, WHICH IS A STRICTLY NARROWER FACT AND
+     * ANSWERS A DIFFERENT QUESTION. `path_forced` says what a reply is WORTH; this says whether an address the
+     * flow composes afterwards may rest on BYTES THIS ENGINE CHOSE, which is what decides whether the act of
+     * fetching it may be spent. Two questions, two bits — folding them into one is the defect
+     * §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS names, and the looser question is the one that would lose.
+     *
+     * WHAT SETS IT. `decide.c` pins a source (CONCRETIZE-ON-PIN) on the holding arm of an equality, and where
+     * that arm is one the flow's own concrete example CONTRADICTS, this is marked with it. From that instant
+     * `concolic_new`'s pin arm answers every later read of that source with the pinned spelling, so anything
+     * the page computes from it — a URL above all — carries a witness THIS ENGINE chose rather than one the
+     * server or the document supplied.
+     *
+     * WHY IT IS NOT READ OFF THE ADDRESS, WHICH IS THE SHAPE A READER WILL REACH FOR FIRST AND IS NOT
+     * BUILDABLE. The natural spelling of this fact is "does this request's ADDRESS carry a value this path
+     * pinned", asked of the URL at the park — and the answer is ALWAYS NO, for every pinned value, by design.
+     * `pin_mint` (solver/concolic.c) returns a BARE primitive — `JS_NewString`, `JS_NULL`, a Number — and
+     * never a concolic, and `concolic_add_hook` returns 0 when neither operand is concolic, so
+     * `"/chunks/" + region + ".js"` with `region` pinned is a PLAIN STRING carrying no identity whatever. It
+     * is byte-indistinguishable in kind from a chunk address spelled entirely in the bundle's own source.
+     * Recovering the link would mean tracking bytes through `+`, `slice` and every builtin — a TAINT TRACKER
+     * over primitives, which §Re-execution bans by name and which the concolic value exists to replace. So the
+     * fact is recorded where the bytes are CHOSEN, which is the one door they enter the program through, and
+     * not where they are spent.
+     *
+     * STRICTLY NESTED INSIDE `path_forced`, AND STRUCTURALLY SO RATHER THAN BY A SECOND COPY OF THE RULE.
+     * Its one writer is reached only on the branch where `decide_note_forced_arm` has just marked the path, so
+     * there is no state of the program in which this is set and that is clear — `pending_prov_compose` asserts
+     * exactly that, at the park, where the pair is consumed. That nesting is what makes reading it a NARROWING
+     * of the forced set and never a reach outside it (CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE).
+     *
+     * MONOTONE, FORK-CARRIED AND NOT A WEIGHT TERM, for `path_forced`'s reasons exactly, one field up: a path
+     * cannot un-choose a witness, an arm is its parent's path with one more arm on it, and a flow that pinned
+     * cheaply must not be able to change its rank by having done so.
+     *
+     * NAMED RESIDUAL — A PIN TAKEN WHERE THE FLOW HAD NO EXAMPLE AT ALL IS NOT MARKED. What is not covered:
+     * `decide_note_forced_arm` returns early on REAL_ARM_UNOBSERVED, so an equality over a source this run
+     * never observed pins a witness and leaves both bits clear. What the next diff builds: an arm of
+     * `decide_real_arm`'s answer that separates "the example contradicts this" from "there is no example",
+     * and a third state on this field for the second. How its absence would show: a flow that pinned such a
+     * source, took a contradicted arm on an UNRELATED gate afterwards, and then parked — the request is graded
+     * FORCED, this bit reads clear, and the chokepoint fires an address holding the earlier witness. It is
+     * left narrow deliberately: §@H rules that a value pinned by the page's own equality is DETERMINED and not
+     * invented, so such an address is one this engine already fires at the DERIVED grade today. */
+    int   path_pinned;
     /* THE DOCUMENT'S LOAD STAGE IS NOT HERE, and the field that was is DELETED. One integer cannot hold N
        documents: an agent is an origin-keyed CLUSTER, so a flow reaches several Documents and HTML gives each
        its own readiness and its own DOMContentLoaded. The stage lives on each Document (document.c's readiness
@@ -2489,6 +2533,20 @@ void  flow_mark_forced_arm(void);
    exactly as it applies to its address: a flow that parks a request and takes a contradicted arm afterwards
    built that request on the path it had THEN. */
 int   flow_path_forced(const Flow *f);
+/* THE RUNNING FLOW JUST DETERMINED A SOURCE'S VALUE ON AN ARM ITS OWN EXAMPLE CONTRADICTS — `path_pinned`'s ONE
+   writer, and the whole of what separates a request whose ADDRESS may rest on a witness this engine chose from
+   one merely built past a forced gate. Idempotent and monotone for `flow_mark_forced_arm`'s reasons.
+   IT IS CALLED ONLY WHERE THAT FUNCTION HAS JUST BEEN CALLED, which is what makes the nesting structural
+   rather than a second copy of the forced test: decide.c's `decide_note_forced_arm` ANSWERS whether it marked
+   the path, and this is reached only on that answer. Two sites spelling "did this arm contradict its example"
+   would be two rules free to disagree, and the disagreement would file a chosen witness under a path that
+   denies standing on one. */
+void  flow_mark_pinned_value(void);
+/* HAS THIS FLOW DETERMINED A VALUE ON SUCH AN ARM — read at the PARK, beside `flow_path_forced` and for the
+   same reason: a park is a work item and §scheduler's "an operation that becomes a work item takes its inputs
+   with it" applies to what its address RESTS ON exactly as it applies to the address. A flow that parks a
+   request and pins a source afterwards built that request on the path it had THEN. */
+int   flow_path_pinned(const Flow *f);
 /* CHARGE THE RUNNING FLOW FOR THE THREAD TIME A STEP JUST BURNED, in MICROSECONDS — the same currency as the
    reward above, which is the only reason the aging term can ever outweigh it. Charged AFTER the step, because
    the quantity is not known before it, and by the scheduler alone (it is the only caller that holds both ends

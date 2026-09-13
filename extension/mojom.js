@@ -440,7 +440,7 @@
         reply: [
           { name: "requests", type: "string",
             why: "the REQUESTS flows are parked on — one " +
-                 "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>CREDENTIALS<TAB>URL` line each, " +
+                 "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>URL` line each, " +
                  "newline-joined, \"\" for none, deduped by the PAIR. The field was `urls` and the list was addresses alone, which is a " +
                  "request named by half of itself: a page that issues a GET and a POST to one address parks " +
                  "two, and both settled with whichever body the zone fetched first. TAB can occur in none of " +

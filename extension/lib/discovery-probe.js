@@ -184,6 +184,10 @@ function _chokepointGetFn(tab, who) {
       pageUrl: tab.url,
       pageOrigin: tab.origin,
       provenance: "derived",
+      /* ENTAILED BY THE NESTING AND NOT ASSUMED: solver/flow.h holds the witness mark strictly inside
+         `path_forced`, so a request this zone states as DERIVED cannot carry one. safe-fetch.js asserts the
+         pair rather than trusting it, which is what makes stating it here a claim and not a formality. */
+      pinned: "unpinned",
       destination: "",
       headers: headers || {},
     });

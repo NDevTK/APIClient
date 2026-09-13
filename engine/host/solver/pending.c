@@ -398,7 +398,7 @@ int pending_owed_replies(JSValueConst reg)
            reached through the one entry kind for which no reply exists at all. */
         if (kind != FLOW_PENDING_HOSTREQ && pend_host_owed(e)) {
             /* A DEBT IS A REPLY THAT CAN STILL ARRIVE, AND ONLY THE PAIR MAKES ONE ARRIVE. engine_pending_fetches
-               lists `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>CREDENTIALS<TAB>URL` and engine_provide delivers
+               lists `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>URL` and engine_provide delivers
                against the pair, so an owed
                entry missing either is one the host was never shown and never will be — counting it credits a reply nobody is
                going to send, and the credit is then spent by a reply the host genuinely mispaired. Asserted at
@@ -459,7 +459,27 @@ int pending_prov_compose(int kind, int path_forced)
     return kind == FLOW_PENDING_DOCSCRIPT ? PROV_OBSERVED : PROV_DERIVED;
 }
 
-JSValue pending_push(JSValue *reg, int kind, int path_forced)
+/* See pending.h. IT IS THE PARK'S OWN READING OF A PAIR OF FLOW FACTS AND COMPUTES NOTHING FROM THE KIND —
+   `kind` is taken so that the assert below can name the park that carried a broken pair, which is the one
+   coordinate a reader of this abort would otherwise have to reconstruct. A PROGRAM park and a DATA park are
+   equally able to compose an address out of a determined witness; what differs is what the reply BECOMES, and
+   that is Fetch §2.2.5's destination and the trusted zone's question rather than this one. */
+int pending_pinned_compose(int kind, int path_forced, int path_pinned)
+{
+    DCHECK(path_pinned == 0 || path_pinned == 1,
+           "a park stated a determined-witness mark that is neither set nor clear — it comes from "
+           "flow_path_pinned, which asserts the same thing at the other end, so a third value is a caller that "
+           "computed this somewhere else");
+    DCHECKF(!path_pinned || path_forced,
+            "a park of kind %d states that its address may rest on a value the flow DETERMINED on a "
+            "contradicted arm, while stating that its path stood on no contradicted arm — solver/flow.h "
+            "declares the second bit strictly nested inside the first, and the trusted zone reads the pair as "
+            "a NARROWING of the forced set, so this park would have the chokepoint decide a request the "
+            "provenance beside it refuses", kind);
+    return path_pinned;
+}
+
+JSValue pending_push(JSValue *reg, int kind, int path_forced, int path_pinned)
 {
     JSValue e;
 

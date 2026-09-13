@@ -1498,6 +1498,11 @@ async function frontierRederive(e) {
        credential question being answered by silence. */
     try { r = await self.safeFetch(e.sourceUrl, { pageUrl: e.sourceUrl, pageOrigin: e.origin,
                                                   destination: "document", provenance: PROVENANCE_DERIVED,
+                                                  /* ENTAILED AND NOT ASSUMED: solver/flow.h nests the witness
+                                                     mark strictly inside `path_forced`, so a request this
+                                                     zone states as DERIVED cannot be carrying one. The
+                                                     chokepoint asserts that pair rather than trusting it. */
+                                                  pinned: "unpinned",
                                                   credentials: "include",
                                                   credentialed: navigationCarriesSession(e.sourceUrl, e.origin) }); }
     catch (err) { RETHROW_FATAL(err); r = null; }
@@ -2149,6 +2154,15 @@ async function navigationLoad(u, base, principalUrl, principalOrigin, provenance
        credential question being answered by silence. */
     const r = await self.safeFetch(abs, { pageUrl: principalUrl, pageOrigin: principalOrigin,
                                           destination: "document", provenance: provenance,
+                                          /* `unstated` BECAUSE THIS PROVENANCE IS A VARIABLE. A navigation's
+                                             word comes from `engine_provenance_of_running_path` by way of a
+                                             notice, and a notice is not a park, so no witness mark was ever
+                                             composed for it — see safe-fetch.js's `_pinnedOf` for why
+                                             `unpinned` would be false exactly where it matters and for what
+                                             retires this. It changes no outcome: `document` is not
+                                             §2.2.5 SCRIPT-LIKE, so a forced navigation is refused either
+                                             way; what it costs is the specificity of the sentence. */
+                                          pinned: "unstated",
                                           credentials: "include",
                                           credentialed: navigationCarriesSession(abs, principalOrigin) });
     DCHECK(r && typeof r === "object" && r.body instanceof Uint8Array && r.headers && typeof r.headers === "object",
@@ -2899,15 +2913,21 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
      "Requests" gives every request one; `safe-fetch.js` decides the CORB class from §2.2.5's own script-like
      predicate over it. It is passed THROUGH rather than reduced to a boolean here, because a boolean is a
      second vocabulary for a spec field and the zone that decides is the one that should read the value. */
-  const fetched = async (method, u, destination, provenance, credentials) => {
+  const fetched = async (method, u, destination, provenance, pinned, credentials) => {
+    DCHECK(pinned === "pinned" || pinned === "unpinned",
+           "a pending request reached the fetch relay carrying no witness mark — solver/engine.h states " +
+           "`pinned` or `unpinned` on every line of the pending join, and the chokepoint reads it WITH the " +
+           "destination to decide whether an act may be spent on an address this engine may have composed. " +
+           "A relay that dropped it would have safe-fetch.js answer from `unstated`, which is the word for " +
+           "an act that never had one");
     DCHECK(typeof destination === "string",
            "a pending request reached the chokepoint with no DESTINATION — GetPending answers " +
-           "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>CREDENTIALS<TAB>URL` and Fetch §2.2.5 " +
+           "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>URL` and Fetch §2.2.5 " +
            "makes the destination part of the request, so a caller that omits it is one whose code load " +
            "would be fetched as data and compiled. The empty string is a real destination and means DATA");
     DCHECK(typeof method === "string" && method !== "",
            "a pending request reached the chokepoint with no method — GetPending answers " +
-           "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>CREDENTIALS<TAB>URL` and the " +
+           "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>URL` and the " +
            "(method, url) pair is what the flow parked on, so a request whose method is unknown can be " +
            "neither refused nor issued");
     /* AND THE CREDENTIALS MODE, ASSERTED HERE FOR THE DESTINATION'S REASON EXACTLY: it is half of what this
@@ -2917,7 +2937,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
        and from this zone's own willingness, which are two facts and not one (see `_credentialedOf`). */
     DCHECK(typeof credentials === "string" && credentials !== "",
            "a pending request reached the chokepoint with no CREDENTIALS MODE — GetPending answers " +
-           "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>CREDENTIALS<TAB>URL`, Fetch §2.2.5 " +
+           "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>URL`, Fetch §2.2.5 " +
            "\"Requests\" gives every request one, and only the algorithm that created it knows which. A " +
            "caller that drops it hands `safe-fetch.js` a request it can decide nothing about");
     /* THE METHOD HALF OF THE FIRING QUESTION, ASKED OF THE CHOKEPOINT RATHER THAN RE-DERIVED HERE. This was
@@ -3015,7 +3035,8 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
          off the pending line. Their conjunction is `safe-fetch.js`'s, and the mode can only ever narrow it —
          so relaying it takes no new decision today and is what makes the `omit` parks refusable, and the
          `include` ones honest, the day the principal above is wired. */
-      const opts = { pageUrl: msg.sourceUrl, destination, provenance, credentials, credentialed: false };
+      const opts = { pageUrl: msg.sourceUrl, destination, provenance, pinned, credentials,
+                     credentialed: false };
       const r = await self.safeFetch(abs, opts);
       /* THE CHOKEPOINT'S RECORD IS FIXED — safe-fetch.js returns {ok,status,statusText,headers,body,urlList}
          on every path it has, including every blocked one. `if (!r || typeof r.body !== "string") return null`
@@ -3261,9 +3282,16 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
          about the request, and NOT as `credentialed`, which is this zone's own decision to spend the
          session and is still false here: the two are composed at the chokepoint and the statement can only
          ever narrow. Relaying it takes no new decision and gives the refusal below a fact to be about. */
+      /* AND `unstated` FOR THE WITNESS MARK, WHICH IS A STATEMENT ABOUT THIS ACT AND NOT A GUESS ABOUT ITS
+         PATH. The engine composes `pinned`/`unpinned` at a PARK, off the parking flow's own
+         `flow_path_pinned`; an `xhr.send` record is not a park and carries
+         `engine_provenance_of_running_path`'s word alone. `unpinned` here would be FALSE exactly where it
+         matters — a flow that pinned a witness has `path_forced` set by the nesting, so precisely the records
+         that say `forced` are the ones whose address may hold our bytes — and `pinned` would be a wrong
+         sentence the other way. safe-fetch.js's `_pinnedOf` carries the residual and what retires it. */
       const r = await self.safeFetch(abs, { pageUrl: msg.sourceUrl, destination: "",
-                                            provenance: q.provenance, credentials: q.credentials,
-                                            headers: q.headers });
+                                            provenance: q.provenance, pinned: "unstated",
+                                            credentials: q.credentials, headers: q.headers });
       DCHECK(r && typeof r === "object" && r.body instanceof Uint8Array && typeof r.status === "number" &&
              r.headers && typeof r.headers === "object",
              "safeFetch answered an XHR with something other than its reply record — §3.5.6's response is " +
@@ -3742,15 +3770,20 @@ async function engineDecline(eng, method, url, reason) {
    the grammar actually promises. */
 function pendingRequest(line) {
   const f = line.split("\t");
-  CHECK(f.length === 6 && f[0] !== "" && f[5] !== "",
+  CHECK(f.length === 7 && f[0] !== "" && f[6] !== "",
         "content.mojom.Renderer.GetPending answered a line that is not " +
-        "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>CREDENTIALS<TAB>URL`: `" + line + "` — the " +
-        "engine joins the six and this zone must deliver against the (method, url) pair, so a line missing a " +
+        "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>URL`: `" + line + "` — the " +
+        "engine joins the seven and this zone must deliver against the (method, url) pair, so a line missing a " +
         "field puts a token where the address belongs and keys a reply on a request nothing parked on");
   const destination = f[1];
   const initiator = f[2];
   const provenance = f[3];
-  const credentials = f[4];
+  /* …AND WHETHER THE ADDRESS MAY REST ON A WITNESS THE ENGINE CHOSE — solver/engine.h's `pinned`/`unpinned`,
+     composed at the park from solver/flow.h's `path_pinned` and NESTED inside the provenance beside it. This
+     zone relays it and decides nothing from it: `safe-fetch.js` reads it with the destination, which is where
+     every other risk decision in this project lives. */
+  const pinned = f[4];
+  const credentials = f[5];
   /* THREE FIELDS AND THREE QUESTIONS, AND THE ONE THIS ZONE ACTS ON IS THE DESTINATION. Fetch §2.2.5
      "Requests" gives every request one, the engine states it at each park off the request record, and
      `safe-fetch.js` decides the CORB class by asking §2.2.5's own SCRIPT-LIKE predicate of it. That question
@@ -3788,6 +3821,12 @@ function pendingRequest(line) {
         "GetPending stated a provenance this zone does not know: `" + provenance + "` — solver/engine.h " +
         "declares exactly `observed`, `derived` and `forced`, and a fourth value would be answered by " +
         "whichever arm the firing policy happens to be written with as its else");
+  CHECK(pinned === "pinned" || pinned === "unpinned",
+        "GetPending stated a witness mark this zone does not know: `" + pinned + "` — solver/engine.h " +
+        "declares exactly `pinned` and `unpinned` on this line, and the firing policy reads it to decide " +
+        "whether an ACT MAY BE SPENT on an address that may be one this engine composed, so an unknown word " +
+        "would take that policy's permissive arm. `unstated` is safe-fetch.js's word for an act that carries " +
+        "no mark at all and is never one a pending line may state");
   /* AND THE FOURTH FIELD IS FETCH §2.2.5 "Requests"' CREDENTIALS MODE, WHICH IS THE ONE THIS ZONE ACTS ON
      BESIDE THE DESTINATION — it says WHOSE SESSION PAYS. Only the algorithm that CREATED the request knows
      it (§2.5.1's create a potential-CORS request for an `<img>`, §2.5.4's CORS settings attribute credentials
@@ -3798,7 +3837,7 @@ function pendingRequest(line) {
      fatal at the door that decides (`_credentialedOf`), which is one check for BOTH hosts, since
      `engine/trusted.mjs` loads that same file verbatim. What is asserted here is the LINE'S SHAPE, which is
      this splitter's own contract. */
-  return { method: f[0], destination, initiator, provenance, credentials, url: f[5] };
+  return { method: f[0], destination, initiator, provenance, pinned, credentials, url: f[6] };
 }
 async function engineServiceFetch(eng) {   // one round: answer every parked REQUEST, then the engine is hot again
   /* THE REPLY'S METADATA CROSSES AS TEXT AND CARRYING ITS TYPE — JSON, exactly as qjs_host_answer's answer
@@ -3828,8 +3867,8 @@ async function engineServiceFetch(eng) {   // one round: answer every parked REQ
      it, the splitter above CHECKed it, and then it stopped here: every park was fired, at every grade, and the
      check that validated the word was validating a field with no reader. */
   for (const line of requests) {
-    const { method, destination, provenance, credentials, url } = pendingRequest(line);
-    const answer = await eng.fetched(method, url, destination, provenance, credentials);
+    const { method, destination, provenance, pinned, credentials, url } = pendingRequest(line);
+    const answer = await eng.fetched(method, url, destination, provenance, pinned, credentials);
     /* A DECLINE IS ITS OWN DELIVERY, AND DELIVERING NOTHING WAS ONLY HALF OF IT. The park was right — the
        engine's register keys on (method, url), `provide` clears the entry, and leaving it there is the flow
        STAYING PARKED, which is what §@S requires of a search not yet solved and what lets the request fire the
@@ -4395,7 +4434,12 @@ async function hostNotice(eng, line) {
        derived the address and STATED how it got there — and this zone did exactly what it should, which is to
        decline. A derived-and-unfired address is not a gap in the report; §Attacker-sources says it IS the
        report. */
-    const _seedRefusal = self.safeFetchFiringRefusal(f[2], f[1]);
+    /* `document` AND `unstated`, FOR THE REASON `navigationLoad` STATES: a route declaration is a notice and
+       not a park, so the engine composed no witness mark for it, and a document load is never §2.2.5
+       SCRIPT-LIKE so neither field can change this answer. Both are stated because the GRADE is the
+       chokepoint's — a caller that guessed either would be the second copy of the rule this call exists to
+       avoid. */
+    const _seedRefusal = self.safeFetchFiringRefusal(f[2], f[1], "document", "unstated");
     if (_seedRefusal) {
       console.warn("[bridge] a route declaration for `" + f[1] + "` stood on a " + _seedRefusal.toUpperCase() +
                    " arm and its origin is not widened for exploration — the address is derived and " +

@@ -464,7 +464,7 @@ async function child(docPath, schedName) {
        classic-script decode had never once seen the bytes whose charset it exists to honour. The mock body is
        written as source text here, so this is an ENCODE. */
     /* THE REQUEST THIS ANSWERS IS THE PAIR the engine listed — `qjs_pending` answers
-       `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>CREDENTIALS<TAB>URL` and the reply is delivered against the (method, url) pair, so a GET and a POST to one address are two questions here. */
+       `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>URL` and the reply is delivered against the (method, url) pair, so a GET and a POST to one address are two questions here. */
     const provide = (method, u, reply, body) => {
       const b = new TextEncoder().encode(body);
       const p = M._malloc(b.length + 1);
@@ -639,11 +639,11 @@ async function child(docPath, schedName) {
                  : pending;
     for (const line of answer) {
       const t = line.split("\t");
-      if (t.length !== 6 || t.some((x, i) => i !== 1 && x === ""))
+      if (t.length !== 7 || t.some((x, i) => i !== 1 && x === ""))
         gateFail("a pending line is not " +
-                 "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>CREDENTIALS<TAB>URL` — " +
-                 "qjs_pending joins the six and the reply is delivered against the (method, url) pair, so a " +
-                 "short line makes a token the address. The empty DESTINATION is Fetch §2.2.5's own default " +
+                 "`METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>URL` — " +
+                 "qjs_pending joins the seven and the reply is delivered against the (method, url) pair, so " +
+                 "a short line makes a token the address. The empty DESTINATION is Fetch §2.2.5's own default " +
                  "and is the one field that may be empty");
       /* THE DESTINATION IS NAMED NOW, AND THE ARGUMENT IT REPLACES IS REWRITTEN RATHER THAN DELETED because a
          reader who re-derives it will re-introduce it. It said the destination need not be named "for

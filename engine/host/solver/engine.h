@@ -926,6 +926,33 @@ void engine_unload_document(uint32_t doc);
 #define PENDING_PROVENANCE_DERIVED  "derived"  /* the page's own code computed it from real inputs */
 #define PENDING_PROVENANCE_FORCED   "forced"   /* a value in it exists only because a gate was forced */
 
+/* …AND WHETHER THE ADDRESS ITSELF MAY REST ON A WITNESS THIS ENGINE CHOSE — a SECOND field and never a fourth
+ * word above, because the two answer different questions and one token cannot carry both. The provenance says
+ * what a REPLY IS WORTH and is correct as stamped; this says whether the ACT MAY BE SPENT, which CLAUDE.md
+ * §A-REQUEST-CARRIES-THE-PROVENANCE decides "from the provenance the request declares BESIDE its method and
+ * credential state". Spelling it as a fourth provenance would RE-KEY the grade — every consumer that reads
+ * `forced` to mean "carry this reply as forced" would stop seeing it — which is the one repair that file
+ * refuses by name.
+ * WHAT IT MEANS. `pinned` says the parking flow had, before it built this request, DETERMINED some source's
+ * value on an arm its own concrete example contradicts (solver/flow.h's `path_pinned`). From that instant
+ * concretize-on-pin answers every read of that source with the chosen spelling, so an address the page
+ * composes afterwards may be one no server ever had. `unpinned` is the positive statement that it had not, so
+ * every byte of the address came from the document, the server, or the page's own text.
+ * IT IS A PROPERTY OF THE PATH AND NOT OF THE ADDRESS, WHICH IS A NARROWING AND IS STATED RATHER THAN HIDDEN.
+ * The address cannot be asked: `pin_mint` (solver/concolic.c) answers a pinned read with a BARE primitive and
+ * `concolic_add_hook` derives nothing from two bare operands, so the composed URL is a plain string that has
+ * forgotten where its bytes came from — and that forgetting is the mechanism, not a defect in it. Recovering
+ * the link would be a TAINT TRACKER over primitives, which §Re-execution bans by name. So `pinned` is a
+ * MAY-REST-ON and never a DOES-REST-ON: it is the necessary condition, recorded at the one door those bytes
+ * enter through, and a request parked BEFORE any such determination cannot carry them at all.
+ * A DEDUPED SET STATES THE SAFER OF ITS MEMBERS, which is the OPPOSITE DIRECTION to the provenance beside it
+ * and is deliberate. The provenance reports the MOST OBSERVED member because the set is one request and a
+ * reply to it is evidence about the app if any member's path was clean. This reports `pinned` if ANY member's
+ * was: the set is one ADDRESS, and a member that composed it out of a chosen witness is a member for which
+ * those bytes may be ours. Under-claiming here fires an act; under-claiming there merely grades a reply. */
+#define PENDING_PINNED_YES "pinned"     /* the path determined a witness before building this address */
+#define PENDING_PINNED_NO  "unpinned"   /* it had not: every byte of the address came from outside this engine */
+
 /* THE SAME THREE WORDS FOR AN ACT THAT IS NOT A PARK — one composition, in one place, for every request this
  * engine builds by RUNNING THE PAGE'S CODE rather than by parking on a reply. A NAVIGATION is the caller this
  * was written for (core/frame/navigable.c's §7.4.5 "Populating a session history entry" load and its
@@ -1022,7 +1049,7 @@ const char *engine_provenance_token(int prov);
    and the zone has no register. */
 
 /* WHAT THE HOST STILL OWES THE FRONTIER'S NETWORK PARKS — one
- * `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>CREDENTIALS<TAB>URL` line per outstanding
+ * `METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>URL` line per outstanding
  * request, newline-terminated, "" for none, DEDUPED BY THE PAIR.
  * THIS SENTENCE NAMED FOUR FIELDS AFTER THE PROVENANCE BECAME THE FIFTH, which is the ordinary way a grammar
  * stated in prose beside the function that joins it goes wrong: every reader of the LINE was updated and the
@@ -1072,7 +1099,8 @@ const char *engine_pending_fetches(void);
 /* ONE LINE, SPLIT WHERE IT WAS JOINED — because three hosts each deriving the pair is three places to get it
    wrong, which is the hand-copy 59d0e42d abolished. `line` is the host's own mutable copy of one line (no
    newline); each TAB is overwritten with a NUL and the six fields are handed back pointing into it.
-   THE DESTINATION, THE INITIATOR, THE PROVENANCE AND THE CREDENTIALS MODE ARE OUT-PARAMETERS AND NONE IS
+   THE DESTINATION, THE INITIATOR, THE PROVENANCE, THE PINNED MARK AND THE CREDENTIALS MODE ARE OUT-PARAMETERS
+   AND NONE IS
    OPTIONAL, deliberately: a
    host that did not want one could pass NULL and would then be a host reading a request whose LOAD CLASS — or
    whose PROVENANCE — it never asked about, which is the defaulted-field defect wearing a convenience. Two of
@@ -1084,8 +1112,8 @@ const char *engine_pending_fetches(void);
    personalised body as the logged-out one — or, in the other direction, spends the person's cookies on a
    park whose own algorithm said `omit`. It costs a caller four locals and four membership asserts. */
 void engine_pending_split(char *line, const char **method, const char **destination,
-                          const char **initiator, const char **provenance, const char **credentials,
-                          const char **url);
+                          const char **initiator, const char **provenance, const char **pinned,
+                          const char **credentials, const char **url);
 /* DELIVER A BODY FOR ONE REQUEST — keyed on `(method, url)`, which is what the flow parked on. Returns how many
    entries it filled; 0 with nothing matched is the host's pairing being off (or a sale — engine_take_paged_owed),
    and it is the CALLER that tells those apart because the caller owns the credit. */

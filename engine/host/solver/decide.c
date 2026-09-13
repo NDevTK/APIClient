@@ -2152,18 +2152,24 @@ static int decide_real_arm(JSContext *ctx, JSValueConst cond) {
  * THE CMP-SUBJECT HALF IS SILENT THERE RATHER THAN WRONG. An operand is not a comparison result, so it carries
  * no `cmp_subj_ident` and the second contradiction does not fire — the operand IS the subject at an outcome,
  * and it is already named by its own identity above. */
-static void decide_note_forced_arm(JSValueConst v, int real_arm, int arm) {
+/* IT ANSWERS WHETHER IT MARKED, AND THAT RETURN IS THE ONLY SPELLING OF "THIS ARM CONTRADICTS ITS EXAMPLE"
+   THE REST OF THIS FUNCTION MAY READ. The pin below needs the same fact — a witness determined on a
+   contradicted arm is what solver/flow.h's `path_pinned` records — and re-deriving it from `real` and `arm` at
+   that second site would be two rules free to disagree about which arm proved what, which is the disagreement
+   the `eq_holds`/`eq_fails` pair a few lines down exists to prevent for the sibling records. One speller. */
+static int decide_note_forced_arm(JSValueConst v, int real_arm, int arm) {
     const char *ident;
 
     DCHECK(arm == 0 || arm == 1,
            "an arm that is neither taken nor not-taken was compared against an example — the contradiction is "
            "between TWO booleans, so a third value here is a decision seam that answered something else");
-    if (real_arm == REAL_ARM_UNOBSERVED || arm == real_arm) return;
+    if (real_arm == REAL_ARM_UNOBSERVED || arm == real_arm) return 0;
     flow_mark_forced_arm();
     ident = concolic_ident_c(v);
     if (ident) concolic_contradict_example(ident);
     ident = concolic_cmp_subject_ident(v);
     if (ident) concolic_contradict_example(ident);
+    return 1;
 }
 
 /* THE ONE BODY BEHIND BOTH BRANCH ENTRIES — see decide.h. `restartable` is the CALLER's declaration about
@@ -2172,7 +2178,7 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
     const char *src = NULL, *tok = NULL;
     ConcolicLit tok_kind = CONCOLIC_LIT_NONE;
     char *key;
-    int op, forked = 0, arm, real, neg, eq_holds, eq_fails;
+    int op, forked = 0, arm, real, neg, eq_holds, eq_fails, forced_arm;
 
     if (!g_running || !concolic_is(cond)) return -1;   /* not a forced-exec branch on a concolic value */
 
@@ -2211,7 +2217,7 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
     arm = decide_arm(ctx, key, cond, restartable, nonforking, real, &forked);
     free(key);
 
-    decide_note_forced_arm(cond, real, arm);
+    forced_arm = decide_note_forced_arm(cond, real, arm);
 
     /* the source equals tok on the arm that makes the EQ true (EQ&&true or NE&&false) -> the code pinned it */
     /* THE ROOT TRAVELS WITH THE PIN, and it is read off the COMPARISON RESULT rather than re-derived: pred_new
@@ -2239,8 +2245,25 @@ static int decide_branch(JSContext *ctx, JSValueConst cond, int restartable, int
            "that is not an equality must stand on NEITHER (an ordering and a call predicate determine no "
            "value), and one that is must stand on exactly one, or a pin and the exclusion that contradicts it "
            "are recorded off the same run of the same gate");
-    if (src && tok && eq_holds)
+    if (src && tok && eq_holds) {
         concolic_pin(src, concolic_root_c(cond), tok_kind, tok, concolic_cmp_algo(cond));
+        /* …AND THE PATH RECORDS THAT IT HAS NOW CHOSEN A WITNESS, where the arm that chose it is one this
+           run's own example CONTRADICTS. From this instant concolic_new's pin arm answers every later read of
+           `src` with `tok`, so every address the page composes from that source afterwards carries bytes THIS
+           ENGINE picked rather than bytes the document or the server supplied — and the trusted zone's firing
+           decision is the one thing that has to tell those apart (CLAUDE.md
+           §A-REQUEST-CARRIES-THE-PROVENANCE: "does this address carry a value this path pinned or
+           contradicted … and only then does the firing question read it").
+           IT IS RECORDED HERE, AT THE CHOICE, BECAUSE IT CANNOT BE RECOVERED AT THE ADDRESS. `pin_mint`
+           answers a read with a BARE primitive and `concolic_add_hook` derives nothing from two bare
+           operands, so the composed URL is a plain string that has forgotten where its bytes came from —
+           deliberately, since that forgetting is what stops a pinned source re-forking. solver/flow.h's field
+           carries the full reading and the residual.
+           NOT GATED ON THE ALGORITHM, unlike the loose-equality record below: §7.2.14 and §7.2.13 disagree
+           about what a HOLDING arm proves, and `concolic_pin` already refuses the loose one — so reaching
+           this line at all means a value was determined, which is the only thing this bit claims. */
+        if (forced_arm) flow_mark_pinned_value();
+    }
     /* AND THE OTHER ARM, WHICH IS AN OBSERVATION AND NOT AN ABSENCE — the half this line did not have.
        Forced multi-path runs BOTH arms of every `x === "admin"`, so the two branches of this `if` fire at
        exactly the same rate: one flow leaves knowing the value IS "admin", and its sibling leaves having

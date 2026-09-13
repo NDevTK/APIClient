@@ -313,7 +313,7 @@ async function main() {
      the run computed on a path that stood on no contradicted arm. */
   const probe = await ZONE.safeFetch(`${peerOrigin}/pna-probe`,
                                      { pageUrl: seedUrl, destination: 'document',
-                                       provenance: 'derived', credentialed: false });
+                                       provenance: 'derived', pinned: 'unpinned', credentialed: false });
   if (!probe || typeof probe.status !== 'number')
     record('pna', 'missing', 'safeFetch returned no reply record at all');
   else if (probe.status === 0)

@@ -447,6 +447,47 @@ function _provenanceOf(opts) {
         "network. State `observed`, `derived` or `forced` and mean it");
   return opts.provenance;
 }
+/* …AND THE NARROWER FACT THE ENGINE STATES BESIDE IT — solver/engine.h's `pinned`/`unpinned`, composed at the
+   park from solver/flow.h's `path_pinned`. It says whether the parking flow had DETERMINED some source's value
+   on an arm nothing observed before it built this address, so that everything the page computed afterwards may
+   carry a witness THE ENGINE picked rather than one the document or the server supplied.
+   A `CHECK` FOR `_provenanceOf`'s REASON EXACTLY, and it is the sharper of the two: an ABSENT mark and an
+   INVENTED one both read as `not pinned`, which is this function's PERMISSIVE arm, and the arm it feeds is the
+   one that SPENDS AN ACT. A provenance read wrongly mislabels a reply; this read wrongly fires a request.
+   IT IS A MAY-REST-ON AND NEVER A DOES-REST-ON, and a reader deciding from it is entitled to know which:
+   concretize-on-pin answers a pinned source's read with a BARE primitive (solver/concolic.c's `pin_mint`), so
+   the composed address has forgotten where its bytes came from and NOTHING can ask it. The engine records the
+   fact at the one door those bytes enter through instead. So `pinned` means "this path had chosen a witness
+   before this request existed", and `unpinned` is the positive statement that it had not — under which every
+   byte of the address came from the document, the server, or the bundle's own text. */
+/* THE THIRD WORD IS THIS ZONE'S AND NOT THE ENGINE'S, AND IT IS A STATEMENT ABOUT THE ACT RATHER THAN A HOLE.
+   `pinned` and `unpinned` are solver/engine.h's and ride the PENDING-FETCH line. `unstated` is what an act
+   that does not come off that line says: the engine composes a witness mark at the PARK, and an XHR record or
+   a navigation notice is not a park — those carry `engine_provenance_of_running_path`'s word and no mark
+   beside it. Writing `unpinned` there would be a FALSE claim (a flow that pinned a witness has `path_forced`
+   set by the nesting, so exactly those acts can be `forced` and carry our bytes) and writing `pinned` would be
+   a wrong sentence in the other direction. So the honest third answer is that the act does not carry the fact.
+   IT IS NOT A DEFAULT AND MUST NOT BECOME ONE: an ABSENT `opts.pinned` still aborts. `unstated` has to be
+   TYPED by a caller that means it, which is what makes it greppable, countable, and retirable.
+   NAMED RESIDUAL — TWO SEAMS STATE IT. What is not covered: the XHR relay and the navigation load reach the
+   value arm with a `forced` provenance and no witness mark, so their refusal says `forced` where it might have
+   said `forced-witness`. What the next diff builds: `engine_pinned_of_running_path()` beside
+   `engine_prov_of_running_path` (solver/engine.c), written into the five records and notices that already
+   carry that function's word — `xml_http_request.c`'s request op, `navigable.c`'s three, `route_seed.c` — and
+   relayed by their readers here. How its absence would show: a frontier that will not drain whose refusals all
+   read `blocked-provenance:forced`, with no `forced-witness` among them, on a document whose data requests are
+   built out of pinned values. It changes no firing outcome at any setting of this table — both words refuse
+   and the same widening reopens both — which is why it is a residual and not a gap. */
+var _PINNED_MARKS = ["pinned", "unpinned", "unstated"];
+function _pinnedOf(opts) {
+  CHECK(_PINNED_MARKS.indexOf(opts.pinned) >= 0,
+        "safeFetch was called with a PINNED mark that is none of the three this file declares: " +
+        JSON.stringify(opts.pinned) + " — this file decides whether to SPEND AN ACT on an address from it, " +
+        "and an absent or invented value would take the permissive arm exactly as a missing provenance " +
+        "would. State `pinned` or `unpinned` from the engine's pending line, or `unstated` if this act does " +
+        "not carry one");
+  return opts.pinned;
+}
 /* ── AND WHAT THIS FUNCTION DOES *NOT* READ, WHICH IS THE HALF NO ASSERT WAS MAKING ──────────────────────
    The two rules above refuse a VALUE this file cannot serve. This one refuses a FIELD it will not read, and
    the failure it closes is the opposite shape: not a bad answer to a question this file asks, but a caller's
@@ -470,7 +511,7 @@ function _provenanceOf(opts) {
    A CLOSED SET IS A RESTATEMENT OF WHAT THE BODY READS, AND THE DRIFT DIRECTION IS WHY THAT IS SAFE HERE:
    an option added to the body and forgotten in this list aborts on its AUTHOR's own first call, at the line
    they just wrote — while the failure it closes is silent and belongs to somebody else, later. */
-var _SAFEFETCH_OPTIONS = ["pageUrl", "pageOrigin", "destination", "provenance", "credentialed",
+var _SAFEFETCH_OPTIONS = ["pageUrl", "pageOrigin", "destination", "provenance", "pinned", "credentialed",
                           "credentials", "headers", "signal", "onChunk"];
 /* FETCH §2.2.5 "Requests"' CREDENTIALS MODE — "which is `omit`, `same-origin`, or `include`" — and these are
    the same three words `core/fetch/fetch.h`'s `fetch_credentials_token` puts on the pending line, which is
@@ -710,31 +751,48 @@ function safeFetchWidenedOrigins() { return Object.keys(_EXPLORED); }
    merge, and a chunk's reply is PROGRAM TEXT run by a flow whose path is ALREADY marked, so
    every endpoint and value it yields is graded FORCED at every site stating
    `engine_prov_of_running_path()`. Nothing it produces reaches the derived pool either way.
-   SO THE SPLIT IS NOT WHERE EITHER READING PUT IT, AND THIS FILE STILL MAY NOT CLOSE IT.
-   `path_forced` answers "does everything this path computes from here on rest on something
-   nothing observed", which is the right question for WHAT A REPLY IS WORTH; the firing
-   question is "may this act be spent", decided "from the provenance the request declares
-   BESIDE its method and credential state" — three inputs, of which this function reads one.
-   Fetch §2.2.5's DESTINATION separates a reply that becomes a VALUE from one that becomes a
-   PROGRAM, and is stamped by the engine and received here already — AND IS NOT SUFFICIENT
-   ALONE, which is why nothing here changes: `import("/chunks/" + region + ".js")` with
-   `region` pinned by a forced equality is destination `script` AND a forced value in its
-   address, so a destination-only widening fires the one case this policy exists to refuse.
-   The missing fact is finer than either bit — does this request's ADDRESS carry a value this
-   path pinned or contradicted — and the engine does not compute it. THE ORDER IS THEREFORE
-   FIXED: the engine states that fact beside the path grade, and only then does this function
-   read it with the destination; the second without the first is the widening forbidden
-   below. THIS PARAGRAPH RETIRES when that fact exists and is read here.
-   WHAT MUST NOT FOLLOW is widening this policy to make the number move. The refusal is
-   correct for a request whose values came from a forced gate, and a reply to one of those
-   is the plausible fabrication §A-REQUEST-CARRIES-THE-PROVENANCE-OF-ITS-VALUES is entirely
-   about; loosening the grade here would buy the chunk bodies by making every genuinely
-   forced reply indistinguishable from an observed one.
-   `forced` IS THE WIDENING, AND ITS REFUSAL IS THIS POLICY'S ANSWER RATHER THAN A GAP IN
-   IT. A value in the request exists only because a gate was forced, so a reply to it is
-   evidence about what a server says to a request no client makes. The address is DERIVED IN
-   FULL and REPORTED, which §Attacker-sources says is not a gap in the report but IS the
-   report — "that surface is what forced execution finds and a sniffer cannot".
+   SO THE SPLIT IS NOT WHERE EITHER READING PUT IT, AND IT IS NOW MADE. `path_forced` answers
+   "does everything this path computes from here on rest on something nothing observed", which
+   is the right question for WHAT A REPLY IS WORTH; the firing question is "may this act be
+   spent", decided "from the provenance the request declares BESIDE its method and credential
+   state" — three inputs, and this function now reads all three.
+   WHAT THE OPT-IN IS ACTUALLY ABOUT, WHICH IS THE THING NEITHER READING HAD. It is not
+   forced-versus-observed. It is whether this tool's forced execution may make network requests
+   BEYOND LOADING THE APP'S OWN JAVASCRIPT. Loading a program — a `<script src>`, a module
+   import, a lazy chunk — is A BROWSER LOADING A PAGE: the bytes are the app's own, served
+   identically to every visitor, and they reveal nothing about this person. Requests beyond
+   that — API calls, data fetches, discovery probes — are the per-origin widening. That line is
+   Fetch §2.2.5's DESTINATION, which separates a reply that becomes a PROGRAM from one that
+   becomes a VALUE, and which has been arriving at this function all along.
+   A FORCED SEGMENT IN A PROGRAM'S ADDRESS DOES NOT MOVE IT ACROSS THAT LINE.
+   `import("/chunks/" + region + ".js")` with `region` pinned by forcing a gate reads as the
+   hard case and is not one: the chunk is still the app's own code, still served to anyone who
+   asks, and it is PRECISELY the gated surface this product exists to reach. Refusing it leaves
+   the default mode reaching only what the document literally names, which is about what a plain
+   HTML parse already gives. So the destination decides it and the pinned mark below does not.
+   THE PINNED MARK IS READ ON THE VALUE SIDE ONLY, AND THAT IS WHERE IT EARNS ITS KEEP. A data
+   request whose address may rest on a witness THIS ENGINE chose is a different act from one
+   whose address the app's own text spells: the first may be an address no server ever had, so
+   its reply is the plausible fabrication §A-REQUEST-CARRIES-THE-PROVENANCE-OF-ITS-VALUES is
+   entirely about — a 401 body that parses as JSON and yields fields that exist nowhere. Both
+   are refused by default and both are reopened by the same widening, so this does not gate one
+   behind the other; what it changes is the SENTENCE a person reading a frontier that will not
+   drain is given, which mojom.js's `reason` calls "the only account anybody ever gets of it".
+   THE ORDER CLAUDE.md FIXED IS KEPT AND IS WHY THIS IS NOT A DESTINATION-ONLY WIDENING: the
+   engine states the finer fact FIRST, at the park, and this function reads it WITH the
+   destination. It is read second and narrows only the value arm, so it cannot widen anything.
+   WHAT MUST NOT FOLLOW is re-keying the GRADE to make the number move. The provenance stays
+   exactly as stamped — `forced` still means this reply is evidence about a request no client
+   makes, and every consumer that carries a forced reply out of the observed pool still sees
+   that word. What changed is which ACT may be spent, not what any reply is worth. The retired
+   reading, kept because a reader will re-derive it: this paragraph used to say a forced request
+   must be refused OUTRIGHT because "a value in the request exists only because a gate was
+   forced". That is true of a VALUE request and false of a PROGRAM request, and the measurement
+   that settled it is the one below — 100% of every refusal this tool has ever recorded was this
+   rule, and the addresses were the page's own chunks.
+   THE ADDRESS IS STILL DERIVED IN FULL AND REPORTED wherever this refuses, which
+   §Attacker-sources says is not a gap in the report but IS the report — "that surface is what
+   forced execution finds and a sniffer cannot".
    THE ONE COMBINATION THAT IS NEVER A SETTING IS UNREACHABLE HERE BY CONSTRUCTION, which is
    what makes this a whole answer rather than a hole with a flag over it: credentialed AND
    state-mutating AND forced. The middle conjunct is false at every setting of this table,
@@ -747,10 +805,33 @@ function safeFetchWidenedOrigins() { return Object.keys(_EXPLORED); }
    — that §9.2.1's contract is the RESOURCE OWNER's to honour and not ours to verify — is
    the destructive-path deny list below, which is a FLOOR under this policy and never a
    substitute for it. */
-function _firingRefusal(provenance, origin) {
+function _firingRefusal(provenance, origin, destination, pinned) {
+  CHECK(typeof destination === "string" && _PINNED_MARKS.indexOf(pinned) >= 0,
+        "the firing question was asked without the two fields that decide it — Fetch §2.2.5's DESTINATION " +
+        "says whether this reply becomes a PROGRAM or a VALUE, and the witness mark says whether a data " +
+        "request's address may rest on a value this engine chose. A caller that omitted either would be " +
+        "answered by this function's permissive arm, which is the one that spends an act");
+  /* THE NESTING, ASSERTED AT THE CONSUMER — solver/flow.h declares `path_pinned` strictly inside
+     `path_forced`, so a park that is not FORCED cannot be carrying a witness this engine chose, and the two
+     halves of that contract are checked by the two parties to it (`pending_pinned_compose` is the other).
+     A pair that disagreed would have this function decide a request the grade beside it refuses. */
+  CHECK(provenance === "forced" || pinned !== "pinned",
+        "a request states that its address may rest on a witness this engine DETERMINED, while stating a " +
+        "provenance of `" + provenance + "` — solver/flow.h declares the witness mark strictly nested inside " +
+        "the forced-path bit, so this pair cannot both be true and one of the two producers is wrong");
   if (provenance === "observed" || provenance === "derived") return null;
+  /* THE PER-ORIGIN WIDENING REOPENS EVERY ARM BELOW IT, which is what makes it ONE switch answering the
+     question a person actually has ("may this tool fetch data at my app") rather than a family of them. */
   if (_EXPLORED[origin] === true) return null;
-  return provenance;
+  /* A PROGRAM LOAD IS A BROWSER LOADING A PAGE, so it is default-allowed even here — see the banner. The
+     predicate is §2.2.5's own SCRIPT-LIKE subset and is NOT restated: it is the same line CORB is decided on
+     one function up, and two spellings of "is this code" would be two rules free to disagree about a chunk. */
+  if (_isScriptLike(destination)) return null;
+  /* …AND ON THE VALUE SIDE, WHICH OF THE TWO REFUSALS THIS IS. Both are reopened by the widening above, so
+     this chooses a SENTENCE and not a policy — and the sentence is the whole account a person gets of a
+     request that did not happen. `forced-witness` says the address itself may be ours; `forced` says the
+     address is the app's and the PATH to it was not. */
+  return pinned === "pinned" ? "forced-witness" : provenance;
 }
 /* THE SAME ANSWER, ASKED BY A CALLER WHOSE ACT IS NOT A FETCH. One function read twice is
    not two policies — it is the opposite, and it is why this is exported rather than
@@ -770,12 +851,12 @@ function _firingRefusal(provenance, origin) {
    file's to make; an address that will not parse is not a refusal but a caller's serializer
    disagreeing with a URL parser, so it THROWS rather than answering a permission question
    about nothing. */
-function safeFetchFiringRefusal(provenance, url) {
+function safeFetchFiringRefusal(provenance, url, destination, pinned) {
   CHECK(_PROVENANCE_TYPES.indexOf(provenance) >= 0,
         "safeFetchFiringRefusal was asked about the provenance " + JSON.stringify(provenance) + ", which is " +
         "none of the three — the caller is deciding whether to spend an act on this address and would read " +
         "an unknown value as the permissive arm, exactly as the chokepoint would");
-  return _firingRefusal(provenance, new URL(String(url)).origin);
+  return _firingRefusal(provenance, new URL(String(url)).origin, destination, pinned);
 }
 function _corbDeniesScript(mime, nosniff, sniff, sameOrigin) {
   // same-origin: the page's own data is its to read, and the only thing refused is
@@ -877,6 +958,22 @@ function _isPrivateHost(host) {
 //               state this parameter ends: `engine/trusted.mjs` declined every
 //               DERIVED and FORCED park while `bridge.js` fired every one of them,
 //               two answers to one question, neither of them the policy.
+//               IT IS NO LONGER THE WHOLE OF THE FIRING DECISION and that is the
+//               correction this parameter's own paragraph above carries: the act a
+//               request IS matters as much as what its reply is WORTH, and Fetch
+//               §2.2.5's DESTINATION is what separates them. See `_firingRefusal`.
+//   opts.pinned:
+//               `pinned` / `unpinned` verbatim from the engine's pending line
+//               (solver/engine.h's PENDING_PINNED_*), or `unstated` where the act is
+//               not a park and the engine composed no mark for it. It says whether
+//               this request's ADDRESS may rest on a value the parking flow itself
+//               DETERMINED on an arm nothing observed — which is a different question
+//               from what the reply is worth, and the one that decides whether a DATA
+//               request may be spent. It is a MAY-REST-ON: concretize-on-pin answers a
+//               pinned read with a bare primitive, so no address can be asked and the
+//               engine records the fact where those bytes are CHOSEN instead. Strictly
+//               nested inside `forced` (solver/flow.h), and `_firingRefusal` asserts
+//               that pair rather than trusting it.
 //   opts.headers:
 //               THE ONE OPTION THIS FILE READS WHOSE VALUES CROSS FROM THE UNTRUSTED
 //               ZONE — on the XHR path they are the analysed BUNDLE's own list.
@@ -1217,6 +1314,12 @@ async function safeFetch(url, opts) {
      happens before any byte moves. Read ONCE here and passed down, never re-read at the two gates below — a
      field consulted twice is a field two gates can disagree about. */
   var provenance = _provenanceOf(opts);
+  /* …AND THE WITNESS MARK BESIDE IT, AT THE SAME DOOR AND FOR THE SAME THREE REASONS: this zone DECIDES from
+     it, its absent and invented values take the permissive arm, and the decision it feeds happens before any
+     byte moves. Read HERE rather than at the gate so a caller that states no mark aborts on every path
+     through this function and not only on the ones that reach the firing question — an assert that fires for
+     some callers and not others is one whose coverage is an accident of which arm a request took. */
+  var pinnedMark = _pinnedOf(opts);
   /* AND WHETHER THE PERSON'S SESSION PAYS FOR IT, DERIVED ONCE AT THE SAME DOOR — see `_credentialedOf`,
      which is also where the one option this file reads from the UNTRUSTED zone is refused a place on a
      cookie-bearing request. It was derived below, beside the deny list; one derivation is what stops the
@@ -1331,7 +1434,7 @@ async function safeFetch(url, opts) {
      not yet solved, a PARKED flow, never a verdict. Parking is also what makes the widening MEAN anything —
      the flow fires the day `safeFetchWiden` is told about this origin, which a flow that has already run its
      failure path cannot do. */
-  var _ptok = _firingRefusal(provenance, parsed.origin);
+  var _ptok = _firingRefusal(provenance, parsed.origin, _destinationOf(opts), pinnedMark);
   if (_ptok)
     return _refused("decline", "blocked-provenance:" + _ptok, [parsed.href], {});
   // opts.credentialed: replay a learned GET with the user's COOKIES to fetch the REAL

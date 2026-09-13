@@ -1428,6 +1428,39 @@ int flow_path_forced(const Flow *f) {
     return f->path_forced;
 }
 
+/* THE NARROWER FACT ABOUT THE SAME PATH — see flow.h's field for why it is recorded at the CHOICE of a witness
+ * and not at the address that spends it. Everything flow_mark_forced_arm says about the missing `if (g_running)`
+ * guard holds here verbatim and is not restated: this has ONE caller, decide.c's branch seam, which reaches it
+ * only on the answer that it has just marked the same path forced. */
+void flow_mark_pinned_value(void) {
+    DCHECK(g_running != NULL,
+           "a determined witness was recorded with no flow running — the determination is a fact about ONE "
+           "path, so there is no flow here to be standing on it, and the addresses built from that witness "
+           "would be fetched as though their bytes came from the document");
+    /* THE NESTING, ASSERTED AT THE WRITE AND NOT ONLY AT THE PARK. flow.h states that this bit is strictly
+       inside `path_forced`, and the park's own composition asserts the pair it consumes — but a mark that
+       arrived here on an unmarked path would make that later assert fire arbitrarily far from the seam that
+       caused it, naming a park rather than the decision. The two are the same claim read at its two ends. */
+    DCHECK(g_running->path_forced == 1,
+           "a flow recorded that it DETERMINED a value on a contradicted arm while its path stands on no "
+           "contradicted arm at all — this bit is strictly nested inside `path_forced` and its one caller is "
+           "reached only where decide.c has just marked the path, so an unmarked path here is a second "
+           "speller of 'did this arm contradict its example' that disagrees with the first");
+    g_running->path_pinned = 1;
+}
+
+int flow_path_pinned(const Flow *f) {
+    DCHECK(f != NULL, "a flow's path was asked whether it determined a witness, of no flow");
+    DCHECK(f->path_pinned == 0 || f->path_pinned == 1,
+           "a flow's determined-witness mark is neither set nor clear — it is written in exactly one place, "
+           "as a constant, so any other value is memory this field does not own");
+    DCHECK(!f->path_pinned || f->path_forced,
+           "a flow claims to have determined a value on a contradicted arm while claiming to stand on none — "
+           "the nesting flow.h declares is what makes reading this a NARROWING of the forced set rather than "
+           "a reach outside it, so a consumer given this pair would fire a request the path bit refuses");
+    return f->path_pinned;
+}
+
 /* Age the running flow by the MICROSECONDS of thread time its step just burned. A monopolizer that runs without
    emitting sinks below productive + unrun flows — see FLOW_AGE_RATE for the exchange that makes that true.
    IT IS THE ONLY CHARGE ON `cpu`, AND THAT SENTENCE IS A CORRECTION. What stood here said a DEPARTING flow
@@ -1807,6 +1840,7 @@ void flow_fork_inherit(Flow *sib, const Flow *parent) {
     DCHECK(sib->val == 0.0 && sib->cpu == 0 && sib->cpu_gen == 0 && sib->visits == 0 && sib->picks == 0 &&
            sib->cand_replay == 0.0 && sib->cand_replay_of == 0 && sib->cand_replay_arms == 0 &&
            sib->cand_surv == 0.0 && sib->cand_rung == 0 && sib->path_forced == 0 &&
+           sib->path_pinned == 0 &&
            sib->family == sib->acct && sib->family->fam_us == 0 && sib->family->emit_gen == 0 &&
            sib->family->base == 0.0 && sib->family->earned == 0.0 && !sib->family->placed,
            "a forked sibling was credited, charged, DISPATCHED or DECIDED before it inherited its parent's "
@@ -1987,6 +2021,12 @@ void flow_fork_inherit(Flow *sib, const Flow *parent) {
        weight term, would be the wrong-narrowing move one level up. Whoever takes it states which of the two
        spec sentences yields. */
     sib->path_forced = parent->path_forced;
+    /* …AND THE NARROWER FACT WITH IT, FOR THE IDENTICAL REASON AND NOT AS A SECOND DECISION. An arm is its
+       parent's path with one more arm on it, so a witness the parent had already chosen is one the arm computes
+       from too — a sibling born clean of it would declare that its addresses rest on the document's own bytes
+       on the strength of having been forked, which is reset-by-splitting one field over. It is not in the
+       equality below for `path_forced`'s reason exactly: neither is a weight term. */
+    sib->path_pinned = parent->path_pinned;
     /* §scheduler'S ONE WFQ, ASSERTED AT THE FORK: A FORK IS RANK-NEUTRAL. The sibling is the same flow's path
        with one more arm on it, so at the instant it is born it is worth exactly what the parent is worth —
        branching is neither a promotion nor a demotion. It is not a tautology dressed as a check: it fires the

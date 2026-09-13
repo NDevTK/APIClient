@@ -323,7 +323,8 @@ async function main() {
      (`_provenanceOf` is a CHECK), so there is no arm here that could take a default — but the word is also
      what the deny list is scoped by, and a seed is exactly the population that scoping is for. */
   const seed = await ZONE.safeFetch(target, { pageUrl: target, destination: 'document',
-                                              provenance: 'observed', credentialed: false });
+                                              provenance: 'observed', pinned: 'unpinned',
+                                              credentialed: false });
   const seeded = replyRecord(seed, 'the seed document');
   if (!seeded)
     throw new Error(`the chokepoint refused the seed: ${seed.statusText} — the document a session is rooted ` +
@@ -562,7 +563,11 @@ async function main() {
        thing that will ever print why a peer does not exist. `safeFetchFiringRefusal` is `_firingRefusal`
        itself, asked by a caller that needs the GRADE in order to say which — never a second copy of the rule,
        and never a string match on the `statusText` the same refusal would arrive in one call later. */
-    const refusal = ZONE.safeFetchFiringRefusal(provenance, abs);
+    /* `document` AND `unstated`: this ask is about provisioning a PEER for a navigation, which is not a park,
+       so no witness mark was composed for it — see safe-fetch.js's `_pinnedOf`. A document load is never
+       §2.2.5 SCRIPT-LIKE, so neither field can change the answer here; both are stated because the grade is
+       the chokepoint's and a caller that guessed either would be re-deriving the rule. */
+    const refusal = ZONE.safeFetchFiringRefusal(provenance, abs, 'document', 'unstated');
     if (refusal)
       return { declined: `${what} ${abs} — a DOCUMENT LOAD whose address stands on a ${refusal.toUpperCase()} ` +
                          'arm at an origin nobody has widened for exploration. CLAUDE.md §Attacker-sources ' +
@@ -576,8 +581,12 @@ async function main() {
                          'gap in the report but IS the report' };
     /* Fetch §2.2.5's `document` DESTINATION — this is HTML's navigate algorithm's own fetch, which is that
        section's own `document` row. Not script-like, so no CORB: an HTML parser is what reads these bytes. */
+    /* AND `unstated` FOR THE WITNESS MARK — the same word the refusal ask above this call states, and for
+       the same reason: a navigation is not a park, so the engine composed no mark for it. The two must agree,
+       because a grade asked one way and a request made another way is the second copy of the rule. */
     const rec = replyRecord(await ZONE.safeFetch(abs, { pageUrl: fromDocUrl, destination: 'document',
-                                                        provenance, credentialed: false }),
+                                                        provenance, pinned: 'unstated',
+                                                        credentialed: false }),
                             `${what} ${abs}`);
     /* HTML §7.4.5 determines the loaded Document's ORIGIN over the RESPONSE'S URL — "set responseOrigin to the
        result of determining the origin given response's URL" — and Fetch §2.2.5 "Requests" makes that the LAST
@@ -589,7 +598,7 @@ async function main() {
              bytes: rec.bytes };
   }
 
-  const workFetch = async (e, method, destination, initiator, provenance, credentials, url) => {
+  const workFetch = async (e, method, destination, initiator, provenance, pinned, credentials, url) => {
     const abs = new URL(url, e.docUrl).href;
     /* THE PRODUCER'S VOCABULARY, CHECKED BEFORE IT IS ACTED ON. solver/engine.h declares exactly two initiator
        tokens and exactly three provenance tokens, and an unknown one would be routed by whichever arm of the
@@ -661,7 +670,11 @@ async function main() {
        host has no session to spend — while the mode says what the algorithm that created the request named.
        The chokepoint composes the two (`_credentialedOf`) and the mode can only ever narrow, so relaying it
        takes no new decision here and gives that composition a fact to be about. */
-    const raw = await ZONE.safeFetch(abs, { pageUrl: e.docUrl, destination, provenance, credentials,
+    /* AND THE WITNESS MARK BESIDE THE PROVENANCE, RELAYED FOR THE DESTINATION'S REASON WORD FOR WORD. The
+       engine composes `pinned`/`unpinned` at the park from solver/flow.h's `path_pinned`; this zone states it
+       and tests it nowhere, because the chokepoint reads it WITH the destination and that is the one place
+       this project keeps a risk decision. */
+    const raw = await ZONE.safeFetch(abs, { pageUrl: e.docUrl, destination, provenance, pinned, credentials,
                                             credentialed: false });
     /* A REFUSAL THIS ZONE'S OWN POLICY MADE IS A DECLINE AND NOT A NETWORK ERROR, and the difference is what
        the flow does next. A `provide` of `null` is Fetch §5.6's network error: the page's request RESUMES down
@@ -682,7 +695,7 @@ async function main() {
        `statusText` match: `safeFetchFiringRefusal` says whether a widening is what this park is waiting on, so
        the `--explore` paragraph is written only where `--explore` is the answer. */
     if (raw.refusal && raw.refusal.kind === 'decline') {
-      const refusal = ZONE.safeFetchFiringRefusal(provenance, abs);
+      const refusal = ZONE.safeFetchFiringRefusal(provenance, abs, destination, pinned);
       if (!refusal) {
         e.ready.push(declineRequest(method, url,
                             `${method} ${abs} — ${raw.refusal.reason}. The chokepoint DECLINED to make this ` +
@@ -1032,17 +1045,17 @@ async function main() {
     }
     const f = line.split('\t');
     if (f[0] === 'fetch') {
-      if (f.length !== 7)
+      if (f.length !== 8)
         throw new Error('the host announced a fetch that is not ' +
-                        '`fetch<TAB>METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>CREDENTIALS<TAB>' +
+                        '`fetch<TAB>METHOD<TAB>DESTINATION<TAB>INITIATOR<TAB>PROVENANCE<TAB>PINNED<TAB>CREDENTIALS<TAB>' +
                         'URL`: ' +
                         `${line} — the bill is ` +
                         'the pending line verbatim and this zone splits it where the engine joined it, so a ' +
                         'short record is the two grammars having parted');
-      const [, method, destination, initiator, provenance, credentials, url] = f;
+      const [, method, destination, initiator, provenance, pinned, credentials, url] = f;
       const key = `${method}\t${url}`;
       if (e.answered.has(key)) return;
-      track(e, key, workFetch(e, method, destination, initiator, provenance, credentials, url));
+      track(e, key, workFetch(e, method, destination, initiator, provenance, pinned, credentials, url));
     } else if (f[0] === 'request') {
       const id = Number(f[1]), op = f.slice(2).join('\t');
       const key = `req:${f[1]}`;
