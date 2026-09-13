@@ -2137,7 +2137,11 @@ function stepCostReading(a, b, q) {
      638eb345, one interleaving), so the mean is a figure no turn is near and comparing it against the budget
      is a bare count over a population nobody partitioned. `sliceOverruns` counts the turns that actually met
      or passed the slice, with the same inequality solver/quantum.c asks, so this fraction answers directly
-     what the mean could only suggest. It is READ AND NOT DEFAULTED: the row is in result_cold_json's own
+     what the mean could only suggest. MEASURED SHAPE, so a reader knows what to expect of it: over one whole
+     run of 13043 turns at 638eb345, one interleaving, FOUR windows of 46 held a turn at or past the slice and
+     the other forty-two ran at 0.1 to 1.5 ms — so this fraction is normally SMALL, and a small fraction here
+     is not a quiet result, it is a short list of turns to go and look at. The mean over that same run was
+     56 ms, which is near none of them. It is READ AND NOT DEFAULTED: the row is in result_cold_json's own
      format string, so censusRowSet requires it and an artifact without it fails loudly here rather than
      reading as a run that never overran. */
   const overFrac = b.sliceOverruns / b.steps;

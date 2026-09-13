@@ -1222,7 +1222,19 @@ typedef struct {
      * uniform: read as a SERIES rather than as a terminal value, the MARGINAL cost between consecutive
      * censuses of one run spans four orders of magnitude — 0.105 ms between two samples and 822 ms between
      * two others — so the mean is a figure no turn is near, and comparing it against the budget is the
-     * bare-count-over-an-unpartitioned-population defect wearing a ratio. `slice_overruns` is the count of
+     * bare-count-over-an-unpartitioned-population defect wearing a ratio.
+     * AND THE DISTRIBUTION IS NOT MERELY WIDE, IT IS A HANDFUL OF OUTLIERS CARRYING ALMOST ALL THE TIME,
+     * which is the shape that decides what this row is worth. Over one whole run — 47 censuses, 13043 turns,
+     * revision 638eb345, one interleaving — FOUR of the 46 windows had a marginal turn at or past the slice
+     * and the other FORTY-TWO ran at 0.1 to 1.5 ms, comfortably inside it. So the loop is not slice-bound in
+     * the way a mean of 56 ms suggests: it is overwhelmingly NOT slice-bound, with a few turns of 155, 222,
+     * 684 and 822 ms — the last being 68 slices in one turn — carrying the run. That is a small population
+     * to go and look at, which a mean can never hand you.
+     * A COROLLARY THAT CORRECTS THE PHASE SPLIT'S OWN HEADLINE: the STEP's share is not a constant. Over the
+     * same run it drifts monotonically from 99.99% to 99.87%, so `sched`'s share GROWS sixteenfold as the run
+     * proceeds — which is what a roughly fixed per-turn cost does once the cheap turns come to dominate the
+     * denominator. The conclusion is unchanged and its stability was overstated: a single quoted percentage
+     * of this pair is a reading of WHERE IN A RUN it was taken. `slice_overruns` is the count of
      * TURNS whose step alone met or exceeded the budget, so `slice_overruns / steps` is a proper fraction of
      * a denominator this struct already carries and needs no mean at all.
      * IT IS THE SAME INEQUALITY quantum_expired() ASKS, asked at the turn boundary instead of at an opcode —
