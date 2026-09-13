@@ -1395,15 +1395,98 @@ function renderEngineRuns() {
            "asserts both before writing them onto this record, so a record that has an @RESULT document and " +
            "is missing one is that relay broken, and whether this tool drove any code the page never called " +
            "goes back to being readable only off a stdout the renderer does not tee");
+
+    /* AND THE DENOMINATOR OF AN `asked` ZERO, WHICH HAS BEEN ON THIS RECORD ALL ALONG AND UNREAD. The arm
+       below used to render `orphansAsked === 0` as "no flow of this document ever ran out of its own work",
+       and that is ONE of three states the number cannot choose between — solver/cold.h names them and says
+       they take opposite work: a member never handed the thread (the PICK), a member suspended inside a live
+       frame (below `if (!f->frame)`, so no rung is reached), and a member dispatched and standing with no
+       frame and no row, which is the only population of which "which rung is holding it" is even a question.
+       The old sentence asserted the first two by naming neither, and pointed a reader at the orphan take.
+       IT IS A READER'S DEFECT AND NOT A MISSING MECHANISM, which is the reason this is four lines and not a
+       subproblem. `outOfPrograms` and the three rows that partition it ride `_cold`, bridge.js relays that
+       census WHOLE in the same object literal as the pair above, and nothing in this zone had ever opened it
+       — so the numerator was published to a person and its denominator was not (CLAUDE.md §a-metric-whose-
+       observation-site sits inside a guard: publish the discriminator BESIDE the number, never relocate it).
+       THE ROWS ARE ASSERTED BY NAME AND NOT DEFAULTED, for the reason every counter above is: a row the
+       engine stops writing must not become a zero this panel reports for ever. bridge.js asserts that `cold`
+       is an object and that every row of it is finite, and asks nothing about WHICH rows — so the names this
+       reader depends on are its own to assert, and the two causes are the same two in the same order (a wasm
+       older than this file, then a composition that changed under the seam).
+       A GAUGE BESIDE A LIFETIME COUNT, AND THE RENDERING SAYS SO RATHER THAN COMPARING THEM. `asked` is a
+       LIFETIME count over the session and these three are readings of the INSTANT the document was composed
+       at, so they may not be differenced against it: a zero here is "nobody was standing there when this was
+       taken" and never "nobody ever stood there". Saying that is the whole of what makes the pair honest.
+       AND THE ARMS ARE NAMED, NEVER CLASSIFIED. engine/build.mjs's `ladderUnitReading` refuses to render an
+       arm as above-or-below the orphan seed, because the only ways to know are a name list here — a second
+       copy of solver/step_unit.h's — or a derivation from engine.c's source that was tried and is UNSOUND,
+       flow_step holding more than one block so source order is not ladder order. This reader inherits that
+       refusal rather than re-deriving it: it prints the arm each member last returned through and sends the
+       reader to flow_step, which is one file and one chain. */
+    DCHECK(m.cold && typeof m.cold === "object" && !Array.isArray(m.cold),
+           "an engine run record reached the popup with no `cold` census — solver/result.c composes it into " +
+           "every document it builds and bridge.js relays it whole in the same object literal as the orphan " +
+           "pair above, so a record carrying `orphansAsked` and no `cold` is that relay broken, and the only " +
+           "rows that can say WHY the orphan question was never asked are invisible again");
+    for (const f of ["outOfPrograms", "outOfProgramsUnrun", "outOfProgramsFramed",
+                     "outOfProgramsAtTheLadder"])
+      DCHECK(typeof m.cold[f] === "number",
+             "the engine's cold census carries no `" + f + "` — it is one of the four rows that say whether " +
+             "any member was ever in a position to be asked the orphan question, and without it a zero " +
+             "`orphansAsked` goes back to being three readings behind one number. TWO CAUSES IN THIS ORDER: " +
+             "the loaded wasm predates this reader (read extension/lib/qjs/qjs.mjs.build.json's `head` and " +
+             "ask whether the commit adding " + f + " is an ancestor of it — if it is not, the answer is to " +
+             "BUILD and nothing here is wrong), or result_cold_json's composition changed under this seam. " +
+             "NEVER SOFTEN THIS INTO A DEFAULT: a row the engine stops writing would become a zero this " +
+             "panel reports as a measurement for ever");
+    /* THE PARTITION'S SUM IS NOT ASSERTED HERE, AND THE REFUSAL IS THE POINT. solver/cold.c raises the three
+       rows on ONE if/else pass and asserts they sum to `outOfPrograms` at that line — the origin, where the
+       walk that computes them is in hand. Restating it in this zone would be a SECOND COPY of an invariant
+       whose owner already runs it against reality, and the copy that drifts is the one nobody checks; it
+       would also fire one boundary LATE, on a document already composed, which is a bug built on rather than
+       a bug found. What IS this zone's to assert is the thing the engine cannot see — whether the rows
+       reached a reader at all — which is the loop above. */
+    /* WHICH OF THE THREE THE ZERO IS, read in the order solver/cold.h asks them: the ZEROTH conjunct first,
+       because every condition of the ladder is asked INSIDE flow_step and a member the pick never reached
+       satisfies none of them and is invisible in all of them. */
+    const ladderUnits = m.cold.outOfProgramsAtTheLadderUnits;
+    const ladderArms = ladderUnits && typeof ladderUnits === "object"
+      ? Object.keys(ladderUnits).filter((a) => ladderUnits[a] > 0)
+              .sort((x, y) => ladderUnits[y] - ladderUnits[x])
+      : [];
+    const whereTheyStand =
+      m.cold.outOfPrograms === 0
+        ? `no member had run out of its own work when this was taken (\`outOfPrograms\` 0) — a GAUGE, so it `
+          + `says where the frontier was at that instant and NOT that no member ever stood there`
+        : m.cold.outOfProgramsAtTheLadder === 0
+          ? `${esc(String(m.cold.outOfPrograms))} member(s) had run out of their own work, and NONE was in a `
+            + `position to be asked: ${esc(String(m.cold.outOfProgramsUnrun))} had never been handed the `
+            + `thread and ${esc(String(m.cold.outOfProgramsFramed))} were suspended inside a live frame, `
+            + `which is below the ladder's own \`if (!f->frame)\`. That is a statement about the PICK and `
+            + `about frames, not about the orphan take or the heap`
+          : `${esc(String(m.cold.outOfProgramsAtTheLadder))} member(s) were standing where the next dispatch `
+            + `descends the ladder (beside ${esc(String(m.cold.outOfProgramsUnrun))} never handed the thread `
+            + `and ${esc(String(m.cold.outOfProgramsFramed))} in a live frame)`
+            + (ladderArms.length === 0
+                ? ``
+                : `, by the arm each LAST returned through: `
+                  + ladderArms.map((a) => esc(String(ladderUnits[a])) + " " + esc(a)).join(" · ")
+                  + `. Read that arm's position in flow_step's chain against \`engine_orphan_seed\`: ABOVE `
+                  + `the seed says these members ARE dispatched and that work the page arranged falls due `
+                  + `ahead of the take every round; BELOW it says the member went PAST the seed`)
+            + `. These are readings of ONE INSTANT and \`orphansAsked\` is a LIFETIME count, so they cannot `
+            + `be differenced — but a population standing there beside an ask that never moved is the one `
+            + `state in which the take is not the thing to open`;
     /* THE DISCRIMINATOR IS THE ONE ALREADY ON THIS RECORD, AND IT IS A COUNT OR A STATED ABSENCE. `m.resumed
        === null` is "this run never seeded a frontier", which is not a resumed session — the routing arm that
        consumes a take without seeding cannot have fired — so it takes the fresh reading. Only a POSITIVE
        residue count makes the middle state ambiguous. */
     const fromResidue = m.resumed !== null && m.resumed > 0;
     const orphan = m.orphansAsked === 0
-      ? `uncalled code: the question was never reached — no flow of this document ever ran out of its own `
-        + `work, so nothing walked the heap for a function the bundle ships and never calls. That is a result `
-        + `about this RUN, not a fact about the page.`
+      ? `uncalled code: the question was never reached — nothing walked the heap for a function the bundle `
+        + `ships and never calls. WHY it was never reached is the row beside it, and the walk is the LAST arm `
+        + `of flow_step's ladder, so every condition above it had to fall through first: ${whereTheyStand}. `
+        + `That is a result about this RUN, not a fact about the page.`
       : m.orphansDriven === 0
         ? `uncalled code: the walk ran ${esc(String(m.orphansAsked))} time(s) and seeded no drive`
           + (fromResidue
