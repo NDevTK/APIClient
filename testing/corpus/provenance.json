@@ -2351,18 +2351,18 @@
   "status": 200,
   "contentType": "text/html; charset=utf-8",
   "csp": "",
-  "bytes": 260632,
-  "sha256": "83a09842a65e6c454a8a86947ba7d38d421d465d41243d356855faab3461995f",
-  "fetchedAt": "2026-09-13T08:01:10.072Z",
+  "bytes": 260670,
+  "sha256": "0127556af2212b9376435904aa546bd38adaa41596127012e35513c0a708ceab",
+  "fetchedAt": "2026-09-13T08:53:47.071Z",
   "resources": [
    {
-    "url": "https://a.slack-edge.com/bv1-13/manifest.39f4356643961c77.marketing.min.js",
+    "url": "https://a.slack-edge.com/bv1-13-br/manifest.39f4356643961c77.marketing.min.js",
     "status": 200,
     "contentType": "application/javascript; charset=ANSI_X3.4-1968",
-    "bytes": 949,
-    "sha256": "0a25dad73a51d2db790acad59158a05d9a0b9d1dbebf4678222b78ed20b481db",
-    "fetchedAt": "2026-09-13T08:01:11.095Z",
-    "path": "a.slack-edge.com/bv1-13/manifest.39f4356643961c77.marketing.min.js"
+    "bytes": 1965,
+    "sha256": "8800469403817d2c4fd2abc3b1da190bc58a50638a8f9d3a60694724bbd9adac",
+    "fetchedAt": "2026-09-13T08:53:47.548Z",
+    "path": "a.slack-edge.com/bv1-13-br/manifest.39f4356643961c77.marketing.min.js"
    },
    {
     "url": "https://cdn.cookielaw.org/scripttemplates/otSDKStub.js",
@@ -2370,7 +2370,7 @@
     "contentType": "application/javascript",
     "bytes": 26961,
     "sha256": "3258940d51f736d6d58b6b98af4617a0450545f16e307c3e72d308c7ff6b3d8e",
-    "fetchedAt": "2026-09-13T08:01:11.331Z",
+    "fetchedAt": "2026-09-13T08:53:47.721Z",
     "path": "cdn.cookielaw.org/scripttemplates/otSDKStub.js"
    },
    {
@@ -2379,7 +2379,7 @@
     "contentType": "application/json",
     "bytes": 137,
     "sha256": "01eb6d620f634bd573b6b0b7598c18e7dfa94ed6bc8b2d36d97015e2cc82c1f6",
-    "fetchedAt": "2026-09-13T08:01:11.759Z",
+    "fetchedAt": "2026-09-13T08:53:48.055Z",
     "path": "reveal.clearbit.com/v1/companies/reveal__qa86af808"
    },
    {
@@ -2388,125 +2388,125 @@
     "contentType": "application/javascript",
     "bytes": 1106372,
     "sha256": "fdda8030cebcbffd96b0e116b6748c02009039dca64136e186a3a81238f23459",
-    "fetchedAt": "2026-09-13T08:01:12.534Z",
+    "fetchedAt": "2026-09-13T08:53:48.374Z",
     "path": "d34u8crftukxnk.cloudfront.net/snippets/11179690159.js"
    },
    {
-    "url": "https://a.slack-edge.com/bv1-13/rollup-marketing.3040457da920a09b.marketing.min.js",
+    "url": "https://a.slack-edge.com/bv1-13-br/rollup-marketing.3040457da920a09b.marketing.min.js",
     "status": 200,
     "contentType": "application/javascript; charset=ANSI_X3.4-1968",
-    "bytes": 174265,
-    "sha256": "a47835b2cdbdfaa1fa170ca7f3b784ca0274f1f1df9f13afeb5d3b00f7d21e65",
-    "fetchedAt": "2026-09-13T08:01:13.255Z",
-    "path": "a.slack-edge.com/bv1-13/rollup-marketing.3040457da920a09b.marketing.min.js"
+    "bytes": 581905,
+    "sha256": "7457463d12fe2beeb3fac99a0cf25ae4d0604a85b9e5aa4a634c42aa0e71ddd1",
+    "fetchedAt": "2026-09-13T08:53:48.685Z",
+    "path": "a.slack-edge.com/bv1-13-br/rollup-marketing.3040457da920a09b.marketing.min.js"
    },
    {
-    "url": "https://a.slack-edge.com/bv1-13/marketing-core.8f2b1c5c23addf00.marketing.min.js",
+    "url": "https://a.slack-edge.com/bv1-13-br/marketing-core.8f2b1c5c23addf00.marketing.min.js",
     "status": 200,
     "contentType": "application/javascript; charset=ANSI_X3.4-1968",
-    "bytes": 80565,
-    "sha256": "97dbe3f395682d5d76be6caea49b7519f9dc00b34e393b9024ae9be655da5189",
-    "fetchedAt": "2026-09-13T08:01:14.108Z",
-    "path": "a.slack-edge.com/bv1-13/marketing-core.8f2b1c5c23addf00.marketing.min.js"
+    "bytes": 281511,
+    "sha256": "c49e79999c00f710039f2190210499df1d3e78595a9748fd138a685cc0846b9e",
+    "fetchedAt": "2026-09-13T08:53:48.982Z",
+    "path": "a.slack-edge.com/bv1-13-br/marketing-core.8f2b1c5c23addf00.marketing.min.js"
    },
    {
-    "url": "https://a.slack-edge.com/bv1-13/marketing-page-index.f08670de5e42cd6e.marketing.min.js",
+    "url": "https://a.slack-edge.com/bv1-13-br/marketing-page-index.f08670de5e42cd6e.marketing.min.js",
     "status": 200,
     "contentType": "application/javascript; charset=ANSI_X3.4-1968",
-    "bytes": 45189,
-    "sha256": "1becf1b3e2a8b3946d95c24b437b7965ceaf1e872d4934a9969d52a1d5d12222",
-    "fetchedAt": "2026-09-13T08:01:14.984Z",
-    "path": "a.slack-edge.com/bv1-13/marketing-page-index.f08670de5e42cd6e.marketing.min.js"
+    "bytes": 166851,
+    "sha256": "5a18f2bcd5386664efa1bd72a0a1ab477f99430225a6b1dc726599ed8b8ff4b0",
+    "fetchedAt": "2026-09-13T08:53:49.165Z",
+    "path": "a.slack-edge.com/bv1-13-br/marketing-page-index.f08670de5e42cd6e.marketing.min.js"
    },
    {
-    "url": "https://a.slack-edge.com/bv1-13/marketing-page-index-revamped-25.82af1f8e60c71638.marketing.min.js",
+    "url": "https://a.slack-edge.com/bv1-13-br/marketing-page-index-revamped-25.82af1f8e60c71638.marketing.min.js",
     "status": 200,
     "contentType": "application/javascript; charset=ANSI_X3.4-1968",
-    "bytes": 45501,
-    "sha256": "ad85ef3c03bc9b0b7ec6760e06251d11461a7614601ee9e75a3f89fcd5991edd",
-    "fetchedAt": "2026-09-13T08:01:15.832Z",
-    "path": "a.slack-edge.com/bv1-13/marketing-page-index-revamped-25.82af1f8e60c71638.marketing.min.js"
+    "bytes": 167576,
+    "sha256": "9902c947e1f1e0b6e06fb1df1df06557cc283267df98515f07a03b184a4f2362",
+    "fetchedAt": "2026-09-13T08:53:49.320Z",
+    "path": "a.slack-edge.com/bv1-13-br/marketing-page-index-revamped-25.82af1f8e60c71638.marketing.min.js"
    },
    {
-    "url": "https://a.slack-edge.com/bv1-13/marketing-autoscroll-asset-text-carousel.96518253fc031a78.marketing.min.js",
+    "url": "https://a.slack-edge.com/bv1-13-br/marketing-autoscroll-asset-text-carousel.96518253fc031a78.marketing.min.js",
     "status": 200,
     "contentType": "application/javascript; charset=ANSI_X3.4-1968",
-    "bytes": 1380,
-    "sha256": "3a32179ed695c20da6dff058daed289c8d6b3dee010ea56a922842c5f97b4a0a",
-    "fetchedAt": "2026-09-13T08:01:16.321Z",
-    "path": "a.slack-edge.com/bv1-13/marketing-autoscroll-asset-text-carousel.96518253fc031a78.marketing.min.js"
+    "bytes": 3830,
+    "sha256": "045b014a0be9839baa4c1245e5639d1e7ced6766d153eba4d03f2938275c5509",
+    "fetchedAt": "2026-09-13T08:53:49.558Z",
+    "path": "a.slack-edge.com/bv1-13-br/marketing-autoscroll-asset-text-carousel.96518253fc031a78.marketing.min.js"
    },
    {
-    "url": "https://a.slack-edge.com/bv1-13/swiper.40ccad387ff058df.marketing.min.js",
+    "url": "https://a.slack-edge.com/bv1-13-br/swiper.40ccad387ff058df.marketing.min.js",
     "status": 200,
     "contentType": "application/javascript; charset=ANSI_X3.4-1968",
-    "bytes": 44664,
-    "sha256": "b8843cfeb7a74d655cf5287b1e3b2fde82218698781288c7517dfe6cb2008a8e",
-    "fetchedAt": "2026-09-13T08:01:17.000Z",
-    "path": "a.slack-edge.com/bv1-13/swiper.40ccad387ff058df.marketing.min.js"
+    "bytes": 165396,
+    "sha256": "3f889541472a8d8bec67379cbcb9cd70c51a30580efa4f72f64a620ed7c098a3",
+    "fetchedAt": "2026-09-13T08:53:49.858Z",
+    "path": "a.slack-edge.com/bv1-13-br/swiper.40ccad387ff058df.marketing.min.js"
    },
    {
-    "url": "https://a.slack-edge.com/bv1-13/marketing-video-control.4bca4346b5b54360.marketing.min.js",
+    "url": "https://a.slack-edge.com/bv1-13-br/marketing-video-control.4bca4346b5b54360.marketing.min.js",
     "status": 200,
     "contentType": "application/javascript; charset=ANSI_X3.4-1968",
-    "bytes": 1040,
-    "sha256": "ebdf5b87904b341e3cf9e60daa6fac8b4cb84366e42e4587a9941fee81fadbbe",
-    "fetchedAt": "2026-09-13T08:01:17.625Z",
-    "path": "a.slack-edge.com/bv1-13/marketing-video-control.4bca4346b5b54360.marketing.min.js"
+    "bytes": 2930,
+    "sha256": "1790e1e4cfd0ad6edc24e9b367ef84bb90ab1ba691334ae675cb0dd3ebe9affd",
+    "fetchedAt": "2026-09-13T08:53:50.066Z",
+    "path": "a.slack-edge.com/bv1-13-br/marketing-video-control.4bca4346b5b54360.marketing.min.js"
    },
    {
-    "url": "https://a.slack-edge.com/bv1-13/marketing-component-content-switcher.694349bd9d1b0c70.marketing.min.js",
+    "url": "https://a.slack-edge.com/bv1-13-br/marketing-component-content-switcher.694349bd9d1b0c70.marketing.min.js",
     "status": 200,
     "contentType": "application/javascript; charset=ANSI_X3.4-1968",
-    "bytes": 44839,
-    "sha256": "f79ce131689d7dd93a8027afb08a50c05ea3c8f80d79d8b111807cca1347e127",
-    "fetchedAt": "2026-09-13T08:01:18.142Z",
-    "path": "a.slack-edge.com/bv1-13/marketing-component-content-switcher.694349bd9d1b0c70.marketing.min.js"
+    "bytes": 165858,
+    "sha256": "fdd9311fe83a67b2eefa0b2ac29da4da931f5322631ffc0a518362d29c9ca94d",
+    "fetchedAt": "2026-09-13T08:53:50.564Z",
+    "path": "a.slack-edge.com/bv1-13-br/marketing-component-content-switcher.694349bd9d1b0c70.marketing.min.js"
    },
    {
-    "url": "https://a.slack-edge.com/bv1-13/marketing-sticky-toc.dd7347c16bce07af.marketing.min.js",
+    "url": "https://a.slack-edge.com/bv1-13-br/marketing-sticky-toc.dd7347c16bce07af.marketing.min.js",
     "status": 200,
     "contentType": "application/javascript; charset=ANSI_X3.4-1968",
-    "bytes": 1568,
-    "sha256": "1bcb0d8ac2e1b7bc303d916c15fa53497087a11ad5aa81ca2dbea2fe7cfb736d",
-    "fetchedAt": "2026-09-13T08:01:18.679Z",
-    "path": "a.slack-edge.com/bv1-13/marketing-sticky-toc.dd7347c16bce07af.marketing.min.js"
+    "bytes": 4033,
+    "sha256": "6f4805201c517be86d6ed2860d8a92438eb8dd5f65ebf2a84e7a3fa3a0684707",
+    "fetchedAt": "2026-09-13T08:53:50.736Z",
+    "path": "a.slack-edge.com/bv1-13-br/marketing-sticky-toc.dd7347c16bce07af.marketing.min.js"
    },
    {
-    "url": "https://a.slack-edge.com/bv1-13/marketing-customer-videos.ccaabc979a83266f.marketing.min.js",
+    "url": "https://a.slack-edge.com/bv1-13-br/marketing-customer-videos.ccaabc979a83266f.marketing.min.js",
     "status": 200,
     "contentType": "application/javascript; charset=ANSI_X3.4-1968",
-    "bytes": 872,
-    "sha256": "2ce8979d4924877120a9036b1aebc8b203e5b7dd27523fa563415e020f3f714e",
-    "fetchedAt": "2026-09-13T08:01:19.187Z",
-    "path": "a.slack-edge.com/bv1-13/marketing-customer-videos.ccaabc979a83266f.marketing.min.js"
+    "bytes": 1845,
+    "sha256": "ffb4f41d4632343a999e6072535dc587a4ef1eeae440c43fdc7b735aada963a5",
+    "fetchedAt": "2026-09-13T08:53:50.931Z",
+    "path": "a.slack-edge.com/bv1-13-br/marketing-customer-videos.ccaabc979a83266f.marketing.min.js"
    },
    {
-    "url": "https://a.slack-edge.com/bv1-13/expanded-marketing-page-footer.6331f019b3210fc8.marketing.min.js",
+    "url": "https://a.slack-edge.com/bv1-13-br/expanded-marketing-page-footer.6331f019b3210fc8.marketing.min.js",
     "status": 200,
     "contentType": "application/javascript; charset=ANSI_X3.4-1968",
-    "bytes": 558,
-    "sha256": "8bc6d8d358fd37bf1850cac2c7f9f064ec54ea3fc1a90fafcdb3b514c4bfd26c",
-    "fetchedAt": "2026-09-13T08:01:19.626Z",
-    "path": "a.slack-edge.com/bv1-13/expanded-marketing-page-footer.6331f019b3210fc8.marketing.min.js"
+    "bytes": 1033,
+    "sha256": "e9d3da4ae6a8cf4cf8e79d4f70e55d6150bdef81920c9c72990035268b4ea921",
+    "fetchedAt": "2026-09-13T08:53:51.155Z",
+    "path": "a.slack-edge.com/bv1-13-br/expanded-marketing-page-footer.6331f019b3210fc8.marketing.min.js"
    },
    {
-    "url": "https://a.slack-edge.com/bv1-13/marketing-page-yext-search.9471614218f68606.marketing.min.js",
+    "url": "https://a.slack-edge.com/bv1-13-br/marketing-page-yext-search.9471614218f68606.marketing.min.js",
     "status": 200,
     "contentType": "application/javascript; charset=ANSI_X3.4-1968",
-    "bytes": 1964,
-    "sha256": "d5bb5b8e256baf332d065f237a8ccbf8122ef7c04ac73b7a080276325ef17ef0",
-    "fetchedAt": "2026-09-13T08:01:20.052Z",
-    "path": "a.slack-edge.com/bv1-13/marketing-page-yext-search.9471614218f68606.marketing.min.js"
+    "bytes": 6736,
+    "sha256": "ed84c54171f96603a04c5ca3e39bb166829ad6534086ab2345aecf33299174c7",
+    "fetchedAt": "2026-09-13T08:53:51.291Z",
+    "path": "a.slack-edge.com/bv1-13-br/marketing-page-yext-search.9471614218f68606.marketing.min.js"
    },
    {
-    "url": "https://a.slack-edge.com/bv1-13/expanded-marketing-page-navigation.e050c94a4f60b5fe.marketing.min.js",
+    "url": "https://a.slack-edge.com/bv1-13-br/expanded-marketing-page-navigation.e050c94a4f60b5fe.marketing.min.js",
     "status": 200,
     "contentType": "application/javascript; charset=ANSI_X3.4-1968",
-    "bytes": 1890,
-    "sha256": "2d1a0af72f001ddbef64a6d8b841799f011984c19f5ee56e75789de15dba4d49",
-    "fetchedAt": "2026-09-13T08:01:20.470Z",
-    "path": "a.slack-edge.com/bv1-13/expanded-marketing-page-navigation.e050c94a4f60b5fe.marketing.min.js"
+    "bytes": 6549,
+    "sha256": "d0512684236c5e4cffc1e51392a1d79cf70a39d0ce1154d47d5235bc6008f65c",
+    "fetchedAt": "2026-09-13T08:53:51.453Z",
+    "path": "a.slack-edge.com/bv1-13-br/expanded-marketing-page-navigation.e050c94a4f60b5fe.marketing.min.js"
    }
   ],
   "baseUrl": "https://app.slack.com/"
