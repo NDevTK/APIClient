@@ -38,10 +38,19 @@
  * is the true value of that instant and says nothing about the run, so its useful readings are the PARTIALS
  * taken while the frontier is live — which is the cadence extension/bridge.js's `streamPartial` already runs
  * the shipped path at, and the reason it says "A PARTIAL'S CENSUS IS THE VALUABLE ONE". The larger half of
- * `_cold` is LIFETIME counts, so its terminal reading is the one to quote. Hence: `_wfq` whole on every
- * sample line, `_cold` whole on the terminal one, and BOTH whole in the transcript. Neither is filtered to a
- * chosen row list — they cross whole in bridge.js for the stated reason that "a row added to the census
- * reaches the popup with no edit on this path", and a driver that named rows would be the hand-kept copy.
+ * `_cold` is LIFETIME counts, so its terminal reading is the one to quote. Hence: EVERY instrument member
+ * whole on every sample line, and every one of them whole again on the terminal one — a lifetime census read
+ * at the last sample and a reading of an instant read at that same instant, from one document, so a reader
+ * can align them. None of it is filtered to a chosen row list, for the stated reason that "a row added to the
+ * census reaches the popup with no edit on this path", and a driver that named rows would be the hand-kept
+ * copy.
+ * THAT LAST SENTENCE WAS TRUE OF THE ROWS AND FALSE OF THE MEMBERS FOR AS LONG AS IT STOOD, which is why it
+ * now says EVERY rather than naming two: the line beneath it published `_wfq` and `_cold` and ten scalars and
+ * dropped the other nineteen members of the same document, `_forkAt` among them. See `censusOf` for what that
+ * cost and for why the surviving set is a COMPLEMENT rather than a list. A reader who wants the terminal
+ * reading of a lifetime census on a run the external budget ended takes the LAST sample line: §NO BOUNDS means
+ * a real document's frontier does not drain, so the `final` line is not reached for exactly the documents this
+ * driver exists for — which is the same trap `surface` below records paying for once.
  *
  * THERE IS NO STEP CAP, NO TIME CAP AND NO SAMPLE CAP IN THIS FILE. §NO BOUNDS. It is bounded from OUTSIDE by
  * the same rlimit and timeout every other driver here is run under, and because each sample is APPENDED to the
@@ -203,14 +212,6 @@ function census() {
                      "this text: " + String(err).slice(0, 160)); }
 }
 
-/* THE COST COLUMNS, READ OFF THE SAME DOCUMENT AS THE CENSUS. §Testing: an answered-statement count is quoted
-   beside the work counters or it is not quoted, because a run whose `workDone` is near one did not run. The
-   same rule is what makes a census line readable: `_wfq` at `{members: 0}` on a run with no jobs is a frontier
-   that never existed, and on a run with tens of thousands it is a frontier that drained. */
-const COST = ["_flows", "_switches", "_jobsQueued", "_jobsRun", "_unitsDone", "_candidates",
-              "_sourceReads", "_sinkReached", "_orphansDriven", "_orphansAsked"];
-const costOf = (d) => Object.fromEntries(COST.map((k) => [k, d[k]]));
-
 /* THE SURFACE ITSELF, PUBLISHED PER SAMPLE — WHICH IS WHAT THIS FILE ALREADY SAYS IT DOES AND DID NOT.
  * `emit`'s own banner states the rule: a transcript composed after the loop "would be empty for exactly the
  * long runs it exists for", because there is no bound here and the run is ended from OUTSIDE. That was true of
@@ -254,6 +255,43 @@ function surface(d, n) {
   }
 }
 
+/* EVERYTHING ELSE THE DOCUMENT CARRIES — THE COMPLEMENT OF `SURFACES`, COMPUTED RATHER THAN WRITTEN DOWN.
+ * §Testing: an answered-statement count is quoted beside the work counters or it is not quoted, because a run
+ * whose `workDone` is near one did not run. The same rule is what makes a census line readable: `_wfq` at
+ * `{members: 0}` on a run with no jobs is a frontier that never existed, and on a run with tens of thousands
+ * it is a frontier that drained. That is why the columns are published; this is why they are DERIVED.
+ *
+ * WHAT STOOD HERE WAS A HAND-KEPT LIST, IN THE ONE FILE WHOSE OWN BANNER FORBIDS ONE. That banner says of the
+ * two censuses it published that "neither is filtered to a chosen row list — they cross whole in bridge.js for
+ * the stated reason that `a row added to the census reaches the popup with no edit on this path`, and a driver
+ * that named rows would be the hand-kept copy" — and then named two objects and ten scalars out of a document
+ * carrying thirty-four members. The rule was stated and applied ONE LEVEL DOWN: the ROWS inside `_wfq` and
+ * `_cold` crossed whole while the MEMBERS beside them were chosen by hand, so the projection the banner warns
+ * about is the one the file was performing. It is the same defect `surface` above records having found over
+ * the findings arrays — "the surface was not missing, it was projected away" — at the level above the one that
+ * was repaired, which is why repairing that one did not reach it.
+ *
+ * MEASURED, AND IT COST A LANE ITS WHOLE QUESTION: nineteen of the document's twenty-nine instrument members
+ * reached no transcript, `_forkAt` among them. That member is the census of WHICH SOURCE READ GREW THE
+ * FRONTIER, keyed by source identity — the first question a run whose frontier explodes asks, and the one
+ * decide.h says had "never once been answerable off a production run" until it started riding this document.
+ * A lane pointed at a bombing multi-megabyte bundle to ask that found the answer already parsed, in hand, and
+ * dropped at the emit below on every sample. `_worldSegmentsForked`, `_heap`, `_swap`, `_absent` and `_park`
+ * went the same way, and each is a question somebody will arrive with.
+ *
+ * THE TWO NAMESPACES ARE THE ENGINE'S OWN AND ARE READ OFF THE ARTIFACT RATHER THAN RESTATED: result.c spells
+ * every instrument member with a leading `_` and no finding with one. This does not KEY on that convention —
+ * it takes the complement of `SURFACES`, which `surface` already asserts the shape of — so the prefix is
+ * corroboration a reader can check and not a second copy of a rule this file does not own. A member added to
+ * result.c now reaches this transcript with no edit here, which is what the banner already promised.
+ *
+ * IT IS NESTED RATHER THAN SPREAD, AND THE ENGINE'S SPELLING SURVIVES. Nesting means no document key can
+ * collide with the frame keys `emit` composes around it, so nothing here rests on the two namespaces staying
+ * disjoint. Preserving the spelling means one grep for `_forkAt` answers over result.c AND over this
+ * transcript; the line this replaces renamed `_wfq` to `wfq`, which made the producer and its own measurement
+ * un-greppable together and is the rename layer every other projection in this file refuses. */
+const censusOf = (d) => Object.fromEntries(Object.entries(d).filter(([k]) => !SURFACES.includes(k)));
+
 let n = 0, lastSample = 0, filledTotal = 0, quantum = null;
 const t0 = Date.now();
 for (;;) {
@@ -268,8 +306,7 @@ for (;;) {
     lastSample = now;
     const d = census();
     if (!quantum) { quantum = d._quantum; emit({ at: "quantum", quantum }); }
-    emit({ n: ++n, atMs: now - t0, step: r === 3 ? "stalled" : "yield",
-           wfq: d._wfq, cold: d._cold, cost: costOf(d) });
+    emit({ n: ++n, atMs: now - t0, step: r === 3 ? "stalled" : "yield", census: censusOf(d) });
     /* AFTER the census line and from the SAME document, so a reader can align a row with the frontier state
        that produced it. A run the budget ends has now published everything it reached, which is what `emit`'s
        banner already promised for the series. */
@@ -355,7 +392,7 @@ surface(out, n + 1);
    pointed at a real bundle to answer. `surface` asserts the arrays are named, so no `|| []` stands here: that
    default turned "the producer stopped naming this" into "this run found nothing". */
 emit({ at: "final", samples: n, repliesFilled: filledTotal, elapsedMs: Date.now() - t0,
-       wfq: out._wfq, cold: out._cold, cost: costOf(out),
+       census: censusOf(out),
        fetchCallSites: out.fetchCallSites.length,
        securitySinks: out.securitySinks.length,
        pageErrors: out.pageErrors.length });
