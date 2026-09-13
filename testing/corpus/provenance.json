@@ -2759,5 +2759,398 @@
    }
   ],
   "baseUrl": "https://codesandbox.io/"
+ },
+ {
+  "id": "figma",
+  "stack": "Next.js app router behind Netlify (/_netlify/_next/static/chunks/)",
+  "requestedUrl": "https://www.figma.com/",
+  "finalUrl": "https://www.figma.com/",
+  "status": 200,
+  "contentType": "text/html; charset=utf-8",
+  "csp": "default-src 'self' https://accounts.google.com/gsi/ ; script-src 'self' 'unsafe-eval' 'unsafe-inline' https://platform.twitter.com/js/ https://platform.twitter.com/widgets.js https://player.vimeo.com/api/player.js https://www.youtube.com/iframe_api https://www.youtube.com/s/player/ https://accounts.google.com/gsi/client https://adora-cdn.com/adora-start.js https://decagon.ai ; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com/ https://accounts.google.com/gsi/style ; object-src 'none' ; base-uri 'self' ; font-src 'self' https://fonts.gstatic.com ; connect-src 'self' https://static.figma.com https://forms.figma.com https://boards-api.greenhouse.io/v1/boards/figma/jobs https://vimeo.com https://accounts.google.com/gsi/ https://figma.com/api/figment-proxy/monitor https://staging.figma.com/api/figment-proxy/monitor https://figma.com/api/figment-proxy/identify https://staging.figma.com/api/figment-proxy/identify https://figma.com/api/figment-proxy/page https://staging.figma.com/api/figment-proxy/page https://staging.figma.com/api/user/help-center https://www.figma.com/api/user/help-center https://cdn.sanity.io https://events.statsigapi.net/v1/rgstr https://statsigapi.net/v1/sdk_exception https://prodregistryv2.org/v1/rgstr https://featuregates.org/v1/initialize https://featureassets.org/v1/initialize https://o22594.ingest.sentry.io *.adora-cdn.com https://figma-marketing-tools.vercel.app/api/white-background https://decagon.ai ; frame-src 'self' *.figma.site https://www.figma.com https://marketing.figma.com https://marketing.staging.figma.com https://platform.twitter.com https://player.vimeo.com https://www.youtube.com https://accounts.google.com/gsi/ https://figma.com/api/figment-proxy/monitor https://staging.figma.com/api/figment-proxy/monitor https://figma.com/api/figment-proxy/identify https://staging.figma.com/api/figment-proxy/identify https://figma.com/api/figment-proxy/page https://staging.figma.com/api/figment-proxy/page https://decagon.ai ; img-src 'self' data: blob: https://cdn.sanity.io https://i.vimeocdn.com https://*.figma.com https://i.ytimg.com https://www.gravatar.com https://i0.wp.com/s3-alpha.figma.com/ https://i1.wp.com/s3-alpha.figma.com/ https://i2.wp.com/s3-alpha.figma.com/ https://i3.wp.com/s3-alpha.figma.com/ ; media-src 'self' https://cdn.sanity.io https://static.figma.com ; worker-src 'self' ; upgrade-insecure-requests",
+  "bytes": 1682175,
+  "sha256": "3822a225b8c8b273929d8cb8e55d97c1f681076e45eaf9d528d3532a4f395bd6",
+  "fetchedAt": "2026-09-13T08:04:21.784Z",
+  "resources": [
+   {
+    "url": "https://www.figma.com/_netlify/_next/static/chunks/4bd1b696-be5ceba1b1a33b39.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 173408,
+    "sha256": "e91377bcc275026570514ef59ca8783caf78f978fb08881976122dfb7644a0ec",
+    "fetchedAt": "2026-09-13T08:04:22.215Z",
+    "path": "www.figma.com/_netlify/_next/static/chunks/4bd1b696-be5ceba1b1a33b39.js"
+   },
+   {
+    "url": "https://www.figma.com/_netlify/_next/static/chunks/3914-2bf7749f3c7c1d45.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 402370,
+    "sha256": "2b907a09ac1483047b51a7d7e2fd71b58e8f5edeca1ddb426b1926d5be511dff",
+    "fetchedAt": "2026-09-13T08:04:22.416Z",
+    "path": "www.figma.com/_netlify/_next/static/chunks/3914-2bf7749f3c7c1d45.js"
+   },
+   {
+    "url": "https://www.figma.com/_netlify/_next/static/chunks/main-app-961aa67ca2328138.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 12222,
+    "sha256": "93d33de7401da0f03bb44e558ef6b07901098ce7e9ecefd3cf2639c19a7bc58f",
+    "fetchedAt": "2026-09-13T08:04:22.614Z",
+    "path": "www.figma.com/_netlify/_next/static/chunks/main-app-961aa67ca2328138.js"
+   },
+   {
+    "url": "https://www.figma.com/_netlify/_next/static/chunks/bf76e631-047ac0aae52ca139.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 134137,
+    "sha256": "b86365d3b4330463cd9ced9f0d4b4ab00d76dd5880e8a39aff476d5166c731ec",
+    "fetchedAt": "2026-09-13T08:04:23.388Z",
+    "path": "www.figma.com/_netlify/_next/static/chunks/bf76e631-047ac0aae52ca139.js"
+   },
+   {
+    "url": "https://www.figma.com/_netlify/_next/static/chunks/9104-5a18d21ea507af9e.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 27449,
+    "sha256": "bb0ddf0d498a8c5497fcc6cd7e3005d5a276e8e8593b3a5f3e9cd5378f4a602c",
+    "fetchedAt": "2026-09-13T08:04:23.805Z",
+    "path": "www.figma.com/_netlify/_next/static/chunks/9104-5a18d21ea507af9e.js"
+   },
+   {
+    "url": "https://www.figma.com/_netlify/_next/static/chunks/1293-a1241bd97f5e8406.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 158045,
+    "sha256": "46e44d15b72ab8bd7ff8f8b3826c474ea84e974afd8242085931b1e0cf9ded8a",
+    "fetchedAt": "2026-09-13T08:04:24.084Z",
+    "path": "www.figma.com/_netlify/_next/static/chunks/1293-a1241bd97f5e8406.js"
+   },
+   {
+    "url": "https://www.figma.com/_netlify/_next/static/chunks/829-dbbbfe9d89a509ef.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 106241,
+    "sha256": "8d3114f4c83ac4ac77738b3b39be04ff6bcffecead8afa906a0257e64380c4c1",
+    "fetchedAt": "2026-09-13T08:04:24.282Z",
+    "path": "www.figma.com/_netlify/_next/static/chunks/829-dbbbfe9d89a509ef.js"
+   },
+   {
+    "url": "https://www.figma.com/_netlify/_next/static/chunks/5640-16f37ed96d007393.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 127305,
+    "sha256": "4d4cae7c995aa6fa5db893bd88b6335ab9bb9840ab23626afdf0f0450b4f52ad",
+    "fetchedAt": "2026-09-13T08:04:24.481Z",
+    "path": "www.figma.com/_netlify/_next/static/chunks/5640-16f37ed96d007393.js"
+   },
+   {
+    "url": "https://www.figma.com/_netlify/_next/static/chunks/5897-1045e82848a6e38f.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 50705,
+    "sha256": "d6cab0122f07bf16ff82e86f7d5e10302cc4dc1bd4d42e34717a6db885faf70a",
+    "fetchedAt": "2026-09-13T08:04:24.667Z",
+    "path": "www.figma.com/_netlify/_next/static/chunks/5897-1045e82848a6e38f.js"
+   },
+   {
+    "url": "https://www.figma.com/_netlify/_next/static/chunks/6416-5438a2f1b22175e5.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 19420,
+    "sha256": "d05d68af54f3367a5e450892765a3e77894274c50540337a3ba9376a35ada745",
+    "fetchedAt": "2026-09-13T08:04:24.856Z",
+    "path": "www.figma.com/_netlify/_next/static/chunks/6416-5438a2f1b22175e5.js"
+   },
+   {
+    "url": "https://www.figma.com/_netlify/_next/static/chunks/5880-25451cc195d20b88.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 95161,
+    "sha256": "8874af0429ff725ecd2a587d22ed3c85e357dd46670ec7ddf086feb5f6c851e5",
+    "fetchedAt": "2026-09-13T08:04:25.043Z",
+    "path": "www.figma.com/_netlify/_next/static/chunks/5880-25451cc195d20b88.js"
+   },
+   {
+    "url": "https://www.figma.com/_netlify/_next/static/chunks/8146-b69daef121606429.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 20381,
+    "sha256": "e5430153c4d03a504b1a46a81197a4b36162a7a0f7205aa1128843d3ae3d5bf7",
+    "fetchedAt": "2026-09-13T08:04:25.468Z",
+    "path": "www.figma.com/_netlify/_next/static/chunks/8146-b69daef121606429.js"
+   },
+   {
+    "url": "https://www.figma.com/_netlify/_next/static/chunks/6120-250d053c3e9c8dcc.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 1164617,
+    "sha256": "7c1551c1467544dbc647a74b09196b85415412ff4b3e47b994fc336bb0537c23",
+    "fetchedAt": "2026-09-13T08:04:25.718Z",
+    "path": "www.figma.com/_netlify/_next/static/chunks/6120-250d053c3e9c8dcc.js"
+   },
+   {
+    "url": "https://www.figma.com/_netlify/_next/static/chunks/4782-4835a8fc82592938.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 104049,
+    "sha256": "799cc93f5b718db61e45d3c6f4bc00e429e0c21c57bb1ac367f6b93a38926459",
+    "fetchedAt": "2026-09-13T08:04:26.248Z",
+    "path": "www.figma.com/_netlify/_next/static/chunks/4782-4835a8fc82592938.js"
+   },
+   {
+    "url": "https://www.figma.com/_netlify/_next/static/chunks/5280-dd41e1872f26af66.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 145921,
+    "sha256": "acbd2ceff264c05902537eca1a7bd6e70d8ba6b254e46faa07a80b2c59c1edd5",
+    "fetchedAt": "2026-09-13T08:04:26.450Z",
+    "path": "www.figma.com/_netlify/_next/static/chunks/5280-dd41e1872f26af66.js"
+   },
+   {
+    "url": "https://www.figma.com/_netlify/_next/static/chunks/3990-a20f213c8d41091f.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 12421,
+    "sha256": "1f80b481bed6174966fab35ba7f87752a2d40eb0d46baa91fee817aacbbef238",
+    "fetchedAt": "2026-09-13T08:04:26.623Z",
+    "path": "www.figma.com/_netlify/_next/static/chunks/3990-a20f213c8d41091f.js"
+   },
+   {
+    "url": "https://www.figma.com/_netlify/_next/static/chunks/8722-245d80e926d45056.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 315078,
+    "sha256": "754b79457eb4e89ba3004648cb60ef9c8c3b63cf63c7edf7ba661a1c536375e7",
+    "fetchedAt": "2026-09-13T08:04:26.869Z",
+    "path": "www.figma.com/_netlify/_next/static/chunks/8722-245d80e926d45056.js"
+   },
+   {
+    "url": "https://www.figma.com/_netlify/_next/static/chunks/6693-a47b69bba3186a53.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 60730,
+    "sha256": "fba212cf4b2d6d41440fd1cfbcd76f022a1676cb7fb58d7b8452fc34e356efd9",
+    "fetchedAt": "2026-09-13T08:04:27.386Z",
+    "path": "www.figma.com/_netlify/_next/static/chunks/6693-a47b69bba3186a53.js"
+   },
+   {
+    "url": "https://www.figma.com/_netlify/_next/static/chunks/2367-52b315432d836a27.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 31684,
+    "sha256": "5673d7644606c2db40a882a693898a12a21bd29722858158fecb80f0e0d12a8d",
+    "fetchedAt": "2026-09-13T08:04:27.865Z",
+    "path": "www.figma.com/_netlify/_next/static/chunks/2367-52b315432d836a27.js"
+   },
+   {
+    "url": "https://www.figma.com/_netlify/_next/static/chunks/8256-3b5342fd68502658.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 12055,
+    "sha256": "fb41559dbb4f809639ce073aed7f000fed9a8a18c6663bb789e699cc9d5bdec6",
+    "fetchedAt": "2026-09-13T08:04:28.241Z",
+    "path": "www.figma.com/_netlify/_next/static/chunks/8256-3b5342fd68502658.js"
+   },
+   {
+    "url": "https://www.figma.com/_netlify/_next/static/chunks/app/%5Blang%5D/%5B...slug%5D/page-7ab26935503d4380.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 20507,
+    "sha256": "ae71e4c9a6bf81cf9a4cd287c320ea685cc98bee0b0a4de8b18f352245ef72e2",
+    "fetchedAt": "2026-09-13T08:04:28.615Z",
+    "path": "www.figma.com/_netlify/_next/static/chunks/app/%5Blang%5D/%5B...slug%5D/page-7ab26935503d4380.js"
+   },
+   {
+    "url": "https://www.figma.com/_netlify/_next/static/chunks/2302-a2df8bc53f4e3dfc.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 19812,
+    "sha256": "6020997f80dd38dd7c37bbad0d4da34bbed14ff2cd8f2bb5670bfeb04c5b9e9e",
+    "fetchedAt": "2026-09-13T08:04:28.852Z",
+    "path": "www.figma.com/_netlify/_next/static/chunks/2302-a2df8bc53f4e3dfc.js"
+   },
+   {
+    "url": "https://www.figma.com/_netlify/_next/static/chunks/app/%5Blang%5D/(bespoke)/page-aff18a19d8591e1c.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 602,
+    "sha256": "dbfa780cb2e2184f33f1809aedccbba831919cd6ce62d01f0f6371df08c3b2f7",
+    "fetchedAt": "2026-09-13T08:04:29.211Z",
+    "path": "www.figma.com/_netlify/_next/static/chunks/app/%5Blang%5D/(bespoke)/page-aff18a19d8591e1c.js"
+   },
+   {
+    "url": "https://www.figma.com/_netlify/_next/static/chunks/app/%5Blang%5D/error-a6502a68df4ea2fe.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 1424,
+    "sha256": "1066d9242f9ba465043e17924bf5737436ce10b66f81b7b140bfb643a7d88a91",
+    "fetchedAt": "2026-09-13T08:04:29.418Z",
+    "path": "www.figma.com/_netlify/_next/static/chunks/app/%5Blang%5D/error-a6502a68df4ea2fe.js"
+   },
+   {
+    "url": "https://www.figma.com/_netlify/_next/static/chunks/app/%5Blang%5D/not-found-d70f224fb84808ed.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 20587,
+    "sha256": "0ea9e87015ad70bb949051059fb73e84e58cdacfbc6c667cc4dfdd25c96ab200",
+    "fetchedAt": "2026-09-13T08:04:29.866Z",
+    "path": "www.figma.com/_netlify/_next/static/chunks/app/%5Blang%5D/not-found-d70f224fb84808ed.js"
+   },
+   {
+    "url": "https://www.figma.com/_netlify/_next/static/chunks/polyfills-42372ed130431b0a.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 112594,
+    "sha256": "0973c1d64c88adc8e3c950410cb58b288f72118d5965b78049438deb8f2f9683",
+    "fetchedAt": "2026-09-13T08:04:30.167Z",
+    "path": "www.figma.com/_netlify/_next/static/chunks/polyfills-42372ed130431b0a.js"
+   },
+   {
+    "url": "https://www.figma.com/_netlify/_next/static/chunks/webpack-f09dbb557c7ae17b.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 4871,
+    "sha256": "cd0e548632ed6a227b362ecdc15a25849622bc82d04aedaa76a0125852c11b44",
+    "fetchedAt": "2026-09-13T08:04:30.357Z",
+    "path": "www.figma.com/_netlify/_next/static/chunks/webpack-f09dbb557c7ae17b.js"
+   },
+   {
+    "url": "https://www.figma.com/_netlify/_next/static/media/7c42ed55a7834032-s.p.woff2",
+    "status": 200,
+    "contentType": "font/woff2",
+    "bytes": 315460,
+    "sha256": "570307dd2771e4de962d5a87e1785fe5eb33d71ff5016a5b787be886a6c53d88",
+    "fetchedAt": "2026-09-13T08:04:30.773Z",
+    "path": "www.figma.com/_netlify/_next/static/media/7c42ed55a7834032-s.p.woff2"
+   },
+   {
+    "url": "https://cdn.sanity.io/images/599r6htc/regionalized/717af6633a6896341b7c95807c05f449597ef769-98x32.svg?q=75&fit=max&auto=format",
+    "status": 200,
+    "contentType": "image/svg+xml",
+    "bytes": 8514,
+    "sha256": "dff6275c5366d1459c735b7a1bc47eeeb81deedc9e3255d37c0808e7bd8cb2bb",
+    "fetchedAt": "2026-09-13T08:04:30.973Z",
+    "path": "cdn.sanity.io/images/599r6htc/regionalized/717af6633a6896341b7c95807c05f449597ef769-98x32.svg__q1a0f722f"
+   },
+   {
+    "url": "https://cdn.sanity.io/images/599r6htc/regionalized/855afc6ef4bb9d8394d6e431355190296391803d-155x32.svg?q=75&fit=max&auto=format",
+    "status": 200,
+    "contentType": "image/svg+xml",
+    "bytes": 3571,
+    "sha256": "0aa16c72639b6d8e035a62cc95e59088bd07dc64f911148a795681c41e9d4a8b",
+    "fetchedAt": "2026-09-13T08:04:31.174Z",
+    "path": "cdn.sanity.io/images/599r6htc/regionalized/855afc6ef4bb9d8394d6e431355190296391803d-155x32.svg__q1a0f722f"
+   },
+   {
+    "url": "https://cdn.sanity.io/images/599r6htc/regionalized/b294234a9bfdd4a158e20e92fbac3c629f6e9170-124x32.svg?q=75&fit=max&auto=format",
+    "status": 200,
+    "contentType": "image/svg+xml",
+    "bytes": 3078,
+    "sha256": "bc857af6065f1c08dcac4af1ee4d9e83a515b40e2ee25d44391b667ba5a0f636",
+    "fetchedAt": "2026-09-13T08:04:31.329Z",
+    "path": "cdn.sanity.io/images/599r6htc/regionalized/b294234a9bfdd4a158e20e92fbac3c629f6e9170-124x32.svg__q1a0f722f"
+   },
+   {
+    "url": "https://cdn.sanity.io/images/599r6htc/regionalized/04c81a93b530b57e29b1fabbb263cd398637e0c3-107x32.svg?q=75&fit=max&auto=format",
+    "status": 200,
+    "contentType": "image/svg+xml",
+    "bytes": 4545,
+    "sha256": "8697dc5b2df4e9b7b44841d23876d105e0b3d3e586801d1847bc8b60b9085235",
+    "fetchedAt": "2026-09-13T08:04:31.539Z",
+    "path": "cdn.sanity.io/images/599r6htc/regionalized/04c81a93b530b57e29b1fabbb263cd398637e0c3-107x32.svg__q1a0f722f"
+   },
+   {
+    "url": "https://cdn.sanity.io/images/599r6htc/regionalized/9e4f6f88c28e657c5b56355f210f3b0ca4f6f93c-87x32.svg?q=75&fit=max&auto=format",
+    "status": 200,
+    "contentType": "image/svg+xml",
+    "bytes": 4340,
+    "sha256": "3f544d82eafb0fbb7d9b8f93319d0fd6b68f571a38311e924b31176a039eab55",
+    "fetchedAt": "2026-09-13T08:04:31.749Z",
+    "path": "cdn.sanity.io/images/599r6htc/regionalized/9e4f6f88c28e657c5b56355f210f3b0ca4f6f93c-87x32.svg__q1a0f722f"
+   },
+   {
+    "url": "https://cdn.sanity.io/images/599r6htc/regionalized/6a3dc606d7d09fc8e5c6750e614571151be3700d-380x56.svg?q=75&fit=max&auto=format",
+    "status": 200,
+    "contentType": "image/svg+xml",
+    "bytes": 6211,
+    "sha256": "0bf63c4bf0f7f1dc2cc4ae09d4f687d6dfab44bb8d8c928fb72588a111775bd2",
+    "fetchedAt": "2026-09-13T08:04:31.898Z",
+    "path": "cdn.sanity.io/images/599r6htc/regionalized/6a3dc606d7d09fc8e5c6750e614571151be3700d-380x56.svg__q1a0f722f"
+   },
+   {
+    "url": "https://cdn.sanity.io/images/599r6htc/regionalized/6b1738a69bdca9a6b7eb575a5e9aad7851edfab6-120x32.svg?q=75&fit=max&auto=format",
+    "status": 200,
+    "contentType": "image/svg+xml",
+    "bytes": 6164,
+    "sha256": "4c279342f2e6910897d551e4eae4cf228f9b92d72da0ad0b806ec276f91b1eff",
+    "fetchedAt": "2026-09-13T08:04:32.311Z",
+    "path": "cdn.sanity.io/images/599r6htc/regionalized/6b1738a69bdca9a6b7eb575a5e9aad7851edfab6-120x32.svg__q1a0f722f"
+   },
+   {
+    "url": "https://cdn.sanity.io/images/599r6htc/regionalized/176848b4508f88d6e99cbebe953a99544383503f-84x32.svg?q=75&fit=max&auto=format",
+    "status": 200,
+    "contentType": "image/svg+xml",
+    "bytes": 1498,
+    "sha256": "0409772241d291dea07f82e7057fd95d5b12816d667f9a90d61e471d04148591",
+    "fetchedAt": "2026-09-13T08:04:32.633Z",
+    "path": "cdn.sanity.io/images/599r6htc/regionalized/176848b4508f88d6e99cbebe953a99544383503f-84x32.svg__q1a0f722f"
+   },
+   {
+    "url": "https://cdn.sanity.io/images/599r6htc/regionalized/86f3e1fdd939b2b55742aeb050901033ac11df68-130x32.svg?q=75&fit=max&auto=format",
+    "status": 200,
+    "contentType": "image/svg+xml",
+    "bytes": 14875,
+    "sha256": "47814c8f3999f208aac0d1f554d4ea649ee49d189ceec94fa7a4af2692b9e054",
+    "fetchedAt": "2026-09-13T08:04:32.850Z",
+    "path": "cdn.sanity.io/images/599r6htc/regionalized/86f3e1fdd939b2b55742aeb050901033ac11df68-130x32.svg__q1a0f722f"
+   },
+   {
+    "url": "https://cdn.sanity.io/images/599r6htc/regionalized/f810691e526e4f771f2ebf33ddcd0f566117da1f-97x32.svg?q=75&fit=max&auto=format",
+    "status": 200,
+    "contentType": "image/svg+xml",
+    "bytes": 3668,
+    "sha256": "f7c8f018792ef6d99c997fe8fc6834f4a1e45dd35dc1aa4dd06f952dfc59b038",
+    "fetchedAt": "2026-09-13T08:04:32.995Z",
+    "path": "cdn.sanity.io/images/599r6htc/regionalized/f810691e526e4f771f2ebf33ddcd0f566117da1f-97x32.svg__q1a0f722f"
+   },
+   {
+    "url": "https://cdn.sanity.io/images/599r6htc/regionalized/291a41dd8ae8cd7f9bde48427197b549a75109a7-66x32.svg?q=75&fit=max&auto=format",
+    "status": 200,
+    "contentType": "image/svg+xml",
+    "bytes": 2165,
+    "sha256": "6f82fc3c34cc5e1fd8a82cd7c90e19f5b1908a5108f4f61bcacf04fefe82df24",
+    "fetchedAt": "2026-09-13T08:04:33.166Z",
+    "path": "cdn.sanity.io/images/599r6htc/regionalized/291a41dd8ae8cd7f9bde48427197b549a75109a7-66x32.svg__q1a0f722f"
+   },
+   {
+    "url": "https://cdn.sanity.io/images/599r6htc/regionalized/41d8568f985d041ccbcb64865c56c5d04dacbe77-180x32.svg?q=75&fit=max&auto=format",
+    "status": 200,
+    "contentType": "image/svg+xml",
+    "bytes": 22620,
+    "sha256": "304caa05856a27cba0bf45ad62f2b2600c24ab0a179c12ab77823fd8d32b14ec",
+    "fetchedAt": "2026-09-13T08:04:33.401Z",
+    "path": "cdn.sanity.io/images/599r6htc/regionalized/41d8568f985d041ccbcb64865c56c5d04dacbe77-180x32.svg__q1a0f722f"
+   },
+   {
+    "url": "https://cdn.sanity.io/images/599r6htc/regionalized/9152f45c8c5c17a2071ee4d2f04507c89240eafe-86x32.svg?q=75&fit=max&auto=format",
+    "status": 200,
+    "contentType": "image/svg+xml",
+    "bytes": 3629,
+    "sha256": "e365d0ff88280bcadbec8faef6c482a38fb971f01bf26d6c877a69917757a57f",
+    "fetchedAt": "2026-09-13T08:04:33.634Z",
+    "path": "cdn.sanity.io/images/599r6htc/regionalized/9152f45c8c5c17a2071ee4d2f04507c89240eafe-86x32.svg__q1a0f722f"
+   },
+   {
+    "url": "https://www.figma.com/api/user",
+    "status": 202,
+    "contentType": "text/html; charset=UTF-8",
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "fetchedAt": "2026-09-13T08:04:33.808Z",
+    "path": "www.figma.com/api/user"
+   }
+  ],
+  "baseUrl": "https://www.figma.com/"
  }
 ]
