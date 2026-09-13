@@ -101,6 +101,17 @@ static char *body_span_example_text(JSContext *ctx, JSValueConst unknown)
    IT RUNS NO PAGE CODE AND CANNOT SUSPEND. Every index is in range on a brand-tested TypedArray, so the read
    is answered by the fast element path and never reaches a prototype walk, a getter or a Proxy trap — which is
    what makes it safe at a host edge with no flow to park.
+   THE WALK IS ONE ORDINARY ELEMENT READ PER ELEMENT AND HAS NO EARLY-OUT, which is a cost stated rather than
+   hidden: nothing public answers whether a buffer carries any span at all, so a body with none pays one fast
+   element read per element, once, at the extraction. What would remove it is an engine-side predicate over
+   the span count — a submodule landing, which this walk deliberately needs none of otherwise.
+   AND AN UNKNOWN *INDEX* REACHES FURTHER THAN A READER EXPECTS. §10.4.5.18's other arm records a span over the
+   byte range an unknown OFFSET could have been in, and the engine/host contract gives it no domain to narrow
+   with, so today that range is the WHOLE BUFFER — every element then answers unknown, they all spell one
+   shape, and this walk coalesces them into a single range covering the body. That is over-general in the
+   direction §Solver-half asks for and it has a visible price: one `buf[i] = 1` with an unknown `i` takes the
+   whole payload's bytes off the record, because a body whose fields are named carries no raw form. It
+   narrows on its own the day the engine can read an offset unknown's domain, with no line here changing.
    ADJACENT ENTRIES SPELLING ONE SHAPE ARE ONE ENTRY, and that is a statement rather than a saving: a page
    writing a string field byte by byte derives every byte from ONE operand through ONE operation, so
    concolic_new_derived composes ONE shape for all of them, and one row naming the whole range is the true
