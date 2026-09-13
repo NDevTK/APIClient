@@ -17538,13 +17538,22 @@ static void css_math_selftest(void)
         { "calc(1px + 50%)", CSS_MATH_PROD_LENGTH, false, "the same hint rule, reached through an addition" },
         { "calc(1px + 50%)", CSS_MATH_PROD_LENGTH_PERCENTAGE, true,
           "§5.1's third clause for `<length-percentage>`: `any valid <calc()> expression combining <length> and "
-          "<percentage> components` — a value that matches NEITHER `<length>` nor `<percentage>` alone, which "
-          "is why the two questions cannot be ORed together" },
+          "<percentage> components` — which is a third CLAUSE and not a third VALUE. This one MATCHES the "
+          "first disjunct: CSS Typed OM 1 §4.3.2 makes matching context-relative, so «[\"length\" → 1]» with "
+          "a hint of \"length\" matches `<length>` in a position that resolves percentages against one. What "
+          "cannot be ORed is the two QUESTIONS, because asking `<length>` alone names a context in which "
+          "§10.9's `<percentage>` terminal types the `50%` as \"percent\" and the addition is §4.3.2's FAILURE — "
+          "the row directly above is that world. THIS SITE CARRIED `a value that matches NEITHER <length> nor "
+          "<percentage> alone` after the three that were repaired together, which is why a retired argument is "
+          "grepped for by its WORDS and not only at the sites the diff that retired it happened to open" },
         /* §5.6's OTHER MIXED PRODUCTION, asked here rather than left to the one caller that needs it. The
-           gradient fixture above reaches `<angle-percentage>` through a conic colour stop, and it runs
-           FIRST — so without these rows a defect in this component's typing aborts at a gradient row and
-           reads as a gradient defect, which is the same mis-reporting the ordering note beneath this table
-           gives for running the numeric-type fixture last. */
+           syntax-string fixture reaches `<angle-percentage>` through a conic colour stop, so without these
+           rows a defect in this component's typing aborts at a GRADIENT row and reads as a gradient defect.
+           THAT WAS WRITTEN AS A PREDICTION AND THEN HAPPENED, which is why the sentence is kept: these rows
+           landed while that fixture still ran FIRST, so they could not fire, and a §10.9 defect was read as
+           an `<angle-percentage>` grammar question across three revisions. The order is now the one every
+           other note in `main` states — the PRIMITIVE reports its own failure — so this table is what speaks
+           next time and the prediction has no way left to come true. */
         { "calc(25% + 10deg)", CSS_MATH_PROD_ANGLE, false,
           "the hint rule NOT taken: with no context resolving percentages against an angle, `25%` types as "
           "percent and §4.3.2's add-two-types over percent and angle is failure" },
@@ -19652,15 +19661,32 @@ int main(int argc, char **argv) {
     csp_element_matching_selftest();
     csp_url_matching_selftest();
     document_policy_selftest();
-    css_property_grammar_selftest();
     css_math_selftest();   /* css-values-4 §10's grammar, §10.9's type algebra and §10.10.1's reduction —
-                              AFTER the syntax-string fixture, because §5.1's numeric types are matched
-                              THROUGH this component now and a failure there must be read as this one's */
+                              BEFORE the syntax-string fixture, because EIGHT of CSS Properties and Values
+                              API 1 §5.1's supported names are matched THROUGH this component (every arm of
+                              core/css/css_syntax_match.c's `val_math_is`) and a failure in it would otherwise
+                              be reported as one of them being wrong. It is the order `secure_hash_selftest`
+                              takes in front of the CSP fixtures above and `css_numeric_type_selftest` takes
+                              behind this one: the PRIMITIVE runs first, so its failure is reported at its own
+                              row.
+                              THE NOTE HERE ONCE SAID `AFTER ... and a failure there must be read as this
+                              one's`, WHICH IS THE SAME OBSERVATION WITH THE CONCLUSION INVERTED, and it is
+                              rewritten rather than deleted because the inversion is easy to re-derive from a
+                              true premise. MEASURED: a §10.9 typing defect aborted the syntax fixture at
+                              `<image>` / `conic-gradient(red calc(25% + 10deg), blue)` and was read as a
+                              gradient question across three revisions, while the rows below assert the same
+                              typing directly and had never executed. The table below had already written that
+                              down as a prediction. */
+    css_property_grammar_selftest();
     css_numeric_type_selftest();   /* CSS Typed OM 1 §4.3.2's nine create-a-type branches and css-values-4
                                       §5.4.1's conversion ratio — AFTER the math fixture, because seven of the
                                       nine ARE §10.9's terminal rule over the same tables and the type map they
-                                      return is that component's, so a failure in the algebra is reported one
-                                      line earlier and must not be read as this one's */
+                                      return is that component's, so a failure in the algebra is reported
+                                      FIRST and must not be read as this one's. It said `one line earlier`
+                                      while the math fixture was the call directly above; the ordering that
+                                      matters is which fixture REPORTS a shared failure, not how many calls
+                                      apart they sit, and the syntax fixture now stands between them for the
+                                      same reason this one stands behind */
     xml_char_selftest();   /* XML §2.2's [2] Char, §2.3's [3] S, and §2.11's line-break normalization */
     xml_ref_selftest();    /* XML §4.1's [66] CharRef and [68] EntityRef, and §4.6's five predefined entities */
     xml_markup_selftest(); /* XML §2.5's [15] Comment, §2.6's [16] PI, §2.7's [18] CDSect, and §2.11's
