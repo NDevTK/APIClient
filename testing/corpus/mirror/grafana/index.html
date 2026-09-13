@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html class="fs-loading">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1" />
+    <meta name="viewport" content="width=device-width" />
+    <meta name="theme-color" content="#000" />
+
+    <title>Grafana</title>
+
+    <base href="/" />
+
+    
+    <script
+      data-is-production-environment="true"
+      data-recording-token="QBB1Q6GAdejcytJjPj3v4fmuN4giMvAM6rcCJZuF"
+      nonce="aspMKVJcgsPkgyUjSNtskQ"
+      src="https://snippet.meticulous.ai/v1/meticulous.js"
+    ></script>
+    
+
+    <link rel="icon" id="grafana_favicon" type="image/png" href="https://grafana-assets.grafana.net/grafana/13.3.0-34259522365/public/build/img/fav32.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="https://grafana-assets.grafana.net/grafana/13.3.0-34259522365/public/build/img/apple-touch-icon.png" />
+    <link rel="mask-icon" href="https://grafana-assets.grafana.net/grafana/13.3.0-34259522365/public/build/img/grafana_mask_icon.svg" color="#F05A28" />
+
+    
+      <link rel="stylesheet" href="https://grafana-assets.grafana.net/grafana/13.3.0-34259522365/public/build/grafana.app.e3d0bb45757bd985dc70.css" />
+    
+
+    <script nonce="aspMKVJcgsPkgyUjSNtskQ">
+      performance.mark('frontend_boot_css_time_seconds');
+    </script>
+  </head>
+
+  <body>
+    <div class="preloader">
+      <style>
+         
+
+         
+        :root {
+          --fs-loader-bg: #f4f5f5;
+          --fs-loader-text-color: rgb(36, 41, 46);
+          --fs-spinner-arc-color: #F55F3E;
+          --fs-spinner-track-color: rgba(36, 41, 46, 0.12);
+          --fs-color-error: #e0226e;
+        }
+
+         
+        @media (prefers-color-scheme: dark) {
+          :root {
+            --fs-loader-bg: #111217;
+            --fs-loader-text-color: rgb(204, 204, 220);
+            --fs-spinner-arc-color: #F55F3E;
+            --fs-spinner-track-color: rgba(204, 204, 220, 0.12);
+            --fs-color-error: #d10e5c;
+          }
+        }
+
+        @keyframes spin {
+          to {
+            transform: rotate(360deg);
+          }
+        }
+
+        body {
+          background-color: var(--fs-loader-bg);
+          color: var(--fs-loader-text-color);
+          margin: 0;
+        }
+
+        .preloader {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          height: 100dvh;
+          justify-content: center;
+          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+            Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji",
+            "Segoe UI Symbol";
+          line-height: 1;  
+        }
+
+        .fs-variant-loader, .fs-variant-error {
+          display: contents;
+        }
+
+        .fs-hidden {
+          display: none;
+        }
+
+        .fs-spinner {
+          animation: spin 1500ms linear infinite;
+          width: 32px;
+          height: 32px;
+        }
+
+        .fs-spinner-track {
+          stroke: rgba(255,255,255,.15);
+        }
+
+        .fs-spinner-arc {
+          stroke: #F55F3E;
+        }
+
+        .fs-loader-text {
+          opacity: 0;
+          font-size: 16px;
+          margin-bottom: 0;
+          transition: opacity 300ms ease-in-out;
+        }
+
+        .fs-loader-starting-up .fs-loader-text {
+          opacity: 1;
+        }
+
+        .fs-variant-error .fs-loader-text {
+          opacity: 1;
+        }
+
+        .fs-error-icon {
+          fill: var(--fs-color-error);
+        }
+      </style>
+
+      <div class="fs-variant-loader">
+        <svg
+          width="32"
+          height="32"
+          class="fs-spinner"
+          viewBox="0 0 100 100"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <circle class="fs-spinner-track" cx="50" cy="50" r="45" fill="none" stroke-width="10" />
+          <circle class="fs-spinner-arc" cx="50" cy="50" r="45" fill="none" stroke-width="10" stroke-linecap="round" stroke-dasharray="70.7 212.3" stroke-dashoffset="0" />
+        </svg>
+
+        <p class="fs-loader-text">Grafana is starting up...</p>
+      </div>
+
+      <div class="fs-variant-error fs-hidden">
+        <svg
+          width="32"
+          height="32"
+          class="fs-error-icon"
+          viewBox="0 0 24 24"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <path d="M12,14a1.25,1.25,0,1,0,1.25,1.25A1.25,1.25,0,0,0,12,14Zm0-1.5a1,1,0,0,0,1-1v-3a1,1,0,0,0-2,0v3A1,1,0,0,0,12,12.5ZM12,2A10,10,0,1,0,22,12,10.01114,10.01114,0,0,0,12,2Zm0,18a8,8,0,1,1,8-8A8.00917,8.00917,0,0,1,12,20Z"/>
+        </svg>
+
+        <p class="fs-loader-text">Error loading Grafana</p>
+      </div>
+  </div>
+
+    <noscript>
+      <style>
+        .preloader {
+          display: none;
+        }
+
+        .js-required-message {
+          margin: 48px auto;
+          max-width: 720px;
+          padding: 0 16px;
+          font-family: Sans-serif;
+          line-height: 1.5;
+          color: #52545c;
+        }
+
+         
+        @media (prefers-color-scheme: dark) {
+          .js-required-message {
+            color: #d8d9da;
+          }
+        }
+      </style>
+      <main class="js-required-message">
+        <h1>JavaScript is required to run Grafana</h1>
+        <p>Please enable JavaScript in your browser and reload the page.</p>
+      </main>
+    </noscript>
+
+    <div id="reactRoot"></div>
+
+    <script nonce="aspMKVJcgsPkgyUjSNtskQ">
+      
+        window.nonce = 'aspMKVJcgsPkgyUjSNtskQ';
+      
+
+      
+        window.public_cdn_path = 'https:\/\/grafana-assets.grafana.net\/grafana\/13.3.0-34259522365\/public\/build\/';
+      
+
+      
+
+      
+
+      
+        
+        window.__grafanaAssetSriChecksEnabled = true;
+      
+
+      
+
+      
+        window.__grafanaOFREPRootUrlEnabled = true;
+      
+
+      
+
+      window.__grafanaLegacyAPIMode = "off";
+      window.__grafanaPublicDashboardAccessToken = "";
+
+      
+        
+        window.grafanaBootData = {
+          _femt: true, 
+          assets: {"cdn":"https://grafana-assets.grafana.net/grafana/13.3.0-34259522365/","jsFiles":[{"filePath":"https://grafana-assets.grafana.net/grafana/13.3.0-34259522365/public/build/runtime.d1749671a463cf9f29e1.js","integrity":"sha384-d69RHyaTBnhCn/6k5C9LkDqWs153IRzR5hMLrIUJKpuCLVH68iOscMugzBu+Ayhw sha512-rDGaTfd1q08MbyZ+Eh3B7p/et7wCDCE43Dv0us0priw4XYcZAWYCMVd2FCps9EaF0ThE6J7/spfyGTzPnwdtyA=="},{"filePath":"https://grafana-assets.grafana.net/grafana/13.3.0-34259522365/public/build/26727.f1d82a61ee6e2e513ef2.js","integrity":"sha384-Ai9cGsyCgbOtqPQgKGQn9yaktx21Y9lNdkhiGhfLbbQ0ej3MYmnARHt3co+KMoQ2 sha512-xGfTy80EnJTZP5eTk9+n0fnEVzscG4sj0rrgYJO4zAUg9KkpxFS2HIcrDcjVQ7NoZuAataZEW021oh2zzpXpIQ=="},{"filePath":"https://grafana-assets.grafana.net/grafana/13.3.0-34259522365/public/build/65063.92d0ddad092666cbce72.js","integrity":"sha384-8lUUbnCKk4KaeCni80jz9SksR0nPrh9Twc8gfQ+is7zKxSf4tIym0CjebC8ULB6d sha512-cDX6VB76EnuzmqYf6jURQvMntcKEfla0UpWs9XyCATdDsJJ+iMFKx+Z4WzqYt25RitYkeRIVoSOf3rx0gsYOmQ=="},{"filePath":"https://grafana-assets.grafana.net/grafana/13.3.0-34259522365/public/build/app.cd436acb3b5d611e12ff.js","integrity":"sha384-K5dXY0NlhnqItIEqzko72Z9o5AQoSygkDwWMU2O1XrN5VlfHWZvySUTQ4Y1p6WtU sha512-ox8niL6VGdPWFCMGor0+/A3nkVHnRALwX08Ii0duAp87V5olzrzP6HuUqvM4103PdSf69llpM4uEQhiqnQAKXQ=="}],"cssFiles":[{"filePath":"https://grafana-assets.grafana.net/grafana/13.3.0-34259522365/public/build/grafana.app.e3d0bb45757bd985dc70.css","integrity":"sha384-w2vqta93Uy2PV9AMiHaQShdvwQV3HNsDIvcDJDXwW6MchrfG1sBhHzS0EnU4KKE3 sha512-tm1cNWKRQTUktF1r6Ad4jvhw7EZzFSYhCd2YpNct/eCviHrKYpfROvdOgYNak52ywBY9mgpuIxuY00ErOgQe3Q=="}],"dark":"https://grafana-assets.grafana.net/grafana/13.3.0-34259522365/public/build/grafana.dark.04cc15f4008a63621333.css","light":"https://grafana-assets.grafana.net/grafana/13.3.0-34259522365/public/build/grafana.light.b6731e2112cf0ee6e9e5.css"},
+          navTree: [],
+          settings: {"autoAssignOrg":true,"disableUserSignUp":true,"buildInfo":{"hideVersion":false,"version":"13.3.0-34259522365","versionString":"Grafana Cloud","commit":"a7e0f0391d31a6dc6c7e935656f6b304efb7f31f","commitShort":"a7e0f0391d","buildstamp":1788890132,"edition":"Pro","latestVersion":"","hasUpdate":false,"env":"production"},"googleAnalyticsId":"UA-58328364-6","rudderstackWriteKey":"1vjCCxXFaLSCZL0JiIkR313ixXW","rudderstackDataPlaneUrl":"https://rs.grafana.com","rudderstackSdkUrl":"https://rsdk2.grafana.com","rudderstackV3SdkUrl":"https://rsdk2.grafana.com/cdn/v3/modern/rsa.min.js","rudderstackConfigUrl":"https://rsc2.grafana.com","rudderstackIntegrationsUrl":"https://rsi.grafana.com/v1.1/js-integrations","grafanaJavascriptAgent":{"enabled":true,"customEndpoint":"https://faro-collector-ops-eu-south-0.grafana-ops.net/collect/bc03dd0f2a088059ae67a23bc296a26d","apiKey":"","internalLoggerLevel":0,"consoleInstrumentalizationEnabled":false,"performanceInstrumentalizationEnabled":true,"cspInstrumentalizationEnabled":true,"tracingInstrumentalizationEnabled":true,"botFilterEnabled":false},"applicationInsightsAutoRouteTracking":true,"cspReportOnlyEnabled":true},
+          user: {"isSignedIn":false,"id":0,"uid":"","login":"","email":"","name":"","theme":"","lightTheme":false,"orgCount":0,"orgId":0,"orgName":"","orgRole":"","isGrafanaAdmin":false,"gravatarUrl":"","timezone":"","weekStart":"","locale":"","language":"","hasEditPermissionInFolders":false,"authenticatedBy":"","analytics":{"identifier":""}},
+        }
+      
+
+    </script>
+
+    <script nonce="aspMKVJcgsPkgyUjSNtskQ">
+      (()=>{"use strict";const s=window.__grafanaPublicDashboardAccessToken;let c=!1;window.__grafana_load_failed=function(a){c||(c=!0,console.error("Failed to load Grafana",a),document.querySelector(".fs-variant-loader")?.classList.add("fs-hidden"),document.querySelector(".fs-variant-error")?.classList.remove("fs-hidden"),fetch(`/-/fe-boot-error?ts=${Date.now()}${Math.random()}`,{method:"GET",cache:"no-store"}).catch(t=>{console.error("Failed to report boot error to backend: ",t)}))},window.onload=function(){if(window.__grafana_app_bundle_loaded){delete window.__grafanaPublicDashboardAccessToken;return}window.__grafana_load_failed(new Error("App bundle not loaded"))};let d=!1;function w(){d||(document.querySelector(".preloader")?.classList.add("fs-loader-starting-up"),d=!0)}const l=1*1e3;function u(a){const t=document.cookie.split(";").map(e=>e.trim());for(const e of t)if(e.startsWith(a+"="))return e.substring(a.length+1)}function g(){const a=u("grafana_session_expiry");if(!a)return;const t=parseInt(a,10),e=Math.max(t-10,0);return new Date(e*1e3)}async function h(){await fetch("/api/user/auth-tokens/rotate",{method:"POST"})}async function f(){try{const a=g();a&&new Date>=a&&await h()}catch(a){console.warn("Failed to rotate session",a)}}async function m(){const a=new URLSearchParams(window.location.search);let t="/bootdata";s&&(t+=`/${s}`);const e=new URL(t,window.location.origin);for(const[r,k]of a.entries())e.searchParams.append(r,k);const o=await fetch(e);if(o.status===204){const r=o.headers.get("Redirect-Domain");if(r){window.location.hostname=r;return}}const i=await o.text();let n;try{n=JSON.parse(i)}catch{throw new Error("Unexpected response type: "+i)}if(o.status===503&&n.code==="Loading")return;if(!o.ok)throw new Error("Unexpected response body: "+i);const v=n.settings?.loginError||window.grafanaBootData.settings.loginError,L=[/\/dashboard\/snapshot\/.*$/,/\/invite$/,/\/signup$/,/\/user\/password\/send-reset-email$/,/\/user\/password\/reset$/,/\/public-dashboards\/.*$/].some(r=>r.test(window.location.pathname));return n.autoLoginRedirectURL&&!v&&!a.has("disableAutoLogin")&&!L?(window.location.href.substring(window.location.origin.length)!=="/login"&&window.sessionStorage.setItem("redirectTo",encodeURIComponent(window.location.href.substring(window.location.origin.length))),{redirect:n.autoLoginRedirectURL}):n}function p(){return new Promise((a,t)=>{const e=async()=>{await f();try{const o=await m();if(!o){w(),setTimeout(e,l);return}a(o)}catch(o){t(o)}};e()})}async function _(){const a=window.grafanaBootData?.settings?.namespace;if(!a)return;const t=await fetch(`/apis/iam.grafana.app/v0alpha1/namespaces/${a}/users/~`);if(t.status!==401){if(!t.ok)throw new Error(`Unexpected /users/~ response: ${t.status}`);return t.json()}}function D(){const a=window.grafanaBootData.settings.whitelabeling?.favIcon;if(!a)return;const t=document.getElementById("grafana_favicon");if(t&&!(t instanceof HTMLLinkElement))return;const e=t??document.createElement("link");e.rel="icon",e.type="image/png",e.id="grafana_favicon",t||document.head.appendChild(e),e.href=a}async function b(){const a=await p();if("redirect"in a)return Promise.reject({redirect:a.redirect});window.grafanaBootData.user=a.user,window.grafanaBootData.settings={...a.settings,...window.grafanaBootData.settings},window.grafanaBootData.navTree=a.navTree,a.settings?.buildInfo?.edition&&(window.grafanaBootData.settings.buildInfo.edition=a.settings.buildInfo.edition);const t=document.createElement("link");if(t.rel="stylesheet",window.grafanaBootData.user.theme==="system"){const n=window.matchMedia("(prefers-color-scheme: dark)");window.grafanaBootData.user.lightTheme=!n.matches}const o=window.grafanaBootData.user.lightTheme;document.body.classList.add(o?"theme-light":"theme-dark");const i=window.grafanaBootData.user.language;i&&(document.documentElement.lang=i),t.href=window.grafanaBootData.assets[o?"light":"dark"],document.head.appendChild(t)}async function y(){await f();const a=await _();a?window.grafanaBootData.user={...window.grafanaBootData.user,isSignedIn:!0,id:a.internalId??0,uid:a.identity?.name??"",name:a.displayName,gravatarUrl:a.avatarURL??"",orgRole:a.role??""}:window.grafanaBootData.user={...window.grafanaBootData.user,isSignedIn:!1}}async function B(){window.__grafanaReduceBootdataAPI?await y():await b(),D()}window.__grafana_boot_data_promise=B(),window.__grafana_boot_data_promise.catch(a=>{if(a&&a.redirect&&typeof a.redirect=="string"){window.location.href=a.redirect;return}console.error("__grafana_boot_data_promise rejected",a),window.__grafana_load_failed(a)})})();
+
+//# sourceMappingURL=boot.js.map
+    </script>
+
+    
+      
+        <script
+        nonce="aspMKVJcgsPkgyUjSNtskQ"
+        src="https://grafana-assets.grafana.net/grafana/13.3.0-34259522365/public/build/runtime.d1749671a463cf9f29e1.js"
+        integrity="sha384-d69RHyaTBnhCn/6k5C9LkDqWs153IRzR5hMLrIUJKpuCLVH68iOscMugzBu&#43;Ayhw sha512-rDGaTfd1q08MbyZ&#43;Eh3B7p/et7wCDCE43Dv0us0priw4XYcZAWYCMVd2FCps9EaF0ThE6J7/spfyGTzPnwdtyA=="
+        crossorigin="anonymous"
+        type="text/javascript"
+        defer
+      ></script>
+      
+        <script
+        nonce="aspMKVJcgsPkgyUjSNtskQ"
+        src="https://grafana-assets.grafana.net/grafana/13.3.0-34259522365/public/build/26727.f1d82a61ee6e2e513ef2.js"
+        integrity="sha384-Ai9cGsyCgbOtqPQgKGQn9yaktx21Y9lNdkhiGhfLbbQ0ej3MYmnARHt3co&#43;KMoQ2 sha512-xGfTy80EnJTZP5eTk9&#43;n0fnEVzscG4sj0rrgYJO4zAUg9KkpxFS2HIcrDcjVQ7NoZuAataZEW021oh2zzpXpIQ=="
+        crossorigin="anonymous"
+        type="text/javascript"
+        defer
+      ></script>
+      
+        <script
+        nonce="aspMKVJcgsPkgyUjSNtskQ"
+        src="https://grafana-assets.grafana.net/grafana/13.3.0-34259522365/public/build/65063.92d0ddad092666cbce72.js"
+        integrity="sha384-8lUUbnCKk4KaeCni80jz9SksR0nPrh9Twc8gfQ&#43;is7zKxSf4tIym0CjebC8ULB6d sha512-cDX6VB76EnuzmqYf6jURQvMntcKEfla0UpWs9XyCATdDsJJ&#43;iMFKx&#43;Z4WzqYt25RitYkeRIVoSOf3rx0gsYOmQ=="
+        crossorigin="anonymous"
+        type="text/javascript"
+        defer
+      ></script>
+      
+        <script
+        nonce="aspMKVJcgsPkgyUjSNtskQ"
+        src="https://grafana-assets.grafana.net/grafana/13.3.0-34259522365/public/build/app.cd436acb3b5d611e12ff.js"
+        integrity="sha384-K5dXY0NlhnqItIEqzko72Z9o5AQoSygkDwWMU2O1XrN5VlfHWZvySUTQ4Y1p6WtU sha512-ox8niL6VGdPWFCMGor0&#43;/A3nkVHnRALwX08Ii0duAp87V5olzrzP6HuUqvM4103PdSf69llpM4uEQhiqnQAKXQ=="
+        crossorigin="anonymous"
+        type="text/javascript"
+        defer
+      ></script>
+      
+    
+
+     <script nonce="aspMKVJcgsPkgyUjSNtskQ">
+      performance.mark('frontend_boot_js_done_time_seconds');
+    </script>
+  </body>
+</html>

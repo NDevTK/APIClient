@@ -3152,5 +3152,65 @@
    }
   ],
   "baseUrl": "https://www.figma.com/"
+ },
+ {
+  "id": "grafana",
+  "stack": "PASSES 1-3, FAILS 4 — DRIVE LIVE, NEVER QUOTE AS A FROZEN-BYTES BEFORE/AFTER. /api/search?limit=2 returns 200 application/json 872B anonymously while /api/user returns 401 application/json (1 and 2, proven live), and the document carries a large inline window.grafanaBootData — server-injected absent state, which §Attacker-sources requires to stay symbolic and fork to the logged-in arm. It fails the mirror test because mirror.mjs reaches app JavaScript through <script src> and preload links and this document has neither, so it cannot be frozen until the mirror can follow a bootstrap that builds its own script tags. STACK: NO <script src> and NO preload link in the 16.8KiB document — four inline <script nonce> blocks build the app's script elements at runtime from grafana-assets.grafana.net",
+  "requestedUrl": "https://play.grafana.org/",
+  "finalUrl": "https://play.grafana.org/",
+  "status": 200,
+  "contentType": "text/html; charset=UTF-8",
+  "csp": "script-src 'self' 'unsafe-eval' 'unsafe-inline' 'strict-dynamic' 'nonce-aspMKVJcgsPkgyUjSNtskQ' https://grafana-assets.grafana.net/ https://plugins-cdn.grafana.net/ https://rsdk-staging.grafana.com/ https://www.google-analytics.com/analytics.js https://rsdk.grafana.com https://storage.googleapis.com https://widget.intercom.io https://edge.fullstory.com https://snippet.meticulous.ai/; object-src 'none'; base-uri 'self'; form-action 'self' ; frame-ancestors 'none'",
+  "bytes": 16081,
+  "sha256": "1affa3e01c7934a6545c1088081f1a1233fccdd12b835e7bade0117d66ae2970",
+  "fetchedAt": "2026-09-13T08:04:34.603Z",
+  "resources": [
+   {
+    "url": "https://snippet.meticulous.ai/v1/meticulous.js",
+    "status": 200,
+    "contentType": "application/javascript",
+    "bytes": 1353508,
+    "sha256": "91295c0331841b37c0d16eea3f1dbe9302dbed331d7cc0f057387064b1bbb38e",
+    "fetchedAt": "2026-09-13T08:04:35.259Z",
+    "path": "snippet.meticulous.ai/v1/meticulous.js"
+   },
+   {
+    "url": "https://grafana-assets.grafana.net/grafana/13.3.0-34259522365/public/build/runtime.d1749671a463cf9f29e1.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 68249,
+    "sha256": "e1b512ebaea615873fb6eee59225624382da732ace215322031c66f9975b205f",
+    "fetchedAt": "2026-09-13T08:04:35.585Z",
+    "path": "grafana-assets.grafana.net/grafana/13.3.0-34259522365/public/build/runtime.d1749671a463cf9f29e1.js"
+   },
+   {
+    "url": "https://grafana-assets.grafana.net/grafana/13.3.0-34259522365/public/build/26727.f1d82a61ee6e2e513ef2.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 3461814,
+    "sha256": "a034525794a2da43790c2ed6bbdd37972d4184976d78d7ad4d9521fbf8ad9e7a",
+    "fetchedAt": "2026-09-13T08:04:35.910Z",
+    "path": "grafana-assets.grafana.net/grafana/13.3.0-34259522365/public/build/26727.f1d82a61ee6e2e513ef2.js"
+   },
+   {
+    "url": "https://grafana-assets.grafana.net/grafana/13.3.0-34259522365/public/build/65063.92d0ddad092666cbce72.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 5060423,
+    "sha256": "16a4d5701cba4146b211f3aa520f18c56c79c786f3fbf5c871d3089dd46c2330",
+    "fetchedAt": "2026-09-13T08:04:36.339Z",
+    "path": "grafana-assets.grafana.net/grafana/13.3.0-34259522365/public/build/65063.92d0ddad092666cbce72.js"
+   },
+   {
+    "url": "https://grafana-assets.grafana.net/grafana/13.3.0-34259522365/public/build/app.cd436acb3b5d611e12ff.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 42744,
+    "sha256": "79b2b904079a0bfc70fab95be5aa257d962e437df00cf3a2b19acf4d4dc9e5a6",
+    "fetchedAt": "2026-09-13T08:04:36.549Z",
+    "path": "grafana-assets.grafana.net/grafana/13.3.0-34259522365/public/build/app.cd436acb3b5d611e12ff.js"
+   }
+  ],
+  "baseUrl": "https://play.grafana.org/"
  }
 ]
