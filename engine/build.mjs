@@ -2197,6 +2197,16 @@ function programCursorReading(b) {
            `measurement and not an absent row`;
   const top = at.reduce((x, r) => (r[1] > x[1] ? r : x), at[0]);
   const standingDeepest = at.reduce((x, r) => (Number(r[0]) > x ? Number(r[0]) : x), Number(at[0][0]));
+  /* AND THE HISTOGRAM'S EXTENT IS NOT THE TABLE'S LENGTH, WHICH THIS LINE ASSERTED AND `rootPrograms` NOW
+     REFUTES. It read "the slots run one wider than the document's programs", which is true only when the
+     furthest flow has started the LAST row: the buckets come from the live members, so they stop at
+     `deepest + 1` however many rows the document has. `engine_seed_scripts` queues the WHOLE table at flow
+     creation, so a member's `dyn_n` is the document's count from birth and a top bucket is where the mass
+     GOT TO, never where the sequence ends. Read the old way, a top bucket of 8 on a 24-row document says the
+     156 members standing there have nothing left to run, when in fact sixteen rows remain and every one of
+     them is a chunk. Those are opposite diagnoses — one is a finished document and the other is a frontier
+     parked two rows into a bundle — and the sentence that made them indistinguishable had been landed, read,
+     and quoted. */
   /* THE BUCKETS ARE CURSORS AND `deepest` IS A PROGRAM INDEX, AND THIS SENTENCE USED TO CALL THEM BOTH
      PROGRAMS. solver/flow.h's `script_i` runs over [0, dyn_n] — closed at the top, because `dyn_n` is what a
      member holds between two programs at the tail — so the histogram is ONE BUCKET WIDER than the document has
@@ -2248,8 +2258,9 @@ function programCursorReading(b) {
             `the seed stands here at every census while \`asked\` never moves. \`outOfProgramsAtTheLadderUnits\` ` +
             `is the row that separates those two`);
   return `program cursors at the last census (${b.live} live member${b.live === 1 ? "" : "s"} over ` +
-         `${rows.length} cursor slot${rows.length === 1 ? "" : "s"} — a CURSOR is one-past-the-program-it-left, ` +
-         `so the slots run one wider than the document's programs; ` +
+         `${rows.length} cursor slot${rows.length === 1 ? "" : "s"} — a CURSOR is one-past-the-program-it-left ` +
+         `and the slots are one wider than the DEEPEST STARTED program, which is not the document's program ` +
+         `count and is the reading this line used to state; ` +
          `document deepest ${b.deepest} / completed ${b.completed} against ${b.rootPrograms} own <script> program${Number(b.rootPrograms) === 1 ? "" : "s"}${seedReach}; ${oopReading}): ` +
          at.map((r) => `${r[1]} at ${r[0]}`).join(", ") +
          ` — largest bucket ${top[1]} of ${b.live} at cursor ${top[0]}, deepest member standing at cursor ` +

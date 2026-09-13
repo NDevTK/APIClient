@@ -1224,9 +1224,16 @@ char *result_swap_json(void) {
    READ AGAINST `deepest` MEANS READ IN ITS OWN UNIT, WHICH THE SENTENCE ABOVE DOES NOT SAY AND A READER
    CANNOT SUPPLY. The buckets are CURSORS and `deepest` is a PROGRAM INDEX, and a cursor's range is closed at
    `dyn_n` while a program index's is not — so the cursor that means "this member has finished the deepest
-   program the document has" is `deepest + 1`, not `deepest`. The mass sitting AT `deepest + 1` is the second
-   diagnosis; a top bucket one above `deepest` is not two instruments disagreeing, which is how it has been
-   read. `outOfPrograms` beside them is the count of members standing there with no row left at all.
+   program ANY FLOW HAS STARTED" is `deepest + 1`, not `deepest`. The mass sitting AT `deepest + 1` is the
+   second diagnosis; a top bucket one above `deepest` is not two instruments disagreeing, which is how it has
+   been read. `outOfPrograms` beside them is the count of members standing there with no row left at all.
+   THAT USED TO READ "the deepest program THE DOCUMENT HAS", AND THOSE ARE DIFFERENT NUMBERS — `rootPrograms`
+   is the document's own count and `deepest` is how far anybody got, so a top bucket at `deepest + 1` says
+   where the MASS reached and never that the sequence ends there. `engine_seed_scripts` queues the whole table
+   at flow creation, so a member at that bucket may have sixteen chunk rows still in front of it; read the old
+   way it looks like a document that finished. Those are opposite diagnoses and `outOfPrograms` is the row
+   that tells them apart — which is exactly what the paragraph below says and what the wrong phrase above it
+   made unnecessary to read.
 
    `outOfPrograms` IS THE ROW THE HISTOGRAM CANNOT CARRY FOR ITSELF. One cursor value covers a member INSIDE
    the program at that index and a member PAST THE LAST ROW of its own sequence; `framed` separates those two
