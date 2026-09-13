@@ -3318,8 +3318,16 @@ function censusReading(out) {
        grows early and then plateaus reads ~0 here, and the sentence called that "a session that barely ran".
        A STANDING COUNT ANSWERS WHAT THE DIFFERENCE WAS REACHING FOR and needs no second sample, which is how
        solver/cold.h says to read the rows this sentence already cites: its `out_of_programs` family "is
-       evidence only where `live` is nonzero, and `live` is on the same line — read them together". `live` is
-       a GAUGE where it is declared, so the last census is the only place it is entitled to be read at all. */
+       evidence only where `live` is nonzero, and `live` is on the same line — read them together".
+       AND `live`'S OWN KIND IS STATED HERE BECAUSE IT IS STATED NOWHERE ELSE, which is the correction this
+       clause carries rather than a citation. cold.h's "A GAUGE OVER LIVE MEMBERS" is about `out_of_programs`,
+       one row down; the field this reads is declared as `long flows;` carrying a trailing comment that says
+       only "live members of the frontier" — no kind at all — so an earlier draft of this very comment
+       attributed a GAUGE declaration that does not exist. It IS a gauge, by construction rather than by
+       citation: it counts members STANDING, so it falls when they depart — which is exactly the property
+       cold.h leans on one row down when it separates that row from `deepest`/`completed`, "high-water marks
+       [that] cannot go backwards, and this one can".
+       The last census is therefore the only place it is entitled to be read. */
     const liveStanding = c ? c.b.live : null;
     if (forkFlip.length)
       parts.push(`orphan census: ${forkFlip.length} session(s) on this stdout CHANGED their forking regime `
