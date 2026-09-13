@@ -1674,7 +1674,12 @@ char *result_cold_json(void) {
                     than a subtraction, with the identity asserted at engine_frontier_census; `schedUs` is
                     EVERYTHING IN THE TURN THAT IS NOT THE STEP, which includes the previous iteration's tail
                     because the charge telescopes (solver/engine.h). */
-                 "\"sliceUs\":%lld,\"schedUs\":%lld,\"stepUnitRuns\":%s,"
+                 /* AND THE PARTITION, BECAUSE `stepUs`/`steps` IS A MEAN NO TURN IS NEAR — the marginal
+                    cost between consecutive censuses of one run spans four orders of magnitude, so the
+                    quotient cannot answer whether the loop is slice-bound and this fraction can. Raised once
+                    per turn from the same readings `sliceUs` is accumulated from, with the containment
+                    asserted at engine_step_unit_runs; see solver/engine.h's `slice_overruns`. */
+                 "\"sliceUs\":%lld,\"schedUs\":%lld,\"sliceOverruns\":%lld,\"stepUnitRuns\":%s,"
                  "\"outOfPrograms\":%ld,"
                  "\"outOfProgramsUnrun\":%ld,\"outOfProgramsFramed\":%ld,"
                  "\"outOfProgramsAtTheLadder\":%ld,"
@@ -1705,7 +1710,7 @@ char *result_cold_json(void) {
                  c.dyn_count, c.dyn_bytes / 1024,
                  (c.seg_bytes + c.dom_seg_bytes + c.pin_seg_bytes + c.dec_seg_bytes + c.dyn_bytes) / 1024,
                  r.steps, (long long)r.step_us,
-                 (long long)r.slice_us, (long long)r.sched_us, runs,
+                 (long long)r.slice_us, (long long)r.sched_us, (long long)r.slice_overruns, runs,
                  c.out_of_programs,
                  c.out_of_programs_unrun, c.out_of_programs_framed, c.out_of_programs_at_the_ladder,
                  ladder, hist, cursors);

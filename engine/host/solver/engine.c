@@ -7545,6 +7545,10 @@ static int64_t g_step_us;
    A REPORT AND NEVER A BOUND (§NO BOUNDS), for `g_step_us`' reason and with the same hazard — a per-phase time
    total is exactly what a watchdog on a long step would be built from. */
 static int64_t g_slice_us, g_sched_us;
+/* THE PARTITION OF THE ABOVE — see solver/engine.h's `slice_overruns` for why a mean of the two arms cannot
+   answer the question their own banner asks. Counted from the SAME two readings the slice arm is accumulated
+   from, so a turn cannot be charged to one and counted by the other. */
+static int64_t g_slice_over;
 /* THE WIDTH, MADE A BUILD FAILURE RATHER THAN A SENTENCE. A comment saying "this must be 64-bit" is read by
    whoever is already thinking about it; the one edit that matters is the one that narrows the type back to
    match its neighbours on this page, and the author of that edit is precisely the reader the comment misses.
@@ -9307,6 +9311,16 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
     out->step_us = g_step_us;
     out->slice_us = g_slice_us;
     out->sched_us = g_sched_us;
+    out->slice_overruns = g_slice_over;
+    /* THE CONTAINMENT, ASSERTED WHERE BOTH ARE IN ONE HAND — a count of turns cannot exceed the turns, and a
+       subset larger than its population is the one arithmetic tell §CLAUDE.md names as free. It is the same
+       obligation the identity below discharges for the two time arms: a fraction whose numerator is raised at
+       one event and whose denominator advances at another is unbounded above and reads as a rate. */
+    DCHECKF(out->slice_overruns <= out->steps,
+            "solver/engine.c: slice_overruns %lld exceeds steps %lld — the overrun count is raised once per "
+            "dispatch turn from the same two clock readings the slice arm is accumulated from, so it can only "
+            "outrun its denominator if one of the two moved without the other",
+            (long long)out->slice_overruns, (long long)out->steps);
     /* THE IDENTITY, ASSERTED WHERE ALL THREE ARE IN ONE HAND — see g_slice_us for why the halves are rows and
        not a subtraction. Both arms are added inside the same iteration the charge is taken in, from the same
        two clock readings, so a difference is a THIRD phase having been added to the turn without an arm of its
@@ -10628,6 +10642,12 @@ static int engine_sched_slice(void) {
                the step and `now` immediately after it, so this arm is the step and nothing else, and the two
                arms sum to the charge below by construction rather than by agreement. */
             g_slice_us += now - t_slice0;
+            /* AND WHETHER THIS ONE TURN OVERRAN, ASKED WITH THE SAME INEQUALITY solver/quantum.c's
+               quantum_expired() USES AND NOT A SECOND OPINION ABOUT THE BUDGET — a step that met or passed the
+               slice is a step in which the flow never reached a raise point, which is the one thing a mean of
+               turn costs cannot report. No branch depends on it (§NO BOUNDS: a per-turn overrun test is
+               exactly what a watchdog would be built from); it is counted and nothing else. */
+            if (now - t_slice0 >= (int64_t)ENGINE_QUANTUM_MS * 1000) g_slice_over++;
             /* WHAT THIS TURN OF THE DISPATCH LOOP COST, ACCUMULATED FROM THE SAME DELTA THE CHARGE BILLS AND
                NOT FROM A SECOND READING — see g_step_us. It is written BEFORE the charge for the ordinary
                reason a reading is taken before the thing that consumes it: `flow_age_running` is the WFQ's

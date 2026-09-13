@@ -2130,6 +2130,20 @@ function stepCostReading(a, b, q) {
       : ` — of which ${(100 * b.sliceUs / b.stepUs).toFixed(0)}% is the STEP (${b.sliceUs}) and ` +
         `${(100 * b.schedUs / b.stepUs).toFixed(0)}% is everything else in the turn (${b.schedUs}: the pick, ` +
         `the two delta swaps, and the previous turn's tail, which the telescoping charge puts on this bill)`;
+  /* AND THE PARTITION THAT MAKES THE VERDICT BELOW A READING RATHER THAN A MEAN — `stepUs`/`steps` is a
+     lifetime average, and this loop's turns are not one population. Read as a SERIES rather than as a
+     terminal value, the MARGINAL cost between consecutive censuses of ONE run spans four orders of magnitude
+     (0.105 ms between two samples and 822 ms between two others, measured on the smoke fixture at revision
+     638eb345, one interleaving), so the mean is a figure no turn is near and comparing it against the budget
+     is a bare count over a population nobody partitioned. `sliceOverruns` counts the turns that actually met
+     or passed the slice, with the same inequality solver/quantum.c asks, so this fraction answers directly
+     what the mean could only suggest. It is READ AND NOT DEFAULTED: the row is in result_cold_json's own
+     format string, so censusRowSet requires it and an artifact without it fails loudly here rather than
+     reading as a run that never overran. */
+  const overFrac = b.sliceOverruns / b.steps;
+  const over = ` ${b.sliceOverruns} of the ${b.steps} turn(s) — ${(100 * overFrac).toFixed(1)}% — met or ` +
+               `passed the slice outright, which is the count the mean above cannot give and is the one ` +
+               `number here that is a fraction of a denominator rather than an average of a spread`;
   const dSteps = b.steps - a.steps, dUs = b.stepUs - a.stepUs;
   const ivl = dSteps > 0
     ? `, and ${(dUs / dSteps).toFixed(0)} over the last window's ${dSteps} turn(s)`
@@ -2142,16 +2156,17 @@ function stepCostReading(a, b, q) {
     return `dispatch turns cost ${per.toFixed(0)} unit(s) of the scheduler's own measure each over the whole ` +
            `run (${b.stepUs} over ${b.steps} turns)${ivl}${phase} — this stage printed no @QUANTUM line, so ` +
            `there is no slice to read that against and the number is a rate with no yardstick rather than a ` +
-           `verdict`;
+           `verdict —${over}, which the ENGINE decided against its own budget and this reader therefore ` +
+           `still has even with no denomination to quote`;
   const sliceUs = q.sliceMs * 1000;
   const frac = per / sliceUs;
   return `dispatch turns cost ${per.toFixed(0)} ${q.measure} microsecond(s) each over the whole run ` +
          `(${b.stepUs} over ${b.steps} turns)${ivl}${phase}. That is ${frac.toFixed(2)} of the ` +
          `${q.sliceMs} ms ` +
          `cooperative slice, both sides in the same measure, so this quotient is what the run-to-run spread ` +
-         `cannot reach. ` +
-         (frac >= 0.5
-           ? `A turn costing most of a slice means the loop makes about one choice per slice BY ` +
+         `cannot reach.${over}. ` +
+         (overFrac >= 0.5
+           ? `Most turns reaching the slice means the loop makes about one choice per slice BY ` +
              `CONSTRUCTION: the number of picks a run can make is its thread time divided by the slice, and ` +
              `a frontier larger than that is not being under-served by the ORDER — it is a granularity ` +
              `floor, and no re-pricing of a weight term reaches it` +
@@ -2161,7 +2176,7 @@ function stepCostReading(a, b, q) {
                  `wall, which the engine cannot tell apart either because the slice is armed on this same ` +
                  `clock. The consumed reading is not established here — only the arithmetic that follows ` +
                  `from a turn taking a slice's worth of the clock the scheduler runs on`)
-           : `A turn well inside the slice means the loop is NOT slice-bound: the picks a run made are not ` +
+           : `Most turns ending well inside the slice means the loop is NOT slice-bound: the picks a run made are not ` +
              `capped by what a turn costs, so a small step count is a statement about how much thread time ` +
              `the loop was given rather than about the granularity` +
              (q.cpu ? `` : `. Not CPU, so a descheduled turn would have read HIGH — this reading is the ` +

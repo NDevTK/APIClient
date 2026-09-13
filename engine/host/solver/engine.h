@@ -1216,6 +1216,25 @@ typedef struct {
      * and INVERTS rather than going absent. */
     int64_t slice_us;
     int64_t sched_us;
+    /* …AND THE PARTITION THE SPLIT ABOVE TURNED OUT TO NEED, WHICH IS THE READING AND NOT A SECOND OPINION.
+     * `slice_us`' banner promises that `step_us / steps` against the slice answers whether the loop is
+     * slice-bound. It does not, because that quotient is a LIFETIME MEAN over a turn population that is not
+     * uniform: read as a SERIES rather than as a terminal value, the MARGINAL cost between consecutive
+     * censuses of one run spans four orders of magnitude — 0.105 ms between two samples and 822 ms between
+     * two others — so the mean is a figure no turn is near, and comparing it against the budget is the
+     * bare-count-over-an-unpartitioned-population defect wearing a ratio. `slice_overruns` is the count of
+     * TURNS whose step alone met or exceeded the budget, so `slice_overruns / steps` is a proper fraction of
+     * a denominator this struct already carries and needs no mean at all.
+     * IT IS THE SAME INEQUALITY quantum_expired() ASKS, asked at the turn boundary instead of at an opcode —
+     * solver/quantum.c tests `quantum_thread_us() - <slice start> >= ENGINE_QUANTUM_MS * 1000` and this tests
+     * the step's own two readings against that same product. So the row is not a private opinion about the
+     * budget that could drift from the component that owns it; it is a count of the turns in which the flow
+     * never reached a raise point inside its slice, which is §scheduler's named transport gap made countable
+     * on a host where nothing can raise the yield bit mid-call.
+     * A COUNT AND NOT A MAXIMUM. A high-water mark of turn length would saturate early and then plateau, and
+     * a plateau is indistinguishable from a ceiling on a short run; a count only rises with the population it
+     * is drawn from, and the population is printed beside it. */
+    int64_t slice_overruns;
 } EngineStepUnitRuns;
 void engine_step_unit_runs(EngineStepUnitRuns *out);
 
