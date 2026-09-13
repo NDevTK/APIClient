@@ -3821,6 +3821,44 @@ static const char *HTML =
     "   function (bsE) { fetch('/api/bsmin?w=' + bsE.name); });"
     " } catch (bsX) { fetch('/api/bsreach?d=no&n=' + bsX.name); }"
     "</script>"
+
+    /* ─── §8.1.4.4 "Calling scripts"'S *OTHER* ENTRY, WITH A ROW OF ITS OWN ───────────────────
+       THE MODULE ARM HAD NO ROW THAT COULD SPEAK, WHICH IS WHY A ROUTING DEFECT IN IT REACHED PRODUCTION AND
+       WAS FOUND BY A CORPUS CENSUS RATHER THAN BY THIS GATE. This document already holds one
+       `<script type=module>` — the `/api/csmod` observation of §4.12.1.1 step 4 — and it is rung TWO of
+       `current-script-restore`, whose rung ONE is a TIMER record. A ladder reports its LOWEST 0, so while the
+       timer rung is unreached the module rung is not being reported on at all: the module entry could stop
+       running entirely and that row would not move. Three states behind one answer, with the module arm the
+       state nothing can name.
+       WHAT MAKES THIS STATEMENT PROOF RATHER THAN A COUNTER I WROTE AND READ: it carries a TOP-LEVEL `await`.
+       ECMAScript §16.2.1.6 ParseModule accepts one and §16.1.6 ParseScript does not — `await` is not a legal
+       primary expression at a classic script's top level — so this source COMPILES ONLY THROUGH THE MODULE
+       ENTRY. A record from it is therefore an observable consequence of §8.1.4.4's module algorithm having
+       run, which is the one thing a step-unit counter cannot establish: had the loader classified this row
+       classic, the compile would have failed and NOTHING below would emit.
+       TWO RECORDS AND THEY ARE ENTAILED, WHICH IS WHAT MAKES THE LOWEST 0 THE LOCALISATION. The first is
+       emitted BEFORE the await and says the module body began; the second is emitted AFTER it and says the
+       body PARKED into the slot JS_ResumeParkedFlow drains and was resumed with its continuation intact.
+       Folded into one they would answer "the module arm is broken somewhere", which is the two different
+       diffs — the loader's classification and the flow machinery's park seam — that this pair exists to tell
+       apart. The second implies the first by construction: a body cannot resume past an await it never
+       reached.
+       NOTHING HERE ASSERTS `import.meta.url`, AND THAT IS A DELIBERATE ABSENCE RATHER THAN AN OVERSIGHT.
+       quickjs's `JS_GetImportMeta` allocates a bare null-prototype object and the HOST is what populates it;
+       this host names no meta callback, so `import.meta.url` is `undefined` here. That is an honest unbuilt
+       capability (§NO STUBS) and a row asserting it would be red on every run from the day it landed —
+       §A-VERDICT-THAT-IS-RED-ON-EVERY-RUN's furniture, which is worse than no row. It is named HERE, at the
+       statement that would have asserted it, so the next reader builds it rather than rediscovering it: what
+       it needs is a module-name-to-URL answer at the meta callback, and its absence shows as a module
+       resolving a nested relative specifier against nothing.
+       APPENDED IN FRONT OF `</body></html>` AND NOT INSERTED, for the reason the three operand-shape
+       statements above state: this document is ONE LINE, so a `@WHY` frame's COLUMN is the only coordinate a
+       reader has into it, and an insertion silently re-points every column after it. */
+    "<script type=module>"
+    " fetch('/api/modreach?d=ok');"
+    " await Promise.resolve('r');"
+    " fetch('/api/modtla?w=resumed');"
+    "</script>"
     "</body></html>";
 
 /* MINIMAL ASan fixture (APICLIENT_ASAN_MIN=1) — the memory-sensitive CLONE/COW/verify paths ONLY, with tiny
@@ -11836,6 +11874,36 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "§4.12.1.1's \"immediately execute the script element\" read the WRONG element: /api/csinj's "
              "`el` is not `csINJ`, so the injected program saw the element that injected it rather than its "
              "own — a slot written by the injecting program");
+    /* §8.1.4.4's MODULE ENTRY AND ITS PARK SEAM — TWO ROWS, BECAUSE THEY ARE TWO DIFFERENT DIFFS.
+       THIS DOCUMENT'S MODULE OBSERVATIONS WERE ALL BEHIND A RUNG ABOUT SOMETHING ELSE. `/api/csmod` above is
+       rung TWO of `current-script-restore`, whose rung ONE is a TIMER record, so while the timer is unreached
+       nothing reports on the module arm at all — it could stop running entirely and no row here would move.
+       That is the three-states-behind-one-answer this file's readers exist to refuse, and it is why the rows
+       below ask of an endpoint NO other statement in this document can emit.
+       THE STATEMENT COMPILES ONLY THROUGH THE MODULE ENTRY, which is what makes rung 1 a claim about
+       §8.1.4.4 rather than about a counter: it carries a TOP-LEVEL `await`, which ECMAScript §16.2.1.6
+       ParseModule accepts and §16.1.6 ParseScript refuses. A loader that classified the row CLASSIC would
+       fail the compile and emit neither record, so a record here IS the module algorithm having run.
+       THE TWO ROWS ARE ENTAILED AND ARE STILL TWO ROWS. `module-tla` implies `module-entry` — a body cannot
+       resume past an await it never reached — so folded they would read as one 0 for either of two opposite
+       repairs: the loader's classification of the row, and the flow machinery's park/resume of an async
+       module body. Split, the pair NAMES which. */
+    const char *modentry_why = NULL; int modentry_tt = 1;
+    fold_row(&modentry_tt, &modentry_why, !!strstr(js, "\"/api/modreach\""),
+             "NOT REACHED: there is no /api/modreach record at all, so §8.1.4.4's MODULE entry never ran this "
+             "document's module. The source carries a top-level `await`, which §16.1.6 ParseScript refuses, so "
+             "a CLASSIC classification of this row fails the compile and emits nothing — read the "
+             "`program-did-not-compile` step-unit row beside this one to tell that from the SCHEDULE");
+    const char *modtla_why = NULL; int modtla_tt = 1;
+    fold_row(&modtla_tt, &modtla_why, !!strstr(js, "\"/api/modreach\""),
+             "NOT REACHED: there is no /api/modreach record at all, so the module body never began and the "
+             "await below it was never reached. That is `module-entry`'s finding, not this row's");
+    fold_row(&modtla_tt, &modtla_why, param_value_is(js, "/api/modtla", "w", "resumed"),
+             "the module body BEGAN and did not come back from its top-level `await`: /api/modreach is here "
+             "and /api/modtla is not. §16.2.1.6.1.3.1's async-evaluated body parks into the slot "
+             "JS_ResumeParkedFlow drains at the top of the scheduler loop, so a continuation that never "
+             "resumed is the park seam dropping a module's frame where it carries every other flow's — and "
+             "a module whose evaluation never completes leaves its promise pending for ever");
     /* The §4.4 algorithms, each proved by its own endpoint carrying a token only the right answer produces.
        READ INSIDE THE ENDPOINT'S OWN RECORD, which is what the address column is for and is the whole reason
        it is no longer written quoted. Spelled as two whole-document `strstr`s this was a hundred-odd
@@ -13376,6 +13444,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "orphan-ccode", orphan_ccode, "orphanCharCode", SESS_EXPLORE, orphan_why },
         { "orphan-update", orphan_update, "orphanUpdate", SESS_EXPLORE, orphan_why },
         { "orphan-clamp", orphan_clamp, "orphanClamp", SESS_EXPLORE, orphan_why },
+        { "module-entry", modentry_tt, "/api/modreach", SESS_EXPLORE, modentry_why },
+        { "module-tla", modtla_tt, "/api/modtla", SESS_EXPLORE, modtla_why },
         { "frame-ctl", frame_ctl, "/api/framectl", SESS_EXPLORE, frame_ctl_why },
         { "fetch", fetch_await, "/api/config", SESS_EXPLORE, fetch_await_why },
         { "then-chain", then_chain, "at=chain1", SESS_EXPLORE },
