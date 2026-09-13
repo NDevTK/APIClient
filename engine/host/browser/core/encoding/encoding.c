@@ -1261,16 +1261,28 @@ static JSValue js_encoder_encode_into(JSContext *ctx, JSValueConst this_val, int
        reaches this body rather than being refused because §3.2.26 is a BRAND TEST: idl_args.h's
        IDL_CONCOLIC_CROSSES is why unknown external input crosses a declared type as itself, since answering
        "that is not a Uint8Array" about a value nothing is known about is a control-flow decision over unknown
-       input. There is nowhere in a Uint8Array to put an unknown byte and no identified buffer here to write
-       into, so the pair returned below would report a write into a destination this engine never resolved.
-       BUILD: concolic bytes in a typed array's backing store — the same capability the source arm names — and
-       an unknown that carries a REAL view as its example, so the write lands in the example's buffer and the
-       COW capture below records it. Its absence would show as a page reading real zeroes back out of a buffer
+       input. There is no identified buffer here to write into, so the pair returned below would report a write
+       into a destination this engine never resolved.
+       THE HALF OF THIS THAT SAID "THERE IS NOWHERE IN A Uint8Array TO PUT AN UNKNOWN BYTE" IS RETIRED AND IS
+       REWRITTEN RATHER THAN DELETED, because it is the intuitive belief and a reader who re-derives it will
+       re-introduce it. It was true of the data block and was never true of the OBJECT: the engine now keeps a
+       SPAN LIST beside the block on the live ArrayBuffer, so the block holds an EXAMPLE and the span beside it
+       is the fact. 10.4.5.18 TypedArraySetElement stores an unknown through it, and a writer reaches it by
+       writing NORMALLY — there is no entry to call and none exported, which is the whole design: the span is
+       recorded by the ordinary element store, so no caller has to know spans exist.
+       WHAT IS STILL MISSING HERE IS A DIFFERENT QUESTION FROM THE SOURCE ARM'S, and the store does not answer
+       it. That store needs a DESTINATION to write into; this arm has none, because the unknown IS the
+       destination. What it needs is an unknown that carries a REAL view as its EXAMPLE, so the write lands in
+       the example's buffer and the COW capture below records it — a fact about what a concolic carries and not
+       about what a buffer can hold. Its absence would show as a page reading real zeroes back out of a buffer
        it believes holds the encoding of attacker-controlled input. */
     DCHECK(!concolic_is(argv[1]),
            "§7.4 encodeInto(source, destination) was given an unknown DESTINATION — §3.2.26 Buffer source "
            "types brands a concrete view and unknown external input crosses a declared type as itself, so "
-           "there is no buffer here to write into. Build concolic bytes in a typed array's backing store");
+           "there is no buffer here to write into. THE REMEDY THIS ONCE NAMED — concolic bytes in a typed "
+           "array's backing store — IS BUILT and is not what this arm needs: that store writes an unknown INTO "
+           "a destination, and here the unknown IS the destination. BUILD instead a concolic that carries a "
+           "REAL view as its example, so this write lands in the example's buffer");
     /* §7.4 DECLARES `[AllowShared] Uint8Array destination`, AND THE DECLARATION IS WHAT CONVERTS IT — Web IDL
        §3.2.26 Buffer source types step 2's brand against Uint8Array's own [[TypedArrayName]], then step 4's
        refusal of a buffer that is not fixed-length ([AllowShared] is what switches step 3's off). A body's own
@@ -1289,17 +1301,28 @@ static JSValue js_encoder_encode_into(JSContext *ctx, JSValueConst this_val, int
            "installed from a mint that never ran the declaration");
     /* AN UNKNOWN SOURCE IS A DIFFERENT QUESTION FROM encode()'s, AND THIS ENGINE CANNOT ANSWER IT YET. encode()
        hands the page a NEW Uint8Array, so its unknown result is one derived value; §7.4's encodeInto WRITES
-       INTO THE PAGE'S OWN BUFFER, and a Uint8Array element is a number — there is nowhere in one to put an
-       unknown byte. Its `read`/`written` are derivable and its DESTINATION is not, and answering the pair
-       while leaving the bytes untouched would report a write that did not happen: the page then reads real
-       zeroes out of a buffer it believes holds the encoding of attacker-controlled input.
-       BUILD: concolic bytes in a typed array's backing store — the same capability a concolic element read
-       would need — so the destination carries the unknown and the COW capture above records it. */
+       INTO THE PAGE'S OWN BUFFER. Answering `read`/`written` while leaving the bytes untouched would report a
+       write that did not happen: the page then reads real zeroes out of a buffer it believes holds the
+       encoding of attacker-controlled input.
+       THE CAPABILITY THIS NAMED IS BUILT, AND THE SENTENCE IT RESTED ON IS REWRITTEN RATHER THAN DELETED —
+       "a Uint8Array element is a number, so there is nowhere in one to put an unknown byte" was true of the
+       DATA BLOCK and never of the buffer OBJECT. A span list now sits beside the block: the block carries an
+       EXAMPLE and the span is the FACT, and 10.4.5.18 TypedArraySetElement records one through the ORDINARY
+       element write, so a writer reaches it by writing normally rather than by calling anything.
+       SO THIS ARM IS NOW BUILDABLE AND IS THE NEXT DIFF, which is what keeps this a crash and not a residual:
+       §7.4's step 5 loop would write each byte through the ordinary typed-array element store — the unknown
+       where the source is unknown, the real byte where it is not — and the span records it. WHAT MUST NOT BE
+       DONE WHILE BUILDING IT is the thing §@H forbids: a span is recorded even where NO byte is written,
+       because an unknown may carry no example, and writing `0` there would invent a value known only to
+       satisfy the loop. HOW ITS ABSENCE SHOWS, until then: `enc.encodeInto(location.hash, buf)` — an ordinary
+       bundle's own spelling — aborts this engine rather than encoding. */
     DCHECK(!concolic_is(argv[0]),
            "§7.4 encodeInto(source, destination) was given an unknown SOURCE — its destination is a "
-           "Uint8Array, whose elements are numbers, so this engine has nowhere to write the unknown bytes and "
-           "would report `read`/`written` over a buffer it never touched. Build concolic bytes in a typed "
-           "array's backing store");
+           "Uint8Array, and this engine does not yet write the unknown bytes into it, so it would report "
+           "`read`/`written` over a buffer it never touched. THE STORE THIS ONCE ASKED FOR EXISTS — "
+           "10.4.5.18 TypedArraySetElement keeps a span beside the data block and records one through the "
+           "ORDINARY element write, with no entry to call — so what is left is §7.4's step 5 loop writing "
+           "through it, and that is a diff rather than a capability");
     /* A DETACHED DESTINATION IS NOT THIS ALGORITHM'S ERROR — IT IS A WINDOW OF ZERO BYTES, AND Encoding §7.4
        STATES THAT WITHOUT A DETACH TEST OF ITS OWN. encodeInto is not one of Web IDL §3.2.26's byte-COPY
        callers. Encoding §7.4's loop asks whether "destination's byte length − written is greater than or equal
