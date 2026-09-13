@@ -2030,6 +2030,29 @@ typedef struct JSTimeTravelHooks {
        were each permanent for every sibling. One hook for the three because they are one object; the host
        captures per object and puts back what it saved (JS_ObjStateSave / Restore / Free). */
     void (*obj_state)(JSContext *ctx, JSValueConst obj);
+    /* Before a flow ADVANCES a shared ITERATION RECORD — the engine's own class opaque behind an iterator
+       object (`p->u.for_in_iterator` and its siblings), whose cursor says how far through the walk this
+       object is. `obj` is the ITERATOR object.
+       IT IS NOT obj_state's UNIT AND NOT prop_write's, which is why it is a hook and not a widening: an
+       iteration cursor is neither a property slot nor one of the three fields every object has, and
+       cow_capture_obj draws that boundary itself, in the last sentence of its own comment:
+       `What is NOT here is the class's own record ... those have their own units.`
+       This is that unit for the records the ENGINE owns, as cow_capture_host_record is for the ones a browser
+       component owns; the difference is only who can see the layout, which is why the blob is the engine's
+       (JS_IterStateSave / Restore / Free) rather than a caller-supplied offset list.
+       WHY IT IS NEEDED AT ALL, since an iterator looks like the most flow-private object there is: a snapshot
+       fork COPIES THE FRAME and clone_susp_frame dups each operand stack slot, so a JSValue is a REFERENCE and
+       both arms walk ONE record. The cursor is then shared, each arm's advance moves the other's, and the two
+       arms SPLIT one enumeration — each reporting a proper subset, with no abort and nothing to say so. That
+       is a wrong answer rather than a crash, and §Solver-half makes it the common case rather than an edge
+       one: an iteration over unknown input forks each iteration as its own parkable flow, so a `for...in` over
+       a server-injected record is precisely the shape that forks inside the loop.
+       WHAT IS CAPTURED IS THE MUTABLE HALF AND THE IMMUTABLE HALF IS ASSERTED, not saved-and-restored: a
+       for-in iterator's receiver, its array-ness and its array length are written once at construction and
+       never again, so a blob that put them back would be describing a fact rather than restoring a write. The
+       save holds them anyway and the restore compares them, which is what makes a future write to any of them
+       fail loudly here instead of being dropped on every context switch. */
+    void (*iter_state)(JSContext *ctx, JSValueConst obj);
     /* Before a flow changes the ASYNC STATE of a shared object: a promise leaving PENDING, a REACTION being
        attached to one that is still pending, or a resolving-function pair latching already_resolved. The
        reaction list belongs here for the same reason the settlement does — `if (flag) p.then(h1); else
@@ -2199,6 +2222,32 @@ JS_EXTERN void JS_MapDeleteRecord(JSContext *ctx, JSValueConst obj, JSValueConst
 JS_EXTERN void *JS_ObjStateSave(JSContext *ctx, JSValueConst obj);
 JS_EXTERN void  JS_ObjStateRestore(JSContext *ctx, JSValueConst obj, void *blob);
 JS_EXTERN void  JS_ObjStateFree(JSRuntime *rt, void *blob);
+
+/* A shared ITERATION RECORD's state (JSTimeTravelHooks.iter_state), saved into an engine-owned blob and put
+   back on a context switch — the iterator twin of JS_ObjStateSave, engine-owned for the same reason: what it
+   holds is an ATOM, which is a counted reference, so a byte copy would take a reference it never counted and
+   the next restore would free a name the blob still holds. That is exactly why the host's CowRecord could not
+   express this record: its `val_off` names JSValues and has no way to name an atom.
+   THE CLASS DECIDES THE ARMS AND AN UNKNOWN ONE CRASHES IN ALL THREE. Save's default is the gate — a class
+   whose opaque record grew a cursor and reached this hook has no arm here yet, and it says so by name — and
+   Restore's and Free's are then guards over a value this engine enumerates: Save accepted the class, so a blob
+   that exists names a class all three know, and a default reached in either of them means the three lists have
+   drifted apart. That is the assert that makes forgetting an arm impossible, and it is why there is no fourth
+   place to keep in step.
+   NAMED RESIDUAL — WHAT IS NOT COVERED: only the for-in iterator has an arm. Every other engine class whose
+   opaque record carries a cursor its own `.next()` advances is still shared whole across a snapshot fork, and
+   that is a PROPERTY rather than a list — derive today's set with
+       grep -nE '^ +struct JS[A-Za-z]+ \*[a-z_]*iterator[a-z_]*;' engine/qjs/quickjs.c
+   and read each record for a field its next() writes. WHAT THE NEXT DIFF BUILDS: that class's arm in all three
+   functions below, plus the capture at the one place its advance reaches the record — for a record whose
+   cursor advance also FREES an owned JSValue (an iterator that clears its source on exhaustion), the arm's
+   save holds a counted reference on it exactly as the atom is held here. HOW ITS ABSENCE WOULD SHOW: no abort
+   at all — two arms of a fork taken inside a `for...of` each walk a proper subset of the sequence, and an arm
+   that runs the iterator to exhaustion ends the sibling's loop as well, so the observation is a loop body that
+   ran fewer times than the source has elements with nothing in any log to say so. */
+JS_EXTERN void *JS_IterStateSave(JSContext *ctx, JSValueConst obj);
+JS_EXTERN void  JS_IterStateRestore(JSContext *ctx, JSValueConst obj, void *blob);
+JS_EXTERN void  JS_IterStateFree(JSRuntime *rt, void *blob);
 
 /* APIClient forced-execution CONCOLIC-VALUE hooks — how a concolic (symbolic + carried example) value
    PROPAGATES through the two interpreter operators that must carry it. One concern, one owner (the concolic

@@ -8615,6 +8615,16 @@ static inline void cow_capture_obj(JSContext *ctx, JSObject *p) {
         g_time_travel.obj_state(ctx, JS_MKPTR(JS_TAG_OBJECT, p));
 }
 
+/* Time-travel capture for an ITERATION RECORD: an iterator's cursor lives in the class opaque, which is neither
+   a property slot nor one of the three fields cow_capture_obj holds, so nothing above could see it advance.
+   It is reached BY THE ACCESSOR rather than at each write — a record a flow has reached is one it may write,
+   the delta dedups to one entry per iterator per flow, and there is then no write site left to miss, which is
+   the only way this goes wrong. See JSTimeTravelHooks.iter_state. */
+static inline void cow_capture_iter(JSContext *ctx, JSObject *p) {
+    if (g_time_travel.iter_state)
+        g_time_travel.iter_state(ctx, JS_MKPTR(JS_TAG_OBJECT, p));
+}
+
 /* Time-travel capture for a CLOSURE CELL: a captured local is a shared JSVarRef, not a property, so a write to
    it (OP_put_var_ref / OP_*_loc_ref) bypasses cow_capture above. cell_write records the cell's pre-write value
    into the running flow's delta so a snapshot-forked sibling sharing the cell stays isolated. The cell is opaque
@@ -12283,6 +12293,125 @@ void JS_ObjStateFree(JSRuntime *rt, void *blob)
     if (st->proto)
         JS_FreeValueRT(rt, JS_MKPTR(JS_TAG_OBJECT, st->proto));
     JS_FreeValueRT(rt, st->object_data);
+    js_free_rt(rt, st);
+}
+
+/* AN ITERATION RECORD'S STATE — the cursor that says how far through a walk a shared iterator object is, plus
+ * whatever else that walk writes into the class opaque. See JSTimeTravelHooks.iter_state for why a flow-private
+ * looking object needs this at all (a snapshot fork dups the operand stack, so a JSValue is a reference and both
+ * arms walk ONE record).
+ *
+ * THE UNION IS PER CLASS AND THE CLASS IS STORED, because the record behind `p->u` is a different struct for
+ * every iterator kind and the restore has nothing else to decide by. It is re-derived from the object and
+ * compared, exactly as JSObjState's `has_data` is and for the same reason: a JSObject does not change class, so
+ * a blob whose class disagrees was read off a different object than it names.
+ *
+ * WHAT IS OWNED HERE IS ONE ATOM, and it is why this blob is the engine's rather than a host CowRecord: an atom
+ * is a counted reference that no offset list of JSValues can name, so a byte copy of this record would take a
+ * reference it never counted. `pending` is held for the life of the blob, which is what lets the same blob
+ * restore any number of times. */
+typedef struct JSIterState {
+    JSClassID class_id;
+    union {
+        struct {                   /* JS_CLASS_FOR_IN_ITERATOR */
+            /* RESTORED — the mutable half, and the whole of it: js_for_in_candidate advances `idx` and the
+               opcode's deletion check parks its candidate in `pending`. */
+            uint32_t idx;
+            JSAtom   pending;      /* OWNED */
+            /* ASSERTED, never restored — the immutable half, written once by the construction in js_for_in_step
+               and never again. Putting these back would be restoring a fact rather than a write; holding them
+               is what makes a future write to any of them fail loudly at the restore instead of being dropped
+               silently by every context switch. `obj_id` is an IDENTITY and not a reference: it is
+               JS_VALUE_GET_PTR of a value the iterator owns and the delta entry keeps alive, it is compared and
+               never dereferenced, and there is nothing in it to dup or free. */
+            void    *obj_id;
+            uint32_t array_length;
+            uint8_t  is_array;
+        } for_in;
+    } u;
+} JSIterState;
+
+void *JS_IterStateSave(JSContext *ctx, JSValueConst obj)
+{
+    JSObject *p;
+    JSIterState *st;
+
+    DCHECK(JS_VALUE_GET_TAG(obj) == JS_TAG_OBJECT, "an iteration-state capture on something that is not an object");
+    p = JS_VALUE_GET_OBJ(obj);
+    /* zeroed, so the release arm of the DFAIL below hands back a COHERENT blob rather than an uninitialised
+       union: JS_ATOM_NULL is 0, which is a valid unowned atom, and Restore's own default then does nothing —
+       leaving exactly the behaviour this hook did not yet have rather than a restore of garbage. */
+    st = js_mallocz(ctx, sizeof(*st));
+    if (!st)
+        return NULL;
+    st->class_id = p->class_id;
+    switch (p->class_id) {
+    case JS_CLASS_FOR_IN_ITERATOR: {
+        const JSForInIterator *it = p->u.for_in_iterator;
+        st->u.for_in.idx = it->idx;
+        st->u.for_in.pending = JS_DupAtom(ctx, it->pending);
+        st->u.for_in.obj_id = JS_VALUE_GET_PTR(it->obj);
+        st->u.for_in.array_length = it->array_length;
+        st->u.for_in.is_array = it->is_array;
+        break;
+    }
+    default:
+        DFAIL("an iteration record reached the time-travel capture with no arm here — this class's opaque holds "
+              "a cursor now, so build its arm in JS_IterStateSave, JS_IterStateRestore and JS_IterStateFree "
+              "together, holding a counted reference on anything its walk owns");
+        break;
+    }
+    return st;
+}
+
+void JS_IterStateRestore(JSContext *ctx, JSValueConst obj, void *blob)
+{
+    JSObject *p = JS_VALUE_GET_OBJ(obj);
+    const JSIterState *st = blob;
+
+    DCHECK(st != NULL, "an iterator's state was re-applied before any unapply had recorded one — the context "
+                       "switch that parked this flow did not run");
+    DCHECK(st->class_id == p->class_id,
+           "an iteration record's captured state disagrees with its object about its CLASS — a JSObject does "
+           "not change class, so the entry was read off a different object than it names");
+    switch (p->class_id) {
+    case JS_CLASS_FOR_IN_ITERATOR: {
+        JSForInIterator *it = p->u.for_in_iterator;
+        DCHECK(JS_VALUE_GET_PTR(it->obj) == st->u.for_in.obj_id
+               && it->array_length == st->u.for_in.array_length
+               && it->is_array == (bool)st->u.for_in.is_array,
+               "a for-in iterator's IMMUTABLE half moved under a COW swap — its receiver, its array length or "
+               "its array-ness is written after construction now, so this blob saves a field the swap then "
+               "drops on every context switch; restore it here as well as assert it");
+        it->idx = st->u.for_in.idx;
+        /* the record's own reference goes, the blob's is DUP'd in: the blob keeps its own, which is what lets
+           one entry restore on every switch for the life of the flow. */
+        JS_FreeAtom(ctx, it->pending);
+        it->pending = JS_DupAtom(ctx, st->u.for_in.pending);
+        break;
+    }
+    default:
+        DFAIL("an iteration record's state is being restored for a class JS_IterStateSave has no arm for — the "
+              "save accepted this class, so the two switches have drifted apart");
+        break;
+    }
+}
+
+void JS_IterStateFree(JSRuntime *rt, void *blob)
+{
+    JSIterState *st = blob;
+
+    if (!st)
+        return;
+    switch (st->class_id) {
+    case JS_CLASS_FOR_IN_ITERATOR:
+        JS_FreeAtomRT(rt, st->u.for_in.pending);
+        break;
+    default:
+        DFAIL("an iteration record's state is being freed for a class JS_IterStateSave has no arm for — the "
+              "save accepted this class, so anything its arm dup'd is leaking here");
+        break;
+    }
     js_free_rt(rt, st);
 }
 
@@ -22413,6 +22542,20 @@ static JSAtom js_for_in_candidate(JSObject *p, JSForInIterator *it)
             return prs->atom;
         }
     }
+}
+
+/* THE ONE REACH of a for-in iterator's record from the interpreter, which is what makes the time-travel capture
+   unmissable. Both of OP_for_in_next's arms come through here — the candidate walk and the deletion check's
+   delivery — so the capture is made once, where a flow first TOUCHES the record, rather than at each of the
+   three places that write it; a record a flow has reached is one it may write, and the delta dedups to one
+   entry per iterator per flow. Written as an accessor for the reason cow.h gives for a component's: there is
+   then no write site left to forget, which is the only way this goes wrong. */
+static JSForInIterator *for_in_reach(JSContext *ctx, JSObject *p)
+{
+    DCHECK(p->class_id == JS_CLASS_FOR_IN_ITERATOR,
+           "a for-in iterator record was reached through an object of another class");
+    cow_capture_iter(ctx, p);
+    return p->u.for_in_iterator;
 }
 
 /* DELETED: js_for_in_next. Its loop is OP_for_in_next's do_for_in_next_loop / do_for_in_has_deliver pair, so
@@ -37819,7 +37962,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     BREAK;
                 }
                 fip = JS_VALUE_GET_OBJ(sp[-1]);
-                fit = fip->u.for_in_iterator;
+                fit = for_in_reach(ctx, fip);
                 fprop = js_for_in_candidate(fip, fit);
                 if (fprop == JS_ATOM_NULL) { js_for_in_deliver(ctx, sp, JS_ATOM_NULL); sp += 2; BREAK; }
                 /* a PROXY receiver is not re-checked: its key list came from the `ownKeys` trap and the
@@ -37833,38 +37976,29 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 }
                 /* the candidate is BORROWED from the shape, which the trap may reshape under us, so the
                    iterator takes its own reference for the duration of the request. */
-                /* THIS FIRES BECAUSE THE ITERATOR'S RECORD IS SHARED BETWEEN FLOWS, AND THE ABORT IS THE
-                   LOUD SYMPTOM OF A QUIET DEFECT THAT IS WORSE THAN IT. `pending` lives on JSForInIterator,
-                   a C record hung off this object, and `grep FOR_IN_ITERATOR solver/cow.c` answers NOTHING:
-                   none of this record is captured by the per-flow COW delta. A fork copies the frame, and the
-                   operand stack holds the iterator as a JSValue — a REFERENCE — so both arms walk ONE
-                   JSForInIterator. Arm A sets `pending` and parks inside the `has` request; arm B resumes at
-                   this same opcode, re-enters here, and finds the bit up.
-                   THE CURSOR IS IN THE SAME RECORD AND IS THE REAL LOSS. `idx` is the enumeration's position,
-                   so two arms of a fork taken inside `for (k in o)` SHARE it: each advance moves the other's
-                   cursor and the two arms split one enumeration between them, each seeing a fraction of the
-                   keys, with nothing anywhere to say so. That is a wrong answer where this is a crash, and it
-                   is not an edge case — §Solver-half REQUIRES an iteration over unknown input to fork each
-                   iteration as its own parkable flow, so a for-in over a server-injected record is precisely
-                   the shape that forks inside the loop.
-                   WITHOUT THE ASSERT IT IS ALSO A LEAK AND A CROSS-TIMELINE DELIVERY: arm B would overwrite a
-                   dup'd atom arm A still owns, and the deliver would hand arm A's candidate to whichever arm
-                   arrives first.
-                   WHAT THE FIX MUST RECKON WITH, and it is why this is a record and not a one-line repair:
-                   §Architecture's primitive for exactly this shape is cow_capture_host_record(obj, rec,
-                   &LAYOUT) at the point a flow REACHES the record, with the layout naming the record's owned
-                   values and matching what the finalizer frees. This record's owned fields are a JSValue
-                   (`obj`) AND A JSAtom (`pending`), and an atom is not a JSValue — so whether that layout can
-                   express this record at all is the first question, and the honest answers are to widen it or
-                   to move `pending` onto the flow. Either way the CURSOR is the field that decides the design,
-                   because it must be per-flow whether or not a check is in flight.
-                   How its absence shows: this abort on a resume under a quiet schedule, and — far more often
-                   and with no abort at all — a `for...in` over an unknown-keyed record whose arms each report
-                   a different proper subset of the keys. */
+                /* THE RECORD IS PER-FLOW NOW, SO THIS IS AN ENGINE INVARIANT AGAIN — and what it used to say
+                   is kept here rather than deleted, because a reader who re-derives the retired reason will
+                   re-introduce it. It used to read: the iterator's JSForInIterator is a C record hung off this
+                   object, `grep FOR_IN_ITERATOR solver/cow.c` answered NOTHING, and a snapshot fork copies the
+                   frame while the operand stack holds the iterator as a JSValue — a REFERENCE — so both arms
+                   walked ONE record; arm A set `pending` and parked inside the `has` request, arm B resumed at
+                   this same opcode and found the bit up.
+                   THAT WAS THE LOUD HALF. The quiet half was worse and was the reason the fix is a capture
+                   rather than a repair here: `idx` is in the same record, so two arms of a fork taken inside
+                   `for (k in o)` SHARED the cursor, each advance moved the other's, and the two arms split one
+                   enumeration between them — each reporting a proper subset of the keys, with no abort and
+                   nothing anywhere to say so. §Solver-half makes that the common shape rather than an edge
+                   case: an iteration over unknown input forks each iteration as its own parkable flow, so a
+                   for-in over a server-injected record is exactly what forks inside the loop.
+                   WHAT NOW HOLDS: for_in_reach captures the record into the running flow's delta at every
+                   reach (JSTimeTravelHooks.iter_state), so `idx` and `pending` are per-flow and the swap puts
+                   each arm's own back. This assert is therefore no longer a report about the COW delta's
+                   coverage — it asserts what it says: that this engine's own opcode does not begin a second
+                   deletion check while one is in flight on the same flow. */
                 DCHECK(fit->pending == JS_ATOM_NULL,
-                       "a for-in deletion check is already in flight on this iterator — this iterator's "
-                       "JSForInIterator is shared between two flows because solver/cow.c captures none of "
-                       "it, so its CURSOR is shared too and the two arms are splitting one enumeration");
+                       "a for-in deletion check is already in flight on this iterator and this flow is starting "
+                       "another — one flow walks one iterator one candidate at a time, so the continuation that "
+                       "was to consume the parked candidate never ran");
                 fit->pending = JS_DupAtom(ctx, fprop);
                 gp_obj = fit->obj; gp_atom = fit->pending; gp_op = GP_HAS; gp_val = JS_UNDEFINED;
                 gp_recv = JS_UNINITIALIZED; gp_no_throw = 0;
@@ -37876,7 +38010,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             /* the deletion check answered. The iterator is still the operand the opcode left at sp[-1], which is
                why this continuation needs no state: the candidate is parked on it. */
             {
-                JSForInIterator *fit = JS_VALUE_GET_OBJ(sp[-1])->u.for_in_iterator;
+                JSForInIterator *fit = for_in_reach(ctx, JS_VALUE_GET_OBJ(sp[-1]));
                 JSAtom fprop = fit->pending;
                 int fhas;
                 fit->pending = JS_ATOM_NULL;
