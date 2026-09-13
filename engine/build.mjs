@@ -5330,20 +5330,39 @@ mkdirSync(OBJDIR, { recursive: true });
    false statement of exactly the kind a cache comment must not make. `emcc -v` costs ~0.2 s once per build,
    names both the emscripten and the clang commit, and goes through `unroot` like every other string here. */
 const unroot = (s) => s.split(EMSDK).join("<emsdk>").split(ROOT).join("<root>");
-const TOOLCHAIN_ID = (() => {
-  const v = spawnSync(requireEmcc(), ["-v"], { encoding: "utf8" });
+/* ── A NAMED TOOLCHAIN, WHICH IS THE PARAMETER THIS CACHE WAS ALREADY KEYED ON ────────────────────────────
+   Every identity below folds a FLAG ID in — `depRecord`'s name, `contentId`'s name, and therefore every object
+   in OBJDIR — and that id is the hash of (a compiler's own version string, a flag set). So this cache has
+   always been able to hold TWO toolchains' objects with neither able to masquerade as the other: two flag sets
+   are two files, which is the same property the paragraph above credits with making the release/dev mix-up
+   impossible rather than merely detected. What there was never a second VALUE for was the key itself — the id
+   was one module-scope constant computed from emcc, the compile spawned `requireEmcc()`, and the identity loop
+   filled one module-global map, so the ONE thing the design was built to allow was the one thing unreachable.
+   SO THIS NAMES A PARAMETER THAT WAS ALREADY THERE AND ADDS NO CAPABILITY, which is also how to check it: the
+   wasm toolchain composes its `flagId` from the same two strings in the same order as the constant it
+   replaces, so every object name is byte-identical across this change and A WARM CACHE STAYS WARM. The first
+   build after it must report `emcc: N sources, 0 to compile (rest cached)`; a full recompile means the id
+   moved and every name with it, and that is a defect in this change rather than a cost of it.
+   THE ACCEPTANCE TEST TRAVELS WITH THE TOOLCHAIN because "did this report a version" is a different question
+   per tool, and a compiler that cannot be identified may not name an object at all — a name that does not
+   change when the compiler does is how a stale object is reported fresh, which is the sentence the emcc-only
+   spelling already carried and which is owed to every tool that reaches this cache. */
+function toolchain(name, cc, versionArgv, versionOk, cflags, cwd) {
+  const v = spawnSync(cc, versionArgv, { encoding: "utf8" });
   const text = unroot(((v.stdout || "") + (v.stderr || "")).split("\n")
                         .filter((l) => !l.startsWith("InstalledDir")).join("\n"));
-  if (!/^emcc \(/m.test(text)) {
-    console.error("[build] `emcc -v` did not report a version (rc=" + v.status + ")\n" +
+  if (!versionOk.test(text)) {
+    console.error("[build] `" + name + " " + versionArgv.join(" ") + "` did not report a version (rc=" +
+                  v.status + ")\n" +
                   "[build]   an object may not be named for a toolchain this cannot identify — a name that\n" +
                   "[build]   does not change when the compiler does is how a stale object is reported fresh.");
     process.exit(1);
   }
-  return text;
-})();
-const FLAG_ID = createHash("sha256")
-  .update(TOOLCHAIN_ID + "\0" + unroot(CFLAGS.join("\0"))).digest("hex").slice(0, 12);
+  return { name, cc, cflags, cwd,
+           flagId: createHash("sha256").update(text + "\0" + unroot(cflags.join("\0")))
+                                       .digest("hex").slice(0, 12) };
+}
+const WASM_TC = toolchain("emcc", requireEmcc(), ["-v"], /^emcc \(/m, CFLAGS, QJS);
 
 /* ONE READ PER FILE PER BUILD, NOT PER TRANSLATION UNIT — check.h is in nearly every dependency list and is
    hashed once. That is the whole of the cost control: what gets read is the unique file SET, not the ~2900
@@ -5374,8 +5393,8 @@ function parseDepFile(dFile) {
 
 /* THE NAME. Null when the list names a file this tree does not have — that is "no identity", and it is never a
    name computed from the shorter list that remains: a name is only ever the hash of a COMPLETE set. */
-function contentId(deps) {
-  const h = createHash("sha256").update("apiclient-obj-v1\0" + FLAG_ID);
+function contentId(tc, deps) {
+  const h = createHash("sha256").update("apiclient-obj-v1\0" + tc.flagId);
   for (const d of deps) {
     const fh = fileHash(depFile(d));
     if (fh === null) return null;
@@ -5398,10 +5417,10 @@ const objFor = (id) => join(OBJDIR, id + ".o");
    costs a needless recompile and can cost nothing else, which is the only failure mode a memo in a build system
    may have.
    The record's first line is its SUBJECT, checked on read, so a record can never be spent on another source. */
-const depRecord = (src) => join(OBJDIR, createHash("sha256")
-  .update("apiclient-deps-v1\0" + FLAG_ID + "\0" + depName(src)).digest("hex").slice(0, 32) + ".deps");
-function recordedDeps(src) {
-  const f = depRecord(src);
+const depRecord = (tc, src) => join(OBJDIR, createHash("sha256")
+  .update("apiclient-deps-v1\0" + tc.flagId + "\0" + depName(src)).digest("hex").slice(0, 32) + ".deps");
+function recordedDeps(tc, src) {
+  const f = depRecord(tc, src);
   if (!existsSync(f)) return null;
   const lines = readFileSync(f, "utf8").split("\n").filter(Boolean);
   return lines.length > 1 && lines[0] === depName(src) ? lines.slice(1) : null;
@@ -5415,100 +5434,126 @@ const TO_COMPILE = SHARED_SOURCES.concat([ENTRY_SMOKE, ENTRY_ABI]);
    arrangement exists to make impossible — such a name does not change when a header does, so the SECOND build
    would compute the same name and HIT an object compiled against headers that have since been edited. A source
    with no identity is therefore given none: it compiles to a private temporary and is named afterwards. */
-const OBJ_OF = new Map();
-const IDENTITY_T0 = Date.now();
-for (const src of TO_COMPILE) {
-  const deps = recordedDeps(src);
-  const id = deps && contentId(deps);
-  if (id && existsSync(objFor(id))) OBJ_OF.set(src, objFor(id));
-}
-const IDENTITY_MS = Date.now() - IDENTITY_T0;
-const stale = TO_COMPILE.filter((s) => !OBJ_OF.has(s));
-console.log("[build] " + TO_COMPILE.length + " sources, " + stale.length + " to compile" +
-            (stale.length < TO_COMPILE.length ? " (rest cached)" : "") +
-            " [identity " + IDENTITY_MS + " ms over " + fileHashes.size + " files]");
+/* THE COMPILE, AS A FUNCTION OF A TOOLCHAIN RATHER THAN OF THE ONLY ONE THERE WAS. The three identities this
+   reads — `recordedDeps`, `contentId`, `objFor` — were already keyed on a flag id; what pinned this to emcc
+   was module-scope state rather than anything about the scheme: one global map, one `requireEmcc()` at the
+   spawn, one `cwd: QJS`. Each of those is now the toolchain's own, so a second compiler names its objects in
+   the same OBJDIR under a different id and neither can answer for the other.
+   IT RETURNS THE MAP RATHER THAN FILLING A GLOBAL, which is the half that makes a second caller possible at
+   all: a module-global `OBJ_OF` is a single answer to a question that now has two, and `mustObj` reading it
+   implicitly is how the second toolchain's link would have been handed the first one's objects — a stale
+   object reported fresh with no cache miss anywhere in it, which is the one failure this whole section is
+   built to make impossible.
+   THE TOOLCHAIN NAMES ITSELF IN THE LINE, for the reason every count in this build states its denominator:
+   two compiles reporting "410 sources, 0 to compile" are indistinguishable in a log, and which one was warm
+   is exactly the question a reader of this section has. */
+async function compileAll(tc, sources) {
+  const objOf = new Map();
+  const identityT0 = Date.now();
+  for (const src of sources) {
+    const deps = recordedDeps(tc, src);
+    const id = deps && contentId(tc, deps);
+    if (id && existsSync(objFor(id))) objOf.set(src, objFor(id));
+  }
+  const identityMs = Date.now() - identityT0;
+  const stale = sources.filter((s) => !objOf.has(s));
+  console.log("[build] " + tc.name + ": " + sources.length + " sources, " + stale.length + " to compile" +
+              (stale.length < sources.length ? " (rest cached)" : "") +
+              " [identity " + identityMs + " ms over " + fileHashes.size + " files]");
 
-if (stale.length) {
-  /* IN PARALLEL, bounded by the cores actually present. A cold build is every translation unit in the program
-     and the machine is otherwise idle while each one runs. */
-  const JOBS = Math.max(1, cpus().length - 1);
-  let next = 0, failed = 0, running = 0, tmpSeq = 0;
-  await new Promise((done) => {
-    const pump = () => {
-      while (running < JOBS && next < stale.length) {
-        const src = stale[next++];
-        /* A PRIVATE TEMPORARY, because the name this object will carry is not known until it has been compiled
-           and has said what it read. The pid keeps two concurrent builds out of each other's way; the final
-           name they both arrive at is the same one, and arriving there is a rename, which is atomic. */
-        const tmp = join(OBJDIR, ".tmp-" + process.pid + "-" + tmpSeq++);
-        running++;
-        const p = spawn(requireEmcc(), [...CFLAGS, "-MMD", "-MF", tmp + ".d", "-c", src, "-o", tmp + ".o"],
-                        { stdio: "inherit", shell: true, cwd: QJS });
-        /* THE NAMING, AND IT IS THE ONLY PLACE AN OBJECT EVER GETS A NAME. It runs on a compile that exited 0,
-           over the dependency list THAT compile just wrote, so the invariant the lookup rests on holds by
-           construction: `<id>.o` exists only where `id` is the hash of a complete, observed input set. Every
-           way of not knowing that set is a failure here rather than a shorter hash — a name computed from part
-           of the inputs is precisely the stale-object-reported-fresh defect, arrived at from the other end. */
-        const adopt = () => {
-          const deps = parseDepFile(tmp + ".d");
-          if (!deps)
-            return "the compiler exited 0 and recorded no dependency list, so this object cannot be named — "
-                 + "naming it from its source alone would give it a name that does not change when a header does";
-          if (!deps.includes(depName(src))) return "the recorded dependency list does not name the source itself";
-          const id = contentId(deps);
-          if (!id) return "a file this compile had just read is already gone";
-          renameSync(tmp + ".o", objFor(id));            /* the FACT, published atomically */
-          writeFileSync(depRecord(src), [depName(src), ...deps].join("\n") + "\n");   /* the HINT, after it */
-          rmSync(tmp + ".d", { force: true });
-          OBJ_OF.set(src, objFor(id));
-          return null;
-        };
-        let settled = false;
-        const settle = (why) => {          /* exit and error are not mutually exclusive; the pump must run once */
-          if (settled) return;
-          settled = true;
-          if (why) {
-            failed++;
-            /* NOTHING HALF-NAMED SURVIVES A FAILURE. A temporary left behind is an object with no identity, and
-               an obj/ directory that accumulates those is a directory whose contents stop meaning anything. */
-            rmSync(tmp + ".o", { force: true });
+  if (stale.length) {
+    /* IN PARALLEL, bounded by the cores actually present. A cold build is every translation unit in the program
+       and the machine is otherwise idle while each one runs. */
+    const JOBS = Math.max(1, cpus().length - 1);
+    let next = 0, failed = 0, running = 0, tmpSeq = 0;
+    await new Promise((done) => {
+      const pump = () => {
+        while (running < JOBS && next < stale.length) {
+          const src = stale[next++];
+          /* A PRIVATE TEMPORARY, because the name this object will carry is not known until it has been compiled
+             and has said what it read. The pid keeps two concurrent builds out of each other's way; the final
+             name they both arrive at is the same one, and arriving there is a rename, which is atomic. */
+          const tmp = join(OBJDIR, ".tmp-" + process.pid + "-" + tmpSeq++);
+          running++;
+          const p = spawn(tc.cc, [...tc.cflags, "-MMD", "-MF", tmp + ".d", "-c", src, "-o", tmp + ".o"],
+                          { stdio: "inherit", shell: true, cwd: tc.cwd });
+          /* THE NAMING, AND IT IS THE ONLY PLACE AN OBJECT EVER GETS A NAME. It runs on a compile that exited 0,
+             over the dependency list THAT compile just wrote, so the invariant the lookup rests on holds by
+             construction: `<id>.o` exists only where `id` is the hash of a complete, observed input set. Every
+             way of not knowing that set is a failure here rather than a shorter hash — a name computed from part
+             of the inputs is precisely the stale-object-reported-fresh defect, arrived at from the other end. */
+          const adopt = () => {
+            const deps = parseDepFile(tmp + ".d");
+            if (!deps)
+              return "the compiler exited 0 and recorded no dependency list, so this object cannot be named — "
+                   + "naming it from its source alone would give it a name that does not change when a header does";
+            if (!deps.includes(depName(src))) return "the recorded dependency list does not name the source itself";
+            const id = contentId(tc, deps);
+            if (!id) return "a file this compile had just read is already gone";
+            renameSync(tmp + ".o", objFor(id));            /* the FACT, published atomically */
+            writeFileSync(depRecord(tc, src), [depName(src), ...deps].join("\n") + "\n");   /* the HINT, after it */
             rmSync(tmp + ".d", { force: true });
-            console.error("[build] FAILED " + src + " — " + why);
-          }
-          running--;
-          if (next >= stale.length && running === 0) done();
-          else pump();
-        };
-        p.on("exit", (code) => settle(code === 0 ? adopt() : "compiler exited " + code));
-        /* A SPAWN THAT NEVER STARTS MUST BE A FAILED TU, NOT AN UNHANDLED THROW. With no `error` listener node
-           raises the event as an exception, so the build died mid-run with no line naming a source — and
-           `running--` never ran either, so the promise it was inside could not have settled had the throw been
-           caught. Observed twice under fork pressure as `spawn /bin/sh ENOENT`: the machine was saturated, not
-           the code wrong, and the build reported neither. That is the loaded-machine defect §Testing names —
-           an artifact of HOW it ran presented as a fact about WHAT ran — so it is reported as what it is, with
-           the source named. */
-        p.on("error", (e) => settle("could not start the compiler: " + e.message));
-      }
-      if (next >= stale.length && running === 0) done();
-    };
-    pump();
-  });
-  if (failed) { console.error("[build] FAILED — " + failed + " source(s) did not compile"); process.exit(1); }
+            objOf.set(src, objFor(id));
+            return null;
+          };
+          let settled = false;
+          const settle = (why) => {          /* exit and error are not mutually exclusive; the pump must run once */
+            if (settled) return;
+            settled = true;
+            if (why) {
+              failed++;
+              /* NOTHING HALF-NAMED SURVIVES A FAILURE. A temporary left behind is an object with no identity, and
+                 an obj/ directory that accumulates those is a directory whose contents stop meaning anything. */
+              rmSync(tmp + ".o", { force: true });
+              rmSync(tmp + ".d", { force: true });
+              console.error("[build] FAILED " + src + " — " + why);
+            }
+            running--;
+            if (next >= stale.length && running === 0) done();
+            else pump();
+          };
+          p.on("exit", (code) => settle(code === 0 ? adopt() : "compiler exited " + code));
+          /* A SPAWN THAT NEVER STARTS MUST BE A FAILED TU, NOT AN UNHANDLED THROW. With no `error` listener node
+             raises the event as an exception, so the build died mid-run with no line naming a source — and
+             `running--` never ran either, so the promise it was inside could not have settled had the throw been
+             caught. Observed twice under fork pressure as `spawn /bin/sh ENOENT`: the machine was saturated, not
+             the code wrong, and the build reported neither. That is the loaded-machine defect §Testing names —
+             an artifact of HOW it ran presented as a fact about WHAT ran — so it is reported as what it is, with
+             the source named. */
+          p.on("error", (e) => settle("could not start the compiler: " + e.message));
+        }
+        if (next >= stale.length && running === 0) done();
+      };
+      pump();
+    });
+    if (failed) { console.error("[build] " + tc.name + " FAILED — " + failed +
+                                " source(s) did not compile"); process.exit(1); }
+  }
+  return objOf;
 }
+/* THE ONE CALLER TODAY. A second one is what this change is for and it is NOT written here: a program that is
+   compiled and not run is §Testing's excluded test one layer down, so the native objects arrive in the same
+   diff as the link that consumes them and the stage that runs it, never before. */
+const OBJ_OF = await compileAll(WASM_TC, TO_COMPILE);
 
 /* THE LINK ASKS FOR AN OBJECT BY SOURCE AND IS ANSWERED OR THE BUILD STOPS. Every source either had a name at
    the top of this section or was compiled and named by `adopt`, so an absent entry here is not a link that will
    be short one object — it is a source that reached the link with no compiled identity at all, which can only
    mean the compile loop lost it. Say so at the source rather than hand wasm-ld a shorter list. */
-function mustObj(src) {
-  const o = OBJ_OF.get(src);
+/* IT IS ASKED OF A NAMED SET OF OBJECTS AND NOT OF A GLOBAL ONE, which is the same sentence one line up: with
+   two toolchains in this file a bare `OBJ_OF.get(src)` answers a question about WHICH compile silently, and
+   the wrong answer is an object that exists, links, and was compiled for another target. An absent entry here
+   is still a source that reached the link with no compiled identity; what the parameter removes is the case
+   where the entry is PRESENT and belongs to somebody else. */
+function mustObj(objs, src) {
+  const o = objs.get(src);
   if (!o || !existsSync(o)) {
     console.error("[build] no object for " + src + " — it reached the link with no compiled identity");
     process.exit(1);
   }
   return o;
 }
-const OBJS_SHARED = SHARED_SOURCES.map(mustObj);
+const OBJS_SHARED = SHARED_SOURCES.map((s) => mustObj(OBJ_OF, s));
 
 /* ── LINK BOTH PROGRAMS ───────────────────────────────────────────────────────────────────────────────────
    THE ABI ARTIFACT STAGES WHERE THE EXTENSION LOADS IT: bridge.js does import("./lib/qjs/qjs.mjs"), so that is
@@ -5535,11 +5580,12 @@ function link(what, entryObjs, ldflags, out) {
   console.log("[build] OK -> " + out);
   return { label: what + " link", verdict: "PASS", code: 0, kind: null };
 }
-const SMOKE_LINK = link("smoke", [mustObj(ENTRY_SMOKE), mustObj(ENTRY_ABI)], LDFLAGS_SMOKE, join(OUT, "qjs.js"));
+const SMOKE_LINK = link("smoke", [mustObj(OBJ_OF, ENTRY_SMOKE), mustObj(OBJ_OF, ENTRY_ABI)], LDFLAGS_SMOKE,
+                         join(OUT, "qjs.js"));
 const ABI_LINK = ABI_LIST.code
   ? skipped("production ABI link", "the renderer ABI list and main.c's QJS_EXPORT bodies disagree, so this "
                                  + "link's --export= list is known wrong")
-  : link("production ABI", [mustObj(ENTRY_ABI)], LDFLAGS_ABI, join(ABI_STAGE, "qjs.mjs"));
+  : link("production ABI", [mustObj(OBJ_OF, ENTRY_ABI)], LDFLAGS_ABI, join(ABI_STAGE, "qjs.mjs"));
 
 /* THE ARTIFACT RECORDS THE REVISION IT WAS BUILT FROM, because engine/solvergate.mjs runs this file and
    never compiles anything, so without a stamp the only question it could ask about the program was how old
