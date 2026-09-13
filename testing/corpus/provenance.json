@@ -2194,16 +2194,16 @@
   "contentType": "text/html; charset=utf-8",
   "csp": "frame-ancestors 'none'",
   "bytes": 342144,
-  "sha256": "e401b8799768b1ce9d0b0fbadc2395c9dc886ea9a9ee84ddfa0d63bc266e2096",
-  "fetchedAt": "2026-09-13T08:00:44.578Z",
+  "sha256": "8e058ea80d00b1e2c8f0038560dec1ea2eedacc82ad2693c73573e748890b27f",
+  "fetchedAt": "2026-09-13T08:46:53.886Z",
   "resources": [
    {
     "url": "https://main.vscode-cdn.net/nlsmetadata/645f29cc3176500b4b5762ba887cf2a7f0ffdf2c/nls.messages.js",
     "status": 200,
     "contentType": "application/javascript",
-    "bytes": 281882,
-    "sha256": "45d04ec603390d6eab0e13a95de3925b29b245d7efa5f3c541e30575a8b28be4",
-    "fetchedAt": "2026-09-13T08:00:45.328Z",
+    "bytes": 1106702,
+    "sha256": "c83e8045bb0430b1fbf312728337fffe8531ad97c90076b11e86632d7276e977",
+    "fetchedAt": "2026-09-13T08:46:54.539Z",
     "path": "main.vscode-cdn.net/nlsmetadata/645f29cc3176500b4b5762ba887cf2a7f0ffdf2c/nls.messages.js"
    }
   ],
