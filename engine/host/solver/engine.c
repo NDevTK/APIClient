@@ -803,6 +803,23 @@ static RootScript *g_root_scripts;
    each arm. It starts at 1 so that 0 — the register field's own default — is a name no row can answer to. */
 static uint64_t g_dyn_row_id = 1;
 static int g_root_n;
+/* AND THE PARTITION OF IT THAT DECIDES WHETHER THIS RUN EVER LEARNED AN ENDPOINT AT ALL. A seeded row either
+   already HAS its source text — an inline `<script>`, or an external one whose response the host handed over
+   — or it does not, and a row that does not is a row the seed turns into a DYN_SCRIPT_SRC whose body is its
+   own address, which PARKS the flow on the reply door. So `rootProgramsAwaited` is the number of reply-door
+   openings this document owes for its OWN BUNDLE, and it is the denominator `replyAsked` has never had.
+   `replyAsked == rootProgramsAwaited` IS THE PRODUCT'S HEADLINE VERDICT AND IT WAS BEING COUNTED BY HAND. The
+   reply door is a fetch, an injected `<script src>`, the document's own script slots and a dynamic `import()`
+   (solver/result.c), so a run whose asks exactly equal what the bundle owes has issued NO page `fetch()`, no
+   XHR and no dynamic `import()` — it learned nothing, and §What-the-tool-produces is the whole of what it was
+   for. That reading has already settled a real question about a real page, and it settled it by somebody
+   counting a document's `<script src>` elements off the page and writing "ten script rows" into a comment,
+   which is in no log and comparable with no other document.
+   RAISED AT THE ONE LINE `g_root_n` IS, ON THE SAME FIELD THE SEED ITSELF BRANCHES ON — engine_seed_scripts
+   chooses DYN_PAGE_SCRIPT or DYN_SCRIPT_SRC by `rows[i].body`, so keying these on that same column is what
+   stops the census and the seed being two opinions about one row. The identity against `g_root_n` is asserted
+   at engine_frontier_census, where all three are in one hand, for the reason `g_finished`'s arms are. */
+static int g_root_n_held, g_root_n_awaited;
 static Flow *g_sess_cur;
 static int g_sess_live;
 
@@ -9624,6 +9641,7 @@ static void engine_session_close(void) {
         g_root_scripts = NULL;
     }
     g_root_n = 0;
+    g_root_n_held = g_root_n_awaited = 0;   /* the arms go back with the total they partition */
     g_sess_live = 0;
 }
 
@@ -9914,6 +9932,7 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
             CHECK(g_root_scripts[g_root_n].body,
                   "engine: OOM copying a program of the root document into its seed table");
         }
+        if (g_root_scripts[g_root_n].body) g_root_n_held++; else g_root_n_awaited++;
         g_root_n++;
     }
     /* AND EVERY FLOW OF THIS DOCUMENT IS SEEDED FROM IT — installed BEFORE the frontier is seeded below,
@@ -11179,6 +11198,8 @@ void engine_frontier_census(EngineFrontierCensus *out)
        by whatever that timeline queued, so per-flow it is a different number per arm and none of them is the
        document's. A closed session reads 0: engine_session_close gives the table back. */
     out->root_programs     = g_root_n;
+    out->root_programs_held    = g_root_n_held;
+    out->root_programs_awaited = g_root_n_awaited;
     out->prog_starts       = g_prog_starts;
     out->prog_starts_cand  = g_prog_starts_cand;
     out->prog_starts_other = g_prog_starts_other;
@@ -11233,6 +11254,18 @@ void engine_frontier_census(EngineFrontierCensus *out)
             "it, so a sale path that reads it afterwards gets freed memory rather than a wrong count and this "
             "is where that shows",
             out->sold_flows, out->sold_cands, out->sold);
+    /* AND THE SEED TABLE'S PARTITION, asserted here for the same reason and about a table built ONCE per
+       session rather than per flow: `held` is a row whose source text this instance already has and `awaited`
+       is one whose bytes the reply door still owes, which is the whole content of the pair. A difference means
+       a row was added to the table by a path that did not say which side it was on, and the side that matters
+       is the one `replyAsked` is read against — an unlabelled row there silently lowers the bundle's own share
+       of the reply door and makes a run that learned nothing read as one that reached a request. */
+    DCHECKF(out->root_programs_held + out->root_programs_awaited == out->root_programs,
+            "the root document's seed rows do not partition its own count (%d held + %d awaited against %d "
+            "rows) — both arms are written at the one line the total is, on the same column engine_seed_scripts "
+            "branches on, so a difference is a second path into that table and `replyAsked` is about to be read "
+            "against a bundle share that is not the bundle's",
+            out->root_programs_held, out->root_programs_awaited, out->root_programs);
     /* AND THE PROGRAM-START PARTITION, asserted for the reason the two above are and at the same place. It is
        the ONLY identity these four rows have, which is stated here because the missing one is the tempting
        one: `prog_queued_cand` is an ASK and `prog_starts_cand` counts STARTS ACROSS TIMELINES, and a fork

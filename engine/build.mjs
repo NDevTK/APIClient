@@ -297,6 +297,37 @@ function coldPartition(c, total, parts, where) {
    THE ZERO ARM IS THE LOUD ONE and is named rather than left to be noticed in a pair of digits: a run whose
    entire retirement is candidates has retired no exploration at all, and that is the sentence a reader acts
    on. It is a reading of the counters and not a threshold — nothing here is compared against a proportion. */
+/* HOW MUCH OF THE REPLY DOOR WAS THE DOCUMENT'S OWN BUNDLE, WHICH IS THE VERDICT THIS WHOLE TOOL IS FOR AND
+   WHICH HAD NO ROW. The reply door is a fetch, an injected `<script src>`, the document's own script slots and
+   a dynamic `import()` (solver/result.c), so `replyAsked` on its own cannot say whether a run reached ONE
+   request of the application's or merely dragged in the scripts the page shipped. `rootProgramsAwaited` is the
+   bundle's own share — the seeded rows whose bytes the door still owes — so the subtraction is the number of
+   openings the RUN reached, and `§Learning-from-replies calls that the POINT`.
+   IT WAS BEING DONE BY HAND AND THE HAND COUNT IS IN A LANDED COMMENT: a live-run reading of a real page said
+   "that document ships EXACTLY SIX `<script src>` elements — so the request door opened for the bundle and
+   for nothing else", with the six counted off the page. That number was in no log and comparable with no other
+   document, which is the same defect as reading `deepest` against a denominator nobody published.
+   THE FOURTH ARM IS THE ONE A TERNARY WOULD HAVE LOST. `replyAsked` BELOW the bundle's share is not a smaller
+   version of "nothing was reached" — it says the run never finished asking for its own scripts, so it is a
+   statement about how far the run got and sends a reader to the cursor histogram rather than to the driving.
+   A READING AND NEVER A THRESHOLD (§NO BOUNDS): nothing branches on it and no verdict is refused for it. */
+function bundleShareReading(b) {
+  coldPartition(b, "rootPrograms", ["rootProgramsHeld", "rootProgramsAwaited"], "engine_frontier_census");
+  const owed = Number(b.rootProgramsAwaited), asked = Number(b.replyAsked);
+  const beyond = asked - owed;
+  if (owed === 0)
+    return `; the document's own ${b.rootPrograms} program(s) owe the reply door NOTHING (every one is inline ` +
+           `or already fetched), so all ${asked} ask(s) are openings the run reached`;
+  if (beyond > 0)
+    return `; ${beyond} of those ask(s) are ABOVE the ${owed} its own bundle owes — the run reached a ` +
+           `request the document did not ship`;
+  if (beyond === 0)
+    return `; that is EXACTLY the ${owed} its own bundle owes, so the door opened for the bundle and for ` +
+           `nothing else — no page \`fetch()\`, no XHR and no dynamic \`import()\` was ever reached`;
+  return `; that is ${-beyond} SHORT of the ${owed} its own bundle owes, so the run did not finish asking for ` +
+         `the document's own scripts — read the cursor histogram, not the driving`;
+}
+
 function retiredReading(c) {
   coldPartition(c, "finished", ["finishedFlows", "finishedCands"], "engine_frontier_census");
   coldPartition(c, "sold", ["soldFlows", "soldCands"], "engine_frontier_census");
@@ -2729,6 +2760,7 @@ function censusReading(out) {
                   24636 answered records was relayed as "about 4% consumed". The denominator in the arm's unit
                   is `pendReady` on the frontier-shape line above. */
                `; reply ${c.b.replyAnswered}/${c.b.replyAsked} record(s) answered` +
+               bundleShareReading(c.b) +
                `; programs: deepest ${c.b.deepest}, completed ${c.b.completed}` +
                `; forks ${c.b.forks}` +
                /* THREE STATES, THREE SENTENCES — and the middle one is why this is not a ternary. `no inherited
