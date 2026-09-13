@@ -232,29 +232,34 @@ static bool img_side_or_corner(const char *const *w, const size_t *wl, int n)
     return true;
 }
 
-/* §3.4.1 "Color Stop Lists": `<linear-color-stop> = <color> <length-percentage>?`. */
+/* css-images-4 §3.5.1 "Color Stop Lists":
+     <linear-color-stop> = <color> <color-stop-length>?
+     <color-stop-length> = <length-percentage>{1,2}
+   THE `{1,2}` IS THE WHOLE OF THIS FUNCTION'S DELTA FROM LEVEL 3, whose §3.4.1 "Color Stop Lists" writes
+   `<linear-color-stop> = <color> <length-percentage>?` and admits ONE position. A second position is the
+   DOUBLE-POSITION stop that writes a hard colour band as one stop instead of two, and §3.5.1 states its
+   meaning rather than leaving it to a renderer: "A color stop with two positions is equivalent to specifying
+   two color stops with the same color, one for each position." Every user agent ships it, so refusing it
+   DROPPED a declaration that is valid CSS — and the drop is silent, since the page's whole `background`
+   would then read as undeclared with the property's initial value to show for it.
+   NEITHER POSITION IS RANGE-CHECKED AND THE PAIR IS NOT ORDERED, which is the grammar's own answer and not a
+   laxity here. §3.5.1 writes a bare `<length-percentage>` with no `[0,∞]` bracket and says in its own words
+   that positions "can be specified anywhere on the gradient line"; a second position BELOW the first is
+   resolved at used-value time by §3.5.3 "Color Stop Fixup" and is never a parse error. */
 static bool img_color_stop(const char *g, size_t glen)
 {
     const char *w[3];
     size_t wl[3];
-    int n = img_words(g, glen, w, wl, 3);
+    int n = img_words(g, glen, w, wl, 3), i;
     CssColor c;
 
+    /* -1 IS "MORE THAN THREE", which `n < 1` takes: `<color>` is ONE component value however many commas its
+       function token carries, so four components match no reading of `<color> <color-stop-length>?`. */
     if (n < 1) return false;
     if (!css_color_parse(w[0], wl[0], &c)) return false;
-    if (n == 1) return true;
-    if (n == 2) return img_length_predicate(w[1], wl[1], true);
-    if (img_length_predicate(w[1], wl[1], true) && img_length_predicate(w[2], wl[2], true))
-        DFAIL("a colour stop carries TWO positions, which is css-images-4 §3.5.1 \"Color Stop Lists\"' "
-              "`<color-stop-length> = <length-percentage>{1,2}` — the DOUBLE-POSITION stop that writes a hard "
-              "colour band as one stop instead of two (`red 0% 50%, blue 50% 100%`). css-images-3 §3.4.1 "
-              "\"Color Stop Lists\", which is the level css-backgrounds-3 references and which this component "
-              "implements, gives `<linear-color-stop>` ONE optional position, so this value matches no arm "
-              "here and refusing it would DROP a declaration that every user agent accepts — the page's whole "
-              "`background` would read as undeclared with the initial value to show for it, which is the "
-              "silent shape of this defect. BUILD css-images-4 §3.5.1's grammar: the second position is a "
-              "third component of the same group and nothing else in this file changes");
-    return false;
+    for (i = 1; i < n; i++)
+        if (!img_length_predicate(w[i], wl[i], true)) return false;
+    return true;
 }
 
 /* §3.4.1's `<linear-color-hint> = <length-percentage>` — the transition hint BETWEEN two stops. */
