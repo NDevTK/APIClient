@@ -680,6 +680,37 @@ function safeFetchWidenedOrigins() { return Object.keys(_EXPLORED); }
    body is JAVASCRIPT is ALWAYS fetched + EXECUTED (a lazy chunk reveals real endpoints —
    the headline moat surface)". A default that refused it would turn the tool's central
    capability off and call the silence caution.
+   AND THAT WORKED EXAMPLE DOES NOT HAPPEN ON A REAL APP PAGE, WHICH IS A MEASUREMENT AND
+   NOT AN ARGUMENT. Driven against a mirrored production SPA, ONE run refused 467 requests
+   over 85 distinct addresses and every single refusal was `blocked-provenance:forced` —
+   not one refusal of any other kind — and the addresses are ORDINARY LAZY CHUNKS OF THE
+   PAGE'S OWN BUNDLE at its own origin: `IconDot-<hash>.js`, `Pill-<hash>.js`,
+   `agent-ids-<hash>.js`, and the vendor chunk holding the descriptor decoder. So the
+   sentence above names the lazy chunk as the headline case that FIRES, and the lazy chunk
+   is exactly what was refused. The command is
+   `grep -o 'blocked-[a-z-]*:[a-z]*' <a drive log> | sort | uniq -c`, run with a negative
+   control, and it is quoted rather than the figure because the figure is one run's.
+   THE TWO READINGS TAKE OPPOSITE WORK AND THIS FILE MAY NOT ARBITRATE BETWEEN THEM. Either
+   the grade is RIGHT and this banner's example is wrong — a chunk selected on a forced arm
+   is a request the person's client would not have made, so refusing it is the policy working
+   and the example should never have named it — or the grade is keying on the wrong thing:
+   CLAUDE.md defines FORCED as "a value exists only because a gate was forced", which is a
+   statement about the REQUEST'S VALUES, while `engine_prov_of_running_path` answers from
+   `flow_path_forced`, which is a property of the FLOW'S PATH. An icon chunk's address is
+   composed from the bundler's static chunk map and carries no forced value under any
+   reading; what the forcing decided is WHICH chunk, not what the address says. Those are
+   two questions and one bit is answering both, decided by the stricter one, with the cost
+   landing on the other (§A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS) — and the cost here is
+   every chunk body on a logged-out SPA, which is the surface the tool exists to reach.
+   WHAT SETTLES IT IS NOT A JUDGEMENT ABOUT THIS FILE: it is reading `flow_path_forced` and
+   its one increment against the definition above, and asking whether a request composed
+   ENTIRELY of constants can be graded FORCED. That is an engine question and the answer
+   belongs at the producer, not here, because this file is handed a word and must obey it.
+   WHAT MUST NOT FOLLOW is widening this policy to make the number move. The refusal is
+   correct for a request whose values came from a forced gate, and a reply to one of those
+   is the plausible fabrication §A-REQUEST-CARRIES-THE-PROVENANCE-OF-ITS-VALUES is entirely
+   about; loosening the grade here would buy the chunk bodies by making every genuinely
+   forced reply indistinguishable from an observed one.
    `forced` IS THE WIDENING, AND ITS REFUSAL IS THIS POLICY'S ANSWER RATHER THAN A GAP IN
    IT. A value in the request exists only because a gate was forced, so a reply to it is
    evidence about what a server says to a request no client makes. The address is DERIVED IN
