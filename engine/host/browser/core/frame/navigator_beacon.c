@@ -155,6 +155,13 @@ static JSValue js_nav_send_beacon(JSContext *ctx, JSValueConst this_val, int arg
     int nhdrs = 0;
     EndpointBody eb = { NULL, NULL, 0 };
     const EndpointBody *ebp = NULL;
+    /* WHICH BYTES OF THE PAYLOAD THE PAGE DID NOT DETERMINE, projected out of the body state for the reason
+       the header above is projected: the solver must not learn what a BodyState is. The same projection
+       stands at core/fetch/fetch.c's host edge, which is the other producer whose body state is still alive
+       at its record call. `nespan` stays 0 through every early return, which is the true statement for a beacon
+       that never reached step 6 at all. */
+    EndpointBodySpan *espan = NULL;
+    int nespan = 0;
     BodyState b = { 0 };
     char *mime = NULL;
     /* The address as the @H surface must see it: the JSValue endpoint_record reads (a concolic passes through
@@ -279,7 +286,30 @@ static JSValue js_nav_send_beacon(JSContext *ctx, JSValueConst this_val, int arg
            line already knew, and `bkind` already held it; the answer stopped here and the surface published
            an unknown body's display spelling as bytes the beacon sent. It is the same fact step 6.2 above
            declines to measure a length from, for the same reason. */
-        eb.kind = (bkind == BODY_SHAPE) ? EPB_SHAPE : EPB_SENT;
+        {
+            const BodySpan *bs = body_state_spans(&b, &nespan);
+
+            if (nespan > 0) {
+                int k;
+
+                espan = malloc(sizeof(*espan) * (size_t)nespan);
+                CHECK(espan != NULL, "beacon: OOM naming which bytes of a beacon's payload are unknown input");
+                for (k = 0; k < nespan; k++) {
+                    espan[k].off = bs[k].off;
+                    espan[k].len = bs[k].len;
+                    espan[k].shape = bs[k].shape;
+                    espan[k].example = bs[k].example;
+                }
+            }
+            eb.span = espan;
+            eb.nspan = nespan;
+        }
+        /* A SPANNED BODY TAKES THE SHAPE ARM FOR A SECOND REASON, and it is the constraint solver/endpoint.c's
+           retired residual was written to be built against: some of these bytes are an unknown's EXAMPLE and
+           some are a byte nobody wrote, because §10.4.5.18 TypedArraySetElement skips the block write entirely
+           for an unknown carrying no example rather than inventing one. So the beacon does not send exactly
+           these bytes and no record of it may say that it does. */
+        eb.kind = (bkind == BODY_SHAPE || nespan > 0) ? EPB_SHAPE : EPB_SENT;
         ebp = &eb;
         if (mime) {                        /* step 6.3.3, run only "if contentType is not null" */
             hdrs[nhdrs].name = "Content-Type";
@@ -302,6 +332,7 @@ static JSValue js_nav_send_beacon(JSContext *ctx, JSValueConst this_val, int arg
     ret = beacon_queue_result(ctx, url_text);
 
     free(mime);
+    free(espan);
     body_state_free(JS_GetRuntime(ctx), &b);
     JS_FreeValue(ctx, url_str);
     free(url_owned);

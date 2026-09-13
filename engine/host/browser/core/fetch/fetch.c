@@ -1451,6 +1451,13 @@ static int js_fetch_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
            So the header list wins here for the same reason it wins above. */
         EndpointBody eb;
         const EndpointBody *ebp = NULL;
+        /* WHICH BYTES OF THE PAYLOAD THE PAGE DID NOT DETERMINE, projected out of the body state for the
+           reason the header list is projected above: the solver must not learn what a BodyState is. The same
+           projection stands at core/frame/navigator_beacon.c, which is the other producer whose body state is
+           still alive at its record call; there is no third, because XHR's slot holds a STRING by the time it
+           records (see the residual there). */
+        EndpointBodySpan *espan = NULL;
+        int nespan = 0;
         char *body_ct = NULL;
         const char *ext_mime = NULL;   /* step 37.4's extracted type, used only where the list names none */
         if (s->hdrs.n) {
@@ -1483,17 +1490,44 @@ static int js_fetch_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
         if (body_kind == BODY_BYTES || body_kind == BODY_SHAPE) {
             body_ct = header_list_get(&s->hdrs, "content-type");
             if (!body_ct && !JS_IsUndefined(s->body_mime)) ext_mime = JS_ToCString(ctx, s->body_mime);
+            const BodySpan *bs = body_state_spans(&s->body, &nespan);
+
             eb.mime = body_ct ? body_ct : ext_mime;
             eb.bytes = body_bytes;
             eb.len = body_bytes_len;
+            if (nespan > 0) {
+                int k;
+
+                espan = js_malloc(ctx, sizeof(*espan) * (size_t)nespan);
+                if (!espan) {
+                    free(body_ct);
+                    if (ext_mime) JS_FreeCString(ctx, ext_mime);
+                    js_free(ctx, eh);
+                    return -1;
+                }
+                for (k = 0; k < nespan; k++) {
+                    espan[k].off = bs[k].off;
+                    espan[k].len = bs[k].len;
+                    espan[k].shape = bs[k].shape;
+                    espan[k].example = bs[k].example;
+                }
+            }
+            eb.span = espan;
+            eb.nspan = nespan;
             /* The arm the line above already took, carried instead of dropped — BODY_SHAPE's bytes are the
-               display spelling of an unknown and must never be published as what the request sends. */
-            eb.kind = (body_kind == BODY_SHAPE) ? EPB_SHAPE : EPB_SENT;
+               display spelling of an unknown and must never be published as what the request sends.
+               A SPANNED BODY TAKES THE SAME ARM FOR A SECOND REASON, and it is the constraint solver/endpoint.c's
+               retired residual was written to be built against: some of these bytes are an unknown's EXAMPLE
+               and some are a byte nobody wrote, because §10.4.5.18 skips the block write entirely for an
+               unknown carrying no example rather than inventing one. So the request does not send exactly
+               these bytes and no record of it may say that it does. */
+            eb.kind = (body_kind == BODY_SHAPE || nespan > 0) ? EPB_SHAPE : EPB_SENT;
             ebp = &eb;
         }
         endpoint_record(ctx, s->rec.method, s->url, eh, s->hdrs.n, ebp, prov);
         if (ext_mime) JS_FreeCString(ctx, ext_mime);
         free(body_ct);
+        js_free(ctx, espan);
         js_free(ctx, eh);
     }
     /* AND THE SUB-REQUESTS THE BODY ITSELF NAMES. A batch API takes N calls in ONE request — `POST /batch`

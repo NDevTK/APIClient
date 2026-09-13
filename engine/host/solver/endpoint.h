@@ -83,7 +83,30 @@ typedef enum {
     EPB_SHAPE           /* the engine's display spelling of an unknown body; NEVER bytes the page sent */
 } EndpointBodyKind;
 
-typedef struct { const char *mime, *bytes; size_t len; EndpointBodyKind kind; } EndpointBody;
+/* WHICH BYTE RANGES OF THE BODY THE PAGE DID NOT DETERMINE, AND WHERE EACH CAME FROM — the one fact that
+   turns "replay these bytes verbatim" into a request a reviewer can EDIT, and the only one a sniffer can never
+   produce. A page that composes its payload AS A STRING carries its operands' display forms into the result,
+   so the JSON arm below already names its fields; a page that writes BYTE BY BYTE into a typed array carries
+   nothing at all, because a data block holds uint8_t and an unknown cannot live in one. ECMAScript §10.4.5.18
+   TypedArraySetElement ( obj, index, value ) records the fact beside the block instead, and this is that
+   record projected onto this surface.
+   NOTHING DECODES AND NOTHING BRANCHES ON A PROTOCOL, which is what makes it answer for an encoding this
+   engine has never heard of. The page's own serializer ran with the real field names and the real values in
+   its hands and wrote these bytes itself, so a span saying that bytes 17 to 23 of the payload are the value
+   which entered at the page's own query string is an OBSERVATION of that run rather than a reconstruction
+   from a byte stream — and a wire decoder selected
+   by a MIME pattern is the protocol-specific recognizer §Architecture bans, whose next member is Connect, or
+   grpc-web-text, or a framing invented next year.
+   `shape` IS NEVER NULL AND `example` MAY BE. §10.4.5.18 skips the block write entirely for an unknown
+   carrying no example, because a byte in a buffer is indistinguishable from a byte the page computed and
+   inventing one is §@H's value known only to satisfy a gate. So the absence is a POSITIVE statement — nobody
+   knows what this byte is — and never a hole for a default to fill.
+   IT IS A PROJECTION AND NOT A SECOND REPRESENTATION, for the reason EndpointHeader is one: four fields
+   either way, and the solver must not learn what a BodyState is. Borrowed for the length of the call. */
+typedef struct { size_t off, len; const char *shape, *example; } EndpointBodySpan;
+
+typedef struct { const char *mime, *bytes; size_t len; EndpointBodyKind kind;
+                 const EndpointBodySpan *span; int nspan; } EndpointBody;
 
 /* Record one learned endpoint (deduped by method+url). `url` may be concolic (shape) or concrete. Headers are
    MERGED into a same-identity endpoint: a header seen with a concrete value supersedes the same header seen

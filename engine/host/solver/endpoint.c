@@ -573,18 +573,81 @@ static char *body_field_text(JSContext *ctx, JSValueConst v) {
    JSON says so, and a body this engine has no reader for records no fields rather than a guess at some. */
 /* RETURNS HOW MANY FIELDS IT NAMED, because the caller's question is no longer "did this run" but "is there
    anything left for the zone to read". It was void while the only answer to an unreadable body was silence. */
+/* THE FIELDS OF A BODY THE PAGE'S OWN SERIALIZER WROTE, NAMED OFF ITS SPANS — the RPC field keys and example
+   values of a real web app, which is what §What-the-tool-produces asks for by name, and the one answer to it
+   that needs no decoder. Each span is a byte range the run OBSERVED an unknown land in, so this walk makes no
+   inference at all: it prints what the engine recorded while the page's own code ran.
+   IT IS ASKED BEFORE THE CONTENT-TYPE, AND THAT IS THE WHOLE REASON IT IS A SEPARATE WALK. §5.2 BodyInit
+   unions gives a BufferSource NO type, so a protobuf payload handed to `fetch` as a Uint8Array with the page
+   setting no Content-Type reaches this file with `mime == NULL` — and the reader below returns at its first
+   line for exactly that. Its fields do not depend on a type, because nothing here reads the bytes.
+   THE NAME IS THE BYTE RANGE BECAUSE THE RANGE IS WHAT PLACES THE VALUE BACK. A query param is substituted by
+   its key and a path param by its segment; a byte body is substituted by SPLICING, so `body[17:23]` is this
+   param's address in the same sense `region` is a query param's. The end is exclusive.
+   THE VALUE IS THE EXAMPLE WHERE THERE IS ONE AND THE PROVENANCE WHERE THERE IS NOT, which is kv_pairs' rule
+   for a query param spelled again rather than a second convention: an example is what the code COMPUTED and a
+   shape is where the value ENTERED, and §@H's two-facts rule is closed by the DOMAIN travelling beside both —
+   read here off the same flow, under the same hole key, by the same kv_add.
+   A COALESCED RUN CARRIES NO EXAMPLE, AND THAT IS THE RESIDUAL BELOW RATHER THAN A CHOICE MADE HERE. The
+   capture drops it when a run grows past one element (core/fetch/body.c), because the example of a RANGE is
+   BYTES, and a param value is written by json_buf_str, which is NUL-terminated and must be UTF-8. */
+static int body_spans_params(KvBuf *out, const EndpointBody *body) {
+    int i, before = out->n;
+
+    if (!body || body->nspan <= 0) return 0;
+    DCHECK(body->span != NULL,
+           "a request body reached the @H surface counting unknown byte ranges it holds no array of — the "
+           "pair is one fact, and reading the count alone walks a pointer its producer never set");
+    for (i = 0; i < body->nspan; i++) {
+        const EndpointBodySpan *s = &body->span[i];
+        char name[64];
+        int nl;
+        char *hole;
+        const char *val;
+
+        DCHECK(s->shape != NULL,
+               "an unknown byte range of a request body reached the @H surface with no provenance — the shape "
+               "is what says WHERE these bytes came from, and a range with neither an example nor a source is "
+               "a row a reviewer can read nothing off");
+        DCHECK(i == 0 || body->span[i - 1].off + body->span[i - 1].len <= s->off,
+               "a request body's unknown byte ranges arrived out of order or overlapping — the capture walks "
+               "the page's view in index order, so two ranges claiming one byte means two records of one body "
+               "were merged");
+        nl = snprintf(name, sizeof name, "body[%zu:%zu]", s->off, s->off + s->len);
+        DCHECK(nl > 0 && nl < (int)sizeof name,
+               "a body span's name did not fit its buffer — the name is two decimal offsets into a body, so a "
+               "truncation here would give two different ranges one param name");
+        /* THE DOMAIN IS LOOKED UP BY THE SAME KEY EVERY OTHER PARAM ON THIS SURFACE USES, composed HERE rather
+           than carried from the producer so that this file holds the only caller of concolic_hole_key for a
+           body and the two cannot spell one hole two ways. */
+        hole = concolic_hole_key(s->shape);
+        val = s->example ? s->example : s->shape;
+        kv_add(out, name, (size_t)nl, val, strlen(val), EP_BODY, hole);
+        free(hole);
+    }
+    return out->n - before;
+}
+
 static int body_params(JSContext *ctx, KvBuf *out, const EndpointBody *body) {
     MimeType mt;
     char *text;
     int before = out->n;
 
-    if (!body || !body->bytes) return 0;
+    /* THE SPANS FIRST AND UNCONDITIONALLY — see body_spans_params for why they cannot wait behind the type.
+       Its params are counted by this function's own `before`, so a body whose only fields are span-named is
+       still a body whose fields were READ, which is what the caller asks and what stops the raw-bytes store
+       from making a replay claim over an example. */
+    body_spans_params(out, body);
+    if (!body || !body->bytes) return out->n - before;
     /* §4.4 "parse a MIME type" is the ONE reader of a Content-Type in this engine — never a `strcasecmp`
        against a literal, which is the C locale's answer where the standard's is ASCII's, and never a private
        essence split beside the record that already has one. A type that will not parse is §4.4's failure and
        reads no fields. */
     mime_type_init(&mt);
-    if (!body->mime || !mime_type_parse(&mt, body->mime, strlen(body->mime))) { mime_type_free(&mt); return 0; }
+    if (!body->mime || !mime_type_parse(&mt, body->mime, strlen(body->mime))) {
+        mime_type_free(&mt);
+        return out->n - before;
+    }
 
     text = malloc(body->len + 1); CHECK(text, "endpoint: OOM request body");
     memcpy(text, body->bytes, body->len); text[body->len] = 0;
@@ -678,28 +741,29 @@ static int body_params(JSContext *ctx, KvBuf *out, const EndpointBody *body) {
    have reached a body written byte by byte. That sentence is what commissioned the store; ECMAScript
    §10.4.5.18 TypedArraySetElement ( obj, index, value ) now stores unknown external input, with the data
    block holding an EXAMPLE and a span beside it carrying the FACT.
-   WHAT IS NOT COVERED, WHICH IS NOW A SMALLER THING THAN IT WAS: the fields and example values of a request
-   body whose bytes the page wrote into a backing store. The store exists; what does not yet exist is the half
-   that reaches THIS surface — a byte body arriving with its spans, graded EPB_SHAPE, with body_params naming
-   the fields off them. That is what the user asked for by name (which encoding a request is sent in),
-   answered by running the page's own serializer with no decoder and no protocol branch anywhere.
-   AND THE GRADE IS WHAT MAKES THE STORE'S OUTPUT SAFE TO PUBLISH, which is the constraint to build against
-   rather than discover: a span is recorded even where NO BYTE was written, because an unknown may carry no
-   example and writing `0` would invent a value known only to satisfy a gate. So a body any of whose spans is
-   exampleless has no bytes the request can be said to send, and it must never arrive here as EPB_SENT — the
-   same refusal body_bytes_b64 already performs, reached for a second reason.
-   HOW ITS ABSENCE SHOWS, RESTATED BECAUSE THE OLD OBSERVATION HAS CHANGED ANSWER: it was an abort naming a
-   typed-array element store, and that abort is gone from the engine, so the tell is now a request whose body
-   this surface reports with no field a reviewer can vary while the run itself had the values in hand.
-   THE TELL ABOVE IS ARMED, WHICH IS A PRECONDITION AND NOT A STATUS LINE: the store this residual is about
-   is reachable in the SHIPPED artifact, so a claim here about what a byte body does is now a claim about the
-   PRODUCT rather than about the tree. It was not always so — the blocker that stood here was an artifact
-   older than the store, and a reader who met it correctly got the defer answer and moved on. What retires
-   that sentence in turn is the same observation that armed it: grep the installed
-   `extension/lib/qjs/qjs.wasm` for the store's own abort text with a control beside it, and a zero under a
-   non-zero control means the artifact has gone backwards and the tell is mute again. It is the artifact and
-   never the stamp that answers, because a stamp names a revision and a residual waits on BYTES.
-   IT RETIRES when a body built through that store records its fields here.
+   THAT RESIDUAL IS RETIRED AND ITS ARGUMENT IS REWRITTEN RATHER THAN DELETED, because the argument is what a
+   reader re-derives from the bytes being here at all. It asked for a byte body to arrive with its spans,
+   graded so as never to make a replay claim, with the fields named off them — and body_spans_params above is
+   that, reached through the engine's own element read rather than through a decoder. Its grade CONSTRAINT is
+   what now holds the whole design up and must not be re-derived as a preference: a span is recorded even
+   where NO BYTE was written, because an unknown may carry no example and writing `0` would invent a value
+   known only to satisfy a gate, so a body carrying spans has no bytes the request can be said to send and
+   must never be published as EPB_SENT. body_store asserts that rather than trusting it.
+
+   NAMED RESIDUAL — THE EXAMPLE BYTES OF A RANGE, WHICH IS WHAT A GUI SPLICES INTO.
+   WHAT IS NOT COVERED: the bytes standing at an unknown RANGE. A single unknown element carries its own
+   example and body_spans_params prints it; a run of several does not, and cannot, because the example of a
+   range is BYTES and a param value is written by json_buf_str, which is NUL-terminated and passes bytes above
+   0x7F through on the promise that everything it is given is already UTF-8. So the row for a coalesced run
+   states WHERE those bytes came from and what the flow proved about them, and not what the serializer
+   actually emitted for the example — which is the half a reviewer edits.
+   WHAT THE NEXT DIFF BUILDS: the body's bytes carried under a key of their own, base64 through the engine's
+   own codec like `body_b64` and explicitly NOT making `body_b64`'s claim, so a consumer holding the spans can
+   read the example at each range and splice a replacement in. That is a THIRD body kind beside EPB_SENT and
+   EPB_SHAPE (bytes that are an EXAMPLE of the body rather than what it sends), a third arm in body_store, and
+   a reader in the popup — so it lands with its consumer and not before it.
+   HOW ITS ABSENCE WOULD SHOW: an @H record naming several body byte ranges and their sources, on which a
+   reviewer can change WHICH value a field carries and cannot see what it currently carries.
    THE CODEC IS THE ENGINE'S OWN, for the reason core/file/file_reader.c gives at its own call: `btoa`'s codec
    is already implemented here and §Solver's rule is that an encoding builtin is modelled faithfully, never
    re-implemented beside itself. */
@@ -742,6 +806,16 @@ static char *body_bytes_b64(const EndpointBody *body) {
    so this cannot mix a forced body into an observed one. */
 static void body_store(Endpoint *e, const EndpointBody *body, int body_named) {
     if (body_named || !body || !body->bytes) return;
+    /* A BODY CARRYING SPANS NEVER REACHES EITHER ARM BELOW, AND THAT IS ASSERTED RATHER THAN ARRANGED. Both
+       arms are wrong for one: `body_b64` promises a reviewer these are the bytes the request sends, and a
+       spanned body's are an unknown's EXAMPLE where it had one and a byte nobody wrote where it did not;
+       `body_shape` is a C string over bytes that may hold a NUL and may not be UTF-8. body_spans_params mints
+       a param for EVERY span, so `body_named` is non-zero for every body that has one and this line is
+       unreachable — which makes it a statement about this file's own logic, which is what a DCHECK is for. */
+    DCHECK(body->nspan == 0,
+           "a request body carrying unknown byte ranges reached the raw-body store, which means body_params "
+           "named none of them — every span mints a param, so this is the span walk having been skipped, and "
+           "the arms below would publish an unknown's example bytes as the payload a reviewer replays");
     if (e->body_b64 || e->body_shape) return;
     if (body->kind == EPB_SHAPE) {
         /* THE SHAPE TEXT ITSELF, WHICH IS A STATEMENT ABOUT A SOURCE AND NOT A PAYLOAD. `{cfg.payload}` names
@@ -954,6 +1028,18 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
             "one fact: the first is replayable evidence and the second is a hole, and emitting the second as "
             "the first hands a reviewer a request the page never made. State EPB_SENT or EPB_SHAPE from the "
             "arm core/fetch/body.h already told you. method=%s mime=%s", method, body->mime ? body->mime : "(none)");
+    /* AND THAT ITS SPAN RECORD IS ONE FACT. `EndpointBody` is declared at each producer and filled field by
+       field, so a member added to it is a member some producer forgets — and a count with no array is read as
+       a body with unknown ranges nobody can name while an array with no count is read as a body with none.
+       Neither is a state a consumer could tell from a body that simply has no spans, which is why the pair is
+       asserted here rather than defended at each reader. */
+    DCHECKF(!body || (body->span == NULL) == (body->nspan == 0),
+            "a request body reached the @H surface with half a span record — its producer set the array or "
+            "the count and not the other, so this body either claims unknown byte ranges it holds no "
+            "provenance for or holds provenance nothing will read. method=%s", method);
+    DCHECKF(!body || body->nspan >= 0,
+            "a request body reached the @H surface claiming a negative number of unknown byte ranges, which "
+            "is a producer that declared this record and never filled it. method=%s", method);
     if (g_suppress) return;   /* candidate/verify run -> not a real @H endpoint */
     char *disp = url_display(ctx, url);
     char *ex = url_example(ctx, url);
@@ -970,7 +1056,10 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
        address and carried no example under any param a reply's field reached. The two halves are split HERE
        rather than inside either scan, because `?` is the address's own boundary and neither grammar contains
        it.
-       THE BODY STILL CARRIES NO EXAMPLE — see body_params' residual. */
+       THE BODY CARRIES AN EXAMPLE FOR EXACTLY THE VALUES THE RUN OBSERVED LANDING IN IT. A body the page
+       composed as a STRING spells its own holes and the JSON arm reads them; a body it wrote BYTE BY BYTE is
+       named off its span record. What a range's row still does not carry is the bytes the serializer emitted
+       for it — see body_params' residual. */
     KvBuf kvb = { 0 };
     char *path = path_scan(&kvb, shape_path, expath);
     { const char *q = strchr(disp, '?'), *eq = ex ? strchr(ex, '?') : NULL;

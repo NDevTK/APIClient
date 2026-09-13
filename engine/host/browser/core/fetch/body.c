@@ -52,6 +52,143 @@ void body_state_mark(JSRuntime *rt, BodyState *b, JS_MarkFunc *mark_func)
     JS_MarkValue(rt, b->unknown, mark_func);
 }
 
+/* RELEASE THE SPAN RECORD. It owns two strings per entry and the array; a state is refilled as well as freed,
+   so both sites call this rather than spelling the loop twice. */
+static void body_spans_free(BodyState *b)
+{
+    int i;
+
+    for (i = 0; i < b->nspan; i++) {
+        free(b->span[i].shape);
+        free(b->span[i].example);
+    }
+    free(b->span);
+    b->span = NULL;
+    b->nspan = 0;
+}
+
+/* THE UNKNOWN'S OWN EXAMPLE AS TEXT, OR NOTHING. The three primitive kinds are named POSITIVELY rather than
+   objects being excluded, and that is not a style choice: JS_ToCString THROWS for a Symbol, so a rule written
+   as "not an object" would have converted one — and an example that cannot be spelled is a legitimate state
+   here (§10.4.5.18 records a span for an unknown carrying no example at all), so there is nothing to gain by
+   reaching further. Runs no page code: a primitive conversion invokes nothing. */
+static char *body_span_example_text(JSContext *ctx, JSValueConst unknown)
+{
+    JSValue ex = concolic_example(ctx, unknown);
+    char *r = NULL;
+
+    if (JS_IsNumber(ex) || JS_IsString(ex) || JS_IsBool(ex)) {
+        const char *s = JS_ToCString(ctx, ex);
+
+        CHECK(s != NULL, "body: OOM rendering the example of an unknown byte of a request body");
+        r = strdup(s);
+        CHECK(r != NULL, "body: OOM copying the example of an unknown byte of a request body");
+        JS_FreeCString(ctx, s);
+    }
+    JS_FreeValue(ctx, ex);
+    return r;
+}
+
+/* §10.4.5.18's SPAN RECORD, READ BACK OUT AT THE ONE MOMENT THE HOST STILL HOLDS THE PAGE'S VIEW. The body
+   about to be filled is a COPY of the block's bytes, and the fact that some of those bytes are an unknown's
+   example rather than a value the page determined lives on the BUFFER — so it has to be taken here or it is
+   gone, and the @H surface then publishes example bytes under a claim that the request sends exactly them.
+   IT GOES THROUGH THE ORDINARY ELEMENT READ AND NEVER A SECOND ACCESSOR. §10.4.5.17 TypedArrayGetElement's
+   site is the ONE point every typed-array element read converges on and is where the span answer is given, so
+   a walk through it cannot drift from the store's own recency and witness rules; a walk that reached the span
+   list directly would be a second copy of those rules with nothing keeping the two equal — and it would need
+   an engine export, which is a submodule landing this needs none of.
+   IT RUNS NO PAGE CODE AND CANNOT SUSPEND. Every index is in range on a brand-tested TypedArray, so the read
+   is answered by the fast element path and never reaches a prototype walk, a getter or a Proxy trap — which is
+   what makes it safe at a host edge with no flow to park.
+   ADJACENT ENTRIES SPELLING ONE SHAPE ARE ONE ENTRY, and that is a statement rather than a saving: a page
+   writing a string field byte by byte derives every byte from ONE operand through ONE operation, so
+   concolic_new_derived composes ONE shape for all of them, and one row naming the whole range is the true
+   report where N rows saying it separately are the same fact written N times. The EXAMPLE is dropped when a
+   run grows past one element, because the per-byte examples of a run are BYTES and a param value is a JSON
+   string that truncates at a NUL and must be UTF-8 — see the residual at solver/endpoint.c's body_params.
+
+   NAMED RESIDUAL — a body extracted from a bare ArrayBuffer or from a DataView.
+   WHAT IS NOT COVERED: §5.2 BodyInit unions' BufferSource arm reaches this engine by three spellings and only
+   a TypedArray view has an element read to ask. `fetch(u, {body: buf})` over the ArrayBuffer itself, and over
+   a DataView, extract the same bytes and record no span, so their unknown ranges are lost exactly as every
+   typed-array body's were.
+   WHAT THE NEXT DIFF BUILDS: a host-owned Uint8Array minted over the buffer for the walk — JS_NewTypedArray
+   (quickjs.h, grepped) takes the buffer as its argument list — with the span offsets shifted by the view's own
+   byte offset, since such a view spans the whole buffer while the body is a window into it. The view is never
+   handed to the page, so minting one observes nothing.
+   HOW ITS ABSENCE WOULD SHOW: two requests carrying byte-identical payloads composed by one serializer, one
+   sent as `w.finish()` and one as `w.finish().buffer`, reported with a full set of body fields and with none. */
+static void body_spans_capture(JSContext *ctx, BodyState *b, JSValueConst view)
+{
+    size_t boff = 0, blen = 0, bpe = 0, count, i;
+    JSValue buf;
+
+    if (JS_GetTypedArrayType(view) < 0)
+        return;
+    buf = JS_GetTypedArrayBuffer(ctx, view, &boff, &blen, &bpe);
+    /* The caller has already extracted this view's window, which refuses an out-of-bounds view and a detached
+       buffer, so the two things this entry can throw for have both been answered. It is discharged rather than
+       asserted because it is one call away from the page's own reach. */
+    if (JS_IsException(buf)) { JS_FreeValue(ctx, JS_GetException(ctx)); return; }
+    JS_FreeValue(ctx, buf);
+    DCHECK(bpe > 0, "a TypedArray reported an element width of zero — every TypedArray element type is at "
+                    "least one byte wide, so a zero here is a width that did not travel between the entry "
+                    "that reads it and this walk");
+    count = bpe ? blen / bpe : 0;
+    for (i = 0; i < count; i++) {
+        JSValue el = JS_GetPropertyUint32(ctx, view, (uint32_t)i);
+        const char *shape;
+        size_t off = i * bpe;
+
+        /* An in-range element of a brand-tested TypedArray is answered by the fast path, which throws for
+           nothing; the discharge is here because a returned exception must never be left pending. */
+        if (JS_IsException(el)) { JS_FreeValue(ctx, JS_GetException(ctx)); return; }
+        if (!concolic_is(el)) { JS_FreeValue(ctx, el); continue; }
+        shape = concolic_shape_c(el);
+        /* ALWAYS FATAL for body_state_content's own reason one screen up: a live concolic is minted with its
+           shape, and a fallback here would put the two characters an unnameable hole prints as onto the @H
+           surface as the provenance of a byte range. */
+        CHECK(shape != NULL, "an unknown byte of a request body reached the surface with no display shape — "
+                             "the shape is the whole of what the span says about where those bytes came from");
+        if (b->nspan > 0 && b->span[b->nspan - 1].off + b->span[b->nspan - 1].len == off &&
+            !strcmp(b->span[b->nspan - 1].shape, shape)) {
+            b->span[b->nspan - 1].len += bpe;
+            free(b->span[b->nspan - 1].example);
+            b->span[b->nspan - 1].example = NULL;
+        } else {
+            BodySpan *s;
+
+            /* A LOST SPAN IS A SILENT DE-TAINT, which is why this is fatal rather than a return: dropping the
+               record leaves an example byte in the body with nothing to say it is an example, and the surface
+               publishes it as a byte the request sends. quickjs.c's js_ab_span_push refuses the same way for
+               the same reason. */
+            b->span = realloc(b->span, (size_t)(b->nspan + 1) * sizeof(*b->span));
+            CHECK(b->span != NULL, "body: OOM recording which bytes of a request body are unknown input");
+            s = &b->span[b->nspan++];
+            s->off = off;
+            s->len = bpe;
+            s->shape = strdup(shape);
+            CHECK(s->shape != NULL, "body: OOM copying the provenance of an unknown byte of a request body");
+            s->example = body_span_example_text(ctx, el);
+        }
+        JS_FreeValue(ctx, el);
+    }
+    DCHECK(b->nspan == 0 || b->span[b->nspan - 1].off + b->span[b->nspan - 1].len <= b->len,
+           "a request body's span record reaches past the bytes it describes — the walk above is over the "
+           "same view the fill copied, so a span outside them means the two read different windows");
+}
+
+const BodySpan *body_state_spans(const BodyState *b, int *n)
+{
+    DCHECK(b != NULL, "a body was asked which of its bytes are unknown with no state to ask about");
+    DCHECK((b->span == NULL) == (b->nspan == 0),
+           "a body's span record holds a pointer and no count or a count and no pointer — the pair is one "
+           "fact and a consumer reading either half alone walks a garbage array or reports no unknown bytes");
+    *n = b->nspan;
+    return b->span;
+}
+
 void body_state_free(JSRuntime *rt, BodyState *b)
 {
     JS_FreeValueRT(rt, b->stream);
@@ -63,6 +200,7 @@ void body_state_free(JSRuntime *rt, BodyState *b)
     b->len = 0;
     b->has = 0;
     b->source_null = 0;
+    body_spans_free(b);
 }
 
 int body_state_set(JSContext *ctx, BodyState *b, const char *bytes, size_t len)
@@ -89,6 +227,11 @@ int body_state_set(JSContext *ctx, BodyState *b, const char *bytes, size_t len)
        with is a no-op where `JS_IsUndefined` on it would have answered a lie. */
     JS_FreeValue(ctx, b->unknown);
     b->unknown = JS_UNDEFINED;
+    /* …AND THE SPAN RECORD GOES WITH THE BYTES IT DESCRIBES. A span names an OFFSET into these bytes, so one
+       surviving a refill would point into a body it was never about — the stale-shadow failure §10.4.5.18's
+       witness exists to prevent, arriving one level up where there is no witness to catch it. The capture runs
+       AFTER this fill for exactly that reason. */
+    body_spans_free(b);
     if (!bytes) return 0;
     /* +1 and a NUL past the end, so the bytes can still be handed to a C string consumer; `len` is what every
        read here uses, and it is what an interior NUL no longer truncates. */
@@ -162,7 +305,31 @@ int body_state_copy(JSContext *ctx, BodyState *dst, const BodyState *src)
 
     switch (body_state_content(src, &bytes, &len)) {
     case BODY_NONE:  return body_state_set(ctx, dst, NULL, 0);
-    case BODY_BYTES: return body_state_set(ctx, dst, bytes, len);
+    case BODY_BYTES: {
+        int i;
+
+        if (body_state_set(ctx, dst, bytes, len) < 0)
+            return -1;
+        /* THE SPANS RIDE THE COPY, because §2.2.4 Bodies' "other members are copied from body" is about the
+           BODY and a span is a fact about these bytes rather than about the object holding them. A clone that
+           dropped them would report `r.clone()`'s payload as bytes the page composed and `r`'s as a set of
+           unknown ranges, for one body. */
+        for (i = 0; i < src->nspan; i++) {
+            BodySpan *s;
+
+            dst->span = realloc(dst->span, (size_t)(dst->nspan + 1) * sizeof(*dst->span));
+            CHECK(dst->span != NULL, "body: OOM copying which bytes of a body are unknown input");
+            s = &dst->span[dst->nspan++];
+            s->off = src->span[i].off;
+            s->len = src->span[i].len;
+            s->shape = strdup(src->span[i].shape);
+            CHECK(s->shape != NULL, "body: OOM copying the provenance of an unknown byte of a body");
+            s->example = src->span[i].example ? strdup(src->span[i].example) : NULL;
+            CHECK(!src->span[i].example || s->example != NULL,
+                  "body: OOM copying the example of an unknown byte of a body");
+        }
+        return 0;
+    }
     case BODY_SHAPE: return body_state_set_unknown(ctx, dst, src->unknown);
     case BODY_STREAM:
         DFAIL("a STREAM-BACKED body reached a content copy: §5.2 BodyInit unions' ReadableStream arm leaves "
@@ -491,6 +658,11 @@ int body_extract(JSContext *ctx, BodyState *b, JSValueConst init, bool keepalive
         base = JS_GetArrayBuffer(ctx, &whole, buf);
         if (!base) { JS_FreeValue(ctx, buf); return -1; }
         r = body_state_set(ctx, b, (const char *)base + off, n);
+        /* AND WHICH OF THOSE BYTES THE PAGE DID NOT DETERMINE, taken here because here is the last place the
+           page's VIEW exists: what this arm copies is a block of uint8_t, and the record saying some of them
+           are an unknown's example lives on the buffer rather than in them. Without it a payload a serializer
+           built out of unknown input arrives indistinguishable from one the page computed. */
+        if (r == 0) body_spans_capture(ctx, b, init);
         JS_FreeValue(ctx, buf);
         return r;
     }

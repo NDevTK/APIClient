@@ -1945,6 +1945,30 @@ static void xhr_record_endpoint(JSContext *ctx, XhrData *d)
             /* §3.5.6 step 4's arm, carried from the extraction rather than re-derived from the characters —
                which cannot be done, since a display shape and a body that spells one are the same bytes. */
             eb.kind = d->request_body_is_shape ? EPB_SHAPE : EPB_SENT;
+            /* AND NO SPAN RECORD, STATED RATHER THAN LEFT UNWRITTEN — `eb` is declared field by field, so a
+               member nobody assigns is read out of whatever the stack held, and a count with no array is the
+               half-record solver/endpoint.c's own assert refuses. This is a POSITIVE statement and not a
+               default: this producer does not know which bytes of its payload are unknown input, and cannot.
+
+               NAMED RESIDUAL — the same slot, and the same loss one layer deeper than the one above.
+               WHAT IS NOT COVERED: `request_body` is a JS STRING, and core/fetch/body.c's span record names
+               BYTE OFFSETS into the bytes §5.2's extraction produced. Those bytes are gone by this line for a
+               reason sharper than the de-tainting above: JS_NewStringLen at the store site runs them through
+               utf8_scan/utf8_decode (read at quickjs.c's js_new_string_len_or_null), so a BINARY payload — the
+               gRPC-Web and protobuf bodies this whole capability exists for — is UTF-8-decoded on the way into
+               the slot and re-encoded on the way out. A span offset into the result names a different byte
+               than the one the page wrote, so carrying the record here without fixing the slot would be worse
+               than not carrying it: a provenance row pointing at the wrong bytes.
+               WHAT THE NEXT DIFF BUILDS: the slot carrying the extraction's BYTES and its BodyState rather
+               than a String of them — which is the same repair the residual at §3.5.6 step 4's store site
+               already asks for (it names the VALUE; this names the BYTES and the SPANS, and one change to the
+               slot answers all three), with this line then projecting body_state_spans exactly as
+               core/fetch/fetch.c and core/frame/navigator_beacon.c do.
+               HOW ITS ABSENCE WOULD SHOW: one serializer's output posted through `fetch` and through
+               `xhr.send` reported with a full set of body byte-range fields and with none — and the XHR
+               record's `bodyBase64` differing from the fetch record's for byte-identical payloads. */
+            eb.span = NULL;
+            eb.nspan = 0;
             ebp = &eb;
         }
     }

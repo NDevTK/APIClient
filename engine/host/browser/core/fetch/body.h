@@ -44,8 +44,37 @@
    A ZEROED STATE READS AS ABSENT WITH NO GUARD, unlike `stream`: an including interface allocates its record
    with js_mallocz and a zeroed JSValue is the INTEGER 0, which `concolic_is` answers 0 for — so the question
    asked of this slot is "is it a concolic", which is also the only thing it is ever set to. */
+/* WHICH BYTE RANGES OF THESE BYTES ARE UNKNOWN EXTERNAL INPUT, AND WHERE EACH CAME FROM. A body the page
+   composed AS A STRING carries its operands' display forms into the result, so `'{"id":"' + id + '"}'` reaches
+   the @H surface already spelling its own holes; a body the page writes BYTE BY BYTE into a typed array
+   carries nothing, because a data block holds uint8_t and an unknown cannot live in one. ECMAScript
+   §10.4.5.18 TypedArraySetElement ( obj, index, value ) records the fact BESIDE the block instead — the block
+   holds the unknown's own EXAMPLE where it has one and the span says the bytes are unknown — and this is that
+   record, read back out through the ordinary element read at the one moment the host still holds the page's
+   view.
+   NOTHING HERE DECODES AND NOTHING BRANCHES ON A PROTOCOL. The page's own serializer ran with the real field
+   names and the real values in its hands and wrote the bytes itself, so a span saying that bytes 17 to 23 of
+   the payload are the value which entered at the page's own query string is an OBSERVATION of that run —
+   which is why it answers for an encoding this engine has never heard of, and why a wire decoder keyed on a
+   MIME pattern is the recognizer §Architecture bans rather than a second way of getting the same answer.
+   `example` IS ABSENT RATHER THAN ZERO WHERE THE UNKNOWN CARRIES NONE. §10.4.5.18's arm skips the block write
+   entirely for an unknown with no example, because a byte in a buffer is indistinguishable from a byte the
+   page computed and inventing one is §@H's value known only to satisfy a gate. The absence rides here for the
+   same reason: a consumer must be able to tell a byte whose value the run computed from a byte nobody knows
+   the value of, and those two are one default apart.
+   `shape` IS NEVER NULL — a live concolic always has one (solver/concolic.c mints it with the value) — so the
+   pair states §@H's two facts together: PROVENANCE here, and the DOMAIN at whatever reads it, looked up by
+   `concolic_hole_key(shape)` rather than carried, so there is one speller of that key and not two. */
+typedef struct {
+    size_t off;        /* byte offset into the body's bytes */
+    size_t len;        /* bytes covered — the element's width */
+    char  *shape;      /* the unknown's display shape; never NULL */
+    char  *example;    /* the unknown's own example as text, or NULL where it has none */
+} BodySpan;
+
 typedef struct {
     char *bytes; size_t len; int used; int has; int source_null; JSValue stream; JSValue unknown;
+    BodySpan *span; int nspan;
 } BodyState;
 
 /* WHAT A BODY IS, FOR A CONSUMER THAT NEEDS BYTES — ONE question with FOUR answers, because they are four
@@ -80,6 +109,14 @@ void body_state_free(JSRuntime *rt, BodyState *b);
    Beacon §3 step 6.1 is the one caller that sets it; everything else extracts with the flag unset, which is
    what `keepalive`'s IDL default already says for a Request that never declared one. */
 int  body_extract(JSContext *ctx, BodyState *b, JSValueConst init, bool keepalive, char **out_mime);
+/* THE SPANS, ASKED SEPARATELY FROM THE BYTES BECAUSE THEY ARE A SECOND QUESTION ABOUT ONE FACT.
+   body_state_content answers "what IS this body"; this answers "which of its bytes did the page not
+   determine", and a consumer that needs one rarely needs the other. Answers a borrowed array, empty for every
+   body no unknown was ever written into — which is nearly all of them, so the ordinary cost is reading a zero.
+   SORTED BY OFFSET AND DISJOINT, because the capture walks the view's elements in index order; a consumer may
+   coalesce adjacent entries without sorting and this entry's own caller asserts it. */
+const BodySpan *body_state_spans(const BodyState *b, int *n);
+
 /* Copy `len` bytes in, or NULL for the spec's null body. Returns -1 on OOM with an exception live.
    It also RELEASES any `unknown` the state held: a body filled from bytes has no unknown content, and the two
    are the disjoint arms body_state_content tells apart. */
