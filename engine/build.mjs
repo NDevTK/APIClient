@@ -2773,6 +2773,66 @@ const shareText = (pairs, total) => {
   const t = biggest(pairs);
   return total > 0 ? `${t[0]} ${t[1]} (${Math.round(100 * t[1] / total)}%)` : `nothing — all ${pairs.length} are 0`;
 };
+/* WHICH CAPTURE UNITS THE RUN ACTUALLY EXERCISED — the `cowStateAsks`/`cowStateMade` pair, and the reason they
+   are a PAIR is solver/result.c's own banner and not a preference: a bare `made` of zero means THREE different
+   things — nothing reached that capture point under a running flow, or it was reached and the unit's own gate
+   correctly refused because the object was flow-private, or the unit is broken — and only the ask count
+   separates the first from the second. A reader that rendered `made` alone would be publishing one number for
+   three states, which is the shape this file's own bands exist to refuse.
+   THEY ARE NOT A RATIO AND ARE NOT DIVIDED HERE. The producer says why: a walk ASKS once per key and RECORDS
+   once, because the dedup IS the mechanism working — so `asks` running far ahead of `made` is a healthy unit
+   and not a refusal rate. Anything computed as made/asks would read as a failure percentage of exactly the
+   units doing their job.
+   BOTH ARE PER-KIND LIFETIME COUNTS, so either may be differenced across two samples; nothing here does,
+   because the question this renders is WHICH UNITS SPOKE AT ALL and that is an instant.
+   THE IDENTITY IS CHECKED FROM OUTSIDE THE PROCESS, exactly as the branch census's two are: cow.c asserts
+   `made <= asks` where both are in hand, that DCHECK is compiled OUT of a release build, and this reader still
+   runs on that build's bytes. */
+function cowStateReading(b) {
+  for (const name of ["cowStateAsks", "cowStateMade"]) {
+    const u = b[name];
+    if (u === null || typeof u !== "object" || Array.isArray(u))
+      throw new Error(`[build] the @SWAP census carries no \`${name}\` object — solver/result.c's ` +
+                      `result_swap_json composes it from cow.h's kind list on every census, so its absence ` +
+                      `is that composer having changed rather than a run in which no state was captured. An ` +
+                      `absent histogram and an all-zero one are different facts and this reader will not ` +
+                      `average them.`);
+    for (const [k, v] of Object.entries(u))
+      if (typeof v !== "number")
+        throw new Error(`[build] the @SWAP census's \`${name}.${k}\` is not a number — the pair is a count ` +
+                        `per capture kind, and a non-numeric row cannot be compared against its sibling.`);
+  }
+  const asks = b.cowStateAsks, made = b.cowStateMade;
+  const ak = Object.keys(asks).join(","), mk = Object.keys(made).join(",");
+  if (ak !== mk)
+    throw new Error(`[build] the @SWAP census's two capture histograms name different kinds — asks ` +
+                    `(${ak}) against made (${mk}). They are ONE list read twice (solver/cow.h's X-macro), so ` +
+                    `a disagreement is two expansions of that list having drifted, and every per-kind ` +
+                    `sentence below would be pairing rows that are not about the same unit.`);
+  for (const k of Object.keys(asks))
+    if (made[k] > asks[k])
+      throw new Error(`[build] the @SWAP census reports capture kind \`${k}\` making ${made[k]} entr(ies) ` +
+                      `from ${asks[k]} ask(s) — cow.c raises the ask at the call BEFORE every gate and the ` +
+                      `made at the entry, so \`made <= asks\` holds by construction and an excess is a ` +
+                      `capture that recorded an entry nothing asked for. cow.c DCHECKs this where both are ` +
+                      `in hand; that check is compiled out of the release build this reader still runs on.`);
+  const never = Object.keys(asks).filter((k) => asks[k] === 0);
+  const askedOnly = Object.keys(asks).filter((k) => asks[k] > 0 && made[k] === 0);
+  const live = Object.keys(asks).filter((k) => made[k] > 0);
+  return `; capture kinds — ` +
+         (live.length ? `${live.map((k) => `${k} ${made[k]}/${asks[k]}`).join(", ")} recorded` : `NONE recorded`) +
+         (askedOnly.length
+           ? `; ${askedOnly.join(", ")} were ASKED and recorded nothing — reached under a flow and refused, ` +
+             `which is the unit's own flow-private gate working unless the unit is broken, and these two are ` +
+             `what the ask count exists to tell apart from never being reached at all`
+           : ``) +
+         (never.length
+           ? `; ${never.join(", ")} were NEVER ASKED — no capture point of that kind was reached under a ` +
+             `running flow in this run, which is a statement about what the run DID and not about the unit`
+           : `; every kind was asked at least once`) +
+         ` (counts, never a ratio: a walk asks per key and records once, so asks running ahead of made is the ` +
+         `dedup working)`;
+}
 function censusReading(out) {
   const h = lastTwo(out, "@HEAP", heapFields(), "solver/result.c's result_heap_json");
   const w = lastTwo(out, "@SWAP", swapFields(), "solver/result.c's result_swap_json");
@@ -2914,7 +2974,7 @@ function censusReading(out) {
     parts.push(`swap: ${w.b.installs} switches over ${w.b.entries} delta entries, ${w.b.mean} each and ` +
                `${w.b.worst} at the worst; chains holding ${w.b.heapSegs} heap segment(s) ` +
                `(${w.b.heapSegEntries} entries) + ${w.b.domSegs} DOM (${w.b.domSegEntries})` +
-               (w.b.heapSegs > w.a.heapSegs ? ` and still growing` : ``));
+               (w.b.heapSegs > w.a.heapSegs ? ` and still growing` : ``) + cowStateReading(w.b));
   if (c) {
     parts.push(retiredReading(c.b));
     /* WHAT THE PARKED FRONTIER WEIGHS AND WHICH HALF OF IT — the pager's own trade, and the reason
