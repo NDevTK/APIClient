@@ -2510,5 +2510,254 @@
    }
   ],
   "baseUrl": "https://app.slack.com/"
+ },
+ {
+  "id": "codesandbox",
+  "stack": "Next.js app router (/_next/static/chunks/main-app-<hash>.js)",
+  "requestedUrl": "https://codesandbox.io/",
+  "finalUrl": "https://codesandbox.io/",
+  "status": 200,
+  "contentType": "text/html; charset=utf-8",
+  "csp": "",
+  "bytes": 366938,
+  "sha256": "b4605db81bda411e3b29cf465d3d9bfe5954c05a0674476119937b5fcf4d0a4a",
+  "fetchedAt": "2026-09-13T08:01:21.212Z",
+  "resources": [
+   {
+    "url": "https://codesandbox.io/_next/static/chunks/3a1fbd1c-9a309fde5120dbc5.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 172194,
+    "sha256": "cf9e5ea26c04fd7f608b163c99d79026368f9d6e0db5a4f8ca577a2d913945c6",
+    "fetchedAt": "2026-09-13T08:01:21.465Z",
+    "path": "codesandbox.io/_next/static/chunks/3a1fbd1c-9a309fde5120dbc5.js"
+   },
+   {
+    "url": "https://codesandbox.io/_next/static/chunks/7157-f1dd02184197292d.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 113135,
+    "sha256": "82945758e14a7f30dc1bf11cc79a07e6f831367491c38b687cddab75121de747",
+    "fetchedAt": "2026-09-13T08:01:21.957Z",
+    "path": "codesandbox.io/_next/static/chunks/7157-f1dd02184197292d.js"
+   },
+   {
+    "url": "https://codesandbox.io/_next/static/chunks/main-app-75c43e41ef6ed856.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 475,
+    "sha256": "6c0de139586a11261843a23537ad4102aaf5a07a59d5137aa235127008636705",
+    "fetchedAt": "2026-09-13T08:01:22.201Z",
+    "path": "codesandbox.io/_next/static/chunks/main-app-75c43e41ef6ed856.js"
+   },
+   {
+    "url": "https://codesandbox.io/_next/static/chunks/3f1d3ad2-a485d252cbe40351.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 3104,
+    "sha256": "8d001e568da29ef0f57a10719c2f11a5f041a75e4a430b44d4ea10feacb3811a",
+    "fetchedAt": "2026-09-13T08:01:22.426Z",
+    "path": "codesandbox.io/_next/static/chunks/3f1d3ad2-a485d252cbe40351.js"
+   },
+   {
+    "url": "https://codesandbox.io/_next/static/chunks/f923c8e2-e4529f531e4e04c4.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 3549,
+    "sha256": "d044e0a0b3e1697853ffa95caaac9aa759ae562dabc9c4a8d2a44cf364a2fc67",
+    "fetchedAt": "2026-09-13T08:01:22.723Z",
+    "path": "codesandbox.io/_next/static/chunks/f923c8e2-e4529f531e4e04c4.js"
+   },
+   {
+    "url": "https://codesandbox.io/_next/static/chunks/4057-4e99c5dd1bd82477.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 21661,
+    "sha256": "40cc3a42e194b8d59a919102f50638eb8dbd3f63d48c0ca4d270f1e60bbdd047",
+    "fetchedAt": "2026-09-13T08:01:23.295Z",
+    "path": "codesandbox.io/_next/static/chunks/4057-4e99c5dd1bd82477.js"
+   },
+   {
+    "url": "https://codesandbox.io/_next/static/chunks/2409-a2745fd5e5a7ed70.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 163576,
+    "sha256": "a1a7e98a16e73c1cdf12339f95179bb82fe0e3a844428b868268378b9086d818",
+    "fetchedAt": "2026-09-13T08:01:23.609Z",
+    "path": "codesandbox.io/_next/static/chunks/2409-a2745fd5e5a7ed70.js"
+   },
+   {
+    "url": "https://codesandbox.io/_next/static/chunks/3037-34ebfe82f03e16ac.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 101958,
+    "sha256": "d02beeb27a38e70cf348662740b522d7c6fed820d2e3ce378ed3a5d6af99b2b3",
+    "fetchedAt": "2026-09-13T08:01:23.973Z",
+    "path": "codesandbox.io/_next/static/chunks/3037-34ebfe82f03e16ac.js"
+   },
+   {
+    "url": "https://codesandbox.io/_next/static/chunks/9230-85da48510973f4ae.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 317131,
+    "sha256": "382fa8d78213168c5beb0719ad84063f8e7abab747d3276de30500c1bb3e248a",
+    "fetchedAt": "2026-09-13T08:01:24.238Z",
+    "path": "codesandbox.io/_next/static/chunks/9230-85da48510973f4ae.js"
+   },
+   {
+    "url": "https://codesandbox.io/_next/static/chunks/4629-224af97c0fd1356b.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 94951,
+    "sha256": "6a42e711b2db9d6c57f9a0c7e4982af762a3e90fea5ea65bd4a0e140a64035dd",
+    "fetchedAt": "2026-09-13T08:01:24.576Z",
+    "path": "codesandbox.io/_next/static/chunks/4629-224af97c0fd1356b.js"
+   },
+   {
+    "url": "https://codesandbox.io/_next/static/chunks/1-c004ed1afd33ec34.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 65010,
+    "sha256": "814294481b0915ad45e47fc876fd9f53a9557482c63fac6fbfd8bf525d2131e9",
+    "fetchedAt": "2026-09-13T08:01:24.864Z",
+    "path": "codesandbox.io/_next/static/chunks/1-c004ed1afd33ec34.js"
+   },
+   {
+    "url": "https://codesandbox.io/_next/static/chunks/9348-05a610c5a6f1cd9e.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 6980,
+    "sha256": "6f32fbb3bf84d91c7a0b3738bdf47773da8b6ab28e990b221e34cedd30eb557e",
+    "fetchedAt": "2026-09-13T08:01:25.121Z",
+    "path": "codesandbox.io/_next/static/chunks/9348-05a610c5a6f1cd9e.js"
+   },
+   {
+    "url": "https://codesandbox.io/_next/static/chunks/app/page-a1ac0777479f7084.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 34848,
+    "sha256": "992d010bed3ec9b154e3a677c5c6c87940edb2f36925feda3468218b7e0a091a",
+    "fetchedAt": "2026-09-13T08:01:25.334Z",
+    "path": "codesandbox.io/_next/static/chunks/app/page-a1ac0777479f7084.js"
+   },
+   {
+    "url": "https://codesandbox.io/_next/static/chunks/ef9c525d-794586603a2cf360.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 150534,
+    "sha256": "5549fa48b874738050b397c41b1c2eb04f1433809b6e2c9eb39f11d4cb5717b9",
+    "fetchedAt": "2026-09-13T08:01:25.623Z",
+    "path": "codesandbox.io/_next/static/chunks/ef9c525d-794586603a2cf360.js"
+   },
+   {
+    "url": "https://codesandbox.io/_next/static/chunks/6820-bb4640cbd01fa338.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 62037,
+    "sha256": "32d75b5e2903f31bdf41ae173c7d037e2ae64d094a9698731e1289a599167f1d",
+    "fetchedAt": "2026-09-13T08:01:25.873Z",
+    "path": "codesandbox.io/_next/static/chunks/6820-bb4640cbd01fa338.js"
+   },
+   {
+    "url": "https://codesandbox.io/_next/static/chunks/1261-d0847cd35a4e9b63.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 24023,
+    "sha256": "79010c149a24944ef3f2af6bbc191fe827a343f5ff24d87a307195caf5e68c0a",
+    "fetchedAt": "2026-09-13T08:01:26.147Z",
+    "path": "codesandbox.io/_next/static/chunks/1261-d0847cd35a4e9b63.js"
+   },
+   {
+    "url": "https://codesandbox.io/_next/static/chunks/app/layout-3b2c6dbb6b1620bf.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 10848,
+    "sha256": "ca473ea818019098bfaae68f11a654cca1cd3f2e3750ac188432b9c0f1f4204f",
+    "fetchedAt": "2026-09-13T08:01:26.447Z",
+    "path": "codesandbox.io/_next/static/chunks/app/layout-3b2c6dbb6b1620bf.js"
+   },
+   {
+    "url": "https://codesandbox.io/_next/static/chunks/app/loading-e857583c567d07e0.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 690,
+    "sha256": "dcc70c5d0e7e87b25bd5651e14eea8aae4220f793a55a5504d0048fcf8333c20",
+    "fetchedAt": "2026-09-13T08:01:26.682Z",
+    "path": "codesandbox.io/_next/static/chunks/app/loading-e857583c567d07e0.js"
+   },
+   {
+    "url": "https://codesandbox.io/_next/static/chunks/ec0da940-7fe13e19c1ef37bc.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 163336,
+    "sha256": "2c0d354da9c18a0c22a675e22f24a2fa8e5ee7e5dc7356f6efdbe09db27e49d2",
+    "fetchedAt": "2026-09-13T08:01:27.024Z",
+    "path": "codesandbox.io/_next/static/chunks/ec0da940-7fe13e19c1ef37bc.js"
+   },
+   {
+    "url": "https://codesandbox.io/_next/static/chunks/e332d428-607a0fc2b0f712b1.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 121284,
+    "sha256": "60947fe806aaa755f3dfd529f7ce3aba1272f0f27fb37b0dddd65cf9e1e34c60",
+    "fetchedAt": "2026-09-13T08:01:27.411Z",
+    "path": "codesandbox.io/_next/static/chunks/e332d428-607a0fc2b0f712b1.js"
+   },
+   {
+    "url": "https://codesandbox.io/_next/static/chunks/9331-ab608ee9ae01eddb.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 370862,
+    "sha256": "01012909458a3747c115a24315cd36fd6f671badf74b20b76b1a7a78ef8d79a5",
+    "fetchedAt": "2026-09-13T08:01:27.717Z",
+    "path": "codesandbox.io/_next/static/chunks/9331-ab608ee9ae01eddb.js"
+   },
+   {
+    "url": "https://codesandbox.io/_next/static/chunks/app/template-8960a68d4c18d614.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 9592,
+    "sha256": "391360bda41bc1bebfa004b5d1596e9199c27a68f20650b0d3a00dd47c22ff16",
+    "fetchedAt": "2026-09-13T08:01:27.981Z",
+    "path": "codesandbox.io/_next/static/chunks/app/template-8960a68d4c18d614.js"
+   },
+   {
+    "url": "https://codesandbox.io/_next/static/chunks/app/not-found-ed746ab6512baad1.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 1081,
+    "sha256": "b6e2891db99819b3ffa4f29d737ff3c8c056ff946c266ca0ad1b4e1ae47cf8f9",
+    "fetchedAt": "2026-09-13T08:01:28.199Z",
+    "path": "codesandbox.io/_next/static/chunks/app/not-found-ed746ab6512baad1.js"
+   },
+   {
+    "url": "https://codesandbox.io/_next/static/chunks/polyfills-c67a75d1b6f99dc8.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 91460,
+    "sha256": "0225eb034d024a03bdc90ea6c79f56193662e7c3eee909696298820e517cbb83",
+    "fetchedAt": "2026-09-13T08:01:28.457Z",
+    "path": "codesandbox.io/_next/static/chunks/polyfills-c67a75d1b6f99dc8.js"
+   },
+   {
+    "url": "https://codesandbox.io/_next/static/chunks/webpack-0aa71c7d06ee8e3a.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=UTF-8",
+    "bytes": 4913,
+    "sha256": "8866ec658e36adfe3e22a3be0472f5fbbad6e8dddaad665dc1b3d90a3a026194",
+    "fetchedAt": "2026-09-13T08:01:28.713Z",
+    "path": "codesandbox.io/_next/static/chunks/webpack-0aa71c7d06ee8e3a.js"
+   },
+   {
+    "url": "https://codesandbox.io/_next/static/media/e4af272ccee01ff0-s.p.woff2",
+    "status": 200,
+    "contentType": "font/woff2",
+    "bytes": 48432,
+    "sha256": "c940764593d0fe5d596be327ca7558855e018039fb78509aa21921fd3644c3e4",
+    "fetchedAt": "2026-09-13T08:01:28.972Z",
+    "path": "codesandbox.io/_next/static/media/e4af272ccee01ff0-s.p.woff2"
+   }
+  ],
+  "baseUrl": "https://codesandbox.io/"
  }
 ]
