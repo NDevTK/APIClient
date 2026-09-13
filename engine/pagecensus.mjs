@@ -47,6 +47,14 @@
  * the same rlimit and timeout every other driver here is run under, and because each sample is APPENDED to the
  * transcript as it is taken, a run the external budget ends has already published everything it reached. A
  * driver that stopped itself would be choosing which part of the frontier never got measured.
+ * THAT SENTENCE WAS TRUE OF THE CENSUS AND FALSE OF THE PRODUCT'S OWN FINDINGS, WHICH IS THE ONE THING THIS
+ * FILE GOT WRONG AND THE HARDEST KIND TO SEE: the rule was stated, correctly, and applied to one half of what
+ * the driver reads. The endpoints, the sinks and the page errors were read ONCE, after the loop, from a
+ * `qjs_result` the loop only reaches on ENGINE_STEP_DONE — and §NO BOUNDS means a real document's frontier does
+ * not drain, so for exactly the documents this exists for the process was killed before that line. Measured on
+ * a real bundle: 130 samples, SIGXCPU at the rlimit, and `fetchCallSites` occurring ZERO times in the whole
+ * transcript. The surface is published per sample now; see `surface` for why a row is keyed by its own text
+ * and for the cost.
  *
  * NAMED RESIDUAL — the sniff. `computedType` is what the ZONE THAT READ THE BYTES decided, and
  * extension/lib/safe-fetch.js is where this tree states MIME Sniffing §7 "Determining the computed MIME
@@ -203,6 +211,49 @@ const COST = ["_flows", "_switches", "_jobsQueued", "_jobsRun", "_unitsDone", "_
               "_sourceReads", "_sinkReached", "_orphansDriven", "_orphansAsked"];
 const costOf = (d) => Object.fromEntries(COST.map((k) => [k, d[k]]));
 
+/* THE SURFACE ITSELF, PUBLISHED PER SAMPLE — WHICH IS WHAT THIS FILE ALREADY SAYS IT DOES AND DID NOT.
+ * `emit`'s own banner states the rule: a transcript composed after the loop "would be empty for exactly the
+ * long runs it exists for", because there is no bound here and the run is ended from OUTSIDE. That was true of
+ * the census series and FALSE of the product's own findings, which were read once, after the loop, from a
+ * `qjs_result` the loop only reaches on ENGINE_STEP_DONE. §NO BOUNDS means a real document's frontier does not
+ * drain, so the endpoints, the sinks and the page errors of every document worth pointing this at were
+ * serialized into a variable the process was killed before reading.
+ * MEASURED: a real 4.5 MB bundle, 130 samples, SIGXCPU at the rlimit — `fetchCallSites` occurs ZERO times in
+ * the whole transcript, and the run's entire API surface was unobservable no matter how long anyone ran it.
+ * THE DOCUMENT WAS ALREADY IN HAND, WHICH IS THE PART WORTH KEEPING. `census()` calls `qjs_emit_partial` and
+ * parses the WHOLE result document every sample — the same channel extension/bridge.js reads the product's
+ * findings off — and then named `_wfq`, `_cold` and ten cost columns out of it. So the surface was not missing,
+ * it was projected away: the hand-picked-subset defect, in a driver, over the one part of the document the
+ * driver exists to be pointed at. No new ABI call, no engine change, and no extra parse.
+ * A ROW IS PUBLISHED WHEN ITS TEXT IS NEW TO THIS TRANSCRIPT, which makes no identity claim of its own. The
+ * engine dedups its own array and MERGES into a row later (endpoint.c: "first body wins, never overwritten"),
+ * so an index-keyed delta would miss an update and a key composed here would be a second opinion about what
+ * an endpoint IS. Comparing the serialized row catches both cases and asserts nothing: a second row carrying
+ * an address already seen is the engine having merged into it, never a second endpoint.
+ * THE COST IS STATED RATHER THAN LEFT TO BE MEASURED: one `JSON.stringify` per row per sample, against a
+ * `JSON.parse` of the whole document that this sample already performs. The set grows with the surface, which
+ * is the quantity being measured, and it bounds nothing. */
+const SURFACES = ["fetchCallSites", "securitySinks", "pageErrors"];
+const seenRow = new Map(SURFACES.map((k) => [k, new Set()]));
+function surface(d, n) {
+  for (const k of SURFACES) {
+    /* NOT DEFAULTED. extension/bridge.js DCHECKs that the engine's result document carries these arrays, and a
+       `|| []` here would turn "the producer stopped naming this" into "this run found nothing" — the same
+       absent-versus-zero the rest of this driver refuses. */
+    if (!Array.isArray(d[k]))
+      fail(`the engine's result document carries no \`${k}\` array — extension/bridge.js asserts the same ` +
+           "shape on the same channel, so this is the producer having stopped naming it and NOT a run that " +
+           "found nothing; those are different facts and only one of them is a measurement");
+    const seen = seenRow.get(k);
+    for (const row of d[k]) {
+      const text = JSON.stringify(row);
+      if (seen.has(text)) continue;
+      seen.add(text);
+      emit({ n, at: k, row });
+    }
+  }
+}
+
 let n = 0, lastSample = 0, filledTotal = 0, quantum = null;
 const t0 = Date.now();
 for (;;) {
@@ -219,6 +270,10 @@ for (;;) {
     if (!quantum) { quantum = d._quantum; emit({ at: "quantum", quantum }); }
     emit({ n: ++n, atMs: now - t0, step: r === 3 ? "stalled" : "yield",
            wfq: d._wfq, cold: d._cold, cost: costOf(d) });
+    /* AFTER the census line and from the SAME document, so a reader can align a row with the frontier state
+       that produced it. A run the budget ends has now published everything it reached, which is what `emit`'s
+       banner already promised for the series. */
+    surface(d, n);
   }
 
   /* THE PARKS, ANSWERED FROM THE ORIGIN THE DOCUMENT CAME FROM. The six fields are checked for their
@@ -290,11 +345,20 @@ for (;;) {
 const json = str("qjs_result");
 if (!json) fail("qjs_result answered nothing — the result document did not serialize");
 const out = JSON.parse(json);
+/* THE SURFACE ONE LAST TIME, FROM THE TERMINAL DOCUMENT, AND IT IS NOT THE ONLY COPY ANY MORE — the rows the
+   loop already published stay published whether or not this line is ever reached, which is the whole change.
+   A row that appears ONLY here is one the engine merged into after the last sample. */
+surface(out, n + 1);
+/* AND THE COUNTS, WHICH ARE A SUMMARY OF ROWS THE TRANSCRIPT NOW CARRIES RATHER THAN A SUBSTITUTE FOR THEM.
+   They used to be the only statement this driver made about the product's own output, and a count cannot say
+   which method, which address, which parameter or which example value — which is the question this driver is
+   pointed at a real bundle to answer. `surface` asserts the arrays are named, so no `|| []` stands here: that
+   default turned "the producer stopped naming this" into "this run found nothing". */
 emit({ at: "final", samples: n, repliesFilled: filledTotal, elapsedMs: Date.now() - t0,
        wfq: out._wfq, cold: out._cold, cost: costOf(out),
-       fetchCallSites: (out.fetchCallSites || []).length,
-       securitySinks: (out.securitySinks || []).length,
-       pageErrors: (out.pageErrors || []).length });
+       fetchCallSites: out.fetchCallSites.length,
+       securitySinks: out.securitySinks.length,
+       pageErrors: out.pageErrors.length });
 
 /* THE TEARDOWN IS NOT BOOKKEEPING — main.c's runs JS_RunGC and JS_FreeRuntime, whose gc_obj_list walk aborts
    on a leaked GC object, so every run of this driver is also a leak check for the solver's own allocations
