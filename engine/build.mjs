@@ -2166,7 +2166,11 @@ function stepUnitOverrunReading(b) {
      arms, which is exactly why the sentence says which one it ordered by. */
   const rate = (r) => { const n = Number(runs.get(r[0]) ?? 0); return n > 0 ? r[1] / n : 1; };
   const over = rows.filter((r) => r[1] > 0).sort((x, y) => rate(y) - rate(x));
-  if (Number(b.sliceOverruns) === 0)
+  /* NOT `Number(...)`: censusHistRows three lines up refuses a census whose `sliceOverruns` is not a number,
+     so the coercion bought nothing here and cost the one thing a coercion always costs — it turns an absence
+     into a value, which is what the record-field audit reports and what a reader of this line would then have
+     to re-derive the guarantee to dismiss. The guarantee is real and it is upstream; the read is direct. */
+  if (b.sliceOverruns === 0)
     return `arms that overran the slice: NONE — every one of the ${b.steps} turn(s) ended inside the ` +
            `cooperative budget, so no arm in this run held the thread past a slice`;
   /* AND WHAT DID NOT OVERRUN IS HALF THE FINDING, because the naive expectation is that overruns are spread
@@ -2389,6 +2393,21 @@ function stepCostReading(a, b, q) {
    untrue — a row set that does not partition `live` — which is a statement about the document and not about
    the run. */
 function programCursorReading(b) {
+  /* THE TWO ROWS THIS READER COMPARES ARE ASSERTED, NOT COERCED — and the coercion that stood in their place
+     is the shape the record-field audit names: `Number(x)` turns an ABSENCE into a VALUE rather than into a
+     crash, so an emission that stopped carrying these rendered "NaN of the document's own undefined
+     programs have never been started", a sentence with a verdict's shape and a producer's hole where the
+     answer goes. `censusHistRows` below guarantees `live` and says so; it says nothing about these two.
+     BOTH, THOUGH ONLY ONE WAS REPORTABLE. The audit's band is EQUALITY OPERANDS, so it saw
+     `Number(b.rootPrograms) === 0` and could not see `Number(b.deepest) + 1` one line down — same read, same
+     absence, same NaN, and nothing downstream crashes on it either. A fix of the form "this is not how to ask
+     that" is not finished at the site the instrument happened to reach. */
+  for (const k of ["rootPrograms", "deepest"])
+    if (typeof b[k] !== "number")
+      throw new Error(`[build] the @COLD census carries no numeric \`${k}\` — solver/result.c's ` +
+                      `result_cold_json emits it on every census, so its absence is that composer having ` +
+                      `changed rather than a document with none. Coercing it would render a reading of the ` +
+                      `document's program list out of a row that is not there.`);
   const rows = censusHistRows(b, "programCursors", "live",
                               "the live members' own cursors (solver/cold.h), whose extent is therefore the " +
                               "deepest program any standing member is at rather than a fixed list — and which " +
@@ -2444,7 +2463,7 @@ function programCursorReading(b) {
      is the right instinct applied to a disagreement that does not exist. The unit is named on the line now,
      the cursor that MEANS "finished the deepest program" is spelled out, and solver/result.c asserts the
      identity (top cursor <= deepest + 1) at the composer where both numbers are in one hand. */
-  const finishedAll = Number(b.deepest) + 1;
+  const finishedAll = b.deepest + 1;
   /* AND THE NUMBER `deepest` AND `completed` ARE A FRACTION OF, which is what stops "deepest 7" reading as a
      finished document on one run and as a ceiling on the next. `rootPrograms` is the ROOT DOCUMENT'S OWN
      <script> count, and a flow's sequence runs PAST it — every lazy chunk, injected element and @S candidate
@@ -2455,13 +2474,13 @@ function programCursorReading(b) {
      THIS ROW IS THE DENOMINATOR AND NOT A SECOND OPINION ON THE NUMERATOR: it says nothing about queued rows,
      of which there is no count on this line, so "all of them started" is a statement about the seed alone. */
   const seedReach =
-    Number(b.rootPrograms) === 0
+    b.rootPrograms === 0
       ? ` (the root document seeded NO executable <script>, so every program those two maxima name was queued ` +
         `by the run itself — and a census taken outside a live session reads the same 0)`
-      : finishedAll >= Number(b.rootPrograms)
+      : finishedAll >= b.rootPrograms
         ? ` — the furthest flow started all ${b.rootPrograms} of them, so whatever went unreached is a row the ` +
           `run QUEUED above the seed rather than one the document shipped`
-        : ` — ${Number(b.rootPrograms) - finishedAll} of the document's own ${b.rootPrograms} programs have ` +
+        : ` — ${b.rootPrograms - finishedAll} of the document's own ${b.rootPrograms} programs have ` +
           `never been started by any flow`;
   const oopReading =
     b.outOfPrograms === 0
@@ -2489,7 +2508,7 @@ function programCursorReading(b) {
          `${rows.length} cursor slot${rows.length === 1 ? "" : "s"} — a CURSOR is one-past-the-program-it-left ` +
          `and the slots are one wider than the DEEPEST STARTED program, which is not the document's program ` +
          `count and is the reading this line used to state; ` +
-         `document deepest ${b.deepest} / completed ${b.completed} against ${b.rootPrograms} own <script> program${Number(b.rootPrograms) === 1 ? "" : "s"}${seedReach}; ${oopReading}): ` +
+         `document deepest ${b.deepest} / completed ${b.completed} against ${b.rootPrograms} own <script> program${b.rootPrograms === 1 ? "" : "s"}${seedReach}; ${oopReading}): ` +
          at.map((r) => `${r[1]} at ${r[0]}`).join(", ") +
          ` — largest bucket ${top[1]} of ${b.live} at cursor ${top[0]}, deepest member standing at cursor ` +
          `${standingDeepest}. A mass LOW against \`deepest\` and a mass AT it are opposite diagnoses ` +

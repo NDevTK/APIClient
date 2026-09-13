@@ -97,7 +97,20 @@ import { GLUE_PATH as WASM, abiOperands } from "./renderer_abi.mjs";
    instrument is one the product already pays for. */
 const SAMPLE_MS = 750;
 
-function fail(msg) { console.log("@CENSUSFAIL " + msg); process.exit(1); }
+/* NOT AN `@` STREAM MARKER, AND THAT IS THE WHOLE POINT OF THE NAME CHANGE. Every other `@` token this
+   project prints — @H, @S, @WFQ, @COLD, @SWAP, @HWORK, @QUANTUM, @E, @WHY — is PARSED by something: the
+   build's readers, the extension, a census consumer. The prefix is a promise that a machine reads the line.
+   `@CENSUSFAIL` made that promise and nothing anywhere matched it, which the record-field audit reports as a
+   written marker with no reader — correctly, and permanently, because there was no consumer to build.
+   THE FAILURE IS ALREADY MACHINE-READABLE AND IT IS THE EXIT CODE. This driver is invoked by hand (its two
+   mentions in the tree are prose), its whole configuration is one argv, and it exits 1 beside this line — so
+   a caller that wants to know THAT it failed has the answer, and no caller exists that wants to know WHY in a
+   form it could act on. Building a reader for a hypothetical one is the follow-up a comment may not stand in
+   for, in reverse: inventing the consumer to justify the marker.
+   SO THE PREFIX GOES AND THE REASON STAYS HERE, because a reader who re-derives "our diagnostics wear @" will
+   put it back and send the next auditor hunting a consumer that was never intended. If this driver ever gains
+   a programmatic caller, the marker comes back WITH that caller's parser in the same diff. */
+function fail(msg) { console.log("pagecensus: " + msg); process.exit(1); }
 
 const docUrl = process.argv[2];
 const transcript = process.argv[3] || null;
