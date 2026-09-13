@@ -1279,11 +1279,33 @@ typedef struct JSProxyData {
  * have an ORDER in the head and apply replays forward — and JS_BufferStateRestore's immutable DCHECK already
  * tells a future reader to "carry the bit in the buffer-state blob's restore beside the extent", which is this
  * move, anticipated. */
+/* A SPAN HAS TWO KINDS BECAUSE 10.4.5.18 READS TWO VALUES THE PAGE SUPPLIES. JS_AB_SPAN_AT is an unknown
+   VALUE at a known offset: the block holds its example and the witness decides staleness. JS_AB_SPAN_ANY is a
+   write whose OFFSET was unknown — nothing was written anywhere, because there is no offset to write at, and
+   the span covers the byte range the offset could have been in.
+   THE RANGE IS THE WHOLE BUFFER TODAY AND THAT IS A LIMIT OF THE ENGINE/HOST CONTRACT, NOT A CHOICE. The right
+   extent is the offset unknown's own constraint DOMAIN — `for (i = 0; i < 8; i++) buf[i] = x` covers [0,8) and
+   leaves byte 9 concrete — and the domain is read by solver/concolic.c's concolic_bound_read, keyed by a hole
+   string, which lives in the HOST. The engine reaches the solver only through JSConcolicHooks, whose twenty
+   members carry no domain accessor, so an engine-side read of it does not exist to make. Whole-buffer is the
+   sound degradation of that and never a cap: it is OVER-GENERAL, which is the direction §Solver-half asks for,
+   and it narrows the day a domain hook is added without any other line here changing.
+   AN ANY SPAN HAS NO WITNESS, AND THAT IS A STATEMENT RATHER THAN AN OMISSION. A witness answers "has anything
+   overwritten the bytes this span describes"; an ANY span describes bytes nothing was written to, so there is
+   nothing for a later write to invalidate and no reading of the block that could retire it. It therefore
+   stands for the life of the buffer, which is over-general in a second way — a concrete `buf[3] = 7` after an
+   unknown-index write still reads unknown at 3 — and that is the same direction and the same reason. */
+enum { JS_AB_SPAN_AT = 0, JS_AB_SPAN_ANY };
+
 typedef struct JSArrayBufferSpan {
-    uint32_t offset;      /* byte offset into the data block */
-    uint8_t length;       /* the element's byte width, 1..8 */
-    uint8_t witness[8];   /* the bytes standing in the block when this span was recorded */
-    JSValue unknown;      /* ONE COUNTED REFERENCE, held for the life of the span */
+    uint32_t offset;      /* byte offset into the data block; the START of the covered range for an ANY span */
+    uint32_t extent;      /* bytes covered: the element's width for AT, the offset domain's extent for ANY */
+    uint8_t kind;         /* JS_AB_SPAN_AT / JS_AB_SPAN_ANY */
+    uint8_t witness[8];   /* AT only: the bytes standing in the block when this span was recorded */
+    JSValue unknown;      /* the unknown VALUE written, or JS_UNINITIALIZED when an ANY span's value was
+                             concrete. ONE COUNTED REFERENCE when set. */
+    JSValue index;        /* ANY only: the unknown OFFSET, which is what the read derives from when the value
+                             was concrete. ONE COUNTED REFERENCE when set. */
 } JSArrayBufferSpan;
 
 typedef struct JSArrayBuffer {
@@ -2324,9 +2346,12 @@ static bool js_get_fast_array_element(JSContext *ctx, JSObject *p, uint32_t idx,
 /* see JSArrayBufferSpan. Declared here because the two sides of an unknown element are far apart in this file
    and must stay one mechanism: the STORE is 10.4.5.18's arm in JS_CallInternal and the READ is
    js_get_fast_array_element directly above, while the record they share is defined with the buffer code. */
-static JSValueConst js_ab_span_get(const JSArrayBuffer *abuf, uint32_t offset, int length);
+static bool js_ab_span_get(JSContext *ctx, JSObject *bufobj, const JSArrayBuffer *abuf,
+                           uint32_t offset, int length, JSValue *pval);
 static void js_ab_span_set(JSContext *ctx, JSArrayBuffer *abuf, uint32_t offset, int length,
                            JSValueConst unknown);
+static void js_ab_span_set_any(JSContext *ctx, JSArrayBuffer *abuf, JSValueConst index,
+                               JSValueConst unknown);
 static void js_ab_spans_free(JSRuntime *rt, JSArrayBuffer *abuf);
 static bool js_get_fast_array(JSContext *ctx, JSValue obj,
                               const JSValue **arrpp, uint32_t *countp);
@@ -6753,14 +6778,6 @@ JSValue JS_NewAtomString(JSContext *ctx, const char *str)
    only this function has (the macro captured it), and the PAGE's call into that consumer, which only a
    backtrace has. */
 static void js_why_backtrace(JSContext *ctx, char *dst, size_t n);
-/* ITS TWIN, DECLARED FOR THE SAME REASON AND NOT BECAUSE ONE CALLER NEEDED IT. Every composed `@WHY` in this
-   file renders an unknown's SHAPE beside the frames, and a shape comes from the page, so it is sanitized by
-   this before it reaches a message; a site earlier in the file than its definition therefore reaches for it
-   exactly as it reaches for the backtrace above. Only the backtrace was declared here, so the two were
-   available at different points of one file for no reason either of them states — and the omission is not
-   caught by reading, it is caught by an implicit-declaration error at whichever site happens to be first,
-   which is why the pair is declared together now. */
-static void js_why_sanitize(char *dst, size_t n, const char *src);
 #endif
 
 /* THE ONE CONVERGENCE POINT OF EVERY BYTE CONSUMER IN THE ENGINE AND THE HOST — JS_ToCStringLen2At and
@@ -14614,16 +14631,11 @@ static bool js_get_fast_array_element(JSContext *ctx, JSObject *p,
     if (unlikely(is_typed_array(p->class_id)) && idx < p->u.array.count) {
         JSTypedArray *ta = p->u.typed_array;
         JSArrayBuffer *abuf = ta->buffer->u.array_buffer;
+        int width = 1 << typed_array_size_log2(p->class_id);
 
-        if (unlikely(abuf->n_span != 0)) {
-            int width = 1 << typed_array_size_log2(p->class_id);
-            JSValueConst unknown = js_ab_span_get(abuf, ta->offset + idx * (uint32_t)width, width);
-
-            if (!JS_IsUninitialized(unknown)) {
-                *pval = js_dup(unknown);
-                return true;
-            }
-        }
+        if (unlikely(abuf->n_span != 0) &&
+            js_ab_span_get(ctx, ta->buffer, abuf, ta->offset + idx * (uint32_t)width, width, pval))
+            return true;
     }
     switch(p->class_id) {
     case JS_CLASS_ARRAY:
@@ -15736,93 +15748,51 @@ int JS_SetProperty(JSContext *ctx, JSValueConst this_obj, JSAtom prop, JSValue v
 static int JS_SetPropertyValue(JSContext *ctx, JSValueConst this_obj,
                                JSValue prop, JSValue val, int flags)
 {
-#if APICLIENT_DEV
-    /* 10.4.5.18 TypedArraySetElement ( obj, index, value ) READS TWO VALUES THE PAGE SUPPLIES, AND EVERY TEXT
-       IN THIS ENGINE DISCUSSES ONLY ONE. Its steps read `value` and `index`; the arm in JS_CallInternal refuses
-       an unknown VALUE by name. An unknown INDEX is refused by nothing, and it is not a narrower case of the
-       same question — it is a different algorithm with a different answer, which is why it is a crash here and
-       not a clause there.
-       WHAT THE ENGINE DOES WITH ONE TODAY IS WRONG RATHER THAN INCOMPLETE, which is the whole reason this is a
-       DFAIL and not a residual. A concolic is a real JSObject, so it is no tagged int and takes the slow path,
-       where JSConcolicHooks.key_name converts it — and key_name's contract is that an unknown key DENOTES A
-       REAL STRING, its own shape, which is "what makes `o[x] = 1` then `o[x]` find one slot". That contract is
-       correct and is written for an ORDINARY OBJECT. On a TYPED ARRAY it takes an arm no world the unknown
-       denotes would take: 10.4.5.5 [[Set]] routes a key to TypedArraySetElement only when it is a CANONICAL
-       NUMERIC INDEX, and a shape like `{state}.len` is not one, so the write becomes an ordinary named property
-       on the Uint8Array and NOT ONE BYTE IS STORED — while every integer the unknown could actually be IS a
-       canonical numeric index, so the spec's answer for every world in the domain is a store.
-       ITS ABSENCE WOULD SHOW AS A SHORT BODY THAT NOTHING REPORTS AS SHORT. A serializer writing at an unknown
-       offset leaves the backing store holding whatever was there, the request is still built, and
-       solver/endpoint.c records a body it will label as bytes the page sent — which a reviewer REPLAYS. A
-       silently wrong payload is worse than an absent one, and nothing downstream can tell them apart.
-       WHAT TO BUILD IS A SPAN WHOSE OFFSET IS UNKNOWN, AND THE REMEDY THIS CRASH FIRST NAMED IS RETIRED HERE
-       RATHER THAN DELETED, because it is the one a reader re-derives from the value arm thirty lines away. It
-       said: build the per-position outcome fork 10.4.2.4 ArraySetLength already has in this same carrier
-       (JSArrayLen's AL_UNKNOWN_SVZ / AL_UNKNOWN_PIN, asking at each n whether the index is n), and give
-       10.4.5.17 TypedArrayGetElement the identical chain so both sides of an unknown index answer alike. BOTH
-       HALVES ARE WRONG, and they are wrong in the two ways a next-diff clause always is — it named a MECHANISM
-       and it asserted a SCOPE, and both are claims about THIS TREE written from the value arm's vantage point.
-       THE FORK IS UNAFFORDABLE HERE AND AFFORDABLE THERE, AND THE DIFFERENCE IS HOW OFTEN THE WRITE HAPPENS. A
-       `length` is written ONCE and the chain's n is the length being set, so its walk is short and the WFQ
-       genuinely makes it behave like a finite one. An INDEX is written PER ELEMENT: a serializer does one store
-       per byte, so a per-position fork over an N-element buffer is N arms for EVERY store and N^k over a k-byte
-       body. The WFQ orders work; it does not make an exponential finite, and §NO BOUNDS forbids the cap that
-       would. Copying the chain because the carrier is the same is reasoning from where the code sits rather
-       than from what it costs.
-       AND THE READ SIDE IS NOT A GAP AT ALL, WHICH ONE READ OF THE OPCODE SETTLES. OP_get_array_el answers an
-       unknown key AT THE OPERATOR, before any element path: it asks key_name for the shape's own slot, and
-       failing that JSConcolicHooks.key_read hands back a concolic derived from the base and the key's source,
-       example-free on purpose. So `buf[x]` with x unknown never reaches 10.4.5.17 TypedArrayGetElement, and
-       what it already answers is sound — a gate on it forks and a sink still solves for the key. It is
-       OVER-GENERAL, since it does not constrain the value to the bytes the buffer actually holds, and
-       over-general is the direction §Solver-half asks for. There was never a second chain to build.
-       WHAT IS LEFT IS THE WRITE, AND (1)'s RECORD ALREADY HAS THE SHAPE FOR IT: it separates the BYTES from the
-       FACT, so a write at an unknown index is a fact with no offset. The question that must be decided BEFORE
-       anything is built — and it is a design step, not an implementation detail — is what a read at a CONCRETE
-       offset answers once such a span stands over the buffer. Every sound answer is over-general; picking one
-       silently is how a solver acquires a domain nobody chose.
-       THE RELEASE ARM IS UNCHANGED BY THIS DIFF AND IS NOT THEREBY ENDORSED: without the fork there is nothing
-       correct to do, so release keeps today's named-property write, and this names it rather than leaving a
-       reader to discover it. It stops being a question when the chain above lands. */
+    /* 10.4.5.18 TypedArraySetElement ( obj, index, value ) OVER AN UNKNOWN INDEX — the OTHER of the two
+       values that algorithm reads from the page, and the one that ABORTED until now.
+       WHAT THE ENGINE DID WITH ONE BEFORE WAS WRONG RATHER THAN INCOMPLETE, and that is why this was a crash
+       and not a residual. A concolic is a real JSObject, so it is no tagged int and took the slow path, where
+       JSConcolicHooks.key_name converts it — and key_name's contract is that an unknown key DENOTES A REAL
+       STRING, its own shape, which is "what makes `o[x] = 1` then `o[x]` find one slot". That is correct and
+       is written for an ORDINARY OBJECT. On a TYPED ARRAY it took an arm no world the unknown denotes would
+       take: 10.4.5.5 [[Set]] routes a key to TypedArraySetElement only when it is a CANONICAL NUMERIC INDEX,
+       and a shape like `{state}.len` is not one, so the write landed as a named property and NOT ONE BYTE WAS
+       STORED — while every integer the unknown could actually be IS a canonical numeric index. The serializer's
+       buffer was silently short, the request was still built, and solver/endpoint.c recorded it under EPB_SENT
+       as bytes the page sent, which a reviewer REPLAYS.
+       THE ANSWER IS A SPAN WITH NO OFFSET, AND IT NEEDS NO NEW MECHANISM. The record the VALUE arm keeps
+       already separates the BYTES from the FACT, so a write whose offset is unknown is a fact with no offset:
+       nothing is written to the block, because there is no offset to write at, and the span is the whole of
+       what the store leaves behind. Every read inside the span's range then answers UNKNOWN — see
+       js_ab_span_get for why answering the block's stale byte is the one error that may never be made, and why
+       forking over "does this span cover offset n" is refused for exactly the reason the write-side
+       per-position fork was.
+       THE NAMED PROPERTY IS NOT WRITTEN EITHER, which is the half that makes this a fix rather than an
+       addition: leaving it would keep the wrong arm alive beside the right one, and a `buf[x]` read would then
+       find a slot whose value no byte-consumer can see. `prop` and `val` are consumed here exactly as the slow
+       path would have consumed them.
+       THE DOMAIN IS THE WHOLE BUFFER AND THAT IS AN ENGINE/HOST CONTRACT LIMIT, NOT A CHOICE — see
+       JSArrayBufferSpan. The right extent is the offset unknown's own constraint domain, which
+       solver/concolic.c's concolic_bound_read holds, and the engine reaches the solver only through
+       JSConcolicHooks, whose twenty members carry no domain accessor. Whole-buffer is the sound degradation:
+       over-general, never a cap, and it narrows the day that hook exists with no other line here changing. */
     if (unlikely(JS_VALUE_GET_TAG(this_obj) == JS_TAG_OBJECT && js_value_is_concolic(prop)
                  && is_typed_array(JS_VALUE_GET_OBJ(this_obj)->class_id))) {
-        /* SIZED FROM THE PARTS, for the reason the VALUE arm's buffer states: the frames go LAST, so a short
-           buffer cuts the address and leaves a crash that still reads complete. 928 bytes of format + 240
-           shape + 40 class name + 10 count + 2048 frames = 3266. */
-        char frames[2048], why[4096], shbuf[256], cbuf[ATOM_GET_STR_BUF_SIZE];
         JSObject *tap = JS_VALUE_GET_OBJ(this_obj);
-        JSValue sv = JS_UNINITIALIZED;
+        JSArrayBuffer *abuf = tap->u.typed_array->buffer->u.array_buffer;
 
-        snprintf(shbuf, sizeof shbuf, "%s", "(a shape this engine could not spell)");
-        if (g_concolic.key_name) {
-            sv = g_concolic.key_name(ctx, prop);
-            if (JS_IsString(sv)) {
-                const char *s = JS_ToCString(ctx, sv);
-                if (s) { js_why_sanitize(shbuf, sizeof shbuf, s); JS_FreeCString(ctx, s); }
-            }
-        }
-        JS_FreeValue(ctx, sv);
-        js_why_backtrace(ctx, frames, sizeof frames);
-        snprintf(why, sizeof why,
-                 "10.4.5.18 TypedArraySetElement ( obj, index, value ) over an UNKNOWN INDEX `%.240s`: "
-                 "`ta[x] = v` on a %.40s of %u elements, where x is unknown external input. This is the OTHER "
-                 "of the two values that algorithm reads from the page, and the one nothing refuses. A concolic "
-                 "is no tagged int, so key_name converts it to its own shape as a real String — correct for an "
-                 "ordinary object and WRONG here, because 10.4.5.5 [[Set]] routes only a CANONICAL NUMERIC "
-                 "INDEX to TypedArraySetElement, so this becomes a named property and stores NO BYTE, while "
-                 "every integer the unknown could be is a canonical numeric index. Do NOT decide the index. "
-                 "BUILD a span whose OFFSET is unknown: the record 10.4.5.18's value arm already keeps "
-                 "SEPARATES the BYTES from the FACT, and a write at an unknown index is a fact with no offset, "
-                 "so it is the one shape that needs no new mechanism. WHAT MUST BE DECIDED FIRST, and is a "
-                 "design step rather than an implementation detail: what a read at a CONCRETE offset answers "
-                 "once such a span stands over the buffer — sound answers exist and every one of them is "
-                 "OVER-GENERAL, which is the direction to prefer but not one to pick silently. Frames: %s",
-                 shbuf,
-                 JS_AtomGetStr(ctx, cbuf, sizeof cbuf, ctx->rt->class_array[tap->class_id].class_name),
-                 (unsigned)tap->u.array.count, frames);
-        DFAIL(why);
+        /* THE VALUE'S OWN PROVENANCE IS KEPT WHERE IT HAS ONE. `buf[x] = y` with both unknown must answer a
+           later read with the VALUE's identity, because that is the source an @S candidate is injected at; a
+           concrete `y` leaves nothing to carry, and the read derives from the unknown OFFSET instead, which is
+           the honest statement that what is unknown about the element is WHICH BYTE IT IS. */
+        js_ab_span_set_any(ctx, abuf, prop,
+                           js_value_is_concolic(val) ? val : JS_UNINITIALIZED);
+        JS_FreeValue(ctx, prop);
+        JS_FreeValue(ctx, val);
+        /* 10.4.5.5 [[Set]] returns true and 10.4.5.3 step 1.g returns true: a store the spec skips still
+           SUCCEEDS, and here the store did not happen for a reason the spec has no step for. */
+        return true;
     }
-#endif
     if (likely(JS_VALUE_GET_TAG(this_obj) == JS_TAG_OBJECT &&
                JS_VALUE_GET_TAG(prop) == JS_TAG_INT)) {
         JSObject *p;
@@ -114807,22 +114777,58 @@ static JSValue js_ab_ctor_fini(JSContext *ctx, void *st, bool take_result)
 }
 
 /* also used for SharedArrayBuffer */
-/* THE SPAN COVERING THIS ELEMENT, OR NOTHING — see JSArrayBufferSpan for why a witness decides it. BORROWED:
-   the caller dups to keep. The scan runs backwards because a serializer writes FORWARD, so the element a page
-   is reading back is usually one of the last recorded; and it runs at all only for a buffer some flow has
-   stored an unknown into, which is why the cost for every ordinary buffer is the load of a zero. */
-static JSValueConst js_ab_span_get(const JSArrayBuffer *abuf, uint32_t offset, int length)
+/* THE ELEMENT'S UNKNOWN, OR NOTHING — see JSArrayBufferSpan. Answers true with *pval OWNED.
+   THE SCAN IS BACKWARDS AND THAT IS THE RECENCY RULE, not an optimisation on its own: the last span recorded
+   over an element is the one that describes it, so a later AT write through the same offset supersedes an
+   earlier one without anything having to delete it. It is also the order a serializer's own writes arrive in,
+   so the element a page reads back is usually found at once. An ANY span is walked by the SAME loop and not
+   ahead of it, so recency decides between the two kinds too. */
+static bool js_ab_span_get(JSContext *ctx, JSObject *bufobj, const JSArrayBuffer *abuf,
+                           uint32_t offset, int length, JSValue *pval)
 {
     int i;
 
     if (abuf->n_span == 0 || abuf->detached || abuf->data == NULL)
-        return JS_UNINITIALIZED;
+        return false;
     if ((int64_t)offset + length > (int64_t)abuf->byte_length)
-        return JS_UNINITIALIZED;
+        return false;
     for (i = abuf->n_span - 1; i >= 0; i--) {
         const JSArrayBufferSpan *s = &abuf->span[i];
 
-        if (s->offset != offset || s->length != length)
+        if (s->kind == JS_AB_SPAN_ANY) {
+            /* A WRITE WHOSE OFFSET WAS UNKNOWN COVERS EVERY OFFSET IT COULD HAVE BEEN. Answering the block's
+               byte here is the one error that may never be made: nothing was written at this offset, so the
+               block holds a STALE byte, and handing it back deletes a world nothing contradicted — the
+               wrong-narrowing move, arriving through a read instead of through a pin.
+               FORKING OVER "DOES THIS SPAN COVER OFFSET n" IS REFUSED FOR THE REASON THE WRITE-SIDE FORK WAS:
+               it is 2 arms per read and 2^k over a k-byte read, and the WFQ orders work rather than making an
+               exponential finite. So the answer is OVER-GENERAL, which §Solver-half asks for — uncertainty
+               keeps the arm, a contradicted branch is pruned sound-only, and an unproductive one starves. The
+               cost is that a branch on a concrete framing byte now forks, which is work the ordering owns. */
+            if (offset < s->offset || (int64_t)offset >= (int64_t)s->offset + (int64_t)s->extent)
+                continue;
+            if (!JS_IsUninitialized(s->unknown)) {
+                /* THE VALUE'S OWN PROVENANCE WHERE THERE IS ONE, because a sink receiving this byte must name
+                   the source a candidate is injected at, and the value is what was written. */
+                *pval = js_dup(s->unknown);
+                return true;
+            }
+            /* THE VALUE WAS CONCRETE, so what is unknown about this element is WHICH BYTE IT IS, and the
+               derivation says exactly that: JSConcolicHooks.key_read is this engine's existing answer for
+               `obj[x]` with an unknown x — "a lookup that names no particular slot" — and this is that lookup
+               with the buffer as the base. Reaching for it rather than minting something new is why an unknown
+               offset needs no new value-side mechanism at all. */
+            if (g_concolic.key_read) {
+                JSValue kv = g_concolic.key_read(ctx, JS_MKPTR(JS_TAG_OBJECT, bufobj), s->index);
+
+                if (!JS_IsUninitialized(kv)) {
+                    *pval = kv;
+                    return true;
+                }
+            }
+            continue;
+        }
+        if (s->offset != offset || s->extent != (uint32_t)length)
             continue;
         /* THE WITNESS, AND THE ONE DIRECTION IT MAY BE WRONG IN. Unchanged bytes mean nothing has overwritten
            this element since the unknown was stored, so the unknown still describes it. Changed bytes mean
@@ -114831,12 +114837,32 @@ static JSValueConst js_ab_span_get(const JSArrayBuffer *abuf, uint32_t offset, i
            SAME bytes leaves it standing, which answers with an unknown where the page wrote a number: that
            fabricates unknownness and §Solver-half prefers it, because uncertainty keeps the arm. The opposite
            error would hand back the example as a concrete number, which is the de-taint this record exists to
-           prevent, and no spelling of this check can make it. */
-        if (memcmp(&abuf->data[offset], s->witness, s->length) != 0)
-            return JS_UNINITIALIZED;
-        return s->unknown;
+           prevent, and NO SPELLING OF THIS CHECK CAN MAKE THAT ERROR. */
+        if (memcmp(&abuf->data[offset], s->witness, (size_t)length) != 0)
+            continue;
+        *pval = js_dup(s->unknown);
+        return true;
     }
-    return JS_UNINITIALIZED;
+    return false;
+}
+
+/* GROW THE LIST BY ONE AND HAND BACK THE NEW ENTRY. A LOST SPAN IS A SILENT DE-TAINT, which is why OOM here is
+   fatal rather than a return code: dropping the record leaves an example byte in the block with nothing to say
+   it is an example, so the next read hands the page a concrete number where it had unknown input and every arm
+   behind the fork goes with it — arriving as an allocation failure nobody would connect to it. */
+static JSArrayBufferSpan *js_ab_span_push(JSRuntime *rt, JSArrayBuffer *abuf)
+{
+    if (abuf->n_span == abuf->span_size) {
+        int ns = abuf->span_size ? abuf->span_size * 2 : 8;
+        JSArrayBufferSpan *nv = js_realloc_rt(rt, abuf->span, sizeof(*nv) * (size_t)ns);
+
+        CHECK(nv != NULL,
+              "OOM recording that a typed-array element holds unknown external input — dropping the span "
+              "would leave its example byte in the data block as a concrete number");
+        abuf->span = nv;
+        abuf->span_size = ns;
+    }
+    return &abuf->span[abuf->n_span++];
 }
 
 /* RECORD THAT THIS ELEMENT'S BYTES ARE UNKNOWN EXTERNAL INPUT. Called AFTER the example (where there is one)
@@ -114855,45 +114881,56 @@ static void js_ab_span_set(JSContext *ctx, JSArrayBuffer *abuf, uint32_t offset,
         (int64_t)offset + length > (int64_t)abuf->byte_length)
         return;   /* 10.4.5.18 step 3 skipped the store, so there is nothing to describe */
     for (i = abuf->n_span - 1; i >= 0; i--) {
-        if (abuf->span[i].offset == offset && abuf->span[i].length == length) {
+        if (abuf->span[i].kind == JS_AB_SPAN_AT && abuf->span[i].offset == offset &&
+            abuf->span[i].extent == (uint32_t)length) {
             s = &abuf->span[i];
             JS_FreeValueRT(rt, s->unknown);
             break;
         }
     }
-    if (s == NULL) {
-        if (abuf->n_span == abuf->span_size) {
-            int ns = abuf->span_size ? abuf->span_size * 2 : 8;
-            JSArrayBufferSpan *nv = js_realloc_rt(rt, abuf->span, sizeof(*nv) * (size_t)ns);
-
-            /* A LOST SPAN IS A SILENT DE-TAINT, WHICH IS WHY THIS IS FATAL RATHER THAN A RETURN CODE. Dropping
-               the record leaves the example byte in the block with nothing to say it is an example, so the
-               next read hands the page a concrete number where it had unknown input and every arm behind the
-               fork goes with it — the exact loss this whole record exists to prevent, arriving as an
-               allocation failure nobody would connect to it. §Offensive programming makes OOM a CHECK for the
-               same reason a dropped flow corrupts the frontier. */
-            CHECK(nv != NULL,
-                  "OOM recording that a typed-array element holds unknown external input — dropping the span "
-                  "would leave its example byte in the data block as a concrete number");
-            abuf->span = nv;
-            abuf->span_size = ns;
-        }
-        s = &abuf->span[abuf->n_span++];
-    }
+    if (s == NULL)
+        s = js_ab_span_push(rt, abuf);
+    s->kind = JS_AB_SPAN_AT;
     s->offset = offset;
-    s->length = (uint8_t)length;
+    s->extent = (uint32_t)length;
     memcpy(s->witness, &abuf->data[offset], (size_t)length);
     s->unknown = js_dup(unknown);
+    s->index = JS_UNINITIALIZED;
 }
 
-/* THE BUFFER'S STORAGE IS GOING, SO EVERY SPAN NAMING IT GOES TOO — one counted reference each, exactly as
-   JSBufferStateView's are released in JS_BufferStateFree. */
+/* RECORD THAT SOME ELEMENT OF THIS BUFFER HOLDS THIS VALUE AND NOTHING KNOWS WHICH — 10.4.5.18 with an unknown
+   INDEX. Nothing is written to the block, because there is no offset to write at; the span IS the whole of what
+   this store leaves behind, which is why it is recorded even though no byte moved.
+   IT IS NEVER MERGED WITH AN EXISTING ONE, unlike the AT kind. Two unknown-index writes are two facts about two
+   values, and a read covered by both answers with the later — picking the older would be a claim that the
+   second write did not happen. */
+static void js_ab_span_set_any(JSContext *ctx, JSArrayBuffer *abuf, JSValueConst index,
+                               JSValueConst unknown)
+{
+    JSRuntime *rt = ctx->rt;
+    JSArrayBufferSpan *s;
+
+    if (abuf->detached || abuf->data == NULL || abuf->byte_length <= 0)
+        return;
+    s = js_ab_span_push(rt, abuf);
+    s->kind = JS_AB_SPAN_ANY;
+    s->offset = 0;
+    s->extent = (uint32_t)abuf->byte_length;   /* see JSArrayBufferSpan: whole-buffer until a domain hook exists */
+    memset(s->witness, 0, sizeof s->witness);
+    s->unknown = JS_IsUninitialized(unknown) ? JS_UNINITIALIZED : js_dup(unknown);
+    s->index = js_dup(index);
+}
+
+/* THE BUFFER'S STORAGE IS GOING, SO EVERY SPAN NAMING IT GOES TOO — one counted reference per field that has
+   one, exactly as JSBufferStateView's is released in JS_BufferStateFree. */
 static void js_ab_spans_free(JSRuntime *rt, JSArrayBuffer *abuf)
 {
     int i;
 
-    for (i = 0; i < abuf->n_span; i++)
+    for (i = 0; i < abuf->n_span; i++) {
         JS_FreeValueRT(rt, abuf->span[i].unknown);
+        JS_FreeValueRT(rt, abuf->span[i].index);
+    }
     js_free_rt(rt, abuf->span);
     abuf->span = NULL;
     abuf->n_span = 0;
@@ -115214,8 +115251,10 @@ void JS_BufferStateFree(JSRuntime *rt, void *blob)
         return;
     for (i = 0; i < st->n_view; i++)
         JS_FreeValueRT(rt, JS_MKPTR(JS_TAG_OBJECT, st->view[i].obj));
-    for (i = 0; i < st->n_span; i++)
+    for (i = 0; i < st->n_span; i++) {
         JS_FreeValueRT(rt, st->span[i].unknown);
+        JS_FreeValueRT(rt, st->span[i].index);
+    }
     js_free_rt(rt, st->span);
     js_free_rt(rt, st->view);
     js_free_rt(rt, st->data);
@@ -115301,7 +115340,11 @@ void *JS_BufferStateSave(JSContext *ctx, JSValueConst obj)
             goto fail;
         for (i = 0; i < abuf->n_span; i++) {
             st->span[i] = abuf->span[i];
+            /* EVERY OWNED FIELD, not just the first. An ANY span holds a second reference — the unknown OFFSET
+               the read derives from — and a copy that dup'd one of the two would hand the baseline a value
+               whose count the free then over-releases. */
             (void)js_dup(abuf->span[i].unknown);
+            (void)js_dup(abuf->span[i].index);
             st->n_span = i + 1;
         }
     }
@@ -115442,6 +115485,7 @@ void JS_BufferStateRestore(JSContext *ctx, JSValueConst obj, void *blob)
         for (i = 0; i < st->n_span; i++) {
             abuf->span[i] = st->span[i];
             (void)js_dup(st->span[i].unknown);
+            (void)js_dup(st->span[i].index);
             abuf->n_span = i + 1;
         }
     }
