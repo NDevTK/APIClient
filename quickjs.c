@@ -1221,6 +1221,19 @@ typedef struct JSForInIterator {
     JSAtom pending;
 } JSForInIterator;
 
+/* THE ARRAY AND STRING ITERATORS' RECORD (hoisted for the time-travel capture, as JSAsyncFromSyncIteratorData is
+   for the for-await consumer): ONE struct behind two classes, JS_CLASS_ARRAY_ITERATOR and
+   JS_CLASS_STRING_ITERATOR, which is why JS_IterStateSave's arm takes both together.
+   ITS MUTABLE HALF IS `obj` AND `idx` AND ITS IMMUTABLE HALF IS `kind`, which is what its time-travel arm is
+   built out of: the two constructions write all three and never write them again, and the only writes after
+   that are the two `.next()`s advancing `idx` and RELEASING `obj` on exhaustion. */
+typedef struct JSArrayIteratorData {
+    JSValue obj;   /* the source (an object, or a STRING for JS_CLASS_STRING_ITERATOR); released and set
+                      UNDEFINED by the walk that exhausts it, which is what makes it a MUTABLE field */
+    JSIteratorKindEnum kind;
+    int64_t idx;   /* LengthOfArrayLike is ToLength, so a source can be longer than a uint32 cursor can count */
+} JSArrayIteratorData;
+
 typedef struct JSRegExp {
     JSString *pattern;
     JSString *bytecode; /* also contains the flags */
@@ -12306,10 +12319,15 @@ void JS_ObjStateFree(JSRuntime *rt, void *blob)
  * compared, exactly as JSObjState's `has_data` is and for the same reason: a JSObject does not change class, so
  * a blob whose class disagrees was read off a different object than it names.
  *
- * WHAT IS OWNED HERE IS ONE ATOM, and it is why this blob is the engine's rather than a host CowRecord: an atom
- * is a counted reference that no offset list of JSValues can name, so a byte copy of this record would take a
- * reference it never counted. `pending` is held for the life of the blob, which is what lets the same blob
- * restore any number of times. */
+ * WHAT EACH ARM OWNS DIFFERS AND THE BLOB IS THE ENGINE'S EITHER WAY, because the reason that covers all of
+ * them is that THE RECORD IS THE ENGINE'S: every one of these structs is private to this file, so there is no
+ * caller who could hand cow_capture_host_record an offset list for one. The for-in arm has the sharper form of
+ * the same argument, and it is the one that would still hold if the layouts were public — what it owns is an
+ * ATOM, a counted reference no offset list of JSValues can name, so a byte copy would take a reference it never
+ * counted. The array/string arm owns a JSValue, which such a list COULD have named; for that one the private
+ * struct is the whole reason, which is why it is stated first.
+ * EVERY OWNED HALF IS HELD FOR THE LIFE OF THE BLOB — the atom here, the source value there — which is what
+ * lets the same blob restore any number of times rather than giving its only reference away on the first. */
 typedef struct JSIterState {
     JSClassID class_id;
     union {
@@ -12328,6 +12346,26 @@ typedef struct JSIterState {
             uint32_t array_length;
             uint8_t  is_array;
         } for_in;
+        struct {                   /* JS_CLASS_ARRAY_ITERATOR and JS_CLASS_STRING_ITERATOR — ONE record behind
+                                      two classes (JSArrayIteratorData), so one arm serves both */
+            /* RESTORED — the mutable half, and BOTH of its fields are written by the same .next(): the cursor
+               advances, and the walk that runs out RELEASES THE SOURCE (`JS_FreeValue(ctx, it->obj); it->obj =
+               JS_UNDEFINED`, in js_array_iter_next_step and js_string_iterator_next alike).
+               THAT RELEASE IS WHY `obj` IS A COUNTED REFERENCE HERE AND for_in's IS AN IDENTITY. There the
+               receiver is written once and the record holds it for the iterator's whole life, so the entry
+               keeping the iterator alive keeps the receiver alive and a bare pointer is enough to compare. Here
+               the record DROPS its reference the moment one arm exhausts the walk — a sibling's blob holding a
+               bare pointer would then be naming freed storage, and restoring it would install a dangling value
+               into a live record. So the blob holds its own, for the same reason for_in's atom is dup'd: one
+               entry is restored on every switch for the life of the flow. */
+            JSValue obj;           /* OWNED */
+            int64_t idx;
+            /* ASSERTED, never restored — the immutable half. `kind` is written by the two constructions
+               (js_create_array_iterator and js_string_iterator_create_step) and by nothing else, so putting it
+               back would be restoring a fact rather than a write; holding it is what makes a future write to it
+               fail loudly at the restore instead of being dropped by every context switch. */
+            JSIteratorKindEnum kind;
+        } array_iter;
     } u;
 } JSIterState;
 
@@ -12353,6 +12391,14 @@ void *JS_IterStateSave(JSContext *ctx, JSValueConst obj)
         st->u.for_in.obj_id = JS_VALUE_GET_PTR(it->obj);
         st->u.for_in.array_length = it->array_length;
         st->u.for_in.is_array = it->is_array;
+        break;
+    }
+    case JS_CLASS_ARRAY_ITERATOR:
+    case JS_CLASS_STRING_ITERATOR: {
+        const JSArrayIteratorData *it = p->u.array_iterator_data;
+        st->u.array_iter.obj = js_dup(it->obj);
+        st->u.array_iter.idx = it->idx;
+        st->u.array_iter.kind = it->kind;
         break;
     }
     default:
@@ -12390,6 +12436,20 @@ void JS_IterStateRestore(JSContext *ctx, JSValueConst obj, void *blob)
         it->pending = JS_DupAtom(ctx, st->u.for_in.pending);
         break;
     }
+    case JS_CLASS_ARRAY_ITERATOR:
+    case JS_CLASS_STRING_ITERATOR: {
+        JSArrayIteratorData *it = p->u.array_iterator_data;
+        DCHECK(it->kind == st->u.array_iter.kind,
+               "an array or string iterator's IMMUTABLE half moved under a COW swap — its `kind` is written "
+               "after construction now, so this blob saves a field the swap then drops on every context "
+               "switch; restore it here as well as assert it");
+        it->idx = st->u.array_iter.idx;
+        /* the record's own reference goes and the blob's is DUP'd in — the blob keeps its own, which is what
+           lets one entry restore on every switch. An EXHAUSTED walk's saved `obj` is JS_UNDEFINED, and both
+           halves of that are free. */
+        set_value(ctx, &it->obj, js_dup(st->u.array_iter.obj));
+        break;
+    }
     default:
         DFAIL("an iteration record's state is being restored for a class JS_IterStateSave has no arm for — the "
               "save accepted this class, so the two switches have drifted apart");
@@ -12406,6 +12466,10 @@ void JS_IterStateFree(JSRuntime *rt, void *blob)
     switch (st->class_id) {
     case JS_CLASS_FOR_IN_ITERATOR:
         JS_FreeAtomRT(rt, st->u.for_in.pending);
+        break;
+    case JS_CLASS_ARRAY_ITERATOR:
+    case JS_CLASS_STRING_ITERATOR:
+        JS_FreeValueRT(rt, st->u.array_iter.obj);
         break;
     default:
         DFAIL("an iteration record's state is being freed for a class JS_IterStateSave has no arm for — the "
@@ -93231,12 +93295,6 @@ static JSValue js_array_sort_vfini(JSContext *ctx, void *st, bool take_result)
     return r;
 }
 
-typedef struct JSArrayIteratorData {
-    JSValue obj;
-    JSIteratorKindEnum kind;
-    int64_t idx;   /* LengthOfArrayLike is ToLength, so a source can be longer than a uint32 cursor can count */
-} JSArrayIteratorData;
-
 static void js_array_iterator_finalizer(JSRuntime *rt, JSValueConst val)
 {
     JSObject *p = JS_VALUE_GET_OBJ(val);
@@ -93363,6 +93421,25 @@ static JSValue js_string_iterator_create_fini(JSContext *ctx, void *st, bool tak
     return r;
 }
 
+/* THE ONE REACH of an array or string iterator's record from anywhere that can advance it, which is what makes
+   the time-travel capture unmissable — the same shape for_in_reach has and for the same reason. THREE sites come
+   through here and they are the whole population: js_array_iter_next_step's AIN_START and its AIN_INDEX (the
+   record is read again after the length read, which is a REQUEST and therefore a place the flow can park), and
+   js_string_iterator_next. `grep -n 'array_iterator_data' quickjs.c` finds only those, the record's construction
+   and its finalizer/mark pair — and the finalizer and the mark go through the union directly and deliberately,
+   because a capture during collection would dup values on an object being torn down.
+   A record a flow has reached is one it may write, and the delta dedups to one entry per iterator per flow, so
+   capturing at the REACH rather than at each of the four writes leaves no write site to forget. It takes the
+   CLASS because one record stands behind two of them; JS_GetOpaque2's TypeError is the page's — a receiver is
+   page-supplied input, so a foreign one is refused and never asserted on. */
+static JSArrayIteratorData *array_iter_reach(JSContext *ctx, JSValueConst this_val, JSClassID class_id)
+{
+    JSArrayIteratorData *it = JS_GetOpaque2(ctx, this_val, class_id);
+    if (it)
+        cow_capture_iter(ctx, JS_VALUE_GET_OBJ(this_val));
+    return it;
+}
+
 /* WHICH STEP OF 23.1.5.1's CLOSURE EACH STAGE RESTS AT. %ArrayIteratorPrototype%.next is one line —
    GeneratorResume — so the algorithm a parked flow is really in is the abstract closure CreateArrayIterator
    built, and its step 1.b.* is what each stage names. The typed-array arm reads its length from the buffer
@@ -93387,7 +93464,7 @@ static int js_array_iter_next_step(JSContext *ctx, void *st, JSValue cb_result, 
         /* FIRST, before anything that can throw: the teardown frees exactly what the state holds. */
         s->obj = JS_UNDEFINED; s->el = JS_UNDEFINED; s->result = JS_UNDEFINED;
         s->len = 0; s->idx = 0; s->kind = JS_ITERATOR_KIND_VALUE;
-        it = JS_GetOpaque2(ctx, s->hdr.this_val, JS_CLASS_ARRAY_ITERATOR);
+        it = array_iter_reach(ctx, s->hdr.this_val, JS_CLASS_ARRAY_ITERATOR);
         if (!it) return -1;
         if (JS_IsUndefined(it->obj)) {   /* already exhausted: the closure has returned */
             s->result = js_create_iterator_result(ctx, JS_UNDEFINED, true);
@@ -93415,7 +93492,7 @@ static int js_array_iter_next_step(JSContext *ctx, void *st, JSValue cb_result, 
         s->hdr.stage = AIN_INDEX;
     }
     if (s->hdr.stage == AIN_INDEX) {
-        it = JS_GetOpaque(s->hdr.this_val, JS_CLASS_ARRAY_ITERATOR);
+        it = array_iter_reach(ctx, s->hdr.this_val, JS_CLASS_ARRAY_ITERATOR);
         DCHECK(it != NULL, "the array iterator lost its data across its own length read");
         s->idx = it->idx;
         if (s->idx >= s->len) {
@@ -98202,7 +98279,7 @@ static JSValue js_string_iterator_next(JSContext *ctx, JSValueConst this_val,
     uint32_t idx, c, start;
     JSString *p;
 
-    it = JS_GetOpaque2(ctx, this_val, JS_CLASS_STRING_ITERATOR);
+    it = array_iter_reach(ctx, this_val, JS_CLASS_STRING_ITERATOR);
     if (!it) {
         *pdone = false;
         return JS_EXCEPTION;

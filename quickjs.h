@@ -2031,8 +2031,8 @@ typedef struct JSTimeTravelHooks {
        captures per object and puts back what it saved (JS_ObjStateSave / Restore / Free). */
     void (*obj_state)(JSContext *ctx, JSValueConst obj);
     /* Before a flow ADVANCES a shared ITERATION RECORD — the engine's own class opaque behind an iterator
-       object (`p->u.for_in_iterator` and its siblings), whose cursor says how far through the walk this
-       object is. `obj` is the ITERATOR object.
+       object (`p->u.for_in_iterator`, `p->u.array_iterator_data`, and the siblings that have no arm yet),
+       whose cursor says how far through the walk this object is. `obj` is the ITERATOR object.
        IT IS NOT obj_state's UNIT AND NOT prop_write's, which is why it is a hook and not a widening: an
        iteration cursor is neither a property slot nor one of the three fields every object has, and
        cow_capture_obj draws that boundary itself, in the last sentence of its own comment:
@@ -2224,27 +2224,48 @@ JS_EXTERN void  JS_ObjStateRestore(JSContext *ctx, JSValueConst obj, void *blob)
 JS_EXTERN void  JS_ObjStateFree(JSRuntime *rt, void *blob);
 
 /* A shared ITERATION RECORD's state (JSTimeTravelHooks.iter_state), saved into an engine-owned blob and put
-   back on a context switch — the iterator twin of JS_ObjStateSave, engine-owned for the same reason: what it
-   holds is an ATOM, which is a counted reference, so a byte copy would take a reference it never counted and
-   the next restore would free a name the blob still holds. That is exactly why the host's CowRecord could not
-   express this record: its `val_off` names JSValues and has no way to name an atom.
+   back on a context switch — the iterator twin of JS_ObjStateSave, engine-owned for the reason that covers
+   every arm: THE RECORD IS THE ENGINE'S. Each of these structs is private to quickjs.c, so there is no caller
+   anywhere who could hand the host's cow_capture_host_record an offset list for one, and that is true whatever
+   a particular arm happens to own. The for-in arm has the sharper half of the same argument and it is kept
+   because it is the one that would still hold if the layouts were public: what THAT record owns is an ATOM,
+   a counted reference `val_off` cannot name at all, since it names JSValues. The array/string arm owns a
+   JSValue, which `val_off` COULD have named — so for that one the private struct is the whole reason, which is
+   why the general argument is stated first and the atom second.
    THE CLASS DECIDES THE ARMS AND AN UNKNOWN ONE CRASHES IN ALL THREE. Save's default is the gate — a class
    whose opaque record grew a cursor and reached this hook has no arm here yet, and it says so by name — and
    Restore's and Free's are then guards over a value this engine enumerates: Save accepted the class, so a blob
    that exists names a class all three know, and a default reached in either of them means the three lists have
    drifted apart. That is the assert that makes forgetting an arm impossible, and it is why there is no fourth
    place to keep in step.
-   NAMED RESIDUAL — WHAT IS NOT COVERED: only the for-in iterator has an arm. Every other engine class whose
-   opaque record carries a cursor its own `.next()` advances is still shared whole across a snapshot fork, and
-   that is a PROPERTY rather than a list — derive today's set with
+   NAMED RESIDUAL — WHAT IS NOT COVERED: the for-in iterator and the array/string one have arms. Every other
+   engine class whose opaque record carries a cursor its own `.next()` ADVANCES is still shared whole across a
+   snapshot fork, and that is a PROPERTY rather than a list — derive today's set with
        grep -nE '^ +struct JS[A-Za-z]+ \*[a-z_]*iterator[a-z_]*;' engine/qjs/quickjs.c
-   and read each record for a field its next() writes. WHAT THE NEXT DIFF BUILDS: that class's arm in all three
-   functions below, plus the capture at the one place its advance reaches the record — for a record whose
-   cursor advance also FREES an owned JSValue (an iterator that clears its source on exhaustion), the arm's
-   save holds a counted reference on it exactly as the atom is held here. HOW ITS ABSENCE WOULD SHOW: no abort
-   at all — two arms of a fork taken inside a `for...of` each walk a proper subset of the sequence, and an arm
-   that runs the iterator to exhaustion ends the sibling's loop as well, so the observation is a loop body that
-   ran fewer times than the source has elements with nothing in any log to say so. */
+   and read each record for a field its next() WRITES. That second step is the whole of the derivation and not
+   a formality: run on this tree it returns records with NO cursor at all — a wrapper holding two JSValues
+   written once at construction, which delegates, so the cursor it walks belongs to the wrapped iterator and is
+   that object's own arm to have. A record is a member of this population because its next() writes it, never
+   because its name says iterator.
+   THE STRUCTURAL FACT, WHICH IS WHAT PREDICTS THE NEXT MEMBER AND WHAT DECIDES WHETHER AN EXISTING ARM IS ITS
+   TEMPLATE: these records differ in WHAT THE CURSOR OWNS, and there are three shapes, of which the two built
+   here are the easy ones. (a) A cursor that owns nothing beside itself — for-in's `idx` — is a scalar the
+   restore puts back. (b) A cursor whose advance RELEASES AN OWNED VALUE — the array/string record dropping its
+   source on exhaustion — needs the blob to hold a counted reference, which is the arm below. (c) A cursor that
+   is A POSITION IN A STRUCTURE A SIBLING CAN MUTATE OR FREE, or one that DECIDES WHAT THE RECORD OWNS, is
+   neither: putting back a refcounted link into a list another arm has deleted from is not restoring a value,
+   and putting back an index over a half-consumed owned array without putting back the ownership double-frees
+   or leaks. Nothing in (a) or (b) is a template for (c), and reading a record for its cursor's SHAPE is what
+   says which one a class is before any of it is written.
+   WHAT THE NEXT DIFF BUILDS: that class's arm in all three functions below, plus the capture at every place
+   its advance reaches the record — through ONE accessor where the sites converge, as for_in_reach and
+   array_iter_reach are, so a write site cannot be forgotten. Where the class is a shape (c), the arm is a
+   subproblem of its own and the ownership question is answered before the cursor is.
+   HOW ITS ABSENCE WOULD SHOW: no abort at all — a loop body that ran fewer times than its source has elements,
+   with nothing in any log to say so, and an arm that runs the iterator to exhaustion ending its sibling's loop
+   as well. What separates that from a loop that simply was not reached is the swap census: `cowStateAsks` and
+   `cowStateMade` carry the `iter` unit per kind, so a class with no capture contributes to NEITHER, while one
+   whose capture is reached and refuses contributes to the asks alone. */
 JS_EXTERN void *JS_IterStateSave(JSContext *ctx, JSValueConst obj);
 JS_EXTERN void  JS_IterStateRestore(JSContext *ctx, JSValueConst obj, void *blob);
 JS_EXTERN void  JS_IterStateFree(JSRuntime *rt, void *blob);
