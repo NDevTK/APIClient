@@ -22,30 +22,50 @@ function sendToOffscreen(msg) {
      installed — its absence is a broken load order, not an optional feature. Returning a failure response
      instead reported "analysis worker dispatch unavailable" as this document's `_astError` and moved on,
      which is a page that silently never reached the frontier at all. */
-  /* …AND WHICH OF THE TWO CAUSES IT IS, BECAUSE THEY TAKE OPPOSITE WORK AND THE ASSERT ABOVE NAMED ONLY
-     ONE. "A broken load order" is the cause when bridge.js NEVER RAN; it is NOT the cause when bridge.js
-     ran and THREW before reaching its install. bridge.js is ast-worker.html's last script and installs
-     `astDispatch` at its own line 6392 of 6628, so a throw anywhere in the six thousand lines above that
-     leaves this exact state with the load order perfectly correct — and a classic script that throws does
-     not stop the ones after it, so nothing else about the zone looks wrong. One reported state, two
-     causes, and the repair for each is in a different file.
-     `_engineLog` IS THE WITNESS AND IT COSTS NOTHING. bridge.js sets it unconditionally at its own line
-     40, before anything that can throw, and it is already a real global this zone publishes (the corpus
-     probe reads `self._engineLog` off the page). So: present here with `astDispatch` missing means
-     bridge.js STARTED AND DIED IN BETWEEN — read that file's own error, not this one's load order.
-     Absent means the script genuinely never ran, which is the load-order failure the message below
-     names. It is a WITNESS and not a second contract: nothing reads it FOR this purpose, so it cannot
-     drift from what it already means. */
+  /* …AND WHICH OF THE **THREE** STATES IT IS. THIS COMMENT NAMED TWO AND BOTH WERE REFUTED BY
+     MEASUREMENT, recorded here rather than quietly rewritten because the reasoning that produced them is
+     the reasoning a reader re-derives. It said: bridge.js is ast-worker.html's last script and installs
+     `astDispatch` at its own line 6392 of 6628, so either it NEVER RAN (a broken load order) or it RAN AND
+     THREW in between — and it offered `_engineLog`, set unconditionally at bridge.js line 40, as the witness
+     telling those apart.
+     WHAT REFUTED IT: a census lane drove ONE mirrored site frozen, twice, one pass apart, same artifact and
+     same command. This fired in one pass and NOT the next, and the pass it fired in reported TWO COMPLETED
+     ENGINE RUNS. Both facts kill both arms. An intermittent absence is neither a load order (broken every
+     time) nor a throw before an install (every time); and an `_engineLog` ROW is written only where an
+     engine RAN, which can only happen through this one entry — so in the very pass that fired, the dispatch
+     was installed and working for other documents, while both arms predict a run count of ZERO.
+     THE THIRD STATE IS A RACE AND IT IS THE COMMON ONE: a document SEEDED BEFORE bridge.js reached its
+     install. That is a TRANSIENT, and the retired witness read it as "started and died in between" — a
+     terminal verdict on a moment.
+     SO THE WITNESS IS THE ROW COUNT AND NOT THE ARRAY'S EXISTENCE. A NON-EMPTY `_engineLog` is POSITIVE
+     EVIDENCE that this entry has already worked in this document, so the state here is a race. An ABSENT
+     array is still the load order. An array PRESENT AND EMPTY cannot be separated at this line at all — it
+     is the first document either way — and the message says so rather than guessing, because a diagnostic
+     naming a cause it cannot know is precisely what is being replaced.
+     NAMED RESIDUAL. WHAT IS NOT COVERED: the race itself. A seed arriving before the one entry exists is
+     this zone's own logic being incomplete rather than a stranger's input, so the abort is correct until it
+     is built out — but it is silently losing documents, and `ensureOffscreen` returns `Promise.resolve()`
+     with "Nothing to create from inside it", so NOTHING waits for readiness. WHAT THE NEXT DIFF BUILDS: a
+     readiness promise bridge.js settles at its own end — it already prints `bridge ready` there — which
+     this function awaits before dispatching, settling REJECTED if bridge.js fails so a genuine throw still
+     aborts here instead of hanging. That makes this state impossible rather than reported, and retires the
+     whole ladder. HOW ITS ABSENCE WOULD SHOW: exactly what was measured — one document reporting unanalysed
+     on one pass and analysed on the next, same bytes and same command, beside a run count proving the entry
+     was working while that document was told it was not. */
   DCHECK(typeof self.astDispatch === "function",
          "the trusted zone has no astDispatch to hand this document to — it is the ONE entry to the host " +
          "WFQ pool, so without it the document never becomes work on the frontier and reports as " +
-         "unanalysed. WHICH FAILURE THIS IS: bridge.js " +
-         (Array.isArray(self._engineLog)
-            ? "RAN AND THREW before installing it — its own line 40 got as far as `_engineLog` and its " +
-              "line 6392 never ran, so the load ORDER is correct and the fault is a throw inside " +
-              "bridge.js; read that script's error rather than this document's load"
-            : "NEVER RAN AT ALL — `_engineLog` is absent too, so ast-worker.html did not reach its last " +
-              "script and this IS the broken load order"));
+         "unanalysed. WHICH STATE THIS IS: " +
+         (!Array.isArray(self._engineLog)
+            ? "bridge.js NEVER RAN — `_engineLog` is absent too, so ast-worker.html did not reach its last " +
+              "script and this IS a broken load order"
+            : self._engineLog.length > 0
+              ? "A RACE, NOT A FAILURE — " + self._engineLog.length + " engine run(s) are already logged " +
+                "and a run exists only by coming through this entry, so the dispatch IS installed and this " +
+                "document seeded before it was. Build the readiness gate; do not hunt a throw in bridge.js"
+              : "UNSEPARABLE AT THIS LINE — `_engineLog` is present and EMPTY, so this is the first document " +
+                "either way: bridge.js may have thrown before its line 6392, or this seed simply beat the " +
+                "install. Read bridge.js's own error to tell them apart"));
   return self.astDispatch(msg);
 }
 // The offscreen document's lifecycle + the cross-session resume kick are owned by
