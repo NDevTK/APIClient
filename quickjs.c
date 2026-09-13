@@ -343,6 +343,17 @@ struct JSRuntime {
        this struct two different sizes, which is the skew that once had two translation units disagree about a
        layout and read a record one slot early. */
     JSGCObjectHeader *gc_decref_parent;
+    /* AND WHICH OF THAT PARENT'S EDGES THE WALK IS ON, 1-based, reset at each parent. The field above turned
+       "some edge somewhere in the engine" into "some edge of an async_function", and a kind is not something
+       a reader can act on — a mark function reports a field list, and the list is long and includes whole
+       arrays. A READER ACTS ON A FIELD, and an ordinal is the only way to name one without a per-field string
+       table beside each mark function, which is the hand-kept second copy of a walk and drifts the day a
+       field is added. Counting a mark function's reports to N is mechanical and cannot go stale, because the
+       thing being counted IS the code the reader is being sent to read.
+       Written UNCONDITIONALLY for both of gc_decref_parent's reasons — one struct size in both builds, and a
+       value a debugger can read on either — and it is one increment on a path that already does a load, a
+       branch and a store per edge. */
+    uint32_t gc_decref_edge;
     /* THE POST-COLLECTION SWEEP'S WORKLIST — see js_gc_sweep. It exists because a collection is a phase in
        which some work is unsafe rather than a phase in which nothing may happen: a realm whose last reference
        goes away INSIDE the collection releases its own references there (that half is phase-safe) and parks
@@ -10194,34 +10205,62 @@ static void gc_decref_child(JSRuntime *rt, JSGCObjectHeader *p)
        that what is left on each is the count held from OUTSIDE the graph; reaching zero here means some parent
        reported this child to mark_children MORE TIMES than it dup'd it, so the subtraction is about to take a
        live object negative and hand it to the sweep.
-       IT IS THE PARENT THAT IS WRONG AND NOT THE CHILD, WHICH IS WHY THE PARENT IS WHAT THIS NAMES. The
-       producers are all the parent's: a field MARKED but never dup'd; a field dup'd once and marked twice; a
-       pointer copied into a second structure without incrementing, so two holders mark what one reference
-       backs; and a release that gave a reference back without dropping the edge that still names it.
+       THIS SAID "IT IS THE PARENT THAT IS WRONG AND NOT THE CHILD", AND THAT IS AN OVER-CLAIM THAT SENT A
+       READER TO THE WRONG MARK FUNCTION. The failing predicate is about the RUNNING TOTAL: the child was
+       already at zero when this parent's edge arrived, so the walk has now reported MORE edges to it than it
+       has counted references — and any of those parents may be the one that over-reported. This parent is
+       simply the one whose edge tipped it, and which parent that is depends on gc_obj_list order. MEASURED,
+       which is why the sentence is retired rather than softened: two archived smoke runs at two revisions
+       broke this same invariant on the same fixture and named parents of DIFFERENT KINDS (an async_function
+       in one, an ordinary js_object in the other) — so a brief written off the first one went looking for a
+       defect in async_func_mark, which the second refutes.
+       THERE ARE ALSO TWO ENDS, NOT ONE, and the retired sentence hid the second. The mark side over-reports:
+       a field MARKED but never dup'd; a field dup'd once and marked twice; a pointer copied into a second
+       structure without incrementing, so two holders mark what one reference backs. The HOLDER side
+       under-references: a release that gave a reference back without dropping the edge that still names it,
+       or a value stored in two places on one dup. Those take opposite work — one is a mark function to read,
+       the other is a store to read — and a message that names only the first is a message that costs the
+       reader the second. Both are named below, and both fit only because the text was cut to the fork's own
+       APICLIENT_QJS_REASON_CAP (quickjs-check.h, 512 — NOT the host emitter's, which is 3776 and would not
+       have cut anything): the old reason composed to 532 bytes and arrived as `[reason truncated: 511 of 532
+       bytes]`, so the clause naming the producers was the half cut out of every log that carried this abort.
+       THIS RECORD RETIRES WHEN THE ASSERT CAN NAME THE OVER-MARKING PARENT RATHER THAN THE TIPPING ONE, which
+       is a walk this file does not have: on the failing branch, re-run mark_children over the whole
+       gc_obj_list with a counting callback and report every parent that reports THIS child, with its count.
+       A parent reporting it twice is named outright; where every parent reports it once the defect is on the
+       holder side and the list is the set of stores to read. Until that exists the sentence above is the only
+       thing standing between the next reader and the mark function this one sent a lane to.
        THIS SAID "JS_REF_COUNT(p) > 0", WHICH IS ITS OWN CONDITION SPELLED TWICE. A reader meeting it learned
        neither what invariant had broken nor where to look, and this callback is reached from every gc_mark in
        the engine — so the message named one line for the whole object graph and the crash had to be
        rediscovered rather than read. The kind of the PARENT is what turns "some edge somewhere" into a handful
        of mark functions worth reading, and the two pointers are where a debugger starts. The parent is read
        from the runtime rather than derived here, because a callback cannot see its caller: see
-       JSRuntime.gc_decref_parent. */
+       JSRuntime.gc_decref_parent and gc_decref_edge.
+       THE CHILD'S CLASS IS REPORTED BECAUSE "a js_object" IS EVERY OBJECT IN THE ENGINE. The class id is the
+       one field that turns it into a handful of mark functions and one finalizer, it is a plain integer in an
+       allocation the sweep has not touched (a zero refcount only moves a header to tmp_obj_list), and it is
+       read only on the failing branch — DCHECKF evaluates its arguments inside the `if`. It is -1 for a child
+       that is not a JSObject, because only a JSObject has one. */
+    rt->gc_decref_edge++;   /* 1-based, and BEFORE the assert so the number names THIS edge */
     DCHECKF(JS_REF_COUNT(p) > 0,
-            "the collector's decref pass found a mark edge with no counted reference behind it. The CHILD %p "
-            "is a %s (gc_obj_type %d) already at refcount 0. The PARENT whose children are being walked is "
-            "%p, a %s (gc_obj_type %d) — that is the object with the defect: it reports this child to "
-            "mark_children more often than it holds references on it. Read that kind's mark function against "
-            "its own dup/free sites for a field it marks and never dup'd, or a pointer it took from another "
-            "structure without incrementing",
+            "a mark edge with no counted reference behind it: refcount hit 0 before the walk finished its "
+            "edges. CHILD %p %s(%d) class %d; PARENT %p %s(%d) edge #%u. THE PARENT IS WHERE THE WALK IS, "
+            "NOT NECESSARILY WHERE THE DEFECT IS: its KIND varies run to run. Count that kind's mark "
+            "function to that edge for a field marked and never dup'd; and read the child's holders for a "
+            "reference released without clearing the field naming it",
             (void *)p,
             js_gc_obj_type_name(JS_GC_TYPE(p)) ? js_gc_obj_type_name(JS_GC_TYPE(p)) : "kind no enum names",
             (int)JS_GC_TYPE(p),
+            JS_GC_TYPE(p) == JS_GC_OBJ_TYPE_JS_OBJECT ? (int)((JSObject *)p)->class_id : -1,
             (void *)rt->gc_decref_parent,
             rt->gc_decref_parent
                 ? (js_gc_obj_type_name(JS_GC_TYPE(rt->gc_decref_parent))
                        ? js_gc_obj_type_name(JS_GC_TYPE(rt->gc_decref_parent))
                        : "kind no enum names")
-                : "no parent recorded — this walk is not the decref pass",
-            rt->gc_decref_parent ? (int)JS_GC_TYPE(rt->gc_decref_parent) : -1);
+                : "none (not the decref pass)",
+            rt->gc_decref_parent ? (int)JS_GC_TYPE(rt->gc_decref_parent) : -1,
+            (unsigned)rt->gc_decref_edge);
     JS_REF_COUNT(p)--;
     if (JS_REF_COUNT(p) == 0 && JS_GC_MARK(p) == 1) {
         list_del(&p->link);
@@ -10246,6 +10285,7 @@ static void gc_decref(JSRuntime *rt)
            handed only the child, and the unbacked edge belongs to this object. Written unconditionally so the
            field means the same thing in both builds and is readable in a debugger on either. */
         rt->gc_decref_parent = p;
+        rt->gc_decref_edge = 0;   /* the ordinal is per PARENT, so it is reset where the parent is written */
         mark_children(rt, p, gc_decref_child);
         JS_GC_MARK(p) = 1;
         if (JS_REF_COUNT(p) == 0) {
@@ -10256,6 +10296,7 @@ static void gc_decref(JSRuntime *rt)
     /* The pass owns this field only for its own length — a stale parent read by anything else would name an
        object that has nothing to do with the walk asking. */
     rt->gc_decref_parent = NULL;
+    rt->gc_decref_edge = 0;
 }
 
 static void gc_scan_incref_child(JSRuntime *rt, JSGCObjectHeader *p)
