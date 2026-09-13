@@ -43,9 +43,11 @@
 bool css_transform_is_transformable(lxb_dom_element_t *el);
 
 /* §2 Terminology's TRANSFORMED ELEMENT — "an element with a computed value other than none for the transform
-   property". The computed value is core/css/css_computed_value.h's, so a `<transform-list>` crashes THERE,
-   naming §3's own `Computed value:` line; what reaches this predicate today is the `none` every element has
-   that no declaration reached, and that is a REAL computed value and not a stand-in for one. */
+   property". The computed value is core/css/css_computed_value.h's, which answers BOTH arms of §3's `Value:`
+   line: `none` for every element no declaration reached, and a real `<transform-list>` with its lengths made
+   absolute for every element one did (core/css/css_transform_function.h holds §7 "The Transform Functions"'
+   grammar that reads it). So this predicate's two answers are both derivations over a value that exists, and
+   a `<transform-list>` here is a declaration to honour rather than one nothing could read. */
 bool css_transform_is_transformed(lxb_dom_element_t *el);
 
 /* THE NEAREST ELEMENT AT OR ABOVE `el` THAT A TRANSFORM APPLIES TO — transformable AND transformed — or NULL

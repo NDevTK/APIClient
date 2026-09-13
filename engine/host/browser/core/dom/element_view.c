@@ -1076,13 +1076,18 @@ static void ev_border_area_px(const EvTarget *t, CssPx out[4])
               "one whose computed `transform` is not `none`. Reporting the border area below would drop an "
               "author's own declaration, which is a WRONG rectangle rather than an absent one. This is not the "
               "scroll-bar term every other member here reads as zero: no scroll bar is a UA CHOICE this model "
-              "makes, and a transform is a declaration the page wrote. WHAT TO BUILD, IN ORDER: "
-              "core/css/css_computed_value.c crashes for the COMPUTED value of a <transform-list> and names "
-              "css-transforms-1 §7 \"The Transform Functions\"' grammar; then §3.2 \"Resolved value of "
-              "transform\"'s reduction of a list to one 4x4 matrix; then THIS step, which post-multiplies the "
-              "matrices of the element and of every ancestor and maps the border area's four corners through "
-              "the product — the result is the AXIS-ALIGNED bounding box of those corners, which is why a "
-              "rotated box reports a rectangle wider than its own width");
+              "makes, and a transform is a declaration the page wrote. WHAT TO BUILD, IN ORDER, AND THE FIRST "
+              "OF THE THREE IS DONE: the COMPUTED value of a <transform-list> is answered now — "
+              "core/css/css_transform_function.h parses css-transforms-1 §7 \"The Transform Functions\"' "
+              "grammar and §3 \"The transform Property\"'s absolutization runs over what it finds. WHAT IS "
+              "LEFT is §12 \"Mathematical Description of Transform Functions\"' matrix for each function and "
+              "§3.2 \"Resolved value of transform\"'s reduction of a list to one 4x4 — build BOTH beside "
+              "core/css/css_transform.c rather than here, because INTERSECTION OBSERVER §3.2.9 \"Calculate a "
+              "target's Effective Transformation Matrix\" needs the same matrix and a second one would drift "
+              "— and then THIS step, which post-multiplies the matrices of the element and of every ancestor "
+              "and maps the border area's four corners through the product. The result is the AXIS-ALIGNED "
+              "bounding box of those corners, which is why a rotated box reports a rectangle wider than its "
+              "own width");
     /* AN INLINE BOX'S BORDER AREA IS NOT AN EXTENT AT A POSITION and cannot be assembled the way the block
        arm below assembles one: CSS 2 §10.3.1 "Inline, non-replaced elements" says the `width` property "does
        not apply", and §10.6.1 says the same of `height` while making the box's own content area a function of

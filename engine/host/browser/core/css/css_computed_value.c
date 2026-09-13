@@ -15,6 +15,7 @@
 #include "core/css/css_property_applies.h"
 #include "core/css/css_shorthand.h"
 #include "core/css/css_style_declaration.h"
+#include "core/css/css_transform_function.h"
 #include "core/css/font_metrics.h"
 #include "core/css/font_size_functions.h"
 #include "core/dom/document.h"
@@ -1324,6 +1325,43 @@ CssBorderSpacing css_computed_border_spacing(lxb_dom_element_t *el)
     return out;
 }
 
+/* css-transforms-1 §3 "The transform Property"'s SECOND ARM — `Computed value: as specified, but with lengths
+   made absolute` over a `<transform-list>`. §7 "The Transform Functions"' grammar is what finds which parts of
+   the value ARE lengths, and it lives in its own component beside core/css/css_transform.c because the parsed
+   list is what §3.2 "Resolved value of transform", CSSOM VIEW §6 "Extensions to the Element Interface" and
+   INTERSECTION OBSERVER §3.2.9 "Calculate a target's Effective Transformation Matrix" each need — none of them
+   wants this string, and a grammar written here would have to be written again for them.
+   A VALUE THAT DOES NOT MATCH §7's GRAMMAR COMPUTES TO `none`, which is not a fallback and is the reason this
+   arm can exist at all. Lexbor's property registry carries no `transform` entry, so a declared transform
+   reaches the cascade as a `__CUSTOM` declaration with its RAW text and NOTHING has checked it against a
+   grammar — this parse is the first thing that looks. CSS Syntax §2.2 "Error Handling" is what it must
+   therefore answer for a mistake: "the user agent checks it against its expected grammar. If it does not match
+   the grammar" it is ignored, so the declaration is dropped and §3's `Initial:` value of `none` is what the
+   element computes. Asserting instead would hand every page an abort switch for this engine over a typo in a
+   stylesheet. A capability this engine has NOT BUILT is the other population and crashes by name inside the
+   parse; see core/css/css_transform_function.h for why those two may not share an answer.
+   THE PERCENTAGE HALF NEEDS NO REFERENCE BOX HERE, which retires the second of the two things the crash this
+   replaced said were missing. §5 "Transform reference box: the transform-box property" is what a percentage
+   translation resolves against and it is a LAYOUT — and §3's line moves LENGTHS, so a percentage is left
+   exactly where css-values-4 §10.11 "Computed Value" leaves every unresolved percentage: as specified. The box
+   becomes a question for the consumer that maps a rectangle through the matrix, not for this value. */
+static char *computed_transform(lxb_dom_element_t *el, char *spec)
+{
+    CssCvFontCtx slot;
+    CssFontMetrics font = css_cv_font_metrics(&slot, el, "transform");
+    CssTransformList list;
+    char *out;
+
+    if (!css_transform_list_parse(css_cv_realm(el), &font, spec, &list)) {
+        free(spec);
+        return css_cv_strdup("none");
+    }
+    free(spec);
+    out = css_transform_list_serialize(&list);
+    css_transform_list_free(&list);
+    return out;
+}
+
 char *css_computed_value(lxb_dom_element_t *el, const char *name)
 {
     char *spec;
@@ -1380,25 +1418,7 @@ char *css_computed_value(lxb_dom_element_t *el, const char *name)
        lengths without the `<transform-function>` grammar, so it cannot absolutize them. */
     if (strcmp(name, "transform") == 0) {
         if (css_cv_is(spec, "none")) return spec;
-        free(spec);
-        DFAIL("css-transforms-1 §3 \"The transform Property\" gives `transform` a `Computed value:` of \"as "
-              "specified, but with lengths made absolute\", and this element's specified value is a "
-              "<transform-list> rather than `none`. TWO THINGS ARE MISSING AND THE FIRST IS THE ONE TO BUILD. "
-              "(1) THE GRAMMAR: `<transform-list> = <transform-function>+`, whose functions are §7 \"The "
-              "Transform Functions\" — this file parses none of them, so it cannot even find which components "
-              "of the value are lengths, let alone absolutize them. (2) THE REFERENCE BOX: §5 \"Transform "
-              "reference box: the transform-box property\" is what a PERCENTAGE translation resolves against, "
-              "and it is the element's border box and therefore a layout — but a list with no percentage needs "
-              "no box, so that half is not on the critical path and the grammar alone unblocks the common "
-              "case. THREE ALGORITHMS ARE WAITING ON THIS ONE VALUE and each names it: §3.2 \"Resolved value "
-              "of transform\" post-multiplies the list into one matrix() below, CSSOM VIEW §6 "
-              "\"Extensions to the Element Interface\"'s getClientRects() step 3 maps a border area through "
-              "it, and INTERSECTION OBSERVER §3.2.9 \"Calculate a target's Effective Transformation Matrix\" up a "
-              "containing block chain. BUILD §7's function grammar in its own component beside "
-              "core/css/css_transform.c, then the absolutization, then each consumer's own step");
-        /* A RELEASE BUILD CANNOT BUILD THE GRAMMAR, so it answers the clause it CAN honour — the value as
-           specified, which is the whole of §3's line for every list that carries no relative length. */
-        return css_cv_specified(el, name);
+        return computed_transform(el, spec);
     }
     /* `float` (CSS2 §9.5.1), `position` (css-position §2) and `box-sizing` (css-sizing §5) all state "Computed
        value: as specified" (`box-sizing`'s line is "specified keyword"), and a keyword has no absolutization to
@@ -1875,8 +1895,11 @@ JSValue css_resolved_value(JSContext *ctx, lxb_dom_element_t *el, const char *na
            computed value."
            THE COMPUTED VALUE IS ASKED FOR AS ONE, not re-derived from the cascade here: §3's own line has an
            absolutization in it, so a resolved value built out of the SPECIFIED value would report a `10em`
-           translation as `10em` on a page whose font size makes it 160px. The entry above crashes for a list
-           and names the grammar, which is why only `none` reaches the escape below today. */
+           translation as `10em` on a page whose font size makes it 160px. The entry above ANSWERS a list now —
+           it parses §7 "The Transform Functions"' grammar and absolutizes what it finds — so what reaches the
+           escape below is `none`, and what reaches the crash is a real computed `<transform-list>` rather than
+           a value nothing could read. That is the whole of what changed here: the argument this comment used
+           to make, that the grammar was missing and only `none` could arrive, is retired. */
         char *v = css_computed_value(el, name);
 
         if (css_cv_is(v, "none")) { out = JS_NewString(ctx, v); free(v); return out; }
