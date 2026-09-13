@@ -1941,8 +1941,33 @@ function wfqReading(out) {
           `and anything maintained that way is quadratic in it`
         : `a STAR — a chain of ${w.members} would read depth ${w.members - 1} and this reads ` +
           `${w.brDepthMax}, so a walk \`up\` costs ${w.brDepthMax} hop(s) a charge and does not grow with the ` +
-          `frontier. That is the precondition solver/flow.c's \`up\` residual names for holding its three ` +
-          `counters per NODE, and this census MEETS it`);
+          `frontier`) +
+    /* AND WHICH FORK INSIDE THE FAT BUCKET DID THE MINTING, which every row above sums away. THE CLAUSE THAT
+       STOOD ONE LINE UP IS RETIRED AND NOT MERELY SHORTENED: it said a STAR "is the precondition
+       solver/flow.c's \`up\` residual names for holding its three counters per NODE, and this census MEETS
+       it". The precondition was met and the residual was refuted anyway — the cost that binds is RETENTION
+       (a per-node bucket pins every dead fork node with a live descendant, which is the unbounded retention
+       acct_compress_dead exists to prevent) and the scope would have re-keyed the \`branch\` that
+       flow_branch_bonus divides by, which is a term of the ORDER. A reader who acted on the old sentence
+       would have built a weight change and an unbounded retention on the strength of a depth reading. The
+       \`brFan*\` rows are what answers the question instead, and they cost no retention and no charge-time
+       walk at all.
+       WHY IT IS READ HERE AND NOT LEFT AS A ROW: a fan is the only published statement of the fork structure
+       BELOW a bucket, and \`brLiveMax\` at nearly \`members\` reads identically whether one arm minted the
+       crowd at the first branch or four levels down. \`brFanDepth\` is the whole discriminator. */
+    (w.brFanMax === 0
+      ? `. Every fork standing in this frontier is a TOP-LEVEL one (\`brFanMax: 0\`), so the bucket rows ` +
+        `above are complete for this run — there is no deeper fork for them to have summed away`
+      : `. Below the top level, the widest single fork holds ${w.brFanMax} of the ${w.brFanSum} member(s) ` +
+        `standing under a non-root parent ` +
+        `(${(100 * w.brFanMax / w.brFanSum).toFixed(0)}%), at fork-tree depth ${w.brFanDepth}` +
+        (w.brFanDepth === 1
+          ? ` — depth 1, so the minting fork IS a top-level arm and the bucket rows above are about the ` +
+            `node that did it`
+          : ` — depth ${w.brFanDepth}, so the minting sits ${w.brFanDepth - 1} level(s) BELOW the arm those ` +
+            `bucket rows name, and the concentration they report is a sum over a fork they cannot see`) +
+        `. The remaining ${w.members - w.brFanSum} member(s) hang off a family root and are already ` +
+        `separated as buckets of their own`);
   const terms = `terms over the frontier: reward ${rangeVal.toFixed(3)}, fitness ${w.distMax.toFixed(3)}, ` +
                 `optimism ${rangeUcb.toFixed(3)}, aging ${(rangeOwn + rangeFam).toFixed(3)} ` +
                 `(own ${rangeOwn.toFixed(3)}, family ${rangeFam.toFixed(3)}) — against a total order spread ` +

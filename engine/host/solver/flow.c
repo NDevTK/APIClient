@@ -223,22 +223,53 @@ typedef struct FlowAcct {
        So the sentence this residual used to say could not be said — "the two sides of this branch received X
        and Y" — is a number for every branch a ROOT flow takes, which on a page whose flows all descend from
        boot is every branch the boot flow itself takes.
-       NOT COVERED: A BRANCH TAKEN BY A FLOW THAT IS NOT A ROOT. Both sides of such a fork inherit the same
-       bucket, so a subtree that mints unboundedly two levels down is summed into its top-level arm and is
-       indistinguishable there from an arm that mints unboundedly at the first branch. This field is still the
-       only record of those levels, and it is still the case that nothing charges through it and nothing ranks
-       by it: it is read by acct_unref, by acct_compress_dead and by three preconditions, all lifetime
-       management, plus the one-level branch derivation in flow_fork_inherit.
-       WHAT THE NEXT DIFF BUILDS: the SAME three counters held per NODE rather than per top-level arm, so a
-       bucket is any fork point and `branch` is no longer one level. What must exist afterward is an update
-       whose cost is not O(depth) at every charge — the natural spelling walks `up` from the running flow to
-       the root on every slice, which is affordable on a STAR fork tree and quadratic on a CHAIN. `brDepthMax`
-       is the row this diff adds to answer which of the two this engine actually builds; that row is the
-       precondition for the next diff and not a mechanism it may assume.
-       HOW ITS ABSENCE SHOWS: `branches` small while `brLiveMax` sits at nearly `members` — one bucket holding
-       the whole frontier, with nothing to say which fork INSIDE it did the minting. That is a real state and
-       not a hypothetical: an arm forked off boot which then forks unboundedly presents exactly it, and is
-       indistinguishable in these rows from boot forking unboundedly at one top-level branch. */
+       THE REMEDY CLAUSE THAT STOOD HERE WAS WRONG ON BOTH OF ITS HALVES AND IS RECORDED RATHER THAN DELETED,
+       BECAUSE A NEXT-DIFF CLAUSE IS READ ONCE BY SOMEBODY WHO HAS ALREADY DECIDED TO DO THE WORK. It said:
+       "the SAME three counters held per NODE rather than per top-level arm, so a bucket is any fork point and
+       `branch` is no longer one level", with the cost objection "an update whose cost is not O(depth) at
+       every charge — affordable on a STAR fork tree and quadratic on a CHAIN", and it made `brDepthMax` the
+       precondition. `brDepthMax` ANSWERED: 5..6 over a frontier that grew to 75113 on a real 4.5 MB bundle,
+       and 6 over 71452 in this file's own artifact-58d56516 reading — a STAR, so the named cost is paid. The
+       clause was refuted anyway, twice.
+       IT WOULD HAVE MOVED A TERM OF THE ORDER, WHICH IS THE ONE THING THIS SCOPE MAY NOT DO. `branch` is read
+       by flow_branch_bonus (`1.0 / (sub_born - sub_gone)` over the bucket), which flow_nonreward sums into
+       flow_weight — the field's own paragraph below records three consumers pricing it while two declarations
+       denied it. Re-keying `branch` to the nearest fork point is exactly the transfer flow_fork_inherit
+       performs in reverse, and that site's own DCHECK states the consequence: delete the transfer and "the
+       newborn keeps its own bucket at one live member — bonus 1.0 — against a parent bucket of L, so the
+       equality FIRES for every L above one". The clause proposed a weight change wearing an observation's
+       clothes, in a paragraph whose sentence above correctly says nothing ranks by `up`.
+       AND IT PRICED THE WRONG RESOURCE. The cost that binds is not the WALK, it is RETENTION. A bucket must
+       outlive its owner — acct_unref frees a node at refcount zero and acct_compress_dead splices out every
+       dead non-branch node between a live member and its branch node, for the reason stated at that function:
+       without it a family whose arms depart one at a time retains one node per departed arm, "which for the
+       unknown-length walk this file is written against is one node per iteration". Making every fork point a
+       bucket PINS precisely the nodes that loop exists to free, per departed arm, unbounded, and §NO BOUNDS
+       forbids capping it. The clause's own precondition could never have discovered that, because depth says
+       nothing about how many dead ancestors have live descendants.
+       WHAT WAS BUILT INSTEAD, AND IT ANSWERS THE QUESTION THE CLAUSE ASKED RATHER THAN THE MECHANISM IT NAMED:
+       the MINTING FAN — `br_fan_max`, `br_fan_sum`, `br_fan_depth`. Live members are counted by the node their
+       `up` names, over NON-ROOT parents only, which is exactly this residual's uncovered population (a fork
+       off a root already opens a bucket of its own). It needs no retention, no charge-time walk and no change
+       to `branch`: a live member's `up` is written once at its fork and moved only at its own departure, so
+       the key is its true fork parent, and the whole cost is one pointer load and one generation-stamped
+       increment inside the census's EXISTING member walk. `br_fan_depth` is what separates the clause's two
+       indistinguishable states — minting at the first branch reads depth 1, minting two levels down reads 3.
+       NOT COVERED, NARROWED: THE BURN AND THE LIFETIME MINT COUNT OF A DEEP FORK. `sub_us`, `sub_born` and
+       `sub_gone` are still maintained only where `branch == self`, so "how much of the thread did each side of
+       a DEEP branch get" and "has this deep fork minted a hundred or a hundred thousand" have no number. The
+       fan answers WHICH fork is minting and HOW WIDE it stands now; it is a GAUGE and says nothing about
+       receipt. This field is still the only record of those levels, and nothing charges through it and nothing
+       ranks by it: it is read by acct_unref, by acct_compress_dead, by three preconditions and by the fan door
+       in flow_wfq_census, all of them lifetime management or observation, plus the one-level branch derivation
+       in flow_fork_inherit.
+       WHAT MUST EXIST AFTERWARD: a per-deep-fork receipt whose maintenance PINS NO NODE THE COMPRESSION WOULD
+       OTHERWISE FREE. That is the constraint the retired clause did not know it was under, and it is stated
+       as a property rather than as a mechanism because the mechanism is not established — a reader who reaches
+       for per-node buckets will re-derive the retention the paragraph above refutes.
+       HOW ITS ABSENCE SHOWS: a census in which `br_fan_max` is a large share of `br_fan_sum` — one deep fork
+       holding the standing crowd — while every burn row on the line is a TOP-LEVEL arm's, so a reader can say
+       which fork minted the frontier and cannot say what that fork's two sides RECEIVED. */
     struct FlowAcct *up;
     int refcount;             /* the owner's reference + every live child's `up` */
     /* THE FAMILY'S SERVICE SINCE ITS LAST EMISSION — the quantity flow_weight's aging term is now made of, and
@@ -467,6 +498,21 @@ typedef struct FlowAcct {
        it, because a ROOT is both a family AND a branch and one field cannot record that it has been counted
        once as each. Same generation VALUE, two marks. Zero is unmarked, `reclaim_calloc` supplies it. */
     unsigned branch_gen;
+    /* …AND A THIRD MARK, WITH A COUNT UNDER IT — HOW MANY LIVE MEMBERS WERE FORKED DIRECTLY OFF THIS NODE.
+       A THIRD rather than a second spelling of either above, for the reason there are already two: a node can
+       be counted once as a family, once as a bucket and once as a FORK PARENT in one scan, and one field
+       cannot record three. Same generation VALUE, three marks.
+       WHY THE KEY IS `up` AND WHY THAT IS EXACT RATHER THAN APPROXIMATE. `up` has exactly two writers —
+       flow_fork_inherit, at the fork, and acct_compress_dead, which runs only from acct_depart and only on
+       the DEPARTING flow's own node. So a LIVE member's `up` is its fork parent's node, written once and never
+       moved while that member stands; the compression rewrites the chain ABOVE a dead node and never a live
+       member's edge. Counting members by `up` is therefore counting them by the fork that minted them, at the
+       instant of the census, with no ancestry walk and nothing retained to make it possible.
+       IT IS A GAUGE, and `census_gen`'s sentence is why the mark is a generation: clearing a per-node count
+       over a frontier of tens of thousands is a walk and an increment is not. The count is reset on the first
+       member of a scan that reaches its node, not by a pass. */
+    unsigned fan_gen;
+    long fan_n;
 } FlowAcct;
 
 /* THE CENSUS, counted at the two points a node's lifetime begins and ends so the pair cannot drift from what it
@@ -4408,6 +4454,8 @@ void flow_wfq_census(WfqCensus *out) {
     out->br_live_max = out->br_live_min = out->br_live_sum = out->br_born_max = 0;
     out->br_us_max = out->br_us_min = out->br_us_sum = 0;
     out->br_depth_max = 0;
+    out->br_fan_max = out->br_fan_sum = 0;
+    out->br_fan_depth = 0;
     /* THE TWO INSTANCE TOTALS, WHICH ARE NOT READINGS OF THIS WALK — assigned unconditionally, exactly as
        `picks_lifetime` and `nonreward_max` are, so they are the same numbers on an empty scan as on a full
        one. They are the other two terms of the burn identity asserted at the end of this function, and
@@ -4733,9 +4781,67 @@ void flow_wfq_census(WfqCensus *out) {
             branch_take(out, br);
             /* …AND HOW DEEP IN THE FORK TREE THE DEEPEST LIVE MEMBER SITS, which is not a fact about buckets
                and is taken here because this is where the node is already in hand. It is what says whether the
-               tree this engine builds is a STAR or a CHAIN, and that is what decides whether the per-node
-               generalisation the residual at FlowAcct's `up` names can be maintained by walking. */
+               tree this engine builds is a STAR or a CHAIN.
+               IT WAS ADDED AS A PRECONDITION AND THE PRECONDITION IS DISCHARGED, which is a different standing
+               from the one it had. The residual at FlowAcct's `up` asked it whether a per-node aggregate could
+               be maintained by walking to the root; it answered STAR — 5..6 against a frontier of 75113 — so
+               the walk is affordable, and the clause was refuted on a cost it had not named (RETENTION, which
+               depth cannot see) and on a scope that would have moved a weight term. What the row is FOR now is
+               the shape itself, which every other row here is blind to, and the fan below is what answers the
+               question the retired clause was reaching for. */
             if (f->acct->depth > out->br_depth_max) out->br_depth_max = f->acct->depth;
+            /* …AND WHICH FORK MINTED THIS MEMBER, WHICH IS THE ONE THING THE BUCKET ABOVE SUMS AWAY. A
+               bucket is a TOP-LEVEL ARM, so every fork taken deeper lands in its ancestor's bucket and the
+               rows above cannot say whether an arm minted the crowd at the first branch or four levels down.
+               The fan says exactly that, and it is counted here because the node is already in hand.
+               THE KEY IS `up` AND IT IS THE TRUE FORK PARENT, not an approximation of one. `up` has two
+               writers: flow_fork_inherit, at the fork, and acct_compress_dead, which runs only from
+               acct_depart and only on the DEPARTING flow's own node — so a LIVE member's edge is written once
+               and never moved, and the compression only ever shortens the chain above a node that has already
+               left. The parent may itself be DEAD and retained by this very member, which is the informative
+               case rather than a corner: a walker that forked N arms and then finished is exactly the shape
+               this row exists to name.
+               NON-ROOT PARENTS ONLY, WHICH IS THE UNCOVERED POPULATION AND NOT A NARROWING FOR CONVENIENCE. A
+               fork off a ROOT opens a bucket of its own (flow_fork_inherit's `br` expression), so the rows
+               above already separate it; a fork off anything else is summed into its ancestor's bucket and has
+               no row anywhere. The gate is spelled with the SAME predicate that decides the bucket, so the two
+               cannot drift into disagreeing about which forks the buckets already cover.
+               IT IS A GAUGE over the members standing now and may FALL between samples, like `br_live_*` and
+               unlike everything on this line carrying `Life`: a fan is how wide a fork stands AT THIS INSTANT,
+               and the arms it minted and shed are not in it. `br_born_max` is the lifetime question and it is
+               asked at the bucket. */
+            {
+                FlowAcct *up = f->acct->up;
+                /* THE BUCKET A CHILD INHERITS, READ BACK AT THE SITE THAT COUNTS THE CHILDREN — the write
+                   side is flow_fork_inherit's `br = parent->acct->up ? parent->acct->branch : sib->acct`, and
+                   this asks its NON-ROOT arm at a second instant, long after the fork. Both operands are real
+                   program state: a compression that moved a LIVE member's edge, or a `branch` re-pointed by
+                   something that is not the fork, separates them. It is what makes the fan identity at the
+                   end of this function true by construction rather than by hope — every member the fan counts
+                   under a non-root parent is a live member of that parent's bucket, so a fan can never
+                   outnumber the bucket holding it.
+                   THE ROOT ARM IS NOT ASKED HERE AND THAT IS NOT AN OMISSION: flow_fork_inherit asserts it
+                   where it is decided (a root's own `sub_born` staying at 1), and nothing the fan publishes
+                   rests on it, because a root-parented member is excluded from the fan by the gate below. */
+                DCHECK(up == NULL || up->up == NULL || f->acct->branch == up->branch,
+                       "a live member's branch bucket is not the one its fork parent carries — a fork off a "
+                       "non-root joins its parent's bucket and nothing else ever re-points `branch`, so this "
+                       "member is counted in a subtree it was not forked into and the fan below is about to "
+                       "be published as a share of a bucket it is not drawn from");
+                if (up && up->up) {
+                    if (up->fan_gen != g_wfq_census_gen) { up->fan_gen = g_wfq_census_gen; up->fan_n = 0; }
+                    up->fan_n++;
+                    out->br_fan_sum++;
+                    /* THE DEPTH IS TAKEN WITH THE MAXIMUM AND NOT SEPARATELY, because it is a fact about the
+                       node that HOLDS the maximum and a second extremum over depths would be a fact about a
+                       different node. `>` and not `>=` keeps the shallowest such fork when two tie, which is
+                       the one nearer the bucket the other rows are about. */
+                    if (up->fan_n > out->br_fan_max) {
+                        out->br_fan_max = up->fan_n;
+                        out->br_fan_depth = up->depth;
+                    }
+                }
+            }
         }
         /* THE FLOOR, TAKEN OVER EVERY MEMBER AND NOT ONLY THE SERVED ONES — see flow.h. A frontier holding one
            never-run flow reads 0 here and that is the answer, not a hole in it: the aging term is then charging
@@ -5131,6 +5237,34 @@ void flow_wfq_census(WfqCensus *out) {
            "retired term when it is freed, so a break is a charge that reached the aging and not the bucket, "
            "or a bucket freed without its fold, and `brUsLifeMax / chargedUsLife` is about to be published as "
            "a fraction of a denominator the numerator is not drawn from");
+    /* AND THE FAN AGAINST THE BUCKET THAT HOLDS IT — the relation that makes `br_fan_max / br_fan_sum` a
+       reading INSIDE the buckets above rather than a second population beside them. Every member the fan
+       counts sits under a NON-ROOT parent, and a fork off a non-root joins its parent's bucket, so all of one
+       fan's members are live members of ONE bucket and the widest fan cannot exceed the fattest bucket.
+       IT IS NOT THE PARTITION IDENTITY RESTATED AND IT IS NOT VACUOUS, which is the test this file applies to
+       every assertion it adds. The two sides come from different writers: the fan is counted by the member
+       walk above, and `br_live_max` is `sub_born - sub_gone` maintained at flow_fork_inherit and acct_depart.
+       A departure that missed its `sub_gone`, or a `branch` re-pointed by anything but the fork, separates
+       them. A `br_fan_sum + <members with a root parent> == members` identity was deliberately NOT written
+       instead: both terms would be raised once per trip of this scan's own loop, so it is a loop counter
+       compared with itself — a non-check wearing the syntax of one, which is worse than no check at all. */
+    DCHECK(out->br_fan_max <= out->br_live_max,
+           "a fork's live children outnumber the whole branch bucket they were forked into — a fork off a "
+           "non-root joins its parent's bucket, so every member counted in a fan is a live member of one "
+           "bucket and this says the two are counting different frontiers: either a departure left a bucket's "
+           "`sub_gone` unraised, or a member's `branch` was moved by something that is not the fork");
+    /* AND THE DEPTH AGAINST THE FAN IT BELONGS TO, because a `br_fan_depth` of 0 is how a reader is told
+       there is NO fan and a real fan can never stand at one: its node has a parent (the door tests `up->up`),
+       and a node with a parent went through flow_fork_inherit, which wrote `depth = parent->depth + 1`. The
+       two fields are written by two statements and the compression moves `up` while explicitly leaving
+       `depth` alone, so they can disagree — which is the whole reason this is asked rather than assumed. It
+       is NOT the pair above restated: that one relates the fan to the BUCKET, this one relates the published
+       depth to the fan's own existence, and a reader who took a 0 for "no deep fork" would be wrong. */
+    DCHECK(out->br_fan_max == 0 || out->br_fan_depth > 0,
+           "the census reports a fork below the top level standing at fork-tree depth 0 — depth 0 is a family "
+           "ROOT and a root is excluded from the fan by the same predicate that decides a branch bucket, so "
+           "either `up` names a node no fork attached or `depth` was never written beside it, and "
+           "`brFanDepth: 0` is about to be published as the statement that this frontier has no deep fork");
 }
 
 /* The four questions, each a seed, a filter or a direction over the one scan above. */

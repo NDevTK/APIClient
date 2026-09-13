@@ -817,6 +817,23 @@ char *result_wfq_json(void) {
                      "\"brBornLifeMax\":%ld,\"brUsLifeMax\":%lld,\"brUsLifeMin\":%lld,"
                      "\"brUsLifeSum\":%lld,\"brRetiredUsLife\":%lld,\"chargedUsLife\":%lld,"
                      "\"brDepthMax\":%d,"
+                     /* AND WHICH FORK INSIDE A BUCKET DID THE MINTING, which no row above can say: a bucket
+                        is a TOP-LEVEL ARM, so an arm forked off boot that then forks unboundedly and boot
+                        forking unboundedly at one top-level branch present IDENTICALLY up there. A fan is the
+                        live members forked directly off ONE non-root node (solver/flow.h states why the key
+                        is exact and why roots are excluded), and `brFanDepth` is the discriminator — depth 1
+                        is the top-level arm minting the crowd itself, depth D is the minting sitting D-1
+                        levels below the arm the rows above name.
+                        GAUGES, so no `Life` in the names and none of them may be differenced: a fan is how
+                        wide a fork stands NOW and the arms it has minted and shed are not in it.
+                        READ `brFanMax / brFanSum` for how concentrated the DEEP forking is, and
+                        `members - brFanSum` for everything the bucket rows already describe. `brFanMax: 0`
+                        says every fork here is a top-level one and those rows are complete for this run.
+                        ONE MORE IDENTITY, CHECKABLE ON THIS DOCUMENT: `brFanMax <= brLiveMax`. A fork off a
+                        non-root joins its parent's bucket, so a fan's members are all live members of one
+                        bucket — and the two sides are counted by different writers, which is what makes it a
+                        check. Asserted in flow_wfq_census where both are in one hand. */
+                     "\"brFanMax\":%ld,\"brFanSum\":%ld,\"brFanDepth\":%d,"
                      "\"visMin\":%lld,\"visMax\":%lld,\"visZero\":%ld,"
                      "\"cands\":%ld,\"candUnrun\":%ld,\"candSvcMax\":%lld,\"candDecMax\":%ld,\"decMax\":%ld,"
                      "\"distMax\":%.3f,\"wTop\":%.3f,\"wMin\":%.3f,\"candWMax\":%.3f,"
@@ -991,6 +1008,7 @@ char *result_wfq_json(void) {
                      w.br_born_max, (long long)w.br_us_max, (long long)w.br_us_min,
                      (long long)w.br_us_sum, (long long)w.br_retired_us, (long long)w.charged_us,
                      w.br_depth_max,
+                     w.br_fan_max, w.br_fan_sum, w.br_fan_depth,
                      (long long)w.vis_min, (long long)w.vis_max, w.vis_zero,
                      w.cand_members, w.cand_unrun, (long long)w.cand_svc_max, w.cand_dec_max, w.dec_max,
                      w.dist_max, w.w_top, w.w_min, w.cand_w_max,
