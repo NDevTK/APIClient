@@ -605,6 +605,22 @@ static int body_params(JSContext *ctx, KvBuf *out, const EndpointBody *body) {
    positive control proving such text survives the build at all, so the absence is an answer. Until an install,
    a run of this engine still meets the old abort, and any claim here about what a byte body does is a claim
    about the tree and not about the product.
+   AND THAT PARAGRAPH NAMED NO ACTOR, WHICH IS WHAT KEPT IT STANDING RATHER THAN ANYTHING ABOUT THE WORK. It
+   said `until an install` in the passive, so it reads as PENDING — and an artifact carries a name only because
+   somebody BUILT and INSTALLED it, which in this project exactly ONE role may do. Every other reader runs the
+   observation, gets the defer answer, correctly leaves the residual standing, and moves on; nothing anywhere
+   accumulates those readings, so a residual blocked on an INSTALL is indistinguishable from one blocked on
+   unfinished work while taking the opposite action — the first is a REQUEST to the one role that can build,
+   the second is code somebody has to write. So, naming it: THE ACT IS A BUILD FOLLOWED BY AN INSTALL OF
+   `extension/lib/qjs/qjs.wasm`, AND THE MAIN AGENT IS THE ONLY ROLE THAT MAY PERFORM IT — a lane that meets
+   this paragraph asks rather than waits.
+   AND THE OBSERVATION IS A COMMAND, SO IT IS SPELLED OUT HERE RATHER THAN RE-DERIVED: grep the installed
+   `extension/lib/qjs/qjs.wasm` for `a typed-array element span was recorded with a width no element has`,
+   with `10.4.5.18` beside it as the POSITIVE control (abort text survives this build) and an invented string
+   as the NEGATIVE control (an empty answer means absent rather than un-asked). Three greps, one artifact. A
+   subject of 0 under a positive control of non-zero is the defer answer; a subject of non-zero retires THIS
+   paragraph and leaves the rest of the residual standing, because the store being reachable is not the same
+   claim as a byte body recording its fields here.
    IT RETIRES when a body built through that store records its fields here.
    THE CODEC IS THE ENGINE'S OWN, for the reason core/file/file_reader.c gives at its own call: `btoa`'s codec
    is already implemented here and §Solver's rule is that an encoding builtin is modelled faithfully, never
