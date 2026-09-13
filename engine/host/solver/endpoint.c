@@ -594,6 +594,14 @@ static char *body_bytes_b64(const EndpointBody *body) {
     char *b64;
 
     if (!body || !body->bytes || body->len == 0) return NULL;
+    /* A SHAPE IS NOT A PAYLOAD, AND THIS IS THE LINE THAT USED TO SAY IT WAS. A body built out of unknown
+       external input arrives carrying the engine's DISPLAY SPELLING of that unknown, because there are no
+       bytes to carry; base64-ing it published the literal characters of a hole under the record's own claim
+       that the request sent exactly these bytes, which a reviewer REPLAYS. Returning nothing is the honest
+       answer: this run does not know what this request sends. The fields may still be known — a body the page
+       composed by joining text spells its own holes, and body_params above reads them — so the two questions
+       are answered separately and only this one refuses. */
+    if (body->kind == EPB_SHAPE) return NULL;
     cap = JS_Base64EncodedSize(body->len) + 1;
     b64 = malloc(cap);
     CHECK(b64 != NULL, "endpoint: OOM base64-encoding a request body this engine has no field reader for");
@@ -771,6 +779,20 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
             "an endpoint was recorded with the provenance %d, which is none of the three solver/pending.h "
             "defines — the grade is part of this record's identity and is emitted on it, so an unrecognised "
             "one both merges with nothing and publishes a word no consumer can read. method=%s", prov, method);
+    /* AND WHOSE BYTES THE BODY IS, ASSERTED AT THE SAME MINT AND FOR A SHARPER REASON THAN THE GRADE ABOVE.
+       A body's bytes are either what the request SENDS or the engine's display spelling of an unknown, and
+       only the producer knows which — it asked core/fetch/body.h that question in order to obtain them. The
+       zero is UNSTATED rather than either answer, so a producer that forgets is refused instead of being
+       silently read as the replayable one, which is the arm that publishes a hole's characters as a payload.
+       THE SITE IS NAMED BY ITS mime AND method BECAUSE THIS ASSERT CANNOT STAMP ONE: three callers pass a
+       body and all three would report this line, so the message carries what tells them apart rather than
+       leaving a reader to grep every endpoint_record in the tree. */
+    DCHECKF(!body || body->kind == EPB_SENT || body->kind == EPB_SHAPE,
+            "a request body reached the @H surface without its producer saying whether the bytes are what the "
+            "request SENDS or this engine's display spelling of an unknown. Those are not two renderings of "
+            "one fact: the first is replayable evidence and the second is a hole, and emitting the second as "
+            "the first hands a reviewer a request the page never made. State EPB_SENT or EPB_SHAPE from the "
+            "arm core/fetch/body.h already told you. method=%s mime=%s", method, body->mime ? body->mime : "(none)");
     if (g_suppress) return;   /* candidate/verify run -> not a real @H endpoint */
     char *disp = url_display(ctx, url);
     char *ex = url_example(ctx, url);

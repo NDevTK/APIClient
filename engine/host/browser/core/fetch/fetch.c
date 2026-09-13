@@ -1465,21 +1465,30 @@ static int js_fetch_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
            reviewer replays a derived POST with and what a sniffer can never produce — CLAUDE.md
            §What-the-tool-produces' "what the bundle CAN do but didn't". Recording nothing for it, which is
            what testing `s->body.bytes` did, reported the POST as BODYLESS.
-           NAMED RESIDUAL — the surface cannot tell a shape from bytes. WHAT IS NOT COVERED: solver/endpoint.h's
-           EndpointBody is `{mime, bytes, len}` with no grade on it, so a display shape arrives at
-           body_params looking like a payload; it is read as an UNDECLARED body (Fetch §5.2's string arm type) and
-           run through the real JSON parser, where `{cfg.payload}` fails to parse and records no fields —
-           which is the true statement, reached by accident rather than by statement. WHAT THE NEXT DIFF
-           BUILDS: the body's own provenance on EndpointBody beside its bytes, the way the record already
-           carries `prov` for the sighting, so a shape body states that its FIELDS are unknown instead of
-           parsing as if they might not be. HOW ITS ABSENCE SHOWS: the day a source's display spelling happens
-           to be a JSON text, its holes would be reported as this POST's field names. */
+           THE SURFACE IS TOLD WHICH OF THE TWO IT HAS, which it could not be asked before: EndpointBody now
+           carries a `kind` and this line states it from the arm body_state_content just answered. The
+           residual that stood here is retired by that, and what it was RIGHT about is worth keeping — a
+           display shape did arrive at the surface looking like a payload, and the surface base64'd it into a
+           record promising a reviewer those were the bytes the request sent.
+           IT ASKED FOR ONE CONSEQUENCE THIS DIFF DELIBERATELY DID NOT TAKE, recorded here because the next
+           reader would otherwise build it. The clause said a shape body should state that its FIELDS are
+           unknown INSTEAD OF being parsed. Parsing it is in fact how the fields of most unknown-bearing
+           bodies are learned at all: a page that composes its payload by joining text carries every operand's
+           display form into the result, so `'{"id":"' + id + '"}'` reaches the surface spelling
+           `{"id":"{state}.id"}` and the JSON arm names `id` with the hole as its value — which is exactly the
+           report this tool exists to produce. Refusing the parse would have thrown that away to close a case
+           the shape grammar makes unreachable: an ATOMIC shape is a brace-wrapped source path, which is not a
+           JSON text, and the one that does parse (`{}`) yields no fields. So the parse stays and only the
+           REPLAYABLE-BYTES claim is refused, which is where the fabrication actually was. */
         if (body_kind == BODY_BYTES || body_kind == BODY_SHAPE) {
             body_ct = header_list_get(&s->hdrs, "content-type");
             if (!body_ct && !JS_IsUndefined(s->body_mime)) ext_mime = JS_ToCString(ctx, s->body_mime);
             eb.mime = body_ct ? body_ct : ext_mime;
             eb.bytes = body_bytes;
             eb.len = body_bytes_len;
+            /* The arm the line above already took, carried instead of dropped — BODY_SHAPE's bytes are the
+               display spelling of an unknown and must never be published as what the request sends. */
+            eb.kind = (body_kind == BODY_SHAPE) ? EPB_SHAPE : EPB_SENT;
             ebp = &eb;
         }
         endpoint_record(ctx, s->rec.method, s->url, eh, s->hdrs.n, ebp, prov);

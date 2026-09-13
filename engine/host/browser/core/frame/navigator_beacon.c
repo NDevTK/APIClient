@@ -275,6 +275,11 @@ static JSValue js_nav_send_beacon(JSContext *ctx, JSValueConst this_val, int arg
         eb.mime = mime;                    /* NULL for §5.2's arms that carry no type — a BufferSource */
         eb.bytes = bbytes;                 /* the bytes, or an unknown body's DISPLAY SHAPE — body.h */
         eb.len = blen;
+        /* WHICH OF THOSE TWO IT IS, STATED RATHER THAN LEFT FOR THE SURFACE TO GUESS. The comment above this
+           line already knew, and `bkind` already held it; the answer stopped here and the surface published
+           an unknown body's display spelling as bytes the beacon sent. It is the same fact step 6.2 above
+           declines to measure a length from, for the same reason. */
+        eb.kind = (bkind == BODY_SHAPE) ? EPB_SHAPE : EPB_SENT;
         ebp = &eb;
         if (mime) {                        /* step 6.3.3, run only "if contentType is not null" */
             hdrs[nhdrs].name = "Content-Type";

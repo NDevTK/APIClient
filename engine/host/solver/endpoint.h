@@ -58,8 +58,32 @@ typedef struct { const char *name, *value; } EndpointHeader;
    is what the shape IS.
    Borrowed for the length of the call like the headers.
    It is a separate struct and not three arguments because a body is one fact: bytes with no type are bytes
-   nothing can name the fields of, and a type with no bytes is not a body. */
-typedef struct { const char *mime, *bytes; size_t len; } EndpointBody;
+   nothing can name the fields of, and a type with no bytes is not a body — and `kind` is part of that one
+   fact rather than a fourth argument for the same reason. */
+
+/* WHOSE BYTES THESE ARE, WHICH THIS STRUCT COULD NOT SAY AND WHICH DECIDES WHETHER THEY MAY BE REPLAYED.
+   A producer holding a body built out of UNKNOWN EXTERNAL INPUT has no bytes to hand over — there are none —
+   so what it passes is the engine's own DISPLAY SPELLING of that unknown (core/fetch/body.h's BODY_SHAPE).
+   Those characters look exactly like a payload here, and the surface base64'd them into `bodyBase64` under
+   this header's promise that the request sent exactly these bytes.
+   THAT IS FABRICATED EVIDENCE AND NOT A MISSING VALUE, which is the distinction that makes it worth a field.
+   §@H's rule is that a value known only to satisfy a gate is INVENTED rather than computed; a SHAPE rendered
+   as BYTES is that defect one layer out, and it is worse than a `||` default because a default merely reads
+   as a measurement while this is handed to a reviewer to REPLAY — so a request nobody ever made gets sent,
+   carrying the literal characters of a hole. An ABSENT `bodyBase64` beside a shape body is the honest state,
+   and this field is what makes that difference expressible rather than guessable from the bytes.
+   IT HAS NO SAFE DEFAULT, so its zero is UNSTATED and endpoint_record aborts on it. Every producer computes
+   this already — each one asks core/fetch/body.h which arm its body took — and each was DROPPING the answer
+   between that question and this call, so the fix is to carry a fact that exists rather than to derive a new
+   one. A producer that forgets takes the same arm as one that has nothing to say, which is what stops
+   forgetting from being a way to be exempted. */
+typedef enum {
+    EPB_UNSTATED = 0,   /* nobody said; endpoint_record refuses it */
+    EPB_SENT,           /* bytes the page composed — what the request will actually send, replayable */
+    EPB_SHAPE           /* the engine's display spelling of an unknown body; NEVER bytes the page sent */
+} EndpointBodyKind;
+
+typedef struct { const char *mime, *bytes; size_t len; EndpointBodyKind kind; } EndpointBody;
 
 /* Record one learned endpoint (deduped by method+url). `url` may be concolic (shape) or concrete. Headers are
    MERGED into a same-identity endpoint: a header seen with a concrete value supersedes the same header seen

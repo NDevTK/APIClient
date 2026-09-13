@@ -113,6 +113,13 @@ typedef struct {
     JSValue url_src;
     JSValue author_headers;    /* author request headers — an Array of [name, value] */
     JSValue request_body;      /* request body — a JS string, or JS_NULL */
+    /* …AND WHETHER THOSE CHARACTERS ARE THE BODY OR A SPELLING OF ONE. The slot above is declared a JS string
+       because §3.5.6 step 4's extraction is resolved to bytes here, and for a body built out of unknown
+       external input there are no bytes: what lands in it is core/fetch/body.h's DISPLAY SHAPE. The two are
+       indistinguishable once stored — that is the residual at the store site — so the ARM is kept beside them,
+       because the @H surface must refuse to publish a shape as bytes the request sent and this is the only
+       place that still knows. It is not a second copy of a fact the slot holds; the slot cannot hold it. */
+    uint8_t  request_body_is_shape;
     JSValue override_mime;     /* override MIME type — a JS string, or JS_NULL */
     JSValue response_headers;  /* the response's header list — an Array of [name, value] */
     JSValue status_text;       /* the response's status message — a JS string */
@@ -598,6 +605,7 @@ static void xhr_reset_request(JSContext *ctx, XhrData *d)
     d->send_invoked = 0;
     xhr_set(ctx, d, &d->author_headers, JS_NewArray(ctx));
     xhr_set(ctx, d, &d->request_body, JS_NULL);
+    d->request_body_is_shape = 0;   /* the arm goes with the body it describes */
     d->upload_listener = 0;
     /* "Set this's response to a network error", which is the initial value of every response field. */
     d->network_error = 1;
@@ -1919,7 +1927,13 @@ static void xhr_record_endpoint(JSContext *ctx, XhrData *d)
     if (!JS_IsNull(d->request_body)) {
         body = JS_ToCStringLen(ctx, &body_len, d->request_body);
         body_ct = hl_get(ctx, d->author_headers, "content-type");
-        if (body) { eb.mime = body_ct; eb.bytes = body; eb.len = body_len; ebp = &eb; }
+        if (body) {
+            eb.mime = body_ct; eb.bytes = body; eb.len = body_len;
+            /* §3.5.6 step 4's arm, carried from the extraction rather than re-derived from the characters —
+               which cannot be done, since a display shape and a body that spells one are the same bytes. */
+            eb.kind = d->request_body_is_shape ? EPB_SHAPE : EPB_SENT;
+            ebp = &eb;
+        }
     }
     /* The CONCOLIC where open() was given one, so the surface reports the shape AND the example it carries;
        the serialization otherwise, which for a plain address is the same string XHR §3.5.1 The open() method
@@ -2589,6 +2603,7 @@ static int js_xhr_send_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
         JS_FreeValue(ctx, in);
         in = JS_UNDEFINED;
         xhr_set(ctx, d, &d->request_body, JS_NULL);
+        d->request_body_is_shape = 0;   /* the arm goes with the body it describes */
         s->body_len = 0;
         if (!JS_IsNull(s->body) && !JS_IsUndefined(s->body)) {
             BodyState b = { 0 };
@@ -2615,7 +2630,10 @@ static int js_xhr_send_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
                than a number. HOW ITS ABSENCE SHOWS: an `xhr.send(unknown)` whose progress events carry the
                character count of "{cfg.payload}", and a re-fire that cannot substitute the hole because the
                value's identity was dropped here. */
-            body_state_content(&b, &bbytes, &blen);
+            /* THE ARM IS KEPT, WHICH IS THE HALF THE RESIDUAL ABOVE COULD NOT DO FROM HERE. It cannot carry
+               the VALUE — that is the next diff it names — but the one fact the @H surface must not guess is
+               whether these characters are the body or a spelling of it, and this is where that is known. */
+            d->request_body_is_shape = (body_state_content(&b, &bbytes, &blen) == BODY_SHAPE);
             xhr_set(ctx, d, &d->request_body, JS_NewStringLen(ctx, bbytes ? bbytes : "", blen));
             s->body_len = (double)blen;
             body_state_free(JS_GetRuntime(ctx), &b);
