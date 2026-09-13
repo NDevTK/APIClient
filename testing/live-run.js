@@ -235,7 +235,44 @@ const COUNTERS = ["switches", "flows", "candidates", "jobsQueued", "jobsRun", "u
  * evidence either way. A coordinator quoted `neverPicked 64605 of 71452` into a brief WITHOUT
  * `picksLifetime` — a fraction with no denominator, and the reading that says so was in a file he had been
  * editing the same day. The denominator is the whole of it: no order can dispatch what the thread never
- * reached. */
+ * reached.
+ *
+ * AND THE PROGRAM THE MASS IS STANDING IN IS THE PRODUCT'S OWN HEADLINE SURFACE, WHICH IS WHY THE EMPTY
+ * RESULT IS WORSE THAN IT READS. The cursors above are an index into the root document's seeded programs, and
+ * that table is derivable from the document alone rather than from any run — which is what makes this
+ * checkable instead of a coordinate that rots:
+ *
+ *   grep -o '<script[^>]*>' <the mirror>/index.html        — 25 elements, of which ONE is
+ *                                                            `type="application/ld+json"` and not executable
+ *
+ * Twenty-four executable, SEVEN inline and SEVENTEEN `src=`, which is `rootPrograms 24 /
+ * rootProgramsHeldAtSeed 7 / rootProgramsAwaitedAtSeed 17` exactly — three rows confirmed against the
+ * DOCUMENT rather than against the engine, which is the only independent check those rows have ever had.
+ * Index 7 of that table is a chunk of TWO KILOBYTES whose entire top level is one statement:
+ *
+ *   (this.webpackJsonp=this.webpackJsonp||[]).push([["…"],{<module id>:function(n,r,a){…}}]);
+ *
+ * THE MODULE IS DEFINED AND NOT RUN — webpack executes a factory only when something requires it — and that
+ * factory's body is a ROUTE TABLE: nine admin addresses with their parameter shapes, among them
+ * `/admin/session/destroy`, `/admin/impersonation`, `/admin/deploy_keys/:id/edit` and
+ * `/o/:organization_path/admin`, each with `id` or `organization_path` REQUIRED and `format` optional.
+ * Admin endpoints shipped to a logged-out visitor, which is §What-the-tool-produces' entire thesis in one
+ * file. The run reached the program that defines them and emitted nothing.
+ *
+ * SO THE PATH TO THEM IS ORPHAN DRIVING AND IT HAS AN ORDERING CONSTRAINT NOBODY HAS STATED. §Attacker-sources
+ * already says the frontier gets "one drive per function the bundle shipped and never called", and a webpack
+ * module factory is exactly that. What is NOT free is WHEN: the factory's first statements are `a("<id>")`
+ * calls against the webpack require it is handed, and the route strings are built by a helper living in ANOTHER
+ * module. Drive it with an unknown `a` and every route is unknown — the drive completes, emits nothing, and
+ * looks like exploration. Drive it after the runtime and the entry chunk have registered their modules, with
+ * the REAL require, and the same body computes nine concrete addresses. §Do-subproblems-IN-ORDER, arriving as
+ * a constraint on a drive rather than on a diff.
+ * WHAT WOULD SHOW THE DIFFERENCE: `handAParkedDriveItsFunction` and `resumeAParkedOrphanDrive` against
+ * `seedOneOrphanFlow` in the `stepUnitRuns` histogram — seeds without hands is a frontier that queued drives
+ * and never ran one, and hands whose bodies still emit nothing is the ordering above.
+ * THE COORDINATES HERE ROT AND THE SHAPE DOES NOT: a minified bundle's chunk names, hashes and index numbers
+ * change on every deploy, so re-derive the table with the grep above rather than trusting the index, and read
+ * the rest as what a webpack bundle IS. */
 const CENSUS_LIFETIME = ["stepUnitRuns"];
 const CENSUS_GAUGE = ["stepUnits", "programCursors"];
 const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered",
