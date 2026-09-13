@@ -1598,13 +1598,32 @@ function wfqReading(out) {
       (ivl === null
         ? `only one census carries the scan rows, so there is no interval to read and the lifetime totals ` +
           `below are an instant's accumulation — no verdict is available from one sample`
-        : `over the last interval the dispatch scan walked ${ivl.walked.toFixed(1)} member(s) of the ` +
+        : `over the last interval the dispatch scan WEIGHED ${ivl.walked.toFixed(1)} member(s) of the ` +
           `${ivl.members} standing (${(100 * ivl.walked / ivl.members).toFixed(0)}%)` +
-          (ivl.walked >= ivl.members * 0.5
-            ? `, so the pick is LINEAR in the frontier and a step's cost grows with it — the run's total scan ` +
-              `work is then quadratic in its own step count, which is a throughput finding and not an ` +
-              `ordering one`
-            : `, so the filters keep the pick well below the frontier and its cost is not tracking it`) +
+          /* THIS RATIO IS NOT A COMPLEXITY AND IT USED TO BE READ AS ONE, WHICH IS A VACUOUS TEST PRINTED AS
+             A VERDICT. `scanNextWeights` is raised where the WEIGHT is taken, and solver/flow.c's loop skips
+             exactly three things before that line — the seed, the excluded member, and the host-owed ones
+             under `runnable_only`. So this quotient is `1 - (1 + exclude + hostOwed) / members` BY
+             CONSTRUCTION, and it reads high whatever the pick's shape is: it cannot fall unless most of the
+             frontier is host-owed, and no value of it distinguishes a linear scan from an indexed one. The
+             old arms branched on it at a half and asserted LINEAR above and NOT-TRACKING below; both were
+             conclusions the number has no power to support, and the second was additionally false about the
+             loop, which TRIPS over every member and merely declines to WEIGH the skipped ones — a
+             distinction the raise site's own comment already draws.
+             WHAT IT DOES MEASURE IS WORTH PRINTING: the share of the frontier the pick could actually
+             consider. A low reading is a run whose order was choosing from a small live subset because the
+             host owed the rest a reply, which is a fact about the DOOR and not about the ordering.
+             AND THE COMPLEXITY IS A STRUCTURAL FACT, READ RATHER THAN SAMPLED — flow_pick walks `g_flows`
+             end to end, so it is linear in the frontier and the run's total scan work is quadratic in its own
+             step count. That is true of every run and needs no census to say so, which is exactly why no
+             census row should appear to be establishing it. */
+          `, which is the share the pick could CONSIDER — the rest were host-owed, excluded or the seed, and ` +
+          `a low reading is a statement about the reply door rather than about the order. It is not a ` +
+          `complexity: the loop trips over every member and this counts only the ones it weighed, so no ` +
+          `value of it could distinguish a linear pick from an indexed one. The pick IS linear — that is ` +
+          `read off flow_pick walking the registry end to end, and it makes the run's total scan work ` +
+          `quadratic in its own step count, which is a throughput fact about every run and not a finding ` +
+          `about this one` +
           `; the preempt hook rescanned ${ivl.rival.toFixed(2)} time(s) per dispatch scan over ` +
           `${ivl.gen} rank change(s)` +
           /* THE COST AND THE CADENCE ARE TWO QUESTIONS AND THE SAME COUNT ANSWERS BOTH ONLY WITH TWO
@@ -1635,7 +1654,14 @@ function wfqReading(out) {
          compare against another revision's. */
       ` (within this run only, not comparable across runs: ${w.scanNextWeights} weight(s) over ` +
       `${w.scanNextRuns} dispatch scan(s), ${w.scanRivalWeights} over ${w.scanRivalRuns} hook rescan(s), ` +
-      `${w.scanOtherWeights} over ${w.scanOtherRuns} host/pager scan(s))`;
+      /* NOT `host/pager`, WHICH IS WHAT THIS SAID AND WHICH engine/host/main.c REFUSES AT ITS OWN SITE: the
+         OTHER entry is shared by flow_best, the pager's eviction tail, the top-weight read AND the flow_best
+         inside flow_wfq_census — so a census pays into it, and naming one of its contributors invites a
+         reader to divide it by that contributor's cadence. Its own declaration says nothing subtracts the
+         census's share afterwards and no row carries it separately, so the honest label is the mixture. */
+      `${w.scanOtherWeights} over ${w.scanOtherRuns} scan(s) on the SHARED 'other' entry (flow_best, the ` +
+      `pager's tail, the top-weight read, and the flow_best inside the census itself — not divisible by any ` +
+      `one of them))`;
 
   const signedDelta = (n) => (n >= 0 ? `+${n}` : `${n}`);
   const svcUp = ordSeries.filter((r, i) => i > 0 && r.topSvc > ordSeries[i - 1].topSvc).length;
