@@ -341,7 +341,15 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (!t) return;
     await renderEgressPolicy({ revoke: t.dataset.egressRevoke });
   });
-  renderEgressPolicy();
+  /* NO FIRST RENDER HERE, AND ITS ABSENCE IS THE POINT RATHER THAN AN OMISSION — the setting above it does
+     have one, and this row is not the same kind of control. Its subject is the PINNED DOCUMENT'S origin,
+     which is unknown until GET_FRAMES has answered, so a render at wiring time can only ever paint "(no
+     origin)". `loadState` (called at the end of this block) renders it the moment the frames are in and on
+     every re-load after, which is also what keeps it following a navigation.
+     AND IT WOULD HAVE BEEN A RACE, NOT MERELY A WASTED PAINT: two concurrent reads of one table settle in
+     whichever order they settle, so the wiring-time one could land AFTER the frame-aware one and leave the
+     row saying this document has no origin when it has one — a permission surface reporting the wrong
+     subject, which is the one thing it may not do. */
 
   // Discovery panel (lib/popup-discovery.js): one delegated click path for the three active-discovery probes.
   initDiscoveryPanel();
