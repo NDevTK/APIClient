@@ -391,7 +391,32 @@ const row = {
   docsAnswered: mine.filter(d => d.answered).length,
   docsSeenMine: mine.length,
   docsAllOrigins: [...new Set((cur.docs || []).map(d => { try { return new URL(d.url).origin; } catch { return d.url; } }))],
-  /* THE HEADLINE NUMBER: distinct addresses learned, which is what "endpoints" has to mean in a report. */
+  /* THE HEADLINE NUMBER: distinct addresses learned, which is what "endpoints" has to mean in a report.
+     IT IS A REACH FIGURE AND NOT AN API-SURFACE FIGURE, AND IT HAS ALREADY BEEN QUOTED AS THE SECOND.
+     CLAUDE.md is explicit that "Static assets are NEVER endpoints (magic-byte + content-type, not URL
+     suffix) but still drive the code path" -- so a learned address counted here is a place the engine got
+     to, and whether it is part of the app's API is a question ANOTHER component answers from the RESPONSE.
+     WHAT IT COST, MEASURED: a coordinator read 90 off a gitpod row and reported to the user, twice, that a
+     real production SPA now yields 90 endpoints -- as evidence the engine works on real apps. Counting the
+     addresses in that row's own `siteEndpoints`: 89 end `.js` and 1 ends `.svg`, and nothing else is in it.
+     They are the app's own module graph -- the rolldown runtime, the vendor chunk, the generated `*_pb`
+     descriptor modules, an icon. Zero derived API addresses. The count was exactly right and the claim made
+     from it was not, which is why this sits at the field and not in a report.
+     THE SUFFIXES ABOVE ARE A DESCRIPTION AND NOT A CLASSIFIER, deliberately: deciding what a thing IS from
+     its URL suffix is the banned name-matching, and the real classifier reads response magic-bytes. That is
+     the point rather than a caveat -- the classifier COULD NOT RUN, because every one of those addresses was
+     refused at the chokepoint and there was no response to classify. So this is ONE mechanism and not two:
+     the refusal that stopped the descriptor decode is the same refusal that leaves every chunk unclassified,
+     and an unclassified chunk load then reaches the Send panel wearing [UNUSED] -- the badge that is the
+     product's entire differentiator -- because `_methodOrigin` can only answer "asset" for a method whose
+     response was decoded.
+     NAMED RESIDUAL. WHAT IS NOT COVERED: this row cannot state its own composition, because the fact that
+     would split it (is this address an asset) is not in the record it reads -- the classification lives on a
+     decoded response in the offscreen store and never reaches the census. WHAT THE NEXT DIFF BUILDS: the
+     record carrying the classifier's own answer, so this row can publish learned-addresses beside
+     classified-as-asset and neither can be quoted as the other. HOW ITS ABSENCE WOULD SHOW: a census row
+     whose endpoint count is read as an API surface by someone who would have to open the address list to
+     find out otherwise -- which is what happened, and the address list is two fields away. */
   siteEndpoints: [...new Set(mine.flatMap(d => d.sites))],
   distinctEndpoints: new Set(mine.flatMap(d => d.sites)).size,
   pageErrors: [...new Set(mine.flatMap(d => d.errs))].slice(0, 40),
