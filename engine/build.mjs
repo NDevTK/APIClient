@@ -4551,11 +4551,20 @@ function vehicleAgreement(nat, veh) {
                                   : `${r.label}: a ${r.q.measure} slice of ${r.q.sliceMs} ms`;
   const asked = (r) => r.stand === null ? null : r.stand.asked;
   const findings = [];
+  /* A MISSING PROBE STREAM IS AN INABILITY AND NOT A FINDING, WHICH IS THE DIRECTION THIS HAS TO ERR IN.
+     Whether a run reached the fixture's first table is a REACH fact - a run that aborts early prints none and
+     a run that gets further prints one - and reach is the quantity §Testing says is a reading of ONE
+     interleaving. So an absent stream on either host says nothing whatever about the VEHICLE, and reporting
+     it as a vehicle finding would be an accusation manufactured by the instrument, which this project rates
+     as the worse of the two failure directions. It is stated as something this line COULD NOT COMPARE, named
+     per host, so the silence is readable as an answer rather than as agreement. */
+  const cannot = [];
   if (asked(a) === null || asked(b) === null)
-    findings.push(`ONE HOST PRINTED NO @H PROBE STREAM (native: ` +
-                  `${asked(a) === null ? "none" : asked(a) + " statements asked"}; vehicle: ` +
-                  `${asked(b) === null ? "none" : asked(b) + " statements asked"}), so the fixture's own ` +
-                  `denominator cannot be compared and the halves of this line that need it are not stated`);
+    cannot.push(`the fixture's own DENOMINATOR (native: ` +
+                `${asked(a) === null ? "no @H probe stream" : asked(a) + " statements asked"}; vehicle: ` +
+                `${asked(b) === null ? "no @H probe stream" : asked(b) + " statements asked"}) - a host that ` +
+                `printed no table did not REACH one, which is a reading of one interleaving and says nothing ` +
+                `about the vehicle`);
   else if (asked(a) !== asked(b))
     findings.push(`THE TWO HOSTS ASK DIFFERENT NUMBERS OF STATEMENTS (native ${asked(a)}, vehicle ` +
                   `${asked(b)}) - the fixture's denominator is a property of engine/host/test_forced.c and ` +
@@ -4567,16 +4576,22 @@ function vehicleAgreement(nat, veh) {
                   `${bn === null ? "none" : JSON.stringify(bn)}. An abort's IDENTITY survives a repeat, so ` +
                   `this is a difference between the two HOSTS and not between two runs`);
   const head = `[build] VEHICLE AGREEMENT (${den(a)}; ${den(b)})`;
+  const could = cannot.length ? `\n[build]   COULD NOT BE COMPARED IN THIS RUN: ${cannot.join("; ")}.` : ``;
   const tail = `\n[build]   NOT COMPARED, DELIBERATELY: how many statements each host ANSWERED, and every ` +
                `work, fork, job and census total. Two runs of ONE artifact on ONE host already move those, so ` +
                `a difference between two HOSTS carries no information about either. This line decides ` +
                `nothing and no exit code moves by one.`;
+  /* WHAT AGREEMENT MAY BE CLAIMED IS EXACTLY WHAT WAS COMPARED. With the denominator uncomparable the only
+     surviving axis is the abort identity, so the sentence names that axis rather than saying the two hosts
+     agree - "agree on everything comparable" over an empty comparison is the vacuous claim one column over. */
+  const agreed = [asked(a) === null || asked(b) === null ? null : `the same ${asked(a)} statement(s) asked`,
+                  an === null ? `no abort on either` : `the same abort ${JSON.stringify(an)} on both`]
+                 .filter(Boolean).join(", and ");
   return (findings.length
     ? `${head} - ${findings.length} FINDING(S) ABOUT THE VEHICLE: ${findings.join("; ")}` +
       `\n[build]   a vehicle finding is never averaged into the verdict and never overturns it (§Testing). ` +
-      `The verdict above is the native host's.`
-    : `${head} - the two hosts agree on everything comparable: the same ${asked(a)} statement(s) asked, and ` +
-      `${an === null ? "no abort on either" : "the same abort " + JSON.stringify(an) + " on both"}`) + tail;
+      `The verdict above is the native host's.` + could
+    : `${head} - the two hosts agree on what this run could compare: ${agreed}` + could) + tail;
 }
 
 /* A SOURCE CENSUS IS RECOGNISED BY THE SENTENCE THE STAGE ITSELF PRINTS, NEVER BY ITS FILE NAME. A list here of
