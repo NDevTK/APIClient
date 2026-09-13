@@ -1244,6 +1244,48 @@ typedef struct JSProxyData {
     uint8_t is_revoked;
 } JSProxyData;
 
+/* UNKNOWN EXTERNAL INPUT STORED INTO A DATA BLOCK — 10.4.5.18 TypedArraySetElement ( obj, index, value )
+   step 3's SetValueInBuffer, for a value no run has determined.
+ *
+ * THE DATA BLOCK ONLY EVER HOLDS AN EXAMPLE AND THE SPAN IS THE FACT. A block holds uint8_t and not JSValues,
+ * so an unknown cannot live in it and converting one would hand the very next read a concrete number where the
+ * page had unknown input, deleting the fork and everything behind the other arm. What goes in the block is the
+ * unknown's OWN EXAMPLE where it has one — the projection §Solver already asks an unknown for at fetch's URL
+ * and the Attr/Element text edges — and the span beside it is what says the bytes are unknown.
+ * AND A SPAN IS RECORDED EVEN WHERE NOTHING IS WRITTEN, which is the load-bearing half. An unknown may carry NO
+ * example (JSConcolicHooks.example answers JS_UNDEFINED), and there is then no byte to write: inventing one is
+ * §@H's value known only to satisfy a gate, one hop worse than inventing `6` for `x > 5`, because a byte in a
+ * buffer is INDISTINGUISHABLE from a byte the page computed. So the store leaves the block alone and records
+ * the span anyway, and a consumer reading a body whose spans include an exampleless one must refuse to publish
+ * it as bytes the page sent — the refusal solver/endpoint.c's body_bytes_b64 already performs for EPB_SHAPE.
+ *
+ * THE WITNESS IS WHY THERE ARE NO INVALIDATION CALL SITES, AND IT IS THE WHOLE DESIGN. Provenance that shadows
+ * MUTABLE bytes goes stale when something overwrites them, and the obvious cure is to drop overlapping spans at
+ * every byte write — which is eleven sites (the ones cow_capture_bytes marks: the element store, fill,
+ * copyWithin, set's memmove, sort's writeback, reverse, the DataView setters, Atomics) and one silent omission
+ * away from a wrong answer. Instead each span records the BYTES STANDING IN THE BLOCK when it was made, and the
+ * read compares them: unchanged means nothing has overwritten this element and the unknown still describes it;
+ * changed means something did and the span is spent. No writer has to know spans exist.
+ * ITS ONE ERROR IS IN THE SAFE DIRECTION, which is why a witness is admissible where over-invalidation is not.
+ * A concrete write that happens to store the SAME byte values leaves the span standing, so a read answers with
+ * an unknown where the page wrote a concrete byte — it FABRICATES unknownness, and §Solver-half says to err
+ * toward MORE exploration because uncertainty keeps the arm. Over-invalidation makes the opposite error: it
+ * hands back the example as a concrete number, which is the de-taint this whole record exists to prevent.
+ *
+ * THE SPANS LIVE IN THE BUFFER'S OWN STORAGE STATE AND NOT IN THE COW SAVE BLOB. A span is a live fact ABOUT
+ * these bytes and has to SWAP WITH THEM, so it belongs where the bytes are; JS_BufferStateSave copies it into
+ * the baseline alongside `data` and the restore puts the pair back together. That is the same argument the
+ * extent, the detached bit and the per-view window are already in ONE entry for — two entries over one buffer
+ * have an ORDER in the head and apply replays forward — and JS_BufferStateRestore's immutable DCHECK already
+ * tells a future reader to "carry the bit in the buffer-state blob's restore beside the extent", which is this
+ * move, anticipated. */
+typedef struct JSArrayBufferSpan {
+    uint32_t offset;      /* byte offset into the data block */
+    uint8_t length;       /* the element's byte width, 1..8 */
+    uint8_t witness[8];   /* the bytes standing in the block when this span was recorded */
+    JSValue unknown;      /* ONE COUNTED REFERENCE, held for the life of the span */
+} JSArrayBufferSpan;
+
 typedef struct JSArrayBuffer {
     int byte_length; /* 0 if detached */
     int max_byte_length; /* -1 if not resizable; >= byte_length otherwise */
@@ -1254,6 +1296,11 @@ typedef struct JSArrayBuffer {
     struct list_head array_list;
     void *opaque;
     JSFreeArrayBufferDataFunc *free_func;
+    /* see JSArrayBufferSpan. Empty for every buffer no unknown was ever stored into, which is nearly all of
+       them, so the read's cost is one load of a count that is zero. */
+    JSArrayBufferSpan *span;
+    int n_span;
+    int span_size;
 } JSArrayBuffer;
 
 typedef struct JSTypedArray {
@@ -2274,6 +2321,13 @@ static __exception int js_set_length64(JSContext *ctx, JSValueConst obj,
 static void free_arg_list(JSContext *ctx, JSValue *tab, uint32_t len);
 static JSValue js_create_array(JSContext *ctx, int len, JSValueConst *tab);
 static bool js_get_fast_array_element(JSContext *ctx, JSObject *p, uint32_t idx, JSValue *pval);
+/* see JSArrayBufferSpan. Declared here because the two sides of an unknown element are far apart in this file
+   and must stay one mechanism: the STORE is 10.4.5.18's arm in JS_CallInternal and the READ is
+   js_get_fast_array_element directly above, while the record they share is defined with the buffer code. */
+static JSValueConst js_ab_span_get(const JSArrayBuffer *abuf, uint32_t offset, int length);
+static void js_ab_span_set(JSContext *ctx, JSArrayBuffer *abuf, uint32_t offset, int length,
+                           JSValueConst unknown);
+static void js_ab_spans_free(JSRuntime *rt, JSArrayBuffer *abuf);
 static bool js_get_fast_array(JSContext *ctx, JSValue obj,
                               const JSValue **arrpp, uint32_t *countp);
 static int expand_fast_array(JSContext *ctx, JSObject *p, uint32_t new_len);
@@ -14543,6 +14597,34 @@ static JSAtom js_referenced_name_atom(JSContext *ctx, JSValueConst base,
 static bool js_get_fast_array_element(JSContext *ctx, JSObject *p,
                                       uint32_t idx, JSValue *pval)
 {
+    /* 10.4.5.17 TypedArrayGetElement ( obj, index ) OVER AN ELEMENT SOME FLOW STORED UNKNOWN EXTERNAL INPUT
+       INTO — the READ half of 10.4.5.18's store, and it is here because this is the ONE point every
+       typed-array element read converges on: [[Get]], JS_GetPropertyUint32 and the interpreter's own fast path
+       all reach the switch below, which is the property that makes the pair ONE mechanism rather than a store
+       with a list of readers to remember.
+       IT LANDS BEFORE THE SWITCH, NOT INSIDE AN ARM, because the answer is the same for every element type: the
+       block's bytes are the unknown's EXAMPLE and the unknown is the value. Answering from an arm would have
+       given each of the ten a copy of that decision to drift from.
+       WHY THE PAIR IS ONE LANDING AND WAS NEVER SPLIT: a store that accepts an unknown beside a read that
+       cannot hand it back is not a partial build, it is a silent DE-TAINT — `ta[i] = x` then `ta[i]` would
+       return the example as a concrete number, deleting the fork and everything behind the arm it never
+       explored, with nothing anywhere to say so. That is strictly worse than the abort this replaces.
+       THE COST FOR AN ORDINARY BUFFER IS THE LOAD OF A ZERO. n_span is 0 for every buffer no flow has stored an
+       unknown into, which is nearly all of them, so the branch below is predictable and the scan never runs. */
+    if (unlikely(is_typed_array(p->class_id)) && idx < p->u.array.count) {
+        JSTypedArray *ta = p->u.typed_array;
+        JSArrayBuffer *abuf = ta->buffer->u.array_buffer;
+
+        if (unlikely(abuf->n_span != 0)) {
+            int width = 1 << typed_array_size_log2(p->class_id);
+            JSValueConst unknown = js_ab_span_get(abuf, ta->offset + idx * (uint32_t)width, width);
+
+            if (!JS_IsUninitialized(unknown)) {
+                *pval = js_dup(unknown);
+                return true;
+            }
+        }
+    }
     switch(p->class_id) {
     case JS_CLASS_ARRAY:
     case JS_CLASS_ARGUMENTS:
@@ -38689,91 +38771,91 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                    this says so instead. What to build is the same shape as the length's — a typed-array
                    element store that can hold unknown input, or a documented refusal at the store. */
                 if (al->phase == AL_TA_PRIM && unlikely(js_value_is_concolic(al->val))) {
-#if APICLIENT_DEV
-                    /* THE ADDRESS IS THE FRAME LIST AND THE UNKNOWN’S OWN SHAPE, AND THIS CRASH CARRIED
-                       NEITHER. It stated the spec fact and it stated the remedy, and it named no OBJECT at
-                       all — not the page expression, not which unknown, not even which array or which
-                       element — which is the defect g_no_user_code_depth’s own abort in this file
-                       records having been made four times, standing here a fifth. It was also the ONLY
-                       unknown-input crash in this file that did not compose its message: every sibling
-                       (§7.1.4 ToNumber, §7.1.15 ToBigInt, §7.1.19 ToString) already renders the
-                       shape through JSConcolicHooks.key_name and the frames through js_why_backtrace, and
-                       this one alone was a static string.
-                       THE THREE FACTS A BINARY SERIALIZER’S READER NEEDS ARE EXACTLY THE THREE A STATIC
-                       STRING CANNOT GIVE. WHICH unknown died — a request body carries many fields and the
-                       flow dies at the FIRST one, so the shape says which field the serializer had reached.
-                       WHERE in the buffer — element 3 of 4096 says it died composing its first field,
-                       element 3000 says it died on its twentieth, and those are different reports about how
-                       much of the body this engine can already build. WHICH page expression wrote it —
-                       without which the abort cannot be attributed to a document at all.
-                       AND THAT ATTRIBUTION IS SOMEBODY’S STATED FALSIFIER, WHICH IS WHY THIS IS NOT
-                       COSMETIC: solver/endpoint.c’s named residual for a request body the page wrote into
-                       a backing store makes this very abort its HOW ITS ABSENCE WOULD SHOW clause — the
-                       tell being an abort naming a typed-array element store on a document whose network
-                       panel shows the call. An observation a reader cannot attribute to a document is not an
-                       observation that can be run, so the residual was unfalsifiable for as long as this
-                       message named no site.
-                       THE RENDER MUST NOT BE ITS OWN TRAP, which is the lesson the no-user-code abort in this
-                       file states at its own flag: everything below reads engine state and calls
-                       js_why_backtrace, which takes the DEFAULT CallSite rendering and runs no page code. */
-                    /* `why` IS SIZED FROM THE PARTS AND NOT BY HABIT, because the part this diff ADDS is
-                       the one a short buffer eats: the frames go LAST, so a truncation cuts exactly the
-                       address the message exists to carry and leaves a crash that still reads complete.
-                       814 bytes of format + 240 shape + 40 index + 40 class name + 10 count + 2048
-                       frames = 3192, so 4096 is the parts plus headroom rather than a round number. */
-                    char frames[2048], why[4096], shbuf[256], ibuf[32], cbuf[ATOM_GET_STR_BUF_SIZE];
+                    /* 10.4.5.18 TypedArraySetElement ( obj, index, value ) OVER UNKNOWN EXTERNAL INPUT, STORED.
+                       This arm ABORTED until now, and the abort was right for as long as there was nowhere to
+                       put an unknown: steps 1-2 coerce V and step 3's SetValueInBuffer writes RAW BYTES into a
+                       data block that holds uint8_t and not JSValues, so converting would have handed the very
+                       next `ta[i]` read a concrete number where the page had unknown input, deleting the fork
+                       and everything behind the other arm.
+                       THE DATA BLOCK NOW HOLDS ONLY AN EXAMPLE AND THE SPAN IS THE FACT — see JSArrayBufferSpan
+                       for the whole argument, including why a span is recorded even when nothing is written and
+                       why its witness is what makes the read safe without a single invalidation call site.
+                       THE COERCION IS NOT PERFORMED ON THE UNKNOWN, which is the invariant this arm keeps. What
+                       reaches JS_SetPropertyValue below is the unknown's OWN EXAMPLE, a primitive, so steps 1-2
+                       run over a real number and invoke nothing; the unknown itself is never coerced, never
+                       ToNumber'd and never decided. Where there is no example the store is SKIPPED ENTIRELY and
+                       only the span is recorded: inventing a byte is §@H's value known only to satisfy a gate,
+                       and a byte in a buffer is indistinguishable from a byte the page computed.
+                       WHY THE SPAN IS RECORDED AFTER THE WRITE AND NOT BEFORE: the witness is the bytes as they
+                       STAND once this store is done, so recording first would witness the bytes this store is
+                       about to replace and the read would call its own span stale immediately. */
                     JSObject *tap = JS_VALUE_GET_OBJ(al->obj);
-                    JSValue sv = JS_UNINITIALIZED;
+                    JSTypedArray *ta;
+                    JSArrayBuffer *abuf;
+                    uint32_t idx, off;
+                    int width;
+                    JSValue ex;
 
-                    /* THE CARRIER’S OWN DISCRIMINATION, ASSERTED WHERE THE DIAGNOSTIC DEREFERENCES IT.
-                       AL_TA_PRIM is set at exactly one site, from the JSObject * that
-                       ta_atom_write_needs_toprim resolved, so the phase already means "a typed array"; this
-                       says so at the one line that reads class_id and u.array.count off it, and a future arm
-                       that sets the phase from anything else crashes here by name instead of rendering a
-                       union that is not an array. */
+                    /* `ret_val` IS THIS CHAIN'S ONE OWNED RESULT REGISTER, CLEARED BEFORE IT IS REUSED — the
+                       convention AL_TA_WRITE below establishes for this same dispatch, where it MOVES the
+                       register into `coerced` and hands ownership to the store. This arm has no coercion to
+                       hand it to, because the whole point is that the unknown is never coerced, so the
+                       equivalent of that move is a free. Assigning the completion over it without this would
+                       leak whatever the register was holding when the write began. */
+                    JS_FreeValue(ctx, ret_val);
+                    ret_val = JS_UNDEFINED;
+
                     DCHECK(JS_VALUE_GET_TAG(al->obj) == JS_TAG_OBJECT && is_typed_array(tap->class_id),
-                           "10.4.5.18 TypedArraySetElement’s unknown-input arm was entered with a target "
-                           "that is not a TypedArray — AL_TA_PRIM is set only from the site that already "
-                           "resolved one, so the phase and the target have parted company");
-                    /* 10.4.5.16 IsValidIntegerIndex ( obj, index ) is NOT asked here and the index is printed
-                       anyway: steps 1-2 coerce V BEFORE step 3’s bounds test, so an out-of-range element
-                       reaches this refusal exactly as an in-range one does, and the number the reader wants is
-                       the one the page WROTE. A canonical numeric index that is not a tagged int ("1.5",
-                       "1e21", "-0") is never a valid index, which is a statement rather than a hole. */
-                    if (__JS_AtomIsTaggedInt(al->atom))
-                        snprintf(ibuf, sizeof ibuf, "%u", __JS_AtomToUInt32(al->atom));
-                    else
-                        snprintf(ibuf, sizeof ibuf, "%s", "(a canonical numeric index that is no valid index)");
-                    snprintf(shbuf, sizeof shbuf, "%s", "(a shape this engine could not spell)");
-                    if (g_concolic.key_name) {
-                        sv = g_concolic.key_name(ctx, al->val);
-                        if (JS_IsString(sv)) {
-                            const char *s = JS_ToCString(ctx, sv);
-                            if (s) { js_why_sanitize(shbuf, sizeof shbuf, s); JS_FreeCString(ctx, s); }
-                        }
+                           "10.4.5.18 TypedArraySetElement's unknown-input arm was entered with a target that "
+                           "is not a TypedArray — AL_TA_PRIM is set only from the site that already resolved "
+                           "one, so the phase and the target have parted company");
+                    DCHECK(g_concolic.example != NULL,
+                           "the concolic value class is installed without JSConcolicHooks.example, so an "
+                           "unknown stored into a data block could not be asked for the one projection that "
+                           "may legitimately go in it — the two come from one table set by one call");
+                    ta = tap->u.typed_array;
+                    abuf = ta->buffer->u.array_buffer;
+                    width = 1 << typed_array_size_log2(tap->class_id);
+                    /* 10.4.5.16 IsValidIntegerIndex ( obj, index ) is step 3's gate and it is answered HERE
+                       rather than assumed: an out-of-range element reaches this arm exactly as an in-range one
+                       does, because steps 1-2 coerce before step 3 tests, and the spec's answer for it is that
+                       the store is skipped and the operation still succeeds. */
+                    if (!__JS_AtomIsTaggedInt(al->atom))
+                        goto ta_unknown_done;
+                    idx = __JS_AtomToUInt32(al->atom);
+                    if (typed_array_is_immutable(tap) || typed_array_is_oob(tap) ||
+                        idx >= (uint32_t)tap->u.array.count)
+                        goto ta_unknown_done;
+                    off = ta->offset + idx * (uint32_t)width;
+                    ex = g_concolic.example(ctx, al->val);
+                    if (!JS_IsUndefined(ex)) {
+                        JSValue key = JS_AtomIsNumericIndex1(ctx, al->atom);
+                        int wres;
+
+                        DCHECK(!JS_IsUndefined(key) && !JS_IsException(key),
+                               "a TypedArray element store resumed on a key that is not a canonical numeric "
+                               "index, which its own predicate required");
+                        DCHECK(!js_value_is_concolic(ex),
+                               "JSConcolicHooks.example answered with another unknown — an example is the "
+                               "CONCRETE projection of an unknown, so an unknown one would send this store "
+                               "round the coercion it exists to keep the unknown out of");
+                        /* THE EXAMPLE GOES THROUGH THE ORDINARY STORE, which is steps 1-2 with the coercion
+                           spent and step 3 including its out-of-bounds no-op — the same call the AL_TA_WRITE
+                           phase below makes for a coerced value, so the ten per-class arms and their COW
+                           capture are reached exactly once and are not re-spelled here. */
+                        wres = JS_SetPropertyValue(ctx, al->obj, key, ex, JS_PROP_THROW);
+                        if (unlikely(wres < 0)) goto do_array_len_throw;
+                    } else {
+                        JS_FreeValue(ctx, ex);
                     }
-                    JS_FreeValue(ctx, sv);
-                    js_why_backtrace(ctx, frames, sizeof frames);
-                    snprintf(why, sizeof why,
-                             "10.4.5.18 TypedArraySetElement ( obj, index, value ) over UNKNOWN EXTERNAL INPUT "
-                             "`%.240s`: `ta[%.40s] = x` on a %.40s of %u elements. Steps 1-2 coerce V with "
-                             "ToBigInt/ToNumber and step 3 writes the result as RAW BYTES into the "
-                             "ArrayBuffer’s data block, which holds uint8_t and not JSValues — so there "
-                             "is no slot for an unknown, and converting would make the very next `ta[i]` read "
-                             "hand the page a concrete number where it had unknown external input, deleting "
-                             "the fork and everything behind the other arm. Do NOT convert here. BUILD the "
-                             "element store that can hold unknown input — which is the capability "
-                             "solver/endpoint.c’s residual names for a request body the page wrote into a "
-                             "backing store, and Encoding §7.4 Interface TextEncoder’s encodeInto "
-                             "refuses its destination for the same reason. Frames: %s",
-                             shbuf, ibuf,
-                             JS_AtomGetStr(ctx, cbuf, sizeof cbuf,
-                                           ctx->rt->class_array[tap->class_id].class_name),
-                             (unsigned)tap->u.array.count, frames);
-                    DFAIL(why);
-#endif
-                    JS_ThrowTypeError(ctx, "a TypedArray element that is unknown external input is not modelled yet");
-                    goto do_array_len_throw;
+                    js_ab_span_set(ctx, abuf, off, width, al->val);
+                ta_unknown_done:
+                    /* BOTH SPELLINGS SUCCEED, exactly as the coerced path below: 10.4.5.5 returns true and
+                       10.4.5.3 step 1.g returns true. */
+                    ret_val = al->no_throw ? JS_TRUE : JS_UNDEFINED;
+                    gp_outer = al->outer; gp_outer_kind = al->outer_kind;
+                    js_array_len_free(ctx, al);
+                    goto do_getprop_complete;
                 }
                 if (al->phase == AL_TA_PRIM) {
                     al->phase = AL_TA_WRITE;
@@ -114482,6 +114564,13 @@ static JSValue js_array_buffer_init(JSContext *ctx, JSValue obj,
     abuf = js_malloc(ctx, sizeof(*abuf));
     if (!abuf)
         goto fail;
+    /* js_malloc AND NOT js_mallocz, so every field is assigned here or it is garbage. An uninitialised span
+       count is not a quiet wrong answer: js_ab_span_get would read it, walk a garbage pointer and hand the
+       page whatever it found, which is why these three are set at the allocation rather than lazily at the
+       first store. */
+    abuf->span = NULL;
+    abuf->n_span = 0;
+    abuf->span_size = 0;
     abuf->byte_length = len;
     abuf->max_byte_length = max_len ? *max_len : -1;
     if (alloc_flag) {
@@ -114696,6 +114785,99 @@ static JSValue js_ab_ctor_fini(JSContext *ctx, void *st, bool take_result)
 }
 
 /* also used for SharedArrayBuffer */
+/* THE SPAN COVERING THIS ELEMENT, OR NOTHING — see JSArrayBufferSpan for why a witness decides it. BORROWED:
+   the caller dups to keep. The scan runs backwards because a serializer writes FORWARD, so the element a page
+   is reading back is usually one of the last recorded; and it runs at all only for a buffer some flow has
+   stored an unknown into, which is why the cost for every ordinary buffer is the load of a zero. */
+static JSValueConst js_ab_span_get(const JSArrayBuffer *abuf, uint32_t offset, int length)
+{
+    int i;
+
+    if (abuf->n_span == 0 || abuf->detached || abuf->data == NULL)
+        return JS_UNINITIALIZED;
+    if ((int64_t)offset + length > (int64_t)abuf->byte_length)
+        return JS_UNINITIALIZED;
+    for (i = abuf->n_span - 1; i >= 0; i--) {
+        const JSArrayBufferSpan *s = &abuf->span[i];
+
+        if (s->offset != offset || s->length != length)
+            continue;
+        /* THE WITNESS, AND THE ONE DIRECTION IT MAY BE WRONG IN. Unchanged bytes mean nothing has overwritten
+           this element since the unknown was stored, so the unknown still describes it. Changed bytes mean
+           something did — fill, copyWithin, set, sort, reverse, a DataView setter, an Atomics store or an
+           ordinary concrete assignment — and the span is spent. A concrete write that happens to store the
+           SAME bytes leaves it standing, which answers with an unknown where the page wrote a number: that
+           fabricates unknownness and §Solver-half prefers it, because uncertainty keeps the arm. The opposite
+           error would hand back the example as a concrete number, which is the de-taint this record exists to
+           prevent, and no spelling of this check can make it. */
+        if (memcmp(&abuf->data[offset], s->witness, s->length) != 0)
+            return JS_UNINITIALIZED;
+        return s->unknown;
+    }
+    return JS_UNINITIALIZED;
+}
+
+/* RECORD THAT THIS ELEMENT'S BYTES ARE UNKNOWN EXTERNAL INPUT. Called AFTER the example (where there is one)
+   has been written, because the witness is the bytes as they stand once the store is done. */
+static void js_ab_span_set(JSContext *ctx, JSArrayBuffer *abuf, uint32_t offset, int length,
+                           JSValueConst unknown)
+{
+    JSRuntime *rt = ctx->rt;
+    JSArrayBufferSpan *s = NULL;
+    int i;
+
+    DCHECK(length >= 1 && length <= 8,
+           "a typed-array element span was recorded with a width no element has — 10.4.5.18's element types "
+           "are 1, 2, 4 and 8 bytes wide and the witness buffer is sized for the largest");
+    if (abuf->detached || abuf->data == NULL ||
+        (int64_t)offset + length > (int64_t)abuf->byte_length)
+        return;   /* 10.4.5.18 step 3 skipped the store, so there is nothing to describe */
+    for (i = abuf->n_span - 1; i >= 0; i--) {
+        if (abuf->span[i].offset == offset && abuf->span[i].length == length) {
+            s = &abuf->span[i];
+            JS_FreeValueRT(rt, s->unknown);
+            break;
+        }
+    }
+    if (s == NULL) {
+        if (abuf->n_span == abuf->span_size) {
+            int ns = abuf->span_size ? abuf->span_size * 2 : 8;
+            JSArrayBufferSpan *nv = js_realloc_rt(rt, abuf->span, sizeof(*nv) * (size_t)ns);
+
+            /* A LOST SPAN IS A SILENT DE-TAINT, WHICH IS WHY THIS IS FATAL RATHER THAN A RETURN CODE. Dropping
+               the record leaves the example byte in the block with nothing to say it is an example, so the
+               next read hands the page a concrete number where it had unknown input and every arm behind the
+               fork goes with it — the exact loss this whole record exists to prevent, arriving as an
+               allocation failure nobody would connect to it. §Offensive programming makes OOM a CHECK for the
+               same reason a dropped flow corrupts the frontier. */
+            CHECK(nv != NULL,
+                  "OOM recording that a typed-array element holds unknown external input — dropping the span "
+                  "would leave its example byte in the data block as a concrete number");
+            abuf->span = nv;
+            abuf->span_size = ns;
+        }
+        s = &abuf->span[abuf->n_span++];
+    }
+    s->offset = offset;
+    s->length = (uint8_t)length;
+    memcpy(s->witness, &abuf->data[offset], (size_t)length);
+    s->unknown = js_dup(unknown);
+}
+
+/* THE BUFFER'S STORAGE IS GOING, SO EVERY SPAN NAMING IT GOES TOO — one counted reference each, exactly as
+   JSBufferStateView's are released in JS_BufferStateFree. */
+static void js_ab_spans_free(JSRuntime *rt, JSArrayBuffer *abuf)
+{
+    int i;
+
+    for (i = 0; i < abuf->n_span; i++)
+        JS_FreeValueRT(rt, abuf->span[i].unknown);
+    js_free_rt(rt, abuf->span);
+    abuf->span = NULL;
+    abuf->n_span = 0;
+    abuf->span_size = 0;
+}
+
 static void js_array_buffer_finalizer(JSRuntime *rt, JSValueConst val)
 {
     JSObject *p = JS_VALUE_GET_OBJ(val);
@@ -114703,6 +114885,7 @@ static void js_array_buffer_finalizer(JSRuntime *rt, JSValueConst val)
     struct list_head *el, *el1;
 
     if (abuf) {
+        js_ab_spans_free(rt, abuf);
         /* The ArrayBuffer finalizer may be called before the typed
            array finalizers using it, so abuf->array_list is not
            necessarily empty. */
@@ -114988,6 +115171,16 @@ typedef struct JSBufferState {
     uint8_t *data;          /* an OWNED copy of byte_length bytes; NULL iff detached */
     int n_view;
     JSBufferStateView *view;
+    /* THE SPANS, BECAUSE THEY ARE PART OF THE STORAGE STATE AND NOT A SECOND ENTRY BESIDE IT — see
+       JSArrayBufferSpan. A span is a live fact ABOUT these bytes and has to SWAP WITH THEM: a flow that stored
+       an unknown at offset 3 and parked must resume finding it there, and a sibling that never stored one must
+       not see it at all. Two entries over one buffer have an ORDER in the head and apply replays forward, which
+       is the same argument that put the extent, the detached bit and the per-view window in this one blob; and
+       JS_BufferStateRestore's immutable DCHECK already tells a future reader to carry a new fact "in the
+       buffer-state blob's restore beside the extent", which is exactly this. Each holds ONE COUNTED REFERENCE,
+       released in JS_BufferStateFree like the views'. */
+    int n_span;
+    JSArrayBufferSpan *span;
 } JSBufferState;
 
 void JS_BufferStateFree(JSRuntime *rt, void *blob)
@@ -114999,6 +115192,9 @@ void JS_BufferStateFree(JSRuntime *rt, void *blob)
         return;
     for (i = 0; i < st->n_view; i++)
         JS_FreeValueRT(rt, JS_MKPTR(JS_TAG_OBJECT, st->view[i].obj));
+    for (i = 0; i < st->n_span; i++)
+        JS_FreeValueRT(rt, st->span[i].unknown);
+    js_free_rt(rt, st->span);
     js_free_rt(rt, st->view);
     js_free_rt(rt, st->data);
     js_free_rt(rt, st);
@@ -115072,6 +115268,20 @@ void *JS_BufferStateSave(JSContext *ctx, JSValueConst obj)
             st->n_view = ++i;
         }
         DCHECK(i == n, "a buffer's view list changed under the walk that records it");
+    }
+    /* THE SPANS ARE COPIED, NOT MOVED, because this blob is the baseline and a restore may put it back more
+       than once — the flow it belongs to can be unapplied and reapplied at every context switch. Publishing
+       n_span per entry is the views' rule for the views' reason: the count is what the free walks, so a
+       bail-out that left it at 0 would drop every reference already taken. */
+    if (abuf->n_span > 0) {
+        st->span = js_malloc_rt(rt, sizeof(*st->span) * (size_t)abuf->n_span);
+        if (!st->span)
+            goto fail;
+        for (i = 0; i < abuf->n_span; i++) {
+            st->span[i] = abuf->span[i];
+            (void)js_dup(abuf->span[i].unknown);
+            st->n_span = i + 1;
+        }
     }
     return st;
  fail:
@@ -115189,6 +115399,29 @@ void JS_BufferStateRestore(JSContext *ctx, JSValueConst obj, void *blob)
                "a view recorded on one buffer's list names a different buffer — a view's [[ViewedArrayBuffer]] "
                "is fixed at construction, so the blob is being put back into a buffer it did not come from");
         vp->u.typed_array->length = st->view[i].length;
+    }
+    /* AND THE SPANS, PUT BACK WITH THE BYTES THEY DESCRIBE — see JSArrayBufferSpan. This is the whole reason
+       they live in the storage state rather than anywhere else: the bytes above and the spans here are restored
+       in ONE operation, so a witness can never be compared against bytes from a different flow. Restoring the
+       bytes alone would leave this flow's spans standing over a sibling's bytes, where every witness mismatches
+       and every unknown silently becomes the concrete byte underneath it — the de-taint, arriving through the
+       context switch instead of through the store.
+       THE LIVE LIST IS RELEASED AND THE BLOB'S IS COPIED, never moved: the baseline is put back at every
+       unapply, so a move would empty the blob on the first one and every later restore would answer "no
+       unknowns" for a flow that had them. */
+    js_ab_spans_free(rt, abuf);
+    if (st->n_span > 0) {
+        abuf->span = js_malloc_rt(rt, sizeof(*abuf->span) * (size_t)st->n_span);
+        CHECK(abuf->span,
+              "cow: OOM restoring the record of which of an ArrayBuffer's bytes are unknown external input — "
+              "dropping it would hand the page the example bytes as concrete numbers and delete every fork "
+              "behind them, which is the one failure this record exists to prevent");
+        abuf->span_size = st->n_span;
+        for (i = 0; i < st->n_span; i++) {
+            abuf->span[i] = st->span[i];
+            (void)js_dup(st->span[i].unknown);
+            abuf->n_span = i + 1;
+        }
     }
 }
 
