@@ -328,6 +328,18 @@ const COUNTERS = ["switches", "flows", "candidates", "jobsQueued", "jobsRun", "u
  * the rest as what a webpack bundle IS. */
 const CENSUS_LIFETIME = ["stepUnitRuns"];
 const CENSUS_GAUGE = ["stepUnits", "programCursors"];
+/* AND WHAT THE JOB BACKLOG IS WAITING ON — solver/flow.h's split, off `wfq` rather than `cold`. This
+   driver already carries `jobsQueued`/`jobsRun`/`unitsDone` in COUNTERS and those cannot name a component:
+   a queued job waits on the HOST (`jobsOwed`), on its member finishing its own program (`jobsFramed`, HTML
+   §8.1.4.4 "Calling scripts", clean up after running script step 3), or on RANK (`jobsReady`), and ONLY THE
+   LAST IS THE ORDERING'S TO MOVE. So a run reporting `jobsRun: 0` is charged to the scheduler or to flow_step
+   by THESE rows and by nothing else in this file's output.
+   THEY ARE GAUGES, filed here rather than with the counters for the reason the header line below states: a
+   walk of the frontier at one instant may FALL and may never be differenced, and `jobsRun` beside it is a
+   monotone total. `jobWGap` is read with `jobsReady` and never alone (0 is both "no ready holder" and "the
+   top of the queue holds a runnable job"); `memUnframed` separates `jobsReady: 0`'s two silences; and
+   `wfqMembers` is the population all of them are taken over. */
+const WFQ_JOB_SPLIT = ["jobsReady", "jobsFramed", "jobsOwed", "jobWGap", "memUnframed", "visZero"];
 const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered",
   /* AND THE REPLAY TRIPLE, WHICH IS THE COUNTER THE `forkAt` ROWS ABOVE HAVE TO BE READ AGAINST AND THE ONE
      THING THIS DRIVER DID NOT CARRY. solver/decide.c's `fork_site_name` states a NAMED RESIDUAL — a fork over
@@ -363,6 +375,16 @@ function census(r) {
   for (const k of CENSUS_LIFETIME) o[k] = c && (k in c) ? c[k] : null;
   for (const k of CENSUS_GAUGE) o[k] = c && (k in c) ? c[k] : null;
   for (const k of COLD_COUNTERS) o[k] = c && (k in c) ? c[k] : null;
+  /* THE ORDER'S OWN CENSUS, AND `members: 0` IS NOT A READING. extension/bridge.js states the contract it
+     asserts: no `wfq` is a BROKEN CONTRACT, `{members: 0}` is an EMPTY FRONTIER carrying NO term rows at
+     all, and a full object is a READING. A finalize document is composed after the frontier drained or parked,
+     so `members: 0` is the true reading of that instant and not of the run — its rows are absent, and they
+     stay `null` here rather than becoming zeroes, because a frontier that was never observed standing and one
+     observed with no backlog are different findings. */
+  const w = ("wfq" in r) ? r.wfq : null;
+  const live = w && typeof w === "object" && w.members > 0;
+  o.wfqMembers = w && typeof w.members === "number" ? w.members : null;
+  for (const k of WFQ_JOB_SPLIT) o[k] = live && typeof w[k] === "number" ? w[k] : null;
   return o;
 }
 
@@ -517,7 +539,8 @@ async function main() {
   console.log("# frontier.* — LIFETIME (may be differenced): " +
               CENSUS_LIFETIME.concat(COLD_COUNTERS).join(",") + ", and every `forkAt` row" +
               " | UNITS: replayHits+replayLeftArms are ARMS (decision-vector slots), replayLeft is EVENTS" +
-              " | GAUGES (may FALL; never difference): " + CENSUS_GAUGE.join(","));
+              " | GAUGES (may FALL; never difference): " +
+              CENSUS_GAUGE.concat(WFQ_JOB_SPLIT).concat(["wfqMembers"]).join(","));
 
   const { browser, extId } = await connect();
   try {
