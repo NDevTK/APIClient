@@ -13,7 +13,7 @@
 //                  statement about the engine at all.
 //   RAN            no abort: the engine ran flows. `finished` then says whether the analysis RETURNED
 //                  within the dwell (a result document stored on the doc) or was still exploring.
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { siteList } from './list.mjs';
 
@@ -402,6 +402,51 @@ if (loads.length) console.log(`load average across rows: min ${Math.min(...loads
    CAN learn from the page; the spread column beside it is what says how reliably. */
 const measurable = table.filter((t) => t.outcome !== 'NET/FIXTURE');
 const withEp = table.filter((t) => t.epAnswered > 0);
+/* WHERE THE LEARNED ADDRESSES CAME FROM, WHICH IS THE ONE QUESTION THIS TABLE COULD NOT ASK AND THE ONLY ONE
+   THE PRODUCT IS ABOUT. §What-the-tool-produces is 'what the bundle CAN do but didn't' — addresses the code
+   COMPUTED — and an endpoint COUNT is silent about that: an address harvested from markup and one derived by
+   running the bundle are one number here, and a plain HTML parse finds the first without a solver at all.
+   MEASURED, BY HAND, BEFORE THIS EXISTED — which is why it exists. On gitpod the document's 89
+   `<link rel=modulepreload>` hrefs were learned 89 of 89 and its ONE `<script src>` — the module entry it
+   actually loads — was learned 0 of 1. On gitlab, three independent passes identical: 17 `<script src>`,
+   ZERO learned, and the four addresses it did learn are `.woff2` FONTS. Two bundler shapes, three real
+   sites, and not one address that could only have come from executing something.
+   AN INVERSION IS A DIFFERENT FINDING FROM A SHORTFALL, and only this split can state it: `learned 90` reads
+   as a solver working, while `hints 89/89, scripts 0/1` reads as a solver that has not run — and those take
+   opposite work. The row's own `distinctEndpoints` carries a residual saying a classifier's answer is what
+   would split it; this is CHEAPER and sharper, because it needs no response and no magic-byte read, only the
+   document that was served.
+   FROZEN ROWS ONLY, AND THE ABSENCE IS SAID RATHER THAN SKIPPED. A live row has no mirrored document to
+   compare against, so it is reported as unmeasurable HERE rather than dropped — an absent split and a split
+   of zero are different facts. The markup read is a REGEX over the served bytes and not a parse, so it is a
+   floor: a script a document writes from script is not in it, which is the direction that UNDERSTATES the
+   inversion and therefore cannot manufacture one. */
+const strip = (s) => { const u = String(s).replace(/^[A-Z]+ /, '');
+                       try { return new URL(u).pathname.replace(/^\/_m\/[^/]+/, ''); } catch { return u; } };
+const provenanceSplit = [];
+for (const t of table) {
+  const doc = join(ROOT, 'mirror', t.id, 'index.html');
+  if (!existsSync(doc)) { provenanceSplit.push({ id: t.id, split: 'NO MIRROR — not measurable here' }); continue; }
+  const html = readFileSync(doc, 'utf8');
+  const scripts = [...new Set([...html.matchAll(/<script[^>]*\ssrc="([^"]+)"/g)].map((m) => m[1]))];
+  const hints = [...new Set([...html.matchAll(/rel="(?:modulepreload|preload)"[^>]*href="([^"]+)"/g)]
+                            .map((m) => m[1]))];
+  /* THE RAW ROWS AND NOT `t` — MY OWN FIRST VERSION READ `t.siteEndpoints` AND THE TABLE ROW DOES NOT
+     CARRY IT, so it printed `hintsLearned: 0` where the truth is 89 of 89. That is not a smaller number,
+     it is the INVERSE FINDING: `0/89` reads as an engine that learned nothing from the document, and
+     `89/89` reads as one that learned the document's markup and none of its code. Caught only because
+     the totals line two lines down said 94 endpoints while this said zero — two numbers from one run
+     disagreeing, which is the cheapest check there is and needed no second command.
+     SO IT READS THE CENSUS FILES DIRECTLY, independent of this file's own table shape, which is also
+     what stops it drifting the next time a column is added. */
+  const learned = new Set(passes.flatMap((pp) => pp.rows.filter((r) => r.id === t.id))
+                                .flatMap((r) => r.siteEndpoints || []).map(strip));
+  provenanceSplit.push({ id: t.id, learned: learned.size,
+                         scriptsInDoc: scripts.length, scriptsLearned: scripts.filter((s) => learned.has(s)).length,
+                         hintsInDoc: hints.length, hintsLearned: hints.filter((s) => learned.has(s)).length });
+}
+console.log('provenance split (frozen rows; a learned address the document NAMES was not derived by running '
+            + 'anything): ' + JSON.stringify(provenanceSplit, null, 1));
 console.log('totals: ' + JSON.stringify({
   sites: table.length,
   netFixture: table.filter((t) => t.outcome === 'NET/FIXTURE').length,
