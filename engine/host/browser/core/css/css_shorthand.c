@@ -470,21 +470,23 @@ static char *text_align_component(const char *value, int term)
    question about it, so that arm is copied verbatim exactly as a `margin`'s component is. */
 static int vertical_align_term_of(const char *w, size_t n, const char **canon)
 {
-    char *probe;
-    bool len;
-
     *canon = css_sh_keyword(BASELINE_SOURCE_KEYWORDS, CSS_SH_N(BASELINE_SOURCE_KEYWORDS), w, n);
     if (*canon) return 0;
     *canon = css_sh_keyword(ALIGNMENT_BASELINE_KEYWORDS, CSS_SH_N(ALIGNMENT_BASELINE_KEYWORDS), w, n);
     if (*canon) return 1;
     *canon = css_sh_keyword(BASELINE_SHIFT_KEYWORDS, CSS_SH_N(BASELINE_SHIFT_KEYWORDS), w, n);
     if (*canon) return 2;
-    probe = css_sh_dupn(w, n);
     /* §4.2.3's `<length-percentage>` carries NO range restriction — "raise (positive value) or lower (negative
-       value)" — so a leading `-` is a value and not the invalid declaration it is for a `<line-width>`. */
-    len = css_length_is_length_percentage(probe);
-    free(probe);
-    return len ? 2 : -1;
+       value)" — so a leading `-` is a value and not the invalid declaration it is for a `<line-width>`, and
+       `sh_length_component` admits the sign for exactly that reason.
+       IT GOES THROUGH THAT ENTRY FOR THE REASON THE OTHER THREE DO, and the route in is narrower than it looks
+       rather than absent: a bare `2` never reaches here on its own, because lexbor TYPES `vertical-align`,
+       refuses a unitless non-zero at its own `<length-percentage>`, and core/css/css_style_declaration.c drops
+       a refused declaration that carries no math function. `vertical-align: calc(1px) 2` is the one that does
+       arrive — that gate admits a value containing a math function and routes a SHORTHAND here whole — and the
+       `2` would be taken as §4.2.3's shift, copied into `baseline-shift`, and ABORT the length parse when
+       core/layout/line_box.c asks for its computed value. */
+    return sh_length_component(w, n, true) ? 2 : -1;
 }
 
 /* §4.2's expansion: the component values in ANY ORDER, each term at most once, omitted terms initial — the same
@@ -585,9 +587,6 @@ typedef enum { CSS_BORDER_PART_WIDTH = 0, CSS_BORDER_PART_STYLE = 1, CSS_BORDER_
    answer FALSE to css_shorthand_complete_for. */
 static bool border_part_component_valid(CssBorderPart part, const char *w, size_t n)
 {
-    char *probe;
-    bool ok;
-
     if (part == CSS_BORDER_PART_STYLE)
         return css_sh_keyword(LINE_STYLE_KEYWORDS, CSS_SH_N(LINE_STYLE_KEYWORDS), w, n) != NULL;
     if (part == CSS_BORDER_PART_COLOR) {
@@ -597,10 +596,15 @@ static bool border_part_component_valid(CssBorderPart part, const char *w, size_
     }
     if (css_sh_keyword(LINE_WIDTH_KEYWORDS, CSS_SH_N(LINE_WIDTH_KEYWORDS), w, n)) return true;
     if (n > 0 && w[0] == '-') return false;   /* §3.3: "Negative values are invalid" */
-    probe = css_sh_dupn(w, n);
-    ok = css_length_is_length(probe);
-    free(probe);
-    return ok;
+    /* §3.3's `<line-width>` through the entry that answers CSS's production — see `sh_length_component`.
+       THIS SITE IS WHY THAT ENTRY IS SHARED AND THE LESSON IS ABOUT THE REPAIR RATHER THAN THE DEFECT: the
+       same question was routed at `border_longhand_value` one commit earlier and this caller was missed, so
+       `border-top-width: 2` was refused while `border-width: 2` — the commoner spelling by far, and
+       `border: 2 solid red` with it — went on aborting the length parse. The two paths are NOT alternatives
+       that meet again: `border_four_side_component` validates here and then returns the component VERBATIM,
+       so nothing downstream re-asks, which is exactly what its own comment above says ("nothing has checked
+       these components"). A fix of the form "X is not how to ask Q" is not finished at one site. */
+    return sh_length_component(w, n, false);
 }
 
 /* CSS 2.1 §8.3's four-side rotation applied to a shorthand whose components are `<line-width>`, `<line-style>`
@@ -964,14 +968,17 @@ char *css_shorthand_component(const char *shorthand, const char *value, const ch
            a validation that only some callers get is the shape whose gaps are invisible.
            §10.12 "Range Checking" is deliberately not applied — a negative `calc()` is a VALID declaration that
            computes to the clamped value, so refusing one here would drop `padding: calc(1rem - 2rem)`. */
-        for (k = 0; k < n; k++) {
-            char *probe = css_sh_dupn(w[k], wl[k]);
-            bool ok = css_length_is_length_percentage(probe) ||
-                      (is_margin && strcmp(probe, "auto") == 0);
-
-            free(probe);
-            if (!ok) return NULL;
-        }
+        /* THROUGH `sh_length_component` AND NOT THE WIDE PREDICATE, because this arm ALSO returns its component
+           VERBATIM below — so, exactly as at `border_four_side_component`, nothing downstream re-asks and this
+           is the only check there is. The path here is narrower than that one and still real: a bare `2` never
+           arrives on its own (lexbor types `margin`, refuses it, and `cssd_undef_is_declaration` drops a
+           refused declaration carrying no math function), but `margin: calc(1px) 2` DOES — that gate admits a
+           value containing a math function and hands the whole thing here, components and all. The `2` would
+           then be copied into `margin-right` and ABORT core/css/css_length.c's parse. */
+        for (k = 0; k < n; k++)
+            if (!sh_length_component(w[k], wl[k], true) &&
+                !(is_margin && wl[k] == 4 && memcmp(w[k], "auto", 4) == 0))
+                return NULL;
         comp = SIDE_OF[n][side];
         return css_sh_dupn(w[comp], wl[comp]);
     }
