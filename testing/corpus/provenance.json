@@ -1473,5 +1473,353 @@
    }
   ],
   "baseUrl": "https://www.tldraw.com/"
+ },
+ {
+  "id": "telegram",
+  "stack": "Vite (<script type=module crossorigin src=./index-<hash>.js>)",
+  "requestedUrl": "https://web.telegram.org/k/",
+  "finalUrl": "https://web.telegram.org/k/",
+  "status": 200,
+  "contentType": "text/html",
+  "csp": "",
+  "bytes": 14729,
+  "sha256": "0ed281dc631621d23e5b8825d397155bc5a31e8e1d5b96ec47b0f8c1dc85bcdc",
+  "fetchedAt": "2026-09-13T07:54:54.016Z",
+  "resources": [
+   {
+    "url": "https://web.telegram.org/k/index-CBuWbkpt.js",
+    "status": 200,
+    "contentType": "application/javascript",
+    "bytes": 81782,
+    "sha256": "f96a8174e8a530c951809477124f8000a2463adfc7b215d3a97e17350fd12e93",
+    "fetchedAt": "2026-09-13T07:54:54.709Z",
+    "path": "web.telegram.org/k/index-CBuWbkpt.js"
+   },
+   {
+    "url": "https://web.telegram.org/k/rolldown-runtime-hePW80VL.js",
+    "status": 200,
+    "contentType": "application/javascript",
+    "bytes": 716,
+    "sha256": "580ad8c58061a4dde99bde0a56905e382f0568516ee2f5b84dbfb52085709021",
+    "fetchedAt": "2026-09-13T07:54:55.190Z",
+    "path": "web.telegram.org/k/rolldown-runtime-hePW80VL.js"
+   },
+   {
+    "url": "https://web.telegram.org/k/userAgent-CAySW5Wl.js",
+    "status": 200,
+    "contentType": "application/javascript",
+    "bytes": 1971,
+    "sha256": "7102352503deefd5c98bdca36c3148c01059af52d8e5821507337f8e46b957b6",
+    "fetchedAt": "2026-09-13T07:54:55.617Z",
+    "path": "web.telegram.org/k/userAgent-CAySW5Wl.js"
+   },
+   {
+    "url": "https://web.telegram.org/k/app-BSCNxN1b.js",
+    "status": 200,
+    "contentType": "application/javascript",
+    "bytes": 787,
+    "sha256": "29cc14416104de928e50e7cf3e2f91948890f8b35025dfb9e3c28d167d984ed6",
+    "fetchedAt": "2026-09-13T07:54:56.078Z",
+    "path": "web.telegram.org/k/app-BSCNxN1b.js"
+   },
+   {
+    "url": "https://web.telegram.org/k/cancellablePromise-DEtsmW8i.js",
+    "status": 200,
+    "contentType": "application/javascript",
+    "bytes": 837,
+    "sha256": "0c035aafcf24a60e0da7f48ca8c29d1da69b24caa94b269d2aadf79d3a87e1b7",
+    "fetchedAt": "2026-09-13T07:54:56.521Z",
+    "path": "web.telegram.org/k/cancellablePromise-DEtsmW8i.js"
+   },
+   {
+    "url": "https://web.telegram.org/k/cryptoMessagePort-DlPkBHfu.js",
+    "status": 200,
+    "contentType": "application/javascript",
+    "bytes": 14093,
+    "sha256": "8bc60d9321df5ca9159e45711dc599e792ce2e85250d77e92da534a01b9a461f",
+    "fetchedAt": "2026-09-13T07:54:57.093Z",
+    "path": "web.telegram.org/k/cryptoMessagePort-DlPkBHfu.js"
+   },
+   {
+    "url": "https://web.telegram.org/k/encryptedStorageLayer-Bq44bNnb.js",
+    "status": 200,
+    "contentType": "application/javascript",
+    "bytes": 9546,
+    "sha256": "c3bd728a42857796327788d9e73d68ca6463586cc9fd2a4d8160abdca1322648",
+    "fetchedAt": "2026-09-13T07:54:57.584Z",
+    "path": "web.telegram.org/k/encryptedStorageLayer-Bq44bNnb.js"
+   },
+   {
+    "url": "https://web.telegram.org/k/solid-WnanT5kq.js",
+    "status": 200,
+    "contentType": "application/javascript",
+    "bytes": 16852,
+    "sha256": "350b5faa412297f03171186b2a65a9f51f2fc84bf39f5a0cb192caf05a90a052",
+    "fetchedAt": "2026-09-13T07:54:58.155Z",
+    "path": "web.telegram.org/k/solid-WnanT5kq.js"
+   },
+   {
+    "url": "https://web.telegram.org/k/langPack--d9bv9Gp.js",
+    "status": 200,
+    "contentType": "application/javascript",
+    "bytes": 65688,
+    "sha256": "1b2b1c2b6e1f17f61041d37ca57d36c2287c6c30ffa0f9bf137039a43165c4f1",
+    "fetchedAt": "2026-09-13T07:54:58.806Z",
+    "path": "web.telegram.org/k/langPack--d9bv9Gp.js"
+   },
+   {
+    "url": "https://web.telegram.org/k/setDeepProperty-PeINt371.js",
+    "status": 200,
+    "contentType": "application/javascript",
+    "bytes": 309,
+    "sha256": "da8a60f1d4d556441e302128c73c25adb2a8370ad4083ec037485940ac90ad26",
+    "fetchedAt": "2026-09-13T07:54:59.277Z",
+    "path": "web.telegram.org/k/setDeepProperty-PeINt371.js"
+   },
+   {
+    "url": "https://web.telegram.org/k/findUpAsChild-4I9rMZ9r.js",
+    "status": 200,
+    "contentType": "application/javascript",
+    "bytes": 7468,
+    "sha256": "0e03917759b52956d84e5fdb73f3c42787cc86a715c732eb8af7632ad481333a",
+    "fetchedAt": "2026-09-13T07:54:59.736Z",
+    "path": "web.telegram.org/k/findUpAsChild-4I9rMZ9r.js"
+   },
+   {
+    "url": "https://web.telegram.org/k/appWindow-BAAFc2gx.js",
+    "status": 200,
+    "contentType": "application/javascript",
+    "bytes": 564,
+    "sha256": "22e00fd1ecab6f97dfb97447cbf594147fd42e2866e6e1921e7db063e651150f",
+    "fetchedAt": "2026-09-13T07:55:00.207Z",
+    "path": "web.telegram.org/k/appWindow-BAAFc2gx.js"
+   },
+   {
+    "url": "https://web.telegram.org/k/cancelEvent-DOcVzRz1.js",
+    "status": 200,
+    "contentType": "application/javascript",
+    "bytes": 257,
+    "sha256": "d532117cdacb05e3361f2a2cef9030c6ba48dec8249a0350b8854967333e9acb",
+    "fetchedAt": "2026-09-13T07:55:00.641Z",
+    "path": "web.telegram.org/k/cancelEvent-DOcVzRz1.js"
+   },
+   {
+    "url": "https://web.telegram.org/k/mediaSizes-BTcDDHTm.js",
+    "status": 200,
+    "contentType": "application/javascript",
+    "bytes": 9286,
+    "sha256": "56449549380405166d5de20a28424931af9255939e6eb26bad2683623fceb1df",
+    "fetchedAt": "2026-09-13T07:55:01.155Z",
+    "path": "web.telegram.org/k/mediaSizes-BTcDDHTm.js"
+   },
+   {
+    "url": "https://web.telegram.org/k/touchSupport-C16ceHgU.js",
+    "status": 200,
+    "contentType": "application/javascript",
+    "bytes": 152,
+    "sha256": "253d400dfc31effa18b7d49c2eef8737254f0679c68310aca89bdf89afb4036e",
+    "fetchedAt": "2026-09-13T07:55:01.635Z",
+    "path": "web.telegram.org/k/touchSupport-C16ceHgU.js"
+   },
+   {
+    "url": "https://web.telegram.org/k/schedulers-b4lWz3X5.js",
+    "status": 200,
+    "contentType": "application/javascript",
+    "bytes": 383,
+    "sha256": "1b630fe181af1acffe0eb7457486a6435b5e7dc90ac3388ec39ed533f712209e",
+    "fetchedAt": "2026-09-13T07:55:02.108Z",
+    "path": "web.telegram.org/k/schedulers-b4lWz3X5.js"
+   },
+   {
+    "url": "https://web.telegram.org/k/pause-DRsyeiPM.js",
+    "status": 200,
+    "contentType": "application/javascript",
+    "bytes": 113,
+    "sha256": "2451912063c48eb78a6673571900eedb51b617ce52a296f5caf044229a807417",
+    "fetchedAt": "2026-09-13T07:55:02.556Z",
+    "path": "web.telegram.org/k/pause-DRsyeiPM.js"
+   },
+   {
+    "url": "https://web.telegram.org/k/constants-Cw8WsUPQ.js",
+    "status": 200,
+    "contentType": "application/javascript",
+    "bytes": 78,
+    "sha256": "7890fa1247a46ff3b7aa22fd9d6183461ab30d5985715455d206d2dc21cf126c",
+    "fetchedAt": "2026-09-13T07:55:03.132Z",
+    "path": "web.telegram.org/k/constants-Cw8WsUPQ.js"
+   },
+   {
+    "url": "https://web.telegram.org/k/clamp-D7k6Oux1.js",
+    "status": 200,
+    "contentType": "application/javascript",
+    "bytes": 109,
+    "sha256": "fa275263055dbbd00c3470acc4ccf8ccf801f5e4a6bf6fbd481baecfef4ef979",
+    "fetchedAt": "2026-09-13T07:55:03.575Z",
+    "path": "web.telegram.org/k/clamp-D7k6Oux1.js"
+   },
+   {
+    "url": "https://web.telegram.org/k/state-y9uiDo1B.js",
+    "status": 200,
+    "contentType": "application/javascript",
+    "bytes": 15582,
+    "sha256": "8769c5d0c29e36564bce364f51889f74cf04c06662ae06a4d7205705642cd8b5",
+    "fetchedAt": "2026-09-13T07:55:04.193Z",
+    "path": "web.telegram.org/k/state-y9uiDo1B.js"
+   },
+   {
+    "url": "https://web.telegram.org/k/resizeObserver-DNwiwdaz.js",
+    "status": 200,
+    "contentType": "application/javascript",
+    "bytes": 1462,
+    "sha256": "8bc338e8675d3e776e04d77077ea596a3940542c7440bad7b7d10c98147b15ec",
+    "fetchedAt": "2026-09-13T07:55:04.628Z",
+    "path": "web.telegram.org/k/resizeObserver-DNwiwdaz.js"
+   },
+   {
+    "url": "https://web.telegram.org/k/themeController-8OcPSpCQ.js",
+    "status": 200,
+    "contentType": "application/javascript",
+    "bytes": 15435,
+    "sha256": "d34bb92393edcec3a9a2942091d95add94cdce31ca1bf3e66f29947abd057e4e",
+    "fetchedAt": "2026-09-13T07:55:05.227Z",
+    "path": "web.telegram.org/k/themeController-8OcPSpCQ.js"
+   },
+   {
+    "url": "https://web.telegram.org/k/sessionStorage-obancYVI.js",
+    "status": 200,
+    "contentType": "application/javascript",
+    "bytes": 4460,
+    "sha256": "155182d943ba8df80b41d210d702aded464a1887150f79f737ce22aea2c22572",
+    "fetchedAt": "2026-09-13T07:55:05.674Z",
+    "path": "web.telegram.org/k/sessionStorage-obancYVI.js"
+   },
+   {
+    "url": "https://web.telegram.org/k/tsNow-DQaJXZ7j.js",
+    "status": 200,
+    "contentType": "application/javascript",
+    "bytes": 108,
+    "sha256": "c36a2a5e1edfcb9f301981732eb1c283e7e3629e61e0ec2b9c1b5f729e24b05e",
+    "fetchedAt": "2026-09-13T07:55:06.133Z",
+    "path": "web.telegram.org/k/tsNow-DQaJXZ7j.js"
+   },
+   {
+    "url": "https://web.telegram.org/k/bytesFromHex-Blz0aWpC.js",
+    "status": 200,
+    "contentType": "application/javascript",
+    "bytes": 610,
+    "sha256": "2669e0714454723dff8ff6099019d6b003474e3414392587de1cf4a1ed9a17c4",
+    "fetchedAt": "2026-09-13T07:55:06.564Z",
+    "path": "web.telegram.org/k/bytesFromHex-Blz0aWpC.js"
+   },
+   {
+    "url": "https://web.telegram.org/k/broadcastChannel-5OK5CIXz.js",
+    "status": 200,
+    "contentType": "application/javascript",
+    "bytes": 113051,
+    "sha256": "292d9a77237f658d944827cae6ccd3df3062e10be0b62c4b68fa97c454005b60",
+    "fetchedAt": "2026-09-13T07:55:07.348Z",
+    "path": "web.telegram.org/k/broadcastChannel-5OK5CIXz.js"
+   },
+   {
+    "url": "https://web.telegram.org/k/telegramMeWebManager-DASt_Muz.js",
+    "status": 200,
+    "contentType": "application/javascript",
+    "bytes": 987,
+    "sha256": "8d737c9f07be1b4383d173d3f66e6c55329d51dd69d977d90936fe52ca53a451",
+    "fetchedAt": "2026-09-13T07:55:07.805Z",
+    "path": "web.telegram.org/k/telegramMeWebManager-DASt_Muz.js"
+   },
+   {
+    "url": "https://web.telegram.org/k/placeCaretAtEnd-Bo-FoE_z.js",
+    "status": 200,
+    "contentType": "application/javascript",
+    "bytes": 3132,
+    "sha256": "687a77d47a222a22a079e21712c11f11238d063545266ffcad1af5a2391821ef",
+    "fetchedAt": "2026-09-13T07:55:08.278Z",
+    "path": "web.telegram.org/k/placeCaretAtEnd-Bo-FoE_z.js"
+   },
+   {
+    "url": "https://web.telegram.org/k/sequentialDom-BFICvxYG.js",
+    "status": 200,
+    "contentType": "application/javascript",
+    "bytes": 867,
+    "sha256": "36fe0e822494632867f4245023d526e4104baccdeeeff32c09db30c676487daf",
+    "fetchedAt": "2026-09-13T07:55:08.709Z",
+    "path": "web.telegram.org/k/sequentialDom-BFICvxYG.js"
+   },
+   {
+    "url": "https://web.telegram.org/k/middleware-Bss_jQmb.js",
+    "status": 200,
+    "contentType": "application/javascript",
+    "bytes": 1186,
+    "sha256": "bf627a7182f0969827d71d8f5b9759bc08e08712a90cffde720179b8bb386f42",
+    "fetchedAt": "2026-09-13T07:55:09.199Z",
+    "path": "web.telegram.org/k/middleware-Bss_jQmb.js"
+   },
+   {
+    "url": "https://web.telegram.org/k/animation--6L6ca10.js",
+    "status": 200,
+    "contentType": "application/javascript",
+    "bytes": 542,
+    "sha256": "8ca7a9fa2d01c8b18fd5c358f5f84c213e17122937371fcab460b07766d0492c",
+    "fetchedAt": "2026-09-13T07:55:09.704Z",
+    "path": "web.telegram.org/k/animation--6L6ca10.js"
+   },
+   {
+    "url": "https://web.telegram.org/k/web-Cdw80WQO.js",
+    "status": 200,
+    "contentType": "application/javascript",
+    "bytes": 11870,
+    "sha256": "22c9aa75a39b36b136f63c4f84134d24feec5cf8257f1e1c61dc08dba6f98546",
+    "fetchedAt": "2026-09-13T07:55:10.196Z",
+    "path": "web.telegram.org/k/web-Cdw80WQO.js"
+   },
+   {
+    "url": "https://web.telegram.org/k/hotReloadGuard-Cf_gJi1H.js",
+    "status": 200,
+    "contentType": "application/javascript",
+    "bytes": 443,
+    "sha256": "3a0c0f940e3862c87f2dbd37a232c7bd9a0bae2884036873fb418e2d3949b1bb",
+    "fetchedAt": "2026-09-13T07:55:10.637Z",
+    "path": "web.telegram.org/k/hotReloadGuard-Cf_gJi1H.js"
+   },
+   {
+    "url": "https://web.telegram.org/k/apiManagerProxy-DVXobuyu.js",
+    "status": 200,
+    "contentType": "application/javascript",
+    "bytes": 201286,
+    "sha256": "dd0c085f588933412dac28f9cd05a4eac870c767873988681bb50ce74d66f23c",
+    "fetchedAt": "2026-09-13T07:55:11.467Z",
+    "path": "web.telegram.org/k/apiManagerProxy-DVXobuyu.js"
+   },
+   {
+    "url": "https://web.telegram.org/k/overlayCounter-CyFrKg7x.js",
+    "status": 200,
+    "contentType": "application/javascript",
+    "bytes": 577,
+    "sha256": "b642345f4de8e5b1bfab4ee041604cfcd3475e8684b562170d5f6877f16a1216",
+    "fetchedAt": "2026-09-13T07:55:11.973Z",
+    "path": "web.telegram.org/k/overlayCounter-CyFrKg7x.js"
+   },
+   {
+    "url": "https://web.telegram.org/k/overlayScrollSupport-CSX3ak_n.js",
+    "status": 200,
+    "contentType": "application/javascript",
+    "bytes": 785,
+    "sha256": "5d90a27d77de986bdc14a90954dad72b0d6d460e76d7cf084cc84c5cf260f246",
+    "fetchedAt": "2026-09-13T07:55:12.433Z",
+    "path": "web.telegram.org/k/overlayScrollSupport-CSX3ak_n.js"
+   },
+   {
+    "url": "https://web.telegram.org/k/ripple-B-Lil1c0.js",
+    "status": 200,
+    "contentType": "application/javascript",
+    "bytes": 2683,
+    "sha256": "409898c1e5ce668974e016c12f57e9d8dff2d9be266e9b1e4c48920bf467690e",
+    "fetchedAt": "2026-09-13T07:55:12.883Z",
+    "path": "web.telegram.org/k/ripple-B-Lil1c0.js"
+   }
+  ],
+  "baseUrl": "https://web.telegram.org/k/"
  }
 ]
