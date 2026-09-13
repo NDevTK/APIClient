@@ -15755,12 +15755,32 @@ static int JS_SetPropertyValue(JSContext *ctx, JSValueConst this_obj,
        offset leaves the backing store holding whatever was there, the request is still built, and
        solver/endpoint.c records a body it will label as bytes the page sent — which a reviewer REPLAYS. A
        silently wrong payload is worse than an absent one, and nothing downstream can tell them apart.
-       WHAT TO BUILD IS A PER-POSITION OUTCOME FORK, AND THE SHAPE ALREADY EXISTS THIRTY LINES FROM THE VALUE
-       ARM IN THE SAME CARRIER. 10.4.2.4 ArraySetLength over unknown input asks "is the length being set greater
-       than n?" at each n, through step_fork_run under JSArrayLen's AL_UNKNOWN_SVZ / AL_UNKNOWN_PIN phases, and
-       10.4.5.17 TypedArrayGetElement's read side needs the identical chain — the two sides of an unknown index
-       must answer alike for the same reason the two sides of an unknown length already do. There is no bound on
-       n and there must not be one; what makes it behave like a finite walk is the WFQ.
+       WHAT TO BUILD IS A SPAN WHOSE OFFSET IS UNKNOWN, AND THE REMEDY THIS CRASH FIRST NAMED IS RETIRED HERE
+       RATHER THAN DELETED, because it is the one a reader re-derives from the value arm thirty lines away. It
+       said: build the per-position outcome fork 10.4.2.4 ArraySetLength already has in this same carrier
+       (JSArrayLen's AL_UNKNOWN_SVZ / AL_UNKNOWN_PIN, asking at each n whether the index is n), and give
+       10.4.5.17 TypedArrayGetElement the identical chain so both sides of an unknown index answer alike. BOTH
+       HALVES ARE WRONG, and they are wrong in the two ways a next-diff clause always is — it named a MECHANISM
+       and it asserted a SCOPE, and both are claims about THIS TREE written from the value arm's vantage point.
+       THE FORK IS UNAFFORDABLE HERE AND AFFORDABLE THERE, AND THE DIFFERENCE IS HOW OFTEN THE WRITE HAPPENS. A
+       `length` is written ONCE and the chain's n is the length being set, so its walk is short and the WFQ
+       genuinely makes it behave like a finite one. An INDEX is written PER ELEMENT: a serializer does one store
+       per byte, so a per-position fork over an N-element buffer is N arms for EVERY store and N^k over a k-byte
+       body. The WFQ orders work; it does not make an exponential finite, and §NO BOUNDS forbids the cap that
+       would. Copying the chain because the carrier is the same is reasoning from where the code sits rather
+       than from what it costs.
+       AND THE READ SIDE IS NOT A GAP AT ALL, WHICH ONE READ OF THE OPCODE SETTLES. OP_get_array_el answers an
+       unknown key AT THE OPERATOR, before any element path: it asks key_name for the shape's own slot, and
+       failing that JSConcolicHooks.key_read hands back a concolic derived from the base and the key's source,
+       example-free on purpose. So `buf[x]` with x unknown never reaches 10.4.5.17 TypedArrayGetElement, and
+       what it already answers is sound — a gate on it forks and a sink still solves for the key. It is
+       OVER-GENERAL, since it does not constrain the value to the bytes the buffer actually holds, and
+       over-general is the direction §Solver-half asks for. There was never a second chain to build.
+       WHAT IS LEFT IS THE WRITE, AND (1)'s RECORD ALREADY HAS THE SHAPE FOR IT: it separates the BYTES from the
+       FACT, so a write at an unknown index is a fact with no offset. The question that must be decided BEFORE
+       anything is built — and it is a design step, not an implementation detail — is what a read at a CONCRETE
+       offset answers once such a span stands over the buffer. Every sound answer is over-general; picking one
+       silently is how a solver acquires a domain nobody chose.
        THE RELEASE ARM IS UNCHANGED BY THIS DIFF AND IS NOT THEREBY ENDORSED: without the fork there is nothing
        correct to do, so release keeps today's named-property write, and this names it rather than leaving a
        reader to discover it. It stops being a question when the chain above lands. */
@@ -15791,10 +15811,12 @@ static int JS_SetPropertyValue(JSContext *ctx, JSValueConst this_obj,
                  "ordinary object and WRONG here, because 10.4.5.5 [[Set]] routes only a CANONICAL NUMERIC "
                  "INDEX to TypedArraySetElement, so this becomes a named property and stores NO BYTE, while "
                  "every integer the unknown could be is a canonical numeric index. Do NOT decide the index. "
-                 "BUILD the per-position outcome fork 10.4.2.4 ArraySetLength already has in this same carrier "
-                 "(JSArrayLen's AL_UNKNOWN_SVZ/AL_UNKNOWN_PIN), asking at each n whether the index is n, and "
-                 "give 10.4.5.17 TypedArrayGetElement the same chain so both sides of an unknown index answer "
-                 "alike. Frames: %s",
+                 "BUILD a span whose OFFSET is unknown: the record 10.4.5.18's value arm already keeps "
+                 "SEPARATES the BYTES from the FACT, and a write at an unknown index is a fact with no offset, "
+                 "so it is the one shape that needs no new mechanism. WHAT MUST BE DECIDED FIRST, and is a "
+                 "design step rather than an implementation detail: what a read at a CONCRETE offset answers "
+                 "once such a span stands over the buffer — sound answers exist and every one of them is "
+                 "OVER-GENERAL, which is the direction to prefer but not one to pick silently. Frames: %s",
                  shbuf,
                  JS_AtomGetStr(ctx, cbuf, sizeof cbuf, ctx->rt->class_array[tap->class_id].class_name),
                  (unsigned)tap->u.array.count, frames);
