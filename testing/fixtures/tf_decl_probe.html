@@ -1,0 +1,50 @@
+<!doctype html><html><head><meta charset="utf-8"><title>where is transform lost</title></head><body>
+<!-- WHERE AN INLINE `transform` DECLARATION IS LOST, asked as a LADDER so the answer names a stage rather than
+     a symptom. `tf_grammar.html` established that real Chrome keeps `style="transform: rotate(45deg)"` and
+     this engine reports no specified transform for it; the three candidates take OPPOSITE work — the attribute
+     never arriving, lexbor's parse dropping the declaration, or CSSOM reading a different store than the
+     cascade wrote — so the stage is established before anything is called wrong.
+     THE CONTROL IS `color`, DECLARED IN THE SAME ATTRIBUTE. It is in lexbor's property registry and `transform`
+     is not, which is the one difference the ladder is about: a rung that answers for `color` and not for
+     `transform` names the registry as the discriminator, and a rung that answers for NEITHER means the whole
+     attribute was lost and the registry has nothing to do with it.
+     EVERY MARK CARRIES A CONSTANT. A witness may not be composed from a value the subject can make unknown:
+     this engine's whole purpose is to make values unknown, so a payload built from one can itself be unknown,
+     the request is never sent, and a path that RAN reads exactly like one that did not. Each reading is
+     collapsed to one of a fixed set of tokens by comparison BEFORE it reaches a URL. -->
+<div id="e" style="transform: rotate(45deg); color: rgb(1, 2, 3)">x</div>
+<script>
+function mark(t) { try { fetch("/tf-decl/" + t); } catch (e) {} }
+var e = document.getElementById("e");
+mark("start");
+/* RUNG 1 — did the attribute arrive at all? If this says `-none`, nothing below is about CSS. */
+var a = e.getAttribute("style");
+mark("attr-" + (a ? (a.indexOf("transform") >= 0 ? "has-transform" : "no-transform") : "none"));
+/* RUNG 2 — CSSOM's own view of the block. `length` is the count of declarations §6.6.1 exposes, and `item(0)`
+   their names; both are collapsed to tokens rather than reported as values. */
+mark("len-" + (e.style.length === 0 ? "0" : e.style.length === 1 ? "1" : "many"));
+for (var i = 0; i < e.style.length && i < 4; i++)
+  mark("item-" + (e.style[i] === "transform" ? "transform" : e.style[i] === "color" ? "color" : "other"));
+/* RUNG 3 — the two property reads, each against its own control. `color` is in lexbor's registry and
+   `transform` is not, so a split here names the registry as where the declaration is lost. */
+mark("get-transform-" + (e.style.transform ? "set" : "empty"));
+mark("get-color-" + (e.style.color ? "set" : "empty"));
+mark("gpv-transform-" + (e.style.getPropertyValue("transform") ? "set" : "empty"));
+mark("gpv-color-" + (e.style.getPropertyValue("color") ? "set" : "empty"));
+/* RUNG 4 — the CASCADE rather than CSSOM, which is the half that actually feeds the computed value. If this
+   answers where rung 3 does not, the declaration reached the cascade and only CSSOM cannot see it — the
+   opposite repair from a declaration lexbor dropped. `getComputedStyle().color` is safe; `.transform` is
+   css-transforms-1 §3.2's resolved-value special case and is deliberately NOT read here, because it crashes
+   for a list by design and would end the run before the control below could answer. */
+var cs = getComputedStyle(e);
+mark("computed-color-" + (cs.color ? "set" : "empty"));
+/* RUNG 5 — a WRITE through CSSOM, which is the path a real bundle uses far more than an attribute. If reading
+   back what we just wrote fails for `transform` and works for `color`, the defect is in the property path and
+   not in the attribute parse. */
+e.style.transform = "translateX(3px)";
+e.style.color = "rgb(4, 5, 6)";
+mark("wrote-transform-" + (e.style.transform ? "set" : "empty"));
+mark("wrote-color-" + (e.style.color ? "set" : "empty"));
+mark("end");
+</script>
+</body></html>

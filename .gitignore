@@ -32,6 +32,11 @@ testing/fixtures/*
 # themselves, and one of them is a REGRESSION GUARD rather than a gap: `transform: translate(2)` must compute
 # `none` and not abort, which is the page-held abort switch 0b5c14d0 removed from core/css.
 !testing/fixtures/tf_grammar.html
+# THE STAGE LADDER FOR THE LOST `transform` DECLARATION, re-included by name for the same reason its sibling
+# above is: it is a document whose content is an EXPERIMENT, and one somebody else runs at a revision somebody
+# else names. Its `color` control is declared in the same attribute as its subject, so a run of it is only
+# readable against the revision it was written for.
+!testing/fixtures/tf_decl_probe.html
 # THE `webpackJsonp` PRESENT/ABSENT PAIR AND THE FOUR BODIES IT LOADS. THREE TRACKED FILES QUOTE NUMBERS
 # MEASURED ON THIS DOCUMENT AND NAME IT BY PATH, and the bytes were in no revision: engine/host/solver/flow.c's
 # argument for why `rankChanges` is not the arrival count (34315 against 34309 at the last of twelve samples,
