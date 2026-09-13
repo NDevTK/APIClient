@@ -690,22 +690,41 @@ function safeFetchWidenedOrigins() { return Object.keys(_EXPLORED); }
    is exactly what was refused. The command is
    `grep -o 'blocked-[a-z-]*:[a-z]*' <a drive log> | sort | uniq -c`, run with a negative
    control, and it is quoted rather than the figure because the figure is one run's.
-   THE TWO READINGS TAKE OPPOSITE WORK AND THIS FILE MAY NOT ARBITRATE BETWEEN THEM. Either
-   the grade is RIGHT and this banner's example is wrong — a chunk selected on a forced arm
-   is a request the person's client would not have made, so refusing it is the policy working
-   and the example should never have named it — or the grade is keying on the wrong thing:
-   CLAUDE.md defines FORCED as "a value exists only because a gate was forced", which is a
-   statement about the REQUEST'S VALUES, while `engine_prov_of_running_path` answers from
-   `flow_path_forced`, which is a property of the FLOW'S PATH. An icon chunk's address is
-   composed from the bundler's static chunk map and carries no forced value under any
-   reading; what the forcing decided is WHICH chunk, not what the address says. Those are
-   two questions and one bit is answering both, decided by the stricter one, with the cost
-   landing on the other (§A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS) — and the cost here is
-   every chunk body on a logged-out SPA, which is the surface the tool exists to reach.
-   WHAT SETTLES IT IS NOT A JUDGEMENT ABOUT THIS FILE: it is reading `flow_path_forced` and
-   its one increment against the definition above, and asking whether a request composed
-   ENTIRELY of constants can be graded FORCED. That is an engine question and the answer
-   belongs at the producer, not here, because this file is handed a word and must obey it.
+   BOTH READINGS WERE PUT AND BOTH ARE REFUTED, BY READING THE PRODUCER RATHER THAN BY
+   JUDGING THIS FILE — rewritten rather than deleted, because they are the pair a reader
+   re-derives. The decisive question was "can a request composed ENTIRELY of constants be
+   graded FORCED", and `pending_prov_compose` (solver/pending.c) answers YES: its
+   `path_forced` arm returns PROV_FORCED BEFORE the park kind is looked at, so the flow's
+   monotone path bit dominates every other fact and no property of the address is consulted
+   anywhere in the composition. The two questions ARE distinct — that much of the second
+   reading holds, AND ITS REPAIR DOES NOT FOLLOW, because grading on the request's VALUES,
+   which is CLAUDE.md's letter, FIRES `/api/admin/users` behind `if (user.isAdmin)`: a
+   constant address, no forced value under any reading, and a CREDENTIALED read of an admin
+   surface on an arm nothing observed — exactly the reply whose 403 body parses as JSON and
+   yields fields that exist nowhere. The path bit catches that and the value definition does
+   not, so THE ENGINE IS WIDER THAN THE SPEC AND IS RIGHT TO BE.
+   AND THE FIRST READING FAILS ON WHAT THE REFUSAL BUYS. A grade correct as EVIDENCE does not
+   make a refusal correct as POLICY, and the containment this one spends the chunk bodies for
+   is already bought downstream and structurally: `prov` is part of `same_identity`
+   (solver/endpoint.c), so a forced sighting and a derived one are TWO records that cannot
+   merge, and a chunk's reply is PROGRAM TEXT run by a flow whose path is ALREADY marked, so
+   every endpoint and value it yields is graded FORCED at every site stating
+   `engine_prov_of_running_path()`. Nothing it produces reaches the derived pool either way.
+   SO THE SPLIT IS NOT WHERE EITHER READING PUT IT, AND THIS FILE STILL MAY NOT CLOSE IT.
+   `path_forced` answers "does everything this path computes from here on rest on something
+   nothing observed", which is the right question for WHAT A REPLY IS WORTH; the firing
+   question is "may this act be spent", decided "from the provenance the request declares
+   BESIDE its method and credential state" — three inputs, of which this function reads one.
+   Fetch §2.2.5's DESTINATION separates a reply that becomes a VALUE from one that becomes a
+   PROGRAM, and is stamped by the engine and received here already — AND IS NOT SUFFICIENT
+   ALONE, which is why nothing here changes: `import("/chunks/" + region + ".js")` with
+   `region` pinned by a forced equality is destination `script` AND a forced value in its
+   address, so a destination-only widening fires the one case this policy exists to refuse.
+   The missing fact is finer than either bit — does this request's ADDRESS carry a value this
+   path pinned or contradicted — and the engine does not compute it. THE ORDER IS THEREFORE
+   FIXED: the engine states that fact beside the path grade, and only then does this function
+   read it with the destination; the second without the first is the widening forbidden
+   below. THIS PARAGRAPH RETIRES when that fact exists and is read here.
    WHAT MUST NOT FOLLOW is widening this policy to make the number move. The refusal is
    correct for a request whose values came from a forced gate, and a reply to one of those
    is the plausible fabrication §A-REQUEST-CARRIES-THE-PROVENANCE-OF-ITS-VALUES is entirely
