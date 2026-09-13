@@ -11,13 +11,31 @@
 //                  a `pageErrors` row that is NOT an engine assert, or as a @LOG the page itself emitted.
 //   FIXTURE/NET    the site did not deliver a document (HTTP 5xx, proxy refusal, navigation failure). Not a
 //                  statement about the engine at all.
-//   RAN            no abort: the engine ran flows. `finished` then says whether the analysis RETURNED
-//                  within the dwell (a result document stored on the doc) or was still exploring.
+//   RAN            no abort: the engine ran flows. `terminal` then says what those runs ENDED as, in the
+//                  producer's own words, and `fin/n` counts the passes that reached `complete`. Read the two
+//                  TOGETHER and never `fin/n` alone: a `0/n` beside `partial x n` is a dwell that expired
+//                  while the engine was still exploring -- unbounded exploration behaving correctly -- and a
+//                  `0/n` beside anything else is a different fact entirely.
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { siteList } from './list.mjs';
 
 const ROOT = new URL('.', import.meta.url).pathname;
+/* THE RUN-OUTCOME VOCABULARY, DERIVED FROM THE PRODUCER'S OWN DECLARATION AND NEVER RESTATED HERE. Four
+   words leave extension/bridge.js on every run record and it declares them in one line; a copy typed into
+   this file would be the second copy CLAUDE.md forbids (an auditor DERIVES the rule it checks, which is why
+   idlgen reads the real .idl and the type-crossing audit parses the switch it audits). The day a fifth word
+   arrives, a hand-kept reader buckets it into "did not finish" and reports a NEW run state as the old one --
+   silently, because every column below partitions by exactly this vocabulary. Read from the declaration, an
+   unknown word THROWS instead, which is the only arm that cannot mis-report. */
+const RUN_OUTCOMES = (() => {
+  const decl = readFileSync(join(ROOT, '..', '..', 'extension', 'bridge.js'), 'utf8')
+    .match(/const RUN_OUTCOMES = \[([^\]]*)\]/);
+  if (!decl) throw new Error('report.mjs: extension/bridge.js no longer declares `const RUN_OUTCOMES = [...]`.\n' +
+    '  This file reads the run-outcome words off that line rather than keeping its own copy, so a rename there\n' +
+    '  has to be seen HERE rather than silently leaving every outcome unrecognised. Re-point this reader.');
+  return JSON.parse('[' + decl[1] + ']');
+})();
 /* SEVERAL PASSES, BECAUSE ONE RUN IS NOT A MEASUREMENT. Pass every census file and the table reports each
    site's SPREAD across them; pass one and the spread is a single value, which is honest about what it is.
    The pass label is taken from the filename (census-p1.jsonl -> p1) purely to name the log a signature came
@@ -191,9 +209,58 @@ for (const p of passes) for (const r of p.rows) {
     const line = (blob.match(/@(?:WHY|E)[^\n]{0,300}/) || [])[0];
     unnamed.push({ id: r.id, pass: p.label, line: line || '(no @WHY or @E line anywhere in this row or its log)' });
   }
+  /* WHAT THIS RUN ENDED AS -- THE FACT `finished` WAS INFERRING, AND IT HAD IT EXACTLY INVERTED.
+     `r.docsAnswered > 0 && !r.crashedMine` stood here under a banner promising it says "whether the analysis
+     RETURNED within the dwell ... or was still exploring", and it says NEITHER. `docsAnswered` counts
+     documents carrying a TERMINAL `_astRun`, and offscreen-brain.js writes that word on exactly three arms --
+     `complete`, `crashed`, `nothing-to-run`, which is its own DCHECK's list -- while a `partial` never reaches
+     it at all. So the left conjunct is TRUE for a run that DIED and FALSE for a run that learned seventy
+     addresses and is still exploring, which is the opposite of what this column is read for. The
+     `&& !crashedMine` beside it is not a second question: it is a patch cancelling the left half's error, and
+     the two together are MUTUALLY EXCLUSIVE over every row in which an engine ran.
+     MEASURED, over this corpus's 54 rows (derive it: read every census-cc-*.jsonl and count):
+     `docsAnswered > 0 && !crashedMine` is true for TWO, both carrying `runsMine: 0` and `runOutcomesMine: {}`
+     -- rows where NO ENGINE RAN AT ALL. Zero counterexamples to `docsAnswered > 0 => crashedMine > 0` among
+     rows that ran. The column was a predicate that can only be true when nothing happened, which is
+     CLAUDE.md's assert-whose-two-sides-cannot-disagree arriving in a report column instead of in a C assert:
+     a non-check wearing the syntax of a check, printing a plausible `0/n` for all 18 sites over 48 passes.
+     IT ALSO CREDITED THE ONE OUTCOME THAT HAS NO DOCUMENT BY CONSTRUCTION. bridge.js documents
+     `nothing-to-run` as "No document, and NOT a crash", and both surviving true rows are that -- so the
+     column read "the analysis finished" off the arm where there is nothing to have finished.
+     `complete` IS THE FACT and is read off the RUN RECORD rather than inferred from a document slot.
+     WHY THIS IS NOT A MOVE INTO A DEAD CHANNEL, which is the one thing that would make it worse rather than
+     better: `complete` has fired ZERO times in 63 run records here (36 `partial`, 27 `crashed`), so a bare
+     `fin 0/n` off the new predicate would be precisely the silent zero the old one already printed. The
+     PARTITION is published beside it, so `0/5` now reads as `partial x5` -- a 60s dwell that expired while
+     the engine was still exploring, which under §NO BOUNDS is the engine behaving correctly and not a failure
+     -- and can never again be read as a result the trusted zone dropped. The discriminator is the deliverable;
+     the predicate is only what it explains.
+     NAMED RESIDUAL -- WHAT IS NOT COVERED: this pair says what a run ENDED as and cannot say WHY a `partial`
+     never became a `complete`, because the two candidate reasons leave the same word: the dwell expired with
+     the frontier still draining, or the run reached `finish` and something below it failed. WHAT THE NEXT DIFF
+     BUILDS: site.mjs carrying the engine's own frontier-drained statement off the last partial's document, so
+     a `partial` at dwell-end is separable from a frontier that emptied. HOW ITS ABSENCE WOULD SHOW: a corpus
+     in which every row reads `partial` and no column can say whether a longer dwell would change any of it. */
+  const outc = r.runOutcomesMine || {};
+  for (const w of Object.keys(outc))
+    if (!RUN_OUTCOMES.includes(w))
+      throw new Error(`report.mjs: row \`${r.id}\` (pass ${p.label}) carries the run outcome \`${w}\`, which is\n` +
+        `  not one of the words extension/bridge.js declares (${RUN_OUTCOMES.join(', ')}). Every column below\n` +
+        `  partitions by that vocabulary, so an unknown word is counted as "did not finish" and a NEW run state\n` +
+        `  is reported as the old one. Teach this file the word, or fix the producer.`);
+  /* AND THE PARTS SUM TO THE TOTAL, asserted where both are in one hand. A partition whose members can drift
+     from the count they are drawn from is one nobody can reason from, and this is the single check that makes
+     `terminal` quotable beside `runs`. site.mjs builds both off the SAME `myRuns` array, so it holds for all
+     54 rows today: it costs nothing and can only fire on a real regression. */
+  const outcSum = Object.values(outc).reduce((a, b) => a + b, 0);
+  if (outcSum !== r.runsMine)
+    throw new Error(`report.mjs: row \`${r.id}\` (pass ${p.label}) reports ${r.runsMine} runs at its origin\n` +
+      `  while its runOutcomesMine sums to ${outcSum}. site.mjs composes both from the same \`myRuns\` array,\n` +
+      `  so a disagreement means one of them is being built over a different population and the outcome\n` +
+      `  breakdown describes runs that the count does not.`);
   if (!seen.has(r.id)) seen.set(r.id, []);
   seen.get(r.id).push({
-    pass: p.label, outcome, finished: r.docsAnswered > 0 && !r.crashedMine,
+    pass: p.label, outcome, finished: (outc.complete || 0) > 0, outc,
     runs: r.runsMine, crashed: r.crashedMine,
     /* THE HEADLINE IS `distinctEndpoints` -- distinct ADDRESSES learned, which is what "endpoints" has to
        mean in a report. `r.endpoints` is the last log entry's CUMULATIVE counter and is kept beside it under
@@ -264,6 +331,17 @@ const table = [...seen.entries()].map(([id, ms]) => ({
       : ms.some((m) => m.outcome === 'ABORT(unclassified)') ? 'ABORT(unnamed)' : 'RAN',
   abortedPasses: ms.filter((m) => m.outcome.includes('ABORT')).length,
   finishedPasses: ms.filter((m) => m.finished).length,
+  /* THE OUTCOME PARTITION ACROSS EVERY PASS, WHICH IS WHAT MAKES `fin/n` A READING RATHER THAN A SHRUG.
+     Summed over the passes rather than listed per pass, because the question a reader brings to a `0/n` is
+     "what did those n runs end as", and the answer is a distribution. Printed in the PRODUCER's declaration
+     order so two sites are always comparable left to right, and `no-run` where no engine ran at this origin
+     at all -- which is a third fact and had been sharing a column with the other two. */
+  terminal: (() => {
+    const t = {};
+    for (const m of ms) for (const w of Object.keys(m.outc)) t[w] = (t[w] || 0) + m.outc[w];
+    const parts = RUN_OUTCOMES.filter((w) => t[w]).map((w) => w + '\u00d7' + t[w]);
+    return parts.length ? parts.join(' ') : 'no-run';
+  })(),
   n: ms.length,
   ep: spread(ms, 'endpoints'), fl: spread(ms, 'flows'), sw: spread(ms, 'switches'),
   sk: spread(ms, 'sinks'), rn: spread(ms, 'runs'), ld: spread(ms, 'load'),
@@ -287,15 +365,22 @@ const table = [...seen.entries()].map(([id, ms]) => ({
 /* ABSENT PRINTS AS `-`, NEVER AS 0. A run that produced no result document is not a page that was analysed
    and found clean, and `String(null)` would have printed "null" into a numeric column. */
 const pad = (s, n) => String(s).padEnd(n).slice(0, n);
+/* THE `terminal` COLUMN SIZES ITSELF TO ITS WIDEST VALUE, because `pad` TRUNCATES and a truncated partition
+   is not a narrow partition, it is a wrong one -- `crashed x6 partial x3` clipped to `crashed x6 par` reads
+   as a site that only ever crashed. A fixed width chosen today is a width that silently starts lying the
+   first time a site produces three different outcomes. Derived from the rows, it cannot. */
+const termW = Math.max('terminal'.length, ...table.map((t) => t.terminal.length)) + 2;
 console.log(`${passes.length} pass(es): ${passes.map((p) => p.label + '(' + p.rows.length + ')').join(' ')}`);
 console.log(`list: ${list.rel} (${list.rows.length} sites, ${table.length} measured here)`);
 console.log('\n' + pad('site', 20) + pad('outcome', 20) + pad('abort/n', 8) + pad('fin/n', 7) +
+  pad('terminal', termW) +
   pad('ep', 8) + pad('sinks', 7) + pad('src>reach>taint>sup', 21) + pad('ask>drv', 13) +
   pad('flows', 12) + pad('switches', 12) +
   pad('load', 10) + 'signature');
 for (const t of table)
   console.log(pad(t.id, 20) + pad(t.outcome, 20) + pad(t.abortedPasses + '/' + t.n, 8) +
-    pad(t.finishedPasses + '/' + t.n, 7) + pad(t.ep, 8) + pad(t.sk, 7) + pad(t.arrival, 21) +
+    pad(t.finishedPasses + '/' + t.n, 7) + pad(t.terminal, termW) +
+    pad(t.ep, 8) + pad(t.sk, 7) + pad(t.arrival, 21) +
     pad(t.orphans, 13) +
     pad(t.fl, 12) + pad(t.sw, 12) + pad(t.ld, 10) + (t.sigs[0] ? t.sigs[0].split(' :: ')[0] : '-'));
 
