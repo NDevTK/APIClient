@@ -17220,6 +17220,15 @@ static void css_property_grammar_selftest(void)
         { "<length>", "1px 2px", false, "an unmultiplied component is ONE component value and nothing after it" },
         { "<length-percentage>", "50%", true,
           "§5.1: `any valid <length> or <percentage> value`" },
+        { "<length-percentage>", "calc(100% - 20px)", true,
+          "§5.1's THIRD clause for this name, which is the reason `<length>` and `<length-percentage>` are two "
+          "supported names rather than one with an OR behind it: `any valid <calc()> expression combining "
+          "<length> and <percentage> components`. It is the row that fails whenever §10.9's last rule is read "
+          "through CSS Typed OM 1 §4.3.2's percent-hint-must-be-null bullet — the bullet for a context that "
+          "mixes no percentages — because this value's type is «[\"length\" → 1]» with a hint of \"length\" and "
+          "there is no reading of that bullet under which it matches. Every other row in this table types with "
+          "a NULL hint, so none of them can see it, and the `<image>` row far below saw it only as a gradient "
+          "refusing a colour stop" },
         { "<number>", "1.5", true, "CSS Values §5.3's `<number-token>`" },
         { "<integer>", "-3", true,
           "CSS Values §5.2: `the first digit of an integer may be immediately preceded by - or + to indicate "
@@ -17339,9 +17348,16 @@ static void css_property_grammar_selftest(void)
           "position that resolves percentages against one. What the row witnesses is the other half of that "
           "sentence — a component that asks `<angle>` ALONE names a context resolving percentages against "
           "nothing, §10.9's `<percentage>` terminal then types the `25%` as \"percent\", and percent+angle "
-          "has no consistent hint, so the CALCULATION's type is §4.3.2's FAILURE. It fired when that failure "
-          "was a refusal by the WALK rather than a type, which made `css_math_is_lone_function` answer that "
-          "these bytes are not a math function at all" },
+          "has no consistent hint, so the CALCULATION's type is §4.3.2's FAILURE. IT HAS FIRED TWICE AND FOR "
+          "TWO DIFFERENT REASONS, both kept because each is a reading a maintainer re-derives: first while "
+          "that failure was a refusal by the WALK rather than a type, which made `css_math_is_lone_function` "
+          "answer that these bytes are not a math function at all; then while §10.9's validity was asked a "
+          "SECOND time under the production gate, over the eight productions §10.9's last rule names, matched "
+          "through §4.3.2's percent-hint-must-be-null bullet — so the hinted type this row exists to produce "
+          "matched none of them and `css_math_matches` answered false for the value it had just typed "
+          "correctly. The `<length-percentage>` row far above is the witness for that one at the layer that "
+          "names the production; this row is the witness for the ROUTE, and a defect in either reads here as "
+          "a gradient refusing a colour stop" },
         { "<image>", "linear-gradient(in oklch, red, blue)", true,
           "css-images-4 §3.2.1 \"Adding <color-interpolation-method>\" hangs CSS Color 4 §13.2 \"Color Space "
           "for Interpolation\"'s production off the LINEAR and RADIAL families and not only the conic one, and "

@@ -362,8 +362,24 @@ static bool mth_type_matches(const CssMathType *t, CssMathProduction want)
    resolve to <number> can be used in any place that only accepts <integer>"), and the two §5.6 mixed types,
    which CSS Typed OM 1 §4.3.2 defines as the disjunction of two members already here ("A type matches
    <length-percentage> if it matches <length> or matches <percentage>"). Adding either kind would not widen
-   the answer and would state a rule this sentence does not have. */
-static bool mth_type_is_valid(const CssMathType *t)
+   the answer and would state a rule this sentence does not have.
+   AND THE EIGHT ARE ONLY THE WHOLE ANSWER IN A CONTEXT THAT MIXES NO PERCENTAGES, WHICH IS WHY `ctx` IS A
+   PARAMETER THIS FUNCTION READS ONLY TO ASSERT. §10.9's "its type matches" is CSS Typed OM 1 §4.3.2's
+   matching, and that is stated CONTEXT-RELATIVE: the reading `mth_type_matches` carries for a bare `<angle>`
+   is §4.3.2's LAST bullet, "If the context does not allow <percentage> values to be mixed with <length>/etc
+   values (or doesn't allow <percentage> values at all, such as border-width), then for the type to be
+   considered matching the percent hint must be null." A context that DOES mix takes the bullet above it
+   instead — "it must either have a null percent hint, or the percent hint must match the other type" — so in
+   an `<angle-percentage>` position «["angle" → 1]» with a hint of "angle" MATCHES `<angle>` and the math
+   function is VALID, while this list answers that it matches none of the eight.
+   THAT LIST WAS ONCE ASKED OF EVERY CALLER AND THE ARGUMENT IS REWRITTEN RATHER THAN DELETED, because it is
+   the reading a maintainer re-derives: §10.9 ends with a FAILURE rule and then a sentence that reads like a
+   validity rule followed by a resolution rule, so a gate that asked validity and then the caller's production
+   looked like §10 read in order. It is ONE sentence read twice, and the second reading invented a context —
+   every percentage-hinted type was refused, which is every math function mixing a percentage with a dimension
+   in the position §5.6 defines for exactly that. `mth_top` now asks it once; the assert below is what stops
+   the second reading being written again. */
+static bool mth_type_is_valid(const CssMathType *t, CssMathProduction ctx)
 {
     static const CssMathProduction OF[] = {
         CSS_MATH_PROD_NUMBER, CSS_MATH_PROD_PERCENTAGE, CSS_MATH_PROD_LENGTH, CSS_MATH_PROD_ANGLE,
@@ -371,9 +387,19 @@ static bool mth_type_is_valid(const CssMathType *t)
     };
     unsigned i;
 
-    /* §10.9's rule BEFORE that one, and it stands first because `mth_type_matches` asserts it is never handed
-       a failure: "For each of the above, if the type is failure, the math function is invalid." */
-    if (css_math_type_is_failure(t)) return false;
+    DCHECK(mth_pct_base(ctx) == CSS_MATH_PERCENT,
+           "§10.9's validity rule was asked in a calculation context that RESOLVES PERCENTAGES AGAINST A "
+           "DIMENSION. The eight productions below are matched through CSS Typed OM 1 §4.3.2's "
+           "percent-hint-must-be-null bullet, which is that section's rule for a context mixing no "
+           "percentages — so in a `<length-percentage>` or `<angle-percentage>` context this list refuses "
+           "every type the hint exists to describe, `calc(100% - 20px)` included. A caller that names such a "
+           "context HAS a production and asks `css_math_matches` for it; this entry is for the caller that "
+           "has none");
+    DCHECK(!css_math_type_is_failure(t),
+           "§10.9's validity rule was handed §4.3.2's FAILURE. Its own preceding rule — \"For each of the "
+           "above, if the type is failure, the math function is invalid\" — is a rule of ITS OWN and is "
+           "answered by `mth_top` in front of both gates, so a failure arriving here is a caller that skipped "
+           "it and `mth_type_matches` one frame down asserts the same thing");
     for (i = 0; i < sizeof OF / sizeof OF[0]; i++)
         if (mth_type_matches(t, OF[i])) return true;
     return false;
@@ -1487,10 +1513,22 @@ done:
 }
 
 /* HOW MUCH OF §10 IS PART OF THE ANSWER, which is §10's own division into sections and not a convenience:
-   §10.8 "Syntax" gives the grammar, and §10.9 "Type Checking" gives first a VALIDITY ("if the type is failure,
-   the math function is invalid" / "If it can't match any of these, the math function is invalid") and then a
-   RESOLUTION against a production the caller names. Each rung admits strictly fewer texts than the one above
-   it, and the three public entries below are one rung each.
+   §10.8 "Syntax" gives the grammar, and §10.9 "Type Checking" gives first a FAILURE rule ("For each of the
+   above, if the type is failure, the math function is invalid") and then ONE sentence that is its validity
+   and its resolution at once ("A math function resolves to <number>, <length>, <angle>, <time>, <frequency>,
+   <resolution>, <flex>, or <percentage> according to which of those productions its type matches ... If it
+   can't match any of these, the math function is invalid").
+   THE LAST TWO RUNGS ARE TWO READINGS OF THAT ONE SENTENCE AND NOT TWO SENTENCES, which this enum was landed
+   without: the VALID rung reads it with no production in hand, over §10.9's own eight, and the PRODUCTION rung
+   reads it against `want`. Asking BOTH of a caller that named one asked CSS Typed OM 1 §4.3.2's
+   CONTEXT-RELATIVE matching a second time in a context the walk is not in — see `mth_type_is_valid`, which
+   now asserts the context it may be read in.
+   THE RUNGS NEST WITHIN ONE CONTEXT and only there: each admits strictly fewer texts than the one above it,
+   and the three public entries below are one rung each. ACROSS contexts they cannot, and §10.9.1 is why — a
+   percentage's type is a fact about where the value sits, so `calc(25% + 10deg)` is VALID in an
+   `<angle-percentage>` position and INVALID where percentages resolve against nothing. That is not a gap in
+   the nesting; it is what the middle rung means, and it is why `css_math_is_valid_function` names its own
+   context rather than taking one from a caller that by definition has no production to name.
    IT IS ONE WALK AND NOT THREE, which is the point: a second scan written to answer "is this one math
    function" would have to re-derive §10.8's nesting, its comma arities and its `<calc-value>` productions,
    and the day the two disagreed a caller would be told a value is not a math function by one and refused by
@@ -1552,15 +1590,23 @@ static bool mth_top(const char *text, size_t len, const CssMathResolver *res, Cs
     mth_skip_ws(&m);
     t = mth_peek(&m);
     if (t == NULL || t->type != LXB_CSS_SYNTAX_TOKEN__EOF) goto done;
-    /* §10.9's VALIDITY, which is the whole of what a failure type MEANS and is a question of its own: an
-       INVALID math function is still ONE math function, so §10.8's grammar has already been satisfied by the
-       time control is here. The step also has to stand in FRONT of the match below, because
-       `mth_type_matches` asserts it is never handed a failure — and that assert is LIVE rather than
-       decorative only because the algebra above now PRODUCES a failure type where it used to refuse the
-       walk. */
-    if (gate != MTH_GATE_SYNTAX && !mth_type_is_valid(&v.type)) goto done;
-    /* §10.9's last rule: "A math function resolves to <number>, <length>, ... according to which of those
-       productions its type matches ... If it can't match any of these, the math function is invalid." */
+    /* §10.9's FAILURE RULE, which is a rule of its OWN and stands in front of BOTH gates below: "For each of
+       the above, if the type is failure, the math function is invalid." An INVALID math function is still ONE
+       math function, so §10.8's grammar has already been satisfied by the time control is here; and this step
+       has to precede every match, because `mth_type_matches` asserts it is never handed a failure — an assert
+       that is LIVE rather than decorative only because the algebra above now PRODUCES a failure type where it
+       used to refuse the walk. */
+    if (gate != MTH_GATE_SYNTAX && css_math_type_is_failure(&v.type)) goto done;
+    /* §10.9's LAST RULE, ASKED ONCE AND IN THE CONTEXT THE CALLER NAMED: "A math function resolves to
+       <number>, <length>, ... according to which of those productions its type matches ... If it can't match
+       any of these, the math function is invalid." The two lines below are two READINGS of that sentence and
+       never two sentences — against `want` where a production is named, over §10.9's own eight where none is
+       — so exactly one of them runs. Running the eight-way one FIRST, under every gate, asked CSS Typed OM 1
+       §4.3.2's matching in a context the walk was not in: it carries that section's percent-hint-must-be-null
+       bullet, so it refused every type a `<length-percentage>` or `<angle-percentage>` context produces, and
+       `css_math_matches` answered false for `calc(100% - 20px)` and `calc(25% + 10deg)` in the one position
+       §5.6 defines them for. `mth_type_is_valid` now asserts the context it may be read in. */
+    if (gate == MTH_GATE_VALID && !mth_type_is_valid(&v.type, want)) goto done;
     if (gate == MTH_GATE_PRODUCTION && !mth_type_matches(&v.type, want)) goto done;
     ok = true;
     if (res == NULL || out == NULL) goto done;
@@ -1624,13 +1670,14 @@ bool css_math_matches(const char *text, size_t len, CssMathProduction want)
 
 bool css_math_is_valid_function(const char *text, size_t len)
 {
-    /* `want` is genuinely unread under this gate — it reaches only the last rule and the rounding step, and
-       neither runs — but it still names §10.9.1's calculation context, which decides the TYPE the validity
-       question is then asked of. `CSS_MATH_PROD_NUMBER` is the context whose percentages resolve against
-       nothing, which is §10.9's own "Otherwise" arm and the only honest answer for a caller that holds no
-       property grammar: a bare `calc(50%)` is a valid `<percentage>` under it, and `calc(25% + 10deg)` is
-       INVALID under it and valid in a position that states an `<angle-percentage>`. A caller that knows the
-       position asks `css_math_matches` for it instead. */
+    /* `want` NAMES §10.9.1's CALCULATION CONTEXT, which decides the TYPE the validity question is then asked
+       of AND which of §4.3.2's matching bullets that question may be read through — the two are one fact, so
+       `mth_type_is_valid` asserts this context rather than taking any. `CSS_MATH_PROD_NUMBER` is the context
+       whose percentages resolve against nothing, which is §10.9's own "Otherwise" arm and the only honest
+       answer for a caller that holds no property grammar: a bare `calc(50%)` is a valid `<percentage>` under
+       it, and `calc(25% + 10deg)` is INVALID under it and valid in a position that states an
+       `<angle-percentage>`. A caller that knows the position asks `css_math_matches` for it instead, and gets
+       §10.9's last rule read against that position rather than against this one. */
     return mth_top(text, len, NULL, CSS_MATH_PROD_NUMBER, MTH_GATE_VALID, NULL);
 }
 
