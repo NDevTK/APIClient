@@ -411,11 +411,22 @@ const withEp = table.filter((t) => t.epAnswered > 0);
    actually loads — was learned 0 of 1. On gitlab, three independent passes identical: 17 `<script src>`,
    ZERO learned, and the four addresses it did learn are `.woff2` FONTS. Two bundler shapes, three real
    sites, and not one address that could only have come from executing something.
-   AN INVERSION IS A DIFFERENT FINDING FROM A SHORTFALL, and only this split can state it: `learned 90` reads
-   as a solver working, while `hints 89/89, scripts 0/1` reads as a solver that has not run — and those take
-   opposite work. The row's own `distinctEndpoints` carries a residual saying a classifier's answer is what
-   would split it; this is CHEAPER and sharper, because it needs no response and no magic-byte read, only the
-   document that was served.
+   AND THE INFERENCE I FIRST DREW FROM THAT WAS WRONG, WHICH IS RECORDED HERE BECAUSE A WRONG CONCLUSION FROM
+   RIGHT EVIDENCE IS INHERITED AS METHOD. This comment said `hints 89/89, scripts 0/1` reads as a solver that
+   has not run. It does not. A lane READ the sites: `endpoint_record` has exactly ONE call in html_script.c
+   and it is on the TAINTED-`src` arm, with a `return` after it — so a parser-inserted `<script src>` with a
+   CONCRETE address never records at all, by design, because a bundle's own chunk is a program load and not
+   an API endpoint. The 89 hints are html_link.c recording deliberately (`a modulepreloaded chunk is an
+   address the bundle NAMED`), and gitlab's fonts are the `<link rel=preload>` arm of the same policy.
+   ALL THREE POPULATIONS ARE MARKUP-RECORDING SITES BY DESIGN, so a comparison of learned-against-markup
+   cannot tell `learned by executing` from `recorded at the element` — it asks only about the population
+   execution would NOT produce. The arithmetic was sound and the conclusion did not follow from it.
+   SO THE COLUMN THAT ANSWERS THE QUESTION IS THE COMPLEMENT, and that lane named it: an address in the
+   learned set that the document names NOWHERE — not a script, not a link, not an image. That is the only
+   population code could have composed. MEASURED: gitpod 0 of 90, gitlab 0 of 4. It is a FLOOR IN THE SAFE
+   DIRECTION, because a regex can only UNDER-count the markup, which INFLATES this set — and it came back
+   empty anyway. It does not prove nothing executed; it proves no learned address REQUIRED execution, which
+   is the strongest claim the data supports and is all this prints.
    FROZEN ROWS ONLY, AND THE ABSENCE IS SAID RATHER THAN SKIPPED. A live row has no mirrored document to
    compare against, so it is reported as unmeasurable HERE rather than dropped — an absent split and a split
    of zero are different facts. The markup read is a REGEX over the served bytes and not a parse, so it is a
@@ -429,6 +440,11 @@ for (const t of table) {
   if (!existsSync(doc)) { provenanceSplit.push({ id: t.id, split: 'NO MIRROR — not measurable here' }); continue; }
   const html = readFileSync(doc, 'utf8');
   const scripts = [...new Set([...html.matchAll(/<script[^>]*\ssrc="([^"]+)"/g)].map((m) => m[1]))];
+  /* EVERY URL THE MARKUP NAMES, not only the script-like ones: the complement is only meaningful against
+     the WHOLE document, since a font or an icon the engine recorded is markup-derived too. */
+  const named = new Set([...scripts,
+    ...[...html.matchAll(/<link[^>]*\shref="([^"]+)"/g)].map((m) => m[1]),
+    ...[...html.matchAll(/<img[^>]*\ssrc="([^"]+)"/g)].map((m) => m[1])]);
   const hints = [...new Set([...html.matchAll(/rel="(?:modulepreload|preload)"[^>]*href="([^"]+)"/g)]
                             .map((m) => m[1]))];
   /* THE RAW ROWS AND NOT `t` — MY OWN FIRST VERSION READ `t.siteEndpoints` AND THE TABLE ROW DOES NOT
@@ -443,7 +459,9 @@ for (const t of table) {
                                 .flatMap((r) => r.siteEndpoints || []).map(strip));
   provenanceSplit.push({ id: t.id, learned: learned.size,
                          scriptsInDoc: scripts.length, scriptsLearned: scripts.filter((s) => learned.has(s)).length,
-                         hintsInDoc: hints.length, hintsLearned: hints.filter((s) => learned.has(s)).length });
+                         hintsInDoc: hints.length, hintsLearned: hints.filter((s) => learned.has(s)).length,
+                         /* THE ONLY COLUMN THAT COULD SHOW EXECUTION-DERIVED LEARNING. */
+                         learnedButNamedNowhereInMarkup: [...learned].filter((s) => !named.has(s)).length });
 }
 console.log('provenance split (frozen rows; a learned address the document NAMES was not derived by running '
             + 'anything): ' + JSON.stringify(provenanceSplit, null, 1));
