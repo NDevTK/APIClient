@@ -427,12 +427,16 @@ done:
 /* §5.1's `<image>`: "Any valid <image> value" — and the LEVEL is the REFERENCING spec's, not the newest one.
    §5.1's own row links `<image>` at css-images-3 §2 "Image Values: the <image> type", whose production is
    `<image> = <url> | <gradient>`; that is exactly what core/css/css_image.c decides, and it is the same
-   production css-backgrounds-3 normatively references, which is why one component answers both. css-images-4
-   §2 "2D Image Values: the <image> type" widens the type to six arms, and each of those arms crashes INSIDE
-   that component naming its OWN css-images-4 section — a `conic-gradient()` reports §3.3 "Conic Gradients:
-   the conic-gradient() notation" rather than reporting that this engine has no `<image>` grammar at all,
-   which is the difference between a gap a reader can act on and a claim about the tree that stopped being
-   true. Like `<color>` below, this takes the value's TEXT and not a token, because an image is a functional
+   production css-backgrounds-3 normatively references, which is why one component answers both. An arm that
+   css-images-4 §2 "2D Image Values: the <image> type" adds and that component has not built crashes INSIDE
+   it naming its OWN section, rather than reporting that this engine has no `<image>` grammar at all — a gap
+   a reader can act on instead of a claim about the tree that stopped being true.
+   WHICH ARMS THOSE ARE IS core/css/css_image.h's TO STATE AND NOT THIS FILE'S. This sentence named
+   `conic-gradient()` as the example until that notation was built, and an illustration of a PRODUCER's gap
+   held at its CONSUMER goes stale on the day the producer closes it — with nothing here to notice, since
+   nothing in this file reads that component's arms. The argument is the same one and it is about whichever
+   arms are open.
+   Like `<color>` below, this takes the value's TEXT and not a token, because an image is a functional
    notation whose interior is its own grammar. */
 static bool val_is_image(const char *span, size_t span_len)
 {

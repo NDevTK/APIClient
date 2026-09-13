@@ -3304,7 +3304,8 @@ static const char *HTML =
        upgradeneeded event has been fired" made reachable. `pending` is §4.1's readyState while the `get`'s
        done flag is false — the request is returned BEFORE its operation runs, which is the whole of what
        "asynchronously execute" means. `99:done` is the value §6.1 stored under key 2 and §6.2 read back,
-       delivered by §5.9's fire-a-success-event with the flag already set by §5.6 step 5.6.2.
+       delivered by §5.9's fire-a-success-event with the flag already set by
+       IndexedDB §5.6 "Asynchronously executing a request" step 5.6.2.
        AND THE ORDER IS THE PROOF: `success` at the open request fires only after the upgrade transaction has
        FINISHED (§4.3's note says so, and §5.7 step 10 is what waits), and nothing calls `commit()` — §5.9
        step 9.3 found the request list empty once the `get` handler returned. `_r.result.version` is §4.4's
@@ -3332,7 +3333,7 @@ static const char *HTML =
     /* AND THE ROUND TRIP ITSELF, WHICH USED TO BE AN IN-C FIXTURE. §6.1 is a step machine now (its step 5
        drives §7.1 and therefore §7.4's array arm), so there is no C entry for it and these four claims run
        where a page runs them — which is strictly more than the C fixture asserted, because each goes through
-       §5.6's request and §5.9/§5.10's event rather than calling the operation directly.
+       IndexedDB §5.6's request and §5.9/§5.10's event rather than calling the operation directly.
        `ConstraintError` is §6.1 step 2's no-overwrite refusal — what tells `add` from `put` — delivered as an
        `error` event that `preventDefault()` keeps from aborting the transaction (§5.10 step 9.3, which is the
        reason that event is cancelable at all). `first1` is §2.2's ordering read through §6.2: the records
@@ -3360,7 +3361,8 @@ static const char *HTML =
     " try { _i.put({ q: 1 }); _idb += ':nothrow'; } catch (_e) { _idb += ':' + _e.name; }"
     " var _ig = _i.get('u-9');"
     " _ig.onsuccess = function(){ _idb += ':' + _ig.result.n + ':' + _ig.result.id.v; };"
-    /* THE ORDER OF THESE HANDLERS IS §5.6 STEP 5.1's, not this statement's: a transaction's requests are
+    /* THE ORDER OF THESE HANDLERS IS IndexedDB §5.6 STEP 5.1's, not this statement's: a transaction's
+       requests are
        executed in the order they were placed, so the tokens accumulate in placement order. */
     " var _o = _r.result.createObjectStore('ord');"
     " _o.put(30, 3); _o.put(10, 1); _o.put(20, 2); _o.put(21, 2);"
@@ -7729,8 +7731,8 @@ static void exposure_selftest(JSContext *ctx, const char *top_level_url)
  * and it becomes meaningless), and it would be the second non-suspending driver §C-stack names as the dual
  * system. The round trip therefore runs where a page runs it — `_s.put`/`_s.get`/`_o.add`/`_at.abort()` in the
  * full document's own statement, read back by the `idb-open` and `idb-record` probes — which is a STRONGER
- * assertion than this file could make, because it goes through §5.6's request, §5.9's success event and §5.5's
- * abort rather than calling the operations directly.
+ * assertion than this file could make, because it goes through IndexedDB §5.6's request, §5.9's success event
+ * and §5.5's abort rather than calling the operations directly.
  *
  * WHAT STAYS HERE IS WHAT NEEDS NO FLOW: §2.1's set of databases, §2.2's set of object stores, and the three
  * algorithms below whose own C entries crash exactly where a flow would be required (§7.1's extract, §2.5's key
@@ -17277,6 +17279,85 @@ static void css_property_grammar_selftest(void)
         { "<url>", "\"a.png\"", false,
           "§4.5's bare-string spelling belongs to `SOME CSS contexts (such as @import)` and is not the `<url>` "
           "production itself" },
+        /* §5.1's `<image>`, WHICH IS THE ONE GROUP HERE WHOSE POINT IS REACHABILITY RATHER THAN GRAMMAR.
+           Its matcher forwards to core/css/css_image.c, and until these rows existed nothing in this fixture
+           reached that component at all — so a smoke could report every stage green while the gradient
+           grammar had never been asked one question, which is exactly what a run measured at `_switches` 0
+           did report.
+           THE OBSERVATION THAT RETIRES THAT DOUBT IS ALREADY IN THE STREAM AND NEEDS NO NEW COUNTER. This
+           selftest runs from main BEFORE engine_run, so ANY `@H` line in a log is evidence that every row
+           below answered — including a run that never dispatched a flow, which is the `_switches` 0 state
+           engine/build.mjs keys its before-any-dispatch arm on. There is nothing to add and nothing to
+           remember: the witness is the table that is printed anyway.
+           EVERY VALUE IS A LITERAL, which is the whole of why this channel works rather than a page. A
+           witness composed from anything this engine computed can itself become unknown, and then the more
+           successfully the solver does its job the less the witness speaks. Nothing here is computed. */
+        { "<image>", "url(a.png)", true,
+          "css-images-3 §2 \"Image Values: the <image> type\"'s `<image> = <url> | <gradient>`, whose first arm "
+          "is the same `<url>` the rows above ask for — the level §5.1's own row links, which is why one "
+          "component answers this and css-backgrounds-3 both" },
+        { "<image>", "linear-gradient(red 0% 50%, blue)", true,
+          "css-images-4 §3.5.1 \"Color Stop Lists\"'s `<color-stop-length> = <length-percentage>{1,2}`. The "
+          "second position is the DOUBLE-POSITION stop, whose meaning that section states rather than leaving "
+          "to a renderer: \"A color stop with two positions is equivalent to specifying two color stops with "
+          "the same color, one for each position.\" Level 3's §3.4.1 admits ONE, so a component built to that "
+          "level DROPS this declaration — silently, since a dropped `background` reads as an undeclared one" },
+        { "<image>", "linear-gradient(red 0% 50% 75%, blue)", false,
+          "and `{1,2}` has no third arm. A group that asked only the true case above would pass against a "
+          "stop list accepting any number of positions, which is a different grammar agreeing on one input" },
+        { "<image>", "linear-gradient(red 10deg, blue)", false,
+          "§3.5.1's LINEAR positions are `<length-percentage>`s and css-values-4 §7.1's `<angle>` is a sibling "
+          "production of §6's — this is the row that fails if the linear family is handed the ANGULAR position "
+          "type, and every other linear row here would still pass" },
+        { "<image>", "conic-gradient(red, blue)", true,
+          "css-images-4 §3.3.1 \"conic-gradient() Syntax\", whose whole prefix is optional, over the two stops "
+          "`<angular-color-stop-list>` requires. A notation this component has no arm for CRASHES rather than "
+          "answering false, so a missing family is loud here and a wrong one is caught by the rows below" },
+        { "<image>", "conic-gradient(from 45deg at 25% 75%, red, blue)", true,
+          "§3.3.1's `[ [ from [ <angle> | <zero> ] ]? [ at <position> ]? ]` with BOTH optional terms present — "
+          "they are a SEQUENCE there and not a `||`, which is the one place this prefix differs in shape from "
+          "the radial one it otherwise resembles, and a row carrying only one of them cannot see that" },
+        { "<image>", "conic-gradient(red 0, blue)", true,
+          "§3.3.1's `<zero>` arm, whose sentence reads \"The unit identifier may be omitted if the <angle> is "
+          "zero.\" It is a production beside `<angle>` rather than a widening of the unit set, which is "
+          "css-values-4 §7.1's own note: \"for legacy reasons, some uses of <angle> allow a bare 0 to mean "
+          "0deg. This is not true in general\"" },
+        { "<image>", "conic-gradient(red 0deg 90deg, blue)", true,
+          "§3.5.1's `<color-stop-angle> = [ <angle-percentage> | <zero> ]{1,2}` — the double position in the "
+          "ANGULAR family, which is the same `{1,2}` as the linear row above and is why ONE implementation "
+          "answers both: that section's note calls the two lists \"exactly identical in structure, they just "
+          "differ on whether they accept\" lengths or angles" },
+        { "<image>", "conic-gradient(red 10px, blue)", false,
+          "and the mirror of the linear row: a `<length>` is no `<angle-percentage>` and no `<zero>`, so this "
+          "is what fails if the conic family is handed the LINEAR position type" },
+        { "<image>", "conic-gradient(red calc(25% + 10deg), blue)", true,
+          "css-values-4 §5.6's `<angle-percentage> = [ <angle> | <percentage> ]`, whose percentage resolves "
+          "against an angle base. The row is here because `calc(25% + 10deg)` matches NEITHER disjunct alone — "
+          "a component that asked `<angle>` and then `<percentage>` drops it, and css_math_selftest's own "
+          "rows below ask the same question of the production directly" },
+        { "<image>", "linear-gradient(in oklch, red, blue)", true,
+          "css-images-4 §3.2.1 \"Adding <color-interpolation-method>\" hangs CSS Color 4 §13.2 \"Color Space "
+          "for Interpolation\"'s production off the LINEAR and RADIAL families and not only the conic one, and "
+          "its `||` makes the method a complete prefix on its own" },
+        { "<image>", "linear-gradient(to right in oklch, red, blue)", true,
+          "and `||` is one-or-more IN ANY ORDER, so the method is tried at BOTH ends of the group — a group "
+          "whose method always led would leave the trailing arm unasked" },
+        { "<image>", "radial-gradient(in oklab, red, blue)", true,
+          "§3.2.1 by its own title is written over the radial family too, and `oklab` is one of §13.2's "
+          "`<rectangular-color-space>`s" },
+        { "<image>", "linear-gradient(in hsl longer hue, red, blue)", true,
+          "§13.2's `<hue-interpolation-method>`, which is TWO components because the literal `hue` sits INSIDE "
+          "the production rather than after it" },
+        { "<image>", "linear-gradient(in oklab longer hue, red, blue)", false,
+          "and it is POLAR-ONLY — `oklab` is rectangular, so the method ends at the space and leaves two "
+          "components no arm of §3.1's grammar admits" },
+        { "<image>", "linear-gradient(red)", false,
+          "§3.5.1's `<color-stop-list> = <linear-color-stop> , [ <linear-color-hint>? , <linear-color-stop> ]#?`: "
+          "the literal comma after the first stop has to be followed by something" },
+        { "<image>", "notanimage(red, blue)", false,
+          "THE NEGATIVE CONTROL FOR THE WHOLE GROUP. Every row above asserts something about a gradient "
+          "grammar, and all of them would still pass against a matcher that answered true for any functional "
+          "notation at all — this is the one that would not" },
     };
     unsigned i;
 
@@ -17436,6 +17517,26 @@ static void css_math_selftest(void)
           "§5.1's third clause for `<length-percentage>`: `any valid <calc()> expression combining <length> and "
           "<percentage> components` — a value that matches NEITHER `<length>` nor `<percentage>` alone, which "
           "is why the two questions cannot be ORed together" },
+        /* §5.6's OTHER MIXED PRODUCTION, asked here rather than left to the one caller that needs it. The
+           gradient fixture above reaches `<angle-percentage>` through a conic colour stop, and it runs
+           FIRST — so without these rows a defect in this component's typing aborts at a gradient row and
+           reads as a gradient defect, which is the same mis-reporting the ordering note beneath this table
+           gives for running the numeric-type fixture last. */
+        { "calc(25% + 10deg)", CSS_MATH_PROD_ANGLE, false,
+          "the hint rule NOT taken: with no context resolving percentages against an angle, `25%` types as "
+          "percent and §4.3.2's add-two-types over percent and angle is failure" },
+        { "calc(25% + 10deg)", CSS_MATH_PROD_ANGLE_PERCENTAGE, true,
+          "and taken. css-values-4 §5.6 writes `<angle-percentage> = [ <angle> | <percentage> ]`, so §10.9's "
+          "`the type is determined as the other type, but with a percent hint set to that other type` reads "
+          "with ANGLE in place of the length above — and the pair is what the hinted context buys, since "
+          "neither disjunct admits this value on its own" },
+        { "calc(10deg + 0.25turn)", CSS_MATH_PROD_ANGLE_PERCENTAGE, true,
+          "a pure `<angle>` satisfies the hinted production too: §4.3.2 matches when the percent hint is "
+          "`either null or` the other type, so a hint PERMITS a percentage rather than requiring one" },
+        { "calc(1px + 50%)", CSS_MATH_PROD_ANGLE_PERCENTAGE, false,
+          "and a hint is not a licence — a LENGTH sum is no `<angle-percentage>`. This is the row that fails "
+          "if the new production's arm were reached for any percentage-carrying type at all, which the two "
+          "`<length-percentage>` rows directly above cannot see" },
         { "min(50vw, 400px)", CSS_MATH_PROD_LENGTH, true,
           "§10.9: min()'s type is `the result of adding the types of its comma-separated calculations`" },
         { "clamp(12px, 4vw, 24px)", CSS_MATH_PROD_LENGTH, true, "§10.2's three calculations, one type" },
