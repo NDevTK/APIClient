@@ -114,6 +114,87 @@ bool css_shorthand_number(const char *w, size_t n, double *out)
     return end != NULL && *end == '\0';
 }
 
+/* IS THIS COMPONENT VALUE A `<length>` — OR A `<length-percentage>` — THAT CSS ACTUALLY ADMITS, asked HERE
+   because for the properties this file owns the grammar of, this is THE ONLY CHECK THERE IS.
+ *
+ * WHY core/css/css_length.h's PREDICATE IS NOT THAT QUESTION, AND WHY THAT IS NOT A BUG IN IT. Its own header
+ * says what it does: it hands the span to `strtod` and "leaves the refusal of what CSS does not admit to the
+ * parse that later ASSERTS it". That is exactly the right split for a value LEXBOR HAS ALREADY TYPED, which is
+ * every length-valued property in its registry — `width`, `margin-*`, `font-size`, `line-height` — because
+ * lexbor's own `<length-percentage>` grammar has already refused a bare non-zero number before the cascade
+ * sees it, so the assert can only ever fire on this engine's own logic. IT IS THE WRONG SPLIT FOR THE FIVE
+ * PROPERTIES LEXBOR'S REGISTRY DOES NOT CARRY AND THIS FILE VALIDATES — the four `border-*-width` longhands
+ * and `border-spacing` — because for those there is nothing in front of this grammar at all: lexbor turns a
+ * property it has no id for into a `__CUSTOM` declaration carrying the RAW value, and it arrives here
+ * unjudged.
+ *
+ * WHAT THAT COST, WHICH IS WHY THIS IS A SHARED ENTRY AND NOT A LINE AT ONE SITE. `strtod` reads three spans
+ * CSS does not admit — a bare non-zero number, `inf`/`nan`/`Infinity`, and a hexadecimal literal — so
+ * `border-width: 2`, `border-top-width: Infinity` and `border-spacing: 0x10` were each ADMITTED by the grammar
+ * and then ABORTED core/css/css_length.c's parse, which asserts the unitless number is zero. Every one of
+ * those is an ordinary authoring mistake in a STRANGER'S stylesheet, or the result of `el.style.borderWidth =
+ * n` with a number in `n` — the commonest way a real bundle writes a length — and CLAUDE.md is unambiguous
+ * that a `DCHECK` may stand only on a value this codebase COMPUTED. A page's own typo may not be this
+ * engine's assertion mechanism. The right answer is the one CSS Syntax §2.2 "Error Handling" already gives:
+ * "the user agent checks it against its expected grammar. If it does not match the grammar" it is ignored.
+ *
+ * AND IT IS ONE ENTRY BECAUSE THE FILE ALREADY HELD THE ANSWER ONCE. `flex_take_basis` reasoned this out for
+ * `flex-basis` — the third property here with no lexbor grammar in front of it — and wrote the test inline,
+ * where it protected that one caller and nothing else. Two more sites asked the same question the same wrong
+ * way, which is what happens to a right answer kept at its own site, so the answer moves here and the three
+ * callers ROUTE to it rather than each carrying a copy.
+ *
+ * THE TWO SENTENCES IT IS MADE OF, and each is asked of a different part of the span:
+ *   css-values-4 §5.4 "Numbers with Units: dimension values" — "When written literally, a dimension is a
+ *   number immediately followed by a unit identifier, which is an identifier." So a literal `<length>` splits
+ *   into a `<number>` and a UNIT at the first code point that cannot continue the number, and BOTH halves are
+ *   then asked of the entry that owns them: `css_shorthand_number` for §5.3's spelling (which is what refuses
+ *   `inf`, `nan` and `0x10`, since none of them is that spelling) and core/css/css_length.h's unit table for
+ *   the identifier. Neither is re-derived here.
+ *   css-values-4 §6 "Distance Units: the <length> type" — the unit may be omitted only for zero. So a span
+ *   that is WHOLLY a number is a `<length>` exactly when it is zero, which is the arm that refuses
+ *   `border-width: 2` while leaving `border-width: 0` the valid declaration every browser accepts.
+ * A MATH FUNCTION IS THE OTHER SPELLING §5.4 ADMITS and is not a literal dimension at all, so it is handed to
+ * the wide predicate, which type-checks it through core/css/css_math.h — the one judgement this entry has no
+ * business making a second time. */
+static bool sh_length_component(const char *w, size_t n, bool percentage_too)
+{
+    size_t k = 0;
+    double v;
+    char probe[64];
+
+    if (n == 0) return false;
+    /* §5.4's other spelling. The `(` is CSS Syntax's own one-character difference between a FUNCTION and an
+       IDENT, which is the same test core/css/css_length.c makes at the same fork and for the same reason. */
+    if (memchr(w, '(', n) != NULL) {
+        bool ok;
+
+        if (n >= sizeof probe) return false;
+        memcpy(probe, w, n);
+        probe[n] = '\0';
+        ok = percentage_too ? css_length_is_length_percentage(probe) : css_length_is_length(probe);
+        return ok;
+    }
+    /* §5.4's split. The exponent's own `e` is why the scan does not simply stop at the first letter: `1e2px`
+       is a dimension whose number is `1e2`, and a unit is never reached by treating that `e` as one. */
+    while (k < n && ((w[k] >= '0' && w[k] <= '9') || w[k] == '.' || w[k] == '+' || w[k] == '-')) k++;
+    if (k < n && (w[k] == 'e' || w[k] == 'E')) {
+        size_t q = k + 1;
+
+        if (q < n && (w[q] == '+' || w[q] == '-')) q++;
+        if (q < n && w[q] >= '0' && w[q] <= '9') {
+            while (q < n && w[q] >= '0' && w[q] <= '9') q++;
+            k = q;
+        }
+    }
+    if (!css_shorthand_number(w, k, &v)) return false;
+    if (k == n) return v == 0.0;                        /* §6: the unit is optional only for zero */
+    /* §5.5 "Percentages: the <percentage> type" is a SIBLING production of §6's `<length>` and never one, so
+       it is admitted only where the caller's own grammar writes `<length-percentage>`. */
+    if (percentage_too && n - k == 1 && w[k] == '%') return true;
+    return css_length_is_length_unit(w + k, n - k);
+}
+
 /* css-overflow §3.1's value grammar for `overflow-x`/`overflow-y`, plus the LEGACY ALIAS the same section
    requires ("User agents must also support the overlay keyword as a legacy value alias of auto"). The alias is
    a SPECIFIED value in its own right and is mapped where the section's other value-to-value rule lives — the
@@ -653,7 +734,6 @@ static bool flex_is_factor(const char *w, size_t n)
 static bool flex_take_basis(CssShSpan *o, const char *w, size_t n, bool zero_ok)
 {
     const char *kw = css_sh_keyword(FLEX_BASIS_KEYWORDS, CSS_SH_N(FLEX_BASIS_KEYWORDS), w, n);
-    char probe[64];
     double v;
 
     if (kw != NULL) { flex_span(o, kw, strlen(kw)); return true; }
@@ -666,23 +746,12 @@ static bool flex_take_basis(CssShSpan *o, const char *w, size_t n, bool zero_ok)
        sign and not the value, exactly as `border-<part>`'s is one grammar up: a `calc(1rem - 2rem)` is a VALID
        declaration whose used value is clamped, so refusing it here would drop a declaration CSS admits. */
     if (n == 0 || w[0] == '-') return false;
-    /* AND WHAT REMAINS MUST BEGIN LIKE A DIMENSION OR BE A FUNCTION, which css-values-4 §5.4 "Numbers with
-       Units: dimension values" states outright: "When written literally, a dimension is a number immediately
-       followed by a unit identifier, which is an identifier." So a literal `<length-percentage>` starts with
-       §5.3's `<number>`, and the only other spelling the production admits is a math function — a name and a
-       `(`, which the entry below type-checks through core/css/css_math.h.
-       IT IS ASKED HERE BECAUSE `css_length_is_length_percentage` IS DELIBERATELY WIDER THAN §6, and its own
-       comment says so: it hands the span to `strtod`, a C production, and leaves the refusal of what CSS does
-       not admit to the parse that later ASSERTS it. That is the right split for a value lexbor has already
-       typed and the wrong one where this grammar is the only check there is — `inf` and `nan` are spans
-       `strtod` reads as numbers and CSS reads as plain identifiers, so admitting one would turn a page's own
-       invalid declaration into a `flex-basis` whose computed value ABORTS the length parser, which is this
-       engine's assertion mechanism fired by a stranger's bytes rather than by its own logic. */
-    if (!(w[0] >= '0' && w[0] <= '9') && w[0] != '.' && w[0] != '+' && memchr(w, '(', n) == NULL) return false;
-    if (n >= sizeof probe) return false;
-    memcpy(probe, w, n);
-    probe[n] = '\0';
-    if (!css_length_is_length_percentage(probe)) return false;
+    /* AND WHAT REMAINS MUST BE A `<length-percentage>` CSS ADMITS, which is `sh_length_component`'s question.
+       THIS FILE REASONED IT OUT HERE FIRST AND KEPT THE ANSWER AT THIS SITE, which protected `flex-basis` and
+       nothing else — `border-*-width` and `border-spacing` went on asking it the wrong way, through the wide
+       predicate, until each was found to abort the length parse from a stylesheet. The test is now one entry
+       and this caller ROUTES to it; a second correct answer beside it is the shape that drifts. */
+    if (!sh_length_component(w, n, true)) return false;
     flex_span(o, w, n);
     return true;
 }
@@ -979,16 +1048,10 @@ static char *table_longhand_value(const char *longhand, const char *value)
     n = css_words(value, w, wl, 2);
     if (n < 1) return NULL;
     for (i = 0; i < n; i++) {
-        char *probe;
-        bool ok;
-
-        /* §17.6.1: "Lengths may not be negative." css_length_is_length answers the PRODUCTION and not the
+        /* §17.6.1: "Lengths may not be negative." `sh_length_component` answers the PRODUCTION and not the
            range, so the sign is tested here exactly as css-backgrounds-3 §3.3's is for a border width. */
         if (wl[i] > 0 && w[i][0] == '-') return NULL;
-        probe = css_sh_dupn(w[i], wl[i]);
-        ok = css_length_is_length(probe);
-        free(probe);
-        if (!ok) return NULL;
+        if (!sh_length_component(w[i], wl[i], false)) return NULL;
     }
     /* Rebuilt from the components rather than copied from `value`, so the specified value carries ONE space
        between two lengths however the author spaced the declaration — the same canonicalization every keyword
@@ -1060,13 +1123,11 @@ char *css_shorthand_longhand_value(const char *longhand, const char *value)
     kw = css_sh_keyword(LINE_WIDTH_KEYWORDS, CSS_SH_N(LINE_WIDTH_KEYWORDS), w[0], wl[0]);
     if (kw) return css_sh_strdup(kw);
     if (wl[0] > 0 && w[0][0] == '-') return NULL;   /* §3.3: "Negative values are invalid" */
-    {
-        char *probe = css_sh_dupn(w[0], wl[0]);
-
-        if (css_length_is_length(probe)) return probe;
-        free(probe);
-        return NULL;
-    }
+    /* §3.3's `<line-width>` is a `<length [0,∞]>`, asked through the entry that answers CSS's production —
+       `css_length_is_length` alone admitted `border-top-width: 2`, `Infinity` and `0x10`, each of which then
+       ABORTED the length parse from a stylesheet. See `sh_length_component`. */
+    if (!sh_length_component(w[0], wl[0], false)) return NULL;
+    return css_sh_dupn(w[0], wl[0]);
 }
 
 /* ---- CSSOM §6.6's REVERSE DIRECTION -----------------------------------------------------------------------
