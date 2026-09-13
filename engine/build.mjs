@@ -3300,11 +3300,27 @@ function censusReading(out) {
        not a reason to stop composing the rest of the verdict. */
     const forkFlip = ocs.filter((r) => r.some((x) => x._sessionForks !== r[0]._sessionForks));
     const dAsk = last._orphansAsked - first._orphansAsked, dDrv = last._orphansDriven - first._orphansDriven;
-    /* THE FRONTIER'S OWN MOVEMENT, WHICH IS WHAT MAKES `asked == 0` A VERDICT RATHER THAN A SHRUG. A session
+    /* THE FRONTIER'S OWN STANDING, WHICH IS WHAT MAKES `asked == 0` A VERDICT RATHER THAN A SHRUG. A session
        that never reached the question and a session that barely ran are the same zero, and @COLD's `live` is
        the number that splits them. It is read as a POSITIVE statement and never defaulted: with no @COLD line
-       there is no frontier reading to cite, and the sentence says that instead of implying a still frontier. */
-    const liveMoved = c ? c.b.live - c.a.live : null;
+       there is no frontier reading to cite, and the sentence says that instead of implying a still frontier.
+       IT IS ONE SAMPLE AND NEVER A DIFFERENCE, WHICH IS THIS FILE'S OWN RULE AND WAS BROKEN HERE. The
+       `replayLeftArms` check above states it in as many words: "`lastTwo` hands back the last census and the
+       MIDDLE one, which may be two different SESSIONS of one stdout (`censusSessions` exists because the host
+       takes one runtime down and brings another up), so a difference of these rows across the pair is a
+       number about nothing. Each sample is asked alone." This clause read `c.b.live - c.a.live` and rendered
+       it as growth "across the same span" as the orphan pair's delta, and it is not the same span by three
+       independent measures: `lastTwo`'s `a` is the MIDPOINT and not the previous sample, @COLD is not split
+       at session boundaries while the pair beside it is READ OFF THE LAST SESSION ONLY, and the two markers
+       are emitted at different cadences. MEASURED on one archived smoke (123 @COLD samples): the frontier
+       stood at 1 at the first census and 1754 at the last, and the differenced pair reported 298 — an 83%
+       understatement rendered as the whole span. The other arm is worse because it EXCUSES: a frontier that
+       grows early and then plateaus reads ~0 here, and the sentence called that "a session that barely ran".
+       A STANDING COUNT ANSWERS WHAT THE DIFFERENCE WAS REACHING FOR and needs no second sample, which is how
+       solver/cold.h says to read the rows this sentence already cites: its `out_of_programs` family "is
+       evidence only where `live` is nonzero, and `live` is on the same line — read them together". `live` is
+       a GAUGE where it is declared, so the last census is the only place it is entitled to be read at all. */
+    const liveStanding = c ? c.b.live : null;
     if (forkFlip.length)
       parts.push(`orphan census: ${forkFlip.length} session(s) on this stdout CHANGED their forking regime `
         + `between samples, so this pair's counters do not have one meaning across their own series — the ask `
@@ -3342,13 +3358,16 @@ function censusReading(out) {
               + `\`outOfProgramsAtTheLadderUnits\` beside it separating "and are not being picked" from `
               + `"and are picked, with something ABOVE the rung due every round" — two readings that take `
               + `opposite work and that the ask count alone cannot choose between`
-              + (liveMoved === null
-                  ? ` (no @COLD line in this run, so there is no frontier reading to say whether it was moving)`
-                  : liveMoved > 0
-                    ? ` — and the frontier GREW by ${liveMoved} live member(s) across the same span, so the `
-                      + `session was running and still never reached the question`
-                    : ` — and @COLD's live count did not grow either, so this may be a session that barely ran `
-                      + `rather than one that ran and never asked`))
+              + (liveStanding === null
+                  ? ` (no @COLD line in this run, so there is no frontier reading to say whether anything was `
+                    + `standing)`
+                  : liveStanding > 0
+                    ? ` — and ${liveStanding} member(s) were STANDING at the last @COLD census, so the `
+                      + `frontier was populated and still never reached the question. That census is a `
+                      + `different marker at a different cadence and is not split at session boundaries, so `
+                      + `it is a reading BESIDE this pair and not a measurement over the same span`
+                    : ` — and @COLD's last census had NO live member at all, so this may be a session that `
+                      + `drained or barely ran rather than one that ran and never asked`))
             : dAsk === 0 && dDrv === 0
               ? ` — both counters FLAT across the whole span while the session went on sampling: the frontier `
                 + `has stopped reaching the question, which is neither the take nor the page`
