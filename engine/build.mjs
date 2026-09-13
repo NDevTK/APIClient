@@ -2152,18 +2152,46 @@ function stepUnitReading(b) {
 function stepUnitOverrunReading(b) {
   const rows = censusHistRows(b, "stepUnitOverruns", "sliceOverruns", STEP_UNIT_EXTENT);
   const runs = new Map(censusHistRows(b, "stepUnitRuns", "steps", STEP_UNIT_EXTENT));
-  const over = rows.filter((r) => r[1] > 0).sort((x, y) => y[1] - x[1]);
+  /* SORTED BY RATE AND NOT BY COUNT, WHICH IS A CORRECTION TO THIS READER'S FIRST VERSION AND THE WHOLE OF
+     WHAT IT IS FOR. It quoted the denominator per arm — which was right — and then ordered the arms by the
+     NUMERATOR, so the row a reader meets first is whichever arm simply RUNS most, and the rate that decides
+     anything sits behind it. That is the orientation defect CLAUDE.md names for a sorted table, arriving in an
+     instrument whose entire subject is a rate.
+     MEASURED, ON THE RUN THIS ROW WAS BUILT FOR, and the order inverts the reading completely:
+         resume-program            55 of 2085   2.6%   84.6% of all overruns
+         start-a-classic-program    8 of   24  33.3%   12.3% of all overruns
+         microtask-checkpoint       2 of  851   0.2%    3.1% of all overruns
+     By count the answer is `resume-program` and it is the least interesting of the three; by rate the answer
+     is that ONE START IN THREE ran past the slice. The two numbers are both correct and they name different
+     arms, which is exactly why the sentence says which one it ordered by. */
+  const rate = (r) => { const n = Number(runs.get(r[0]) ?? 0); return n > 0 ? r[1] / n : 1; };
+  const over = rows.filter((r) => r[1] > 0).sort((x, y) => rate(y) - rate(x));
   if (Number(b.sliceOverruns) === 0)
     return `arms that overran the slice: NONE — every one of the ${b.steps} turn(s) ended inside the ` +
            `cooperative budget, so no arm in this run held the thread past a slice`;
-  return `arms that overran the slice (${b.sliceOverruns} of ${b.steps} turn(s)): ` +
+  /* AND WHAT DID NOT OVERRUN IS HALF THE FINDING, because the naive expectation is that overruns are spread
+     with the WORK — an arm that runs ten times as often overrunning ten times as often — and a concentration
+     is only visible against the arms that carry the work and never overrun at all. An arm's absence from the
+     list above is a statement and this is where it gets made. */
+  const busiest = [...runs.entries()].filter((e) => e[1] > 0 && !rows.some((r) => r[0] === e[0] && r[1] > 0))
+                                     .sort((x, y) => y[1] - x[1]).slice(0, 2);
+  return `arms that overran the slice (${b.sliceOverruns} of ${b.steps} turn(s)), ORDERED BY RATE rather ` +
+         `than by count — the arm with the most overruns is usually just the arm that runs most: ` +
          over.map((r) => {
            /* THE ARM'S OWN RUN COUNT IS THE DENOMINATOR AND IT IS QUOTED, never left to a reader to find on
               another line — `4 overruns` is a magnitude and `4 of 4 runs` is a verdict, and they are the same
               number. A row whose two counts are EQUAL is the one to read first. */
            const n = Number(runs.get(r[0]) ?? 0);
-           return `${r[1]} of ${n} ${r[0]}${n > 0 && r[1] === n ? " (EVERY run of that arm overran)" : ""}`;
-         }).join(", ");
+           return `${r[1]} of ${n} ${r[0]}` +
+                  (n > 0 ? ` (${(100 * r[1] / n).toFixed(1)}%)` : "") +
+                  (n > 0 && r[1] === n ? " — EVERY run of that arm overran" : "");
+         }).join(", ") +
+         (busiest.length
+           ? `; and the arms carrying the work overran NOT ONCE — ` +
+             busiest.map((e) => `${e[0]} (${e[1]} run(s))`).join(", ") +
+             `, so this is a CONCENTRATION and not the budget being tight everywhere: the slice is being held ` +
+             `by particular units of work rather than by the amount of it`
+           : ``);
 }
 
 function stepUnitRunReading(b) {

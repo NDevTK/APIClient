@@ -1258,7 +1258,22 @@ typedef struct {
      * question about MASS; this answers "which arm cannot rest", which is a question about the TRANSPORT, and
      * only the second is what §NO BOUNDS' suspend-at-any-depth requirement is about. A count also needs no
      * second clock reading and partitions a total this struct already publishes, so it can be asserted
-     * rather than believed. */
+     * rather than believed.
+     * ITS FIRST READING INVERTED THE OBVIOUS ONE, AND THAT IS WHAT THE PAIR ABOVE IS FOR. Ordered by COUNT the
+     * answer was `resume-program`, 55 of the 65 overruns — and that arm runs 2085 times, so its rate is 2.6%
+     * and it is the LEAST interesting of the three. Ordered by RATE the answer is `start-a-classic-program`:
+     * 8 overruns out of TWENTY-FOUR RUNS, one start in three held the thread past the slice. A magnitude and a
+     * rate over one population, naming different arms, which is why the reader that renders this says which
+     * it sorted by.
+     * AND THE SHAPE OF THE DISTRIBUTION IS A SEPARATE FACT FROM EITHER — the overruns are NOT spread with the
+     * work. On that run `deliver-one-reply` took 36% of every turn and `run-a-task` 18.5%, and NEITHER OVERRAN
+     * ONCE; every overrun was in one of three arms and two of those three are a program STARTING or RESUMING.
+     * So the slice is held by particular UNITS OF WORK rather than by the amount of work, which is a claim
+     * about which C activations offer a suspend point at all — on this host the only raise sources are the
+     * interpreter's own (a back edge, a call, a fork), so a unit that runs engine C rather than page bytecode
+     * has nothing to raise the request and the budget cannot be evaluated inside it however long it takes.
+     * An arm's ABSENCE from the overrun histogram is therefore evidence, and it is the half a reader who looks
+     * only at the non-zero rows never sees. */
     long over_arms[STEP_UNIT_N];
 } EngineStepUnitRuns;
 void engine_step_unit_runs(EngineStepUnitRuns *out);
