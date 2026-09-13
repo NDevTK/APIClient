@@ -38616,13 +38616,89 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                    this says so instead. What to build is the same shape as the length's — a typed-array
                    element store that can hold unknown input, or a documented refusal at the store. */
                 if (al->phase == AL_TA_PRIM && unlikely(js_value_is_concolic(al->val))) {
-                    DFAIL("10.4.5.18 TypedArraySetElement ( obj, index, value ) over UNKNOWN EXTERNAL INPUT: "
-                          "`ta[i] = x` where x is unknown. Steps 1-2 coerce V with ToBigInt/ToNumber and step 3 "
-                          "writes the result as RAW BYTES into the ArrayBuffer's data block, which holds "
-                          "uint8_t and not JSValues — so there is no slot for an unknown, and converting would "
-                          "make the very next `ta[i]` read hand the page a concrete number where it had unknown "
-                          "external input, deleting the fork and everything behind the other arm. Do NOT "
-                          "convert here. BUILD the element store that can hold unknown input.");
+#if APICLIENT_DEV
+                    /* THE ADDRESS IS THE FRAME LIST AND THE UNKNOWN’S OWN SHAPE, AND THIS CRASH CARRIED
+                       NEITHER. It stated the spec fact and it stated the remedy, and it named no OBJECT at
+                       all — not the page expression, not which unknown, not even which array or which
+                       element — which is the defect g_no_user_code_depth’s own abort in this file
+                       records having been made four times, standing here a fifth. It was also the ONLY
+                       unknown-input crash in this file that did not compose its message: every sibling
+                       (§7.1.4 ToNumber, §7.1.15 ToBigInt, §7.1.19 ToString) already renders the
+                       shape through JSConcolicHooks.key_name and the frames through js_why_backtrace, and
+                       this one alone was a static string.
+                       THE THREE FACTS A BINARY SERIALIZER’S READER NEEDS ARE EXACTLY THE THREE A STATIC
+                       STRING CANNOT GIVE. WHICH unknown died — a request body carries many fields and the
+                       flow dies at the FIRST one, so the shape says which field the serializer had reached.
+                       WHERE in the buffer — element 3 of 4096 says it died composing its first field,
+                       element 3000 says it died on its twentieth, and those are different reports about how
+                       much of the body this engine can already build. WHICH page expression wrote it —
+                       without which the abort cannot be attributed to a document at all.
+                       AND THAT ATTRIBUTION IS SOMEBODY’S STATED FALSIFIER, WHICH IS WHY THIS IS NOT
+                       COSMETIC: solver/endpoint.c’s named residual for a request body the page wrote into
+                       a backing store makes this very abort its HOW ITS ABSENCE WOULD SHOW clause — the
+                       tell being an abort naming a typed-array element store on a document whose network
+                       panel shows the call. An observation a reader cannot attribute to a document is not an
+                       observation that can be run, so the residual was unfalsifiable for as long as this
+                       message named no site.
+                       THE RENDER MUST NOT BE ITS OWN TRAP, which is the lesson the no-user-code abort in this
+                       file states at its own flag: everything below reads engine state and calls
+                       js_why_backtrace, which takes the DEFAULT CallSite rendering and runs no page code. */
+                    /* `why` IS SIZED FROM THE PARTS AND NOT BY HABIT, because the part this diff ADDS is
+                       the one a short buffer eats: the frames go LAST, so a truncation cuts exactly the
+                       address the message exists to carry and leaves a crash that still reads complete.
+                       814 bytes of format + 240 shape + 40 index + 40 class name + 10 count + 2048
+                       frames = 3192, so 4096 is the parts plus headroom rather than a round number. */
+                    char frames[2048], why[4096], shbuf[256], ibuf[32], cbuf[ATOM_GET_STR_BUF_SIZE];
+                    JSObject *tap = JS_VALUE_GET_OBJ(al->obj);
+                    JSValue sv = JS_UNINITIALIZED;
+
+                    /* THE CARRIER’S OWN DISCRIMINATION, ASSERTED WHERE THE DIAGNOSTIC DEREFERENCES IT.
+                       AL_TA_PRIM is set at exactly one site, from the JSObject * that
+                       ta_atom_write_needs_toprim resolved, so the phase already means "a typed array"; this
+                       says so at the one line that reads class_id and u.array.count off it, and a future arm
+                       that sets the phase from anything else crashes here by name instead of rendering a
+                       union that is not an array. */
+                    DCHECK(JS_VALUE_GET_TAG(al->obj) == JS_TAG_OBJECT && is_typed_array(tap->class_id),
+                           "10.4.5.18 TypedArraySetElement’s unknown-input arm was entered with a target "
+                           "that is not a TypedArray — AL_TA_PRIM is set only from the site that already "
+                           "resolved one, so the phase and the target have parted company");
+                    /* 10.4.5.16 IsValidIntegerIndex ( obj, index ) is NOT asked here and the index is printed
+                       anyway: steps 1-2 coerce V BEFORE step 3’s bounds test, so an out-of-range element
+                       reaches this refusal exactly as an in-range one does, and the number the reader wants is
+                       the one the page WROTE. A canonical numeric index that is not a tagged int ("1.5",
+                       "1e21", "-0") is never a valid index, which is a statement rather than a hole. */
+                    if (__JS_AtomIsTaggedInt(al->atom))
+                        snprintf(ibuf, sizeof ibuf, "%u", __JS_AtomToUInt32(al->atom));
+                    else
+                        snprintf(ibuf, sizeof ibuf, "%s", "(a canonical numeric index that is no valid index)");
+                    snprintf(shbuf, sizeof shbuf, "%s", "(a shape this engine could not spell)");
+                    if (g_concolic.key_name) {
+                        sv = g_concolic.key_name(ctx, al->val);
+                        if (JS_IsString(sv)) {
+                            const char *s = JS_ToCString(ctx, sv);
+                            if (s) { js_why_sanitize(shbuf, sizeof shbuf, s); JS_FreeCString(ctx, s); }
+                        }
+                    }
+                    JS_FreeValue(ctx, sv);
+                    js_why_backtrace(ctx, frames, sizeof frames);
+                    snprintf(why, sizeof why,
+                             "10.4.5.18 TypedArraySetElement ( obj, index, value ) over UNKNOWN EXTERNAL INPUT "
+                             "`%.240s`: `ta[%.40s] = x` on a %.40s of %u elements. Steps 1-2 coerce V with "
+                             "ToBigInt/ToNumber and step 3 writes the result as RAW BYTES into the "
+                             "ArrayBuffer’s data block, which holds uint8_t and not JSValues — so there "
+                             "is no slot for an unknown, and converting would make the very next `ta[i]` read "
+                             "hand the page a concrete number where it had unknown external input, deleting "
+                             "the fork and everything behind the other arm. Do NOT convert here. BUILD the "
+                             "element store that can hold unknown input — which is the capability "
+                             "solver/endpoint.c’s residual names for a request body the page wrote into a "
+                             "backing store, and Encoding §7.4 Interface TextEncoder’s encodeInto "
+                             "refuses its destination for the same reason. Frames: %s",
+                             shbuf, ibuf,
+                             JS_AtomGetStr(ctx, cbuf, sizeof cbuf,
+                                           ctx->rt->class_array[tap->class_id].class_name),
+                             (unsigned)tap->u.array.count, frames);
+                    DFAIL(why);
+#endif
                     JS_ThrowTypeError(ctx, "a TypedArray element that is unknown external input is not modelled yet");
                     goto do_array_len_throw;
                 }
