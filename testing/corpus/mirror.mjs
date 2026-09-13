@@ -67,7 +67,20 @@ function get(url) {
   rmSync(hdr, { force: true });
   let body;
   try {
-    body = execFileSync('curl', ['-sS', '-L', '--max-time', '40', '-D', hdr,
+    /* `--compressed` IS WHAT A BROWSER DOES AND WITHOUT IT THIS STORED BYTES NO PARSER CAN READ. curl was
+       sending no `Accept-Encoding` and decoding nothing, while the UA above says Chrome — and a CDN that
+       gzips on that basis then handed back gzip which was written to disk verbatim. MEASURED: 15 `.js`
+       files under mirror/ began with the gzip magic `1f 8b` (slack 14, vscodedev 1), `file(1)` naming one
+       outright as "gzip compressed data … original size modulo 2^32 1106702".
+       WHAT IT COST WAS A FALSE ENGINE ABORT, which is worse than a missing fixture: serve-faithful handed
+       those bytes over as JavaScript, the compile refused at byte one, and the census row read
+       ENGINE-ABORT at engine/host/solver/engine.c:8976 — the SAME site as a real module-vs-classic
+       failure — so a census counting abort SITES would have scored it as a second instance of a compile
+       ceiling it has nothing to do with. The discriminator is the TOKEN: `unsupported keyword: export` is
+       an engine gap, `unexpected token in expression: '\x1f'` is this defect wearing its clothes.
+       THE ENGINE WAS RIGHT AND THE FIXTURE WAS WRONG, which is the direction that costs the most to
+       diagnose, because everything downstream behaves exactly as it should. */
+    body = execFileSync('curl', ['-sS', '-L', '--compressed', '--max-time', '40', '-D', hdr,
       '-A', 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36',
       '-w', '\\n@@FINAL@@%{url_effective}\\n@@CODE@@%{http_code}\\n', url],
       { maxBuffer: 128 * 1024 * 1024 });
@@ -78,6 +91,19 @@ function get(url) {
   const final = (tail.match(/@@FINAL@@(.*)/) || [, url])[1];
   const code = Number((tail.match(/@@CODE@@(\d+)/) || [, 0])[1]);
   const buf = Buffer.from(s.slice(0, mF), 'binary');
+  /* AND A BODY THAT IS STILL COMPRESSED IS REFUSED RATHER THAN STORED, which is the difference between this
+     defect being impossible and being merely fixed. `--compressed` above asks curl to decode, and a body that
+     arrives with the gzip magic anyway is one curl could not decode — an encoding it did not negotiate, or a
+     server ignoring the negotiation. Storing it writes bytes that are neither what the page was served
+     semantically nor anything a parser can read, and the only thing downstream can do with them is
+     manufacture a compile failure at byte one. A resource that could not be decoded is a resource this
+     mirror does not have, and saying so is the honest record — an absent fixture is a fixture server 404,
+     which `serve-faithful` already reports loudly and keeps a count of, while a corrupt one is an engine
+     abort nobody can attribute. */
+  if (buf.length >= 2 && buf[0] === 0x1f && buf[1] === 0x8b)
+    return { err: 'body is still gzip-compressed after --compressed (magic 1f 8b, ' + buf.length + ' B) — '
+                + 'curl could not decode what this server sent, so the bytes are unreadable to any parser '
+                + 'and are NOT stored; a fixture 404 is reported and counted, a corrupt fixture is not' };
   let ct = '', csp = '';
   try {
     const h = readFileSync(hdr, 'utf8');
