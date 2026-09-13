@@ -326,8 +326,20 @@ typedef struct {
        build. It is also why the deferral above costs the investigation nothing: the reading that needs them
        is over runs, and runs are what the logs are. THE OBSERVATION THAT RETIRES IT, and not the reason: these names occurring
        in `extension/lib/qjs/qjs.wasm`, checked by CONTENT with `runwayPerMille` as the positive control and an
-       invented name as the negative one. Measured at this commit: the control PRESENT, all three ABSENT. When
-       the artifact carries them the reader and the requirement land together, in one diff. */
+       invented name as the negative one. When the artifact carries them the reader and the requirement land
+       together, in one diff.
+       THE OBSERVATION HAS FLIPPED AND THE WORK IS NOW DUE RATHER THAN DEFERRED. It recorded "the control
+       PRESENT, all three ABSENT", which was true when written and is a claim about a BUILT ARTIFACT — the one
+       kind no git command can check, because a build leaves no commit and this file is byte-identical either
+       side of one. Re-run on the artifact this tree now loads, with both controls:
+         runwayPerMille 1 (positive control)   runwayArms 2   runwayWalked 1   runwayOf 1
+         runwayInventedControl 0 (negative control — so the presences are presence, not an unarmed question)
+       THE ACT THAT CHANGED IT WAS AN INSTALL AND ONLY ONE ROLE MAY PERFORM ONE, which is why the deferral read
+       as merely pending for as long as it did: every other reader runs the observation, gets the defer answer,
+       correctly leaves it standing, and nothing anywhere accumulates those readings. The remaining work is the
+       one this clause already names — the card reader and the store-shape requirement, landing together —
+       and the store half must be raised WITH `_STORE_SHAPE`, since a record short of a newly required name
+       takes the restore check and aborts every map rather than being shed. */
     int reinject_len;
     /* …AND THE POSITION ITSELF, HELD AS ITS TWO HALVES RATHER THAN AS THE THOUSANDTHS ABOVE — the same repair
        `surv_run`/`surv_len` is one rung up, and for the same stated reason: the report has to be able to say
