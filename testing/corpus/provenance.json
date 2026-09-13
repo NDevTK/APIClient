@@ -2328,5 +2328,19 @@
    }
   ],
   "baseUrl": "https://openlibrary.org/"
+ },
+ {
+  "id": "squoosh",
+  "stack": "NOT AN @H SUBJECT — fails 1 and 2: a client-side image compressor with no backend; its whole network surface is its own chunks, four demo images and analytics.js. Measured over 4 census passes plus one live drive, spread zero: 9 endpoints emitted and all 9 are this document's 9 `<img src>` values, one-to-one in markup order. STACK: no <script src> in the 75KiB document — bootstrap is inline",
+  "requestedUrl": "https://squoosh.app/",
+  "finalUrl": "https://squoosh.app/",
+  "status": 200,
+  "contentType": "text/html; charset=UTF-8",
+  "csp": "",
+  "bytes": 75215,
+  "sha256": "9a6903b747deac75c992210173e5ce44d849ba7bd7f8fe7ce5ea2960d4e315da",
+  "fetchedAt": "2026-09-13T08:01:09.584Z",
+  "resources": [],
+  "baseUrl": "https://squoosh.app/"
  }
 ]
