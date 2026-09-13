@@ -104,6 +104,16 @@ const char *const *css_shorthand_longhands(const char *shorthand, unsigned *pn);
    outside it. */
 bool css_shorthand_is_shorthand(const char *name);
 
+/* THE SAME TABLE ASKED FOR A NAME RATHER THAN A YES, because CSSOM §2's "supported CSS property" is a SET whose
+   members have a canonical spelling and a caller that matched one has to store it. It is the same row and the
+   same lookup as the predicate above — a second table of the same names is the copy that drifts — and the
+   pointer is the row's own static name, so it outlives every caller and needs no free.
+   WHY A SHORTHAND THIS COMPONENT EXPANDS IS A SUPPORTED PROPERTY AT ALL: §2 defines the term as "a CSS
+   property that the user agent implements", and the user agent is this ENGINE and not the vendored parser it
+   embeds. A name in the table below is one whose grammar and whose expansion this file owns, which is what
+   implementing a property means. */
+const char *css_shorthand_property_named(const char *name);
+
 /* THE SHORTHANDS THAT SET `longhand`, written into `out` in CSSOM §6.6's own PREFERRED ORDER — "order
    shorthands lexicographically; move all items that begin with `-` last; move all items that begin with `-`
    but not `-webkit-` last; order by the number of longhand properties that map to it, with the greatest number

@@ -1356,6 +1356,15 @@ bool css_shorthand_is_shorthand(const char *name)
     return css_sh_row(name) != NULL;
 }
 
+const char *css_shorthand_property_named(const char *name)
+{
+    const CssShorthandRow *row;
+
+    DCHECK(name != NULL, "CSSOM §2's supported-property question was asked about no name at all");
+    row = css_sh_row(name);
+    return row ? row->name : NULL;
+}
+
 /* CSSOM §6.6's PREFERRED ORDER is a definition, not a UA preference, and it is FOUR steps applied in its own
    order — each a stable rearrangement of the one before, so the last is the primary key and the first is the
    tie-break. Written out step by step rather than collapsed into one comparator, because the collapsed form is

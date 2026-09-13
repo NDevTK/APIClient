@@ -105,6 +105,7 @@
 #include "core/css/css_property_numeric.h"
 #include "core/css/css_presentational_hints.h"
 #include "core/css/css_rule.h"
+#include "core/css/css_background_shorthand.h"
 #include "core/css/css_shorthand.h"
 #include "core/css/css_style_declaration.h"
 #include "core/css/css_style_sheet.h"
@@ -2932,15 +2933,56 @@ static bool cssom_supported_css_property(uintptr_t id, const lxb_css_entry_data_
 const char *cssom_supported_css_property_named(const char *name)
 {
     const lxb_css_entry_data_t *e;
+    const char *own;
+    unsigned i;
 
     DCHECK(name != NULL, "CSSOM §2's supported CSS property set was asked about no name at all — the empty "
                          "string is a real question with the answer NO, and the absence of a name is a caller "
                          "that never took one");
     e = lxb_css_property_by_name((const lxb_char_t *)name, strlen(name));
-    if (e == NULL || !cssom_supported_css_property(e->unique, e))
-        return NULL;
-    DCHECK(e->name != NULL, "lexbor's property registry answered a supported row with no name");
-    return (const char *)e->name;
+    if (e != NULL && cssom_supported_css_property(e->unique, e)) {
+        DCHECK(e->name != NULL, "lexbor's property registry answered a supported row with no name");
+        return (const char *)e->name;
+    }
+    /* AND THE PROPERTIES THIS ENGINE IMPLEMENTS THAT THE VENDORED REGISTRY DOES NOT CARRY, which the registry
+       alone cannot answer for and which this set is NOT allowed to exclude.
+       CSSOM §2 defines the term in one sentence — "The term supported CSS property refers to a CSS property
+       that the user agent implements, including any vendor-prefixed properties, but excluding custom
+       properties" — and the USER AGENT IS THIS ENGINE, not the parser it embeds. Reading the set off
+       `lxb_css_property_by_name` alone answered for the LIBRARY instead, which is the defect class this file
+       is now the worked example of: A CAPABILITY PREDICATE DERIVED FROM A VENDORED REGISTRY ANSWERS FOR THE
+       LIBRARY AND NOT FOR THE ENGINE THAT EXTENDS IT. It is worth stating in those words because the
+       population it got wrong is not a corner: it is every property this engine implements itself — the four
+       `border-*-width`, the four `border-*-style`, `border-spacing`, `caption-side`, `table-layout`,
+       `transform`, the seven `font-variant-*`, the eight background longhands — which is the same set a
+       separate hunt found holding page-held abort switches, and that coincidence is a fact about the
+       architecture rather than about either defect.
+       WHAT IT COST WAS A SILENT WRONG ANSWER AND NOT A REFUSAL, which is why it outranks the read it also
+       breaks. §7.5's setProperty asks this set BEFORE it parses anything, so a NULL here made
+       `el.style.setProperty("transform", …)` return having set nothing, and CSSOM §6.6.1's per-property IDL
+       attributes are installed by walking the registry BY ID, so `el.style.transform = x` was not an accessor
+       at all: it created an ordinary own property that reached no declaration block, changed nothing, and READ
+       BACK AS IF IT HAD WORKED. A page that writes a style and reads it back then diverges from the browser
+       with NO CRASH, so the forcing function never fires and every branch behind it explores a world the page
+       is not in.
+       EACH SOURCE IS ASKED OF THE COMPONENT THAT OWNS IT, and there is no fourth list here: a set assembled by
+       re-typing its members is the copy that drifts, and this file already asserts that a name in its own
+       table which lexbor ALSO carries is one fact with two sources. The registry is still asked FIRST, so a
+       property lexbor types keeps its canonical spelling from the row that types it. */
+    for (i = 0; i < sizeof(CSSD_INITIAL_UNREGISTERED) / sizeof(CSSD_INITIAL_UNREGISTERED[0]); i++)
+        if (strcmp(CSSD_INITIAL_UNREGISTERED[i].name, name) == 0)
+            return CSSD_INITIAL_UNREGISTERED[i].name;
+    /* css-backgrounds-3 §2.10's eight, whose grammars core/css/css_background_shorthand.h owns. They are NOT
+       in the table above — an initial value is a fact a property has whether or not anything asks for it, and
+       nothing asks these for one — so a set built from that table alone would have been short by exactly the
+       eight this engine most obviously implements. */
+    for (i = 0; i < CSS_BACKGROUND_SHORTHAND_N; i++)
+        if (strcmp(CSS_BACKGROUND_SHORTHAND_LONGHANDS[i], name) == 0)
+            return CSS_BACKGROUND_SHORTHAND_LONGHANDS[i];
+    /* And the SHORTHANDS core/css/css_shorthand.h expands, asked of that component rather than listed here. */
+    own = css_shorthand_property_named(name);
+    if (own != NULL) return own;
+    return NULL;
 }
 
 /* An IDL attribute name is bounded by the property name it comes from, since §6.6.1's algorithm only ever
