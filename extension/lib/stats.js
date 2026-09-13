@@ -3,8 +3,29 @@
 // numeric ranges, and cross-parameter correlations.
 
 const STATS_MAX_UNIQUE_VALUES = 50;
-const STATS_MIN_OBS_FOR_REQUIRED = 3;
-const STATS_MIN_OBS_FOR_ENUM = 5;
+/* TWO POPULATIONS, NEVER ONE CONSTANT. The two thresholds that stood here were named for neither of the
+   quantities they gated — "OBS" — and each gated BOTH `requestCount` and `stats.observedCount`, so one
+   number answered two questions that are not the same question. `analyzeRequired` asks how many REQUESTS
+   there are, because requestCount is the denominator of its ratio and a ratio over one request says
+   nothing. `analyzeDefault` and `analyzeFormat` ask how many SIGHTINGS OF THIS PARAMETER there are,
+   because their population is the values in `stats.values` / `stats.formatHints`, not the requests those
+   came from. Each SITE was already reading the right quantity; what was shared was the threshold.
+   THE TWO ARE ORDERED RATHER THAN EQUIVALENT, which is what makes one number for both actively wrong and
+   not merely untidy: `observedCount <= requestCount` is an INVARIANT this file now asserts (analyzeRequired,
+   below), so at one constant the sighting gate is STRICTLY STRONGER — a parameter present in 2 of 5
+   requests clears the request gate and fails the sighting gate. Tuning "how many requests before I will
+   call a parameter required" therefore silently moved "how many sightings before I will claim a default
+   value" and "…before I will claim a format", by a different amount, with nothing anywhere to say so.
+   CLAUDE.md §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS, one level down at a constant: the cost lands on the
+   looser question, and there is no missing name for a grep to find because nothing is missing.
+   THE VALUES ARE UNCHANGED AND SO IS EVERY ANSWER THIS FILE GIVES TODAY. The split is what makes the next
+   tuning edit a decision about ONE question instead of a silent edit to three. Each name states the
+   POPULATION it counts, so a future site cannot reach for one without saying which it means. */
+const STATS_MIN_REQUESTS_FOR_REQUIRED = 3;
+const STATS_MIN_SIGHTINGS_FOR_DEFAULT = 3;
+const STATS_MIN_SIGHTINGS_FOR_FORMAT = 3;
+const STATS_MIN_SIGHTINGS_FOR_ENUM = 5;
+const STATS_MIN_REQUESTS_FOR_CORRELATION = 5;
 const STATS_MAX_ENUM_VALUES = 20;
 const STATS_DEFAULT_THRESHOLD = 0.8;
 
@@ -212,7 +233,7 @@ function detectFormat(stats, value) {
 }
 
 function analyzeRequired(stats, requestCount) {
-  if (requestCount < STATS_MIN_OBS_FOR_REQUIRED) {
+  if (requestCount < STATS_MIN_REQUESTS_FOR_REQUIRED) {
     return { required: false, confidence: stats.observedCount / Math.max(requestCount, 1) };
   }
   /* ASSERTED WHERE BOTH ARE IN ONE HAND, which is the one check a reader of this quotient can make without
@@ -232,7 +253,7 @@ function analyzeRequired(stats, requestCount) {
 }
 
 function analyzeEnum(stats) {
-  if (stats.observedCount < STATS_MIN_OBS_FOR_ENUM) {
+  if (stats.observedCount < STATS_MIN_SIGHTINGS_FOR_ENUM) {
     return { isEnum: false, values: [] };
   }
   const uniqueValues = Object.keys(stats.values);
@@ -244,7 +265,7 @@ function analyzeEnum(stats) {
 }
 
 function analyzeDefault(stats) {
-  if (stats.observedCount < STATS_MIN_OBS_FOR_REQUIRED) {
+  if (stats.observedCount < STATS_MIN_SIGHTINGS_FOR_DEFAULT) {
     return { hasDefault: false, value: null, confidence: 0 };
   }
   let maxCount = 0;
@@ -263,7 +284,7 @@ function analyzeDefault(stats) {
 }
 
 function analyzeFormat(stats) {
-  if (stats.observedCount < STATS_MIN_OBS_FOR_REQUIRED) return null;
+  if (stats.observedCount < STATS_MIN_SIGHTINGS_FOR_FORMAT) return null;
 
   // Find the dominant format hint (must be >80% of observations)
   const threshold = stats.observedCount * STATS_DEFAULT_THRESHOLD;
@@ -285,7 +306,7 @@ function analyzeRange(stats) {
  * @returns {Array} correlation entries
  */
 function detectCorrelations(methodStats) {
-  if (methodStats.requestCount < STATS_MIN_OBS_FOR_ENUM) return [];
+  if (methodStats.requestCount < STATS_MIN_REQUESTS_FOR_CORRELATION) return [];
 
   const paramNames = Object.keys(methodStats.params);
   if (paramNames.length < 2) return [];
