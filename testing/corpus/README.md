@@ -1,7 +1,15 @@
 # Real-site corpus
 
-The gate for "does this work on real webapps". Five instruments; the mirror tree
-itself is NOT checked in (102 MiB) and is rebuilt from a site list.
+The gate for "does this work on real webapps". Six instruments.
+
+THE MIRROR TREE IS CHECKED IN AND THIS FILE USED TO SAY IT WAS NOT. Measured at `origin/main`:
+`git ls-tree -r origin/main -- testing/corpus/mirror | wc -l` is 463 blobs, 72.1 MiB, 397 of them `.js`.
+That is not a detail of housekeeping — it is what lets a number taken over these bytes BELONG TO A REVISION,
+which is the whole of why `reach.mjs` derives its denominator from the mirror rather than from a run. What is
+NOT tracked is the census `.jsonl` rows (`git ls-tree -r origin/main -- testing/corpus | grep -c census` is 0),
+so any figure read out of THOSE is a fact about one run and one artifact and never about a commit. Re-derive
+both with the commands above rather than taking these counts; they are printed to show which side of the line
+each input falls on, not as a total to quote.
 
     node list.mjs                       # (a module) the one reader of a site list
     SITES=apps.tsv node mirror.mjs      # fetch + freeze that list, write provenance.json
@@ -10,6 +18,7 @@ itself is NOT checked in (102 MiB) and is rebuilt from a site list.
     LANE=/tmp/mylane ./run.sh a1                          # one pass, frozen bytes, sites.tsv
     LANE=/tmp/mylane SITES=apps.tsv AT=live ./run.sh r1   # one pass, live, the app pages
     SITES=apps.tsv node report.mjs census-r1.jsonl …      # the table + the ranked abort queue
+    node reach.mjs census-r1.jsonl …                      # reach: where each learned address came from
 
 ## Two lists, and a census is a measurement OF one
 

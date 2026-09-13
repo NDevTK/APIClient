@@ -487,69 +487,18 @@ if (loads.length) console.log(`load average across rows: min ${Math.min(...loads
    CAN learn from the page; the spread column beside it is what says how reliably. */
 const measurable = table.filter((t) => t.outcome !== 'NET/FIXTURE');
 const withEp = table.filter((t) => t.epAnswered > 0);
-/* WHERE THE LEARNED ADDRESSES CAME FROM, WHICH IS THE ONE QUESTION THIS TABLE COULD NOT ASK AND THE ONLY ONE
-   THE PRODUCT IS ABOUT. §What-the-tool-produces is 'what the bundle CAN do but didn't' — addresses the code
-   COMPUTED — and an endpoint COUNT is silent about that: an address harvested from markup and one derived by
-   running the bundle are one number here, and a plain HTML parse finds the first without a solver at all.
-   MEASURED, BY HAND, BEFORE THIS EXISTED — which is why it exists. On gitpod the document's 89
-   `<link rel=modulepreload>` hrefs were learned 89 of 89 and its ONE `<script src>` — the module entry it
-   actually loads — was learned 0 of 1. On gitlab, three independent passes identical: 17 `<script src>`,
-   ZERO learned, and the four addresses it did learn are `.woff2` FONTS. Two bundler shapes, three real
-   sites, and not one address that could only have come from executing something.
-   AND THE INFERENCE I FIRST DREW FROM THAT WAS WRONG, WHICH IS RECORDED HERE BECAUSE A WRONG CONCLUSION FROM
-   RIGHT EVIDENCE IS INHERITED AS METHOD. This comment said `hints 89/89, scripts 0/1` reads as a solver that
-   has not run. It does not. A lane READ the sites: `endpoint_record` has exactly ONE call in html_script.c
-   and it is on the TAINTED-`src` arm, with a `return` after it — so a parser-inserted `<script src>` with a
-   CONCRETE address never records at all, by design, because a bundle's own chunk is a program load and not
-   an API endpoint. The 89 hints are html_link.c recording deliberately (`a modulepreloaded chunk is an
-   address the bundle NAMED`), and gitlab's fonts are the `<link rel=preload>` arm of the same policy.
-   ALL THREE POPULATIONS ARE MARKUP-RECORDING SITES BY DESIGN, so a comparison of learned-against-markup
-   cannot tell `learned by executing` from `recorded at the element` — it asks only about the population
-   execution would NOT produce. The arithmetic was sound and the conclusion did not follow from it.
-   SO THE COLUMN THAT ANSWERS THE QUESTION IS THE COMPLEMENT, and that lane named it: an address in the
-   learned set that the document names NOWHERE — not a script, not a link, not an image. That is the only
-   population code could have composed. MEASURED: gitpod 0 of 90, gitlab 0 of 4. It is a FLOOR IN THE SAFE
-   DIRECTION, because a regex can only UNDER-count the markup, which INFLATES this set — and it came back
-   empty anyway. It does not prove nothing executed; it proves no learned address REQUIRED execution, which
-   is the strongest claim the data supports and is all this prints.
-   FROZEN ROWS ONLY, AND THE ABSENCE IS SAID RATHER THAN SKIPPED. A live row has no mirrored document to
-   compare against, so it is reported as unmeasurable HERE rather than dropped — an absent split and a split
-   of zero are different facts. The markup read is a REGEX over the served bytes and not a parse, so it is a
-   floor: a script a document writes from script is not in it, which is the direction that UNDERSTATES the
-   inversion and therefore cannot manufacture one. */
-const strip = (s) => { const u = String(s).replace(/^[A-Z]+ /, '');
-                       try { return new URL(u).pathname.replace(/^\/_m\/[^/]+/, ''); } catch { return u; } };
-const provenanceSplit = [];
-for (const t of table) {
-  const doc = join(ROOT, 'mirror', t.id, 'index.html');
-  if (!existsSync(doc)) { provenanceSplit.push({ id: t.id, split: 'NO MIRROR — not measurable here' }); continue; }
-  const html = readFileSync(doc, 'utf8');
-  const scripts = [...new Set([...html.matchAll(/<script[^>]*\ssrc="([^"]+)"/g)].map((m) => m[1]))];
-  /* EVERY URL THE MARKUP NAMES, not only the script-like ones: the complement is only meaningful against
-     the WHOLE document, since a font or an icon the engine recorded is markup-derived too. */
-  const named = new Set([...scripts,
-    ...[...html.matchAll(/<link[^>]*\shref="([^"]+)"/g)].map((m) => m[1]),
-    ...[...html.matchAll(/<img[^>]*\ssrc="([^"]+)"/g)].map((m) => m[1])]);
-  const hints = [...new Set([...html.matchAll(/rel="(?:modulepreload|preload)"[^>]*href="([^"]+)"/g)]
-                            .map((m) => m[1]))];
-  /* THE RAW ROWS AND NOT `t` — MY OWN FIRST VERSION READ `t.siteEndpoints` AND THE TABLE ROW DOES NOT
-     CARRY IT, so it printed `hintsLearned: 0` where the truth is 89 of 89. That is not a smaller number,
-     it is the INVERSE FINDING: `0/89` reads as an engine that learned nothing from the document, and
-     `89/89` reads as one that learned the document's markup and none of its code. Caught only because
-     the totals line two lines down said 94 endpoints while this said zero — two numbers from one run
-     disagreeing, which is the cheapest check there is and needed no second command.
-     SO IT READS THE CENSUS FILES DIRECTLY, independent of this file's own table shape, which is also
-     what stops it drifting the next time a column is added. */
-  const learned = new Set(passes.flatMap((pp) => pp.rows.filter((r) => r.id === t.id))
-                                .flatMap((r) => r.siteEndpoints || []).map(strip));
-  provenanceSplit.push({ id: t.id, learned: learned.size,
-                         scriptsInDoc: scripts.length, scriptsLearned: scripts.filter((s) => learned.has(s)).length,
-                         hintsInDoc: hints.length, hintsLearned: hints.filter((s) => learned.has(s)).length,
-                         /* THE ONLY COLUMN THAT COULD SHOW EXECUTION-DERIVED LEARNING. */
-                         learnedButNamedNowhereInMarkup: [...learned].filter((s) => !named.has(s)).length });
-}
-console.log('provenance split (frozen rows; a learned address the document NAMES was not derived by running '
-            + 'anything): ' + JSON.stringify(provenanceSplit, null, 1));
+/* WHERE THE LEARNED ADDRESSES CAME FROM IS ASKED BY `reach.mjs`, NOT HERE, AND THE COLUMN THAT USED TO STAND
+   AT THIS POINT IS DELETED RATHER THAN LEFT BESIDE IT. It compared a learned address STRIPPED TO ITS PATHNAME
+   against markup attribute values taken RAW, read only `src`/`href`/`img src` case-sensitively, and resolved
+   nothing — so an absolutely-specified resource could never match, a `srcSet` list was invisible, a
+   document-relative `./chunk.js` never matched, and a percent-encoded learned spelling never met its raw
+   attribute. Every one of those misses INFLATES the complement, which was the column a reader was told to
+   trust: it published 122 addresses as named-nowhere-in-markup where the sound answer over the same rows and
+   the same mirror is 0. A second, correct implementation standing next to it would be the dual-system rot —
+   and the broken one is the one already in everybody's fingers, so it goes.
+   THE CENSUS TABLE'S CONTRACT IS THE RUN OUTCOME AND THE ABORT QUEUE; provenance is a different axis over
+   different inputs (the TRACKED mirror rather than these untracked rows) and it lives in its own file:
+       node reach.mjs <the same census files> */
 console.log('totals: ' + JSON.stringify({
   sites: table.length,
   netFixture: table.filter((t) => t.outcome === 'NET/FIXTURE').length,
