@@ -267,9 +267,26 @@ const COUNTERS = ["switches", "flows", "candidates", "jobsQueued", "jobsRun", "u
  * looks like exploration. Drive it after the runtime and the entry chunk have registered their modules, with
  * the REAL require, and the same body computes nine concrete addresses. §Do-subproblems-IN-ORDER, arriving as
  * a constraint on a drive rather than on a diff.
- * WHAT WOULD SHOW THE DIFFERENCE: `handAParkedDriveItsFunction` and `resumeAParkedOrphanDrive` against
- * `seedOneOrphanFlow` in the `stepUnitRuns` histogram — seeds without hands is a frontier that queued drives
- * and never ran one, and hands whose bodies still emit nothing is the ordering above.
+ * WHAT WOULD SHOW THE DIFFERENCE — and the first answer written here was WRONG, which is recorded rather
+ * than corrected away because the wrong pair is the one a reader reaches for. It named
+ * `handAParkedDriveItsFunction` and `resumeAParkedOrphanDrive` against `seedOneOrphanFlow`, and those two
+ * arms serve CROSS-SESSION RESIDUE ROUTING: solver/engine.c raises ORPHAN_ROUTE only behind
+ * `!g_orphan_claims_closed && engine_orphan_route(...)`, which is the path that hands an INHERITED recipe the
+ * body it was recorded for, and its own comment says a session with no residue pays one comparison. A fresh
+ * session therefore reads 0 at both, CORRECTLY, and a reader following the retired sentence would have
+ * concluded the drive mechanism was dead. The build that produced these numbers said so in its own output —
+ * `no residue was handed to this session, so the drive verdict is not a reading` — one line above the
+ * histogram the sentence was derived from.
+ * THE PAIR THAT ACTUALLY ANSWERS IT is the orphan census's own: `orphan drive: N ask(s), M body(ies) driven`.
+ * M of 0 is a frontier that queued drives and ran none. M above 0 beside an endpoint surface that is still
+ * empty is the ordering constraint above — the bodies ran and computed unknowns, which is what driving a
+ * webpack factory with an unknown require looks like from outside. On the fixture that pair reads 923 asked
+ * and 315 driven and BOTH RISE across samples, so the mechanism is working end to end there; the mirror has
+ * not been read for it.
+ * THE METHOD IS THE FINDING AND NOT THE SENTENCE. The retired pair was chosen by NAME — three arms whose
+ * names contain the word `orphan`, one of which counts the thing I meant — without reading what raises them.
+ * §READ-THE-ACCESSOR is the same rule for a counter, and a step-unit arm is a counter with a sentence for a
+ * name.
  * THE COORDINATES HERE ROT AND THE SHAPE DOES NOT: a minified bundle's chunk names, hashes and index numbers
  * change on every deploy, so re-derive the table with the grep above rather than trusting the index, and read
  * the rest as what a webpack bundle IS. */
