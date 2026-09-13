@@ -1957,6 +1957,56 @@ details summary:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* THE PER-SIGNAL ROWS. One line per signal, its reliability beside its name, and a checkbox per value —
+   laid out so the VALUES wrap rather than the names, because the name and the grade are what a person scans
+   and the values are what they act on. `.egress-now` marks the value the request in front of them actually
+   has, which is how a refusal naming a signal is found on this surface without reading every row. */
+.egress-signals:not(:empty) {
+  padding: 4px 8px;
+  font-size: 11px;
+  border-bottom: 1px solid var(--border, #2a2a2a);
+}
+.egress-signals .egress-default {
+  opacity: 0.7;
+  margin: 2px 0 4px;
+  line-height: 1.4;
+}
+.egress-signals .egress-signal {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  padding: 2px 0;
+}
+.egress-signals .egress-signal > code {
+  font-family: monospace;
+  min-width: 9em;
+}
+.egress-signals .egress-certainty {
+  opacity: 0.6;
+  flex: 1 1 14em;
+  min-width: 0;
+}
+.egress-signals .egress-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.egress-signals .egress-now {
+  font-weight: 600;
+  text-decoration: underline dotted;
+}
+.egress-signals .egress-now-tag,
+.egress-signals .egress-fixed {
+  opacity: 0.55;
+  font-style: italic;
+}
+.egress-dropped:not(:empty) {
+  padding: 4px 8px;
+  font-size: 11px;
+  line-height: 1.4;
+  border-bottom: 1px solid var(--border, #2a2a2a);
+}
 .egress-allowed:not(:empty) {
   padding: 4px 8px;
   font-size: 11px;

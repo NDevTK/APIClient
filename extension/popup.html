@@ -57,16 +57,43 @@
          served identically to every visitor and reveal nothing about this person. What this opens is the
          other kind: an API call, a data fetch or a probe whose address the engine reached only by forcing a
          gate the person's own session never passed.
-         AND ONE COMBINATION IS UNREACHABLE AT EVERY SETTING OF IT, which is what makes this a whole answer
-         rather than a hole with a label over it: credentialed AND state-mutating AND forced. safe-fetch.js
-         cannot compose a request with a method or a body at all, so the middle conjunct is false by
-         construction and no value of this control can make it true. -->
+         AND THE SENTENCE THAT STOOD HERE IS RETIRED RATHER THAN DELETED, BECAUSE IT IS THE ONE A READER
+         RE-DERIVES AND BECAUSE THE HALF THAT WAS WRONG IS NOT THE HALF ANYBODY WOULD SUSPECT. It read: "AND
+         ONE COMBINATION IS UNREACHABLE AT EVERY SETTING OF IT … credentialed AND state-mutating AND forced.
+         safe-fetch.js cannot compose a request with a method or a body at all, so the middle conjunct is
+         false by construction and no value of this control can make it true." The project owner has RETIRED
+         that absolute (CLAUDE.md §AND-THAT-ABSOLUTE-IS-RETIRED-BY-THE-PROJECT-OWNER). NOTHING IS REFUSED AT
+         EVERY SETTING, because stripping the cookie never made a request uncorrelated with the person: the
+         authority can be in the ADDRESS — a presigned URL, a reset or invite token, a signed webhook — and
+         the address can have been DERIVED from a credentialed read. GET does not mean safe either, since RFC
+         9110 §9.2.1 "Safe Methods" defines safety by what the CLIENT requests and expects and says an
+         implementation may cause side effects anyway.
+         SO THE CONTROL IS THE WHOLE OF THE SAFETY, AND THAT IS WHY IT IS PER-SIGNAL AND NOT A SWITCH. With no
+         combination refused, the only thing between a person and one they did not intend is whether the rows
+         below STATED THE CONSEQUENCE — so every signal the policy can compute is a row, and one it cannot
+         determine says UNKNOWN in those words rather than being left out. A row that is absent reads as a
+         question that was answered; a row that says unknown is the question, asked.
+         WHAT IS STILL TRUE AND IS SMALLER: `safe-fetch.js` sends GET and only GET, and it cannot compose a
+         body — which is a FACT ABOUT THIS TRANSPORT that the `method` row states, not a combination no
+         setting may reach. -->
     <div class="egress-policy">
       <label for="btn-egress-widen">Data requests at</label>
       <code id="egress-origin" class="egress-origin"></code>
-      <button id="btn-egress-widen" type="button" class="btn-small">Allow</button>
+      <button id="btn-egress-widen" type="button" class="btn-small">Allow all</button>
       <span id="egress-status" class="egress-status"></span>
     </div>
+    <!-- THE ROWS A PERSON ACTUALLY DECIDES FROM. One per SIGNAL, one checkbox per VALUE, each carrying how
+         much this tool can know about it — `certain` (this zone computed it), `stated` (another zone said
+         it), `partial` (a hit is a fact and a miss is not), `undetermined` (nobody can compute it yet) and
+         `intent` (an intent the engine holds and cannot verify). Grading facts of different reliability as
+         one list is what a score does, and a score is what this is not. -->
+    <div id="egress-signals" class="egress-signals"></div>
+    <!-- A PERMISSION THAT COULD NOT BE CARRIED FORWARD IS SAID OUT LOUD AND NEVER LEFT TO BE NOTICED. The
+         previous control was one switch per origin and a bare origin in its store meant "fire everything
+         here" — including the signals that did not exist when the person said it — so it is dropped rather
+         than read as a permission over them. A grant that silently stops existing is the one failure this
+         surface must not have: a person who is never told concludes it is still granted. -->
+    <div id="egress-dropped" class="egress-dropped"></div>
     <!-- WHAT IS ALREADY PERMITTED, AND THE WAY BACK OUT. A permission with no withdrawal is not a preference
          but a one-way door, and this one spends somebody else's server under the person's own session. The
          list is the CHOKEPOINT'S OWN TABLE read back, never a copy this surface keeps — so what is rendered

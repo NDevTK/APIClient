@@ -165,8 +165,9 @@ function _NO_BYTES() { return new Uint8Array(0); }
    paying it, `frontierWeight` (emit-per-visit) sinks it below productive and unrun work, and the disk share
    sheds it as a strict suffix of the one value order. Nothing is truncated and nothing accumulates. What a
    permanent decline owes the READER is not a third channel but the SENTENCE, and it already has one: the
-   reason travels in `statusText`, and `blocked-destructive:logout` and `blocked-provenance:forced` say
-   different things to the person reading the stall. §Attacker-sources states the rest outright — a
+   reason travels in `statusText`, and `blocked-destructive:logout` and `blocked-signal:destination=value` say
+   different things to the person reading the stall — the second naming the ROW of their own control that
+   holds it, which is the whole of what a per-signal policy buys over a score. §Attacker-sources states the rest outright — a
    derived-and-unfired request "is not a gap in the report, it IS the report".
    WHAT A DECLINE DOES COST, NAMED HERE BECAUSE THIS IS WHERE IT IS DECIDED: the page's own `.catch(...)` arm
    goes unexplored. That is a real loss and it is NOT an argument for the lie — an arm reached by fabricating
@@ -470,14 +471,22 @@ function _provenanceOf(opts) {
    IT IS NOT A DEFAULT AND MUST NOT BECOME ONE: an ABSENT `opts.pinned` still aborts. `unstated` has to be
    TYPED by a caller that means it, which is what makes it greppable, countable, and retirable.
    NAMED RESIDUAL — TWO SEAMS STATE IT. What is not covered: the XHR relay and the navigation load reach the
-   value arm with a `forced` provenance and no witness mark, so their refusal says `forced` where it might have
-   said `forced-witness`. What the next diff builds: `engine_pinned_of_running_path()` beside
+   value arm with a `forced` provenance and no witness mark, so what the policy is told about those acts is
+   that the fact does not travel. What the next diff builds: `engine_pinned_of_running_path()` beside
    `engine_prov_of_running_path` (solver/engine.c), written into the five records and notices that already
    carry that function's word — `xml_http_request.c`'s request op, `navigable.c`'s three, `route_seed.c` — and
-   relayed by their readers here. How its absence would show: a frontier that will not drain whose refusals all
-   read `blocked-provenance:forced`, with no `forced-witness` among them, on a document whose data requests are
-   built out of pinned values. It changes no firing outcome at any setting of this table — both words refuse
-   and the same widening reopens both — which is why it is a residual and not a gap. */
+   relayed by their readers here. How its absence would show: a person auditing what they permitted at an
+   origin finds `witness=unstated` doing the work on a document whose data requests are built out of pinned
+   values, so the row cannot separate an address that may carry this engine's own witness from one the
+   bundle's text spells.
+   AND THE CLAUSE THIS RESIDUAL USED TO CARRY IS RETIRED BY THE DIFF THAT MADE THE WITNESS A SIGNAL, WHICH IS
+   WHY IT IS REWRITTEN HERE RATHER THAN LEFT STANDING. It read "It changes no firing outcome at any setting of
+   this table — both words refuse and the same widening reopens both". That was true while one per-origin
+   switch reopened every arm at once. It is FALSE now: `witness` is a gating signal, so `unstated` and
+   `unpinned` are two rows a person permits separately, and an origin permitted for one and not the other
+   fires the discovery sweep (which states `unpinned`) while refusing the XHR relay (which states `unstated`)
+   — a difference in OUTCOME and not only in the sentence. The residual is therefore larger than it was, not
+   smaller, and the direction is the safe one: an act that cannot state the fact needs its own permission. */
 var _PINNED_MARKS = ["pinned", "unpinned", "unstated"];
 function _pinnedOf(opts) {
   CHECK(_PINNED_MARKS.indexOf(opts.pinned) >= 0,
@@ -492,11 +501,18 @@ function _pinnedOf(opts) {
    The two rules above refuse a VALUE this file cannot serve. This one refuses a FIELD it will not read, and
    the failure it closes is the opposite shape: not a bad answer to a question this file asks, but a caller's
    answer to a question this file never asks — DROPPED IN SILENCE, and read by the caller as carried.
-   THE OPTION THAT MATTERS IS `method`, AND IT IS THE MIDDLE CONJUNCT OF THE ONE COMBINATION CLAUDE.md
-   §A-REQUEST-CARRIES-THE-PROVENANCE SAYS IS NEVER A SETTING: credentialed AND state-mutating AND forced.
-   `_firingRefusal` argues that conjunct is false at every setting of the widening table "because this file
-   cannot issue a non-GET at all", and that is TRUE — `init` hardcodes `method: "GET"` and nothing below
-   reads `opts.method` or `opts.body`. What was missing is that the argument was enforced by a GREP, and
+   THE OPTION THAT MATTERS IS `method`, AND THE REASON IT MATTERS IS REWRITTEN HERE RATHER THAN DELETED
+   BECAUSE IT IS THE REASON A READER RE-DERIVES. It used to read: `method` "IS THE MIDDLE CONJUNCT OF THE ONE
+   COMBINATION CLAUDE.md SAYS IS NEVER A SETTING: credentialed AND state-mutating AND forced", and this rule
+   made that conjunct false at every setting of the widening table. The project owner has RETIRED that
+   absolute (CLAUDE.md §AND-THAT-ABSOLUTE-IS-RETIRED-BY-THE-PROJECT-OWNER); nothing is refused at every
+   setting now, and what replaces it is the per-signal control below.
+   WHAT SURVIVES IS SMALLER AND IS STILL THE REASON THIS RULE EXISTS: this file can issue ONE VERB — `init`
+   hardcodes `method: "GET"` and nothing below reads `opts.method` or `opts.body` — so the `method` SIGNAL
+   has exactly one value here, and a caller that states another is describing a request this transport cannot
+   perform. That is a FACT ABOUT THE TRANSPORT and not a combination no setting may reach, and the difference
+   is checkable: delete the whole widening table and the GET literal is still here, because it selects
+   against nothing. What was missing is that the argument was enforced by a GREP, and
    SECURITY.md said so in as many words ("GET only, enforced by ABSENCE … grep: no occurrence"). Absence
    stops a method being SENT; it says NOTHING to the caller that believes it sent one. So a call site that
    passed a verb was not refused, it was IGNORED, and the reply to a GET came back attributed to its POST.
@@ -537,8 +553,8 @@ function _refuseUnreadOptions(opts) {
            "safeFetch was passed the option `" + k + "`, which it does not read — so it would be DROPPED IN " +
            "SILENCE and the request would not carry what its caller said about it. `method` and `body` are " +
            "the ones that matter: this file hardcodes `method:\"GET\"`, which is RFC 9110 §9.2.1 \"Safe " +
-           "Methods\"' safe set enforced structurally and is what makes the state-mutating conjunct of " +
-           "CLAUDE.md's never-a-setting triple false — so a caller that states a verb gets the reply to a GET " +
+           "Methods\"' safe set enforced structurally — this transport performs ONE verb, which is what " +
+           "the `method` signal of the egress policy states — so a caller that states a verb gets the reply to a GET " +
            "attributed to its own, which is the substitution this project already paid for once on the XHR " +
            "path. `as` is refused by this same rule and no longer by one of its own: the CORB class is the " +
            "request's DESTINATION now (Fetch §2.2.5 \"Requests\"). State only what this file reads (" +
@@ -567,11 +583,11 @@ function _refuseUnreadOptions(opts) {
    always the same: the fact is asserted where it is relied on rather than described somewhere else.
    WHY IT IS WORTH CLOSING RATHER THAN RESTATING. RFC 9110 §9.2.1 "Safe Methods" is enforced here
    STRUCTURALLY — the verb is a literal and `_refuseUnreadOptions` makes a caller-stated one impossible to
-   write — and that is what makes the state-mutating conjunct of CLAUDE.md's never-a-setting triple
-   (credentialed AND state-mutating AND forced) false by construction. A header list is the OTHER route to a
+   write — which is what makes the `method` signal of the egress policy a fact with one value rather than a
+   row a person could change. A header list is the OTHER route to a
    verb: `X-Http-Method-Override` is a convention this project's own code sends (`lib/discovery.js` calls it
    "the documented trick"), and a server that honours it reads a GET as whatever the header names. So a
-   bundle-chosen header list on a cookie-bearing request is the triple reconstituted one layer up, past the
+   bundle-chosen header list on a cookie-bearing request puts a verb back one layer up, past the
    one place this file closed it. That is not a bug anybody has written; it is a bug this file would not
    refuse if somebody did.
    CHECK AND NOT DCHECK, on this file's own discriminator: release must be able to PROCEED correctly with the
@@ -602,8 +618,8 @@ function _credentialedOf(opts) {
         "different question the moment the person's cookies pay for it: this file enforces RFC 9110 §9.2.1 " +
         "\"Safe Methods\" by making the verb a literal, and a header list is the other route to a verb — " +
         "`X-Http-Method-Override` is a convention this project's own code sends, and a server honouring it " +
-        "reads this GET as whatever the header names, which is CLAUDE.md's never-a-setting triple " +
-        "(credentialed AND state-mutating AND forced) rebuilt past the place this file closed it. State " +
+        "reads this GET as whatever the header names, which puts a state-mutating verb back on a " +
+        "cookie-bearing request past the place this file closed it. State " +
         "whose header list it is at the site that knows, the way `provenance` is stated, or send it " +
         "uncredentialed");
   /* AND THE SECOND INPUT, WHICH IS THE REQUEST'S OWN AND NOT THIS ZONE'S. `credentialed` is a decision — this
@@ -658,41 +674,327 @@ function _credentialedOf(opts) {
              "saying so, which is the moat this tool exists to cross. Build the pre-request same-origin " +
              "test against `pageOrigin`; every willing caller today is a §7.4 navigation stating `include`");
 }
-/* THE PER-ORIGIN EXPLORATION WIDENING — A PERSON'S SENTENCE, NEVER AN INFERENCE.
-   CLAUDE.md §Attacker-sources: firing what a bundle only reaches past a forced gate is
-   "CONFIGURABLE AND PER-ORIGIN, BECAUSE EXPERIMENTATION IS NOT ALWAYS WRONG AND A SINGLE
-   SWITCH CANNOT SAY SO … Default conservative, widened deliberately per origin, never
-   inferred from a site looking like a test." Firing at an app you own is the point of the
-   tool; doing it at a stranger's production account is not; and NO PROPERTY OF THE ADDRESS
-   distinguishes them, which is precisely why the answer is a person's.
-   IT LIVES IN THIS FILE BECAUSE THE DECISION DOES. A registry in a host is a registry the
-   OTHER host does not read, and two zones answering one question is the shape this whole
-   parameter exists to end. `engine/trusted.mjs` loads this file verbatim into a realm of
-   its own and its `--explore <origin>` writes HERE; the offscreen loads it in
-   `ast-worker.html`, restores what the person granted in an earlier session from its own
-   store, and reads the same table.
-   AN EMPTY TABLE AND AN UNSTATED ONE ARE TWO FACTS AND THIS FILE HOLDS THEM IN TWO FIELDS.
-   "Nobody has widened anything" is a positive statement a host MAKES; "this host has not
-   yet said" is the absence of one, and the offscreen genuinely passes through it — its
-   grants live in IndexedDB and come back asynchronously. Collapsing them would make the
-   window before that read indistinguishable from a person who granted nothing, so a
-   request arriving in it would be refused with `blocked-provenance:forced` — the policy
-   speaking, in a voice the person cannot tell from a policy they set. That is the silence
-   this file spends its length refusing, so the second field exists and `_firingRefusal`
-   asserts it: the window is closed BY CONSTRUCTION (the offscreen states the table at its
-   one door into analysis, and only an engine ever produces a `forced` request), and the
-   assert is that construction checked rather than described.
-   WHAT WIDENING OBLIGES, STATED WHERE IT IS GRANTED. §@H makes the reply to a forced
-   request evidence about what a server says to a request NO CLIENT MAKES, so its values
-   must be carried as FORCED and never merged into the observed pool — a 401 body parses as
-   JSON and yields fields that exist nowhere, and one invented field is the example that
-   shapes the next endpoint. That carrying is the engine's and it is the subproblem AFTER
-   this one; until it exists, widening buys the request and the person takes on the reply. */
+/* ─── THE SIGNALS THE EGRESS POLICY SURFACES, AND THE PERSON WHO DECIDES FROM THEM ───────────────────────
+   CLAUDE.md §AND-THAT-ABSOLUTE-IS-RETIRED-BY-THE-PROJECT-OWNER: "METHOD, CREDENTIAL STATE, PROVENANCE,
+   URL-CARRIED AUTHORITY, CREDENTIAL LINEAGE, DESTINATION AND INTENDED INVALIDITY ARE FACTS THE POLICY
+   SURFACES, AND THE PERSON DECIDES WHICH COMBINATIONS THEIR ORIGIN ALLOWS." The control is PER-SIGNAL and
+   PER-ORIGIN and not a score, "because a collapsed number is the several-states-behind-one-answer shape
+   arriving where a person has to act on it — a wrong weighting inside a score is invisible, and a named
+   signal a person allowed is a decision they can revisit".
+   THE RULE THIS REPLACED, REWRITTEN RATHER THAN DELETED BECAUSE IT IS THE ONE A READER RE-DERIVES. It was a
+   CONJUNCTION — credentialed AND state-mutating AND forced is never a setting — from which it followed that
+   STRIPPING THE CREDENTIAL ended it. The arithmetic was sound; the clause it carried was false, and no
+   amount of care about the method could have reached the reason: STRIPPING THE COOKIE DOES NOT MAKE A
+   REQUEST UNCORRELATED WITH THE PERSON. A CAPABILITY URL carries its authority in the path or the query — a
+   presigned object-store address, a password-reset or invite token, a signed webhook — so an uncredentialed
+   request to one mutates state perfectly well and there is no cookie to strip. An address DERIVED from a
+   credentialed reply names that person's account whatever headers it carries, because the identifiers came
+   out of their session. And the virtual document may itself have been created WITH cookies, so everything
+   computed downstream of it is downstream of that session. Two halves of the same framing go with it and
+   both are spec-true: GET DOES NOT MEAN SAFE, since RFC 9110 §9.2.1 "Safe Methods" defines safety by what
+   the CLIENT requests and expects and says in its own text that an implementation MAY cause side effects —
+   so method safety is a signal about INTENT and never a guarantee about CONSEQUENCE; and POST DOES NOT MEAN
+   UNSAFE WHERE THE REQUEST IS DELIBERATELY INVALID, since a probe built to fail validation never reaches
+   business logic, which is the whole technique.
+   NOTHING IS REFUSED AT EVERY SETTING, WHICH MOVES THE HARD PART RATHER THAN REMOVING IT. With no
+   combination refused, the only thing between a person and a combination they did not intend is whether the
+   control STATED THE CONSEQUENCE — so a signal is surfaced only where this file can COMPUTE it, and one it
+   cannot determine renders as a POSITIVE STATED UNKNOWN rather than as an absence a default fills. That is
+   §A-FIELD-A-CONSUMER-DEFAULTS arriving at the one boundary where the CONSUMER IS THE PERSON, and it is the
+   worst place for it: a plausible datum there is not a wrong number in a report, it is a decision made on a
+   fact nobody established.
+   WHAT THIS FILE DOES NOT DO AND MUST NOT BE READ AS DOING. It still cannot issue a verb: `init` hardcodes
+   `method:"GET"` and `_refuseUnreadOptions` makes a caller-stated one impossible to write. That is NOT the
+   retired carve-out re-introduced — it is a statement about what this transport IS, and the retired rule was
+   a statement about what no SETTING may permit. The difference is checkable: delete the widening table
+   entirely and the GET literal is still there, because it is not selecting against anything. A caller whose
+   request is not a GET is told so (`safeFetchMethodRefusal`) rather than having its verb dropped, and
+   teaching this chokepoint a verb is a subproblem with its own diff, not a value of this table.
+   IT LIVES IN THIS FILE BECAUSE THE DECISION DOES. A registry in a host is a registry the OTHER host does
+   not read, and two zones answering one question is the shape this whole parameter exists to end.
+   `engine/trusted.mjs` loads this file verbatim into a realm of its own and its `--explore <origin>` writes
+   HERE; the offscreen loads it in `ast-worker.html`, restores what the person granted in an earlier session
+   from its own store, and reads the same table.
+   WHAT WIDENING OBLIGES, STATED WHERE IT IS GRANTED. §@H makes the reply to a forced request evidence about
+   what a server says to a request NO CLIENT MAKES, so its values must be carried as FORCED and never merged
+   into the observed pool — a 401 body parses as JSON and yields fields that exist nowhere, and one invented
+   field is the example that shapes the next endpoint. That carrying is the engine's and it is the subproblem
+   AFTER this one; until it exists, a permission buys the request and the person takes on the reply. */
+/* HOW RELIABLE EACH SIGNAL IS, DECLARED BESIDE IT, BECAUSE GRADING FACTS OF DIFFERENT RELIABILITY AS ONE
+   LIST IS §THE-MIRROR-OF-THAT-IS-A-LIST-OF-EXAMPLES PERFORMED ON A CONTROL SURFACE. A person ticking a row
+   is entitled to know whether they are permitting something this zone KNOWS, something another zone SAID, or
+   something nobody has established — and the three take different amounts of trust.
+     "certain"      — THIS zone determines the value out of its own literals and its own code. It cannot be
+                      wrong unless this file is.
+     "stated"       — ANOTHER zone determined it and this file asserts only the VOCABULARY. The `CHECK`s
+                      above catch a word outside the enumeration and can never catch a wrong word inside it,
+                      so a `stated` signal is a CLAIM this zone relays and not a fact it holds.
+     "partial"      — this file computes a LOWER BOUND. One value is a fact when it appears; the OTHER value
+                      is a stated unknown and is NEVER the negative of the first. Reading it as the negative
+                      is the inverse reading §Attacker-sources forbids of the deny list, one signal over.
+     "undetermined" — nothing in this zone can compute it at all, so its only value is `unknown`. It is
+                      surfaced anyway, because a person permitting a request whose lineage NOBODY established
+                      has made a different decision from one permitting a request known to have none, and a
+                      row that is absent says the second while meaning the first.
+     "intent"       — an intent the ENGINE holds and cannot VERIFY. A probe can be BUILT to fail validation
+                      and cannot be KNOWN to be refused before business logic, since a server may log,
+                      rate-limit, lock an account or act on malformed input. */
+var _SIGNAL_CERTAINTY = ["certain", "stated", "partial", "undetermined", "intent"];
+/* ── URL-CARRIED AUTHORITY: A MATCH, IN THE DENY DIRECTION ONLY, AND NEVER READABLE AS ITS NEGATIVE ──────
+   §RUN-DON'T-MATCH bans matching because a matched NAME would be ASSERTED as a value; a match that only ever
+   REFUSES asserts nothing, which is the argument `_destructiveToken` already stands on in this same file and
+   the reason it is "the one place this project matches on a name, matching only to refuse". This is the
+   second, on the same terms and with the same ceiling: a hit is a fact, and a MISS IS NOT A FINDING. The
+   value for a miss is `unknown`, never `none`, and a person permitting `unknown` is permitting a stated
+   unknown rather than an established absence — which the surface must say in those words.
+   WHAT IS IN THE LIST IS WHAT AUTHORIZES A STRANGER WITHOUT A SESSION. A presigned object-store address, a
+   reset or invite token and a signed webhook all carry the authority in the address, which is precisely what
+   refuted the retired rule: an uncredentialed request to one is not uncorrelated with the person.
+   WHAT IS DELIBERATELY NOT IN IT, STATED SO IT IS NOT RE-ADDED. `key` and `api_key` are excluded: an API key
+   is the APPLICATION's authority and not the person's, it is what a published discovery document is fetched
+   with, and admitting it would make `present` the common answer — which does not merely add noise, it
+   retrains the reader of this signal to ignore it, so the day a real capability URL appears the row it
+   appears in is the row nobody looks at. A bare opaque token in a PATH SEGMENT is also outside it, because
+   nothing distinguishes one from an object id; the JWS prefix below is the one path-borne form that is
+   self-identifying, and the residual is stated rather than guessed at.
+   NAMED RESIDUAL. WHAT IS NOT COVERED: authority carried in a path segment that is not a JWS — an opaque
+   reset token spelled `/invite/<40 hex>` reads `unknown` and is permitted by whoever permitted `unknown`.
+   WHAT THE NEXT DIFF BUILDS: the signal read off the ENGINE instead of off the address — the park already
+   knows which source each segment of an address came from, so a segment that came from a credentialed reply
+   is the lineage question and answers this one on the way past. HOW ITS ABSENCE WOULD SHOW: a person
+   inspecting a widened origin's permitted values sees `url-authority=unknown` doing all the work while the
+   `present` row is never exercised, on an app whose addresses carry capability tokens. */
+var _URL_AUTHORITY_PARAMS = ["x-amz-signature", "x-goog-signature", "x-ms-signature", "sig", "signature",
+                             "hmac", "token", "access_token", "auth_token", "reset_token", "invite_token"];
+function _urlAuthorityMarker(u) {
+  var found = null;
+  u.searchParams.forEach(function (v, n) {
+    if (found === null && _URL_AUTHORITY_PARAMS.indexOf(String(n).toLowerCase()) >= 0) found = String(n).toLowerCase();
+  });
+  if (found !== null) return found;
+  /* A JWS COMPACT SERIALIZATION ANYWHERE IN THE ADDRESS. RFC 7515 §3.1 "JWS Compact Serialization Overview"
+     makes the first component `BASE64URL(UTF8(JWS Protected Header))`, and §4 "JOSE Header" makes that header
+     a JSON OBJECT — so its first three bytes are `{`, `"` and the first character of the first member's
+     name, and base64url of those is `eyJ` for every name beginning with an ASCII LETTER or `_`. Measured
+     rather than asserted, because the two-byte reading is a different string: `base64url("{\"")` alone is
+     `eyI`, and the `J` comes from the THIRD byte — `{"a` is `eyJh`, `{"k` is `eyJr`, `{"0` is `eyIw`. Every
+     header name the JOSE registry defines (`alg`, `typ`, `kid`, `enc`, `crit`) begins with a letter.
+     IT IS A LOWER BOUND LIKE EVERY OTHER ENTRY HERE AND MAY NOT BE READ AS MORE: a header whose first member
+     name began with a digit would not match, which is the `unknown` arm and is not a statement that there is
+     no authority. It is asked of the PATH and the QUERY together because a JWS is authority in the address
+     whatever component it sits in and whatever the parameter is called. */
+  if ((u.pathname + u.search).indexOf("eyJ") >= 0) return "jws";
+  return null;
+}
+/* ── THE REGISTRY. ONE DECLARATION, READ BY THE FIRING WALK AND BY THE SURFACE ───────────────────────────
+   THE ORDER IS THE REFUSAL'S ORDER, which is the whole of what a per-signal control buys over a score: the
+   refusal names the FIRST gating signal whose value the origin does not permit, so a person reading a
+   frontier that will not drain is told WHICH FACT held it rather than that something did. `destination` is
+   first deliberately — at an origin nobody has permitted anything at, the sentence a person most needs is
+   "this origin does not permit data requests", and every other row is a refinement of it.
+   `gates` IS NOT A STYLE FLAG AND IS ASSERTED. A signal that does not gate has exactly ONE possible value at
+   this chokepoint, so a control over it would be a control with one setting — §AN-ASSERT-WHOSE-TWO-SIDES-
+   CANNOT-DISAGREE's shape arriving in a permission surface. The day the value space grows the signal MUST
+   start gating, and `_signalRegistryCheck` is what makes that impossible to forget rather than a thing to
+   remember: a second value on a non-gating signal aborts at the host's own startup.
+   A NON-GATING SIGNAL IS STILL SURFACED. It is a fact the person is entitled to see before they permit
+   anything — "this transport only ever sends GET" is the sentence that makes the method rows of every other
+   security discussion legible — and it is where the row already is on the day it starts gating. */
+var _SIGNALS = [
+  /* FETCH §2.2.5 "Requests"' DESTINATION, COLLAPSED TO THE ONE DISTINCTION THE POLICY TURNS ON, and the
+     predicate is `_isScriptLike` itself rather than a second spelling of it: two answers to "is this code"
+     would be two rules free to disagree about a chunk, and CORB decides on that same line one function up.
+     A PROGRAM LOAD IS A BROWSER LOADING A PAGE — the bytes are the app's own, served identically to every
+     visitor, revealing nothing about this person — and a VALUE request is this tool spending somebody
+     else's server. That line is where the default below is drawn. */
+  { name: "destination", gates: true, certainty: "stated", values: ["program", "value"],
+    of: function (f) { return _isScriptLike(f.destination) ? "program" : "value"; } },
+  /* CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's three names. `stated` and not `certain`: the engine
+     composes the word at the park out of the park's own kind and the parking flow's `path_forced`, and the
+     `CHECK` in `_provenanceOf` catches a word outside the three and nothing else. */
+  { name: "provenance", gates: true, certainty: "stated", values: _PROVENANCE_TYPES,
+    of: function (f) { return f.provenance; } },
+  /* WHETHER THE PERSON'S COOKIE JAR PAYS, AND IT MEANS COOKIES AND NOTHING WIDER. `credentials:"omit"`
+     strips the jar; it does not strip an `Authorization` header, it does not strip authority carried in the
+     address, and it says nothing about lineage — which is why those are their own rows rather than readings
+     of this one. `certain` because `_credentialedOf` composes it out of this zone's own literal and a mode
+     whose vocabulary it asserts, and because it is the flag that decides what `init.credentials` says. */
+  { name: "cookies", gates: true, certainty: "certain", values: ["yes", "no"],
+    of: function (f) { return f.credentialed ? "yes" : "no"; } },
+  /* AND WHETHER ANY OTHER AUTHORITY RIDES IN A HEADER, WHICH IS A QUESTION ABOUT WHOSE LIST IT IS AND NOT
+     ABOUT WHAT IS IN IT. `opts.headers` on the XHR path is the analysed BUNDLE's own list, which may carry
+     the bearer token that person's session minted — and nothing states whose list it is, which is the
+     residual `_credentialedOf` already names and the reason a credentialed request may not state one at all.
+     SO `none` IS A FACT AND `unknown` IS A STATED UNKNOWN: with no list, this zone adds no authority beyond
+     what `init.credentials` says, and that is certain; with a list, the owner is unstated and so is the
+     answer. It is NOT `partial`, because the informative value here is the ABSENCE — the reverse of
+     `url-authority`, where the informative value is the presence. */
+  { name: "header-authority", gates: true, certainty: "certain", values: ["none", "unknown"],
+    of: function (f) { return f.headers ? "unknown" : "none"; } },
+  /* solver/engine.h's WITNESS MARK — whether the parking flow had DETERMINED some source's value on an arm
+     nothing observed before it built this address, so the address may carry a witness THE ENGINE picked.
+     `unstated` is this zone's third word for an act that does not come off a pending line at all; see
+     `_pinnedOf` for why writing `unpinned` there would be false exactly where it matters. */
+  { name: "witness", gates: true, certainty: "stated", values: _PINNED_MARKS,
+    of: function (f) { return f.pinned; } },
+  /* AUTHORITY IN THE ADDRESS — see `_urlAuthorityMarker`. `partial`, and the grade is the whole warning:
+     `present` is a fact and `unknown` is NOT the statement that there is none. */
+  { name: "url-authority", gates: true, certainty: "partial", values: ["present", "unknown"],
+    of: function (f) { return _urlAuthorityMarker(f.url) !== null ? "present" : "unknown"; } },
+  /* CREDENTIAL LINEAGE — DO THIS ADDRESS'S BYTES DERIVE FROM A RESPONSE THAT WAS FETCHED CREDENTIALED. THE
+     CHOKEPOINT CANNOT SEE IT AND THIS ROW IS THAT SENTENCE, WRITTEN WHERE THE DECISION IS MADE RATHER THAN
+     IN A DOCUMENT. A chokepoint reads the credential state of the request IN FRONT OF IT and nothing
+     whatever about where the address came from; an address the bundle computed out of a credentialed reply
+     (`/api/orgs/{theirOrgId}/members/{theirUserId}`) is about that person's account whatever headers it
+     carries, and no property of the address distinguishes it from one the bundle spelled as a constant.
+     IT IS SURFACED AS `unknown` RATHER THAN OMITTED, AND THAT IS THE POINT OF THE ROW. Omitting it would
+     make every permission read as covering a request whose lineage had been established; stating it makes a
+     person's permission say, in their own control, that they are permitting requests nobody has established
+     the lineage of. That is the difference between a stated unknown and an absence a default fills.
+     NAMED RESIDUAL. WHAT IS NOT COVERED: every request, at every setting — this signal has exactly one value
+     today and it is the unknown one. WHAT THE NEXT DIFF BUILDS: a `credentialed` bit on the RESPONSE the
+     engine ingests, carried into the concolic value's source identity so that a value derived from that
+     reply carries it, and composed at the park beside the provenance word onto the pending line — the same
+     KIND of question the engine already answers with `path_forced`, one hop further out. HOW ITS ABSENCE
+     WOULD SHOW: a person auditing what they permitted at an origin finds every request there reading
+     `lineage=unknown`, including the ones whose address the bundle demonstrably built out of a logged-in
+     reply, so the row cannot separate the population it exists to separate. */
+  { name: "lineage", gates: true, certainty: "undetermined", values: ["unknown"],
+    of: function () { return "unknown"; } },
+  /* THE METHOD, WHICH IS A FACT ABOUT THIS TRANSPORT AND NOT A CONTROL. `init` hardcodes `method:"GET"` and
+     `_refuseUnreadOptions` refuses a caller that states one, so the value space here has exactly one member
+     and a permission row over it would be a checkbox that cannot be unticked. It is SURFACED because a
+     person deciding what to permit is entitled to know that this transport sends one verb, and because the
+     day it can send another the row is already here and `_signalRegistryCheck` forces it to start gating. */
+  { name: "method", gates: false, certainty: "certain", values: ["GET"],
+    of: function () { return "GET"; } },
+  /* INTENDED INVALIDITY — AN INTENT THIS ENGINE HOLDS AND CANNOT VERIFY, AND AT THIS CHOKEPOINT IT HAS NO
+     POPULATION AT ALL. A probe built to fail validation never reaches business logic, which is why POST does
+     not mean unsafe and is the whole `req2proto` technique — but that request is a POST WITH A BODY, and
+     this file can compose neither: `_SAFEFETCH_OPTIONS` is a closed set containing no `method` and no
+     `body`, so there is no way for a caller to state such an intent and no request here for it to be about.
+     `unstated` IS THEREFORE A STRUCTURAL FACT AND NOT A DEFAULT. Nothing declares it because nothing CAN,
+     and the closed option set is what makes that checkable rather than a claim about who the callers are.
+     WHERE THE POPULATION LIVES: `pageContextFetch`, the operator-initiated relay, which is a different
+     transport with a different authorization — a human at a surface that shows them the bytes — and whose
+     verb is stated at its own call site. A signal surfaced HERE about requests made THERE would be a control
+     over something this file never sees, which is the second policy point SECURITY.md puts in one place.
+     RETIREMENT: this row starts gating the day a caller here can state an invalidity intent, which requires
+     a verb and a body to exist in `_SAFEFETCH_OPTIONS` first; until then `_signalRegistryCheck` asserts it
+     has one value, which is the same sentence enforced rather than described. */
+  { name: "invalidity", gates: false, certainty: "intent", values: ["unstated"],
+    of: function () { return "unstated"; } }
+];
+/* THE REGISTRY IS CHECKED ONCE, AT THE ONE DOOR EVERY HOST GOES THROUGH, AND THE THREE THINGS IT CHECKS ARE
+   THE THREE A GRANT IS KEYED ON. A duplicate name would make one row's permission silently answer for
+   another's; a certainty outside the vocabulary would render as a blank where a person reads how much to
+   trust a row; and a NON-GATING signal with more than one value is a control that was dropped — the value
+   varies, nothing in the table can express it, and every grant silently permits both. That last one is the
+   only assert here that can catch a future diff rather than a typo, and it is why `gates` is data. */
+function _signalRegistryCheck() {
+  var seen = Object.create(null), i, s;
+  for (i = 0; i < _SIGNALS.length; i++) {
+    s = _SIGNALS[i];
+    CHECK(!seen[s.name],
+          "the egress signal `" + s.name + "` is declared twice — a grant is keyed on the NAME, so the " +
+          "second declaration's permitted values would answer for the first's and a person's permission " +
+          "would be about a row they never saw");
+    seen[s.name] = true;
+    CHECK(_SIGNAL_CERTAINTY.indexOf(s.certainty) >= 0,
+          "the egress signal `" + s.name + "` declares the certainty " + JSON.stringify(s.certainty) +
+          ", which is none this file states — the grade is what tells a person whether they are permitting " +
+          "something this zone KNOWS, something another zone SAID, or something nobody established, and an " +
+          "unrecognised one renders as a blank beside a checkbox they are about to tick");
+    CHECK(Array.isArray(s.values) && s.values.length >= 1,
+          "the egress signal `" + s.name + "` declares no value space — the surface renders one row per " +
+          "value and a grant permits values, so a signal with none is a row a person can neither see nor " +
+          "permit while the firing walk still asks it");
+    CHECK(s.gates || s.values.length === 1,
+          "the egress signal `" + s.name + "` does not gate and has more than one possible value — a signal " +
+          "whose value VARIES and which no permission can express is a control that was silently dropped: " +
+          "every grant permits every value of it and nothing anywhere says so. A signal is surfaced without " +
+          "gating only where this chokepoint can produce exactly one answer, which is a structural fact " +
+          "(`method` is a literal, `invalidity` cannot be stated through a closed option set) and stops " +
+          "being true the moment that structure changes. Make it gate");
+  }
+}
+/* THE VECTOR FOR ONE REQUEST — every signal's value, computed from the facts this file has already
+   validated. It is what the firing walk asks and what the surface renders, so there is one derivation and
+   not two: a control that showed a person a value the walk did not decide from would be a permission
+   surface about a different request. */
+function _signalVector(facts) {
+  var v = Object.create(null), i, s, val;
+  for (i = 0; i < _SIGNALS.length; i++) {
+    s = _SIGNALS[i];
+    val = s.of(facts);
+    /* THE COMPUTATION AND THE DECLARED VALUE SPACE ARE TWO STATEMENTS AND THIS IS WHERE THEY ARE MADE TO
+       AGREE. A grant permits values out of the DECLARED space, so a computed value outside it is a value no
+       permission can ever name — a request that can never fire however much a person permits, refused with
+       a sentence naming a value they cannot find in their own control. DCHECK and not CHECK on this file's
+       own discriminator: release still PROCEEDS correctly, because an unpermittable value is refused, which
+       is the conservative arm. */
+    DCHECK(s.values.indexOf(val) >= 0,
+           "the egress signal `" + s.name + "` computed " + JSON.stringify(val) + ", which is not in the " +
+           "value space it declares (" + s.values.join(", ") + ") — a grant names values out of that space, " +
+           "so this request can never be permitted by any setting and the person's control has no row for " +
+           "the answer it is being refused with");
+    v[s.name] = val;
+  }
+  return v;
+}
+/* ── WHAT FIRES WITHOUT ANYBODY SAYING SO, AND IT IS DATA SO THE SURFACE CAN SHOW IT ─────────────────────
+   CLAUDE.md: "THE DEFAULT FOR AN UNCONFIGURED ORIGIN IS PROGRAM LOADS ONLY — a script, a module import, a
+   lazy chunk, same-origin and credentialed exactly as a browser is, WHICH IS THE PAGE LOADING ITSELF AND IS
+   A REQUEST THE PERSON'S OWN BROWSER WOULD HAVE MADE. No data fetch, no probe, no discovery, until the
+   origin is deliberately widened."
+   THE SECOND ARM IS A READING OF THAT SENTENCE'S OWN JUSTIFYING CLAUSE AND IT IS NAMED AS ONE, because the
+   DEFINITION ("program loads only") and the PURPOSE ("a request the person's own browser would have made")
+   disagree on exactly one population and this file has to answer for it. An OBSERVED request is
+   solver/engine.h's "a real load of this document makes exactly this request" — the page's own parked
+   `fetch()` or XHR, the document the browser actually navigated to — so it satisfies the PURPOSE clause
+   verbatim while not being a program load. CLAUDE.md's own rule for that disagreement is
+   §WHERE-A-RULE'S-DEFINITION-AND-ITS-STATED-PURPOSE-DISAGREE: the purpose is the half that was checked
+   against reality, because a purpose is written while looking at the hazard and a definition afterwards, to
+   be tidy.
+   AND THE TWO MISTAKES ARE NOT THE SAME SIZE, WHICH IS THE OTHER HALF OF WHY IT IS HERE. Getting this wrong
+   in the REFUSING direction stops this engine answering the page's own `fetch()` — §Learning-from-replies
+   calls learning from replies "the POINT", and this project has already measured what that costs once, when
+   the reply path was unreachable in the shipped extension and every flow a page's `fetch()` parked stayed
+   parked for ever. The failure is SILENT: parked flows, no crash, an empty report. Getting it wrong in the
+   PERMITTING direction relays a request the page itself made, which the person's own browser made anyway.
+   IT IS ONE LINE TO OVERTURN AND THE LINE IS DATA. If the intended reading is the literal one, delete the
+   `provenance`/`observed` entry: the arms are a list, the surface renders them, and the refusal that follows
+   names the signal. What must NOT happen is the reading being changed in prose while this list stays.
+   THESE ARE PERMISSIONS AND NOT REFUSALS, so no value of the table below can be narrowed by them and
+   §NOTHING-IS-REFUSED-AT-EVERY-SETTING is untouched: an arm here only ever makes something fire. */
+var _DEFAULT_ARMS = [
+  /* AND THIS ARM IS THE ONE WITH A MEASUREMENT UNDER IT, CARRIED FORWARD FROM THE SINGLE-SWITCH CONTROL IT
+     REPLACES BECAUSE IT IS EVIDENCE AND NOT AN ARGUMENT. Driven against a mirrored production SPA, ONE run
+     refused 467 requests over 85 distinct addresses and every single refusal was this gate's — not one
+     refusal of any other kind — and the addresses were ORDINARY LAZY CHUNKS OF THE PAGE'S OWN BUNDLE at its
+     own origin: `IconDot-<hash>.js`, `Pill-<hash>.js`, `agent-ids-<hash>.js`, and the vendor chunk holding
+     the descriptor decoder. §the-symbolic/trust-boundary names exactly that case as the one that must fire
+     ("a lazy chunk reveals real endpoints — the headline moat surface"), and it was what was refused. The
+     command is quoted rather than the figure, because the figure is one run's:
+     `grep -o "blocked-[a-z-]*:[a-z=-]*" <a drive log> | sort | uniq -c`, run with a negative control.
+     A FORCED SEGMENT IN A PROGRAM'S ADDRESS DOES NOT MOVE IT ACROSS THIS LINE, which is the case the split
+     most invites getting wrong: `import("/chunks/" + region + ".js")` with `region` pinned by forcing a gate
+     reads as the hard case and is not one — the chunk is still the app's own code, still served to anyone
+     who asks, and it is PRECISELY the gated surface this product exists to reach. That is why this arm reads
+     the destination ALONE: the `witness` row cannot narrow it, because an arm here is a permission and the
+     table below only ever widens. */
+  { signal: "destination", value: "program",
+    why: "a script, a module import or a lazy chunk is the page loading itself — the app's own code, served " +
+         "byte-identically to every visitor, revealing nothing about this person" },
+  { signal: "provenance", value: "observed",
+    why: "the page made exactly this request, so relaying it is this browser being a browser; refusing it " +
+         "would leave the engine unable to answer the document's own fetch" }
+];
 var _EXPLORED = Object.create(null);
 /* HAS A HOST SPOKEN YET. Two questions, two fields — never one value answering both, because the
    permissive-looking reading of an unstated table is exactly the one that would be wrong. */
 var _EXPLORED_STATED = false;
-/* WHETHER AN ORIGIN CAN BE WIDENED AT ALL, ANSWERING THE REASON IT CANNOT OR `null` FOR YES — ONE FACT
+/* WHETHER AN ORIGIN CAN BE PERMITTED AT ALL, ANSWERING THE REASON IT CANNOT OR `null` FOR YES — ONE FACT
    ASKED BY TWO CALLERS WITH TWO DIFFERENT OUTCOMES, which is the split that stops a CHECK and a REFUSAL
    becoming two rules free to disagree about a string. `safeFetchWiden` below asks it and ABORTS, because a
    caller inside this project handing it an address is that caller broken. A surface where a PERSON is
@@ -701,19 +1003,19 @@ var _EXPLORED_STATED = false;
    any page that sandboxes an iframe an abort switch on the trusted zone.
    THE VALUE MUST BE THE ORIGIN A URL PARSER WOULD PRODUCE, AND `_isRealOrigin` IS NOT THAT TEST. It asks
    only whether the string contains "://", which the whole of `https://a.test/some/path` does — so a caller
-   passing an address rather than an origin would have widened a key no request's `.origin` can ever equal: a
-   permission that was granted, is in the table, reads as granted, and matches nothing for ever. That is the
-   destructive deny list's own failure shape (an entry that looks protective and refuses nothing) pointed the
-   other way, and it is worse here because the silence looks like the conservative default working. So the
-   value is required to be its OWN serialized origin — parsed, re-serialized, compared.
+   passing an address rather than an origin would have permitted a key no request's `.origin` can ever equal:
+   a permission that was granted, is in the table, reads as granted, and matches nothing for ever. That is
+   the destructive deny list's own failure shape (an entry that looks protective and refuses nothing) pointed
+   the other way, and it is worse here because the silence looks like the conservative default working. So
+   the value is required to be its OWN serialized origin — parsed, re-serialized, compared.
    THE HTTP(S) ARM IS NOT TIDINESS, AND IT IS NOT REACHED BY THE LINE ABOVE. `ws://a.test`, `wss://a.test`
    and `ftp://a.test` are SPECIAL schemes whose tuple origins serialize back to themselves, so they pass the
    comparison and only this arm refuses them — while this file answers any non-http(s) address with
-   `blocked-scheme:` before it reaches the wire. A widening of one is therefore a permission that grants
+   `blocked-scheme:` before it reaches the wire. A permission for one is therefore a permission that grants
    nothing while sitting in the table reading as granted, which is the same failure shape one clause up.
    AN OPAQUE ORIGIN IS REFUSED BY THE PARSE AND NEEDS NO CLAUSE OF ITS OWN: `null` does not parse as a URL,
    and every opaque origin is same-origin with nothing (itself included), so there is no address one could
-   ever widen. A full address is refused by the re-serialization, which is exactly the comparison
+   ever permit. A full address is refused by the re-serialization, which is exactly the comparison
    `_firingRefusal` makes against a request URL's own `origin`. */
 function safeFetchWidenable(origin) {
   var normalized = null;
@@ -722,216 +1024,273 @@ function safeFetchWidenable(origin) {
   if (origin.indexOf("http://") !== 0 && origin.indexOf("https://") !== 0) return "not-http";
   return null;
 }
+/* WHETHER A SIGNAL NAME AND A VALUE ARE ONES THIS FILE KNOWS, answered as a reason or `null` for yes, for
+   the same two-caller reason `safeFetchWidenable` is split: a surface asks it about what a person clicked
+   and must say why, a caller inside this project asks it and is broken if the answer is no. */
+function safeFetchSignalUsable(signal, value) {
+  var i;
+  for (i = 0; i < _SIGNALS.length; i++) {
+    if (_SIGNALS[i].name !== signal) continue;
+    if (!_SIGNALS[i].gates) return "does-not-gate";
+    return _SIGNALS[i].values.indexOf(value) >= 0 ? null : "not-a-value";
+  }
+  return "not-a-signal";
+}
+/* THE REGISTRY ITSELF, FOR A SURFACE THAT MUST RENDER ONE ROW PER SIGNAL. A COPY is handed out rather than
+   the array, and the `of` functions are deliberately not on it: a surface that could compute a value for
+   itself would be a second derivation of the thing the walk decides from, and what it needs is the NAME, the
+   GRADE and the VALUE SPACE — which are what a person reads. */
+function safeFetchSignals() {
+  return _SIGNALS.map(function (s) {
+    return { name: s.name, gates: s.gates, certainty: s.certainty, values: s.values.slice() };
+  });
+}
+/* AND THE DEFAULT ARMS, FOR THE SAME SURFACE AND THE SAME REASON. A person looking at a control that
+   permits nothing is entitled to know why their app's scripts still load, and a surface that explained it in
+   its own words would be a second copy of this list that could stop agreeing with it. */
+function safeFetchDefaultArms() {
+  return _DEFAULT_ARMS.map(function (a) { return { signal: a.signal, value: a.value, why: a.why }; });
+}
 /* THE HOST STATES THE TABLE, ONCE, BEFORE ANYTHING MAY ASK IT. A host that persists its grants restores them
    here; a host that persists none (the native one — a command line is a sentence for one run) states the
-   empty list, and that is the POSITIVE "nobody has widened anything" rather than the absence above it.
+   empty table, and that is the POSITIVE "nobody has permitted anything" rather than the absence above it.
    IT IS ONCE AND A SECOND CALL ABORTS. A re-statement would replace a table the person has since added to
    from a surface, which is a grant silently revoked — and the only reason to call this twice is a host that
-   has two startup paths and does not know it. Grants after the statement go through `safeFetchWiden`. */
-function safeFetchWidenStated(origins) {
+   has two startup paths and does not know it. Grants after the statement go through `safeFetchPermit`.
+   THE SHAPE IS `{ origin: { signal: [values] } }`, AND A SHAPE FROM AN EARLIER BUILD IS REFUSED RATHER THAN
+   CARRIED FORWARD. The previous control was a single switch per origin and its store was a LIST OF ORIGIN
+   STRINGS; carrying one of those forward would mean permitting every value of every signal — including the
+   signals that did not exist when the person granted it, which is exactly the widening this whole model
+   exists to stop being silent. So a legacy entry is DROPPED, REPORTED, and the person re-permits per signal.
+   The answer names them so a surface can say so rather than leaving a person to notice a permission gone.
+   A SIGNAL A STORED GRANT DOES NOT NAME IS NOT PERMITTED, which is the same rule the walk below applies and
+   is what makes adding a signal safe: every existing grant NARROWS, the refusal names the new row, and the
+   person widens it again deliberately. A new signal can never silently widen an old permission. */
+function safeFetchEgressStated(table) {
+  var origin, signal, values, why, i, legacy = [];
   CHECK(!_EXPLORED_STATED,
-        "a host stated its per-origin widening table a second time — the table is the person's standing " +
+        "a host stated its per-origin egress table a second time — the table is the person's standing " +
         "sentence and a re-statement REPLACES it, so a grant made from a surface between the two calls is " +
         "revoked with nothing anywhere saying so. State it once, at the one door that runs before this zone " +
-        "can answer a firing question, and add to it with safeFetchWiden");
-  CHECK(Array.isArray(origins),
-        "a host stated its per-origin widening table as " + JSON.stringify(origins) + " rather than as a " +
-        "list of origins — this is the whole of what the chokepoint knows about what a person has permitted, " +
-        "and a value it cannot walk would leave the table empty while the host believed it had spoken");
-  for (var i = 0; i < origins.length; i++) {
-    var why = safeFetchWidenable(origins[i]);
+        "can answer a firing question, and add to it with safeFetchPermit");
+  _signalRegistryCheck();
+  CHECK(table !== null && typeof table === "object" && !Array.isArray(table),
+        "a host stated its per-origin egress table as " + JSON.stringify(table) + " rather than as an " +
+        "origin-keyed object — an ARRAY is the shape the previous single-switch control persisted and it " +
+        "cannot be read as this one, because a bare origin meant `permit everything` including the signals " +
+        "that did not exist when it was written. This is the whole of what the chokepoint knows about what " +
+        "a person has permitted, and a value it cannot walk would leave the table empty while the host " +
+        "believed it had spoken");
+  for (origin in table) {
+    if (!Object.prototype.hasOwnProperty.call(table, origin)) continue;
+    why = safeFetchWidenable(origin);
     CHECK(why === null,
-          "a host stated " + JSON.stringify(origins[i]) + " as a widened origin and it is not one (" + why +
+          "a host stated " + JSON.stringify(origin) + " as a permitted origin and it is not one (" + why +
           ") — the entry would sit in this table matching no request's `.origin` for ever, which is a " +
           "permission that was granted, reads as granted, and refuses nothing. A host is the only writer of " +
           "its own store, so this is that store corrupted rather than a person mistyping");
-    _EXPLORED[origins[i]] = true;
+    if (typeof table[origin] !== "object" || table[origin] === null || Array.isArray(table[origin])) {
+      legacy.push(origin);
+      continue;
+    }
+    for (signal in table[origin]) {
+      if (!Object.prototype.hasOwnProperty.call(table[origin], signal)) continue;
+      values = table[origin][signal];
+      if (!Array.isArray(values)) { legacy.push(origin); break; }
+      for (i = 0; i < values.length; i++) {
+        /* A STORED VALUE THIS BUILD NO LONGER KNOWS IS DROPPED AND NOT ASSERTED, AND THAT IS THE ONE PLACE
+           THIS FILE READS ITS OWN STORE AS INPUT. A signal renamed or a value retired between builds is an
+           UPGRADE and not a corrupted record, and the direction it must fail in is narrower: an unknown
+           value permits nothing, so the request is refused and the refusal names the row the person must
+           re-permit. Aborting here would brick every profile that had ever granted anything. */
+        if (safeFetchSignalUsable(signal, values[i]) !== null) continue;
+        if (!_EXPLORED[origin]) _EXPLORED[origin] = Object.create(null);
+        if (!_EXPLORED[origin][signal]) _EXPLORED[origin][signal] = Object.create(null);
+        _EXPLORED[origin][signal][values[i]] = true;
+      }
+    }
   }
   _EXPLORED_STATED = true;
+  return legacy;
 }
-function safeFetchWiden(origin) {
+/* ONE SIGNAL, ONE VALUE, AT ONE ORIGIN — THE DOOR A PER-SIGNAL SURFACE WRITES THROUGH. It is the whole of
+   what a person's click means, and it is deliberately not a batch: a control that set several rows at once
+   would make the answer a person reads back afterwards a summary of an act rather than the table now in
+   force, which is the thing this file says about `safeFetchWidenedOrigins` and about every refusal it
+   writes. `allow` false REMOVES the value, because a permission with no withdrawal is a one-way door and
+   this one spends somebody else's server under the person's own session. */
+function safeFetchPermit(origin, signal, value, allow) {
+  var why;
   CHECK(_EXPLORED_STATED,
-        "an exploration widening was granted before this host stated its table — the statement is what " +
-        "restores the person's earlier grants, so a grant that ran first would be REPLACED by that restore " +
-        "and the person would watch a permission they had just made disappear");
-  var why = safeFetchWidenable(origin);
+        "an egress permission was changed before this host stated its table — the statement is what restores " +
+        "the person's earlier grants, so a grant that ran first would be REPLACED by that restore and the " +
+        "person would watch a permission they had just made disappear");
+  why = safeFetchWidenable(origin);
   CHECK(why === null,
-        "an exploration widening was asked for " + JSON.stringify(origin) + ", which cannot be widened (" +
-        why + ") — the widening is compared against a request URL's own `origin`, so a full address, an " +
-        "opaque `null`, an explicit default port, a non-http(s) scheme or an empty string would sit in this " +
-        "table matching nothing while reading as a permission somebody granted. A surface with a person in " +
-        "front of it asks `safeFetchWidenable` and tells them why; a caller inside this project passing one " +
-        "is broken. Pass the origin, not the address");
-  _EXPLORED[origin] = true;
+        "an egress permission was asked for at " + JSON.stringify(origin) + ", which cannot be permitted (" +
+        why + ") — the table is compared against a request URL's own `origin`, so a full address, an opaque " +
+        "`null`, an explicit default port, a non-http(s) scheme or an empty string would sit here matching " +
+        "nothing while reading as a permission somebody granted. A surface with a person in front of it asks " +
+        "`safeFetchWidenable` and tells them why; a caller inside this project passing one is broken");
+  why = safeFetchSignalUsable(signal, value);
+  CHECK(why === null,
+        "an egress permission was asked for the signal " + JSON.stringify(signal) + " at the value " +
+        JSON.stringify(value) + ", which this file cannot use (" + why + ") — a permission naming a signal " +
+        "or a value the firing walk never asks about is one that reads as granted and refuses nothing, and " +
+        "a surface asks `safeFetchSignalUsable` before it offers a person the row");
+  if (allow) {
+    if (!_EXPLORED[origin]) _EXPLORED[origin] = Object.create(null);
+    if (!_EXPLORED[origin][signal]) _EXPLORED[origin][signal] = Object.create(null);
+    _EXPLORED[origin][signal][value] = true;
+    return;
+  }
+  if (_EXPLORED[origin] && _EXPLORED[origin][signal]) delete _EXPLORED[origin][signal][value];
 }
-/* AND THE PERSON TAKES IT BACK. A permission with no way to withdraw it is not a preference, it is a
-   one-way door — and this one spends somebody else's server under the person's own session, which is the
-   last place a decision should be unmakeable. It answers WHETHER THE ORIGIN WAS THERE so the surface can
-   say what it did rather than reporting a success for a revocation of nothing; that is a fact about the
-   table and not a second policy. */
+/* PERMIT EVERY VALUE OF EVERY GATING SIGNAL AT ONE ORIGIN — the coarse sentence, kept because two callers
+   genuinely mean it and neither can say anything finer. `engine/trusted.mjs`'s `--explore <origin>` is a
+   command line, which is a sentence for one run with no surface to tick rows on; and the popup's one-click
+   `Allow` is a person saying "all of it here", which is a real thing to want and is what the previous
+   single switch meant. It is DERIVED FROM THE REGISTRY rather than written out, so a signal added later is
+   included in it without anybody remembering — which is the opposite of the stored-grant rule one function
+   up, and deliberately: a grant made EARLIER cannot have meant a signal that did not exist, and a grant made
+   NOW through a control that says `everything` did. */
+function safeFetchWiden(origin) {
+  var i, j;
+  for (i = 0; i < _SIGNALS.length; i++) {
+    if (!_SIGNALS[i].gates) continue;
+    for (j = 0; j < _SIGNALS[i].values.length; j++)
+      safeFetchPermit(origin, _SIGNALS[i].name, _SIGNALS[i].values[j], true);
+  }
+}
+/* AND THE PERSON TAKES THE WHOLE ORIGIN BACK. It answers WHETHER ANYTHING WAS THERE so the surface can say
+   what it did rather than reporting a success for a revocation of nothing; that is a fact about the table
+   and not a second policy. */
 function safeFetchUnwiden(origin) {
+  var had = _EXPLORED[origin] !== undefined;
   CHECK(_EXPLORED_STATED,
-        "an exploration widening was revoked before this host stated its table — the revocation would be " +
+        "an egress permission was revoked before this host stated its table — the revocation would be " +
         "undone by the restore that follows it, and the person would watch a permission they had just " +
         "withdrawn come back");
-  var had = _EXPLORED[origin] === true;
   delete _EXPLORED[origin];
   return had;
 }
-/* WHAT HAS BEEN WIDENED, FOR A CALLER THAT MUST ASSERT THE ABSENCE OF ANY. Not a report —
-   a PREMISE READER. A zone whose own reasoning rests on "no origin is widened HERE" holds
+/* WHAT HAS BEEN PERMITTED, FOR A CALLER THAT MUST ASSERT THE ABSENCE OF ANY. Not a report —
+   a PREMISE READER. A zone whose own reasoning rests on "no origin is permitted HERE" holds
    that premise where it is relied on rather than in a comment that outlives it. */
 function safeFetchWidenedOrigins() {
   CHECK(_EXPLORED_STATED,
-        "the widened-origin list was read before this host stated its table — an empty answer would be read " +
-        "as `nobody has widened anything`, which is a statement this host has not yet made, and a surface " +
-        "rendering it would tell a person their standing grants are gone");
+        "the permitted-origin list was read before this host stated its table — an empty answer would be " +
+        "read as `nobody has permitted anything`, which is a statement this host has not yet made, and a " +
+        "surface rendering it would tell a person their standing grants are gone");
   return Object.keys(_EXPLORED);
 }
-/* THE FIRING DECISION, IN ONE FUNCTION, ANSWERING THE RULE THAT REFUSED OR `null` FOR FIRE.
-   THE METHOD HALF IS ALREADY ANSWERED AND IS NOT ASKED HERE: this file is GET-ONLY BY
-   ABSENCE (it hardcodes `method:"GET"` and reads neither `opts.method` nor `opts.body`), and
-   GET is in RFC 9110 §9.2.1 "Safe Methods"' safe set — "the client does not request, and
-   does not expect, any state change on the origin server". So the entire remaining question
-   is PROVENANCE, which is what this reads.
-   `observed` FIRES: a real load of this document makes exactly this request, so the request
-   is one the person's own client makes and firing it discovers nothing about a world that
-   would not have happened anyway.
-   `derived` FIRES: the page's own code computed the address from real inputs, so it is a
-   FACT ABOUT THE APP even where no session sent it — and CLAUDE.md §Attacker-sources calls
-   firing it REQUIRED ("Active discovery is REQUIRED … passive learning is too thin"), with
-   §the-symbolic/trust-boundary naming the headline case in as many words: "a fetch whose
-   body is JAVASCRIPT is ALWAYS fetched + EXECUTED (a lazy chunk reveals real endpoints —
-   the headline moat surface)". A default that refused it would turn the tool's central
-   capability off and call the silence caution.
-   AND THAT WORKED EXAMPLE DOES NOT HAPPEN ON A REAL APP PAGE, WHICH IS A MEASUREMENT AND
-   NOT AN ARGUMENT. Driven against a mirrored production SPA, ONE run refused 467 requests
-   over 85 distinct addresses and every single refusal was `blocked-provenance:forced` —
-   not one refusal of any other kind — and the addresses are ORDINARY LAZY CHUNKS OF THE
-   PAGE'S OWN BUNDLE at its own origin: `IconDot-<hash>.js`, `Pill-<hash>.js`,
-   `agent-ids-<hash>.js`, and the vendor chunk holding the descriptor decoder. So the
-   sentence above names the lazy chunk as the headline case that FIRES, and the lazy chunk
-   is exactly what was refused. The command is
-   `grep -o 'blocked-[a-z-]*:[a-z]*' <a drive log> | sort | uniq -c`, run with a negative
-   control, and it is quoted rather than the figure because the figure is one run's.
-   BOTH READINGS WERE PUT AND BOTH ARE REFUTED, BY READING THE PRODUCER RATHER THAN BY
-   JUDGING THIS FILE — rewritten rather than deleted, because they are the pair a reader
-   re-derives. The decisive question was "can a request composed ENTIRELY of constants be
-   graded FORCED", and `pending_prov_compose` (solver/pending.c) answers YES: its
-   `path_forced` arm returns PROV_FORCED BEFORE the park kind is looked at, so the flow's
-   monotone path bit dominates every other fact and no property of the address is consulted
-   anywhere in the composition. The two questions ARE distinct — that much of the second
-   reading holds, AND ITS REPAIR DOES NOT FOLLOW, because grading on the request's VALUES,
-   which is CLAUDE.md's letter, FIRES `/api/admin/users` behind `if (user.isAdmin)`: a
-   constant address, no forced value under any reading, and a CREDENTIALED read of an admin
-   surface on an arm nothing observed — exactly the reply whose 403 body parses as JSON and
-   yields fields that exist nowhere. The path bit catches that and the value definition does
-   not, so THE ENGINE IS WIDER THAN THE SPEC AND IS RIGHT TO BE.
-   AND THE FIRST READING FAILS ON WHAT THE REFUSAL BUYS. A grade correct as EVIDENCE does not
-   make a refusal correct as POLICY, and the containment this one spends the chunk bodies for
-   is already bought downstream and structurally: `prov` is part of `same_identity`
-   (solver/endpoint.c), so a forced sighting and a derived one are TWO records that cannot
-   merge, and a chunk's reply is PROGRAM TEXT run by a flow whose path is ALREADY marked, so
-   every endpoint and value it yields is graded FORCED at every site stating
-   `engine_prov_of_running_path()`. Nothing it produces reaches the derived pool either way.
-   SO THE SPLIT IS NOT WHERE EITHER READING PUT IT, AND IT IS NOW MADE. `path_forced` answers
-   "does everything this path computes from here on rest on something nothing observed", which
-   is the right question for WHAT A REPLY IS WORTH; the firing question is "may this act be
-   spent", decided "from the provenance the request declares BESIDE its method and credential
-   state" — three inputs, and this function now reads all three.
-   WHAT THE OPT-IN IS ACTUALLY ABOUT, WHICH IS THE THING NEITHER READING HAD. It is not
-   forced-versus-observed. It is whether this tool's forced execution may make network requests
-   BEYOND LOADING THE APP'S OWN JAVASCRIPT. Loading a program — a `<script src>`, a module
-   import, a lazy chunk — is A BROWSER LOADING A PAGE: the bytes are the app's own, served
-   identically to every visitor, and they reveal nothing about this person. Requests beyond
-   that — API calls, data fetches, discovery probes — are the per-origin widening. That line is
-   Fetch §2.2.5's DESTINATION, which separates a reply that becomes a PROGRAM from one that
-   becomes a VALUE, and which has been arriving at this function all along.
-   A FORCED SEGMENT IN A PROGRAM'S ADDRESS DOES NOT MOVE IT ACROSS THAT LINE.
-   `import("/chunks/" + region + ".js")` with `region` pinned by forcing a gate reads as the
-   hard case and is not one: the chunk is still the app's own code, still served to anyone who
-   asks, and it is PRECISELY the gated surface this product exists to reach. Refusing it leaves
-   the default mode reaching only what the document literally names, which is about what a plain
-   HTML parse already gives. So the destination decides it and the pinned mark below does not.
-   THE PINNED MARK IS READ ON THE VALUE SIDE ONLY, AND THAT IS WHERE IT EARNS ITS KEEP. A data
-   request whose address may rest on a witness THIS ENGINE chose is a different act from one
-   whose address the app's own text spells: the first may be an address no server ever had, so
-   its reply is the plausible fabrication §A-REQUEST-CARRIES-THE-PROVENANCE-OF-ITS-VALUES is
-   entirely about — a 401 body that parses as JSON and yields fields that exist nowhere. Both
-   are refused by default and both are reopened by the same widening, so this does not gate one
-   behind the other; what it changes is the SENTENCE a person reading a frontier that will not
-   drain is given, which mojom.js's `reason` calls "the only account anybody ever gets of it".
-   THE ORDER CLAUDE.md FIXED IS KEPT AND IS WHY THIS IS NOT A DESTINATION-ONLY WIDENING: the
-   engine states the finer fact FIRST, at the park, and this function reads it WITH the
-   destination. It is read second and narrows only the value arm, so it cannot widen anything.
-   WHAT MUST NOT FOLLOW is re-keying the GRADE to make the number move. The provenance stays
-   exactly as stamped — `forced` still means this reply is evidence about a request no client
-   makes, and every consumer that carries a forced reply out of the observed pool still sees
-   that word. What changed is which ACT may be spent, not what any reply is worth. The retired
-   reading, kept because a reader will re-derive it: this paragraph used to say a forced request
-   must be refused OUTRIGHT because "a value in the request exists only because a gate was
-   forced". That is true of a VALUE request and false of a PROGRAM request, and the measurement
-   that settled it is the one below — 100% of every refusal this tool has ever recorded was this
-   rule, and the addresses were the page's own chunks.
-   THE ADDRESS IS STILL DERIVED IN FULL AND REPORTED wherever this refuses, which
-   §Attacker-sources says is not a gap in the report but IS the report — "that surface is what
-   forced execution finds and a sniffer cannot".
-   THE ONE COMBINATION THAT IS NEVER A SETTING IS UNREACHABLE HERE BY CONSTRUCTION, which is
-   what makes this a whole answer rather than a hole with a flag over it: credentialed AND
-   state-mutating AND forced. The middle conjunct is false at every setting of this table,
-   because this file cannot issue a non-GET at all.
-   AND THAT IS NOW ASSERTED RATHER THAN GREPPED, which is the difference between a request
-   carrying a verb being IGNORED and one being IMPOSSIBLE TO WRITE. `_refuseUnreadOptions`
-   at the entry refuses a caller that states a `method` or a `body`, so the conjunct is false
-   because no such request can be composed — not merely because nothing here reads one.
-   What is left of that sentence's concern
-   — that §9.2.1's contract is the RESOURCE OWNER's to honour and not ours to verify — is
-   the destructive-path deny list below, which is a FLOOR under this policy and never a
-   substitute for it. */
-function _firingRefusal(provenance, origin, destination, pinned) {
-  CHECK(typeof destination === "string" && _PINNED_MARKS.indexOf(pinned) >= 0,
-        "the firing question was asked without the two fields that decide it — Fetch §2.2.5's DESTINATION " +
-        "says whether this reply becomes a PROGRAM or a VALUE, and the witness mark says whether a data " +
-        "request's address may rest on a value this engine chose. A caller that omitted either would be " +
-        "answered by this function's permissive arm, which is the one that spends an act");
+/* THE TABLE ITSELF, IN THE SHAPE `safeFetchEgressStated` TAKES, so a host persists what the chokepoint is
+   actually using rather than a second registry that can disagree with it. The round trip is the contract:
+   what this answers is what that accepts. */
+function safeFetchEgressTable() {
+  var out = Object.create(null), origin, signal;
+  CHECK(_EXPLORED_STATED,
+        "the egress table was read before this host stated it — an empty answer would be persisted as `this " +
+        "person has permitted nothing`, which would write over every standing grant with a statement this " +
+        "host had not yet made");
+  for (origin in _EXPLORED) {
+    if (!Object.prototype.hasOwnProperty.call(_EXPLORED, origin)) continue;
+    out[origin] = Object.create(null);
+    for (signal in _EXPLORED[origin]) {
+      if (!Object.prototype.hasOwnProperty.call(_EXPLORED[origin], signal)) continue;
+      out[origin][signal] = Object.keys(_EXPLORED[origin][signal]);
+    }
+  }
+  return out;
+}
+/* WHAT ONE ORIGIN PERMITS, ROW BY ROW, FOR THE SURFACE THAT RENDERS IT. `false` for a value nobody has
+   permitted rather than an absent key, because the surface renders a checkbox per value and an absent key
+   would render as unchecked-because-missing — which is the same pixel as unchecked-because-denied and a
+   different fact. */
+function safeFetchPermitted(origin) {
+  var out = [], i, j, row;
+  CHECK(_EXPLORED_STATED,
+        "one origin's egress permissions were read before this host stated its table — every row would " +
+        "answer `not permitted`, which is a sentence this host has not yet earned the right to say");
+  for (i = 0; i < _SIGNALS.length; i++) {
+    row = { name: _SIGNALS[i].name, gates: _SIGNALS[i].gates, certainty: _SIGNALS[i].certainty, values: [] };
+    for (j = 0; j < _SIGNALS[i].values.length; j++)
+      row.values.push({ value: _SIGNALS[i].values[j],
+                        permitted: !!(_EXPLORED[origin] && _EXPLORED[origin][_SIGNALS[i].name] &&
+                                      _EXPLORED[origin][_SIGNALS[i].name][_SIGNALS[i].values[j]] === true) });
+    out.push(row);
+  }
+  return out;
+}
+/* THE FIRING DECISION, IN ONE FUNCTION, ANSWERING THE SIGNAL THAT REFUSED OR `null` FOR FIRE.
+   IT ANSWERS A SIGNAL AND A VALUE AND NEVER A SCORE, which is the whole of what this control buys: a person
+   reading a frontier that will not drain is told WHICH FACT held it and therefore which row to look at. A
+   collapsed number could not say that, and §THE-MIRROR-OF-THAT-IS-A-LIST-OF-EXAMPLES is why the three
+   certainty grades travel with the rows rather than being averaged into one.
+   THE ORDER OF THE ANSWER IS THE REGISTRY'S ORDER AND NOT A RANKING OF HARM. The first gating signal whose
+   value this origin does not permit is the one named; the others may be unpermitted too, and the surface is
+   where a person sees all of them at once. Naming one is what makes the refusal a SENTENCE; naming the
+   vector is what makes the surface a CONTROL, and both exist rather than one standing in for the other.
+   WHAT MUST NOT FOLLOW is re-keying any signal to make a number move. The provenance stays exactly as the
+   engine stamped it — `forced` still means this reply is evidence about a request no client makes, and every
+   consumer that carries a forced reply out of the observed pool still sees that word. What a permission
+   changes is which ACT may be spent, never what any reply is worth.
+   THE ADDRESS IS STILL DERIVED IN FULL AND REPORTED wherever this refuses, which §Attacker-sources says is
+   not a gap in the report but IS the report — "that surface is what forced execution finds and a sniffer
+   cannot". */
+function _firingRefusal(facts) {
+  var v, i, s;
+  CHECK(facts !== null && typeof facts === "object",
+        "the firing question was asked with no facts — every signal is computed from them and a caller that " +
+        "passed none would be answered by whichever arm this function happens to reach first");
+  CHECK(typeof facts.destination === "string" && _PROVENANCE_TYPES.indexOf(facts.provenance) >= 0 &&
+        _PINNED_MARKS.indexOf(facts.pinned) >= 0 && typeof facts.credentialed === "boolean" &&
+        facts.url !== null && typeof facts.url === "object" && typeof facts.url.origin === "string",
+        "the firing question was asked without the facts that decide it — Fetch §2.2.5's DESTINATION says " +
+        "whether this reply becomes a PROGRAM or a VALUE, the provenance says whose act it is, the witness " +
+        "mark says whether the address may rest on a value this engine chose, the credential flag says " +
+        "whether the person's session pays, and the parsed URL is what the address-borne authority is read " +
+        "off. A caller that omitted any of them would be answered by this function's permissive arm, which " +
+        "is the one that spends an act. Every one of them is a fact the CALLER holds and this file cannot " +
+        "re-derive: forgetting to state one may never be a way to be exempted");
   /* THE NESTING, ASSERTED AT THE CONSUMER — solver/flow.h declares `path_pinned` strictly inside
      `path_forced`, so a park that is not FORCED cannot be carrying a witness this engine chose, and the two
      halves of that contract are checked by the two parties to it (`pending_pinned_compose` is the other).
      A pair that disagreed would have this function decide a request the grade beside it refuses. */
-  CHECK(provenance === "forced" || pinned !== "pinned",
+  CHECK(facts.provenance === "forced" || facts.pinned !== "pinned",
         "a request states that its address may rest on a witness this engine DETERMINED, while stating a " +
-        "provenance of `" + provenance + "` — solver/flow.h declares the witness mark strictly nested inside " +
-        "the forced-path bit, so this pair cannot both be true and one of the two producers is wrong");
-  if (provenance === "observed" || provenance === "derived") return null;
+        "provenance of `" + facts.provenance + "` — solver/flow.h declares the witness mark strictly nested " +
+        "inside the forced-path bit, so this pair cannot both be true and one of the two producers is wrong");
+  v = _signalVector(facts);
+  /* THE DEFAULTS FIRST, BECAUSE THEY ARE PERMISSIONS AND A PERMISSION CANNOT BE NARROWED BY A TABLE THAT
+     ONLY EVER WIDENS. Reading the table first would make no difference to any answer and would make the
+     order look like a precedence rule somebody could invert. */
+  for (i = 0; i < _DEFAULT_ARMS.length; i++)
+    if (v[_DEFAULT_ARMS[i].signal] === _DEFAULT_ARMS[i].value) return null;
   /* AND THE TABLE HAS BEEN STATED, WHICH IS THE ONE PREMISE EVERY ANSWER BELOW RESTS ON. An unstated table
-     is EMPTY, so this line and the two after it would refuse a request at an origin the person HAS widened
-     and the refusal would be `blocked-provenance:forced` — the policy's own word for "you did not permit
-     this", said to somebody who did. It is conservative, which is why it is a DCHECK and not a CHECK; it is
-     also unreadable, which is why it is asserted at all.
-     THE WINDOW IS CLOSED BY CONSTRUCTION AND THIS CHECKS THE CONSTRUCTION. `_EXPLORED` is only ever READ for
-     a `forced` request — the two arms above return first for `observed` and `derived` — and only an ENGINE
-     composes `forced`, and every engine in the offscreen is created behind `astDispatch`, which states the
-     table before it does anything. The native host states it before it parses its own command line. So this
-     cannot fire unless a host grew a second door into analysis, which is exactly what it should say. */
+     is EMPTY, so the walk would refuse a request at an origin the person HAS permitted and the refusal would
+     name a signal in the policy's own voice — indistinguishable from a policy they set. It is conservative,
+     which is why it is a DCHECK and not a CHECK; it is also unreadable, which is why it is asserted at all.
+     THE WINDOW IS CLOSED BY CONSTRUCTION AND THIS CHECKS THE CONSTRUCTION. The table is only ever READ for a
+     request the default arms did not admit, and every engine in the offscreen is created behind
+     `astDispatch`, which states the table before it does anything; the native host states it before it
+     parses its own command line. So this cannot fire unless a host grew a second door into analysis, which
+     is exactly what it should say. */
   DCHECK(_EXPLORED_STATED,
-         "the firing question was asked before this host STATED its per-origin widening table — the table is " +
-         "empty until a host speaks, so this refusal would tell a person their own standing grant does not " +
-         "exist, in the policy's own voice and indistinguishable from a policy they set. Every host states " +
-         "it at the ONE door that runs before this zone can answer a firing question (the offscreen in " +
-         "astDispatch, the native host before it reads `--explore`), so reaching here unstated is a SECOND " +
-         "door into analysis that was never told");
-  /* THE PER-ORIGIN WIDENING REOPENS EVERY ARM BELOW IT, which is what makes it ONE switch answering the
-     question a person actually has ("may this tool fetch data at my app") rather than a family of them. */
-  if (_EXPLORED[origin] === true) return null;
-  /* A PROGRAM LOAD IS A BROWSER LOADING A PAGE, so it is default-allowed even here — see the banner. The
-     predicate is §2.2.5's own SCRIPT-LIKE subset and is NOT restated: it is the same line CORB is decided on
-     one function up, and two spellings of "is this code" would be two rules free to disagree about a chunk. */
-  if (_isScriptLike(destination)) return null;
-  /* …AND ON THE VALUE SIDE, WHICH OF THE TWO REFUSALS THIS IS. Both are reopened by the widening above, so
-     this chooses a SENTENCE and not a policy — and the sentence is the whole account a person gets of a
-     request that did not happen. `forced-witness` says the address itself may be ours; `forced` says the
-     address is the app's and the PATH to it was not. */
-  return pinned === "pinned" ? "forced-witness" : provenance;
+         "the firing question was asked before this host STATED its per-origin egress table — the table is " +
+         "empty until a host speaks, so this refusal would tell a person their own standing permission does " +
+         "not exist, in the policy's own voice and indistinguishable from a policy they set. Every host " +
+         "states it at the ONE door that runs before this zone can answer a firing question (the offscreen " +
+         "in astDispatch, the native host before it reads `--explore`), so reaching here unstated is a " +
+         "SECOND door into analysis that was never told");
+  for (i = 0; i < _SIGNALS.length; i++) {
+    s = _SIGNALS[i];
+    if (!s.gates) continue;
+    if (_EXPLORED[facts.url.origin] && _EXPLORED[facts.url.origin][s.name] &&
+        _EXPLORED[facts.url.origin][s.name][v[s.name]] === true) continue;
+    return s.name + "=" + v[s.name];
+  }
+  return null;
 }
 /* THE SAME ANSWER, ASKED BY A CALLER WHOSE ACT IS NOT A FETCH. One function read twice is
    not two policies — it is the opposite, and it is why this is exported rather than
@@ -941,22 +1300,41 @@ function _firingRefusal(provenance, origin, destination, pinned) {
    one this file will refuse would pay an admission slot every round to be told no;
    `engine/trusted.mjs`'s `navigate` must answer its channel with a DECLINE (no instance is
    provisioned) rather than with the empty Document a network refusal produces.
-   IT ANSWERS THE RULE THAT REFUSED AND NOT A BOOLEAN, for the reason `_corbDeniesScript`
-   answers one: a caller that must tell somebody WHY cannot re-derive the grade from a `false`,
+   IT ANSWERS THE SIGNAL THAT REFUSED AND NOT A BOOLEAN, for the reason `_corbDeniesScript`
+   answers a rule: a caller that must tell somebody WHY cannot re-derive it from a `false`,
    and re-deriving it is how the second copy of a policy gets written. The refusal is the
-   GRADE; the SENTENCE a host wraps around it is that host's own, because how a person
-   expresses a widening is per-host (`--explore <origin>` is a command line, and the offscreen
-   has no command line) while what a widening MEANS is not.
+   POLICY's; the SENTENCE a host wraps around it is that host's own, because how a person
+   expresses a permission is per-host (`--explore <origin>` is a command line, and the
+   offscreen has no command line) while what a permission MEANS is not.
    IT TAKES AN ABSOLUTE URL because the caller holds one and the origin comparison is this
    file's to make; an address that will not parse is not a refusal but a caller's serializer
    disagreeing with a URL parser, so it THROWS rather than answering a permission question
-   about nothing. */
-function safeFetchFiringRefusal(provenance, url, destination, pinned) {
-  CHECK(_PROVENANCE_TYPES.indexOf(provenance) >= 0,
-        "safeFetchFiringRefusal was asked about the provenance " + JSON.stringify(provenance) + ", which is " +
-        "none of the three — the caller is deciding whether to spend an act on this address and would read " +
-        "an unknown value as the permissive arm, exactly as the chokepoint would");
-  return _firingRefusal(provenance, new URL(String(url)).origin, destination, pinned);
+   about nothing.
+   IT TAKES A FACTS OBJECT AND NOT A POSITIONAL LIST, and that is the shape rather than a
+   preference: the signal set GROWS, and a positional call is exactly where adding one
+   shifts every operand after it silently. Every field is required and an absent one aborts
+   in `_firingRefusal`, because a caller asking a hypothetical must state the same facts the
+   real request would — a hypothetical answered from fewer facts is a permission question
+   about a different request. */
+function safeFetchFiringRefusal(facts) {
+  CHECK(facts !== null && typeof facts === "object" && typeof facts.url === "string",
+        "safeFetchFiringRefusal was asked without an absolute URL — the origin comparison is this file's to " +
+        "make and a caller that parsed one for itself would be the second copy of that rule");
+  return _firingRefusal({ url: new URL(String(facts.url)), destination: facts.destination,
+                          provenance: facts.provenance, pinned: facts.pinned,
+                          credentialed: !!facts.credentialed, headers: facts.headers });
+}
+/* THE VECTOR FOR A HYPOTHETICAL REQUEST, FOR A SURFACE THAT MUST SHOW A PERSON WHAT THEY ARE DECIDING
+   ABOUT. It is the SAME derivation the firing walk reads, handed out rather than re-computed, for the reason
+   every other pair in this file is one function: two answers to one question is the shape a control surface
+   goes wrong in silently — the rows a person ticks would be about a request the policy never sees. */
+function safeFetchSignalVector(facts) {
+  CHECK(facts !== null && typeof facts === "object" && typeof facts.url === "string",
+        "the signal vector was asked for without an absolute URL — `url-authority` is read off the parsed " +
+        "address, so a caller with none would be shown a row about nothing");
+  return _signalVector({ url: new URL(String(facts.url)), destination: facts.destination,
+                         provenance: facts.provenance, pinned: facts.pinned,
+                         credentialed: !!facts.credentialed, headers: facts.headers });
 }
 function _corbDeniesScript(mime, nosniff, sniff, sameOrigin) {
   // same-origin: the page's own data is its to read, and the only thing refused is
@@ -1082,8 +1460,9 @@ function _isPrivateHost(host) {
 //               page can already reach itself); REFUSED on a credentialed one, by a
 //               CHECK in `_credentialedOf` rather than by the callers happening to be
 //               disjoint. A header list is the other route to a verb
-//               (`X-Http-Method-Override`), so the combination is the never-a-setting
-//               triple rebuilt past the place the literal `method:"GET"` closed it.
+//               (`X-Http-Method-Override`), so it puts a state-mutating verb back on a
+//               cookie-bearing request past the place the literal `method:"GET"` closed
+//               it — which the `method` signal of the egress policy states as one value.
 //   opts.destination:
 //               Fetch §2.2.5 "Requests"' DESTINATION, verbatim from the request the
 //               engine parked (solver/engine.h puts it on the pending line). A
@@ -1404,11 +1783,14 @@ async function safeFetch(url, opts) {
      `DCHECK(!("as" in opts))` beside `_destinationOf` — one dead keyword refused by name, which is a rule
      with a hole for every option nobody happened to think of. What stands here now is the general form of
      it: the fields this file READS are a closed set, so a caller's statement it will not read is REFUSED
-     rather than dropped. The CORB class is one thing that goes wrong that way; the never-a-setting triple's
-     state-mutating conjunct is the other. Both are asked at the entry rather than beside the rule they feed,
+     rather than dropped. The CORB class is one thing that goes wrong that way; a caller's belief that it
+     sent a verb is the other. Both are asked at the entry rather than beside the rule they feed,
      which runs only after the bytes are already back. */
   _refuseUnreadOptions(opts);
-  _destinationOf(opts);
+  /* CAPTURED RATHER THAN ASKED TWICE, for the reason the provenance below states in its own words: a field
+     two gates re-derive is a field two gates can disagree about, and this one now feeds the signal vector
+     BOTH firing gates read. */
+  var destination = _destinationOf(opts);
   /* AND WHAT THE REQUEST IS EVIDENCE OF, ASKED AT THE SAME DOOR AND FOR THE SAME REASON: it is a field this
      zone DECIDES from, its absent and invented values take the permissive arm, and the decision it feeds
      happens before any byte moves. Read ONCE here and passed down, never re-read at the two gates below — a
@@ -1534,9 +1916,10 @@ async function safeFetch(url, opts) {
      not yet solved, a PARKED flow, never a verdict. Parking is also what makes the widening MEAN anything —
      the flow fires the day `safeFetchWiden` is told about this origin, which a flow that has already run its
      failure path cannot do. */
-  var _ptok = _firingRefusal(provenance, parsed.origin, _destinationOf(opts), pinnedMark);
+  var _ptok = _firingRefusal({ url: parsed, destination: destination, provenance: provenance,
+                               pinned: pinnedMark, credentialed: credentialed, headers: opts.headers });
   if (_ptok)
-    return _refused("decline", "blocked-provenance:" + _ptok, [parsed.href], {});
+    return _refused("decline", "blocked-signal:" + _ptok, [parsed.href], {});
   // opts.credentialed: replay a learned GET with the user's COOKIES to fetch the REAL
   // authenticated reply (the logged-in API surface), instead of a useless 401. Still
   // GET-only (method is forced below) so a well-designed server performs no account
@@ -1718,9 +2101,31 @@ async function safeFetch(url, opts) {
   /* DECLINE, for the reason the destructive re-check states one line up, and with the widening still live: a
      person who widens the LANDED origin makes this same load fire, and a flow that has run its failure path
      is not there to fire. */
-  var _rptok = _firingRefusal(provenance, _finalUrl.origin);
+  /* AND THIS CALL IS WHERE A SIGNATURE WIDENING WENT MISSING, RECORDED AT THE LINE RATHER THAN IN A REPORT,
+     BECAUSE THE NEXT READER OF THIS FUNCTION IS THE ONE WHO WILL OTHERWISE REPEAT IT. `_firingRefusal` grew
+     from two parameters to four; THREE call sites were updated and THIS one was not, so it passed an
+     `undefined` destination and an `undefined` witness mark into a function whose FIRST statement is a
+     `CHECK` — fatal in dev AND release — requiring both. Every gate between the `fetch` above and this line
+     returns only from inside an `if`, so an ORDINARY SUCCESSFUL REPLY reached it: the app's own lazy chunk,
+     the one load this policy exists never to refuse, aborted the trusted zone with `@E CHECK failed: the
+     firing question was asked without the two fields that decide it`. Verified by executing that revision's
+     own file against a stubbed 200, not by reading it.
+     THE DEFECT SHAPE IS THE PART THAT OUTLIVES THE INCIDENT AND IT IS CLAUDE.md's OWN: a fix that widens a
+     contract falsifies every site stating the old one, so its code delta is not its size — and here the
+     widened contract was ASSERTED, which converted a silently-dropped argument into a fatal on the success
+     path rather than into a wrong answer. Two things follow. A signature widening greps for its own callers
+     in the same diff, by NAME and with no path, and counts them. And an assert added at a function's entry
+     is an assert added to every caller, including the ones the diff did not open.
+     IT IS NOT REACHABLE BY THAT ROUTE AGAIN: the facts arrive as ONE OBJECT, so a new signal is a new KEY
+     that a caller omits and `_firingRefusal`'s own `CHECK` names, rather than a new POSITION that shifts
+     every operand after it. That is the same argument `safeFetchFiringRefusal` carries for taking one.
+     THE URL IS THE LANDED ONE AND NOT THE REQUESTED ONE, which matters for more than the origin now: a 30x
+     onto a presigned or token-bearing address is exactly the case `url-authority` exists to see, and reading
+     the requested address here would answer that row about a URL the bytes did not come from. */
+  var _rptok = _firingRefusal({ url: _finalUrl, destination: destination, provenance: provenance,
+                                pinned: pinnedMark, credentialed: credentialed, headers: opts.headers });
   if (_rptok)
-    return _refused("decline", "blocked-provenance-redirect:" + _rptok,
+    return _refused("decline", "blocked-signal-redirect:" + _rptok,
                     _urlList(parsed.href, _finalHref, resp.redirected), {});
   /* THE HEADERS, WITH NOTHING BETWEEN THEM AND THE TWO GATES THAT READ THEM. This walk stood
      inside `catch (e) {}`, whose arm was an EMPTY header map — and an empty map is not an
@@ -1919,15 +2324,26 @@ async function safeFetch(url, opts) {
    thing and a host that could obtain one without the other would be a host holding half the contract. Both
    hosts reach them the same way: `engine/trusted.mjs` runs this file in a vm context and reads them off it,
    `ast-worker.html` loads it into the offscreen document before bridge.js.
-   `safeFetchWiden` IS THE POLICY'S ONE INPUT and it takes a person's sentence; `safeFetchUnwiden` is that
-   person taking it back, because a permission with no withdrawal is not a preference. `safeFetchWidenStated`
-   is the host restoring what an earlier session granted, once, before anything may ask — the two fields
-   above are why it exists. `safeFetchWidenable` is the SAME test `safeFetchWiden` aborts on, exported so a
-   surface with a person in front of it can REFUSE WITH THE REASON instead of aborting the zone over a
-   sandboxed document. `safeFetchFiringRefusal` is the same answer for a caller whose act is not a fetch, and
-   `safeFetchWidenedOrigins` is what a surface renders and what a caller asserting an absence reads. None of
-   them is a second policy: every one resolves to `_firingRefusal` or to the one predicate it compares
-   against, which is the only thing in this project that answers the firing question.
+   `safeFetchPermit` IS THE POLICY'S ONE INPUT and it takes a person's answer to ONE ROW — one signal, one
+   value, one origin, allowed or not — because the control is per-signal and a batch would make the table a
+   person reads back a summary of their act rather than the policy now in force. `safeFetchWiden` is the
+   coarse form of the same sentence, "all of it here", which is what a command line means and what the
+   popup's one click means; `safeFetchUnwiden` is the person taking a whole origin back, because a permission
+   with no withdrawal is not a preference. `safeFetchEgressStated` is the host restoring what an earlier
+   session granted, once, before anything may ask — the two fields above are why it exists — and it ANSWERS
+   which stored entries it could not carry forward, so a permission that stopped existing is said out loud
+   rather than left to be noticed. `safeFetchEgressTable` is that answer's other half: what a host persists,
+   in exactly the shape the restore takes, so the round trip is a contract rather than two writers.
+   `safeFetchWidenable` and `safeFetchSignalUsable` are the SAME tests `safeFetchPermit` aborts on, exported
+   so a surface with a person in front of it can REFUSE WITH THE REASON instead of aborting the zone over a
+   sandboxed document or a row this build no longer declares. `safeFetchFiringRefusal` is the same answer for
+   a caller whose act is not a fetch; `safeFetchSignals`, `safeFetchPermitted`, `safeFetchSignalVector` and
+   `safeFetchDefaultArms` are what a surface RENDERS — the registry, one origin's permissions row by row,
+   what a given request's facts compute to, and what fires without anybody saying so — and
+   `safeFetchWidenedOrigins` is what a caller asserting an absence reads. None of them is a second policy:
+   every one resolves to `_firingRefusal`, to `_signalVector`, or to a predicate one of those compares
+   against, which is the only thing in this project that answers the firing question. A surface that computed
+   any of them for itself would be the second copy this whole parameter exists to end.
    `safeFetchMethodRefusal` IS THE OTHER HALF OF THE SAME QUESTION and is installed beside them for the same
    reason: the method decides whether an act may be spent (RFC 9110 §9.2.1 "Safe Methods") and this file
    answers it by ABSENCE, so a host that cannot see the answer writes its own — which both of them did, with
@@ -1946,8 +2362,15 @@ if (typeof self !== "undefined") {
   self.safeFetchMethodRefusal = safeFetchMethodRefusal;
   self.safeFetchWiden = safeFetchWiden;
   self.safeFetchUnwiden = safeFetchUnwiden;
-  self.safeFetchWidenStated = safeFetchWidenStated;
+  self.safeFetchPermit = safeFetchPermit;
+  self.safeFetchEgressStated = safeFetchEgressStated;
+  self.safeFetchEgressTable = safeFetchEgressTable;
   self.safeFetchWidenable = safeFetchWidenable;
+  self.safeFetchSignalUsable = safeFetchSignalUsable;
+  self.safeFetchSignals = safeFetchSignals;
+  self.safeFetchPermitted = safeFetchPermitted;
+  self.safeFetchSignalVector = safeFetchSignalVector;
+  self.safeFetchDefaultArms = safeFetchDefaultArms;
   self.safeFetchFiringRefusal = safeFetchFiringRefusal;
   self.safeFetchWidenedOrigins = safeFetchWidenedOrigins;
 }

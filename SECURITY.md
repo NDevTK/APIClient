@@ -196,25 +196,59 @@ has to remember:
   for that question), stated by the popup where the person is, forwarded by the relay and **`CHECK`ed at the
   bridge**. An absent or unknown grade takes the refusing arm, so forgetting to state one is not a way to be
   exempted.
-  **THE DECISION IS STILL `safe-fetch.js`'S AND THIS PATH RE-DECIDES NOTHING.** What may be widened is the
-  chokepoint's own `safeFetchWidenable` — the SAME predicate `safeFetchWiden` aborts on, exported so a
-  surface with a person in front of it can refuse with the REASON instead of aborting the trusted zone over
-  an opaque origin. What a request is answered with is `safeFetchFiringRefusal`, the same function the
-  chokepoint refuses with, so the control shows the policy's own word rather than its own guess at it. The
-  subject is the **browser-stated `MessageSender.origin`** for the pinned document (never URL-parsed), so a
-  page that sandboxes its own iframe cannot have the control name its embedder.
-  **THE ONE COMBINATION THAT IS NEVER A SETTING STAYS UNREACHABLE AT EVERY VALUE OF THIS TABLE** —
-  credentialed AND state-mutating AND forced. `safe-fetch.js` cannot compose a request carrying a method or a
-  body (`_refuseUnreadOptions`), so the middle conjunct is false by construction and no grant can make it
-  true. Program loads (`<script src>`, a module import, a lazy chunk — Fetch §2.2.5's script-like
-  destinations) fire at every setting and are not what this control opens.
+  **THE DECISION IS STILL `safe-fetch.js`'S AND THIS PATH RE-DECIDES NOTHING.** What may be permitted is the
+  chokepoint's own `safeFetchWidenable` and `safeFetchSignalUsable` — the SAME predicates `safeFetchPermit`
+  aborts on, exported so a surface with a person in front of it can refuse with the REASON instead of
+  aborting the trusted zone over an opaque origin or a row this build no longer declares. What a request is
+  answered with is `safeFetchFiringRefusal`, the same function the chokepoint refuses with, so the control
+  shows the policy's own word rather than its own guess at it. The subject is the **browser-stated
+  `MessageSender.origin`** for the pinned document (never URL-parsed), so a page that sandboxes its own
+  iframe cannot have the control name its embedder.
+  **THE CONTROL IS PER-SIGNAL AND PER-ORIGIN, AND NOTHING IS REFUSED AT EVERY SETTING.** The sentence that
+  stood here — "THE ONE COMBINATION THAT IS NEVER A SETTING STAYS UNREACHABLE AT EVERY VALUE OF THIS TABLE —
+  credentialed AND state-mutating AND forced … no grant can make it true" — is RETIRED by the project owner
+  (CLAUDE.md §AND-THAT-ABSOLUTE-IS-RETIRED-BY-THE-PROJECT-OWNER) and is rewritten rather than deleted,
+  because its reasoning is what a reader re-derives. **STRIPPING THE COOKIE NEVER MADE A REQUEST
+  UNCORRELATED WITH THE PERSON**: the authority can be in the ADDRESS — a presigned object-store URL, a
+  password-reset or invite token, a signed webhook — where there is no cookie to strip, and the address can
+  have been DERIVED from a credentialed read, so it names that person's account whatever headers it carries.
+  GET does not mean safe either: RFC 9110 §9.2.1 "Safe Methods" defines safety by what the CLIENT requests
+  and expects and says an implementation MAY cause side effects anyway.
+  So the policy surfaces **SIGNALS** and a person decides which combinations their origin allows: the
+  request's `destination` (program or value), its `provenance`, whether the person's `cookies` pay, whether a
+  header list of unstated ownership rides along (`header-authority`), the engine's `witness` mark,
+  address-borne authority (`url-authority`), and `lineage`. Each row carries how much this tool can KNOW
+  about it — `certain`, `stated`, `partial`, `undetermined`, `intent` — because grading facts of different
+  reliability as one list is what a score does, and a collapsed number hides which signal drove a decision at
+  the one boundary where a person acts on it. A signal the chokepoint cannot determine renders as a stated
+  UNKNOWN rather than being omitted: an absent row reads as a question that was answered.
+  **WHAT STILL CANNOT BE COMPOSED HERE IS SMALLER AND IS A FACT ABOUT THE TRANSPORT.** `safe-fetch.js`
+  hardcodes `method:"GET"` and `_refuseUnreadOptions` refuses a caller-stated verb or body, so the `method`
+  signal has exactly ONE value at this chokepoint and `invalidity` cannot be stated at all — which is why
+  both are surfaced as facts rather than as rows a person can tick. That is not a combination no setting may
+  reach; it is what this transport IS, and the difference is checkable: delete the whole table and the `GET`
+  literal is still there, because it selects against nothing.
+  **PROGRAM LOADS FIRE AT EVERY SETTING AND ARE NOT WHAT THIS CONTROL OPENS** (`<script src>`, a module
+  import, a lazy chunk — Fetch §2.2.5's script-like destinations), and so does a request the page itself made
+  (`provenance` `observed`): both are the page loading itself, which the person's own browser would have done.
+  Those two are the DEFAULT ARMS, they are DATA (`safeFetchDefaultArms`), and the surface renders them — a
+  person looking at a control that permits nothing is owed the reason their app still works.
   **THE GRANTS PERSIST IN THE OFFSCREEN'S OWN IndexedDB** (`apiclient-frontier`'s `prefs` store, beside the
   storage share), never `chrome.storage.local`, and the store is written FROM the chokepoint's table rather
   than from the message that changed it — so a grant the policy REFUSED cannot be persisted as one it took.
   The table is **STATED once per host before anything may read it** (the offscreen at `astDispatch`, the
   native host before it parses `--explore`), and `_firingRefusal` asserts that: an unstated table is EMPTY,
-  so a request arriving before the restore would be refused with `blocked-provenance:forced` — the policy's
-  own word for "you did not permit this", said to somebody who did.
+  so a request arriving before the restore would be refused with `blocked-signal:<name>=<value>` — a row of
+  the person's own control named back at them as one they did not tick, said to somebody who did.
+  **A GRANT THE RESTORE CANNOT CARRY FORWARD IS SAID OUT LOUD.** The previous control was ONE SWITCH per
+  origin and its store was a list of origin names; a bare origin in that shape meant "fire everything here",
+  including the signals that did not exist when the person said it. Reading it as a permission over those
+  would be exactly the silent widening this model exists to end, so such an entry is DROPPED,
+  `safeFetchEgressStated` ANSWERS which origins it dropped, and the popup tells the person to re-permit them
+  signal by signal. A permission that silently stops existing is the one failure this row must not have. The
+  same rule governs the other direction and is why adding a signal is safe: a signal a stored grant does not
+  NAME is not permitted, so every existing grant NARROWS when a row is added and the refusal names the new
+  row — a new signal can never silently widen an old permission.
 
 ## State / storage
 
@@ -351,8 +385,11 @@ guarantees, in one auditable place:
   because release can still PROCEED (an unread option drops exactly as before, and every one of them lands
   on the safe side: a dropped `method` fires the GET this file was always going to fire), and it may assert
   at all because the KEYS are composed in trusted-zone source at every call site while the untrusted engine
-  supplies only VALUES. This is what makes the middle conjunct of CLAUDE.md's never-a-setting triple —
-  credentialed AND state-mutating AND forced — false by construction rather than by convention.
+  supplies only VALUES. This is what makes the `method` signal of the per-origin egress control a FACT with
+  one value at this chokepoint rather than a row a person could change — structurally, rather than by
+  convention. (It used to read "this is what makes the middle conjunct of CLAUDE.md's never-a-setting triple
+  — credentialed AND state-mutating AND forced — false by construction". That absolute is retired; what
+  survives is the narrower and checkable claim about this transport.)
   **THE REFUSAL IS NO LONGER SILENT ON THE XHR PATH, and it is the CALLER's, not the chokepoint's.**
   `bridge.js` used to hand the chokepoint the page's real `method`/`body`/`credentials` and they were dropped
   without a word, so `xhr.open("POST", u)` was answered with the reply to a *GET* of `u` and the engine
@@ -399,8 +436,10 @@ guarantees, in one auditable place:
   STRUCTURALLY — the verb is a literal and `_refuseUnreadOptions` makes a caller-stated one unwritable — and
   a header list is the OTHER route to a verb: `X-Http-Method-Override` is a convention this project's own
   code sends (`lib/discovery.js` calls it "the documented trick"), so a bundle-chosen header list on a
-  cookie-bearing request is CLAUDE.md's never-a-setting triple rebuilt one layer above the place that literal
-  closed it. `_credentialedOf` in `safe-fetch.js` now derives the credential flag at the entry and **CHECKs**
+  cookie-bearing request puts a state-mutating verb back one layer above the place that literal closed it —
+  which is why the `header-authority` signal exists as a row of its own rather than being read off the cookie
+  flag: `credentialed` in this file means COOKIES, and a header list of unstated ownership is a separate
+  question with a separate answer. `_credentialedOf` in `safe-fetch.js` now derives the credential flag at the entry and **CHECKs**
   that a credentialed request states no header list — fatal in release, on the same discriminator
   `_destinationOf` and `_provenanceOf` carry, because the arm a compiled-out assert leaves is the one that
   sends them. It may assert at all for `_refuseUnreadOptions`' reason: the KEYS are trusted-zone literals at
@@ -764,6 +803,25 @@ never run.
 
 ## Known residuals (not yet airtight)
 
+- **CREDENTIAL LINEAGE IS THE SIGNAL THE CHOKEPOINT CANNOT SEE, and it is a ROW reading `unknown` rather than
+  a row left out.** The per-origin egress control surfaces what the chokepoint can compute; this one it
+  cannot. A chokepoint reads the credential state of the request IN FRONT OF IT and nothing whatever about
+  where the address came from, so an address the bundle computed out of a credentialed reply
+  (`/api/orgs/{theirOrgId}/members/{theirUserId}`) is about that person's account whatever headers it
+  carries, and NO PROPERTY OF THE ADDRESS distinguishes it from one the bundle spelled as a constant.
+  Surfacing it as a stated UNKNOWN is what keeps a person's permission honest — permitting requests whose
+  lineage nobody established is a different decision from permitting requests known to have none, and a row
+  that is absent says the second while meaning the first.
+  **IT IS NOT A NEW MECHANISM AND THAT IS WHY IT IS A RESIDUAL RATHER THAN A GAP IN THE MODEL.** The engine
+  already grades every request `observed`/`derived`/`forced` out of the parking flow's own `path_forced`,
+  which answers what this request's PATH rests on; lineage is the same KIND of question one hop further out,
+  asked of a VALUE rather than of a path, in an engine whose whole subject is where values came from. What it
+  needs is a `credentialed` bit on the RESPONSE the engine ingests, carried into the concolic value's source
+  identity so a value derived from that reply carries it, and composed at the park beside the provenance word
+  onto the pending line — engine C plus a bridge field, which is the cross-boundary seam.
+  **HOW ITS ABSENCE SHOWS**: a person auditing what they permitted at an origin finds every request there
+  reading `lineage=unknown`, including the ones whose address the bundle demonstrably built out of a
+  logged-in reply, so the row cannot separate the population it exists to separate.
 - **Redirect-to-private:** `safeFetch` re-validates the final URL after redirects (so internal data is
   never *ingested*), but preventing the redirected request from *reaching* a private host relies on the
   browser's Private Network Access for extension fetches.
@@ -868,7 +926,11 @@ config-loaded allowlist that no transform-expression or SMT encoding can.
 | A page widens its OWN origin for exploration, turning off the refusal that keeps forced data requests from firing at it | **Mitigated** — `EGRESS_POLICY` is on the popup command surface, which the offscreen router gates on `sender.origin === chrome-extension://<id>`: a content script never reaches the switch at all (its origin is the web page's, and content types are routed to the data-input-only handler), and a SANDBOXED extension page carries the opaque `"null"`, which is not that equality. The handler re-asserts the principal where it is relied on rather than resting on which functions call it |
 | An AUTOMATIC caller inside the trusted zone widens an origin nobody asked to widen | **Mitigated, and the principal alone does not do it** — a trusted extension document is where a person's click arrives AND where an automatic sender would sit, so the message carries the initiator grade (`PAGE_CONTEXT_USER_INITIATED`), stated by the popup where the person is and `CHECK`ed at `astDispatch`. An absent or unknown grade takes the refusing arm, so forgetting to state one is not a way to be exempted. This is the page-context relay's own lesson applied before the defect rather than after it |
 | A widening is granted for one origin and a request at ANOTHER is fired under it | **Mitigated** — the table is keyed on the serialized TUPLE ORIGIN and `safeFetchWidenable` refuses anything that is not its own re-serialization (an address, an explicit default port, an opaque `null`) or is not http(s); `_firingRefusal` compares against the request URL's own `.origin`. A cold-tier re-fetch reads the PROVENANCE parked on its entry rather than re-deriving a grade from the address, which is the inference CLAUDE.md §Attacker-sources forbids |
-| A person's grant is still in IndexedDB when a forced request arrives, so the policy answers from a table nobody has read | **Mitigated by construction, and asserted** — an unstated table is EMPTY, so this fails toward REFUSAL; what it costs is legibility, because `blocked-provenance:forced` is the policy's own word for "you did not permit this". `_EXPLORED` and `_EXPLORED_STATED` are two fields, every host STATES the table at the one door that runs before it can answer a firing question, and `_firingRefusal` DCHECKs that — reachable only if a host grows a second door into analysis |
+| A person's grant is still in IndexedDB when a forced request arrives, so the policy answers from a table nobody has read | **Mitigated by construction, and asserted** — an unstated table is EMPTY, so this fails toward REFUSAL; what it costs is legibility, because `blocked-signal:<name>=<value>` names a row of the person's own control for "you did not permit this". `_EXPLORED` and `_EXPLORED_STATED` are two fields, every host STATES the table at the one door that runs before it can answer a firing question, and `_firingRefusal` DCHECKs that — reachable only if a host grows a second door into analysis |
+| A person permits a combination whose consequence the control never stated | **This is the residual the model creates and it is named rather than mitigated** — with nothing refused at every setting, the surface IS the safety. Every signal the chokepoint can compute is a row with its RELIABILITY beside it (`certain` / `stated` / `partial` / `undetermined` / `intent`), and one it cannot determine renders as a stated UNKNOWN rather than being omitted, because an absent row reads as a question that was answered. What remains unmitigated is a person who ticks a row without reading it |
+| A permission granted under the previous single-switch control silently covers signals that did not exist when it was made | **Mitigated** — the old store was a list of origin names meaning "fire everything here"; the restore DROPS such an entry rather than reading it as a permission over the new rows, `safeFetchEgressStated` answers which origins it dropped, and the popup tells the person to re-permit them signal by signal. The same rule runs forward: a signal a stored grant does not NAME is not permitted, so adding a row NARROWS every existing grant and the refusal names the new row |
+| An uncredentialed request carries the person's authority in the ADDRESS (a presigned URL, a reset or invite token, a signed webhook) | **Partially mitigated, and the limit is stated** — `url-authority` is a deny-direction match over capability-URL parameter names and the JWS prefix, so `present` is a fact and needs its own permission. A MISS is `unknown` and is NEVER the statement that there is none: an opaque token in a path segment that is not a JWS reads `unknown`. `api_key`-shaped names are deliberately excluded (an API key is the application's authority, not the person's) |
+| An address the bundle computed out of a CREDENTIALED reply is fetched uncredentialed and still names that person's account | **NOT mitigated — see Known residuals** — the chokepoint can read the credential state of the request in front of it and nothing about where the address came from. The `lineage` row exists and reads `unknown` for every request at every setting, which is the honest statement rather than a row left out |
 | A page seeds a cross-origin address to spend the user's session at a host it merely names | **Mitigated** — twice, on two different facts: the brain admits a `CONTENT_SEED` only where its origin is the origin of `_browserFacts.url` (HTML §7.2.5 lets `pushState` move the path, never the origin), and `navigationCarriesSession` attaches cookies only where the address is same-origin with the browser-minted `MessageSender.origin`. A seed that passed neither would be dropped before a request exists |
 | The analyzer's own credentialed GET ends the user's session or destroys a resource | **Mitigated** — method is GET (RFC 9110 §9.2.1 Safe Methods), and `_destructiveToken`'s deny list refuses a session-ending or resource-destroying path token, pre-request *and* post-redirect, scoped to exactly the credentialed case. Not a claim that an unmatched path is safe — a floor under the policy, never a substitute for it |
 | A page sandboxes its own iframe (opaque origin) to read the embedder's credentialed API via the shared analysis | **Mitigated** — credentialed-read principal is the *requesting frame's* `MessageSender.origin` (opaque-unique, documentId-keyed), never the top frame or URL-parsed; an opaque origin is same-origin with nothing; a mixed-origin buffer fails closed |

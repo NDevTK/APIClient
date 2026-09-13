@@ -4018,9 +4018,13 @@ int engine_decline(JSContext *ctx, const char *method, const char *url, const ch
            "host sending the URL where the method goes has its operands shifted by one");
     /* THE REASON IS NOT OPTIONAL AND NOT ALLOWED TO BE EMPTY, because it is the ONLY account anybody ever gets
        of a request nobody made: the flow parked on it will not drain this session, and a reader looking at a
-       frontier that stops has nothing else to read. It also decides what happens NEXT — `blocked-provenance`
-       names a per-origin widening that would make this fire, `blocked-destructive` names a refusal nothing
-       reopens — and only the zone that applied the rule knows which. */
+       frontier that stops has nothing else to read. It also decides what happens NEXT — `blocked-signal`
+       names the SIGNAL AND VALUE of the person's own per-origin egress control that holds it, and permitting
+       that value is what would make this fire, while `blocked-destructive` names a refusal nothing reopens —
+       and only the zone that applied the rule knows which. (This is a COMMENT and the string is the trusted
+       zone's; nothing here matches on it, which is why the vocabulary moving is a prose repair rather than a
+       protocol change — `trusted.mjs` says in its own words that the grade is asked of the policy and never
+       parsed out of a `statusText`.) */
     DCHECK(reason != NULL && *reason != '\0',
            "a request was refused with no REASON — the party that refused is the party that knows why, and an "
            "unnamed refusal leaves a frontier parked with nothing anywhere to say which rule holds it");

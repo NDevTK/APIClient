@@ -710,7 +710,8 @@
             why: "why this zone will not make the request, in the zone's own words. It is not diagnostics: " +
                  "the flow refused here will not drain this session, so this sentence is the only account " +
                  "anybody ever gets of it, and it is what says what would change the answer — " +
-                 "`blocked-provenance` names a per-origin widening that would make the request fire, " +
+                 "`blocked-signal:<name>=<value>` names the ROW of the person's own per-origin egress " +
+                 "control that holds it, and ticking that value is what would make the request fire; " +
                  "`blocked-destructive` names a refusal nothing reopens. The party that refused is the only " +
                  "party that knows which rule fired, which is why the grade and the sentence both travel " +
                  "from the chokepoint rather than being re-derived by a reader" }],

@@ -334,6 +334,17 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("btn-egress-widen").addEventListener("click", async () => {
     await renderEgressPolicy({ grant: currentPrincipalOrigin() });
   });
+  /* AND ONE DELEGATED PATH FOR THE PER-SIGNAL ROWS, for the reason the revocation list has one: the rows are
+     re-rendered from the policy's answer on every change, so a listener bound per checkbox would be bound to
+     a node the next render replaces. The checkbox is read for the DIRECTION and the row is read for WHICH —
+     the surface states a person's answer and the chokepoint decides what it means, which is why nothing here
+     computes whether the combination fires. */
+  document.getElementById("egress-signals").addEventListener("change", async (ev) => {
+    const t = ev.target.closest("[data-egress-signal]");
+    if (!t) return;
+    await renderEgressPolicy({ permit: { origin: currentPrincipalOrigin(), signal: t.dataset.egressSignal,
+                                         value: t.dataset.egressValue, allow: !!t.checked } });
+  });
   /* ONE DELEGATED PATH FOR THE REVOCATIONS, because the list is re-rendered on every answer and a listener
      bound per entry would be bound to a node the next render replaces. */
   document.getElementById("egress-allowed").addEventListener("click", async (ev) => {
@@ -1064,7 +1075,7 @@ async function renderEgressPolicy(act) {
   const subject = currentPrincipalOrigin();
   const r = await chrome.runtime.sendMessage({
     type: "EGRESS_POLICY", initiator: "user-initiated", subject,
-    grant: act && act.grant, revoke: act && act.revoke });
+    grant: act && act.grant, revoke: act && act.revoke, permit: act && act.permit });
   /* EVERY FIELD THIS FUNCTION READS IS ASSERTED, AND THE THREE THAT CAN BE `null` ARE ASSERTED AS
      NULL-OR-STRING RATHER THAN AS PRESENT. `null` is a POSITIVE answer on each of them — "this origin can be
      widened", "a forced data request here fires", "nothing was refused" — so an ABSENT one is not a missing
@@ -1073,10 +1084,14 @@ async function renderEgressPolicy(act) {
   DCHECK(r && Array.isArray(r.origins) && typeof r.subject === "string" && typeof r.changed === "boolean" &&
          (r.subjectUsable === null || typeof r.subjectUsable === "string") &&
          (r.subjectRefusal === null || typeof r.subjectRefusal === "string") &&
-         (r.refused === null || typeof r.refused === "string"),
+         (r.refused === null || typeof r.refused === "string") &&
+         Array.isArray(r.signals) && Array.isArray(r.defaults) && Array.isArray(r.legacyDropped) &&
+         (r.vector === null || (r.vector !== null && typeof r.vector === "object")),
          "the egress command answered without the table now in force — this row is the only place a person " +
-         "can see or change which origins this tool may fetch data at, and a partial answer would render a " +
-         "permission surface that permits nothing while looking as if it had never been asked");
+         "can see or change which signals this tool may fetch data under, and a partial answer would render " +
+         "a permission surface that permits nothing while looking as if it had never been asked. The four " +
+         "fields added with the per-signal control are asserted for the same reason the three above are: " +
+         "`signals` empty renders NO ROWS, which is the same pixels as a policy that offers no choices");
   const originEl = document.getElementById("egress-origin");
   const btn = document.getElementById("btn-egress-widen");
   const status = document.getElementById("egress-status");
@@ -1098,13 +1113,73 @@ async function renderEgressPolicy(act) {
   else if (r.subjectUsable !== null)
     msg = "this origin cannot be permitted (" + r.subjectUsable + ")";
   else if (r.subjectRefusal === null)
-    msg = "allowed — API and data requests the engine reached past a forced gate fire here, with this "
-        + "profile's cookies, GET only";
+    msg = "allowed — a forced data request at this origin fires under the values ticked below";
   else
-    msg = "refused (" + r.subjectRefusal + ") — this app's own scripts, modules and lazy chunks still load; "
-        + "API and data requests whose address the engine reached past a forced gate do not";
+    /* THE REFUSAL NAMES A SIGNAL AND A VALUE, WHICH IS THE WHOLE OF WHAT THIS CONTROL BUYS OVER A SCORE: the
+       person is told WHICH ROW below holds it rather than that something did, and the row is right there. */
+    msg = "refused on " + r.subjectRefusal + " — the row named there is the one holding it; this app's own "
+        + "scripts, modules and lazy chunks load at every setting";
   if (r.refused) msg = "not permitted (" + r.refused + ") — " + msg;
   status.textContent = msg;
+  /* WHAT THE PERSON IS DECIDING ABOUT. Every row is the POLICY'S, read back — this surface computes no value
+     and decides no combination, because a control that worked out for itself what would fire would be the
+     second copy of the rule that CLAUDE.md says two zones answering one question always becomes.
+     THE CERTAINTY TRAVELS WITH THE ROW AND IS NOT A DECORATION. A person ticking `lineage: unknown` is
+     permitting requests whose lineage NOBODY HAS ESTABLISHED, which is a different sentence from permitting
+     requests known to have none — and the difference is invisible unless the row says it. That is
+     §A-FIELD-A-CONSUMER-DEFAULTS arriving where the consumer is a person, and the words below are the fix.
+     A NON-GATING ROW IS SHOWN AND CANNOT BE TICKED, because it is a FACT about this transport rather than a
+     choice: `method` has one value because `safe-fetch.js` sends GET and can compose no other, and
+     `invalidity` has one because no caller here can state such an intent through a closed option set. Hiding
+     them would leave a person reading the rows that remain as though they were the whole question. */
+  const CERTAINTY_SAYS = {
+    certain: "this tool computed it",
+    stated: "the engine said it; only the vocabulary is checked",
+    partial: "a match is a fact — NO match is not a statement that there is none",
+    undetermined: "nothing here can work this out yet; permitting it permits the unknown",
+    intent: "an intent this engine holds and cannot verify" };
+  document.getElementById("egress-signals").innerHTML = r.signals.length === 0 ? "" :
+    '<div class="card-label">What may be fetched here, signal by signal</div>' +
+    /* THE DEFAULTS FIRST, BECAUSE THE FIRST QUESTION A PERSON HAS LOOKING AT A CONTROL THAT PERMITS NOTHING
+       IS WHY THEIR APP STILL WORKS. They are read off the policy rather than written here for the reason
+       every other line in this function is: a surface that explained them in its own words would be a second
+       copy of the list that could stop agreeing with it. */
+    '<div class="egress-default">Fires without any of this: ' +
+      r.defaults.map((d) => "<code>" + esc(d.signal) + "=" + esc(d.value) + "</code> (" + esc(d.why) + ")")
+                .join("; ") + '</div>' +
+    r.signals.map((sig) => {
+      const now = r.vector && r.vector[sig.name] !== undefined ? r.vector[sig.name] : null;
+      return '<div class="egress-signal"><code>' + esc(sig.name) + '</code>'
+        + '<span class="egress-certainty">' + esc(CERTAINTY_SAYS[sig.certainty] || sig.certainty) + '</span>'
+        + sig.values.map((v) =>
+            '<label class="egress-value">'
+            + (sig.gates
+                ? '<input type="checkbox" data-egress-signal="' + esc(sig.name) + '" data-egress-value="'
+                  + esc(v.value) + '"' + (v.permitted ? " checked" : "") + ' />'
+                : "")
+            + '<span' + (now === v.value ? ' class="egress-now"' : "") + '>' + esc(v.value) + '</span>'
+            + (now === v.value ? '<span class="egress-now-tag">this request</span>' : "")
+            + '</label>').join("")
+        + (sig.gates ? "" : '<span class="egress-fixed">fixed — not a choice here</span>')
+        + '</div>';
+    }).join("");
+  /* AND A PERMISSION THAT COULD NOT BE CARRIED FORWARD IS SAID OUT LOUD. The previous control was one switch
+     per origin and its store was a list of origin names; a bare origin in that shape meant "fire everything
+     here", including signals that did not exist when the person said it, so it is DROPPED rather than read
+     as a permission over them. A grant that silently stops existing is the one failure this row must not
+     have — a person who is never told concludes it is still granted. */
+  const dropped = document.getElementById("egress-dropped");
+  /* ASSERTED AND NOT `if (dropped)`, WHICH IS THE SAME DEFECT ONE ZONE OVER FROM THE ONE THIS WHOLE ROW IS
+     ABOUT. A guard there would make a MISSING ELEMENT indistinguishable from a person with nothing to be
+     told, and the thing that goes unsaid is a permission of theirs that stopped existing. The node is this
+     extension's own markup, so its absence is this surface broken rather than anything a page did. */
+  DCHECK(dropped !== null,
+         "the popup has no `egress-dropped` element — it is where a person is told that a standing " +
+         "permission could not be carried forward, and with no node the sentence is simply never said while " +
+         "the grant is simply gone");
+  dropped.textContent = r.legacyDropped.length === 0 ? "" :
+    "Permissions made with the previous single-switch control were cleared and must be re-made signal by "
+    + "signal: " + r.legacyDropped.join(", ");
   /* THE ALLOWED LIST IS THE CHOKEPOINT'S TABLE READ BACK, so what is shown is what the policy is using — and
      the way OUT is beside every entry, because a permission with no withdrawal is a one-way door and this
      one spends somebody else's server under this person's session. */

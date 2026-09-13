@@ -982,26 +982,49 @@ function frontierPrefPut(name, value) {
    It is NOT read as an absence to be filled: the empty list is what a host STATES, and the chokepoint holds
    "stated empty" and "not yet stated" in two different fields for precisely that reason. */
 let _egressPolicyStated = null;
+/* WHICH ORIGINS' STANDING PERMISSIONS THIS RESTORE COULD NOT CARRY FORWARD, HELD SO THE SURFACE CAN SAY SO.
+   A permission that silently stops existing is the one failure this row must not have: a person who granted
+   something and finds it gone with no sentence anywhere concludes the control does not work, and a person
+   who is never told concludes it is still granted. It is a LIST and not a count, because the sentence the
+   surface needs names the origins. */
+let _egressLegacyDropped = [];
 function egressPolicyReady() {
   if (_egressPolicyStated === null) _egressPolicyStated = (async () => {
     const stored = await frontierPref("exploreOrigins");
-    /* THE STORED VALUE IS THIS ZONE'S OWN WRITE, so a shape that is not a list is this store corrupted and
-       not a person mistyping — and the direction it fails in is the one that matters: a value the walk below
-       cannot read would leave the table EMPTY while this host believed it had restored the person's grants,
-       which is every standing permission silently gone. `safeFetchWidenStated` re-asks each member with the
-       chokepoint's own predicate and aborts on one it cannot use, which is the half this zone may not judge. */
-    DCHECK(stored === null || Array.isArray(stored),
-           "the stored per-origin exploration widening is not a list (" + String(stored) + ") — this zone is " +
-           "its only writer, so this is that record corrupted, and reading past it would state an EMPTY table " +
-           "while every origin this person has permitted silently stopped being permitted");
-    self.safeFetchWidenStated(Array.isArray(stored) ? stored : []);
+    /* THE STORED VALUE IS THIS ZONE'S OWN WRITE, so a shape the walk cannot read is this record corrupted
+       rather than a person mistyping — with one exception this build creates and must not read as corruption:
+       an ARRAY is what the PREVIOUS single-switch control persisted, and it is an UPGRADE.
+       IT IS DROPPED RATHER THAN CARRIED FORWARD, WHICH IS THE CONSERVATIVE DIRECTION AND IS NAMED AS ONE. A
+       bare origin in that shape meant "fire everything here", and "everything" now includes signals that did
+       not exist when the person said it — a credential state, an address-borne authority, a lineage nobody
+       has established. Reading it as a permission over those is the silent widening this whole model exists
+       to end, so the grant goes and the person re-permits per signal, TOLD that it happened.
+       `safeFetchEgressStated` re-asks each member with the chokepoint's own predicate and answers which
+       entries it could not use, which is the half this zone may not judge. */
+    DCHECK(stored === null || typeof stored === "object",
+           "the stored per-origin egress table is neither null nor an object (" + String(stored) + ") — this " +
+           "zone is its only writer, so this is that record corrupted, and reading past it would state an " +
+           "EMPTY table while every origin this person has permitted silently stopped being permitted");
+    if (Array.isArray(stored)) {
+      /* THE LEGACY SHAPE, NAMED AT THE ONE PLACE IT ARRIVES. The chokepoint's own statement takes an
+         origin-keyed object and refuses an array outright — a CHECK, because a host handing it the wrong
+         SHAPE is that host broken — so the translation is this host's, which is where the store is. */
+      _egressLegacyDropped = stored.filter((o) => typeof o === "string");
+      self.safeFetchEgressStated({});
+    } else {
+      _egressLegacyDropped = self.safeFetchEgressStated(stored === null ? {} : stored);
+    }
   })();
   return _egressPolicyStated;
 }
 /* THE WRITE-BACK, TAKEN OFF THE TABLE RATHER THAN OFF THE MESSAGE THAT CHANGED IT — so a grant the
    chokepoint REFUSED cannot be persisted as one it accepted, and the two can never drift. */
 function egressPolicyPersist() {
-  return frontierPrefPut("exploreOrigins", self.safeFetchWidenedOrigins());
+  /* THE TABLE AND NOT THE ORIGIN LIST, because the permission is now per SIGNAL and per VALUE and a list of
+     origins cannot express one — persisting the names alone would write back "everything at these origins",
+     which is the legacy shape this restore has just refused to read. The round trip is the contract:
+     `safeFetchEgressTable` answers in exactly the shape `safeFetchEgressStated` takes. */
+  return frontierPrefPut("exploreOrigins", self.safeFetchEgressTable());
 }
 /* A frontier entry (the GLOBAL union spans all origins): { key: origin|hash, sourceUrl, topLevelUrl, origin,
    responseHeaders, html, code, recipes: "idx,dec;...", emit, visits, credentialed, provenance }. Rehydration re-runs
@@ -2112,7 +2135,8 @@ function navigationCarriesSession(absUrl, principalOrigin) {
    EVERY ONE OF THOSE REASONS IS THE NETWORK'S NOW, AND THAT IS THE VOCABULARY BEING KEPT CLOSED RATHER THAN
    A REASON BEING LOST. This function used to hold a fourth word of its own — `{kind: "provenance"}`, for a
    navigation it declined because the address exists only past a forced gate — and the closed vocabulary the
-   popup renders has exactly three. The refusal is the CHOKEPOINT's now (`blocked-provenance:forced` in the
+   popup renders has exactly three. The refusal is the CHOKEPOINT's now (`blocked-signal:destination=value`
+   or whichever row of the person's own control holds it, in the
    reply record's `statusText`), so it arrives through `kind: "network"` beside `blocked-scheme:` and
    `blocked-private-from-public`, which is where a reader already looks for WHICH RULE refused a load. "The
    chokepoint would not" and "this caller would not" were two answers to one question; there is one answerer.
@@ -2170,7 +2194,7 @@ async function navigationLoad(u, base, principalUrl, principalOrigin, provenance
      `CHECK` (fatal in release too, because the arm an unstated grade falls to is the one that spends the
      network), and `_firingRefusal` is the widening. So the crash §Attacker-sources asks for still happens,
      once, for BOTH hosts, at the line that opens the socket — and a refused navigation comes back as the
-     chokepoint's own `blocked-provenance:` reply record, in the same refusal vocabulary as a blocked scheme,
+     chokepoint's own `blocked-signal:` reply record, in the same refusal vocabulary as a blocked scheme,
      rather than through a shape this file invented for one caller. */
   /* THE FORCED ARM THAT STOOD HERE IS DELETED WITH THE `unavailable` KIND IT INVENTED, AND BOTH DELETIONS ARE
      THE SAME CORRECTION. Its reasoning was right and is preserved at `_firingRefusal`, where it now serves
@@ -2178,7 +2202,7 @@ async function navigationLoad(u, base, principalUrl, principalOrigin, provenance
      answered `{kind: "provenance"}`, a fourth word in a vocabulary `serialize.js` and `popup.js` each assert
      to exactly three — so the one shape it produced could never reach a reader, and the row that renders a
      page that was not analysed would have aborted on it had a seed ever taken this arm. The chokepoint's
-     refusal is a reply record whose `statusText` is `blocked-provenance:forced`, which the `status === 0`
+     refusal is a reply record whose `statusText` is `blocked-signal:<name>=<value>`, which the `status === 0`
      arm below already turns into `{kind: "network", detail}` — the same field, and the same sentence in the
      popup, that `blocked-scheme:` and `blocked-private-from-public` are read out of. A refusal this zone
      makes and a refusal the network makes are two answers to the reader's ONE question ("why is there no
@@ -3950,10 +3974,10 @@ async function engineServiceFetch(eng) {   // one round: answer every parked REQ
        SO IT IS SAID OUT LOUD, ON ITS OWN METHOD. `Decline` carries the same PAIR `Provide` does — a refusal
        answers the same question a reply answers — and the chokepoint's own words with it: the engine records
        the refusal, stops listing the request, keeps one arm WAITING with no reply invented for it, and forks
-       the other to run the page's failure path with its path marked FORCED. `blocked-provenance:forced` and
+       the other to run the page's failure path with its path marked FORCED. `blocked-signal:cookies=yes` and
        `blocked-destructive:logout` are different sentences to the person reading a frontier that will not
-       drain — the first names a per-origin widening that would make this fire, the second names a refusal
-       nothing reopens — and both are addresses DERIVED IN FULL AND REPORTED, which §Attacker-sources says is
+       drain — the first names the ROW OF THEIR OWN CONTROL that holds it and would make this fire if they
+       ticked it, the second names a refusal nothing reopens — and both are addresses DERIVED IN FULL AND REPORTED, which §Attacker-sources says is
        not a gap in the report but IS the report. */
     if (answer !== null && answer.refusal) {
       DCHECK(typeof answer.refusal.reason === "string" && answer.refusal.reason !== "",
@@ -4507,11 +4531,29 @@ async function hostNotice(eng, line) {
        SCRIPT-LIKE so neither field can change this answer. Both are stated because the GRADE is the
        chokepoint's — a caller that guessed either would be the second copy of the rule this call exists to
        avoid. */
-    const _seedRefusal = self.safeFetchFiringRefusal(f[2], f[1], "document", "unstated");
+    /* THE FACTS ARRIVE AS ONE OBJECT AND EVERY ONE OF THEM IS THIS CALLER'S TO STATE, which is the shape
+       rather than a preference: the policy's signal set GROWS, and a positional call is exactly where adding
+       one shifts every operand after it silently — which this project has now paid for once, at the
+       chokepoint's own post-redirect gate, where a widening from two parameters to four missed a call site
+       and an ordinary reply aborted the trusted zone.
+       `credentialed` IS THE ANSWER THIS SEED WOULD ACTUALLY GET, asked with the same predicate the load will
+       ask with: a hypothetical answered from facts the real request would not state is a permission question
+       about a different request, and the credential row is one a person permits separately now. `headers` is
+       genuinely absent on a navigation and is stated as such rather than omitted.
+       AND THE PRINCIPAL IS `eng.origin` AND NEVER `originOf(...)`, which is the SAME value the seed below
+       carries into `_seeds` as its `principalOrigin`: the browser's `MessageSender.origin`, opaque-unique.
+       The same-origin test a few lines up compares two URL-DERIVED origins because it is asking about an
+       ADDRESS, and this is asking whose SESSION pays — SECURITY.md's credentialed-read principal, which is
+       the one value in this zone that may never be parsed out of an address. Using the derived one here
+       would answer `true` for a sandboxed document the browser refused to give an origin to. */
+    const _seedRefusal = self.safeFetchFiringRefusal({
+      url: f[1], destination: "document", provenance: f[2], pinned: "unstated",
+      credentialed: navigationCarriesSession(f[1], eng.origin), headers: null });
     if (_seedRefusal) {
-      console.warn("[bridge] a route declaration for `" + f[1] + "` stood on a " + _seedRefusal.toUpperCase() +
-                   " arm and its origin is not widened for exploration — the address is derived and " +
-                   "reported, and it is not seeded");
+      console.warn("[bridge] a route declaration for `" + f[1] + "` is refused by this origin's egress " +
+                   "policy on `" + _seedRefusal + "` — the address is derived and reported, and it is not " +
+                   "seeded; the signal and value named there is the row of the person's own control that " +
+                   "holds it");
       return;
     }
     /* THE PRIVATE-NETWORK PRINCIPAL AND THE CREDENTIALED-READ PRINCIPAL ARE TAKEN NOW AND CARRIED WITH THE
@@ -6540,8 +6582,8 @@ self.astDispatch = async function astDispatch(msg) {
        cold rehydration all run inside the host loop, which nothing kicks until a document arrives here). So
        stating it at this one door closes the window by construction rather than by a race that usually goes
        the right way — and the alternative it replaces is the one this project keeps naming as the worst
-       outcome: a request refused `blocked-provenance:forced` because the policy had not been READ yet, in
-       words the person cannot tell from a policy they set.
+       outcome: a request refused `blocked-signal:<row>` because the policy had not been READ yet, naming a
+       row of the person's own control in words they cannot tell from a permission they never made.
        IT IS AWAITED FOR EVERY TYPE AND NOT ONLY THE ONE THAT RUNS A DOCUMENT, because which types can reach
        a fetch is a question about the rest of this function and a premise stated here would go stale inside
        it. It is one memoized IndexedDB read for the life of this document. */
@@ -6635,10 +6677,15 @@ self.astDispatch = async function astDispatch(msg) {
             "\"never inferred from a site looking like a test\", so the one thing this command may not do is " +
             "be issued by something that decided on its own. A caller that cannot state the grade never " +
             "answered the question, which is why an absent value takes this arm and not the permissive one");
-      DCHECK(msg.grant === undefined || msg.revoke === undefined,
-             "the egress command was asked to grant and to revoke in one message — the two are opposite " +
-             "sentences about one table and the order they would be applied in is whichever this entry " +
-             "happens to test first, which is a permission decided by the shape of an `if`");
+      /* AT MOST ONE COMMAND PER MESSAGE, AND THE COUNT IS TAKEN RATHER THAN THE PAIRS ENUMERATED — a rule
+         re-written per pair has a hole for every command nobody has added yet, which is the general form
+         `_refuseUnreadOptions` already carries one file over. Three commands make three pairs; the fourth
+         makes six, and the one that gets forgotten is the one whose order is then decided by the shape of
+         an `if` rather than by anybody. */
+      DCHECK([msg.grant, msg.revoke, msg.permit].filter((c) => c !== undefined).length <= 1,
+             "the egress command carried more than one of grant/revoke/permit in one message — they are " +
+             "competing sentences about one table and the order they would be applied in is whichever this " +
+             "entry happens to test first, which is a permission decided by the shape of an `if`");
       DCHECK(typeof msg.subject === "string",
              "the egress command carried no subject — it is the origin the surface is SHOWING the person, " +
              "and the refusal answered below is about it, so without one the control would report a policy " +
@@ -6662,6 +6709,32 @@ self.astDispatch = async function astDispatch(msg) {
                "names an ORIGIN, and a non-string would silently remove nothing while reading as a " +
                "permission the person had just taken back");
         changed = self.safeFetchUnwiden(msg.revoke);
+      } else if (msg.permit !== undefined) {
+        /* ONE SIGNAL, ONE VALUE, ONE ORIGIN — THE PER-SIGNAL DOOR, AND IT DECIDES NOTHING. What arrives is a
+           person's answer to a row `lib/safe-fetch.js` declared and this surface rendered; whether that row
+           exists, whether the value is one of its own, and what permitting it MEANS are all the chokepoint's,
+           asked here through its own predicate so the two cannot drift.
+           IT IS ONE ROW PER MESSAGE AND DELIBERATELY NOT A BATCH. A control that set several rows at once
+           would make the table a person reads back a summary of the act rather than the policy now in force,
+           which is the rule this whole row already keeps: every answer below is read off the chokepoint. */
+        DCHECK(msg.permit !== null && typeof msg.permit === "object" &&
+               typeof msg.permit.origin === "string" && typeof msg.permit.signal === "string" &&
+               typeof msg.permit.value === "string" && typeof msg.permit.allow === "boolean",
+               "the egress command carried a permission that is not an {origin, signal, value, allow} — a " +
+               "field missing here would reach the chokepoint as `undefined`, which its own predicate " +
+               "refuses, so the person would be told their row could not be permitted for a reason about " +
+               "this message rather than about their app");
+        /* REFUSED WITH ITS REASON AND NEVER ASSERTED, for the reason the grant above gives: a person looking
+           at a sandboxed document or a row this build no longer declares is an ordinary state of the world,
+           and a fatal here would hand any page that sandboxes an iframe an abort switch on the trusted zone.
+           The ORIGIN and the ROW are two questions and both are asked, because a message naming a good
+           origin and a retired signal would otherwise abort inside `safeFetchPermit`'s own CHECK. */
+        refused = self.safeFetchWidenable(msg.permit.origin);
+        if (refused === null) refused = self.safeFetchSignalUsable(msg.permit.signal, msg.permit.value);
+        if (refused === null) {
+          self.safeFetchPermit(msg.permit.origin, msg.permit.signal, msg.permit.value, msg.permit.allow);
+          changed = true;
+        }
       }
       /* THE STORE MOVES ONLY WHERE THE TABLE DID, and it is written FROM the table. A refused grant persists
          nothing, and a revocation of an origin that was not there persists nothing — so the record cannot
@@ -6676,11 +6749,31 @@ self.astDispatch = async function astDispatch(msg) {
          nothing. `null` there is the positive statement "this origin cannot be the subject", which the
          surface renders as the reason rather than as a policy answer. */
       const _subjectUsable = self.safeFetchWidenable(msg.subject);
+      /* THE PROBE IS A FORCED, UNCREDENTIALED DATA REQUEST AT THE SUBJECT'S OWN ROOT, and every one of those
+         words is a choice this line has to make rather than a default it falls into. `""` is the destination
+         a data fetch carries (never §2.2.5 script-like, which is the arm that fires by default whatever this
+         table says); `forced` is the grade a permission is most about; `unstated` is the honest witness mark
+         for a question that is not an act; `false` is the credential state the learned-GET replay states
+         today. The ADDRESS is the origin's own root, which is the only address this surface has — so the
+         `url-authority` row it shows reads `unknown`, and that is exactly what that row means and not a
+         statement that this origin's addresses carry none. */
+      const _probe = { url: msg.subject + "/", destination: "", provenance: PROVENANCE_FORCED,
+                       pinned: "unstated", credentialed: false, headers: null };
       return { success: true, result: {
         origins: self.safeFetchWidenedOrigins(),
         subject: msg.subject, subjectUsable: _subjectUsable,
-        subjectRefusal: _subjectUsable === null
-          ? self.safeFetchFiringRefusal(PROVENANCE_FORCED, msg.subject, "", "unstated") : null,
+        subjectRefusal: _subjectUsable === null ? self.safeFetchFiringRefusal(_probe) : null,
+        /* WHAT THE PERSON IS DECIDING ABOUT, ROW BY ROW, AND IT IS THE POLICY'S OWN DERIVATION RATHER THAN
+           THIS FILE'S GUESS AT IT. `signals` is the registry with each value's permitted state at this
+           origin; `vector` is what THIS probe's facts compute, so a person can see which row their current
+           refusal is about; `defaults` is what fires without anybody saying so, which is the answer to "why
+           do my app's scripts still load". Every one of them is read from `lib/safe-fetch.js` — a surface
+           that computed any of them would be the second copy of the policy this whole parameter exists to
+           end. */
+        signals: _subjectUsable === null ? self.safeFetchPermitted(msg.subject) : [],
+        vector: _subjectUsable === null ? self.safeFetchSignalVector(_probe) : null,
+        defaults: self.safeFetchDefaultArms(),
+        legacyDropped: _egressLegacyDropped,
         refused, changed } };
     }
     if (msg.type !== "AST_ANALYZE") return { success: false, error: "unknown type " + msg.type };

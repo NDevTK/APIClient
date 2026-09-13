@@ -138,12 +138,16 @@ const ZONE = (() => {
      by ABSENCE — so nothing downstream can OBSERVE it, and both hosts wrote their own copy and answered
      differently. A zone that obtained the chokepoint without it would take an `undefined` refusal as permission
      and fire every method it was parked on. */
-  /* `safeFetchWidenStated` IS ON THIS LIST AND ITS ABSENCE IS THE SHARPEST OF THE FOUR. Without it this
-     host cannot SPEAK its (empty) table at all, so `_firingRefusal` would assert on the first forced request
-     of every run — and in a release build, where that assert is compiled out, it would answer from a table
-     nobody had stated. A zone holding the chokepoint without the ability to state its own policy is a zone
-     whose `--explore` writes into a table the chokepoint has not agreed exists. */
-  for (const n of ['safeFetchWiden', 'safeFetchWidenStated', 'safeFetchFiringRefusal',
+  /* `safeFetchEgressStated` IS ON THIS LIST AND ITS ABSENCE IS THE SHARPEST OF THEM. Without it this
+     host cannot SPEAK its (empty) table at all, so `_firingRefusal` would assert on the first request of
+     every run the default arms do not admit — and in a release build, where that assert is compiled out, it
+     would answer from a table nobody had stated. A zone holding the chokepoint without the ability to state
+     its own policy is a zone whose `--explore` writes into a table the chokepoint has not agreed exists.
+     THE NAME MOVED WITH THE MODEL AND THAT IS THE POINT OF CHECKING IT HERE. The table is per-SIGNAL now and
+     `safeFetchWidenStated` took a list of origin strings, which this model reads as the shape the previous
+     control persisted and refuses outright — so a zone assembled from a stale copy of that file fails on THIS
+     line, loudly, rather than by silently stating nothing. */
+  for (const n of ['safeFetchWiden', 'safeFetchEgressStated', 'safeFetchFiringRefusal',
                    'safeFetchWidenedOrigins', 'safeFetchMethodRefusal'])
     if (typeof sandbox[n] !== 'function')
       throw new Error(`extension/lib/safe-fetch.js did not install \`${n}\` — the firing decision and its ` +
@@ -267,11 +271,20 @@ function declineRequest(method, url, reason) { return `decline-request\t${method
  * goes out with the reason.
  * WHAT A REFUSAL STILL OWES THIS CHANNEL IS ITS WORDS, and it still gets them — `workFetch` declines with the
  * chokepoint's own `statusText`, which is the party that refused saying why, one zone further in than before.
- * THE ONE COMBINATION THAT IS NEVER A SETTING REMAINS UNREACHABLE FROM THIS PROCESS BY CONSTRUCTION —
- * credentialed AND state-mutating AND forced. This process has NO COOKIE JAR (see this file's header: Node's
- * `fetch` has no cookie store, so `credentials:"include"` would attach nothing and name a person who is not
- * present), and `safe-fetch.js` is GET-only BY ABSENCE. Both other conjuncts are false at every setting of
- * the widening, including its widest. */
+ * AND THE SENTENCE THAT STOOD HERE IS RETIRED RATHER THAN DELETED, BECAUSE ITS REASONING IS WHAT A READER
+ * RE-DERIVES. It read: "THE ONE COMBINATION THAT IS NEVER A SETTING REMAINS UNREACHABLE FROM THIS PROCESS BY
+ * CONSTRUCTION — credentialed AND state-mutating AND forced … Both other conjuncts are false at every setting
+ * of the widening, including its widest." The project owner has RETIRED that absolute (CLAUDE.md
+ * §AND-THAT-ABSOLUTE-IS-RETIRED-BY-THE-PROJECT-OWNER): stripping the cookie does not make a request
+ * uncorrelated with the person, because the authority can be in the ADDRESS — a presigned URL, a reset or
+ * invite token, a signed webhook — and the address can have been DERIVED from a credentialed read. Nothing is
+ * refused at every setting now; what replaces the rule is a per-signal, per-origin control a person decides.
+ * TWO FACTS ABOUT THIS PROCESS SURVIVE THE RETIREMENT AND ARE WORTH KEEPING FOR WHAT THEY ACTUALLY SAY. It
+ * has NO COOKIE JAR (Node's `fetch` has no cookie store, so `credentials:"include"` would attach nothing and
+ * name a person who is not present), so the `cookies` signal reads `no` for every request it makes; and
+ * `safe-fetch.js` is GET-only, so the `method` signal reads `GET`. Those are two ROWS of the control with
+ * one value each here, which is a smaller and true claim — and it is the honest one, because it says nothing
+ * whatever about the address-borne authority or the lineage rows, which this process cannot see either. */
 
 
 async function main() {
@@ -293,7 +306,12 @@ async function main() {
      IT IS BEFORE THE LOOP AND NOT INSIDE IT, because a run with no `--explore` reaches the network exactly as
      one with three does, and a table stated only on the arm that carries a flag would leave the commonest
      invocation of this tool asserting at the chokepoint. */
-  ZONE.safeFetchWidenStated([]);
+  /* `{}` AND NOT `[]`, AND THE DIFFERENCE IS THE WHOLE MODEL: the table is keyed by ORIGIN and each entry
+     is a per-SIGNAL map of permitted values, so an empty OBJECT is "nobody has permitted anything" while an
+     empty ARRAY is the shape the previous single-switch control persisted — which the chokepoint refuses by
+     name, because a bare origin in it meant "permit everything" including signals that did not exist when it
+     was written. */
+  ZONE.safeFetchEgressStated({});
   const positional = [];
   for (let i = 2; i < process.argv.length; i++) {
     if (process.argv[i] !== '--explore') { positional.push(process.argv[i]); continue; }
@@ -584,12 +602,19 @@ async function main() {
        so no witness mark was composed for it — see safe-fetch.js's `_pinnedOf`. A document load is never
        §2.2.5 SCRIPT-LIKE, so neither field can change the answer here; both are stated because the grade is
        the chokepoint's and a caller that guessed either would be re-deriving the rule. */
-    const refusal = ZONE.safeFetchFiringRefusal(provenance, abs, 'document', 'unstated');
+    /* A FACTS OBJECT AND NOT A POSITIONAL LIST, for the reason the chokepoint states at its own door: the
+       signal set GROWS, and a positional call is where adding one shifts every operand after it silently —
+       which this project has paid for once, at that file's own post-redirect gate. `credentialed: false` is
+       what this host's navigate actually performs and is stated rather than omitted, because a hypothetical
+       answered from fewer facts than the real request states is a permission question about a different
+       request. */
+    const refusal = ZONE.safeFetchFiringRefusal({ url: abs, destination: 'document', provenance,
+                                                  pinned: 'unstated', credentialed: false, headers: null });
     if (refusal)
-      return { declined: `${what} ${abs} — a DOCUMENT LOAD whose address stands on a ${refusal.toUpperCase()} ` +
-                         'arm at an origin nobody has widened for exploration. CLAUDE.md §Attacker-sources ' +
-                         'makes exactly this the per-origin widening ("default conservative, widened ' +
-                         'deliberately per origin, never inferred from a site looking like a test"), so this ' +
+      return { declined: `${what} ${abs} — a DOCUMENT LOAD this origin's egress policy refuses on ` +
+                         `\`${refusal}\`, which names the SIGNAL and the VALUE that held it rather than a ` +
+                         'score. CLAUDE.md §AND-THAT-ABSOLUTE-IS-RETIRED makes the control per-signal and ' +
+                         'per-origin ("the person decides which combinations their origin allows"), so this ' +
                          'is the policy\'s ANSWER rather than a capability that is missing. Pass `--explore ' +
                          '<origin>` to widen it, and note what that obliges: §@H makes the reply to a forced ' +
                          'request evidence about what a server says to a request no client makes, so its ' +
@@ -712,7 +737,11 @@ async function main() {
        `statusText` match: `safeFetchFiringRefusal` says whether a widening is what this park is waiting on, so
        the `--explore` paragraph is written only where `--explore` is the answer. */
     if (raw.refusal && raw.refusal.kind === 'decline') {
-      const refusal = ZONE.safeFetchFiringRefusal(provenance, abs, destination, pinned);
+      /* THE SAME FACTS THE REQUEST ONE CALL BELOW STATES, for the reason the navigate arm gives: this is a
+         question about THAT request and not about a simpler one. `credentialed: false` is what `fetched`
+         passes and `headers: null` is what a park carries here. */
+      const refusal = ZONE.safeFetchFiringRefusal({ url: abs, destination, provenance, pinned,
+                                                    credentialed: false, headers: null });
       if (!refusal) {
         e.ready.push(declineRequest(method, url,
                             `${method} ${abs} — ${raw.refusal.reason}. The chokepoint DECLINED to make this ` +
@@ -723,8 +752,9 @@ async function main() {
         return;
       }
       e.ready.push(declineRequest(method, url,
-                            `${method} ${abs} — ${raw.refusal.reason}. A ${refusal.toUpperCase()} park at an ` +
-                           'origin nobody has widened for exploration: pass `--explore <origin>` to widen it, ' +
+                            `${method} ${abs} — ${raw.refusal.reason}. This origin's egress policy refuses ` +
+                            `it on \`${refusal}\`, which names the SIGNAL and the VALUE that held it: pass ` +
+                           '`--explore <origin>` to permit every value of every signal at that host, ' +
                            'and note what that obliges — §@H makes the reply to a forced request evidence ' +
                            'about what a server says to a request no client makes, so its values are carried ' +
                            'as FORCED and never merged into the observed pool. Until then the request is ' +
