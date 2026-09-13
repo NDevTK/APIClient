@@ -116,7 +116,21 @@ createServer((req, res) => {
     if (!existsSync(f)) continue;
     served++;
     const r = byUrl.get(u.href);
-    res.writeHead(200, { 'content-type': (r && r.contentType) || 'application/javascript' });
+    /* THE STATUS THE ORIGIN GAVE, NOT AN UNCONDITIONAL 200. mirror.mjs records each resource's real HTTP
+       status and this replayed every one of them as 200, so a subresource the origin REFUSED came back to
+       the engine as a success carrying the refusal's body -- which is precisely the "error page under a
+       real URL's name" mirror.mjs's own header calls a manufactured engine defect, arriving through the
+       replay instead of through the capture. A 402 whose body is `{"error":...}` served as 200
+       application/json is a document the real browser never saw, and the engine's handling of it is a fact
+       about this fixture rather than about the site.
+       MEASURED when this landed: 445 resources over 18 frozen rows, TWO of them non-200 -- a third-party
+       analytics call answering 402 with a 137-byte JSON body, and a document preloading its own
+       same-origin /api/user which answered 202 with NO body. Both were captured in the same pass that
+       found this, so the population was empty before and nothing already frozen changes behaviour here:
+       every resource of gitlab, gitpod and helix is 200 and replays byte-identically.
+       A status is only ever read from the record; a resource that is on disk with NO recorded status is an
+       older capture and keeps the 200 it has always been served with. */
+    res.writeHead((r && r.status) || 200, { 'content-type': (r && r.contentType) || 'application/javascript' });
     return res.end(readFileSync(f));
   }
   /* A 404 here is a REAL fact about the mirror and is counted, not hidden: a fixture that silently serves
