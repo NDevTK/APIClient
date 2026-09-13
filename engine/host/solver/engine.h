@@ -1265,6 +1265,25 @@ typedef struct {
        which is a question about the schedule and not about the document's coverage. */
     int  deepest;           /* highest program this document has STARTED */
     int  completed;         /* highest program it has run to its END */
+    /* AND THE DENOMINATOR THOSE TWO ARE READ AGAINST, WHICH IS THE ONE NUMBER NEITHER CARRIES AND NOTHING
+     * ELSE ON THIS LINE SUPPLIES. `deepest 7` says some flow started the eighth program; whether that is the
+     * WHOLE of a document or a third of it is not derivable from any other row. The cursor histogram's extent
+     * is taken from the LIVE MEMBERS rather than from the document, `progStarts` counts STARTS across
+     * timelines rather than rows, and a fork COPIES a sequence rather than extending it. So "the document's
+     * own scripts all ran" and "most of them were never reached" read identically — and they take opposite
+     * work, the first sending a reader to the chunk-discovery path and the second to the order.
+     * MEASURED AS A DEFECT RATHER THAN A HAZARD: a landed analysis of a real 4.5 MB bundle read `progStarts`
+     * as the document's script count and reported `24 - 8 = 16` scripts that never start. The subtraction was
+     * of two different things, and the sentence it produced was quoted into briefs.
+     * IT IS THE SEED LENGTH AND NOT THE SEQUENCE LENGTH, which is the one thing it must not be read as. A
+     * flow's sequence is these rows FOLLOWED BY every program the run queued into it — a lazy chunk, an
+     * injected <script>, an @S candidate — so `deepest` may legitimately exceed `rootPrograms - 1` and may
+     * legitimately fall short of it. No inequality holds in either direction, which is why there is
+     * deliberately no assert between them: one would fire on a healthy run that reached a queued chunk.
+     * ZERO IS A STATEMENT AND NOT A HOLE. A census taken outside a live session reads 0 because the seed
+     * table is given back when a session closes (engine_session_close), and a document with no executable
+     * <script> element reads 0 for the reason the seed's own type assert gives. */
+    int  root_programs;     /* rows the ROOT DOCUMENT'S OWN <script> elements seeded into every flow of it */
     /* ─── AND THE COUNTS THOSE TWO MAXIMA CANNOT CARRY, WITH THE ASK THE CANDIDATE ARM IS MEASURED AGAINST ──
      *
      * `deepest` and `completed` are MAXIMA and answer how FAR, so neither can answer how MANY, or WHOSE.

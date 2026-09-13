@@ -84,9 +84,25 @@ static int64_t g_picks_total = 0;
    38836: a cross product of a handful of unknowns, not seventy thousand decisions. 10507 of 10569 steps are
    REPLAY HITS, so nearly all of the thread goes into re-running prefixes.
    WHAT IS NEW IS THE CURSOR HISTOGRAM, AND IT IS A FACT ABOUT THE DOCUMENT RATHER THAN THE QUEUE.
-   `progStarts` 24, `deepest` 7, `programCursors` {0..6: 0, 7: 71296, 8: 156}: seven programs completed, ONE is
-   holding the entire frontier, and SIXTEEN SCRIPTS OF THE DOCUMENT NEVER START. Everything a bundle defers to
-   a later chunk — which is where an app's API clients are — is not explored slowly, it is not reached.
+   `deepest` 7, `programCursors` {0..6: 0, 7: 71296, 8: 156}: ONE program is holding the entire frontier —
+   71296 members have finished program 6 and have 7 left, while 156 stand one past the deepest program any
+   flow has started, with nothing of the document's own table left to run.
+   AND THE SENTENCE THAT STOOD HERE — "SIXTEEN SCRIPTS OF THE DOCUMENT NEVER START" — WAS READ OFF THE WRONG
+   ACCESSOR AND IS REWRITTEN RATHER THAN DELETED, BECAUSE IT IS THE DERIVATION A READER RE-DOES. It was
+   `progStarts` 24 minus the histogram's eight slots. `progStarts` counts program STARTS ACROSS EVERY FLOW AND
+   EVERY TIMELINE (engine.c raises it at the one line a program is compiled, beside the candidate/other split),
+   so 24 starts over 8 indices is three lineages walking one sequence and the subtraction was of a count of
+   STARTS from a count of ROWS. The refutation was at the raise site: that comment already records this row
+   being read as a count of program starts and calls it "how a defect in a label becomes a defect in a
+   diagnosis". I read the row's NAME and not the line that writes it, which is the one check §READ-THE-ACCESSOR
+   asks for, and the sentence was quoted into briefs before anybody re-derived it.
+   WHAT THE CENSUS ACTUALLY COULD NOT SAY IS HOW MANY PROGRAMS THE DOCUMENT HAS, and that was not an oversight
+   in the reading: no row published one. `deepest 7` is equally "this document has eight programs and a flow
+   ran them all" and "it has far more and nothing reached them" — two states that take opposite work, one
+   sending a reader to the chunk-discovery path and the other to the order. `rootPrograms` is that denominator
+   now (solver/engine.h), so the next measurement states the fraction instead of inventing one; the reading
+   above is therefore the last one taken without it, and the conclusion the deleted sentence drew — that a
+   bundle's later chunks are not reached — is a HYPOTHESIS this census never tested.
    THE DISCRIMINATOR THE ORDER HAS NOT GOT, stated as a question because naming a term here without an
    observation that separates the two sides is the wrong-narrowing move one level up: `neverPicked` is 64605 of
    71452 with `neverPickedGap` 0, so the member that is the ONLY one standing at program 8 and the member that
@@ -3496,8 +3512,9 @@ double flow_distance(const Flow *f) {
    WHY IT IS NEEDED, MEASURED ON A DOCUMENT NOBODY DESIGNED rather than on a fixture. A 4.5 MB real bundle
    replayed from its own mirror: 71452 members and 71451 forks out of FIFTY branch sites at depth 6 over
    THIRTY-NINE source reads, one bucket holding 38836; `families: 1`, so the reward is one value every member
-   holds; the whole order spanning 0.036 points; 64605 members never picked with `neverPickedGap` 0. Sixteen of
-   the document's twenty-four scripts never started and ZERO jobs ran. Every existing term was common to the
+   holds; the whole order spanning 0.036 points; 64605 members never picked with `neverPickedGap` 0. ZERO jobs
+   ran, so nothing behind an await, a `.then`, a timer or a delivery was ever answered. Every existing term was
+   common to the
    two sides of the branch that made that frontier, which is the state absent.c's own banner ends by naming:
    "what must exist afterward is a frontier on which the two sides of an example-free branch are COMPARABLE AT
    ALL". A bucket's occupancy is that reading, and it is about the SEARCH rather than about either arm.

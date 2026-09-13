@@ -149,6 +149,13 @@ const COUNTERS = ["switches", "flows", "candidates", "jobsQueued", "jobsRun", "u
    ever reached. `programCursors` puts 88-97% of every run's members inside the document's FIRST program, with
    the deepest cursor reached being 1 or 2 of its ten script rows, and `forkAt`'s heaviest NAMED row is a
    branch on the same absent polyfill global in all three.
+   THAT DENOMINATOR WAS COUNTED BY HAND AND IS A ROW NOW. "Ten script rows" is not in the census this driver
+   reads: it was counted off the document, so it could not be re-derived from any log and could not be
+   compared against another page at all. The engine publishes `rootPrograms` — the root document's own
+   executable `<script>` count — beside `deepest` and `completed`, which is what makes "1 or 2 of ten" a
+   reading a later run states rather than one a reader supplies. Taking it here is the next diff for this
+   driver: without it `deepest` names a distance with no length beside it, and the same absence produced a
+   landed analysis that read `progStarts` as a script count and reported scripts that never start.
    `hostAsked`/`hostAnswered` IS THE OTHER DOOR AND IS NOT THAT PAIR — solver/result.c says so where it emits
    them, and records that `hostAsked: 0` "has already been relayed as 'nothing is ever asked of the host' for
    a document holding hundreds of thousands of records". They are minted at engine.c's `mint_req`, which is
@@ -164,9 +171,15 @@ const COUNTERS = ["switches", "flows", "candidates", "jobsQueued", "jobsRun", "u
    (`grep -rn "engine_host_request *(" engine/host/`) and is how this one was found.
    AND IT WAS ALREADY CORRECTED IN solver/result.c AND NOT HERE, WHICH IS THE POINT: a fix that retires an
    argument falsifies every site where that argument was written down, and its code delta is not its size.
-   `grep -rn "cross-instance rendezvous and NOTHING ELSE" engine/host/` still answers — that site is owed the
-   same repair by whoever owns the engine tree, and it is named by its STRING rather than its line so this
-   sentence cannot rot into a wrong coordinate.
+   THE REPAIR HAS LANDED AND THE TEST THIS SENTENCE GAVE FOR IT CANNOT SAY SO, WHICH IS THE PART WORTH
+   KEEPING. It said `grep -rn "cross-instance rendezvous and NOTHING ELSE" engine/host/` still answers and that
+   the site was owed a repair — and that grep STILL answers today, at the repaired site, because this tree's
+   own rule is that a retired argument is REWRITTEN RATHER THAN DELETED and solver/result.c's correction opens
+   by quoting the sentence it retires. So a retirement condition spelled as "grep for the wrong claim" is
+   unsatisfiable HERE BY CONSTRUCTION: the fix makes the string more common, not less. Naming it by string
+   rather than by line was still right — the coordinate would have rotted too — and what the string must name
+   is the CORRECTION: that site now reads "THIS PARAGRAPH SAID … AND THAT IS FALSE BY EXACTLY THE CALLER",
+   which is the positive form and which a later deletion of the repair would remove.
    Both pairs are carried here because each names its own door: the pair that answers "did this run ever ask
    for a RESOURCE" is the REPLY pair, and the pair that answers "did this run ever issue an XHR or read across
    an instance boundary" is this one. A document that does neither reads 0/0 for ever and is right to.

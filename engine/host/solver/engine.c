@@ -11174,6 +11174,11 @@ void engine_frontier_census(EngineFrontierCensus *out)
     out->forks             = decide_fork_total();
     out->deepest           = g_deepest;
     out->completed         = g_completed;
+    /* THE SEED LENGTH `deepest` AND `completed` ARE READ AGAINST — see EngineFrontierCensus. It is read from
+       the SESSION'S table rather than from any flow's `dyn_n`, because a flow's sequence is the seed followed
+       by whatever that timeline queued, so per-flow it is a different number per arm and none of them is the
+       document's. A closed session reads 0: engine_session_close gives the table back. */
+    out->root_programs     = g_root_n;
     out->prog_starts       = g_prog_starts;
     out->prog_starts_cand  = g_prog_starts_cand;
     out->prog_starts_other = g_prog_starts_other;

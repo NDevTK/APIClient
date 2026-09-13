@@ -1586,6 +1586,14 @@ char *result_cold_json(void) {
                  "{\"live\":%ld,\"framed\":%ld,\"blocked\":%ld,\"owed\":%d,"
                  "\"finished\":%ld,\"finishedFlows\":%ld,\"finishedCands\":%ld,"
                  "\"deepest\":%d,\"completed\":%d,"
+                 /* AND THE NUMBER THOSE TWO MAXIMA ARE READ AGAINST, without which "deepest 7" is equally
+                    "this document has eight programs and a flow ran them all" and "it has far more and
+                    nothing reached them" — two readings that take opposite work and that no other row on
+                    this line separates. It is the ROOT DOCUMENT'S OWN <script> count and NOT the length of
+                    any flow's sequence, which continues past it with every chunk, injection and candidate
+                    the run queued; solver/engine.h states why no inequality between the two holds and why
+                    there is therefore no assert. */
+                 "\"rootPrograms\":%d,"
                  /* THE COUNTS BESIDE THOSE TWO MAXIMA, AND THE @S SEARCH'S OWN NUMERATOR AND DENOMINATOR. See
                     solver/engine.h for the whole reading; the part a reader of THIS line needs is that
                     `progStartsCand` alone means nothing. A `0` there is `no breakout was ever queued` and it
@@ -1653,6 +1661,7 @@ char *result_cold_json(void) {
                  c.flows, c.framed, c.blocked, flow_host_owed_count(),
                  e.finished, e.finished_flows, e.finished_cands,
                  e.deepest, e.completed,
+                 e.root_programs,
                  e.prog_starts, e.prog_starts_cand, e.prog_starts_other, e.prog_queued_cand,
                  e.sold, e.sold_flows, e.sold_cands, e.forks,
                  ran, resumed.segs, resumed.flows, resumed.cands, resumed.worlds,

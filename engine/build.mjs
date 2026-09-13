@@ -2176,6 +2176,24 @@ function programCursorReading(b) {
      the cursor that MEANS "finished the deepest program" is spelled out, and solver/result.c asserts the
      identity (top cursor <= deepest + 1) at the composer where both numbers are in one hand. */
   const finishedAll = Number(b.deepest) + 1;
+  /* AND THE NUMBER `deepest` AND `completed` ARE A FRACTION OF, which is what stops "deepest 7" reading as a
+     finished document on one run and as a ceiling on the next. `rootPrograms` is the ROOT DOCUMENT'S OWN
+     <script> count, and a flow's sequence runs PAST it — every lazy chunk, injected element and @S candidate
+     the run queued takes a row above the seed — so `deepest` at or above it means the document's own table was
+     walked and whatever went unreached was queued, while `deepest` below it means the table itself was not.
+     Those are opposite diagnoses, and the arithmetic that was done instead subtracted `progStarts`, a count of
+     STARTS ACROSS TIMELINES, from a count of ROWS, and reported the difference as scripts that never ran.
+     THIS ROW IS THE DENOMINATOR AND NOT A SECOND OPINION ON THE NUMERATOR: it says nothing about queued rows,
+     of which there is no count on this line, so "all of them started" is a statement about the seed alone. */
+  const seedReach =
+    Number(b.rootPrograms) === 0
+      ? ` (the root document seeded NO executable <script>, so every program those two maxima name was queued ` +
+        `by the run itself — and a census taken outside a live session reads the same 0)`
+      : finishedAll >= Number(b.rootPrograms)
+        ? ` — the furthest flow started all ${b.rootPrograms} of them, so whatever went unreached is a row the ` +
+          `run QUEUED above the seed rather than one the document shipped`
+        : ` — ${Number(b.rootPrograms) - finishedAll} of the document's own ${b.rootPrograms} programs have ` +
+          `never been started by any flow`;
   const oopReading =
     b.outOfPrograms === 0
       ? `no member has run out of its own program sequence, so the orphan ladder's last rung was not standing ` +
@@ -2201,7 +2219,7 @@ function programCursorReading(b) {
   return `program cursors at the last census (${b.live} live member${b.live === 1 ? "" : "s"} over ` +
          `${rows.length} cursor slot${rows.length === 1 ? "" : "s"} — a CURSOR is one-past-the-program-it-left, ` +
          `so the slots run one wider than the document's programs; ` +
-         `document deepest ${b.deepest} / completed ${b.completed}; ${oopReading}): ` +
+         `document deepest ${b.deepest} / completed ${b.completed} against ${b.rootPrograms} own <script> program${Number(b.rootPrograms) === 1 ? "" : "s"}${seedReach}; ${oopReading}): ` +
          at.map((r) => `${r[1]} at ${r[0]}`).join(", ") +
          ` — largest bucket ${top[1]} of ${b.live} at cursor ${top[0]}, deepest member standing at cursor ` +
          `${standingDeepest}. A mass LOW against \`deepest\` and a mass AT it are opposite diagnoses ` +
