@@ -9151,12 +9151,22 @@ static void fork_row_impl(const char *js, int *row, const char **why,
    the two records carry the SAME one — param_add_val dedups WITHIN a record and emitted_recs_one_statement
    refuses two records at one grade, so N identical entries is exactly N GRADES AGREEING. That is the engine
    being RIGHT, and the old spelling read it as a fork.
-   MEASURED, AND THE FIXTURE IS ITS OWN WITNESS: `/api/bodybytes` stands in the same <script> as
-   `if (addn > 0)`, whose operand is minted carrying the example 1920, and all four of its values are read off
-   one reply and depend on nothing that branch decides. `add-fork` reading 1 in the same census IS that forced
-   arm emitting. The addnum rows already record this mechanism one level up — a check counting RECORDS refused
-   the statement it was written to read — and it survived here because that repair was made where it was found
-   rather than at every site asking the same question the same wrong way.
+   THE MECHANISM IS STRUCTURAL AND ITS FIRST CANDIDATE INSTANCE WAS REFUTED, AND THE SECOND HALF IS THE ONE A
+   READER WOULD OTHERWISE INHERIT. `/api/bodybytes` stands in the same <script> as `if (addn > 0)`, whose
+   operand is minted carrying the example 1920, and all four of its values are read off one reply and depend on
+   nothing that branch decides — so it read as the worked example, and `add-fork` at 1 in the same census IS
+   that forced arm emitting at its own next statement. IT DOES NOT EXPLAIN THAT ROW. Five `_only` rows over
+   SYNCHRONOUS statements of the same <script> and the same stretch — `hdrs`, `hdr-proxy`, `hdr-iter`,
+   `hdr-seq`, `hdr-record`, at document lines that BRACKET this one — all read 1 in the same terminal census,
+   and this mechanism would have turned every one of them 0 with it; `clone-body`, which asks
+   `param_value_is` and is immune to entry counting, reads 0 in the same shape beside them. So the forced arm
+   is starved between its own branch and this stretch, and what those two rows share is the REPLY path and not
+   this predicate. THE REPAIR STANDS ON THE READING AND NOT ON THAT CENSUS — same_identity, the grade stamped
+   on every request an arm builds, param_add_val's dedup, and the one-grade-per-record refusal — and the day a
+   forced arm is served past its own branch is the day the old spelling would have reddened all five at once.
+   The addnum rows already record this mechanism one level up — a check counting RECORDS refused the statement
+   it was written to read — and it survived here because that repair was made where it was found rather than at
+   every site asking the same question the same wrong way.
    ASKED AS THE TWO COUNTS ABOVE RATHER THAN AS A THIRD WALK, which is param_value_count_of's own instruction:
    the entries that are NEITHER literal are that count subtracted from param_value_count, and have no other
    spelling in this file. The escape assertion rides in with it instead of being restated here.
