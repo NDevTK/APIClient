@@ -102,7 +102,7 @@ static int64_t g_picks_total = 0;
    THAT REFRAMES THE DIAGNOSIS AND IS WORTH MORE THAN THE CORRECTION. "The order never gets there" and "the
    members ARE there and the bytes never arrive" are opposite work — the first is the WFQ's and the second is
    the fetch path's — and cursor 8 says 156 members had already arrived. `replyAsked` against
-   `rootProgramsAwaited` (17 for this document) is the pair that separates them, and neither number was in the
+   `rootProgramsAwaitedAtSeed` (17 for this document) is the pair that separates them, and neither number was in the
    reading above because neither existed. Only five of the rows at or below index 7 carry a `src`, so a run
    stopped at `deepest 7` should show `replyAsked` near 5 and not near 17: a figure at 17 would mean the bundle
    was fetched whole and the programs were not run, which is the fetch path working and the order failing, and
@@ -137,7 +137,7 @@ static int64_t g_picks_total = 0;
    would have announced itself. It agreed instead, so a derivation that means nothing produced a figure that
    was exactly right, and the figure was quoted onward as evidence for the method that produced it.
    AND THAT COUNT IS A PREDICTION THIS MEASUREMENT CAN NOW BE SCORED AGAINST rather than a note: the next run
-   of that mirror must read `rootPrograms` 24, `rootProgramsAwaited` 17 and `rootProgramsHeld` 7. A
+   of that mirror must read `rootPrograms` 24, `rootProgramsAwaitedAtSeed` 17 and `rootProgramsHeldAtSeed` 7. A
    disagreement is informative in either direction — the engine's own script table is built by
    document_exec_scripts and drops rows this hand count does not model, so a lower number names which rows
    those are, and a higher one says the count above missed a shape.

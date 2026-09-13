@@ -1601,13 +1601,13 @@ char *result_cold_json(void) {
                     the run queued; solver/engine.h states why no inequality between the two holds and why
                     there is therefore no assert. */
                  "\"rootPrograms\":%d,"
-                 /* …AND ITS TWO ARMS, WHICH ARE WHAT `replyAsked` BELOW IS READ AGAINST. `rootProgramsAwaited`
+                 /* …AND ITS TWO ARMS, WHICH ARE WHAT `replyAsked` BELOW IS READ AGAINST. `rootProgramsAwaitedAtSeed`
                     is the reply-door openings this document owes for its OWN bundle, so `replyAsked` equal to
                     it is a run that issued no page `fetch()`, no XHR and no dynamic `import()` — it learned
                     nothing, which is the one verdict §What-the-tool-produces cares about and which was being
                     reached by counting `<script src>` elements off the page by hand. A partition, asserted at
                     engine_frontier_census. */
-                 "\"rootProgramsHeld\":%d,\"rootProgramsAwaited\":%d,"
+                 "\"rootProgramsHeldAtSeed\":%d,\"rootProgramsAwaitedAtSeed\":%d,"
                  /* THE COUNTS BESIDE THOSE TWO MAXIMA, AND THE @S SEARCH'S OWN NUMERATOR AND DENOMINATOR. See
                     solver/engine.h for the whole reading; the part a reader of THIS line needs is that
                     `progStartsCand` alone means nothing. A `0` there is `no breakout was ever queued` and it
@@ -1689,7 +1689,7 @@ char *result_cold_json(void) {
                  e.finished, e.finished_flows, e.finished_cands,
                  e.deepest, e.completed,
                  e.root_programs,
-                 e.root_programs_held, e.root_programs_awaited,
+                 e.root_programs_held_at_seed, e.root_programs_awaited_at_seed,
                  e.prog_starts, e.prog_starts_cand, e.prog_starts_other, e.prog_queued_cand,
                  e.sold, e.sold_flows, e.sold_cands, e.forks,
                  ran, resumed.segs, resumed.flows, resumed.cands, resumed.worlds,

@@ -806,9 +806,9 @@ static int g_root_n;
 /* AND THE PARTITION OF IT THAT DECIDES WHETHER THIS RUN EVER LEARNED AN ENDPOINT AT ALL. A seeded row either
    already HAS its source text — an inline `<script>`, or an external one whose response the host handed over
    — or it does not, and a row that does not is a row the seed turns into a DYN_SCRIPT_SRC whose body is its
-   own address, which PARKS the flow on the reply door. So `rootProgramsAwaited` is the number of reply-door
+   own address, which PARKS the flow on the reply door. So `rootProgramsAwaitedAtSeed` is the number of reply-door
    openings this document owes for its OWN BUNDLE, and it is the denominator `replyAsked` has never had.
-   `replyAsked == rootProgramsAwaited` IS THE PRODUCT'S HEADLINE VERDICT AND IT WAS BEING COUNTED BY HAND. The
+   `replyAsked == rootProgramsAwaitedAtSeed` IS THE PRODUCT'S HEADLINE VERDICT AND IT WAS BEING COUNTED BY HAND. The
    reply door is a fetch, an injected `<script src>`, the document's own script slots and a dynamic `import()`
    (solver/result.c), so a run whose asks exactly equal what the bundle owes has issued NO page `fetch()`, no
    XHR and no dynamic `import()` — it learned nothing, and §What-the-tool-produces is the whole of what it was
@@ -819,6 +819,30 @@ static int g_root_n;
    chooses DYN_PAGE_SCRIPT or DYN_SCRIPT_SRC by `rows[i].body`, so keying these on that same column is what
    stops the census and the seed being two opinions about one row. The identity against `g_root_n` is asserted
    at engine_frontier_census, where all three are in one hand, for the reason `g_finished`'s arms are. */
+/* AND `AT SEED` IS IN THE NAME BECAUSE A READER WITH THIS FILE OPEN GOT IT WRONG, WHICH IS THE ONLY EVIDENCE
+   a naming argument can have. Both arms are written at the ONE line below and never again: nothing updates
+   them when a reply lands, because the pair is a DENOMINATOR — a fact about what the DOCUMENT owes, fixed
+   the moment its rows are seeded — and that is what makes `replyAsked` readable against it at all. They are
+   therefore neither of the two kinds §CLAUDE.md's counter rule names: not a GAUGE, which states what is true
+   now, and not a LIFETIME COUNTER, which may be differenced across samples. They are a CONSTANT, and a
+   constant that decreases would be a broken seed rather than progress.
+   THE MISREADING IT INVITES IS SPECIFIC AND EXPENSIVE. Read as live, `…Awaited 17` says seventeen of the
+   document's programs are STILL owed bytes — and a frontier standing at program 7's door then reads as a
+   delivery that never arrived, which sends the next reader to the reply seam. On the run that produced those
+   numbers the door had answered every opening it was given (`replyAsked 21 == replyAnswered 21`, at the
+   FIRST census, before any fork), so that reading was available and wrong, and the work it would have
+   dispatched was at a component with nothing wrong in it.
+   THE FIX IS THE NAME AND NOT THIS PARAGRAPH. §CLAUDE.md: a counter states its KIND at the point it is
+   EMITTED, in the key rather than in a comment no consumer reads — a reader is standing at the census line,
+   not here. What this record adds that the name cannot is the direction of the error, which is the half that
+   decides where a misled reader goes.
+   WHAT RETIRES IT: a LIVE companion row. The question the misreading was reaching for — how many of the
+   document's own rows still await bytes RIGHT NOW — is real and is not answered anywhere; when a row answers
+   it, the ambiguity is gone and this paragraph goes with it. That row is NOT a walk of `g_root_scripts`,
+   which learns nothing after the seed (its `.body` is written at one line and never again), and it is not
+   document-wide either: a program row's kind lives on EACH FLOW's own table and a delivery rewrites the
+   flow's, so the honest answer is per-flow and the shape of the row is a question about the delivery's
+   fan-out rather than about this pair. */
 static int g_root_n_held, g_root_n_awaited;
 static Flow *g_sess_cur;
 static int g_sess_live;
@@ -11263,8 +11287,8 @@ void engine_frontier_census(EngineFrontierCensus *out)
        by whatever that timeline queued, so per-flow it is a different number per arm and none of them is the
        document's. A closed session reads 0: engine_session_close gives the table back. */
     out->root_programs     = g_root_n;
-    out->root_programs_held    = g_root_n_held;
-    out->root_programs_awaited = g_root_n_awaited;
+    out->root_programs_held_at_seed    = g_root_n_held;
+    out->root_programs_awaited_at_seed = g_root_n_awaited;
     out->prog_starts       = g_prog_starts;
     out->prog_starts_cand  = g_prog_starts_cand;
     out->prog_starts_other = g_prog_starts_other;
@@ -11325,12 +11349,12 @@ void engine_frontier_census(EngineFrontierCensus *out)
        a row was added to the table by a path that did not say which side it was on, and the side that matters
        is the one `replyAsked` is read against — an unlabelled row there silently lowers the bundle's own share
        of the reply door and makes a run that learned nothing read as one that reached a request. */
-    DCHECKF(out->root_programs_held + out->root_programs_awaited == out->root_programs,
+    DCHECKF(out->root_programs_held_at_seed + out->root_programs_awaited_at_seed == out->root_programs,
             "the root document's seed rows do not partition its own count (%d held + %d awaited against %d "
             "rows) — both arms are written at the one line the total is, on the same column engine_seed_scripts "
             "branches on, so a difference is a second path into that table and `replyAsked` is about to be read "
             "against a bundle share that is not the bundle's",
-            out->root_programs_held, out->root_programs_awaited, out->root_programs);
+            out->root_programs_held_at_seed, out->root_programs_awaited_at_seed, out->root_programs);
     /* AND THE PROGRAM-START PARTITION, asserted for the reason the two above are and at the same place. It is
        the ONLY identity these four rows have, which is stated here because the missing one is the tempting
        one: `prog_queued_cand` is an ASK and `prog_starts_cand` counts STARTS ACROSS TIMELINES, and a fork

@@ -300,7 +300,7 @@ function coldPartition(c, total, parts, where) {
 /* HOW MUCH OF THE REPLY DOOR WAS THE DOCUMENT'S OWN BUNDLE, WHICH IS THE VERDICT THIS WHOLE TOOL IS FOR AND
    WHICH HAD NO ROW. The reply door is a fetch, an injected `<script src>`, the document's own script slots and
    a dynamic `import()` (solver/result.c), so `replyAsked` on its own cannot say whether a run reached ONE
-   request of the application's or merely dragged in the scripts the page shipped. `rootProgramsAwaited` is the
+   request of the application's or merely dragged in the scripts the page shipped. `rootProgramsAwaitedAtSeed` is the
    bundle's own share — the seeded rows whose bytes the door still owes — so the subtraction is the number of
    openings the RUN reached, and `§Learning-from-replies calls that the POINT`.
    IT WAS BEING DONE BY HAND AND THE HAND COUNT IS IN A LANDED COMMENT: a live-run reading of a real page said
@@ -312,20 +312,20 @@ function coldPartition(c, total, parts, where) {
    statement about how far the run got and sends a reader to the cursor histogram rather than to the driving.
    A READING AND NEVER A THRESHOLD (§NO BOUNDS): nothing branches on it and no verdict is refused for it. */
 function bundleShareReading(b) {
-  coldPartition(b, "rootPrograms", ["rootProgramsHeld", "rootProgramsAwaited"], "engine_frontier_census");
-  const owed = Number(b.rootProgramsAwaited), asked = Number(b.replyAsked);
+  coldPartition(b, "rootPrograms", ["rootProgramsHeldAtSeed", "rootProgramsAwaitedAtSeed"], "engine_frontier_census");
+  const owed = Number(b.rootProgramsAwaitedAtSeed), asked = Number(b.replyAsked);
   const beyond = asked - owed;
   if (owed === 0)
     return `; the document's own ${b.rootPrograms} program(s) owe the reply door NOTHING (every one is inline ` +
            `or already fetched), so all ${asked} ask(s) are openings the run reached`;
   /* THE DIFFERENCE IS AN UPPER BOUND AND NOT A COUNT, WHICH THIS ARM USED TO STATE AS A COUNT AND WHICH A
-     MEASUREMENT CAUGHT. The two numbers are drawn from POPULATIONS OF DIFFERENT WIDTH: `rootProgramsAwaited`
+     MEASUREMENT CAUGHT. The two numbers are drawn from POPULATIONS OF DIFFERENT WIDTH: `rootProgramsAwaitedAtSeed`
      counts the document's own seed rows that still need bytes, and the reply door carries more than those —
      solver/result.c names it as "a fetch, an injected `<script src>`, the document's own script slots, a
      dynamic `import()`", and a driver that hands the document in may or may not have spent an ask on it. So
-     `replyAsked - rootProgramsAwaited` bounds what the RUN reached above the bundle; it does not count it, and
+     `replyAsked - rootProgramsAwaitedAtSeed` bounds what the RUN reached above the bundle; it does not count it, and
      reading it as a count credits the run with every non-script opening the door happened to carry.
-     Measured on a real bundle: `replyAsked 21` against `rootProgramsAwaited 17`, where the four are the
+     Measured on a real bundle: `replyAsked 21` against `rootProgramsAwaitedAtSeed 17`, where the four are the
      document and its peers rather than four requests the driving discovered. §a-coverage-figure-states-what-
      it-is-a-fraction-of, owed by this reading to itself. */
   if (beyond > 0)

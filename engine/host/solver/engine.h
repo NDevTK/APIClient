@@ -1323,12 +1323,14 @@ typedef struct {
     /* …AND THE PARTITION OF IT THAT SAYS WHETHER THIS RUN EVER LEARNED AN ENDPOINT. A seeded row either
      * already holds its source text or its bytes are still owed by the reply door, and the second kind is
      * what the bundle itself costs in reply-door openings. `replyAsked` has never had a denominator, so
-     * `replyAsked == rootProgramsAwaited` — the run asked for exactly its own bundle and nothing else, so no
+     * `replyAsked == rootProgramsAwaitedAtSeed` — the run asked for exactly its own bundle and nothing else, so no
      * page `fetch()`, no XHR and no dynamic `import()` was ever reached — was a reading taken by counting a
      * document's `<script src>` elements by hand. Both arms are written at the one line the total is. */
-    int  root_programs_held;    /* …whose source text this instance already has: inline, or external and
-                                   already fetched, both of which the seed makes a DYN_PAGE_SCRIPT */
-    int  root_programs_awaited; /* …and whose bytes the reply door still owes — the seed makes each of these a
+    int  root_programs_held_at_seed;    /* …whose source text this instance HAD WHEN THE ROWS WERE SEEDED:
+                                   inline, or external and already fetched, both of which the seed makes a
+                                   DYN_PAGE_SCRIPT. Past tense on purpose — see solver/engine.c, where both
+                                   arms are written at one line and never again */
+    int  root_programs_awaited_at_seed; /* …and whose bytes the reply door owed AT THAT MOMENT — the seed makes each of these a
                                    DYN_SCRIPT_SRC that parks its flow, so this is the bundle's own share of
                                    `replyAsked` and everything above it is something the RUN reached */
     /* ─── AND THE COUNTS THOSE TWO MAXIMA CANNOT CARRY, WITH THE ASK THE CANDIDATE ARM IS MEASURED AGAINST ──
