@@ -318,12 +318,26 @@ function bundleShareReading(b) {
   if (owed === 0)
     return `; the document's own ${b.rootPrograms} program(s) owe the reply door NOTHING (every one is inline ` +
            `or already fetched), so all ${asked} ask(s) are openings the run reached`;
+  /* THE DIFFERENCE IS AN UPPER BOUND AND NOT A COUNT, WHICH THIS ARM USED TO STATE AS A COUNT AND WHICH A
+     MEASUREMENT CAUGHT. The two numbers are drawn from POPULATIONS OF DIFFERENT WIDTH: `rootProgramsAwaited`
+     counts the document's own seed rows that still need bytes, and the reply door carries more than those —
+     solver/result.c names it as "a fetch, an injected `<script src>`, the document's own script slots, a
+     dynamic `import()`", and a driver that hands the document in may or may not have spent an ask on it. So
+     `replyAsked - rootProgramsAwaited` bounds what the RUN reached above the bundle; it does not count it, and
+     reading it as a count credits the run with every non-script opening the door happened to carry.
+     Measured on a real bundle: `replyAsked 21` against `rootProgramsAwaited 17`, where the four are the
+     document and its peers rather than four requests the driving discovered. §a-coverage-figure-states-what-
+     it-is-a-fraction-of, owed by this reading to itself. */
   if (beyond > 0)
-    return `; ${beyond} of those ask(s) are ABOVE the ${owed} its own bundle owes — the run reached a ` +
-           `request the document did not ship`;
+    return `; at most ${beyond} of those ask(s) are above the ${owed} its own bundle owes — an UPPER BOUND on ` +
+           `what the run reached beyond the document's own scripts, never a count of them, because the reply ` +
+           `door also carries the document itself and every non-script resource and none of those are in the ` +
+           `${owed}`;
   if (beyond === 0)
-    return `; that is EXACTLY the ${owed} its own bundle owes, so the door opened for the bundle and for ` +
-           `nothing else — no page \`fetch()\`, no XHR and no dynamic \`import()\` was ever reached`;
+    return `; that is EXACTLY the ${owed} its own bundle owes, which is the strongest evidence this census ` +
+           `offers that no page \`fetch()\`, XHR or dynamic \`import()\` was ever reached — and evidence ` +
+           `rather than proof, since the door's population is wider than the seed's and a run that spent no ` +
+           `ask on the document reads the same`;
   return `; that is ${-beyond} SHORT of the ${owed} its own bundle owes, so the run did not finish asking for ` +
          `the document's own scripts — read the cursor histogram, not the driving`;
 }
