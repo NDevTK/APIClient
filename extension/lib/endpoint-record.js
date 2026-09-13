@@ -116,22 +116,24 @@ const ENDPOINT_ABSENT = Object.freeze({
    observed no body". `endpointRecordMissingNames` answers for them with nothing edited there, because it
    derives from this declaration rather than from a hand-kept list.
 
-   NAMED RESIDUAL — the engine half is landed and the INSTALLED artifact predates it.
-   WHAT IS NOT COVERED: this file is interpreted from the tree, so it is live on write, while the engine is
-   live only after an install. Until one happens, `bodySent` and `bodyShape` are null on every record for a
-   reason that is NOT "this request sends no body" — the shipped engine emits neither key — and those two
-   read alike here, which is the absent-versus-zero defect this very declaration is about.
-   WHAT THE NEXT DIFF BUILDS: nothing in this tree. The retiring act is an INSTALL of an engine built at or
-   after the commit that added `bodyShape`, and only the role that builds and installs (the coordinator) can
-   perform it; every other reader runs the observation, gets the defer answer, and correctly leaves this
-   standing.
-   HOW ITS ABSENCE WOULD SHOW, by CONTENT in the artifact and never by a timestamp: the literal key name is
-   absent from the shipped wasm. Run it with a negative control so a zero means ABSENT rather than
-   `my probe never reached this` —
-     strings extension/lib/qjs/qjs.wasm | grep -c bodyShape        # 0 while this stands, 1+ once installed
-     strings extension/lib/qjs/qjs.wasm | grep -c bodyShapeControl # 0 always; the probe is armed if this is 0
-                                                                   # AND the first answers nonzero
-   IT RETIRES the day that first count is nonzero, at which point a null here means what it says. */
+   THE RESIDUAL THAT STOOD HERE IS RETIRED, AND IT IS REWRITTEN RATHER THAN DELETED BECAUSE ITS REASONING IS
+   WHAT A READER RE-DERIVES. It said these two names would be null on every record for a reason that was NOT
+   "this request sends no body" — this file is interpreted from the tree and so live on write, while the engine
+   is live only after an install, so the shipped engine emitted neither key and the two read alike here. Its
+   retiring observation was by CONTENT in the artifact with a negative control, never a timestamp, and it has
+   been run: the key name occurs in the shipped wasm and the invented control does not, so the presence is an
+   answer rather than an unarmed question. A null here now means what it says.
+
+   WHAT THE INSTALL DID NOT REACH, AND IT IS A DIFFERENT MECHANISM RATHER THAN A SMALLER VERSION OF THE SAME
+   ONE. An install moves the PRODUCER and moves nothing already on disk. A record restored from IndexedDB may
+   have been written by an engine that emitted neither key, and "stored by an older build" is a different fact
+   from "this request sends no body" — which is exactly the pair `pathParamsForced` states above and the reason
+   it crashes there rather than reading the absence. That case IS covered, and it is covered by the STORE-SHAPE
+   BUMP rather than by the install: `_STORE_SHAPE` and `endpoints`' `statedFrom` moved to 6 together in the
+   diff that added these names, so a store written before them is ASKED and its endpoints are SHED against
+   their `pageUrl` recipe instead of being read as a body-less request. The install retires the ARTIFACT half;
+   the shed covers the STORE half; neither does the other's job, and a reader who retires one of them on the
+   other's evidence has closed a question nobody answered. */
 /* HOW MANY EXAMPLES A HOLE CARRIES ON THE FLAT RECORD — one constant, because the two pools truncating at
    different lengths would make "this pool ran out" and "this pool has no more" different questions with the
    same appearance. It is a cap over what this record COPIES per hole, never over work: the values themselves
