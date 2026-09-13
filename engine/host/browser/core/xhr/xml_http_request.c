@@ -1925,6 +1925,19 @@ static void xhr_record_endpoint(JSContext *ctx, XhrData *d)
         }
     }
     if (!JS_IsNull(d->request_body)) {
+        /* THIS READ CANNOT MEET UNKNOWN EXTERNAL INPUT, AND THE REASON IS A LOSS RATHER THAN A GUARANTEE —
+           recorded here because a reader who asks the obvious question about this line gets the answer
+           backwards, and the two answers take OPPOSITE work.
+           The obvious question is what happens if `request_body` holds a concolic: JS_ToCStringLen would reach
+           js_force_tostring, which aborts by name over one. It never does. §3.5.6 step 4's extraction resolves
+           the body to CHARACTERS at the store site below and puts a real String in this slot, so by the time
+           this line runs the taint is already gone — a DE-TAINTING, not an abort, which is the silent
+           direction and is exactly why it reads as the safe one. What lands here for an unknown body is that
+           body's DISPLAY SHAPE, indistinguishable from a page that literally wrote those characters.
+           SO THE ARM IS CARRIED BESIDE THE SLOT and is what the @H surface is told, because it cannot be
+           recovered from these bytes: an abort would be a capability to build, and a de-tainting is a fact
+           that must travel. The store site's own residual names what is still missing — the VALUE, not the
+           arm — and nothing here may be read as having closed that. */
         body = JS_ToCStringLen(ctx, &body_len, d->request_body);
         body_ct = hl_get(ctx, d->author_headers, "content-type");
         if (body) {

@@ -61,10 +61,16 @@ typedef struct { char *name; char *value; } EpHeader;   /* the transport half: w
    a record was observed at ONE grade, because a sighting at another grade cannot reach it. */
 typedef struct { char *method; char *path; Param *params; int np, pcap;
                  EpHeader *hdrs; int nh, hcap; int is_asset; int prov;
-                 /* THE BYTES THIS ENGINE HAD NO FIELD READER FOR — see endpoint.h. Set only where
+                 /* THE BODY THIS ENGINE HAD NO FIELD READER FOR — see endpoint.h. Set only where
                     `body_params` named NOTHING, so it is never a second spelling of fields already on
-                    `params`, and never overwritten once set: a request body is ONE example, not a set. */
-                 char *body_mime, *body_b64; } Endpoint;
+                    `params`, and never overwritten once set: a request body is ONE example, not a set.
+                    TWO FIELDS BECAUSE THEY ARE TWO FACTS, AND EXACTLY ONE IS EVER SET. `body_b64` is bytes
+                    the request SENDS, which is a replay claim; `body_shape` is the display spelling of a body
+                    built out of unknown external input, which names the SOURCE that composes it and is not
+                    replayable. Carrying both in one field is what published a hole as a payload. A consumer
+                    that had to guess which it held would be making the same mistake one layer out, so the
+                    key it is emitted under is the answer. */
+                 char *body_mime, *body_b64, *body_shape; } Endpoint;
 
 /* A value carrying a `{hole}` is a SHAPE — an unknown the code did not compute — and a hole-free one is the
    real thing. The distinction decides the merge: a concrete value supersedes a shape for the same header, which
@@ -594,14 +600,19 @@ static char *body_bytes_b64(const EndpointBody *body) {
     char *b64;
 
     if (!body || !body->bytes || body->len == 0) return NULL;
-    /* A SHAPE IS NOT A PAYLOAD, AND THIS IS THE LINE THAT USED TO SAY IT WAS. A body built out of unknown
+    /* A SHAPE IS NOT A PAYLOAD, AND THIS FUNCTION USED TO TURN ONE INTO ONE. A body built out of unknown
        external input arrives carrying the engine's DISPLAY SPELLING of that unknown, because there are no
        bytes to carry; base64-ing it published the literal characters of a hole under the record's own claim
-       that the request sent exactly these bytes, which a reviewer REPLAYS. Returning nothing is the honest
-       answer: this run does not know what this request sends. The fields may still be known — a body the page
-       composed by joining text spells its own holes, and body_params above reads them — so the two questions
-       are answered separately and only this one refuses. */
-    if (body->kind == EPB_SHAPE) return NULL;
+       that the request sent exactly these bytes, which a reviewer REPLAYS.
+       IT IS ASSERTED HERE AND DECIDED AT ONE PLACE, which is body_store below. A silent `return NULL` stood
+       here for one revision and was a SECOND answer to a question that already has an owner — the caller
+       chooses the field, so a shape reaching this function is that choice having gone wrong, and the engine's
+       own logic being wrong is what a DCHECK is for rather than something to absorb. */
+    DCHECK(body->kind == EPB_SENT,
+           "the base64 of a request body was asked for a body that is NOT bytes the request sends — this "
+           "function makes the record's replay claim, so running it over an unknown body's display spelling "
+           "publishes the characters of a hole as a payload a reviewer would send. body_store picks the "
+           "field; a shape belongs in `body_shape` and never here");
     cap = JS_Base64EncodedSize(body->len) + 1;
     b64 = malloc(cap);
     CHECK(b64 != NULL, "endpoint: OOM base64-encoding a request body this engine has no field reader for");
@@ -609,6 +620,42 @@ static char *body_bytes_b64(const EndpointBody *body) {
     CHECK(n > 0, "endpoint: the base64 buffer was sized wrong for a request body");
     b64[n] = 0;
     return b64;
+}
+
+/* WHICH OF THE TWO BODY FACTS THIS SIGHTING CARRIES, DECIDED ONCE. Everything above answers "what is this
+   body"; this is the only place that answers "so which field does it go in", and having exactly one such
+   place is what lets body_bytes_b64 ASSERT its precondition instead of absorbing a shape.
+   `body_named` IS NOT A SECOND SPELLING OF EMPTINESS — it says body_params already put this body's fields on
+   `params`, which is the better answer, so the raw form is not carried beside it. A body whose fields were
+   read is a body the reviewer can VARY; these two fields are for the one whose fields nobody could name.
+   FIRST BODY WINS AND IS NEVER OVERWRITTEN: a request body is ONE example of what this endpoint is sent, not
+   a set to be merged, and replacing it would swap one example for another with nothing on the record to say
+   so. A sighting at a different GRADE is already a different record (provenance is part of `same_identity`),
+   so this cannot mix a forced body into an observed one. */
+static void body_store(Endpoint *e, const EndpointBody *body, int body_named) {
+    if (body_named || !body || !body->bytes) return;
+    if (e->body_b64 || e->body_shape) return;
+    if (body->kind == EPB_SHAPE) {
+        /* THE SHAPE TEXT ITSELF, WHICH IS A STATEMENT ABOUT A SOURCE AND NOT A PAYLOAD. `{cfg.payload}` names
+           WHO composes this body, which is strictly more than an empty panel tells a reviewer and is exactly
+           what a sniffer can never produce. It is carried under its own key so that no consumer ever has to
+           decide which of the two it is holding. A MIME is attached only if there is one: §5.2's string arm
+           gives an unknown body `text/plain;charset=UTF-8`, which the PAGE never chose, so it is reported as
+           what it is rather than withheld — and the page's own declared type, where it set one, is the thing
+           a reviewer actually wants here. */
+        e->body_shape = malloc(body->len + 1);
+        CHECK(e->body_shape, "endpoint: OOM recording the display shape of an unknown request body");
+        memcpy(e->body_shape, body->bytes, body->len);
+        e->body_shape[body->len] = 0;
+    } else if (body->mime) {
+        /* BYTES, WHICH ONLY MEAN ANYTHING BESIDE THE TYPE THAT SAYS HOW TO READ THEM — the pair `EndpointBody`
+           is one struct for. This is the arm that makes the record's replay claim. */
+        e->body_b64 = body_bytes_b64(body);
+    }
+    if ((e->body_b64 || e->body_shape) && body->mime) {
+        e->body_mime = strdup(body->mime);
+        CHECK(e->body_mime, "endpoint: OOM recording a request body's content type");
+    }
 }
 
 /* THE DOMAIN'S FIRST OBSERVATION — this endpoint's record takes the set the recording flow proved. */
@@ -841,10 +888,7 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
                nothing on the record to say so. A sighting at a different GRADE is already a different record
                (provenance is part of `same_identity`), so this cannot silently mix a forced body into an
                observed one. */
-            if (!body_named && !g_eps[i].body_b64 && body && body->mime) {
-                g_eps[i].body_b64 = body_bytes_b64(body);
-                if (g_eps[i].body_b64) g_eps[i].body_mime = strdup(body->mime);
-            }
+            body_store(&g_eps[i], body, body_named);
             if (endpoint_merge_headers(&g_eps[i], hdrs, nhdrs) > 0)
                 flow_credit_emit(1.0);
             goto done;
@@ -865,10 +909,7 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
         param_set_leq(&e->params[e->np], kvb.e[j].leq, kvb.e[j].nleq);
         e->np++;
     }
-    if (!body_named && body && body->mime) {
-        e->body_b64 = body_bytes_b64(body);
-        if (e->body_b64) e->body_mime = strdup(body->mime);
-    }
+    body_store(e, body, body_named);
     /* The count is deliberately DROPPED here: every header of a brand-new endpoint is new, and the discovery
        being credited is the ENDPOINT. Crediting both would price one sighting at one point plus one per header
        it happened to carry, which makes a request's header count part of the ranking. */
@@ -940,9 +981,17 @@ char *endpoint_json_array(void) {
            bytes is not a body — the same sentence `EndpointBody` is one struct for. A consumer reads their
            presence as the POSITIVE statement "this request sends a body this engine has no reader for",
            never as a hole to default past. */
-        if (e->body_b64 && e->body_mime) {
-            json_buf_raw(&b, ","); json_buf_key(&b, "bodyMime"); json_buf_str(&b, e->body_mime);
-            json_buf_raw(&b, ","); json_buf_key(&b, "bodyBase64"); json_buf_str(&b, e->body_b64);
+        if (e->body_b64 || e->body_shape) {
+            DCHECK(!(e->body_b64 && e->body_shape),
+                   "one request body was recorded as BOTH bytes the request sends and the display spelling of "
+                   "an unknown — body_store sets exactly one, so a record holding both is two sightings "
+                   "merged across a grade the identity is supposed to keep apart");
+            if (e->body_mime) { json_buf_raw(&b, ","); json_buf_key(&b, "bodyMime"); json_buf_str(&b, e->body_mime); }
+            /* TWO KEYS, SO THE CONSUMER NEVER GUESSES. `bodyBase64` is the replay claim and `bodyShape` is a
+               statement about WHICH SOURCE composes the body; a reader that met one field would have to
+               decide which of those it was holding, and deciding wrongly is how a hole gets sent. */
+            if (e->body_b64)   { json_buf_raw(&b, ","); json_buf_key(&b, "bodyBase64"); json_buf_str(&b, e->body_b64); }
+            if (e->body_shape) { json_buf_raw(&b, ","); json_buf_key(&b, "bodyShape");  json_buf_str(&b, e->body_shape); }
         }
         /* …AND WHAT THIS RECORD IS EVIDENCE OF, ALWAYS, in the same three words the pending line spells and
            through the same mapping (solver/engine.h's `engine_provenance_token`), so the zone that reads both
@@ -1126,7 +1175,7 @@ void endpoint_free(void) {
         /* THE TWO FIELDS ADDED TO `Endpoint` FREED WHERE EVERY OTHER OWNED FIELD IS — §Architecture's rule
            that a struct copied or freed field-by-field creates an obligation at every such site, which is
            what a field added to one and not the other silently breaks. */
-        free(g_eps[i].body_mime); free(g_eps[i].body_b64);
+        free(g_eps[i].body_mime); free(g_eps[i].body_b64); free(g_eps[i].body_shape);
         for (int j = 0; j < g_eps[i].np; j++) {
             free(g_eps[i].params[j].name);
             for (int k = 0; k < g_eps[i].params[j].nvals; k++) free(g_eps[i].params[j].vals[k]);
