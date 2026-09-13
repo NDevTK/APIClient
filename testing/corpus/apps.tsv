@@ -49,9 +49,15 @@
 ##      bundle names, requested anonymously, answering 401/403/303 beside a sibling that answers 200.
 ##   3. SURVIVES A HEADLESS LOAD WITHOUT AUTH — a real app document, not an SSO wall and not a 403 shell.
 ##   4. MIRRORABLE, so a before/after is on FROZEN BYTES (§Testing). The test is mechanical: does `mirror.mjs`
-##      reach the app's JavaScript, which it does through `<script src>` and `<link rel=preload/modulepreload
-##      as=script>`? A page whose bundle is reached only by RUNNING its inline bootstrap fails this — the
-##      engine can drive it live, and a number from it may never be quoted as a frozen-bytes comparison.
+##      reach the app's JavaScript, which it does through `<script src>` and `<link rel=preload/modulepreload>`
+##      — EVERY preload, whatever its `as`. This clause used to say `as=script` and the matcher never read
+##      `as` at all: 46 of 445 frozen resources across 10 of 18 rows are fonts, stylesheets and svg, and
+##      keeping them is right, because the fixture replays each under its recorded content type.
+##      AND THE TEST IS RUN WITH A REGEX ENGINE, NEVER A LINE-ORIENTED GREP. A `<script>` tag may span
+##      lines with its `src=` alone on one of them, and grafana's five do — so a `grep -oE` answered ZERO
+##      and this list carried a FAILS-4 verdict for a page that mirrors 5/5 at 200. A page whose bundle is
+##      reached only by RUNNING its inline bootstrap still fails this, and squoosh is the measured example
+##      at 0/0 scripts; a number from such a row may never be quoted as a frozen-bytes comparison.
 ##   5. THE BUNDLER STACK IS AN OBSERVATION RECORDED AFTERWARDS, NEVER A SELECTION CRITERION.
 ##
 ## A VERDICT IN THE THIRD COLUMN IS A MEASUREMENT AND ITS ABSENCE IS "NOT ASSESSED", NEVER "PASSES". Most of

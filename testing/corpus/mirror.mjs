@@ -1,8 +1,16 @@
 // PROVENANCE + A FROZEN COPY, so a later run can tell A SITE CHANGING from THE ENGINE CHANGING.
 //
-// For each corpus row: fetch the document (following redirects), then every `<script src>` and
-// `<link rel=modulepreload|preload as=script>` it names, saving each at its ORIGINAL path under
-// mirror/<id>/<host>/<path> — NOT flattened to s0.js, because a flattened tree throws away the module
+// For each corpus row: fetch the document (following redirects), then every `<script src>` and every
+// `<link rel=modulepreload|preload>` it names -- EVERY preload, WHATEVER ITS `as`, which this line used
+// to deny. It said `preload as=script` and the matcher below has never read `as` at all: MEASURED over
+// the frozen corpus, 46 of 445 resources across 10 of 18 rows are not JavaScript (16 woff2, 15 svg, 13
+// css, one json, one html), and the oldest of those rows was frozen long before anybody doubted the
+// sentence. THE CODE IS RIGHT AND THE SENTENCE WAS WRONG, so the sentence changed: serve-faithful.mjs
+// replays each resource under its RECORDED contentType, so a captured font or stylesheet answers as the
+// origin's did, and narrowing the capture to `as=script` would turn all 46 into fixture 404s the real
+// page never saw. A reader who wants `the app's JavaScript` filters the record by contentType, which is
+// already recorded per resource; no field is needed for it and none is added. Saved at its ORIGINAL path
+// under mirror/<id>/<host>/<path> — NOT flattened to s0.js, because a flattened tree throws away the module
 // graph (a `type="module"` chunk's own relative `import` resolves against ITS url, not the document's) and
 // that fixture defect has already produced false crashes in this session's earlier census.
 //
