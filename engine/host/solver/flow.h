@@ -2259,17 +2259,18 @@ long flow_starved_picks(void);
    THE FRACTION IS OF `picks_lifetime`, exactly as the superset's is, and the two are raised under one
    condition at one line so `idle <= starved` holds by construction and neither is a reading of a second
    moment. A LIFETIME COUNTER and one of the few kinds a reader may difference.
-   WHAT IT CANNOT SEE IS ONE CLAUSE OF THE BOUNDARY, stated at the counter in flow.c: engine.c's unit boundary
-   is `!frame && !JS_HasParkedFlow(runtime) && !flow_job_microtask`, and `flow_between_units` asks the first
-   and the third. So a member with no frame, no microtask owed and a PARKED CONTINUATION reads between-units
-   here and is not, which makes this an UPPER BOUND on the defect and a much tighter one than the row above.
-   THE POPULATION THAT BOUND IS OVER IS THE NON-INCUMBENT, WHICH IS THE OPPOSITE OF WHAT THIS SENTENCE SAID.
-   It read "over-reports by exactly the incumbent-with-a-park", and the raise in flow.c requires `best !=
-   seed` — the incumbent SEEDS that scan and can never be the member counted — so the incumbent is the one
-   member this row structurally excludes. The uncovered set is a non-running member holding a park, whose
-   queue is on `Flow::parked` rather than in the runtime, which is precisely why the runtime clause cannot be
-   asked of it from here. Corrected at both sites in one diff; the SUBSTANCE (one clause of three is unasked)
-   is unchanged and it is flow.c's residual that says what closes it. */
+   IT ASKS ALL THREE CLAUSES OF THE BOUNDARY NOW, AND IT IS NO LONGER AN UPPER BOUND. engine.c's unit
+   boundary is `!frame && !JS_HasParkedFlow(runtime) && !flow_job_microtask`; `flow_between_units` asks the
+   first and the third and flow.c's `flow_holds_park` asks the second, so a member with no frame, no microtask
+   owed and a PARKED CONTINUATION is no longer counted here as though it had finished its trial.
+   WHAT MADE THE SECOND CLAUSE ASKABLE FROM HERE IS WHO IS COUNTED, NOT A NEW HANDLE. The raise requires
+   `best != seed`, the incumbent SEEDS that scan and can never be the member counted, so every member this row
+   counts is a NON-RUNNING one — and a non-running member's park queue is on `Flow::parked`, exactly where the
+   predicate reads it. Only the RUNNING member's queue is in the runtime, and asking about that member is an
+   assert rather than a silent NULL.
+   THE READING THIS BUYS IS THE ONE THAT MATTERS AND IT IS WORTH SAYING WHY: an upper bound NEAR ZERO is
+   decisive and an upper bound that is LARGE is not, so while this row was a bound it could not be trusted in
+   the direction an ordering question is actually asked in. */
 long flow_starved_picks_idle(void);
 
 /* The highest-priority flow in the frontier, or NULL if empty — EVERY member, whether or not it can currently

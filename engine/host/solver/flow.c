@@ -151,6 +151,23 @@ static int64_t g_picks_total = 0;
    THIS LICENSES NO BOUND AND NO CAP (§NO BOUNDS). Nothing here argues for shedding an arm, capping a fork
    site or bounding a cross product; a growing frontier is the design working. It says only that the ORDER, on
    a real document, is not currently choosing between two kinds of work that are worth very different amounts.
+   AND IT IS NOT EVIDENCE THAT THE ORDER IS WHAT IS WRONG, WHICH IS THE READING THESE FIGURES INVITE AND HAVE
+   ALREADY PRODUCED ONCE — A THROUGHPUT PROBLEM DISPATCHED AS AN ORDERING ONE. `neverPicked` is a fraction of
+   the FRONTIER, and what decides whether it says anything about ranking at all is `picksLifetime`, the
+   denominator it is quoted without above. This file says so itself at the starvation counter: `never_picked`
+   climbing "is arithmetic about the fork factor and not about the order (5786 flows created against 1010
+   dispatches — no ordering can dispatch what the thread has not reached)". MEASURED on the same mirror these
+   numbers came from, on a quiet box: `_unitsDone` 55 against 17165 flows, with `_jobsRun` 0. The thread
+   reached essentially nothing, so 64605 unpicked members is what a fork factor does to a frontier nobody
+   served, and not a statement about rank.
+   `neverPickedGap` 0 POINTS THE OTHER WAY FROM HOW IT READS, AND IT IS THE ROW THAT SETTLES IT: the best
+   never-picked member stands AT the top, so nothing is ranked ahead of it and the order is ready to serve it
+   the moment a dispatch exists. A gap of zero is an order with nothing to answer for.
+   THE TWO SUBJECTS TAKE OPPOSITE WORK, which is why the distinction is worth this paragraph: an ordering
+   defect is repaired by a TERM, and a throughput one by finding where a TURN GOES. So a reader who meets this
+   block with a mechanism already in mind owes two numbers before naming it — `picksLifetime` beside the
+   fraction, and `starvedPicksIdle` against `picksLifetime`, that subset being the only instrument here that
+   asks whether a pick ever PASSED OVER a member, which is what "is the order wrong" actually asks.
 
    THAT IS A GAUGE OVER A COUNTER AND IT IS THE REASON THESE TWO ROWS EXIST. `members` is a gauge, so
    `members / picksLifetime` is a HOLDING ratio over the whole session and cannot be differenced into a rate;
@@ -1459,6 +1476,28 @@ static int flow_between_units(const Flow *f) {
     return f->frame == NULL && !flow_job_microtask(f);
 }
 
+/* THE THIRD CLAUSE OF engine.c'S UNIT BOUNDARY, ASKED OF A MEMBER THAT IS NOT HOLDING THE THREAD — the half
+   flow_between_units above cannot ask, and the whole of what the starvation counter's residual was about.
+   A PARK IS A PER-MEMBER FACT FOR EVERY MEMBER BUT ONE. `Flow::parked` holds a member's parked continuations,
+   and it is authoritative for anybody who is not running; the RUNNING member's queue has been moved into the
+   runtime for the duration of its turn (flow_switch_out's JS_TakeParkedFlows stores it back), so `parked`
+   reads NULL for it no matter how many continuations it holds. That is why this asserts rather than guards:
+   answering "no park" for the running flow would be a plausible datum where the honest answer is that this
+   predicate cannot see it, and a caller that needs the running member needs a runtime handle this file does
+   not have — which is a capability to BUILD (pass the runtime to the pick) and not a case to paper over.
+   THE COUNTER BELOW CAN NEVER ASK IT ABOUT THE RUNNING MEMBER, and that is a claim this assert makes
+   checkable rather than a comment asserting it: the raise requires `best != seed`, the seed IS the incumbent,
+   and the incumbent is the flow holding the thread. If this ever fires, the seed was not the running flow and
+   the residual's whole population argument was wrong — which is a finding and not an inconvenience. */
+static int flow_holds_park(const Flow *f) {
+    DCHECK(f != g_running,
+           "a member's parked continuations were asked for while it holds the thread — its queue is in the "
+           "RUNTIME for the duration of its turn, not on Flow::parked, so this would answer NO PARK for a "
+           "flow that has several. Build the runtime handle at the pick (engine.c asks JS_HasParkedFlow of "
+           "the runtime) rather than reading a field that is empty by construction here");
+    return f->parked != NULL;
+}
+
 /* A FLOW COMPLETED A UNIT OF WORK — the OPTIMISM term's quantity, and the one thing in this file that is a count
    rather than a clock. See flow.h's `visits` for what a unit is and why the term may not be thread time.
    IT IS A SEPARATE CALL FROM flow_age_running AND THAT IS THE POINT. The two are charged at the same moment by
@@ -2372,7 +2411,26 @@ static Flow *flow_new(JSContext *ctx, JSValueConst fn, WorldId w) {
  * debt whose only currency was the dispatch the debt itself was foreclosing, which is §scheduler's razor's
  * STARVES. It is not needed either: frontier_vt() is the serving item's QUEUE COORDINATE, aging included, so
  * copying the aging again would charge the newcomer twice for thread time it never consumed.
- */
+ *
+ * AND THIS IS WHY AN ACCOUNT PER BRANCH ARM IS INADMISSIBLE, WHICH IS A DIFFERENT REFUTATION FROM THE TWO
+ * ABOVE AND THE ONLY ONE THAT REACHES THE PAIR flow_fork_inherit'S EQUALITY CANNOT COMPARE. The two above are
+ * about a COPY: copying the parent's aging is an unrepayable debt, and copying its reward is birth order. The
+ * proposal that survives both is to let an arm FOUND ITS OWN ACCOUNT and copy nothing — it would then arrive
+ * here, unplaced, reading the clock like any from-baseline flow, and there is no seeding to object to. That is
+ * the refutation everyone reaches for and it is the wrong one.
+ * IT FAILS THE TWO-INSTANTS TEST ANYWAY, BECAUSE AN UNPLACED ACCOUNT DOES NOT READ A CONSTANT — IT READS A
+ * CLOCK, AND A CLOCK IS EXACTLY WHAT MAKES TWO INSTANTS DIFFER. `frontier_vt()` is the serving item's queue
+ * coordinate and it ADVANCES, so two arms of ONE parent founding accounts at two instants arrive at two
+ * different virtual times, differing by precisely what the frontier did in between — which is birth order and
+ * nothing else. A higher reward ranks better and `vt` climbs, so the LATER arm is born ABOVE the earlier:
+ * newest-first, the same LIFO a copied reward produces, reached by the one route that avoids copying. Neither
+ * arm did anything between the two branches, which is the whole of the test.
+ * SO BOTH DOORS ARE SHUT AND THE FAMILY IS THE ANSWER RATHER THAN A COMPROMISE: a fork JOINS, every member of
+ * a family reads ONE reward, and §scheduler's "a never-run flow is never starved" holds WITHIN a family by
+ * construction, because the gap that guarantee is tight in is identically zero there.
+ * A READER WHO ARRIVES WANTING THE TWO SIDES OF AN EXAMPLE-FREE BRANCH TO BE COMPARABLE IS USUALLY HOLDING A
+ * THROUGHPUT MEASUREMENT AND READING IT AS AN ORDERING ONE — see the `neverPicked` block at the head of this
+ * file for the figures that decide which, and for the denominator they have to be quoted with. */
 static void flow_arrive_at_virtual_time(Flow *f) {
     DCHECK(f->val == 0.0 && f->cpu == 0 && f->cpu_gen == 0 && f->visits == 0 &&
            f->family == f->acct && f->family->fam_us == 0 && f->family->emit_gen == 0 &&
@@ -4015,21 +4073,21 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
        and was handed the thread again ahead of a member that has never had one. That subset is the defect; the
        remainder is a program being finished, which is the necessary work no ordering should interrupt on a
        tie. Read the SUBSET against `picksLifetime` and the remainder as what a forking frontier costs.
-       NAMED RESIDUAL — THE IDLE SUBSET IS ITSELF AN UPPER BOUND, BY ONE CLAUSE. Not covered: a member holding a
-       PARKED CONTINUATION and nothing else. engine.c's unit boundary has a third clause for it and asks it of
-       the RUNTIME, because the running flow's park queue is moved there for the duration of its turn and
-       stored back on `Flow::parked` only at switch-out — so from here the same question has two spellings
-       depending on who holds the thread, and flow_between_units asks neither. THE POPULATION THAT LEAVES
-       UNCOVERED IS THE NON-INCUMBENT, WHICH IS THE OPPOSITE OF WHAT THIS SENTENCE SAID: it read "since the
-       incumbent seeds this scan and is who `best` usually is, the uncovered population is exactly the
-       incumbent-with-a-park", and the condition three paragraphs down requires `best != seed`, so the
-       incumbent is the ONE member this row can never count. The uncovered set is a NON-running member holding
-       a park — its queue is on `Flow::parked` rather than in the runtime, which is exactly why the runtime
-       clause cannot be asked of it from here — and it is counted as idle when it is not. What the next diff builds: one accessor answering "does this member
-       hold a parked continuation" for every member including the running one, so the boundary here is
-       engine.c's whole boundary rather than its per-member half. How its absence shows: `starvedPicksIdle`
-       tracking `starvedPicks` on a document whose flows park heavily inside continuations while `unitsDone`
-       stays flat — an idle count that cannot fall below the park rate, on a run in which nothing finished.
+       THE IDLE SUBSET WAS AN UPPER BOUND BY ONE CLAUSE AND IS NO LONGER, AND THE RESIDUAL IS RETIRED HERE
+       RATHER THAN DELETED because what retired it is narrower than what it asked for. It asked for one
+       accessor answering "does this member hold a parked continuation" FOR EVERY MEMBER INCLUDING THE RUNNING
+       ONE, so that this boundary would be engine.c's whole boundary rather than its per-member half — and that
+       accessor is not needed and was never needed, because THIS ROW CANNOT ASK ABOUT THE RUNNING MEMBER. The
+       raise requires `best != seed`, the seed is the incumbent, and the incumbent is the flow holding the
+       thread; so every member this row counts is one whose park queue is on `Flow::parked`, where
+       flow_holds_park reads it exactly. The running member's queue is in the runtime and this file holds no
+       handle to it, which is now an assert inside that predicate rather than a gap in this one.
+       WHICH IS WHY THE RESIDUAL'S OWN CORRECTION IS THE PART WORTH KEEPING: it first read "the uncovered
+       population is exactly the incumbent-with-a-park", and the incumbent is the ONE member this row can
+       never count. Getting the population backwards is what made the remedy a general accessor instead of a
+       field read, and a reader who re-derives the two-spellings argument will re-derive the general accessor
+       with it. What actually closed it was noticing WHO IS COUNTED, not building the thing that would have
+       answered for everybody.
        ONLY THE SCHEDULER'S OWN PICK, AND ONLY WHERE THAT PICK DISPLACES THE INCUMBENT — `best != seed` IS
        LOAD-BEARING AND ITS ABSENCE IS WHAT MADE THIS ROW UNREADABLE. This comment used to say FLOW_SCAN_NEXT
        is "the one call whose answer becomes a dispatch", and that is FALSE of the answer `cur` itself:
@@ -4063,7 +4121,7 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
        than by two writers agreeing. */
     if (why == FLOW_SCAN_NEXT && best && best != seed && best->picks > 0 && never && never_w == bw) {
         g_starved_picks++;
-        if (flow_between_units(best)) g_starved_picks_idle++;
+        if (flow_between_units(best) && !flow_holds_park(best)) g_starved_picks_idle++;
     }
     return best;
 }
