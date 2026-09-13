@@ -1122,5 +1122,74 @@
    }
   ],
   "baseUrl": "https://app.gitpod.io/"
+ },
+ {
+  "id": "excalidraw",
+  "stack": "Vite (<script type=module crossorigin src=/assets/index-<hash>.js>)",
+  "requestedUrl": "https://excalidraw.com/",
+  "finalUrl": "https://excalidraw.com/",
+  "status": 200,
+  "contentType": "text/html; charset=utf-8",
+  "csp": "",
+  "bytes": 6862,
+  "sha256": "c952b33c8525ba958ac8d7b6981ef5b02bfd9f7a77b72ba63865af5c334e153b",
+  "fetchedAt": "2026-09-13T07:52:32.287Z",
+  "resources": [
+   {
+    "url": "https://excalidraw.com/assets/index-C9AdTbDz.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 2196189,
+    "sha256": "271476cb3c093a8fc2b08f18dea319a733445bac5b7fc2f192cd043a53843268",
+    "fetchedAt": "2026-09-13T07:52:33.074Z",
+    "path": "excalidraw.com/assets/index-C9AdTbDz.js"
+   },
+   {
+    "url": "https://excalidraw.nyc3.cdn.digitaloceanspaces.com/oss/fonts/Excalifont/Excalifont-Regular-a88b72a24fb54c9f94e3b5fdaa7481c9.woff2",
+    "status": 200,
+    "contentType": "font/woff2",
+    "bytes": 24956,
+    "sha256": "e4423b318e11432aff2e6e865e300b7ca270f92321a3f56632268fede01c1b48",
+    "fetchedAt": "2026-09-13T07:52:33.431Z",
+    "path": "excalidraw.nyc3.cdn.digitaloceanspaces.com/oss/fonts/Excalifont/Excalifont-Regular-a88b72a24fb54c9f94e3b5fdaa7481c9.woff2"
+   },
+   {
+    "url": "https://excalidraw.nyc3.cdn.digitaloceanspaces.com/oss/fonts/Nunito/Nunito-Regular-XRXI3I6Li01BKofiOc5wtlZ2di8HDIkhdTQ3j6zbXWjgeg.woff2",
+    "status": 200,
+    "contentType": "font/woff2",
+    "bytes": 16476,
+    "sha256": "6d1626aac658786e37e78e0adce3ffffddbd75abc923d72e45a7168bd80053da",
+    "fetchedAt": "2026-09-13T07:52:34.294Z",
+    "path": "excalidraw.nyc3.cdn.digitaloceanspaces.com/oss/fonts/Nunito/Nunito-Regular-XRXI3I6Li01BKofiOc5wtlZ2di8HDIkhdTQ3j6zbXWjgeg.woff2"
+   },
+   {
+    "url": "https://excalidraw.nyc3.cdn.digitaloceanspaces.com/oss/fonts/Assistant/Assistant-SemiBold.woff2",
+    "status": 200,
+    "contentType": "font/woff2",
+    "bytes": 20212,
+    "sha256": "bba47a7d1b185a4a2e0d265ec82aeac5dbc2dc9cb0f482a2ff57cbdfe4e5045d",
+    "fetchedAt": "2026-09-13T07:52:34.964Z",
+    "path": "excalidraw.nyc3.cdn.digitaloceanspaces.com/oss/fonts/Assistant/Assistant-SemiBold.woff2"
+   },
+   {
+    "url": "https://excalidraw.nyc3.cdn.digitaloceanspaces.com/oss/fonts/ComicShanns/ComicShanns-Regular-279a7b317d12eb88de06167bd672b4b4.woff2",
+    "status": 200,
+    "contentType": "font/woff2",
+    "bytes": 17488,
+    "sha256": "fa930fceb529a4b51ba3055d590302722c27704f6a6357495873950136b1e2ea",
+    "fetchedAt": "2026-09-13T07:52:35.394Z",
+    "path": "excalidraw.nyc3.cdn.digitaloceanspaces.com/oss/fonts/ComicShanns/ComicShanns-Regular-279a7b317d12eb88de06167bd672b4b4.woff2"
+   },
+   {
+    "url": "https://excalidraw.com/assets/mermaid-to-excalidraw-D-aVQaad.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 594914,
+    "sha256": "8fe940bcfe1c196fafe41a5c35cd9dbff94d9e3f7d76e76ac31f5f62584ffdcc",
+    "fetchedAt": "2026-09-13T07:52:36.172Z",
+    "path": "excalidraw.com/assets/mermaid-to-excalidraw-D-aVQaad.js"
+   }
+  ],
+  "baseUrl": "https://excalidraw.com/"
  }
 ]
