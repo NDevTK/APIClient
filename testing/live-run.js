@@ -229,7 +229,43 @@ const COUNTERS = ["switches", "flows", "candidates", "jobsQueued", "jobsRun", "u
  *
  * FIFTY-FIVE UNITS OF WORK AGAINST SEVENTEEN THOUSAND FLOWS IS THE FINDING. Every member finished program 6
  * and is standing at program 7's door — a chunk whose bytes were delivered before the first fork — and the run
- * spends itself forking rather than executing. That is a THROUGHPUT statement and not an ordering one:
+ * spends itself forking rather than executing.
+ *
+ * AND WHAT IT FORKS ON IS ONE NAME, MEASURED TWICE. The fork census keyed by source identity
+ * (solver/decide.c's Space-Saving table, read through the transcript) answers this outright on two independent
+ * runs of this same mirror: SIXTY-FOUR OF SIXTY-FOUR named predicate rows key on `webpackJsonp`, carrying
+ * 78.4% and 78.0% of every fork the run took, from SIX symbolic reads of the global object. The two runs
+ * differed 4.25x in reach and both ended at SIGXCPU, so their fork TOTALS are reach totals and do not survive
+ * a repeat — the IDENTITY does, and it is the identity that matters. The instrument licenses its own argmax:
+ * its published Space-Saving bound was 213 against a largest floor of 2975, which is decide.h's own condition
+ * for quoting an argmax whatever the spill is, and the site table's bound was 0, so nothing was evicted and
+ * the unnamed-site rows are complete rather than truncated.
+ * THE MULTIPLIER IS IN THE MIRROR'S OWN RUNTIME CHUNK and it is per-element x per-key, not per-chunk:
+ *
+ *   var h=this.webpackJsonp=this.webpackJsonp||[],t=h.push.bind(h);
+ *   h.push=a; h=h.slice(); for(var s=0;s<h.length;s++)a(h[s]);
+ *
+ * `h.slice()` on a symbolic global yields an unknown array; `s<h.length` is an unknown-LENGTH loop, so it
+ * forks per POSITION; each `h[s]` is unknown and the callback for-ins over it, so it forks per KEY. Every
+ * operation token the census carries maps onto one step of that line, ending in `[[OwnPropertyKeys]]`,
+ * `[[GetPrototypeOf]]` and `%ForInIteratorPrototype%.next`.
+ * A COORDINATOR'S ARITHMETIC WAS HALF RIGHT AND THE HALF IT GOT WRONG IS THE INSTRUCTIVE ONE: he predicted the
+ * NAME correctly and predicted the multiplier as per-chunk, which gives 2^6=64 against a frontier of tens of
+ * thousands, and he said the arithmetic did not close rather than fitting it. It did not close because the
+ * multiplication was over the wrong operation. A prediction that names its own gap is what let the census
+ * settle it in one reading instead of confirming a plausible wrong mechanism.
+ * WHAT THIS DOES NOT LICENSE, and it is the whole reason the measurement is recorded rather than acted on:
+ * the forking is CORRECT. §Solver-half REQUIRES an iteration over opaque input to fork each iteration as its
+ * own parkable flow, and no run has falsified any of those arms' premises. A hot path is exactly where
+ * §a-wrong-narrowing is most tempting and most expensive. What is refuted is the MITIGATION §Solver-half
+ * pairs with the forking — that the identical-input tail is outranked and paged — and that refutation is
+ * recorded in CLAUDE.md at the sentence that states it.
+ * STILL OPEN, stated so nobody reads it as settled: whether a global an EARLIER PROGRAM OF THE SAME FLOW
+ * assigned is still read as unknown. Six `_absent` reads against roughly eighteen sites of that name is
+ * CONSISTENT with sequential assignment already working, so the census cannot separate that from six genuine
+ * first-reads and nothing here should be built on it.
+ *
+ * That is a THROUGHPUT statement and not an ordering one:
  * `neverPickedGap` was 0, and engine/build.mjs's own reading of that row says in its own words that nothing is
  * ranked ahead of those members, so the ordering is not what is keeping them out and the instant is not
  * evidence either way. A coordinator quoted `neverPicked 64605 of 71452` into a brief WITHOUT
