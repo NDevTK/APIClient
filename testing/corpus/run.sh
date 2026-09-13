@@ -66,7 +66,27 @@ echo "artifact $(sha256sum "$LANE/extension/lib/qjs/qjs.wasm" | cut -c1-64)"
 echo "list $SITES   at $AT"
 echo "load at start: $(cut -d' ' -f1-3 /proc/loadavg)"
 
-while IFS=$'\t' read -r id url stack; do
+# THE LIST IS READ ONCE, INTO MEMORY, BEFORE THE LOOP — because `done < "$SITES"` holds an OPEN FD and the
+# shell reads INCREMENTALLY, so a rewrite of the list while a pass is running moves the file under the
+# offset. This is the same shared-input hazard the LANE exists for, on the one input that was still
+# pointing at the shared checkout: the lane copies harness.js and extension/ precisely so nobody can swap
+# them mid-pass, and then the site list was read live from a file a peer appends to.
+# MEASURED, AND IT COST ELEVEN ROWS: a mirroring lane appended a verdict to one row's third column while a
+# census was walking the list. The loop resumed at a byte offset INSIDE the new prose and fed PROSE
+# FRAGMENTS in as site ids — one row's id was `pass" AND IT NOW ANSWERS 200. Measured four times…` and the
+# next was `c)`. Rows 1-8 were exactly right and 9 onward were not, which is the worst shape: a pass that
+# is partly valid.
+# WHAT CAUGHT IT WAS report.mjs BEING FATAL on a row its list does not name. A softer instrument would
+# have printed a ten-row census with two nonsense rows in it and the pass would have been reported. That
+# refusal is the rule earning its keep, and it is the reason this defect is a comment rather than a
+# silently wrong number in somebody's report.
+# A COPY IS NOT ENOUGH AND THE SNAPSHOT IS NOT THE POINT — what matters is that the read happens ONCE, at
+# a known instant, so every row of one pass comes from one version of the list. `mapfile` does that with
+# no second file to keep in step, and the count is printed so a pass states how many rows it was handed.
+mapfile -t SITE_ROWS < "$SITES"
+echo "list read once: ${#SITE_ROWS[@]} line(s) at $(date -u +%H:%M:%S) — rows below come from THIS snapshot of the list, not from re-reads"
+for _row in "${SITE_ROWS[@]}"; do
+  IFS=$'\t' read -r id url stack <<< "$_row"
   [ -z "$id" ] && continue
   case "$id" in \#*) continue;; esac
   [ -n "$ONLY" ] && [ "$ONLY" != "$id" ] && continue
@@ -116,7 +136,7 @@ while IFS=$'\t' read -r id url stack; do
   [ -z "$R" ] && R="ROW {\"id\":\"$id\",\"url\":\"$url\",\"fatal\":\"driver produced no row\"}"
   echo "${R#ROW }" >> "$OUT"
   [ -n "$SRV" ] && { kill -TERM $SRV 2>/dev/null; wait $SRV 2>/dev/null; }
-done < "$SITES"
+done
 
 # TEAR DOWN BY THE PID IN *OUR* LOCK, never by a pattern. `pkill -f testing/harness.js` matches every lane's
 # harness on a shared checkout, which is the exact way one agent has already killed another's browser.
