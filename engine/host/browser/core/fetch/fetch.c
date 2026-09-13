@@ -1516,12 +1516,20 @@ static int js_fetch_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSV
             eb.nspan = nespan;
             /* The arm the line above already took, carried instead of dropped — BODY_SHAPE's bytes are the
                display spelling of an unknown and must never be published as what the request sends.
-               A SPANNED BODY TAKES THE SAME ARM FOR A SECOND REASON, and it is the constraint solver/endpoint.c's
-               retired residual was written to be built against: some of these bytes are an unknown's EXAMPLE
-               and some are a byte nobody wrote, because §10.4.5.18 skips the block write entirely for an
-               unknown carrying no example rather than inventing one. So the request does not send exactly
-               these bytes and no record of it may say that it does. */
-            eb.kind = (body_kind == BODY_SHAPE || nespan > 0) ? EPB_SHAPE : EPB_SENT;
+               A SPANNED BODY IS REFUSED THE SAME CLAIM FOR A SECOND REASON AND UNDER ITS OWN NAME: some of
+               these bytes are an unknown's EXAMPLE and some are a byte nobody wrote, because §10.4.5.18 skips
+               the block write entirely for an unknown carrying no example rather than inventing one. So the
+               request does not send exactly these bytes and no record of it may say that it does.
+               IT STOOD AS EPB_SHAPE AND THAT WAS THE REFUSAL WITHOUT THE STATEMENT, which solver/endpoint.c's
+               own shape arm names as the trap it fell into once: a shape is a C string naming WHICH SOURCE
+               composes a body, and these are BYTES with a per-range provenance already on `params`, so
+               grading them as a shape recorded neither — the surface's `body_named` test then dropped them
+               entirely. EPB_EXAMPLE is that refusal with the fact kept.
+               BODY_SHAPE STILL WINS THE TEST, and that ordering is the assertion rather than a tie-break: a
+               shape body has no data block for a span to name an offset into (core/fetch/body.c captures
+               spans only on the BufferSource arm), so the two are disjoint and the surface's mint DCHECKs the
+               pairing — a shape arriving with spans fires there instead of quietly becoming an example. */
+            eb.kind = body_kind == BODY_SHAPE ? EPB_SHAPE : (nespan > 0 ? EPB_EXAMPLE : EPB_SENT);
             ebp = &eb;
         }
         endpoint_record(ctx, s->rec.method, s->url, eh, s->hdrs.n, ebp, prov);

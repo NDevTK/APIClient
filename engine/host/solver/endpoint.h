@@ -77,10 +77,35 @@ typedef struct { const char *name, *value; } EndpointHeader;
    between that question and this call, so the fix is to carry a fact that exists rather than to derive a new
    one. A producer that forgets takes the same arm as one that has nothing to say, which is what stops
    forgetting from being a way to be exempted. */
+/* AND A THIRD ANSWER, WHICH IS NEITHER OF THOSE TWO AND IS THE ONE A REVIEWER EDITS. The pair above is a
+   complete partition of a body whose bytes are all of ONE provenance — the page computed every one of them,
+   or the page computed none of them — and a body a serializer wrote BYTE BY BYTE is neither. `EndpointBodySpan`
+   below names which ranges of it the run did not determine; the rest IS what the page computed, and inside a
+   span stands the unknown's own EXAMPLE where it had one and a byte NOBODY WROTE where it did not, because
+   §10.4.5.18 skips the block write rather than inventing one.
+   SO THEY ARE AN EXAMPLE OF THE BODY AND NEVER WHAT THE REQUEST SENDS, and that difference is the whole of what
+   makes them safe to publish. A reviewer handed them under EPB_SENT's claim would replay a byte no run ever
+   computed, which is §@H's invented value one layer out and is exactly the fabrication the EPB_SHAPE split was
+   made to end — so the constraint is not a preference to be re-derived: a body carrying spans has no bytes the
+   request can be said to send, and endpoint_record asserts the pairing rather than trusting a producer to.
+   WITHOUT IT THE HONEST STATE IS A SILENCE, which is the same pairing EPB_SHAPE's own arm records: the spans
+   name WHERE a reviewer edits and say nothing about what currently stands there, so a panel holding them alone
+   can change WHICH value a field carries and cannot show what it carries. An ABSENT example and an example of
+   all-zero bytes are different facts, and this kind is what makes the first expressible.
+   IT IS A THIRD KIND AND NOT A FLAG ON EPB_SENT for the reason the two fields it selects between are two
+   fields: a consumer combining `sent` with `some of it is an example` decides the claim at the point of use,
+   and the claim is precisely what the key is for. THE TWO RUNS ABOVE ARE IN BACKTICKS RATHER THAN QUOTED
+   because they are SPELLINGS BEING SHOWN and not a spec sentence — a quoted run this near a section number is
+   compared against that section by engine/citegen.mjs and reported as a fabricated quotation, which is that
+   tool working and this file having written a claim it was not making. */
 typedef enum {
     EPB_UNSTATED = 0,   /* nobody said; endpoint_record refuses it */
     EPB_SENT,           /* bytes the page composed — what the request will actually send, replayable */
-    EPB_SHAPE           /* the engine's display spelling of an unknown body; NEVER bytes the page sent */
+    EPB_SHAPE,          /* the engine's display spelling of an unknown body; NEVER bytes the page sent */
+    EPB_EXAMPLE         /* bytes that are an EXAMPLE of the body — the page's own where it computed them and an
+                           unknown's where it had one, with a byte nobody wrote inside an exampleless span.
+                           NEVER replayable: it is what the payload LOOKS LIKE, for a consumer holding the
+                           spans to splice a replacement into. */
 } EndpointBodyKind;
 
 /* WHICH BYTE RANGES OF THE BODY THE PAGE DID NOT DETERMINE, AND WHERE EACH CAME FROM — the one fact that

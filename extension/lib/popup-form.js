@@ -67,12 +67,20 @@ function buildFormFields(schema, initialData = null) {
      of the answer, because a reviewer learns the encoding by LOOKING at a frame header and a wire tag. Nothing
      here has to know what they mean, which is the point: no transport branch, no decoder, no content-type
      pattern. The panel SHOWS, it does not interpret.
-     THE TWO FIELDS ARE RENDERED AS TWO CLAIMS AND NEVER FOLDED. `bodySent` is bytes the request sends, so it
-     may say so and a reviewer may replay it; `bodyShape` is the engine's display spelling of a body composed
-     from unknown external input, so it names WHICH SOURCE composes the payload and must never be labelled as
-     bytes — that mislabelling is what solver/endpoint.c was caught doing, and the cost of it is a reviewer
-     SENDING a request the page never made. The record asserts the two are exclusive; this reads the key it
+     THE THREE FIELDS ARE RENDERED AS THREE CLAIMS AND NEVER FOLDED. `bodySent` is bytes the request sends, so
+     it may say so and a reviewer may replay it; `bodyShape` is the engine's display spelling of a body
+     composed from unknown external input, so it names WHICH SOURCE composes the payload and must never be
+     labelled as bytes — that mislabelling is what solver/endpoint.c was caught doing, and the cost of it is a
+     reviewer SENDING a request the page never made; `bodyExample` is what a payload the page wrote BYTE BY
+     BYTE currently looks like, which is neither, because the page computed most of those bytes itself and
+     some of them nobody computed at all. The record asserts the three are exclusive; this reads the key it
      was given rather than deciding.
+     THE THIRD ONE IS THE ONLY ONE WHOSE FIELDS ARE ALSO IN THE PARAMETER LIST BELOW, and that is the point of
+     it rather than a duplication: the other two are recorded exactly where the engine could name NO field of
+     the body, while this is recorded where it named several — `body[17:23]` rows, which are ADDRESSES into
+     these bytes. Rendering the addresses and not the content gives a reviewer a range to edit and no way to
+     see what stands there; rendering the content and not the addresses gives an opaque blob. The two halves
+     are one answer and this panel is where they meet.
      NEITHER PRESENT IS NOT RENDERED AS "NO BODY", and that is the absent-versus-zero rule rather than
      caution: the shipped engine may predate these keys entirely (see lib/endpoint-record.js's residual), in
      which case null means "this build does not report request bodies" and not "this request sends none". The
@@ -81,15 +89,48 @@ function buildFormFields(schema, initialData = null) {
      the two. */
   const _bs = schema.endpoint && schema.endpoint.bodySent;
   const _bsh = schema.endpoint && schema.endpoint.bodyShape;
-  DCHECK(!(_bs && _bsh),
-         "the Send panel was handed BOTH a sent request body and the display spelling of an unknown one — " +
+  const _bex = schema.endpoint && schema.endpoint.bodyExample;
+  DCHECK((!!_bs + !!_bsh + !!_bex) <= 1,
+         "the Send panel was handed more than one of the three things a request body can be — " +
          "lib/endpoint-record.js asserts these are exclusive and solver/endpoint.c asserts it again at its " +
-         "emit, so both arriving means one of those two doors was bypassed and this panel would have to " +
-         "choose which of two contradictory claims to show a reviewer");
-  if (_bs || _bsh) {
+         "emit, so two arriving means one of those doors was bypassed and this panel would have to " +
+         "choose which of several contradictory claims to show a reviewer");
+  if (_bs || _bsh || _bex) {
     const bsec = el("div", "form-section");
     let bh = '<div class="form-section-label">Request Body <span class="card-meta">(learned)</span></div>';
-    if (_bs) {
+    if (_bex) {
+      /* A BYTE-COMPOSED PAYLOAD, AND THE CLAIM IS NEITHER OF THE OTHER TWO. These bytes are what the payload
+         LOOKS LIKE: outside the ranges they are bytes the page's own serializer computed, and inside one
+         stands an unknown's EXAMPLE where it had one and a byte NOBODY WROTE where it did not, because
+         §10.4.5.18 TypedArraySetElement skips the block write rather than inventing a value known only to
+         satisfy a gate. The panel says so in the same breath as it shows them: a reviewer who read this as a
+         payload to replay would send a byte no run ever computed, which is the fabrication the three-key
+         split exists to stop and the reason this cannot share `bodySent`'s wording any more than its key.
+         WHAT MAKES IT USEFUL IS THE PAIRING AND NOT THE BYTES. The ranges are already on this endpoint as
+         `body[off:end]` parameters — solver/endpoint.c mints one per span at location "body", and
+         lib/learn.js folds every location-"body" param into the method's request schema — so they render in
+         the parameter list BELOW this panel. That half is the ADDRESSES and this half is the CONTENT: the
+         reviewer edits an address and reads what currently stands there off here, and either half alone is
+         the state solver/endpoint.c's residual was written against.
+         NO DECODE, AND THAT IS THE DESIGN RATHER THAN A LIMIT OF THIS PANEL. §Architecture forbids a protocol
+         branch and §RUN-DON'T-MATCH forbids reconstructing a field number out of a byte stream: the page's
+         own serializer already ran with the real names and the real values in its hands, and the ranges below
+         are what it did. A reviewer learns the encoding by LOOKING, exactly as they do for `bodySent` one arm
+         down, and this surface has no more business interpreting one than the other. */
+      DCHECK(typeof _bex.base64 === "string",
+             "a learned request-body example reached the Send panel with no bytes — the base64 is the whole " +
+             "of what this field states, and the byte RANGES that address it are useless without it");
+      bh += '<div class="card-meta">This request builds its body byte by byte, so these are an EXAMPLE of the payload and NOT bytes to replay. Where a byte range below is unknown, this holds the example that unknown carried, or a byte nobody wrote where the run computed none.</div>';
+      bh += `<div class="card-meta"><code style="word-break:break-all">${esc(_bex.base64)}</code></div>`;
+      /* THE TYPE IS SHOWN ONLY WHERE THE PAGE HAD ONE, AND ITS ABSENCE IS STATED RATHER THAN PASSED OVER.
+         §5.2 BodyInit unions gives a BufferSource no Content-Type, so no type here is the ORDINARY case for
+         exactly this population and means the request really sends none. That is a fact a reviewer replaying
+         by hand needs, and an empty line reads identically to a field this build does not report. */
+      if (typeof _bex.mime === "string")
+        bh += `<div class="card-meta">Sent as <code>${esc(_bex.mime)}</code>.</div>`;
+      else
+        bh += '<div class="card-meta">The page set no <code>Content-Type</code> for it, so the request sends none.</div>';
+    } else if (_bs) {
       /* BYTES, AND THE CLAIM IS THE REPLAY CLAIM. The type is shown beside them because it is how they are
          READ — the pair solver/endpoint.h's EndpointBody is one struct for — and the base64 is shown as
          base64 rather than decoded, because decoding it here would be this surface deciding the payload is

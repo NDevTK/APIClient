@@ -10465,6 +10465,40 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "a body param is named but not `body[1:2]` -- the unknown was written at ELEMENT 1 of a "
              "Uint8Array with concrete neighbours either side, so the range is one byte at offset 1 and a "
              "different one is the store's offset arithmetic disagreeing with the element that was written");
+    /* AND WHAT CURRENTLY STANDS AT THAT RANGE, WHICH IS A SEPARATE ROW BECAUSE THE TWO ARE NOT ENTAILED. The
+       ladder above asks whether the unknown byte RANGE reached the record as an addressable param; this asks
+       whether the bytes it addresses reached it too, and neither implies the other: a store that names the
+       ranges and drops the bytes hands a reviewer an address with nothing at it, and one that publishes the
+       bytes under a range nobody named hands them an opaque blob. Folded into one ladder they would put a 1
+       above a 0 the first time either half broke alone, which is the false contract the entailment note above
+       exists to refuse — so the same document answers two rows rather than one row with four rungs.
+       THE VALUE IS PREDICTED IN FULL AND THAT IS THE CLAIM. `u8` is [65, screen.width, 66, 67];
+       §10.4.5.18 TypedArraySetElement ( obj, index, value ) stores the unknown's OWN EXAMPLE through the real
+       coercion (core/frame/screen.c's SCREEN_WIDTH is 1920 and ToUint8 of 1920 is 128), so the data block
+       holds 0x41 0x80 0x42 0x43 and its base64 is `QYBCQw==`. A rung that asked only for the KEY would pass
+       over a store that published four zero bytes — which is exactly the value known only to satisfy a gate
+       that §@H forbids, and the one wrong answer this capability is able to give. The middle rung is kept
+       under it anyway so that a MISSING key and a WRONG value are two different localisations rather than one.
+       NOTHING HERE ASKS THAT THESE BYTES ARE NOT PUBLISHED AS `bodyBase64`, and that is a deliberate absence:
+       solver/endpoint.c asserts the three keys are exclusive at its own emit, and a probe row restating an
+       invariant a DCHECK already holds is the second copy §AN-AUDITOR-DERIVES-THE-RULE forbids — it would
+       read 1 in every build where the abort is compiled in and say nothing the abort has not already said. */
+    const char *body_ex_why = NULL; int body_ex = 1;
+    fold_row(&body_ex, &body_ex_why, !!strstr(js, "\"/api/bodyspan\""),
+             "NOT REACHED: there is no /api/bodyspan record at all, so the typed-array-body statement never "
+             "ran and the clauses below are not being reported on. That is the SCHEDULE");
+    fold_row(&body_ex, &body_ex_why, emitted_record_has(js, "/api/bodyspan", "\"bodyExampleBase64\":\""),
+             "the record names the body's unknown byte range and carries no example bytes -- so a reviewer "
+             "is handed an ADDRESS with nothing at it and can change WHICH value the range carries without "
+             "seeing what it currently carries, which is the half the span params cannot state");
+    fold_row(&body_ex, &body_ex_why,
+             emitted_record_has(js, "/api/bodyspan", "\"bodyExampleBase64\":\"QYBCQw==\""),
+             "the example bytes are present and are not `QYBCQw==` -- the statement writes [65, screen.width, "
+             "66, 67] into a Uint8Array and screen.width's example is 1920, so the block is 0x41 0x80 0x42 "
+             "0x43. All-zero bytes here (`AAAAAA==`) are the store having INVENTED a byte for the unknown "
+             "rather than writing its example, and any other value is the example or the concrete "
+             "neighbours disagreeing with what the statement wrote");
+
     /* THE LATCH TIME-TRAVELS: two arms forked BEFORE either read one shared reply, and BOTH read it. If the
        body-used flag did not ride the COW delta, the second arm's read would throw and only one tag would be
        here — which is exactly what it did, as a `body stream already read` page error. */
@@ -13348,6 +13382,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "clone-body", clone_body, "/api/clonebody", SESS_EXPLORE, clone_body_why },
         { "body-bytes", body_bytes, "/api/bodybytes", SESS_EXPLORE, body_bytes_why },
         { "body-span", body_span, "/api/bodyspan", SESS_EXPLORE, body_span_why },
+        { "body-example", body_ex, "/api/bodyspan", SESS_EXPLORE, body_ex_why },
         { "body-iso", body_iso, "/api/bodyiso", SESS_EXPLORE, body_iso_why },
         { "verb-key", verb_key, "/api/echo", SESS_EXPLORE },
         { "hdrs", hdrs, "/api/hdrs?", SESS_EXPLORE, hdrs_why },

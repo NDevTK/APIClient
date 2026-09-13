@@ -158,16 +158,24 @@ function scheduleSave() {
    store on the assert arm, and a `statedFrom` raised without this number leaves it above the stamp this build
    writes — after which the kind is never asserted at all and the save-side door stops being a door. */
 /* RAISED TO 6 WITH `endpoints`' OWN `statedFrom`, WHICH IS THE PAIR THE PARAGRAPH ABOVE FORBIDS SPLITTING.
-   The endpoint record learned two names this build requires — `bodySent` and `bodyShape`, the two arms of
-   what a request body is — and `checkEndpointRecord` asserts both. Every store written before this diff
+   The endpoint record learned two names that build required — `bodySent` and `bodyShape`, two of the arms of
+   what a request body is — and `checkEndpointRecord` asserts them. Every store written before that diff
    carries neither KEY, and at the old numbers `storeRecordShapeStates("endpoints", 5)` answered TRUE against
    a `statedFrom` of 1, so the door ASSERTED: one older endpoint record would have taken that DCHECK and
    aborted the restore of all seven maps. Raising both moves those stores onto the ASK arm, where an endpoint
    short of the names is SHED against its own recipe — `pageUrl`, the document whose re-visit re-runs the same
    bundle and mints the address again (§OOM/paging's re-derivable third category) — or stranded and NAMED
    where that recipe is null. This is the kind's own precedent and not a new mechanism: `statedFrom` was
-   raised to 3 the last time a required name was added, for exactly this reason. */
-const _STORE_SHAPE = 6;
+   raised to 3 the last time a required name was added, for exactly this reason.
+   AND TO 7 WITH IT AGAIN, FOR A THIRD ARM RATHER THAN A NEW ARGUMENT. `bodyExample` — what a payload the page
+   wrote BYTE BY BYTE currently looks like, at the byte ranges that endpoint's own `body[off:end]` params name
+   — is the third thing a request body can be, `checkEndpointRecord` asserts it exactly as it asserts the
+   other two, and a store written at 6 carries no such key. The paragraph above is the whole mechanism and it
+   is kept as written because it is the argument a reader re-derives; the only thing this diff adds is one
+   more instance of it. The bump is NOT optional for a name whose absence and whose stated `null` are
+   different facts: "stored by an older build" and "this request sends no byte-composed body" are exactly the
+   pair `pathParamsForced` states, and reading the first as the second is what the ASK arm exists to stop. */
+const _STORE_SHAPE = 7;
 
 /* WHAT THE RESTORE DID, AS NUMBERS — because a shed nobody can count is the silent truncation this whole
    section exists to end, and §NO BOUNDS is explicit that discarding work "with nothing to say so" is a cap

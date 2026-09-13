@@ -304,12 +304,15 @@ static JSValue js_nav_send_beacon(JSContext *ctx, JSValueConst this_val, int arg
             eb.span = espan;
             eb.nspan = nespan;
         }
-        /* A SPANNED BODY TAKES THE SHAPE ARM FOR A SECOND REASON, and it is the constraint solver/endpoint.c's
-           retired residual was written to be built against: some of these bytes are an unknown's EXAMPLE and
-           some are a byte nobody wrote, because §10.4.5.18 TypedArraySetElement skips the block write entirely
-           for an unknown carrying no example rather than inventing one. So the beacon does not send exactly
-           these bytes and no record of it may say that it does. */
-        eb.kind = (bkind == BODY_SHAPE || nespan > 0) ? EPB_SHAPE : EPB_SENT;
+        /* A SPANNED BODY IS REFUSED THE REPLAY CLAIM FOR A SECOND REASON AND UNDER ITS OWN NAME: some of these
+           bytes are an unknown's EXAMPLE and some are a byte nobody wrote, because §10.4.5.18
+           TypedArraySetElement skips the block write entirely for an unknown carrying no example rather than
+           inventing one. So the beacon does not send exactly these bytes and no record of it may say that it
+           does — and EPB_EXAMPLE says that while still stating what the payload LOOKS LIKE, where EPB_SHAPE
+           said it by recording nothing at all (the surface's `body_named` test drops a shape whose ranges
+           `params` already names). BODY_SHAPE still wins the test: a shape body has no data block for a span
+           to name an offset into, so the two are disjoint and solver/endpoint.c asserts the pairing. */
+        eb.kind = bkind == BODY_SHAPE ? EPB_SHAPE : (nespan > 0 ? EPB_EXAMPLE : EPB_SENT);
         ebp = &eb;
         if (mime) {                        /* step 6.3.3, run only "if contentType is not null" */
             hdrs[nhdrs].name = "Content-Type";

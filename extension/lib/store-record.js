@@ -323,13 +323,16 @@ const STORE_RECORD_KINDS = Object.freeze({
     }),
   }),
   endpoints: Object.freeze({
-    /* 6, RAISED WITH lib/persistence.js's `_STORE_SHAPE` IN THE SAME DIFF — the pair that file's own comment
-       forbids splitting. The record learned `bodySent` and `bodyShape`, which `checkEndpointRecord` asserts,
-       and a store written before them carries neither key. At `1` this kind was asserted against every live
-       store, so one older record would have aborted the restore of all seven maps rather than being shed;
-       at `6` those stores are ASKED, and `endpointRecordMissingNames` names what they lack because it derives
-       from the record's own declarations rather than from a list kept here. */
-    statedFrom: 6, delegate: "endpoint",
+    /* 7, RAISED WITH lib/persistence.js's `_STORE_SHAPE` IN THE SAME DIFF — the pair that file's own comment
+       forbids splitting. It was 6 for `bodySent` and `bodyShape` and is 7 for `bodyExample`, the third thing
+       a request body can be, which `checkEndpointRecord` asserts exactly as it asserts those two; a store
+       written before each of them carries none of the keys that diff added. At `1` this kind was asserted
+       against every live store, so one older record would have aborted the restore of all seven maps rather
+       than being shed; at `7` those stores are ASKED, and `endpointRecordMissingNames` names what they lack
+       because it derives from the record's own declarations rather than from a list kept here — which is why
+       adding the third name cost nothing HERE beyond the number, and why the number is the one thing that
+       cannot be derived. */
+    statedFrom: 7, delegate: "endpoint",
     recipe: (v) => endpointRecordRecipe(v),
     adopt: (v) => v,
   }),

@@ -66,6 +66,11 @@ const ENDPOINT_ABSENT = Object.freeze({
                           // input, e.g. `{cfg.payload}`; null = no such body. NOT replayable — it names
                           // WHO composes the body, and `mime` may be null where §5.2 supplied one the page
                           // never chose.
+  bodyExample: null,      // {mime, base64} what a body the page wrote BYTE BY BYTE currently LOOKS LIKE, for
+                          // the byte ranges `body[off:end]` this endpoint's params name; null = no such body.
+                          // NOT replayable: inside a range stands an unknown's example where it had one and a
+                          // byte nobody wrote where it did not. `mime` may be null — §5.2's BufferSource arm
+                          // supplies no Content-Type, which is the ordinary case for exactly this population.
 });
 
 /* WHY THE HOLES TAKE TWO FIELDS AND NOT ONE, AND WHY THE SECOND IS NOT A DUPLICATE OF THE FIRST.
@@ -103,6 +108,21 @@ const ENDPOINT_ABSENT = Object.freeze({
    SO THE KEY IS THE GRADE. The engine emits `bodyBase64` only for bytes and `bodyShape` only for a shape,
    never both, and asserts the exclusivity at its emit; this record keeps that split rather than folding it
    back into a flag, so no surface can be handed a field whose meaning it must guess.
+
+   AND THERE ARE THREE, NOT TWO {EM} the paragraph above is kept as written because its ARGUMENT is what a reader
+   re-derives and it is unchanged, and because the third field was added under exactly it. A body the page
+   wrote BYTE BY BYTE into a typed array is neither of the two: it is not the display spelling of an unknown
+   (the page computed most of these bytes itself) and it is not bytes the request sends (inside a range named
+   by an unknown stands that unknown's EXAMPLE, or a byte NOBODY wrote, because {SEC}10.4.5.18 skips the block
+   write rather than inventing one). `bodyExample` is that third claim, and by the same rule it gets its own
+   key rather than a flag on `bodySent`: a surface skimming for a payload to replay must not be able to find
+   one here, and a flag beside `bodySent` is precisely the field such a surface defaults past.
+   IT IS THE ONE OF THE THREE THAT ARRIVES BESIDE NAMED FIELDS RATHER THAN INSTEAD OF THEM. The other two are
+   recorded only where the engine could name NO field of the body; this one is recorded exactly where it named
+   several, because those fields are `body[17:23]` {EM} ADDRESSES into these bytes rather than values. The
+   addresses without the content is a panel on which a reviewer can change WHICH value a range carries and
+   cannot see what it carries; the content without the addresses is an opaque blob. They are one answer, which
+   is why the exclusivity below is over the three KEYS and never over "a body was recorded".
    AND THE SECOND FIELD IS NOT A NICETY — WITHOUT IT THE FIX WAS A SILENCE. Refusing to publish the shape as
    bytes, on its own, left an unknown body recording NOTHING AT ALL, which is CLAUDE.md
    §MEASURE-WHAT-THE-SHIPPED-PATH-WRITES' pairing: an ABSENT value and a ZERO value are different facts and
@@ -516,10 +536,20 @@ function checkEndpointRecord(ep, where) {
          "an endpoint record's `bodyShape` is neither a display spelling nor a stated absence (" + where +
          ") — `mime` is legitimately null here (Fetch §5.2's string arm supplies a type the PAGE never " +
          "chose), but the shape text is the whole of what this field states and cannot be absent from it");
-  DCHECK(!(ep.bodySent && ep.bodyShape),
-         "an endpoint record carries BOTH the bytes a request sends and the display spelling of an unknown " +
-         "body (" + where + ") — they are the two arms of one question and the engine asserts the same " +
-         "exclusivity at its emit, so both arriving is two sightings folded across a grade that is supposed " +
+  DCHECK(ep.bodyExample === null ||
+         (!!ep.bodyExample && typeof ep.bodyExample === "object" && !Array.isArray(ep.bodyExample) &&
+          typeof ep.bodyExample.base64 === "string" &&
+          (ep.bodyExample.mime === null || typeof ep.bodyExample.mime === "string")),
+         "an endpoint record's `bodyExample` is neither the bytes a byte-composed payload currently shows " +
+         "nor a stated absence (" + where + ") — `mime` is legitimately null here (§5.2's BufferSource arm " +
+         "supplies no Content-Type, which is the ordinary case for a protobuf payload and is exactly why " +
+         "these bytes are addressed by the `body[off:end]` params rather than by a type), but the base64 is " +
+         "the whole of what this field states and cannot be absent from it");
+  DCHECK((!!ep.bodySent + !!ep.bodyShape + !!ep.bodyExample) <= 1,
+         "an endpoint record carries more than one of the three things a request body can be (" + where +
+         ") — bytes the request sends, the display spelling of an unknown, and what a byte-composed payload " +
+         "currently looks like. They are three arms of one question and the engine asserts the same " +
+         "exclusivity at its emit, so two arriving is two sightings folded across a grade that is supposed " +
          "to keep them in separate records");
   DCHECK(ep.pathParams === null || Array.isArray(ep.pathParams),
          "an endpoint record's `pathParams` is neither a list of examples nor a stated absence (" + where +

@@ -568,6 +568,13 @@ function resolveEndpointSchema(endpointKey, service, methodId) {
              null is a stated absence and collapsing it to a falsy default erases which of the two it was. */
           bodySent: ep.bodySent,
           bodyShape: ep.bodyShape,
+          /* AND THE THIRD, FOR THE SAME REASON AND WITH A SHARPER ONE OF ITS OWN. The list is an explicit
+             allowlist, so a name the record carries and this omits reaches no surface at all and reads there
+             as the record's declared absence. For `bodyExample` that silent drop would be the worst of the
+             three: the endpoint's `body[off:end]` params DO reach the panel (they are the method's request
+             schema), so the reviewer would get the addresses with nothing at them — which is exactly the
+             state solver/endpoint.c's residual was written against, reproduced one hop later by an omission. */
+          bodyExample: ep.bodyExample,
         }
       : null,
   };

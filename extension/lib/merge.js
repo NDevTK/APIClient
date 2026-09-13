@@ -268,7 +268,7 @@ function mergeASTResultsIntoVDD(tab, results) {
                missing key is "nothing was observed" and becomes null here, and a PRESENT one is asserted to
                be the non-empty record it can only be. */
             requiredHeaders: callSite.headers === undefined ? null : astHeaderRecord(callSite.headers),
-            /* THE REQUEST BODY, IN WHICHEVER OF ITS TWO KINDS THE RUN OBSERVED — and the KEY the engine chose
+            /* THE REQUEST BODY, IN WHICHEVER OF ITS THREE KINDS THE RUN OBSERVED — and the KEY the engine chose
                is what says which, so nothing here decides it. solver/endpoint.c writes `bodyBase64` only for
                bytes the request SENDS and `bodyShape` only for the display spelling of a body built out of
                unknown external input, never both, and asserts that exclusivity at its own emit.
@@ -286,6 +286,18 @@ function mergeASTResultsIntoVDD(tab, results) {
             bodyShape: callSite.bodyShape === undefined ? null
                      : { mime: callSite.bodyMime === undefined ? null : callSite.bodyMime,
                          shape: callSite.bodyShape },
+            /* AND THE THIRD KEY, WHICH IS THE ONE THAT ARRIVES BESIDE `params` RATHER THAN INSTEAD OF IT.
+               `bodyExampleBase64` is what a payload the page wrote BYTE BY BYTE currently looks like, at the
+               byte ranges the `body[off:end]` params of this same call site name — so this is not a third
+               spelling of the two above, it is the CONTENT whose ADDRESSES are already on `params`, and a
+               reader holding one without the other has half an answer either way.
+               ITS `bodyMime` IS LEGITIMATELY ABSENT, which is why it takes the shape arm's `undefined` test
+               rather than the sent arm's straight-through read: §5.2 BodyInit unions gives a BufferSource NO
+               Content-Type, so the protobuf payload this whole capability exists for arrives with no type at
+               all, and endpoint.c records the bytes anyway because the span params address them. */
+            bodyExample: callSite.bodyExampleBase64 === undefined ? null
+                       : { mime: callSite.bodyMime === undefined ? null : callSite.bodyMime,
+                           base64: callSite.bodyExampleBase64 },
             /* THE PATH-PARAM EXAMPLES, FROM THE RECORD THAT ACTUALLY HOLDS THEM — BOTH POOLS, because the
                flat record is the one that is READ where the method record is not. It reads the METHOD
                lib/learn.js just registered, which has TWO producers of a `location:"path"` parameter:

@@ -69,8 +69,15 @@ typedef struct { char *method; char *path; Param *params; int np, pcap;
                     built out of unknown external input, which names the SOURCE that composes it and is not
                     replayable. Carrying both in one field is what published a hole as a payload. A consumer
                     that had to guess which it held would be making the same mistake one layer out, so the
-                    key it is emitted under is the answer. */
-                 char *body_mime, *body_b64, *body_shape; } Endpoint;
+                    key it is emitted under is the answer.
+                    AND A THIRD, WHICH IS NOT A THIRD RENDERING OF THE SAME BODY BUT A DIFFERENT CLAIM ABOUT A
+                    DIFFERENT ONE. `body_example_b64` is the bytes of a body whose unknown RANGES are named on
+                    `params`, and it is the only one of the three that is set BESIDE named fields rather than
+                    instead of them: the span params say WHERE a reviewer edits, these bytes say what stands
+                    there now, and neither is the other's better answer. It makes no replay claim — some of
+                    these bytes are an unknown's example and some are bytes nobody wrote — which is why it
+                    cannot share `body_b64`'s key however the two are spelled. */
+                 char *body_mime, *body_b64, *body_shape, *body_example_b64; } Endpoint;
 
 /* A value carrying a `{hole}` is a SHAPE — an unknown the code did not compute — and a hole-free one is the
    real thing. The distinction decides the merge: a concrete value supersedes a shape for the same header, which
@@ -750,27 +757,57 @@ static int body_params(JSContext *ctx, KvBuf *out, const EndpointBody *body) {
    known only to satisfy a gate, so a body carrying spans has no bytes the request can be said to send and
    must never be published as EPB_SENT. body_store asserts that rather than trusting it.
 
-   NAMED RESIDUAL — THE EXAMPLE BYTES OF A RANGE, WHICH IS WHAT A GUI SPLICES INTO.
-   WHAT IS NOT COVERED: the bytes standing at an unknown RANGE. A single unknown element carries its own
-   example and body_spans_params prints it; a run of several does not, and cannot, because the example of a
-   range is BYTES and a param value is written by json_buf_str, which is NUL-terminated and passes bytes above
-   0x7F through on the promise that everything it is given is already UTF-8. So the row for a coalesced run
-   states WHERE those bytes came from and what the flow proved about them, and not what the serializer
-   actually emitted for the example — which is the half a reviewer edits.
-   WHAT THE NEXT DIFF BUILDS: the body's bytes carried under a key of their own, base64 through the engine's
-   own codec like `body_b64` and explicitly NOT making `body_b64`'s claim, so a consumer holding the spans can
-   read the example at each range and splice a replacement in. That is a THIRD body kind beside EPB_SENT and
-   EPB_SHAPE (bytes that are an EXAMPLE of the body rather than what it sends), a third arm in body_store, and
-   a reader in the popup — so it lands with its consumer and not before it.
-   HOW ITS ABSENCE WOULD SHOW: an @H record naming several body byte ranges and their sources, on which a
-   reviewer can change WHICH value a field carries and cannot see what it currently carries.
+   THAT RESIDUAL IS RETIRED AND ITS ARGUMENT IS REWRITTEN RATHER THAN DELETED, because what it was right
+   about is the thing the built mechanism rests on and a reader who re-derives it from the row alone gets the
+   safe half and not the constraint. It said: a single unknown ELEMENT carries its own example and
+   body_spans_params prints it, while a coalesced RUN does not and CANNOT, because the example of a range is
+   BYTES and a param value is written by json_buf_str, which is NUL-terminated and passes bytes above 0x7F
+   through on the promise that everything it is handed is already UTF-8. That is still exactly true, and it is
+   why the answer could never be a longer param value: the row for a run states WHERE those bytes came from
+   and what the flow proved about them, and no spelling of a C string states what the serializer emitted.
+   SO THE BYTES RIDE A KEY OF THEIR OWN AND THE PARAMS KEEP THEIRS, which is the one shape that says both
+   things without either standing in for the other — `body_example_b64` below, base64 through the engine's own
+   codec, EPB_EXAMPLE at the mint, `bodyExampleBase64` at the emit and lib/popup-form.js reading it. The span
+   params are the ADDRESSES and these are the CONTENT, and a consumer holding both can splice.
+   ITS GRADE CONSTRAINT IS WHAT HOLDS THE WHOLE DESIGN UP AND MUST NOT BE RE-DERIVED AS A PREFERENCE, which is
+   the sentence the retired residual above this one already spends itself on: a span is recorded even where NO
+   BYTE was written, so a spanned body has no bytes the request can be said to send, and the third key exists
+   precisely so that saying what the payload LOOKS LIKE is not the same act as claiming the request sends it.
    THE CODEC IS THE ENGINE'S OWN, for the reason core/file/file_reader.c gives at its own call: `btoa`'s codec
    is already implemented here and §Solver's rule is that an encoding builtin is modelled faithfully, never
-   re-implemented beside itself. */
-static char *body_bytes_b64(const EndpointBody *body) {
+   re-implemented beside itself.
+
+   NAMED RESIDUAL — THE BYTES OF A BODY THE PAGE NEVER PUT IN A BUFFER.
+   WHAT IS NOT COVERED: a body composed as a STRING out of unknown input. Its bytes reach this file as the
+   engine's display spelling (§5.2's string arm over a concolic), so there is no example byte sequence anywhere
+   to encode and EPB_SHAPE's text is the whole of what is known — correct, and narrower than a reviewer wants,
+   because such a body's CONCRETE half (the literal characters the concatenation contributed around the hole)
+   is a real byte sequence this surface never renders.
+   WHAT THE NEXT DIFF BUILDS: an example rendering carried beside the display one on `EndpointBody`, which is
+   the same field solver/endpoint.c's body_params residual asks for and is ONE field answering both — so the
+   two land together or the second is a second spelling of the first.
+   HOW ITS ABSENCE WOULD SHOW: a Send panel that names the source composing a payload and shows no bytes at
+   all, for a request whose address bar half carries concrete values computed the same way. */
+/* THE CODEC, WITH NO CLAIM IN IT. Two fields make two different claims about one kind of bytes, and what must
+   NOT be shared between them is the PRECONDITION — so the assert stays at each caller, where it names the
+   field it is defending, and the encoding is written once. Answers NULL for a body with nothing in it, which
+   every caller reads as the absence it is. */
+static char *body_b64_encode(const char *bytes, size_t len) {
     size_t cap, n;
     char *b64;
 
+    if (!bytes || len == 0) return NULL;
+    cap = JS_Base64EncodedSize(len) + 1;
+    b64 = malloc(cap);
+    CHECK(b64 != NULL, "endpoint: OOM base64-encoding a request body this engine has no field reader for");
+    n = JS_Base64Encode(b64, cap, (const uint8_t *)bytes, len);
+    CHECK(n > 0, "endpoint: the base64 buffer was sized wrong for a request body");
+    b64[n] = 0;
+    return b64;
+}
+
+/* THE REPLAY CLAIM. */
+static char *body_bytes_b64(const EndpointBody *body) {
     if (!body || !body->bytes || body->len == 0) return NULL;
     /* A SHAPE IS NOT A PAYLOAD, AND THIS FUNCTION USED TO TURN ONE INTO ONE. A body built out of unknown
        external input arrives carrying the engine's DISPLAY SPELLING of that unknown, because there are no
@@ -785,39 +822,70 @@ static char *body_bytes_b64(const EndpointBody *body) {
            "function makes the record's replay claim, so running it over an unknown body's display spelling "
            "publishes the characters of a hole as a payload a reviewer would send. body_store picks the "
            "field; a shape belongs in `body_shape` and never here");
-    cap = JS_Base64EncodedSize(body->len) + 1;
-    b64 = malloc(cap);
-    CHECK(b64 != NULL, "endpoint: OOM base64-encoding a request body this engine has no field reader for");
-    n = JS_Base64Encode(b64, cap, (const uint8_t *)body->bytes, body->len);
-    CHECK(n > 0, "endpoint: the base64 buffer was sized wrong for a request body");
-    b64[n] = 0;
-    return b64;
+    return body_b64_encode(body->bytes, body->len);
 }
 
-/* WHICH OF THE TWO BODY FACTS THIS SIGHTING CARRIES, DECIDED ONCE. Everything above answers "what is this
+/* AND THE OTHER CLAIM OVER THE SAME CODEC, WHICH IS WHY THE ASSERT IS HERE AND NOT IN IT. These bytes are what
+   the payload LOOKS LIKE and never what the request sends: inside a span stands an unknown's example where it
+   had one and a byte nobody wrote where it did not, and outside every span stands a byte the page computed.
+   Reaching this over an EPB_SENT body would be the mirror of the defect above — it would UNDERSTATE a
+   replayable payload as an example, so a reviewer would decline to replay a request the page really made,
+   which is a lost finding rather than a fabricated one and is still this file's logic being wrong. */
+static char *body_example_b64(const EndpointBody *body) {
+    if (!body || !body->bytes || body->len == 0) return NULL;
+    DCHECK(body->kind == EPB_EXAMPLE,
+           "the example bytes of a request body were asked for a body that is not one — this key states "
+           "what a payload LOOKS LIKE so a consumer holding the span params can splice into it, and it is "
+           "reached only for a body carrying spans. A body with none is either bytes the request sends or the "
+           "display spelling of an unknown, and body_store picks between those two");
+    return body_b64_encode(body->bytes, body->len);
+}
+
+/* WHICH OF THE THREE BODY FACTS THIS SIGHTING CARRIES, DECIDED ONCE. Everything above answers "what is this
    body"; this is the only place that answers "so which field does it go in", and having exactly one such
-   place is what lets body_bytes_b64 ASSERT its precondition instead of absorbing a shape.
+   place is what lets body_bytes_b64 and body_example_b64 each ASSERT its own precondition instead of
+   absorbing the other's body.
    `body_named` IS NOT A SECOND SPELLING OF EMPTINESS — it says body_params already put this body's fields on
-   `params`, which is the better answer, so the raw form is not carried beside it. A body whose fields were
-   read is a body the reviewer can VARY; these two fields are for the one whose fields nobody could name.
+   `params`. For a body whose fields were READ that is the better answer and the raw form is not carried
+   beside it: such a body is one the reviewer can VARY, and `body_b64`/`body_shape` are for the one whose
+   fields nobody could name.
+   AND THAT SENTENCE IS FALSE OF EXACTLY ONE POPULATION, WHICH IS WHY THE SPAN ARM IS ASKED FIRST — rewritten
+   rather than deleted because the rule is right everywhere else and a reader who re-derives it will put the
+   span arm behind the flag. A span param names a BYTE RANGE, so it is an address rather than a value: it says
+   where a reviewer edits and is silent about what stands there, and the bytes it addresses are the other half
+   of one answer instead of a worse version of it. `body_named` is non-zero for every spanned body (every span
+   mints a param), so a spanned body behind that flag records nothing at all — which is the SILENCE half of
+   §MEASURE-WHAT-THE-SHIPPED-PATH-WRITES' pairing, the same trap the shape arm below already records.
    FIRST BODY WINS AND IS NEVER OVERWRITTEN: a request body is ONE example of what this endpoint is sent, not
    a set to be merged, and replacing it would swap one example for another with nothing on the record to say
    so. A sighting at a different GRADE is already a different record (provenance is part of `same_identity`),
    so this cannot mix a forced body into an observed one. */
 static void body_store(Endpoint *e, const EndpointBody *body, int body_named) {
-    if (body_named || !body || !body->bytes) return;
-    /* A BODY CARRYING SPANS NEVER REACHES EITHER ARM BELOW, AND THAT IS ASSERTED RATHER THAN ARRANGED. Both
-       arms are wrong for one: `body_b64` promises a reviewer these are the bytes the request sends, and a
-       spanned body's are an unknown's EXAMPLE where it had one and a byte nobody wrote where it did not;
-       `body_shape` is a C string over bytes that may hold a NUL and may not be UTF-8. body_spans_params mints
-       a param for EVERY span, so `body_named` is non-zero for every body that has one and this line is
-       unreachable — which makes it a statement about this file's own logic, which is what a DCHECK is for. */
-    DCHECK(body->nspan == 0,
-           "a request body carrying unknown byte ranges reached the raw-body store, which means body_params "
-           "named none of them — every span mints a param, so this is the span walk having been skipped, and "
-           "the arms below would publish an unknown's example bytes as the payload a reviewer replays");
-    if (e->body_b64 || e->body_shape) return;
-    if (body->kind == EPB_SHAPE) {
+    if (!body || !body->bytes) return;
+    /* FIRST BODY WINS ACROSS ALL THREE FIELDS AND NOT PER FIELD, which is the same sentence this function's
+       header already makes about two of them and is what stops a second sighting recording a DIFFERENT body
+       under a key the first one left free. A record holding a spanned body's example AND another sighting's
+       display shape would be two bodies presented as one request's, with nothing on the record saying so. */
+    if (e->body_b64 || e->body_shape || e->body_example_b64) return;
+    if (body->nspan > 0) {
+        /* THE SPANNED BODY, AND IT IS ASKED BEFORE `body_named` RATHER THAN BEHIND IT — the one place in this
+           function where named fields and raw bytes are not alternatives. `body_named` means body_params put
+           this body's fields on `params`, and for every OTHER body that is strictly the better answer, so the
+           raw form is not carried beside it. A span param is not that kind of field: `body[17:23]` is an
+           ADDRESS, and an address with nothing at it is a row on which a reviewer can change WHICH value a
+           range carries and cannot see what it currently carries. The two halves are one answer.
+           AND THE OTHER TWO ARMS ARE BOTH WRONG FOR IT, which is why this is a third field and not a widening
+           of either: `body_b64` promises a reviewer these are the bytes the request SENDS, and a spanned
+           body's are an unknown's example where it had one and a byte nobody wrote where it did not;
+           `body_shape` is a C string over bytes that may hold a NUL and may not be UTF-8. */
+        DCHECK(body_named,
+               "a request body carrying unknown byte ranges was stored with none of its ranges named — every "
+               "span mints a param, so this is the span walk having been skipped and these example bytes "
+               "would reach a reviewer with no address to splice at, which is the half that makes them safe");
+        e->body_example_b64 = body_example_b64(body);
+    } else if (body_named) {
+        return;
+    } else if (body->kind == EPB_SHAPE) {
         /* THE SHAPE TEXT ITSELF, WHICH IS A STATEMENT ABOUT A SOURCE AND NOT A PAYLOAD. `{cfg.payload}` names
            WHO composes this body, which is strictly more than an empty panel tells a reviewer and is exactly
            what a sniffer can never produce.
@@ -837,10 +905,16 @@ static void body_store(Endpoint *e, const EndpointBody *body, int body_named) {
         e->body_shape[body->len] = 0;
     } else if (body->mime) {
         /* BYTES, WHICH ONLY MEAN ANYTHING BESIDE THE TYPE THAT SAYS HOW TO READ THEM — the pair `EndpointBody`
-           is one struct for. This is the arm that makes the record's replay claim. */
+           is one struct for. This is the arm that makes the record's replay claim.
+           THE EXAMPLE ARM ABOVE DELIBERATELY DOES NOT SHARE THIS TEST, AND THE DIFFERENCE IS WHAT THE SPANS
+           BUY. A type is what names the FIELDS of a payload nobody can otherwise address, so a replayable
+           body with none is bytes a reviewer can do nothing with; a spanned body is addressed by its own
+           span params, which §5.2 BodyInit unions makes the ordinary case rather than the exotic one — a
+           BufferSource arm supplies NO Content-Type, so the protobuf payload this whole capability exists for
+           arrives with `mime == NULL`. Requiring one here would have silenced exactly that population. */
         e->body_b64 = body_bytes_b64(body);
     }
-    if ((e->body_b64 || e->body_shape) && body->mime) {
+    if ((e->body_b64 || e->body_shape || e->body_example_b64) && body->mime) {
         e->body_mime = strdup(body->mime);
         CHECK(e->body_mime, "endpoint: OOM recording a request body's content type");
     }
@@ -1022,12 +1096,26 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
        THE SITE IS NAMED BY ITS mime AND method BECAUSE THIS ASSERT CANNOT STAMP ONE: three callers pass a
        body and all three would report this line, so the message carries what tells them apart rather than
        leaving a reader to grep every endpoint_record in the tree. */
-    DCHECKF(!body || body->kind == EPB_SENT || body->kind == EPB_SHAPE,
+    DCHECKF(!body || body->kind == EPB_SENT || body->kind == EPB_SHAPE || body->kind == EPB_EXAMPLE,
             "a request body reached the @H surface without its producer saying whether the bytes are what the "
-            "request SENDS or this engine's display spelling of an unknown. Those are not two renderings of "
-            "one fact: the first is replayable evidence and the second is a hole, and emitting the second as "
-            "the first hands a reviewer a request the page never made. State EPB_SENT or EPB_SHAPE from the "
-            "arm core/fetch/body.h already told you. method=%s mime=%s", method, body->mime ? body->mime : "(none)");
+            "request SENDS, this engine's display spelling of an unknown, or an EXAMPLE of the payload. Those "
+            "are not three renderings of one fact: the first is replayable evidence, the second is a hole, "
+            "and the third is what the payload looks like at ranges `params` names. Emitting any of them as "
+            "another hands a reviewer a request the page never made or hides one it did. State the kind from "
+            "the arm core/fetch/body.h already told you. method=%s mime=%s", method, body->mime ? body->mime : "(none)");
+    /* AND THE ONE PAIRING BETWEEN THE TWO FACTS ABOVE, WHICH IS THE CONSTRAINT THE WHOLE EXAMPLE KEY RESTS ON.
+       §10.4.5.18 TypedArraySetElement ( obj, index, value ) records a span even where NO BYTE was written — an
+       unknown may carry no example and writing `0` would be §@H's value known only to satisfy a gate — so a body
+       carrying spans has bytes the request CANNOT be said to send, whatever its producer thinks. Asserting it
+       at the mint is what lets body_store dispatch on `nspan` and body_example_b64 assert its own precondition
+       instead of each re-deriving a rule a producer could quietly disagree with.
+       IT IS ONE-WAY: a body with NO span may still be an example (nothing here says otherwise), and what is
+       refused is the spanned body that claims to be replayable. */
+    DCHECKF(!body || body->nspan == 0 || body->kind == EPB_EXAMPLE,
+            "a request body carrying unknown byte ranges reached the @H surface graded as something other "
+            "than an EXAMPLE of the payload — some of its bytes are an unknown's example and some are bytes "
+            "nobody wrote, so no record of this request may claim it sends exactly them. method=%s kind=%d",
+            method, (int)body->kind);
     /* AND THAT ITS SPAN RECORD IS ONE FACT. `EndpointBody` is declared at each producer and filled field by
        field, so a member added to it is a member some producer forgets — and a count with no array is read as
        a body with unknown ranges nobody can name while an array with no count is read as a body with none.
@@ -1192,17 +1280,27 @@ char *endpoint_json_array(void) {
            bytes is not a body — the same sentence `EndpointBody` is one struct for. A consumer reads their
            presence as the POSITIVE statement "this request sends a body this engine has no reader for",
            never as a hole to default past. */
-        if (e->body_b64 || e->body_shape) {
-            DCHECK(!(e->body_b64 && e->body_shape),
-                   "one request body was recorded as BOTH bytes the request sends and the display spelling of "
-                   "an unknown — body_store sets exactly one, so a record holding both is two sightings "
-                   "merged across a grade the identity is supposed to keep apart");
+        if (e->body_b64 || e->body_shape || e->body_example_b64) {
+            DCHECK((!!e->body_b64 + !!e->body_shape + !!e->body_example_b64) == 1,
+                   "one request body was recorded under more than one of this surface's three claims — bytes "
+                   "the request sends, the display spelling of an unknown, and an EXAMPLE of a payload whose "
+                   "unknown ranges `params` names. body_store sets exactly one, so a record holding two is "
+                   "two sightings merged across a grade the identity is supposed to keep apart");
             if (e->body_mime) { json_buf_raw(&b, ","); json_buf_key(&b, "bodyMime"); json_buf_str(&b, e->body_mime); }
-            /* TWO KEYS, SO THE CONSUMER NEVER GUESSES. `bodyBase64` is the replay claim and `bodyShape` is a
-               statement about WHICH SOURCE composes the body; a reader that met one field would have to
-               decide which of those it was holding, and deciding wrongly is how a hole gets sent. */
+            /* THREE KEYS, SO THE CONSUMER NEVER GUESSES. `bodyBase64` is the replay claim, `bodyShape` is a
+               statement about WHICH SOURCE composes the body, and `bodyExampleBase64` is what the payload
+               LOOKS LIKE at the byte ranges `params` names; a reader that met one field would have to decide
+               which of those it was holding, and deciding wrongly is how a hole gets sent.
+               THE THIRD NAME CARRIES ITS REFUSAL IN ITS OWN SPELLING and that is deliberate rather than
+               decorative: `bodyExampleBase64` cannot be mistaken for `bodyBase64` by a consumer skimming for
+               a payload to replay, where a `bodyBase64` plus a sibling flag could be, and the flag would be
+               the field a reader defaults past. It is emitted BESIDE the span params rather than instead of
+               them — they are the addresses and it is the content, so a splice needs both. */
             if (e->body_b64)   { json_buf_raw(&b, ","); json_buf_key(&b, "bodyBase64"); json_buf_str(&b, e->body_b64); }
             if (e->body_shape) { json_buf_raw(&b, ","); json_buf_key(&b, "bodyShape");  json_buf_str(&b, e->body_shape); }
+            if (e->body_example_b64) {
+                json_buf_raw(&b, ","); json_buf_key(&b, "bodyExampleBase64"); json_buf_str(&b, e->body_example_b64);
+            }
         }
         /* …AND WHAT THIS RECORD IS EVIDENCE OF, ALWAYS, in the same three words the pending line spells and
            through the same mapping (solver/engine.h's `engine_provenance_token`), so the zone that reads both
@@ -1383,10 +1481,13 @@ char *endpoint_json_array(void) {
 void endpoint_free(void) {
     for (int i = 0; i < g_eps_n; i++) {
         free(g_eps[i].method); free(g_eps[i].path);
-        /* THE TWO FIELDS ADDED TO `Endpoint` FREED WHERE EVERY OTHER OWNED FIELD IS — §Architecture's rule
+        /* THE BODY FIELDS ADDED TO `Endpoint` FREED WHERE EVERY OTHER OWNED FIELD IS — §Architecture's rule
            that a struct copied or freed field-by-field creates an obligation at every such site, which is
-           what a field added to one and not the other silently breaks. */
+           what a field added to one and not the other silently breaks. It said TWO for as long as there were
+           two; the count is gone rather than raised, because the obligation is the rule and the number is
+           what goes stale the next time this struct grows. */
         free(g_eps[i].body_mime); free(g_eps[i].body_b64); free(g_eps[i].body_shape);
+        free(g_eps[i].body_example_b64);
         for (int j = 0; j < g_eps[i].np; j++) {
             free(g_eps[i].params[j].name);
             for (int k = 0; k < g_eps[i].params[j].nvals; k++) free(g_eps[i].params[j].vals[k]);
