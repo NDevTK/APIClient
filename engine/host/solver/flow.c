@@ -1778,10 +1778,34 @@ void flow_fork_inherit(Flow *sib, const Flow *parent) {
        because forcing is what MAKES most siblings: the arm minted at a contradicted branch is exactly the one
        that would deny the contradiction.
        IT IS NOT IN THE EQUALITY BELOW, and that is a statement rather than an omission: `path_forced` is not a
-       weight term (flow.c's flow_mark_forced_arm says why it must never become one), so flow_weight cannot see
-       it and the equality would pass whether this line existed or not. What asserts it is the pair of claims
-       around this one — the precondition above that the sibling has decided nothing yet, and the equality
-       below that nothing has entered the WEIGHT unnoticed. */
+       weight term, so flow_weight cannot see it and the equality would pass whether this line existed or not.
+       What asserts it is the pair of claims around this one — the precondition above that the sibling has
+       decided nothing yet, and the equality below that nothing has entered the WEIGHT unnoticed.
+       THE PARENTHESIS THAT STOOD HERE DEFERRED THE WHY TO ANOTHER SITE AND THAT SITE DOES NOT HOLD IT. It read
+       "flow.c's flow_mark_forced_arm says why it must never become one"; that function holds its no-guard
+       reason and two DCHECKs and argues nothing about weights, flow.h's declaration beside the field moves
+       straight on to `script_i`, and the claim occurs nowhere else in the solver — one grep for `forced` across
+       these files answers, and the only hit pairing it with a weight was this sentence citing itself. A
+       load-bearing argument held BY REFERENCE is invisible to every instrument here: the citation reads as
+       settled, so nobody re-derives it, and what it forecloses stays foreclosed on nothing.
+       WHAT IT FORECLOSES IS NOT NOTHING, WHICH IS WHY THE REFERENCE MATTERED. `path_forced` is fork-INHERITED
+       (this line), monotone and idempotent, and already CONSUMED — engine.c grades every request built past it
+       PROV_FORCED rather than PROV_DERIVED. So the engine already carries, per flow, the one bit separating the
+       arm a real browser would take from an arm this solver forced, uses it to label what it reports, and never
+       to order anything. §Solver-half says "the example marks the real arm PRIMARY", so the spec asserts those
+       two arms are NOT worth the same; the equality below asserts that at the branch they are. Both sentences
+       are in the spec and they are in tension.
+       THE MEASURED COST OF RESOLVING IT IN FAVOUR OF THE EQUALITY, on a real 4.5 MB bundle (see the series
+       above): the frontier is 71452 members at `families: 1`, every one holding reward 4 inside a weight spread
+       of 0.036, and SIXTEEN OF THE DOCUMENT'S TWENTY-FOUR SCRIPTS NEVER START. The unforced arm — the one that
+       would walk the program list exactly as a browser does — is tied with seventy thousand forced ones.
+       AND THE OBSTACLE IS AN ASSERT RATHER THAN AN OPINION, WHICH IS WHY THIS IS RECORDED AND NOT REPAIRED. A
+       fork sets `path_forced` on the arm taken against the example and not on its sibling, so a weight reading
+       it differs across the two at the instant of the branch and the equality below FIRES. Reading it is
+       therefore not a tweak to the order: it is a decision about what §ONE-WFQ's fork-neutrality is a claim
+       about — every arm, or every arm the run did not contradict — and making that decision silently, inside a
+       weight term, would be the wrong-narrowing move one level up. Whoever takes it states which of the two
+       spec sentences yields. */
     sib->path_forced = parent->path_forced;
     /* §scheduler'S ONE WFQ, ASSERTED AT THE FORK: A FORK IS RANK-NEUTRAL. The sibling is the same flow's path
        with one more arm on it, so at the instant it is born it is worth exactly what the parent is worth —
