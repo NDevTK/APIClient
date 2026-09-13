@@ -124,13 +124,29 @@ function _encodeSentence(item) {
   // IS DELIBERATE. solve.c emits `deliveryProbed` only where the search HOLDS a delivery probe
   // (cand_has_delivery_probe), so on a current engine its absence is positive: a single-context class states
   // its vectors at detection and runs none, and a derived search over server-injected page state has no byte
-  // in question. But the SHIPPED wasm predates that producer — `deliveryProbed` occurs zero times in
-  // extension/lib/qjs/qjs.wasm while `sourceDelivers` occurs once — so today every absent-`sourceDelivers`
-  // record arrives here with no arrival count at all, and a consumer cannot tell "this search holds no probe"
-  // from "this engine does not speak the field". Those are two facts under one absence, so this states
-  // NEITHER as a fact about the search: it reports what the RECORD carries, which is true under both engines
-  // and is the strongest claim this side is entitled to. It must not say "yet" here — that word fabricates a
-  // pending measurement for a search that may hold nothing to measure with.
+  // in question.
+  //
+  // THE HALF OF THIS THAT SAID THE SHIPPED WASM PREDATES THAT PRODUCER IS DISCHARGED, AND IT COULD ONLY EVER
+  // BE DISCHARGED BY AN INSTALL — which is why it stood: the claim is falsified by a BUILD, a build leaves no
+  // commit, and the source it defers against is byte-identical at both revisions, so every git-based staleness
+  // check answers "unchanged" while the fact has flipped. It read `deliveryProbed` occurring ZERO times in
+  // extension/lib/qjs/qjs.wasm against `sourceDelivers` once. Re-run by CONTENT with a negative control, on
+  // the artifact this tree now loads:
+  //     strings extension/lib/qjs/qjs.wasm | grep -c deliveryProbed         # 1   (was 0)
+  //     strings extension/lib/qjs/qjs.wasm | grep -c sourceDelivers         # 2   (was 1)
+  //     strings extension/lib/qjs/qjs.wasm | grep -c deliveryProbedControl  # 0   — the probe is armed
+  // So for a record THIS engine writes, an absent `deliveryProbed` is now the positive statement the first
+  // paragraph describes, and the two-facts-under-one-absence reading is gone.
+  //
+  // AND THE STORE IS WHY THE DECISION BELOW DOES NOT CHANGE, WHICH IS A BETTER REASON THAN THE ONE IT
+  // REPLACES AND IS RETIRED BY NO INSTALL. A record restored from IndexedDB may have been written by an
+  // engine that did not emit the field at all, and "stored by an older build" is a different fact from "this
+  // search holds no probe" — the same pair `endpoint-record.js` states at `pathParamsForced`, and the same
+  // reason it crashes there rather than reading the absence. An install moves the PRODUCER and moves nothing
+  // already on disk. So this still states NEITHER as a fact about the search: it reports what the RECORD
+  // carries, which is true of a record from either engine and is the strongest claim this side is entitled
+  // to. It must not say "yet" — that word fabricates a pending measurement for a search that may hold nothing
+  // to measure with.
   var enc = "the browser percent-encodes <code>" + esc(item.sourceEncodes) + "</code> in this source";
   if (typeof item.sourceDelivers !== "string") {
     if (item.deliveryProbed > 0)
