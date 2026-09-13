@@ -2689,6 +2689,26 @@ static const char *HTML =
       " var tag = cfg.admin ? 'bodyADMIN' : 'bodyPUBLIC';"   /* THE FORK — before either arm has read `r` */
       " var v = (await r.json()).region + '-' + tag;"        /* both arms read the SAME reply */
       " fetch('/api/bodyiso?v=' + v); })();"
+    /* A BYTE BODY WHOSE BYTES CAME FROM AN UNKNOWN, which is the ONE shape ECMAScript §10.4.5.18
+       TypedArraySetElement's span store exists for and the one NOTHING in this fixture constructed. The lane
+       that built the span-naming half said so in its own report and named this as what would settle it:
+       greping this tree for a typed-array request body answered ZERO, so the new path's prediction ("no new
+       DCHECK fires") was satisfiable by a run that never took it -- an absent abort meaning only that the
+       code was never reached, which is the shape §AN-ABSENT-CRASH-IS-NOT-A-CORRECT-VALUE names.
+       `screen.width` AND NOT `num`, because the `num` mint one screen up records that it is SYNTHETIC and
+       duplicates a real source now that concolic_new asserts the brace -- and it names collapsing rows onto
+       `screen.width` as the follow-through. A new row may as well start there.
+       THE UNKNOWN IS AT INDEX 1 AND THE NEIGHBOURS ARE CONCRETE, deliberately: a span over the WHOLE body
+       would be satisfied by an implementation that recorded one span per write with no offset arithmetic at
+       all, so the row could not tell a correct store from a store that says "somewhere in here". Bracketing
+       it makes the offset the claim.
+       POST, WHICH IS NEVER FIRED AND IS THE POINT. RFC 9110 §9.2.1's safe set does not contain it, so
+       §Attacker-sources forbids sending it to learn and its values come only from the local forced-exec
+       path -- which is exactly the surface a byte body is interesting on, and it means this row asserts about
+       a DERIVED record rather than about anything that reached a server. */
+    "(function(){ var u8 = new Uint8Array(4);"
+      " u8[0] = 65; u8[1] = screen.width; u8[2] = 66; u8[3] = 67;"
+      " fetch('/api/bodyspan', { method: 'POST', body: u8 }); })();"
     /* TWO METHODS, ONE ADDRESS — the request's IDENTITY, and the one thing no other probe here can see. The
        reply seam listed URLs and matched on URLs, so this page's two requests were ONE line on the join (the
        dedup dropped the POST) and ONE delivery filling BOTH entries: the POST's promise settled with the GET's
@@ -10420,6 +10440,31 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "the bytes");
     fold_row(&body_bytes, &body_bytes_why, param_value_only(js, "/api/bodybytes", "kind", "truetrue"),
              "§6.4.1/§6.4.2 the two results are not an ArrayBuffer and a Uint8Array");
+    /* THE SPAN REACHED THE @H SURFACE AS A NAMED FIELD -- the whole point of recording which BYTES of a body
+       came from an unknown, and the thing that turns "replay these bytes verbatim" into a field a reviewer can
+       vary. §10.4.5.18's store records the range; endpoint.c names it `body[<off>:<end>]` at location
+       "body"; this asks whether that survived to the record.
+       THE RUNGS ARE ENTAILED, WHICH IS WHAT MAKES THE LOWEST 0 THE LOCALISATION: the third implies the second
+       by construction (a param named `body[1:2]` at location "body" IS a param at location "body"), and the
+       second implies the first. A ladder whose rung does not imply its predecessor has a false contract and
+       the finding is the ladder.
+       ASKED INSIDE THIS RECORD'S OWN SPAN and never of the whole document, for the reason the path-param row
+       one screen down gives: `"location":"body"` asked of the document is answered by ANY param of ANY
+       record, including two different params of two different records, which is the join this is written to
+       refuse. The emitter writes the two fields ADJACENT, so one needle is the join. */
+    const char *body_span_why = NULL; int body_span = 1;
+    fold_row(&body_span, &body_span_why, !!strstr(js, "\"/api/bodyspan\""),
+             "NOT REACHED: there is no /api/bodyspan record at all, so the typed-array-body statement never "
+             "ran and the clauses below are not being reported on. That is the SCHEDULE");
+    fold_row(&body_span, &body_span_why, emitted_record_has(js, "/api/bodyspan", "\"location\":\"body\""),
+             "the record carries no param at location \"body\" -- the body's bytes reached this surface with "
+             "no field named off them, so a reviewer is handed an opaque blob and §10.4.5.18's span record "
+             "bought nothing");
+    fold_row(&body_span, &body_span_why,
+             emitted_record_has(js, "/api/bodyspan", "\"name\":\"body[1:2]\",\"location\":\"body\""),
+             "a body param is named but not `body[1:2]` -- the unknown was written at ELEMENT 1 of a "
+             "Uint8Array with concrete neighbours either side, so the range is one byte at offset 1 and a "
+             "different one is the store's offset arithmetic disagreeing with the element that was written");
     /* THE LATCH TIME-TRAVELS: two arms forked BEFORE either read one shared reply, and BOTH read it. If the
        body-used flag did not ride the COW delta, the second arm's read would throw and only one tag would be
        here — which is exactly what it did, as a `body stream already read` page error. */
@@ -13302,6 +13347,7 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "then-chain", then_chain, "at=chain1", SESS_EXPLORE },
         { "clone-body", clone_body, "/api/clonebody", SESS_EXPLORE, clone_body_why },
         { "body-bytes", body_bytes, "/api/bodybytes", SESS_EXPLORE, body_bytes_why },
+        { "body-span", body_span, "/api/bodyspan", SESS_EXPLORE, body_span_why },
         { "body-iso", body_iso, "/api/bodyiso", SESS_EXPLORE, body_iso_why },
         { "verb-key", verb_key, "/api/echo", SESS_EXPLORE },
         { "hdrs", hdrs, "/api/hdrs?", SESS_EXPLORE, hdrs_why },
