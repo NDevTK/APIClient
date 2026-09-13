@@ -1878,6 +1878,37 @@ function wfqReading(out) {
                     `on exactly one bucket and that a wholly-departed bucket folds its total into the retired ` +
                     `term rather than losing it, so a shortfall is thread time attributed to nobody and every ` +
                     `concentration reading below is a fraction of the wrong total.`);
+  /* AND THE TWO THE CROWD ROWS BRING WITH THEM, checked here for the identical reason: the engine DCHECKs both
+     in flow_wfq_census where every term is in one hand, and that is compiled OUT of the release artifact this
+     reader still runs against.
+     THE FIRST IS WHAT MAKES THREE ROWS DESCRIBE ONE BUCKET. solver/flow.c retains the node that owns the live
+     maximum and dereferences it once after the walk, so `brCrowdLive` is a SECOND reading of that bucket's
+     membership pair and `brLiveMax` is the running maximum folded during the walk — two writers at two
+     instants. Written at the maximum's own assignment they would be one statement compared with itself.
+     THE SECOND IS THE DENOMINATOR HALF, and it chains: `brUsLifeSum` keeps every bucket the walk takes
+     including the ones nobody stands in, so the crowd's share of the THREAD is only a share of a population
+     its numerator is drawn from when it is taken against `brHeldUsLife`. With the burn identity above, every
+     microsecond the scheduler has ever charged has exactly one of three published homes. */
+  if (w.brCrowdLive !== w.brLiveMax)
+    throw new Error(`[build] the @WFQ census's crowd rows are not about the bucket it names as fattest: ` +
+                    `brCrowdLive ${w.brCrowdLive} against brLiveMax ${w.brLiveMax}. solver/flow.c folds the ` +
+                    `retained bucket and the live maximum in ONE statement and reads the bucket back after ` +
+                    `the walk, so a disagreement means one of the two is now moved by something else and ` +
+                    `brCrowdBornLife/brCrowdUsLife are some other arm's numbers under this arm's name.`);
+  if (w.brHeldUsLife + w.brEmptyUsLife !== w.brUsLifeSum)
+    throw new Error(`[build] the @WFQ census's bucket burn does not split by occupancy: brHeldUsLife ` +
+                    `${w.brHeldUsLife} + brEmptyUsLife ${w.brEmptyUsLife} = ` +
+                    `${w.brHeldUsLife + w.brEmptyUsLife} against brUsLifeSum ${w.brUsLifeSum}. The two are ` +
+                    `raised by separate accumulators in the two arms of branch_take's live guard, so a break ` +
+                    `is an arm that stopped firing, and brCrowdUsLife is about to be published as a share of ` +
+                    `a total drawn from a different set of buckets than the numerator.`);
+  if (w.brHeldUsLife + w.brEmptyUsLife + w.brRetiredUsLife !== w.chargedUsLife)
+    throw new Error(`[build] the @WFQ census's three-way burn partition does not close: brHeldUsLife ` +
+                    `${w.brHeldUsLife} + brEmptyUsLife ${w.brEmptyUsLife} + brRetiredUsLife ` +
+                    `${w.brRetiredUsLife} against chargedUsLife ${w.chargedUsLife}. Every charged ` +
+                    `microsecond belongs to a bucket somebody stands in, a bucket still taken and standing ` +
+                    `empty, or a bucket whose subtree has wholly departed — this total cannot move without ` +
+                    `one of its three parts moving, and a break is thread time attributed to nobody.`);
   /* THE BRANCH TERM'S RANGE IS OVER THE MINT PAIR AND NOT THE LIVE PAIR, BECAUSE flow_branch_bonus DIVIDES
      BY `sub_born`. This read the live pair while the engine read the live gauge, and both moved together; it
      is repointed here in the same diff rather than left to agree by coincidence. The two are NOT
@@ -1989,6 +2020,63 @@ function wfqReading(out) {
             `bucket rows name, and the concentration they report is a sum over a fork they cannot see`) +
         `. The remaining ${w.members - w.brFanSum} member(s) hang off a family root and are already ` +
         `separated as buckets of their own`);
+  /* AND THE ONE SENTENCE EVERY ROW ABOVE IS STRUCTURALLY UNABLE TO SAY: WHAT THE CROWD ITSELF RECEIVED.
+     The paragraph above this function already refuses to bind `brLiveMax` and `brUsLifeMax` to one arm, and
+     it is right to — they are two maxima over two populations, and this file records a run where the burn
+     maximum sat FROZEN across forty-nine censuses while the live maximum climbed from four to seventy-seven,
+     the frozen one being a departed family root holding nobody. What that refusal leaves is a reader who can
+     see how crowded the fattest arm is and cannot see whether it has been given a microsecond. Those are the
+     two halves of the only question this scope was declared for.
+     `brCrowdUsLife` is that bucket's OWN receipt, so the share below is one arm's and the caveat is retired
+     rather than repeated. THE DENOMINATOR IS `brHeldUsLife` AND NOT `brUsLifeSum`, because the numerator is
+     drawn from the live buckets and the sum deliberately keeps the departed ones — which on a real page is
+     the largest single term in it.
+     THE THREE STATES IT SEPARATES TAKE THREE DIFFERENT NEXT DIFFS and read identically in every row above:
+     at par is a branching arm converting fork factor into thread one for one while having emitted nothing;
+     far below par is an arm the order is already demoting, where what keeps the frontier from draining is
+     retention rather than ordering; far above par is an ordinary monopolist, which the aging charge catches.
+     IT IS RENDERED ON EVERY CENSUS, for the reason the front's rows are: computed on one arm of a verdict and
+     dropped on the others it would be a row with a writer and no reader on most runs, which is the defect
+     this file's own derived field list exists to stop one layer out. */
+  const crowdShare = w.members > 0 ? w.brCrowdLive / w.members : 0;
+  const crowdThread = w.brHeldUsLife > 0 ? w.brCrowdUsLife / w.brHeldUsLife : null;
+  const crowd = w.brCrowdLive <= 0
+    ? `. No live branch bucket was reached, so the crowd rows say nothing about this census — with members ` +
+      `standing the engine asserts that cannot happen`
+    : `. THE FATTEST ARM'S OWN THREE NUMBERS (one bucket, not three maxima): it holds ${w.brCrowdLive} of ` +
+      `${w.members} member(s) (${(100 * crowdShare).toFixed(0)}%), has ever MINTED ${w.brCrowdBornLife}, and ` +
+      `has received ${w.brCrowdUsLife} of the ${w.brHeldUsLife} microsecond(s) the live buckets hold` +
+      (crowdThread === null
+        ? ` — no live bucket has been charged at all, so there is no share to take`
+        : ` (${(100 * crowdThread).toFixed(0)}%)`) +
+      (crowdThread === null
+        ? ``
+        : crowdThread < crowdShare / 2
+        ? `. FAR BELOW PAR: the crowd is standing and is not being given the thread, so the order IS ` +
+          `demoting it and what holds the frontier open is RETENTION rather than ordering — the next diff is ` +
+          `what retires these members, not what ranks them`
+        : crowdThread > crowdShare * 2
+        ? `. FAR ABOVE PAR: this arm is taking more thread than its size, which is an ordinary monopolist ` +
+          `and exactly the shape the aging charge is written to catch`
+        : `. AT PAR: this arm's share of the thread tracks its share of the members, so forking is being ` +
+          `converted into thread one for one — an arm that grows by branching and pays only what its ` +
+          `members burn, which is the reading solver/flow.c's own aging note says the per-member charge ` +
+          `cannot reach`) +
+      `. ` +
+      (w.brCrowdUsLife === w.brUsLifeMax
+        ? `It IS the bucket that received the most thread`
+        : `It is NOT the bucket that received the most thread (${w.brUsLifeMax}), so those two maxima name ` +
+          `two arms`) +
+      ` and it ` +
+      (w.brCrowdBornLife === w.brBornLifeMax
+        ? `IS the arm that has taken most arms`
+        : `is NOT the arm that has taken most arms (${w.brBornLifeMax})`) +
+      `. ` +
+      (w.brCrowdBornLife > w.brCrowdLive
+        ? `It has shed ${w.brCrowdBornLife - w.brCrowdLive} arm(s): what it forked is not all still standing`
+        : `Nothing it forked has departed — it accumulates`) +
+      `. Of the ${w.chargedUsLife} microsecond(s) ever charged, ${w.brEmptyUsLife} sit(s) in buckets nobody ` +
+      `stands in and ${w.brRetiredUsLife} in buckets wholly departed`;
   const terms = `terms over the frontier: reward ${rangeVal.toFixed(3)}, fitness ${w.distMax.toFixed(3)}, ` +
                 `optimism ${rangeUcb.toFixed(3)}, aging ${(rangeOwn + rangeFam).toFixed(3)} ` +
                 `(own ${rangeOwn.toFixed(3)}, family ${rangeFam.toFixed(3)}) — against a total order spread ` +
@@ -1999,7 +2087,7 @@ function wfqReading(out) {
                    the mirror of the defect this reader's own field list exists to stop — and it is the row a
                    reader needs BEFORE a gap opens, because the discriminator it carries is a shape across the
                    stream and a stream is only assembled from censuses that all state it. */
-                `${ucb}; ${starved}; ${dispatch}; ${leader}; ${branch}; ${series}`;
+                `${ucb}; ${starved}; ${dispatch}; ${leader}; ${branch}${crowd}; ${series}`;
   /* WHOSE REWARD THE ORDER IS, which is a different question from whether the reward is ordering it and is the
      one the verdict's own sentence makes a claim about. `selfEmit` counts members that have emitted something
      THEMSELVES, so the difference is how many stand on an account some other arm of their fork family filled.
@@ -4370,6 +4458,127 @@ const STAGE_KIND = {
   TERMINAL:  { rank: 3, tag: "TERMINAL" },
 };
 
+/* ── WHICH HOST A STAGE RAN ON, AND WHICH HOST'S RUN THIS BUILD TAKES ITS VERDICT FROM ────────────────────
+   CLAUDE.md §Testing: "the run whose verdict decides the build is the one whose cooperative SLICE is
+   denominated in CPU", and the vehicle's run is "a second stage answering a different question - whether the
+   thing that SHIPS behaves like the thing that was MEASURED. Where the two disagree, the disagreement is a
+   finding about the VEHICLE, reported as one, never averaged into the verdict and never used to overturn it."
+   Until this existed every engine run in this build was the vehicle's, so the one reading §Testing says may
+   NOT decide a verdict was the only reading that ever did.
+   THE OBJECT THIS SEPARATES IS THE ENGINE'S SLICE AND NOT THE RUN BUDGET, and conflating those two has
+   already cost a brief. The RUN BUDGET is `RLIMIT_CPU` and the kernel's SIGXCPU, installed by CPU_BUDGET_SH
+   around EVERY child this file spawns on BOTH hosts - identical here, and therefore not the discriminator.
+   What differs is the ENGINE'S OWN cooperative SLICE (solver/quantum.h): thread-CPU where the host has a
+   clock, WALL where it has none, which is what decides how far a flow replays before a peer answers and
+   therefore what every census series below is a reading of. solver/quantum.c states it per run on its
+   `@QUANTUM` line, `quantumDenomination` parses it, and `runDependenceText` already marks every verdict with
+   it. What was missing was the word for WHOSE RUN the row was - and a host tag is NOT a second denomination
+   claim beside `isCpu`: the denomination stays the engine's own word for itself, read off the artifact, and
+   this says only who ran.
+   FOUR VALUES, BECAUSE "not the vehicle" IS NOT ONE CLAIM. A source census spawns no engine at all, so it has
+   no slice to be denominated and its finding is about the REVISION on every host. The emcc compile and link,
+   and the JS host layers driven over the artifact they produce, are the vehicle's OWN MACHINERY - nothing
+   else in this tree asks their question, so there is no second reading for them to disagree with, and
+   excusing them from the verdict would be §Testing's excluded test wearing a vehicle finding's clothes. Only
+   a run with a NATIVE COUNTERPART IN THE SAME REPORT is VEHICLE, which is what stops this becoming a place to
+   put an inconvenient red: `report()` refuses a VEHICLE stage that has no native run beside it.
+   IT IS STATED BY THE SITE THAT CHOSE THE PROGRAM AND NOWHERE ELSE. `runChild` is handed a path and cannot
+   know what host it names; the push site chose it, so the push site is the only place the fact exists - the
+   same rule this project states for every invariant whose subject is absent from the site that relies on it.
+   `report()` REFUSES a stage that states none rather than guessing, because an unstated host would land in
+   whichever population a default picked and read as a deliberate answer. */
+const STAGE_HOST = {
+  /* THE VERDICT HOST - a CPU-denominated slice (solver/quantum.c's timer_create CLOCK_THREAD_CPUTIME_ID arm),
+     a real fork(), and the sanitizers §Architecture prescribes by name and which wasm32 cannot run. */
+  NATIVE:  { tag: "native",  vehicle: false },
+  /* THE VEHICLE'S OWN MACHINERY - the emcc compile and link, and the JS layers driven over what they produce.
+     A fact about the revision: if it does not build, or its host layer refuses, nothing ships. IT DECIDES. */
+  WASM:    { tag: "wasm",    vehicle: false },
+  /* A VEHICLE RUN THAT HAS A NATIVE COUNTERPART IN THIS SAME REPORT. It RUNS - deleting it would be measuring
+     a program nobody ships, which §Testing names as the inverted failure - and it DECIDES NOTHING. */
+  VEHICLE: { tag: "vehicle", vehicle: true  },
+  /* A READER OF THE SOURCES. No engine, no slice, no denomination; a finding about the revision. */
+  SOURCE:  { tag: "source",  vehicle: false },
+};
+/* THE HOST IS ATTACHED WHERE THE PROGRAM WAS CHOSEN, AND A NEW OBJECT IS RETURNED RATHER THAN THE STAGE
+   MUTATED: a host written into a stage after the fact is a fact that arrives late, and a stage whose host
+   CHANGED is worse than one that never stated it. Every field the producer wrote is carried across -
+   `captured` included, which is what the vehicle-agreement reader below is made of. */
+function onHost(stage, host) {
+  if (!host || typeof host.tag !== "string" || typeof host.vehicle !== "boolean")
+    throw new Error(`[build] a stage was pushed with ${JSON.stringify(host)} where a STAGE_HOST belongs. ` +
+                    `Every stage states which host it ran on, because this build's verdict is the NATIVE ` +
+                    `host's and a vehicle run's reading may not be summed into it.`);
+  return Object.assign({}, stage, { host });
+}
+
+/* ── WHETHER THE THING THAT SHIPS BEHAVED LIKE THE THING THAT WAS MEASURED ────────────────────────────────
+   ONE LINE, ITS OWN VERDICT, AND IT IS SUMMED INTO NOTHING. §Testing: the vehicle's disagreement with the
+   verdict host "is a finding about the VEHICLE, reported as one, never averaged into the verdict and never
+   used to overturn it". So this composes a sentence and returns it; no arm of `report()` branches on it, no
+   exit code moves by one, and it is deliberately NOT a stage - a third pass/fail total beside the two
+   `report()` already prints is exactly the furniture §A-VERDICT-THAT-IS-RED-ON-EVERY-RUN describes.
+   IT COMPARES ONLY WHAT SURVIVES A REPEAT, WHICH IS A SHORT LIST AND IS THE WHOLE DISCIPLINE HERE. §Testing:
+   "a crash's IDENTITY and its frame list, a conservation identity read within one sample, a count that cannot
+   be true, and a value that is wrong rather than small" survive; "any comparison of totals across two runs"
+   does not - and this file already carries its own measurement of that, two runs of ONE artifact answering
+   35/208 and 75/208 at 3,003 and 34,947 units of engine work and TERMINATING DIFFERENTLY. So the ANSWERED
+   count is not compared, and the refusal is STATED rather than left as a silence a reader would fill in: a
+   line reading "native answered 90 and the vehicle 25" would be the caveat-stated-and-then-not-applied defect
+   in the one place this file most owes it.
+   WHAT IS LEFT IS TWO FACTS AND BOTH ARE REAL. The fixture's own DENOMINATOR - how many statements the
+   document ASKS - is a property of test_forced.c and not of any interleaving, so two hosts disagreeing about
+   it means the two programs are not the same fixture, which no other stage in this build would ever notice.
+   And the ABORT IDENTITY, named by the same `causeName` every verdict in this file uses, so there is ONE
+   spelling of "the name of an abort" rather than a second that can drift: an abort on one host and not the
+   other, or two different aborts, IS "the thing that ships does not behave like the thing that was measured".
+   ABSENCE IS REPORTED AS ABSENCE. A host that printed no probe stream, or no `@QUANTUM` line, is said to have
+   printed none - never defaulted to a number or a denomination this reader did not observe. */
+function vehicleAgreement(nat, veh) {
+  /* `captured` IS THE WITNESS THAT A CHILD RAN AT ALL. `skipped()` produces a stage with none, which is the
+     positive statement "this question was never put" and must not render as a host that agreed. */
+  const read = (s) => (s && "captured" in s)
+    ? { stand: probeStanding(s.captured), abort: abortRecord(s.captured),
+        q: quantumDenomination(s.captured), label: s.label }
+    : null;
+  const a = read(nat), b = read(veh);
+  if (a === null || b === null)
+    return `[build] VEHICLE AGREEMENT - NOT ASKED: ` +
+           `${a === null ? "the native run" : "the vehicle run"} produced no output in this build, so there ` +
+           `is no second reading to compare against and this line says NOTHING about the vehicle. That is an ` +
+           `absence, and an absence is not agreement.`;
+  const den = (r) => r.q === null ? `${r.label} printed no @QUANTUM line`
+                                  : `${r.label}: a ${r.q.measure} slice of ${r.q.sliceMs} ms`;
+  const asked = (r) => r.stand === null ? null : r.stand.asked;
+  const findings = [];
+  if (asked(a) === null || asked(b) === null)
+    findings.push(`ONE HOST PRINTED NO @H PROBE STREAM (native: ` +
+                  `${asked(a) === null ? "none" : asked(a) + " statements asked"}; vehicle: ` +
+                  `${asked(b) === null ? "none" : asked(b) + " statements asked"}), so the fixture's own ` +
+                  `denominator cannot be compared and the halves of this line that need it are not stated`);
+  else if (asked(a) !== asked(b))
+    findings.push(`THE TWO HOSTS ASK DIFFERENT NUMBERS OF STATEMENTS (native ${asked(a)}, vehicle ` +
+                  `${asked(b)}) - the fixture's denominator is a property of engine/host/test_forced.c and ` +
+                  `not of any interleaving, so these two programs are not the same fixture`);
+  const an = a.abort === null ? null : causeName(a.abort);
+  const bn = b.abort === null ? null : causeName(b.abort);
+  if (an !== bn)
+    findings.push(`THE ABORTS DIFFER - native: ${an === null ? "none" : JSON.stringify(an)}; vehicle: ` +
+                  `${bn === null ? "none" : JSON.stringify(bn)}. An abort's IDENTITY survives a repeat, so ` +
+                  `this is a difference between the two HOSTS and not between two runs`);
+  const head = `[build] VEHICLE AGREEMENT (${den(a)}; ${den(b)})`;
+  const tail = `\n[build]   NOT COMPARED, DELIBERATELY: how many statements each host ANSWERED, and every ` +
+               `work, fork, job and census total. Two runs of ONE artifact on ONE host already move those, so ` +
+               `a difference between two HOSTS carries no information about either. This line decides ` +
+               `nothing and no exit code moves by one.`;
+  return (findings.length
+    ? `${head} - ${findings.length} FINDING(S) ABOUT THE VEHICLE: ${findings.join("; ")}` +
+      `\n[build]   a vehicle finding is never averaged into the verdict and never overturns it (§Testing). ` +
+      `The verdict above is the native host's.`
+    : `${head} - the two hosts agree on everything comparable: the same ${asked(a)} statement(s) asked, and ` +
+      `${an === null ? "no abort on either" : "the same abort " + JSON.stringify(an) + " on both"}`) + tail;
+}
+
 /* A SOURCE CENSUS IS RECOGNISED BY THE SENTENCE THE STAGE ITSELF PRINTS, NEVER BY ITS FILE NAME. A list here of
    which stages are "allowed" to be red would be the hand-kept list this file spends its length warning about,
    and it fails in silence: a gate added without an entry is classified by nobody. The audits state their own
@@ -4599,7 +4808,15 @@ let REV_AT_START = null;
 const revAtStart = () => (REV_AT_START ||= gateRevision(
   ["engine/host", "engine/qjs", "engine/build.mjs", "engine/gate_revision.mjs"]));
 
-function report(stages) {
+/* `findings` IS A REQUIRED ARGUMENT AND AN EMPTY ARRAY IS A POSITIVE STATEMENT. It carries the lines that are
+   NOT stages - the vehicle-agreement sentence is the only one today - and it is required rather than
+   defaulted for the reason every other required argument in this file is: `undefined` from a caller that
+   stopped passing it and `[]` from a build that had nothing to say must never render the same. */
+function report(stages, findings) {
+  if (!Array.isArray(findings))
+    throw new Error(`[build] report() was handed ${JSON.stringify(findings)} where its list of non-stage ` +
+                    `finding lines belongs. A build with nothing to report passes an EMPTY array; a caller ` +
+                    `that passes nothing at all is a caller that has stopped stating it.`);
   const w = Math.max(...stages.map((s) => s.label.length));
   /* BEFORE THE STAGE TABLE, because the tail is what gets pasted and the revision is what the table is about.
      Printed on the failing path as well as the passing one: a stage that ABORTED is the result most likely to
@@ -4627,8 +4844,27 @@ function report(stages) {
      missing the row says UNRANKED rather than inventing a category or borrowing a green one. */
   const tagw = Math.max("UNRANKED".length, ...Object.values(STAGE_KIND).map((k) => k.tag.length));
   const tagOf = (s) => s.code === 0 ? "PASS" : (s.kind && s.kind.tag) || "UNRANKED";
+  /* THE HOST IS A COLUMN AND NOT A WORD INSIDE THE VERDICT, on exactly the argument the KIND column rests on:
+     this row is what gets pasted, quoted and dispatched on, and "which host said this" is the fact §Testing
+     makes every number in the row conditional on. The DENOMINATION is already in the row - `runDependenceText`
+     appends `[ONE INTERLEAVING (<measure>-denominated N ms slice) ...]` to every run verdict - so what this
+     adds is the half that was missing, and the two are read together.
+     AN UNSTATED HOST RENDERS AS `UNSTATED` AND THE REPORT REFUSES AFTER THE ROWS ARE OUT, which is the same
+     shape (and the same reason) as `UNRANKED` above it: the plausible datum available here is a real host
+     name, so inventing one would put a stage in a population nobody chose for it, and a throw BEFORE the rows
+     would be a door in front of the one thing a reader actually needs. */
+  const hostOf = (s) => (s.host && typeof s.host.vehicle === "boolean") ? s.host : null;
+  const hostw = Math.max("UNSTATED".length, ...Object.values(STAGE_HOST).map((h) => h.tag.length));
   for (const s of stages)
-    console.log("[build]   " + s.label.padEnd(w) + "  [" + tagOf(s).padEnd(tagw) + "]  " + s.verdict);
+    console.log("[build]   " + s.label.padEnd(w) + "  [" + tagOf(s).padEnd(tagw) + "]  " +
+                (hostOf(s) ? hostOf(s).tag : "UNSTATED").padEnd(hostw) + "  " + s.verdict);
+  const unstated = stages.filter((s) => hostOf(s) === null);
+  if (unstated.length)
+    throw new Error(`[build] ${unstated.length} stage(s) state no STAGE_HOST: ` +
+                    `${unstated.map((s) => JSON.stringify(s.label)).join(", ")}. This build's verdict is the ` +
+                    `NATIVE host's and a vehicle run's reading may not be summed into it, so a stage that ` +
+                    `does not say which host it ran on cannot be placed in either population - and this ` +
+                    `report will not pick one for it. Wrap the push in \`onHost(..., STAGE_HOST.X)\`.`);
   /* THE COUNTS ARE A PARTITION AND THE PARTITION IS THE CONTRACT — the same shape `coldFields` states one
      screen up, and for the same reason: replacing one ambiguous number with several is only an improvement if
      something says the several are the whole of it. A category count is a SHARE of the stage list, and
@@ -4650,9 +4886,15 @@ function report(stages) {
      IT REFUSES AFTER THE ROWS ARE OUT. The rows are what a reader needs and this is the last thing in the
      run — there is no stage left for it to be a door in front of, which is the only reason a throw is
      admissible here at all. */
-  const n = (k) => stages.filter((s) => s.kind === k).length;
-  const part = { DEFECT: n(STAGE_KIND.DEFECT), "NOT ASKED": n(STAGE_KIND.NOT_ASKED),
-                 CENSUS: n(STAGE_KIND.CENSUS), TERMINAL: n(STAGE_KIND.TERMINAL),
+  /* A FUNCTION OF A LIST RATHER THAN OF `stages`, BECAUSE THERE ARE NOW TWO LISTS AND THEY MUST NOT BE ADDED.
+     The partition assertion below is still over the WHOLE list - it is a check on the PRODUCERS, and a
+     producer defect is one whichever population its stage lands in - while the two censuses printed after it
+     are over the verdict population and the vehicle population separately. One spelling of the count, three
+     callers, so no two of them can state different numbers for one list. */
+  const censusOf = (list) => {
+    const n = (k) => list.filter((s) => s.kind === k).length;
+    return { DEFECT: n(STAGE_KIND.DEFECT), "NOT ASKED": n(STAGE_KIND.NOT_ASKED),
+             CENSUS: n(STAGE_KIND.CENSUS), TERMINAL: n(STAGE_KIND.TERMINAL),
                  /* PASS IS A FACT ABOUT THE CODE ALONE, AND THE FIRST SPELLING OF IT MADE THIS ASSERTION
                     VACUOUS FOR THE ONE STATE IT NAMES. It read `s.code === 0 && !s.kind`, which EXCLUDES a
                     passing stage that carries a kind from the PASS count and leaves it counted exactly once
@@ -4663,8 +4905,10 @@ function report(stages) {
                     worst outcome this file can produce, and the assertion written to prevent it was the thing
                     that let it through — an assert whose two sides had been quietly taught to agree.
                     Spelled on the code alone, that stage is counted twice and the sum runs LONG. */
-                 PASS: stages.filter((s) => s.code === 0).length };
-  const summed = Object.values(part).reduce((a, b) => a + b, 0);
+             PASS: list.filter((s) => s.code === 0).length };
+  };
+  const whole = censusOf(stages);
+  const summed = Object.values(whole).reduce((a, b) => a + b, 0);
   if (summed !== stages.length) {
     const wrong = stages.filter((s) => (s.code === 0) !== (s.kind === null || s.kind === undefined) ||
                                        (s.kind && !Object.values(STAGE_KIND).includes(s.kind)));
@@ -4681,8 +4925,30 @@ function report(stages) {
      population it is drawn from is printed beside it whether or not anything is wrong. Composed from the same
      `part` the assertion above is over, so the sentence and the check can never state different numbers for
      one list. */
-  const census = `${part.DEFECT} DEFECT, ${part["NOT ASKED"]} NOT ASKED, ${part.CENSUS} CENSUS, ` +
-                 `${part.TERMINAL} TERMINAL of ${stages.length} stage(s) — ${part.PASS} PASS`;
+  /* THE TWO POPULATIONS, AND THE PARTITION BETWEEN THEM IS A BOOLEAN AND THEREFORE NOT ASSERTED. `vehicle`
+     is true or it is false, so "these two lists are the whole of the stage list" is a statement no state of
+     this program can break - and an assert whose two sides cannot disagree is a comment with a pipeline in
+     it. What CAN break is the thing asserted directly below. */
+  const vehicle = stages.filter((s) => s.host.vehicle);
+  const deciding = stages.filter((s) => !s.host.vehicle);
+  /* A VEHICLE STAGE WITH NO NATIVE RUN BESIDE IT IS A STAGE EXCUSED FROM DECIDING WITH NOTHING TO COMPARE IT
+     AGAINST, which is the one way this whole mechanism could become a place to put an inconvenient red. The
+     VEHICLE population exists because a second reading of the SAME question exists on the verdict host; with
+     no native run in the report there is no second reading, the vehicle's is all there is, and it must
+     therefore decide. The push site is where that choice is made and this is where it is checked. */
+  if (vehicle.length && !deciding.some((s) => s.host === STAGE_HOST.NATIVE && "captured" in s))
+    throw new Error(`[build] ${vehicle.length} stage(s) are marked VEHICLE - ` +
+                    `${vehicle.map((s) => JSON.stringify(s.label)).join(", ")} - and no NATIVE run produced ` +
+                    `output in this same report. A vehicle run is excused from the verdict because the same ` +
+                    `question was also asked on the host whose slice is CPU-denominated; with no native run ` +
+                    `there is no second reading, so the vehicle's is the only one and it must decide. Push it ` +
+                    `as STAGE_HOST.WASM when the native program did not run.`);
+  const part = censusOf(deciding);
+  const vpart = censusOf(vehicle);
+  const censusText = (p, list) => `${p.DEFECT} DEFECT, ${p["NOT ASKED"]} NOT ASKED, ${p.CENSUS} CENSUS, ` +
+                                  `${p.TERMINAL} TERMINAL of ${list.length} stage(s) — ${p.PASS} PASS`;
+  const census = censusText(part, deciding);
+  const decidedBy = [...new Set(deciding.map((s) => s.host.tag))].join(" + ") || "no host at all";
   /* THE VERDICT IS THE WORST CATEGORY PRESENT AND NOT THE FIRST ROW IN THE LIST. Push order was the whole
      ranking and it is a fact about how this file is written rather than about what happened: `smoke test` sits
      ahead of the two-instance drive, the browser-process layer and both audits, so on every build where the
@@ -4690,8 +4956,32 @@ function report(stages) {
      any of those four could not appear in this line. Within one category push order still decides, which keeps
      the old tie-break exactly where it was and keeps a program that did not build ahead of one that did. */
   const rank = [STAGE_KIND.DEFECT, STAGE_KIND.NOT_ASKED, STAGE_KIND.CENSUS, STAGE_KIND.TERMINAL];
-  const bad = rank.map((k) => stages.find((s) => s.kind === k)).find(Boolean);
-  if (!bad) { console.log("[build] BUILD CLEAN — " + census); process.exit(0); }
+  const bad = rank.map((k) => deciding.find((s) => s.kind === k)).find(Boolean);
+  /* THE VEHICLE'S OWN LINE, ON EVERY OUTCOME INCLUDING THE CLEAN DAY, AND SUMMED INTO NOTHING. It carries its
+     own census of its own population, so the two totals can never be read as one; it names its worst stage
+     where it has one; and it says in the line that it decides nothing, because a count printed beside a
+     verdict is read as part of it unless something says otherwise. Printed on the clean day for the reason
+     every other census here is: a line that appears only on the bad day is one nobody learns to look for. */
+  const vbad = rank.map((k) => vehicle.find((s) => s.kind === k)).find(Boolean);
+  console.log(vehicle.length === 0
+    ? `[build] VEHICLE — no stage in this build ran on the vehicle with a native counterpart, so nothing ` +
+      `here says whether the thing that SHIPS behaves like the thing that was measured. That is an ABSENCE ` +
+      `and it is not agreement.`
+    : vbad
+      ? `[build] VEHICLE — ${censusText(vpart, vehicle)}; worst: ${vbad.label} [${vbad.kind.tag}] — ` +
+        `${vbad.verdict}\n[build]   NOT SUMMED INTO THE VERDICT AND NOT ABLE TO OVERTURN IT (§Testing). The ` +
+        `vehicle's slice is wall-denominated, so how far its run got is a fact about the box and the hour; ` +
+        `what it is entitled to state is a DISAGREEMENT with the native run, which is what the VEHICLE ` +
+        `AGREEMENT line reports.`
+      : `[build] VEHICLE — ${censusText(vpart, vehicle)}. It is summed into no verdict either way.`);
+  /* AND THE LINES THAT ARE NOT STAGES AT ALL. They decide nothing and are counted in nothing; they are here
+     rather than at their own push site because what a reader pastes is the tail of this run. */
+  for (const l of findings) console.log(l);
+  if (!bad) {
+    console.log(`[build] BUILD CLEAN — ${census} [verdict from the ${decidedBy} stage(s)` +
+                `${vehicle.length ? "; " + vehicle.length + " vehicle stage(s) decided nothing" : ""}]`);
+    process.exit(0);
+  }
   /* WHAT THE DECIDING CATEGORY MEANS, IN THE LINE, because the tag alone is a word and the reader's next act
      is what this is for. Four sentences, one per category, and the one printed is the one that was reached. */
   const says = {
@@ -4717,9 +5007,14 @@ function report(stages) {
      stage's code is handed out, never that a non-zero one is: the code is the same integer that stage would
      have exited with had it been run alone, so a caller reading `$?` gets the same vocabulary it always got
      and gets it from the most consequential stage instead of the earliest-pushed one. */
-  console.error("[build] BUILD FAILED — " + census);
+  console.error("[build] BUILD FAILED — " + census + " [verdict from the " + decidedBy + " stage(s)" +
+                (vehicle.length ? "; " + vehicle.length + " vehicle stage(s) decided nothing" : "") + "]");
   console.error("[build]   " + says);
-  console.error("[build]   deciding stage: " + bad.label + " [" + bad.kind.tag + "] — " + bad.verdict);
+  /* THE HOST IS IN THE DECIDING LINE FOR THE SAME REASON IT IS IN THE ROW: this is the sentence that gets
+     quoted at another agent, and a verdict that does not say which host produced it is a verdict whose
+     denomination the reader has to go and look up. */
+  console.error("[build]   deciding stage: " + bad.label + " [" + bad.kind.tag + "] (" + bad.host.tag +
+                ") — " + bad.verdict);
   console.error("[build]   exiting " + bad.code + ", which is that stage's own code — every category above " +
                 "keeps a non-zero exit and none of them is forgiven here.");
   process.exit(bad.code);
@@ -5014,12 +5309,47 @@ for (const l of revisionLines(revAtStart())) console.log(l);
  * SEGV in one go. The flags below are wpt.mjs's, with the SMOKE entry instead of the WPT one, and DEV on so a
  * DCHECK stays live — a sanitized build with the asserts compiled out reports faults the engine's own
  * invariants would have caught first, at the wrong site. */
-const NATIVE = process.argv.includes("native");
-if (NATIVE) {
-  /* WHICH SANITIZER, IF ANY — named, because the plain native build is the one the memory series comes from and
-     a sanitizer changes both the numbers and the wall-clock by an order of magnitude. */
-  const kind = process.argv.includes("address") ? "address"
-             : process.argv.includes("leak")    ? "leak" : "none";
+/* ── THE VERDICT HOST'S PROGRAM, BUILT ONCE AND CALLED FROM BOTH TARGETS ──────────────────────────────────
+   This body used to be inline in the `native` target and is now a function because the DEFAULT build calls it
+   too: CLAUDE.md §Testing puts the build's verdict on the host whose cooperative slice is CPU-denominated, and
+   until this call existed the default build compiled no native program at all. A SECOND native build path
+   beside this one would be the dual system this project forbids, so there is exactly one and both targets
+   take it - the `native` target with its sanitizer kind, the default build with `none`.
+   IT IS A `function` DECLARATION AND THAT IS LOAD-BEARING RATHER THAN STYLE. Declarations hoist, so the same
+   body is callable from the `native` branch ABOVE the object cache and from the default build's stage list
+   BELOW it; every `const` it reads (QUIET_WARNINGS, QJS, HOST, OUT, LEXBOR_INC, SHARED_SOURCES, ENTRY_SMOKE,
+   ENTRY_ABI, ENGINE) is initialised before either call site. That ordering is the trap this file has already
+   recorded twice - a `const` moved below its reader, and one moved inside the function that read it, neither
+   of which `node --check` can see - so it is stated here rather than left to be rediscovered.
+   IT SPAWNS NO EMSCRIPTEN ANYTHING, which the `native` target depends on and the default build does not care
+   about: `lexborNativeArchive` is cmake+make and the compile is clang, so the invariant the paragraph below
+   the `native` branch states - NOTHING COMPILES ABOVE THE BRANCH THAT DECIDES WHAT TO COMPILE - is untouched.
+   NAMED RESIDUAL - THE COMPILE IS UNCACHED WHERE THE WASM ONE IS NOT, AND NOW EVERY DEFAULT BUILD PAYS IT.
+   WHAT IS NOT COVERED: this is one `clang` invocation over every source, so the default build recompiles the
+   whole program natively on every run while the emcc half answers "N sources, 0 to compile (rest cached)".
+   WHAT THE NEXT DIFF BUILDS: `compileAll(tc, sources)` and `toolchain(...)` are already parameterised by a
+   toolchain for exactly this - their own banners say a second caller was the one thing the design allowed and
+   nothing did - so the next diff gives this a `toolchain("clang", ...)` record and links its objects. It is
+   not done HERE because `compileAll` reads module `const`s declared BELOW the `native` branch, so calling it
+   from both sites needs that branch moved below them, and moving it below `WASM_TC = toolchain("emcc",
+   requireEmcc(), ...)` would make `node engine/build.mjs native` require emsdk again - a property a previous
+   diff deliberately built and whose loss this one may not pay for.
+   HOW ITS ABSENCE WOULD SHOW: the default build's own compile line reports a cached count for emcc and this
+   function prints none at all, and the wall time between the two halves of one build is asymmetric in a way
+   no cache report explains.
+   NAMED RESIDUAL - ONE CALL IN HERE CAN STILL END THE PROCESS, AND IT IS NOW IN THE DEFAULT BUILD'S PATH.
+   WHAT IS NOT COVERED: `lexborNativeArchive` exits(1) when cmake or make cannot be run and the cached archive
+   does not match this tree's lexbor source. The clang spawn does NOT - a missing compiler answers `status:
+   null` and becomes the DEFECT stage above - so the exposure is exactly the cold-archive case, and it is a
+   door in front of every stage this function is called before. It is left standing rather than guarded by a
+   presence check here, because a check here would be a SECOND copy of what that archive's recipe requires and
+   this project has already paid for one of those in the same file.
+   WHAT THE NEXT DIFF BUILDS: `lexborNativeArchive` returns a failure its callers report instead of exiting -
+   which is a change to engine/lexbor_source.mjs and reaches engine/wpt.mjs too, so it is that file's diff and
+   not this one's.
+   HOW ITS ABSENCE WOULD SHOW: a build on a box without cmake ends with `[build] lexbor cmake FAILED` and NO
+   stage table at all, where every other failure in this file prints the table first. */
+function nativeProgram(kind) {
   const bin = join(OUT, "qjs-native-" + kind);
   mkdirSync(OUT, { recursive: true });
   
@@ -5077,11 +5407,44 @@ if (NATIVE) {
        whose only possible contribution is to disagree. */
     ...SHARED_SOURCES, ENTRY_SMOKE, ENTRY_ABI, LEXBOR_NATIVE, "-o", bin, "-lm", "-lpthread",
   ], { stdio: "inherit" });
-  if (cc.status !== 0) { console.error("[build] native build FAILED rc=" + cc.status); process.exit(cc.status || 1); }
+  /* A STAGE RATHER THAN A `process.exit`, WHICH IS THE ONE THING THAT CHANGED IN MOVING THIS BODY HERE.
+     An exit is a door in front of every stage behind it - this file's own recorded lesson, and the reason
+     `cold` could not fall through to the native run - and with the DEFAULT build now calling this function
+     too, that door would stand in front of the wasm link, both host-layer drives and both source censuses.
+     The integer is unchanged: `report()` hands out the deciding stage's own code, so a `native` target whose
+     compile fails still exits with exactly what it exited with before. */
+  if (cc.status !== 0) {
+    /* A TOOL THAT IS NOT INSTALLED AND A TOOL THAT FAILED ARE DIFFERENT FACTS, and only one of them writes a
+       status: a spawn that never started answers `status: null` and puts the reason in `error`, so the old
+       `rc=` + cc.status printed `rc=null` for a box with no clang on it. engine/lexbor_source.mjs already
+       states this rule about the same two tools; it is owed here now that this arm composes a VERDICT a
+       reader acts on rather than exiting with a number. */
+    const why = cc.error ? "clang could not be run at all (" + (cc.error.code || cc.error.message) + ")"
+              : cc.status === null ? "clang died on signal " + cc.signal
+              : "rc=" + cc.status;
+    console.error("[build] native build FAILED — " + why);
+    return { bin: null, stage: { label: "native link (" + kind + ")", verdict: "FAILED — " + why,
+                                 code: cc.status || 1, kind: STAGE_KIND.DEFECT } };
+  }
   console.log("[build] OK -> " + bin + " (both entries: the fixture, and `--abi` over the shipped qjs_* ABI)");
+  return { bin, stage: { label: "native link (" + kind + ")", verdict: "PASS", code: 0, kind: null } };
+}
+
+const NATIVE = process.argv.includes("native");
+if (NATIVE) {
+  /* WHICH SANITIZER, IF ANY — named, because the plain native build is the one the memory series comes from and
+     a sanitizer changes both the numbers and the wall-clock by an order of magnitude. */
+  const kind = process.argv.includes("address") ? "address"
+             : process.argv.includes("leak")    ? "leak" : "none";
+  /* THE ONE NATIVE BUILD PATH, SHARED WITH THE DEFAULT TARGET. */
+  const built = nativeProgram(kind);
+  const bin = built.bin;
   /* EVERY STAGE THIS TARGET RUNS, IN ONE LIST, because `report()` exits and a stage that reports alone is a
      stage that ends the run. This is the whole reason `cold` could not fall through to the native run. */
-  const stages = [];
+  /* THE BUILD IS ITSELF THE FIRST STAGE NOW, WHICH IS WHAT MAKES A FAILED COMPILE REPORTABLE RATHER THAN
+     FATAL: the runs below SKIP with that reason instead of never being reached, so the report carries a
+     NAMED hole rather than a silent one, and this target exits with the same integer it always did. */
+  const stages = [onHost(built.stage, STAGE_HOST.NATIVE)];
   /* THE CROSS-SESSION ROUND TRIP: TWO INVOCATIONS OVER ONE SHELF.
    *
    * §Time-travel-resume's whole claim is that the frontier persists as suspended snapshots ACROSS SESSIONS, and
@@ -5101,7 +5464,9 @@ if (NATIVE) {
     /* THE SHELF IS EMPTY BEFORE SESSION ONE. A residue left by an earlier run of a DIFFERENT tree would resume
        flows standing on segments this build never wrote — and it would look like a pass. */
     rmSync(store, { force: true });
-    const v1 = runChild("session ONE (--cold-park)", bin, ["--cold-park", store],
+    const v1 = bin === null
+      ? skipped("session ONE (--cold-park)", "the native program did not link")
+      : runChild("session ONE (--cold-park)", bin, ["--cold-park", store],
       "read its `@H park-*` rows beside the round-trip line below: a 0 kind names which record the park did " +
       "not write, and the moment it was taken at is `fixture_want_park` in engine/host/test_forced.c.");
     /* SESSION TWO IS SKIPPED AND NOT MERELY UNREPORTED. This is a real data dependency and not a door — the
@@ -5118,7 +5483,9 @@ if (NATIVE) {
        writes no bytes at all", so ABSENT and EMPTY are the same non-residue and a size is one of the two ways to
        ask. Reading it asks both at once and costs nothing at this size — the document is a few hundred bytes. */
     const residue = existsSync(store) && readFileSync(store, "utf8").trim().length > 0;
-    const v2 = !residue
+    const v2 = bin === null
+      ? skipped("session TWO (--cold-resume)", "the native program did not link")
+      : !residue
       ? skipped("session TWO (--cold-resume)", "session ONE wrote no residue for it to resume from")
       : runChild("session TWO (--cold-resume)", bin, ["--cold-resume", store],
                  "the round-trip line below says what it rebuilt out of the residue; a kind session one " +
@@ -5141,13 +5508,18 @@ if (NATIVE) {
        fixture records having had three times — and `native cold` answered with a cold verdict and no fixture at
        all. The two are INDEPENDENT questions about one binary, so they are two stages of one report, and a red
        cold round trip must not decide whether the fixture is exercised. */
-    stages.push(v1, v2);
+    stages.push(onHost(v1, STAGE_HOST.NATIVE), onHost(v2, STAGE_HOST.NATIVE));
   }
   /* AND IT IS RUN, because a target that is only built is the excluded test one layer down: the whole point is
      the stream it prints and the report it ends with, and nothing else in the tree produces either. */
-  stages.push(runChild("the native run (" + kind + (MIN ? ", minimal document" : "") + ")", bin, MIN ? ["--min"] : [],
-                       "a LeakSanitizer summary above is a real leak, and an AddressSanitizer report a real fault"));
-  report(stages);
+  stages.push(onHost(bin === null
+    ? skipped("the native run (" + kind + ")", "the native program did not link")
+    : runChild("the native run (" + kind + (MIN ? ", minimal document" : "") + ")", bin, MIN ? ["--min"] : [],
+               "a LeakSanitizer summary above is a real leak, and an AddressSanitizer report a real fault"),
+    STAGE_HOST.NATIVE));
+  /* NO VEHICLE RAN IN THIS TARGET AND THEREFORE NO AGREEMENT LINE. `report()` says so in its own words rather
+     than printing nothing, because a silent vehicle line reads as agreement. */
+  report(stages, []);
 }
 
 /* THE WASM LEXBOR, AND IT SITS BELOW `native` FOR THE REASON THE HEADER TWO SCREENS UP ALREADY GIVES.
@@ -5729,7 +6101,10 @@ function runProgram(label, argv, hint) {
   return runChild(label, process.execPath, argv, hint);
 }
 
-/* THE TWO PROGRAMS ARE TWO AREAS AND BOTH ARE ASKED, EVERY RUN.
+/* THE TWO PROGRAMS ARE TWO AREAS AND BOTH ARE ASKED, EVERY RUN — AND THE SMOKE IS NOW ASKED ON TWO HOSTS.
+ * (This banner said TWO runs while it described the vehicle's alone. The native smoke below is a third, it is
+ * the one the verdict is taken from, and the sentence that counted them is rewritten rather than deleted:
+ * a reader who re-derives "there are two" from the two PROGRAMS will re-introduce it.)
  *
  * The smoke drives test_forced.c's fixture document (its @H probe stream: any row 0 and the process exits
  * non-zero — the trailing arguments reach main()'s argv, the channel getenv could not be, since emscripten's
@@ -5745,22 +6120,77 @@ function runProgram(label, argv, hint) {
  * probe row 0, in any unrelated area of the fixture, and the seam went unexercised while the report named only
  * the smoke. That is §Testing's excluded test wearing a complete-looking total, and the fix is that neither
  * stage gates the other and BOTH numbers are in one report. */
-const STAGES = [ABI_LIST, SMOKE_LINK, ABI_LINK];
-STAGES.push(SMOKE_LINK.code
+/* EVERY STAGE STATES WHICH HOST IT RAN ON — see STAGE_HOST. The renderer ABI list READS main.c and the
+   declaration beside it, so it is a SOURCE census and its finding is about the revision on every host; the
+   two emcc links are the VEHICLE'S OWN MACHINERY, which nothing else in this tree asks about and which
+   therefore decides, because a program that does not link for the shipped target is a fact about the
+   revision and not a reading of one interleaving. */
+const STAGES = [onHost(ABI_LIST, STAGE_HOST.SOURCE),
+                onHost(SMOKE_LINK, STAGE_HOST.WASM),
+                onHost(ABI_LINK, STAGE_HOST.WASM)];
+/* THE LINES THIS RUN PRODUCES THAT ARE NOT STAGES. Empty is a positive statement and `report()` requires the
+   array, so a build with nothing to say passes one rather than passing nothing. */
+const FINDINGS = [];
+
+/* ── THE VERDICT RUN, ON THE HOST THAT CAN MEASURE CPU ────────────────────────────────────────────────────
+   CLAUDE.md §Testing: "THE GATE'S VERDICT IS TAKEN ON THE HOST THAT CAN MEASURE CPU, AND A VEHICLE RUN IS A
+   SECOND STAGE WHOSE DISAGREEMENT IS A FINDING ABOUT THE VEHICLE." Until this the default build compiled no
+   native program at all, so the one run §Testing says may not decide a verdict was the only run there was.
+   The consequences that decision is made on are measured and are in that section: this fixture's throughput
+   is BIMODAL at a FIXED CPU budget with a clean gap nobody has explained, two runs of ONE artifact answered
+   35/208 and 75/208 and TERMINATED DIFFERENTLY, a bisect over that signal converged confidently on a commit
+   that was not a cause, and AddressSanitizer cannot run on the shipped program because wasm32 addresses 4 GiB
+   and this frontier measures 5.2 GiB of live allocation. None of that is a reason to stop running the
+   vehicle - §Testing calls that the inverted failure, measuring a program nobody ships - and all of it is a
+   reason not to take a verdict from it.
+   THE SLICE IS WHAT MOVED AND THE BUDGET IS NOT. Both children run under the same `RLIMIT_CPU` and die on the
+   same kernel SIGXCPU; what differs is the ENGINE'S OWN cooperative slice, thread-CPU here and WALL on the
+   vehicle, which solver/quantum.c states per run on its `@QUANTUM` line and which every verdict in this file
+   already carries. Nothing here adds a second denomination tag beside that one. */
+const NATIVE_BUILT = nativeProgram("none");
+STAGES.push(onHost(NATIVE_BUILT.stage, STAGE_HOST.NATIVE));
+const NATIVE_SMOKE = NATIVE_BUILT.bin === null
+  ? skipped("native smoke test", "the native program did not link")
+  : runChild("native smoke test" + (MIN ? " (minimal document)" : ""),
+             NATIVE_BUILT.bin, MIN ? ["--min"] : [],
+             "THIS IS THE VERDICT RUN. Its cooperative slice is thread-CPU (solver/quantum.c's timer_create " +
+             "CLOCK_THREAD_CPUTIME_ID arm), so every microsecond the WFQ's aging charge bills is one a flow " +
+             "HELD THE THREAD for. The @H row printed 0 above names a statement engine/host/test_forced.c's " +
+             "probe table declares and this run did not answer.");
+STAGES.push(onHost(NATIVE_SMOKE, STAGE_HOST.NATIVE));
+
+/* ── AND THE VEHICLE'S RUN, WHICH STILL RUNS AND DECIDES NOTHING ──────────────────────────────────────────
+   ITS HOST DEPENDS ON WHETHER THE NATIVE RUN HAPPENED, and that is not a hedge - it is the rule STAGE_HOST
+   states. A run is excused from the verdict because the SAME question was also asked on the host whose slice
+   is CPU-denominated; where the native program did not link there is no second reading, this one is all there
+   is, and it must therefore decide. `report()` refuses the other combination rather than trusting this line. */
+const WASM_SMOKE = SMOKE_LINK.code
   ? skipped("smoke test", "the smoke program did not link")
   : runProgram("smoke test" + (MIN ? " (minimal document)" : ""),
                [join(OUT, "qjs.js"), ...(MIN ? ["--min"] : [])],
                "the @H row printed 0 above names the statement the fixture document makes and this run did " +
-               "not answer — engine/host/test_forced.c's probe table is where that row is declared."));
+               "not answer — engine/host/test_forced.c's probe table is where that row is declared. This is " +
+               "the VEHICLE's run: its slice is wall-denominated, so how far it got is a fact about the box " +
+               "and the hour, and what it is entitled to state is a DISAGREEMENT with the native run above.");
+STAGES.push(onHost(WASM_SMOKE,
+                   NATIVE_BUILT.bin === null ? STAGE_HOST.WASM : STAGE_HOST.VEHICLE));
+/* ONE LINE, ITS OWN VERDICT, SUMMED INTO NOTHING — see `vehicleAgreement`. It is composed here, where both
+   records are in one hand, and PRINTED by `report()` beside the verdict, where a reader is looking. */
+FINDINGS.push(vehicleAgreement(NATIVE_SMOKE, WASM_SMOKE));
 /* A STALE ARTIFACT IS NOT A SUBJECT. route.mjs imports extension/lib/qjs/qjs.mjs off disk, so running it after
    a failed ABI link would measure whatever a PREVIOUS build left there and report the number under this
    revision — which is worse than not running it, and is why this is a SKIP rather than an attempt. */
-STAGES.push(ABI_LINK.code
+STAGES.push(onHost(ABI_LINK.code
   ? skipped("two-instance ABI drive", "the production ABI program did not link")
   : runProgram("two-instance ABI drive", [join(ENGINE, "route.mjs")],
                "this is the cross-instance seam: the world registry, the nearest-first ancestry fork, the " +
                "synchronous cross-origin read, and the park on an outstanding one. Nothing else in this tree " +
-               "provisions a second instance, so a failure here is unobserved by every other gate."));
+               "provisions a second instance, so a failure here is unobserved by every other gate."),
+  /* THE VEHICLE'S OWN MACHINERY AND NOT A VEHICLE RUN. It drives the shipped wasm ABI through the JS host
+     layer, and NOTHING in this tree asks that question a second time — there is no native counterpart for it
+     to disagree with — so excusing it from the verdict would delete the only cross-instance gate there is,
+     which is §Testing's excluded test rather than a finding about the vehicle. */
+  STAGE_HOST.WASM));
 /* AND THE SAME SEAM ONE LAYER UP — the BROWSER-PROCESS half, which route.mjs plays the part of rather than
    runs. route.mjs calls `makeEngine` itself, so what it proves about the transport says nothing about the two
    components that decide an instance exists and materialize it in the shipped extension:
@@ -5771,13 +6201,15 @@ STAGES.push(ABI_LINK.code
    IT SKIPS ON THE SAME CONDITION AND FOR THE SAME REASON as the drive above: it boots the renderer program the
    ABI link just produced, so running it after a failed link would measure whatever a previous build left in
    `extension/lib/qjs/` and report that number under this revision. */
-STAGES.push(ABI_LINK.code
+STAGES.push(onHost(ABI_LINK.code
   ? skipped("browser-process layer", "the production ABI program did not link")
   : runProgram("browser-process layer", [join(ENGINE, "renderer_host_gate.mjs")],
                "this is the renderer registry and the RenderFrameHost, driven by their own bytes: two " +
                "cross-origin renderers provisioned into one browsing-context group, the duplicate-cluster " +
                "refusal that is SECURITY.md's one-instance-per-cluster rule, and the routing-id accounting. " +
-               "Until this stage existed neither file was compiled, imported or run by anything."));
+               "Until this stage existed neither file was compiled, imported or run by anything."),
+  /* THE SAME READING AS THE DRIVE ABOVE: the vehicle's own machinery, asked by nothing else, so it decides. */
+  STAGE_HOST.WASM));
 /* THE RECORD-FIELD CONTRACT, which is the defect class §Architecture names and which nothing else here asks
    about: a name a consumer READS off a producer's record and no producer WRITES, a field a producer emits that
    nothing reads, a `||`/`??`/`?.`/swallowed-catch that turns either of those into a plausible datum instead of
@@ -5800,13 +6232,15 @@ STAGES.push(ABI_LINK.code
    BE A PROPERTY OF THIS PUSH POSITION and is now a property of the kind: it held only while every program
    stage happened to sit above every audit, which made a correct rule depend on the order two lines were
    written in. */
-STAGES.push(runProgram("record-field contract audit", [join(ENGINE, "fieldgate.mjs")],
+/* BOTH AUDITS READ THE SOURCES AND COMPILE NOTHING, so neither has an engine slice to be denominated and
+   neither answers for one host: their findings are about the REVISION on every host and they decide. */
+STAGES.push(onHost(runProgram("record-field contract audit", [join(ENGINE, "fieldgate.mjs")],
                        "each category above is one side of a contract with nothing on the other: a field read " +
                        "off a record no producer emits, a field emitted and never read, a default that stops " +
                        "either from crashing, or a branch on a value outside a producer's return domain. Fix " +
                        "at the ROOT — make the consumer DCHECK the field (extension/check.js mirrors check.h) " +
                        "or delete the half of the contract that has gone stale. There is no baseline to " +
-                       "update: the count IS the disagreement."));
+                       "update: the count IS the disagreement."), STAGE_HOST.SOURCE));
 /* THE THIRD AREA: does each component install the surface its Web IDL declares. It gates nothing and nothing
    gates it — it compiles no C and reads no artifact, so it asks its question of the SOURCES whatever the two
    programs above did, and a link failure can never take the member census out of the run with it.
@@ -5819,14 +6253,15 @@ STAGES.push(runProgram("record-field contract audit", [join(ENGINE, "fieldgate.m
    code and the member gap does not stand in front of it wherever either is pushed. Every stage still reports,
    which is the whole point of the list, and the count is still a non-zero exit: there is no baseline to update
    and none is grown here, so the gap is never forgiven and is never called a regression either. */
-STAGES.push(runProgram("Web IDL gap audit", [join(ENGINE, "idlgen.mjs")],
+STAGES.push(onHost(runProgram("Web IDL gap audit", [join(ENGINE, "idlgen.mjs")],
                        "this stage prints TWO LEDGERS and they are NEVER SUMMED. A FINDING is one disagreement " +
                        "between the platform's IDL and this engine, closed at the ROOT IN THE ENGINE by the action " +
                        "ITS OWN line names — they are not all members to write, and never a js_noop stub. A BLIND " +
                        "SPOT is a construct THIS RUN COULD NOT READ, so it found nothing about the engine there: it " +
                        "is closed IN THE AUDIT, never by implementing anything in a component, and until it is the " +
-                       "finding count is a FLOOR. There is no baseline to update: the findings ARE the gap."));
-report(STAGES);
+                       "finding count is a FLOOR. There is no baseline to update: the findings ARE the gap."),
+  STAGE_HOST.SOURCE));
+report(STAGES, FINDINGS);
 
 /* A THIRD DRIVE STOOD HERE — the driver for the deleted second program, which put the RENDERER REGISTRY's
    transitions through it — and it is deleted with the program it drove. THE COVERAGE IT HELD IS NAMED RATHER
