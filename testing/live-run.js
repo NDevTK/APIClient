@@ -198,6 +198,44 @@ const COUNTERS = ["switches", "flows", "candidates", "jobsQueued", "jobsRun", "u
    arms and read identically in the three objects above.
    ABSENT AND ZERO STAY DIFFERENT FACTS: a crashed row carries no census at all, and each field is `null` there
    rather than `{}` — an empty object is a census that was taken and found nothing, which is a finding. */
+
+/* WHAT THE PRODUCT ACTUALLY FINDS ON A REAL BUNDLE, MEASURED — AND IT IS FOUR STATIC FONTS.
+ *
+ * This driver watches a live page through a browser. The companion measurement is the frozen one, and it is
+ * recorded here rather than beside the instrument because it is a fact about the PRODUCT and the two readings
+ * belong together: `testing/corpus/mirror/gitlab` (a 4.5 MB real bundle, 18 tracked files) replayed by
+ * `testing/corpus/serve-faithful.mjs` at its original host and paths, driven by `engine/pagecensus.mjs`
+ * through the production ABI, artifact stamped `f84f671f`, quiet box (load 0.32 rising to 1.03), 51 samples.
+ *
+ *   fetchCallSites: FOUR, every one a `.woff2` font under /assets/, `provenance=derived`, `params` EMPTY.
+ *   securitySinks: 0.   pageErrors: 0.   Terminal event: a real `@WHY`, not the budget.
+ *
+ * §Attacker-sources says a static asset is never an endpoint, so BY THIS PROJECT'S OWN RULE THE LEARNED API
+ * SURFACE IS EMPTY — no address, no parameter, no example value, no encoding. Nothing built for bodies,
+ * grades, headers or provenance was exercised, because nothing reached it.
+ *
+ * AND THE SURFACE WAS COMPLETE AT SAMPLE 0 AND NEVER GREW, which is the half that says where to look. All four
+ * were known inside the first 750 ms; 118 seconds and 17 165 flows added nothing. So the terminal abort is NOT
+ * the cause — it fired 117 seconds after the last thing was learned, and reading it as the cause is the
+ * terminal-event-as-explanation mistake this file warns about one paragraph up.
+ *
+ * WHAT SURVIVES A REPEAT AND WHAT DOES NOT, because two runs of this document have now been taken and they
+ * ended DIFFERENTLY (one at the CPU rlimit, one at an abort), so their reach columns are not comparable:
+ *   IDENTITY, stable across both: `rootPrograms 24 / Held 7 / Awaited 17`; `replyAsked 21 == replyAnswered 21`
+ *   at the FIRST sample before any fork — the whole bundle fetched up front, so the fetch path is not the
+ *   problem; `_jobsRun` 0 in BOTH, so nothing behind an `await`, a `.then`, a timer or a delivery ever ran.
+ *   REACH, this run only: `deepest 8`, `completed 7`, cursors `{7: 17158, 8: 7}` with ZERO below 7,
+ *   `forks 17164`, `_unitsDone` 55.
+ *
+ * FIFTY-FIVE UNITS OF WORK AGAINST SEVENTEEN THOUSAND FLOWS IS THE FINDING. Every member finished program 6
+ * and is standing at program 7's door — a chunk whose bytes were delivered before the first fork — and the run
+ * spends itself forking rather than executing. That is a THROUGHPUT statement and not an ordering one:
+ * `neverPickedGap` was 0, and engine/build.mjs's own reading of that row says in its own words that nothing is
+ * ranked ahead of those members, so the ordering is not what is keeping them out and the instant is not
+ * evidence either way. A coordinator quoted `neverPicked 64605 of 71452` into a brief WITHOUT
+ * `picksLifetime` — a fraction with no denominator, and the reading that says so was in a file he had been
+ * editing the same day. The denominator is the whole of it: no order can dispatch what the thread never
+ * reached. */
 const CENSUS_LIFETIME = ["stepUnitRuns"];
 const CENSUS_GAUGE = ["stepUnits", "programCursors"];
 const COLD_COUNTERS = ["hostAsked", "hostAnswered", "replyAsked", "replyAnswered",
