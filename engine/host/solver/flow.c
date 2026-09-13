@@ -85,8 +85,28 @@ static int64_t g_picks_total = 0;
    REPLAY HITS, so nearly all of the thread goes into re-running prefixes.
    WHAT IS NEW IS THE CURSOR HISTOGRAM, AND IT IS A FACT ABOUT THE DOCUMENT RATHER THAN THE QUEUE.
    `deepest` 7, `programCursors` {0..6: 0, 7: 71296, 8: 156}: ONE program is holding the entire frontier —
-   71296 members have finished program 6 and have 7 left, while 156 stand one past the deepest program any
-   flow has started, with nothing of the document's own table left to run.
+   71296 members have finished program 6 and are standing at program 7's door, while 156 have finished 7 and
+   are standing at 8's.
+   THE CLAUSE THAT STOOD HERE — "with nothing of the document's own table left to run" — WAS FALSE AND IS
+   REWRITTEN, BECAUSE IT WAS DERIVED FROM THE HISTOGRAM'S EXTENT AND THE EXTENT IS NOT THE TABLE. The buckets
+   run to `deepest + 1` because that is how far any LIVE MEMBER has got, so a top bucket reads exactly the same
+   whether the sequence ends there or continues for another sixteen rows. `engine_seed_scripts` queues the
+   WHOLE of a document's table at flow creation, so every member's `dyn_n` is 24 from birth and cursor 8 means
+   SIXTEEN ROWS REMAIN. The row that separates those two states is `outOfPrograms`, which this reading did not
+   quote — and that is the same defect as the one above it, one row over: a number read against the wrong
+   denominator, where the right one was not published.
+   AND THE ROW MAP IS WHAT MAKES EVERY LATER READING OF THIS DOCUMENT CONCRETE. Counted off the mirror in
+   document order: rows 0-1 INLINE, 2-4 `src`, 5 INLINE, 6-19 `src`, 20-23 INLINE. So `deepest 7` means the
+   run reached the SECOND of fourteen consecutive chunk rows; the 71296 are piled at row 7's door and the 156
+   at row 8's, and both of those doors are an external `src` whose bytes arrive through the reply door.
+   THAT REFRAMES THE DIAGNOSIS AND IS WORTH MORE THAN THE CORRECTION. "The order never gets there" and "the
+   members ARE there and the bytes never arrive" are opposite work — the first is the WFQ's and the second is
+   the fetch path's — and cursor 8 says 156 members had already arrived. `replyAsked` against
+   `rootProgramsAwaited` (17 for this document) is the pair that separates them, and neither number was in the
+   reading above because neither existed. Only five of the rows at or below index 7 carry a `src`, so a run
+   stopped at `deepest 7` should show `replyAsked` near 5 and not near 17: a figure at 17 would mean the bundle
+   was fetched whole and the programs were not run, which is the fetch path working and the order failing, and
+   a figure at 5 is the reverse. That is a prediction and this census never made it.
    AND THE SENTENCE THAT STOOD HERE — "SIXTEEN SCRIPTS OF THE DOCUMENT NEVER START" — WAS READ OFF THE WRONG
    ACCESSOR AND IS REWRITTEN RATHER THAN DELETED, BECAUSE IT IS THE DERIVATION A READER RE-DOES. It was
    `progStarts` 24 minus the histogram's eight slots. `progStarts` counts program STARTS ACROSS EVERY FLOW AND
