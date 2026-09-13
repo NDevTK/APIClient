@@ -216,6 +216,28 @@ function mergeASTResultsIntoVDD(tab, results) {
       } else {
         tab._epNorm.set(_structKey, epKey);
       }
+      /* THE RECORD'S NAME, CARRIED ONTO THE LEARNED METHOD, BECAUSE THIS LOOP IS THE ONE PLACE BOTH EXIST
+         AND THE SEND PANEL REACHES THE RECORD THROUGH THE METHOD OR NOT AT ALL. The panel's dropdown is
+         built from this document's learned methods and selects by (service, methodId), so the only thing
+         `resolveEndpointSchema` is ever handed is that pair — its `endpointKey` parameter has no producer,
+         its `ep` is therefore null, and everything the record states BEYOND an address reaches no surface:
+         the body the run observed this request sending, its templated holes, its probe answer. Each of
+         those three consumers is a live read of a field nothing populates, which is CLAUDE.md
+         §A-FIELD-A-CONSUMER-DEFAULTS with `schema.endpoint && …` in the place a `||` usually stands.
+         THE NAME IS CARRIED AND NOT RE-DERIVED. lib/endpoint-record.js states the rule for its own mint —
+         a key composed independently at two sites is a contract with nothing enforcing it — and the method
+         does carry `origin` and `path`, so recomposing from them is exactly that second composition: the
+         key's host is the HOSTNAME and its path keeps the leading slash, and neither is what those two
+         fields hold. Carrying `endpointKeyFromParts`' own answer leaves one spelling.
+         FIRST WRITER WINS, AND THAT IS REQUIRED RATHER THAN CONVENTIONAL. A learned method is created once,
+         by the first call site to reach its name, and `m.path` is THAT call site's; a later writer would
+         leave the key naming one record while the address the panel sends to named another — two records
+         rendered as one row with no line saying which half came from where. Where several records do share
+         one method name, the rest are unreachable from the panel whatever this line does; that is a defect
+         in the naming and not one this line can state. */
+      if (_learned.method && _learned.method._endpointKey === undefined) {
+        _learned.method._endpointKey = epKey;
+      }
       if (!tab.endpoints.has(epKey)) {
         /* THROUGH lib/endpoint-record.js, WHICH IS NOW THE ONLY DESCRIPTION OF THIS RECORD. This literal used
            to BE the description, and it could only be consulted by reading it — which is why the field list

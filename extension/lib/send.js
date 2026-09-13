@@ -124,17 +124,32 @@ function resolveEndpointSchema(endpointKey, service, methodId) {
      below used to make them one. `null` here means "this panel is resolving a VIRTUAL endpoint, named by
      service+methodId, that no call site registered"; it never means "the record is there but said nothing". */
   const _epHit = endpointKey ? globalStore.endpoints.get(endpointKey) : undefined;
-  const ep = _epHit === undefined ? null : _epHit;
-  if (ep) checkEndpointRecord(ep, "lib/send.js resolving a Send-panel schema, key " + JSON.stringify(endpointKey));
+  const epByKey = _epHit === undefined ? null : _epHit;
+  if (epByKey) checkEndpointRecord(epByKey, "lib/send.js resolving a Send-panel schema, key " + JSON.stringify(endpointKey));
 
   // If no endpoint but we have service+methodId (virtual), create a dummy ep object for context
-  if (!ep && (!service || !methodId)) return { source: "none", endpoint: null };
+  if (!epByKey && (!service || !methodId)) return { source: "none", endpoint: null };
 
   /* THE ENDPOINT'S OWN SERVICE WHEN THERE IS AN ENDPOINT, the caller's argument only when there is none.
      `ep?.service || service` collapsed those into one expression whose two arms answer different questions,
      and its reachable effect was to answer a captured endpoint's discovery lookup with whatever service the
      panel happened to have selected — a lookup against a doc this address was never filed under. */
-  const targetService = ep ? ep.service : service;
+  const targetService = epByKey ? epByKey.service : service;
+
+  /* THE RECORD THE MATCHED METHOD NAMES, WHICH IS THE ONLY WAY THE SEND PANEL EVER REACHES ONE. The
+     parameter above has no producer: the panel's one door is GET_ENDPOINT_SCHEMA and it carries
+     (service, methodId), so `epByKey` is null on every request this function actually serves and the
+     three consumers of a record below — the templated holes, the probe answer, the projected body — read
+     a thing nothing had populated. lib/merge.js stamps `_endpointKey` onto the learned method at the one
+     place both the record and the method exist, so the lookup happens BELOW, after `match`, and
+     `targetService` is left deciding the doc exactly as it did: resolving the record earlier would let
+     `ep.service` pick the document, and merge.js REFINES an endpoint's service after the doc was filed
+     under the unrefined name, so a refined one would miss the doc and the row would vanish from the panel.
+     AN ABSENT `_endpointKey` IS A FACT AND NOT A GAP. lib/persistence.js round-trips these documents
+     through IndexedDB, so a method written before the stamp existed carries none and resolves to no
+     record — which is exactly the state this function has always been in, stated rather than crashed on. */
+  let ep = epByKey;
+  let epKeyUsed = endpointKey ? endpointKey : null;
 
   let source = "none";
   let discoveryMethod = null;
@@ -152,17 +167,37 @@ function resolveEndpointSchema(endpointKey, service, methodId) {
     if (methodId) {
       // Direct lookup by ID (virtual endpoint)
       match = findMethodById(doc, methodId);
-    } else if (ep) {
+    } else if (epByKey) {
       // Path matching (captured endpoint)
       /* THE VERB IS ON THE RECORD. `|| "POST"` matched this address against the discovery doc's POST method
          whenever the endpoint's own verb went missing — a GET endpoint resolved to a POST method's schema,
          which the Send panel then renders as this endpoint's parameters. lib/merge.js asserts the call site
          carries a method before it registers one, so there is no absence here to answer for. */
-      match = findDiscoveryMethod(doc, ep.path, ep.method);
+      match = findDiscoveryMethod(doc, epByKey.path, epByKey.method);
     }
 
     if (match) {
       source = "discovery";
+      /* THE RECORD, BY THE NAME THIS METHOD CARRIES. A miss is a fact — a document persisted before the
+         stamp, or a record the moat has since dropped — and leaves `ep` exactly as it was. A HIT whose verb
+         disagrees is not a fact about the store, it is this stamp naming somebody else's record, and every
+         field projected below would then describe a request at a different address. */
+      const _mKey = match.method._endpointKey;
+      if (ep === null && typeof _mKey === "string" && _mKey !== "") {
+        const _mHit = globalStore.endpoints.get(_mKey);
+        if (_mHit !== undefined) {
+          checkEndpointRecord(_mHit, "lib/send.js resolving the record a learned method names, key " +
+                                     JSON.stringify(_mKey));
+          DCHECK(_mHit.method === match.method.httpMethod,
+                 "the learned method " + JSON.stringify(match.method.id) + " names endpoint record " +
+                 JSON.stringify(_mKey) + ", whose verb is " + JSON.stringify(_mHit.method) + " and not " +
+                 JSON.stringify(match.method.httpMethod) + " — lib/merge.js stamps that name inside the loop " +
+                 "that mints both, so a disagreement is one record's name on another's method and the Send " +
+                 "panel would show this address beside a different request's body and holes");
+          ep = _mHit;
+          epKeyUsed = _mKey;
+        }
+      }
       discoveryMethod = {
         id: match.method.id,
         httpMethod: match.method.httpMethod,
@@ -287,8 +322,8 @@ function resolveEndpointSchema(endpointKey, service, methodId) {
   }
 
   // 2. Try probe results (only if we have a real endpoint key)
-  const probeResult = endpointKey
-    ? globalStore.probeResults.get(endpointKey)
+  const probeResult = epKeyUsed
+    ? globalStore.probeResults.get(epKeyUsed)
     : null;
   if (probeResult?.fields) {
     /* A PROBE'S FIELD LIST IS NOT OURS EITHER. lib/req2proto.js learns it by reading a `google.rpc.Status`
@@ -398,7 +433,7 @@ function resolveEndpointSchema(endpointKey, service, methodId) {
      that is the INVERSE of what was observed — a wrong report, not a thin one — and the value the run did
      compute reached no reviewer at all. */
   const _epHoles = ep ? endpointHolePairs(ep, "lib/send.js resolving the Send-panel schema for " +
-                                              JSON.stringify(endpointKey)) : null;
+                                              JSON.stringify(epKeyUsed)) : null;
   if (_epHoles && _epHoles.size) {
     parameters = parameters || {};
     for (const [_hn, _hp] of _epHoles) {
