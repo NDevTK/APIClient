@@ -6,37 +6,73 @@
      WITNESS: an abort that never fires and a path never taken render identically, so the console line
      each read emits is what separates them — a run with no ROTATE-READ line scores nothing, whatever
      else it does or does not abort on. -->
-<style>
-  #rot   { transform: rotate(45deg); }
-  #t3d   { transform: translate3d(1px, 2px, 3px); }
-  #typo  { transform: translate(2); }
-</style>
+<!-- THE DECLARATIONS ARE INLINE AND NOT IN A <style> BLOCK, deliberately. A sheet asks a SECOND question —
+     does this engine parse and apply this stylesheet — and a run where it does not is indistinguishable at
+     every arm from a run where the transform code is fine: all three elements compute `none` and nothing
+     aborts. An inline `style` attribute is the shortest path from the declaration to the cascade, so a
+     failure here is about the transform grammar and not about sheet plumbing. The `decl` mark below is what
+     makes that checkable rather than assumed. -->
 </head><body>
-<div id="rot"><span id="rot_in">r</span></div>
-<div id="t3d"><span id="t3d_in">d</span></div>
-<div id="typo"><span id="typo_in">t</span></div>
+<div id="rot" style="transform: rotate(45deg)"><span id="rot_in">r</span></div>
+<div id="t3d" style="transform: translate3d(1px, 2px, 3px)"><span id="t3d_in">d</span></div>
+<div id="typo" style="transform: translate(2)"><span id="typo_in">t</span></div>
 <script>
-/* Read in ARM ORDER, least-to-most expected-to-abort, so a log that stops tells you which arm stopped it.
-   Each line is printed BEFORE the read it is about, so the last line in the log names the arm that died. */
-function probe(id, what) {
-  console.log("TF-READ " + id + " " + what);
+/* THE WITNESS IS A FETCH AND NOT A `console.log`, AND THAT CORRECTION IS THE POINT OF THIS FIXTURE.
+   It was written with `console.log` first, and a drive against a real build captured ZERO lines: the engine
+   under test is a RENDERER in a sandboxed iframe that deliberately does not tee its stdout to the console —
+   core/../bridge.js says so in its own words, because a hot engine's traffic would bury the page's. So the
+   witness sat on a surface the shipped path never writes, which is CLAUDE.md §MEASURE-WHAT-THE-SHIPPED-PATH-
+   WRITES exactly: an absent line meant "this instrument cannot see" and rendered identically to "this arm did
+   not run". A fetch is different in kind — it leaves the engine through `safeFetch`, reaches the fixture
+   server, and lands in that server's ACCESS LOG, which is an oracle OUTSIDE the engine entirely.
+   READ IT WITH: grep tf-arm <the fixtures server's log>
+   EACH ARM FETCHES TWICE, before and after its read, and the pair is what makes the log legible: a `-enter`
+   with no `-done` after it is the read that aborted, and it names the arm without any ordering convention to
+   remember. An arm with NO `-enter` at all was never reached, which is the reachability witness — a run
+   missing one has not tested that arm, whatever else it printed. */
+function mark(t) { try { fetch("/tf-arm/" + t); } catch (e) {} }
+/* THE DONE MARK CARRIES NO MEASURED VALUE, and that is the second correction this fixture needed. It first
+   spelled the width into the tag — `…-done-w" + Math.round(r.width)` — and against a real build EVERY arm
+   logged its `-enter` and NONE its `-done`, which reads exactly like three aborts and was not one: `end`
+   fired too, so nothing had aborted at all. A rectangle this engine reports is VIEWPORT-DERIVED and therefore
+   CONCOLIC by design, so the tag built from it is not a concrete string and the fetch that would have carried
+   it never went out. The witness had been made unreachable by precisely the engine behaviour it exists to
+   observe. A witness embeds only CONSTANTS; a measured value goes in its own mark, past a comparison that
+   collapses it to one. */
+function probe(id, tag) {
+  mark(tag + "-enter");
   var r = document.getElementById(id).getBoundingClientRect();
-  console.log("TF-OK " + id + " w=" + r.width + " h=" + r.height);
+  mark(tag + "-done");
+  /* The width as a two-way ANSWER rather than as a number, so a concolic operand cannot take the mark with
+     it: a rotated box reports an axis-aligned bounding box WIDER than the unrotated one, which is the
+     observable css-transforms-1 §12's matrix exists to produce. */
+  mark(tag + (r.width > 8 ? "-wide" : "-narrow"));
+  return r;
 }
-/* (1) THE TYPO ARM MUST NOT ABORT. `translate(2)` is CSS Syntax §2.2 "Error Handling"'s invalid
-   declaration — a bare non-zero number is not a <length-percentage> — so the element computes §3's
-   `Initial:` value of `none`, nothing is transformed, and the rectangle is reported. This is the
-   regression guard: before 0b5c14d0 this reached a DCHECK in core/css/css_length.c and aborted the
-   engine from a stylesheet. A run that dies here has REGRESSED. */
-probe("typo_in", "invalid-declaration-must-compute-none");
-/* (2) THE 2D ARM MUST ABORT AT THE MATRIX, NOT AT THE GRAMMAR. The computed value now exists, so what
-   is left is css-transforms-1 §12 "Mathematical Description of Transform Functions" — the abort's text
-   must contain "WHAT IS LEFT is §12" and must NOT be the retired computed-value crash. */
-probe("rot_in", "2d-transform-must-reach-the-matrix-crash");
-/* (3) THE 3D ARM MUST NAME ITS LEVEL. css-transforms-2 §12.2 "3D Transform Functions", and the message
-   must name `translate3d()` specifically rather than reporting a grammar gap. Unreached if (2) aborts
-   first, which is expected — run it alone to score this arm. */
-probe("t3d_in", "level-2-function-must-name-css-transforms-2");
-console.log("TF-END");
+/* DID THE CASCADE EVEN SEE THE DECLARATION — the reachability witness for the whole document. `style.transform`
+   is the SPECIFIED value through CSSOM and never the resolved one, so it asks nothing of §3.2's matrix and
+   cannot abort; if these three marks say `-none`, no arm below is testing the transform path at all and the
+   run is unscored whatever else it prints. */
+function decl(id, tag) {
+  var v = document.getElementById(id).style.transform;
+  mark("decl-" + tag + (v ? "-set" : "-none"));
+}
+mark("start");
+decl("typo", "typo"); decl("rot", "rot"); decl("t3d", "t3d");
+/* (1) THE TYPO ARM MUST NOT ABORT. `translate(2)` is CSS Syntax §2.2 "Error Handling"'s invalid declaration —
+   a bare non-zero number is not a <length-percentage> — so the element computes css-transforms-1 §3's
+   `Initial:` value of `none`, nothing is transformed, and the rectangle is reported. Real Chrome agrees and is
+   the ground truth: it reports this element UNTRANSFORMED. A run that dies here has REGRESSED. */
+probe("typo_in", "typo");
+/* (2) THE 2D ARM MUST ABORT AT THE MATRIX, NOT AT THE GRAMMAR. The computed value exists now, so what is left
+   is css-transforms-1 §12 "Mathematical Description of Transform Functions"; the abort's text must contain
+   "WHAT IS LEFT is §12" and must NOT be the retired computed-value crash. Expect `rot-enter` with no
+   `rot-done`. */
+probe("rot_in", "rot");
+/* (3) THE 3D ARM MUST NAME ITS LEVEL — css-transforms-2 §12.2 "3D Transform Functions", naming `translate3d()`
+   rather than reporting a grammar gap. Unreached if (2) aborts first, which is expected; run it alone to score
+   this arm. */
+probe("t3d_in", "t3d");
+mark("end");
 </script>
 </body></html>
