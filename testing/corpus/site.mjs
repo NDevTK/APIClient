@@ -229,6 +229,44 @@ for (const r of runs) {
   }
 }
 const counted = myRuns.filter(r => RUN_WITH_COUNTERS.has(r.run));
+
+/* THE ORDER THE FRONTIER WAS IN, WHICH IS THE ROW EVERY JOB COUNT ABOVE HAS TO BE READ THROUGH AND WHICH THIS
+   FILE HAS NEVER CARRIED. `jobsRun: 0` beside a large `jobsQueued` reads as the scheduler failing to serve
+   its own queue — §Every-runtime-job-is-a-scheduler-flow makes every reaction, microtask, timer and delivery a
+   first-class member, so a queue that never moves reads as an ORDERING result. solver/flow.h's split is what
+   refuses that: a queued job waits on the HOST (`jobsOwed`), on its member finishing its own program
+   (`jobsFramed` — HTML §8.1.4.4 "Calling scripts", clean up after running script step 3), or on RANK
+   (`jobsReady`), and ONLY THE LAST IS THE WFQ'S TO MOVE. A run whose backlog is all `jobsFramed` has
+   nothing rank-eligible for the order to have got wrong, and its zero is a statement about members not
+   finishing their programs — one component away from the row it invites blaming.
+   IT WAS ON THE RUN RECORD THE WHOLE TIME. solver/result.c composes `_wfq` onto every document it builds,
+   partials included; extension/bridge.js relays it WHOLE onto every engine-log row; the PROBE above takes
+   `_engineLog` entries whole. This file, the one that ranks the corpus, was again the only reader missing —
+   the FOURTH time this row has been the consumer that never asked for the field written to answer its own
+   ambiguity, after `orphansAsked`, `unitsDone` and the @S arrival census.
+   IT IS A GAUGE AND EVERY COUNTER ABOVE IS A LIFETIME COUNTER, which is why it is selected separately and why
+   both indices are published. `jobsQueued`/`jobsRun`/`unitsDone` are monotone totals over the run; this is
+   a WALK OF THE FRONTIER AT ONE INSTANT and can fall. Differencing it across samples is arithmetic on nothing,
+   and pairing it with a counter from a DIFFERENT entry is the two-moments defect CLAUDE.md records as having
+   been written three times and wrong twice. So `wfqFrom` and `countersFrom` are emitted: equal indices mean
+   the split and the counters are ONE SAMPLE, and unequal indices mean they are not and may not be reconciled.
+   AND THE LAST COUNTED ENTRY IS THE WRONG ONE TO ASK, which is why this walks backwards. bridge.js states the
+   contract: no `_wfq` is a BROKEN CONTRACT, `{members: 0}` is an EMPTY FRONTIER carrying NO term rows at
+   all, and a full object is a READING. A finalize document is composed after the frontier drained or parked,
+   so the last counted entry is routinely `{members: 0}` — taking the split from it would report `null` for
+   every run that finished, which is the reading of that instant and not of the run. The last entry with a LIVE
+   frontier is the one that observed an order. Where no entry has one, these are `null` and never 0: a census
+   that never saw a standing frontier and one that saw a frontier with no backlog are different findings. */
+const wfqLive = (() => {
+  for (let i = counted.length - 1; i >= 0; i--) {
+    const w = counted[i].wfq;
+    if (w && typeof w === 'object' && !Array.isArray(w) && w.members > 0) return { w, i };
+  }
+  return null;
+})();
+/* ABSENT STAYS ABSENT. An artifact older than a given row omits it, and `|| 0` would turn "this build does
+   not publish that row" into "the engine measured zero" — the defaulted-field defect, in the instrument. */
+const wfqRow = (k) => (wfqLive && typeof wfqLive.w[k] === 'number' ? wfqLive.w[k] : null);
 const row = {
   id, url, finalUrl, status, nav, artifact, measuredAt: new Date().toISOString(),
   dwellMs: DWELL, cores: cpus().length, loadBefore, loadAfter,
@@ -308,6 +346,21 @@ const row = {
      `innerHTML` sites. The @S rungs beside it are uninterpretable without this one. */
   unitsDone: counted.length ? counted[counted.length - 1].unitsDone : null,
   parked: counted.length ? counted[counted.length - 1].park : null,
+  /* …AND WHAT THE JOB BACKLOG ABOVE IS ACTUALLY WAITING ON — see `wfqLive`. Read `jobsReady` with
+     `jobWGap` and never alone (a gap of 0 is both "no ready holder" and "the top of the queue holds a
+     runnable job"), and read a `jobsReady: 0` with `memUnframed`, which separates its two silences: with
+     `memUnframed: 0` the resume seam is not ending frames and the reader goes to flow_step, and with
+     `memUnframed > 0` the jobs sit on framed members while the unframed hold none and the reader goes to
+     where jobs are queued. `wfqMembers` is the population all five are taken over. */
+  jobsReady: wfqRow('jobsReady'),
+  jobsFramed: wfqRow('jobsFramed'),
+  jobsOwed: wfqRow('jobsOwed'),
+  jobWGap: wfqRow('jobWGap'),
+  memUnframed: wfqRow('memUnframed'),
+  wfqMembers: wfqLive ? wfqLive.w.members : null,
+  /* WHICH ENTRY EACH HALF CAME FROM, so the gauge and the counters can never be silently reconciled. */
+  wfqFrom: wfqLive ? wfqLive.i : null,
+  countersFrom: counted.length ? counted.length - 1 : null,
   docsAnswered: mine.filter(d => d.answered).length,
   docsSeenMine: mine.length,
   docsAllOrigins: [...new Set((cur.docs || []).map(d => { try { return new URL(d.url).origin; } catch { return d.url; } }))],
