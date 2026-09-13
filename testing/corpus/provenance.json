@@ -1191,5 +1191,56 @@
    }
   ],
   "baseUrl": "https://excalidraw.com/"
+ },
+ {
+  "id": "astexplorer",
+  "stack": "webpack (vendors~app-<hash>.js, parsers~app-<hash>.js, app-<hash>.js)",
+  "requestedUrl": "https://astexplorer.net/",
+  "finalUrl": "https://astexplorer.net/",
+  "status": 200,
+  "contentType": "text/html",
+  "csp": "",
+  "bytes": 10338,
+  "sha256": "a10b341c771fd69d111395c7d4f7f69bb5205331e6ae902718abaf5b2d97f81f",
+  "fetchedAt": "2026-09-13T07:54:44.555Z",
+  "resources": [
+   {
+    "url": "https://plausible.astexplorer.net/js/script.js",
+    "status": 200,
+    "contentType": "application/javascript",
+    "bytes": 1346,
+    "sha256": "021f0fd27042b279a49e982215c6dc3c3ab84e95b35553a119dfdbd50af6be94",
+    "fetchedAt": "2026-09-13T07:54:45.030Z",
+    "path": "plausible.astexplorer.net/js/script.js"
+   },
+   {
+    "url": "https://astexplorer.net/vendors~app-02cf37b0ee2da2390f7c-27.js",
+    "status": 200,
+    "contentType": "application/javascript",
+    "bytes": 803246,
+    "sha256": "91885ddd065d5320814cbf2dd563d400f1f65d69b50c2abbe7f6c8a975a1805f",
+    "fetchedAt": "2026-09-13T07:54:45.631Z",
+    "path": "astexplorer.net/vendors~app-02cf37b0ee2da2390f7c-27.js"
+   },
+   {
+    "url": "https://astexplorer.net/parsers~app-69d1875edf89a39a446a-27.js",
+    "status": 200,
+    "contentType": "application/javascript",
+    "bytes": 269724,
+    "sha256": "4aee91e2e4c9d59dfa7d4bfb3c7fe528131b99ecf1ae55530082250febc23b40",
+    "fetchedAt": "2026-09-13T07:54:45.956Z",
+    "path": "astexplorer.net/parsers~app-69d1875edf89a39a446a-27.js"
+   },
+   {
+    "url": "https://astexplorer.net/app-ae28f02d9edd285e0304-27.js",
+    "status": 200,
+    "contentType": "application/javascript",
+    "bytes": 93105,
+    "sha256": "b2b18662ef540670bdf0b6b253b5565d807a91a83fc78238a754ed8ef8c435e5",
+    "fetchedAt": "2026-09-13T07:54:46.240Z",
+    "path": "astexplorer.net/app-ae28f02d9edd285e0304-27.js"
+   }
+  ],
+  "baseUrl": "https://astexplorer.net/"
  }
 ]
