@@ -4426,6 +4426,20 @@ static double wfq_accounted_spread(const WfqCensus *c) {
    reached tens of thousands of members is a walk, and a single increment is not. */
 static unsigned g_wfq_census_gen;
 
+/* AND THE BUCKET THE LIVE MAXIMUM IS CURRENTLY OWNED BY, RETAINED ACROSS THE WALK SO ITS OWN THREE NUMBERS CAN
+   BE READ FROM ONE NODE INSTEAD OF ASSEMBLED FROM THREE EXTREMA — flow.h's `br_crowd_live` states what that
+   distinction buys and why three maxima cannot make it.
+   A FILE STATIC AND NOT A FIELD OF THE CENSUS, because `FlowAcct` is private to this translation unit and the
+   census struct is the public seam: a node pointer on it would export the fork tree's internals to every
+   reader of flow.h to save one static here. It shares its lifetime with the generation mark directly above,
+   set by branch_take and cleared by flow_wfq_census at both ends of one scan, and nothing steps the engine
+   between those two points — flow_wfq_census walks, weighs and composes, so no node is minted or freed while
+   this is holding one.
+   CLEARED AFTER IT IS READ AS WELL AS BEFORE THE WALK, which is not belt and braces: a pointer left standing
+   between censuses is a pointer into a node the next departure may free, and the only reason this is safe at
+   all is that it never outlives the scan that set it. */
+static FlowAcct *g_wfq_census_crowd;
+
 /* OPEN ONE BRANCH BUCKET INTO THE CENSUS, ONCE PER SCAN HOWEVER MANY DOORS REACH IT — the mark is the node's
    own, so this is idempotent within a scan and that is what makes the sums a PARTITION rather than a weighted
    count. A FUNCTION and not a macro because it is called from exactly one place per door with no invariant to
@@ -4472,8 +4486,28 @@ static void branch_take(WfqCensus *out, FlowAcct *br) {
        exactly and self-describingly. flow_wfq_census's closing assert states the consequence — a frontier
        with members standing cannot leave it at zero. */
     if (live > 0) {
+        /* THE HELD HALF OF THE BURN SPLIT, FOLDED HERE AND ITS TWIN IN THE ARM BELOW so the two are raised by
+           two accumulators under one condition rather than by one accumulator and a subtraction. flow.h says
+           what that buys: the crowd triple's receipt is drawn from the LIVE buckets, so the only denominator
+           it can honestly be a share of is the receipt of the live buckets — and `br_us_sum` is not that,
+           because it deliberately keeps a departed root's whole burn, which on a real page is the largest
+           single term in it. Published as two rows so `br_held_us + br_empty_us == br_us_sum` is a check on
+           this guard rather than a restatement of it. */
+        out->br_held_us += br->sub_us;
         if (out->br_live_min == 0 || live < out->br_live_min) out->br_live_min = live;
-        if (live > out->br_live_max) out->br_live_max = live;
+        if (live > out->br_live_max) {
+            out->br_live_max = live;
+            /* …AND THE BUCKET ITSELF, RETAINED RATHER THAN COPIED, WHICH IS WHAT MAKES THE IDENTITY A CHECK.
+               Writing the three crowd rows HERE, from `br`, would put the maximum and its companions in one
+               statement, and `br_crowd_live == br_live_max` would then be an assignment compared with itself
+               — the non-check this file refuses everywhere else. The pointer is dereferenced once, after the
+               walk, so the left side of that identity is a second reading of the bucket's own pair and the
+               right side is this running maximum. A fold attached to the wrong comparison separates them.
+               THE MEMBERSHIP PAIR IS THE SELECTOR AND THE BURN IS NOT, deliberately: the row this instrument
+               exists to make readable is the CROWD's receipt, and the crowd is a membership fact. Selecting
+               by burn instead would name the hungriest bucket, which `br_us_max` already reports. */
+            g_wfq_census_crowd = br;
+        }
         /* …AND THE MINT PAIR, OVER THE SAME POPULATION AND INSIDE THE SAME GUARD, BECAUSE IT IS THE ORDER'S
            RANGE AND NOT A RECEIPT. `sub_born` is what flow_branch_bonus divides by, so these two extrema ARE
            the branch term's range and wfq_accounted_spread reads them as such. A member's weight is only ever
@@ -4491,6 +4525,12 @@ static void branch_take(WfqCensus *out, FlowAcct *br) {
            nobody is not a statement about the frontier the other row is a share of. */
         if (out->br_born_min == 0 || br->sub_born < out->br_born_min) out->br_born_min = br->sub_born;
         if (br->sub_born > out->br_born_max) out->br_born_max = br->sub_born;
+    } else {
+        /* THE EMPTY HALF, AND IT IS NOT A CORNER — branch_take's own note above says a bucket holding nobody
+           is the ORDINARY state of any frontier whose boot flow has finished, because the family-root door
+           takes exactly such a bucket on purpose to keep boot's burn inside the identity. That burn is real
+           receipt and it is what makes `br_us_sum` the wrong denominator for a live arm's share. */
+        out->br_empty_us += br->sub_us;
     }
     if (out->branches == 1 || br->sub_us > out->br_us_max) out->br_us_max = br->sub_us;
     if (out->branches == 1 || br->sub_us < out->br_us_min) out->br_us_min = br->sub_us;
@@ -4561,6 +4601,14 @@ void flow_wfq_census(WfqCensus *out) {
     out->br_live_max = out->br_live_min = out->br_live_sum = 0;
     out->br_born_max = out->br_born_min = 0;
     out->br_us_max = out->br_us_min = out->br_us_sum = 0;
+    out->br_crowd_live = out->br_crowd_born = 0;
+    out->br_crowd_us = 0;
+    out->br_held_us = out->br_empty_us = 0;
+    /* AND THE RETAINED BUCKET, CLEARED BEFORE THE WALK AS WELL AS AFTER IT IS READ. A pointer surviving from
+       the previous census names a node this one may not reach and a later departure may already have freed,
+       so the crowd rows would be a reading of a bucket that is not this frontier's — or of memory that is no
+       longer a bucket at all. */
+    g_wfq_census_crowd = NULL;
     out->br_depth_max = 0;
     out->br_fan_max = out->br_fan_sum = 0;
     out->br_fan_depth = 0;
@@ -4853,10 +4901,17 @@ void flow_wfq_census(WfqCensus *out) {
            partition of the frontier rather than a weighted count of it.
            THE READING, STATED HERE SO IT IS NOT RE-DERIVED AT EVERY SITE. `br_live_max` against `members` is
            how concentrated the frontier is in one side of one top-level branch; `br_us_max` against
-           `charged_us` is how concentrated the THREAD is; and the other side of that branch is the remainder
-           of each, which is why both totals are published rather than only the extrema. `br_born_max` against
-           `br_live_max` separates a bucket that MINTS unboundedly from one that merely HOLDS a lot right now,
-           and those two take opposite diffs. */
+           `charged_us` is how concentrated the THREAD is; `br_born_max` against `br_live_max` separates a
+           bucket that MINTS unboundedly from one that merely HOLDS a lot right now, and those two take
+           opposite diffs.
+           AND THIS SAID `THE OTHER SIDE OF THAT BRANCH IS THE REMAINDER OF EACH', WHICH IS THREE MAXIMA OVER
+           THREE POPULATIONS READ AS ONE ARM'S THREE PROPERTIES. Each is a fact about whichever bucket happens
+           to own it, and on a frontier with more than two buckets they need not be one bucket at all — the
+           burn maximum in particular is routinely a DEPARTED family root holding no live member, which the
+           door above takes deliberately, so a reader dividing that receipt by the live maximum's membership
+           was reporting boot's thread time as the crowd's. The crowd rows read after this walk are what make
+           the sentence true: they state ONE bucket's membership, mint and receipt, and each published total
+           is what the remainder is taken from. */
         {
             FlowAcct *br;
             DCHECK(f->acct != NULL,
@@ -4992,6 +5047,24 @@ void flow_wfq_census(WfqCensus *out) {
            "flow_credit_pick raises both in one statement and is the only writer of either, so a member's "
            "`picks` has been written from somewhere else and every reading derived from these rows is about "
            "dispatches that did not happen");
+    /* THE FATTEST LIVE BUCKET'S OWN THREE NUMBERS, TAKEN FROM THE ONE NODE THE WALK RETAINED — see flow.h for
+       the three states they separate and for why three extrema over a population cannot separate them. This
+       is the SECOND reading of that bucket's membership pair: branch_take folded the first into a running
+       maximum during the walk, and the identity below compares the two.
+       IT RUNS ONCE PER CENSUS AND NOWHERE ELSE. Three loads and a subtraction, off a pointer already in hand
+       — no charge-time work, no fork-time work, no walk of any ancestry, and nothing whatever per opcode. The
+       only per-bucket cost this instrument adds is the two adds inside branch_take's existing condition.
+       A NULL HERE IS `NO LIVE BUCKET WAS SEEN', which is the state the assert further down already says
+       cannot arise with members standing; the rows then stay at the zero the reset wrote, and `br_crowd_live`
+       is the discriminator a reader needs to tell that zero from a standing crowd that has never been
+       charged. */
+    if (g_wfq_census_crowd) {
+        const FlowAcct *cr = g_wfq_census_crowd;
+        out->br_crowd_live = cr->sub_born - cr->sub_gone;
+        out->br_crowd_born = cr->sub_born;
+        out->br_crowd_us = cr->sub_us;
+    }
+    g_wfq_census_crowd = NULL;
     top = flow_best();
     /* A NON-EMPTY FRONTIER HAS A FRONT, AND SAYING SO IS WHAT MAKES THE ROWS BELOW HONEST. flow_best is
        flow_pick with no seed, no exclusion and `runnable_only` OFF, so its loop skips nothing and takes the
@@ -5355,6 +5428,45 @@ void flow_wfq_census(WfqCensus *out) {
            "plus everything that has ever departed the bucket, so this is the mint extrema and the live "
            "extrema ranging over two different sets of buckets, and the branch term's range is about to be "
            "published as a difference between two numbers that are not two ends of one reading");
+    /* AND THE CROWD TRIPLE AGAINST THE ROW IT IS SELECTED BY — the identity that says these three describe
+       ONE bucket rather than three. The two sides are written by two writers at two instants: the left is a
+       dereference of the node branch_take retained, performed after the walk ended, and the right is a
+       running maximum folded over every live bucket during it. They agree only while the fold that moves the
+       maximum is the same statement that moves the pointer, which is exactly the property a reader cannot
+       check on the emitted document any other way and exactly the one an edit would break silently.
+       IT IS NOT VACUOUS: writing the three rows at the maximum's own assignment would make this a comparison
+       of one statement with itself, and this file refuses that form everywhere else. */
+    DCHECK(out->br_crowd_live == out->br_live_max,
+           "the branch bucket the census retained as the frontier's fattest does not hold the live maximum "
+           "the same walk folded — the pointer and the maximum are moved by one statement, so a disagreement "
+           "means one of them is now moved by another, and the crowd's mint count and receipt are about to be "
+           "published as the fattest arm's when they are some other bucket's");
+    /* AND THAT BUCKET INSIDE THE POPULATION THE OTHER TWO EXTREMA RANGED OVER, which is a different statement
+       from the one above and catches a different break: the identity above says the retained node owns the
+       live maximum, and these say it went through the SAME folds the mint and burn extrema were taken from.
+       A bucket reached by one door and not the others — a guard that came apart, a door added without its
+       folds — leaves a crowd whose own numbers sit outside the range the rows beside them publish, and every
+       coincidence reading (`is the crowd also the hungriest arm', `is it also the one that has taken most
+       arms') would then be comparing two populations. Both are one-sided because a maximum is an upper bound
+       and the crowd is one member of the set it is taken over. */
+    DCHECK(out->br_crowd_born <= out->br_born_max && out->br_crowd_us <= out->br_us_max,
+           "the fattest live branch bucket's own mint count or receipt is above the maximum the census took "
+           "across the buckets it reached — an extremum is an upper bound over a set the crowd belongs to, so "
+           "this is the crowd being reached through a door the extrema are not folded under, and the "
+           "coincidence readings the crowd rows exist for are about to compare two different populations");
+    /* AND THE BURN SPLIT, WHICH IS THE DENOMINATOR HALF. Two accumulators in the two arms of branch_take's
+       one condition, so this fails if either arm stops firing or if the live guard comes apart from the one
+       the live extrema are folded under. Chained with the identity directly below it, every microsecond the
+       scheduler has charged lands in exactly one of three published places — a bucket somebody stands in, a
+       bucket still taken and standing empty, or a bucket whose subtree has wholly departed — and that total
+       cannot move without one of its three parts moving. All four terms are published, so the chain is
+       checkable from outside the process on a release document where this is compiled out. */
+    DCHECK(out->br_held_us + out->br_empty_us == out->br_us_sum,
+           "the thread time held by live branch buckets and by empty ones does not add up to the thread time "
+           "attributed to buckets at all — the two are raised in the two arms of one condition in "
+           "branch_take, so a break is an arm that stopped firing or a guard that no longer decides both, and "
+           "the crowd's share of the thread is about to be published against a denominator drawn from a "
+           "different set of buckets than its numerator");
     DCHECK(out->br_us_sum + out->br_retired_us == out->charged_us,
            "the thread time attributed to branch buckets does not add up to the thread time the scheduler has "
            "charged — every microsecond lands on exactly one bucket and a bucket's total is folded into the "

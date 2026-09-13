@@ -799,13 +799,45 @@ char *result_wfq_json(void) {
                         that burned an hour and then emitted did not RECEIVE less, and receipt is what these
                         ask. There is no quotient hidden in any of them.
                         READ `brLiveMax / members` for how concentrated the FRONTIER is in one side of one
-                        top-level branch and `brUsLifeMax / chargedUsLife` for how concentrated the THREAD is;
-                        the other side of the branch is the remainder of each, which is why both totals are
-                        here and not only the extrema. `brBornLifeMax` beside `brLiveMax` separates a bucket
-                        that MINTS unboundedly from one merely HOLDING a lot now, and those take opposite
-                        diffs. Do NOT read `brLiveMin` as the other side: a family ROOT's bucket holds exactly
-                        one member by construction, so while the root stands this is 0 or 1 and says nothing
-                        about any arm.
+                        top-level branch and `brUsLifeMax / chargedUsLife` for how concentrated the THREAD is.
+                        `brBornLifeMax` beside `brLiveMax` separates a bucket that MINTS unboundedly from one
+                        merely HOLDING a lot now, and those take opposite diffs. Do NOT read `brLiveMin` as
+                        the other side: a family ROOT's bucket holds exactly one member by construction, so
+                        while the root stands this is 0 or 1 and says nothing about any arm.
+                        AND THIS SAID THE OTHER SIDE OF THE BRANCH WAS THE REMAINDER OF EACH, WHICH READ THREE
+                        EXTREMA OVER THREE POPULATIONS AS ONE ARM'S THREE PROPERTIES. A maximum is a fact
+                        about whichever bucket owns it, and with more than two buckets standing they need not
+                        be one bucket — the burn maximum is routinely a DEPARTED family root that holds no
+                        live member and keeps boot's whole burn, so dividing it by the live maximum's
+                        membership reported boot's thread time as the crowd's. `brCrowdLive`,
+                        `brCrowdBornLife` and `brCrowdUsLife` are the SAME bucket's three numbers — the one
+                        that owns `brLiveMax` — so that sentence is true of them and of nothing above them,
+                        and the remainder is taken from the published totals.
+                        READ THE CROWD'S SHARE OF THE MEMBERS STANDING against its share of the thread the
+                        LIVE buckets hold: `brCrowdLive / members` against `brCrowdUsLife / brHeldUsLife`. AT
+                        PAR is a branching arm turning fork factor into thread one for one while having
+                        emitted nothing; NEAR ZERO on the thread side is the opposite finding with the
+                        opposite diff, an arm the order is already demoting and that nothing retires; ABOVE
+                        PAR is an ordinary monopolist, which the aging charge catches. Those three read
+                        identically in every other row on this line. `brCrowdUsLife == brUsLifeMax` says the
+                        crowd IS the hungriest bucket and `brCrowdBornLife == brBornLifeMax` says it IS the
+                        arm that has taken most arms; below either, the maxima belong to two arms.
+                        A `brCrowdUsLife` OF ZERO WITH `brCrowdLive` ABOVE ZERO IS THE STARVED READING AND NOT
+                        AN UNOBSERVED BUCKET — the three are folded inside the same live guard as `brLiveMax`,
+                        so all three at zero is `no live bucket seen', which the engine asserts cannot happen
+                        with members standing.
+                        THE SHARE IS A RATIO FOR A SECOND REASON BESIDES ITS DENOMINATOR: every burn on this
+                        line is charged in whatever the quantum's own measure answers, thread CPU where the
+                        host has a clock and wall where it has none, so one name is two quantities across the
+                        two hosts this engine is driven through and the `@QUANTUM` line's `isCpu` says which.
+                        A quotient of two burns from ONE run in ONE unit is the same number either way; a raw
+                        microsecond total from this line is not, and is quoted with that line beside it.
+                        AND `brHeldUsLife`/`brEmptyUsLife` ARE THAT FRACTION'S DENOMINATOR AND ITS COMPLEMENT.
+                        `brUsLifeSum` keeps every bucket the walk takes, live or not, because receipt outlives
+                        a departed subtree — so a live arm's share of it is a share of a total holding thread
+                        time no live arm has, and on a real page the departed root's term is the largest in
+                        it. Both halves are published rather than one and a subtraction so the split is a
+                        CHECK: they are raised by two accumulators in the two arms of one condition.
                         AND THE MINT PAIR IS THE BRANCH TERM'S OWN RANGE, WHICH THE LIVE PAIR IS NOT.
                         flow_branch_bonus returns `1.0 / sub_born`, so `1/brBornLifeMin - 1/brBornLifeMax` is
                         how many of the one point that term can lift a member it actually spans across this
@@ -826,11 +858,21 @@ char *result_wfq_json(void) {
                         nowhere, above is one counted twice) and `brUsLifeSum + brRetiredUsLife ==
                         chargedUsLife` (every charged microsecond lands on exactly one bucket, and a bucket
                         whose subtree has wholly departed folds its total into the retired term rather than
-                        losing it). Both are asserted in flow_wfq_census where every term is in one hand. */
+                        losing it). Both are asserted in flow_wfq_census where every term is in one hand.
+                        AND TWO MORE THE CROWD ROWS BRING WITH THEM, CHECKABLE ON THIS DOCUMENT FOR THE SAME
+                        REASON. `brCrowdLive == brLiveMax` says the three crowd rows describe the bucket the
+                        live maximum names — two writers at two instants, a running maximum folded during the
+                        walk against a dereference of the retained node taken after it. And `brHeldUsLife +
+                        brEmptyUsLife == brUsLifeSum` splits the bucket burn by whether anybody is standing in
+                        it, which chained with the identity above gives every microsecond ever charged exactly
+                        one of three published homes: `brHeldUsLife + brEmptyUsLife + brRetiredUsLife ==
+                        chargedUsLife`. That total cannot move without one of its three parts moving. */
                      "\"branches\":%ld,\"brLiveMax\":%ld,\"brLiveMin\":%ld,\"brLiveSum\":%ld,"
                      "\"brBornLifeMax\":%ld,\"brBornLifeMin\":%ld,"
+                     "\"brCrowdLive\":%ld,\"brCrowdBornLife\":%ld,\"brCrowdUsLife\":%lld,"
                      "\"brUsLifeMax\":%lld,\"brUsLifeMin\":%lld,"
-                     "\"brUsLifeSum\":%lld,\"brRetiredUsLife\":%lld,\"chargedUsLife\":%lld,"
+                     "\"brUsLifeSum\":%lld,\"brHeldUsLife\":%lld,\"brEmptyUsLife\":%lld,"
+                     "\"brRetiredUsLife\":%lld,\"chargedUsLife\":%lld,"
                      "\"brDepthMax\":%d,"
                      /* AND WHICH FORK INSIDE A BUCKET DID THE MINTING, which no row above can say: a bucket
                         is a TOP-LEVEL ARM, so an arm forked off boot that then forks unboundedly and boot
@@ -1020,8 +1062,11 @@ char *result_wfq_json(void) {
                      (long long)w.svc_max, (long long)w.svc_min,
                      (long long)w.svc_fam_max, (long long)w.svc_fam_min, w.families,
                      w.branches, w.br_live_max, w.br_live_min, w.br_live_sum,
-                     w.br_born_max, w.br_born_min, (long long)w.br_us_max, (long long)w.br_us_min,
-                     (long long)w.br_us_sum, (long long)w.br_retired_us, (long long)w.charged_us,
+                     w.br_born_max, w.br_born_min,
+                     w.br_crowd_live, w.br_crowd_born, (long long)w.br_crowd_us,
+                     (long long)w.br_us_max, (long long)w.br_us_min,
+                     (long long)w.br_us_sum, (long long)w.br_held_us, (long long)w.br_empty_us,
+                     (long long)w.br_retired_us, (long long)w.charged_us,
                      w.br_depth_max,
                      w.br_fan_max, w.br_fan_sum, w.br_fan_depth,
                      (long long)w.vis_min, (long long)w.vis_max, w.vis_zero,

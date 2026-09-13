@@ -1732,9 +1732,17 @@ typedef struct {
      * exists nowhere in the program. There is no quotient here to be mis-read.
      *
      * HOW TO READ THEM, SO IT IS NOT RE-DERIVED AT EVERY SITE. `br_live_max / members` is how concentrated the
-     * FRONTIER is in one side of one top-level branch, and the other side is the remainder. `br_us_max /
-     * charged_us` is how concentrated the THREAD is, and again the other side is the remainder — which is why
-     * both totals are published rather than only the extrema. Those two together are the X and the Y.
+     * FRONTIER is in one side of one top-level branch. `br_us_max / charged_us` is how concentrated the THREAD
+     * is, and both totals are published rather than only the extrema so the remainder of each is readable.
+     * AND THIS SAID `THOSE TWO TOGETHER ARE THE X AND THE Y`, WHICH BOUND TWO EXTREMA OVER TWO POPULATIONS TO
+     * ONE ARM AND WAS THEREFORE A FALSE CLAIM ON EVERY RUN WITH MORE THAN TWO BUCKETS. A maximum is a fact
+     * about whichever bucket owns it, and the bucket owning the live maximum need not be the bucket owning the
+     * burn maximum: build.mjs measured a run in which the burn maximum was FROZEN across forty-nine censuses
+     * while the live maximum climbed from four to seventy-seven, the frozen one being a DEPARTED family root
+     * that holds no live member at all and keeps boot's whole burn. Read as one arm's pair, the crowd's
+     * receipt was being reported as boot's. THE COINCIDENT TRIPLE BELOW IS WHAT MAKES THE SENTENCE TRUE: it
+     * states the SAME bucket's membership, mint and receipt, so X is that bucket and Y is the remainder of
+     * each published total, and a reader need no longer hope the extrema name one arm.
      * `br_born_max` beside `br_live_max` separates a bucket that MINTS unboundedly from one that merely HOLDS
      * a lot at this instant, and those two take opposite diffs. THE MINT PAIR IS ALSO THE ORDER'S OWN RANGE
      * AT THIS SCOPE and the live pair is not: flow_branch_bonus returns `1.0 / sub_born`, so
@@ -1771,9 +1779,79 @@ typedef struct {
     long br_live_sum;   /* GAUGE: their sum, published because `== members` is the partition identity */
     long br_born_max;   /* LIFETIME: the most members ever MINTED into one live bucket */
     long br_born_min;   /* LIFETIME: the fewest — the two ends of flow_branch_bonus's own denominator */
+    /* THE FATTEST LIVE BUCKET'S OWN THREE NUMBERS, TAKEN FROM ONE BUCKET RATHER THAN AS THREE EXTREMA OVER A
+       POPULATION — which is the one reading every row above is structurally unable to make, and the reading
+       the whole scope was declared for. An extremum answers `what is the largest value any bucket holds';
+       three extrema answer that question three times and never once say whether one arm holds all three. The
+       distinction is not pedantic and it is not rare: it is the ORDINARY state of a real page, where fifty
+       buckets stand and the bucket that received the most thread is routinely a departed family root holding
+       nobody. `br_us_max` is then boot's receipt and `br_live_max` is the crowd's membership, and a reader who
+       divides one by the other has composed a fraction out of two different arms.
+       WHAT THEY SEPARATE, AND IT IS THREE STATES THAT SHARE ONE ANSWER TODAY. Take the crowd's share of the
+       members standing (`br_crowd_live / members`) against its share of the thread the live buckets hold
+       (`br_crowd_us / br_held_us`). AT PAR is a branching arm converting fork factor into thread one for one:
+       it holds half the frontier and receives half the thread while having emitted nothing, which is a term
+       that cannot demote it rather than a member that outran its siblings. NEAR ZERO on the thread side is the
+       opposite finding with the opposite diff — the order IS demoting the crowd, the thread went elsewhere,
+       and what keeps the frontier from draining is retention rather than ordering. ABOVE PAR is an ordinary
+       monopolist, which is exactly the shape the aging charge was written to catch and does. Those three take
+       three different next diffs and read identically in every row above this line.
+       AND THEY MAKE TWO PUBLISHED PAIRS CHECKABLE THAT WERE ONLY EVER CAVEATED. `br_crowd_us == br_us_max`
+       says the crowd IS the hungriest bucket; `br_crowd_born == br_born_max` says the crowd IS the arm that
+       has taken most arms. Below either, the two maxima belong to two arms and the caveat that has stood
+       beside them since they were written is the live reading rather than a warning.
+       AND THE UNIT THEY ARE READ IN IS THE HOST'S, WHICH IS WHY THE READING ABOVE IS A RATIO AND NOT A
+       MICROSECOND FIGURE. Every burn on this line is charged in whatever `quantum_measure` answers — thread
+       CPU where the host has a clock for it, wall where it does not — so ONE name means two different
+       quantities on the two hosts this engine is driven through, and the run says which in its own `@QUANTUM`
+       line's `isCpu`. The share the crowd rows exist for is a quotient of two burns taken in ONE unit on ONE
+       run, so it is the same number under either denomination and the two hosts' figures are comparable
+       without knowing which clock produced them. A RAW microsecond total from this line is not, and is quoted
+       with that line beside it.
+       KINDS, WHICH DECIDE WHAT MAY BE DONE WITH THEM. The live count is a GAUGE. The mint count and the burn
+       are per-bucket LIFETIME counters, and an extremum's rule applies to them for the extremum's reason: the
+       BUCKET SELECTED moves between samples, so neither may be DIFFERENCED and both are read as ratios at one
+       instant, exactly as `br_born_max` and `br_live_max` are. MICROSECONDS and not notches, for `sub_us`'s
+       reason: there is no quotient inside them to be misread.
+       THE IDENTITY THAT TIES THEM TO THE ROW THEY ARE SELECTED BY, asserted in flow_wfq_census and published
+       so a release artifact can be checked from outside the process: `br_crowd_live == br_live_max`. The two
+       sides are written by DIFFERENT writers at DIFFERENT instants — the left by a dereference of the bucket
+       the walk retained, taken once after the walk ends, and the right by a running maximum folded over every
+       live bucket during it — so a fold attached to the wrong comparison, or a retained pointer that stopped
+       tracking the maximum, separates them. It is not the vacuous form: writing all three at the maximum's own
+       statement would have made the check a comparison of one assignment with itself, which is a non-check
+       wearing the syntax of one.
+       A ZERO HERE HAS ONE MEANING AND ITS DISCRIMINATOR IS PUBLISHED BESIDE IT. The three are folded inside
+       the same live guard as `br_live_max`, so a census that reached no live bucket leaves all three at zero
+       — and that state is the one flow_wfq_census already asserts cannot arise with members standing. With
+       `br_crowd_live` above zero, a `br_crowd_us` of zero is not an unobserved bucket, it is the STARVED
+       reading above: the crowd exists, it is standing, and it has never been charged a microsecond. */
+    long br_crowd_live;    /* GAUGE: live members in the bucket that owns `br_live_max` */
+    long br_crowd_born;    /* LIFETIME: that same bucket's own mint count */
+    int64_t br_crowd_us;   /* LIFETIME MICROSECONDS: that same bucket's own receipt */
     int64_t br_us_max;  /* LIFETIME MICROSECONDS: the most thread time one bucket's subtree ever received */
     int64_t br_us_min;  /* LIFETIME MICROSECONDS: the least */
     int64_t br_us_sum;  /* LIFETIME MICROSECONDS: their sum — one half of the burn identity */
+    /* AND THAT SUM SPLIT BY WHETHER ANYBODY IS STANDING IN THE BUCKET, which is what gives the triple above a
+       denominator drawn from its own population. `br_us_sum` folds EVERY bucket the walk takes, live or not,
+       deliberately — receipt outlives a departed subtree — so a crowd's share of it is a share of a total
+       that includes thread time no live arm holds, and on a real page the departed root's share of that total
+       is the largest single term in it. A fraction whose numerator is drawn from the live buckets and whose
+       denominator is not is the defect this file names most often, arriving in the row that was supposed to
+       answer it.
+       BOTH HALVES ARE PUBLISHED RATHER THAN ONE AND A SUBTRACTION, so the split is a CHECK and not a
+       definition: they are raised by two separate accumulators in the two arms of one condition, and
+       `br_held_us + br_empty_us == br_us_sum` fails if either arm stops firing or if the guard comes apart
+       from the one the live extrema are folded under. Chained with the burn identity already asserted, every
+       microsecond the scheduler has ever charged lands in exactly one of three published places:
+       `br_held_us + br_empty_us + br_retired_us == charged_us`. That total cannot move without one of its
+       three parts moving, it is checkable on the emitted document, and it is asserted in flow_wfq_census where
+       all four terms are in one hand.
+       LIFETIME COUNTERS BOTH, in microseconds, on the same footing as `br_us_sum` itself: their population is
+       every microsecond ever charged rather than whichever buckets happen to be standing, so unlike every
+       extremum on this line they MAY be differenced across two samples. */
+    int64_t br_held_us;  /* LIFETIME MICROSECONDS: received by buckets holding at least one live member */
+    int64_t br_empty_us; /* LIFETIME MICROSECONDS: received by buckets still taken and holding none */
     int64_t br_retired_us; /* LIFETIME MICROSECONDS received by buckets whose subtree has wholly departed */
     int64_t charged_us; /* LIFETIME MICROSECONDS the scheduler has charged at all — the identity's total */
     /* GAUGE: how deep in the fork tree the deepest LIVE member sits (0 at a root). It ranks nothing and it is
