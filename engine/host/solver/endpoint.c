@@ -579,19 +579,33 @@ static int body_params(JSContext *ctx, KvBuf *out, const EndpointBody *body) {
    page did NOT compose as a string.
 
    NAMED RESIDUAL — the body a page builds in a typed array, which is the one this function is really about.
-   WHAT IS NOT COVERED: the fields and example values of a request body whose bytes the page wrote into a
-   backing store rather than into a string, which is every binary transport.
-   WHAT THE NEXT DIFF BUILDS: concolic bytes in a typed array's backing store. It is not the segment
-   provenance an earlier statement of this residual named — that is what a composed shape already is — and it
-   is strictly BENEATH it: ECMAScript §10.4.5.18 TypedArraySetElement ( obj, index, value ) coerces its value
-   and writes raw bytes into a data block that holds no JSValue, so a serializer storing an unknown reaches an
-   abort that names this capability, and Encoding §7.4 Interface TextEncoder's encodeInto refuses its
-   destination for the same reason. Until a store can hold one, no such body is composed for a span to be
-   attributed in.
-   HOW ITS ABSENCE SHOWS: the address is missing from this surface ENTIRELY rather than present with no
-   fields — the flow dies inside the serializer, before the request it was building exists — so the tell is an
-   abort naming a typed-array element store on a document whose network panel shows the call.
-   IT RETIRES when that store lands and a body built through one records its fields here.
+   ITS BLOCKER IS BUILT AND THE CLAUSE THAT NAMED IT IS REWRITTEN RATHER THAN DELETED, because the reasoning
+   is what a reader re-derives and it was RIGHT: a binary serializer never produces a string, so there was
+   nothing for a span map to attribute in, and no amount of provenance carried through a concatenation could
+   have reached a body written byte by byte. That sentence is what commissioned the store; ECMAScript
+   §10.4.5.18 TypedArraySetElement ( obj, index, value ) now stores unknown external input, with the data
+   block holding an EXAMPLE and a span beside it carrying the FACT.
+   WHAT IS NOT COVERED, WHICH IS NOW A SMALLER THING THAN IT WAS: the fields and example values of a request
+   body whose bytes the page wrote into a backing store. The store exists; what does not yet exist is the half
+   that reaches THIS surface — a byte body arriving with its spans, graded EPB_SHAPE, with body_params naming
+   the fields off them. That is what the user asked for by name (which encoding a request is sent in),
+   answered by running the page's own serializer with no decoder and no protocol branch anywhere.
+   AND THE GRADE IS WHAT MAKES THE STORE'S OUTPUT SAFE TO PUBLISH, which is the constraint to build against
+   rather than discover: a span is recorded even where NO BYTE was written, because an unknown may carry no
+   example and writing `0` would invent a value known only to satisfy a gate. So a body any of whose spans is
+   exampleless has no bytes the request can be said to send, and it must never arrive here as EPB_SENT — the
+   same refusal body_bytes_b64 already performs, reached for a second reason.
+   HOW ITS ABSENCE SHOWS, RESTATED BECAUSE THE OLD OBSERVATION HAS CHANGED ANSWER: it was an abort naming a
+   typed-array element store, and that abort is gone from the engine, so the tell is now a request whose body
+   this surface reports with no field a reviewer can vary while the run itself had the values in hand.
+   THE BLOCKER IS BUILT AND NOT YET INSTALLED, WHICH IS A THIRD STATE AND NOT EITHER OF THE TWO ABOVE. The
+   artifact this tree loads names the engine revision it was built from, and that revision is an ANCESTOR of
+   the one carrying the store — measured by content rather than by the stamp alone: the store's own abort text
+   is absent from the shipped bytes while the OLD typed-array abort is still present in them, which is the
+   positive control proving such text survives the build at all, so the absence is an answer. Until an install,
+   a run of this engine still meets the old abort, and any claim here about what a byte body does is a claim
+   about the tree and not about the product.
+   IT RETIRES when a body built through that store records its fields here.
    THE CODEC IS THE ENGINE'S OWN, for the reason core/file/file_reader.c gives at its own call: `btoa`'s codec
    is already implemented here and §Solver's rule is that an encoding builtin is modelled faithfully, never
    re-implemented beside itself. */
