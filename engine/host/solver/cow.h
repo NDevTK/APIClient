@@ -159,9 +159,11 @@ void      cow_capture_obj_state(JSContext *ctx, JSValueConst obj);
    enumeration, each reporting a proper subset of the keys with no abort and nothing to say so — and §Solver-half
    makes that the ordinary case rather than an edge one, since an iteration over unknown input forks each
    iteration as its own parkable flow.
-   The blob is engine-owned (JS_IterStateSave/Restore/Free) because what it holds is an ATOM, which is a counted
-   reference the CowRecord layout below cannot name — its `val_off` names JSValues — so the byte-copy arm would
-   take a reference it never counted. */
+   The blob is engine-owned (JS_IterStateSave/Restore/Free) because THE RECORDS ARE: each is private to
+   quickjs.c, so nobody outside it could supply the CowRecord offset list below. The for-in record adds the
+   sharper reason, which holds even against a public layout — what it owns is an ATOM, a counted reference
+   `val_off` cannot name, since that names JSValues — so the byte-copy arm would take a reference it never
+   counted. Arms differ in what they own; none of them can be expressed from out here. */
 void      cow_capture_iter_state(JSContext *ctx, JSValueConst obj);
 
 /* Install as JSTimeTravelHooks.async_state: capture a shared promise's settlement (state + result + pending
@@ -305,6 +307,55 @@ void      cow_apply(JSContext *ctx, CowDelta *d);
 /* `gen_fork` is the caller's: the ten other hooks are this file's capture points, and the eleventh belongs to
    whoever assembles the sibling flow. See the definition. */
 void cow_install_time_travel_hooks(JSTimeTravelGenFork gen_fork);
+
+/* THE STATE KINDS AS ONE LIST — each unit's id and the name a census prints it under. The list is in this
+   header rather than beside the enum in cow.c for the reason solver/step_unit.h's list is in one: the ENUM,
+   the NAME and the WIDTH of the rendered histogram are three expansions of it, so a kind added below is
+   counted, named and fitted in the same edit and none of the three can be the one somebody forgot. WHAT EACH
+   KIND MEANS stays at that enum — the banner there is the ARGUMENT for each unit and not a list anybody
+   indexes, so this is the one list and not a second copy of it.
+   APPEND, NEVER INSERT, AND THAT IS THE WHOLE OF WHAT THE ORDER DECIDES: cow_entry_init names the FIRST id
+   explicitly, so a non-state entry's unread `state_kind` reads as it. Nothing else depends on the values —
+   a delta names its targets by live heap pointer and is never serialized, so these reach no wire and no
+   cold-tier residue. */
+#define COW_STATE_KINDS(X)  \
+    X(ASYNC,    "async")    \
+    X(MODULE,   "module")   \
+    X(HOST,     "host")     \
+    X(HOST_REC, "hostRec")  \
+    X(BUFFER,   "buffer")   \
+    X(OBJECT,   "object")   \
+    X(ITER,     "iter")
+
+/* HOW WIDE ONE OF THE TWO KIND HISTOGRAMS IS AS JSON, DERIVED FROM THE LIST RATHER THAN COUNTED BY HAND — the
+   derivation solver/step_unit.h makes and for its reason: this sizes a STACK buffer a caller fills row by row,
+   which is the one place on the result seam where a length must be known BEFORE the bytes exist, so it is an
+   expansion of the list it renders and a kind added above widens it in the same edit. solver/compose.h's own
+   banner is why a hand-counted constant is not an option here.
+   One row is `"<name>":<long>,` — a quote, the name, a quote, a colon, up to 20 digits of `long`, a comma — so
+   24 characters beside the name; plus the two braces and the terminator. */
+#define COW_STATE_KIND_WIDTH(id, name) + (sizeof(name) - 1) + 24
+enum { COW_STATE_KINDS_JSON_MAX = 2 COW_STATE_KINDS(COW_STATE_KIND_WIDTH) + 1 };
+#undef COW_STATE_KIND_WIDTH
+
+/* HOW OFTEN EACH STATE UNIT WAS ASKED FOR AND HOW OFTEN IT RECORDED ONE — two LIFETIME COUNTS per kind, and
+   they are a PAIR because a bare `made` of zero means three different things and only one of them is a defect:
+   nothing ever reached that capture point under a running flow, or it was reached and the unit's own gate
+   correctly refused (the object is flow-private, so there is no shared state to record), or the unit is broken.
+   `asks` is the DENOMINATOR that separates the first from the second — it is raised at the CALL, before every
+   gate, which is the recording point CLAUDE.md §AN-INVARIANT-OVER-A-GATED-OPERATION requires of a question
+   about whether anyone asked; `made` is raised at the OUTCOME, because "were entries actually made" is what a
+   capture's own prediction is about and no count of asks can answer it.
+   THEY ARE NOT A RATIO AND THE PAIR MUST NOT BE DIVIDED. A walk yields many keys and captures ONCE — the dedup
+   is the mechanism working — so `asks` legitimately runs far ahead of `made` on a healthy unit, and the only
+   thing the pair separates is the zeroes. The identity that DOES hold is `made <= asks` for every kind, and it
+   is asserted where an entry is made rather than left here, because that is the one place both are in hand.
+   THE KIND IS AN INDEX INTO THIS FILE'S OWN LIST, ASKED FOR BY COUNT AND BY NAME so that a caller rendering
+   them holds no list of its own: `cow_state_kind_count()` bounds the loop and `cow_state_kind_name()` spells
+   the row, both expansions of COW_STATE_KINDS above. A kind outside the list is a DFAIL and not a blank row. */
+int         cow_state_kind_count(void);
+const char *cow_state_kind_name(int kind);
+void        cow_state_kind_stats(int kind, long *asks, long *made);
 
 /* What the delta swaps have cost so far: how many chain installs, how many entries they touched in total, and
    the worst single one. A switch is supposed to be O(divergence); this says what the divergence actually is. */

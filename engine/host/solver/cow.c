@@ -123,13 +123,21 @@ enum { COW_CUR_UNRECORDED = 0, COW_CUR_ABSENT = 1, COW_CUR_PRESENT = 2 };
  *                        forks each iteration as its own parkable flow.
  *                        IT IS NOT COW_STATE_HOST_REC EVEN THOUGH BOTH ARE A CLASS'S OPAQUE RECORD, and the
  *                        difference is who can see the layout. That one takes a caller-supplied offset list and
- *                        the caller is a browser component that owns its struct; this record is the ENGINE's,
- *                        its struct is private to quickjs.c, and what it owns is an ATOM — which `val_off`
- *                        cannot name at all, so the byte-copy-plus-dup arm would take a reference it never
- *                        counted. So the blob is the engine's (JS_IterStateSave/Restore/Free), exactly as
- *                        COW_STATE_OBJECT's is and for the same reason. */
-enum { COW_STATE_ASYNC = 0, COW_STATE_MODULE = 1, COW_STATE_HOST = 2, COW_STATE_HOST_REC = 3,
-       COW_STATE_BUFFER = 4, COW_STATE_OBJECT = 5, COW_STATE_ITER = 6 };
+ *                        the caller is a browser component that owns its struct; these records are the
+ *                        ENGINE's and their structs are private to quickjs.c, so there is no caller anywhere
+ *                        who could supply the offset list. That reason covers every iterator kind. The for-in
+ *                        record adds the sharper one, which would hold even if the layouts were public: what it
+ *                        owns is an ATOM, which `val_off` cannot name at all, so the byte-copy-plus-dup arm
+ *                        would take a reference it never counted. So the blob is the engine's
+ *                        (JS_IterStateSave/Restore/Free), exactly as COW_STATE_OBJECT's is and for the same
+ *                        reason.
+ *   THE IDS THEMSELVES ARE ONE LIST IN cow.h (COW_STATE_KINDS) and the enum below is an expansion of it, as
+ *   the census row's names and that row's width are. This banner stays here because it is the ARGUMENT for
+ *   each unit rather than a list anybody indexes — the two are not two copies of one thing, and a kind added
+ *   to the list gets its id, its name and its width without anyone editing three places. */
+#define COW_STATE_KIND_ID(id, name) COW_STATE_##id,
+enum { COW_STATE_KINDS(COW_STATE_KIND_ID) COW_STATE_KIND_N };
+#undef COW_STATE_KIND_ID
 typedef struct { JSValue obj; JSAtom atom; int existed; JSPropertyDescriptor base; JSPropertyDescriptor cur;
                  int cur_state; void *vref;
                  int is_gendata; void *g0; void *g1; int is_map; int map_op; int map_pos; JSValue map_old;
@@ -395,6 +403,70 @@ void cow_set_current(CowDelta *d) {
    asking which flow is running, and flow_running() is the authority for that. */
 CowDelta *cow_current(void) { return g_current; }
 
+/* WHAT EACH STATE UNIT WAS ASKED FOR AND WHAT IT RECORDED — see cow.h for why this is a PAIR and not one
+   number. Both are LIFETIME COUNTS over this instance, raised and lowered by nothing, so a reader may difference
+   two samples of either; neither is a gauge and the two must not be divided (a walk asks per key and records
+   once, which is the dedup working).
+   THE ASK IS RAISED WHERE THE PAGE'S WRITE ARRIVES AND BEFORE ANY UNIT'S OWN GATE, which is the whole point of
+   it: a capture that returns because the object is flow-private has been ASKED and correctly recorded nothing,
+   and that is the state a bare `made` of zero cannot be told apart from never having been reached at all. It
+   is NOT raised for this file's own reads and restores — those come through wearing the page's hook and are
+   dropped by the same test every capture opens with, so counting them would make the denominator a fact about
+   the swap rather than about the page. */
+static long g_state_asks[COW_STATE_KIND_N];
+static long g_state_made[COW_STATE_KIND_N];
+
+/* THE ONE PROLOGUE EVERY STATE CAPTURE OPENS WITH, so the ask cannot be the line a new unit forgets: it returns
+   the delta to record into, or NULL when there is nothing to record into, and a caller needs the delta. */
+static CowDelta *cow_state_ask(int kind) {
+    DCHECK(kind >= 0 && kind < COW_STATE_KIND_N,
+           "a COW state capture named a kind outside cow.h's list — the enum and the counters are two "
+           "expansions of ONE macro, so a value outside it is a cast or an uninitialised read");
+    if (cow_hooks_off() || !g_current) return NULL;
+    g_state_asks[kind]++;
+    return g_current;
+}
+
+/* THE ONE CONSTRUCTOR OF A STATE ENTRY — the kind and the flag are set together because an entry with one and
+   not the other is read as a property write, and the count rides here so that a unit added later is counted by
+   existing rather than by somebody remembering.
+   THE ASSERT IS WHAT KEEPS THE ASK FROM DRIFTING AWAY FROM IT. A capture that recorded an entry without going
+   through cow_state_ask has a `made` its `asks` cannot cover, so the pair below fires on the FIRST such entry
+   rather than on a census somebody reads later — which is the only thing standing between a new unit and a
+   denominator that silently reports it as never asked for. The two sides can disagree, which is the test
+   CLAUDE.md puts on an assert: delete the ask in any capture here and this fires on that unit's next entry. */
+static void cow_state_entry_set(CowEntry *e, int kind) {
+    e->is_state = 1;
+    e->state_kind = kind;
+    g_state_made[kind]++;
+    DCHECKF(g_state_made[kind] <= g_state_asks[kind],
+            "a COW state entry of kind `%s` was recorded without the capture that made it having been counted "
+            "as an ASK — its prologue does not go through cow_state_ask, so this unit's census reports entries "
+            "against a denominator that never moved", cow_state_kind_name(kind));
+}
+
+int cow_state_kind_count(void) { return COW_STATE_KIND_N; }
+
+/* THE NAME, FROM THE SAME LIST — a switch rather than a table indexed by the enum, so the two cannot get out of
+   step by an entry being inserted in one and appended to the other. Generated from COW_STATE_KINDS, so it is
+   complete by construction and a missing case is not expressible. */
+#define COW_STATE_KIND_CASE(id, name) case COW_STATE_##id: return name;
+const char *cow_state_kind_name(int kind) {
+    switch (kind) { COW_STATE_KINDS(COW_STATE_KIND_CASE) default: break; }
+    DFAIL("a COW state entry reported a kind that is not in cow.h's list — the enum and the name are two "
+          "expansions of ONE macro, so a value outside it did not come from cow_state_entry_set");
+    return "(not a state kind)";
+}
+#undef COW_STATE_KIND_CASE
+
+void cow_state_kind_stats(int kind, long *asks, long *made) {
+    DCHECK(kind >= 0 && kind < COW_STATE_KIND_N,
+           "a COW state census asked for a kind outside cow.h's list — the loop bound is "
+           "cow_state_kind_count(), which is that list's own length");
+    if (asks) *asks = g_state_asks[kind];
+    if (made) *made = g_state_made[kind];
+}
+
 /* THE SCHEDULER'S OWN BOOKKEEPING — see cow.h. It is expressed as "there is no current delta", which is the
    statement every hook here already understands (`!g_current` is how baseline setup drops its captures), so
    nothing else has to learn about it and no hook can be added that forgets to ask. */
@@ -521,7 +593,8 @@ static void cow_state_free(JSRuntime *rt, const CowEntry *e, void *blob) {
     case COW_STATE_HOST: free(blob); break;   /* POD bytes: nothing in it holds a reference */
     case COW_STATE_BUFFER: JS_BufferStateFree(rt, blob); break;   /* it holds real storage and view references */
     case COW_STATE_OBJECT: JS_ObjStateFree(rt, blob); break;   /* it holds a proto and an internal-slot value */
-    case COW_STATE_ITER: JS_IterStateFree(rt, blob); break;   /* it holds the parked candidate's ATOM */
+    case COW_STATE_ITER: JS_IterStateFree(rt, blob); break;   /* per arm: the parked candidate's ATOM, a walk's
+                                                                 own source VALUE — the engine's to free */
     case COW_STATE_HOST_REC:
         if (blob) {
             int i;
@@ -659,8 +732,8 @@ void cow_capture_map_mutate(JSContext *ctx, JSValueConst obj, JSValueConst key, 
    arm is lost rather than isolated. Flow-private promises (created after the fork) are skipped by the same
    generational test as every other capture — nothing else can observe them. */
 void cow_capture_async_state(JSContext *ctx, JSValueConst obj) {
-    if (cow_hooks_off() || !g_current) return;
-    CowDelta *d = g_current;
+    CowDelta *d = cow_state_ask(COW_STATE_ASYNC);
+    if (!d) return;
     if (JS_ObjFlowGen(obj) > d->fork_gen) return;   /* flow-private skip — the O(shared-state) invariant */
     cow_capture_begin();
     void *blob = JS_AsyncStateSave(ctx, obj);
@@ -680,7 +753,7 @@ void cow_capture_async_state(JSContext *ctx, JSValueConst obj) {
     CowEntry *e = &d->e[d->n++];
     cow_entry_init(e);
     e->obj = JS_DupValue(ctx, obj);
-    e->is_state = 1; e->state_kind = COW_STATE_ASYNC; e->a_base = blob;
+    cow_state_entry_set(e, COW_STATE_ASYNC); e->a_base = blob;
     cow_capture_end();
 }
 
@@ -733,8 +806,10 @@ void cow_capture_async_fork(JSContext *ctx, JSValueConst closure, void *base_dat
 }
 
 void cow_capture_module_eval(JSContext *ctx, void *mod) {
-    if (cow_hooks_off() || !g_current || !mod) return;
-    CowDelta *d = g_current;
+    CowDelta *d;
+    if (!mod) return;
+    d = cow_state_ask(COW_STATE_MODULE);
+    if (!d) return;
     for (int i = 0; i < d->n; i++)                  /* one entry per module: the FIRST baseline is the baseline */
         if (d->e[i].is_state && d->e[i].state_kind == COW_STATE_MODULE && d->e[i].target == mod) return;
     cow_capture_begin();
@@ -745,7 +820,7 @@ void cow_capture_module_eval(JSContext *ctx, void *mod) {
         cow_hash_rebuild(d);
     CowEntry *e = &d->e[d->n++];
     cow_entry_init(e);
-    e->is_state = 1; e->state_kind = COW_STATE_MODULE; e->target = mod; e->a_base = blob;
+    cow_state_entry_set(e, COW_STATE_MODULE); e->target = mod; e->a_base = blob;
     cow_capture_end();
 }
 
@@ -759,8 +834,8 @@ void cow_capture_module_eval(JSContext *ctx, void *mod) {
    whatever now occupies them. The flow-private skip is the same generational test every other capture uses. */
 void cow_capture_host_state_at(JSContext *ctx, JSValueConst owner, void *p, size_t n,
                                const char *file, int line) {
-    if (cow_hooks_off() || !g_current) return;
-    CowDelta *d = g_current;
+    CowDelta *d = cow_state_ask(COW_STATE_HOST);
+    if (!d) return;
     DCHECKF(p != NULL && n > 0,
             "a component asked to capture no state, at %s:%d — the call site has nothing to isolate",
             file, line);
@@ -786,7 +861,7 @@ void cow_capture_host_state_at(JSContext *ctx, JSValueConst owner, void *p, size
     CowEntry *e = &d->e[d->n++];
     cow_entry_init(e);
     e->obj = JS_DupValue(ctx, owner);
-    e->is_state = 1; e->state_kind = COW_STATE_HOST; e->target = p; e->a_len = n;
+    cow_state_entry_set(e, COW_STATE_HOST); e->target = p; e->a_len = n;
     e->a_base = cow_state_save(ctx, e);   /* the bytes as this flow found them */
     cow_capture_end();
 }
@@ -801,8 +876,8 @@ void cow_capture_host_state_at(JSContext *ctx, JSValueConst owner, void *p, size
    then resize, or resize then write) decides nothing now: whichever comes first takes the baseline, and the
    baseline it takes describes the whole storage either way. */
 void cow_capture_buffer(JSContext *ctx, JSValueConst abuf) {
-    if (cow_hooks_off() || !g_current) return;
-    CowDelta *d = g_current;
+    CowDelta *d = cow_state_ask(COW_STATE_BUFFER);
+    if (!d) return;
     uint32_t len;
     DCHECK(JS_IsObject(abuf), "a buffer's storage state was captured with no buffer object — the capture named "
                               "a VIEW where it must name the storage the view is a window onto");
@@ -824,7 +899,7 @@ void cow_capture_buffer(JSContext *ctx, JSValueConst abuf) {
     CowEntry *e = &d->e[d->n++];
     cow_entry_init(e);
     e->obj = JS_DupValue(ctx, abuf);
-    e->is_state = 1; e->state_kind = COW_STATE_BUFFER;
+    cow_state_entry_set(e, COW_STATE_BUFFER);
     e->a_base = cow_state_save(ctx, e);   /* the storage as this flow found it */
     cow_capture_end();
 }
@@ -833,8 +908,8 @@ void cow_capture_buffer(JSContext *ctx, JSValueConst abuf) {
    field, because the three fields are one object and the flow that reached one may write any of them; the
    dedup is therefore what makes six mutation sites cost one entry. */
 void cow_capture_obj_state(JSContext *ctx, JSValueConst obj) {
-    if (cow_hooks_off() || !g_current) return;
-    CowDelta *d = g_current;
+    CowDelta *d = cow_state_ask(COW_STATE_OBJECT);
+    if (!d) return;
     DCHECK(JS_IsObject(obj), "an object's own state was captured with no object");
     if (JS_ObjFlowGen(obj) > d->fork_gen) return;   /* flow-private skip — the O(shared-state) invariant */
     for (int i = 0; i < d->n; i++)                  /* one entry per object: the FIRST state is the baseline */
@@ -847,7 +922,7 @@ void cow_capture_obj_state(JSContext *ctx, JSValueConst obj) {
     CowEntry *e = &d->e[d->n++];
     cow_entry_init(e);
     e->obj = JS_DupValue(ctx, obj);
-    e->is_state = 1; e->state_kind = COW_STATE_OBJECT;
+    cow_state_entry_set(e, COW_STATE_OBJECT);
     e->a_base = cow_state_save(ctx, e);   /* the object as this flow found it */
     cow_capture_end();
 }
@@ -874,8 +949,8 @@ void cow_capture_obj_state(JSContext *ctx, JSValueConst obj) {
    on a page whose forks are per-key: a head that is long THERE is the case this argument does not cover, and
    the repair would be to give state entries a key in the hash index rather than to move this capture. */
 void cow_capture_iter_state(JSContext *ctx, JSValueConst obj) {
-    if (cow_hooks_off() || !g_current) return;
-    CowDelta *d = g_current;
+    CowDelta *d = cow_state_ask(COW_STATE_ITER);
+    if (!d) return;
     DCHECK(JS_IsObject(obj), "an iteration record's state was captured with no object");
     if (JS_ObjFlowGen(obj) > d->fork_gen) return;   /* flow-private skip — the O(shared-state) invariant */
     for (int i = 0; i < d->n; i++)                  /* one entry per iterator: the FIRST state is the baseline */
@@ -888,7 +963,7 @@ void cow_capture_iter_state(JSContext *ctx, JSValueConst obj) {
     CowEntry *e = &d->e[d->n++];
     cow_entry_init(e);
     e->obj = JS_DupValue(ctx, obj);
-    e->is_state = 1; e->state_kind = COW_STATE_ITER;
+    cow_state_entry_set(e, COW_STATE_ITER);
     e->a_base = cow_state_save(ctx, e);   /* the walk as this flow found it */
     cow_capture_end();
 }
@@ -901,8 +976,8 @@ void cow_set_ctx(JSContext *ctx) { g_cow_ctx = ctx; }
 void cow_capture_host_record_at(JSValueConst owner, void *p, const CowRecord *rec,
                                 const char *file, int line) {
     JSContext *ctx = g_cow_ctx;
-    if (cow_hooks_off() || !g_current) return;
-    CowDelta *d = g_current;
+    CowDelta *d = cow_state_ask(COW_STATE_HOST_REC);
+    if (!d) return;
     DCHECKF(ctx != NULL,
             "a component record was captured before cow_set_ctx named the session's context, at %s:%d",
             file, line);
@@ -942,7 +1017,7 @@ void cow_capture_host_record_at(JSValueConst owner, void *p, const CowRecord *re
     CowEntry *e = &d->e[d->n++];
     cow_entry_init(e);
     e->obj = JS_DupValue(ctx, owner);
-    e->is_state = 1; e->state_kind = COW_STATE_HOST_REC; e->target = p; e->rec = rec;
+    cow_state_entry_set(e, COW_STATE_HOST_REC); e->target = p; e->rec = rec;
     e->a_base = cow_state_save(ctx, e);   /* the record as this flow found it */
     cow_capture_end();
 }

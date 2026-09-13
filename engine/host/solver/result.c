@@ -1009,6 +1009,45 @@ char *result_wfq_json(void) {
                      engine_work_done(), flow_rank_changes());
 }
 
+/* ONE ROW-COMPOSER FOR THE TWO STATE-KIND HISTOGRAMS on the line below. They differ in exactly one thing — the
+   side of the pair they count — and not at all in how a row is spelled, so a second copy of this loop would be
+   a second speller of the row format, which is the drift `cold_hist_json`'s own banner exists to prevent one
+   census over.
+   IT HOLDS NO LIST OF ITS OWN, which is the whole reason it is affordable: the bound is cow_state_kind_count()
+   and the row name is cow_state_kind_name(), both expansions of solver/cow.h's COW_STATE_KINDS, so a capture
+   unit added there is counted, named and rendered without anybody editing this file. A census that kept its own
+   kind names would be the second copy CLAUDE.md §AN-AUDITOR-DERIVES-THE-RULE is about, and the one that drifts
+   is always the copy nobody runs against reality.
+   A SELECTOR RATHER THAN AN ARRAY, because the two counts live behind ONE accessor and are read together: a
+   caller that copied one side into a local array would be a second place where a kind's INDEX means something,
+   and an index is only a name while the list is fixed.
+   `what` NAMES THE HISTOGRAM IN THE WIDTH ASSERT for the reason cold_hist_json's does — a DCHECK stamps the
+   line it is WRITTEN at, so a shared helper's message reports this function for both callers and "the histogram
+   did not fit" would otherwise name an action with no object (CLAUDE.md §AN-ASSERT-THAT-NAMES-A-REMEDY).
+   IT RETURNS NOTHING AND ASSERTS NO SUM. There is no total these rows add up to: the pair's own identity is
+   per-kind (`made <= asks`) and it is asserted in cow.c at the entry that makes it, where both are in hand. */
+static void cow_state_hist_json(char *buf, size_t cap, int want_made, const char *what) {
+    int hi = 0, k, n = cow_state_kind_count();
+
+    DCHECK(buf != NULL, "a COW state-kind histogram was composed into nothing");
+    buf[hi++] = '{';
+    for (k = 0; k < n; k++) {
+        long asks = 0, made = 0;
+        int w;
+        cow_state_kind_stats(k, &asks, &made);
+        w = snprintf(buf + hi, cap - (size_t)hi, "%s\"%s\":%ld",
+                     k ? "," : "", cow_state_kind_name(k), want_made ? made : asks);
+        DCHECKF(w > 0 && (size_t)w < cap - (size_t)hi,
+                "the `%s` COW state-kind histogram did not fit the width its own list derives — "
+                "COW_STATE_KINDS_JSON_MAX is computed from solver/cow.h's names, so a row that does not fit "
+                "means a count wider than a `long`'s 20 digits or a name that reached this buffer from "
+                "somewhere else", what);
+        hi += w;
+    }
+    buf[hi++] = '}';
+    buf[hi] = 0;
+}
+
 /* WHAT A CONTEXT SWITCH COSTS, AND WHAT THE TWO CHAINS ARE STILL HOLDING — see result.h for why this composes
    here rather than in a host's printf. It DECIDES NOTHING: it reads cow.c's and dom_cow.c's own stats and
    renders them.
@@ -1032,17 +1071,36 @@ char *result_wfq_json(void) {
    THE IDENTITY IS `entries >= worst` WHENEVER `installs > 0` and holds by construction (`worst` is a maximum
    over the terms `entries` sums), which is the whole of what a reader can check from these bytes.
 
+   AND THE THIRD HALF IS WHICH STATE UNITS WERE EXERCISED AT ALL, which the two above are blind to in the way a
+   total is always blind to its parts: `installs`/`entries` say a swap moved N delta slots and say nothing about
+   what KIND of thing any of them held, so a capture unit that has never recorded one entry in the life of the
+   engine is indistinguishable here from one carrying the traffic. `cowStateAsks` and `cowStateMade` are that
+   partition, per kind, and they are a PAIR for the reason solver/cow.h gives at the accessor: a bare `made` of
+   zero means three different things — nothing reached that capture point under a running flow, or it was
+   reached and the unit's own gate correctly refused because the object was flow-private, or the unit is broken
+   — and only the ask count separates the first from the second.
+   THEIR KINDS: both are per-kind LIFETIME COUNTS (cow.c's `g_state_asks`/`g_state_made`, raised at the capture
+   CALL and at the entry it makes, and lowered by nothing), so either may be differenced across two samples.
+   THEY ARE NOT A RATIO AND MUST NOT BE DIVIDED — a walk asks once per key and records ONCE, because the dedup
+   is the mechanism working, so `asks` running far ahead of `made` is a healthy unit and not a refusal rate.
+   The identity that does hold is `made <= asks` per kind, and it is asserted in cow.c where an entry is made
+   rather than checked here, because that is the one place both numbers are in hand.
+
    NO BYTE COUNT — see solver/compose.h's `composef`. */
 char *result_swap_json(void) {
     long sc = 0, st = 0, sm = 0, hs = 0, he = 0, ds = 0, de = 0;
+    char asks[COW_STATE_KINDS_JSON_MAX], made[COW_STATE_KINDS_JSON_MAX];
 
     cow_swap_stats(&sc, &st, &sm);
     cow_chain_stats(&hs, &he);
     dom_cow_chain_stats(&ds, &de);
+    cow_state_hist_json(asks, sizeof asks, 0, "cowStateAsks");
+    cow_state_hist_json(made, sizeof made, 1, "cowStateMade");
     return composef(
                  "{\"installs\":%ld,\"entries\":%ld,\"worst\":%ld,\"mean\":%.1f,"
-                 "\"heapSegs\":%ld,\"heapSegEntries\":%ld,\"domSegs\":%ld,\"domSegEntries\":%ld}",
-                 sc, st, sm, sc ? (double)st / (double)sc : 0.0, hs, he, ds, de);
+                 "\"heapSegs\":%ld,\"heapSegEntries\":%ld,\"domSegs\":%ld,\"domSegEntries\":%ld,"
+                 "\"cowStateAsks\":%s,\"cowStateMade\":%s}",
+                 sc, st, sm, sc ? (double)st / (double)sc : 0.0, hs, he, ds, de, asks, made);
 }
 
 /* WHAT THE FRONTIER IS MADE OF AND WHAT ITS PARKED SNAPSHOTS WEIGH — solver/cold.h's ColdCensus, this
