@@ -1030,11 +1030,19 @@ function censusComposerFields(file, from, to, why) {
    notice is a composer that grows a FOURTH `%s` — the row is silently absent from `.numeric`, absent from
    every presence loop, computed on every census of every run, and read by nothing. That is precisely the
    defect the numeric derivation was built to end, arriving one KIND over and invisible to it.
-   SO THE CALLER STATES WHICH OBJECTS IT VALIDATES AND THE MISMATCH THROWS, IN BOTH DIRECTIONS. The @COLD
-   reader validates three as partitions (`censusHistRows`, called by name at each of its three readings,
-   because a row reached through a computed key is a row no reader of this file can see); @HEAP and @SWAP
-   validate none, and pass an EMPTY set to say so rather than by omission — "this census publishes no object"
+   SO THE CALLER STATES WHICH OBJECTS IT VALIDATES AND THE MISMATCH THROWS, IN BOTH DIRECTIONS. A caller
+   validating none passes an EMPTY set to say so rather than by omission — "this census publishes no object"
    is a claim, and the day one does the reader that cannot check it is told instead of quietly dropping it.
+   AN EARLIER FORM OF THIS PARAGRAPH ENUMERATED WHICH READER VALIDATES WHAT, AND BOTH HALVES OF THAT
+   ENUMERATION WENT STALE BEFORE ANYONE READ IT AGAIN — it said @HEAP and @SWAP validate none, and @HEAP had
+   gained `childRealmRefSites` while @SWAP has since gained the `cowStateAsks`/`cowStateMade` pair. THE ROT IS
+   THE POINT AND IS WHY THE LIST IS DELETED RATHER THAN CORRECTED: a list of which callers validate what is
+   the second copy of a fact THE CALL SITES THEMSELVES STATE, which is precisely the hand-kept list this whole
+   mechanism exists to end, arriving one level up in the prose that describes it. The call sites are the
+   enumeration. What does not rot is what the refusal is FOR, and that is all that belongs here: a `%s` row is
+   absent from `.numeric`, absent from every presence loop, computed on every census of every run, and read by
+   nothing. `censusHistRows` is the shape for a PARTITION and the message below says "if it is a partition"
+   for a reason — what is required is a reader, never a particular one.
    THE DIRECTION THAT IS ALREADY COVERED IS STILL CHECKED HERE, AND CHEAPLY: a renamed histogram would throw at
    `censusHistRows` when the reading runs, but only if that reading is reached, whereas this fires while the
    row set is being taken and names the composer. One throw, at the seam, for a set that is one line long. */
@@ -2742,8 +2750,12 @@ function coldRoundTrip(v1, v2, store) {
    it, taken from those composers' own format strings rather than retyped here. These two AGREED with their
    composers name for name at the revision the third stopped agreeing with its own, which is not evidence that
    a hand-kept copy works: it is what the @COLD list looked like the day before three rows landed in the
-   composer and in no reader. The empty object set is the positive statement that neither census splices an
-   object — see `censusRowSet`, which is what refuses the day one does. */
+   composer and in no reader. AND THE DAY CAME FOR @SWAP, WHICH IS WHY THE REFUSAL IS WORTH ITS LINE: the
+   empty object set here used to be the positive statement that neither census splices an object, and
+   `result_swap_json` grew the `cowStateAsks`/`cowStateMade` pair — so the build THREW, naming the composer,
+   rather than computing two histograms every census of every run for nobody. They are named here and read by
+   `cowStateReading`, which states its own contract because the pair is NOT a partition: two key sets that
+   must be IDENTICAL and per-key `made <= asks` has no total to be a partition of. */
 let g_heapFields = null;
 const heapFields = () => (g_heapFields ??= censusRowSet(
   "solver/result.c", "char *result_heap_json(JSContext *ctx)", "\n}\n", ["childRealmRefSites"],
@@ -2751,7 +2763,7 @@ const heapFields = () => (g_heapFields ??= censusRowSet(
   "from the composer rather than from a list beside it"));
 let g_swapFields = null;
 const swapFields = () => (g_swapFields ??= censusRowSet(
-  "solver/result.c", "char *result_swap_json(void)", "\n}\n", [],
+  "solver/result.c", "char *result_swap_json(void)", "\n}\n", ["cowStateAsks", "cowStateMade"],
   "the @SWAP reader states which rows it requires of the delta-swap census, and it takes that set from the " +
   "composer rather than from a list beside it"));
 function lastTwo(out, marker, fields, composer) {
