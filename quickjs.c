@@ -39365,8 +39365,9 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                                    || (gp_op == GP_DEFINE && (gp_dflags_r & JS_PROP_HAS_VALUE)
                                        && ta_define_reaches_set(gp_dflags_r, gp_getter_r, gp_setter_r)
                                        && js_ta_index_is_valid(ctx, fwd ? gp_fwd : gp_obj, gp_atom)))) {
-                        /* 10.4.5.16 TypedArraySetElement step 1: the element write coerces V with ToNumber
-                           (ToBigInt for the 64-bit classes) BEFORE the bounds test, and for an OBJECT V that is
+                        /* 10.4.5.18 TypedArraySetElement ( obj, index, value ) steps 1-2: the element write
+                           coerces V with ToNumber (ToBigInt for the 64-bit classes, which is why it is two
+                           steps and not one) BEFORE the bounds test, and for an OBJECT V that is
                            the page's @@toPrimitive/valueOf. The interpreter's own write site guards this; every
                            C caller reaches the write through THIS entry and none of them did, so
                            `[0].fill({valueOf(){ while(x){} }})` on a TypedArray receiver and the TypedArray
@@ -86146,7 +86147,8 @@ static int js_array_every_vstep(JSContext *ctx, void *st, JSValue cb_result, JSV
 
         case ACB_WRITE:
             if (s->special == (special_map | special_TA)) {
-                /* 10.4.5.16 TypedArraySetElement step 1 coerces the value with ToBigInt or ToNumber — the page's
+                /* 10.4.5.18 TypedArraySetElement ( obj, index, value ) steps 1-2 coerce the value with
+                   ToBigInt or ToNumber — the page's
                    valueOf or toString whenever the callback returned an object. JS_SetPropertyValue performed
                    that coercion inside itself, from C, below a live flow. Once the value is a PRIMITIVE the
                    store's own coercion invokes nothing, so the write itself is ordinary C — and the coercion has
@@ -116691,9 +116693,10 @@ static int js_ta_idx_step(JSContext *ctx, void *st, JSValue cb_result, JSValue *
                 s->hdr.stage = TAIDX_NEXT;
             }
         ta_have_element:
-            /* TypedArraySetElement (10.4.5.16) is TWO steps and only the SECOND one is conditional: the value is
-               coerced to the target's content type FIRST -- ? ToBigInt for a BigInt view, ? ToNumber otherwise --
-               and only then does IsValidIntegerIndex decide whether the store happens. Skipping the whole
+            /* 10.4.5.18 TypedArraySetElement ( obj, index, value ) is a COERCION and a CONDITIONAL STORE, and
+               only the store is conditional: the value is coerced to the target's content type FIRST, by steps
+               1-2 -- ? ToBigInt for a BigInt view, ? ToNumber otherwise -- and only then does step 3's
+               10.4.5.16 IsValidIntegerIndex ( obj, index ) decide whether the store happens. Skipping the whole
                element when the view has gone out of bounds skipped the COERCION too, so
                `bigIntTA.set({get length(){ detach(); return 1 }, 0: {valueOf: () => "huzzah!"}})` threw nothing
                where ToBigInt owes a SyntaxError. The write path already coerces before it range-checks, and an
