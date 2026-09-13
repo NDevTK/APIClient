@@ -1,5 +1,7 @@
 /* The dispatch loop — see engine.h. */
 #include "core/fetch/fetch.h"
+#include "core/mime/mime_type.h"   /* §4.4 "Is a JavaScript MIME type": what makes a reply a PROGRAM
+                                       rather than a Response, asked at the fetch delivery below */
 #include "core/fetch/scheme_fetch.h"   /* Fetch §4.3 Scheme fetch: who answers a park's address — this agent
                                           or the host — asked once, at the one place a park takes one */
 #include "solver/engine.h"
@@ -479,6 +481,14 @@ void engine_pending_fetch_url(JSContext *ctx, JSValueConst resolve, JSValueConst
     e = pending_push(&f->pending, FLOW_PENDING_RESOLVE, flow_path_forced(f));
     pending_set(e, PEND_RESOLVE, JS_DupValue(ctx, resolve));
     pending_set(e, PEND_VALUE, JS_DupValue(ctx, value));
+    /* AND WHICH DOCUMENT ASKED — the same sentence the `<script src>` park one entry down already makes, and
+       this was the only one of the three parks not making it. The realm this chokepoint was entered with IS
+       the asking document's; `flow_step`'s is the SESSION's, so a delivery that re-derived this would compile
+       a reply in whichever realm the session happens to be rooted at rather than in the document that asked.
+       IT IS CARRIED RATHER THAN DEFAULTED, and the difference is not theoretical: `PEND_DOC` defaults to 0,
+       which is a real document id, so a delivery reading an unset field gets a plausible answer rather than an
+       absent one — the shape §A-FIELD-A-CONSUMER-DEFAULTS names, one field short of a wrong document. */
+    pending_set_int(e, PEND_DOC, (int)document_doc(ctx));
     /* THE ADDRESS AND EVERYTHING THAT TRAVELS WITH IT GO ON THROUGH THE ONE DOOR, which is also where §4.3
        Scheme fetch is asked. It answers NETWORK for every request that reaches HERE — `fetch_owe` and
        `fetch()` run §4.3 with their own `deliver` closure and return before touching this register when it
@@ -4546,6 +4556,74 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
                 JS_FreeValue(ctx, ul);
             }
 #endif
+            /* A REPLY WHOSE BYTES ARE JAVASCRIPT IS A PROGRAM, AND THIS IS WHERE IT BECOMES ONE. §Solver's
+               trust boundary says it outright — "a fetch whose body is JAVASCRIPT is ALWAYS fetched +
+               EXECUTED (a lazy chunk reveals real endpoints — the headline moat surface)" — and only the
+               FETCHED half was built. The reply became a Response, the page's `then` got it, and if the page
+               did not itself hand those bytes to a `<script>` element nothing ever compiled them. The entry
+               that runs such a program has existed and been correct the whole time
+               (engine_queue_fetched_script); its only caller was a test fixture.
+               WHY HERE AND NOT IN reply_decode_learn, WHICH IS WHERE THE NEXT READER WILL REACH FIRST. That
+               file runs on the HOST's time — its own contract says "OUTSIDE any flow" — and the queue entry
+               below reaches engine_queue_el_body, which DCHECKs `flow_running() != NULL`. That check would
+               NOT fire there and would not save anybody: a yielded flow keeps its stamp up deliberately (its
+               COW delta is still applied), so `flow_running()` at host time answers with whichever flow last
+               yielded and the program would be written silently into an arbitrary member's row table. At THIS
+               site a flow is switched in and it is the flow that made the fetch, which is also what
+               §State-isolation requires — N flows parked on one URL each get their own delivery, so each
+               compiles the chunk on the timeline that asked for it rather than one arm's answer serving both.
+               AND IT IS BEFORE THE SETTLE, not after: the row takes §4.12.1's networking-task-source position
+               ahead of the page's own reaction, which is exactly what the `<script src>` sibling arm above
+               gives a chunk the page loaded through an element. A chunk that arrives after the reaction that
+               was waiting for it is a chunk whose endpoints the reaction has already not seen.
+               THE TYPE IS THE HOST'S DECISION AND IS NEVER RE-SNIFFED HERE. SECURITY.md puts sniffing in the
+               trusted zone and CLAUDE.md keeps it there by name; `computedType` is stamped on every record at
+               fetch_reply_new and this reads it. A record whose type does not parse is not a program — there
+               is no sniff this process may run to find out otherwise, which is the identical sentence
+               reply_decode.c makes at its own extract. */
+            {
+                uint32_t sdoc = (uint32_t)pending_get_int(p, PEND_DOC);
+                char *ct = fetch_reply_computed_type(ctx, pv);
+                MimeType cm;
+                if (mime_type_extract(&cm, ct)) {
+                    if (mime_type_is_javascript(&cm)) {
+                        JSValue suv = pending_get(p, PEND_URL);
+                        const char *su = JS_IsString(suv) ? JS_ToCString(ctx, suv) : NULL;
+                        /* THE ADDRESS IS REQUIRED AND IS NOT DEFAULTABLE — engine_queue_fetched_script
+                           refuses without one, because §8.1.4.2 creates the script with the RESPONSE'S URL
+                           and §8.1.4.1 keeps it as the program's base URL. A park that reached the network
+                           has one by construction (pending_park_request wrote it); the arm is guarded rather
+                           than asserted because a value-carrying park with no address never reaches the
+                           network at all and is not a program either. */
+                        if (su && *su) {
+                            size_t src_n = 0;
+                            /* §8.1.4.2's decode, through the same reader both script arms above use — the
+                               record's bytes are a byte sequence and the encoding is the reply's own. */
+                            char *src = reply_source_text(ctx, pv, SCRIPT_TYPE_CLASSIC, doc_realm(sdoc),
+                                                          &src_n);
+                            CHECK(src, "engine: OOM decoding a fetched JavaScript reply into a program");
+                            /* NAMED RESIDUAL — the bytes are COPIED here and adopted one door over.
+                               NOT COVERED: engine_queue_fetched_script takes `const char *` and
+                               engine_queue_el copies it into a fresh DynBody, so a multi-megabyte chunk
+                               delivered to N flows parked on one URL is decoded and copied N times, where the
+                               `<script src>` arm hands its decode over without a second copy.
+                               WHAT THE NEXT DIFF BUILDS: an entry beside engine_queue_fetched_script taking
+                               an already-built DynBody, so the decode is adopted exactly as the element arm's
+                               is — the shared body is refcounted already (solver/dyn_body.h), so what is
+                               missing is the entry and not the sharing.
+                               HOW ITS ABSENCE WOULD SHOW: resident bytes rising with the number of flows
+                               parked on one chunk address rather than with the number of distinct chunk
+                               addresses a document loaded. */
+                            engine_queue_fetched_script(sdoc, src, src_n, su);
+                            free(src);
+                        }
+                        if (su) JS_FreeCString(ctx, su);
+                        JS_FreeValue(ctx, suv);
+                    }
+                }
+                mime_type_free(&cm);
+                free(ct);
+            }
             if (JS_CallAsFlow(ctx, resolve, pv) < 0) {
                 JSValue exc = JS_GetException(ctx);
                 JS_FreeValue(ctx, exc);   /* a rejected delivery is the page's to observe, not this step's */
