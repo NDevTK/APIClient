@@ -2277,5 +2277,56 @@
    }
   ],
   "baseUrl": "https://developer.mozilla.org/en-US/docs/Web/JavaScript"
+ },
+ {
+  "id": "openlibrary",
+  "stack": "PASSES 1-4 — /search.json?q=dune&limit=2 returns 200 application/json 3058B anonymously (1) while /account/loans.json answers 303 to the login flow and the logged-out document names /account/books, /account/create and /account/login (2). STACK: same-origin <script src> (/static/build/js/all.js?v=<hash>, 505138B application/javascript) + /static/build/lit-components/production/ol-components.js + two /cdn/archive.org scripts",
+  "requestedUrl": "https://openlibrary.org/",
+  "finalUrl": "https://openlibrary.org/",
+  "status": 200,
+  "contentType": "text/html; charset=utf-8",
+  "csp": "",
+  "bytes": 90962,
+  "sha256": "bb4daf5005b60231e5b07027d600bb10161325193ff1083e2aca7054af2dd5d0",
+  "fetchedAt": "2026-09-13T08:00:50.320Z",
+  "resources": [
+   {
+    "url": "https://openlibrary.org/cdn/archive.org/donate.js",
+    "status": 200,
+    "contentType": "text/javascript; charset=utf-8",
+    "bytes": 11699,
+    "sha256": "458e9644aae8da939d2b0eaa935706b18ae47626787e91987a8af7d3963169a9",
+    "fetchedAt": "2026-09-13T08:00:58.047Z",
+    "path": "openlibrary.org/cdn/archive.org/donate.js"
+   },
+   {
+    "url": "https://openlibrary.org/cdn/archive.org/athena.js",
+    "status": 200,
+    "contentType": "text/javascript; charset=utf-8",
+    "bytes": 15127,
+    "sha256": "d739d46b0f3b188cd409c97ab47964ea3a009cce9d08a50b763fdb958e39b822",
+    "fetchedAt": "2026-09-13T08:01:00.490Z",
+    "path": "openlibrary.org/cdn/archive.org/athena.js"
+   },
+   {
+    "url": "https://openlibrary.org/static/build/js/all.js?v=8ec7b7f7e7ce453a064f7b53fe758dbc",
+    "status": 200,
+    "contentType": "application/javascript",
+    "bytes": 505549,
+    "sha256": "0247fc8efc25581cc2d91a2cbc1812baacecc3e5537b6d73a5e7cab32de5f4e1",
+    "fetchedAt": "2026-09-13T08:01:04.998Z",
+    "path": "openlibrary.org/static/build/js/all.js__q54b3907e"
+   },
+   {
+    "url": "https://openlibrary.org/static/build/lit-components/production/ol-components.js?v=cd40aa53b865e6c30e805a9771ea32dd",
+    "status": 200,
+    "contentType": "application/javascript",
+    "bytes": 298325,
+    "sha256": "687c0ef1c7d3299c6c8905bf4a8cbaeaccbd990d6e599ca808ea6e97478b30e6",
+    "fetchedAt": "2026-09-13T08:01:09.008Z",
+    "path": "openlibrary.org/static/build/lit-components/production/ol-components.js__qe472a635"
+   }
+  ],
+  "baseUrl": "https://openlibrary.org/"
  }
 ]

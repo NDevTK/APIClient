@@ -1,0 +1,3291 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="format-detection" content="telephone=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#e2dcc5">
+
+    <link rel="canonical" href="https://openlibrary.org/" />
+
+    <link rel="preconnect" href="https://athena.archive.org">
+    <link rel="preconnect" href="https://apollo.archive.org">
+    
+    <link rel="search" type="application/opensearchdescription+xml" title="Open Library" href="/static/opensearch.xml">
+    <link rel="manifest" href="/static/manifest.json?v=fbf2b3dc370d159ad53f12260ad27c9c">
+
+    <link href="/static/images/openlibrary-128x128.png" rel="apple-touch-icon" />
+    <link href="/static/images/openlibrary-152x152.png" rel="apple-touch-icon" sizes="152x152" />
+    <link href="/static/images/openlibrary-167x167.png" rel="apple-touch-icon" sizes="167x167" />
+    <link href="/static/images/openlibrary-180x180.png" rel="apple-touch-icon" sizes="180x180" />
+    <link href="/static/images/openlibrary-192x192.png" rel="icon" sizes="192x192" />
+    <link href="/static/images/openlibrary-128x128.png" rel="icon" sizes="128x128" />
+    
+    
+    
+    <meta name="ol-icon-sprite" content="/static/icons/sprite.svg?v=b10d8add581262b268b9873d0e7f7dbe">
+    
+    <link href="/static/build/css/tokens.css?v=80694edff6a5cc90729168c42596b499" rel="stylesheet" type="text/css" />
+    <link href="/static/build/css/ol-components.css?v=e396a59756176f0460ca7dbbf9348eef" rel="stylesheet" type="text/css" />
+    <link href="/static/build/css/page-home.css?v=7d7b10cdf47d79cf448d50492a262621" rel="stylesheet" type="text/css" />
+
+    <noscript>
+      <style>
+        /* Don't hide content with clamp if no js to show more/less */
+        .clamp {
+          -webkit-line-clamp: unset !important;
+        }
+
+        /* @width-breakpoint-tablet media query: */
+        @media only screen and (min-width: 768px) {
+          /* Sticky navbar to top of screen if compact title cannot be stickied */
+          .work-menu {
+            top: 0 !important;
+          }
+        }
+      </style>
+    </noscript>
+
+    <script>
+      window.OL_EXPERIMENTS = {};
+    </script>
+
+ <script>
+ // Dimension 1 (visit-scoped): "Days Since Registration" — ID must match Matomo admin config (issue #12144)
+ var _paq = window._paq = window._paq || [];
+ _paq.push(['setCustomDimension', 1, "visitor"]);
+ // One-shot ActivationSuccess: cookie set by /account/verify on successful email activation.
+ // Cleared immediately so it only fires once per activation.
+ if (document.cookie.match(/(?:^|;\s*)ol_activation=1/)) {
+   _paq.push(['trackEvent', 'Account', 'ActivationSuccess']);
+   document.cookie = 'ol_activation=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/';
+ }
+ 
+ var _mtm = window._mtm = window._mtm || [];
+ _mtm.push({'mtm.startTime': (new Date().getTime()), 'event': 'mtm.Start'});
+ (function() {
+   var d=document, g=d.createElement('script'), s=d.getElementsByTagName('script')[0];
+   g.async=true; g.src='https://apollo.archive.org/js/container_7cLc1b4U.js'; s.parentNode.insertBefore(g,s);
+ })();
+ 
+/* @licstart  The following is the entire license notice for the
+ * JavaScript code in this page served from openlibrary.org.
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ *
+ * @licend  The above is the entire license notice
+ * for the JavaScript code in this page.
+ */
+  </script>
+
+    <meta name="google-site-verification" content="KrqcZD4l5BLNVyjzSi2sjZBiwgmkJ1W7n6w7ThD7A74" />
+    <meta name="google-site-verification" content="vtXGm8q3UgP-f6qXTvQBo85uh3nmIYIotVqqdJDpyz4" />
+    
+    <meta name="google-site-verification" content="XYOJ9Uj0MBr6wk7kj1IkttXrqY-bbRstFMADTfEt354" />
+    
+    <meta name="msvalidate.01" content="8BEBECBEF537077737975A49D55B857D" />
+
+    <meta name="description" content="Open Library is an open, editable library catalog, building towards a web page for every book ever published. Read, borrow, and discover more than 3M books for free." />
+    
+    <title>Welcome to Open Library | Open Library</title>
+
+    <meta name="sentry-trace" content="4906db289b874423b11125d1087f65ec-a7a38fcb19ad33fa">
+    <meta name="baggage" content="sentry-trace_id=4906db289b874423b11125d1087f65ec,sentry-environment=production,sentry-release=5b92e77,sentry-public_key=a27de9a317a64432866ac301a855f04e,sentry-sample_rate=0.02">
+    
+    <script>window.OL_SENTRY = {"dsn": "https://8470b9d8af98fa200a09162f2e30ac87@sink.archive.org/82", "environment": "production", "tracesSampleRate": 0.02, "sampleRate": 0.001, "release": "5b92e77", "transactionName": "/"};</script>
+</head>
+
+
+
+<body class="" >
+  <script>
+      // Provide a signal that JS will load
+      document.body.className += ' client-js';
+  </script>
+  <span id="top"></span>
+  <div id="offline-info">It looks like you&#39;re offline.</div>
+  
+  
+  
+
+
+
+
+
+<div id="donato"></div>
+<script src="/cdn/archive.org/donate.js" data-platform="ol"></script>
+
+
+
+<div id="topNotice">
+  <div class="page-banner page-banner-black page-banner-center">
+    <div class="iaBar">
+        <a class="iaLogo" href="https://archive.org"><img alt="Internet Archive logo" src="/static/images/ia-logo.svg" width="160"></a>
+        
+        <a class="ghost-btn iabar-mobile" href="https://archive.org/donate/?platform=ol&origin=olwww-TopNavDonateButton" data-ol-link-track="IABar|DonateButton">Donate <span class="heart" aria-hidden="true">♥</span></a>
+        <div class="language-component header-dropdown iabar-mobile">
+        <details>
+          <summary>
+            <span>English</span>
+            <svg
+    class="ol-icon ol-icon--sm"
+    focusable="false"
+    role="img"
+    aria-label="Change Website Language"
+><use href="/static/icons/sprite.svg?v=b10d8add581262b268b9873d0e7f7dbe#icon-globe"></use></svg>
+
+
+
+
+          </summary>
+          <div class="language-dropdown-component">
+            
+<ul class="locale-options dropdown-menu">
+  <li><a href="#" lang="ar" data-lang-id="ar" title="Arabic">العربية</a></li> 
+  <li><a href="#" lang="cs" data-lang-id="cs" title="Czech">Čeština</a></li> 
+  <li><a href="#" lang="de" data-lang-id="de" title="German">Deutsch</a></li> 
+  <li><a href="#" lang="en" data-lang-id="en" title="English">English</a></li> 
+  <li><a href="#" lang="es" data-lang-id="es" title="Spanish">Español</a></li> 
+  <li><a href="#" lang="fr" data-lang-id="fr" title="French">Français</a></li> 
+  <li><a href="#" lang="hi" data-lang-id="hi" title="Hindi">हिंदी</a></li> 
+  <li><a href="#" lang="hr" data-lang-id="hr" title="Croatian">Hrvatski</a></li> 
+  <li><a href="#" lang="it" data-lang-id="it" title="Italian">Italiano</a></li> 
+  <li><a href="#" lang="ko" data-lang-id="ko" title="Korean">한국어</a></li> 
+  <li><a href="#" lang="pt" data-lang-id="pt" title="Portuguese">Português</a></li> 
+  <li><a href="#" lang="ro" data-lang-id="ro" title="Romanian">Română</a></li> 
+  <li><a href="#" lang="sc" data-lang-id="sc" title="Sardinian">Sardu</a></li> 
+  <li><a href="#" lang="te" data-lang-id="te" title="Telugu">తెలుగు</a></li> 
+  <li><a href="#" lang="uk" data-lang-id="uk" title="Ukrainian">Українська</a></li> 
+  <li><a href="#" lang="zh" data-lang-id="zh" title="Chinese">中文</a></li> 
+  <li><a href="#" lang="tl" data-lang-id="tl" title="Filipino">Filipino</a></li> 
+</ul>
+
+          </div>
+        </details>
+      </div>
+    </div>
+  </div>
+</div>
+
+  
+<header id="header-bar" class="header-bar">
+
+
+
+  <div class="logo-component">
+    <a href="/" title="The Internet Archive&#39;s Open Library: One page for every book">
+      <div class="logo-txt">
+        <img class="logo-icon" src="/static/images/openlibrary-logo-tighter.svg"
+          width="189" height="47"
+          alt="Open Library logo"/>
+      </div>
+    </a>
+    
+    <a
+      href="/?show_page_status=1"
+      style="color:transparent;position:absolute;pointer-events:none;"
+      tabindex="-1"
+      aria-hidden="true"
+    >Page Status</a>
+  </div>
+
+  <ul class="navigation-component">
+    <li>
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="mybooks-component header-dropdown">
+  <a href="/account/books"
+    data-ol-link-track="MainNav|MyBooks"
+  >My Books</a>
+</div>
+</li>
+    <li>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="browse-component header-dropdown">
+  <ol-popover class="browse-popover" placement="bottom-center" aria-label="Browse" data-ol-open-track="MainNav|BrowseOpen">
+    <button type="button" slot="trigger" class="browse-popover__trigger">
+      Browse
+      <svg
+    class="ol-icon ol-icon--sm down-arrow"
+    focusable="false"
+    aria-hidden="true"
+><use href="/static/icons/sprite.svg?v=b10d8add581262b268b9873d0e7f7dbe#icon-chevron-down"></use></svg>
+
+
+
+
+    </button>
+    <div class="browse-popover__panel">
+      <div class="browse-popover__featured">
+        <a class="browse-feature" href="/subjects" data-ol-link-track="MainNav|Subjects|1">
+          <span class="browse-feature__icon"><svg
+    class="ol-icon ol-icon--md"
+    focusable="false"
+    aria-hidden="true"
+><use href="/static/icons/sprite.svg?v=b10d8add581262b268b9873d0e7f7dbe#icon-layout-grid"></use></svg>
+
+
+
+</span>
+          <span class="browse-feature__body">
+            <span class="browse-feature__title">Subjects</span>
+            <span class="browse-feature__desc">Browse books by topic</span>
+          </span>
+        </a>
+        <a class="browse-feature" href="/trending" data-ol-link-track="MainNav|Trending|2">
+          <span class="browse-feature__icon"><svg
+    class="ol-icon ol-icon--md"
+    focusable="false"
+    aria-hidden="true"
+><use href="/static/icons/sprite.svg?v=b10d8add581262b268b9873d0e7f7dbe#icon-trending-up"></use></svg>
+
+
+
+</span>
+          <span class="browse-feature__body">
+            <span class="browse-feature__title">Trending</span>
+            <span class="browse-feature__desc">Most popular right now</span>
+          </span>
+        </a>
+        <a class="browse-feature" href="/explore" data-ol-link-track="MainNav|Explore|3">
+          <span class="browse-feature__icon"><svg
+    class="ol-icon ol-icon--md"
+    focusable="false"
+    aria-hidden="true"
+><use href="/static/icons/sprite.svg?v=b10d8add581262b268b9873d0e7f7dbe#icon-compass"></use></svg>
+
+
+
+</span>
+          <span class="browse-feature__body">
+            <span class="browse-feature__title">Library Explorer</span>
+            <span class="browse-feature__desc">Browse the virtual shelves</span>
+          </span>
+        </a>
+        <a class="browse-feature" href="/lists" data-ol-link-track="MainNav|Lists|4">
+          <span class="browse-feature__icon"><svg
+    class="ol-icon ol-icon--md"
+    focusable="false"
+    aria-hidden="true"
+><use href="/static/icons/sprite.svg?v=b10d8add581262b268b9873d0e7f7dbe#icon-list"></use></svg>
+
+
+
+</span>
+          <span class="browse-feature__body">
+            <span class="browse-feature__title">Lists</span>
+            <span class="browse-feature__desc">Reader-curated collections</span>
+          </span>
+        </a>
+      </div>
+      <hr class="browse-popover__divider">
+      <ul class="browse-popover__links">
+        <li><a class="browse-popover__link" href="/collections" data-ol-link-track="MainNav|Collections|5"><svg
+    class="ol-icon ol-icon--sm"
+    focusable="false"
+    aria-hidden="true"
+><use href="/static/icons/sprite.svg?v=b10d8add581262b268b9873d0e7f7dbe#icon-library-big"></use></svg>
+
+
+
+Collections</a></li>
+        <li><a class="browse-popover__link" href="/k-12" data-ol-link-track="MainNav|K12Library|6"><svg
+    class="ol-icon ol-icon--sm"
+    focusable="false"
+    aria-hidden="true"
+><use href="/static/icons/sprite.svg?v=b10d8add581262b268b9873d0e7f7dbe#icon-graduation-cap"></use></svg>
+
+
+
+K-12 Student Library</a></li>
+        <li><a class="browse-popover__link" href="/booktalks" data-ol-link-track="MainNav|BookTalks|7"><svg
+    class="ol-icon ol-icon--sm"
+    focusable="false"
+    aria-hidden="true"
+><use href="/static/icons/sprite.svg?v=b10d8add581262b268b9873d0e7f7dbe#icon-mic"></use></svg>
+
+
+
+Book Talks</a></li>
+        <li><a class="browse-popover__link" href="/random" data-ol-link-track="MainNav|RandomBook|8"><svg
+    class="ol-icon ol-icon--sm"
+    focusable="false"
+    aria-hidden="true"
+><use href="/static/icons/sprite.svg?v=b10d8add581262b268b9873d0e7f7dbe#icon-dices"></use></svg>
+
+
+
+Random Book</a></li>
+        <li><a class="browse-popover__link" href="/advancedsearch" data-ol-link-track="MainNav|AdvancedSearch|9"><svg
+    class="ol-icon ol-icon--sm"
+    focusable="false"
+    aria-hidden="true"
+><use href="/static/icons/sprite.svg?v=b10d8add581262b268b9873d0e7f7dbe#icon-search"></use></svg>
+
+
+
+Advanced Search</a></li>
+      </ul>
+    </div>
+  </ol-popover>
+</div>
+</li>
+  </ul>
+
+  <div class="search-component">
+    <div class="search-bar-component">
+      
+      
+      
+      
+      
+      
+      
+      
+      
+      
+      
+      
+      
+      
+      <button type="button" class="search-bar-trigger" aria-haspopup="dialog" aria-label="Search" data-i18n="
+
+
+
+
+{&quot;all&quot;: {&quot;label&quot;: &quot;All books&quot;}, &quot;readable&quot;: {&quot;label&quot;: &quot;Readable Only&quot;}, &quot;open&quot;: {&quot;label&quot;: &quot;Free to read now&quot;}, &quot;borrowable&quot;: {&quot;label&quot;: &quot;Borrow online&quot;}}
+" data-i18n-ui="
+
+
+
+
+
+
+
+{&quot;dialogAria&quot;: &quot;Search Open Library&quot;, &quot;inputPlaceholder&quot;: &quot;Search books and authors\u2026&quot;, &quot;inputAria&quot;: &quot;Search&quot;, &quot;closeAria&quot;: &quot;Close search&quot;, &quot;clearAria&quot;: &quot;Clear search&quot;, &quot;seeAll&quot;: &quot;See results&quot;, &quot;seeOne&quot;: &quot;See %s result&quot;, &quot;seeMany&quot;: &quot;See %s results&quot;, &quot;seeAllMany&quot;: &quot;See all %s results&quot;, &quot;clearAll&quot;: &quot;Clear all&quot;, &quot;filtersAria&quot;: &quot;Search filters&quot;, &quot;availabilityLabel&quot;: &quot;Availability&quot;, &quot;languageLabel&quot;: &quot;Language&quot;, &quot;languagePlaceholder&quot;: &quot;Search languages\u2026&quot;, &quot;languageHeading&quot;: &quot;Languages&quot;, &quot;languagesLoading&quot;: &quot;Loading\u2026&quot;, &quot;searching&quot;: &quot;Searching\u2026&quot;, &quot;noResults&quot;: &quot;No results found&quot;, &quot;resultsAnnounce&quot;: &quot;Showing %s of %s results&quot;, &quot;topResults&quot;: &quot;Top results&quot;, &quot;untitled&quot;: &quot;Untitled&quot;, &quot;authorLabel&quot;: &quot;Author&quot;, &quot;accessReadable&quot;: &quot;Readable&quot;, &quot;inLanguage&quot;: &quot;In %s&quot;, &quot;recentSearches&quot;: &quot;Recent searches&quot;, &quot;removeRecent&quot;: &quot;Remove \&quot;%s\&quot; from recent searches&quot;}
+" data-search-lang="en" data-print-disabled="false">
+        <span class="search-bar-trigger__label">Search</span>
+        
+        <svg
+    class="ol-icon ol-icon--md search-bar-trigger__icon"
+    focusable="false"
+    aria-hidden="true"
+><use href="/static/icons/sprite.svg?v=b10d8add581262b268b9873d0e7f7dbe#icon-search"></use></svg>
+
+
+
+
+      </button>
+    </div>
+    
+    
+    <a
+      id="barcode_scanner_link"
+      class="search-by-barcode"
+      aria-label="Search by barcode"
+      title="Search by barcode"
+      href="/barcodescanner?returnTo=/isbn/$$$"
+    >
+      
+      <svg
+    class="ol-icon ol-icon--lg"
+    focusable="false"
+    aria-hidden="true"
+><use href="/static/icons/sprite.svg?v=b10d8add581262b268b9873d0e7f7dbe#icon-scan-barcode"></use></svg>
+
+
+
+
+    </a>
+  </div>
+
+  <ul class="auth-component">
+    <li class="hide-me">
+      <a class="btn"
+         href="/account/login">Log In</a></li>
+    <li><a class="btn primary" href="/account/create">Sign Up</a></li>
+  </ul>
+  
+  <div class="hamburger-component" data-ol-link-track="HeaderBar|Hamburger">
+    <button class="hamburger-trigger" aria-label="Menu" aria-expanded="false">
+      
+      <svg
+    class="ol-icon ol-icon--lg hamburger__icon"
+    focusable="false"
+    aria-hidden="true"
+><use href="/static/icons/sprite.svg?v=b10d8add581262b268b9873d0e7f7dbe#icon-menu"></use></svg>
+
+
+
+
+    </button>
+  </div>
+
+</header>
+
+<ol-drawer id="hamburger-drawer" label="Menu">
+  <ul class="drawer-menu hamburger-drawer-menu">
+
+    
+    <li class="drawer-menu__subsection">My Open Library</li>
+    <li class="drawer-menu__login-links">
+      <a class="drawer-menu__login-secondary" href="/account/login">Log In</a>
+      <a class="drawer-menu__login-primary" href="/account/create">Sign Up</a>
+    </li>
+    
+    
+    
+    
+    
+    <li class="drawer-menu__subsection">Browse</li>
+    
+    
+    <li class="drawer-menu__item"><a href="/subjects" data-ol-link-track="Hamburger|Subjects">Subjects</a></li>
+    
+    <li class="drawer-menu__item"><a href="/trending" data-ol-link-track="Hamburger|Trending">Trending</a></li>
+    
+    <li class="drawer-menu__item"><a href="/explore" data-ol-link-track="Hamburger|Explore">Library Explorer</a></li>
+    
+    <li class="drawer-menu__item"><a href="/lists" data-ol-link-track="Hamburger|Lists">Lists</a></li>
+    
+    <li class="drawer-menu__item"><a href="/collections" data-ol-link-track="Hamburger|Collections">Collections</a></li>
+    
+    <li class="drawer-menu__item"><a href="/k-12" data-ol-link-track="Hamburger|K12Library">K-12 Student Library</a></li>
+    
+    <li class="drawer-menu__item"><a href="/booktalks" data-ol-link-track="Hamburger|BookTalks">Book Talks</a></li>
+    
+    <li class="drawer-menu__item"><a href="/random" data-ol-link-track="Hamburger|RandomBook">Random Book</a></li>
+    
+    <li class="drawer-menu__item"><a href="/advancedsearch" data-ol-link-track="Hamburger|AdvancedSearch">Advanced Search</a></li>
+    
+    
+    <li class="drawer-menu__subsection">Contribute</li>
+    <li class="drawer-menu__item"><a href="/books/add" data-ol-link-track="Hamburger|AddBook">Add a Book</a></li>
+    <li class="drawer-menu__item"><a href="/recentchanges" data-ol-link-track="Hamburger|RecentEdits">Recent Community Edits</a></li>
+
+    
+    <li class="drawer-menu__subsection">Resources</li>
+    <li class="drawer-menu__item"><a href="/help" data-ol-link-track="Hamburger|Help">Help &amp; Support</a></li>
+    <li class="drawer-menu__item"><a href="/developers" data-ol-link-track="Hamburger|DevelopersHelp">Developer Center</a></li>
+    <li class="drawer-menu__item"><a href="/librarians" data-ol-link-track="Hamburger|LibrariansHelp">Librarians Portal</a></li>
+  </ul>
+</ol-drawer>
+<header class="header-bar mobile">
+  <ul class="navigation-component mobile">
+    <li>
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="mybooks-component header-dropdown">
+  <a href="/account/books"
+    data-ol-link-track="MainNav|MyBooks"
+  >My Books</a>
+</div>
+</li>
+    
+    
+    <li>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="browse-component header-dropdown">
+  <ol-popover class="browse-popover" placement="bottom-center" aria-label="Browse" data-ol-open-track="MainNavMobile|BrowseOpen">
+    <button type="button" slot="trigger" class="browse-popover__trigger">
+      Browse
+      <svg
+    class="ol-icon ol-icon--sm down-arrow"
+    focusable="false"
+    aria-hidden="true"
+><use href="/static/icons/sprite.svg?v=b10d8add581262b268b9873d0e7f7dbe#icon-chevron-down"></use></svg>
+
+
+
+
+    </button>
+    <div class="browse-popover__panel">
+      <div class="browse-popover__featured">
+        <a class="browse-feature" href="/subjects" data-ol-link-track="MainNavMobile|Subjects|1">
+          <span class="browse-feature__icon"><svg
+    class="ol-icon ol-icon--md"
+    focusable="false"
+    aria-hidden="true"
+><use href="/static/icons/sprite.svg?v=b10d8add581262b268b9873d0e7f7dbe#icon-layout-grid"></use></svg>
+
+
+
+</span>
+          <span class="browse-feature__body">
+            <span class="browse-feature__title">Subjects</span>
+            <span class="browse-feature__desc">Browse books by topic</span>
+          </span>
+        </a>
+        <a class="browse-feature" href="/trending" data-ol-link-track="MainNavMobile|Trending|2">
+          <span class="browse-feature__icon"><svg
+    class="ol-icon ol-icon--md"
+    focusable="false"
+    aria-hidden="true"
+><use href="/static/icons/sprite.svg?v=b10d8add581262b268b9873d0e7f7dbe#icon-trending-up"></use></svg>
+
+
+
+</span>
+          <span class="browse-feature__body">
+            <span class="browse-feature__title">Trending</span>
+            <span class="browse-feature__desc">Most popular right now</span>
+          </span>
+        </a>
+        <a class="browse-feature" href="/explore" data-ol-link-track="MainNavMobile|Explore|3">
+          <span class="browse-feature__icon"><svg
+    class="ol-icon ol-icon--md"
+    focusable="false"
+    aria-hidden="true"
+><use href="/static/icons/sprite.svg?v=b10d8add581262b268b9873d0e7f7dbe#icon-compass"></use></svg>
+
+
+
+</span>
+          <span class="browse-feature__body">
+            <span class="browse-feature__title">Library Explorer</span>
+            <span class="browse-feature__desc">Browse the virtual shelves</span>
+          </span>
+        </a>
+        <a class="browse-feature" href="/lists" data-ol-link-track="MainNavMobile|Lists|4">
+          <span class="browse-feature__icon"><svg
+    class="ol-icon ol-icon--md"
+    focusable="false"
+    aria-hidden="true"
+><use href="/static/icons/sprite.svg?v=b10d8add581262b268b9873d0e7f7dbe#icon-list"></use></svg>
+
+
+
+</span>
+          <span class="browse-feature__body">
+            <span class="browse-feature__title">Lists</span>
+            <span class="browse-feature__desc">Reader-curated collections</span>
+          </span>
+        </a>
+      </div>
+      <hr class="browse-popover__divider">
+      <ul class="browse-popover__links">
+        <li><a class="browse-popover__link" href="/collections" data-ol-link-track="MainNavMobile|Collections|5"><svg
+    class="ol-icon ol-icon--sm"
+    focusable="false"
+    aria-hidden="true"
+><use href="/static/icons/sprite.svg?v=b10d8add581262b268b9873d0e7f7dbe#icon-library-big"></use></svg>
+
+
+
+Collections</a></li>
+        <li><a class="browse-popover__link" href="/k-12" data-ol-link-track="MainNavMobile|K12Library|6"><svg
+    class="ol-icon ol-icon--sm"
+    focusable="false"
+    aria-hidden="true"
+><use href="/static/icons/sprite.svg?v=b10d8add581262b268b9873d0e7f7dbe#icon-graduation-cap"></use></svg>
+
+
+
+K-12 Student Library</a></li>
+        <li><a class="browse-popover__link" href="/booktalks" data-ol-link-track="MainNavMobile|BookTalks|7"><svg
+    class="ol-icon ol-icon--sm"
+    focusable="false"
+    aria-hidden="true"
+><use href="/static/icons/sprite.svg?v=b10d8add581262b268b9873d0e7f7dbe#icon-mic"></use></svg>
+
+
+
+Book Talks</a></li>
+        <li><a class="browse-popover__link" href="/random" data-ol-link-track="MainNavMobile|RandomBook|8"><svg
+    class="ol-icon ol-icon--sm"
+    focusable="false"
+    aria-hidden="true"
+><use href="/static/icons/sprite.svg?v=b10d8add581262b268b9873d0e7f7dbe#icon-dices"></use></svg>
+
+
+
+Random Book</a></li>
+        <li><a class="browse-popover__link" href="/advancedsearch" data-ol-link-track="MainNavMobile|AdvancedSearch|9"><svg
+    class="ol-icon ol-icon--sm"
+    focusable="false"
+    aria-hidden="true"
+><use href="/static/icons/sprite.svg?v=b10d8add581262b268b9873d0e7f7dbe#icon-search"></use></svg>
+
+
+
+Advanced Search</a></li>
+      </ul>
+    </div>
+  </ol-popover>
+</div>
+</li>
+  </ul>
+</header>
+
+  
+  <main id="test-body-mobile">
+    
+    <div class="flash-messages">
+    </div>
+    
+    
+    
+    
+
+
+
+
+
+
+
+
+<div id="contentBody">
+
+  
+<ol-dialog id="bookPreview" label="Preview Book" width="large">
+  <div class="book-preview">
+    <iframe width="100%" style="border: 0;" title="Book Preview"></iframe>
+    <!-- <p class="learn-more">
+      <a data-key="book_preview_learn_more"
+         data-ol-link-track="book_preview_learn_more">See more about this book on Archive.org</a>
+    </p> -->
+  </div>
+</ol-dialog>
+
+
+  <div class="carousel-section">
+  <div class="carousel-section-header">
+    <h2 class="home-h2">Welcome to Open Library</h2>
+  </div>
+
+  <div class="carousel-container">
+    <div
+      class="carousel carousel--progressively-enhanced"
+      data-config="{&quot;carouselKey&quot;: &quot;welcome&quot;, &quot;booksPerBreakpoint&quot;: [3, 2, 2, 1, 1]}"
+    >
+      
+
+
+
+
+
+
+
+
+
+<div class="carousel__item tutorial__item">
+  <a
+    href="/help/faq/borrow"
+    tabindex="0"
+    data-ol-link-track="OnboardingCarouselClick|Read"
+  >
+    <img src="/static/images/onboarding/read.png"
+      alt=""
+      
+      
+    >
+    <div class="card__text">
+      <p>Read Free Library Books Online</p>
+      <p class="small">Millions of books available through Controlled Digital Lending</p>
+    </div>
+  </a>
+</div>
+
+
+      
+
+
+
+
+
+
+
+
+
+<div class="carousel__item tutorial__item">
+  <a
+    href="/help/faq/yearly-reading-goals"
+    tabindex="0"
+    data-ol-link-track="OnboardingCarouselClick|YearlyReadingGoals"
+  >
+    <img src="/static/images/onboarding/reading_goal.svg"
+      alt=""
+      
+      
+      data-attribution="Calendar by Oksana Latysheva from the Noun Project"
+    >
+    <div class="card__text">
+      <p>Set a Yearly Reading Goal</p>
+      <p class="small">Learn how to set a yearly reading goal and track what you read</p>
+    </div>
+  </a>
+</div>
+
+
+      
+
+
+
+
+
+
+
+
+
+<div class="carousel__item tutorial__item">
+  <a
+    href="/help/faq/reading-log"
+    tabindex="0"
+    data-ol-link-track="OnboardingCarouselClick|Organize"
+  >
+    <img src="/static/images/onboarding/track.png"
+      alt=""
+      
+      
+    >
+    <div class="card__text">
+      <p>Keep Track of your Favorite Books</p>
+      <p class="small">Organize your Books using Lists &amp; the Reading Log</p>
+    </div>
+  </a>
+</div>
+
+
+      
+
+
+
+
+
+
+
+
+
+<div class="carousel__item tutorial__item">
+  <a
+    href="/explore"
+    tabindex="0"
+    data-ol-link-track="OnboardingCarouselClick|Explore"
+  >
+    <img src="/static/images/onboarding/library_explorer.png"
+      alt=""
+      
+      
+    >
+    <div class="card__text">
+      <p>Try the virtual Library Explorer</p>
+      <p class="small">Digital shelves organized like a physical library</p>
+    </div>
+  </a>
+</div>
+
+
+      
+
+
+
+
+
+
+
+
+
+<div class="carousel__item tutorial__item">
+  <a
+    href="/search/inside"
+    tabindex="0"
+    data-ol-link-track="OnboardingCarouselClick|FulltextSearch"
+  >
+    <img src="/static/images/onboarding/fulltext.png"
+      alt=""
+      
+      
+    >
+    <div class="card__text">
+      <p>Try Fulltext Search</p>
+      <p class="small">Find matching results within the text of millions of books</p>
+    </div>
+  </a>
+</div>
+
+
+      
+
+
+
+
+
+
+
+
+
+<div class="carousel__item tutorial__item">
+  <a
+    href="/librarians"
+    tabindex="0"
+    data-ol-link-track="OnboardingCarouselClick|Librarians"
+  >
+    <img src="/static/images/onboarding/librarian.png"
+      alt=""
+      
+      
+    >
+    <div class="card__text">
+      <p>Be an Open Librarian</p>
+      <p class="small">Dozens of ways you can help improve the library</p>
+    </div>
+  </a>
+</div>
+
+
+      
+
+
+
+
+
+
+
+
+
+<div class="carousel__item tutorial__item">
+  <a
+    href="/volunteer"
+    tabindex="0"
+    data-ol-link-track="OnboardingCarouselClick|Volunteer"
+  >
+    <img src="/static/images/onboarding/volunteer.png"
+      alt=""
+      
+      
+      data-attribution="Volunteer by Candy Design from the Noun Project"
+    >
+    <div class="card__text">
+      <p>Volunteer at Open Library</p>
+      <p class="small">Discover opportunities to improve the library</p>
+    </div>
+  </a>
+</div>
+
+
+      
+
+
+
+
+
+
+
+
+
+<div class="carousel__item tutorial__item">
+  <a
+    href="https://forms.gle/enM9rGoPBGB89kd4A"
+    tabindex="0"
+    data-ol-link-track="OnboardingCarouselClick|Feedback"
+  >
+    <img src="/static/images/onboarding/feedback.png"
+      alt=""
+      
+      
+      data-attribution="Reading by Chattapat from the Noun Project"
+    >
+    <div class="card__text">
+      <p>Send us feedback</p>
+      <p class="small">Your feedback will help us improve these cards</p>
+    </div>
+  </a>
+</div>
+
+
+    </div>
+  </div>
+</div>
+
+
+  
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="lazy-carousel" data-config="{&quot;query&quot;: &quot;trending_score_hourly_sum:[1 TO *] readinglog_count:[4 TO *] language:eng -subject:\&quot;content_warning:cover\&quot;&quot;, &quot;sort&quot;: &quot;trending&quot;, &quot;key&quot;: &quot;trending&quot;, &quot;limit&quot;: 20, &quot;search&quot;: false, &quot;has_fulltext_only&quot;: false, &quot;layout&quot;: &quot;carousel&quot;, &quot;fallback&quot;: false, &quot;title&quot;: &quot;Trending Books&quot;}">
+    
+
+<div class=" loadingIndicator ">
+  <figure>
+  <img src="/static/images/ajax-loader-bar.gif" alt="Loading indicator" loading="lazy">
+  <figcaption style="
+      justify-content: center;
+      display: flex;
+  ">Loading carousel</figcaption>
+  </figure>
+</div>
+
+    <div class="lazy-carousel-retry hidden">
+        Failed to fetch carousel. <a href="#" class="retry-btn">Retry?</a>
+    </div>
+</div>
+
+
+  
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="lazy-carousel" data-config="{&quot;query&quot;: &quot;ddc:8* first_publish_year:[* TO 1950] publish_year:[2000 TO *] NOT public_scan_b:false language:eng -subject:\&quot;content_warning:cover\&quot;&quot;, &quot;sort&quot;: &quot;trending&quot;, &quot;key&quot;: &quot;public_domain&quot;, &quot;limit&quot;: 20, &quot;search&quot;: false, &quot;has_fulltext_only&quot;: true, &quot;layout&quot;: &quot;carousel&quot;, &quot;fallback&quot;: false, &quot;title&quot;: &quot;Classic Books&quot;}">
+    
+
+<div class=" loadingIndicator ">
+  <figure>
+  <img src="/static/images/ajax-loader-bar.gif" alt="Loading indicator" loading="lazy">
+  <figcaption style="
+      justify-content: center;
+      display: flex;
+  ">Loading carousel</figcaption>
+  </figure>
+</div>
+
+    <div class="lazy-carousel-retry hidden">
+        Failed to fetch carousel. <a href="#" class="retry-btn">Retry?</a>
+    </div>
+</div>
+
+
+  
+  
+<div class="carousel-section">
+  <div class="carousel-section-header">
+    <h2 class="home-h2">
+      <a data-ol-link-track="BookCarousel|HeaderClick|staff_picks" href="https://archive.org/search.php?query=openlibrary_work%3A%28%2A%29+AND+%28collection%3A%28inlibrary%29+OR+%28%21collection%3A%28printdisabled%29%29%29+AND+%28lending___available_to_browse%3Atrue+OR+lending___available_to_borrow%3Atrue%29+AND++language%3Aeng+AND+openlibrary_subject%3Aopenlibrary_staff_picks+AND+%21collection%3A%28no-preview%29&amp;sort=-lending___last_browse">Books We Love</a>
+    </h2>
+  </div>
+  <div class="carousel-container carousel-container-decorated">
+    <div class="carousel   carousel--progressively-enhanced"
+      data-config="{&quot;booksPerBreakpoint&quot;: [6, 5, 4, 3, 2, 1], &quot;analyticsCategory&quot;: &quot;BookCarousel&quot;, &quot;carouselKey&quot;: &quot;staff_picks&quot;, &quot;i18n&quot;: {&quot;loading&quot;: &quot;Loading...&quot;}, &quot;loadMore&quot;: {&quot;queryType&quot;: &quot;BROWSE&quot;, &quot;q&quot;: &quot; language:eng&quot;, &quot;pageMode&quot;: &quot;page&quot;, &quot;limit&quot;: 18, &quot;layout&quot;: &quot;carousel&quot;, &quot;key&quot;: &quot;staff_picks&quot;, &quot;subject&quot;: &quot;openlibrary_staff_picks&quot;, &quot;secondaryAction&quot;: false, &quot;sorts&quot;: &quot;lending___last_browse desc&quot;, &quot;hasFulltextOnly&quot;: true}}">
+      
+
+<div class="book carousel__item">
+  <div class="book-cover">
+    <div class="book-cover-wrapper">
+      <a href="/books/OL468584M" data-ol-link-track="BookCarousel|CoverClick|staff_picks">
+        <img class="bookcover" loading="lazy"
+          title="Wuthering Heights by Emily Brontë"
+          alt="Wuthering Heights by Emily Brontë"
+        src="//covers.openlibrary.org/b/id/15242817-M.jpg"/>
+      </a>
+    </div>
+  </div>
+
+  <div class="ol-action-row">
+    <div class="ol-macro-wrapper">
+      
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="cta-button-group">
+  <a href="/borrow/ia/wutheringheights0000bron_r3t2?ref=ol" title="Borrow ebook from Internet Archive" class="cta-btn cta-btn--ia cta-btn--available cta-btn--borrow js-login-intent"
+      data-ol-link-track="BookCarousel|BorrowClick|staff_picks"
+
+      data-action="Borrow" data-title="Wuthering Heights" data-type="book" data-resumeurl="/books/OL468584M"
+      >Borrow</a>
+</div>
+
+
+
+
+
+    </div>
+
+  </div>
+</div>
+
+      
+
+<div class="book carousel__item">
+  <div class="book-cover">
+    <div class="book-cover-wrapper">
+      <a href="/books/OL6226003M" data-ol-link-track="BookCarousel|CoverClick|staff_picks">
+        <img class="bookcover" loading="lazy"
+          title="Magister Ludi. by Hermann Hesse"
+          alt="Magister Ludi. by Hermann Hesse"
+        src="//covers.openlibrary.org/b/id/7143886-M.jpg"/>
+      </a>
+    </div>
+  </div>
+
+  <div class="ol-action-row">
+    <div class="ol-macro-wrapper">
+      
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="cta-button-group">
+  <a href="/borrow/ia/magisterludi00hess?ref=ol" title="Borrow ebook from Internet Archive" class="cta-btn cta-btn--ia cta-btn--available cta-btn--borrow js-login-intent"
+      data-ol-link-track="BookCarousel|BorrowClick|staff_picks"
+
+      data-action="Borrow" data-title="Magister Ludi." data-type="book" data-resumeurl="/books/OL6226003M"
+      >Borrow</a>
+</div>
+
+
+
+
+
+    </div>
+
+  </div>
+</div>
+
+      
+
+<div class="book carousel__item">
+  <div class="book-cover">
+    <div class="book-cover-wrapper">
+      <a href="/books/OL35710955M" data-ol-link-track="BookCarousel|CoverClick|staff_picks">
+        <img class="bookcover" loading="lazy"
+          title="Runaway Ralph by Beverly Cleary"
+          alt="Runaway Ralph by Beverly Cleary"
+        src="//covers.openlibrary.org/b/id/15033545-M.jpg"/>
+      </a>
+    </div>
+  </div>
+
+  <div class="ol-action-row">
+    <div class="ol-macro-wrapper">
+      
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="cta-button-group">
+  <a href="/borrow/ia/runawayralph0000unse_s4v7?ref=ol" title="Borrow ebook from Internet Archive" class="cta-btn cta-btn--ia cta-btn--available cta-btn--borrow js-login-intent"
+      data-ol-link-track="BookCarousel|BorrowClick|staff_picks"
+
+      data-action="Borrow" data-title="Runaway Ralph" data-type="book" data-resumeurl="/books/OL35710955M"
+      >Borrow</a>
+</div>
+
+
+
+
+
+    </div>
+
+  </div>
+</div>
+
+      
+
+<div class="book carousel__item">
+  <div class="book-cover">
+    <div class="book-cover-wrapper">
+      <a href="/books/OL7480344M" data-ol-link-track="BookCarousel|CoverClick|staff_picks">
+        <img class="bookcover" loading="lazy"
+          title="The Glass Menagerie by Tennessee Williams"
+          alt="The Glass Menagerie by Tennessee Williams"
+        src="//covers.openlibrary.org/b/id/11943367-M.jpg"/>
+      </a>
+    </div>
+  </div>
+
+  <div class="ol-action-row">
+    <div class="ol-macro-wrapper">
+      
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="cta-button-group">
+  <a href="/borrow/ia/glassmenagerie0000will_r5t1?ref=ol" title="Borrow ebook from Internet Archive" class="cta-btn cta-btn--ia cta-btn--available cta-btn--borrow js-login-intent"
+      data-ol-link-track="BookCarousel|BorrowClick|staff_picks"
+
+      data-action="Borrow" data-title="The Glass Menagerie" data-type="book" data-resumeurl="/books/OL7480344M"
+      >Borrow</a>
+</div>
+
+
+
+
+
+    </div>
+
+  </div>
+</div>
+
+      
+
+<div class="book carousel__item">
+  <div class="book-cover">
+    <div class="book-cover-wrapper">
+      <a href="/books/OL8235935M" data-ol-link-track="BookCarousel|CoverClick|staff_picks">
+        <img class="bookcover" loading="lazy"
+          title="The Time Machine by H. G. Wells"
+          alt="The Time Machine by H. G. Wells"
+        src="//covers.openlibrary.org/b/id/15116560-M.jpg"/>
+      </a>
+    </div>
+  </div>
+
+  <div class="ol-action-row">
+    <div class="ol-macro-wrapper">
+      
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="cta-button-group">
+  <a href="/borrow/ia/timemachinewater00hgwe?ref=ol" title="Borrow ebook from Internet Archive" class="cta-btn cta-btn--ia cta-btn--available cta-btn--borrow js-login-intent"
+      data-ol-link-track="BookCarousel|BorrowClick|staff_picks"
+
+      data-action="Borrow" data-title="The Time Machine" data-type="book" data-resumeurl="/books/OL8235935M"
+      >Borrow</a>
+</div>
+
+
+
+
+
+    </div>
+
+  </div>
+</div>
+
+      
+
+<div class="book carousel__item">
+  <div class="book-cover">
+    <div class="book-cover-wrapper">
+      <a href="/books/OL5817521M" data-ol-link-track="BookCarousel|CoverClick|staff_picks">
+        <img class="bookcover" loading="lazy"
+          title="The Worldly Philosophers by Robert L. Heilbroner"
+          alt="The Worldly Philosophers by Robert L. Heilbroner"
+        src="//covers.openlibrary.org/b/id/6993503-M.jpg"/>
+      </a>
+    </div>
+  </div>
+
+  <div class="ol-action-row">
+    <div class="ol-macro-wrapper">
+      
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="cta-button-group">
+  <a href="/borrow/ia/worldlyphilosoph1961heil?ref=ol" title="Borrow ebook from Internet Archive" class="cta-btn cta-btn--ia cta-btn--available cta-btn--borrow js-login-intent"
+      data-ol-link-track="BookCarousel|BorrowClick|staff_picks"
+
+      data-action="Borrow" data-title="The Worldly Philosophers" data-type="book" data-resumeurl="/books/OL5817521M"
+      >Borrow</a>
+</div>
+
+
+
+
+
+    </div>
+
+  </div>
+</div>
+
+      
+
+<div class="book carousel__item">
+  <div class="book-cover">
+    <div class="book-cover-wrapper">
+      <a href="/books/OL347357M" data-ol-link-track="BookCarousel|CoverClick|staff_picks">
+        <img class="bookcover" loading="lazy"
+          title="Moby-Dick, or, The whale by Herman Melville"
+          alt="Moby-Dick, or, The whale by Herman Melville"
+        data-lazy="//covers.openlibrary.org/b/id/14860393-M.jpg"
+        src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="/>
+      </a>
+    </div>
+  </div>
+
+  <div class="ol-action-row">
+    <div class="ol-macro-wrapper">
+      
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="cta-button-group">
+  <a href="/borrow/ia/mobydickorwhal00melv?ref=ol" title="Borrow ebook from Internet Archive" class="cta-btn cta-btn--ia cta-btn--available cta-btn--borrow js-login-intent"
+      data-ol-link-track="BookCarousel|BorrowClick|staff_picks"
+
+      data-action="Borrow" data-title="Moby-Dick, or, The whale" data-type="book" data-resumeurl="/books/OL347357M"
+      >Borrow</a>
+</div>
+
+
+
+
+
+    </div>
+
+  </div>
+</div>
+
+      
+
+<div class="book carousel__item">
+  <div class="book-cover">
+    <div class="book-cover-wrapper">
+      <a href="/books/OL30777105M" data-ol-link-track="BookCarousel|CoverClick|staff_picks">
+        <img class="bookcover" loading="lazy"
+          title="Stellaluna by Janell Cannon"
+          alt="Stellaluna by Janell Cannon"
+        data-lazy="//covers.openlibrary.org/b/id/15125500-M.jpg"
+        src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="/>
+      </a>
+    </div>
+  </div>
+
+  <div class="ol-action-row">
+    <div class="ol-macro-wrapper">
+      
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="cta-button-group">
+  <a href="/borrow/ia/stellaluna00jane_0?ref=ol" title="Borrow ebook from Internet Archive" class="cta-btn cta-btn--ia cta-btn--available cta-btn--borrow js-login-intent"
+      data-ol-link-track="BookCarousel|BorrowClick|staff_picks"
+
+      data-action="Borrow" data-title="Stellaluna" data-type="book" data-resumeurl="/books/OL30777105M"
+      >Borrow</a>
+</div>
+
+
+
+
+
+    </div>
+
+  </div>
+</div>
+
+      
+
+<div class="book carousel__item">
+  <div class="book-cover">
+    <div class="book-cover-wrapper">
+      <a href="/books/OL37265290M" data-ol-link-track="BookCarousel|CoverClick|staff_picks">
+        <img class="bookcover" loading="lazy"
+          title="Pride and Prejudice by Jane Austen"
+          alt="Pride and Prejudice by Jane Austen"
+        data-lazy="//covers.openlibrary.org/b/id/12648766-M.jpg"
+        src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="/>
+      </a>
+    </div>
+  </div>
+
+  <div class="ol-action-row">
+    <div class="ol-macro-wrapper">
+      
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="cta-button-group">
+  <a href="/borrow/ia/prideprejudice0000unse_c4m0?ref=ol" title="Borrow ebook from Internet Archive" class="cta-btn cta-btn--ia cta-btn--available cta-btn--borrow js-login-intent"
+      data-ol-link-track="BookCarousel|BorrowClick|staff_picks"
+
+      data-action="Borrow" data-title="Pride and Prejudice" data-type="book" data-resumeurl="/books/OL37265290M"
+      >Borrow</a>
+</div>
+
+
+
+
+
+    </div>
+
+  </div>
+</div>
+
+      
+
+<div class="book carousel__item">
+  <div class="book-cover">
+    <div class="book-cover-wrapper">
+      <a href="/books/OL28417093M" data-ol-link-track="BookCarousel|CoverClick|staff_picks">
+        <img class="bookcover" loading="lazy"
+          title="Huckleberry Finn and The Adventures of Tom Sawyer by Mark Twain"
+          alt="Huckleberry Finn and The Adventures of Tom Sawyer by Mark Twain"
+        data-lazy="//covers.openlibrary.org/b/id/10519972-M.jpg"
+        src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="/>
+      </a>
+    </div>
+  </div>
+
+  <div class="ol-action-row">
+    <div class="ol-macro-wrapper">
+      
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="cta-button-group">
+  <a href="/borrow/ia/huckleberryfinna0000twai?ref=ol" title="Borrow ebook from Internet Archive" class="cta-btn cta-btn--ia cta-btn--available cta-btn--borrow js-login-intent"
+      data-ol-link-track="BookCarousel|BorrowClick|staff_picks"
+
+      data-action="Borrow" data-title="Huckleberry Finn and The Adventures of Tom Sawyer" data-type="book" data-resumeurl="/books/OL28417093M"
+      >Borrow</a>
+</div>
+
+
+
+
+
+    </div>
+
+  </div>
+</div>
+
+      
+
+<div class="book carousel__item">
+  <div class="book-cover">
+    <div class="book-cover-wrapper">
+      <a href="/books/OL1736997M" data-ol-link-track="BookCarousel|CoverClick|staff_picks">
+        <img class="bookcover" loading="lazy"
+          title="The yellow wallpaper by Charlotte Perkins Gilman, Aric Cushing, Logan Thomas, SparkNotes, Bryan Hunt, A. J. Alexander, Steven Stern, Aileen Oracion, Twisted Classics, Anne Geer, Sara Barkat, Period Time Publishing, Félix Gerónimo, Agustín López Tobajas, Nicolae Sfetcu, Erminia Passannanti"
+          alt="The yellow wallpaper by Charlotte Perkins Gilman, Aric Cushing, Logan Thomas, SparkNotes, Bryan Hunt, A. J. Alexander, Steven Stern, Aileen Oracion, Twisted Classics, Anne Geer, Sara Barkat, Period Time Publishing, Félix Gerónimo, Agustín López Tobajas, Nicolae Sfetcu, Erminia Passannanti"
+        data-lazy="//covers.openlibrary.org/b/id/608778-M.jpg"
+        src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="/>
+      </a>
+    </div>
+  </div>
+
+  <div class="ol-action-row">
+    <div class="ol-macro-wrapper">
+      
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="cta-button-group">
+  <a href="/borrow/ia/yellowwallpaper0000gilm?ref=ol" title="Borrow ebook from Internet Archive" class="cta-btn cta-btn--ia cta-btn--available cta-btn--borrow js-login-intent"
+      data-ol-link-track="BookCarousel|BorrowClick|staff_picks"
+
+      data-action="Borrow" data-title="The yellow wallpaper" data-type="book" data-resumeurl="/books/OL1736997M"
+      >Borrow</a>
+</div>
+
+
+
+
+
+    </div>
+
+  </div>
+</div>
+
+    </div>
+  </div>
+</div>
+
+  
+  
+<div class="carousel-section">
+  <div class="carousel-section-header">
+    <h2 class="home-h2">
+      <a data-ol-link-track="BookCarousel|HeaderClick|recently_returned" href="https://archive.org/search.php?query=openlibrary_work%3A%28%2A%29+AND+collection%3A%28inlibrary%29+AND+%28lending___available_to_browse%3Atrue+OR+lending___available_to_borrow%3Atrue%29+AND++language%3Aeng+AND+%21collection%3A%28no-preview%29&amp;sort=-lending___last_browse">Recently Returned</a>
+    </h2>
+  </div>
+  <div class="carousel-container carousel-container-decorated">
+    <div class="carousel   carousel--progressively-enhanced"
+      data-config="{&quot;booksPerBreakpoint&quot;: [6, 5, 4, 3, 2, 1], &quot;analyticsCategory&quot;: &quot;BookCarousel&quot;, &quot;carouselKey&quot;: &quot;recently_returned&quot;, &quot;i18n&quot;: {&quot;loading&quot;: &quot;Loading...&quot;}, &quot;loadMore&quot;: {&quot;queryType&quot;: &quot;BROWSE&quot;, &quot;q&quot;: &quot; language:eng&quot;, &quot;pageMode&quot;: &quot;page&quot;, &quot;limit&quot;: 18, &quot;layout&quot;: &quot;carousel&quot;, &quot;key&quot;: &quot;recently_returned&quot;, &quot;subject&quot;: &quot;&quot;, &quot;secondaryAction&quot;: false, &quot;sorts&quot;: &quot;lending___last_browse desc&quot;, &quot;hasFulltextOnly&quot;: true}}">
+      
+
+<div class="book carousel__item">
+  <div class="book-cover">
+    <div class="book-cover-wrapper">
+      <a href="/books/OL1092321M" data-ol-link-track="BookCarousel|CoverClick|recently_returned">
+        <img class="bookcover" loading="lazy"
+          title="Wonders of the ancient world by National Geographic Society (U.S.). Cartographic Division., National Geographic Society (U.S.). Book Division"
+          alt="Wonders of the ancient world by National Geographic Society (U.S.). Cartographic Division., National Geographic Society (U.S.). Book Division"
+        src="//covers.openlibrary.org/b/id/4791308-M.jpg"/>
+      </a>
+    </div>
+  </div>
+
+  <div class="ol-action-row">
+    <div class="ol-macro-wrapper">
+      
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="cta-button-group">
+  <a href="/borrow/ia/wondersofancient0000unse?ref=ol" title="Borrow ebook from Internet Archive" class="cta-btn cta-btn--ia cta-btn--available cta-btn--borrow js-login-intent"
+      data-ol-link-track="BookCarousel|BorrowClick|recently_returned"
+
+      data-action="Borrow" data-title="Wonders of the ancient world" data-type="book" data-resumeurl="/books/OL1092321M"
+      >Borrow</a>
+</div>
+
+
+
+
+
+    </div>
+
+  </div>
+</div>
+
+      
+
+<div class="book carousel__item">
+  <div class="book-cover">
+    <div class="book-cover-wrapper">
+      <a href="/books/OL2068784M" data-ol-link-track="BookCarousel|CoverClick|recently_returned">
+        <img class="bookcover" loading="lazy"
+          title="Memoirs of a beatnik by Diane di Prima"
+          alt="Memoirs of a beatnik by Diane di Prima"
+        src="//covers.openlibrary.org/b/id/7144003-M.jpg"/>
+      </a>
+    </div>
+  </div>
+
+  <div class="ol-action-row">
+    <div class="ol-macro-wrapper">
+      
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="cta-button-group">
+  <a href="/borrow/ia/memoirsofbeatnik00dipr?ref=ol" title="Borrow ebook from Internet Archive" class="cta-btn cta-btn--ia cta-btn--available cta-btn--borrow js-login-intent"
+      data-ol-link-track="BookCarousel|BorrowClick|recently_returned"
+
+      data-action="Borrow" data-title="Memoirs of a beatnik" data-type="book" data-resumeurl="/books/OL2068784M"
+      >Borrow</a>
+</div>
+
+
+
+
+
+    </div>
+
+  </div>
+</div>
+
+      
+
+<div class="book carousel__item">
+  <div class="book-cover">
+    <div class="book-cover-wrapper">
+      <a href="/books/OL2045433M" data-ol-link-track="BookCarousel|CoverClick|recently_returned">
+        <img class="bookcover" loading="lazy"
+          title="How pizza came to Queens by Dayal Kaur Khalsa"
+          alt="How pizza came to Queens by Dayal Kaur Khalsa"
+        src="//covers.openlibrary.org/b/id/7106349-M.jpg"/>
+      </a>
+    </div>
+  </div>
+
+  <div class="ol-action-row">
+    <div class="ol-macro-wrapper">
+      
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="cta-button-group">
+  <a href="/borrow/ia/howpizzacametoqu00khal?ref=ol" title="Borrow ebook from Internet Archive" class="cta-btn cta-btn--ia cta-btn--available cta-btn--borrow js-login-intent"
+      data-ol-link-track="BookCarousel|BorrowClick|recently_returned"
+
+      data-action="Borrow" data-title="How pizza came to Queens" data-type="book" data-resumeurl="/books/OL2045433M"
+      >Borrow</a>
+</div>
+
+
+
+
+
+    </div>
+
+  </div>
+</div>
+
+      
+
+
+
+<div class="book carousel__item">
+  <div class="book-cover">
+    <div class="book-cover-wrapper">
+      <a href="/books/OL11501184M" data-ol-link-track="BookCarousel|CoverClick|recently_returned">
+        <img class="bookcover" loading="lazy"
+          title="The Taos Society of Artists"
+          alt="The Taos Society of Artists"
+        src="//covers.openlibrary.org/b/id/11579564-M.jpg"/>
+      </a>
+    </div>
+  </div>
+
+  <div class="ol-action-row">
+    <div class="ol-macro-wrapper">
+      
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="cta-button-group">
+  <a href="/borrow/ia/taossocietyofart0000scot?ref=ol" title="Borrow ebook from Internet Archive" class="cta-btn cta-btn--ia cta-btn--available cta-btn--borrow js-login-intent"
+      data-ol-link-track="BookCarousel|BorrowClick|recently_returned"
+
+      data-action="Borrow" data-title="The Taos Society of Artists" data-type="book" data-resumeurl="/books/OL11501184M"
+      >Borrow</a>
+</div>
+
+
+
+
+
+    </div>
+
+  </div>
+</div>
+
+      
+
+<div class="book carousel__item">
+  <div class="book-cover">
+    <div class="book-cover-wrapper">
+      <a href="/books/OL26832077M" data-ol-link-track="BookCarousel|CoverClick|recently_returned">
+        <img class="bookcover" loading="lazy"
+          title="The Lost Hero by Rick Riordan"
+          alt="The Lost Hero by Rick Riordan"
+        src="//covers.openlibrary.org/b/id/15250715-M.jpg"/>
+      </a>
+    </div>
+  </div>
+
+  <div class="ol-action-row">
+    <div class="ol-macro-wrapper">
+      
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="cta-button-group">
+  <a href="/borrow/ia/losthero0000rior_c6y2?ref=ol" title="Borrow ebook from Internet Archive" class="cta-btn cta-btn--ia cta-btn--available cta-btn--borrow js-login-intent"
+      data-ol-link-track="BookCarousel|BorrowClick|recently_returned"
+
+      data-action="Borrow" data-title="The Lost Hero" data-type="book" data-resumeurl="/books/OL26832077M"
+      >Borrow</a>
+</div>
+
+
+
+
+
+    </div>
+
+  </div>
+</div>
+
+      
+
+<div class="book carousel__item">
+  <div class="book-cover">
+    <div class="book-cover-wrapper">
+      <a href="/books/OL1115674M" data-ol-link-track="BookCarousel|CoverClick|recently_returned">
+        <img class="bookcover" loading="lazy"
+          title="The Justices of the United States Supreme Court, 1789-1995 by Leon Friedman, Fred L. Israel"
+          alt="The Justices of the United States Supreme Court, 1789-1995 by Leon Friedman, Fred L. Israel"
+        src="//covers.openlibrary.org/b/id/4739781-M.jpg"/>
+      </a>
+    </div>
+  </div>
+
+  <div class="ol-action-row">
+    <div class="ol-macro-wrapper">
+      
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="cta-button-group">
+  <a href="/borrow/ia/justicesofunited0000unse?ref=ol" title="Borrow ebook from Internet Archive" class="cta-btn cta-btn--ia cta-btn--available cta-btn--borrow js-login-intent"
+      data-ol-link-track="BookCarousel|BorrowClick|recently_returned"
+
+      data-action="Borrow" data-title="The Justices of the United States Supreme Court, 1789-1995" data-type="book" data-resumeurl="/books/OL1115674M"
+      >Borrow</a>
+</div>
+
+
+
+
+
+    </div>
+
+  </div>
+</div>
+
+      
+
+<div class="book carousel__item">
+  <div class="book-cover">
+    <div class="book-cover-wrapper">
+      <a href="/books/OL24238788M" data-ol-link-track="BookCarousel|CoverClick|recently_returned">
+        <img class="bookcover" loading="lazy"
+          title="Desire by Charlotte Lamb"
+          alt="Desire by Charlotte Lamb"
+        data-lazy="//covers.openlibrary.org/b/id/6486317-M.jpg"
+        src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="/>
+      </a>
+    </div>
+  </div>
+
+  <div class="ol-action-row">
+    <div class="ol-macro-wrapper">
+      
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="cta-button-group">
+  <a href="/borrow/ia/desire00lamb?ref=ol" title="Borrow ebook from Internet Archive" class="cta-btn cta-btn--ia cta-btn--available cta-btn--borrow js-login-intent"
+      data-ol-link-track="BookCarousel|BorrowClick|recently_returned"
+
+      data-action="Borrow" data-title="Desire" data-type="book" data-resumeurl="/books/OL24238788M"
+      >Borrow</a>
+</div>
+
+
+
+
+
+    </div>
+
+  </div>
+</div>
+
+      
+
+<div class="book carousel__item">
+  <div class="book-cover">
+    <div class="book-cover-wrapper">
+      <a href="/books/OL1708625M" data-ol-link-track="BookCarousel|CoverClick|recently_returned">
+        <img class="bookcover" loading="lazy"
+          title="Taos moderns by David L. Witt"
+          alt="Taos moderns by David L. Witt"
+        data-lazy="//covers.openlibrary.org/b/id/8178954-M.jpg"
+        src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="/>
+      </a>
+    </div>
+  </div>
+
+  <div class="ol-action-row">
+    <div class="ol-macro-wrapper">
+      
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="cta-button-group">
+  <a href="/borrow/ia/taosmodernsartof00davi?ref=ol" title="Borrow ebook from Internet Archive" class="cta-btn cta-btn--ia cta-btn--available cta-btn--borrow js-login-intent"
+      data-ol-link-track="BookCarousel|BorrowClick|recently_returned"
+
+      data-action="Borrow" data-title="Taos moderns" data-type="book" data-resumeurl="/books/OL1708625M"
+      >Borrow</a>
+</div>
+
+
+
+
+
+    </div>
+
+  </div>
+</div>
+
+      
+
+<div class="book carousel__item">
+  <div class="book-cover">
+    <div class="book-cover-wrapper">
+      <a href="/books/OL28784546M" data-ol-link-track="BookCarousel|CoverClick|recently_returned">
+        <img class="bookcover" loading="lazy"
+          title="Defining Moments by Mike Leonetti"
+          alt="Defining Moments by Mike Leonetti"
+        data-lazy="//covers.openlibrary.org/b/id/10641842-M.jpg"
+        src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="/>
+      </a>
+    </div>
+  </div>
+
+  <div class="ol-action-row">
+    <div class="ol-macro-wrapper">
+      
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="cta-button-group">
+  <a href="/borrow/ia/definingmoments0000leon?ref=ol" title="Borrow ebook from Internet Archive" class="cta-btn cta-btn--ia cta-btn--available cta-btn--borrow js-login-intent"
+      data-ol-link-track="BookCarousel|BorrowClick|recently_returned"
+
+      data-action="Borrow" data-title="Defining Moments" data-type="book" data-resumeurl="/books/OL28784546M"
+      >Borrow</a>
+</div>
+
+
+
+
+
+    </div>
+
+  </div>
+</div>
+
+      
+
+<div class="book carousel__item">
+  <div class="book-cover">
+    <div class="book-cover-wrapper">
+      <a href="/books/OL24980008M" data-ol-link-track="BookCarousel|CoverClick|recently_returned">
+        <img class="bookcover" loading="lazy"
+          title="Ready-to-use headlines by Theodore Menten"
+          alt="Ready-to-use headlines by Theodore Menten"
+        data-lazy="//covers.openlibrary.org/b/id/6897789-M.jpg"
+        src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="/>
+      </a>
+    </div>
+  </div>
+
+  <div class="ol-action-row">
+    <div class="ol-macro-wrapper">
+      
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="cta-button-group">
+  <a href="/borrow/ia/readytouseheadli00ment?ref=ol" title="Borrow ebook from Internet Archive" class="cta-btn cta-btn--ia cta-btn--available cta-btn--borrow js-login-intent"
+      data-ol-link-track="BookCarousel|BorrowClick|recently_returned"
+
+      data-action="Borrow" data-title="Ready-to-use headlines" data-type="book" data-resumeurl="/books/OL24980008M"
+      >Borrow</a>
+</div>
+
+
+
+
+
+    </div>
+
+  </div>
+</div>
+
+      
+
+<div class="book carousel__item">
+  <div class="book-cover">
+    <div class="book-cover-wrapper">
+      <a href="/books/OL8374330M" data-ol-link-track="BookCarousel|CoverClick|recently_returned">
+        <img class="bookcover" loading="lazy"
+          title="Existentialism by Charles B. Guignon, Derk Pereboom"
+          alt="Existentialism by Charles B. Guignon, Derk Pereboom"
+        data-lazy="//covers.openlibrary.org/b/id/14590255-M.jpg"
+        src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="/>
+      </a>
+    </div>
+  </div>
+
+  <div class="ol-action-row">
+    <div class="ol-macro-wrapper">
+      
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="cta-button-group">
+  <a href="/borrow/ia/isbn_9780872205956?ref=ol" title="Borrow ebook from Internet Archive" class="cta-btn cta-btn--ia cta-btn--available cta-btn--borrow js-login-intent"
+      data-ol-link-track="BookCarousel|BorrowClick|recently_returned"
+
+      data-action="Borrow" data-title="Existentialism" data-type="book" data-resumeurl="/books/OL8374330M"
+      >Borrow</a>
+</div>
+
+
+
+
+
+    </div>
+
+  </div>
+</div>
+
+      
+
+<div class="book carousel__item">
+  <div class="book-cover">
+    <div class="book-cover-wrapper">
+      <a href="/books/OL7453319M" data-ol-link-track="BookCarousel|CoverClick|recently_returned">
+        <img class="bookcover" loading="lazy"
+          title="The Republic by Plato"
+          alt="The Republic by Plato"
+        data-lazy="//covers.openlibrary.org/b/id/14410212-M.jpg"
+        src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="/>
+      </a>
+    </div>
+  </div>
+
+  <div class="ol-action-row">
+    <div class="ol-macro-wrapper">
+      
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="cta-button-group">
+  <a href="/borrow/ia/republic0000plat_l6f2?ref=ol" title="Borrow ebook from Internet Archive" class="cta-btn cta-btn--ia cta-btn--available cta-btn--borrow js-login-intent"
+      data-ol-link-track="BookCarousel|BorrowClick|recently_returned"
+
+      data-action="Borrow" data-title="The Republic" data-type="book" data-resumeurl="/books/OL7453319M"
+      >Borrow</a>
+</div>
+
+
+
+
+
+    </div>
+
+  </div>
+</div>
+
+      
+
+<div class="book carousel__item">
+  <div class="book-cover">
+    <div class="book-cover-wrapper">
+      <a href="/books/OL10100624M" data-ol-link-track="BookCarousel|CoverClick|recently_returned">
+        <img class="bookcover" loading="lazy"
+          title="The Stone Gods by Jeanette Winterson"
+          alt="The Stone Gods by Jeanette Winterson"
+        data-lazy="//covers.openlibrary.org/b/id/2325403-M.jpg"
+        src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="/>
+      </a>
+    </div>
+  </div>
+
+  <div class="ol-action-row">
+    <div class="ol-macro-wrapper">
+      
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="cta-button-group">
+  <a href="/borrow/ia/stonegods0000wint?ref=ol" title="Borrow ebook from Internet Archive" class="cta-btn cta-btn--ia cta-btn--available cta-btn--borrow js-login-intent"
+      data-ol-link-track="BookCarousel|BorrowClick|recently_returned"
+
+      data-action="Borrow" data-title="The Stone Gods" data-type="book" data-resumeurl="/books/OL10100624M"
+      >Borrow</a>
+</div>
+
+
+
+
+
+    </div>
+
+  </div>
+</div>
+
+      
+
+<div class="book carousel__item">
+  <div class="book-cover">
+    <div class="book-cover-wrapper">
+      <a href="/books/OL7830955M" data-ol-link-track="BookCarousel|CoverClick|recently_returned">
+        <img class="bookcover" loading="lazy"
+          title="Guy Bourdin by Alison M. Gingeras"
+          alt="Guy Bourdin by Alison M. Gingeras"
+        data-lazy="//covers.openlibrary.org/b/id/15088899-M.jpg"
+        src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="/>
+      </a>
+    </div>
+  </div>
+
+  <div class="ol-action-row">
+    <div class="ol-macro-wrapper">
+      
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="cta-button-group">
+  <a href="/borrow/ia/guybourdin0000ging?ref=ol" title="Borrow ebook from Internet Archive" class="cta-btn cta-btn--ia cta-btn--available cta-btn--borrow js-login-intent"
+      data-ol-link-track="BookCarousel|BorrowClick|recently_returned"
+
+      data-action="Borrow" data-title="Guy Bourdin" data-type="book" data-resumeurl="/books/OL7830955M"
+      >Borrow</a>
+</div>
+
+
+
+
+
+    </div>
+
+  </div>
+</div>
+
+      
+
+<div class="book carousel__item">
+  <div class="book-cover">
+    <div class="book-cover-wrapper">
+      <a href="/books/OL35352970M" data-ol-link-track="BookCarousel|CoverClick|recently_returned">
+        <img class="bookcover" loading="lazy"
+          title="Edgar Allan Poe Reader by Edgar Allan Poe"
+          alt="Edgar Allan Poe Reader by Edgar Allan Poe"
+        data-lazy="//covers.openlibrary.org/b/id/12194138-M.jpg"
+        src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="/>
+      </a>
+    </div>
+  </div>
+
+  <div class="ol-action-row">
+    <div class="ol-macro-wrapper">
+      
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="cta-button-group">
+  <a href="/borrow/ia/edgarallanpoerea0000unse_d5y1?ref=ol" title="Borrow ebook from Internet Archive" class="cta-btn cta-btn--ia cta-btn--available cta-btn--borrow js-login-intent"
+      data-ol-link-track="BookCarousel|BorrowClick|recently_returned"
+
+      data-action="Borrow" data-title="Edgar Allan Poe Reader" data-type="book" data-resumeurl="/books/OL35352970M"
+      >Borrow</a>
+</div>
+
+
+
+
+
+    </div>
+
+  </div>
+</div>
+
+      
+
+<div class="book carousel__item">
+  <div class="book-cover">
+    <div class="book-cover-wrapper">
+      <a href="/books/OL19684593M" data-ol-link-track="BookCarousel|CoverClick|recently_returned">
+        <img class="bookcover" loading="lazy"
+          title="SEVENTEENTH-CENTURY ART &amp; ARCHITECTURE. by Ann Sutherland Harris"
+          alt="SEVENTEENTH-CENTURY ART &amp; ARCHITECTURE. by Ann Sutherland Harris"
+        data-lazy="//covers.openlibrary.org/b/id/5542310-M.jpg"
+        src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="/>
+      </a>
+    </div>
+  </div>
+
+  <div class="ol-action-row">
+    <div class="ol-macro-wrapper">
+      
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="cta-button-group">
+  
+
+<a class="cta-btn cta-btn--available cta-btn--external" href="/books/OL19684593M/-/borrow?action=locate" target="_blank" rel="noopener noreferrer"
+  data-ol-link-track="CTAClick|Locate">Locate</a>
+
+</div>
+
+
+
+    </div>
+
+  </div>
+</div>
+
+      
+
+<div class="book carousel__item">
+  <div class="book-cover">
+    <div class="book-cover-wrapper">
+      <a href="/books/OL4118481M" data-ol-link-track="BookCarousel|CoverClick|recently_returned">
+        <img class="bookcover" loading="lazy"
+          title="Female psychology by Sue Cox"
+          alt="Female psychology by Sue Cox"
+        data-lazy="//covers.openlibrary.org/b/id/11718920-M.jpg"
+        src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="/>
+      </a>
+    </div>
+  </div>
+
+  <div class="ol-action-row">
+    <div class="ol-macro-wrapper">
+      
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="cta-button-group">
+  <a href="/borrow/ia/femalepsychology0000unse_j4b3?ref=ol" title="Borrow ebook from Internet Archive" class="cta-btn cta-btn--ia cta-btn--available cta-btn--borrow js-login-intent"
+      data-ol-link-track="BookCarousel|BorrowClick|recently_returned"
+
+      data-action="Borrow" data-title="Female psychology" data-type="book" data-resumeurl="/books/OL4118481M"
+      >Borrow</a>
+</div>
+
+
+
+
+
+    </div>
+
+  </div>
+</div>
+
+      
+
+<div class="book carousel__item">
+  <div class="book-cover">
+    <div class="book-cover-wrapper">
+      <a href="/books/OL7407283M" data-ol-link-track="BookCarousel|CoverClick|recently_returned">
+        <img class="bookcover" loading="lazy"
+          title="An Introduction to Thermal Physics by Daniel V. Schroeder"
+          alt="An Introduction to Thermal Physics by Daniel V. Schroeder"
+        data-lazy="//covers.openlibrary.org/b/id/134641-M.jpg"
+        src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="/>
+      </a>
+    </div>
+  </div>
+
+  <div class="ol-action-row">
+    <div class="ol-macro-wrapper">
+      
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="cta-button-group">
+  
+
+<a class="cta-btn cta-btn--available cta-btn--external" href="/books/OL7407283M/-/borrow?action=locate" target="_blank" rel="noopener noreferrer"
+  data-ol-link-track="CTAClick|Locate">Locate</a>
+
+</div>
+
+
+
+    </div>
+
+  </div>
+</div>
+
+    </div>
+  </div>
+</div>
+
+  
+  
+  
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="lazy-carousel" data-config="{&quot;query&quot;: &quot;subject:romance ebook_access:[borrowable TO *] first_publish_year:[1930 TO *] trending_score_hourly_sum:[1 TO *] language:eng -subject:\&quot;content_warning:cover\&quot;&quot;, &quot;sort&quot;: &quot;trending,trending_score_hourly_sum&quot;, &quot;key&quot;: &quot;romance&quot;, &quot;limit&quot;: 20, &quot;search&quot;: false, &quot;has_fulltext_only&quot;: true, &quot;layout&quot;: &quot;carousel&quot;, &quot;fallback&quot;: false, &quot;title&quot;: &quot;Romance&quot;}">
+    
+
+<div class=" loadingIndicator ">
+  <figure>
+  <img src="/static/images/ajax-loader-bar.gif" alt="Loading indicator" loading="lazy">
+  <figcaption style="
+      justify-content: center;
+      display: flex;
+  ">Loading carousel</figcaption>
+  </figure>
+</div>
+
+    <div class="lazy-carousel-retry hidden">
+        Failed to fetch carousel. <a href="#" class="retry-btn">Retry?</a>
+    </div>
+</div>
+
+
+  
+  
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="lazy-carousel" data-config="{&quot;query&quot;: &quot;ebook_access:[borrowable TO *] trending_score_hourly_sum:[1 TO *] (subject_key:(juvenile_audience OR children&#39;s_fiction OR juvenile_nonfiction OR juvenile_encyclopedias OR juvenile_riddles OR juvenile_poetry OR juvenile_wit_and_humor OR juvenile_limericks OR juvenile_dictionaries OR juvenile_non-fiction) OR subject:(\&quot;Juvenile literature\&quot; OR \&quot;Juvenile fiction\&quot; OR \&quot;pour la jeunesse\&quot; OR \&quot;pour enfants\&quot;)) language:eng -subject:\&quot;content_warning:cover\&quot;&quot;, &quot;sort&quot;: &quot;random.hourly&quot;, &quot;key&quot;: &quot;children&quot;, &quot;limit&quot;: 20, &quot;search&quot;: false, &quot;has_fulltext_only&quot;: true, &quot;layout&quot;: &quot;carousel&quot;, &quot;fallback&quot;: false, &quot;title&quot;: &quot;Kids&quot;}">
+    
+
+<div class=" loadingIndicator ">
+  <figure>
+  <img src="/static/images/ajax-loader-bar.gif" alt="Loading indicator" loading="lazy">
+  <figcaption style="
+      justify-content: center;
+      display: flex;
+  ">Loading carousel</figcaption>
+  </figure>
+</div>
+
+    <div class="lazy-carousel-retry hidden">
+        Failed to fetch carousel. <a href="#" class="retry-btn">Retry?</a>
+    </div>
+</div>
+
+
+  
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="lazy-carousel" data-config="{&quot;query&quot;: &quot;subject:thrillers ebook_access:[borrowable TO *] trending_score_hourly_sum:[1 TO *] language:eng -subject:\&quot;content_warning:cover\&quot;&quot;, &quot;sort&quot;: &quot;trending,trending_score_hourly_sum&quot;, &quot;key&quot;: &quot;thrillers&quot;, &quot;limit&quot;: 20, &quot;search&quot;: false, &quot;has_fulltext_only&quot;: true, &quot;layout&quot;: &quot;carousel&quot;, &quot;fallback&quot;: false, &quot;title&quot;: &quot;Thrillers&quot;, &quot;url&quot;: &quot;/subjects/thrillers&quot;}">
+    
+
+<div class=" loadingIndicator ">
+  <figure>
+  <img src="/static/images/ajax-loader-bar.gif" alt="Loading indicator" loading="lazy">
+  <figcaption style="
+      justify-content: center;
+      display: flex;
+  ">Loading carousel</figcaption>
+  </figure>
+</div>
+
+    <div class="lazy-carousel-retry hidden">
+        Failed to fetch carousel. <a href="#" class="retry-btn">Retry?</a>
+    </div>
+</div>
+
+
+  
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="lazy-carousel" data-config="{&quot;query&quot;: &quot;subject_key:textbooks publish_year:[1990 TO *] ebook_access:[borrowable TO *] language:eng -subject:\&quot;content_warning:cover\&quot;&quot;, &quot;sort&quot;: &quot;trending&quot;, &quot;key&quot;: &quot;textbooks&quot;, &quot;limit&quot;: 20, &quot;search&quot;: false, &quot;has_fulltext_only&quot;: true, &quot;layout&quot;: &quot;carousel&quot;, &quot;fallback&quot;: false, &quot;title&quot;: &quot;Textbooks&quot;, &quot;url&quot;: &quot;/subjects/textbooks&quot;}">
+    
+
+<div class=" loadingIndicator ">
+  <figure>
+  <img src="/static/images/ajax-loader-bar.gif" alt="Loading indicator" loading="lazy">
+  <figcaption style="
+      justify-content: center;
+      display: flex;
+  ">Loading carousel</figcaption>
+  </figure>
+</div>
+
+    <div class="lazy-carousel-retry hidden">
+        Failed to fetch carousel. <a href="#" class="retry-btn">Retry?</a>
+    </div>
+</div>
+
+
+  
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="lazy-carousel" data-config="{&quot;query&quot;: &quot;(subject:authorsalliance OR publisher:\&quot;MIT Press\&quot; OR subject:mitpress) ebook_access:[borrowable TO *] language:eng -subject:\&quot;content_warning:cover\&quot;&quot;, &quot;sort&quot;: &quot;trending&quot;, &quot;key&quot;: &quot;authorsalliance_mit_press&quot;, &quot;limit&quot;: 20, &quot;search&quot;: false, &quot;has_fulltext_only&quot;: true, &quot;layout&quot;: &quot;carousel&quot;, &quot;fallback&quot;: false, &quot;title&quot;: &quot;Authors Alliance &amp; MIT Press&quot;}">
+    
+
+<div class=" loadingIndicator ">
+  <figure>
+  <img src="/static/images/ajax-loader-bar.gif" alt="Loading indicator" loading="lazy">
+  <figcaption style="
+      justify-content: center;
+      display: flex;
+  ">Loading carousel</figcaption>
+  </figure>
+</div>
+
+    <div class="lazy-carousel-retry hidden">
+        Failed to fetch carousel. <a href="#" class="retry-btn">Retry?</a>
+    </div>
+</div>
+
+
+  
+  
+<div class="carousel-section">
+  <div class="carousel-section-header">
+    <h2 class="home-h2"><a href="/subjects">Browse by Subject</a></h2>
+  </div>
+  <div class="carousel-container">
+    <div class="carousel carousel--progressively-enhanced"
+      data-config="{&quot;carouselKey&quot;: &quot;categories&quot;, &quot;booksPerBreakpoint&quot;: [6, 5, 4, 3, 2, 2]}">
+      <div class="category-item carousel__item">
+        <a class="category-nostyle" data-ol-link-track="CarouselCategories"
+           href="/subjects/art#sort=date_published&ebooks=true">
+          <div class="category-icon">
+            <img class="category-img" src="/static/images/categories/art.svg"
+                width="30" height="30"
+                loading="lazy"
+                alt=""/>
+          </div>
+          <p class="category-title">Art</p>
+          <p class="category-count">134,347 Books</p>
+        </a>
+      </div>
+      <div class="category-item carousel__item">
+        <a class="category-nostyle" data-ol-link-track="CarouselCategories"
+           href="/subjects/science_fiction#sort=date_published&ebooks=true">
+          <div class="category-icon">
+            <img class="category-img" src="/static/images/categories/science_fiction.svg"
+                width="30" height="30"
+                loading="lazy"
+                alt=""/>
+          </div>
+          <p class="category-title">Science Fiction</p>
+          <p class="category-count">21,206 Books</p>
+        </a>
+      </div>
+      <div class="category-item carousel__item">
+        <a class="category-nostyle" data-ol-link-track="CarouselCategories"
+           href="/subjects/fantasy#sort=date_published&ebooks=true">
+          <div class="category-icon">
+            <img class="category-img" src="/static/images/categories/fantasy.svg"
+                width="30" height="30"
+                loading="lazy"
+                alt=""/>
+          </div>
+          <p class="category-title">Fantasy</p>
+          <p class="category-count">14,664 Books</p>
+        </a>
+      </div>
+      <div class="category-item carousel__item">
+        <a class="category-nostyle" data-ol-link-track="CarouselCategories"
+           href="/subjects/biographies#sort=date_published&ebooks=true">
+          <div class="category-icon">
+            <img class="category-img" src="/static/images/categories/biographies.svg"
+                width="30" height="30"
+                loading="lazy"
+                alt=""/>
+          </div>
+          <p class="category-title">Biographies</p>
+          <p class="category-count">26,703 Books</p>
+        </a>
+      </div>
+      <div class="category-item carousel__item">
+        <a class="category-nostyle" data-ol-link-track="CarouselCategories"
+           href="/subjects/recipes#sort=date_published&ebooks=true">
+          <div class="category-icon">
+            <img class="category-img" src="/static/images/categories/recipes.svg"
+                width="30" height="30"
+                loading="lazy"
+                alt=""/>
+          </div>
+          <p class="category-title">Recipes</p>
+          <p class="category-count">9,671 Books</p>
+        </a>
+      </div>
+      <div class="category-item carousel__item">
+        <a class="category-nostyle" data-ol-link-track="CarouselCategories"
+           href="/subjects/romance#sort=date_published&ebooks=true">
+          <div class="category-icon">
+            <img class="category-img" src="/static/images/categories/romance.svg"
+                width="30" height="30"
+                loading="lazy"
+                alt=""/>
+          </div>
+          <p class="category-title">Romance</p>
+          <p class="category-count">22,057 Books</p>
+        </a>
+      </div>
+      <div class="category-item carousel__item">
+        <a class="category-nostyle" data-ol-link-track="CarouselCategories"
+           href="/subjects/textbooks#sort=date_published&ebooks=true">
+          <div class="category-icon">
+            <img class="category-img" src="/static/images/categories/textbooks.svg"
+                width="30" height="30"
+                loading="lazy"
+                alt=""/>
+          </div>
+          <p class="category-title">Textbooks</p>
+          <p class="category-count">40,003 Books</p>
+        </a>
+      </div>
+      <div class="category-item carousel__item">
+        <a class="category-nostyle" data-ol-link-track="CarouselCategories"
+           href="/subjects/children#sort=date_published&ebooks=true">
+          <div class="category-icon">
+            <img class="category-img" src="/static/images/categories/children.svg"
+                width="30" height="30"
+                loading="lazy"
+                alt=""/>
+          </div>
+          <p class="category-title">Children</p>
+          <p class="category-count">60,842 Books</p>
+        </a>
+      </div>
+      <div class="category-item carousel__item">
+        <a class="category-nostyle" data-ol-link-track="CarouselCategories"
+           href="/subjects/history#sort=date_published&ebooks=true">
+          <div class="category-icon">
+            <img class="category-img" src="/static/images/categories/history.svg"
+                width="30" height="30"
+                loading="lazy"
+                alt=""/>
+          </div>
+          <p class="category-title">History</p>
+          <p class="category-count">2,556,347 Books</p>
+        </a>
+      </div>
+      <div class="category-item carousel__item">
+        <a class="category-nostyle" data-ol-link-track="CarouselCategories"
+           href="/subjects/medicine#sort=date_published&ebooks=true">
+          <div class="category-icon">
+            <img class="category-img" src="/static/images/categories/medicine.svg"
+                width="30" height="30"
+                loading="lazy"
+                alt=""/>
+          </div>
+          <p class="category-title">Medicine</p>
+          <p class="category-count">62,697 Books</p>
+        </a>
+      </div>
+      <div class="category-item carousel__item">
+        <a class="category-nostyle" data-ol-link-track="CarouselCategories"
+           href="/subjects/religion#sort=date_published&ebooks=true">
+          <div class="category-icon">
+            <img class="category-img" src="/static/images/categories/religion.svg"
+                width="30" height="30"
+                loading="lazy"
+                alt=""/>
+          </div>
+          <p class="category-title">Religion</p>
+          <p class="category-count">170,185 Books</p>
+        </a>
+      </div>
+      <div class="category-item carousel__item">
+        <a class="category-nostyle" data-ol-link-track="CarouselCategories"
+           href="/subjects/mystery_and_detective_stories#sort=date_published&ebooks=true">
+          <div class="category-icon">
+            <img class="category-img" src="/static/images/categories/mystery_and_detective_stories.svg"
+                width="30" height="30"
+                loading="lazy"
+                alt=""/>
+          </div>
+          <p class="category-title">Mystery and Detective Stories</p>
+          <p class="category-count">16,040 Books</p>
+        </a>
+      </div>
+      <div class="category-item carousel__item">
+        <a class="category-nostyle" data-ol-link-track="CarouselCategories"
+           href="/subjects/plays#sort=date_published&ebooks=true">
+          <div class="category-icon">
+            <img class="category-img" src="/static/images/categories/plays.svg"
+                width="30" height="30"
+                loading="lazy"
+                alt=""/>
+          </div>
+          <p class="category-title">Plays</p>
+          <p class="category-count">3,041 Books</p>
+        </a>
+      </div>
+      <div class="category-item carousel__item">
+        <a class="category-nostyle" data-ol-link-track="CarouselCategories"
+           href="/subjects/music#sort=date_published&ebooks=true">
+          <div class="category-icon">
+            <img class="category-img" src="/static/images/categories/music.svg"
+                width="30" height="30"
+                loading="lazy"
+                alt=""/>
+          </div>
+          <p class="category-title">Music</p>
+          <p class="category-count">91,228 Books</p>
+        </a>
+      </div>
+      <div class="category-item carousel__item">
+        <a class="category-nostyle" data-ol-link-track="CarouselCategories"
+           href="/subjects/science#sort=date_published&ebooks=true">
+          <div class="category-icon">
+            <img class="category-img" src="/static/images/categories/science.svg"
+                width="30" height="30"
+                loading="lazy"
+                alt=""/>
+          </div>
+          <p class="category-title">Science</p>
+          <p class="category-count">105,519 Books</p>
+        </a>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+  <div id="home-stats">
+  <div class="head">
+    <h2 class="inline">Around the Library</h2>
+    <p class="inline sansserif large collapse">&nbsp;Here's what's happened over the last 28 days. More <a href="/recentchanges">recent changes</a>.</p>
+  </div>
+
+  <div id="home-stats-charts">
+    <div class="statschart">
+      <div class="chartShow" onclick="window.location.href='/stats';" title="How many new Open Library members have we welcomed?">
+        <div id="members-graph" class="chart-graph" title="Area graph of new members"></div>
+        <a href="/stats" title="How many new Open Library members have we welcomed?"><span class="ticks">126,020</span><span class="label">New Members</span></a>
+      </div>
+    </div>
+    <div class="statschart">
+      <div class="chartShow" onclick="window.location.href='/recentchanges';" title="People are constantly updating the catalog">
+        <div id="edits-graph" class="chart-graph" title="Area graph of recent catalog edits"></div>
+        <a href="/recentchanges" title="People are constantly updating the catalog"><span class="ticks">202,480</span><span class="label">Catalog Edits</span></a>
+      </div>
+    </div>
+
+    <div class="statschart">
+      <div class="chartShow" onclick="window.location.href='/lists';" title="Members can create Lists">
+        <div id="lists-graph" class="chart-graph" title="Area graph of lists created recently"></div>
+        <a href="/lists" title="Members can create Lists"><span class="ticks">1,598</span><span class="label">Lists Created</span></a>
+      </div>
+    </div>
+
+    <div class="statschart">
+      <div class="chartShow" onclick="window.location.href='/stats';" title="We&#39;re a library, so we lend books, too">
+        <div id="ebooks-graph" class="chart-graph" title="Area graph of ebooks borrowed recently"></div>
+        <a href="/subjects/in_library#ebooks=true" title="We&#39;re a library, so we lend books, too"><span class="ticks">237,695</span><span class="label">eBooks Borrowed</span></a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="text/json+graph" id="graph-json-members-graph">[[1786924800000, 2030], [1787011200000, 4549], [1787097600000, 4134], [1787184000000, 3589], [1787270400000, 2781], [1787356800000, 3914], [1787443200000, 4141], [1787529600000, 5107], [1787616000000, 5088], [1787702400000, 5000], [1787788800000, 4809], [1787875200000, 4108], [1787961600000, 4048], [1788048000000, 4007], [1788134400000, 5225], [1788220800000, 5075], [1788307200000, 5076], [1788393600000, 4929], [1788480000000, 4642], [1788566400000, 5075], [1788652800000, 5200], [1788739200000, 5250], [1788825600000, 5494], [1788912000000, 5465], [1788998400000, 6043], [1789084800000, 5307], [1789171200000, 4657], [1789257600000, 1277]]</script>
+<script type="text/json+graph" id="graph-json-edits-graph">[[1786924800000, 3170], [1787011200000, 7824], [1787097600000, 6737], [1787184000000, 6127], [1787270400000, 5141], [1787356800000, 6574], [1787443200000, 6393], [1787529600000, 8251], [1787616000000, 8249], [1787702400000, 7097], [1787788800000, 7187], [1787875200000, 7762], [1787961600000, 5726], [1788048000000, 6879], [1788134400000, 8166], [1788220800000, 7403], [1788307200000, 8751], [1788393600000, 7420], [1788480000000, 7036], [1788566400000, 7937], [1788652800000, 8461], [1788739200000, 9029], [1788825600000, 8839], [1788912000000, 8387], [1788998400000, 9735], [1789084800000, 8008], [1789171200000, 7565], [1789257600000, 2626]]</script>
+<script type="text/json+graph" id="graph-json-lists-graph">[[1786924800000, 34], [1787011200000, 73], [1787097600000, 61], [1787184000000, 81], [1787270400000, 67], [1787356800000, 59], [1787443200000, 55], [1787529600000, 79], [1787616000000, 95], [1787702400000, 47], [1787788800000, 43], [1787875200000, 36], [1787961600000, 43], [1788048000000, 41], [1788134400000, 77], [1788220800000, 61], [1788307200000, 36], [1788393600000, 53], [1788480000000, 41], [1788566400000, 53], [1788652800000, 57], [1788739200000, 81], [1788825600000, 71], [1788912000000, 68], [1788998400000, 51], [1789084800000, 51], [1789171200000, 59], [1789257600000, 25]]</script>
+<script type="text/json+graph" id="graph-json-ebooks-graph">[[1786867080000, 3263.0], [1786953480000, 5882.0], [1787039880000, 8532.0], [1787126280000, 8027.0], [1787212680000, 6127.0], [1787299080000, 6039.0], [1787385480000, 7782.0], [1787471880000, 8245.0], [1787558280000, 9517.0], [1787644680000, 9753.0], [1787731080000, 9404.0], [1787817480000, 9292.0], [1787903880000, 8750.0], [1787990280000, 8891.0], [1788076680000, 8472.0], [1788163080000, 10438.0], [1788249480000, 9226.0], [1788335880000, 9618.0], [1788422280000, 8360.0], [1788508680000, 8613.0], [1788595080000, 8728.0], [1788681480000, 9323.0], [1788767880000, 9415.0], [1788854280000, 9175.0], [1788940680000, 9230.0], [1789027080000, 10220.0], [1789113480000, 8872.0], [1789199880000, 8501.0]]</script>
+
+
+  
+<div id="home-resources">
+  <div class="head">
+    <h2>About the Project</h2>
+  </div>
+
+  <div id="home-about">
+    <div id="home-about-mission">
+      <p id="home-about-mission-tldr">
+        Open Library is an open, editable library catalog, building towards a web page for every book ever published.
+        <a href="/about" class="small sansserif">More</a>
+      </p>
+      <p id="home-about-mission-desc">
+        Just like Wikipedia, you can contribute new information or corrections to the catalog. You can browse by <a href="/subjects">subjects</a>, <a href="/authors">authors</a> or <a href="/lists">lists</a> members have created. If you love books, why not help build a library?
+      </p>
+    </div>
+    <div class="home-resource-section">
+      <h3 class="collapse">
+        <a href="https://blog.openlibrary.org/" class="header">Latest Blog Posts</a>
+      </h3>
+      <ul id="olBlog">
+        <li><a href="https://blog.openlibrary.org/2026/08/23/building-a-library-patrons-choose-to-revisit/">Building a Library Patrons Choose to Revisit</a> - <em>August 23, 2026</em></li>
+        <li><a href="https://blog.openlibrary.org/2026/08/23/helping-patrons-discover-books/">Helping Patrons Discover Books</a> - <em>August 23, 2026</em></li>
+        <li><a href="https://blog.openlibrary.org/2026/07/15/google-summer-of-code-contributors-improve-open-librarys-patron-experience/">Google Summer of Code Contributors Improve Open Library’s Patron Experience</a> - <em>July 15, 2026</em></li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+ </div>
+
+  </main>
+
+
+
+<!--For analytics-->
+<div class="clearfix"></div>
+
+
+<footer>
+  <div id="footer-content" >
+    <div id="footer-links">
+      <div>
+        <h2>Open Library</h2>
+        <ul>
+          <li><a href="/about/vision">Vision</a></li>
+          <li><a href="/volunteer">Volunteer</a></li>
+          <li><a href="/partner-with-us">Partner With Us</a></li>
+          <li><a href="https://archive.org/about/jobs.php" title="Jobs">Careers</a></li>
+          <li><a href="https://blog.openlibrary.org/">Blog</a></li>
+          <li><a href="https://archive.org/about/terms.php">Terms of Service</a></li>
+          <li><a href="https://archive.org/donate/?platform=ol&origin=olwww-TopNavDonateButton">Donate</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>Discover</h2>
+        <ul>
+          <li><a href="/" title="Go home">Home</a></li>
+          <li><a href="/search" title="Explore Books">Books</a></li>
+          <li><a href="/search/authors" title="Explore authors">Authors</a></li>
+          <li><a href="/subjects" title="Explore subjects">Subjects</a></li>
+          <li><a href="/collections" title="Explore collections">Collections</a></li>
+          <li><a href="/advancedsearch" title="Advanced Search">Advanced Search</a></li>
+          <li><a href="#top" title="Navigate to top of this page">Return to Top</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>Develop</h2>
+        <ul>
+          <li><a href="/developers" title="Explore Open Library Developer Center">Developer Center</a></li>
+          <li><a href="/developers/api" title="Explore Open Library APIs">API Documentation</a></li>
+          <li><a href="/developers/dumps" title="Bulk Open Library data">Bulk Data Dumps</a></li>
+          <li><a href="https://docs.openlibrary.org/developers/backend/writing-bots.html" title="Write a bot">Writing Bots</a></li>
+        </ul>
+      </div>
+      <div>
+        <h2>Help</h2>
+        <ul>
+          <li><a href="/help">Help Center</a></li>
+          <li><a href="mailto:openlibrary@archive.org?subject=Support%20Case" title="Contact">Contact Us</a></li>
+          <li><a href="/help/faq/editing" title="Suggest Edits">Suggesting Edits</a></li>
+          <li><a href="/books/add" title="Add a new book to Open Library">Add a Book</a></li>
+          <li><a href="https://github.com/internetarchive/openlibrary/releases" title="Release Notes">Release Notes</a></li>
+        </ul>
+        <aside>
+          <a class="footer-icon" title="Bluesky" href="https://bsky.app/profile/openlibrary.org"><img src="/static/images/bsky.svg" alt="Open Library on Bluesky" loading="lazy"></a>
+          <a class="footer-icon" title="Twitter" href="https://twitter.com/OpenLibrary"><img src="/static/images/tweet.svg" alt="Open Library on Twitter" loading="lazy"></a>
+          <a class="footer-icon" title="GitHub" href="https://github.com/internetarchive/openlibrary"><img src="/static/images/github.svg" alt="Open Library on GitHub" loading="lazy"></a>
+        </aside>
+      </div>
+      <div>
+        <h2>Change Website Language</h2>
+        
+<ul class="locale-options ">
+  <li><a href="#" lang="ar" data-lang-id="ar" title="Arabic">العربية</a></li> 
+  <li><a href="#" lang="cs" data-lang-id="cs" title="Czech">Čeština</a></li> 
+  <li><a href="#" lang="de" data-lang-id="de" title="German">Deutsch</a></li> 
+  <li><a href="#" lang="en" data-lang-id="en" title="English">English</a></li> 
+  <li><a href="#" lang="es" data-lang-id="es" title="Spanish">Español</a></li> 
+  <li><a href="#" lang="fr" data-lang-id="fr" title="French">Français</a></li> 
+  <li><a href="#" lang="hi" data-lang-id="hi" title="Hindi">हिंदी</a></li> 
+  <li><a href="#" lang="hr" data-lang-id="hr" title="Croatian">Hrvatski</a></li> 
+  <li><a href="#" lang="it" data-lang-id="it" title="Italian">Italiano</a></li> 
+  <li><a href="#" lang="ko" data-lang-id="ko" title="Korean">한국어</a></li> 
+  <li><a href="#" lang="pt" data-lang-id="pt" title="Portuguese">Português</a></li> 
+  <li><a href="#" lang="ro" data-lang-id="ro" title="Romanian">Română</a></li> 
+  <li><a href="#" lang="sc" data-lang-id="sc" title="Sardinian">Sardu</a></li> 
+  <li><a href="#" lang="te" data-lang-id="te" title="Telugu">తెలుగు</a></li> 
+  <li><a href="#" lang="uk" data-lang-id="uk" title="Ukrainian">Українська</a></li> 
+  <li><a href="#" lang="zh" data-lang-id="zh" title="Chinese">中文</a></li> 
+  <li><a href="#" lang="tl" data-lang-id="tl" title="Filipino">Filipino</a></li> 
+</ul>
+
+      </div>
+    </div>
+    <hr>
+    <div id="footer-details">
+      <img id="archive-logo" src="/static/images/pantheon.png" alt="Open Library logo" loading="lazy">
+      <div id="legal-details" >
+        <span>Open Library is an initiative of the <a href="//archive.org/">Internet Archive</a>, a 501(c)(3) non-profit, building a digital library of Internet sites and other cultural artifacts in  digital form. Other <a href="//archive.org/projects/">projects</a> include the <a href="//archive.org/web/">Wayback Machine</a>, <a href="//archive.org/">archive.org</a> and <a href="//archive-it.org">archive-it.org</a></span>
+      </div>
+      <div id="version-details">
+        <span class="version">version <a href="https://github.com/internetarchive/openlibrary/commit/5b92e77">5b92e77</a></span>
+      </div>
+    </div>
+  </div>
+</footer>
+
+
+<script src="/cdn/archive.org/athena.js" type="text/javascript"></script>
+
+<script src="/static/build/js/all.js?v=8ec7b7f7e7ce453a064f7b53fe758dbc" type="text/javascript"></script>
+<script src="/static/build/lit-components/production/ol-components.js?v=cd40aa53b865e6c30e805a9771ea32dd" type="module"></script>
+<div class="analytics-stats-time-calculator" data-time="17.995834350585938"></div>
+</body>
+</html>
