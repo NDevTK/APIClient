@@ -1361,6 +1361,11 @@ function learnFromRequest(documentId, interfaceName, entry, headers) {
   // through learnFromAstCallSite directly (no synthetic entries).
   if (!m._stats) m._stats = { requestCount: 0, params: {}, bodyFields: {} };
   m._stats.requestCount++;
+  /* ONE SET FOR THIS REQUEST, SHARED BY ALL THREE COLLECTORS BELOW, so `observedCount` counts REQUESTS
+     CONTAINING a parameter rather than OCCURRENCES of it — see updateParamStats for what that cost. It spans
+     query, path and body deliberately: they write into DIFFERENT stats objects, and the set is keyed on the
+     object, so a query `sdk` and a body `sdk` each count once rather than one masking the other. */
+  const _seenThisRequest = new Set();
 
   // Track query param values
   if (!url.pathname.includes("batchexecute")) {
@@ -1368,7 +1373,7 @@ function learnFromRequest(documentId, interfaceName, entry, headers) {
       if (name === "key" || name === "api_key") return;
       if (name === "$httpHeaders" || name === "$ct") return;
       if (!m._stats.params[name]) m._stats.params[name] = createParamStats();
-      updateParamStats(m._stats.params[name], value);
+      updateParamStats(m._stats.params[name], value, _seenThisRequest);
     });
   }
 
@@ -1390,7 +1395,7 @@ function learnFromRequest(documentId, interfaceName, entry, headers) {
           const paramName = t.slice(1, -1);
           if (!paramName) continue;
           if (!m._stats.params[paramName]) m._stats.params[paramName] = createParamStats();
-          updateParamStats(m._stats.params[paramName], reqSegs[i]);
+          updateParamStats(m._stats.params[paramName], reqSegs[i], _seenThisRequest);
         }
       }
     }
@@ -1402,7 +1407,7 @@ function learnFromRequest(documentId, interfaceName, entry, headers) {
     for (const [fieldPath, value] of Object.entries(flat)) {
       if (typeof value === "string" || typeof value === "number") {
         if (!m._stats.bodyFields[fieldPath]) m._stats.bodyFields[fieldPath] = createParamStats();
-        updateParamStats(m._stats.bodyFields[fieldPath], String(value));
+        updateParamStats(m._stats.bodyFields[fieldPath], String(value), _seenThisRequest);
       }
     }
   }

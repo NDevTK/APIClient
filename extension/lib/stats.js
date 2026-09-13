@@ -17,8 +17,28 @@ function createParamStats() {
   };
 }
 
-function updateParamStats(stats, value) {
-  stats.observedCount++;
+/* `seenThisRequest` IS A SET OF STATS OBJECTS AND IT IS WHAT MAKES `observedCount` A COUNT OF REQUESTS.
+   It counted OCCURRENCES, and `analyzeRequired` divides it by `requestCount` — two different events under
+   one quotient, which is CLAUDE.md's own tell verbatim: a subset that exceeds the population it claims to
+   be drawn from. `URLSearchParams.forEach` VISITS A REPEATED NAME ONCE PER OCCURRENCE, so one request to
+   `?sdk=a&sdk=b&sdk=c` raised this by three against a requestCount of one.
+   IT IS NOT A DISPLAY DEFECT. The popup rendered `seen 300%`, which is merely absurd; `analyzeRequired`
+   returns `required: confidence >= 1.0`, so the same skew marks an OPTIONAL parameter REQUIRED from a
+   SINGLE request — and that badge is written into the OpenAPI export, where it is a claim about the API
+   rather than about this tool. Measured on a real corpus row at requestCount 1 / observedCount 5.
+   THE SET IS KEYED ON THE STATS OBJECT, not on the name, because a query `sdk` and a body `sdk` are
+   different parameters with different stats and must each count once; keying on the name would have made
+   one of them invisible. Passing the set rather than a boolean keeps the rule in ONE place — the three
+   call sites cannot each get it subtly wrong, which is how the query one and the path one would have
+   diverged (a template naming `{id}` twice repeats exactly as a query name does).
+   VALUE FREQUENCY AND NUMERIC RANGE STILL SEE EVERY OCCURRENCE, deliberately: `?a=1&a=2` genuinely
+   observed two values and the enum and range facts are about VALUES, not about requests. Only the
+   per-request count moved. */
+function updateParamStats(stats, value, seenThisRequest) {
+  if (!seenThisRequest || !seenThisRequest.has(stats)) {
+    stats.observedCount++;
+    if (seenThisRequest) seenThisRequest.add(stats);
+  }
 
   // Track value frequencies (capped)
   const strVal = String(value);
@@ -102,6 +122,18 @@ function analyzeRequired(stats, requestCount) {
   if (requestCount < STATS_MIN_OBS_FOR_REQUIRED) {
     return { required: false, confidence: stats.observedCount / Math.max(requestCount, 1) };
   }
+  /* ASSERTED WHERE BOTH ARE IN ONE HAND, which is the one check a reader of this quotient can make without
+     re-deriving the whole mechanism. `observedCount` counts REQUESTS CONTAINING this parameter and
+     `requestCount` counts REQUESTS, so the first can never exceed the second — and when it did, this
+     function returned a confidence above 1 and marked the parameter REQUIRED. A stored record from before
+     the counting fix can still carry the skew, and firing on it is correct: the datum is wrong, the badge
+     derived from it is wrong, and the OpenAPI export writes it out as a claim about somebody's API. */
+  DCHECK(stats.observedCount <= requestCount,
+         'a parameter was observed in ' + stats.observedCount + ' request(s) out of ' + requestCount +
+         ' — a subset cannot exceed the population it is drawn from. observedCount counts REQUESTS ' +
+         'CONTAINING this parameter, so either it was raised more than once for one request (the ' +
+         'occurrence-vs-request defect updateParamStats now prevents) or this record predates that fix ' +
+         'and its `required` badge is derived from a ratio above 1');
   const confidence = stats.observedCount / requestCount;
   return { required: confidence >= 1.0, confidence };
 }
