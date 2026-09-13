@@ -861,6 +861,41 @@ const SPECS = [
      nothing about either — an unindexed standard's citations are counted and never checked. */
   { key: "cssimages3", label: "CSS Images Module Level 3", kind: "bikeshed",
     base: "https://drafts.csswg.org/css-images-3/", edition: "maintained", anchors: ["css-images-3"] },
+  /* AND LEVEL 4 IS ITS OWN ROW, WHICH CLOSES THE GAP THE ROW ABOVE NAMES AGAINST ITSELF. That row records a
+     crash naming Level 4's six-arm image production standing beside a component implementing Level 3's
+     two-arm one, with the audit reporting nothing about either, and gives the reason: an unindexed standard's
+     citations are counted and never checked. The engine has since BUILT the Level 4 gradients — conic, the
+     double-position colour stop, and the colour interpolation method on all three families — so one component
+     alone went from writing a handful of Level 4 citations to writing two dozen, every one of them outside
+     every check here. The cost of the silence was no longer a crash message; it was a grammar.
+     THE TRADE WAS MEASURED ON THE WHOLE CORPUS AND NOT ON THIS STANDARD, because indexing a level makes it a
+     neighbour of every other one and a row that ends a finding in its own component by starting one elsewhere
+     has MOVED a defect rather than closed it. What the title channel LOSES was asked first and asked of every
+     index: of the 45 headings this document carries, 26 are held by no other indexed standard and so become
+     newly resolvable, 6 were already shared by two or more and were never evidence, and 13 were unique to
+     EXACTLY ONE standard — which is Level 3, in all 13 of them, with no third standard losing anything at
+     all. Gradients, Interpolation, Image Processing, Color Stop Lists, Coloring the Gradient Line, Color Stop
+     Fixup and the rest are one module's two levels disagreeing with each other, so the uniqueness this row
+     spends is THE MODULE'S OWN — which is the argument the Grid Level 1 row makes further down, arriving at
+     the module whose row first wrote the rule.
+     MEASURED, on one frozen pair in one snapshot with only this row and its three artifacts differing: the
+     judged population rose by 28, the quotations compared by 15 and the VERIFIED count by 14, and the finding
+     total did NOT move — 972 before and 972 after, with every channel flat (section/term/title, quotation,
+     quotation agreement, step, WRONG-SECTION and WRONG-STANDARD all unchanged). Coverage bought at zero
+     accusations, which is the only shape of this trade worth taking.
+     THE ONE ADVERSE MOVEMENT WAS NOT A NEIGHBOUR AND IS WORTH RECORDING BECAUSE IT WILL RECUR. A first pass
+     of the same pair moved the finding total by one, and the row was not a citation losing its resolution: it
+     was THIS TREE'S OWN PROSE IN QUOTATION MARKS at a site that had just become resolvable, judged against a
+     document it was never about. Making a standard newly checkable makes every quoted run near it newly
+     checkable too, and the population that lands in is the one an author wrote about their own code. It was
+     repaired AT THE SITE by putting the run in backticks, which takes it out of the quotation channel by
+     construction rather than by a clearance some other file happens to supply.
+     AND THIS COMMENT CARRIES NO SECTION SIGN AND NO DOTTED NUMBER ON PURPOSE. This file audits its own kind,
+     so prose added to it JOINS the population it measures — and an explanation of a citation rule is exactly
+     the prose most likely to contain citations, which would move the subject count of the very pair quoted
+     above. The argument is carried in TITLES and in level numbers instead. */
+  { key: "cssimages4", label: "CSS Images Module Level 4", kind: "bikeshed",
+    base: "https://drafts.csswg.org/css-images-4/", edition: "maintained", anchors: ["css-images-4"] },
   /* THE REST OF THE CSS MODULES THIS TREE LAYS OUT WITH, AND THEY WERE THE LARGEST SILENT ZERO IN THIS TABLE.
      Every one of them is bikeshed on drafts.csswg.org, so each is a row and one curl and no reader — which is
      exactly why leaving them out was the shape CLAUDE.md refuses: the cost of coverage was a line of table and

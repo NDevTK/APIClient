@@ -380,8 +380,8 @@ static bool img_color_stop_list(const char *text, size_t len, size_t pos, ImgPos
  * "Adding <color-interpolation-method>", which is that edit having already happened once upstream.
  *
  * A PREFIX ANSWERS A COUNT AND NOT A BOOLEAN, and -1 is a third answer that neither of those carries. Zero is
- * "this term is ABSENT", which the `||` must be free to accept because two of the three prefixes are written
- * entirely out of optional pieces. -1 is "this term is PRESENT AND MALFORMED" — a `to` with no
+ * `this term is ABSENT`, which the `||` must be free to accept because two of the three prefixes are written
+ * entirely out of optional pieces. -1 is `this term is PRESENT AND MALFORMED` — a `to` with no
  * `<side-or-corner>`, an `at` with no `<position>` — and it must not be read as absence, or the caller retries
  * the group as a colour stop and the refusal arrives from the wrong production. */
 typedef int (*ImgPrefixFn)(const char *const *w, const size_t *wl, int n);
