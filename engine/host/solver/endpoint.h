@@ -41,9 +41,21 @@ typedef struct { const char *name, *value; } EndpointHeader;
    FORWARDS ITS BYTES, which is the half that was missing. A protobuf or gRPC-Web payload has no field this
    engine can name, and for as long as that meant silence the record said `POST /pkg.Service/Method` and
    nothing whatever about what it posts, which is most of what §What-the-tool-produces asks. The bytes ride
-   the record as `bodyBase64` beside `bodyMime` (the engine's own `btoa` codec, never a second base64), and
-   extension/lib/learn.js reads them with lib/protobuf.js's wire decoder — the decode belongs where the
-   TYPE decision and the reader already live, not in a C body that would duplicate both.
+   the record as `bodyBase64` beside `bodyMime` (the engine's own `btoa` codec, never a second base64).
+   NOTHING DECODES THEM INTO FIELDS, AND THE SENTENCE THAT STOOD HERE SAID THE ZONE DID. It named a wire
+   decoder in the trusted zone as the reader that turns these bytes into a field model, and that reader is
+   gone: reconstructing a field number out of a byte stream is INFERRING an answer the run already had, since
+   the page's own serializer executed with the real names and the real values in its hands, and the pattern
+   over a MIME string that selected it was the protocol-specific recognizer §Architecture bans. The sentence
+   is rewritten rather than deleted because a reader who re-derives the bytes-are-here-so-something-should-
+   read-them argument will write that decoder again.
+   SO THESE BYTES ARE AN OBSERVATION AND NEVER A FIELD MODEL — this request sent exactly these bytes under
+   exactly this content-type, which is what a reviewer REPLAYS and is not an answer to "what values can be
+   sent". What answers that is `params`, and for every body the page composed AS A STRING it already does:
+   a concatenation carries its operands' display forms into the result's shape, so `'{"id":"' + id + '"}'`
+   reaches this surface spelling `{"id":"{state}.id"}` and the JSON arm below names `id` with the hole as its
+   value. Provenance through the page's own serializer is therefore not a thing to build for those bodies; it
+   is what the shape IS.
    Borrowed for the length of the call like the headers.
    It is a separate struct and not three arguments because a body is one fact: bytes with no type are bytes
    nothing can name the fields of, and a type with no bytes is not a body. */

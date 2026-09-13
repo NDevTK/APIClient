@@ -559,11 +559,33 @@ static int body_params(JSContext *ctx, KvBuf *out, const EndpointBody *body) {
 /* THE BODY THE ENGINE COULD NOT NAME, CARRIED AS BYTES SO THE ZONE CAN. §What-the-tool-produces asks what a
    request SENDS, and for a gRPC-Web or protobuf call that is the whole of the answer: this surface named the
    address and nothing about the payload, so a reviewer got `POST /pkg.Service/Method` and no field.
-   IT FORWARDS RATHER THAN DECODES, AND THAT IS A LAYERING DECISION AND NOT A CONVENIENCE. §Architecture: what
-   belongs in the engine is what a FLOW needs mid-execution; a captured body decoded for a REPORT is computed
-   once between flows, where the failure mode is a wrong answer rather than a corrupted heap. The zone already
-   holds the reader — extension/lib/protobuf.js's `pbDecodeRaw` walks tags, wire types and varints, and
-   lib/learn.js already decodes gRPC-Web frames on the REPLY side — so a decoder here would be a second one.
+   IT FORWARDS AND NOTHING DECODES, AND THE SENTENCE THAT STOOD HERE SAID THE ZONE DID. It argued the forward
+   as a LAYERING choice — the trusted zone already holds a wire decoder, so a second one here would duplicate
+   it — and that argument is retired in both halves: the zone's decoder no longer reads these bytes, and the
+   reason is not layering. Reconstructing a field number out of a byte stream INFERS an answer the run already
+   had, because the page's own serializer executed with the real names and the real values in its hands; and
+   the MIME pattern that selected the decoder is the protocol-specific recognizer §Architecture bans, whose
+   next member is Connect, or grpc-web-text, or a framing invented next year. Rewritten rather than deleted
+   because the retired argument is the one a reader re-derives from the bytes being here at all.
+   WHAT NAMES A FIELD IS THE SHAPE, AND FOR A STRING-COMPOSED BODY IT ALREADY DOES. A concatenation carries its
+   operands' display forms into the result's, so a body the page builds by joining text reaches body_params
+   spelling its own holes and the JSON arm reads them as values. This function is what is left for a body the
+   page did NOT compose as a string.
+
+   NAMED RESIDUAL — the body a page builds in a typed array, which is the one this function is really about.
+   WHAT IS NOT COVERED: the fields and example values of a request body whose bytes the page wrote into a
+   backing store rather than into a string, which is every binary transport.
+   WHAT THE NEXT DIFF BUILDS: concolic bytes in a typed array's backing store. It is not the segment
+   provenance an earlier statement of this residual named — that is what a composed shape already is — and it
+   is strictly BENEATH it: ECMAScript §10.4.5.18 TypedArraySetElement ( obj, index, value ) coerces its value
+   and writes raw bytes into a data block that holds no JSValue, so a serializer storing an unknown reaches an
+   abort that names this capability, and Encoding §7.4 Interface TextEncoder's encodeInto refuses its
+   destination for the same reason. Until a store can hold one, no such body is composed for a span to be
+   attributed in.
+   HOW ITS ABSENCE SHOWS: the address is missing from this surface ENTIRELY rather than present with no
+   fields — the flow dies inside the serializer, before the request it was building exists — so the tell is an
+   abort naming a typed-array element store on a document whose network panel shows the call.
+   IT RETIRES when that store lands and a body built through one records its fields here.
    THE CODEC IS THE ENGINE'S OWN, for the reason core/file/file_reader.c gives at its own call: `btoa`'s codec
    is already implemented here and §Solver's rule is that an encoding builtin is modelled faithfully, never
    re-implemented beside itself. */
