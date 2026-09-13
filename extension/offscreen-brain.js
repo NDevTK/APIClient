@@ -22,9 +22,30 @@ function sendToOffscreen(msg) {
      installed — its absence is a broken load order, not an optional feature. Returning a failure response
      instead reported "analysis worker dispatch unavailable" as this document's `_astError` and moved on,
      which is a page that silently never reached the frontier at all. */
+  /* …AND WHICH OF THE TWO CAUSES IT IS, BECAUSE THEY TAKE OPPOSITE WORK AND THE ASSERT ABOVE NAMED ONLY
+     ONE. "A broken load order" is the cause when bridge.js NEVER RAN; it is NOT the cause when bridge.js
+     ran and THREW before reaching its install. bridge.js is ast-worker.html's last script and installs
+     `astDispatch` at its own line 6392 of 6628, so a throw anywhere in the six thousand lines above that
+     leaves this exact state with the load order perfectly correct — and a classic script that throws does
+     not stop the ones after it, so nothing else about the zone looks wrong. One reported state, two
+     causes, and the repair for each is in a different file.
+     `_engineLog` IS THE WITNESS AND IT COSTS NOTHING. bridge.js sets it unconditionally at its own line
+     40, before anything that can throw, and it is already a real global this zone publishes (the corpus
+     probe reads `self._engineLog` off the page). So: present here with `astDispatch` missing means
+     bridge.js STARTED AND DIED IN BETWEEN — read that file's own error, not this one's load order.
+     Absent means the script genuinely never ran, which is the load-order failure the message below
+     names. It is a WITNESS and not a second contract: nothing reads it FOR this purpose, so it cannot
+     drift from what it already means. */
   DCHECK(typeof self.astDispatch === "function",
          "the trusted zone has no astDispatch to hand this document to — it is the ONE entry to the host " +
-         "WFQ pool, so without it the document never becomes work on the frontier and reports as unanalysed");
+         "WFQ pool, so without it the document never becomes work on the frontier and reports as " +
+         "unanalysed. WHICH FAILURE THIS IS: bridge.js " +
+         (Array.isArray(self._engineLog)
+            ? "RAN AND THREW before installing it — its own line 40 got as far as `_engineLog` and its " +
+              "line 6392 never ran, so the load ORDER is correct and the fault is a throw inside " +
+              "bridge.js; read that script's error rather than this document's load"
+            : "NEVER RAN AT ALL — `_engineLog` is absent too, so ast-worker.html did not reach its last " +
+              "script and this IS the broken load order"));
   return self.astDispatch(msg);
 }
 // The offscreen document's lifecycle + the cross-session resume kick are owned by
