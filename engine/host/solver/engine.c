@@ -3528,15 +3528,22 @@ const char *engine_pending_fetches(void) {
                            has to keep the claim that is true of the set rather than the one true of its
                            luckiest element. The costs are not symmetric either — under-claiming the provenance
                            merely grades a reply, and under-claiming here SPENDS AN ACT. */
+                        /* EVERY READER BELOW TAKES THE COMPUTED OFFSET AND NEVER A `tN + 1` OF ITS OWN, and
+                           that is a repair rather than a style: the offsets and the tab pointers were TWO
+                           SPELLINGS of one position, so inserting a field ahead of the credentials mode moved
+                           `c_at` and left this block's `cred_of_token(t4 + 1, c_len)` reading the field that
+                           had taken its place — with the LENGTH of the field it meant. `cred_of_token` is
+                           fatal on a word §2.2.5 does not define, so every deduped line would have aborted.
+                           One spelling cannot drift from itself. */
                         int mo_pinned = pinned_v || pinned_is_yes(join + n_at, n_len);
-                        int mo_prov = prov_of_token(t3 + 1, p_len);
-                        int mo_parser = ini_is_parser(t2 + 1, i_len) || ini_is_parser(ini, il);
+                        int mo_prov = prov_of_token(join + p_at, p_len);
+                        int mo_parser = ini_is_parser(join + i_at, i_len) || ini_is_parser(ini, il);
                         int widen_dst = destination_is_script_like(d, dl) &&
                                         !destination_is_script_like(join + d_at, d_len);
                         /* …AND THE SET'S CREDENTIALS MODE, WHICH FOLDS THE OTHER WAY FROM THE TWO TOKEN
                            FIELDS BESIDE IT — see `cred_narrower` for why least-credentialed wins and for the
                            residual this fold is. */
-                        FetchCredentialsMode mo_cred = cred_narrower(cred_of_token(t4 + 1, c_len),
+                        FetchCredentialsMode mo_cred = cred_narrower(cred_of_token(join + c_at, c_len),
                                                                     cred_of_token(c, cl));
                         if (prov_v < mo_prov) mo_prov = prov_v;
                         join_set_field(&join, &n_out, &cap, c_at, c_len, fetch_credentials_token(mo_cred));
