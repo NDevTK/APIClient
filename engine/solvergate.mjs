@@ -871,6 +871,27 @@ async function child(docPath, schedName) {
                  "cannot drain under any schedule and its finding set is not a function of the document " +
                  `alone. Owed: ${e.str("qjs_pending").split("\n").filter(Boolean).join(" ; ") || "(no fetch)"}`);
     }
+    /* NAMED RESIDUAL — THE PRECONDITION ABOVE EXCLUDES THE DOCUMENTS THE PRODUCT EXISTS FOR, AND THAT IS A
+       STATEMENT ABOUT WHAT THIS PROJECT'S ONE SOLVER ORACLE CAN SEE RATHER THAN A DEFECT HERE.
+       WHAT IS NOT COVERED: this loop exits on ENGINE_STEP_DONE, and §Testing's differential is sound only
+       because a drained frontier makes the finding set a function of the DOCUMENT alone. §NO BOUNDS means a
+       frontier fed by an unknown-driven fork GROWS, so a document whose boot forks on a name nothing wrote
+       does not drain — which is the ordinary shape of a real bundle rather than an edge case. Every document
+       this gate can judge is therefore one small enough to run out of work, and §the-solver's-semantics-have-
+       their-own-oracle names this differential as the ONLY instrument that judges `decide.c`, `cow.c`,
+       `concolic.c`, `flow.c`, `engine.c` and `cold.c` at all: test262 links none of them and WPT judges them
+       by a browser oracle. So a semantic defect that appears only at scale is outside every oracle here.
+       WHAT THE NEXT DIFF BUILDS: an oracle that does not require a drain, and the obvious one is UNSOUND and
+       is written out here so it is not built. Cutting each schedule at equal WORK and comparing the sets
+       compares two prefixes, and the schedules differ precisely in what they do first — so a difference at a
+       cut is the gate working, not a defect, and the comparison has no verdict. What is sound is narrower and
+       is the thing to build: compare only the findings whose PRODUCING FLOW ran to completion under both
+       schedules, which is a set the razor's own lossless-resume claim is actually about, and report the rest
+       as unjudged rather than as agreement.
+       HOW ITS ABSENCE WOULD SHOW: a change to the solver's own semantics lands green because every document
+       this gate accepted was too small to exercise it, and the first thing to disagree is a real bundle's
+       finding set, which no instrument compares. A reader observes it as a gate that has never once been
+       pointed at the corpus in `testing/corpus/mirror`. */
     /* THE LAST SNAPSHOT IS TAKEN WITH THE FRONTIER ALREADY TERMINAL, WHICH IS WHAT MAKES IT COMPARABLE.
        Everywhere else in a run the two entries answer at different instants and a difference between them
        says nothing; here the loop has broken on DONE, no step runs between this call and the `qjs_result`
