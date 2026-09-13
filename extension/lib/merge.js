@@ -246,6 +246,24 @@ function mergeASTResultsIntoVDD(tab, results) {
                missing key is "nothing was observed" and becomes null here, and a PRESENT one is asserted to
                be the non-empty record it can only be. */
             requiredHeaders: callSite.headers === undefined ? null : astHeaderRecord(callSite.headers),
+            /* THE REQUEST BODY, IN WHICHEVER OF ITS TWO KINDS THE RUN OBSERVED — and the KEY the engine chose
+               is what says which, so nothing here decides it. solver/endpoint.c writes `bodyBase64` only for
+               bytes the request SENDS and `bodyShape` only for the display spelling of a body built out of
+               unknown external input, never both, and asserts that exclusivity at its own emit.
+               ABSENCE IS THE POSITIVE STATEMENT on both, exactly as it is for `headers` one line up: the
+               engine omits the key rather than writing an empty one, so a missing key is "the run observed no
+               body of this kind" and becomes null here — never a `||` that would make a body the run could
+               not name indistinguishable from one it observed to be empty.
+               `bodyMime` IS CARRIED INTO WHICHEVER FIELD IS SET rather than kept beside them, because a type
+               with no body is not a fact this record has any use for: it is how the bytes are READ, so it
+               belongs to them. It is always present with `bodyBase64` (endpoint.c records that pair or
+               neither) and legitimately absent with a shape, where Fetch §5.2's string arm supplies a type
+               the page never chose. */
+            bodySent: callSite.bodyBase64 === undefined ? null
+                    : { mime: callSite.bodyMime, base64: callSite.bodyBase64 },
+            bodyShape: callSite.bodyShape === undefined ? null
+                     : { mime: callSite.bodyMime === undefined ? null : callSite.bodyMime,
+                         shape: callSite.bodyShape },
             /* THE PATH-PARAM EXAMPLES, FROM THE RECORD THAT ACTUALLY HOLDS THEM — BOTH POOLS, because the
                flat record is the one that is READ where the method record is not. It reads the METHOD
                lib/learn.js just registered, which has TWO producers of a `location:"path"` parameter:

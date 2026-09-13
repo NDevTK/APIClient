@@ -61,6 +61,61 @@ function buildFormFields(schema, initialData = null) {
     container.appendChild(hsec);
   }
 
+  /* THE REQUEST BODY THE FORCED EXECUTION OBSERVED, AND WHICH OF THE TWO KINDS IT IS DECIDES WHAT IS CLAIMED.
+     This is the surface the whole seam exists to reach: §What-the-tool-produces asks what a call SENDS, and
+     for a body this engine has no field reader for — a protobuf or gRPC-Web payload — the bytes ARE the whole
+     of the answer, because a reviewer learns the encoding by LOOKING at a frame header and a wire tag. Nothing
+     here has to know what they mean, which is the point: no transport branch, no decoder, no content-type
+     pattern. The panel SHOWS, it does not interpret.
+     THE TWO FIELDS ARE RENDERED AS TWO CLAIMS AND NEVER FOLDED. `bodySent` is bytes the request sends, so it
+     may say so and a reviewer may replay it; `bodyShape` is the engine's display spelling of a body composed
+     from unknown external input, so it names WHICH SOURCE composes the payload and must never be labelled as
+     bytes — that mislabelling is what solver/endpoint.c was caught doing, and the cost of it is a reviewer
+     SENDING a request the page never made. The record asserts the two are exclusive; this reads the key it
+     was given rather than deciding.
+     NEITHER PRESENT IS NOT RENDERED AS "NO BODY", and that is the absent-versus-zero rule rather than
+     caution: the shipped engine may predate these keys entirely (see lib/endpoint-record.js's residual), in
+     which case null means "this build does not report request bodies" and not "this request sends none". The
+     two read alike from here, so this panel states what the RECORD says and never what the REQUEST did — it
+     renders nothing at all, which claims nothing, instead of an empty body panel that claims the stronger of
+     the two. */
+  const _bs = schema.endpoint && schema.endpoint.bodySent;
+  const _bsh = schema.endpoint && schema.endpoint.bodyShape;
+  DCHECK(!(_bs && _bsh),
+         "the Send panel was handed BOTH a sent request body and the display spelling of an unknown one — " +
+         "lib/endpoint-record.js asserts these are exclusive and solver/endpoint.c asserts it again at its " +
+         "emit, so both arriving means one of those two doors was bypassed and this panel would have to " +
+         "choose which of two contradictory claims to show a reviewer");
+  if (_bs || _bsh) {
+    const bsec = el("div", "form-section");
+    let bh = '<div class="form-section-label">Request Body <span class="card-meta">(learned)</span></div>';
+    if (_bs) {
+      /* BYTES, AND THE CLAIM IS THE REPLAY CLAIM. The type is shown beside them because it is how they are
+         READ — the pair solver/endpoint.h's EndpointBody is one struct for — and the base64 is shown as
+         base64 rather than decoded, because decoding it here would be this surface deciding the payload is
+         text when the whole reason it reached this panel is that no reader could name its fields. */
+      DCHECK(typeof _bs.mime === "string" && typeof _bs.base64 === "string",
+             "a learned request body reached the Send panel without both of its halves — bytes with no type " +
+             "are bytes nothing can name the fields of, and solver/endpoint.c records the pair or neither");
+      bh += `<div class="card-meta">These are the bytes this request was observed sending, as <code>${esc(_bs.mime)}</code>.</div>`;
+      bh += `<div class="card-meta"><code style="word-break:break-all">${esc(_bs.base64)}</code></div>`;
+    } else {
+      /* A SHAPE, AND THE CLAIM IS ABOUT A SOURCE. It is labelled as what it is in the same breath as it is
+         shown, because these characters are the engine's spelling of a hole and a reviewer who read them as
+         a payload would send them. What it buys is the thing a sniffer cannot produce: the NAME of whatever
+         composes this body, on a request no session made. */
+      DCHECK(typeof _bsh.shape === "string",
+             "a learned request-body shape reached the Send panel with no shape text — the spelling is the " +
+             "whole of what this field states");
+      bh += '<div class="card-meta">This request builds its body from a value the run could not compute, so there are no bytes to replay. It is composed from:</div>';
+      bh += `<div class="card-meta"><code style="word-break:break-all">${esc(_bsh.shape)}</code></div>`;
+      if (typeof _bsh.mime === "string")
+        bh += `<div class="card-meta">Sent as <code>${esc(_bsh.mime)}</code>.</div>`;
+    }
+    bsec.innerHTML = bh;
+    container.appendChild(bsec);
+  }
+
   if (schema.parameters && Object.keys(schema.parameters).length > 0) {
     const section = el("div", "form-section");
     section.innerHTML = '<div class="form-section-label">URL Parameters</div>';

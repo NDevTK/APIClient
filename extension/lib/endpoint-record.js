@@ -60,6 +60,12 @@ const ENDPOINT_ABSENT = Object.freeze({
   pathParamsForced: null, // [{name, values}] the same holes at the one grade that must never be offered —
                           // values EVERY sighting of which stood on a forced arm. null = the run forced
                           // nothing into a hole. `[]` never reaches here, for the reason above.
+  bodySent: null,         // {mime, base64} the forced execution observed this request SEND; null = no body
+                          // whose bytes the run knows. Replayable: these are the bytes, under that type.
+  bodyShape: null,        // {mime, shape} the DISPLAY SPELLING of a body built out of unknown external
+                          // input, e.g. `{cfg.payload}`; null = no such body. NOT replayable — it names
+                          // WHO composes the body, and `mime` may be null where §5.2 supplied one the page
+                          // never chose.
 });
 
 /* WHY THE HOLES TAKE TWO FIELDS AND NOT ONE, AND WHY THE SECOND IS NOT A DUPLICATE OF THE FIRST.
@@ -86,6 +92,46 @@ const ENDPOINT_ABSENT = Object.freeze({
    happened, which `checkEndpointRecord` asserts against below and `foldValuePools` is the one place that
    performs. */
 
+/* WHY THE BODY TAKES TWO FIELDS AND NOT ONE WITH A GRADE ON IT — the same choice the two hole pools make
+   above, reached from the other side of the seam and for a sharper reason.
+   A request body is either BYTES THE REQUEST SENDS or the engine's DISPLAY SPELLING of a body composed from
+   unknown external input, and those are two facts rather than two renderings of one. One field holding both
+   is decided by the stricter question (`what bytes`) and the looser one — `which source composes this` — is
+   refused with nothing anywhere to say it was asked. Worse, a consumer holding that one field has to DECIDE
+   which it has, and deciding wrongly means sending a hole: solver/endpoint.c base64'd `{cfg.payload}` into a
+   field whose own header promised a reviewer those were the bytes that were sent.
+   SO THE KEY IS THE GRADE. The engine emits `bodyBase64` only for bytes and `bodyShape` only for a shape,
+   never both, and asserts the exclusivity at its emit; this record keeps that split rather than folding it
+   back into a flag, so no surface can be handed a field whose meaning it must guess.
+   AND THE SECOND FIELD IS NOT A NICETY — WITHOUT IT THE FIX WAS A SILENCE. Refusing to publish the shape as
+   bytes, on its own, left an unknown body recording NOTHING AT ALL, which is CLAUDE.md
+   §MEASURE-WHAT-THE-SHIPPED-PATH-WRITES' pairing: an ABSENT value and a ZERO value are different facts and
+   must never be averaged. `{cfg.payload}` tells a reviewer which source composes the payload, which is
+   strictly more than an empty panel and is exactly what a sniffer can never produce; the defect was never
+   that the shape was shown, it was the field it was shown in.
+
+   AN OLDER STORE CARRIES NEITHER NAME, AND THAT MUST CRASH RATHER THAN READ AS THE ABSENCE — the obligation
+   `pathParamsForced` states above, inherited here. A record restored from a store written before these names
+   existed lacks the KEY, and "written by an earlier shape of this record" is a different fact from "this run
+   observed no body". `endpointRecordMissingNames` answers for them with nothing edited there, because it
+   derives from this declaration rather than from a hand-kept list.
+
+   NAMED RESIDUAL — the engine half is landed and the INSTALLED artifact predates it.
+   WHAT IS NOT COVERED: this file is interpreted from the tree, so it is live on write, while the engine is
+   live only after an install. Until one happens, `bodySent` and `bodyShape` are null on every record for a
+   reason that is NOT "this request sends no body" — the shipped engine emits neither key — and those two
+   read alike here, which is the absent-versus-zero defect this very declaration is about.
+   WHAT THE NEXT DIFF BUILDS: nothing in this tree. The retiring act is an INSTALL of an engine built at or
+   after the commit that added `bodyShape`, and only the role that builds and installs (the coordinator) can
+   perform it; every other reader runs the observation, gets the defer answer, and correctly leaves this
+   standing.
+   HOW ITS ABSENCE WOULD SHOW, by CONTENT in the artifact and never by a timestamp: the literal key name is
+   absent from the shipped wasm. Run it with a negative control so a zero means ABSENT rather than
+   `my probe never reached this` —
+     strings extension/lib/qjs/qjs.wasm | grep -c bodyShape        # 0 while this stands, 1+ once installed
+     strings extension/lib/qjs/qjs.wasm | grep -c bodyShapeControl # 0 always; the probe is armed if this is 0
+                                                                   # AND the first answers nonzero
+   IT RETIRES the day that first count is nonzero, at which point a null here means what it says. */
 /* HOW MANY EXAMPLES A HOLE CARRIES ON THE FLAT RECORD — one constant, because the two pools truncating at
    different lengths would make "this pool ran out" and "this pool has no more" different questions with the
    same appearance. It is a cap over what this record COPIES per hole, never over work: the values themselves
@@ -455,6 +501,24 @@ function checkEndpointRecord(ep, where) {
          "an endpoint record's `requiredHeaders` is neither a header record nor a stated absence (" + where +
          ") — `null` MEANS \"nothing was observed\" and `{}` would mean \"this endpoint requires no header\", " +
          "and the Send panel renders those two as the same empty list only if something upstream collapsed them");
+  DCHECK(ep.bodySent === null ||
+         (!!ep.bodySent && typeof ep.bodySent === "object" && !Array.isArray(ep.bodySent) &&
+          typeof ep.bodySent.base64 === "string" && typeof ep.bodySent.mime === "string"),
+         "an endpoint record's `bodySent` is neither the bytes this request sends nor a stated absence (" +
+         where + ") — the bytes only mean anything beside the TYPE that says how to read them, which is why " +
+         "solver/endpoint.c records the pair or neither, so a half of it here is that producer broken");
+  DCHECK(ep.bodyShape === null ||
+         (!!ep.bodyShape && typeof ep.bodyShape === "object" && !Array.isArray(ep.bodyShape) &&
+          typeof ep.bodyShape.shape === "string" &&
+          (ep.bodyShape.mime === null || typeof ep.bodyShape.mime === "string")),
+         "an endpoint record's `bodyShape` is neither a display spelling nor a stated absence (" + where +
+         ") — `mime` is legitimately null here (Fetch §5.2's string arm supplies a type the PAGE never " +
+         "chose), but the shape text is the whole of what this field states and cannot be absent from it");
+  DCHECK(!(ep.bodySent && ep.bodyShape),
+         "an endpoint record carries BOTH the bytes a request sends and the display spelling of an unknown " +
+         "body (" + where + ") — they are the two arms of one question and the engine asserts the same " +
+         "exclusivity at its emit, so both arriving is two sightings folded across a grade that is supposed " +
+         "to keep them in separate records");
   DCHECK(ep.pathParams === null || Array.isArray(ep.pathParams),
          "an endpoint record's `pathParams` is neither a list of examples nor a stated absence (" + where +
          ") — null MEANS no templated hole has been filled, which is what §@H forbids being rendered as a " +

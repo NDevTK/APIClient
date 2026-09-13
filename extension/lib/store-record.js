@@ -323,7 +323,13 @@ const STORE_RECORD_KINDS = Object.freeze({
     }),
   }),
   endpoints: Object.freeze({
-    statedFrom: 1, delegate: "endpoint",
+    /* 6, RAISED WITH lib/persistence.js's `_STORE_SHAPE` IN THE SAME DIFF — the pair that file's own comment
+       forbids splitting. The record learned `bodySent` and `bodyShape`, which `checkEndpointRecord` asserts,
+       and a store written before them carries neither key. At `1` this kind was asserted against every live
+       store, so one older record would have aborted the restore of all seven maps rather than being shed;
+       at `6` those stores are ASKED, and `endpointRecordMissingNames` names what they lack because it derives
+       from the record's own declarations rather than from a list kept here. */
+    statedFrom: 6, delegate: "endpoint",
     recipe: (v) => endpointRecordRecipe(v),
     adopt: (v) => v,
   }),

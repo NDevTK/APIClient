@@ -157,7 +157,17 @@ function scheduleSave() {
    decides WHAT they are asserted against, so a bump here without the kind's `statedFrom` leaves every older
    store on the assert arm, and a `statedFrom` raised without this number leaves it above the stamp this build
    writes — after which the kind is never asserted at all and the save-side door stops being a door. */
-const _STORE_SHAPE = 5;
+/* RAISED TO 6 WITH `endpoints`' OWN `statedFrom`, WHICH IS THE PAIR THE PARAGRAPH ABOVE FORBIDS SPLITTING.
+   The endpoint record learned two names this build requires — `bodySent` and `bodyShape`, the two arms of
+   what a request body is — and `checkEndpointRecord` asserts both. Every store written before this diff
+   carries neither KEY, and at the old numbers `storeRecordShapeStates("endpoints", 5)` answered TRUE against
+   a `statedFrom` of 1, so the door ASSERTED: one older endpoint record would have taken that DCHECK and
+   aborted the restore of all seven maps. Raising both moves those stores onto the ASK arm, where an endpoint
+   short of the names is SHED against its own recipe — `pageUrl`, the document whose re-visit re-runs the same
+   bundle and mints the address again (§OOM/paging's re-derivable third category) — or stranded and NAMED
+   where that recipe is null. This is the kind's own precedent and not a new mechanism: `statedFrom` was
+   raised to 3 the last time a required name was added, for exactly this reason. */
+const _STORE_SHAPE = 6;
 
 /* WHAT THE RESTORE DID, AS NUMBERS — because a shed nobody can count is the silent truncation this whole
    section exists to end, and §NO BOUNDS is explicit that discarding work "with nothing to say so" is a cap

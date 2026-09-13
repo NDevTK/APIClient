@@ -520,6 +520,19 @@ function resolveEndpointSchema(endpointKey, service, methodId) {
           path: ep.path,
           service: ep.service,
           requiredHeaders: ep.requiredHeaders,
+          /* THE BODY THIS ENDPOINT WAS OBSERVED SENDING, WHICH THIS LIST IS THE HOP IT WOULD OTHERWISE HAVE
+             DIED AT. The list is an explicit allowlist, so a name the record carries and this omits reaches
+             no surface at all and reads there as the record's declared absence — the same silent drop the
+             five names above this comment record, arriving from the opposite direction: those were names
+             NOTHING wrote being read, and this is a name something writes not being carried.
+             BOTH, NEVER ONE. They are the two arms of one question (bytes the request sends, against the
+             display spelling of a body composed from unknown input) and the record asserts they are
+             exclusive; projecting only the first would answer "no body" for every unknown-composed payload,
+             which is the case a reviewer most needs named because a sniffer can never produce it. Each
+             passes through as itself rather than through a `||`, for `requiredHeaders`' reason one line up:
+             null is a stated absence and collapsing it to a falsy default erases which of the two it was. */
+          bodySent: ep.bodySent,
+          bodyShape: ep.bodyShape,
         }
       : null,
   };
