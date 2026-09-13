@@ -23336,6 +23336,7 @@ static void close_var_refs(JSRuntime *rt, JSStackFrame *sf)
    Note 2's "changing the property changes the corresponding value of the argument binding and vice-versa". */
 static void close_var_refs_for_fork(JSRuntime *rt, JSStackFrame *sf)
 {
+    JSGCObjectHeader *owner;
     int i;
 #if APICLIENT_DEV
     JSFunctionBytecode *b;
@@ -23353,9 +23354,26 @@ static void close_var_refs_for_fork(JSRuntime *rt, JSStackFrame *sf)
     }
     if (sf->var_ref_count == 0)
         return;
-    DCHECK(sf->cur_gc_obj == NULL || JS_REF_COUNT(sf->cur_gc_obj) > 1,
-           "the frame being forked names an owner that only its own cells are holding — detaching one gives "
-           "that reference back, and this fork is reading the frame it would free");
+    /* THE WALK HOLDS THE OWNER WHOSE ALLOCATION IT IS WALKING INSIDE OF. Every open cell this frame minted
+       holds ONE counted reference on `cur_gc_obj` (get_captured_cell) and close_var_ref gives it back, so a
+       frame with N of them hands this loop N releases — and the Nth frees the async activation or generator
+       object whose allocation THIS FRAME IS A FIELD OF, while `sf->var_refs` and `sf->var_ref_count` are still
+       being read here and while the CALLER reads the frame for the rest of the clone. One reference held
+       across the loop makes that impossible in BOTH builds rather than asserted in one, and it is the same
+       acquire/release pair a cell itself uses — this walk is one more holder for the length of the walk.
+       A COUNT TAKEN BEFORE THE WALK CANNOT ASK THAT QUESTION, and asking it there is what stood here:
+       `JS_REF_COUNT(cur_gc_obj) > 1` is a proxy for "somebody other than this frame's own cells holds the
+       owner", and a count and a WHO agree only where the frame has exactly ONE open cell. Both directions
+       were wrong. It passed for TWO open cells whose owner nothing else held — 2 > 1, and the second release
+       is still the last one — so the free it names went unreported. And it FIRED where the loop detaches
+       NOTHING: `var_ref_count` is the BYTECODE's count of declared captured bindings, not a count of minted
+       cells, so a coroutine whose closure has not been reached yet, and every coroutine forked a SECOND time
+       (the first fork detached its cells and gave those references back, leaving the one holder through which
+       this fork reached the frame), arrives here at exactly 1 with every slot NULL or already detached. The
+       question is decidable after the walk, over what the fork is about to leave behind. */
+    owner = sf->cur_gc_obj;
+    if (owner)
+        JS_REF_COUNT(owner)++;
 #if APICLIENT_DEV
     b = JS_VALUE_GET_OBJ(sf->cur_func)->u.func.function_bytecode;
     nv = b->arg_count + b->var_count;
@@ -23396,6 +23414,14 @@ static void close_var_refs_for_fork(JSRuntime *rt, JSStackFrame *sf)
                "bytecode are one declaration read twice and cannot disagree about which binding a slot is");
 #endif
         close_var_ref(rt, vr);
+    }
+    if (owner) {
+        DCHECK(JS_REF_COUNT(owner) > 1,
+               "a fork gave back the last reference to the object that owns the frame it is cloning — this "
+               "loop's own releases were all of them, so the release below frees the async activation or "
+               "generator whose allocation holds this frame, and the clone goes on reading it. Every caller "
+               "reaches a frame THROUGH a holder of its owner, so one must outlive this walk");
+        js_release_coro(rt, owner);
     }
 }
 
