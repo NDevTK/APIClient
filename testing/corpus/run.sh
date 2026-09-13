@@ -37,7 +37,29 @@
 # mirror lacks; that count goes to logs/<id>.serve so a row with a thin document can be told apart from a
 # row whose engine learned nothing.
 set -u
-CORP="$(cd "$(dirname "$0")" && pwd)"
+# WHERE THE CORPUS IS, AND IT IS OVERRIDABLE SO A LANE CAN RUN A PRIVATE COPY OF THIS SCRIPT.
+# BASH STREAMS ITS OWN SCRIPT. It reads the file INCREMENTALLY as it executes, so an edit to this file
+# while a pass is running can make the running shell resume at a byte offset inside a DIFFERENT construct
+# — the same defect as the streamed site list a few lines down, one level up, and against the one input a
+# lane could not copy.
+# MEASURED, AND THE COORDINATOR CAUSED IT: a census lane's transcript carries
+#   ./run.sh: line 145: syntax error near unexpected token `done'
+# immediately after a site banner, and that invocation wrote TWO census rows — the site, and a second with
+# an EMPTY id and `nav: goto:net::ERR_CONNECTION_REFUSED`. The lane re-hashed its own list and proved it
+# contains no empty first field, so the empty id came from this script jumping, not from its input. It
+# checked the blast radius rather than assuming: one row corrupted, the rest valid, and it deleted and
+# re-queued the casualty.
+# NODE IS NOT LIKE THIS AND THE ASYMMETRY IS THE USEFUL PART: node reads a module WHOLE at import, so
+# site.mjs, serve-faithful.mjs and report.mjs are safe against a mid-edit in a way a bash script is not.
+# A LANE CANNOT DEFEND AGAINST IT EXCEPT BY COPYING THIS FILE, and a copy used to be impossible because
+# this line derived the corpus path from the SCRIPT'S OWN LOCATION — so a copy looked for site.mjs beside
+# itself and found nothing. The override is therefore not a convenience: it is the whole of what makes a
+# private copy work, which is the only protection available. `LANE` already carries harness.js and
+# extension/ for exactly this reason; this closes the last shared input.
+#     cp testing/corpus/run.sh $LANE/run.sh && CORP=/home/user/APIClient/testing/corpus $LANE/run.sh …
+CORP="${CORP:-$(cd "$(dirname "$0")" && pwd)}"
+[ -f "$CORP/site.mjs" ] || { echo "CORP=$CORP holds no site.mjs — a private copy of this script must be "\
+                                 "given CORP explicitly; it is no longer derived from \$0 alone"; exit 2; }
 : "${LANE:?set LANE to a directory holding testing/harness.js and extension/ -- see the comment above}"
 [ -f "$LANE/testing/harness.js" ] || { echo "no $LANE/testing/harness.js"; exit 2; }
 [ -f "$LANE/extension/lib/qjs/qjs.wasm" ] || { echo "no $LANE/extension/lib/qjs/qjs.wasm"; exit 2; }
