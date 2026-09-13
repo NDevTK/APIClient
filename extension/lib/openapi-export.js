@@ -365,6 +365,39 @@ function convertDiscoveryToOpenApi(doc, serviceName) {
             operation.requestBody = {
               content: { "application/x-www-form-urlencoded": { schema } },
             };
+          } else if (method._stats?.body?.undecoded > 0) {
+            /* AN ENDPOINT THAT SENDS A BODY EXPORTS AS ONE THAT SENDS A BODY, EVEN WHERE NOTHING COULD READ
+               IT. Both arms above need a decoded payload to say anything, so an endpoint whose every request
+               carried bytes this codebase has no decoder for fell out of here with NO `requestBody` at all —
+               and an exported spec with no requestBody is not silence, it is the POSITIVE claim that the
+               operation takes no payload, read by whoever imports it and by whoever writes a client from it.
+               That is the absent-versus-zero conflation arriving in a document a reviewer reads as a
+               statement about the API, which is strictly worse than the same loss inside the extension.
+               WHAT IS STATED IS THE OBSERVATION AND NEVER A GUESS. The media type is the one the REQUEST
+               DECLARED, carried through from lib/learn.js's census; no schema is emitted, because none was
+               derived, and synthesising a plausible one is how a fabricated field becomes the example that
+               shapes the next endpoint. An empty Media Type Object is exactly what OpenAPI 3 provides for a
+               payload whose schema is not described, and the any-media-type range (the catch-all written in
+               the `_content` key below, spelled out here would close this comment) is that standard's own
+               name for a body whose type went unstated — neither is a token this code invented. */
+            const _content = {};
+            for (const _t in method._stats.body.undecodedTypes) _content[_t || "*/*"] = {};
+            /* AND THE COUNT SAYS WHAT IT IS A COUNT OF. A summed census raises `uncounted` for every
+               contributing document restored from a store written before this census existed, and those
+               documents' requests are in NEITHER half of the ratio — so printing the ratio bare would state
+               a population as the whole when a named number of contributors is missing from it. */
+            const _uncounted = method._stats.body.uncounted;
+            operation.requestBody = {
+              description:
+                "Observed carrying a payload on " + method._stats.body.undecoded + " of " +
+                method._stats.body.present + " captured request(s); no decoder in this build could read it, " +
+                "so no schema is claimed for it." +
+                (_uncounted > 0
+                  ? " " + _uncounted + " further contributing document(s) predate this census and are " +
+                    "counted in neither half of that ratio."
+                  : ""),
+              content: _content,
+            };
           }
 
           // Response body

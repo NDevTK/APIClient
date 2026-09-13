@@ -1401,6 +1401,61 @@ function learnFromRequest(documentId, interfaceName, entry, headers) {
     }
   }
 
+  /* WHAT THE BODY-FIELD NUMBER BELOW IS A FRACTION OF. `bodyFields` empty is THREE facts under one
+     rendering — this method's requests carried no body, they carried one we decoded that held no scalar
+     leaves, or they carried one THIS CODE COULD NOT DECODE — and only the third is a gap in the tool rather
+     than a fact about the app. With no denominator an endpoint whose whole payload we never read renders
+     exactly like one that sends nothing: §MEASURE-WHAT-THE-SHIPPED-PATH-WRITES' absent-versus-zero, landing
+     in the product's headline deliverable, since the parameter names and example values a person came for
+     live in that body.
+     RECORDED AT THE ASK, NOT THE OUTCOME. `present` is raised off the bytes EXISTING, before anything asks
+     what they are, so the census cannot be narrowed by the same predicate that loses the body — one keyed on
+     the decode's own success could only ever report the shapes already handled.
+     `undecodedTypes` IS A RECORD, NEVER A PREDICATE. It is keyed by the content type the REQUEST DECLARED,
+     and nothing reads it to decide anything: no arm is selected by it, no parse chosen, no value invented.
+     §RUN-DON'T-MATCH bans DECIDING from a matched name; stating what a party declared decides nothing, and
+     it is the one datum naming which decoder is missing. A shape nobody has written a decoder for therefore
+     NAMES ITSELF the first time it arrives, instead of being lost at a `console.debug` in a renderer whose
+     stdout is deliberately not teed.
+     STATED FOR EVERY METHOD THIS BUILD TOUCHES, INCLUDING ONE THAT SENDS NO BODY, so an ABSENT `body` means
+     "counted by a build that did not count" and never "counted none" — a discovery doc restores from
+     IndexedDB with `_stats` intact, and lib/merge.js's `_sumStats` reads that distinction as its `uncounted`
+     arm rather than adding a zero. `uncounted` is stated here at zero for the same reason: only a sum can
+     raise it, a tab-local census has one contributor and has counted it, and a uniform shape lets a reader
+     ask the question once instead of guarding on which kind of census they were handed.
+     NAMED RESIDUAL. NOT COVERED: a body that decodes into a tree but whose values still never reach
+     `bodyFields` — the collector below gates on `entry.isJson`, which only the structural-JSON arm of
+     lib/response-decode.js sets, so a JSPB or binary-protobuf body counts DECODED here and contributes no
+     field values. This census measures the DECODE, not the collector's own narrower gate. NEXT DIFF: a
+     second pair of counters raised at that gate, or the JSPB/protobuf trees routed into the collector.
+     ABSENCE SHOWS AS: a method whose census reports every body decoded and whose `bodyFields` is empty. */
+  if (!m._stats.body) m._stats.body = { present: 0, decoded: 0, undecoded: 0, undecodedTypes: {}, uncounted: 0 };
+  if (entry.rawBodyB64) {
+    const _b = m._stats.body;
+    _b.present++;
+    if (entry.decodedBody) {
+      _b.decoded++;
+    } else {
+      _b.undecoded++;
+      /* THE TYPE THE REQUEST STATED, and "" is a request that declared none — a real shape rather than a
+         hole. offscreen-brain.js asserts the request half of every captured record and says in its own words
+         that an EventSource stream and a GET form both "truthfully have `{}` headers", which are
+         "the request they made, not fillers for one nobody saw". So the empty type is kept as its own key
+         rather than folded into a guess at what such a body probably was. */
+      const _ct = (headers["content-type"] || "").split(";")[0].trim().toLowerCase();
+      if (!_b.undecodedTypes[_ct]) _b.undecodedTypes[_ct] = 0;
+      _b.undecodedTypes[_ct]++;
+    }
+    /* A TOTAL THAT CANNOT MOVE WITHOUT ONE OF ITS PARTS MOVING. All three are created together by the line
+       above and raised only here, so no restore and no merge can put them out of step — which is what makes
+       the `undecodedTypes` tally beside them worth acting on rather than a number a reader must re-derive. */
+    DCHECK(_b.present === _b.decoded + _b.undecoded,
+           "a method's request-body census does not sum — `present` is raised at the ask and `decoded`/" +
+           "`undecoded` partition it at the one gate below, so a disagreement means a body was counted as " +
+           "arriving and neither read nor recorded as unread, which is the silent loss this census exists " +
+           "to end (method=" + methodName + ")");
+  }
+
   // Track body field values (JSON bodies only)
   if (entry.isJson && entry.decodedBody && typeof entry.decodedBody === "object") {
     const flat = flattenObjectValues(entry.decodedBody);

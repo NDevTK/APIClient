@@ -515,7 +515,8 @@ function _mergeParamInto(ep, np) {
    a claim about a set of observations, and carrying one document's answer over another's data is a statement
    about a distribution that was never observed. */
 function _sumStats(byDoc) {
-  const out = { requestCount: 0, params: {}, bodyFields: {} };
+  const out = { requestCount: 0, params: {}, bodyFields: {},
+                body: { present: 0, decoded: 0, undecoded: 0, undecodedTypes: {}, uncounted: 0 } };
   for (const dk in byDoc) {
     const s = byDoc[dk];
     DCHECK(s && typeof s.requestCount === "number" && s.params && s.bodyFields,
@@ -525,7 +526,34 @@ function _sumStats(byDoc) {
     out.requestCount += s.requestCount;
     for (const pn in s.params) out.params[pn] = mergeParamStats(out.params[pn], s.params[pn]);
     for (const fn in s.bodyFields) out.bodyFields[fn] = mergeParamStats(out.bodyFields[fn], s.bodyFields[fn]);
+    /* THE REQUEST-BODY CENSUS IS SUMMED HERE BECAUSE THIS FUNCTION IS AN ALLOWLIST AND NOT A UNION.
+       `_mergeMethodInto` one screen down fills what is missing and copies what it has not heard of, by a
+       rule its own comment states; this one REBUILDS `out` from a fixed literal, so any name lib/learn.js
+       adds to `_stats` that the literal does not carry is dropped at every global merge — the endpoint the
+       popup renders for every page you are not standing on would carry the census the tab doc had, and no
+       reader anywhere would say it had gone. A write whose reader never sees it is the same broken contract
+       as a read with no writer.
+       AND A CONTRIBUTOR THAT STATES NO CENSUS IS COUNTED AS UNCOUNTED RATHER THAN AS ZERO. A document
+       restored from a store written before this census existed carries `_stats` and no `body`, and "this
+       document's requests were never asked this question" is not "it carried no bodies" — averaging the two
+       is exactly the absent-versus-zero conflation the census was added to end, and doing it HERE would
+       re-introduce it one level up, in the summed number a person actually reads. */
+    if (s.body) {
+      out.body.present += s.body.present;
+      out.body.decoded += s.body.decoded;
+      out.body.undecoded += s.body.undecoded;
+      for (const t in s.body.undecodedTypes) {
+        if (!out.body.undecodedTypes[t]) out.body.undecodedTypes[t] = 0;
+        out.body.undecodedTypes[t] += s.body.undecodedTypes[t];
+      }
+    } else {
+      out.body.uncounted++;
+    }
   }
+  DCHECK(out.body.present === out.body.decoded + out.body.undecoded,
+         "a summed request-body census does not sum — each contributor's three counts are raised together " +
+         "at one site in lib/learn.js and added here in one arm, so a disagreement means a contributor was " +
+         "summed from a record whose census had already been written by something else");
   out.correlations = detectCorrelations(out);
   return out;
 }
