@@ -1,0 +1,485 @@
+
+<!DOCTYPE html>
+<html lang="en" class="notranslate" translate="no" data-theme="light" data-text-size="medium">
+<head>
+  <meta charset="UTF-8">
+  <meta name="google" content="notranslate" />
+  <meta name="title" content="regex101">
+  <meta name="description" content="Online regex tester and debugger with real-time match highlighting, detailed explanations, substitutions, unit tests, benchmarking, and code generation. Supports PCRE2, JavaScript, Python, Go, Java, .NET, Rust, POSIX ERE, and POSIX BRE.">
+  <meta name="author" content="Firas Dib">
+
+  <link href="https://regex101.com" rel="home" />
+  <link href="https://regex101.com/" rel="canonical" />
+
+  
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="regex101: build, test, and debug regex" />
+  <meta name="application-name" content="regex101: build, test, and debug regex" />
+  <meta name="format-detection" content="telephone=no">
+
+  <meta name="theme-color" content="#2c5c97">
+  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0f2c48">
+
+  <link rel="manifest" href="/static/assets/manifest.webmanifest">
+
+  <link rel="icon" type="image/png" sizes="196x196" href="/static/assets/icons/favicon-196.png" />
+<link rel="apple-touch-icon" href="/static/assets/icons/apple-icon-180.png" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/light/apple-splash-2048-2732.png"
+  media="(device-width: 1024px) and (device-height: 1366px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/light/apple-splash-2732-2048.png"
+  media="(device-width: 1024px) and (device-height: 1366px) and (-webkit-device-pixel-ratio: 2) and (orientation: landscape)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/light/apple-splash-1668-2388.png"
+  media="(device-width: 834px) and (device-height: 1194px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/light/apple-splash-2388-1668.png"
+  media="(device-width: 834px) and (device-height: 1194px) and (-webkit-device-pixel-ratio: 2) and (orientation: landscape)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/light/apple-splash-1536-2048.png"
+  media="(device-width: 768px) and (device-height: 1024px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/light/apple-splash-2048-1536.png"
+  media="(device-width: 768px) and (device-height: 1024px) and (-webkit-device-pixel-ratio: 2) and (orientation: landscape)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/light/apple-splash-1640-2360.png"
+  media="(device-width: 820px) and (device-height: 1180px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/light/apple-splash-2360-1640.png"
+  media="(device-width: 820px) and (device-height: 1180px) and (-webkit-device-pixel-ratio: 2) and (orientation: landscape)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/light/apple-splash-1668-2224.png"
+  media="(device-width: 834px) and (device-height: 1112px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/light/apple-splash-2224-1668.png"
+  media="(device-width: 834px) and (device-height: 1112px) and (-webkit-device-pixel-ratio: 2) and (orientation: landscape)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/light/apple-splash-1620-2160.png"
+  media="(device-width: 810px) and (device-height: 1080px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/light/apple-splash-2160-1620.png"
+  media="(device-width: 810px) and (device-height: 1080px) and (-webkit-device-pixel-ratio: 2) and (orientation: landscape)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/light/apple-splash-1488-2266.png"
+  media="(device-width: 744px) and (device-height: 1133px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/light/apple-splash-2266-1488.png"
+  media="(device-width: 744px) and (device-height: 1133px) and (-webkit-device-pixel-ratio: 2) and (orientation: landscape)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/light/apple-splash-1320-2868.png"
+  media="(device-width: 440px) and (device-height: 956px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/light/apple-splash-2868-1320.png"
+  media="(device-width: 440px) and (device-height: 956px) and (-webkit-device-pixel-ratio: 3) and (orientation: landscape)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/light/apple-splash-1206-2622.png"
+  media="(device-width: 402px) and (device-height: 874px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/light/apple-splash-2622-1206.png"
+  media="(device-width: 402px) and (device-height: 874px) and (-webkit-device-pixel-ratio: 3) and (orientation: landscape)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/light/apple-splash-1260-2736.png"
+  media="(device-width: 420px) and (device-height: 912px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/light/apple-splash-2736-1260.png"
+  media="(device-width: 420px) and (device-height: 912px) and (-webkit-device-pixel-ratio: 3) and (orientation: landscape)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/light/apple-splash-1290-2796.png"
+  media="(device-width: 430px) and (device-height: 932px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/light/apple-splash-2796-1290.png"
+  media="(device-width: 430px) and (device-height: 932px) and (-webkit-device-pixel-ratio: 3) and (orientation: landscape)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/light/apple-splash-1179-2556.png"
+  media="(device-width: 393px) and (device-height: 852px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/light/apple-splash-2556-1179.png"
+  media="(device-width: 393px) and (device-height: 852px) and (-webkit-device-pixel-ratio: 3) and (orientation: landscape)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/light/apple-splash-1170-2532.png"
+  media="(device-width: 390px) and (device-height: 844px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/light/apple-splash-2532-1170.png"
+  media="(device-width: 390px) and (device-height: 844px) and (-webkit-device-pixel-ratio: 3) and (orientation: landscape)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/light/apple-splash-1284-2778.png"
+  media="(device-width: 428px) and (device-height: 926px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/light/apple-splash-2778-1284.png"
+  media="(device-width: 428px) and (device-height: 926px) and (-webkit-device-pixel-ratio: 3) and (orientation: landscape)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/light/apple-splash-1125-2436.png"
+  media="(device-width: 375px) and (device-height: 812px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/light/apple-splash-2436-1125.png"
+  media="(device-width: 375px) and (device-height: 812px) and (-webkit-device-pixel-ratio: 3) and (orientation: landscape)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/light/apple-splash-1242-2688.png"
+  media="(device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/light/apple-splash-2688-1242.png"
+  media="(device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 3) and (orientation: landscape)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/light/apple-splash-828-1792.png"
+  media="(device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/light/apple-splash-1792-828.png"
+  media="(device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 2) and (orientation: landscape)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/light/apple-splash-1242-2208.png"
+  media="(device-width: 414px) and (device-height: 736px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/light/apple-splash-2208-1242.png"
+  media="(device-width: 414px) and (device-height: 736px) and (-webkit-device-pixel-ratio: 3) and (orientation: landscape)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/light/apple-splash-750-1334.png"
+  media="(device-width: 375px) and (device-height: 667px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/light/apple-splash-1334-750.png"
+  media="(device-width: 375px) and (device-height: 667px) and (-webkit-device-pixel-ratio: 2) and (orientation: landscape)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/light/apple-splash-640-1136.png"
+  media="(device-width: 320px) and (device-height: 568px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/light/apple-splash-1136-640.png"
+  media="(device-width: 320px) and (device-height: 568px) and (-webkit-device-pixel-ratio: 2) and (orientation: landscape)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/dark/apple-splash-dark-2048-2732.png"
+  media="(prefers-color-scheme: dark) and (device-width: 1024px) and (device-height: 1366px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/dark/apple-splash-dark-2732-2048.png"
+  media="(prefers-color-scheme: dark) and (device-width: 1024px) and (device-height: 1366px) and (-webkit-device-pixel-ratio: 2) and (orientation: landscape)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/dark/apple-splash-dark-1668-2388.png"
+  media="(prefers-color-scheme: dark) and (device-width: 834px) and (device-height: 1194px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/dark/apple-splash-dark-2388-1668.png"
+  media="(prefers-color-scheme: dark) and (device-width: 834px) and (device-height: 1194px) and (-webkit-device-pixel-ratio: 2) and (orientation: landscape)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/dark/apple-splash-dark-1536-2048.png"
+  media="(prefers-color-scheme: dark) and (device-width: 768px) and (device-height: 1024px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/dark/apple-splash-dark-2048-1536.png"
+  media="(prefers-color-scheme: dark) and (device-width: 768px) and (device-height: 1024px) and (-webkit-device-pixel-ratio: 2) and (orientation: landscape)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/dark/apple-splash-dark-1640-2360.png"
+  media="(prefers-color-scheme: dark) and (device-width: 820px) and (device-height: 1180px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/dark/apple-splash-dark-2360-1640.png"
+  media="(prefers-color-scheme: dark) and (device-width: 820px) and (device-height: 1180px) and (-webkit-device-pixel-ratio: 2) and (orientation: landscape)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/dark/apple-splash-dark-1668-2224.png"
+  media="(prefers-color-scheme: dark) and (device-width: 834px) and (device-height: 1112px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/dark/apple-splash-dark-2224-1668.png"
+  media="(prefers-color-scheme: dark) and (device-width: 834px) and (device-height: 1112px) and (-webkit-device-pixel-ratio: 2) and (orientation: landscape)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/dark/apple-splash-dark-1620-2160.png"
+  media="(prefers-color-scheme: dark) and (device-width: 810px) and (device-height: 1080px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/dark/apple-splash-dark-2160-1620.png"
+  media="(prefers-color-scheme: dark) and (device-width: 810px) and (device-height: 1080px) and (-webkit-device-pixel-ratio: 2) and (orientation: landscape)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/dark/apple-splash-dark-1488-2266.png"
+  media="(prefers-color-scheme: dark) and (device-width: 744px) and (device-height: 1133px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/dark/apple-splash-dark-2266-1488.png"
+  media="(prefers-color-scheme: dark) and (device-width: 744px) and (device-height: 1133px) and (-webkit-device-pixel-ratio: 2) and (orientation: landscape)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/dark/apple-splash-dark-1320-2868.png"
+  media="(prefers-color-scheme: dark) and (device-width: 440px) and (device-height: 956px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/dark/apple-splash-dark-2868-1320.png"
+  media="(prefers-color-scheme: dark) and (device-width: 440px) and (device-height: 956px) and (-webkit-device-pixel-ratio: 3) and (orientation: landscape)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/dark/apple-splash-dark-1206-2622.png"
+  media="(prefers-color-scheme: dark) and (device-width: 402px) and (device-height: 874px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/dark/apple-splash-dark-2622-1206.png"
+  media="(prefers-color-scheme: dark) and (device-width: 402px) and (device-height: 874px) and (-webkit-device-pixel-ratio: 3) and (orientation: landscape)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/dark/apple-splash-dark-1260-2736.png"
+  media="(prefers-color-scheme: dark) and (device-width: 420px) and (device-height: 912px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/dark/apple-splash-dark-2736-1260.png"
+  media="(prefers-color-scheme: dark) and (device-width: 420px) and (device-height: 912px) and (-webkit-device-pixel-ratio: 3) and (orientation: landscape)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/dark/apple-splash-dark-1290-2796.png"
+  media="(prefers-color-scheme: dark) and (device-width: 430px) and (device-height: 932px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/dark/apple-splash-dark-2796-1290.png"
+  media="(prefers-color-scheme: dark) and (device-width: 430px) and (device-height: 932px) and (-webkit-device-pixel-ratio: 3) and (orientation: landscape)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/dark/apple-splash-dark-1179-2556.png"
+  media="(prefers-color-scheme: dark) and (device-width: 393px) and (device-height: 852px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/dark/apple-splash-dark-2556-1179.png"
+  media="(prefers-color-scheme: dark) and (device-width: 393px) and (device-height: 852px) and (-webkit-device-pixel-ratio: 3) and (orientation: landscape)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/dark/apple-splash-dark-1170-2532.png"
+  media="(prefers-color-scheme: dark) and (device-width: 390px) and (device-height: 844px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/dark/apple-splash-dark-2532-1170.png"
+  media="(prefers-color-scheme: dark) and (device-width: 390px) and (device-height: 844px) and (-webkit-device-pixel-ratio: 3) and (orientation: landscape)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/dark/apple-splash-dark-1284-2778.png"
+  media="(prefers-color-scheme: dark) and (device-width: 428px) and (device-height: 926px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/dark/apple-splash-dark-2778-1284.png"
+  media="(prefers-color-scheme: dark) and (device-width: 428px) and (device-height: 926px) and (-webkit-device-pixel-ratio: 3) and (orientation: landscape)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/dark/apple-splash-dark-1125-2436.png"
+  media="(prefers-color-scheme: dark) and (device-width: 375px) and (device-height: 812px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/dark/apple-splash-dark-2436-1125.png"
+  media="(prefers-color-scheme: dark) and (device-width: 375px) and (device-height: 812px) and (-webkit-device-pixel-ratio: 3) and (orientation: landscape)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/dark/apple-splash-dark-1242-2688.png"
+  media="(prefers-color-scheme: dark) and (device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/dark/apple-splash-dark-2688-1242.png"
+  media="(prefers-color-scheme: dark) and (device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 3) and (orientation: landscape)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/dark/apple-splash-dark-828-1792.png"
+  media="(prefers-color-scheme: dark) and (device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/dark/apple-splash-dark-1792-828.png"
+  media="(prefers-color-scheme: dark) and (device-width: 414px) and (device-height: 896px) and (-webkit-device-pixel-ratio: 2) and (orientation: landscape)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/dark/apple-splash-dark-1242-2208.png"
+  media="(prefers-color-scheme: dark) and (device-width: 414px) and (device-height: 736px) and (-webkit-device-pixel-ratio: 3) and (orientation: portrait)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/dark/apple-splash-dark-2208-1242.png"
+  media="(prefers-color-scheme: dark) and (device-width: 414px) and (device-height: 736px) and (-webkit-device-pixel-ratio: 3) and (orientation: landscape)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/dark/apple-splash-dark-750-1334.png"
+  media="(prefers-color-scheme: dark) and (device-width: 375px) and (device-height: 667px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/dark/apple-splash-dark-1334-750.png"
+  media="(prefers-color-scheme: dark) and (device-width: 375px) and (device-height: 667px) and (-webkit-device-pixel-ratio: 2) and (orientation: landscape)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/dark/apple-splash-dark-640-1136.png"
+  media="(prefers-color-scheme: dark) and (device-width: 320px) and (device-height: 568px) and (-webkit-device-pixel-ratio: 2) and (orientation: portrait)"
+/>
+<link
+  rel="apple-touch-startup-image"
+  href="/static/assets/splash/dark/apple-splash-dark-1136-640.png"
+  media="(prefers-color-scheme: dark) and (device-width: 320px) and (device-height: 568px) and (-webkit-device-pixel-ratio: 2) and (orientation: landscape)"
+/>
+
+
+  <meta name="viewport" content="width=device-width, minimum-scale=1.0, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="keywords" content="regex,regex tester,regular expression,debugger,pcre,php,golang,java,javascript,python,.net,c#,rust">
+
+  
+  <meta property="twitter:card" content="summary_large_image">
+  <meta property="twitter:site" content="@regex101">
+  <meta property="twitter:title" content="regex101: build, test, and debug regex">
+  <meta property="twitter:description" content="Online regex tester and debugger with real-time match highlighting, detailed explanations, substitutions, unit tests, benchmarking, and code generation. Supports PCRE2, JavaScript, Python, Go, Java, .NET, Rust, POSIX ERE, and POSIX BRE.">
+  <meta property="twitter:creator" content="@regex101">
+  <meta property="twitter:image" content="https://regex101.com/preview/">
+  <meta property="twitter:domain" content="regex101.com">
+
+  <meta property="og:image" content="https://regex101.com/preview/">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:title" content="regex101: build, test, and debug regex">
+  <meta property="og:description" content="Online regex tester and debugger with real-time match highlighting, detailed explanations, substitutions, unit tests, benchmarking, and code generation. Supports PCRE2, JavaScript, Python, Go, Java, .NET, Rust, POSIX ERE, and POSIX BRE.">
+  <meta property="og:url" content="https://regex101.com/">
+  <meta property="og:site_name" content="regex101">
+  <meta property="og:type" content="website">
+
+
+  <script>var e;document.addEventListener("readystatechange",e=function(t){if("interactive"===t.target.readyState){document.removeEventListener("readystatechange",e);try{var a,n,r,o=JSON.parse(null===(a=localStorage)||void 0===a?void 0:a.getItem("persist:settings")),l=JSON.parse((null==o?void 0:o.theme)||null),d=JSON.parse((null==o?void 0:o.textSize)||null),i=null!==(n=window)&&void 0!==n&&null!==(r=n.matchMedia)&&void 0!==r&&null!==(r=r.call(n,"(prefers-color-scheme: dark)"))&&void 0!==r&&r.matches?"dark":"light";document.documentElement.setAttribute("data-theme",l&&"auto"!==l.toLowerCase()?l:i),document.documentElement.setAttribute("data-text-size",d||"medium")}catch(e){console.error("Unable to set appearance",e)}}});</script>
+  <script defer>
+  (function(){var a="Worker"in window,b="Promise"in window,c="object"===typeof WebAssembly&&"function"===typeof WebAssembly.instantiate;a&&b&&c||(window.__LEGACY__=!0,window.addEventListener("load",function(){document.body.innerHTML='<div style="padding: 60px; max-width: 600px;margin: 0 auto; text-align: center; font-size: 20px; line-height: 1.5;"><div><p>Unfortunately it seems your browser does not meet the criteria to properly render and utilize this website. You need a browser with support for web workers and Web Assembly.</p><a href="http://browsehappy.com/" style="color: blue;">Please upgrade your browser and come back</a></div><p><strong>Note: if you\'re running a newer version of Edge, and still getting this message, check your security settings as they can be preventing webassembly from running.</strong></p><p><strong>Debug results:</strong> Worker='+a+", Promise="+b+", WASM="+c+"</strong></p></div>"},{once:!0}))})();
+  </script>
+
+  <script fetchpriority="low" defer data-domain="regex101.com" src="https://analytics.regex101.com/js/script.outbound-links.pageview-props.tagged-events.js"></script>
+
+  <title>regex101: build, test, and debug regex</title>
+
+  <link rel="stylesheet" type="text/css" href="/static/699.9a05889fa5553759577f.css" class="regex101-style">
+
+  <script>
+    window.__INITIAL_STATE__ = {"api":{"queries":{},"provided":{"tags":{},"keys":{}}},"miscApi":{"queries":{},"provided":{"tags":{},"keys":{}}},"rightSidebar":{"activeSubsection":"explanation","visibleSections":["explanation","match-info","quickref"],"hiddenSections":[],"width":null},"regexEditor":{"flavor":"pcre2","flags":"gm","delimiter":"/","routeLoadId":1,"parserState":{"result":null,"isParsing":false,"hasParsed":false},"regex":"","testStrings":[{"key":"dbj45b5imn6","name":null,"value":null,"disabled":false}],"selectedTestStringKey":"dbj45b5imn6","substString":"","listSubstString":"","persistedEditorMode":"match","libraryDetails":{"description":null,"author":null,"title":null},"userDetails":{"isOwner":false,"isFavorite":false},"permalinkDetails":{"isLibraryEntry":false,"isPrivate":false,"isLocked":false,"fragment":null,"version":null,"isEditable":false,"permalinkDeleteCode":null,"permalinkVersionDeleteCode":null,"tags":[],"title":null}},"substitutionPipeline":{"initialInput":"","layers":[],"selectedLayerKey":null,"isDirty":false,"executionInputRevision":0,"executionRevision":null,"status":"not-run","results":{}},"settings":{"defaultFlavor":"pcre2","defaultFlags":"gm","defaultDelimiter":"/","maxExecutionTime":2000,"autoRunUnitTests":true,"autoRunSubstitutionPipeline":true,"theme":"auto","regexColorScheme":"default","matchColorScheme":"default","nonParticipatingGroups":false,"displayWhitespace":true,"colorizeSyntax":true,"wrapLines":true,"textSize":"medium","testAreaLineNumbers":false,"regexAreaLineNumbers":false,"language":"ENGLISH","editorTooltips":true,"intellisenseEnabled":true,"alwaysCollapseLeftSidebar":false,"alwaysCollapseRightSidebar":false,"defaultFunction":"MATCH","showWarningUnsavedProgress":true,"defaultCodeGenLanguage":"","copyExplanationStyle":"verbose","calculateRegexSteps":true,"defaultTabBehavior":true,"fileLoadingMode":"ask","disableKeyboardShortcuts":false,"lineSeparator":"","textExplanationMode":"PLAIN_TEXT_BOTH","leftSidebarBreakpoint":1080,"rightSidebarBreakpoint":900,"matchInfoPanel":true,"benchmarkDuration":10000,"formatRegexIndentationWidth":2,"formatRegexMaxLineWidth":80,"analyzeRedos":true,"redosAnalysisMinimumSeverity":"low","updatedAt":0},"unitTests":{"tests":[],"invalidatedTestKeys":[],"testResults":{},"testsRunning":false,"testFilter":"all"},"general":{"documentTitle":null,"metaDescription":"Online regex tester and debugger with real-time match highlighting, detailed explanations, substitutions, unit tests, benchmarking, and code generation. Supports PCRE2, JavaScript, Python, Go, Java, .NET, Rust, POSIX ERE, and POSIX BRE.","currentTheme":"light","settingsLoaded":false},"user":{"userId":null,"email":null,"avatarLabel":null,"serviceProvider":null,"isLibraryModerator":false,"userClass":"free","isProTrialEligible":false,"signedIn":false},"quiz":{"currentTaskData":{},"totalTasks":0},"sponsors":{"sponsorData":null,"sponsors":[{"name":"regex101","tagline":"Fewer distractions and more power with regex101 Pro.","url":"https://regex101.com","logo":{"light":"/static/assets/icons/favicon-196.png","dark":"/static/assets/icons/favicon-196.png"},"orientation":"vertical","expiryDate":null,"totalTime":20,"initialRender":0.3333333333333333},{"name":"digidib","tagline":"digidib · when security, quality, and reliability matter","url":"https://digidib.dev","logo":{"light":"/static/assets/sponsors/digidib.png","dark":"/static/assets/sponsors/digidib.png"},"orientation":"vertical","expiryDate":null,"totalTime":40,"initialRender":0.6666666666666666}],"adBlock":false,"isLoading":true,"hasRequestedCarbonAd":false},"config":{"featureAccess":{"entitledFeatures":["accounts","save-and-share","basic-pro-features","api-explain-regex","file-loading","mcp","substitution-pipeline"],"availableFeatures":["accounts","save-and-share","mcp"],"excludedFeatures":["redos-analysis"]},"forceOffline":false,"hostBlocked":false,"blockedHostname":null,"licenseInfo":{"exp":"2099-01-01T00:00:00.000Z","lastValidated":"2026-09-02T20:20:31.613Z","contactEmail":"firas@regex101.com"},"isEmbedded":false,"minimalInterface":false,"jsRegexSupport":{"lookbehind":false,"namedGroup":false,"unicodeProperty":false,"duplicateSubpatternName":false,"modifierGroup":false}}};
+  </script>
+
+  <link rel="preload" href="/static/67.d130a6939381b6fa75aa.css" as="style" />
+<link rel="preload" href="/static/quickref.239fae22bb19ca894546.chunk.js" as="script" />
+<link rel="stylesheet" type="text/css" href="/static/23.cc797880f306deb8f078.css" class="regex101-style">
+<script src="/static/vendors-bundle.65f4bbafbeb610e24f34.js" defer></script>
+<script src="/static/bundle.ffef7f9367b1fdf9f8fc.js" defer></script>
+</head>
+<body>
+<div id="app-loading" aria-hidden="false">
+  <noscript>
+    <a href="https://turnonjs.com">
+      Please enable JavaScript to use regex101
+    </Link>
+  </noscript>
+  <div class="app-loading__spinner">
+    <div class="app-loading__logo"></div>
+  </div>
+</div>
+<div id="regex-app"><div class="ubMhU"><header class="Mt50K"><h1><a href="/" class="uBZxP W6KiV JhGf4" rel="noopener" tabindex="0" aria-label="regular expressions 101"><span class="FMl1u">Regular</span> <span class="f4WR9">Expressions</span> <span class="Tp_GT">101</span></a></h1><div class="McSFM"><button class="C6U5L qDpGx pd80V" aria-label="Upgrade to Pro" type="button"><span class="OZIwH"><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" height="14" width="14" xmlns="http://www.w3.org/2000/svg"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"></path><path d="M20 3v4"></path><path d="M22 5h-4"></path><path d="M4 17v2"></path><path d="M5 18H3"></path></svg></span><span class="HYBGd"><span class="MHQ0d">Upgrade to Pro</span></span><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="jfn0S" height="14" width="14" xmlns="http://www.w3.org/2000/svg"><path d="m9 18 6-6-6-6"></path></svg></button><button class="C6U5L qDpGx" aria-disabled="false" aria-label="Enterprise" aria-busy="false" type="button"><span class="OZIwH"><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" height="14" width="14" xmlns="http://www.w3.org/2000/svg"><path d="M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z"></path><path d="M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"></path><path d="M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2"></path><path d="M10 6h4"></path><path d="M10 10h4"></path><path d="M10 14h4"></path><path d="M10 18h4"></path></svg></span><span class="HYBGd"><span class="MHQ0d">Enterprise</span></span><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="jfn0S" height="14" width="14" xmlns="http://www.w3.org/2000/svg"><path d="m9 18 6-6-6-6"></path></svg></button><!--$--><!--/$--><button class="C6U5L qDpGx" aria-label="Sponsor" type="button"><span class="OZIwH"><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" height="14" width="14" xmlns="http://www.w3.org/2000/svg"><path d="m11 17 2 2a1 1 0 1 0 3-3"></path><path d="m14 14 2.5 2.5a1 1 0 1 0 3-3l-3.88-3.88a3 3 0 0 0-4.24 0l-.88.88a1 1 0 1 1-3-3l2.81-2.81a5.79 5.79 0 0 1 7.06-.87l.47.28a2 2 0 0 0 1.42.25L21 4"></path><path d="m21 3 1 11h-2"></path><path d="M3 3 2 14l6.5 6.5a1 1 0 1 0 3-3"></path><path d="M3 4h8"></path></svg></span><span class="HYBGd"><span class="MHQ0d">Sponsor</span></span><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="jfn0S" height="14" width="14" xmlns="http://www.w3.org/2000/svg"><path d="m6 9 6 6 6-6"></path></svg></button><button class="C6U5L qDpGx" aria-label="Info" type="button"><span class="OZIwH"><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" height="14" width="14" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4"></path><path d="M12 8h.01"></path></svg></span><span class="HYBGd"><span class="MHQ0d">Info</span><div class="r2Vpq"></div></span><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="jfn0S" height="14" width="14" xmlns="http://www.w3.org/2000/svg"><path d="m6 9 6 6 6-6"></path></svg></button></div></header><div class="cAgJZ"><div class="gqUEa" aria-hidden="true"></div><div class="Txh3p"><nav class="bForU QhyiI"><div class="a5VAu"><span class="Tbe4j igpmB fXzfi TDcxN s_nse Z8IXS t_JcW s2V9B" aria-current="page" aria-label="Regex Editor"><span class="jpZxI">Regex Editor</span><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="kcIdU" height="18" width="18" xmlns="http://www.w3.org/2000/svg"><path d="M17 3v10"></path><path d="m12.67 5.5 8.66 5"></path><path d="m12.67 10.5 8.66-5"></path><path d="M9 17a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v2a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2v-2z"></path></svg></span><a class="uBZxP Tbe4j igpmB fXzfi TDcxN s_nse Z8IXS" aria-label="Community Library" href="/library" data-discover="true"><span class="jpZxI">Community Library</span><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="kcIdU" height="18" width="18" xmlns="http://www.w3.org/2000/svg"><path d="m16 6 4 14"></path><path d="M12 6v14"></path><path d="M8 8v12"></path><path d="M4 4v16"></path></svg></a><a class="uBZxP Tbe4j igpmB fXzfi TDcxN s_nse Z8IXS" aria-label="Account" href="/account/mine" data-discover="true"><span class="jpZxI">Account</span><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="kcIdU" height="18" width="18" xmlns="http://www.w3.org/2000/svg"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg></a><a class="uBZxP Tbe4j igpmB fXzfi TDcxN s_nse Z8IXS" aria-label="Regex Quiz" href="/quiz" data-discover="true"><span class="jpZxI">Regex Quiz</span><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="kcIdU" height="18" width="18" xmlns="http://www.w3.org/2000/svg"><line x1="6" x2="10" y1="12" y2="12"></line><line x1="8" x2="8" y1="10" y2="14"></line><line x1="15" x2="15.01" y1="13" y2="13"></line><line x1="18" x2="18.01" y1="11" y2="11"></line><rect width="20" height="12" x="2" y="6" rx="2"></rect></svg></a></div><div class="CR4sq"><button class="C6U5L Tbe4j qUIkn fXzfi TDcxN s_nse Z8IXS" style="--icon-button-icon-size:18px" aria-label="Live Help" type="button"><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="kcIdU" height="18" width="18" xmlns="http://www.w3.org/2000/svg"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"></path><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><path d="M12 17h.01"></path></svg></button><button class="C6U5L Tbe4j qUIkn fXzfi TDcxN s_nse Z8IXS" style="--icon-button-icon-size:18px" aria-label="Keyboard Shortcuts" type="button"><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="kcIdU" height="18" width="18" xmlns="http://www.w3.org/2000/svg"><path d="M10 8h.01"></path><path d="M12 12h.01"></path><path d="M14 8h.01"></path><path d="M16 12h.01"></path><path d="M18 8h.01"></path><path d="M6 8h.01"></path><path d="M7 16h10"></path><path d="M8 12h.01"></path><rect width="20" height="16" x="2" y="4" rx="2"></rect></svg></button><button class="C6U5L Tbe4j qUIkn fXzfi TDcxN s_nse Z8IXS" style="--icon-button-icon-size:18px" aria-label="Settings" type="button"><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="kcIdU" height="18" width="18" xmlns="http://www.w3.org/2000/svg"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path><circle cx="12" cy="12" r="3"></circle></svg></button></div></nav><div class="_7EOv"><div><h2 class="tv8Jw oY83r qnsqt uvRJT hdfIT"><span class="oY83r">Manage Workspace</span></h2><ul class="OZHfn"><li class="C6U5L h7Pb8" role="button" tabindex="0"><div class="PHr2N KpzVx tVODk rMqm7 E5P59"><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="R4VSs" height="14" width="14" xmlns="http://www.w3.org/2000/svg"><path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"></path><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7"></path><path d="M7 3v4a1 1 0 0 0 1 1h7"></path></svg><div class="UmiAI">Save &amp; Share</div><div class="nCjjB zaGCY"><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="L9x3g" height="16" width="16" xmlns="http://www.w3.org/2000/svg"><path d="m9 18 6-6-6-6"></path></svg></div></div></li></ul></div><div><h2 class="tv8Jw oY83r qnsqt uvRJT hdfIT"><span class="oY83r">Editor</span></h2><ul class="OZHfn"><li class="C6U5L h7Pb8" role="button" tabindex="0"><div class="PHr2N KpzVx tVODk E5P59"><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="R4VSs" height="14" width="14" xmlns="http://www.w3.org/2000/svg"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg><div class="UmiAI"><span>Flavor: <strong class="rMqm7">PCRE2 (PHP)</strong></span></div><div class="nCjjB zaGCY"><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="L9x3g" height="16" width="16" xmlns="http://www.w3.org/2000/svg"><path d="m9 18 6-6-6-6"></path></svg></div></div></li><li class="h7Pb8"><a class="uBZxP ZB4vA" href="/" data-discover="true"><div class="PHr2N KpzVx"><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="R4VSs" height="14" width="14" xmlns="http://www.w3.org/2000/svg"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" x2="20" y1="19" y2="19"></line></svg><div class="d68xb Dt_6h"><div class="dwTUt">Match</div><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="oundo" height="14" width="14" xmlns="http://www.w3.org/2000/svg"><path d="M20 6 9 17l-5-5"></path></svg></div></div></a></li><li class="h7Pb8"><a class="uBZxP ZB4vA" href="/substitution" data-discover="true"><div class="PHr2N KpzVx"><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="R4VSs" height="14" width="14" xmlns="http://www.w3.org/2000/svg"><path d="M14 4a2 2 0 0 1 2-2"></path><path d="M16 10a2 2 0 0 1-2-2"></path><path d="M20 2a2 2 0 0 1 2 2"></path><path d="M22 8a2 2 0 0 1-2 2"></path><path d="m3 7 3 3 3-3"></path><path d="M6 10V5a3 3 0 0 1 3-3h1"></path><rect x="2" y="14" width="8" height="8" rx="2"></rect></svg><div class="d68xb"><div class="dwTUt">Substitution</div><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="oundo" height="14" width="14" xmlns="http://www.w3.org/2000/svg"><path d="M20 6 9 17l-5-5"></path></svg></div></div></a></li><li class="h7Pb8"><a class="uBZxP ZB4vA" href="/list-substitution" data-discover="true"><div class="PHr2N KpzVx"><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="R4VSs" height="14" width="14" xmlns="http://www.w3.org/2000/svg"><path d="M14 14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2"></path><path d="M14 4a2 2 0 0 1 2-2"></path><path d="M16 10a2 2 0 0 1-2-2"></path><path d="M20 14a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2"></path><path d="M20 2a2 2 0 0 1 2 2"></path><path d="M22 8a2 2 0 0 1-2 2"></path><path d="m3 7 3 3 3-3"></path><path d="M6 10V5a 3 3 0 0 1 3-3h1"></path><rect x="2" y="14" width="8" height="8" rx="2"></rect></svg><div class="d68xb"><div class="dwTUt">List</div><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="oundo" height="14" width="14" xmlns="http://www.w3.org/2000/svg"><path d="M20 6 9 17l-5-5"></path></svg></div></div></a></li><li class="h7Pb8"><a class="uBZxP ZB4vA" href="/unit-tests" data-discover="true"><div class="PHr2N KpzVx"><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="R4VSs" height="14" width="14" xmlns="http://www.w3.org/2000/svg"><path d="M21 7 6.82 21.18a2.83 2.83 0 0 1-3.99-.01a2.83 2.83 0 0 1 0-4L17 3"></path><path d="m16 2 6 6"></path><path d="M12 16H4"></path></svg><div class="d68xb"><div class="dwTUt">Unit Tests </div><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="oundo" height="14" width="14" xmlns="http://www.w3.org/2000/svg"><path d="M20 6 9 17l-5-5"></path></svg></div></div></a></li><li class="h7Pb8"><a class="uBZxP ZB4vA" href="/substitution-pipeline" data-discover="true"><div class="PHr2N KpzVx"><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="R4VSs" height="14" width="14" xmlns="http://www.w3.org/2000/svg"><rect width="8" height="8" x="3" y="3" rx="2"></rect><path d="M7 11v4a2 2 0 0 0 2 2h4"></path><rect width="8" height="8" x="13" y="13" rx="2"></rect></svg><div class="d68xb"><div class="dwTUt">Pipeline<span class="DQOcp">Pro</span></div><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="oundo" height="14" width="14" xmlns="http://www.w3.org/2000/svg"><path d="M20 6 9 17l-5-5"></path></svg></div></div></a></li></ul></div><div><h2 class="tv8Jw oY83r qnsqt uvRJT hdfIT"><span class="oY83r">Tools</span></h2><ul class="OZHfn"><li class="h7Pb8 hQq_B"><div class="PHr2N KpzVx"><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="R4VSs" height="14" width="14" xmlns="http://www.w3.org/2000/svg"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path><path d="M14 2v4a2 2 0 0 0 2 2h4"></path><path d="M10 12a1 1 0 0 0-1 1v1a1 1 0 0 1-1 1 1 1 0 0 1 1 1v1a1 1 0 0 0 1 1"></path><path d="M14 18a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1 1 1 0 0 1-1-1v-1a1 1 0 0 0-1-1"></path></svg><div class="NkLlB">Code Generator</div></div></li><li class="h7Pb8 hQq_B"><div class="PHr2N KpzVx"><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="R4VSs" height="14" width="14" xmlns="http://www.w3.org/2000/svg"><path d="m8 2 1.88 1.88"></path><path d="M14.12 3.88 16 2"></path><path d="M9 7.13v-1a3.003 3.003 0 1 1 6 0v1"></path><path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6"></path><path d="M12 20v-9"></path><path d="M6.53 9C4.6 8.8 3 7.1 3 5"></path><path d="M6 13H2"></path><path d="M3 21c0-2.1 1.7-3.9 3.8-4"></path><path d="M20.97 5c0 2.1-1.6 3.8-3.5 4"></path><path d="M22 13h-4"></path><path d="M17.2 17c2.1.1 3.8 1.9 3.8 4"></path></svg><div class="NkLlB">Regex Debugger</div></div></li><li class="h7Pb8 hQq_B S_Xfr"><div class="PHr2N KpzVx"><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="R4VSs" height="14" width="14" xmlns="http://www.w3.org/2000/svg"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path><path d="M14 2v4a2 2 0 0 0 2 2h4"></path><path d="M12 12v6"></path><path d="m15 15-3-3-3 3"></path></svg>Export Matches</div></li><li class="h7Pb8 hQq_B"><div class="PHr2N KpzVx"><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="R4VSs" height="14" width="14" xmlns="http://www.w3.org/2000/svg"><path d="M13 16a3 3 0 0 1 2.24 5"></path><path d="M18 12h.01"></path><path d="M18 21h-8a4 4 0 0 1-4-4 7 7 0 0 1 7-7h.2L9.6 6.4a1 1 0 1 1 2.8-2.8L15.8 7h.2c3.3 0 6 2.7 6 6v1a2 2 0 0 1-2 2h-1a3 3 0 0 0-3 3"></path><path d="M20 8.54V4a2 2 0 1 0-4 0v3"></path><path d="M7.612 12.524a3 3 0 1 0-1.6 4.3"></path></svg>Benchmark Regex<span class="DQOcp">Pro</span></div></li><li class="h7Pb8 hQq_B"><div class="PHr2N KpzVx"><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="R4VSs" height="14" width="14" xmlns="http://www.w3.org/2000/svg"><path d="M17 3v10"></path><path d="m12.67 5.5 8.66 5"></path><path d="m12.67 10.5 8.66-5"></path><path d="M9 17a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v2a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2v-2z"></path></svg>Format Regex<span class="DQOcp">Pro</span></div></li></ul></div></div></div><!--$--><!--/$--><!--$--><!--/$--><!--$--><!--/$--><!--$--><!--/$--><div class="BRij6 DpjAw"><div class="DUEMw"><div class="ZsK_r">Spon⁠sors</div></div><div class="EQWpd"><div class="btUsB"><button class="C6U5L tW_0q gzBA7 AtuLS" type="button"><div class="ZLIKa" style="background-image:url(/static/assets/icons/favicon-196.png)"></div><div class="RHufL">Fewer distractions and more power with regex101 Pro.</div></button></div></div></div></div><div class="TNfY5"><div class="bCcdz"><div class="ZtiXL"><div class="n4YC7 y5BIK"></div><div class="Qik2b"><div class="AXFVd"><h2 class="tv8Jw oY83r qnsqt cRV43 VcXTA"><span class="oY83r">Explanation</span><span class="CAUW_"><button class="C6U5L jjmIt Tbe4j tK5iV qUIkn fXzfi TDcxN OAVUl mhM8d" aria-disabled="true" disabled="" style="--icon-button-icon-size:16px" aria-label="Copy explanation" tabindex="-1" type="button"><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="kcIdU" height="16" width="16" xmlns="http://www.w3.org/2000/svg"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path></svg></button><button class="C6U5L fH5xg" aria-expanded="true" aria-label="Collapse Explanation" type="button"><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="D2z8y" height="18" width="18" xmlns="http://www.w3.org/2000/svg"><path d="m6 9 6 6 6-6"></path></svg></button></span></h2></div><div class="RTVjE"><div class="zcMWU"><div class="T7QyX p0ZgQ">An explanation of your regex will be automatically generated as you type.</div></div></div></div><div class="Qik2b"><div class="AXFVd"><h2 class="tv8Jw oY83r qnsqt cRV43 VcXTA"><span class="oY83r">Match Information</span><span class="CAUW_"><button class="C6U5L fH5xg" aria-expanded="true" aria-label="Collapse Match Information" type="button"><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="D2z8y" height="18" width="18" xmlns="http://www.w3.org/2000/svg"><path d="m6 9 6 6 6-6"></path></svg></button></span></h2></div><div class="RTVjE"><div class="zcMWU"><div class="Ta0pA"><div class="T7QyX">Detailed match information will be displayed here automatically.</div></div></div></div></div><div class="Qik2b" id="quickrefParent"><div class="AXFVd"><h2 class="tv8Jw oY83r qnsqt cRV43 VcXTA"><span class="oY83r">Quick Reference</span><span class="CAUW_"><button class="C6U5L fH5xg" aria-expanded="true" aria-label="Collapse Quick Reference" type="button"><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="D2z8y" height="18" width="18" xmlns="http://www.w3.org/2000/svg"><path d="m6 9 6 6 6-6"></path></svg></button></span></h2></div><div class="RTVjE"><div class="zcMWU"><!--$--><div class="Js8jV"><label class="nMiYH"><span class="jpZxI">Search reference</span><div class="pdyg7 QXqTJ E2jsv"><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="mvJiX" height="16" width="16" xmlns="http://www.w3.org/2000/svg"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path></svg><input type="text" placeholder="Search reference" spellCheck="false" class="qjXYB NQBHs" value=""/></div></label><div class="hiqUJ"><div class="aLSmn"><ul class="OZHfn"><li class="C6U5L h7Pb8" role="button" tabindex="0"><div class="PHr2N aTwTa KpzVx"><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="R4VSs" height="14" width="14" xmlns="http://www.w3.org/2000/svg"><path d="m16 6 4 14"></path><path d="M12 6v14"></path><path d="M8 8v12"></path><path d="M4 4v16"></path></svg><div class="d68xb"><div class="dwTUt">All Tokens</div><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="oundo" height="14" width="14" xmlns="http://www.w3.org/2000/svg"><path d="M20 6 9 17l-5-5"></path></svg></div></div></li><li class="C6U5L h7Pb8" role="button" tabindex="0"><div class="PHr2N aTwTa KpzVx"><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="R4VSs" height="14" width="14" xmlns="http://www.w3.org/2000/svg"><path d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z"></path></svg><div class="d68xb Dt_6h"><div class="dwTUt">Common Tokens</div><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="oundo" height="14" width="14" xmlns="http://www.w3.org/2000/svg"><path d="M20 6 9 17l-5-5"></path></svg></div></div></li><li class="C6U5L h7Pb8" role="button" tabindex="0"><div class="PHr2N aTwTa KpzVx"><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="R4VSs" height="14" width="14" xmlns="http://www.w3.org/2000/svg"><path d="M16 12H3"></path><path d="M16 18H3"></path><path d="M10 6H3"></path><path d="M21 18V8a2 2 0 0 0-2-2h-5"></path><path d="m16 8-2-2 2-2"></path></svg><div class="d68xb"><div class="dwTUt">General Tokens</div><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="oundo" height="14" width="14" xmlns="http://www.w3.org/2000/svg"><path d="M20 6 9 17l-5-5"></path></svg></div></div></li><li class="C6U5L h7Pb8" role="button" tabindex="0"><div class="PHr2N aTwTa KpzVx"><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="R4VSs" height="14" width="14" xmlns="http://www.w3.org/2000/svg"><path d="M12 22V8"></path><path d="M5 12H2a10 10 0 0 0 20 0h-3"></path><circle cx="12" cy="5" r="3"></circle></svg><div class="d68xb"><div class="dwTUt">Anchors</div><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="oundo" height="14" width="14" xmlns="http://www.w3.org/2000/svg"><path d="M20 6 9 17l-5-5"></path></svg></div></div></li><li class="C6U5L h7Pb8" role="button" tabindex="0"><div class="PHr2N aTwTa KpzVx"><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="R4VSs" height="14" width="14" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="10"></circle><circle cx="12" cy="12" r="1"></circle></svg><div class="d68xb"><div class="dwTUt">Meta Sequences</div><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="oundo" height="14" width="14" xmlns="http://www.w3.org/2000/svg"><path d="M20 6 9 17l-5-5"></path></svg></div></div></li><li class="C6U5L h7Pb8" role="button" tabindex="0"><div class="PHr2N aTwTa KpzVx"><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="R4VSs" height="14" width="14" xmlns="http://www.w3.org/2000/svg"><path d="M8 3H7a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2 2 2 0 0 1 2 2v5c0 1.1.9 2 2 2h1"></path><path d="M16 21h1a2 2 0 0 0 2-2v-5c0-1.1.9-2 2-2a2 2 0 0 1-2-2V5a2 2 0 0 0-2-2h-1"></path></svg><div class="d68xb"><div class="dwTUt">Quantifiers</div><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="oundo" height="14" width="14" xmlns="http://www.w3.org/2000/svg"><path d="M20 6 9 17l-5-5"></path></svg></div></div></li><li class="C6U5L h7Pb8" role="button" tabindex="0"><div class="PHr2N aTwTa KpzVx"><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="R4VSs" height="14" width="14" xmlns="http://www.w3.org/2000/svg"><path d="M8 21s-4-3-4-9 4-9 4-9"></path><path d="M16 3s4 3 4 9-4 9-4 9"></path></svg><div class="d68xb"><div class="dwTUt">Group Constructs</div><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="oundo" height="14" width="14" xmlns="http://www.w3.org/2000/svg"><path d="M20 6 9 17l-5-5"></path></svg></div></div></li><li class="C6U5L h7Pb8" role="button" tabindex="0"><div class="PHr2N aTwTa KpzVx"><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="R4VSs" height="14" width="14" xmlns="http://www.w3.org/2000/svg"><path d="M16 3h3v18h-3"></path><path d="M8 21H5V3h3"></path></svg><div class="d68xb"><div class="dwTUt">Character Classes</div><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="oundo" height="14" width="14" xmlns="http://www.w3.org/2000/svg"><path d="M20 6 9 17l-5-5"></path></svg></div></div></li><li class="C6U5L h7Pb8" role="button" tabindex="0"><div class="PHr2N aTwTa KpzVx"><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="R4VSs" height="14" width="14" xmlns="http://www.w3.org/2000/svg"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"></path><line x1="4" x2="4" y1="22" y2="15"></line></svg><div class="d68xb"><div class="dwTUt">Flags/Modifiers</div><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="oundo" height="14" width="14" xmlns="http://www.w3.org/2000/svg"><path d="M20 6 9 17l-5-5"></path></svg></div></div></li><li class="C6U5L h7Pb8" role="button" tabindex="0"><div class="PHr2N aTwTa KpzVx"><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="R4VSs" height="14" width="14" xmlns="http://www.w3.org/2000/svg"><path d="M14 4a2 2 0 0 1 2-2"></path><path d="M16 10a2 2 0 0 1-2-2"></path><path d="M20 2a2 2 0 0 1 2 2"></path><path d="M22 8a2 2 0 0 1-2 2"></path><path d="m3 7 3 3 3-3"></path><path d="M6 10V5a3 3 0 0 1 3-3h1"></path><rect x="2" y="14" width="8" height="8" rx="2"></rect></svg><div class="d68xb"><div class="dwTUt">Substitution</div><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="oundo" height="14" width="14" xmlns="http://www.w3.org/2000/svg"><path d="M20 6 9 17l-5-5"></path></svg></div></div></li></ul></div><div class="sV7Rz"></div><div class="Bbpyp"><ul class="OZHfn"><li class="C6U5L h7Pb8" role="button" tabindex="0"><div class="PHr2N aTwTa KpzVx tVODk"><div class="UmiAI">A single character of: a, b or c</div><div class="nCjjB zaGCY">[abc]</div></div></li><li class="C6U5L h7Pb8" role="button" tabindex="0"><div class="PHr2N aTwTa KpzVx tVODk"><div class="UmiAI">A character except: a, b or c</div><div class="nCjjB zaGCY">[^abc]</div></div></li><li class="C6U5L h7Pb8" role="button" tabindex="0"><div class="PHr2N aTwTa KpzVx tVODk"><div class="UmiAI">A character in the range: a-z</div><div class="nCjjB zaGCY">[a-z]</div></div></li><li class="C6U5L h7Pb8" role="button" tabindex="0"><div class="PHr2N aTwTa KpzVx tVODk"><div class="UmiAI">A character not in the range: a-z</div><div class="nCjjB zaGCY">[^a-z]</div></div></li><li class="C6U5L h7Pb8" role="button" tabindex="0"><div class="PHr2N aTwTa KpzVx tVODk"><div class="UmiAI">A character in the range: a-z or A-Z</div><div class="nCjjB zaGCY">[a-zA-Z]</div></div></li><li class="C6U5L h7Pb8" role="button" tabindex="0"><div class="PHr2N aTwTa KpzVx tVODk"><div class="UmiAI">Any single character</div><div class="nCjjB zaGCY">.</div></div></li><li class="C6U5L h7Pb8" role="button" tabindex="0"><div class="PHr2N aTwTa KpzVx tVODk"><div class="UmiAI">Alternate - match either a or b</div><div class="nCjjB zaGCY">a|b</div></div></li><li class="C6U5L h7Pb8" role="button" tabindex="0"><div class="PHr2N aTwTa KpzVx tVODk"><div class="UmiAI">Any whitespace character</div><div class="nCjjB zaGCY">\s</div></div></li><li class="C6U5L h7Pb8" role="button" tabindex="0"><div class="PHr2N aTwTa KpzVx tVODk"><div class="UmiAI">Any non-whitespace character</div><div class="nCjjB zaGCY">\S</div></div></li><li class="C6U5L h7Pb8" role="button" tabindex="0"><div class="PHr2N aTwTa KpzVx tVODk"><div class="UmiAI">Any digit</div><div class="nCjjB zaGCY">\d</div></div></li><li class="C6U5L h7Pb8" role="button" tabindex="0"><div class="PHr2N aTwTa KpzVx tVODk"><div class="UmiAI">Any non-digit</div><div class="nCjjB zaGCY">\D</div></div></li><li class="C6U5L h7Pb8" role="button" tabindex="0"><div class="PHr2N aTwTa KpzVx tVODk"><div class="UmiAI">Any word character</div><div class="nCjjB zaGCY">\w</div></div></li><li class="C6U5L h7Pb8" role="button" tabindex="0"><div class="PHr2N aTwTa KpzVx tVODk"><div class="UmiAI">Any non-word character</div><div class="nCjjB zaGCY">\W</div></div></li><li class="C6U5L h7Pb8" role="button" tabindex="0"><div class="PHr2N aTwTa KpzVx tVODk"><div class="UmiAI">Non-capturing group</div><div class="nCjjB zaGCY">(?:...)</div></div></li><li class="C6U5L h7Pb8" role="button" tabindex="0"><div class="PHr2N aTwTa KpzVx tVODk"><div class="UmiAI">Capturing Group</div><div class="nCjjB zaGCY">(...)</div></div></li><li class="C6U5L h7Pb8" role="button" tabindex="0"><div class="PHr2N aTwTa KpzVx tVODk"><div class="UmiAI">Zero or one of a</div><div class="nCjjB zaGCY">a?</div></div></li><li class="C6U5L h7Pb8" role="button" tabindex="0"><div class="PHr2N aTwTa KpzVx tVODk"><div class="UmiAI">Zero or more of a</div><div class="nCjjB zaGCY">a*</div></div></li><li class="C6U5L h7Pb8" role="button" tabindex="0"><div class="PHr2N aTwTa KpzVx tVODk"><div class="UmiAI">One or more of a</div><div class="nCjjB zaGCY">a+</div></div></li><li class="C6U5L h7Pb8" role="button" tabindex="0"><div class="PHr2N aTwTa KpzVx tVODk"><div class="UmiAI">Exactly 3 of a</div><div class="nCjjB zaGCY">a{3}</div></div></li><li class="C6U5L h7Pb8" role="button" tabindex="0"><div class="PHr2N aTwTa KpzVx tVODk"><div class="UmiAI">3 or more of a</div><div class="nCjjB zaGCY">a{3,}</div></div></li><li class="C6U5L h7Pb8" role="button" tabindex="0"><div class="PHr2N aTwTa KpzVx tVODk"><div class="UmiAI">Between 3 and 6 of a</div><div class="nCjjB zaGCY">a{3,6}</div></div></li><li class="C6U5L h7Pb8" role="button" tabindex="0"><div class="PHr2N aTwTa KpzVx tVODk"><div class="UmiAI">Start of string</div><div class="nCjjB zaGCY">^</div></div></li><li class="C6U5L h7Pb8" role="button" tabindex="0"><div class="PHr2N aTwTa KpzVx tVODk"><div class="UmiAI">End of string</div><div class="nCjjB zaGCY">$</div></div></li><li class="C6U5L h7Pb8" role="button" tabindex="0"><div class="PHr2N aTwTa KpzVx tVODk"><div class="UmiAI">A word boundary</div><div class="nCjjB zaGCY">\b</div></div></li><li class="C6U5L h7Pb8" role="button" tabindex="0"><div class="PHr2N aTwTa KpzVx tVODk"><div class="UmiAI">Non-word boundary</div><div class="nCjjB zaGCY">\B</div></div></li></ul></div></div></div><!--/$--></div></div></div></div><div class="KOpjX"><div class="GIv_Y"><div class="JeE3Q"><h2 class="tv8Jw oY83r JvdsC qnsqt cRV43"><span class="oY83r">Regular Expression</span><div class="QLl2l lNZCz"></div></h2><div class="SXWLM ITPlP Dc0Vc" aria-disabled="false"><button class="C6U5L dC7Q2" aria-disabled="false" aria-label="Regex delimiter" type="button"><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="U99xG" height="14" width="14" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="1"></circle><circle cx="12" cy="5" r="1"></circle><circle cx="12" cy="19" r="1"></circle></svg>/</button><div class="gvPe1" translate="no" dir="ltr"></div><button class="C6U5L kXfR7" aria-disabled="false" aria-label="Regex options" type="button">/<div class="Rt5R5">gm</div></button><div class="Vpp3X"><button class="C6U5L jjmIt Tbe4j tK5iV qUIkn fXzfi TDcxN OAVUl oENQh mzs7q" aria-disabled="true" disabled="" style="--icon-button-icon-size:16px" aria-label="Copy to clipboard" tabindex="-1" type="button"><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="kcIdU Gwj37" height="16" width="16" xmlns="http://www.w3.org/2000/svg"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"></rect><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"></path></svg></button></div></div></div><div class="q7fFs"><div class="B_rlJ"><div class="m0yW_"><h2 class="tv8Jw oY83r JvdsC qnsqt cRV43"><span class="oY83r">Test String</span><div class="PD7pa"><span class="DQOcp">Pro</span><button class="C6U5L Tbe4j qUIkn fXzfi TDcxN s_nse" style="--icon-button-icon-size:18px" aria-label="Add test string" type="button"><svg stroke="currentColor" fill="none" stroke-width="2" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round" class="kcIdU" height="18" width="18" xmlns="http://www.w3.org/2000/svg"><path d="M5 12h14"></path><path d="M12 5v14"></path></svg></button></div></h2><div class="myZUS ITPlP"><div class="i_8PV" translate="no" dir="ltr"></div><input type="file" hidden="" multiple=""/></div></div></div></div></div></div></div></div></div><section aria-label="Notifications alt+T" tabindex="-1" aria-live="polite" aria-relevant="additions text" aria-atomic="false" data-react-aria-top-layer="true"></section><script>window.__staticRouterHydrationData = JSON.parse("{\"loaderData\":{\"0-3\":null},\"actionData\":null,\"errors\":null}");</script></div></body></html>

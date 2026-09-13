@@ -2124,5 +2124,65 @@
    }
   ],
   "baseUrl": "https://jsoncrack.com/editor"
+ },
+ {
+  "id": "regex101",
+  "stack": "PASSES 1-4 — /api/library returns 200 application/json 26592B anonymously (1); the shipped 724KB bundle names /api/user, /api/user/settings, /api/user/tags, /api/user/pro/checkout, /api/user/pro/manage, /api/workspace and /api/quiz/tasks, and /api/user answers 404 JSON to an anonymous client (2). Added for bundler diversity; it survives re-selection on the right axis. STACK: webpack (/static/vendors-bundle.<hash>.js + /static/bundle.<hash>.js, both defer)",
+  "requestedUrl": "https://regex101.com/",
+  "finalUrl": "https://regex101.com/",
+  "status": 200,
+  "contentType": "text/html; charset=utf-8",
+  "csp": "default-src 'self' 'unsafe-eval' http: https: data: blob: 'unsafe-inline'; script-src 'self' 'unsafe-eval' 'unsafe-inline' https://cdn.paddle.com https://public.profitwell.com https://analytics.regex101.com https://challenges.cloudflare.com; worker-src 'self' blob:; img-src 'self' data: blob: https://*.buysellads.com https://*.buysellads.net https://*.carbonads.net https://*.doubleclick.net; object-src 'none'; base-uri 'self'; form-action 'self'",
+  "bytes": 65201,
+  "sha256": "cd65fa4b3fd5e76009c6eea0248428ddc5728d00f8f09c097502f49685ae6f16",
+  "fetchedAt": "2026-09-13T07:55:22.183Z",
+  "resources": [
+   {
+    "url": "https://analytics.regex101.com/js/script.outbound-links.pageview-props.tagged-events.js",
+    "status": 200,
+    "contentType": "application/javascript",
+    "bytes": 4700,
+    "sha256": "21242045179c9f94c3a674fc4924e690fc17a9c869489703eef1cdc6552eb876",
+    "fetchedAt": "2026-09-13T07:55:22.966Z",
+    "path": "analytics.regex101.com/js/script.outbound-links.pageview-props.tagged-events.js"
+   },
+   {
+    "url": "https://regex101.com/static/vendors-bundle.65f4bbafbeb610e24f34.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 931641,
+    "sha256": "700d2828c62f4f6fa1658fe798c38e857f335f8c14bcee3127eecb7fde7067d9",
+    "fetchedAt": "2026-09-13T07:55:24.052Z",
+    "path": "regex101.com/static/vendors-bundle.65f4bbafbeb610e24f34.js"
+   },
+   {
+    "url": "https://regex101.com/static/bundle.ffef7f9367b1fdf9f8fc.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 775903,
+    "sha256": "8430d8348d2b6c6ad73a9308d1e60bf8f70a0ed164c8f1ef192fb0615ce5c101",
+    "fetchedAt": "2026-09-13T07:55:25.047Z",
+    "path": "regex101.com/static/bundle.ffef7f9367b1fdf9f8fc.js"
+   },
+   {
+    "url": "https://regex101.com/static/67.d130a6939381b6fa75aa.css",
+    "status": 200,
+    "contentType": "text/css",
+    "bytes": 2537,
+    "sha256": "6ae63a50f8c838cb7dc12de44989716fdee56fc14d13e9ddc8d670fe504fcd65",
+    "fetchedAt": "2026-09-13T07:55:25.512Z",
+    "path": "regex101.com/static/67.d130a6939381b6fa75aa.css"
+   },
+   {
+    "url": "https://regex101.com/static/quickref.239fae22bb19ca894546.chunk.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 161042,
+    "sha256": "4899aab37d8020e7cc7d4bea7885e023032dd3d6521a4a37b7a148dd87006ec4",
+    "fetchedAt": "2026-09-13T07:55:26.297Z",
+    "path": "regex101.com/static/quickref.239fae22bb19ca894546.chunk.js"
+   }
+  ],
+  "baseUrl": "https://regex101.com/"
  }
 ]
