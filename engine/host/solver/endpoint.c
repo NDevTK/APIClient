@@ -638,7 +638,13 @@ static void body_store(Endpoint *e, const EndpointBody *body, int body_named) {
     if (body->kind == EPB_SHAPE) {
         /* THE SHAPE TEXT ITSELF, WHICH IS A STATEMENT ABOUT A SOURCE AND NOT A PAYLOAD. `{cfg.payload}` names
            WHO composes this body, which is strictly more than an empty panel tells a reviewer and is exactly
-           what a sniffer can never produce. It is carried under its own key so that no consumer ever has to
+           what a sniffer can never produce.
+           IT IS ALSO WHY REFUSING TO FAKE THE BYTES IS ONLY HALF A FIX. The refusal landed on its own for one
+           revision and recorded NOTHING for an unknown body, which traded a FABRICATION for a SILENCE — and
+           those are not one improvement, they are the two halves of §MEASURE-WHAT-THE-SHIPPED-PATH-WRITES'
+           pairing: an ABSENT value and a ZERO value are different facts and must never be averaged. A record
+           that says nothing about a body reads as a request with no body, which is the same wrong answer the
+           base64 gave, pointing the other way. It is carried under its own key so that no consumer ever has to
            decide which of the two it is holding. A MIME is attached only if there is one: §5.2's string arm
            gives an unknown body `text/plain;charset=UTF-8`, which the PAGE never chose, so it is reported as
            what it is rather than withheld — and the page's own declared type, where it set one, is the thing
