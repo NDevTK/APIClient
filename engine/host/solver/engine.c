@@ -3739,15 +3739,24 @@ void engine_pending_split(char *line, const char **method, const char **destinat
  * that, at the `!flow_blocked` assert a few lines past the report — a §7.2.1 `w.length` read, which is the
  * one member of the cross-origin twelve that only the peer instance can answer.
  *
- * ASKED OF THE FLOWS, not of the joins, because the joins BUILD TEXT and this needs a yes or no — and because
- * `pending_outstanding` is already the exact predicate ("is the host still owed anything on this register"),
- * so the two cannot drift the way three copies of a condition did. The DCHECK in the loop is what keeps the
- * two answers the same one: an outstanding entry the host cannot be TOLD about would make this say STALLED
- * over work no host will ever be handed, which is the livelock the callback's failure was the mirror of. */
+ * ASKED OF THE FLOWS, not of the joins, because the joins BUILD TEXT and this needs a yes or no — and through
+ * `pending_host_outstanding`, which is the register-arity form of the joins' OWN skip condition, so the two
+ * cannot drift the way three copies of a condition did. The DCHECK in the loop is what keeps the two answers
+ * the same one: an outstanding entry the host cannot be TOLD about would make this say STALLED over work no
+ * host will ever be handed, which is the livelock the callback's failure was the mirror of.
+ * IT ASKED `pending_outstanding`, AND THAT SENTENCE CALLED IT "already the exact predicate (`is the host still
+ * owed anything on this register`)", WHICH IT IS NOT — it is `pend_owed`, which is "is this FLOW still
+ * waiting", and pending.c says the two diverge on exactly one input. That input is a DECLINED entry, and the
+ * livelock named above is what it produced: a frontier whose only outstanding records have been REFUSED
+ * reported STALLED while both joins answered the empty string, so the host was handed a bill with no record on
+ * it, paid nothing, and stepped again — for ever in release, and into main.c's "the scheduler asked this host
+ * to PAY and named nothing owed" in dev. The dev walk below already had to exempt `declined` as "deliberately
+ * untellable", which is this function conceding at its own assert that it was asking the other question.
+ * RETIREMENT: this note goes when no register-arity caller of the host question can reach `pend_owed`. */
 int engine_host_owes(void) {
     for (int i = 0; i < flow_count(); i++) {
         Flow *f = flow_at(i);
-        if (!pending_outstanding(f->pending)) continue;
+        if (!pending_host_outstanding(f->pending)) continue;
 #if APICLIENT_DEV
         for (int j = 0, m = pending_count(f->pending); j < m; j++) {
             JSValue e = pending_entry(f->pending, j);
@@ -8828,11 +8837,11 @@ static int flow_step(JSContext *ctx, Flow *f) {
              * run is FINISHED (no handler will ever be attached; nothing ever called this function) and an
              * outstanding reply's continuation can still attach the handler and still make the call. */
             /* AND IT ASKS `pending_outstanding`, NOT `pending_count`, WHICH IS THE SAME QUESTION THE MARK IT
-             * LEADS TO ALREADY ASSERTS. This arm SELECTS the OWED verdict and flow_set_host_owed's own DCHECK
-             * is `pending_outstanding(cur->pending) || g_referenced`, so a count here made the selecting
-             * predicate strictly weaker than the asserting one two seams later — and pending.h says in its own
+             * LEADS TO ALREADY ASSERTS. This arm SELECTS the OWED verdict and the mark's own DCHECK
+             * stands over the same register, so a count here made the selecting predicate strictly weaker than
+             * the asserting one two seams later — and pending.h says in its own
              * words what the count cannot answer: "A register holding one ANSWERED entry has a non-zero count
-             * while the host owes it nothing, so a flow stuck on such an entry passes a count test and is
+             * while nothing is outstanding at all, so a flow stuck on such an entry passes a count test and is
              * marked 'waiting on the host' forever: the mark is cleared only by a host event, and no host event
              * is coming." A deliverable answered entry is taken by the delivery arm above this one, so what
              * reached here on a count was an entry the host had already settled and nothing would settle again.
@@ -8840,6 +8849,19 @@ static int flow_step(JSContext *ctx, Flow *f) {
              * fires, so the crash lands one seam away from the wrong predicate and reads as a bad mark rather
              * than as a bad selection; in release that check is compiled out and the flow is simply never
              * picked again, which §scheduler's razor calls a CAP. */
+            /* …AND IT IS NOW ONE BIT LOOSER THAN THE ASSERT IT LEADS TO, DELIBERATELY, WHICH IS THE OPPOSITE
+             * OF THE DEFECT THE PARAGRAPH ABOVE DESCRIBES AND HAS TO BE SAID WHERE THE READER STANDS. That one
+             * is about a SELECTING predicate weaker than the asserting one by ACCIDENT, which hides a state.
+             * This is `pend_owed` selecting and `pend_host_owed` asserting, and the gap between them is exactly
+             * the DECLINED entry — a flow the trusted zone has refused, which is still WAITING (so this arm is
+             * right to keep it out of the two FINISHED arms below, and pending.h's own paragraph says a
+             * predicate answering otherwise would tear its timeline down) and is owed NOTHING by any host (so
+             * the mark below is a lie and the assert says so). The looseness is therefore the FORCING FUNCTION
+             * and not the bug: FLOW_STEP_OWED is the only resting verdict there is, this arm has to reach for
+             * it, and the crash names the state that has no verdict of its own. Narrowing this test to the host
+             * question would send a refused flow to a FINISHED arm, which is the drop §NO BOUNDS forbids.
+             * RETIREMENT: this note goes with the fourth verdict — when a flow that can make no progress and is
+             * owed nothing has a resting state of its own, the two predicates answer one question again. */
             else if (pending_outstanding(f->pending)) {
                 g_step_unit = STEP_UNIT_AWAIT_OWED_REPLY;   /* every task source is empty; a reply is not */
                 return FLOW_STEP_OWED;
@@ -11242,10 +11264,16 @@ static int engine_sched_slice(void) {
                    breaks). A no-progress count is in §NO-BOUNDS' own list, and this is why. */
                 /* AND THE MARK IS A CLAIM ABOUT THE HOST, ASSERTED WHERE IT IS MADE. A marked flow leaves the
                    pick until a HOST EVENT clears it, so the mark is only ever true if there is something the
-                   host has actually been shown and can still answer: an entry on this flow's register with no
-                   value — which is in engine_pending_fetches or engine_host_requests by construction, since both
-                   walk every flow's register and select exactly the unanswered — or the one case with no entry
-                   at all, a document a peer holds a reference into. Anything else is a flow that has left the
+                   host has actually been shown and can still answer: an entry on this flow's register the JOINS
+                   will list — or the one case with no entry at all, a document a peer holds a reference into.
+                   IT ASKED `pending_outstanding` AND JUSTIFIED ITSELF BY A PROPERTY THOSE JOINS DO NOT HAVE.
+                   The clause here read "which is in engine_pending_fetches or engine_host_requests by
+                   construction, since both walk every flow's register and select exactly the unanswered", and
+                   both joins select the unanswered AND NOT DECLINED — deliberately, so that a refusal is a fork
+                   rather than a spin. So the predicate was one bit looser than the sentence defending it, and
+                   the one state it let through is the one this assert was written to catch: the WAITING arm of
+                   a decline is marked host-owed, leaves the pick for good, and appears on neither join, so the
+                   host is billed for a reply nobody will ever send. Anything else is a flow that has left the
                    run queue for good, and NOTHING would say so: `live` still counts it, `blocked` and `owed`
                    still report it as waiting, and the whole timeline behind it simply never runs again.
                    THE FRONTIER-WIDE FORM OF THIS EXISTS ALREADY AND CANNOT SEE IT (the stall claim below).
@@ -11255,10 +11283,18 @@ static int engine_sched_slice(void) {
                    healthy. It is also the STRICTER predicate: `pending_count > 0` is satisfied by a register
                    whose every entry has already been ANSWERED, and a flow stuck on one of those is precisely
                    the shape no host event can ever clear. Asked per flow, at the instant the mark is made. */
-                DCHECK(pending_outstanding(cur->pending) || g_referenced,
+                DCHECK(pending_host_outstanding(cur->pending) || g_referenced,
                        "a flow was marked host-owed while the host owes it NOTHING — every entry on its "
-                       "register has already been answered, so no host event can clear this mark and the flow "
-                       "is out of the pick for the rest of the session with its whole timeline unexplored");
+                       "register has already been answered or REFUSED, so no host event can clear this mark and "
+                       "the flow is out of the pick for the rest of the session with its whole timeline "
+                       "unexplored. A REFUSED entry is the live shape: the trusted zone declined the request, "
+                       "flow_decline_fork gave this flow its two arms, and the WAITING one has no debt any host "
+                       "can pay — it is waiting on a per-origin widening that happens in a LATER SESSION. "
+                       "FLOW_STEP_OWED is the only resting verdict this scheduler has and it means `the host "
+                       "owes me`, which is false here; what is unbuilt is a resting state for a flow that can "
+                       "make no progress and is owed nothing — out of the pick, out of the bill, and written "
+                       "down to the cold tier before the session closes, which is §NO BOUNDS' "
+                       "deprioritize-and-page rather than a drop");
                 flow_set_host_owed(cur);
             }
             /* AND NOTHING IS CLEARED BY PROGRESS, which is a statement about what a slice can do rather than an

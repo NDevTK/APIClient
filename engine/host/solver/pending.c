@@ -373,6 +373,28 @@ int pending_outstanding(JSValueConst reg)
     return 0;
 }
 
+/* …AND THE SAME WALK OVER THE OTHER PREDICATE, WHICH IS THE ARITY `pend_host_owed` WAS MISSING. The paragraph
+   at `pend_host_owed` says the two questions diverge "here and nowhere else" and pending.h says the host half
+   "IS ASKED OF AN ENTRY AND NOT OF A REGISTER, which is a statement about who needs it" — and that was an
+   enumeration of readers (the join, the reply debt, the fork) rather than a property, so it went wrong the way
+   an enumeration does: TWO readers of the host question stand at a REGISTER, and both of them re-derived it
+   from `pending_outstanding` and got the FLOW question instead. A refused entry is owed to the flow and owed by
+   nobody, so both of them claimed a debt the host cannot be shown and neither could say which entry it meant.
+   Written here so the question has one spelling at each arity, which is `pend_owed`'s own reason said once more
+   about the predicate above it: what differs between callers is which KINDS they ask about, never what "owed"
+   means, and a second spelling of it is the drift that comment exists to prevent. */
+int pending_host_outstanding(JSValueConst reg)
+{
+    int n = pend_len(reg), i;
+    for (i = 0; i < n; i++) {
+        JSValue e = pending_entry(reg, i);
+        int hit = pend_host_owed(e);
+        JS_FreeValue(pend_ctx(), e);
+        if (hit) return 1;
+    }
+    return 0;
+}
+
 int pending_outstanding_kind(JSValueConst reg, int kind)
 {
     int n = pend_len(reg), i;

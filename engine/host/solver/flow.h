@@ -2133,9 +2133,14 @@ typedef struct {
      *
      *   `deliv_owed`   — the member carries the host-owed mark, so flow_pick REFUSES it (`runnable_only`) and
      *                    no ranking can move it. On a frontier whose registers hold nothing OUTSTANDING this
-     *                    should be zero, because flow_set_host_owed's own DCHECK admits a mark only for an
-     *                    outstanding entry or a referenced document — so a non-zero row here beside
-     *                    `pendReady == pend` is those two statements disagreeing.
+     *                    should be zero, because the assert at the mark admits one only for an entry the HOST
+     *                    CAN STILL BE ASKED ABOUT (`pending_host_outstanding`) or a referenced document — so a
+     *                    non-zero row here beside `pendReady == pend` is those two statements disagreeing.
+     *                    THE TWO PREDICATES ARE NOT THE SAME ONE AND THIS ROW IS WHERE THAT SHOWS. A DECLINED
+     *                    entry is OUTSTANDING and is owed by nobody, so a frontier holding one has a member the
+     *                    selecting arm marks and the assert refuses; the row is what a reader sees if that
+     *                    assert is compiled out. In release it is the shape to look for behind a document that
+     *                    stops getting deeper while `live` and `blocked` both look healthy.
      *   `deliv_framed` — the member fails flow_stack_empty, so the reply-delivery arm cannot run for it. This
      *                    is HTML §8.1.4.4 "Calling scripts"'s clean up after running script step 3 measured,
      *                    not a defect on its own — exactly as `jobs_framed` is not.

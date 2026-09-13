@@ -547,13 +547,37 @@ int  pending_ready(JSValueConst reg);
  * exist, in the arm's own unit, summed over the live frontier by cold_census as `pend_ready`. */
 int  pending_deliverable_count(JSValueConst reg);
 
-/* IS THE HOST STILL OWED ANYTHING ON THIS REGISTER — the exact question `flow_set_host_owed`'s mark is a claim
-   about, and the one `pending_count(reg) > 0` cannot answer. A register holding one ANSWERED entry has a
-   non-zero count while the host owes it nothing, so a flow stuck on such an entry passes a count test and is
-   marked "waiting on the host" forever: the mark is cleared only by a host event, and no host event is coming.
-   Counting outstanding entries is what makes that state a crash at the mark instead of a flow that silently
-   leaves the pick and never comes back. */
+/* IS THIS FLOW STILL WAITING ON ANYTHING — and the one `pending_count(reg) > 0` cannot answer. A register
+   holding one ANSWERED entry has a non-zero count while nothing is outstanding at all, so a flow stuck on such
+   an entry passes a count test and is marked "waiting on the host" forever: the mark is cleared only by a host
+   event, and no host event is coming. Counting outstanding entries is what makes that state a crash at the mark
+   instead of a flow that silently leaves the pick and never comes back.
+   THIS HEADLINE READ "IS THE HOST STILL OWED ANYTHING ON THIS REGISTER — the exact question
+   `flow_set_host_owed`'s mark is a claim about", AND THAT IS THE OTHER QUESTION. `pend_host_owed` below this
+   file, in pending.c, says so in its own words — "'is this flow still waiting' is `pend_owed`, and 'can the
+   host still be asked' is this" — so this header held both answers to one question and the two readers that
+   most needed the second one took this line at its word. A refused entry is the input that tells them apart:
+   it is OUTSTANDING (the flow is parked at the line that asked, and a predicate answering otherwise would let
+   it read as FINISHED and tear its timeline down) and the host is owed NOTHING for it (no reply is coming and
+   the joins deliberately do not list it). Ask this one for "is this flow still waiting"; ask
+   `pending_host_outstanding` for "can the host still be asked".
+   RETIREMENT: this note goes when no caller of either predicate can re-derive the wrong one — which is when
+   the marks and the bills below are keyed on something a register cannot answer two ways. */
 int  pending_outstanding(JSValueConst reg);
+
+/* CAN THE HOST STILL BE ASKED ANYTHING ON THIS REGISTER — the question `flow_set_host_owed`'s mark and
+   `engine_host_owes`' bill are each a claim about, and the one the predicate above is ONE BIT looser than.
+   The difference is a DECLINED entry and nothing else: the trusted zone has answered "no", so no reply is
+   coming, `engine_pending_fetches` and `engine_host_requests` both skip it precisely so it is not re-asked and
+   re-refused, and a mark or a bill resting on it is resting on an event that can never happen.
+   BOTH READERS ASKED THE LOOSER ONE AND BOTH SAID IN THEIR OWN COMMENTS THAT THEY MEANT THIS ONE. The mark's
+   assert justified itself by "an entry on this flow's register with no value — which is in
+   engine_pending_fetches or engine_host_requests by construction", which those joins are not; and
+   `engine_host_owes` justified itself by "`pending_outstanding` is already the exact predicate ('is the host
+   still owed anything on this register')", which the line above is not. The state they both miss is one flow:
+   the WAITING arm of a decline, which leaves the pick for good while `live`, `blocked` and `owed` all go on
+   reporting it as a document that is merely waiting. */
+int  pending_host_outstanding(JSValueConst reg);
 
 /* IS ANY ENTRY OF ONE KIND STILL OWED — the missing ARITY of the two questions above, and the one a caller
    that cares WHICH debt it is holding has to be able to ask. `pending_count_kind` asks the kind and counts
@@ -571,11 +595,19 @@ int  pending_outstanding_kind(JSValueConst reg, int kind);
 /* HAS THE TRUSTED ZONE REFUSED THIS ENTRY — the `declined` field read through its own vocabulary, so no caller
    ever spells the JS_NULL-versus-string test for itself, and so the field's two legal shapes are asserted in
    ONE place rather than at each reader.
-   IT IS ASKED OF AN ENTRY AND NOT OF A REGISTER, which is a statement about who needs it. `pending_outstanding`
-   stays TRUE for a refused entry and must: the flow is parked at the line that asked, so a predicate answering
-   "not outstanding" would let it read as FINISHED and tear its timeline down. What changes is only what the
-   HOST can still be asked, and every one of those readers — the join, the reply debt, the fork — is standing at
-   one entry when it asks. */
+   `pending_outstanding` stays TRUE for a refused entry and must: the flow is parked at the line that asked, so
+   a predicate answering "not outstanding" would let it read as FINISHED and tear its timeline down. What
+   changes is only what the HOST can still be asked, which is `pending_host_outstanding` above at register
+   arity and this at entry arity.
+   THIS PARAGRAPH SAID "IT IS ASKED OF AN ENTRY AND NOT OF A REGISTER, which is a statement about who needs it"
+   AND THEN ENUMERATED THE READERS — the join, the reply debt, the fork. The enumeration was short by two, and
+   both of the missing ones stand at a REGISTER: the host-owed MARK and the frontier-wide BILL. Neither could
+   spell the host question at that arity, so both re-derived it from `pending_outstanding` and got the flow
+   question, and a flow parked on a refusal was reported to the host as a debt for the rest of the session.
+   The rule that replaces the list is the property rather than the population: the host question has a spelling
+   at BOTH arities, and a caller that needs it at one of them never composes it out of the other.
+   RETIREMENT: this note goes when `pend_owed` and `pend_host_owed` can no longer both be reached from one
+   exported predicate — that is, when no register-level caller can ask the wrong one at all. */
 int  pending_entry_declined(JSValueConst e);
 
 /* APPEND an entry of `kind` with every field present at its default (no URL, no answer, scriptRow 0, req 0).
