@@ -319,15 +319,69 @@ static JSValue js_last_child_mark(JSContext *ctx, JSValueConst this_val, int arg
    SECURITY.md puts every byte behind the trusted chokepoint — so it parks the URL and the host supplies the
    bytes. With no host doing that, a flow stopped at its first request and the continuation that reads the reply
    never ran; the run simply ended there.
-   The reply is the same JSON every time, because what this fixture tests is the PATH (request parked, reply
-   delivered, continuation resumed), not what any particular endpoint returns. Real replies are the live
-   harness's business. */
+   The reply is the same JSON at every address BUT TWO, because what this fixture tests is the PATH (request
+   parked, reply delivered, continuation resumed), not what any particular endpoint returns. Real replies are
+   the live harness's business. The two exceptions are the addresses whose TYPE is the thing under test — see
+   TF_SERVED below, which is the whole of what this host serves as anything other than JSON. */
 static int hostreq_answer_all(JSContext *ctx);   /* the SYNCHRONOUS half — see the machine below */
 
 /* THE PEER THIS FIXTURE STANDS IN FOR — declared here and defined beside the park moment it belongs to, which
    is the one thing that decides when the question is asked. */
 static int  fixture_cold_moment(void);
 static void fixture_ask_remote_op(JSContext *ctx);
+
+/* ─── THE TWO ADDRESSES THIS HOST SERVES AS SOMETHING OTHER THAN JSON, AND WHY THEY ARE A PAIR ───────────
+ *
+ * §Solver's trust boundary states the requirement: "a fetch whose body is JAVASCRIPT is ALWAYS fetched +
+ * EXECUTED (a lazy chunk reveals real endpoints — the headline moat surface)". The engine answers it at the
+ * FETCH DELIVERY (solver/engine.c's flow_deliver_one_reply), which asks MIME Sniffing §4.6 "MIME type
+ * groups"' JavaScript group of the reply's host-stamped `computedType` and queues the bytes as a program
+ * before the page's own reaction settles. NOTHING IN THIS FIXTURE COULD REACH THAT ARM: every reply this
+ * host served was `application/json`, so the arm's condition was FALSE at every delivery this file has ever
+ * made, and the capability stood landed with no run behind it. This table is the two replies that ask it.
+ *
+ * THE TYPE IS `text/javascript` AND THE CHOICE HAS A REASON. §4.6's group is a LIST of sixteen essences and
+ * not a pattern, so any member of it would pass `mime_type_is_javascript` equally; `text/javascript` is the
+ * one the same standard's §4.2 "MIME type miscellaneous" normalises the whole group TO — "If mimeType is a
+ * JavaScript MIME type, then return `text/javascript`" — which makes it the group's own canonical spelling
+ * rather than a legacy member picked out of a list, and it is what a server sends.
+ *
+ * THE SECOND ADDRESS IS THE CONTROL, AND WITHOUT IT THE FIRST ROW CANNOT BE READ. A run in which the
+ * JS-typed reply becomes a program is equally consistent with the type gate WORKING and with EVERY reply
+ * being compiled, and those are not the same engine — the second one compiles a cross-origin JSON body,
+ * which is the state §A-QUESTION-SOME-ENTRIES-ASK-AND-OTHERS-DO-NOT is about. So this one is served
+ * `application/json` and its body is the SAME SHAPE: one `fetch()` of one constant address, which would emit
+ * a record the instant anything ran it.
+ * THE TWO BODIES DIFFER IN THE CONSTANT THEY CARRY AND IN NOTHING ELSE, AND THEY HAVE TO. The arm reads
+ * `computedType` and never a byte of the body, so a differing marker cannot be what decides — while a SHARED
+ * marker would let the positive's record answer the control's row, and the control could then never fail
+ * while the positive passed. A control that cannot fail is not one.
+ *
+ * THE CONTROL'S ADDRESS ENDS IN `.js` ON PURPOSE. §Active-discovery puts a resource's class on "magic-byte +
+ * content-type, not URL suffix", so an address that LOOKS like a program and is served as DATA is the one
+ * that says which of the two the engine keyed on; one ending in `.json` would agree with both answers.
+ *
+ * NEITHER ADDRESS IS IN `TF_CHUNKS` AND NEITHER IS EVER PASSED TO `loadScript`. That table is the
+ * `<script src>`-shaped door, and its host edge calls engine_queue_fetched_script DIRECTLY — which is exactly
+ * the door that CANNOT exercise the delivery arm, because it parks no request and takes no reply. These two
+ * go through `fetch()` and through nothing else. */
+typedef struct { const char *at; const char *type; const char *body; } TfServed;
+static const TfServed TF_SERVED[] = {
+    { "https://x.test/chunk/replyprog.js", "text/javascript",  "fetch('/api/progran');" },
+    { "https://x.test/chunk/replyctl.js",  "application/json", "fetch('/api/ctlran');" },
+};
+
+/* …ASKED OF THE ABSOLUTE SERIALIZED ADDRESS, which is what a park carries and what the caller holds by the
+   time it gets here. Fetch §5.4 "Request class" step 5.1 parses a string input against HTML's API base URL
+   and the record keeps the SERIALIZATION of the result (core/fetch/request.c), so a host matching the
+   relative reference the page wrote would be matching a spelling no park has ever held. */
+static const TfServed *tf_served_at(const char *abs) {
+    unsigned i;
+
+    for (i = 0; i < sizeof(TF_SERVED) / sizeof(TF_SERVED[0]); i++)
+        if (!strcmp(abs, TF_SERVED[i].at)) return &TF_SERVED[i];
+    return NULL;
+}
 
 static int fixture_provide(JSContext *ctx) {
     const char *urls = engine_pending_fetches();
@@ -390,10 +444,29 @@ static int fixture_provide(JSContext *ctx) {
            probes read that length back as evidence that arrayBuffer() and bytes() are one byte sequence. */
         {
             HeaderList eh = { 0 };
+            /* WHAT THIS PARTICULAR ADDRESS IS SERVED AS, which for every address but two is the JSON above.
+               See TF_SERVED for the two and for why one of them is the other's control. */
+            const TfServed *sv = tf_served_at(abs);
+            const char *rbody = sv ? sv->body : "{\"region\":\"us-west-2\"}";
+            const char *rtype = sv ? sv->type : "application/json";
+
             header_list_append(&eh, "x-echo-method", method);
-            reply = fetch_reply_new(ctx, 200, "OK", &eh, "{\"region\":\"us-west-2\"}",
-                                    strlen("{\"region\":\"us-west-2\"}"), (const char *const *)&abs, 1,
-                                    "application/json");
+            /* AND `Content-Type` ON THOSE TWO, WHICH IS NOT DECORATION — IT IS READ TWICE, BY TWO READERS
+               THAT WANT IT FOR DIFFERENT REASONS. The ENGINE's §8.1.4.2 decode takes the reply's own
+               `content-type` to pick the program's charset (solver/engine.c's reply_source_text), so a
+               program reply carrying none would be decoded through the DOCUMENT's encoding instead of its
+               own: that fallback is the right answer for a reply that states nothing and the wrong one for a
+               reply that does. And the PAGE reads it back, which is the only way this host's own serving
+               decision is observable from inside the document — `computedType` is a FIELD of the reply record
+               and not a header (core/fetch/fetch.h), so no page can see it, and without the readback a probe
+               row reading 0 could not tell "the delivery arm did not run" from "this host never served a
+               program at all". Those take opposite work and one of them is a defect in this file.
+               IT IS APPENDED FOR THOSE TWO ONLY. Every other reply here has always carried no `Content-Type`,
+               and giving them all one would change what several statements that read `r.headers` observe — a
+               change to rows under test, made in passing, to tidy a reply nobody is asking about. */
+            if (sv) header_list_append(&eh, "content-type", rtype);
+            reply = fetch_reply_new(ctx, 200, "OK", &eh, rbody, strlen(rbody),
+                                    (const char *const *)&abs, 1, rtype);
             header_list_free(&eh);
         }
         filled += engine_provide(ctx, method, url, reply);
@@ -2625,6 +2698,30 @@ static const char *HTML =
     "(async function(){ var g = await fetch('/api/echo');"
       " var p = await fetch('/api/echo', { method: 'POST', body: 'x' });"
       " fetch('/api/verb?g=v' + g.headers.get('x-echo-method') + '&p=v' + p.headers.get('x-echo-method')); })();"
+    /* A REPLY WHOSE BYTES ARE JAVASCRIPT IS A PROGRAM, AND THESE TWO STATEMENTS NEVER HAND EITHER BODY TO
+       ANYTHING. §Solver's trust boundary: "a fetch whose body is JAVASCRIPT is ALWAYS fetched + EXECUTED (a
+       lazy chunk reveals real endpoints — the headline moat surface)". THE POPULATION THAT SENTENCE IS ABOUT
+       is exactly this shape — a `fetch()` whose body the page does not itself `eval` and does not append as a
+       `<script>` — because anything the page runs FOR ITSELF would have run before the delivery arm existed,
+       so a statement that ran either way could not say which of the two ran it. Neither reaction here touches
+       the body: each reads ONE header and reports it, which is a statement about what ARRIVED and never about
+       what it contained.
+       THE `.then` IS WHAT MAKES THE STATEMENT REACH THE ARM AT ALL, and it is not a stylistic choice. The arm
+       sits at the DELIVERY; a fire-and-forget `fetch(...)` emits its endpoint record at the REQUEST, so it is
+       satisfied whatever becomes of the reply — this host's own paragraph above `HTML` says so in as many
+       words, and names that pair as the thing that tells `never issued` from `issued and not consumed`. A
+       reaction keeps the flow parked on the reply, so the delivery happens and the arm is asked.
+       THE MARKERS ARE CONSTANTS. §A-WITNESS-MAY-NOT-BE-COMPOSED-FROM-A-VALUE-THE-SUBJECT-CAN-MAKE-UNKNOWN: a
+       payload composed from something this engine COMPUTED can itself be concolic, and then the request is not
+       a concrete string, no record is emitted, and a run in which everything worked reads exactly like a run
+       in which nothing did. Every marker PATH here is a literal — in the document and in the two served
+       programs alike. The one derived value is the header readback, and it rides a QUERY PARAM of a constant
+       path, so a shape there costs the param's value and never the record. */
+    "(function(){"
+      " fetch('/chunk/replyprog.js').then(function(r){"
+      "  fetch('/api/progseen?ct=' + r.headers.get('content-type')); });"
+      " fetch('/chunk/replyctl.js').then(function(r){"
+      "  fetch('/api/ctlseen?ct=' + r.headers.get('content-type')); }); })();"
     /* §5 Headers. The RECORD fill is the conversion `fetch(u, {headers: {...}})` performs, so it is exercised
        through the interface that states it: a record init, then the members that read it back. The list keeps
        PAIRS — two `set-cookie` appends stay two entries and getSetCookie reads both — while `get` combines them
@@ -12991,6 +13088,54 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "AND NOT A DIFFERENCE: it is the control for the three above, and it reddens when the \"missing\" "
              "primitive has been mistaken for a rule about every optional position");
 
+    /* ─── A JAVASCRIPT REPLY IS A PROGRAM, AND THE CONTROL THAT MAKES THAT READABLE ────────────────────────
+       Three clauses, in the order the fact is built, so a 0 names which of three things happened — and the
+       three are not all about the same thing, which is the point. The first two are about the REPLY DOOR
+       (`/api/progseen`, whose `ct` is the header this host served) and the third is about the PROGRAM
+       (`/api/progran`, which nothing but the served bytes can emit). Two records on purpose: "the reply
+       arrived" and "the reply was compiled" are the two facts this row exists to keep apart, and a row that
+       asked only the second would read 0 for a schedule that never delivered anything.
+       §AND-THE-SAME-HOLE-SWALLOWS-A-PREDICTION: a prediction that `/api/progran` is PRESENT is worth nothing
+       without evidence the delivery happened at all, and clauses 1-2 are that evidence. Clause 2 in
+       particular splits the one failure that is THIS FILE's rather than the engine's. */
+    const char *replyprog_why = NULL; int replyprog_tt = 1;
+    fold_row(&replyprog_tt, &replyprog_why, !!strstr(js, "\"/api/progseen\""),
+             "NOT REACHED: there is no /api/progseen record at all, so the reply to `/chunk/replyprog.js` "
+             "never reached a reaction and the clauses below are not being reported on. That is the SCHEDULE, "
+             "and it says nothing whatever about whether a JavaScript reply becomes a program");
+    fold_row(&replyprog_tt, &replyprog_why,
+             param_value_is(js, "/api/progseen", "ct", "text/javascript"),
+             "the reply ARRIVED and this host did not serve it as a program: /api/progseen's `ct` is not "
+             "`text/javascript`, so fixture_provide's TF_SERVED lookup did not match the address the park "
+             "carried. THAT IS A DEFECT IN THIS FIXTURE AND NOT IN THE ENGINE — the delivery arm was never "
+             "asked the question — and it is its own clause for exactly that reason");
+    fold_row(&replyprog_tt, &replyprog_why, !!strstr(js, "\"/api/progran\""),
+             "A JAVASCRIPT REPLY WAS DELIVERED AND DID NOT BECOME A PROGRAM. The two clauses above say the "
+             "reply reached a reaction carrying `text/javascript`, so solver/engine.c's delivery arm was "
+             "asked and answered no — or it answered yes and the row engine_queue_fetched_script appended "
+             "never ran. §Solver's trust boundary requires the EXECUTED half: `fetch('/api/progran')` is the "
+             "served program's own body, and no statement of this document emits that address");
+
+    /* …AND THE CONTROL, ARMED. §A-CONTROL-ARMS-ONLY-ON-A-SITE-THE-INSTRUMENT-CAN-JUDGE: an absence asserted
+       over a statement that never ran is satisfied BY the statement never running, which is a row that cannot
+       fail and therefore is not a control. So the absence is the LAST clause and the two before it establish
+       that this host really did serve the same-shaped body as DATA, to a delivery that really happened. */
+    const char *replyctl_why = NULL; int replyctl_tt = 1;
+    fold_row(&replyctl_tt, &replyctl_why, !!strstr(js, "\"/api/ctlseen\""),
+             "NOT REACHED: there is no /api/ctlseen record at all, so the control reply never reached a "
+             "reaction and the absence below is UNARMED — it would read green for a run that never asked the "
+             "question. That is the SCHEDULE");
+    fold_row(&replyctl_tt, &replyctl_why,
+             param_value_is(js, "/api/ctlseen", "ct", "application/json"),
+             "the control reply ARRIVED and was not served as DATA: /api/ctlseen's `ct` is not "
+             "`application/json`, so this host handed the delivery something other than the control it was "
+             "meant to hand it, and the absence below is a statement about some other experiment");
+    fold_row(&replyctl_tt, &replyctl_why, !strstr(js, "\"/api/ctlran\""),
+             "A REPLY SERVED AS `application/json` BECAME A PROGRAM. /api/ctlran is emitted by nothing but "
+             "the control body, so its presence says the delivery arm compiled bytes whose `computedType` is "
+             "not in MIME Sniffing §4.6's JavaScript group — the type gate is not a gate, and `reply-program` "
+             "above is therefore not evidence that a TYPE decided anything");
+
     /* EVERY ROW NAMES THE STATEMENT IT IS ABOUT, and the two cold sessions are two answers and not one: they run
        the same document and one is about what a park WROTE while the other is about what a resume REBUILT. */
     Probe probes[] = {
@@ -13012,6 +13157,13 @@ static int probes_eval(const char *js, Probe *out, int cap) {
            what the document has is the `loadScript` behind the admin arm. A key is a substring of the PROGRAM,
            never of the answer. */
         { "lazy", lazy, "/chunk/admin.js", SESS_EXPLORE },
+        /* THE SAME RULE THE ROW ABOVE STATES, AT THE OTHER DOOR. `lazy`'s chunk arrives through `loadScript`,
+           which is this host calling engine_queue_fetched_script directly; these two arrive through `fetch()`,
+           are parked, answered and delivered, and become programs — or do not — at solver/engine.c's delivery
+           arm. The KEY is the `fetch` the document writes, for `lazy`'s reason exactly: `/api/progran` is in a
+           body this host serves and in no document at all, and `/api/progseen` is composed by a reaction. */
+        { "reply-program", replyprog_tt, "/chunk/replyprog.js", SESS_EXPLORE, replyprog_why },
+        { "reply-program-typed", replyctl_tt, "/chunk/replyctl.js", SESS_EXPLORE, replyctl_why },
         /* EACH CARRIES ITS OWN `why` NOW — a 0 on any of the three names the clause it stopped at, so a reader
            can tell an unscheduled sibling from a lost DOM delta without inferring one from the other.
            `dom-tt` IS GONE and is not replaced: it was `dom_attr && dom_node`, the AND of the two rows either
