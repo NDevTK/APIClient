@@ -139,7 +139,14 @@ typedef enum {
     CSS_MATH_PROD_FREQUENCY,
     CSS_MATH_PROD_RESOLUTION,
     CSS_MATH_PROD_FLEX,
-    CSS_MATH_PROD_LENGTH_PERCENTAGE
+    CSS_MATH_PROD_LENGTH_PERCENTAGE,
+    /* §5.6 "Mixing Percentages and Dimensions" gives `<angle-percentage>` the same shape it gives
+       `<length-percentage>` — "Equivalent to [ <angle> | <percentage> ]" — so it is a production here for the
+       same reason that one is, and NOT a caller asking `<angle>` and `<percentage>` in turn. The two differ on
+       exactly the value that mixes them: `calc(25% + 10deg)` matches neither half alone and is a value
+       css-images-4 §3.5.1's `<color-stop-angle>` admits, so a caller spelling it as a disjunction would REFUSE
+       a valid declaration — which for a gradient means the page's whole `background` reads as undeclared. */
+    CSS_MATH_PROD_ANGLE_PERCENTAGE
 } CssMathProduction;
 
 /* §10.8's TWENTY-ONE FUNCTIONAL NOTATIONS, as one question. `rgb()` is a function and is not one of them, so a

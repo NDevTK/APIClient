@@ -19,13 +19,20 @@
  * "Serializing CSS Values" serializes it back. A canonicalizing answer here would be this component inventing
  * a spelling for a value whose own module has not stated one.
  *
- * WHAT IS NOT COVERED, BY NAME. This is css-images-3's `<image>`, which is the level css-backgrounds-3
- * normatively references. css-images-4 §2 "2D Image Values: the <image> type" widens it to
- * `<url> | <image()> | <image-set()> | <cross-fade()> | <element()> | <gradient>` and its §3.3 "Conic
- * Gradients: the conic-gradient() notation" adds two more gradient notations; each of those function names
- * reaches a DFAIL naming its own section rather than being refused, because refusing would DROP a declaration
- * that is valid CSS and the drop is silent — the page's `background` would read as undeclared, with the
- * property's initial value to show for it. */
+ * WHAT IS NOT COVERED, BY NAME. The production is css-images-3 §2's `<image> = <url> | <gradient>`, which is
+ * the level css-backgrounds-3 normatively references. css-images-4 §2 "2D Image Values: the <image> type"
+ * widens it to `<url> | <image()> | <image-set()> | <cross-fade()> | <element()> | <gradient>`, and THOSE FOUR
+ * EXTRA ARMS ARE WHAT IS MISSING: each of those function names reaches a DFAIL naming its own section rather
+ * than being refused, because refusing would DROP a declaration that is valid CSS and the drop is silent — the
+ * page's `background` would read as undeclared, with the property's initial value to show for it.
+ *
+ * `<gradient>` ITSELF IS READ AT LEVEL 4, and the split is deliberate rather than an oversight. §3 "Gradients"
+ * there has SIX notations rather than four; §3.1 and §3.2.1 "Adding <color-interpolation-method>" hang that
+ * production off the linear and radial families; and §3.5.1 "Color Stop Lists" gives every colour stop a
+ * second optional position. Every one of those is a value each of the major engines accepts today, so a
+ * component that refused them in order to be consistent about a level number would be dropping valid
+ * declarations — which is the same silent failure the paragraph above describes, chosen on purpose. The four
+ * arms are absent because they are NOT BUILT; the gradients are level 4's because they ARE. */
 #ifndef ENGINE_HOST_BROWSER_CORE_CSS_CSS_IMAGE_H
 #define ENGINE_HOST_BROWSER_CORE_CSS_CSS_IMAGE_H
 #include <stdbool.h>

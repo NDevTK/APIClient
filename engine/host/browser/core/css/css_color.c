@@ -193,6 +193,75 @@ static const char *css_color_space_name(CssColorSpace space)
     return "srgb";
 }
 
+/* ---- CSS Color 4 §13.2 "Color Space for Interpolation"'s `<color-interpolation-method>` ---------------------
+ *
+ * <color-interpolation-method> = in [ <rectangular-color-space> | <polar-color-space> <hue-interpolation-method>? ]
+ * <rectangular-color-space> = srgb | srgb-linear | display-p3 | display-p3-linear | a98-rgb | prophoto-rgb
+ *                           | rec2020 | lab | oklab | <xyz-space>
+ * <xyz-space> = xyz | xyz-d50 | xyz-d65
+ * <polar-color-space> = hsl | hwb | lch | oklch
+ * <hue-interpolation-method> = [ shorter | longer | increasing | decreasing ] hue
+ *
+ * IT IS THIS COMPONENT'S EVEN THOUGH NO COLOUR COMES OUT OF IT, and §13.2 says so in its own words: the
+ * production "is not used by this specification itself, only exposed so that other specifications can use it".
+ * Its operands are CSS Color 4's own colour spaces, so a copy written inside the first module that names it
+ * would be that module's private idea of which spaces exist — which is the reason css_color.h's banner already
+ * gives for `<color>` not living inside its callers.
+ *
+ * THE RECTANGULAR SET IS THE `color()` TABLE PLUS TWO, AND THE TWO ARE NAMED RATHER THAN COPIED. §10.1's
+ * `<predefined-rgb> | <xyz-space>` and §13.2's `<rectangular-color-space>` are the same ten keywords with
+ * `lab` and `oklab` added, so the ten are read out of CSS_COLOR_SPACE_KEYWORDS and only the delta is written
+ * down. The delta exists for a reason the header already states: the lab family has no member of
+ * CssColorSpace, because this component converts lab(), lch(), oklab() and oklch() to sRGB at parse time and
+ * has nothing left to name them with. This production asks whether the AUTHOR WROTE A SPACE THE STANDARD
+ * NAMES, which is a question about the grammar rather than about what this component can represent — so the
+ * two are admitted here, and this list is what gets DELETED on the day the lab family joins the enum.
+ *
+ * THE ANSWER IS A COUNT OF COMPONENT VALUES, exactly as css_position_match's is, because every caller meets
+ * this production inside a `||` and cannot match the rest of its own grammar without knowing where this one
+ * ended. Zero is "no match" and is distinguishable from a match because the production's own first component
+ * is the literal `in`, so a match is never empty. */
+static const char *const CSS_RECTANGULAR_EXTRA[] = { "lab", "oklab" };
+static const char *const CSS_POLAR_COLOR_SPACES[] = { "hsl", "hwb", "lch", "oklch" };
+static const char *const CSS_HUE_INTERPOLATION[] = { "shorter", "longer", "increasing", "decreasing" };
+
+static bool css_color_kw_in(const char *const *set, size_t count, const char *w, size_t wl)
+{
+    size_t i;
+
+    for (i = 0; i < count; i++)
+        if (css_ascii_ci_eq(w, wl, set[i])) return true;
+    return false;
+}
+
+unsigned css_color_interpolation_method_match(const char *const *w, const size_t *wl, unsigned n)
+{
+    CssColorSpace space;
+
+    DCHECK(n == 0 || (w != NULL && wl != NULL),
+           "CSS Color 4 §13.2's <color-interpolation-method> was handed a component count with no components "
+           "to read — the count and the arrays are one argument and have come apart at a caller");
+    if (n < 2 || !css_ascii_ci_eq(w[0], wl[0], "in")) return 0;
+    if (css_color_space_by_name(w[1], wl[1], &space) ||
+        css_color_kw_in(CSS_RECTANGULAR_EXTRA,
+                        sizeof CSS_RECTANGULAR_EXTRA / sizeof CSS_RECTANGULAR_EXTRA[0], w[1], wl[1]))
+        return 2;
+    if (!css_color_kw_in(CSS_POLAR_COLOR_SPACES,
+                         sizeof CSS_POLAR_COLOR_SPACES / sizeof CSS_POLAR_COLOR_SPACES[0], w[1], wl[1]))
+        return 0;
+    /* `<hue-interpolation-method>` IS TWO COMPONENTS AND BOTH ARE REQUIRED WHEN IT IS PRESENT — the literal
+       `hue` is inside the production, not after it — so a lone `in oklch shorter` matches this production only
+       as far as `oklch` and leaves the caller a component no arm of its grammar admits, which is the refusal
+       the standard's own bracketing asks for. It is also POLAR-ONLY: a rectangular space returns above, so
+       `in srgb shorter hue` ends at `srgb` and its caller refuses the remainder. */
+    if (n >= 4 &&
+        css_color_kw_in(CSS_HUE_INTERPOLATION,
+                        sizeof CSS_HUE_INTERPOLATION / sizeof CSS_HUE_INTERPOLATION[0], w[2], wl[2]) &&
+        css_ascii_ci_eq(w[3], wl[3], "hue"))
+        return 4;
+    return 2;
+}
+
 /* ---- the numeric pieces of a parsed colour ------------------------------------------------------------------ */
 
 static double css_clamp01(double v) { return v < 0.0 ? 0.0 : (v > 1.0 ? 1.0 : v); }

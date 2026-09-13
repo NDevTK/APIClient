@@ -131,4 +131,16 @@ size_t css_color_serialize_function(const CssColor *c, char out[CSS_COLOR_FUNCTI
    Returns the length written, not counting the NUL. */
 size_t css_color_serialize_srgb(const CssColor *c, char out[CSS_COLOR_FUNCTION_MAX]);
 
+/* CSS Color 4 §13.2 "Color Space for Interpolation"'s `<color-interpolation-method>`, over a run of COMPONENT
+   VALUES — `in oklch`, `in oklch longer hue`, `in srgb`. Answers HOW MANY of them it consumed (2 or 4) and 0
+   for no match, because every caller meets this production inside a `||` and cannot match the rest of its own
+   grammar without knowing where this one ended; the production's first component is the literal `in`, so a
+   match is never empty and 0 is unambiguous.
+   IT IS EXPORTED BECAUSE §13.2 EXPORTS IT: "It is not used by this specification itself, only exposed so that
+   other specifications can use it." css-images-4 §3.3.1's conic gradient is the first caller here and
+   css-fonts-4's `palette-mix()` is the next, which is exactly why the production is not written inside either.
+   The components are spans — neither NUL-terminated nor lowercased — because CSS Syntax 3 §4 makes an ident
+   sequence a span of the author's own bytes and CSS compares idents ASCII case-insensitively. */
+unsigned css_color_interpolation_method_match(const char *const *w, const size_t *wl, unsigned n);
+
 #endif

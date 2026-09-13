@@ -229,6 +229,7 @@ static int mth_pct_base(CssMathProduction want)
        where <percentage> is resolved against a <length>), and that other type is not <number>, the type is
        determined as the other type, but with a percent hint set to that other type." */
     case CSS_MATH_PROD_LENGTH_PERCENTAGE: return CSS_MATH_LENGTH;
+    case CSS_MATH_PROD_ANGLE_PERCENTAGE:  return CSS_MATH_ANGLE;
     /* "Otherwise, the type is «["percent" → 1]», with a percent hint of "percent"." A context that allows a
        bare `<percentage>` and one that allows no percentage at all reach the same terminal type; they differ
        only in whether that type then MATCHES, which is the rule below and not this one. */
@@ -270,6 +271,12 @@ static bool mth_type_matches(const CssMathType *t, CssMathProduction want)
        be that length rather than having to be null. */
     case CSS_MATH_PROD_LENGTH_PERCENTAGE:
         return (mth_only(t, CSS_MATH_LENGTH) && (null_hint || t->hint == CSS_MATH_LENGTH)) ||
+               (mth_only(t, CSS_MATH_PERCENT) && (null_hint || t->hint == CSS_MATH_PERCENT));
+    /* The same rule over §5.6's other mixed production: "A type matches <length-percentage> if it matches
+       <length> or matches <percentage>" is stated of one pair and is a rule about the PAIR, so the angle pair
+       reads identically with its own base in place of the length. */
+    case CSS_MATH_PROD_ANGLE_PERCENTAGE:
+        return (mth_only(t, CSS_MATH_ANGLE) && (null_hint || t->hint == CSS_MATH_ANGLE)) ||
                (mth_only(t, CSS_MATH_PERCENT) && (null_hint || t->hint == CSS_MATH_PERCENT));
     }
     DFAIL("a math function's resolved type was matched against a production outside CssMathProduction — the "
