@@ -82,19 +82,38 @@ function calculateMethodMetadata(urlObj, interfaceName, hint) {
     startIdx = interfaceParts.length - 1;
   }
 
-  let methodSegments = segments.slice(startIdx);
-
-  // Strip segments that look like hashes, long ID lists, or path-style params
-  methodSegments = methodSegments.filter((s) => {
-    if (s.length > 32) return false;
-    if (s.includes("=")) return false; // path-style parameter (e.g. name=foo)
-    return true;
-  });
+  const methodSegments = segments.slice(startIdx);
 
   // No regex ID-normalization: a concrete path segment stays concrete. The engine already marks
   // genuinely-dynamic segments as {shape} holes from real data-flow (they flow through here unchanged);
   // guessing that a concrete segment "looks like an ID" and collapsing it to _id MERGES distinct real
   // endpoints — the banned name-matching. RUN, DON'T MATCH.
+  //
+  // A SEGMENT FILTER STOOD DIRECTLY ABOVE THAT PARAGRAPH AND WAS THE THING IT FORBIDS. It dropped any
+  // segment longer than 32 characters, or containing "=", before the join — so two paths differing ONLY
+  // in a dropped segment produced ONE methodName, and lib/learn.js resolves a same-name collision only
+  // when the VERB differs: same verb, distinct path falls to its "no collision" arm and REUSES the
+  // incumbent entry, so the second and later endpoints are never registered at all. Nine fingerprinted
+  // asset paths under one directory collapsed to the directory's own name, the panel offered one row,
+  // and `opt.dataset.path` sent that row to whichever of the nine happened to arrive first.
+  //
+  // LENGTH IS NOT A FACT ABOUT A SEGMENT. The threshold is wrong in BOTH directions at once, which is the
+  // tell that it was a guess rather than a rule: a 36-char UUID is dropped while a 32-char MD5 hex is
+  // kept, so it does not even achieve its own stated purpose consistently — and on the side where it does
+  // fire it merges endpoints that are genuinely distinct. "=" is the same guess: /api/user=alice and
+  // /api/user=bob are two addresses and became one name.
+  //
+  // NAMED RESIDUAL. WHAT IS NOT COVERED: an endpoint whose path carries a genuinely DYNAMIC segment that
+  // no template names. `_matchTemplatedMethod` (lib/learn.js) merges a concrete request into a method
+  // whose stored path holds a {…} hole — a literal segment-by-segment structural match, no scoring — but
+  // only the ENGINE puts the hole there, out of real data flow. An endpoint seen only on the wire has no
+  // template, so each observed value of its dynamic segment now mints its own method where a browser
+  // would show one parameterised endpoint. That is the correct direction to be wrong in: an extra row is
+  // a real address a reviewer can send to, and a merged row is a claim about an endpoint nobody observed.
+  // WHAT THE NEXT DIFF BUILDS: the {…} hole for a wire-observed dynamic segment, emitted where the engine
+  // already emits it from data flow, so `_matchTemplatedMethod` has something to match.
+  // HOW ITS ABSENCE WOULD SHOW: one service's method dropdown listing many rows whose paths agree in
+  // every segment but one, each row's `_stats.requestCount` standing at 1.
   let methodName = methodSegments.join("_") || "root";
 
   // If it's a gRPC-style path, use the actual method name
