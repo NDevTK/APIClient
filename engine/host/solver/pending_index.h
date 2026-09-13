@@ -161,6 +161,30 @@ long pending_index_node_answered(const PendIndexNode *n);
  * A rate over THIS door is what says that in one reading, and until it existed the census could not say it at
  * all: not one of its rows separates "never asked" from "asked, paid, and never consumed".
  *
+ * AND THE HALF OF THAT RECORD THAT SAID `deliver-one-reply` NEVER RAN IS NO LONGER TRUE, WHICH MATTERS MORE
+ * THAN THE NUMBERS BESIDE IT: A READER OF THIS PARAGRAPH TODAY WOULD GO AND BUILD AN ARM THAT RUNS. Measured
+ * at `29d61ee7`, ONE interleaving, from a frozen snapshot
+ * (`engine/frozen_snapshot.sh 29d61ee7 <lane> node engine/build.mjs`, terminal @COLD of the smoke):
+ * `deliver-one-reply` ran **6779** times of 17688 steps — 38% of every step the run took — and
+ * `replyAsked == replyAnswered == 15186`. So the door is asked, paid, AND consumed, and the sentence above it
+ * is a fact about a build that no longer exists.
+ * WHAT IS STILL TRUE IS THE OTHER HALF, AND IT IS THE PRODUCT'S OWN PROBLEM RATHER THAN THIS DOOR'S. The five
+ * reply-dependent probe rows — `fetch then-chain clone-body body-bytes body-iso` — STILL read 0 at that
+ * revision, and `pendKiB` was 143924 of `perFlowKiB` 162263: **88.7%** of the frontier's entire per-flow
+ * memory is still reply namings nobody has taken. `pend` and `pendReady` read the SAME number (579499), so
+ * every one of those entries is deliverable right now and none of them is a host debt.
+ * THE ARITHMETIC THE EARLIER RECORD COULD NOT DO IS WHAT MAKES THIS ACTIONABLE: 579499 deliverable namings
+ * against 6779 deliveries performed is 1.2% of the take this frontier owes, and the obligation grows with the
+ * FORK COUNT rather than with the number of distinct records — a fork gives the sibling a new array naming the
+ * SAME record and each arm owes its own delivery, so 2621 live members each owing about 220 takes IS the
+ * 579499. That is not a defect of this door and it is not a bound to impose (§NO BOUNDS); it is the reason a
+ * forking document's learning is rate-limited by DISPATCHES rather than by replies, and it is the number to
+ * quote when somebody says the engine is paid in full.
+ * NOT A TREND. Two runs at two revisions with one interleaving each are two readings and not a direction
+ * (§ONE-RUN-IS-NOT-A-MEASUREMENT); 55% and 88.7% are each true of their own run and neither says the share
+ * moved. What IS comparable across them is the ARM'S IDENTITY — absent then, present now — which does not
+ * depend on how far either run got.
+ *
  * WHAT MAKES THE TAKE REACHABLE IS AN ORDER, AND THE ORDER IS NAMED WHERE IT IS TAKEN. A reply is a task on
  * ONE task source — Fetch §2 Infrastructure's queue a fetch task ends "Otherwise, queue a global task on the
  * networking task source with taskDestination and algorithm" — and flow_step now runs that source's arm above
