@@ -4264,7 +4264,7 @@ static double wfq_accounted_spread(const WfqCensus *c) {
             infinite one — and that is now the only population the guard selects. IT USED TO SELECT ANOTHER,
             MUCH LARGER ONE, and the sentence here is why nobody looked: branch_take folded a bucket with ZERO
             live members into these extrema, and the family-root door mints exactly such a bucket the moment a
-            family's root flow departs, so `br_live_min` read 0 on 48 of 56 censuses of one real bundle and
+            family's root flow departs, so `br_live_min` read 0 on 48 of 56 censuses of the SMOKE FIXTURE and
             this whole clause scored 0.0 on every one of them — a term the order genuinely spans, deleted from
             the accounting that exists to say what the order is made of, by a guard whose comment described a
             census that had reached nothing while the censuses tripping it had reached 198 buckets each. */
@@ -4308,8 +4308,15 @@ static void branch_take(WfqCensus *out, FlowAcct *br) {
        a family's ROOT FLOW HAS DEPARTED, deliberately, because that node's lifetime burn (boot's, on a real
        page) must stay inside the identity at the end of this function and nothing names it through `branch`
        any more. So an empty bucket is the ORDINARY state of any frontier whose boot flow has finished.
-       WHAT IT COST WHILE BOTH QUESTIONS SHARED ONE ANSWER, MEASURED rather than argued: over 56 censuses of
-       one real 4.5 MB bundle, `br_live_sum == members` held in ALL 56 — the partition is exact, because an
+       WHAT IT COST WHILE BOTH QUESTIONS SHARED ONE ANSWER, MEASURED rather than argued — AND THE SUBJECT IS
+       THE SMOKE FIXTURE, WHICH THIS SAID WAS `ONE REAL 4.5 MB BUNDLE`. That was wrong and it is not a label
+       slip: the fixture and a real document read OPPOSITELY on this very scope, so naming the fixture's
+       reading as the real one labels the less relevant of two opposite answers as the relevant one. On the
+       fixture the most crowded bucket holds about 3% of members over ~200 buckets; on a real 4.5 MB bundle
+       replayed from its own mirror the frontier is ONE family over ~50 buckets with ONE bucket holding better
+       than HALF of 75113 members. A reading transferred from a fixture to a real document is a hypothesis,
+       and this one would have been the wrong way round. Over 56 censuses of THE FIXTURE, then:
+       `br_live_sum == members` held in ALL 56 — the partition is exact, because an
        empty bucket contributes 0 to it — and `br_live_min` read ZERO in 48. An empty bucket holds no member
        whose weight any comparison reads, so a minimum taken over it describes the thinnest bucket NOBODY
        stands in, which is not a quantity about the order at all.

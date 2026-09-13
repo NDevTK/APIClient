@@ -1839,7 +1839,7 @@ function wfqReading(out) {
   /* THE READING IS GATED AND THE IDENTITIES ARE NOT, WHICH IS A CORRECTION TO THIS BLOCK'S FIRST VERSION AND
      NOT A REFINEMENT OF IT. Both conservation checks below used to sit behind this flag, and the flag is FALSE
      on exactly the censuses a real page produces: solver/flow.c's family-root door takes a bucket whose root
-     flow has DEPARTED, so `brLiveMin` read 0 on 48 of 56 censuses of one real bundle. Gating the identities on
+     flow has DEPARTED, so `brLiveMin` read 0 on 48 of 56 censuses of the SMOKE FIXTURE. Gating the identities on
      it meant the two checks that exist because the engine's own DCHECKs are compiled out of release were
      themselves silent on 86% of the samples — a check that cannot fire is not a weak check, it is a
      reassuring transcript. The identities are about the PARTITION and the BURN and hold whatever the extrema
@@ -1878,14 +1878,26 @@ function wfqReading(out) {
     ? `ONE top-level arm holds the whole frontier, so every member reads the same 1/${w.brLiveMax} from ` +
       `flow_branch_bonus and that term is a COMMON OFFSET that orders nothing — the same shape as a ` +
       `one-family reward one scope up, and the reason a frontier can be branching hard while the one term ` +
-      `written to price branching is constant across it. Its subtree has received ` +
+      `written to price branching is constant across it. The bucket that received the most thread took ` +
       `${w.chargedUsLife > 0 ? (100 * w.brUsLifeMax / w.chargedUsLife).toFixed(0) : "?"}% of every ` +
       `microsecond the scheduler has charged, which is a receipt and not a verdict: with one arm there is no ` +
       `other side for it to have taken anything FROM`
-    : `${w.branches} top-level arms, the fattest holding ${w.brLiveMax} of ${w.members} members ` +
-      `(${(100 * w.brLiveMax / w.members).toFixed(0)}%) and its subtree having received ` +
+    /* TWO INDEPENDENT MAXIMA OVER POSSIBLY DIFFERENT BUCKETS, AND THIS SAID `ITS SUBTREE` — one word that
+       bound them to ONE bucket and made a false claim on every run. solver/flow.c states them as two separate
+       readings and never as one bucket's pair: `br_live_max` against `members` is how concentrated the
+       FRONTIER is, `br_us_max` against `charged_us` is how concentrated the THREAD is.
+       MEASURED, and it is not a corner: over the last 49 censuses of one run `brUsLifeMax` was FROZEN at one
+       value while `brLiveMax` climbed 4 -> 77 and members climbed 355 -> 2728. A bucket taking on 73 members
+       and being dispatched accrues thread time; the max-us bucket accrued NOTHING across that whole span, so
+       it is not the bucket the other row names. branch_take says what such a bucket is — the family-root
+       door's DEPARTED ROOT, which holds zero live members by construction and whose burn is boot's.
+       So the honest sentence reports them as two facts and says they need not be the same arm. */
+    : `${w.branches} top-level arms; the most CROWDED holds ${w.brLiveMax} of ${w.members} members ` +
+      `(${(100 * w.brLiveMax / w.members).toFixed(0)}%), and the bucket that received the most THREAD took ` +
       `${w.chargedUsLife > 0 ? (100 * w.brUsLifeMax / w.chargedUsLife).toFixed(0) : "?"}% of all charged ` +
-      `thread time — the other side of each is the REMAINDER of the published total and never brLiveMin, ` +
+      `time — TWO MAXIMA OVER TWO BUCKETS THAT NEED NOT BE THE SAME ONE, and a departed family root holds ` +
+      `zero live members while keeping its whole burn, so the thread figure is often boot's rather than any ` +
+      `live arm's. The other side of each is the REMAINDER of the published total and never brLiveMin, ` +
       `which a root's own single-member bucket usually owns. ` +
       /* MINTING AND HOLDING ARE TWO DIFFERENT PAGES AND THEY TAKE OPPOSITE DIFFS, which is why flow.h
          publishes the lifetime born count beside the live gauge rather than only the gauge. */
