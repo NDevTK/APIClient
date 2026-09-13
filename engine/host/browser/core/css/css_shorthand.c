@@ -1356,6 +1356,11 @@ bool css_shorthand_is_shorthand(const char *name)
     return css_sh_row(name) != NULL;
 }
 
+const char *css_shorthand_name_at(unsigned i)
+{
+    return i < CSS_SH_N(SHORTHANDS) ? SHORTHANDS[i].name : NULL;
+}
+
 const char *css_shorthand_property_named(const char *name)
 {
     const CssShorthandRow *row;

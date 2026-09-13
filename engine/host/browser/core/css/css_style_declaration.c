@@ -148,7 +148,14 @@ static int       g_page_proto_slot = -1;
    attribute silently read-only, so it is DCHECKed at the install rather than left to be discovered. */
 static int g_set_css_text_id = -1, g_get_prop_id = -1, g_remove_prop_id = -1, g_get_priority_id = -1,
            g_set_prop_id = -1, g_item_id = -1, g_put_forwards_id = -1;
-static int g_property_set_id[LXB_CSS_PROPERTY__LAST_ENTRY];
+/* The bound on this engine's OWN supported properties — the half of the id space below that the vendored
+   registry does not provide. Declared here because the setter-id array spans the whole space; the list itself
+   and why it exists are at `cssd_own_init`. */
+#define CSSD_OWN_MAX 128
+static int g_property_set_id[LXB_CSS_PROPERTY__LAST_ENTRY + CSSD_OWN_MAX];
+/* CSSOM §6.6.1's id space resolved to ONE name — defined beside the list it reads, forward-declared here
+   because the two per-property accessors above it are what `idl_setter_id` is handed. */
+static const char *cssd_property_name_of(uintptr_t id);
 static int g_id_gcs;   /* getComputedStyle — declared once per agent, installed on each realm's window */
 static int     g_ready;
 
@@ -2816,18 +2823,21 @@ static JSValue js_cssd_set_property(JSContext *ctx, JSValueConst this_val, int a
    rather than stored twice, and the attribute's own spelling is never inverted to recover it. */
 static JSValue js_cssd_property_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    const lxb_css_entry_data_t *e = lxb_css_property_by_id((uintptr_t)magic);
+    const char *pname = cssd_property_name_of((uintptr_t)magic);
     JSValue block = cssd_block(ctx, this_val), r;
 
-    DCHECK(e != NULL, "a CSS attribute was declared with a property id the registry does not have");
+    DCHECK(pname != NULL,
+           "a CSS attribute was declared with a property id the SPACE does not have. `magic` indexes the "
+           "registry's rows followed by this engine's own (cssd_property_name_of), so a NULL here is an "
+           "installer and that seam disagreeing about which properties exist");
     if (JS_IsException(block)) return block;
     if (cssd_flag(ctx, block, "computed")) {
-        r = css_resolved_value(ctx, cssd_owner_element(ctx, block), (const char *)e->name);
+        r = css_resolved_value(ctx, cssd_owner_element(ctx, block), pname);
     } else {
         size_t len = 0;
         char *text = cssd_declarations_text(ctx, block, &len);
-        char *v = cssd_property_value(text, len, (const char *)e->name);
-        JSValue unknown = cssd_taint_read(ctx, block, (const char *)e->name, v);
+        char *v = cssd_property_value(text, len, pname);
+        JSValue unknown = cssd_taint_read(ctx, block, pname, v);
 
         free(text);
         r = !JS_IsUndefined(unknown) ? unknown
@@ -2840,11 +2850,14 @@ static JSValue js_cssd_property_get(JSContext *ctx, JSValueConst this_val, int m
 
 static JSValue js_cssd_property_set(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
-    const lxb_css_entry_data_t *e = lxb_css_property_by_id((uintptr_t)magic);
+    const char *pname = cssd_property_name_of((uintptr_t)magic);
     JSValue block = cssd_block(ctx, this_val);
     CssdValue v;
 
-    DCHECK(e != NULL, "a CSS attribute was declared with a property id the registry does not have");
+    DCHECK(pname != NULL,
+           "a CSS attribute was declared with a property id the SPACE does not have. `magic` indexes the "
+           "registry's rows followed by this engine's own (cssd_property_name_of), so a NULL here is an "
+           "installer and that seam disagreeing about which properties exist");
     if (JS_IsException(block)) return block;
     if (cssd_flag(ctx, block, "readOnly")) {
         JS_FreeValue(ctx, block);
@@ -2854,7 +2867,7 @@ static JSValue js_cssd_property_set(JSContext *ctx, JSValueConst this_val, JSVal
         JS_FreeValue(ctx, block);
         return JS_HasException(ctx) ? JS_EXCEPTION : JS_UNDEFINED;
     }
-    cssd_write_declaration(ctx, block, (const char *)e->name, *v.bytes ? v.bytes : NULL, false, v.taint);
+    cssd_write_declaration(ctx, block, pname, *v.bytes ? v.bytes : NULL, false, v.taint);
     cssd_value_free(ctx, &v);
     JS_FreeValue(ctx, block);
     return JS_UNDEFINED;
@@ -2930,6 +2943,92 @@ static bool cssom_supported_css_property(uintptr_t id, const lxb_css_entry_data_
  * caller. NULL is "not a supported CSS property", which for a CUSTOM property is the right answer and not a
  * miss: §2 excludes custom properties from the set by name, and §7.5 asks about them in its own separate
  * clause. */
+/* ---- CSSOM §6.6.1's PROPERTY ID SPACE, WHICH IS THIS ENGINE'S AND NOT THE REGISTRY'S -----------------------
+ *
+ * §6.6.1's three per-property installers walk a SPACE rather than asking about a name they hold, and every one
+ * of them walked lexbor's ids — so the thirty-nine properties this engine implements and the registry does not
+ * carry had no id to be installed under, and `el.style.transform` was not an accessor at all. The space is
+ * therefore the registry's ids FOLLOWED BY this engine's own, and the accessors' `magic` indexes the whole of
+ * it.
+ *
+ * WHY IDS ABOVE THE REGISTRY'S MAXIMUM ARE SAFE HERE, WHICH IS A QUESTION ABOUT BOUNDARIES AND NOT ABOUT
+ * ARITHMETIC. Lexbor's `LXB_CSS_PROPERTY__LAST_ENTRY` MOVES on a vendor bump, so every engine-side id shifts
+ * with it. That is harmless for an id that lives only inside one process and FATAL for one that crosses a
+ * boundary whose two ends were built at different revisions — a parked flow's snapshot, a store record, a
+ * mojom field, a census row a driver parses — where it would be the stale-coordinate defect with a number on
+ * it. IT IS ESTABLISHED AND NOT ASSUMED, by three greps rather than by reasoning about intent:
+ *   every use of a lexbor property id in `engine/host` is in THIS FILE (`git grep -n
+ *     "lxb_css_property_id\|LXB_CSS_PROPERTY__LAST_ENTRY\|property_by_id" -- engine/host`);
+ *   no persisted or serialized record names one (`git grep -ni "property_id\|propId\|cssPropId" --
+ *     engine/host/solver extension/lib` is EMPTY);
+ *   and the only place an id reaches a JS object is as an accessor's `magic`, installed by
+ *     `cssom_install_proto`, which is a `realm_declare_intrinsic` — so it is rebuilt from these tables at
+ *     every realm creation and no two realms can disagree about it.
+ * A later reader will re-ask this, which is why the commands are here rather than the conclusion alone.
+ *
+ * THE OWN LIST IS BUILT FROM THE OWNERS AND NEVER TYPED. Each of the three sources answers for the properties
+ * IT owns the grammar of, exactly as `cssom_supported_css_property_named` asks them, so there is no fourth
+ * list to drift: this array holds POINTERS to the owners' own static names and copies nothing. It is deduped
+ * because a name in two sources would otherwise take two ids and install one attribute twice. */
+static const char *g_own[CSSD_OWN_MAX];
+static unsigned    g_own_n;
+
+static void cssd_own_add(const char *name)
+{
+    unsigned i;
+
+    /* A name the REGISTRY carries is not this engine's own, and admitting one would be one property with two
+       ids — the registry is asked first everywhere, so the second would be unreachable and its attribute a
+       silent duplicate. This file already asserts the same thing for its initial-value table. */
+    if (lxb_css_property_by_name((const lxb_char_t *)name, strlen(name)) != NULL) return;
+    for (i = 0; i < g_own_n; i++)
+        if (strcmp(g_own[i], name) == 0) return;
+    CHECK(g_own_n < CSSD_OWN_MAX,
+          "cssom: this engine's own supported-property list outgrew its array. It is built from the components "
+          "that own the grammars, so growing past the bound means a component gained properties rather than "
+          "that the bound was wrong — raise it rather than dropping a member, because a dropped one is a "
+          "property a page can declare and CSSOM says does not exist");
+    g_own[g_own_n++] = name;
+}
+
+/* The engine's own supported properties, collected once per agent from the three components that own them. */
+static void cssd_own_init(void)
+{
+    unsigned i;
+    const char *n;
+
+    g_own_n = 0;
+    for (i = 0; i < sizeof(CSSD_INITIAL_UNREGISTERED) / sizeof(CSSD_INITIAL_UNREGISTERED[0]); i++)
+        cssd_own_add(CSSD_INITIAL_UNREGISTERED[i].name);
+    for (i = 0; i < CSS_BACKGROUND_SHORTHAND_N; i++)
+        cssd_own_add(CSS_BACKGROUND_SHORTHAND_LONGHANDS[i]);
+    for (i = 0; (n = css_shorthand_name_at(i)) != NULL; i++)
+        cssd_own_add(n);
+}
+
+/* ONE ID, ONE NAME — the seam every consumer of the space goes through, so the registry's rows and this
+   engine's own are told apart in exactly one place. NULL for an id outside the space and for a registry row
+   CSSOM §2 excludes, which is what the installers' `continue` reads. */
+static const char *cssd_property_name_of(uintptr_t id)
+{
+    if (id < LXB_CSS_PROPERTY__LAST_ENTRY) {
+        const lxb_css_entry_data_t *e = lxb_css_property_by_id(id);
+
+        return cssom_supported_css_property(id, e) ? (const char *)e->name : NULL;
+    }
+    DCHECK(id - LXB_CSS_PROPERTY__LAST_ENTRY < g_own_n,
+           "a CSS property id was resolved past the end of this engine's own list — the space is the "
+           "registry's ids followed by `g_own`, and an id past both is an installer and this seam disagreeing "
+           "about how many properties there are");
+    return g_own[id - LXB_CSS_PROPERTY__LAST_ENTRY];
+}
+
+/* The whole space's extent, which every §6.6.1 installer walks. */
+static uintptr_t cssd_property_id_end(void)
+{
+    return (uintptr_t)LXB_CSS_PROPERTY__LAST_ENTRY + g_own_n;
+}
+
 const char *cssom_supported_css_property_named(const char *name)
 {
     const lxb_css_entry_data_t *e;
@@ -3003,19 +3102,23 @@ const char *cssom_supported_css_property_named(const char *name)
    lowercase first is the CONSEQUENCE, because the removed character is the "-" that would otherwise have set
    uppercase next. `-webkit-transform` is the spec's own worked example: with the flag it is `webkitTransform`,
    without it `WebkitTransform`, and §6.6.1 says a user agent supporting that property has BOTH. */
-static void cssom_css_property_to_idl_attribute(const lxb_css_entry_data_t *e, bool lowercase_first,
+/* IT TAKES THE NAME AND NOT A REGISTRY ROW, because a property this ENGINE implements has no row — and §6.6.1
+   runs "For each CSS property property that is a supported CSS property" — the doubled word is the spec's own,
+   the second being its variable — and CSSOM §2 defines that set as one the USER AGENT implements rather than
+   one the vendored parser types. */
+static void cssom_css_property_to_idl_attribute(const char *property, bool lowercase_first,
                                                 char *out, size_t cap)
 {
-    size_t i = 0, j = 0;
+    size_t i = 0, j = 0, len = strlen(property);
     bool uppercase_next = false;
 
-    DCHECK(e->length > 0, "§6.6.1's algorithm was run for a property with no name");
-    DCHECK(e->length < cap, "a CSS property name outgrew the IDL attribute buffer — raise "
-                            "CSSOM_IDL_ATTRIBUTE_MAX rather than dropping the member");
+    DCHECK(len > 0, "§6.6.1's algorithm was run for a property with no name");
+    DCHECK(len < cap, "a CSS property name outgrew the IDL attribute buffer — raise "
+                      "CSSOM_IDL_ATTRIBUTE_MAX rather than dropping the member");
     if (lowercase_first)
         i = 1;
-    for (; i < e->length; i++) {
-        lxb_char_t c = e->name[i];
+    for (; i < len; i++) {
+        char c = property[i];
 
         if (c == '-') { uppercase_next = true; continue; }
         out[j++] = uppercase_next ? (char)toupper(c) : (char)c;
@@ -3040,12 +3143,12 @@ static void cssom_install_camel_cased_attributes(JSContext *ctx, JSValueConst pr
 {
     uintptr_t id;
 
-    for (id = 0; id < LXB_CSS_PROPERTY__LAST_ENTRY; id++) {
-        const lxb_css_entry_data_t *e = lxb_css_property_by_id(id);
+    for (id = 0; id < cssd_property_id_end(); id++) {
+        const char *p = cssd_property_name_of(id);
         char name[CSSOM_IDL_ATTRIBUTE_MAX];
 
-        if (!cssom_supported_css_property(id, e)) continue;
-        cssom_css_property_to_idl_attribute(e, false, name, sizeof name);
+        if (p == NULL) continue;
+        cssom_css_property_to_idl_attribute(p, false, name, sizeof name);
         cssom_install_property_attribute(ctx, proto, id, name);
     }
 }
@@ -3055,14 +3158,14 @@ static void cssom_install_webkit_cased_attributes(JSContext *ctx, JSValueConst p
     static const char PREFIX[] = "-webkit-";
     uintptr_t id;
 
-    for (id = 0; id < LXB_CSS_PROPERTY__LAST_ENTRY; id++) {
-        const lxb_css_entry_data_t *e = lxb_css_property_by_id(id);
+    for (id = 0; id < cssd_property_id_end(); id++) {
+        const char *p = cssd_property_name_of(id);
         char name[CSSOM_IDL_ATTRIBUTE_MAX];
 
-        if (!cssom_supported_css_property(id, e)) continue;
+        if (p == NULL) continue;
         /* "and that begins with the string -webkit-" */
-        if (e->length < sizeof(PREFIX) - 1 || memcmp(e->name, PREFIX, sizeof(PREFIX) - 1) != 0) continue;
-        cssom_css_property_to_idl_attribute(e, true, name, sizeof name);
+        if (strlen(p) < sizeof(PREFIX) - 1 || memcmp(p, PREFIX, sizeof(PREFIX) - 1) != 0) continue;
+        cssom_css_property_to_idl_attribute(p, true, name, sizeof name);
         cssom_install_property_attribute(ctx, proto, id, name);
     }
 }
@@ -3071,14 +3174,14 @@ static void cssom_install_dashed_attributes(JSContext *ctx, JSValueConst proto)
 {
     uintptr_t id;
 
-    for (id = 0; id < LXB_CSS_PROPERTY__LAST_ENTRY; id++) {
-        const lxb_css_entry_data_t *e = lxb_css_property_by_id(id);
+    for (id = 0; id < cssd_property_id_end(); id++) {
+        const char *p = cssd_property_name_of(id);
 
-        if (!cssom_supported_css_property(id, e)) continue;
+        if (p == NULL) continue;
         /* "except for properties that have no "-" (U+002D) in the property name" — and "dashed attribute is
-           property", so no algorithm runs here at all: the member's name IS the registry row's. */
-        if (memchr(e->name, '-', e->length) == NULL) continue;
-        cssom_install_property_attribute(ctx, proto, id, (const char *)e->name);
+           property", so no algorithm runs here at all: the member's name IS the property's. */
+        if (strchr(p, '-') == NULL) continue;
+        cssom_install_property_attribute(ctx, proto, id, p);
     }
 }
 
@@ -3319,28 +3422,27 @@ static void cssd_computed_name(CssDecls *d, const char *name)
 static void cssd_computed_names(CssDecls *d)
 {
     uintptr_t id;
-    unsigned k, nlh, j, i;
+    unsigned i;
 
     /* THE SAME QUESTION §6.6.1's installers ask, asked THROUGH THE SAME PREDICATE. This walk had its own
        spelling of it — a start index and a null/empty guard — which let lexbor's custom-property marker
        through to be filtered by whether css_computed_models happens to model a property called `#сustom`.
        One "supported CSS property" question with two answers is how the two sites drift apart. */
-    for (id = 0; id < LXB_CSS_PROPERTY__LAST_ENTRY; id++) {
-        const lxb_css_entry_data_t *e = lxb_css_property_by_id(id);
+    for (id = 0; id < cssd_property_id_end(); id++) {
+        const char *p = cssd_property_name_of(id);
 
-        if (!cssom_supported_css_property(id, e)) continue;
-        cssd_computed_name(d, (const char *)e->name);
+        if (p == NULL) continue;
+        cssd_computed_name(d, p);
     }
-    for (k = 0; k < 2; k++) {
-        const char *const *border = css_shorthand_longhands(k == 0 ? "border-width" : "border-style", &nlh);
-
-        DCHECK(border != NULL,
-               "css_shorthand.c stopped recording `border-width`/`border-style`, which are the only place the "
-               "eight longhands lexbor's registry does not carry are named — the enumeration would silently "
-               "lose eight properties whose computed value this build does resolve");
-        for (j = 0; border && j < nlh; j++)
-            cssd_computed_name(d, border[j]);
-    }
+    /* THE HAND-ADDED BORDER LONGHANDS ARE GONE, AND THEIR ARGUMENT IS RETIRED RATHER THAN DELETED. A loop here
+       walked `border-width` and `border-style`'s longhands by hand, because "lexbor's registry does not carry"
+       the eight and the walk above could therefore not reach them — which was true of a walk over the
+       REGISTRY'S ids and is false of one over this engine's own space. Keeping it would not be a harmless
+       belt-and-braces: `cssd_computed_name` appends unconditionally, so every one of the eight would be
+       enumerated TWICE and CSSOM §7.2's `length` and `item(i)` would both report the duplicates.
+       IT IS THE SAME FACT THE SPACE ABOVE EXISTS FOR, which is why the compensation and the gap it compensated
+       for had to go in one diff: a site that works around an absence is falsified by the diff that ends the
+       absence, and a reader who finds it still standing will re-derive the reason it was there. */
     /* LEXICOGRAPHICAL ORDER, which CSSOM §7.2 states outright and which is therefore the enumeration's contract
        rather than a tidy-up: `item(i)` and `length` are the same list read two ways, and a page walking the
        indices expects the order the spec named. */
@@ -3946,8 +4048,12 @@ void cssom_init(JSContext *ctx)
        declare `color: null` — the descriptors beside them had it right, which is what made the disagreement
        readable. One id per property, shared by the property's camel-cased, webkit-cased and dashed attributes,
        because §6.6.1 gives all three the same setter steps. */
-    for (id = 0; id < LXB_CSS_PROPERTY__LAST_ENTRY; id++)
-        g_property_set_id[id] = cssom_supported_css_property(id, lxb_css_property_by_id(id))
+    /* THE OWN LIST IS BUILT BEFORE THE SETTERS ARE DECLARED, because the space's extent is what this loop
+       walks and `cssd_property_id_end` is that extent. Both are per AGENT — a setter id is a runtime's, and
+       the list is collected from tables that do not change while one runs. */
+    cssd_own_init();
+    for (id = 0; id < cssd_property_id_end(); id++)
+        g_property_set_id[id] = cssd_property_name_of(id) != NULL
                               ? idl_setter_id(ctx, IDL_DOMSTRING, true, js_cssd_property_set, (int)id)
                               : -1;
     {

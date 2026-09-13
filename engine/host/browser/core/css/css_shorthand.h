@@ -112,6 +112,12 @@ bool css_shorthand_is_shorthand(const char *name);
    property that the user agent implements", and the user agent is this ENGINE and not the vendored parser it
    embeds. A name in the table below is one whose grammar and whose expansion this file owns, which is what
    implementing a property means. */
+/* THE SAME ROWS, ENUMERATED — the table walked by index, NULL past the last, so a caller that must build a SET
+   out of them does not need a count beside the accessor (a count and a table are one fact, and the count is
+   the copy that goes stale when a row is added). CSSOM §6.6.1's three per-property installers need this
+   because they walk a property SPACE rather than asking about a name they already hold. */
+const char *css_shorthand_name_at(unsigned i);
+
 const char *css_shorthand_property_named(const char *name);
 
 /* THE SHORTHANDS THAT SET `longhand`, written into `out` in CSSOM §6.6's own PREFERRED ORDER — "order
