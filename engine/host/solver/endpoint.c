@@ -331,23 +331,100 @@ static void kv_free(KvBuf *b) {
     free(b->e); b->e = NULL; b->n = b->cap = 0;
 }
 
+/* ONE `name=value` PAIR of a `&`-separated list, READ IN PLACE. `p` is a position in the list; the return is
+   the position of the next pair, or NULL at the end. The name and the value are BORROWED spans: a pair with
+   no `=` has a zero-length value, which is what `?flag` sends, and an empty NAME is left for the caller to
+   refuse at its own site (kv_add asserts it).
+   IN PLACE BECAUSE THE TWO SPELLINGS OF ONE ADDRESS MUST BE WALKED TOGETHER, and `strtok` keeps its state in
+   the string it is destroying, so it cannot be asked about two lists at once. */
+static const char *kv_pair_next(const char *p, const char **nm, size_t *nn, const char **vl, size_t *vn) {
+    const char *amp, *eq;
+    size_t plen;
+
+    while (*p == '&') p++;      /* `&&`, and a trailing `&`: no pair — the same runs strtok collapsed */
+    if (!*p) return NULL;
+    amp = strchr(p, '&');
+    plen = amp ? (size_t)(amp - p) : strlen(p);
+    eq = (const char *)memchr(p, '=', plen);
+    *nm = p;
+    *nn = eq ? (size_t)(eq - p) : plen;
+    *vl = eq ? eq + 1 : p + plen;
+    *vn = eq ? plen - (size_t)(eq - p) - 1 : 0;
+    return p + plen;
+}
+
+/* DOES THE EXAMPLE'S QUERY LINE UP WITH THE SHAPE'S, PAIR BY PAIR? The question path_aligned asks of the path,
+   asked of the other half of the address and for the same reason: the two strings are ONE concatenation
+   rendered twice, so a hole's value may be read across only where everything around it still agrees. Same
+   pair count, same names, and every hole-free value byte-equal. A hole whose value held an `&` splits the
+   example into more pairs than the shape has and nothing aligns — the honest answer, since this layer cannot
+   know which pairs that value spanned. */
+static int query_aligned(const char *shape, const char *ex) {
+    const char *a = shape, *b = ex;
+    for (;;) {
+        const char *an, *av, *bn, *bv, *na, *nb;
+        size_t ann, avn, bnn, bvn;
+
+        na = kv_pair_next(a, &an, &ann, &av, &avn);
+        nb = kv_pair_next(b, &bn, &bnn, &bv, &bvn);
+        if (!na || !nb) return !na && !nb;
+        if (ann != bnn || memcmp(an, bn, ann)) return 0;
+        if (!memchr(av, '{', avn) && (avn != bvn || memcmp(av, bv, avn))) return 0;
+        a = na; b = nb;
+    }
+}
+
 /* `a=1&b=2` — the QUERY STRING's grammar, and `application/x-www-form-urlencoded`'s, which are the same
    grammar. Nothing is percent-DECODED: §Solver-half puts the codecs in the engine's builtins and forbids the
-   solver hand-rolling one, and a value the page encoded is the value the page sends. */
-static void kv_pairs(KvBuf *b, const char *text, EpLoc loc) {
-    char *dup = strdup(text); CHECK(dup, "endpoint: OOM pair list");
-    for (char *tok = strtok(dup, "&"); tok; tok = strtok(NULL, "&")) {
-        char *eq = strchr(tok, '=');
-        const char *name = tok, *val = "";
-        if (eq) { *eq = 0; val = eq + 1; }
-        if (!name[0]) continue;   /* `&&` / a leading `=`: no name, so no param — see kv_add's assert */
-        {   /* the VALUE carries the hole here: `page={state.page}` is one unknown wearing a known name */
-            char *hole = concolic_hole_key(val);
-            kv_add(b, name, strlen(name), val, strlen(val), loc, hole);
-            free(hole);
+   solver hand-rolling one, and a value the page encoded is the value the page sends.
+   `ex` IS THE SAME LIST RENDERED FROM THE CONCRETE EXAMPLE, or NULL where the value carried none. A param's
+   two facts arrive from the two spellings and neither substitutes for the other: the HOLE KEY — which is what
+   the domain, the exclusions and the bounds are looked up by — is read off the SHAPE, and the VALUE emitted
+   is the EXAMPLE the interpreter computed where the shape holds a hole. That is not an invention: the example
+   is the real operation run on real operands (§Solver-half's third member of the triple, and concolic.h's
+   own rule that a result has none where any operand has none), so a gate-CONTRADICTED arm arrives exampleless
+   and falls back to the shape exactly as it did before. It is the same read path_scan already performs for a
+   path segment, which is why a templated PATH carried its value and a templated QUERY did not. */
+static void kv_pairs(KvBuf *b, const char *text, const char *ex, EpLoc loc) {
+    int aligned = ex && query_aligned(text, ex);
+    const char *a = text, *e = ex;
+
+    for (;;) {
+        const char *nm, *vl, *en = NULL, *ev = NULL, *na, *ne;
+        size_t nn, vn, enn = 0, evn = 0;
+        char *shapeval, *hole;
+
+        na = kv_pair_next(a, &nm, &nn, &vl, &vn);
+        if (!na) break;
+        a = na;
+        /* THE TWO WALKS ARE ONE RULE AND THIS IS WHERE THEY ARE HELD TO IT. query_aligned established the
+           pairing with the SAME splitter; asserting it again here is what stops the alignment test and the
+           emission drifting into two readings of one list, which is the only way a value could be attributed
+           to the wrong param. */
+        if (aligned) {
+            ne = kv_pair_next(e, &en, &enn, &ev, &evn);
+            DCHECK(ne != NULL,
+                   "an aligned example query ran out of pairs before its shape did — query_aligned proved the "
+                   "two lists have the same pair count with this same splitter, so the two walks disagree");
+            DCHECK(ne && enn == nn && !memcmp(en, nm, nn),
+                   "an aligned example query's pair names a different param than the shape's at the same "
+                   "position — the example value would be attributed to a param the code never computed it "
+                   "for, which is a fabricated @H value and not a thin one");
+            e = ne;
         }
+        if (!nn) continue;   /* `&&` / a leading `=`: no name, so no param — see kv_add's assert */
+        shapeval = malloc(vn + 1);
+        CHECK(shapeval, "endpoint: OOM copying a query value's display form");
+        if (vn) memcpy(shapeval, vl, vn);
+        shapeval[vn] = 0;
+        hole = concolic_hole_key(shapeval);   /* the DOMAIN is a fact about the shape, whatever the value is */
+        if (aligned && memchr(vl, '{', vn))
+            kv_add(b, nm, nn, ev, evn, loc, hole);
+        else
+            kv_add(b, nm, nn, vl, vn, loc, hole);
+        free(hole);
+        free(shapeval);
     }
-    free(dup);
 }
 
 /* The path half of a display URL (everything before `?`), malloc'd. */
@@ -555,8 +632,24 @@ static int body_params(JSContext *ctx, KvBuf *out, const EndpointBody *body) {
         JS_FreeValue(ctx, v);
     } else if (mt.type && mt.subtype && !strcmp(mt.type, "application") &&
                !strcmp(mt.subtype, "x-www-form-urlencoded")) {
-        kv_pairs(out, text, EP_BODY);
+        /* NO EXAMPLE LIST FOR A BODY — see the residual below. */
+        kv_pairs(out, text, NULL, EP_BODY);
     }
+    /* NAMED RESIDUAL — A BODY FIELD CARRIES ITS SHAPE WHERE A QUERY PARAM NOW CARRIES ITS EXAMPLE.
+       WHAT IS NOT COVERED: the value of a body field the page composed out of an unknown. Both arms above
+       read ONE byte sequence, and that sequence is the DISPLAY form — a concatenation carries its operands'
+       display forms into the result's — so a field whose value the interpreter computed is emitted as
+       `{…}` while the identical computation in the address's query half is emitted as the bytes. The
+       address's two halves stopped disagreeing when the query scan was given the example list; a request's
+       address and its body have not.
+       WHAT THE NEXT DIFF BUILDS: the concrete rendering beside the display one on `EndpointBody`
+       (solver/endpoint.h states `mime`, `bytes`, `len` and `kind` and nothing concrete), so this function can
+       walk the two as kv_pairs now walks a query and body_field_text can be asked for the example's field.
+       ITS PRODUCERS ARE OUTSIDE THIS COMPONENT — nothing here builds an EndpointBody — so the field and every
+       fill of it land together, and a fill that has no example states none rather than repeating the shape.
+       HOW ITS ABSENCE WOULD SHOW: an @H record whose query params carry concrete values and whose body fields
+       carry brace-spelled shapes, for ONE request whose two halves were built from the same computed
+       values — a reviewer can vary the address and not the payload. */
     free(text);
     mime_type_free(&mt);
     return out->n - before;
@@ -884,11 +977,19 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
     /* PATH, THEN QUERY, THEN BODY — the order a request is written in, and the order the identity above
        compares in. The path is re-spelled by the scan (see path_scan) and it is the re-spelled one that
        becomes the endpoint's `url`, because the params are named in ITS grammar and a record whose holes and
-       whose param names disagree is one nothing can replay. The example is aligned against the path only; the
-       query and the body carry the values the display and the bytes already hold. */
+       whose param names disagree is one nothing can replay.
+       THE EXAMPLE IS ALIGNED AGAINST BOTH HALVES OF THE ADDRESS, which it was not: it was split at the `?`
+       and only the path half was ever read, so a hole in a QUERY value rendered as its shape while the same
+       hole one segment earlier rendered as the bytes the code computed. That is the whole of what a bundle
+       does with a config it just fetched — `fetch('/api/user?region=' + c.region)` — so the surface named the
+       address and carried no example under any param a reply's field reached. The two halves are split HERE
+       rather than inside either scan, because `?` is the address's own boundary and neither grammar contains
+       it.
+       THE BODY STILL CARRIES NO EXAMPLE — see body_params' residual. */
     KvBuf kvb = { 0 };
     char *path = path_scan(&kvb, shape_path, expath);
-    { const char *q = strchr(disp, '?'); if (q && q[1]) kv_pairs(&kvb, q + 1, EP_QUERY); }
+    { const char *q = strchr(disp, '?'), *eq = ex ? strchr(ex, '?') : NULL;
+      if (q && q[1]) kv_pairs(&kvb, q + 1, (eq && eq[1]) ? eq + 1 : NULL, EP_QUERY); }
     /* NAMED FIELDS FIRST; THE RAW BYTES ONLY WHERE THERE ARE NONE. A body this engine reads is better
        described by its fields than by a blob, and emitting both would put one fact on the record twice. */
     int body_named = body_params(ctx, &kvb, body);
