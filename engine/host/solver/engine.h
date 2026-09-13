@@ -1268,12 +1268,33 @@ typedef struct {
      * AND THE SHAPE OF THE DISTRIBUTION IS A SEPARATE FACT FROM EITHER — the overruns are NOT spread with the
      * work. On that run `deliver-one-reply` took 36% of every turn and `run-a-task` 18.5%, and NEITHER OVERRAN
      * ONCE; every overrun was in one of three arms and two of those three are a program STARTING or RESUMING.
-     * So the slice is held by particular UNITS OF WORK rather than by the amount of work, which is a claim
-     * about which C activations offer a suspend point at all — on this host the only raise sources are the
-     * interpreter's own (a back edge, a call, a fork), so a unit that runs engine C rather than page bytecode
-     * has nothing to raise the request and the budget cannot be evaluated inside it however long it takes.
-     * An arm's ABSENCE from the overrun histogram is therefore evidence, and it is the half a reader who looks
-     * only at the non-zero rows never sees. */
+     * So the slice is held by particular UNITS OF WORK rather than by the amount of work. An arm's ABSENCE
+     * from the overrun histogram is therefore evidence, and it is the half a reader who looks only at the
+     * non-zero rows never sees.
+     * AND THE MECHANISM THIS PARAGRAPH FIRST GAVE FOR THAT IS RETIRED, REFUTED BY THE SAME RUN'S OWN ROWS —
+     * rewritten rather than deleted, because it is the explanation a reader re-derives in one step and it is
+     * wrong. It said: the only raise sources are the interpreter's own (a back edge, a call, a fork), so a
+     * unit running ENGINE C rather than page bytecode has nothing to raise the request and the budget cannot
+     * be evaluated inside it however long it takes. The raise-kind half is TRUE and checkable — quickjs.h
+     * declares exactly JS_PREEMPT_BACKEDGE, _FORK, _CALL and _HOST, and solver/engine.c's preempt_hook is the
+     * only caller of quantum_expired on the flow path. The CONCLUSION does not follow, and this run refutes
+     * it: a start COMPILES before it executes, and `start-ended-its-frame` — a start that compiled and ran to
+     * completion inside the step — ran 153 TIMES AND OVERRAN NOT ONCE. `deliver-one-reply`, engine C at its
+     * own door, ran 6990 times and overran not once either. The compile is not what holds the slice.
+     * AND THE RATE WAS QUOTED AGAINST THE WRONG DENOMINATOR, WHICH IS WHAT MADE THE WRONG MECHANISM LOOK
+     * NECESSARY. `start-a-classic-program` does not mean "a start"; step_unit.h's own split says it means a
+     * start THAT RETURNED WITH ITS FRAME LIVE, its three frame-clearing outcomes being separate rows. So the
+     * 24 is not the start population: all four start rows sum to 192, and 8 of 192 is 4.2%. "One start in
+     * three" was a fraction of the wrong total, which is this project's own coverage-figure defect committed
+     * at the row that exists to prevent it.
+     * WHAT THE PARTITION ACTUALLY SAYS IS SHARPER THAN EITHER READING, because the two are not two
+     * denominators for one question but TWO POPULATIONS: a start that FINISHED inside the step overran 0 of
+     * 153 times, and a start that was STILL RUNNING when the step ended overran 8 of 24. The overruns sit
+     * where page code was still executing, which is what a stretch between two of the page's OWN raise points
+     * looks like — a long back-edge-free, call-free run — and not where this engine's C is. `resume-program`
+     * at 55 of 2085 is the same population one step later. A unit is not uninterruptible because it is C; it
+     * is uninterrupted because the BYTECODE it is running offered no raise point, and only the page decides
+     * that. */
     long over_arms[STEP_UNIT_N];
 } EngineStepUnitRuns;
 void engine_step_unit_runs(EngineStepUnitRuns *out);
