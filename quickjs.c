@@ -332,6 +332,17 @@ struct JSRuntime {
     /* list of JSGCObjectHeader.link. Used during JS_FreeValueRT() */
     struct list_head gc_zero_ref_count_list;
     struct list_head tmp_obj_list; /* used during GC */
+    /* THE OBJECT WHOSE CHILDREN THE DECREF PASS IS WALKING. gc_decref_child is a JS_MarkFunc, so it is handed
+       a CHILD and nothing else — and the edge being walked belongs to the PARENT, which is where a mark with
+       no reference behind it is written. Every gc_mark in this engine reaches that one line, so the abort
+       there named an address no reader could use: an assert that names a remedy and not a site is a crash
+       nobody can act on, and the site here is an object rather than a file and line. It lives on the RUNTIME
+       for the reason step_owned_fp above gives — a file static is one slot for however many corpus threads
+       the harness runs, and two healthy runtimes would fold into each other's answer. It is written
+       UNCONDITIONALLY, like gc_obj_list and step_census: a field present in one build and not the other makes
+       this struct two different sizes, which is the skew that once had two translation units disagree about a
+       layout and read a record one slot early. */
+    JSGCObjectHeader *gc_decref_parent;
     /* THE POST-COLLECTION SWEEP'S WORKLIST — see js_gc_sweep. It exists because a collection is a phase in
        which some work is unsafe rather than a phase in which nothing may happen: a realm whose last reference
        goes away INSIDE the collection releases its own references there (that half is phase-safe) and parks
@@ -10156,9 +10167,61 @@ static void mark_children(JSRuntime *rt, JSGCObjectHeader *gp,
     }
 }
 
+/* THE NAME OF A GC OBJECT'S KIND, IN ONE PLACE. Two readers need it — JS_DumpGCObject, which prints it, and
+   gc_decref_child's assert, which reports the two ends of an unbacked mark edge — and two tables of one fact
+   is the shape that drifts the day a kind is added. Returns NULL rather than a string for a value that names
+   no kind, because BOTH callers can say more than "unknown" with the raw number in hand and because this one
+   runs while reading memory the collector has just found to be inconsistent: `gc_obj_type` is a 7-bit field,
+   so a corrupted header presents a value no cast to JSGCObjectTypeEnum is defined for, and the parameter is
+   an int for exactly that reason. */
+static __maybe_unused const char *js_gc_obj_type_name(int t)
+{
+    switch (t) {
+    case JS_GC_OBJ_TYPE_JS_OBJECT:         return "js_object";
+    case JS_GC_OBJ_TYPE_FUNCTION_BYTECODE: return "function bytecode";
+    case JS_GC_OBJ_TYPE_SHAPE:             return "shape";
+    case JS_GC_OBJ_TYPE_VAR_REF:           return "var_ref";
+    case JS_GC_OBJ_TYPE_ASYNC_FUNCTION:    return "async_function";
+    case JS_GC_OBJ_TYPE_JS_CONTEXT:        return "js_context";
+    default:                               return NULL;
+    }
+}
+
 static void gc_decref_child(JSRuntime *rt, JSGCObjectHeader *p)
 {
-    DCHECK(JS_REF_COUNT(p) > 0, "JS_REF_COUNT(p) > 0");
+    /* EVERY EDGE mark_children REPORTS MUST BE ONE THE PARENT HOLDS A COUNTED REFERENCE FOR — that is the
+       whole contract of the collector's first pass. It subtracts the references objects hold on EACH OTHER so
+       that what is left on each is the count held from OUTSIDE the graph; reaching zero here means some parent
+       reported this child to mark_children MORE TIMES than it dup'd it, so the subtraction is about to take a
+       live object negative and hand it to the sweep.
+       IT IS THE PARENT THAT IS WRONG AND NOT THE CHILD, WHICH IS WHY THE PARENT IS WHAT THIS NAMES. The
+       producers are all the parent's: a field MARKED but never dup'd; a field dup'd once and marked twice; a
+       pointer copied into a second structure without incrementing, so two holders mark what one reference
+       backs; and a release that gave a reference back without dropping the edge that still names it.
+       THIS SAID "JS_REF_COUNT(p) > 0", WHICH IS ITS OWN CONDITION SPELLED TWICE. A reader meeting it learned
+       neither what invariant had broken nor where to look, and this callback is reached from every gc_mark in
+       the engine — so the message named one line for the whole object graph and the crash had to be
+       rediscovered rather than read. The kind of the PARENT is what turns "some edge somewhere" into a handful
+       of mark functions worth reading, and the two pointers are where a debugger starts. The parent is read
+       from the runtime rather than derived here, because a callback cannot see its caller: see
+       JSRuntime.gc_decref_parent. */
+    DCHECKF(JS_REF_COUNT(p) > 0,
+            "the collector's decref pass found a mark edge with no counted reference behind it. The CHILD %p "
+            "is a %s (gc_obj_type %d) already at refcount 0. The PARENT whose children are being walked is "
+            "%p, a %s (gc_obj_type %d) — that is the object with the defect: it reports this child to "
+            "mark_children more often than it holds references on it. Read that kind's mark function against "
+            "its own dup/free sites for a field it marks and never dup'd, or a pointer it took from another "
+            "structure without incrementing",
+            (void *)p,
+            js_gc_obj_type_name(JS_GC_TYPE(p)) ? js_gc_obj_type_name(JS_GC_TYPE(p)) : "kind no enum names",
+            (int)JS_GC_TYPE(p),
+            (void *)rt->gc_decref_parent,
+            rt->gc_decref_parent
+                ? (js_gc_obj_type_name(JS_GC_TYPE(rt->gc_decref_parent))
+                       ? js_gc_obj_type_name(JS_GC_TYPE(rt->gc_decref_parent))
+                       : "kind no enum names")
+                : "no parent recorded — this walk is not the decref pass",
+            rt->gc_decref_parent ? (int)JS_GC_TYPE(rt->gc_decref_parent) : -1);
     JS_REF_COUNT(p)--;
     if (JS_REF_COUNT(p) == 0 && JS_GC_MARK(p) == 1) {
         list_del(&p->link);
@@ -10179,6 +10242,10 @@ static void gc_decref(JSRuntime *rt)
     list_for_each_safe(el, el1, &rt->gc_obj_list) {
         p = list_entry(el, JSGCObjectHeader, link);
         DCHECK(JS_GC_MARK(p) == 0, "JS_GC_MARK(p) == 0");
+        /* THE ADDRESS TRAVELS WITH THE OPERATION, captured at the caller that knows it. gc_decref_child is
+           handed only the child, and the unbacked edge belongs to this object. Written unconditionally so the
+           field means the same thing in both builds and is readable in a debugger on either. */
+        rt->gc_decref_parent = p;
         mark_children(rt, p, gc_decref_child);
         JS_GC_MARK(p) = 1;
         if (JS_REF_COUNT(p) == 0) {
@@ -10186,6 +10253,9 @@ static void gc_decref(JSRuntime *rt)
             list_add_tail(&p->link, &rt->tmp_obj_list);
         }
     }
+    /* The pass owns this field only for its own length — a stale parent read by anything else would name an
+       object that has nothing to do with the walk asking. */
+    rt->gc_decref_parent = NULL;
 }
 
 static void gc_scan_incref_child(JSRuntime *rt, JSGCObjectHeader *p)
@@ -20424,26 +20494,15 @@ static __maybe_unused void JS_DumpGCObject(JSRuntime *rt, JSGCObjectHeader *p)
         printf("%14p %4d ",
                (void *)p,
                JS_REF_COUNT(p));
-        switch(JS_GC_TYPE(p)) {
-        case JS_GC_OBJ_TYPE_FUNCTION_BYTECODE:
-            printf("[function bytecode]");
-            break;
-        case JS_GC_OBJ_TYPE_SHAPE:
-            printf("[shape]");
-            break;
-        case JS_GC_OBJ_TYPE_VAR_REF:
-            printf("[var_ref]");
-            break;
-        case JS_GC_OBJ_TYPE_ASYNC_FUNCTION:
-            printf("[async_function]");
-            break;
-        case JS_GC_OBJ_TYPE_JS_CONTEXT:
-            printf("[js_context]");
-            break;
-        default:
+        /* ONE NAME TABLE, TWO READERS — see js_gc_obj_type_name. The kinds this dump used to spell itself are
+           the kinds gc_decref_child's assert has to report, and a second copy of them would be right until the
+           day somebody adds a kind to one of the two. The unknown arm keeps the NUMBER, which is the whole
+           reason the table answers NULL rather than a string here. */
+        const char *tn = js_gc_obj_type_name(JS_GC_TYPE(p));
+        if (tn)
+            printf("[%s]", tn);
+        else
             printf("[unknown %d]", JS_GC_TYPE(p));
-            break;
-        }
         printf("\n");
     }
 }
