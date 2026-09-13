@@ -5364,6 +5364,64 @@ for (const l of revisionLines(revAtStart())) console.log(l);
    not this one's.
    HOW ITS ABSENCE WOULD SHOW: a build on a box without cmake ends with `[build] lexbor cmake FAILED` and NO
    stage table at all, where every other failure in this file prints the table first. */
+/* WHERE THE SANITIZER RUNTIME COMES FROM, ASKED OF THE COMPILER RATHER THAN ASSUMED.
+   `-fsanitize=address` is TWO things — instrumentation the compiler emits, and a RUNTIME LIBRARY the driver
+   links — and an installation can carry the first without the second. This one does: clang instruments every
+   source correctly and then dies at the link with `cannot find .../libclang_rt.asan-x86_64.a`, because the box
+   has llvm-18's compiler and not its compiler-rt sanitizer runtimes. Measured, that failure reproduces
+   BYTE-IDENTICALLY on a one-line program, so it is the installation and never this tree.
+   THE RUNTIME IS THE ONLY HALF THAT MOVES, AND THE COMPILER STAYING clang IS NOT A PREFERENCE. engine/
+   test262.mjs, engine/features.mjs and engine/v8mjsunit.mjs each record that a gate on gcc "certifies a
+   translation of these sources that nothing runs", and that this tree has already paid for it — quickjs-step.h
+   keeps three struct tags at file scope because "gcc -w hid all three; the project's clang build does not",
+   and CLAUDE.md records the harder instance, a data pointer in JSCFunctionType passing at -O0 and segfaulting
+   a whole directory at -O1. A memory instrument aimed at a defect in the CLANG-built engine may not be compiled
+   by another compiler: it would be green through a miscompile that ships and red on one that does not, which is
+   the phantom those three files name. So clang INSTRUMENTS and gcc's libsanitizer SERVES.
+   THAT PAIRING IS MEASURED, NOT ASSUMED: the two are one upstream codebase behind a versioned interface, every
+   one of the 47 `__asan_*` symbols clang-18 emits for the real engine/qjs/quickjs.c is exported by this box's
+   libasan (negative control: an invented symbol reports missing), both sides carry the same
+   `__asan_version_mismatch_check_v8` token, and a heap-buffer-overflow under this target's own
+   `-O1 -fno-omit-frame-pointer` produces a correct symbolized report. Every way the pairing can be wrong is
+   LOUD: a symbol gcc lacks is an undefined reference at the link, and a version skew is what that token aborts
+   on. THE PATH IS DERIVED AND NEVER WRITTEN DOWN — `clang -print-file-name=libasan.so` answers out of the GCC
+   installation clang ITSELF detected, so no `/usr/lib/gcc/x86_64-linux-gnu/13`, a path with a VERSION in it,
+   enters this file; the absence signal is the driver's own, which echoes the BARE NAME back for a file it
+   cannot find. clang's OWN runtime is preferred wherever it exists, so a box carrying compiler-rt links exactly
+   what it linked before this function was written. That is ROUTING and not a fallback by §C-stack's test:
+   delete either runtime and "where does the runtime come from" still has to be answered by the other.
+   SHARED AND NOT STATIC, WHICH WAS MEASURED RATHER THAN CHOSEN. The static form (libasan.a + a preinit object)
+   links and reports for `address` and is BROKEN for `leak` — it dies inside LeakSanitizer's own startup with
+   `CHECK failed: lsan_interceptors.cpp:82 "((!lsan_init_is_running)) != (0)"` and exits 23, which is the SAME
+   code a real leak report exits with, so a reader taking the status instead of the output scores it a pass.
+   NAMED RESIDUAL — THE SYMBOL SUBSET IS VERIFIED OVER ONE TRANSLATION UNIT AND NOT OVER THE PROGRAM.
+   WHAT IS NOT COVERED: the 47-symbol check was taken over quickjs.c, the largest TU, and the other sources may
+   reference an interface symbol it does not. WHAT THE NEXT DIFF BUILDS: nothing — the link is that check, and
+   it runs on every invocation of this target. HOW ITS ABSENCE WOULD SHOW: this target fails with an undefined
+   reference to a `__asan_*`/`__lsan_*` name that is absent from
+   `nm -D --defined-only $(clang -print-file-name=libasan.so)`. */
+function sanitizerRuntime(kind) {
+  const lib = kind === "leak" ? "lsan" : "asan";
+  const ask = (a) => (spawnSync("clang", a, { encoding: "utf8" }).stdout || "").trim();
+  const ownDir = ask(["-print-runtime-dir"]);
+  if (ownDir && existsSync(ownDir) && readdirSync(ownDir).some((f) => f.startsWith("libclang_rt." + lib)))
+    return { flags: [], libs: [], how: "clang's own compiler-rt in " + ownDir };
+  const soname = "lib" + lib + ".so";
+  const so = ask(["-print-file-name=" + soname]);
+  if (so && so !== soname && existsSync(so))
+    return { flags: ["-fno-sanitize-link-runtime"], libs: [so],
+             how: "libsanitizer from the GCC installation clang itself reports: " + so };
+  /* A TOOL THAT IS NOT INSTALLED AND A TOOL THAT FAILED ARE DIFFERENT FACTS — the same rule the compile arm
+     below states. This one names BOTH places that were asked and what each answered, because "cannot find
+     libclang_rt.asan-x86_64.a" alone sends its reader hunting a path rather than installing a package. */
+  return { flags: null, libs: null,
+           why: "no " + lib + " runtime anywhere clang looks — its own runtime dir is "
+                + (ownDir ? ownDir + (existsSync(ownDir) ? " (present, no libclang_rt." + lib + ")" : " (absent)")
+                          : "unreported")
+                + ", and `clang -print-file-name=" + soname + "` answered `" + so + "` (a bare name means not "
+                + "found). Install llvm's compiler-rt or gcc's libsanitizer (Debian/Ubuntu: libclang-rt-dev, "
+                + "or lib" + lib + (lib === "asan" ? "8" : "0") + " with gcc installed)." };
+}
 function nativeProgram(kind) {
   const bin = join(OUT, "qjs-native-" + kind);
   mkdirSync(OUT, { recursive: true });
@@ -5399,9 +5457,19 @@ function nativeProgram(kind) {
     "-Werror=implicit-function-declaration",
     "-I" + QJS, "-I" + HOST, "-I" + join(HOST, "browser"), "-I" + LEXBOR_INC,
   ];
+  /* THE SANITIZER RUNTIME, RESOLVED BEFORE THE COMPILE SO ITS ABSENCE IS A NAMED VERDICT RATHER THAN A RAW
+     LINKER ERROR. `none` asks nothing and is unchanged: the DEFAULT build's verdict host takes this arm, so
+     this whole mechanism is unreachable from it. */
+  const san = kind === "none" ? { flags: [], libs: [] } : sanitizerRuntime(kind);
+  if (san.flags === null) {
+    console.error("[build] native " + kind + " FAILED — " + san.why);
+    return { bin: null, stage: { label: "native link (" + kind + ")", verdict: "FAILED — " + san.why,
+                                 code: 1, kind: STAGE_KIND.DEFECT } };
+  }
+  if (kind !== "none") console.log("[build] " + kind + " sanitizer runtime: " + san.how);
   const cc = spawnSync("clang", [
     "-O1", "-g", "-fno-omit-frame-pointer",
-    ...(kind === "none" ? [] : ["-fsanitize=" + kind]),
+    ...(kind === "none" ? [] : ["-fsanitize=" + kind, ...san.flags]),
     ...NATIVE_DIALECT,
     /* BOTH ENTRIES. `main.c` owns the `qjs_*` ABI and has no `main()`, so it contributes no entry point and
        cannot collide with the fixture's — every other symbol in either file is `static`. What it contributes
@@ -5420,7 +5488,7 @@ function nativeProgram(kind) {
        the sanitizers this target exists for, which is what CLAUDE.md means by the engine's home being the
        host with a real sanitizer. Keeping the weaker check beside the stronger one would be a second gate
        whose only possible contribution is to disagree. */
-    ...SHARED_SOURCES, ENTRY_SMOKE, ENTRY_ABI, LEXBOR_NATIVE, "-o", bin, "-lm", "-lpthread",
+    ...SHARED_SOURCES, ENTRY_SMOKE, ENTRY_ABI, LEXBOR_NATIVE, ...san.libs, "-o", bin, "-lm", "-lpthread",
   ], { stdio: "inherit" });
   /* A STAGE RATHER THAN A `process.exit`, WHICH IS THE ONE THING THAT CHANGED IN MOVING THIS BODY HERE.
      An exit is a door in front of every stage behind it - this file's own recorded lesson, and the reason
