@@ -963,6 +963,46 @@ function frontierPrefPut(name, value) {
     }, rej);
   }).catch((e) => { RETHROW_FATAL(e); frontierFail("preference write", e); });
 }
+/* ─── THE PER-ORIGIN EXPLORATION WIDENING, PERSISTED ─────────────────────────────────────────────────────
+   THE DECISION IS NOT HERE. `lib/safe-fetch.js` owns it — the table, what a widening MEANS, what may be
+   widened, and the refusal every request is answered by. This file holds the two things that are the HOST's
+   and that the chokepoint cannot have: WHERE a person's standing sentence is kept between sessions, and WHEN
+   it is spoken. `engine/trusted.mjs` answers both differently (a command line, for one run, stated before it
+   parses its own flags), which is exactly why they are not in the file both hosts share.
+   IT IS A PREFERENCE AND IT LIVES WITH THE OTHER ONE. `chrome.storage.local` is banned (SECURITY.md) and
+   this zone's state is IndexedDB, so it sits in the same `prefs` object store `frontierShare` reads — a
+   record about what THIS PERSON has permitted, beside a record about how much of THIS PERSON's disk the
+   store may take. It is not learned data and it is deliberately not in the cumulative store: nothing about
+   it is a measurement, and a store-shape migration must never be able to drop a permission or invent one.
+   THE STORE FOLLOWS THE TABLE AND NEVER LEADS IT. Every grant and every revocation goes into the chokepoint
+   first and is written out afterwards FROM `safeFetchWidenedOrigins()` — so the persisted list is a
+   projection of the one table rather than a second registry that can disagree with it, which is the same
+   discipline `_frontierIndex` keeps one store along.
+   NULL IS "NOTHING HAS EVER BEEN GRANTED IN THIS PROFILE", which is a real answer and the conservative one.
+   It is NOT read as an absence to be filled: the empty list is what a host STATES, and the chokepoint holds
+   "stated empty" and "not yet stated" in two different fields for precisely that reason. */
+let _egressPolicyStated = null;
+function egressPolicyReady() {
+  if (_egressPolicyStated === null) _egressPolicyStated = (async () => {
+    const stored = await frontierPref("exploreOrigins");
+    /* THE STORED VALUE IS THIS ZONE'S OWN WRITE, so a shape that is not a list is this store corrupted and
+       not a person mistyping — and the direction it fails in is the one that matters: a value the walk below
+       cannot read would leave the table EMPTY while this host believed it had restored the person's grants,
+       which is every standing permission silently gone. `safeFetchWidenStated` re-asks each member with the
+       chokepoint's own predicate and aborts on one it cannot use, which is the half this zone may not judge. */
+    DCHECK(stored === null || Array.isArray(stored),
+           "the stored per-origin exploration widening is not a list (" + String(stored) + ") — this zone is " +
+           "its only writer, so this is that record corrupted, and reading past it would state an EMPTY table " +
+           "while every origin this person has permitted silently stopped being permitted");
+    self.safeFetchWidenStated(Array.isArray(stored) ? stored : []);
+  })();
+  return _egressPolicyStated;
+}
+/* THE WRITE-BACK, TAKEN OFF THE TABLE RATHER THAN OFF THE MESSAGE THAT CHANGED IT — so a grant the
+   chokepoint REFUSED cannot be persisted as one it accepted, and the two can never drift. */
+function egressPolicyPersist() {
+  return frontierPrefPut("exploreOrigins", self.safeFetchWidenedOrigins());
+}
 /* A frontier entry (the GLOBAL union spans all origins): { key: origin|hash, sourceUrl, topLevelUrl, origin,
    responseHeaders, html, code, recipes: "idx,dec;...", emit, visits, credentialed, provenance }. Rehydration re-runs
    (html,code) + resumes recipes -- so a parked flow on ANY site can be advanced later, even when that page
@@ -6493,6 +6533,19 @@ async function hostClear() {
 
 self.astDispatch = async function astDispatch(msg) {
   try {
+    /* THE PERSON'S STANDING EGRESS SENTENCE IS RESTORED HERE, BEFORE ANYTHING BELOW CAN ASK FOR IT — and
+       this line is the whole of why `_firingRefusal`'s stated-table assert cannot fire. The chokepoint reads
+       its widening table ONLY for a `forced` request; only an ENGINE composes `forced`; and every engine in
+       this zone is created behind this function (the waiting-document queue, the declared-route seed and the
+       cold rehydration all run inside the host loop, which nothing kicks until a document arrives here). So
+       stating it at this one door closes the window by construction rather than by a race that usually goes
+       the right way — and the alternative it replaces is the one this project keeps naming as the worst
+       outcome: a request refused `blocked-provenance:forced` because the policy had not been READ yet, in
+       words the person cannot tell from a policy they set.
+       IT IS AWAITED FOR EVERY TYPE AND NOT ONLY THE ONE THAT RUNS A DOCUMENT, because which types can reach
+       a fetch is a question about the rest of this function and a premise stated here would go stale inside
+       it. It is one memoized IndexedDB read for the life of this document. */
+    await egressPolicyReady();
     /* TWO TYPES, AND A THIRD IS AN UNBUILT CAPABILITY THAT SAYS SO. This entry used to answer every type but
        one with `{success:false, error:"unknown type"}`, and the senders wrapped their calls in catches — so
        AST_CLEAR (the Clear button's "stop all work") and SET_ANALYSIS_OPTS (the popup's Settings panel) were
@@ -6502,7 +6555,7 @@ self.astDispatch = async function astDispatch(msg) {
        the cooperative quantum is a step cap. What is left is a real refusal, so it aborts rather than
        reporting a false success to a caller that will not look. */
     DCHECK(!!msg && (msg.type === "AST_ANALYZE" || msg.type === "AST_CLEAR" ||
-                     msg.type === "AST_FRONTIER_SHARE"),
+                     msg.type === "AST_FRONTIER_SHARE" || msg.type === "AST_EGRESS_POLICY"),
            "the trusted zone dispatched a type this bridge does not answer: `" + (msg && msg.type) + "` — " +
            "every edge into the engine is built here, so an unanswered type is a capability that was asked " +
            "for and never made, not an option the caller may proceed without");
@@ -6545,6 +6598,90 @@ self.astDispatch = async function astDispatch(msg) {
                                         shed: _frontierStats.shed, stranded: _frontierStats.stranded,
                                         rederived: _frontierStats.rederived,
                                         entries: _index.size } };
+    }
+    /* ─── THE PERSON'S EGRESS SENTENCE, AND THE ONLY DOOR THE EXTENSION HAS ONTO IT ──────────────────────
+       CLAUDE.md §Attacker-sources makes firing what a bundle reaches only past a forced gate "CONFIGURABLE
+       AND PER-ORIGIN, BECAUSE EXPERIMENTATION IS NOT ALWAYS WRONG AND A SINGLE SWITCH CANNOT SAY SO …
+       Default conservative, widened deliberately per origin, never inferred from a site looking like a test."
+       The chokepoint has held that table for a while and `--explore <origin>` has written to it from a
+       command line; the offscreen has no command line, so in the SHIPPED extension there was no way for the
+       person the setting is about to say anything at all. This is that way.
+       IT DECIDES NOTHING AND IT MUST NOT. Every question — what a widening means, what may be widened, and
+       what any given request is answered with — is `lib/safe-fetch.js`'s, which is where SECURITY.md puts
+       the network policy and where both hosts read it from. What arrives here is a PERSON'S ANSWER to that
+       policy, carried to it. A second rule on this path would be the second policy point the whole parameter
+       exists to end.
+       THE AUTHORIZATION IS THE ROUTER'S AND IS ASSERTED AT THE DOOR THIS MESSAGE ARRIVES AT, not here: a
+       message reaching `handlePopupMessage` has already been gated on `sender.origin === EXTENSION_ORIGIN`
+       (SECURITY.md's document→document rule — browser-set, and the opaque `"null"` a sandboxed extension
+       page carries is not it), and that case re-asserts it where it is relied on.
+       WHAT THIS ENTRY ASSERTS IS THE OTHER HALF, WHICH NO PRINCIPAL CAN ANSWER: that a HUMAN initiated the
+       act. A trusted extension document is where a person's click arrives AND where an automatic caller
+       would sit, and nothing about the message tells them apart — which is the mistake this project has
+       already made once on the page-context relay, where three automatic senders were covered by an
+       exemption scoped by a sentence about who the callers were. So the grade TRAVELS, stated by the surface
+       that knows, and an absent one takes the refusing arm. The constant is `lib/schema.js`'s because the
+       question is the same question and this project states it once; the identifier is that relay's only
+       because that is where a human-initiated act first had to be told from a tool-initiated one.
+       `subject` IS ECHOED AND ITS REFUSAL IS ANSWERED, which is what makes this a surface a person can read
+       rather than a switch they must trust. `safeFetchFiringRefusal` is the SAME function the chokepoint
+       refuses requests with, asked about a forced DATA request at that origin — so the control shows what
+       this origin's requests are actually answered with now, in the policy's own vocabulary, before and
+       after the person changes it. */
+    if (msg.type === "AST_EGRESS_POLICY") {
+      CHECK(msg.initiator === PAGE_CONTEXT_USER_INITIATED,
+            "the per-origin egress widening was reached with the initiator grade " +
+            JSON.stringify(msg.initiator) + " — a widening is a PERSON'S SENTENCE and CLAUDE.md says it is " +
+            "\"never inferred from a site looking like a test\", so the one thing this command may not do is " +
+            "be issued by something that decided on its own. A caller that cannot state the grade never " +
+            "answered the question, which is why an absent value takes this arm and not the permissive one");
+      DCHECK(msg.grant === undefined || msg.revoke === undefined,
+             "the egress command was asked to grant and to revoke in one message — the two are opposite " +
+             "sentences about one table and the order they would be applied in is whichever this entry " +
+             "happens to test first, which is a permission decided by the shape of an `if`");
+      DCHECK(typeof msg.subject === "string",
+             "the egress command carried no subject — it is the origin the surface is SHOWING the person, " +
+             "and the refusal answered below is about it, so without one the control would report a policy " +
+             "answer for nothing while the person read it as being about the page in front of them");
+      /* THE GRANT IS REFUSED WITH ITS REASON AND NEVER ASSERTED. `safeFetchWiden` aborts on an origin it
+         cannot use, which is right for a caller inside this project and wrong for a person looking at a
+         sandboxed document or a `file://` page: an opaque origin is an ordinary state of the web, and a
+         fatal here would hand any page that sandboxes an iframe an abort switch on the trusted zone. So the
+         chokepoint's OWN predicate is asked first and its answer is carried to the surface. */
+      let refused = null;
+      let changed = false;
+      if (msg.grant !== undefined) {
+        DCHECK(typeof msg.grant === "string",
+               "the egress command was asked to grant " + JSON.stringify(msg.grant) + " — a widening names " +
+               "an ORIGIN, and a non-string would reach the chokepoint's parse as a permission about nothing");
+        refused = self.safeFetchWidenable(msg.grant);
+        if (refused === null) { self.safeFetchWiden(msg.grant); changed = true; }
+      } else if (msg.revoke !== undefined) {
+        DCHECK(typeof msg.revoke === "string",
+               "the egress command was asked to revoke " + JSON.stringify(msg.revoke) + " — a revocation " +
+               "names an ORIGIN, and a non-string would silently remove nothing while reading as a " +
+               "permission the person had just taken back");
+        changed = self.safeFetchUnwiden(msg.revoke);
+      }
+      /* THE STORE MOVES ONLY WHERE THE TABLE DID, and it is written FROM the table. A refused grant persists
+         nothing, and a revocation of an origin that was not there persists nothing — so the record cannot
+         come to hold a permission the chokepoint refused. */
+      if (changed) await egressPolicyPersist();
+      /* AND WHAT A FORCED DATA REQUEST AT THE SUBJECT IS ANSWERED WITH RIGHT NOW. `""` is the destination a
+         data fetch carries (never §2.2.5 script-like, which is the arm that fires by default whatever this
+         table says), `unstated` is the honest witness mark for a question that is not an act, and `forced`
+         is the one grade the widening is about. A subject the chokepoint could not widen is not asked —
+         `safeFetchFiringRefusal` takes an absolute URL and an unparseable one is a caller's serializer
+         disagreeing with a URL parser, which it THROWS on rather than answering a permission question about
+         nothing. `null` there is the positive statement "this origin cannot be the subject", which the
+         surface renders as the reason rather than as a policy answer. */
+      const _subjectUsable = self.safeFetchWidenable(msg.subject);
+      return { success: true, result: {
+        origins: self.safeFetchWidenedOrigins(),
+        subject: msg.subject, subjectUsable: _subjectUsable,
+        subjectRefusal: _subjectUsable === null
+          ? self.safeFetchFiringRefusal(PROVENANCE_FORCED, msg.subject, "", "unstated") : null,
+        refused, changed } };
     }
     if (msg.type !== "AST_ANALYZE") return { success: false, error: "unknown type " + msg.type };
     /* ENQUEUE this document into the LIVE host WFQ pool. Its wasm instance interleaves in SLICES with every

@@ -138,8 +138,13 @@ const ZONE = (() => {
      by ABSENCE — so nothing downstream can OBSERVE it, and both hosts wrote their own copy and answered
      differently. A zone that obtained the chokepoint without it would take an `undefined` refusal as permission
      and fire every method it was parked on. */
-  for (const n of ['safeFetchWiden', 'safeFetchFiringRefusal', 'safeFetchWidenedOrigins',
-                   'safeFetchMethodRefusal'])
+  /* `safeFetchWidenStated` IS ON THIS LIST AND ITS ABSENCE IS THE SHARPEST OF THE FOUR. Without it this
+     host cannot SPEAK its (empty) table at all, so `_firingRefusal` would assert on the first forced request
+     of every run — and in a release build, where that assert is compiled out, it would answer from a table
+     nobody had stated. A zone holding the chokepoint without the ability to state its own policy is a zone
+     whose `--explore` writes into a table the chokepoint has not agreed exists. */
+  for (const n of ['safeFetchWiden', 'safeFetchWidenStated', 'safeFetchFiringRefusal',
+                   'safeFetchWidenedOrigins', 'safeFetchMethodRefusal'])
     if (typeof sandbox[n] !== 'function')
       throw new Error(`extension/lib/safe-fetch.js did not install \`${n}\` — the firing decision and its ` +
                       'per-origin widening are that file\'s, read by this host and by the offscreen from the ' +
@@ -277,6 +282,18 @@ async function main() {
      THE VALUE IS NORMALIZED TO AN ORIGIN through the URL parser, because that is what the comparison is
      against — a person who types `https://b.test/some/path` means the host, and a string compare against a
      serialized origin would silently authorize nothing. */
+  /* THIS HOST STATES ITS WIDENING TABLE BEFORE IT READS A FLAG, AND IT STATES THE EMPTY LIST. The chokepoint
+     holds "stated empty" and "not yet stated" in two different fields, because the OTHER host genuinely
+     passes through the second — its grants are in IndexedDB and come back asynchronously, and a request
+     answered in that window would be refused with the policy's own word for "you did not permit this", said
+     to somebody who did. This process has no such window and no such store: a command line is a sentence for
+     ONE RUN, so "nobody has widened anything" is true here until `--explore` says otherwise, and saying it is
+     what makes every `--explore` below an ADDITION to a table that exists rather than the first write to one
+     that does not.
+     IT IS BEFORE THE LOOP AND NOT INSIDE IT, because a run with no `--explore` reaches the network exactly as
+     one with three does, and a table stated only on the arm that carries a flag would leave the commonest
+     invocation of this tool asserting at the chokepoint. */
+  ZONE.safeFetchWidenStated([]);
   const positional = [];
   for (let i = 2; i < process.argv.length; i++) {
     if (process.argv[i] !== '--explore') { positional.push(process.argv[i]); continue; }

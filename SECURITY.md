@@ -177,6 +177,44 @@ has to remember:
   page that exists. Content types are dropped on the BROADER predicate — dropping more can only ever refuse —
   and the popup gates the reverse direction on `sender.origin` too (`isExtensionPage` in `popup.js`), because
   a boundary checked on one side only is not a boundary.
+- **A PERSON'S EGRESS SENTENCE REACHES THE POLICY THROUGH THAT SURFACE, AND IT NEEDS A SECOND FACT NO
+  PRINCIPAL CAN CARRY.** `EGRESS_POLICY` (popup → offscreen → `astDispatch`'s `AST_EGRESS_POLICY`) is how the
+  per-origin exploration widening CLAUDE.md §Attacker-sources requires — "widened deliberately per origin,
+  never inferred from a site looking like a test" — is granted and revoked in the shipped extension. Before
+  it, `lib/safe-fetch.js` held the table and only `engine/trusted.mjs`'s `--explore <origin>` could write to
+  it, so the offscreen (which has no command line) could not be told anything at all.
+  The **authorization** is the document→document rule above and nothing else: the router refuses anything
+  whose `sender.origin` is not `chrome-extension://<id>`, so a content script never reaches the switch and a
+  SANDBOXED extension page (`renderer.html`, `poc-sandbox.html`, origin `"null"`) is refused by the same
+  equality. The handler **re-asserts that principal where it is relied on** rather than resting on which
+  functions happen to call it.
+  **AND THE PRINCIPAL IS ONLY HALF OF IT.** A trusted extension document is where a person's click arrives
+  AND where an automatic caller would sit, and nothing about the message tells them apart — which is the
+  mistake this codebase already made once on the page-context relay, where three automatic senders were
+  covered by an exemption scoped by a sentence about who the callers were. So the message carries the
+  **initiator grade** (`lib/schema.js`'s `PAGE_CONTEXT_USER_INITIATED`, the one vocabulary this project has
+  for that question), stated by the popup where the person is, forwarded by the relay and **`CHECK`ed at the
+  bridge**. An absent or unknown grade takes the refusing arm, so forgetting to state one is not a way to be
+  exempted.
+  **THE DECISION IS STILL `safe-fetch.js`'S AND THIS PATH RE-DECIDES NOTHING.** What may be widened is the
+  chokepoint's own `safeFetchWidenable` — the SAME predicate `safeFetchWiden` aborts on, exported so a
+  surface with a person in front of it can refuse with the REASON instead of aborting the trusted zone over
+  an opaque origin. What a request is answered with is `safeFetchFiringRefusal`, the same function the
+  chokepoint refuses with, so the control shows the policy's own word rather than its own guess at it. The
+  subject is the **browser-stated `MessageSender.origin`** for the pinned document (never URL-parsed), so a
+  page that sandboxes its own iframe cannot have the control name its embedder.
+  **THE ONE COMBINATION THAT IS NEVER A SETTING STAYS UNREACHABLE AT EVERY VALUE OF THIS TABLE** —
+  credentialed AND state-mutating AND forced. `safe-fetch.js` cannot compose a request carrying a method or a
+  body (`_refuseUnreadOptions`), so the middle conjunct is false by construction and no grant can make it
+  true. Program loads (`<script src>`, a module import, a lazy chunk — Fetch §2.2.5's script-like
+  destinations) fire at every setting and are not what this control opens.
+  **THE GRANTS PERSIST IN THE OFFSCREEN'S OWN IndexedDB** (`apiclient-frontier`'s `prefs` store, beside the
+  storage share), never `chrome.storage.local`, and the store is written FROM the chokepoint's table rather
+  than from the message that changed it — so a grant the policy REFUSED cannot be persisted as one it took.
+  The table is **STATED once per host before anything may read it** (the offscreen at `astDispatch`, the
+  native host before it parses `--explore`), and `_firingRefusal` asserts that: an unstated table is EMPTY,
+  so a request arriving before the restore would be refused with `blocked-provenance:forced` — the policy's
+  own word for "you did not permit this", said to somebody who did.
 
 ## State / storage
 

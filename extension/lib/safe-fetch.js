@@ -669,8 +669,19 @@ function _credentialedOf(opts) {
    OTHER host does not read, and two zones answering one question is the shape this whole
    parameter exists to end. `engine/trusted.mjs` loads this file verbatim into a realm of
    its own and its `--explore <origin>` writes HERE; the offscreen loads it in
-   `ast-worker.html` and reads the same table. An EMPTY table is the positive statement
-   "nobody has widened anything", which is the conservative default rather than an absence.
+   `ast-worker.html`, restores what the person granted in an earlier session from its own
+   store, and reads the same table.
+   AN EMPTY TABLE AND AN UNSTATED ONE ARE TWO FACTS AND THIS FILE HOLDS THEM IN TWO FIELDS.
+   "Nobody has widened anything" is a positive statement a host MAKES; "this host has not
+   yet said" is the absence of one, and the offscreen genuinely passes through it — its
+   grants live in IndexedDB and come back asynchronously. Collapsing them would make the
+   window before that read indistinguishable from a person who granted nothing, so a
+   request arriving in it would be refused with `blocked-provenance:forced` — the policy
+   speaking, in a voice the person cannot tell from a policy they set. That is the silence
+   this file spends its length refusing, so the second field exists and `_firingRefusal`
+   asserts it: the window is closed BY CONSTRUCTION (the offscreen states the table at its
+   one door into analysis, and only an engine ever produces a `forced` request), and the
+   assert is that construction checked rather than described.
    WHAT WIDENING OBLIGES, STATED WHERE IT IS GRANTED. §@H makes the reply to a forced
    request evidence about what a server says to a request NO CLIENT MAKES, so its values
    must be carried as FORCED and never merged into the observed pool — a 401 body parses as
@@ -678,33 +689,105 @@ function _credentialedOf(opts) {
    shapes the next endpoint. That carrying is the engine's and it is the subproblem AFTER
    this one; until it exists, widening buys the request and the person takes on the reply. */
 var _EXPLORED = Object.create(null);
-/* THE VALUE MUST BE THE ORIGIN A URL PARSER WOULD PRODUCE, AND `_isRealOrigin` IS NOT THAT
-   TEST. It asks only whether the string contains "://", which the whole of
-   `https://a.test/some/path` does — so a person who typed an address rather than an origin
-   would have widened a key no request's `.origin` can ever equal: a permission that was
-   granted, is in the table, reads as granted, and matches nothing for ever. That is the
-   destructive deny list's own failure shape (an entry that looks protective and refuses
-   nothing) pointed the other way, and it is worse here because the silence looks like the
-   conservative default working. So the value is required to be its OWN serialized origin —
-   parsed, re-serialized, compared — which is exactly the comparison `_firingRefusal` makes.
-   AN OPAQUE ORIGIN IS REFUSED BY THE SAME LINE and needs no clause of its own: `null` does
-   not parse as a URL, and every opaque origin is same-origin with nothing (itself included),
-   so there is no address one could ever widen. */
-function safeFetchWiden(origin) {
+/* HAS A HOST SPOKEN YET. Two questions, two fields — never one value answering both, because the
+   permissive-looking reading of an unstated table is exactly the one that would be wrong. */
+var _EXPLORED_STATED = false;
+/* WHETHER AN ORIGIN CAN BE WIDENED AT ALL, ANSWERING THE REASON IT CANNOT OR `null` FOR YES — ONE FACT
+   ASKED BY TWO CALLERS WITH TWO DIFFERENT OUTCOMES, which is the split that stops a CHECK and a REFUSAL
+   becoming two rules free to disagree about a string. `safeFetchWiden` below asks it and ABORTS, because a
+   caller inside this project handing it an address is that caller broken. A surface where a PERSON is
+   looking at a page asks it and REFUSES WITH THE REASON, because "the document you are looking at has an
+   opaque origin" is an ordinary state of the web and not a broken invariant — and a fatal there would hand
+   any page that sandboxes an iframe an abort switch on the trusted zone.
+   THE VALUE MUST BE THE ORIGIN A URL PARSER WOULD PRODUCE, AND `_isRealOrigin` IS NOT THAT TEST. It asks
+   only whether the string contains "://", which the whole of `https://a.test/some/path` does — so a caller
+   passing an address rather than an origin would have widened a key no request's `.origin` can ever equal: a
+   permission that was granted, is in the table, reads as granted, and matches nothing for ever. That is the
+   destructive deny list's own failure shape (an entry that looks protective and refuses nothing) pointed the
+   other way, and it is worse here because the silence looks like the conservative default working. So the
+   value is required to be its OWN serialized origin — parsed, re-serialized, compared.
+   THE HTTP(S) ARM IS NOT TIDINESS, AND IT IS NOT REACHED BY THE LINE ABOVE. `ws://a.test`, `wss://a.test`
+   and `ftp://a.test` are SPECIAL schemes whose tuple origins serialize back to themselves, so they pass the
+   comparison and only this arm refuses them — while this file answers any non-http(s) address with
+   `blocked-scheme:` before it reaches the wire. A widening of one is therefore a permission that grants
+   nothing while sitting in the table reading as granted, which is the same failure shape one clause up.
+   AN OPAQUE ORIGIN IS REFUSED BY THE PARSE AND NEEDS NO CLAUSE OF ITS OWN: `null` does not parse as a URL,
+   and every opaque origin is same-origin with nothing (itself included), so there is no address one could
+   ever widen. A full address is refused by the re-serialization, which is exactly the comparison
+   `_firingRefusal` makes against a request URL's own `origin`. */
+function safeFetchWidenable(origin) {
   var normalized = null;
   try { normalized = new URL(String(origin)).origin; } catch (e) { RETHROW_FATAL(e); normalized = null; }
-  CHECK(_isRealOrigin(origin) && normalized === origin,
-        "an exploration widening was asked for " + JSON.stringify(origin) + ", which is not the serialized " +
-        "TUPLE ORIGIN a URL parser produces (" + JSON.stringify(normalized) + ") — the widening is compared " +
-        "against a request URL's own `origin`, so a full address, an opaque `null`, an explicit default port " +
-        "or an empty string would sit in this table matching nothing while reading as a permission somebody " +
-        "granted. Pass the origin, not the address");
+  if (!_isRealOrigin(origin) || normalized !== origin) return "not-an-origin";
+  if (origin.indexOf("http://") !== 0 && origin.indexOf("https://") !== 0) return "not-http";
+  return null;
+}
+/* THE HOST STATES THE TABLE, ONCE, BEFORE ANYTHING MAY ASK IT. A host that persists its grants restores them
+   here; a host that persists none (the native one — a command line is a sentence for one run) states the
+   empty list, and that is the POSITIVE "nobody has widened anything" rather than the absence above it.
+   IT IS ONCE AND A SECOND CALL ABORTS. A re-statement would replace a table the person has since added to
+   from a surface, which is a grant silently revoked — and the only reason to call this twice is a host that
+   has two startup paths and does not know it. Grants after the statement go through `safeFetchWiden`. */
+function safeFetchWidenStated(origins) {
+  CHECK(!_EXPLORED_STATED,
+        "a host stated its per-origin widening table a second time — the table is the person's standing " +
+        "sentence and a re-statement REPLACES it, so a grant made from a surface between the two calls is " +
+        "revoked with nothing anywhere saying so. State it once, at the one door that runs before this zone " +
+        "can answer a firing question, and add to it with safeFetchWiden");
+  CHECK(Array.isArray(origins),
+        "a host stated its per-origin widening table as " + JSON.stringify(origins) + " rather than as a " +
+        "list of origins — this is the whole of what the chokepoint knows about what a person has permitted, " +
+        "and a value it cannot walk would leave the table empty while the host believed it had spoken");
+  for (var i = 0; i < origins.length; i++) {
+    var why = safeFetchWidenable(origins[i]);
+    CHECK(why === null,
+          "a host stated " + JSON.stringify(origins[i]) + " as a widened origin and it is not one (" + why +
+          ") — the entry would sit in this table matching no request's `.origin` for ever, which is a " +
+          "permission that was granted, reads as granted, and refuses nothing. A host is the only writer of " +
+          "its own store, so this is that store corrupted rather than a person mistyping");
+    _EXPLORED[origins[i]] = true;
+  }
+  _EXPLORED_STATED = true;
+}
+function safeFetchWiden(origin) {
+  CHECK(_EXPLORED_STATED,
+        "an exploration widening was granted before this host stated its table — the statement is what " +
+        "restores the person's earlier grants, so a grant that ran first would be REPLACED by that restore " +
+        "and the person would watch a permission they had just made disappear");
+  var why = safeFetchWidenable(origin);
+  CHECK(why === null,
+        "an exploration widening was asked for " + JSON.stringify(origin) + ", which cannot be widened (" +
+        why + ") — the widening is compared against a request URL's own `origin`, so a full address, an " +
+        "opaque `null`, an explicit default port, a non-http(s) scheme or an empty string would sit in this " +
+        "table matching nothing while reading as a permission somebody granted. A surface with a person in " +
+        "front of it asks `safeFetchWidenable` and tells them why; a caller inside this project passing one " +
+        "is broken. Pass the origin, not the address");
   _EXPLORED[origin] = true;
+}
+/* AND THE PERSON TAKES IT BACK. A permission with no way to withdraw it is not a preference, it is a
+   one-way door — and this one spends somebody else's server under the person's own session, which is the
+   last place a decision should be unmakeable. It answers WHETHER THE ORIGIN WAS THERE so the surface can
+   say what it did rather than reporting a success for a revocation of nothing; that is a fact about the
+   table and not a second policy. */
+function safeFetchUnwiden(origin) {
+  CHECK(_EXPLORED_STATED,
+        "an exploration widening was revoked before this host stated its table — the revocation would be " +
+        "undone by the restore that follows it, and the person would watch a permission they had just " +
+        "withdrawn come back");
+  var had = _EXPLORED[origin] === true;
+  delete _EXPLORED[origin];
+  return had;
 }
 /* WHAT HAS BEEN WIDENED, FOR A CALLER THAT MUST ASSERT THE ABSENCE OF ANY. Not a report —
    a PREMISE READER. A zone whose own reasoning rests on "no origin is widened HERE" holds
    that premise where it is relied on rather than in a comment that outlives it. */
-function safeFetchWidenedOrigins() { return Object.keys(_EXPLORED); }
+function safeFetchWidenedOrigins() {
+  CHECK(_EXPLORED_STATED,
+        "the widened-origin list was read before this host stated its table — an empty answer would be read " +
+        "as `nobody has widened anything`, which is a statement this host has not yet made, and a surface " +
+        "rendering it would tell a person their standing grants are gone");
+  return Object.keys(_EXPLORED);
+}
 /* THE FIRING DECISION, IN ONE FUNCTION, ANSWERING THE RULE THAT REFUSED OR `null` FOR FIRE.
    THE METHOD HALF IS ALREADY ANSWERED AND IS NOT ASKED HERE: this file is GET-ONLY BY
    ABSENCE (it hardcodes `method:"GET"` and reads neither `opts.method` nor `opts.body`), and
@@ -820,6 +903,23 @@ function _firingRefusal(provenance, origin, destination, pinned) {
         "provenance of `" + provenance + "` — solver/flow.h declares the witness mark strictly nested inside " +
         "the forced-path bit, so this pair cannot both be true and one of the two producers is wrong");
   if (provenance === "observed" || provenance === "derived") return null;
+  /* AND THE TABLE HAS BEEN STATED, WHICH IS THE ONE PREMISE EVERY ANSWER BELOW RESTS ON. An unstated table
+     is EMPTY, so this line and the two after it would refuse a request at an origin the person HAS widened
+     and the refusal would be `blocked-provenance:forced` — the policy's own word for "you did not permit
+     this", said to somebody who did. It is conservative, which is why it is a DCHECK and not a CHECK; it is
+     also unreadable, which is why it is asserted at all.
+     THE WINDOW IS CLOSED BY CONSTRUCTION AND THIS CHECKS THE CONSTRUCTION. `_EXPLORED` is only ever READ for
+     a `forced` request — the two arms above return first for `observed` and `derived` — and only an ENGINE
+     composes `forced`, and every engine in the offscreen is created behind `astDispatch`, which states the
+     table before it does anything. The native host states it before it parses its own command line. So this
+     cannot fire unless a host grew a second door into analysis, which is exactly what it should say. */
+  DCHECK(_EXPLORED_STATED,
+         "the firing question was asked before this host STATED its per-origin widening table — the table is " +
+         "empty until a host speaks, so this refusal would tell a person their own standing grant does not " +
+         "exist, in the policy's own voice and indistinguishable from a policy they set. Every host states " +
+         "it at the ONE door that runs before this zone can answer a firing question (the offscreen in " +
+         "astDispatch, the native host before it reads `--explore`), so reaching here unstated is a SECOND " +
+         "door into analysis that was never told");
   /* THE PER-ORIGIN WIDENING REOPENS EVERY ARM BELOW IT, which is what makes it ONE switch answering the
      question a person actually has ("may this tool fetch data at my app") rather than a family of them. */
   if (_EXPLORED[origin] === true) return null;
@@ -1819,10 +1919,15 @@ async function safeFetch(url, opts) {
    thing and a host that could obtain one without the other would be a host holding half the contract. Both
    hosts reach them the same way: `engine/trusted.mjs` runs this file in a vm context and reads them off it,
    `ast-worker.html` loads it into the offscreen document before bridge.js.
-   `safeFetchWiden` IS THE POLICY'S ONE INPUT and it takes a person's sentence. `safeFetchFiringRefusal` is the
-   same answer for a caller whose act is not a fetch, and `safeFetchWidenedOrigins` is for a caller that must
-   ASSERT no widening exists in its zone. None of the three is a second policy: all four names resolve to
-   `_firingRefusal`, which is the only thing in this project that answers the firing question.
+   `safeFetchWiden` IS THE POLICY'S ONE INPUT and it takes a person's sentence; `safeFetchUnwiden` is that
+   person taking it back, because a permission with no withdrawal is not a preference. `safeFetchWidenStated`
+   is the host restoring what an earlier session granted, once, before anything may ask — the two fields
+   above are why it exists. `safeFetchWidenable` is the SAME test `safeFetchWiden` aborts on, exported so a
+   surface with a person in front of it can REFUSE WITH THE REASON instead of aborting the zone over a
+   sandboxed document. `safeFetchFiringRefusal` is the same answer for a caller whose act is not a fetch, and
+   `safeFetchWidenedOrigins` is what a surface renders and what a caller asserting an absence reads. None of
+   them is a second policy: every one resolves to `_firingRefusal` or to the one predicate it compares
+   against, which is the only thing in this project that answers the firing question.
    `safeFetchMethodRefusal` IS THE OTHER HALF OF THE SAME QUESTION and is installed beside them for the same
    reason: the method decides whether an act may be spent (RFC 9110 §9.2.1 "Safe Methods") and this file
    answers it by ABSENCE, so a host that cannot see the answer writes its own — which both of them did, with
@@ -1840,6 +1945,9 @@ if (typeof self !== "undefined") {
   self.safeFetch = safeFetch;
   self.safeFetchMethodRefusal = safeFetchMethodRefusal;
   self.safeFetchWiden = safeFetchWiden;
+  self.safeFetchUnwiden = safeFetchUnwiden;
+  self.safeFetchWidenStated = safeFetchWidenStated;
+  self.safeFetchWidenable = safeFetchWidenable;
   self.safeFetchFiringRefusal = safeFetchFiringRefusal;
   self.safeFetchWidenedOrigins = safeFetchWidenedOrigins;
 }

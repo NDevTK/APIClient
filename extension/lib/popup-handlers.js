@@ -4,7 +4,12 @@
 // monolith (one problem per file); loaded before it, resolves the per-command backends (lib/send.js,
 // lib/encode.js, buildExportRequest, startExploitProbe, serializers) at call-time.
 
-async function handlePopupMessage(msg, _sender, sendResponse) {
+/* `sender` IS NAMED RATHER THAN `_sender` BECAUSE ONE CASE NOW RELIES ON IT. The router gates this whole
+   function on SECURITY.md's document→document rule (`sender.origin === EXTENSION_ORIGIN`, browser-set, and
+   the opaque `"null"` a sandboxed extension page carries is not it), and EGRESS_POLICY re-asserts that where
+   it is relied on — CLAUDE.md is explicit that a privilege justified by a sentence about who the callers are
+   is not scoped at all, and that this project has already made that exact mistake once. */
+async function handlePopupMessage(msg, sender, sendResponse) {
   await _globalStoreReady;
   const tabId = msg.tabId;            // aggregate/UI filter + Chrome routing (NEVER a storage key)
   const documentId = msg.documentId;  // per-document RPC target (resolved via _docFromMsg)
@@ -409,6 +414,41 @@ async function handlePopupMessage(msg, _sender, sendResponse) {
              "the host answered the frontier-share command with something other than the share now in force " +
              "— the popup renders this number as the user's own setting, and a missing one would render as a " +
              "control showing a value nothing is using");
+      sendResponse(reply.result);
+      return;
+    }
+
+    /* THE PER-ORIGIN EXPLORATION WIDENING — read and set through the ONE entry into the host, exactly as
+       the frontier's share is, and for the same reason: the decision lives in lib/safe-fetch.js and this is a
+       relay carrying a person's answer to it. One case because it is one question — a grant answers with the
+       list now IN FORCE and with what a forced data request at the subject is answered with, so a surface
+       that grants and is told the refusal is gone knows the grant landed and there is no separate read to
+       disagree with it.
+       THE PRINCIPAL IS RE-ASSERTED HERE. The router already refused anything whose `sender.origin` is not
+       this extension's, and that is the whole authorization for every command in this switch — but this one
+       hands a person's sentence to the network policy, so the premise is stated at the site that relies on
+       it rather than left as a fact about which function calls which. A web renderer never reaches this
+       function at all; a SANDBOXED extension page (`renderer.html`, `poc-sandbox.html` — both named in
+       manifest.json) carries the opaque `"null"` origin and is refused by the same equality.
+       `initiator` IS PASSED THROUGH AND NEVER SUPPLIED. It is the grade that says a HUMAN did this, and a
+       relay that manufactured it would be answering the question the grade exists to ask. The bridge CHECKs
+       it; an absent one takes the refusing arm there, which is why nothing here defaults it. */
+    case "EGRESS_POLICY": {
+      DCHECK(sender && sender.origin === EXTENSION_ORIGIN,
+             "the egress-widening command arrived from `" + String(sender && sender.origin) + "` rather than " +
+             "from this extension's own origin — the router gates this whole surface on that equality " +
+             "(SECURITY.md, document→document), so reaching here otherwise is that gate having been widened " +
+             "and a page would be one message away from permitting itself the requests this table refuses");
+      DCHECK(typeof self.astDispatch === "function",
+             "the trusted zone has no astDispatch to carry this person's egress sentence to — it is the ONE " +
+             "entry to the host, so its absence is bridge.js not having loaded in this document and the " +
+             "popup would show a permission control that permits nothing");
+      const reply = await self.astDispatch({ type: "AST_EGRESS_POLICY", initiator: msg.initiator,
+                                             subject: msg.subject, grant: msg.grant, revoke: msg.revoke });
+      DCHECK(reply && reply.success === true && reply.result && Array.isArray(reply.result.origins),
+             "the host answered the egress command without the list of origins now in force — the popup " +
+             "renders that list as the person's own standing permissions, and a missing one would render as " +
+             "a surface reporting that nothing has ever been permitted");
       sendResponse(reply.result);
       return;
     }

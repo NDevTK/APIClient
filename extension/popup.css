@@ -1928,3 +1928,50 @@ details summary:hover {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* THE PER-ORIGIN EGRESS WIDENING (popup.html §THE SECOND SETTING). Same header row as the stored-page-cache
+   setting beside it and for the same reason: both are preferences about this person rather than panels of
+   findings, and neither re-earns a settings panel on its own. The allowed list sits under it rather than in
+   it because it is not a control — it is the chokepoint's own table read back, and it is empty far more
+   often than not. */
+.egress-policy {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  font-size: 11px;
+  border-bottom: 1px solid var(--border, #2a2a2a);
+}
+.egress-policy .egress-origin {
+  font-family: monospace;
+  max-width: 16em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.egress-policy .egress-status {
+  opacity: 0.75;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.egress-allowed:not(:empty) {
+  padding: 4px 8px;
+  font-size: 11px;
+  border-bottom: 1px solid var(--border, #2a2a2a);
+}
+.egress-allowed .egress-entry {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.egress-allowed .egress-entry code {
+  font-family: monospace;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

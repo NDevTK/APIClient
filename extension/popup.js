@@ -328,6 +328,21 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
   renderFrontierShare();
 
+  /* THE EGRESS CONTROL. It sends only on a CLICK and it re-renders from the answer, so what is shown is the
+     table now in force rather than the act that was attempted — the same rule the setting above it keeps and
+     for the same reason: a control that reported its own success could be permitting nothing. */
+  document.getElementById("btn-egress-widen").addEventListener("click", async () => {
+    await renderEgressPolicy({ grant: currentPrincipalOrigin() });
+  });
+  /* ONE DELEGATED PATH FOR THE REVOCATIONS, because the list is re-rendered on every answer and a listener
+     bound per entry would be bound to a node the next render replaces. */
+  document.getElementById("egress-allowed").addEventListener("click", async (ev) => {
+    const t = ev.target.closest("[data-egress-revoke]");
+    if (!t) return;
+    await renderEgressPolicy({ revoke: t.dataset.egressRevoke });
+  });
+  renderEgressPolicy();
+
   // Discovery panel (lib/popup-discovery.js): one delegated click path for the three active-discovery probes.
   initDiscoveryPanel();
 
@@ -990,6 +1005,11 @@ async function loadState() {
   await loadRequestLog();
   render();
   _refreshSendEnabled();   // readiness may have changed (pin became live / stale / not-ready)
+  /* AND THE EGRESS ROW FOLLOWS THE PIN. Its subject is the PINNED DOCUMENT'S origin, so a frame change or a
+     navigation makes the origin it names — and the refusal it reports — a statement about a document that is
+     no longer the one in front of the person. It is re-asked here, from the host, rather than re-labelled
+     from anything this surface remembers. */
+  await renderEgressPolicy();
 }
 
 /* THE SHARE, AND THE DECISIONS RESIDENCY MADE UNDER IT. Called with a byte count it SETS the share first;
@@ -1012,6 +1032,79 @@ async function renderFrontierShare(bytes) {
     mb(r.docBytes) + " MB stored across " + r.entries + " parked page(s)" +
     (r.overShare > 0 ? "; " + mb(r.overShare) + " MB over the share is the only copy there is and was kept" : "") +
     "; " + r.shed + " shed, " + r.rederived + " fetched back, " + r.stranded + " could not be";
+}
+
+/* ─── THE PER-ORIGIN EGRESS WIDENING ─────────────────────────────────────────────────────────────────────
+   THE SUBJECT IS THE BROWSER'S ORIGIN FOR THE PINNED DOCUMENT AND IS NEVER PARSED OUT OF A URL.
+   `currentPrincipalOrigin` reads the documentId→origin mapping the offscreen built from `MessageSender.origin`
+   — SECURITY.md's credentialed-read principal, opaque-unique per document — so a page that sandboxes its own
+   iframe cannot have this control name its EMBEDDER's origin. That accessor answers `""` for an opaque or
+   not-yet-reported document, which is a POSITIVE state of the web and is rendered as one: there is no origin
+   to permit, and the button is off rather than aimed at something invented.
+   `initiator` IS STATED HERE BECAUSE THIS IS WHERE THE PERSON IS. The bridge CHECKs it and an absent or
+   unknown grade takes the refusing arm there, so this is a claim rather than a formality: a widening is a
+   person's sentence and the ONE thing this command may not be is something the tool decided on its own. The
+   constant is `lib/schema.js`'s `PAGE_CONTEXT_USER_INITIATED` and its VALUE is spelled as a literal here
+   because the popup realm does not load that file — the vocabulary is owned and asserted on the other side,
+   which is the same shape every other word that crosses this boundary has (the engine states `forced` and
+   `derived` as strings and safe-fetch.js asserts them). A rename there makes this control start being
+   REFUSED, loudly, which is the direction a vocabulary may drift in.
+   NOTHING IS DEFAULTED OUT OF THE REPLY. Every field is one the host writes on every answer, and the failure
+   an `|| []` would hide is the worst one this surface has: an empty origin list reads as "you have permitted
+   nothing", which is exactly what a person would see if this command stopped being answered at all. */
+async function renderEgressPolicy(act) {
+  const subject = currentPrincipalOrigin();
+  const r = await chrome.runtime.sendMessage({
+    type: "EGRESS_POLICY", initiator: "user-initiated", subject,
+    grant: act && act.grant, revoke: act && act.revoke });
+  /* EVERY FIELD THIS FUNCTION READS IS ASSERTED, AND THE THREE THAT CAN BE `null` ARE ASSERTED AS
+     NULL-OR-STRING RATHER THAN AS PRESENT. `null` is a POSITIVE answer on each of them — "this origin can be
+     widened", "a forced data request here fires", "nothing was refused" — so an ABSENT one is not a missing
+     detail: every test below reads `!== null`, which `undefined` passes, so a field that stopped being
+     written would render "this origin cannot be permitted (undefined)" for an origin that can. */
+  DCHECK(r && Array.isArray(r.origins) && typeof r.subject === "string" && typeof r.changed === "boolean" &&
+         (r.subjectUsable === null || typeof r.subjectUsable === "string") &&
+         (r.subjectRefusal === null || typeof r.subjectRefusal === "string") &&
+         (r.refused === null || typeof r.refused === "string"),
+         "the egress command answered without the table now in force — this row is the only place a person " +
+         "can see or change which origins this tool may fetch data at, and a partial answer would render a " +
+         "permission surface that permits nothing while looking as if it had never been asked");
+  const originEl = document.getElementById("egress-origin");
+  const btn = document.getElementById("btn-egress-widen");
+  const status = document.getElementById("egress-status");
+  const allowed = r.origins.indexOf(r.subject) >= 0;
+  originEl.textContent = r.subject === "" ? "(no origin)" : r.subject;
+  btn.disabled = r.subjectUsable !== null || allowed;
+  /* WHAT THE PERSON IS TOLD, AND IT IS THE POLICY'S OWN ANSWER RATHER THAN THIS SURFACE'S GUESS AT IT.
+     `subjectRefusal` is what `safeFetchFiringRefusal` — the SAME function the chokepoint refuses requests
+     with — answers for a forced data request at this origin right now. So the sentence below changes because
+     the policy changed, and a control that claimed to have granted something the policy did not would say so
+     on its next line rather than reporting its own success. */
+  let msg;
+  if (r.subject === "")
+    msg = "this document has an opaque origin (a sandboxed frame, or about:blank) and is same-origin with "
+        + "nothing, so there is no host to permit";
+  else if (r.subjectUsable === "not-http")
+    msg = "only http(s) origins can be permitted — this tool issues no other scheme, so an entry here would "
+        + "be a permission that matched nothing";
+  else if (r.subjectUsable !== null)
+    msg = "this origin cannot be permitted (" + r.subjectUsable + ")";
+  else if (r.subjectRefusal === null)
+    msg = "allowed — API and data requests the engine reached past a forced gate fire here, with this "
+        + "profile's cookies, GET only";
+  else
+    msg = "refused (" + r.subjectRefusal + ") — this app's own scripts, modules and lazy chunks still load; "
+        + "API and data requests whose address the engine reached past a forced gate do not";
+  if (r.refused) msg = "not permitted (" + r.refused + ") — " + msg;
+  status.textContent = msg;
+  /* THE ALLOWED LIST IS THE CHOKEPOINT'S TABLE READ BACK, so what is shown is what the policy is using — and
+     the way OUT is beside every entry, because a permission with no withdrawal is a one-way door and this
+     one spends somebody else's server under this person's session. */
+  document.getElementById("egress-allowed").innerHTML = r.origins.length === 0 ? "" :
+    '<div class="card-label">Data requests permitted at</div>' + r.origins.map((o) =>
+      '<div class="egress-entry"><code>' + esc(o) + '</code>'
+      + '<button type="button" class="btn-small" data-egress-revoke="' + esc(o) + '">Revoke</button></div>'
+    ).join("");
 }
 
 async function clearState() {

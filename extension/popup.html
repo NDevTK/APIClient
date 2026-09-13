@@ -42,6 +42,37 @@
       <span id="frontier-share-status" class="frontier-share-status"></span>
     </div>
 
+    <!-- THE SECOND SETTING, AND IT IS NOT A KNOB ON WORK EITHER. CLAUDE.md §Attacker-sources: firing what a
+         bundle only reaches past a FORCED gate is "CONFIGURABLE AND PER-ORIGIN, BECAUSE EXPERIMENTATION IS
+         NOT ALWAYS WRONG AND A SINGLE SWITCH CANNOT SAY SO … Default conservative, widened deliberately per
+         origin, never inferred from a site looking like a test." Firing at an app you own is the point of the
+         tool and doing it at a stranger's production account is not, and NO PROPERTY OF THE ADDRESS tells
+         those apart — which is precisely why the answer has to be a person's and why this control exists.
+         The table it writes has been in lib/safe-fetch.js for a while and the native host's `--explore
+         <origin>` has written to it from a command line; the offscreen has no command line, so in the
+         SHIPPED extension there was no way for the person the setting is about to say anything at all.
+         WHAT IT IS NOT: it is not a switch on whether the tool explores, and it is not a switch on whether
+         the tool can reach the network. Loading the app's OWN JavaScript — its scripts, its module imports,
+         its lazy chunks — is a browser loading a page and happens at every setting, because those bytes are
+         served identically to every visitor and reveal nothing about this person. What this opens is the
+         other kind: an API call, a data fetch or a probe whose address the engine reached only by forcing a
+         gate the person's own session never passed.
+         AND ONE COMBINATION IS UNREACHABLE AT EVERY SETTING OF IT, which is what makes this a whole answer
+         rather than a hole with a label over it: credentialed AND state-mutating AND forced. safe-fetch.js
+         cannot compose a request with a method or a body at all, so the middle conjunct is false by
+         construction and no value of this control can make it true. -->
+    <div class="egress-policy">
+      <label for="btn-egress-widen">Data requests at</label>
+      <code id="egress-origin" class="egress-origin"></code>
+      <button id="btn-egress-widen" type="button" class="btn-small">Allow</button>
+      <span id="egress-status" class="egress-status"></span>
+    </div>
+    <!-- WHAT IS ALREADY PERMITTED, AND THE WAY BACK OUT. A permission with no withdrawal is not a preference
+         but a one-way door, and this one spends somebody else's server under the person's own session. The
+         list is the CHOKEPOINT'S OWN TABLE read back, never a copy this surface keeps — so what is rendered
+         is what the policy is actually using. -->
+    <div id="egress-allowed" class="egress-allowed"></div>
+
     <div id="deep-status" class="deep-status" style="display:none"></div>
 
     <nav>
