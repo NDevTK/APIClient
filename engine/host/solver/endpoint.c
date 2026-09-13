@@ -60,7 +60,11 @@ typedef struct { char *name; char *value; } EpHeader;   /* the transport half: w
    consequence to keep in view while reading the merges below: every value, exclusion, bound and predicate on
    a record was observed at ONE grade, because a sighting at another grade cannot reach it. */
 typedef struct { char *method; char *path; Param *params; int np, pcap;
-                 EpHeader *hdrs; int nh, hcap; int is_asset; int prov; } Endpoint;
+                 EpHeader *hdrs; int nh, hcap; int is_asset; int prov;
+                 /* THE BYTES THIS ENGINE HAD NO FIELD READER FOR — see endpoint.h. Set only where
+                    `body_params` named NOTHING, so it is never a second spelling of fields already on
+                    `params`, and never overwritten once set: a request body is ONE example, not a set. */
+                 char *body_mime, *body_b64; } Endpoint;
 
 /* A value carrying a `{hole}` is a SHAPE — an unknown the code did not compute — and a hole-free one is the
    real thing. The distinction decides the merge: a concrete value supersedes a shape for the same header, which
@@ -484,17 +488,20 @@ static char *body_field_text(JSContext *ctx, JSValueConst v) {
    `POST /v1/users` and nothing whatever about what it posts.
    The format is decided by the request's own content-type and never by sniffing the bytes: a page that sends
    JSON says so, and a body this engine has no reader for records no fields rather than a guess at some. */
-static void body_params(JSContext *ctx, KvBuf *out, const EndpointBody *body) {
+/* RETURNS HOW MANY FIELDS IT NAMED, because the caller's question is no longer "did this run" but "is there
+   anything left for the zone to read". It was void while the only answer to an unreadable body was silence. */
+static int body_params(JSContext *ctx, KvBuf *out, const EndpointBody *body) {
     MimeType mt;
     char *text;
+    int before = out->n;
 
-    if (!body || !body->bytes) return;
+    if (!body || !body->bytes) return 0;
     /* §4.4 "parse a MIME type" is the ONE reader of a Content-Type in this engine — never a `strcasecmp`
        against a literal, which is the C locale's answer where the standard's is ASCII's, and never a private
        essence split beside the record that already has one. A type that will not parse is §4.4's failure and
        reads no fields. */
     mime_type_init(&mt);
-    if (!body->mime || !mime_type_parse(&mt, body->mime, strlen(body->mime))) { mime_type_free(&mt); return; }
+    if (!body->mime || !mime_type_parse(&mt, body->mime, strlen(body->mime))) { mime_type_free(&mt); return 0; }
 
     text = malloc(body->len + 1); CHECK(text, "endpoint: OOM request body");
     memcpy(text, body->bytes, body->len); text[body->len] = 0;
@@ -546,6 +553,32 @@ static void body_params(JSContext *ctx, KvBuf *out, const EndpointBody *body) {
     }
     free(text);
     mime_type_free(&mt);
+    return out->n - before;
+}
+
+/* THE BODY THE ENGINE COULD NOT NAME, CARRIED AS BYTES SO THE ZONE CAN. §What-the-tool-produces asks what a
+   request SENDS, and for a gRPC-Web or protobuf call that is the whole of the answer: this surface named the
+   address and nothing about the payload, so a reviewer got `POST /pkg.Service/Method` and no field.
+   IT FORWARDS RATHER THAN DECODES, AND THAT IS A LAYERING DECISION AND NOT A CONVENIENCE. §Architecture: what
+   belongs in the engine is what a FLOW needs mid-execution; a captured body decoded for a REPORT is computed
+   once between flows, where the failure mode is a wrong answer rather than a corrupted heap. The zone already
+   holds the reader — extension/lib/protobuf.js's `pbDecodeRaw` walks tags, wire types and varints, and
+   lib/learn.js already decodes gRPC-Web frames on the REPLY side — so a decoder here would be a second one.
+   THE CODEC IS THE ENGINE'S OWN, for the reason core/file/file_reader.c gives at its own call: `btoa`'s codec
+   is already implemented here and §Solver's rule is that an encoding builtin is modelled faithfully, never
+   re-implemented beside itself. */
+static char *body_bytes_b64(const EndpointBody *body) {
+    size_t cap, n;
+    char *b64;
+
+    if (!body || !body->bytes || body->len == 0) return NULL;
+    cap = JS_Base64EncodedSize(body->len) + 1;
+    b64 = malloc(cap);
+    CHECK(b64 != NULL, "endpoint: OOM base64-encoding a request body this engine has no field reader for");
+    n = JS_Base64Encode(b64, cap, (const uint8_t *)body->bytes, body->len);
+    CHECK(n > 0, "endpoint: the base64 buffer was sized wrong for a request body");
+    b64[n] = 0;
+    return b64;
 }
 
 /* THE DOMAIN'S FIRST OBSERVATION — this endpoint's record takes the set the recording flow proved. */
@@ -729,7 +762,9 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
     KvBuf kvb = { 0 };
     char *path = path_scan(&kvb, shape_path, expath);
     { const char *q = strchr(disp, '?'); if (q && q[1]) kv_pairs(&kvb, q + 1, EP_QUERY); }
-    body_params(ctx, &kvb, body);
+    /* NAMED FIELDS FIRST; THE RAW BYTES ONLY WHERE THERE ARE NONE. A body this engine reads is better
+       described by its fields than by a blob, and emitting both would put one fact on the record twice. */
+    int body_named = body_params(ctx, &kvb, body);
     free(disp); free(ex); free(expath); free(shape_path);
 
     for (int i = 0; i < g_eps_n; i++) {                 /* merge into an existing same-identity endpoint */
@@ -757,6 +792,15 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
                strings. One point per merge that gained structure, matching the granularity below: an endpoint
                is one discovery however many headers arrive with it, and a header the surface gains later is
                one more. */
+            /* FIRST BODY WINS, AND IT IS NEVER OVERWRITTEN. A request body is ONE example of what this
+               endpoint is sent, not a set to be merged; replacing it would swap one example for another with
+               nothing on the record to say so. A sighting at a different GRADE is already a different record
+               (provenance is part of `same_identity`), so this cannot silently mix a forced body into an
+               observed one. */
+            if (!body_named && !g_eps[i].body_b64 && body && body->mime) {
+                g_eps[i].body_b64 = body_bytes_b64(body);
+                if (g_eps[i].body_b64) g_eps[i].body_mime = strdup(body->mime);
+            }
             if (endpoint_merge_headers(&g_eps[i], hdrs, nhdrs) > 0)
                 flow_credit_emit(1.0);
             goto done;
@@ -776,6 +820,10 @@ void endpoint_record(JSContext *ctx, const char *method, JSValueConst url,
         param_set_pred(&e->params[e->np], kvb.e[j].pred, kvb.e[j].npred);
         param_set_leq(&e->params[e->np], kvb.e[j].leq, kvb.e[j].nleq);
         e->np++;
+    }
+    if (!body_named && body && body->mime) {
+        e->body_b64 = body_bytes_b64(body);
+        if (e->body_b64) e->body_mime = strdup(body->mime);
     }
     /* The count is deliberately DROPPED here: every header of a brand-new endpoint is new, and the discovery
        being credited is the ENDPOINT. Crediting both would price one sighting at one point plus one per header
@@ -843,6 +891,15 @@ char *endpoint_json_array(void) {
         wrote_one = 1;
         json_buf_raw(&b, "{"); json_buf_key(&b, "method"); json_buf_str(&b, e->method);
         json_buf_raw(&b, ","); json_buf_key(&b, "url"); json_buf_str(&b, e->path);
+        /* AND THE BODY THIS ENGINE COULD NOT NAME, as bytes plus the type that decides how to read them.
+           BOTH OR NEITHER: bytes with no type are bytes nothing can name the fields of, and a type with no
+           bytes is not a body — the same sentence `EndpointBody` is one struct for. A consumer reads their
+           presence as the POSITIVE statement "this request sends a body this engine has no reader for",
+           never as a hole to default past. */
+        if (e->body_b64 && e->body_mime) {
+            json_buf_raw(&b, ","); json_buf_key(&b, "bodyMime"); json_buf_str(&b, e->body_mime);
+            json_buf_raw(&b, ","); json_buf_key(&b, "bodyBase64"); json_buf_str(&b, e->body_b64);
+        }
         /* …AND WHAT THIS RECORD IS EVIDENCE OF, ALWAYS, in the same three words the pending line spells and
            through the same mapping (solver/engine.h's `engine_provenance_token`), so the zone that reads both
            about one app cannot be shown two vocabularies. There is NO absence-is-the-statement here, which is
@@ -1022,6 +1079,10 @@ char *endpoint_json_array(void) {
 void endpoint_free(void) {
     for (int i = 0; i < g_eps_n; i++) {
         free(g_eps[i].method); free(g_eps[i].path);
+        /* THE TWO FIELDS ADDED TO `Endpoint` FREED WHERE EVERY OTHER OWNED FIELD IS — §Architecture's rule
+           that a struct copied or freed field-by-field creates an obligation at every such site, which is
+           what a field added to one and not the other silently breaks. */
+        free(g_eps[i].body_mime); free(g_eps[i].body_b64);
         for (int j = 0; j < g_eps[i].np; j++) {
             free(g_eps[i].params[j].name);
             for (int k = 0; k < g_eps[i].params[j].nvals; k++) free(g_eps[i].params[j].vals[k]);

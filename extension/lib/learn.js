@@ -895,6 +895,54 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
     if (!m.request) m.request = { $ref: schemaName };
   }
 
+  /* THE BODY THE ENGINE COULD NOT NAME, READ HERE WITH THE CODEC THAT WAS ALREADY SITTING NEXT TO IT.
+     The sentence above used to end "the decode belongs beside those bytes when they arrive, and
+     lib/protobuf.js is still here to read them with" — and the bytes did not arrive. endpoint.c named fields
+     for JSON and form-urlencoded and emitted NOTHING for anything else, so a gRPC-Web or protobuf request
+     reached this file as an address with no payload: `POST /pkg.Service/Method` and not one thing about what
+     it sends, which is most of what §What-the-tool-produces asks of an API record. It forwards the bytes now
+     (`bodyBase64` + `bodyMime`), and this is the reader that makes them a mechanism rather than a field
+     nothing consumes.
+     BOTH OR NEITHER, ASSERTED RATHER THAN DEFAULTED. Bytes with no type cannot be read and a type with no
+     bytes is not a body — the same sentence endpoint.h makes `EndpointBody` one struct for — so a record
+     carrying one is a producer half-writing a pair and is caught here instead of rendering as an empty
+     schema.
+     WHAT IS RECORDED IS WHAT WAS OBSERVED AND NOT WHAT IT PROBABLY MEANS. A wire-decoded field has a NUMBER
+     and a WIRE TYPE and no name: protobuf puts names in a schema this page did not ship. So each field is
+     `field<N>` carrying its wire type, and the property is marked `_pbWire` — a reviewer reading the Send
+     panel sees a field 3 of wire type 2, which is true, rather than a `string userId`, which would be
+     invented. §@H: a value known only to satisfy a shape is a SHAPE, never a concrete pick. */
+  if (callSite.bodyBase64 || callSite.bodyMime) {
+    DCHECK(typeof callSite.bodyBase64 === "string" && typeof callSite.bodyMime === "string",
+           "an @H call site carries one half of the raw-body pair — endpoint.c writes `bodyBase64` and " +
+           "`bodyMime` together or writes neither, so one without the other is a producer that half-wrote " +
+           "a body and a reader that would render an empty request schema for it");
+    const _raw = base64ToUint8(callSite.bodyBase64);
+    /* gRPC-Web FRAMES THE MESSAGE AND PROTOBUF DOES NOT: a 1-byte flag then a 4-byte big-endian length, then
+       the payload. Stripping it is reading the transport the content-type NAMES, never sniffing the bytes —
+       the same rule endpoint.c's own body reader states, and the reply side of this file already does it. */
+    const _grpc = /(^|[+/])grpc-web|grpc\+proto/.test(callSite.bodyMime);
+    const _msg = _grpc && _raw.length >= 5 ? _raw.subarray(5) : _raw;
+    const _fields = _msg.length ? pbDecodeRaw(_msg) : [];
+    if (_fields && _fields.length) {
+      const schemaName = `${methodName.replace(/[^a-zA-Z0-9]/g, "")}Request`;
+      if (!doc.schemas[schemaName]) {
+        doc.schemas[schemaName] = { id: schemaName, type: "object", properties: {}, _astInferred: true };
+      }
+      const schema = doc.schemas[schemaName];
+      if (!schema.properties) schema.properties = {};
+      for (const f of _fields) {
+        const name = `field${f.field}`;
+        if (!schema.properties[name]) {
+          schema.properties[name] = { type: "string", _astInferred: true, _pbWire: f.wire, _pbField: f.field };
+        }
+      }
+      schema._pbEncoding = _grpc ? "grpc-web" : "protobuf";
+      schema._pbMime = callSite.bodyMime;
+      if (!m.request) m.request = { $ref: schemaName };
+    }
+  }
+
   // Apply example-value picker so the Send form has prefills even
   // before any real traffic hits — pickExampleValue's `ast-constraint`
   // tier uses the _astValidValues we just attached. applyStatsToMethod

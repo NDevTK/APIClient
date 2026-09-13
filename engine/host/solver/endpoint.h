@@ -37,7 +37,13 @@ typedef struct { const char *name, *value; } EndpointHeader;
    list's, else the one Fetch §5.4 "Request class" step 37.4 extracts) and it is what decides how the bytes are
    READ — the body's own format, never a guess from the shape of the bytes. A JSON MIME type (MIME Sniffing
    §4.6 "MIME type groups") is read as a name -> value document and `application/x-www-form-urlencoded` by the
-   same grammar as a query string; any other type records no fields rather than a guess at some.
+   same grammar as a query string; any other type records no FIELDS rather than a guess at some — and
+   FORWARDS ITS BYTES, which is the half that was missing. A protobuf or gRPC-Web payload has no field this
+   engine can name, and for as long as that meant silence the record said `POST /pkg.Service/Method` and
+   nothing whatever about what it posts, which is most of what §What-the-tool-produces asks. The bytes ride
+   the record as `bodyBase64` beside `bodyMime` (the engine's own `btoa` codec, never a second base64), and
+   extension/lib/learn.js reads them with lib/protobuf.js's wire decoder — the decode belongs where the
+   TYPE decision and the reader already live, not in a C body that would duplicate both.
    Borrowed for the length of the call like the headers.
    It is a separate struct and not three arguments because a body is one fact: bytes with no type are bytes
    nothing can name the fields of, and a type with no bytes is not a body. */
