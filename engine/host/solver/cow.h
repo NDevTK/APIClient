@@ -151,6 +151,19 @@ void      cow_capture_map_mutate(JSContext *ctx, JSValueConst obj, JSValueConst 
    each holds a reference, so a byte copy would be the uncounted-reference bug cow_capture_host_state warns of. */
 void      cow_capture_obj_state(JSContext *ctx, JSValueConst obj);
 
+/* Install as JSTimeTravelHooks.iter_state: capture a shared ITERATOR object's ENUMERATION STATE — the cursor in
+   the engine's own class opaque — before this flow advances it. `obj` is the iterator.
+   IT LOOKS LIKE THE MOST FLOW-PRIVATE OBJECT THERE IS AND IS NOT, which is why it needed its own unit: a
+   snapshot fork copies the frame and dups every operand stack slot, so the iterator arrives in the sibling as a
+   REFERENCE and both arms walk ONE record. Each advance moved the other's cursor and the two arms SPLIT one
+   enumeration, each reporting a proper subset of the keys with no abort and nothing to say so — and §Solver-half
+   makes that the ordinary case rather than an edge one, since an iteration over unknown input forks each
+   iteration as its own parkable flow.
+   The blob is engine-owned (JS_IterStateSave/Restore/Free) because what it holds is an ATOM, which is a counted
+   reference the CowRecord layout below cannot name — its `val_off` names JSValues — so the byte-copy arm would
+   take a reference it never counted. */
+void      cow_capture_iter_state(JSContext *ctx, JSValueConst obj);
+
 /* Install as JSTimeTravelHooks.async_state: capture a shared promise's settlement (state + result + pending
    reactions) or a resolving-function pair's already_resolved latch before this flow changes it, so each arm of
    a fork settles a pre-fork promise on its OWN timeline. */
@@ -289,7 +302,7 @@ void      cow_apply(JSContext *ctx, CowDelta *d);
    concolic set is: two entries each spelled it out as a struct literal, which is a list that can drift, and one
    of them already had. `.gen_fork` is the scheduler's, which is why this lives with the capture hooks that make
    up the rest of it rather than at either entry. */
-/* `gen_fork` is the caller's: the nine other hooks are this file's capture points, and the tenth belongs to
+/* `gen_fork` is the caller's: the ten other hooks are this file's capture points, and the eleventh belongs to
    whoever assembles the sibling flow. See the definition. */
 void cow_install_time_travel_hooks(JSTimeTravelGenFork gen_fork);
 

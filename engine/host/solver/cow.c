@@ -110,9 +110,26 @@ enum { COW_CUR_UNRECORDED = 0, COW_CUR_ABSENT = 1, COW_CUR_PRESENT = 2 };
  *                        makes an exploration arm's PROTOTYPE-POLLUTION gadget visible to the arm that must not
  *                        see it. ONE kind for the three because they are one object and a flow that reaches any
  *                        of them may write any of them; the blob is the engine's (JS_ObjStateSave) because two
- *                        of the three are engine-internal and each owns a reference. */
+ *                        of the three are engine-internal and each owns a reference.
+ *   COW_STATE_ITER     — an ITERATION RECORD's state (obj is the ITERATOR object; target unused): the cursor in
+ *                        the engine's own class opaque that says how far through a walk this object is. Neither
+ *                        a property nor one of COW_STATE_OBJECT's three fields, so nothing here could see it
+ *                        advance — and an iterator is the last object anyone suspects, because it looks purely
+ *                        flow-private. It is not: a snapshot fork COPIES THE FRAME, clone_susp_frame dups every
+ *                        operand stack slot, and a JSValue is a REFERENCE, so both arms walk ONE record. Each
+ *                        arm's advance then moved the other's and the two SPLIT one enumeration between them,
+ *                        each reporting a proper subset with no abort anywhere — a wrong answer rather than a
+ *                        crash, on the shape §Solver-half makes routine, since an iteration over unknown input
+ *                        forks each iteration as its own parkable flow.
+ *                        IT IS NOT COW_STATE_HOST_REC EVEN THOUGH BOTH ARE A CLASS'S OPAQUE RECORD, and the
+ *                        difference is who can see the layout. That one takes a caller-supplied offset list and
+ *                        the caller is a browser component that owns its struct; this record is the ENGINE's,
+ *                        its struct is private to quickjs.c, and what it owns is an ATOM — which `val_off`
+ *                        cannot name at all, so the byte-copy-plus-dup arm would take a reference it never
+ *                        counted. So the blob is the engine's (JS_IterStateSave/Restore/Free), exactly as
+ *                        COW_STATE_OBJECT's is and for the same reason. */
 enum { COW_STATE_ASYNC = 0, COW_STATE_MODULE = 1, COW_STATE_HOST = 2, COW_STATE_HOST_REC = 3,
-       COW_STATE_BUFFER = 4, COW_STATE_OBJECT = 5 };
+       COW_STATE_BUFFER = 4, COW_STATE_OBJECT = 5, COW_STATE_ITER = 6 };
 typedef struct { JSValue obj; JSAtom atom; int existed; JSPropertyDescriptor base; JSPropertyDescriptor cur;
                  int cur_state; void *vref;
                  int is_gendata; void *g0; void *g1; int is_map; int map_op; int map_pos; JSValue map_old;
@@ -427,6 +444,12 @@ static void *cow_state_save(JSContext *ctx, const CowEntry *e) {
                     "into every sibling");
         return blob;
     }
+    case COW_STATE_ITER: {
+        void *blob = JS_IterStateSave(ctx, e->obj);
+        CHECK(blob, "cow: OOM saving an iteration record's state — a lost cursor leaves two arms of a fork "
+                    "sharing one enumeration, each walking a proper subset of it");
+        return blob;
+    }
     case COW_STATE_BUFFER: {
         /* THE STATE IS ASKED OF THE BUFFER, never read through a pointer the entry kept: a detach frees that
            storage and a resize reallocates it, which is the whole reason this is not the HOST arm above. The
@@ -480,6 +503,9 @@ static void cow_state_restore(JSContext *ctx, const CowEntry *e, void *blob) {
     case COW_STATE_OBJECT:
         JS_ObjStateRestore(ctx, e->obj, blob);   /* asserts the blob's presence itself, at the field it needs */
         break;
+    case COW_STATE_ITER:
+        JS_IterStateRestore(ctx, e->obj, blob);  /* asserts the blob's presence itself, at the field it needs */
+        break;
     default:
         DCHECK(e->state_kind == COW_STATE_ASYNC, "a COW state entry names a target kind with no restore");
         JS_AsyncStateRestore(ctx, e->obj, blob);
@@ -495,6 +521,7 @@ static void cow_state_free(JSRuntime *rt, const CowEntry *e, void *blob) {
     case COW_STATE_HOST: free(blob); break;   /* POD bytes: nothing in it holds a reference */
     case COW_STATE_BUFFER: JS_BufferStateFree(rt, blob); break;   /* it holds real storage and view references */
     case COW_STATE_OBJECT: JS_ObjStateFree(rt, blob); break;   /* it holds a proto and an internal-slot value */
+    case COW_STATE_ITER: JS_IterStateFree(rt, blob); break;   /* it holds the parked candidate's ATOM */
     case COW_STATE_HOST_REC:
         if (blob) {
             int i;
@@ -822,6 +849,47 @@ void cow_capture_obj_state(JSContext *ctx, JSValueConst obj) {
     e->obj = JS_DupValue(ctx, obj);
     e->is_state = 1; e->state_kind = COW_STATE_OBJECT;
     e->a_base = cow_state_save(ctx, e);   /* the object as this flow found it */
+    cow_capture_end();
+}
+
+/* AN ITERATION RECORD'S STATE — the same nineteen lines as cow_capture_obj_state, over a different unit, for
+   the reason COW_STATE_ITER's banner gives: the cursor in an iterator's class opaque is neither a property nor
+   one of that entry's three fields.
+   THE CAPTURE POINT IS THE REACH AND NOT THE WRITE, which is the engine side's choice and is why there is no
+   per-write hook to forget: quickjs routes both of OP_for_in_next's arms through one accessor, so a flow that
+   TOUCHES the record captures it, and the dedup below makes that one entry per iterator per flow however many
+   keys the walk yields.
+   THIS IS THE FIRST PER-KEY CALLER OF A DEDUP SCAN WRITTEN FOR RARE ONES, so why that is affordable is stated
+   here rather than left to be rediscovered by whoever profiles it. State entries are deliberately kept out of
+   the hash index (see the CowEntry banner), so the scan below is O(this flow's HEAD) and it runs once per key
+   the walk yields — on a real bundle the hottest path there is, since a per-element x per-key expansion over an
+   unknown array is what most of a page's frontier is made of. It is affordable because the two cases are
+   disjoint and each is cheap for its own reason. A walk that has NOT forked since the iterator was built reads
+   its own creation, so JS_ObjFlowGen(obj) > d->fork_gen returns before the scan and the whole capture is two
+   compares. A walk that HAS forked pays the scan — over a head cow_delta_fork has just EMPTIED, for the parent
+   as well as the sibling, because the freeze takes the whole head into the shared segment. So the shape that
+   makes this path hot (a fork per key) is the same shape that keeps the head short, and the scan is O(1) in
+   exactly the case that runs most.
+   IT RETIRES WHEN A MEASUREMENT SAYS OTHERWISE, and the measurement is cow_delta_head_stats' entry count taken
+   on a page whose forks are per-key: a head that is long THERE is the case this argument does not cover, and
+   the repair would be to give state entries a key in the hash index rather than to move this capture. */
+void cow_capture_iter_state(JSContext *ctx, JSValueConst obj) {
+    if (cow_hooks_off() || !g_current) return;
+    CowDelta *d = g_current;
+    DCHECK(JS_IsObject(obj), "an iteration record's state was captured with no object");
+    if (JS_ObjFlowGen(obj) > d->fork_gen) return;   /* flow-private skip — the O(shared-state) invariant */
+    for (int i = 0; i < d->n; i++)                  /* one entry per iterator: the FIRST state is the baseline */
+        if (d->e[i].is_state && d->e[i].state_kind == COW_STATE_ITER &&
+            JS_VALUE_GET_PTR(d->e[i].obj) == JS_VALUE_GET_PTR(obj)) return;
+    cow_capture_begin();
+    if (cow_room_for_one(d, "cow: OOM growing delta (iter_state) — a lost cursor leaves two arms of a fork "
+                            "splitting one enumeration, each walking a proper subset of it"))
+        cow_hash_rebuild(d);
+    CowEntry *e = &d->e[d->n++];
+    cow_entry_init(e);
+    e->obj = JS_DupValue(ctx, obj);
+    e->is_state = 1; e->state_kind = COW_STATE_ITER;
+    e->a_base = cow_state_save(ctx, e);   /* the walk as this flow found it */
     cow_capture_end();
 }
 
@@ -1402,7 +1470,7 @@ static void cow_entries_free(JSContext *ctx, CowEntry *e, int n) {
 
 /* THE time-travel hook set — see cow.h. Installed AFTER the context's own globals exist, so the baseline is
    pre-flow and nothing set up before it lands in a delta.
-   `gen_fork` IS THE CALLER'S, and it is the only one of the ten that is: the other nine are this file's own
+   `gen_fork` IS THE CALLER'S, and it is the only one of the eleven that is: the other ten are this file's own
    capture points, while a generator-state fork is stashed by whoever assembles the SIBLING FLOW — the
    scheduler. Naming that function here made this primitive depend on the dispatch loop, and through it on the
    whole DOM, so nothing could take the COW delta without taking the browser too. It is a parameter now, which
@@ -1414,7 +1482,8 @@ void cow_install_time_travel_hooks(JSTimeTravelGenFork gen_fork)
         .arr_append = cow_capture_arr_append, .buf_state = cow_capture_buffer,
         .map_add = cow_capture_map_add, .map_mutate = cow_capture_map_mutate,
         .async_state = cow_capture_async_state, .module_eval = cow_capture_module_eval,
-        .obj_state = cow_capture_obj_state, .async_fork = cow_capture_async_fork };
+        .obj_state = cow_capture_obj_state, .iter_state = cow_capture_iter_state,
+        .async_fork = cow_capture_async_fork };
     DCHECK(gen_fork != NULL,
            "the time-travel hooks were installed with no generator-fork handler — a concolic branch inside a "
            "generator body would fork a sibling that shares the parent's execution state");
