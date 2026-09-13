@@ -74,6 +74,30 @@ static int64_t g_picks_total = 0;
    dispatch the instance had ever made. On an instance
    left running to 13102 dispatches the same document reported `neverPickedAtTop` 43 — 0.1% — with a weight
    spread of 171. The order does separate; what the early samples measure is a frontier still filling.
+   AND THE SAME SPREAD ON A DOCUMENT NOBODY DESIGNED SAYS WHAT IT COSTS THE PRODUCT, which the fixture series
+   above cannot: it measures the ORDER and not what the order fails to reach. Artifact 58d56516, a 4.5 MB real
+   bundle replayed from its own mirror at its original host and paths, 224 samples over 167 s:
+     node testing/corpus/serve-faithful.mjs <id> <port> & node engine/pagecensus.mjs http://127.0.0.1:<port>/
+   `wTop - wMin` is 0.036 — the fixture's figure to the digit — with `valMin == valMax == valTop == 4`, so the
+   reward is not a common offset here either, it is one value every member holds. 71452 members and 71451
+   forks come from FIFTY branch sites at `brDepthMax` 6 over THIRTY-NINE source reads, one bucket holding
+   38836: a cross product of a handful of unknowns, not seventy thousand decisions. 10507 of 10569 steps are
+   REPLAY HITS, so nearly all of the thread goes into re-running prefixes.
+   WHAT IS NEW IS THE CURSOR HISTOGRAM, AND IT IS A FACT ABOUT THE DOCUMENT RATHER THAN THE QUEUE.
+   `progStarts` 24, `deepest` 7, `programCursors` {0..6: 0, 7: 71296, 8: 156}: seven programs completed, ONE is
+   holding the entire frontier, and SIXTEEN SCRIPTS OF THE DOCUMENT NEVER START. Everything a bundle defers to
+   a later chunk — which is where an app's API clients are — is not explored slowly, it is not reached.
+   THE DISCRIMINATOR THE ORDER HAS NOT GOT, stated as a question because naming a term here without an
+   observation that separates the two sides is the wrong-narrowing move one level up: `neverPicked` is 64605 of
+   71452 with `neverPickedGap` 0, so the member that is the ONLY one standing at program 8 and the member that
+   is the 38837th arm at program 7 are BOTH never-picked, both hold reward 4, and nothing between them exceeds
+   0.036. The optimism term is keyed on completed units and answers the same for both. What would have to
+   exist is a reading on which those two are comparable AT ALL — and it must be one a fork CARRIES, since a
+   term that separated the two arms of a branch fails the rank-neutrality equality by construction.
+   THIS LICENSES NO BOUND AND NO CAP (§NO BOUNDS). Nothing here argues for shedding an arm, capping a fork
+   site or bounding a cross product; a growing frontier is the design working. It says only that the ORDER, on
+   a real document, is not currently choosing between two kinds of work that are worth very different amounts.
+
    THAT IS A GAUGE OVER A COUNTER AND IT IS THE REASON THESE TWO ROWS EXIST. `members` is a gauge, so
    `members / picksLifetime` is a HOLDING ratio over the whole session and cannot be differenced into a rate;
    read at one instant it says nothing about whether the frontier is filling or draining, which is the single
