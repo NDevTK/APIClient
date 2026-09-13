@@ -16,14 +16,17 @@
 ## because a stack named from recollection is the citation-without-a-number defect wearing a build tool's
 ## name. A page whose document names nothing says so.
 ##
-## THIS LIST ONLY GROWS, AND A DEAD ENTRY KEEPS ITS ROW. Two of the original twelve serve HTTP 403 to this
-## environment and always have, so every census run against this list measured TEN sites under a twelve-site
-## name — and the report's `measurable` column is the only place that said so. The reflex is to delete them,
-## and it is wrong twice: report.mjs is FATAL on a census row its list does not name (a row the list does not
-## contain is a claim about a corpus nobody selected), so deleting a row makes every historical census file
-## unreadable; and the 403 is itself an observation worth keeping, because a site that blocks this environment
-## is a fact about what this corpus can reach, not an absence. So a blocked entry stays, its third column
-## records the status it actually returns, and a replacement is APPENDED beside it.
+## THIS LIST ONLY GROWS, AND A DEAD ENTRY KEEPS ITS ROW — AND A DEAD ENTRY CAN COME BACK TO LIFE, WHICH IS
+## THE HALF THIS PARAGRAPH GOT WRONG. It said two of the original twelve serve HTTP 403 to this environment
+## "and always have", and replit now answers 200 and mirrors 116/116; only npmjs still 403s, behind a
+## Cloudflare interstitial. The census runs quoted above therefore measured TEN sites under a twelve-site
+## name, and the report's `measurable` column was the only place that said so. The reflex is to delete a
+## blocked row, and it is wrong twice: report.mjs is FATAL on a census row its list does not name (a row
+## the list does not contain is a claim about a corpus nobody selected), so deleting a row makes every
+## historical census file unreadable; and the 403 is itself an observation worth keeping, because a site
+## that blocks this environment is a fact about what this corpus can reach, not an absence. So a blocked
+## entry stays, its third column records the status it actually returns, and a replacement is APPENDED
+## beside it.
 ##
 ## Lines beginning `#` are comments. Columns: id, url, observed stack.
 ##
@@ -67,7 +70,7 @@ astexplorer	https://astexplorer.net/	webpack (vendors~app-<hash>.js, parsers~app
 vscodedev	https://vscode.dev/	hand-rolled loader (342KiB document, <script src=""> + type=module)
 codesandbox	https://codesandbox.io/	Next.js app router (/_next/static/chunks/main-app-<hash>.js)
 slack	https://app.slack.com/	custom rollup (a.slack-edge.com/bv1-13/rollup-marketing.<hash>.min.js)
-replit	https://replit.com/	BLOCKED — HTTP 403 to this environment on every pass; the Next.js pages router noted here was observed before the block and cannot be re-observed
+replit	https://replit.com/	NO LONGER BLOCKED — THIS ROW SAID "HTTP 403 to this environment on every pass" AND IT NOW ANSWERS 200. Measured four times with the mirror's own user agent: 200 text/html, 664858 B, byte count identical on three consecutive probes, then 664371 B on the mirroring fetch itself — a live document that varies by a few hundred bytes between fetches, not a challenge shell. npmjs, the other originally-blocked row, still answers 403 with Cloudflare's "Just a moment..." interstitial, so the block was never a property of this environment in general. The old verdict is corrected rather than deleted and jsoncrack, which was appended to replace this row, stays: a row is never removed, and the two now measure different shapes. MIRRORED 116/116 at 200, 9393630B of JS over 104 <script src> and 12 preload links. NOT RE-SELECTED AGAINST TESTS 1 AND 2 — nobody has fetched an anonymous JSON answer or a gated sibling from this origin since it unblocked, so this row claims MIRRORABLE (4) and a live 200 (3) and says nothing about whether it has a reachable gated backend; writing a verdict for 1 or 2 from the shape of the site is what this file's own header calls the recollection-instead-of-citation defect. STACK: Next.js (104 <script src> and 12 preload links in a 649KiB document, NO <script type=module> and NO modulepreload — all classic)
 npmjs	https://www.npmjs.com/package/react	BLOCKED — HTTP 403 to this environment on every pass, 5.7KiB body; never once delivered a document
 figma	https://www.figma.com/	Next.js app router behind Netlify (/_netlify/_next/static/chunks/)
 mdn	https://developer.mozilla.org/en-US/docs/Web/JavaScript	webpack (/static/client/runtime.<hash>.js + numbered chunks)
