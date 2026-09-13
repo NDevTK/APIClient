@@ -112,11 +112,17 @@ typedef struct Flow {
        correctness rests on a claim this file already asserts elsewhere). There is no third site: no Flow is
        ever copied — `reclaim_calloc(1, sizeof(Flow))` in flow_new is the only construction in the tree — and
        the registry's `reclaim_realloc` moves the POINTER ARRAY, which relocates no member's slot.
-       IT IS CROSS-CHECKED AGAINST THE WALK IT REPLACES, AT THE ONE CALLER THAT STILL WALKS. flow_is_member
-       must answer for a pointer that MAY BE DANGLING, so it compares addresses and cannot use this field to
-       answer; it therefore has the linear answer in hand at no extra cost and asserts this field against it on
-       every call. In the APICLIENT_DEV builds every smoke runs that re-derives the handle over the whole
-       frontier at every pick, which is a two-sided check on real states rather than an argument.
+       IT IS CROSS-CHECKED AGAINST THE WALK IT REPLACES, AT EVERY MEMBER OF EVERY SCAN. flow_pick holds `i`
+       and the pointer for each member it visits, so it asserts this relation there — in the APICLIENT_DEV
+       builds every smoke runs, the handle is re-derived over the WHOLE frontier at every pick, every rival
+       rescan and every pager read, which is a two-sided check on real states rather than an argument.
+       IT USED TO BE ONE MEMBER PER PICK AND THE DIFFERENCE IS WHY THE CHECK MOVED. flow_is_member must answer
+       for a pointer that MAY BE DANGLING, so it compares addresses and cannot use this field to answer; it
+       therefore has the linear answer in hand and asserts the field against it — but only for the member its
+       walk MATCHED, and flow_pick called it once per dispatch purely to ask whether the incumbent was still
+       standing. That was a second full walk of the frontier per dispatch, priced by no counter; the pick
+       decides the same question inside the scan it already performs, and the check it was paying for is wider
+       here than it was there.
        A SWAP-REMOVE RE-KEYS EXACTLY ONE OTHER MEMBER — the one moved from the end into the departing member's
        slot — and nothing else moves. That is a fact about the registry, stated here because it is the property
        any incremental structure over this frontier has to hold, and because a reader who assumes a departure

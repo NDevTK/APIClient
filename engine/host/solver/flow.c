@@ -3931,17 +3931,61 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
     double never_w = 0.0;
     DCHECK(!(seed && worst), "the eviction tail was asked with an incumbent to defend — the seed states who "
                              "keeps the THREAD, and the flow the pager gives up is not a question about that");
-    /* THE SEED IS ELIGIBLE ON THE SAME TERMS AS EVERY CANDIDATE — a member of the frontier, and not one that
-       has told the scheduler it can make no progress. A flow that answered OWED is the one case where the
-       incumbent must NOT keep the thread: keeping it is the spin the mark exists to end. */
-    if (seed && flow_is_member(seed) && !(runnable_only && flow_host_owed(seed))) {
-        best = (Flow *)seed; bw = flow_weight(seed); g_scan_weights[why]++;
-        if (seed->visits == 0 && flow_silence_notch(seed) == 0) { unrun = seed; unrun_w = bw; }
-        if (seed->picks == 0) { never = seed; never_w = bw; }
-    }
+    /* IS THE SEED STILL STANDING — ANSWERED BY THE SCAN BELOW AND NOT BY A SECOND WALK OF THE FRONTIER, which
+       is the whole of why the eligibility block now sits AFTER the loop. This function already visits every
+       member and already compares each one against `seed`, so membership is decided at no cost at all; asking
+       flow_is_member for it made ASKING THE ORDER cost TWO walks per dispatch, of which only one was ever
+       priced — `g_scan_weights` counts weight EVALUATIONS and that walk evaluates none, so the frontier-weighing
+       rows understated the dispatch pick by a factor of two and said nothing about it.
+       IT NEEDS NO STATEMENT THAT THE SEED IS LIVE, WHICH IS WHERE THE RETIRED RESIDUAL'S REMEDY CLAUSE WAS
+       WRONG AND IS RECORDED HERE RATHER THAN DELETED WITH IT. That residual (at flow_is_member) named the next
+       diff as making the pick's membership question O(1), and said what had to exist first was a claim that
+       the seed is not dangling. Neither is needed, and both were reached the same way: its author pictured the
+       HANDLE being read, which does require the pointer to be live, instead of noticing that the answer was
+       already passing through the loop. What decides membership below is an ADDRESS comparison against members
+       the registry is holding — exactly what flow_is_member compares, for exactly its reason — so a dangling
+       seed matches nothing and is never dereferenced, and O(1) never arises because the walk it would have
+       replaced is one the pick performs anyway. A remedy clause is a claim about this tree written by somebody
+       who knew what was missing and was guessing at what fills it; this one is what that looks like.
+       WHY THIS IS STILL A WALK AT ALL, AND IT IS ARITHMETIC RATHER THAN A PREFERENCE. The obvious repair is a
+       heap keyed on flow_weight, and on this engine's frontier it is invalidated faster than it can be kept.
+       Every term of flow_weight except the aging moves only on an event that raises the frontier generation or
+       that touches the RUNNING member; the aging is `-FLOW_AGE_QUANTUM * ((own_silence + fam_us) /
+       FLOW_SERVICE_US)`, and `fam_us` is SHARED by the fork family, advances on EVERY step (flow_age_running)
+       and raises no generation. Adding one constant to both operands of a division preserves their order, so
+       the shared advance reorders nothing CONTINUOUSLY — what reorders is the FLOOR's PHASE, each member
+       straddling its own boundary at its own instant because each carries its own `own_silence`. Over one
+       FLOW_SERVICE_US of family time every member crosses exactly once, FLOW_SERVICE_US IS ENGINE_QUANTUM_MS
+       (the definition above says so), and the cooperative quantum is the slice a dispatch holds — so that is N
+       heap updates per dispatch, which is this loop plus a logarithm. It is the same straddle solver/engine.c's
+       rival cache records having been aborted by, read as a cost instead of as a staleness.
+       WHAT RETIRES THIS: an aging term whose PER-MEMBER quantity does not move between generation bumps.
+       Flooring the two halves apart is one shape of that and `flow_family_notch` is already exactly the half
+       that would then be a common offset within a family — but it is a WEIGHT CHANGE and worth a whole notch of
+       an order this file has measured spanning four hundredths of a point, so it is argued at
+       flow_silence_notch or nowhere, never as an indexing decision. Until then a heap here is not a cheaper
+       spelling of this loop, and a reader who builds one will have moved the cost rather than removed it. */
+    int seed_live = 0;
     for (int i = 0; i < g_flows_n; i++) {
         double w;
-        if (g_flows[i] == exclude || g_flows[i] == seed) continue;
+        /* THE REGISTRY HANDLE, CROSS-CHECKED AGAINST THE WALK IT REPLACES — flow.h's `reg_i` rests on this
+           relation being re-derived over the whole frontier at every pick, and that used to be true of exactly
+           ONE member per pick: whichever one flow_is_member's walk matched the seed at. Asked here it is true
+           of EVERY member of EVERY scan, which is strictly more of the same check for nothing, because the loop
+           is holding `i` and the pointer already. BEFORE the `continue`s, so a seeded, excluded or host-owed
+           member is checked like any other: a member skipped from the ORDER is not a member exempt from the
+           registry's own invariant. */
+        DCHECK(g_flows[i]->reg_i == i,
+               "a flow's registry handle names a slot the registry does not hold it at — the frontier gains a "
+               "member on exactly one line and loses one on exactly one line, so the two writers of this "
+               "relation have come apart, and flow_remove will swap-remove at the handle's slot and drop "
+               "whichever member is standing there");
+        /* SEED BEFORE EXCLUDE, WHICH PRESERVES WHAT THE OLD BLOCK DID RATHER THAN TIDYING IT. flow_is_member
+           answered about MEMBERSHIP and knew nothing about `exclude`, so a pointer that was both would have
+           been folded in; no caller passes both today (the only caller with an exclusion passes no seed), and
+           writing the order the other way round would be a silent policy choice about a pair nothing makes. */
+        if (g_flows[i] == seed) { seed_live = 1; continue; }
+        if (g_flows[i] == exclude) continue;
         /* NOT A DROP AND NOT A DEPRIORITISATION: the flow keeps its weight, its place and every work item it
            holds, and it is picked again the moment anything could have answered it (flow_clear_host_owed). */
         if (runnable_only && flow_host_owed(g_flows[i])) continue;
@@ -3960,6 +4004,32 @@ static Flow *flow_pick(const Flow *seed, const Flow *exclude, int runnable_only,
            estimate, an age or a "cheapest to rebuild" score would be exactly that disagreement. One comparator,
            one scan, one direction bit. */
         if (!best || (worst ? w < bw : w > bw)) { best = g_flows[i]; bw = w; }
+    }
+    /* THE SEED FOLDED IN AFTER THE SCAN, WITH A NON-STRICT COMPARISON, WHICH IS THE SAME ANSWER AND NOT A NEW
+       TIE-BREAK — and that equality is what makes this a RELOCATION rather than a policy change. Seeded before
+       the loop, `best` started at the seed and a member displaced it only on a STRICT improvement, so what was
+       returned is the maximum over {seed} ∪ members with ties going to the seed and then to registry order.
+       Folded afterwards, the loop's maximum is over the members alone with ties to registry order and the seed
+       takes it back on `>=`: the same set, the same maximum, ties still to the seed. The tie is the one this
+       file is emphatic must not move — the incumbent keeps the thread on it, which is §Attention's "a top-ranked
+       flow runs on at ~zero switch cost", and relaxing the loop's own comparison to `>=` would hand the thread
+       away at every opcode instead. `unrun` and `never` fold the same way and for the same reason: each was
+       set UNCONDITIONALLY from the seed before any member had been weighed, which is `>=` against an empty
+       accumulator, and each member then had to beat it strictly.
+       THE DIRECTION BIT IS CARRIED THROUGH EVEN THOUGH `worst` CANNOT BE SET HERE. The DCHECK above forbids a
+       seed with the eviction tail and that DCHECK is DEV-ONLY, so folding for one direction would make release
+       answer differently from dev on an argument pair nothing else rejects — a dev guard compiled out is not a
+       licence to assume its condition in the build where it is gone.
+       THE WEIGHT COUNT IS UNCHANGED AND SO IS WHAT IT MEANS: the seed was weighed once outside the old loop
+       which skipped it, and is weighed once here while this loop skips it, so `g_scan_weights` still counts
+       exactly the eligible members and a reader differencing it across this diff is reading one quantity. */
+    if (seed_live && !(runnable_only && flow_host_owed(seed))) {
+        double w = flow_weight(seed); g_scan_weights[why]++;
+        if (seed->visits == 0 && flow_silence_notch(seed) == 0 && (!unrun || w >= unrun_w)) {
+            unrun = seed; unrun_w = w;
+        }
+        if (seed->picks == 0 && (!never || w >= never_w)) { never = seed; never_w = w; }
+        if (!best || (worst ? w <= bw : w >= bw)) { best = (Flow *)seed; bw = w; }
     }
     /* §scheduler'S SENTENCE, ASSERTED WHERE THE CHOICE IS MADE — "CPU-AGING so a monopolizer that burns CPU
        without emitting sinks below productive+unrun flows". This is the one line in the engine that decides
@@ -5141,20 +5211,26 @@ int flow_count(void) { return g_flows_n; }
    -TWO-QUESTIONS split to make with a second entry when a caller is known live — never a conversion of this
    one.
    AND THE WALK PAYS FOR ITSELF BY CHECKING THE HANDLE. It has the linear answer in hand at no extra cost, so
-   it re-derives `reg_i` over the whole frontier at every call, and flow_pick calls it on every dispatch — so
-   in the APICLIENT_DEV builds every smoke runs, the handle is cross-checked against the walk it replaces on
-   every pick of every run, on whatever states the frontier actually reaches. It is two-sided (the field
-   against the array, both read from live storage) and it is placed AFTER the address match, so it
-   dereferences `f` only once the walk has PROVEN the pointer live — the assert is exactly as dangling-safe as
-   the function holding it.
-   NAMED RESIDUAL — flow_pick's SEED TEST IS STILL A FULL WALK, in every build, once per dispatch. Not
-   covered: making the pick's own membership question O(1). What must exist before that can be built is a
-   statement that flow_pick's `seed` is LIVE — today engine.c hands it an incumbent that this file's own
-   assert at flow_arrive_at_virtual_time only checks in dev, so the shipped pick is relying on this walk's
-   dangling-tolerance and nothing says so anywhere else. How its absence shows: `scanNextRuns` (flow.h's
-   FLOW_SCANS) counts one dispatch pick per step and each of them still costs a second walk of the frontier
-   that no weight counter prices, because `g_scan_weights` counts weight EVALUATIONS and this walk evaluates
-   none — so the frontier-weighing rows understate what asking the order costs by one whole walk per pick. */
+   it re-derives `reg_i` over the whole frontier at every call. It is two-sided (the field against the array,
+   both read from live storage) and it is placed AFTER the address match, so it dereferences `f` only once the
+   walk has PROVEN the pointer live — the assert is exactly as dangling-safe as the function holding it.
+   THE RESIDUAL THAT STOOD HERE IS RETIRED, AND ITS REMEDY CLAUSE WAS WRONG, WHICH IS THE HALF WORTH KEEPING.
+   It said flow_pick's seed test "IS STILL A FULL WALK, in every build, once per dispatch", which was true and
+   is no longer: the pick decides membership inside the scan it was already performing (flow_pick's own
+   `seed_live`), so the second walk is gone rather than made cheap. What it named as the next diff — "making
+   the pick's own membership question O(1)" — and what it named as the precondition — "a statement that
+   flow_pick's `seed` is LIVE" — were BOTH unnecessary, and both for one reason: the clause pictured this
+   function's HANDLE being read at the pick, which really would need the pointer live, instead of the answer
+   already passing through the pick's own loop. The clause was checkable against the tree the day it was
+   written and nobody checked it, because a remedy clause is read once, by somebody who has already decided to
+   do the work. ITS OTHER TWO CLAUSES HELD EXACTLY: the walk was unpriced (`g_scan_weights` counts weight
+   EVALUATIONS and this one evaluates none), so the frontier-weighing rows did understate the dispatch pick by
+   one whole walk, and a reader differencing `scanNextWeights` across that change is comparing a cost that
+   halved against a counter that did not move.
+   THE CROSS-CHECK IT PAID FOR DID NOT GO WITH IT, AND IT GOT WIDER. flow.h's `reg_i` rests on this relation
+   being re-derived over the frontier at every pick, which this function supplied for exactly ONE member per
+   pick — whichever one matched the seed. flow_pick now asserts it for EVERY member of EVERY scan, so the
+   claim flow.h makes is stronger than it was and is made where the walk actually happens. */
 int flow_is_member(const Flow *f) {
     for (int i = 0; i < g_flows_n; i++) if (g_flows[i] == f) {
         DCHECK(f->reg_i == i,
