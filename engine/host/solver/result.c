@@ -1666,7 +1666,15 @@ char *result_cold_json(void) {
                     the arithmetic and solver/engine.c asserts the width; here it is the same `(long long)`
                     cast the @WFQ census's notch rows already take, so this line has one idiom for 64-bit
                     quantities rather than two. */
-                 "\"steps\":%ld,\"stepUs\":%lld,\"stepUnitRuns\":%s,"
+                 "\"steps\":%ld,\"stepUs\":%lld,"
+                 /* THE TWO PHASES `stepUs` IS THE SUM OF, WITHOUT WHICH A SLICE-BOUND TURN CANNOT SAY WHICH
+                    HALF SPENT THE TIME — a step overrunning the slice is the quantum with no asynchronous
+                    source to expire it, and a pick-and-swap that dominates is the ordering and the delta
+                    costing more than the work they order. Different components, different diffs. Rows rather
+                    than a subtraction, with the identity asserted at engine_frontier_census; `schedUs` is
+                    EVERYTHING IN THE TURN THAT IS NOT THE STEP, which includes the previous iteration's tail
+                    because the charge telescopes (solver/engine.h). */
+                 "\"sliceUs\":%lld,\"schedUs\":%lld,\"stepUnitRuns\":%s,"
                  "\"outOfPrograms\":%ld,"
                  "\"outOfProgramsUnrun\":%ld,\"outOfProgramsFramed\":%ld,"
                  "\"outOfProgramsAtTheLadder\":%ld,"
@@ -1696,7 +1704,8 @@ char *result_cold_json(void) {
                  c.dec_seg_count, c.dec_seg_entries, c.dec_seg_bytes / 1024,
                  c.dyn_count, c.dyn_bytes / 1024,
                  (c.seg_bytes + c.dom_seg_bytes + c.pin_seg_bytes + c.dec_seg_bytes + c.dyn_bytes) / 1024,
-                 r.steps, (long long)r.step_us, runs,
+                 r.steps, (long long)r.step_us,
+                 (long long)r.slice_us, (long long)r.sched_us, runs,
                  c.out_of_programs,
                  c.out_of_programs_unrun, c.out_of_programs_framed, c.out_of_programs_at_the_ladder,
                  ladder, hist, cursors);

@@ -7523,6 +7523,28 @@ static long g_steps;
    instance the extension actually ships, `long` is four bytes, so a microsecond accumulator overflows after
    35.8 minutes of the slice's own measure, and the reading it feeds does not go absent, it INVERTS. */
 static int64_t g_step_us;
+/* …AND THE ONE SPLIT OF IT THE ROW ABOVE WAS BUILT TO MAKE AND COULD NOT. `step_us / steps` says a turn is
+   slice-bound or it is not, which is the axis solver/engine.h names — and when it says SLICE-BOUND it cannot
+   say WHICH HALF of the turn spent the time, and the two take opposite work. A turn whose STEP overshoots the
+   slice is the quantum having no asynchronous source to expire it (§scheduler: on a single-threaded wasm
+   instance nothing can raise the yield bit mid-call, so a straight-line stretch never evaluates the budget at
+   all); a turn whose PICK and SWAP dominate is the ordering and the delta costing more than the work they
+   order. Those are different components and different diffs, and one number cannot separate them.
+   TWO ROWS AND NOT A SUBTRACTION, for `g_finished`'s reason: a derived half cannot be checked, and the
+   identity `slice + sched == step` is what a later edit that adds a third phase to the turn breaks loudly
+   instead of silently absorbing into whichever half is spelled as the remainder. Asserted where all three are
+   read together.
+   `sched_us` IS EVERYTHING IN THE TURN THAT IS NOT THE STEP, and that is its honest name rather than a
+   shortfall of it: the charge TELESCOPES (solver/engine.h says so), so this arm carries the previous
+   iteration's tail — the microtask checkpoint, the finish — along with this one's pick and swap. That
+   misattribution is the one the row above already declares, and naming the arm for what it covers rather than
+   for the two things a reader expects is what stops it being read as a pick cost.
+   ONE EXTRA CLOCK READ PER TURN AND NOT PER OPCODE, which is the cost this row may have. On the host that
+   ships, `quantum_thread_us` crosses into the embedder, so the frequency is the whole of the price and it is
+   stated here rather than left to be measured: one read per dispatch, beside one that was already taken.
+   A REPORT AND NEVER A BOUND (§NO BOUNDS), for `g_step_us`' reason and with the same hazard — a per-phase time
+   total is exactly what a watchdog on a long step would be built from. */
+static int64_t g_slice_us, g_sched_us;
 /* THE WIDTH, MADE A BUILD FAILURE RATHER THAN A SENTENCE. A comment saying "this must be 64-bit" is read by
    whoever is already thinking about it; the one edit that matters is the one that narrows the type back to
    match its neighbours on this page, and the author of that edit is precisely the reader the comment misses.
@@ -9283,6 +9305,18 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
        instants: between two entries the loop can step, and a total read one call later than its denominator is
        the collapse this struct exists to prevent. */
     out->step_us = g_step_us;
+    out->slice_us = g_slice_us;
+    out->sched_us = g_sched_us;
+    /* THE IDENTITY, ASSERTED WHERE ALL THREE ARE IN ONE HAND — see g_slice_us for why the halves are rows and
+       not a subtraction. Both arms are added inside the same iteration the charge is taken in, from the same
+       two clock readings, so a difference is a THIRD phase having been added to the turn without an arm of its
+       own, and the symptom would be a per-phase reading that silently stopped covering the turn. */
+    DCHECKF(g_slice_us + g_sched_us == g_step_us,
+            "the dispatch turn's phases do not partition its cost (%lld slice + %lld scheduler against %lld "
+            "step) — both arms are written inside the iteration the charge is taken in and from the same two "
+            "clock readings, so a difference is a phase of the turn that has no arm and a reading that has "
+            "stopped being about the whole turn",
+            (long long)g_slice_us, (long long)g_sched_us, (long long)g_step_us);
     for (i = 0; i < STEP_UNIT_N; i++) out->arms[i] = g_step_unit_runs[i];
 }
 
@@ -10441,6 +10475,12 @@ static int engine_sched_slice(void) {
                with it just incremented is the swap. */
             ENGINE_NO_STRAY(ctx, "pre-step: the scheduler's pick, the context switch and the delta swap",
                             g_switches);
+            /* WHERE THE TURN'S TWO HALVES MEET — see g_slice_us. Everything the scheduler does for this turn
+               is behind this line and the flow has not executed an instruction, which is the same boundary the
+               stray check above is declared at, so the split is taken where the tree already says the pick,
+               the switch and the swap are finished. */
+            int64_t t_slice0 = quantum_thread_us();
+            g_sched_us += t_slice0 - now;
             int r = flow_step(ctx, cur);
             /* WHERE THE STEP'S ANSWER GOES ONTO THE FLOW — the ONE point every arm of flow_step converges on,
                so a new arm cannot forget to be recorded and there is no route to remember. What the arm
@@ -10583,6 +10623,11 @@ static int engine_sched_slice(void) {
             int64_t age_notch0 = flow_silence_notch(cur);
 #endif
             now = quantum_thread_us();
+            /* THE OTHER HALF, FROM THE SAME TWO READINGS THE CHARGE USES — never a third clock reading, which
+               would be a different quantity wearing this one's name. `t_slice0` was taken immediately before
+               the step and `now` immediately after it, so this arm is the step and nothing else, and the two
+               arms sum to the charge below by construction rather than by agreement. */
+            g_slice_us += now - t_slice0;
             /* WHAT THIS TURN OF THE DISPATCH LOOP COST, ACCUMULATED FROM THE SAME DELTA THE CHARGE BILLS AND
                NOT FROM A SECOND READING — see g_step_us. It is written BEFORE the charge for the ordinary
                reason a reading is taken before the thing that consumes it: `flow_age_running` is the WFQ's

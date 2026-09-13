@@ -2102,6 +2102,20 @@ function stepCostReading(a, b, q) {
     return `dispatch turns cost: no step has been taken, so there is no turn to be a cost of — a census taken ` +
            `before the scheduler's first pick and not a loop that ran for free`;
   const per = b.stepUs / b.steps;
+  /* AND WHICH HALF OF THE TURN SPENT IT, which is the question the ratio below RAISES and could not answer.
+     A turn at or over a slice is slice-bound, and that is two different findings: the STEP overrunning the
+     slice is the quantum having no asynchronous source to expire it — on the wasm instance that ships,
+     nothing can raise the yield bit mid-call, so a straight-line stretch never evaluates the budget at all —
+     while the PICK and the SWAP dominating is the ordering and the COW delta costing more than the work they
+     order. One sends a reader to solver/quantum.h's transport and the other to the frontier's shape.
+     `schedUs` IS EVERYTHING IN THE TURN THAT IS NOT THE STEP and carries the previous iteration's tail,
+     because the charge telescopes; it is rendered by that name and never as "the pick". */
+  const phase =
+    b.stepUs === 0
+      ? ` — and the turns cost nothing at all in the scheduler's measure, so there is no share to split`
+      : ` — of which ${(100 * b.sliceUs / b.stepUs).toFixed(0)}% is the STEP (${b.sliceUs}) and ` +
+        `${(100 * b.schedUs / b.stepUs).toFixed(0)}% is everything else in the turn (${b.schedUs}: the pick, ` +
+        `the two delta swaps, and the previous turn's tail, which the telescoping charge puts on this bill)`;
   const dSteps = b.steps - a.steps, dUs = b.stepUs - a.stepUs;
   const ivl = dSteps > 0
     ? `, and ${(dUs / dSteps).toFixed(0)} over the last window's ${dSteps} turn(s)`
@@ -2112,12 +2126,14 @@ function stepCostReading(a, b, q) {
      denomination the run never claimed. */
   if (q === null)
     return `dispatch turns cost ${per.toFixed(0)} unit(s) of the scheduler's own measure each over the whole ` +
-           `run (${b.stepUs} over ${b.steps} turns)${ivl} — this stage printed no @QUANTUM line, so there is ` +
-           `no slice to read that against and the number is a rate with no yardstick rather than a verdict`;
+           `run (${b.stepUs} over ${b.steps} turns)${ivl}${phase} — this stage printed no @QUANTUM line, so ` +
+           `there is no slice to read that against and the number is a rate with no yardstick rather than a ` +
+           `verdict`;
   const sliceUs = q.sliceMs * 1000;
   const frac = per / sliceUs;
   return `dispatch turns cost ${per.toFixed(0)} ${q.measure} microsecond(s) each over the whole run ` +
-         `(${b.stepUs} over ${b.steps} turns)${ivl} — that is ${frac.toFixed(2)} of the ${q.sliceMs} ms ` +
+         `(${b.stepUs} over ${b.steps} turns)${ivl}${phase}. That is ${frac.toFixed(2)} of the ` +
+         `${q.sliceMs} ms ` +
          `cooperative slice, both sides in the same measure, so this quotient is what the run-to-run spread ` +
          `cannot reach. ` +
          (frac >= 0.5

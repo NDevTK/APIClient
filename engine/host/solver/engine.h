@@ -1199,6 +1199,23 @@ typedef struct {
        result.c prints it through `(long long)`/`%lld` — the idiom the @WFQ census already uses for the notch
        rows, which are int64_t for this same reason. */
     int64_t step_us;
+    /* …AND THE SPLIT OF IT THIS ROW'S OWN BANNER ASKS FOR AND COULD NOT MAKE. `step_us / steps` against the
+     * slice separates a loop that is SLICE-BOUND from one that was given little thread time, which is the axis
+     * above. It cannot separate the two slice-bound cases, and they take opposite work: a turn whose STEP
+     * overruns the slice is the quantum with no asynchronous source to expire it — on the wasm instance that
+     * ships, nothing can raise the yield bit mid-call, so a straight-line stretch never evaluates the budget —
+     * while a turn whose PICK and SWAP dominate is the ordering and the COW delta costing more than the work
+     * they order. One is solver/quantum.h's transport and the other is the frontier's own shape.
+     * `sched_us` IS EVERYTHING IN THE TURN THAT IS NOT THE STEP, which is its name and not a shortfall: the
+     * charge TELESCOPES, so it carries the previous iteration's tail — the microtask checkpoint, the finish —
+     * with this one's pick and swap. That is the misattribution `step_us` above already declares, and the arm
+     * is named for what it covers so it cannot be read as a pick cost.
+     * TWO ROWS AND NOT A SUBTRACTION: a derived half cannot be checked, and `slice + sched == step` is what a
+     * later edit adding a third phase to the turn breaks loudly instead of absorbing into the remainder. Both
+     * are int64_t for `step_us`' reason exactly — a `long` of microseconds saturates in 35.8 minutes on wasm32
+     * and INVERTS rather than going absent. */
+    int64_t slice_us;
+    int64_t sched_us;
 } EngineStepUnitRuns;
 void engine_step_unit_runs(EngineStepUnitRuns *out);
 
