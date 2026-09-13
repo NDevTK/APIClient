@@ -1,0 +1,1 @@
+import{i as e}from"./rolldown-runtime-aKtaBQYM.js";import{n as t}from"./@mux-Ce8MRpmL.js";import{ld as n}from"./vendor-B3BotZjU.js";var r=e(t(),1),i=n(),a=({wait:e=1e3,children:t})=>{let[n,a]=(0,r.useState)(!1);return(0,r.useEffect)(()=>{let t=setTimeout(()=>a(!0),e);return()=>clearTimeout(t)},[]),n?(0,i.jsx)(i.Fragment,{children:t}):null};export{a as t};

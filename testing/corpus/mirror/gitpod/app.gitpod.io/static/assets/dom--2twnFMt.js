@@ -1,0 +1,1 @@
+function e(e){return e instanceof HTMLInputElement||e instanceof HTMLTextAreaElement||e instanceof HTMLElement&&e.isContentEditable}function t(t){return t instanceof HTMLElement&&e(t)&&t.closest(`[data-conversation-prompt]`)!==null}export{e as n,t};

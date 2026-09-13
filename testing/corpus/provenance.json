@@ -165,5 +165,962 @@
    }
   ],
   "baseUrl": "https://gitlab.com/explore"
+ },
+ {
+  "id": "helix",
+  "stack": "PASSES 2-4 AND 6 AND FAILS 1's SAME-ORIGIN CLAUSE - the ONLY corpus row carrying real gRPC-WEB WIRE CODE: protobuf-<hash>.js is @protobuf-ts/grpcweb-transport and holds application/grpc-web, application/grpc, X-Grpc-Web, grpc-status, grpc-message and grpc-timeout, which are exactly the strings this corpus had ZERO of. injective-proto-<hash>.js (3.4MB) is generated stubs for EIGHTEEN services - injective_accounts_rpc.InjectiveAccountsRPC, injective_spot_exchange_rpc.InjectiveSpotExchangeRPC, and the derivative_exchange, exchange, explorer, oracle, portfolio, campaign, megavault, rfq, rfq_gw, trading, archiver, auction, insurance, meta, referral and tc_derivatives RPCs. NO full RPC path is a literal anywhere in the bundle (a grep for /<pkg>.<Service>/<Method> over injective-proto returns 0): the transport composes it at call time as service.typeName + \"/\" + method.name, so a static scan names no endpoint and only running the code names any - and the same file refuses client-streaming and duplex as \"not supported by grpc-web\". 2 and 6 proven anonymously with SAFE GETs and a negative control against k8s.global.mainnet.explorer.grpc-web.injective.network: the real /injective_explorer_rpc.InjectiveExplorerRPC/GetTxByTxHash returns 405 (routed, POST-only) while the FABRICATED /zzz.NoSuchRPC/Nope and / both return 404 application/json 111B. FAILS 1's same-origin clause and records it rather than claiming a pass: helixapp.com/api answers 301 and every RPC host is a cross-origin *.grpc-web.injective.network, so this row is an @H subject whose protobuf backend is reached under a real SOP/CORS path rather than same-origin. STACK: Nuxt/Vite (<script type=module src=/_nuxt/<hash>.js> + 10 modulepreload chunks including injective-proto, protobuf, injective-sdk, injective-utils and injective-wallet, plus a non-module /chart/charting_library/charting_library.js, 8.5MiB total)",
+  "requestedUrl": "https://helixapp.com/",
+  "finalUrl": "https://helixapp.com/",
+  "status": 200,
+  "contentType": "text/html",
+  "csp": "frame-ancestors 'self'; upgrade-insecure-requests;",
+  "bytes": 10476,
+  "sha256": "538f1aa68f8ddf23a412dfd5886e6bfeb7c6ae2f1cda5e688a0e2047250f4a28",
+  "fetchedAt": "2026-09-13T05:17:03.883Z",
+  "resources": [
+   {
+    "url": "https://helixapp.com/chart/charting_library/charting_library.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 22501,
+    "sha256": "2723d55ac33ff69a0683f6c92f657e0b632b47b2615fbbb470fb46f1a4002cba",
+    "fetchedAt": "2026-09-13T05:17:04.645Z",
+    "path": "helixapp.com/chart/charting_library/charting_library.js"
+   },
+   {
+    "url": "https://helixapp.com/_nuxt/DoSqoV9r.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 3291355,
+    "sha256": "cf89aef656c95e0598b16ec9d45faa07a7aa7d7da30e785423797a0dd50673e8",
+    "fetchedAt": "2026-09-13T05:17:05.158Z",
+    "path": "helixapp.com/_nuxt/DoSqoV9r.js"
+   },
+   {
+    "url": "https://helixapp.com/Inter-Regular.woff2",
+    "status": 200,
+    "contentType": "font/woff2",
+    "bytes": 37924,
+    "sha256": "450f3ba4e47ee174bd9692b396f264b907d37d2528f53911760f3d0edb785f7e",
+    "fetchedAt": "2026-09-13T05:17:05.521Z",
+    "path": "helixapp.com/Inter-Regular.woff2"
+   },
+   {
+    "url": "https://helixapp.com/_nuxt/injective-sdk-XS13liJR.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 241523,
+    "sha256": "d526bc75c13f3c293b2f7f0d0ccbf228ffdb55f783880c0c92d8472d64681b7c",
+    "fetchedAt": "2026-09-13T05:17:06.310Z",
+    "path": "helixapp.com/_nuxt/injective-sdk-XS13liJR.js"
+   },
+   {
+    "url": "https://helixapp.com/_nuxt/injective-proto-D1Ba60up.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 3375391,
+    "sha256": "41fb1ed4dd69d38cc2a93316fc1e1d2ad85bff07369e1ba405e260fe87cba6c5",
+    "fetchedAt": "2026-09-13T05:17:06.724Z",
+    "path": "helixapp.com/_nuxt/injective-proto-D1Ba60up.js"
+   },
+   {
+    "url": "https://helixapp.com/_nuxt/abitype-CGDx3i3R.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 292625,
+    "sha256": "11d5bb9e448c3fcfd6e57e5eb1799b051c203d28693ed6a192fd90566207c132",
+    "fetchedAt": "2026-09-13T05:17:07.180Z",
+    "path": "helixapp.com/_nuxt/abitype-CGDx3i3R.js"
+   },
+   {
+    "url": "https://helixapp.com/_nuxt/noble-crypto-B1aClpqn.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 407534,
+    "sha256": "98b970563348ae414b827aa4c7175988e267ba9e1038dcfc508aa1f1e4fc69b9",
+    "fetchedAt": "2026-09-13T05:17:07.550Z",
+    "path": "helixapp.com/_nuxt/noble-crypto-B1aClpqn.js"
+   },
+   {
+    "url": "https://helixapp.com/_nuxt/eventemitter-CEkT1BrR.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 5777,
+    "sha256": "09989ed37c8247d76619fafa2917d1a56531a3f310622600031784e9aea2133b",
+    "fetchedAt": "2026-09-13T05:17:07.955Z",
+    "path": "helixapp.com/_nuxt/eventemitter-CEkT1BrR.js"
+   },
+   {
+    "url": "https://helixapp.com/_nuxt/injective-utils-DgU0gRni.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 207882,
+    "sha256": "232d44c9c3350dcb359527a3c077b5b487f81e9c06c481f63f272015aa4e6a8f",
+    "fetchedAt": "2026-09-13T05:17:08.293Z",
+    "path": "helixapp.com/_nuxt/injective-utils-DgU0gRni.js"
+   },
+   {
+    "url": "https://helixapp.com/_nuxt/protobuf-DIdtLLbt.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 690399,
+    "sha256": "b15af72ad19c49e49f78cf9afe9d7c5d8f18cdc0e8453daa4c920588c7d59e8d",
+    "fetchedAt": "2026-09-13T05:17:08.783Z",
+    "path": "helixapp.com/_nuxt/protobuf-DIdtLLbt.js"
+   },
+   {
+    "url": "https://helixapp.com/_nuxt/bn-elliptic-eCUcghfX.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 42713,
+    "sha256": "a9108100c9f3d7989ffeccbb70738d557dda28b0ceb66fa85185ca40943000cc",
+    "fetchedAt": "2026-09-13T05:17:09.145Z",
+    "path": "helixapp.com/_nuxt/bn-elliptic-eCUcghfX.js"
+   },
+   {
+    "url": "https://helixapp.com/_nuxt/injective-wallet-HuW0lXBC.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 73915,
+    "sha256": "281d80412de245cc9d80aa3382dff6ca97d75d0be264d96972b5fdfc9e7c3f6f",
+    "fetchedAt": "2026-09-13T05:17:09.715Z",
+    "path": "helixapp.com/_nuxt/injective-wallet-HuW0lXBC.js"
+   },
+   {
+    "url": "https://helixapp.com/_nuxt/buffer-polyfill-D_Xc0ElF.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 27624,
+    "sha256": "4b4ae99b610e3d66c76b9fa7b0baf67d4aa12bc6d56011e778d10897f90ee7f5",
+    "fetchedAt": "2026-09-13T05:17:10.005Z",
+    "path": "helixapp.com/_nuxt/buffer-polyfill-D_Xc0ElF.js"
+   }
+  ],
+  "baseUrl": "https://helixapp.com/"
+ },
+ {
+  "id": "gitpod",
+  "stack": "PASSES 1-4 AND 6, AND IS THE FLAGSHIP FOR 6 - the logged-out document names ELEVEN generated protobuf chunks by filename (base_snapshot_pb, group_pb, insights_pb, integration_pb, prebuild_pb, project_pb, runner_manager_pb, service_account_pb, team_pb, webhook_pb, workflow_pb) and NOT ONE service, method, message or field name is greppable in any of them: each holds a single base64 FileDescriptorProto that becomes names only after the page RUNS protobuf-es's descriptor decoder out of vendor-<hash>.js. Decoded, group_pb is gitpod/v1/group.proto package gitpod.v1 carrying SERVICE gitpod.v1.GroupService (14 methods - CreateGroup, GetGroup, ListGroups, UpdateGroup, DeleteGroup, CreateMembership, DeleteMembership, GetMembership and six more) and runner_manager_pb carries RunnerService (16), RunnerManagerService (6) and GatewayService (1). TRANSPORT IS CONNECT, NOT gRPC-WEB, and the row says so because the two are different wire formats: api-<hash>.js builds the client with baseUrl origin+\"/api\", useBinaryFormat:!1 and an Authorization Bearer interceptor, and vendor carries application/connect and application/proto while carrying NO application/grpc-web. 1, 2 and 6 proven anonymously with SAFE GETs plus a negative control: /api/gitpod.v1.GroupService/ListGroups?connect=v1&encoding=json&message=%7B%7D returns 401 application/json 89B {\"code\":\"unauthenticated\",\"message\":\"missing authorization header or cookie credentials\"}, identically for RunnerService/ListRunners and UserService/GetAuthenticatedUser, while the FABRICATED /api/gitpod.v1.NoSuchService/Nope returns 404 text/plain \"404 page not found\" and a real path under a plain GET returns 415 - so the router separates real RPC paths from invented ones to an anonymous client, which is 2 proven on an endpoint set no grep can produce. STACK: Rolldown/Vite (<script type=module crossorigin src=/static/assets/main-<hash>.js> + /static/assets/rolldown-runtime-<hash>.js, 90 preloaded chunks, 16MiB total, text/javascript)",
+  "requestedUrl": "https://app.gitpod.io/",
+  "finalUrl": "https://app.gitpod.io/",
+  "status": 200,
+  "contentType": "text/html",
+  "csp": "frame-ancestors 'none';",
+  "bytes": 17268,
+  "sha256": "a89a21c56d346089ae824394f8930f37072e53a9ba160317352af2ebef4382f4",
+  "fetchedAt": "2026-09-13T05:17:24.989Z",
+  "resources": [
+   {
+    "url": "https://app.gitpod.io/static/assets/main-CWnMhEZ-.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 1422198,
+    "sha256": "88975cd1cdc7ceb1556066f22bd492b69ac52ebfeb6dcbf636e2b27950d77cd7",
+    "fetchedAt": "2026-09-13T05:17:25.515Z",
+    "path": "app.gitpod.io/static/assets/main-CWnMhEZ-.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/rolldown-runtime-aKtaBQYM.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 1084,
+    "sha256": "cb2fb01f2064eb36487466778d2ffc4c97ad86af89be1635209de18f0b5b2236",
+    "fetchedAt": "2026-09-13T05:17:26.103Z",
+    "path": "app.gitpod.io/static/assets/rolldown-runtime-aKtaBQYM.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/@mux-Ce8MRpmL.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 867913,
+    "sha256": "669679450fa719d8281e37e20007ed6326de33ae0e41cca041a59c6a1767beea",
+    "fetchedAt": "2026-09-13T05:17:26.352Z",
+    "path": "app.gitpod.io/static/assets/@mux-Ce8MRpmL.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/vendor-B3BotZjU.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 13942638,
+    "sha256": "a2a7c7017a09411b1c0bfb97a1afe51fa1fe287b0766941144979e1ca145a4cb",
+    "fetchedAt": "2026-09-13T05:17:27.034Z",
+    "path": "app.gitpod.io/static/assets/vendor-B3BotZjU.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/use-desktop-BI-06JjZ.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 268,
+    "sha256": "082fe8b14e76f0820ebdeeeaba9c408ee723ca8a3614cfe6d44819af0297aaad",
+    "fetchedAt": "2026-09-13T05:17:27.359Z",
+    "path": "app.gitpod.io/static/assets/use-desktop-BI-06JjZ.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/user-preferences-queries-Db6NTpGh.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 440740,
+    "sha256": "53890f5926c0e82ac6b09c364f9063c61207258a58d5922ba31f75b080979a1a",
+    "fetchedAt": "2026-09-13T05:17:27.806Z",
+    "path": "app.gitpod.io/static/assets/user-preferences-queries-Db6NTpGh.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/base_snapshot_pb-Brv8C3pO.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 6146,
+    "sha256": "d72d408efff88e0f0bda2f45ecf2d72e1138e05d890efdf9c208ab721aff2110",
+    "fetchedAt": "2026-09-13T05:17:28.051Z",
+    "path": "app.gitpod.io/static/assets/base_snapshot_pb-Brv8C3pO.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/runner_manager_pb-BtVECYox.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 25756,
+    "sha256": "f8b7f8520664a917f6607bec74060fd437619cf68a58fb1f8d7e989d5b1b34b3",
+    "fetchedAt": "2026-09-13T05:17:28.298Z",
+    "path": "app.gitpod.io/static/assets/runner_manager_pb-BtVECYox.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/group_pb-Crv6HQMx.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 15863,
+    "sha256": "76e281ffdee7be3753dd0d6a6a7d51a415d4b38c21ec5ff0778208747f40e60e",
+    "fetchedAt": "2026-09-13T05:17:28.494Z",
+    "path": "app.gitpod.io/static/assets/group_pb-Crv6HQMx.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/insights_pb-DbU9hAe5.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 5542,
+    "sha256": "e60c139b66b3af25b887cbeaff16bdcf60be986a962f8419d373b776f371fb50",
+    "fetchedAt": "2026-09-13T05:17:28.772Z",
+    "path": "app.gitpod.io/static/assets/insights_pb-DbU9hAe5.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/integration_pb-D_O3z6vO.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 12939,
+    "sha256": "f2a7378de9bb052d25bf54e72de5b41c08b22481f8900a4877c047ea775a6bb4",
+    "fetchedAt": "2026-09-13T05:17:29.041Z",
+    "path": "app.gitpod.io/static/assets/integration_pb-D_O3z6vO.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/prebuild_pb-CAXZri3Q.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 10588,
+    "sha256": "550587fd5b6c6fe68df93a7a5209981d7ae6b1421bcc0a49b8b88d6a79bc5ebc",
+    "fetchedAt": "2026-09-13T05:17:29.335Z",
+    "path": "app.gitpod.io/static/assets/prebuild_pb-CAXZri3Q.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/project_pb-DgqHruE4.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 13452,
+    "sha256": "78c8b88e0ad3c0e43c8a14b4d919fcfcb8df52d877c78523cf2360190130d557",
+    "fetchedAt": "2026-09-13T05:17:29.617Z",
+    "path": "app.gitpod.io/static/assets/project_pb-DgqHruE4.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/service_account_pb-B2nJW_5A.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 5999,
+    "sha256": "71cf32430a4423814da946b353e5df6a348f6a2788f24accfe7608d3d4ea2c09",
+    "fetchedAt": "2026-09-13T05:17:29.931Z",
+    "path": "app.gitpod.io/static/assets/service_account_pb-B2nJW_5A.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/team_pb-B7yxD2cz.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 3811,
+    "sha256": "325dd6d13cb7402c335b2f39b9fb08dd3a8b326a2b604c08a062ed0e6decd0ca",
+    "fetchedAt": "2026-09-13T05:17:30.230Z",
+    "path": "app.gitpod.io/static/assets/team_pb-B7yxD2cz.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/workflow_pb-DPnRtwBd.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 29074,
+    "sha256": "c9628ea3e2b7f585587c60d5c1f585dc5ca68a18ab9bc79379286832a44a1cd7",
+    "fetchedAt": "2026-09-13T05:17:30.497Z",
+    "path": "app.gitpod.io/static/assets/workflow_pb-DPnRtwBd.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/webhook_pb-CjWuXyV-.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 6194,
+    "sha256": "494d264ec3523b9361641aa7d2c7a0b34ee6eea6ad640fb3429f275da2fc02ea",
+    "fetchedAt": "2026-09-13T05:17:30.758Z",
+    "path": "app.gitpod.io/static/assets/webhook_pb-CjWuXyV-.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/api-ggTzVR0n.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 105535,
+    "sha256": "f04856daf14e724e5361856df7dfb1c10f966d5736464ba15151465c3c46710d",
+    "fetchedAt": "2026-09-13T05:17:30.969Z",
+    "path": "app.gitpod.io/static/assets/api-ggTzVR0n.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/timestamp-BcDKTTy7.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 83,
+    "sha256": "5226e3bdd99f805a4d5f73a91f1b450d05ec7500120dfbf2862b8ca7457780fd",
+    "fetchedAt": "2026-09-13T05:17:31.578Z",
+    "path": "app.gitpod.io/static/assets/timestamp-BcDKTTy7.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/environment-queries-zoure4Rj.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 38381,
+    "sha256": "792004ecf5bf5614cba44ec369357c91590aaca4aa67457ff45f9f4c5fc9ec01",
+    "fetchedAt": "2026-09-13T05:17:31.983Z",
+    "path": "app.gitpod.io/static/assets/environment-queries-zoure4Rj.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/IconGitHub-Dq1FLLOw.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 5613,
+    "sha256": "f4fddee7d38e00fb634f2dfefbc8fcf1c6d46796e3e706101a853486368dfbac",
+    "fetchedAt": "2026-09-13T05:17:32.549Z",
+    "path": "app.gitpod.io/static/assets/IconGitHub-Dq1FLLOw.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/cn-C-UZ2Rd-.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 97,
+    "sha256": "c4002f92dcb488a411b66ee1a86db271c913c4ce4d585ef3f37cbb69b1072915",
+    "fetchedAt": "2026-09-13T05:17:33.164Z",
+    "path": "app.gitpod.io/static/assets/cn-C-UZ2Rd-.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/SourceControlProviderIcon-CTcnZK8i.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 12575,
+    "sha256": "7d673c80ba95c8262544a2b7e9b3b5167a861b101bac4cb04ae4f3ece05b4d76",
+    "fetchedAt": "2026-09-13T05:17:33.738Z",
+    "path": "app.gitpod.io/static/assets/SourceControlProviderIcon-CTcnZK8i.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/button-B2ywA83B.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 7347,
+    "sha256": "0f6afa6bf58980003cf9458f809e2b65c78b81fdf85bc447de56d13c21c19f0b",
+    "fetchedAt": "2026-09-13T05:17:34.338Z",
+    "path": "app.gitpod.io/static/assets/button-B2ywA83B.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/IconWarning-D_CCuSCi.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 2438,
+    "sha256": "698361df7a5a2b429750c78d22a1e29ce113bb81a090f168473953aa5dec6cca",
+    "fetchedAt": "2026-09-13T05:17:34.671Z",
+    "path": "app.gitpod.io/static/assets/IconWarning-D_CCuSCi.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/card-bkRlzRkJ.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 563,
+    "sha256": "fabfc7aeaceb33969582cf4ff5232b4c0dfcecb468ecdb8a743deb1474328363",
+    "fetchedAt": "2026-09-13T05:17:34.918Z",
+    "path": "app.gitpod.io/static/assets/card-bkRlzRkJ.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/delayed-CCw6lpwn.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 357,
+    "sha256": "8e792f4be06bd6f31984758e145e3236dddc37beb1ba6abc517633a647a6be32",
+    "fetchedAt": "2026-09-13T05:17:35.163Z",
+    "path": "app.gitpod.io/static/assets/delayed-CCw6lpwn.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/radix-body-pointer-events-Dvg_rGSi.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 880,
+    "sha256": "f0567b384462eb94e786e664530f5c0c5dd0df1cfa141d652454b4d9e6977745",
+    "fetchedAt": "2026-09-13T05:17:35.433Z",
+    "path": "app.gitpod.io/static/assets/radix-body-pointer-events-Dvg_rGSi.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/dialog-CwUsDc2O.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 3134,
+    "sha256": "902d2b4d3f37c5b30dda5461c6093221135db8827f4e2938fcef74f97c709531",
+    "fetchedAt": "2026-09-13T05:17:35.703Z",
+    "path": "app.gitpod.io/static/assets/dialog-CwUsDc2O.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/IconExternalLink-wGuQ1C7A.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 2181,
+    "sha256": "988d6827a1d8953a2eaba79cc2d7d9df4b208cdc3b6c6ca06da65c4e4b4b3399",
+    "fetchedAt": "2026-09-13T05:17:36.278Z",
+    "path": "app.gitpod.io/static/assets/IconExternalLink-wGuQ1C7A.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/text-CtEA04WK.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 424,
+    "sha256": "bc32786527e870b9ea14d5a88efeeabfe43b202a3311a36bb48193921b476b52",
+    "fetchedAt": "2026-09-13T05:17:36.556Z",
+    "path": "app.gitpod.io/static/assets/text-CtEA04WK.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/error-codes.generated-UE7AABX1.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 12424,
+    "sha256": "07aed39f466b390d7feea30cb996f2b73225e64ae0b8c4f79d4e0c71e4908545",
+    "fetchedAt": "2026-09-13T05:17:37.192Z",
+    "path": "app.gitpod.io/static/assets/error-codes.generated-UE7AABX1.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/error-message-CZfipfTu.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 7448,
+    "sha256": "bbfe3cc8333ce59c2e3e9436acd208ebcedbb124d503e95495dda592d16c3ab5",
+    "fetchedAt": "2026-09-13T05:17:37.483Z",
+    "path": "app.gitpod.io/static/assets/error-message-CZfipfTu.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/headings-oJ7ZN3HN.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 930,
+    "sha256": "da753b4b3c7f8af7694d23dcd49d2652e79e5c39df66d0b08e1804a48ddfd928",
+    "fetchedAt": "2026-09-13T05:17:38.173Z",
+    "path": "app.gitpod.io/static/assets/headings-oJ7ZN3HN.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/use-temporary-value-DggpKO07.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 376,
+    "sha256": "8179dce87ad6c2e7ef28d464aa910aea7e2ca3744885f1f007be827058362e02",
+    "fetchedAt": "2026-09-13T05:17:38.413Z",
+    "path": "app.gitpod.io/static/assets/use-temporary-value-DggpKO07.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/haptic-C0fLUIMR.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 299,
+    "sha256": "fa92bcc76ba66bbbc93f60ca34dcae6385c6a22a371d3b5e4a2d9f19937602bf",
+    "fetchedAt": "2026-09-13T05:17:38.992Z",
+    "path": "app.gitpod.io/static/assets/haptic-C0fLUIMR.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/input-CSk71_M7.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 3685,
+    "sha256": "d401c9903e27a5560f835662c05f09206fe999ebe000fa4e173b7ff56b0ba9d2",
+    "fetchedAt": "2026-09-13T05:17:39.248Z",
+    "path": "app.gitpod.io/static/assets/input-CSk71_M7.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/label-B3WWNNH3.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 462,
+    "sha256": "8d57a77fe77ddfc8b6e37dd61268912ef6ce69ea9ba8c873797664573f29c865",
+    "fetchedAt": "2026-09-13T05:17:39.519Z",
+    "path": "app.gitpod.io/static/assets/label-B3WWNNH3.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/use-theme-Dv9wnR6t.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 325,
+    "sha256": "6f3bb10b8aee32025b891b2400110b05284cf23d4ca6ebb248ca732c100b45a8",
+    "fetchedAt": "2026-09-13T05:17:39.765Z",
+    "path": "app.gitpod.io/static/assets/use-theme-Dv9wnR6t.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/toast-ivThglhY.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 2693,
+    "sha256": "e91e66e533bdbc21b9c14cff20fc5c58552dfb88874dc83e5340918e52df6c19",
+    "fetchedAt": "2026-09-13T05:17:40.405Z",
+    "path": "app.gitpod.io/static/assets/toast-ivThglhY.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/use-mount-effect-BBMZ1mxS.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 156,
+    "sha256": "5e219c79acf1550a81b6109f71417c2a7ef6c573a10f5689d12c95b64ab19679",
+    "fetchedAt": "2026-09-13T05:17:40.702Z",
+    "path": "app.gitpod.io/static/assets/use-mount-effect-BBMZ1mxS.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/url-validation-B4ZnvVnt.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 1151,
+    "sha256": "90ed5c04cacfb4d0e37ecba3ca121e0f18a84ca5f8516688a2f9479a17c29acc",
+    "fetchedAt": "2026-09-13T05:17:41.357Z",
+    "path": "app.gitpod.io/static/assets/url-validation-B4ZnvVnt.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/use-context-url-CFo6YQ9F.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 1208,
+    "sha256": "7cb5e80304233919ccf078cc376047039bf928d2db5925cc20630b7e5bf039a5",
+    "fetchedAt": "2026-09-13T05:17:41.603Z",
+    "path": "app.gitpod.io/static/assets/use-context-url-CFo6YQ9F.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/runner-configuration-queries-CLDnhWqi.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 13448,
+    "sha256": "0923bc41bce8cdb0961f9768740a977adca9a37c7388c81cb6e583ea3251169b",
+    "fetchedAt": "2026-09-13T05:17:41.862Z",
+    "path": "app.gitpod.io/static/assets/runner-configuration-queries-CLDnhWqi.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/runner-queries-BHMbpOkh.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 15373,
+    "sha256": "fc7c2f1117e3cb72e60b39863d346e0528d5221f00b99378badce2264d6ccb52",
+    "fetchedAt": "2026-09-13T05:17:42.156Z",
+    "path": "app.gitpod.io/static/assets/runner-queries-BHMbpOkh.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/SCMAuthentication-D_zpefdg.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 16864,
+    "sha256": "c7acbd3a00dca0a43f22400868269690cbd5c1be8ed81253076177238a266dfe",
+    "fetchedAt": "2026-09-13T05:17:42.435Z",
+    "path": "app.gitpod.io/static/assets/SCMAuthentication-D_zpefdg.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/IconChevronRightSmall-BW_Nbg8T.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 1140,
+    "sha256": "1def468ce8bce0d23471525c9c097c2382971b3db9ff4df32142935d402db948",
+    "fetchedAt": "2026-09-13T05:17:42.692Z",
+    "path": "app.gitpod.io/static/assets/IconChevronRightSmall-BW_Nbg8T.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/IconDot-fDReC_7n.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 1011,
+    "sha256": "598295ce4f76e7681111bb50d379a4ad0efee8a53661024fc891243effaa5949",
+    "fetchedAt": "2026-09-13T05:17:42.973Z",
+    "path": "app.gitpod.io/static/assets/IconDot-fDReC_7n.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/dropdown-menu-BPrWQC8y.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 11105,
+    "sha256": "43e7ff8a9db64fd4b7eaf531e85bda046a15a8adfc78691c351e069f921ad673",
+    "fetchedAt": "2026-09-13T05:17:43.230Z",
+    "path": "app.gitpod.io/static/assets/dropdown-menu-BPrWQC8y.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/IconInfo-rtqcsHQf.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 3054,
+    "sha256": "b1468f4ebee0c6a2c5041a549dd82a702a5d824c2b76fe07f87c2dcafb5c0fa8",
+    "fetchedAt": "2026-09-13T05:17:43.490Z",
+    "path": "app.gitpod.io/static/assets/IconInfo-rtqcsHQf.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/IconRefresh-6ASokAbq.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 3013,
+    "sha256": "d4daf9684154978cbc68e73ef3780b3f21a392bc2b5cc21c56a28bb70a29655e",
+    "fetchedAt": "2026-09-13T05:17:43.738Z",
+    "path": "app.gitpod.io/static/assets/IconRefresh-6ASokAbq.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/utils-BrENuFUf.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 476,
+    "sha256": "65533fbf8f067c08075defa497572e0981cf45e242345e12e3da0359b43d4f8e",
+    "fetchedAt": "2026-09-13T05:17:43.982Z",
+    "path": "app.gitpod.io/static/assets/utils-BrENuFUf.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/agent-ids-CMbPWMtT.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 427,
+    "sha256": "ed1615ba3f391fa587754a8dd0403e51649d8e38e2b2b69252690cb61fbe9187",
+    "fetchedAt": "2026-09-13T05:17:44.281Z",
+    "path": "app.gitpod.io/static/assets/agent-ids-CMbPWMtT.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/agent-queries-8SEg-qpy.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 19187,
+    "sha256": "9cc201913e13fba902f8e927fe85b069b9fa4105f29bef8d05373f37d851cc8b",
+    "fetchedAt": "2026-09-13T05:17:44.572Z",
+    "path": "app.gitpod.io/static/assets/agent-queries-8SEg-qpy.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/ui-state-V9G1wohN.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 1299,
+    "sha256": "d884ab26aa5b6814ae408d4d7f3cd9cf2fcdd07b13c4af77fedf26a8ffda19d5",
+    "fetchedAt": "2026-09-13T05:17:44.847Z",
+    "path": "app.gitpod.io/static/assets/ui-state-V9G1wohN.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/agent-mode-jYL6Rpd8.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 3290,
+    "sha256": "9184d160f5809c75286f5a752babe0cd6dd8f0117a813d36c6ddc15d5689cfcc",
+    "fetchedAt": "2026-09-13T05:17:45.093Z",
+    "path": "app.gitpod.io/static/assets/agent-mode-jYL6Rpd8.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/codex-settings-BR7048pt.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 3166,
+    "sha256": "3eefdf23ef5917d1f91047a586affda1a1b45105adde7825f85ffd3cacc1748b",
+    "fetchedAt": "2026-09-13T05:17:45.631Z",
+    "path": "app.gitpod.io/static/assets/codex-settings-BR7048pt.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/use-environment-class-entries-BDQ6eQlB.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 18554,
+    "sha256": "e4aee0f3004b1217bb33482cc7f48e925944315abb979a295ed3c90e227abce5",
+    "fetchedAt": "2026-09-13T05:17:46.447Z",
+    "path": "app.gitpod.io/static/assets/use-environment-class-entries-BDQ6eQlB.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/user-settings-constants-CpYazck0.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 828,
+    "sha256": "096ad276178650a029b2cdf044ab8b455cfbb0d1e2b4ea937a783d9da6ddac80",
+    "fetchedAt": "2026-09-13T05:17:47.100Z",
+    "path": "app.gitpod.io/static/assets/user-settings-constants-CpYazck0.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/banner-Dg6_qQJZ.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 3464,
+    "sha256": "bb19efc57af8e8ed3686ac36d420e3c1ac9f291dba53a77a0ada1dad881de43b",
+    "fetchedAt": "2026-09-13T05:17:47.417Z",
+    "path": "app.gitpod.io/static/assets/banner-Dg6_qQJZ.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/checkbox-DdKtWyUS.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 1367,
+    "sha256": "a7d49a615bf065492bbfb722c5286191cd7c795326c6e593c9f0ee08c5dae75f",
+    "fetchedAt": "2026-09-13T05:17:47.671Z",
+    "path": "app.gitpod.io/static/assets/checkbox-DdKtWyUS.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/form-control-nej9hQSZ.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 842,
+    "sha256": "5ecc0ecaed6908f4e2420acbeb724f204262208175882a29b582d0803f93b9ff",
+    "fetchedAt": "2026-09-13T05:17:48.010Z",
+    "path": "app.gitpod.io/static/assets/form-control-nej9hQSZ.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/checkbox-input-field-CFt-c6Py.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 991,
+    "sha256": "57afab03d397aee26bc04c0457caf2a3f21065738b35591996bb5bcef88b01f1",
+    "fetchedAt": "2026-09-13T05:17:48.276Z",
+    "path": "app.gitpod.io/static/assets/checkbox-input-field-CFt-c6Py.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/collapsible-BjU8NKYQ.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 481,
+    "sha256": "06b39f1cc4da840f28b57a1ba4ff1f5981f88eae9622d3038f205d3e54b9fb0d",
+    "fetchedAt": "2026-09-13T05:17:48.592Z",
+    "path": "app.gitpod.io/static/assets/collapsible-BjU8NKYQ.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/combobox-CL7GSVcy.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 15201,
+    "sha256": "b1f2fc4fe058b8973d5c1e29b000c297bde38b1031eff27613e35f44d9e83d3e",
+    "fetchedAt": "2026-09-13T05:17:48.915Z",
+    "path": "app.gitpod.io/static/assets/combobox-CL7GSVcy.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/external-link-BPFptIxj.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 389,
+    "sha256": "506e8128d5d402f02dc3507a64f371eacf61ee3f12d6f6dd0edb876ef4659dd9",
+    "fetchedAt": "2026-09-13T05:17:49.161Z",
+    "path": "app.gitpod.io/static/assets/external-link-BPFptIxj.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/textarea-BKIpqJBX.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 5459,
+    "sha256": "0255d001984e35f0e771e9dcecf2dfd7b213d4b4b645d7cd6cbaa874dd2e8a0d",
+    "fetchedAt": "2026-09-13T05:17:49.714Z",
+    "path": "app.gitpod.io/static/assets/textarea-BKIpqJBX.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/keyboard-key-DxQf8D65.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 995,
+    "sha256": "5dd315de1e829e215aeacf5363c1e53ca132b0c0498faef5954d7bfda600af9c",
+    "fetchedAt": "2026-09-13T05:17:50.298Z",
+    "path": "app.gitpod.io/static/assets/keyboard-key-DxQf8D65.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/keyboard-combo-C5BG5wYl.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 773,
+    "sha256": "bae7dd3f2d004a105e87f1ec5acfea8a7f6cc4a0aeb72555cd62fc0ed8b6ff4b",
+    "fetchedAt": "2026-09-13T05:17:50.616Z",
+    "path": "app.gitpod.io/static/assets/keyboard-combo-C5BG5wYl.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/notification-hJFgruqG.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 650,
+    "sha256": "4cf620ac7f373a70fd83e31f8c6af0847b9edfc1ae4f4f18962ab7e9972e9490",
+    "fetchedAt": "2026-09-13T05:17:51.369Z",
+    "path": "app.gitpod.io/static/assets/notification-hJFgruqG.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/tooltip-BxatTfEj.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 921,
+    "sha256": "aa06cb9626f2b8c3814e4e755c19d461b36b685c18528058ca9e58347a23c9fe",
+    "fetchedAt": "2026-09-13T05:17:51.607Z",
+    "path": "app.gitpod.io/static/assets/tooltip-BxatTfEj.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/Pill-B1QV2Cf6.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 1398,
+    "sha256": "9fa667dddd5314eee04d27c8a2f1cc3fad68abc5745bca2ea28912bb2bc9367d",
+    "fetchedAt": "2026-09-13T05:17:52.058Z",
+    "path": "app.gitpod.io/static/assets/Pill-B1QV2Cf6.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/pill-EK18tXsM.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 27,
+    "sha256": "9b0f03f76616b9bea496bae6bf859f3e384d56aa8c83e091e98b77ad91d7c2f8",
+    "fetchedAt": "2026-09-13T05:17:52.279Z",
+    "path": "app.gitpod.io/static/assets/pill-EK18tXsM.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/popover-Cf4j28XX.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 1157,
+    "sha256": "377e0548198f3647c55a1e89d23a39189f500a80e0ae82b7d7d5f3603196942e",
+    "fetchedAt": "2026-09-13T05:17:52.532Z",
+    "path": "app.gitpod.io/static/assets/popover-Cf4j28XX.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/scroll-area-5UfSyWmx.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 3925,
+    "sha256": "69ba1fc21bf611ced91227575fbb44305307f308b5e46d5d014b185ff64860fe",
+    "fetchedAt": "2026-09-13T05:17:52.779Z",
+    "path": "app.gitpod.io/static/assets/scroll-area-5UfSyWmx.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/skeleton-CHjhlGN8.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 913,
+    "sha256": "41e1ac9e9855731081707e1b0883310a90f0e195c4cb6359cb53ae17db0e3934",
+    "fetchedAt": "2026-09-13T05:17:53.003Z",
+    "path": "app.gitpod.io/static/assets/skeleton-CHjhlGN8.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/status-dot-CrI0v5m1.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 10812,
+    "sha256": "41a42c37438c3645191c5d1bfde6ad088ad8940fe6fcf35dd9456fbbbe4059f0",
+    "fetchedAt": "2026-09-13T05:17:53.278Z",
+    "path": "app.gitpod.io/static/assets/status-dot-CrI0v5m1.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/time-picker-C3_U-tvf.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 4380,
+    "sha256": "d1fc9744b5e7d0746e81dede5101a3d6b031997815c90de0aa2383931a6b0285",
+    "fetchedAt": "2026-09-13T05:17:53.543Z",
+    "path": "app.gitpod.io/static/assets/time-picker-C3_U-tvf.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/strings-UJ4cns8E.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 120,
+    "sha256": "942b25b2518499e99768ed9e99958bf2ec89601b1f90fc52a42c6d2ee7f10fff",
+    "fetchedAt": "2026-09-13T05:17:53.822Z",
+    "path": "app.gitpod.io/static/assets/strings-UJ4cns8E.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/time-DGNu_qf2.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 2892,
+    "sha256": "9fb41a961b20c338a4689169fe6ccaad80da79620eda6f3f5592c21395901cb6",
+    "fetchedAt": "2026-09-13T05:17:54.036Z",
+    "path": "app.gitpod.io/static/assets/time-DGNu_qf2.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/use-cursor-pagination-IbOGiiYt.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 813,
+    "sha256": "7d30ed66fc268e3aab2a563534fafdec211b9f3de0574cb274eb9d4cd4cabddc",
+    "fetchedAt": "2026-09-13T05:17:54.229Z",
+    "path": "app.gitpod.io/static/assets/use-cursor-pagination-IbOGiiYt.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/use-membership-0Vj00UX8.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 567,
+    "sha256": "cdf02ee85f39cc305d073411718d5b63d79608564903e4e78c8f07961de94e92",
+    "fetchedAt": "2026-09-13T05:17:54.533Z",
+    "path": "app.gitpod.io/static/assets/use-membership-0Vj00UX8.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/details-url-Btk35eDw.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 107,
+    "sha256": "b2ecab0db15827f804bc85bbcc1a5aeccf04589126bd0a5c46ed74353a22d271",
+    "fetchedAt": "2026-09-13T05:17:54.762Z",
+    "path": "app.gitpod.io/static/assets/details-url-Btk35eDw.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/use-open-file--oXWgfry.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 1425,
+    "sha256": "0d720766a7a7df2d7ac67922e01d16ef1e306c0a021ebd20928764fc06f9b2e9",
+    "fetchedAt": "2026-09-13T05:17:55.153Z",
+    "path": "app.gitpod.io/static/assets/use-open-file--oXWgfry.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/permissions.data-BydDr_cw.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 23864,
+    "sha256": "5185fff5a0f523612347f3193d21a2fb5b56617eaf11cb949a3e183ac9f2f835",
+    "fetchedAt": "2026-09-13T05:17:55.410Z",
+    "path": "app.gitpod.io/static/assets/permissions.data-BydDr_cw.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/group-queries-8yduHWlb.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 12564,
+    "sha256": "2b80369d5a78e850483ac705f43f163d982618b4d1f6621e31c86c17995fe896",
+    "fetchedAt": "2026-09-13T05:17:55.681Z",
+    "path": "app.gitpod.io/static/assets/group-queries-8yduHWlb.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/project-queries-BBbYVdff.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 13469,
+    "sha256": "b54561725a37a2eedc86ce73acd56c8976a81ff8f1b598d7fe7537a3c4feef48",
+    "fetchedAt": "2026-09-13T05:17:56.032Z",
+    "path": "app.gitpod.io/static/assets/project-queries-BBbYVdff.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/phase-DbsgoShG.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 1984,
+    "sha256": "95644e55e8ea8efa32a81aec20df358f7905e0f2df483cf284ed50b64fa123e3",
+    "fetchedAt": "2026-09-13T05:17:56.347Z",
+    "path": "app.gitpod.io/static/assets/phase-DbsgoShG.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/dom--2twnFMt.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 249,
+    "sha256": "51fe3ba56d043c8de37ef4271a9604ea9f458063897be66b59dc7f0975718eef",
+    "fetchedAt": "2026-09-13T05:17:56.534Z",
+    "path": "app.gitpod.io/static/assets/dom--2twnFMt.js"
+   },
+   {
+    "url": "https://app.gitpod.io/static/assets/pull-request-links-DseBFRkc.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 690,
+    "sha256": "5d2c5a731c1cbc6deb545efa84ad357caaebf76d2016d4473c3b500a83a08bf0",
+    "fetchedAt": "2026-09-13T05:17:56.819Z",
+    "path": "app.gitpod.io/static/assets/pull-request-links-DseBFRkc.js"
+   }
+  ],
+  "baseUrl": "https://app.gitpod.io/"
  }
 ]

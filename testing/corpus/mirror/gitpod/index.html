@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="en" class="ona size-full">
+    <head>
+        <meta charset="UTF-8" />
+        <title translate="no">Ona</title>
+        <!-- Comprehensive favicon setup with theme support -->
+        <link rel="icon" href="/static/ona32.png" sizes="32x32" type="image/png" />
+        <link rel="icon" href="/static/ona-logo.svg" sizes="any" type="image/svg+xml" />
+        <link rel="icon" href="/static/ona-dark.ico" sizes="32x32" type="image/x-icon" />
+        <link rel="shortcut icon" href="/static/ona-dark.ico" />
+        <link rel="icon" href="/static/favicon.ico" type="image/x-icon" sizes="16x16" />
+        <link rel="icon" href="/static/ona-light.ico" media="(prefers-color-scheme: dark)" />
+        <link rel="icon" href="/static/ona-dark.ico" media="(prefers-color-scheme: light)" />
+        <link rel="manifest" href="/static/web-applicaiton-manifest.json" />
+        <link rel="apple-touch-icon" href="/static/ona512.png" />
+        <meta name="color-scheme" content="light dark" />
+        <meta name="Gitpod" content="Always ready-to-code" />
+        <meta name="Ona" content="Move beyond your IDE" />
+        <meta
+            name="viewport"
+            content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+        />
+        <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+        <meta name="theme-color" content="#1C1C1C" media="(prefers-color-scheme: dark)" />
+        <script>
+            // Start performance measurement as early as possible
+            try {
+                if (window.performance && window.performance.mark) {
+                    performance.mark("app-start");
+                }
+            } catch (error) {
+                // Silently fail if Performance API is not available
+            }
+        </script>
+        <style>
+            /* ABC Diatype font faces for Ona theme */
+            @font-face {
+                font-family: "ABC Diatype";
+                src: url(/static/fonts/ABCDiatype-Light.woff2) format("woff2");
+                font-weight: 300;
+                font-style: normal;
+                font-display: auto;
+            }
+
+            @font-face {
+                font-family: "ABC Diatype";
+                src: url(/static/fonts/ABCDiatype-Regular.woff2) format("woff2");
+                font-weight: 400;
+                font-style: normal;
+                font-display: auto;
+            }
+
+            @font-face {
+                font-family: "ABC Diatype";
+                src: url(/static/fonts/ABCDiatype-Medium.woff2) format("woff2");
+                font-weight: 500;
+                font-style: normal;
+                font-display: auto;
+            }
+
+            @font-face {
+                font-family: "ABC Diatype";
+                src: url(/static/fonts/ABCDiatype-Bold.woff2) format("woff2");
+                font-weight: 600;
+                font-style: normal;
+                font-display: auto;
+            }
+
+            @font-face {
+                font-family: "ABC Diatype";
+                src: url(/static/fonts/ABCDiatype-Heavy.woff2) format("woff2");
+                font-weight: 700;
+                font-style: normal;
+                font-display: auto;
+            }
+
+            /* ABC Diatype Mono font faces for Ona theme */
+            @font-face {
+                font-family: "ABC Diatype Mono";
+                src:
+                    url(/static/fonts/ABCDiatypeMono-Regular.woff2) format("woff2"),
+                    url(/static/fonts/ABCDiatypeMono-Regular.woff) format("woff");
+                font-weight: 400;
+                font-style: normal;
+                font-display: auto;
+            }
+
+            @font-face {
+                font-family: "ABC Diatype Mono";
+                src:
+                    url(/static/fonts/ABCDiatypeMono-Medium.woff2) format("woff2"),
+                    url(/static/fonts/ABCDiatypeMono-Medium.woff) format("woff");
+                font-weight: 500;
+                font-style: normal;
+                font-display: auto;
+            }
+
+            @font-face {
+                font-family: "ABC Diatype Mono";
+                src:
+                    url(/static/fonts/ABCDiatypeMono-Bold.woff2) format("woff2"),
+                    url(/static/fonts/ABCDiatypeMono-Bold.woff) format("woff");
+                font-weight: 700;
+                font-style: normal;
+                font-display: auto;
+            }
+        </style>
+        <style>
+            @keyframes fadeIn {
+                0% {
+                    opacity: 0;
+                }
+                100% {
+                    opacity: 1;
+                }
+            }
+            @keyframes fadeOut {
+                0% {
+                    opacity: 1;
+                }
+                100% {
+                    opacity: 0;
+                }
+            }
+            #loading {
+                position: absolute;
+                bottom: 0;
+                left: 0;
+                right: 0;
+                top: 0;
+                overflow: hidden;
+                pointer-events: none;
+                height: 100%;
+                width: 100%;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                z-index: 99999;
+                /* This ensures that the Desktop application is still draggable while we show the loading screen.
+                   In electron we use a custom toolbar and we control the draggable area through a React components
+                   but as that isn't rendered yet this ensures the window is still draggable until then.
+                */
+                /* TODO(mads): This break the desktop app as it steals all clicks The fix is add display:none; to the
+                   loading element but I'll do that in a follow-up PR and then add the dragging back
+ *              */
+                /* -webkit-app-region: drag; */
+            }
+            body.loaded #loading {
+                transition: opacity 0.4s ease-out;
+                animation: fadeOut 0.4s ease-out;
+                opacity: 0;
+            }
+            #loading-content {
+                width: 45px;
+                height: 46px;
+                transition: opacity 0.4s ease-out;
+                /* We delay the animation by 1s to ensure we only show the loading screen
+                   if it takes more than 1s to load the assets and render the React application */
+                animation: fadeIn 0.4s ease-out 1s both;
+            }
+            /* Match Ona theme surfaces before Tailwind loads.
+               The background mirrors dark --surface-primary, while the dark theme-color
+               meta mirrors --surface-base. Keep these with the mirrored tokens in index.css. */
+            .dark body,
+            .dark #loading {
+                background-color: #161515;
+                color: #fafafa;
+            }
+            .dark #loading-logo {
+                filter: invert(1);
+            }
+        </style>
+      <script type="module" crossorigin src="/static/assets/main-CWnMhEZ-.js"></script>
+      <link rel="modulepreload" crossorigin href="/static/assets/rolldown-runtime-aKtaBQYM.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/@mux-Ce8MRpmL.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/vendor-B3BotZjU.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/use-desktop-BI-06JjZ.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/user-preferences-queries-Db6NTpGh.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/base_snapshot_pb-Brv8C3pO.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/runner_manager_pb-BtVECYox.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/group_pb-Crv6HQMx.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/insights_pb-DbU9hAe5.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/integration_pb-D_O3z6vO.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/prebuild_pb-CAXZri3Q.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/project_pb-DgqHruE4.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/service_account_pb-B2nJW_5A.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/team_pb-B7yxD2cz.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/workflow_pb-DPnRtwBd.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/webhook_pb-CjWuXyV-.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/api-ggTzVR0n.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/timestamp-BcDKTTy7.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/environment-queries-zoure4Rj.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/IconGitHub-Dq1FLLOw.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/cn-C-UZ2Rd-.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/SourceControlProviderIcon-CTcnZK8i.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/button-B2ywA83B.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/IconWarning-D_CCuSCi.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/card-bkRlzRkJ.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/delayed-CCw6lpwn.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/radix-body-pointer-events-Dvg_rGSi.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/dialog-CwUsDc2O.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/IconExternalLink-wGuQ1C7A.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/text-CtEA04WK.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/error-codes.generated-UE7AABX1.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/error-message-CZfipfTu.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/headings-oJ7ZN3HN.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/use-temporary-value-DggpKO07.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/haptic-C0fLUIMR.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/input-CSk71_M7.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/label-B3WWNNH3.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/use-theme-Dv9wnR6t.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/toast-ivThglhY.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/use-mount-effect-BBMZ1mxS.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/url-validation-B4ZnvVnt.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/use-context-url-CFo6YQ9F.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/runner-configuration-queries-CLDnhWqi.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/runner-queries-BHMbpOkh.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/SCMAuthentication-D_zpefdg.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/IconChevronRightSmall-BW_Nbg8T.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/IconDot-fDReC_7n.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/dropdown-menu-BPrWQC8y.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/IconInfo-rtqcsHQf.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/IconRefresh-6ASokAbq.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/utils-BrENuFUf.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/agent-ids-CMbPWMtT.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/agent-queries-8SEg-qpy.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/ui-state-V9G1wohN.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/agent-mode-jYL6Rpd8.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/codex-settings-BR7048pt.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/use-environment-class-entries-BDQ6eQlB.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/user-settings-constants-CpYazck0.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/banner-Dg6_qQJZ.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/checkbox-DdKtWyUS.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/form-control-nej9hQSZ.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/checkbox-input-field-CFt-c6Py.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/collapsible-BjU8NKYQ.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/combobox-CL7GSVcy.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/external-link-BPFptIxj.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/textarea-BKIpqJBX.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/keyboard-key-DxQf8D65.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/keyboard-combo-C5BG5wYl.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/notification-hJFgruqG.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/tooltip-BxatTfEj.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/Pill-B1QV2Cf6.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/pill-EK18tXsM.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/popover-Cf4j28XX.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/scroll-area-5UfSyWmx.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/skeleton-CHjhlGN8.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/status-dot-CrI0v5m1.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/time-picker-C3_U-tvf.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/strings-UJ4cns8E.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/time-DGNu_qf2.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/use-cursor-pagination-IbOGiiYt.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/use-membership-0Vj00UX8.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/details-url-Btk35eDw.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/use-open-file--oXWgfry.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/permissions.data-BydDr_cw.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/group-queries-8yduHWlb.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/project-queries-BBbYVdff.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/phase-DbsgoShG.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/dom--2twnFMt.js">
+      <link rel="modulepreload" crossorigin href="/static/assets/pull-request-links-DseBFRkc.js">
+      <link rel="stylesheet" crossorigin href="/static/assets/main-Axxp4gIh.css">
+    </head>
+    <body class="size-full bg-surface-primary text-content-primary">
+        <script nonce="" type="text/javascript">
+            // This ensures that we use the correct theme for the loading screen.
+            //
+            // Currently it is the React application that is responsible for setting the theme class on the <html> element
+            // but the whole purpose of this screen is to have have something to show the user while we're waiting for the
+            // assets to load and and the initial React render.
+            //
+            // By setting the class here (too) we avoid having a white screen for the initial load which would result in a
+            // flickering experience for the user.
+            try {
+                let e = localStorage.getItem("gitpod-ui-theme"),
+                    t = window.matchMedia("(prefers-color-scheme: dark)").matches,
+                    isDark = e === "dark" || (e !== "light" && t);
+                if (isDark) {
+                    self.document.documentElement.classList.add("dark");
+                }
+                // Set color-scheme so the browser uses the correct native background
+                // color (scrollbars, form controls, default page background) before
+                // CSS loads. Without this, dark-mode users see a white flash.
+                let m = document.querySelector("meta[name='color-scheme']");
+                if (m) m.setAttribute("content", isDark ? "dark" : "light");
+            } catch (e) {}
+        </script>
+        <div id="root" class="size-full"></div>
+        <div id="loading" class="bg-surface-primary text-content-primary">
+            <div id="loading-content">
+                <img id="loading-logo" src="/static/ona-lettermark.svg" alt="Ona" width="45" height="46" />
+            </div>
+        </div>
+    </body>
+</html>

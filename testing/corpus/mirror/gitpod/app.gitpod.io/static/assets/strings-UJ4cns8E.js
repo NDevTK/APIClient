@@ -1,0 +1,1 @@
+function e(e,t,n=`${t}s`){return e===1?t:n}var t=(t,n,r,i=`${r}s`)=>`${t}${n?`+`:``} ${e(t,r,i)}`;export{t as n,e as t};

@@ -1,0 +1,1 @@
+import{i as e}from"./rolldown-runtime-aKtaBQYM.js";import{n as t}from"./@mux-Ce8MRpmL.js";var n=e(t(),1),r=(0,n.createContext)(null),i=()=>{let e=(0,n.useContext)(r);if(!e)throw Error(`useDesktop must be used within a DesktopProvider`);return e};export{r as n,i as t};

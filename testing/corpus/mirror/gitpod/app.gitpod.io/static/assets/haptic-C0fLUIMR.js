@@ -1,0 +1,1 @@
+import{Cu as e}from"./vendor-B3BotZjU.js";var t=()=>window.matchMedia(`(hover: none) and (pointer: coarse)`).matches,n={light:`light`,medium:`medium`,confirm:`success`,warning:`warning`,error:`error`},r=null;function i(){return r||=new e,r}function a(e){t()&&i().trigger(n[e])}export{t as n,a as t};
