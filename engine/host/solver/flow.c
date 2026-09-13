@@ -3451,6 +3451,7 @@ double flow_distance(const Flow *f) {
                            + (1.0 + 1.0 + (double)(FLOW_RUNGS_N - 2)) / (double)FLOW_RUNGS_N /* distance: two   */ \
                                                                                         /* fractions + the top  */ \
                                                                                         /* boolean rung         */ \
+                           + 1.0 / 1.0                                                  /* branch: alone in it  */ \
                            - 0.0 * FLOW_AGE_QUANTUM )                                   /* aging, no silence    */
 
 /* WHAT THE ORDER IS MADE OF BESIDES THE REWARD, AND THE ONE PLACE THE CLAIM "THE REWARD IS THE ONLY UNRANGED
@@ -3490,11 +3491,55 @@ double flow_distance(const Flow *f) {
    this file. A caller's address would name which flow was being ranked at the moment, which is not the object
    of the instruction. The tell that the rule does apply is the one absent here — a message whose remedy names
    an action with no object; this one names a place, and the place is where the crash already points. */
+/* HOW MUCH OF ITS OWN BRANCH BUCKET THIS MEMBER IS — the reading that tells the FIRST arm of an unexplored
+   branch from the thirty-eight-thousandth arm of one already taken, which no other term of this order can.
+   WHY IT IS NEEDED, MEASURED ON A DOCUMENT NOBODY DESIGNED rather than on a fixture. A 4.5 MB real bundle
+   replayed from its own mirror: 71452 members and 71451 forks out of FIFTY branch sites at depth 6 over
+   THIRTY-NINE source reads, one bucket holding 38836; `families: 1`, so the reward is one value every member
+   holds; the whole order spanning 0.036 points; 64605 members never picked with `neverPickedGap` 0. Sixteen of
+   the document's twenty-four scripts never started and ZERO jobs ran. Every existing term was common to the
+   two sides of the branch that made that frontier, which is the state absent.c's own banner ends by naming:
+   "what must exist afterward is a frontier on which the two sides of an example-free branch are COMPARABLE AT
+   ALL". A bucket's occupancy is that reading, and it is about the SEARCH rather than about either arm.
+   IT IS A BONUS FOR A SPARSE BUCKET AND NOT A PENALTY FOR A CROWDED ONE, AND THE SIGN IS THE WHOLE REASON THIS
+   IS ADMISSIBLE. The crossing bound below ends its own list of what would break it with "an optimism term keyed
+   on something a never-run flow does not stand at zero of" — and a crowding PENALTY is exactly that: it would
+   drop an unrun member's weight beneath the 1.0 the derivation rests on and fire the assert, correctly. Read
+   the other way round nothing is ever lowered, an unrun flow still carries at least its optimism, and the only
+   consequence is that this term's own range joins FLOW_NONREWARD_MAX and loosens the silence bound by one
+   point — the same shape, and the same arithmetic, as the fitness comparator already there.
+   IT IS FORK-NEUTRAL BY CONSTRUCTION AND NOT BY ARGUMENT. A forked sibling JOINS ITS PARENT'S BUCKET (the
+   inheritance above moves its membership there), and this is READ AT THE PICK rather than stored at birth, so
+   at every instant after the branch both arms read ONE number and rank equal — which is what the equality at
+   the fork asserts. It also passes the two-instants test the equality cannot see: two arms of one parent
+   forked at different moments read the bucket as it is NOW, not as it was when each was born.
+   WHAT IT COSTS THE GUARANTEE, STATED RATHER THAN DISCOVERED. §scheduler's "a never-run flow is never starved"
+   stays true — this term only ever adds, and the reward still dominates — but two never-run members are no
+   longer indistinguishable: one alone in its bucket outranks one of N by (1 - 1/N), bounded by a single point.
+   That is the ordering saying a fresh branch is worth more than another arm of a cross product, which is the
+   one comparison the frontier above had no way to make. */
+static double flow_branch_bonus(const Flow *f) {
+    const FlowAcct *br;
+    long live;
+
+    DCHECK(f != NULL && f->acct != NULL && f->acct->branch != NULL,
+           "a member was weighed with no branch bucket — flow_new opens one for every node and the fork moves "
+           "membership rather than clearing it, so a null here is a member the branch census cannot reach "
+           "either and its share of every per-branch reading is attributed to nobody");
+    br = f->acct->branch;
+    live = br->sub_born - br->sub_gone;
+    DCHECK(live >= 1,
+           "a member's own branch bucket reports fewer than one live member while that member is standing in "
+           "it — `sub_born`/`sub_gone` are a matched pair moved in one statement, so a count below the member "
+           "doing the reading is a departure charged to a bucket the flow had already left");
+    return 1.0 / (double)live;
+}
+
 static double flow_nonreward(const Flow *f) {
     /* THE TWO READINGS AND THE ONE TAG, which is what this sum is now made of explicitly: the optimism
        bonus and the fitness distance are facts about THIS FLOW, and the aging is the queue coordinate it
        shares with whatever it was placed beside. flow_weight is unchanged in value. */
-    double n = flow_queue_nonreward(f) + flow_optimism(f) + flow_distance(f);
+    double n = flow_queue_nonreward(f) + flow_optimism(f) + flow_distance(f) + flow_branch_bonus(f);
     DCHECK(n <= FLOW_NONREWARD_MAX,
            "a term of the WFQ's order other than the REWARD lifted a flow further than one emission and a full "
            "fitness reading can — so the ordering is no longer made of one unranged ledger plus terms that each "
@@ -3568,7 +3613,11 @@ static inline int64_t flow_silence_us_to_sink(const Flow *f) {
        account the silence on the other side of this inequality is charged to. Read off the flow it would be a
        bound on a quantity the weight does not contain, so the guard would pass on a state the order does not
        have and fail on one it does. */
-    return (int64_t)((acct_family_val(f) + 1.0) * (double)FLOW_SILENCE_US) + FLOW_SERVICE_US;
+    /* `+ 2.0` AND NOT `+ 1.0`: the derivation above forces `A*Q <= val + D + B` where `D` is the fitness
+       fraction and `B` the branch bonus, each in [0, 1]. The second point is the branch term's entire range,
+       earned exactly as the fitness term's first one is — a member alone in its bucket may outlast one of a
+       crowded bucket by a point's worth of silence, which is that term doing its job. */
+    return (int64_t)((acct_family_val(f) + 2.0) * (double)FLOW_SILENCE_US) + FLOW_SERVICE_US;
 }
 
 /* HOST-OWED MARKS — see flow.h for what a mark means and why the flow carries one at all.
@@ -3979,6 +4028,12 @@ static double wfq_accounted_spread(const WfqCensus *c) {
     return (c->val_max - c->val_min)
          + c->dist_max
          + (1.0 / (double)(1 + c->vis_min) - 1.0 / (double)(1 + c->vis_max))
+         /* …AND THE BRANCH BONUS'S OWN RANGE, which is a reading of the SPARSEST bucket against the most
+            crowded one: the smallest bucket carries the largest bonus, so the extrema invert between the two
+            rows. Guarded because a census that reached no bucket has no range to report rather than an
+            infinite one. */
+         + (c->br_live_min > 0 && c->br_live_max > 0
+              ? 1.0 / (double)c->br_live_min - 1.0 / (double)c->br_live_max : 0.0)
          + (double)((c->svc_max - c->svc_min) + (c->svc_fam_max - c->svc_fam_min) + 1) * FLOW_AGE_QUANTUM;
 }
 
