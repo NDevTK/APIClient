@@ -1836,18 +1836,31 @@ function wfqReading(out) {
      spread every count here is unquotable under. `brLiveMin` is deliberately NOT read as "the other side of
      the branch" — solver/flow.h says a family root's own bucket holds exactly one member by construction and
      therefore usually OWNS the minimum, so the other side is the REMAINDER of the published totals. */
+  /* THE READING IS GATED AND THE IDENTITIES ARE NOT, WHICH IS A CORRECTION TO THIS BLOCK'S FIRST VERSION AND
+     NOT A REFINEMENT OF IT. Both conservation checks below used to sit behind this flag, and the flag is FALSE
+     on exactly the censuses a real page produces: solver/flow.c's family-root door takes a bucket whose root
+     flow has DEPARTED, so `brLiveMin` read 0 on 48 of 56 censuses of one real bundle. Gating the identities on
+     it meant the two checks that exist because the engine's own DCHECKs are compiled out of release were
+     themselves silent on 86% of the samples — a check that cannot fire is not a weak check, it is a
+     reassuring transcript. The identities are about the PARTITION and the BURN and hold whatever the extrema
+     read, so they are asked whenever the rows are present.
+     THE FLAG NOW SELECTS ONE STATE AND THE ENGINE ASSERTS IT CANNOT ARISE WITH MEMBERS STANDING
+     (flow_wfq_census's `members == 0 || br_live_min > 0`). It is kept rather than deleted because this reader
+     runs against RELEASE artifacts too, where that DCHECK is compiled out, and against artifacts built before
+     it existed — where a 0 is the old defect and the honest rendering is that the term says nothing here
+     rather than a range computed by dividing by it. */
   const brOk = w.branches > 0 && w.brLiveMin > 0;
   /* THE TWO CONSERVATION IDENTITIES, CHECKED FROM OUTSIDE THE PROCESS. The engine DCHECKs both in
      flow_wfq_census where every term is in one hand, and that check is compiled OUT of a release build where
      this reader still runs — which is the same reason the pair above this function is checked here. Every term
      of both is published precisely so a reader need not re-derive the mechanism to check the number. */
-  if (brOk && w.brLiveSum !== w.members)
+  if (w.brLiveSum !== w.members)
     throw new Error(`[build] the @WFQ census's branch buckets do not partition the frontier: brLiveSum ` +
                     `${w.brLiveSum} against members ${w.members}. solver/flow.h states 'br_live_sum == ` +
                     `members' as an identity — a sum BELOW is a member counted in no bucket and therefore ` +
                     `absent from every per-branch reading, a sum ABOVE is one counted twice. Either way the ` +
                     `bucket walk and the member walk disagree about the same frontier.`);
-  if (brOk && w.brUsLifeSum + w.brRetiredUsLife !== w.chargedUsLife)
+  if (w.brUsLifeSum + w.brRetiredUsLife !== w.chargedUsLife)
     throw new Error(`[build] the @WFQ census loses charged thread time: brUsLifeSum ${w.brUsLifeSum} + ` +
                     `brRetiredUsLife ${w.brRetiredUsLife} = ${w.brUsLifeSum + w.brRetiredUsLife} against ` +
                     `chargedUsLife ${w.chargedUsLife}. solver/flow.h states every charged microsecond lands ` +
@@ -1856,7 +1869,11 @@ function wfqReading(out) {
                     `concentration reading below is a fraction of the wrong total.`);
   const brLift = brOk ? 1 / w.brLiveMin - 1 / w.brLiveMax : 0;
   const branch = !brOk
-    ? `no live branch bucket in this census, so the branch term of flow_weight says nothing here`
+    ? `${w.branches} branch bucket(s) taken and the live minimum reads ${w.brLiveMin}, so the branch ` +
+      `term's range is not computable from this census — with members standing that is an artifact ` +
+      `built before solver/flow.c's branch_take split the live extrema from the burn totals, where ` +
+      `a bucket whose root flow had DEPARTED dragged the minimum to zero and deleted this term from ` +
+      `wfq_accounted_spread as well`
     : w.branches === 1
     ? `ONE top-level arm holds the whole frontier, so every member reads the same 1/${w.brLiveMax} from ` +
       `flow_branch_bonus and that term is a COMMON OFFSET that orders nothing — the same shape as a ` +

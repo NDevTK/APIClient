@@ -4260,8 +4260,14 @@ static double wfq_accounted_spread(const WfqCensus *c) {
          + (1.0 / (double)(1 + c->vis_min) - 1.0 / (double)(1 + c->vis_max))
          /* …AND THE BRANCH BONUS'S OWN RANGE, which is a reading of the SPARSEST bucket against the most
             crowded one: the smallest bucket carries the largest bonus, so the extrema invert between the two
-            rows. Guarded because a census that reached no bucket has no range to report rather than an
-            infinite one. */
+            rows. Guarded because a census that reached no LIVE bucket has no range to report rather than an
+            infinite one — and that is now the only population the guard selects. IT USED TO SELECT ANOTHER,
+            MUCH LARGER ONE, and the sentence here is why nobody looked: branch_take folded a bucket with ZERO
+            live members into these extrema, and the family-root door mints exactly such a bucket the moment a
+            family's root flow departs, so `br_live_min` read 0 on 48 of 56 censuses of one real bundle and
+            this whole clause scored 0.0 on every one of them — a term the order genuinely spans, deleted from
+            the accounting that exists to say what the order is made of, by a guard whose comment described a
+            census that had reached nothing while the censuses tripping it had reached 198 buckets each. */
          + (c->br_live_min > 0 && c->br_live_max > 0
               ? 1.0 / (double)c->br_live_min - 1.0 / (double)c->br_live_max : 0.0)
          + (double)((c->svc_max - c->svc_min) + (c->svc_fam_max - c->svc_fam_min) + 1) * FLOW_AGE_QUANTUM;
@@ -4296,8 +4302,35 @@ static void branch_take(WfqCensus *out, FlowAcct *br) {
     out->branches++;
     out->br_live_sum += live;
     out->br_us_sum += br->sub_us;
-    if (out->branches == 1 || live > out->br_live_max) out->br_live_max = live;
-    if (out->branches == 1 || live < out->br_live_min) out->br_live_min = live;
+    /* THE LIVE EXTREMA RANGE OVER BUCKETS THAT HOLD A MEMBER, AND THE BURN TOTALS OVER EVERY BUCKET TAKEN —
+       two populations through one walk, which is why they used to be one and why that was wrong.
+       A bucket with ZERO live members is not a corner: the family-root door below takes exactly one whenever
+       a family's ROOT FLOW HAS DEPARTED, deliberately, because that node's lifetime burn (boot's, on a real
+       page) must stay inside the identity at the end of this function and nothing names it through `branch`
+       any more. So an empty bucket is the ORDINARY state of any frontier whose boot flow has finished.
+       WHAT IT COST WHILE BOTH QUESTIONS SHARED ONE ANSWER, MEASURED rather than argued: over 56 censuses of
+       one real 4.5 MB bundle, `br_live_sum == members` held in ALL 56 — the partition is exact, because an
+       empty bucket contributes 0 to it — and `br_live_min` read ZERO in 48. An empty bucket holds no member
+       whose weight any comparison reads, so a minimum taken over it describes the thinnest bucket NOBODY
+       stands in, which is not a quantity about the order at all.
+       AND THE ZERO DID NOT MERELY MISLEAD A READER, IT DELETED A TERM FROM THE ACCOUNTING.
+       wfq_accounted_spread guards its branch clause on `br_live_min > 0` and said it did so because "a
+       census that reached no bucket has no range to report rather than an infinite one" — a true sentence
+       about a population this one is not. Those 48 censuses had reached 198 buckets each, so the branch
+       bonus's whole range was scored as 0.0 in the spread that exists to say what the order is made of, on
+       86% of the samples, for as long as the rows have existed.
+       `br_us_max` and `br_us_min` KEEP every taken bucket and that is not an oversight: a departed root's
+       subtree really did receive that thread time, receipt is the question those rows ask, and the burn
+       identity below is over the same population. This is one walk answering two questions, and the answer
+       is two guards rather than one — the looser question had been silently taking the stricter one's answer.
+       THE `branches == 1` FIRST-BUCKET TEST IS GONE FROM THIS PAIR AND NEEDED NO REPLACEMENT FIELD: every
+       assignment below writes a value of at least one, so `br_live_min == 0` IS "no live bucket seen yet",
+       exactly and self-describingly. flow_wfq_census's closing assert states the consequence — a frontier
+       with members standing cannot leave it at zero. */
+    if (live > 0) {
+        if (out->br_live_min == 0 || live < out->br_live_min) out->br_live_min = live;
+        if (live > out->br_live_max) out->br_live_max = live;
+    }
     if (out->branches == 1 || br->sub_us > out->br_us_max) out->br_us_max = br->sub_us;
     if (out->branches == 1 || br->sub_us < out->br_us_min) out->br_us_min = br->sub_us;
     if (br->sub_born > out->br_born_max) out->br_born_max = br->sub_born;
@@ -5073,6 +5106,18 @@ void flow_wfq_census(WfqCensus *out) {
            "bucket and each bucket is opened once per census, so a sum below `members` is a member counted in "
            "no bucket and a sum above it is one counted in two. Every per-branch row is about to be published "
            "as a share of a frontier it is not a partition of");
+    /* AND A FRONTIER WITH MEMBERS STANDING HAS A THINNEST BUCKET SOMEBODY IS STANDING IN — the invariant that
+       makes wfq_accounted_spread's branch guard dead code for a live frontier rather than the silent
+       term-deleter it was. Every live member's own bucket is taken by the member door with a live count of at
+       least one (the member was minted into it and has not departed), so a census reporting members cannot
+       leave the live minimum at zero. It is NOT the partition identity above restated: that one is satisfied
+       by any set of buckets whose live counts sum correctly, EMPTY ONES INCLUDED, which is exactly how the
+       defect this replaces stayed invisible through 56 censuses of an assert that held every time. */
+    DCHECK(out->members == 0 || out->br_live_min > 0,
+           "the census reports members standing and no branch bucket holding one — every live member is "
+           "minted into a bucket and reaches it through `branch`, so a zero here is the live extrema ranging "
+           "over a bucket NOBODY stands in, and wfq_accounted_spread is about to score the branch term's "
+           "whole range as 0.0 while the order spans it");
     DCHECK(out->br_us_sum + out->br_retired_us == out->charged_us,
            "the thread time attributed to branch buckets does not add up to the thread time the scheduler has "
            "charged — every microsecond lands on exactly one bucket and a bucket's total is folded into the "
