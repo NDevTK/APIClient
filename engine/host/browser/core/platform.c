@@ -4,6 +4,7 @@
 
 #include "check.h"
 #include "core/agent_state.h"
+#include "core/canvas/path_2d.h"
 #include "core/console/console.h"
 #include "core/crypto/crypto.h"
 #include "core/css/css_math_value.h"
@@ -245,6 +246,7 @@ static void d_fetch(JSContext *c, const PlatformAgent *a) { (void)a; fetch_init(
 static void d_abort(JSContext *c, const PlatformAgent *a) { (void)a; abort_init(c); }
 static void d_observable(JSContext *c, const PlatformAgent *a) { (void)a; observable_init(c); }
 static void d_dom_rect(JSContext *c, const PlatformAgent *a) { (void)a; dom_rect_init(c); }
+static void d_path_2d(JSContext *c, const PlatformAgent *a) { (void)a; path_2d_init(c); }
 static void d_dom_rect_list(JSContext *c, const PlatformAgent *a) { (void)a; dom_rect_list_init(c); }
 static void d_dom_string_list(JSContext *c, const PlatformAgent *a) { (void)a; dom_string_list_init(c); }
 static void d_element(JSContext *c, const PlatformAgent *a) { (void)a; element_init(c); }
@@ -522,6 +524,7 @@ static void r_iframe(JSRuntime *rt) { iframe_free(rt); }
 static void r_dom_rect_list(JSRuntime *rt) { dom_rect_list_free(rt); }
 static void r_dom_string_list(JSRuntime *rt) { dom_string_list_free(rt); }
 static void r_dom_rect(JSRuntime *rt) { (void)rt; dom_rect_free(); }
+static void r_path_2d(JSRuntime *rt) { (void)rt; path_2d_free(); }
 /* THE FIVE ROWS THAT HAD NO RELEASE FUNCTION AT ALL, which is the arm the pairing below silently passes: a row
    with an empty release column and a component that declared nothing agree, and they agree whether the
    component holds nothing or holds everything and gives none of it back. All five held. Indexed Database §4.7's
@@ -1142,6 +1145,17 @@ static const PlatformComponent PLATFORM[] = {
        thing that decides, and browser/idl_exposure.h states each straight out of the corpus. */
     { "dom_rect",            d_dom_rect,            NULL,        r_dom_rect },
     { "dom_rect_list",       d_dom_rect_list,       i_dom_rect_list, r_dom_rect_list },
+    /* HTML §4.12.5.1.7 "Path2D objects" and §4.12.5.1.6 "Building paths"'s CanvasPath mixin with it. NO
+       DOCUMENT HALF, and the exposure set is why: §4.12.5.1.7 declares `Path2D` `[Exposed=(Window,Worker)]`,
+       so a realm whose global object implements a worker scope owes the name and reaches no
+       platform_document_install — path_2d.c's own realm intrinsic places it, as dom_rect.c's does for the two
+       rows above and for the same sentence of Web IDL §3.8.
+       IT DEPENDS ON NOTHING AND SO ITS POSITION IS FREE. The order here is the dependency order, and
+       `Path2D` inherits from no interface — browser/idl_inheritance.h records it as IDL_PROTO_OBJECT, whose
+       prototype is Object.prototype — so there is no earlier prototype it must be built after. It sits beside
+       the geometry rows because that is what it is: a path is coordinates, and the two components answer the
+       same kind of question about a page with no device under either of them. */
+    { "path_2d",             d_path_2d,             NULL,        r_path_2d },
     { "element",             d_element,             NULL,        r_element },
     /* CSSOM §8.1 The CSS.escape() Method's `CSS` NAMESPACE and CSS Conditional Rules 3 §7.5 The CSS namespace,
        and the supports() function's partial namespace on it, AFTER `element` — which is where the whole CSSOM
@@ -1415,6 +1429,7 @@ static const struct { const char *name, *component; IdlExposure exposure; } PLAT
     { "AbortController",       "abort" },
     { "DOMRect",               "dom_rect" },
     { "DOMRectList",           "dom_rect_list" },
+    { "Path2D",                "path_2d" },
     { "IntersectionObserver",  "intersection_observer" },
     { "IntersectionObserverEntry", "intersection_observer" },
     /* RESIZE OBSERVER's three names, all three mapping to the ONE component that declares and installs them.
