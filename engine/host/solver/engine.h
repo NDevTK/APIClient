@@ -1247,6 +1247,19 @@ typedef struct {
      * a plateau is indistinguishable from a ceiling on a short run; a count only rises with the population it
      * is drawn from, and the population is printed beside it. */
     int64_t slice_overruns;
+    /* …AND WHICH ARM EACH OF THOSE TURNS WAS IN, which is the question the count above raises and cannot
+     * answer. `arms` is the same list counting RUNS, so this is that histogram restricted to the turns that
+     * overran, in solver/step_unit.h's order, and `sum(over_arms) == slice_overruns` is asserted where both
+     * are in one hand exactly as `sum(arms) == steps` is. Two histograms over one list, and the pair is the
+     * reading: an arm with many runs and no overruns is cheap however often it is taken, and an arm with
+     * FOUR runs and FOUR overruns is a step that cannot be preempted, which is a different diff in a
+     * different component from a hot arm.
+     * WHY IT IS NOT PER-ARM TIME. A time accumulator per arm would answer "where did the run go", which is a
+     * question about MASS; this answers "which arm cannot rest", which is a question about the TRANSPORT, and
+     * only the second is what §NO BOUNDS' suspend-at-any-depth requirement is about. A count also needs no
+     * second clock reading and partitions a total this struct already publishes, so it can be asserted
+     * rather than believed. */
+    long over_arms[STEP_UNIT_N];
 } EngineStepUnitRuns;
 void engine_step_unit_runs(EngineStepUnitRuns *out);
 

@@ -7518,6 +7518,20 @@ static StepUnit g_step_unit = STEP_UNIT_NONE;
    engine_session_close's path, the host wants the INSTANCE's total, and a counter cleared under
    engine_sched_begin would report the last session's ladder as the document's. */
 static long g_step_unit_runs[STEP_UNIT_N];
+/* …AND THE SAME LIST RESTRICTED TO THE TURNS THAT OVERRAN THE SLICE — see solver/engine.h's `over_arms`. Two
+   histograms over one list: runs says how OFTEN an arm is taken, this says how often taking it cost a whole
+   slice, and an arm whose two counts are EQUAL is a step that cannot be preempted rather than a hot one. */
+static long g_step_unit_over[STEP_UNIT_N];
+/* ITS OWN SUM, WALKED RATHER THAN CARRIED — a running total beside the rows would be a second copy of one
+   fact, agreeing with them only while somebody remembers both. Pure, and vanishes with the asserts. */
+static inline long step_unit_over_total(void)
+{
+    long t = 0;
+    int i;
+
+    for (i = 0; i < STEP_UNIT_N; i++) t += g_step_unit_over[i];
+    return t;
+}
 /* …AND THE STEPS THEMSELVES, COUNTED WHERE THE HISTOGRAM ABOVE IS NOT, which is the whole of what makes the
    identity between the two an assertion rather than an arithmetic tautology. This is incremented where
    flow_step RESETS the name — its entry — and the histogram is incremented where the scheduler RECORDS the
@@ -9336,6 +9350,7 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
     out->slice_us = g_slice_us;
     out->sched_us = g_sched_us;
     out->slice_overruns = g_slice_over;
+    for (i = 0; i < STEP_UNIT_N; i++) out->over_arms[i] = g_step_unit_over[i];
     /* THE CONTAINMENT, ASSERTED WHERE BOTH ARE IN ONE HAND — a count of turns cannot exceed the turns, and a
        subset larger than its population is the one arithmetic tell §CLAUDE.md names as free. It is the same
        obligation the identity below discharges for the two time arms: a fraction whose numerator is raised at
@@ -10671,7 +10686,23 @@ static int engine_sched_slice(void) {
                slice is a step in which the flow never reached a raise point, which is the one thing a mean of
                turn costs cannot report. No branch depends on it (§NO BOUNDS: a per-turn overrun test is
                exactly what a watchdog would be built from); it is counted and nothing else. */
-            if (now - t_slice0 >= (int64_t)ENGINE_QUANTUM_MS * 1000) g_slice_over++;
+            if (now - t_slice0 >= (int64_t)ENGINE_QUANTUM_MS * 1000) {
+                g_slice_over++;
+                /* KEYED ON THE ARM THIS TURN DECLARED, which is still in hand: `g_step_unit` is written by
+                   flow_step's convergence point above and is not overwritten until the next step resets it,
+                   so the arm, both clock readings and the budget are all one turn's. */
+                g_step_unit_over[g_step_unit]++;
+                /* THE CONSERVATION, ASSERTED AT THE ONE INSTANT IT IS EXACT — both arms have just been
+                   raised, so this is the only point in the loop where the histogram and the total agree, and
+                   asserting it at the accessor instead would learn that they disagree with the turn that
+                   broke them long gone. Same argument as the runs identity above, and the same shape: a
+                   partition whose parts cannot move without the total moving. */
+                DCHECKF(step_unit_over_total() == g_slice_over,
+                        "the slice-overrun histogram does not account for every overrunning turn (%ld arm "
+                        "counts against %lld overruns) — both are raised on this line from one turn's arm and "
+                        "one turn's clock readings, so a difference is a second raise site for one of them",
+                        step_unit_over_total(), (long long)g_slice_over);
+            }
             /* WHAT THIS TURN OF THE DISPATCH LOOP COST, ACCUMULATED FROM THE SAME DELTA THE CHARGE BILLS AND
                NOT FROM A SECOND READING — see g_step_us. It is written BEFORE the charge for the ordinary
                reason a reading is taken before the thing that consumes it: `flow_age_running` is the WFQ's

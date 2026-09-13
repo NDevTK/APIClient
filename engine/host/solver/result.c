@@ -1408,6 +1408,9 @@ char *result_cold_json(void) {
        solver/step_unit.h's arms again, restricted to the members standing at the orphan ladder, so its width
        is the list's and not the frontier's. See solver/cold.h for what it separates. */
     char ladder[STEP_UNITS_JSON_MAX];
+    /* AND THE FOURTH EXPANSION OF THE SAME LIST — solver/step_unit.h's arms again, restricted to the turns
+       that overran the cooperative slice. Same derivation, same width, for the same reason. */
+    char over[STEP_UNITS_JSON_MAX];
     /* AND THE FOURTH HISTOGRAM, ON THE HEAP FOR THE ONE REASON THE THREE ABOVE ARE ON THE STACK: its extent
        is the FRONTIER's and not a list's, so there is no width to derive. See cursor_hist_json. */
     char *cursors;
@@ -1435,6 +1438,7 @@ char *result_cold_json(void) {
         long stepped  = cold_hist_json(runs, sizeof runs, r.arms, "stepUnitRuns");
         long atladder = cold_hist_json(ladder, sizeof ladder, c.at_the_ladder_units,
                                        "outOfProgramsAtTheLadderUnits");
+        long overran  = cold_hist_json(over, sizeof over, r.over_arms, "stepUnitOverruns");
         long atcursor = 0;
         int k;
         for (k = 0; k < c.program_cursor_n; k++) atcursor += c.program_cursors[k];
@@ -1457,6 +1461,17 @@ char *result_cold_json(void) {
                "at the convergence point and the steps at flow_step's entry, so a total that is not `steps` "
                "means one of the two stopped being written, and every reading of which rung the ladder stops "
                "at is then about a ladder this document did not climb");
+        /* AND THE OVERRUN HISTOGRAM'S, WHICH IS THE SAME CONTRACT AS `stepped`'s OVER A SUBSET OF THE SAME
+           TURNS. engine.c asserts it inside the branch that raises both, where it is exact; this is the other
+           side, at the boundary the numbers cross. It is worth asking here for a reason the runs identity is
+           not: this histogram is normally SPARSE — four turns of thirteen thousand, on the run that motivated
+           it — so a row silently lost between the accessor and this document would move the total from four to
+           three and read as an engine that rested more often, which is the flattering direction. */
+        DCHECK(overran == r.slice_overruns,
+               "the slice-overrun histogram does not account for every overrunning turn — the arm and the "
+               "total are raised on one line from one turn's clock readings, so a total that is not "
+               "`sliceOverruns` means a row was lost crossing into this document, and a sparse histogram "
+               "losing a row reads as a loop that rested more often rather than as a broken count");
         /* AND THE CURSOR HISTOGRAM'S PARTITION, WHICH IS `standing`'s IDENTITY OVER A DIFFERENT QUESTION. Every
            live member stands at exactly one program cursor, so these counts sum to the frontier too — and the
            consequence of an inequality here is sharper than for the arm histogram, because this row exists
@@ -1680,6 +1695,11 @@ char *result_cold_json(void) {
                     per turn from the same readings `sliceUs` is accumulated from, with the containment
                     asserted at engine_step_unit_runs; see solver/engine.h's `slice_overruns`. */
                  "\"sliceUs\":%lld,\"schedUs\":%lld,\"sliceOverruns\":%lld,\"stepUnitRuns\":%s,"
+                 /* AND WHICH ARM EACH OVERRUNNING TURN WAS IN — the same list as `stepUnitRuns`, restricted
+                    to the turns `sliceOverruns` counts, so the PAIR is the reading: an arm with many runs and
+                    no overruns is cheap however often it is taken, and an arm whose two counts are EQUAL is a
+                    step that cannot rest. See solver/engine.h's `over_arms`. */
+                 "\"stepUnitOverruns\":%s,"
                  "\"outOfPrograms\":%ld,"
                  "\"outOfProgramsUnrun\":%ld,\"outOfProgramsFramed\":%ld,"
                  "\"outOfProgramsAtTheLadder\":%ld,"
@@ -1710,7 +1730,7 @@ char *result_cold_json(void) {
                  c.dyn_count, c.dyn_bytes / 1024,
                  (c.seg_bytes + c.dom_seg_bytes + c.pin_seg_bytes + c.dec_seg_bytes + c.dyn_bytes) / 1024,
                  r.steps, (long long)r.step_us,
-                 (long long)r.slice_us, (long long)r.sched_us, (long long)r.slice_overruns, runs,
+                 (long long)r.slice_us, (long long)r.sched_us, (long long)r.slice_overruns, runs, over,
                  c.out_of_programs,
                  c.out_of_programs_unrun, c.out_of_programs_framed, c.out_of_programs_at_the_ladder,
                  ladder, hist, cursors);

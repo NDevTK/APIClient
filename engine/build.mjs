@@ -256,7 +256,7 @@ const loadNow = () => {
 let g_coldFields = null;
 const coldFields = () => (g_coldFields ??= censusRowSet(
   "solver/result.c", "char *result_cold_json(void)", "\n}\n",
-  ["stepUnits", "stepUnitRuns", "outOfProgramsAtTheLadderUnits", "programCursors"],
+  ["stepUnits", "stepUnitRuns", "stepUnitOverruns", "outOfProgramsAtTheLadderUnits", "programCursors"],
   "the @COLD reader states which rows it requires of the frontier census, and it takes that set from the " +
   "composer rather than from a list beside it"));
 /* THE POPULATION SPLITS ARE PARTITIONS AND THE PARTITION IS THE CONTRACT, checked here for the reason
@@ -2015,6 +2015,34 @@ function stepUnitReading(b) {
    IT IS REPORTED AND NEVER USED TO DECIDE (§NO BOUNDS). No arm of the verdict below reads it, no discriminator
    branches on it, and it is not a no-progress detector: it is rendered beside the gauge because a reader
    needs both to name a rung, and that is the whole of its job here. */
+/* WHICH ARMS CANNOT REST, WHICH IS THE PAIR `stepUnitRuns` ABOVE IS ONE HALF OF. `sliceOverruns` says HOW
+   MANY turns met or passed the cooperative slice and this says WHICH ARM each of them was in, so the reading
+   is the two counts side by side: an arm with many runs and no overruns is cheap however often it is taken,
+   and an arm whose two counts are EQUAL is a step that cannot be preempted at all — a different diff, in a
+   different component, from a hot arm. Validated as a PARTITION of `sliceOverruns` for the reason the runs
+   histogram is validated against `steps`: two numbers that are supposed to be the whole of a third are two
+   numbers that can drift, and this one is normally SPARSE, so a lost row moves it toward zero and reads as a
+   loop that rested more often — the flattering direction.
+   MEASURED SHAPE: over one run of 13043 turns at 638eb345, one interleaving, FOUR turns overran. So the
+   expected output of this reading is a very short list, and a short list is the deliverable rather than a
+   quiet result — it names the arms to go and read. */
+function stepUnitOverrunReading(b) {
+  const rows = censusHistRows(b, "stepUnitOverruns", "sliceOverruns", STEP_UNIT_EXTENT);
+  const runs = new Map(censusHistRows(b, "stepUnitRuns", "steps", STEP_UNIT_EXTENT));
+  const over = rows.filter((r) => r[1] > 0).sort((x, y) => y[1] - x[1]);
+  if (Number(b.sliceOverruns) === 0)
+    return `arms that overran the slice: NONE — every one of the ${b.steps} turn(s) ended inside the ` +
+           `cooperative budget, so no arm in this run held the thread past a slice`;
+  return `arms that overran the slice (${b.sliceOverruns} of ${b.steps} turn(s)): ` +
+         over.map((r) => {
+           /* THE ARM'S OWN RUN COUNT IS THE DENOMINATOR AND IT IS QUOTED, never left to a reader to find on
+              another line — `4 overruns` is a magnitude and `4 of 4 runs` is a verdict, and they are the same
+              number. A row whose two counts are EQUAL is the one to read first. */
+           const n = Number(runs.get(r[0]) ?? 0);
+           return `${r[1]} of ${n} ${r[0]}${n > 0 && r[1] === n ? " (EVERY run of that arm overran)" : ""}`;
+         }).join(", ");
+}
+
 function stepUnitRunReading(b) {
   const rows = censusHistRows(b, "stepUnitRuns", "steps", STEP_UNIT_EXTENT);
   const ran = rows.filter((r) => r[1] > 0).sort((x, y) => y[1] - x[1]);
@@ -3275,7 +3303,8 @@ function hungCauseCensus(out) {
                   because its yardstick is the slice THAT RUN was scheduled on and because the measure decides
                   which readings of the number are available; both are facts of the run and neither is this
                   tree's to supply. */
-               stepUnitReading(b) + "; " + stepUnitRunReading(b) + "; " + ladderUnitReading(b) + "; " +
+               stepUnitReading(b) + "; " + stepUnitRunReading(b) + "; " + stepUnitOverrunReading(b) +
+               "; " + ladderUnitReading(b) + "; " +
                stepCostReading(a, b, quantumDenomination(out)) + "; " + programCursorReading(b);
   /* AND WHICH OF THE STILL-0 ROWS WERE EVER ANYTHING ELSE, which is the distinction `flipped.length === 0`
      cannot draw and which decides what "still advancing" is worth. Measured across six builds: the rows that
