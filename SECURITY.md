@@ -362,11 +362,27 @@ guarantees, in one auditable place:
   `blocked-scheme:` — with no bytes beside it, which is the network error §3.5.6's "handle errors" turns into
   the page's `error` event. It passes ONLY what the chokepoint reads, so there is nothing left for it to drop
   in silence; `q.credentials` is deliberately not mapped onto `opts.credentialed` (that flag is this zone's
-  decision, never the analysed bundle's). **STILL OPEN on the `fetch()` path**, and it is the same defect one
-  seam over: the pending register carries the method (`PEND_METHOD`) but `engine_pending_urls` joins URLs
-  ALONE and `engine_provide` fills every entry whose URL matches, so a page that issues a GET and a POST to
-  one address has both promises settled with the GET's body. The fix is in the engine — the pending record
-  and the provide key are `(method, url)`, not `url`.
+  decision, never the analysed bundle's).
+  **AND THE `fetch()` PATH IS NO LONGER THE SAME DEFECT ONE SEAM OVER — THAT PARAGRAPH WAS A `STILL OPEN`
+  THAT HAD STOPPED BEING OPEN, WHICH IS THE DIRECTION THIS FILE RATES WORST.** It read: "the pending register
+  carries the method (`PEND_METHOD`) but `engine_pending_urls` joins URLs ALONE and `engine_provide` fills
+  every entry whose URL matches … The fix is in the engine — the pending record and the provide key are
+  `(method, url)`, not `url`." That fix is LANDED. `engine_pending_urls` is not a symbol in this tree at all
+  (the join is `engine_pending_fetches`, which `git grep` settles in one command); `engine_provide` takes the
+  method as its own parameter and `DCHECK`s it, under a message saying the seam "is keyed on `(method, url)`"
+  and that "a host still sending an address alone has not been converted"; and `engine.h`'s own banner
+  records the pair arriving. A standing `STILL OPEN` naming a symbol that does not exist is worse than a
+  missing one, because its only reader is somebody about to build what is already there.
+  **AND `credentialed` IN THIS FILE MEANS COOKIES, WHICH IS NARROWER THAN "CARRIES NO AUTHORITY" — STATED
+  HERE BECAUSE A READER REACHES FOR THE WIDER SENSE AND THE TWO ARE ONE WORD APART.** `credentials:"omit"`
+  strips the cookie jar. It does not strip an `Authorization` header, and `opts.headers` on the XHR path is
+  the analysed BUNDLE's own list, which may carry the bearer token the person's session minted. It does not
+  strip authority carried in the URL either — a presigned object-store address, a password-reset or invite
+  token, a signed webhook all authorize in the path or query with no cookie anywhere. And it says nothing
+  about LINEAGE: an address the bundle computed out of a credentialed reply
+  (`/api/orgs/{theirOrgId}/members/{theirUserId}`) is about that person's account whatever headers it
+  carries. So an uncredentialed request is not thereby uncorrelated with the person, and any rule that reads
+  the cookie flag as though it were is reading one signal as if it were the question.
 - **`opts.headers` COMES FROM THE UNTRUSTED BUNDLE on the XHR path** — a correction; `safe-fetch.js`'s own
   "analyzer probe headers only" comment was no longer the whole truth, and both halves of that correction are
   now landed rather than noted. `fetchedXhr` forwards the page's header list. It is within the model (an
