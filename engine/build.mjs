@@ -1901,12 +1901,28 @@ function wfqReading(out) {
         ? `MOST of the one point that term can lift a member: a lone arm is being ranked most of an emission ` +
           `ahead of every member of the crowd, by the crowd's size alone`
         : `a fraction of the one point that term can lift a member`) +
-    `. Fork tree depth ${w.brDepthMax}: ` +
-      (w.brDepthMax <= 2
-        ? `a STAR — one flow forking arms off one node, so an aggregate maintained by walking to the root ` +
-          `would be O(1)-ish per charge`
-        : `a CHAIN ${w.brDepthMax} deep — each arm forking the next, so anything maintained by walking to the ` +
-          `root is quadratic, which is the cost solver/flow.h says this row exists to decide`);
+    `. Fork tree depth ${w.brDepthMax} against ${w.members} live member(s): ` +
+      /* THE COMPARISON IS DEPTH AGAINST THE FRONTIER AND NOT AGAINST A CONSTANT, WHICH IS A CORRECTION AND NOT
+         A REFINEMENT. This read `brDepthMax <= 2` and called everything above it a CHAIN whose maintenance is
+         "quadratic". `brDepthMax` is a MAXIMUM over live members (solver/flow.c takes `f->acct->depth` at the
+         member door), so it states how long the LONGEST walk is and nothing about how WIDE the tree is — while
+         the residual it exists to decide asks whether that walk grows WITH the frontier, which is a ratio. A
+         pure chain of N members reads depth N-1, and that is the structural threshold: it needs no constant.
+         MEASURED, and the retired arm answered CHAIN on every real document this tree has censused: 504
+         censuses of a 4.5 MB bundle held depth 5..6 while the frontier grew 1 -> 75113, and solver/flow.c's
+         own artifact-58d56516 reading records fifty buckets at depth 6 over 71452 members. Both rendered as
+         quadratic, which is the answer that argues AGAINST building the `up` residual's next diff — an
+         under-claim, which nobody discovers by acting on it because acting on it means not building. This
+         retires the day a census series shows `brDepthMax` rising with `members`. */
+      (w.members <= 2
+        ? `too few members to tell a star from a chain`
+        : w.brDepthMax >= w.members - 1
+        ? `a CHAIN — every live member is another fork below the last, so a walk to the root IS the frontier ` +
+          `and anything maintained that way is quadratic in it`
+        : `a STAR — a chain of ${w.members} would read depth ${w.members - 1} and this reads ` +
+          `${w.brDepthMax}, so a walk \`up\` costs ${w.brDepthMax} hop(s) a charge and does not grow with the ` +
+          `frontier. That is the precondition solver/flow.c's \`up\` residual names for holding its three ` +
+          `counters per NODE, and this census MEETS it`);
   const terms = `terms over the frontier: reward ${rangeVal.toFixed(3)}, fitness ${w.distMax.toFixed(3)}, ` +
                 `optimism ${rangeUcb.toFixed(3)}, aging ${(rangeOwn + rangeFam).toFixed(3)} ` +
                 `(own ${rangeOwn.toFixed(3)}, family ${rangeFam.toFixed(3)}) — against a total order spread ` +
