@@ -61,16 +61,109 @@ function updateParamStats(stats, value, seenThisRequest) {
   detectFormat(stats, strVal);
 }
 
-function detectFormat(stats, value) {
-  // date-time: parseable date with structural indicators. new Date(invalid)
-  // returns Invalid Date (NaN getTime) instead of throwing, so the try/catch
-  // is just defensive against unexpected platform behavior — the isNaN check
-  // is the real validity test. No try needed.
-  if (value.length >= 8 && (value.includes("-") || value.includes("T"))) {
-    const d = new Date(value);
-    if (!isNaN(d.getTime()) && d.getFullYear() > 1900 && d.getFullYear() < 2200) {
-      stats.formatHints["date-time"]++;
+/* ECMAScript §21.4.1.32 "Date Time String Format" — CONFORMANCE, asked BEFORE the value is parsed.
+   `new Date(v)` is real parsing and that is exactly why it cannot be the test on its own: §21.4.3.2
+   "Date.parse ( string )" says, verbatim, "The function first attempts to parse the String according to
+   the format described in Date Time String Format (21.4.1.32), including expanded years. If the String
+   does not conform to that format the function may fall back to any implementation-specific heuristics
+   or implementation-specific date formats." V8 takes that licence generously, so a comment reading
+   "real parsing, not regex" was true and was not the point: the parser was real and deliberately lenient,
+   and what it returned for a value that is not a date was a DATE.
+   MEASURED on node v22: "ConfigCat-React/a-4.8.0" parses as 2000-04-08, "sdk-2.15.3" as 2003-02-15,
+   "my-app-1.2" as 2001-01-02 — ordinary SDK version strings, which is what a `?sdk=` query parameter
+   holds. The hint reaches `field.format` (lib/learn.js analyzeFormat call site) and `openapi-export.js`
+   writes it out, so it stops being a claim about this tool and becomes `format: date-time` on somebody
+   else's API. CLAUDE.md §@H: a value known only to satisfy a guess is INVENTED, never emitted as observed.
+   THE SPLIT IS STRUCTURE HERE, BOUNDS AT THE PARSER, and both are needed. The grammar decides SHAPE — it
+   is a production from the standard, not a guess about what a date looks like — and the real parse still
+   decides VALIDITY, because the grammar admits combinations the standard calls out of bounds
+   (DD is "01 to 31", so 2024-02-31 conforms and is not a day; HH is "00 to 24", so T24:30 conforms and is
+   not a time). Running the real parser on a string already known to conform is RUN, DON'T MATCH with the
+   fallback door shut.
+   THE OLD YEAR WINDOW (1900 < y < 2200) IS GONE RATHER THAN KEPT. It was standing in for "is this really
+   a date" against the lenient parser's output; with the grammar gate ahead of it the garbage it was
+   filtering never arrives, and the only strings it still rejected were CONFORMING dates outside an
+   arbitrary window. A guess that has stopped catching anything but true positives is not a safety net. */
+function _allDigits(s, from, len) {
+  if (from < 0 || from + len > s.length) return false;
+  for (let i = from; i < from + len; i++) {
+    const c = s.charCodeAt(i);
+    if (c < 48 || c > 57) return false;
+  }
+  return true;
+}
+function _num2(s, from, len) { return Number(s.slice(from, from + len)); }
+
+function _isDateTimeStringFormat(value) {
+  // Shortest conforming form this accepts is YYYY-MM-DD (10). Not a heuristic — arithmetic on the
+  // grammar below, which exists only to skip the scan for values that cannot possibly reach its end.
+  if (value.length < 10) return false;
+
+  let i;
+  // YYYY: "four decimal digits from 0000 to 9999, or as an expanded year of '+' or '-' followed by six
+  // decimal digits" (§21.4.1.32, §21.4.1.32.1 "Expanded Years").
+  if (value[0] === "+" || value[0] === "-") {
+    if (!_allDigits(value, 1, 6)) return false;
+    i = 7;
+  } else {
+    if (!_allDigits(value, 0, 4)) return false;
+    i = 4;
+  }
+
+  /* §21.4.1.32 also lists the date-only forms YYYY and YYYY-MM, and this DELIBERATELY requires the full
+     YYYY-MM-DD. Two reasons, both stated so the narrowing is not read as an oversight. The hint is named
+     `date-time` and is exported as an OpenAPI `format`, where date-time is an RFC 3339 instant and a bare
+     year is not one. And accepting bare YYYY would type every four-digit numeric parameter — a year, a
+     port, a page size — as date-time, because `analyzeFormat` returns the FIRST hint over its threshold
+     and `createParamStats` lists "date-time" ahead of "integer", so date-time wins that tie outright.
+     The predicate it replaces already required length >= 8, so neither form reached it before either:
+     this is the same population, decided by a rule instead of by a length. */
+  if (value[i] !== "-" || !_allDigits(value, i + 1, 2)) return false;
+  const month = _num2(value, i + 1, 2);
+  if (month < 1 || month > 12) return false;            // "01 (January) to 12 (December)"
+  i += 3;
+  if (value[i] !== "-" || !_allDigits(value, i + 1, 2)) return false;
+  const day = _num2(value, i + 1, 2);
+  if (day < 1 || day > 31) return false;                // "01 to 31"
+  i += 3;
+  if (i === value.length) return true;                  // date-only YYYY-MM-DD
+
+  // "T" appears literally, to indicate the beginning of the time element.
+  if (value[i] !== "T") return false;
+  i += 1;
+  if (!_allDigits(value, i, 2)) return false;
+  if (_num2(value, i, 2) > 24) return false;            // HH "from 00 to 24"
+  i += 2;
+  if (value[i] !== ":" || !_allDigits(value, i + 1, 2)) return false;
+  if (_num2(value, i + 1, 2) > 59) return false;        // mm "from 00 to 59"
+  i += 3;
+  if (value[i] === ":") {                               // optional :ss
+    if (!_allDigits(value, i + 1, 2)) return false;
+    if (_num2(value, i + 1, 2) > 59) return false;      // ss "from 00 to 59"
+    i += 3;
+    if (value[i] === ".") {                             // optional .sss
+      if (!_allDigits(value, i + 1, 3)) return false;
+      i += 4;
     }
+  }
+  if (i === value.length) return true;                  // no offset — a local-time form, still conforming
+
+  // Z ::: "Z", or "+"/"-" followed by HH:mm. §21.4.1.33 "Time Zone Offset String Format" bounds that
+  // hour at 23 (`Hour ::: 0 DecimalDigit | 1 DecimalDigit | 20 | 21 | 22 | 23`) and the minute at 59.
+  if (value[i] === "Z") return i + 1 === value.length;
+  if (value[i] !== "+" && value[i] !== "-") return false;
+  if (!_allDigits(value, i + 1, 2) || _num2(value, i + 1, 2) > 23) return false;
+  i += 3;
+  if (value[i] !== ":" || !_allDigits(value, i + 1, 2)) return false;
+  if (_num2(value, i + 1, 2) > 59) return false;
+  return i + 3 === value.length;
+}
+
+function detectFormat(stats, value) {
+  // date-time: conforms to §21.4.1.32's grammar AND the real parser accepts it. new Date(invalid)
+  // returns Invalid Date (NaN getTime) instead of throwing, so isNaN is the validity test; no try needed.
+  if (_isDateTimeStringFormat(value) && !isNaN(new Date(value).getTime())) {
+    stats.formatHints["date-time"]++;
   }
 
   // uri: canParse guard — root-cause fix for the URL-parse-as-validity test.
