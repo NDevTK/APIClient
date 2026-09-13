@@ -34,7 +34,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
-import { readFileSync, rmSync } from 'node:fs';
+import { readFileSync, rmSync, readdirSync, rmdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { siteList } from './list.mjs';
 
@@ -149,6 +149,8 @@ for (const [id, url, stack] of rows) {
   if (doc.err || !doc.buf) { put({ id, stack, requestedUrl: url, error: doc.err || 'no body', fetchedAt: now() }); console.log(id, 'FAILED', doc.err); continue; }
   const html = doc.buf.toString('utf8');
   writeFileSync(join(dir, 'index.html'), doc.buf);
+  /* EVERY FILE THIS CAPTURE WRITES, so the prune below can tell them from a PREVIOUS capture's. */
+  const written = new Set([join(dir, 'index.html')]);
   /* THE DOCUMENT'S POLICY, AND ONLY THE DOCUMENT'S. HTML §7.1.7 "Policy containers" gives a policy container
      to a DOCUMENT; a subresource's own `Content-Security-Policy` governs nothing about the page that loaded
      it, so a `csp` on a `resources` entry would be a field whose only possible reading is the wrong one.
@@ -207,11 +209,47 @@ for (const [id, url, stack] of rows) {
     const f = join(dir, rel.replace(/[^A-Za-z0-9._/@%+-]/g, '_'));
     mkdirSync(dirname(f), { recursive: true });
     writeFileSync(f, r.buf);
+    written.add(f);
     rec.resources.push({ url: abs, status: r.code, contentType: r.ct, bytes: r.buf.length, sha256: sha(r.buf), fetchedAt: now(), path: rel });
     n++;
   }
+  /* THE ROW'S DIRECTORY HOLDS EXACTLY WHAT THIS CAPTURE WROTE, AND A LEFTOVER FILE IS NOT INERT -- IT IS
+     SERVED. serve-faithful.mjs resolves a request BY DISK PATH and reads the record only for the status and
+     the type, saying so in its own words: `A status is only ever read from the record; a resource that is on
+     disk with NO recorded status is an older capture and keeps the 200 it has always been served with.` So a
+     file no manifest entry vouches for comes back to the engine as 200 `application/javascript`, which is the
+     manufactured-engine-defect shape this file's header is otherwise entirely about, arriving through what
+     the builder FAILED TO REMOVE rather than through what it wrote.
+     MEASURED, AND IT IS `--compressed` ABOVE THAT PRODUCED IT: asking for an encoding changes which DOCUMENT
+     the origin serves, and a document that may name per-encoding resource paths then names DIFFERENT ONES.
+     slack's names the brotli-variant CDN directory `a.slack-edge.com/bv1-13-br/...` where the previous
+     capture's named `a.slack-edge.com/bv1-13/...` -- 21 references before, 22 after, NOT ONE PATH IN COMMON.
+     So the re-mirror that fixed 14 gzip bodies wrote 14 correct files BESIDE the 14 corrupt ones and left
+     every one of them reachable: the gzip derivation over the mirror still read 14 after a run that printed
+     `17/17 scripts` and refused nothing. THE CAPTURE WAS RIGHT AND THE DIRECTORY WAS THE UNION OF TWO OF THEM,
+     which no count of what the run fetched can show, because every number that run printed was true.
+     PRUNED AFTER, NEVER CLEARED BEFORE. The document fetch above `continue`s without writing anything, so a
+     row whose site is briefly unreachable keeps the capture it already has; a clear-first would empty it on
+     the strength of a run that got nothing, which is the destructive direction and the irreversible one. A
+     resource that failed THIS time is recorded with an `error` and no `path`, so its stale bytes go with the
+     rest -- the record says this mirror does not have it, and disk must not be left disagreeing, because a
+     fixture 404 is a fact serve-faithful reports and counts while a stale 200 is an abort nobody can
+     attribute. The scope is this row's own directory and nothing above it. */
+  const sweep = (d, files = [], dirs = []) => {
+    for (const e of readdirSync(d, { withFileTypes: true })) {
+      const q = join(d, e.name);
+      if (e.isDirectory()) { dirs.push(q); sweep(q, files, dirs); } else files.push(q);
+    }
+    return { files, dirs };
+  };
+  const { files: onDisk, dirs: subDirs } = sweep(dir);
+  let pruned = 0;
+  for (const f of onDisk) if (!written.has(f)) { rmSync(f); pruned++; }
+  /* Deepest first, so a directory emptied by the prune is gone before its parent is tried. `rmdirSync`
+     refuses a non-empty one, which is exactly the test wanted and is why nothing here counts entries. */
+  for (const d of subDirs.sort((a, b) => b.length - a.length)) { try { rmdirSync(d); } catch { } }
   put(rec);
-  console.log(`${id}\t${doc.code}\t${(doc.buf.length / 1024).toFixed(0)}KiB doc\t${n}/${srcs.size} scripts\t${(rec.resources.reduce((a, x) => a + (x.bytes || 0), 0) / 1024).toFixed(0)}KiB js`);
+  console.log(`${id}\t${doc.code}\t${(doc.buf.length / 1024).toFixed(0)}KiB doc\t${n}/${srcs.size} scripts\t${(rec.resources.reduce((a, x) => a + (x.bytes || 0), 0) / 1024).toFixed(0)}KiB js\t${pruned} stale pruned`);
 }
 writeFileSync(join(ROOT, 'provenance.json'), JSON.stringify(manifest, null, 1));
 console.log('wrote provenance.json (' + manifest.length + ' sites)');
