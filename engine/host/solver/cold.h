@@ -222,8 +222,10 @@ typedef struct {
        `document-lifecycle-stage`) says the members ARE dispatched and that work the page arranged falls due
        ahead of the take on every round — a statement about this ladder's precondition and not about the pick.
        Mass on an arm BELOW it (`queue-rendering-opportunity`, `fire-due-timer`, `await-owed-reply`,
-       `close-request`) says the member went PAST the seed, so the seed RAN and found nothing to take, which is
-       a fact about the HEAP and not about the frontier at all.
+       `await-a-refused-request`, `close-request`) says the member went PAST the seed, so the seed RAN and
+       found nothing to take, which is a fact about the HEAP and not about the frontier at all. The two
+       `await-` rows there are ONE arm of flow_step split by whether the host can still be asked, so they are
+       at the same rung by construction and a reader of this row may take either as the same evidence.
        AND THE SECOND OF THOSE HAS A CONSEQUENCE FOR THE ORPHAN CENSUS WORTH STATING AND NOT ASSERTING: `asked`
        is a LIFETIME count and this is a GAUGE, so a member reading a below-rung arm says only that SOME member
        passed the seed at SOME past instant. That is enough to make a nonzero below-rung mass beside `asked` 0

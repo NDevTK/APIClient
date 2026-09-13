@@ -579,6 +579,26 @@ int  pending_outstanding(JSValueConst reg);
    reporting it as a document that is merely waiting. */
 int  pending_host_outstanding(JSValueConst reg);
 
+/* IS THIS FLOW PARKED ON SOMETHING THE TRUSTED ZONE HAS REFUSED — the THIRD answer, and the one whose absence
+   made the two above read as a difference rather than as a partition. Per entry `owed` splits exactly two
+   ways (`pend_host_owed` is `pend_owed && !declined`), so this is the other half at register arity, and the
+   identity `outstanding == host_outstanding || declined_outstanding` is asserted where all three are in one
+   hand.
+   IT EXISTS BECAUSE A MARK AND A BILL ARE DIFFERENT CLAIMS AND ONLY ONE OF THEM IS ABOUT THE HOST.
+   `flow_set_host_owed` takes a flow OUT OF THE PICK, which is right for a refused flow — it can make no
+   progress and a step of it converts nothing into work. What is NOT right is reading that mark as a debt: the
+   joins skip a refused entry precisely so it is not re-asked, so `engine_host_owes` answers 0 and the bill is
+   empty. The two asserts that guard the mark enumerate the reasons a mark may rest on something and were
+   short by exactly this one, so the state they abort on is the state the design requires — §@S's
+   search-not-yet-solved, waiting on a per-origin widening that happens in a LATER SESSION.
+   ASK THIS ONE RATHER THAN COMPOSING IT. `pending_outstanding(reg) && !pending_host_outstanding(reg)` is the
+   same answer for a register whose every owed entry is refused and a DIFFERENT one for a mixed register, and
+   composing a question out of two others is how both register-arity readers of the host question came to ask
+   the flow question instead.
+   RETIREMENT: this note goes with the partition assert in pending.c — when the three walks cannot disagree,
+   there is nothing here for a caller to get wrong. */
+int  pending_declined_outstanding(JSValueConst reg);
+
 /* IS ANY ENTRY OF ONE KIND STILL OWED — the missing ARITY of the two questions above, and the one a caller
    that cares WHICH debt it is holding has to be able to ask. `pending_count_kind` asks the kind and counts
    ANSWERED entries too (which is right for the request door); `pending_outstanding` asks "owed" and not the

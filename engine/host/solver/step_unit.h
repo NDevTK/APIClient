@@ -8,8 +8,11 @@
  * silence covering arms that take OPPOSITE work: a frontier looping in `queue-rendering-opportunity` or
  * `fire-due-timer` has unbounded periodic work and is a fidelity gap or a regression; one sitting in
  * `start-a-classic-program`/`resume-program` legitimately holds more script than it used to; one in the orphan
- * arms is seeding drives; one at `await-owed-reply` is parked on the host. Those are four different diffs, and
- * "no flow finished across the window" was the whole of what the gate could say about which.
+ * arms is seeding drives; one at `await-owed-reply` is parked on the host; one at `await-a-refused-request`
+ * is parked on nothing the host can do at all and is asking for a per-origin widening rather than for code.
+ * Those are five different diffs, and "no flow finished across the window" was the whole of what the gate
+ * could say about which — and the last two are the sharpest case this file has, because they leave flow_step
+ * through ONE arm under ONE verdict and the work they name is in two different zones.
  *
  * AND THE PAIR IN THAT SENTENCE IS THE ONE THIS LIST GOT WRONG, WHICH IS WORTH STATING BESIDE THE DEFECT IT
  * ENDS. `start` and `resume` are not one state read twice: a step that STARTS a program advanced this flow's
@@ -41,11 +44,18 @@
  * list, and a row dropped from one of them for being structurally zero would make the two key sets differ,
  * which is a difference every reader of either would then have to know about.
  *
- * THE PARTITION IS COMPLETE ON PURPOSE — every exit of flow_step is one of these, including the three that
- * return OWED without doing any work (`host-blocked`, `await-owed-reply`, `await-peer-operation`) and the one
- * that returns DONE (`finished`). Those four used to leave the previous arm's name standing, so a member
- * parked on the host was reported under whatever it last DID, which is precisely the attribution this
- * instrument exists to get right. */
+ * THE PARTITION IS COMPLETE ON PURPOSE — every exit of flow_step is one of these, including the four that
+ * return OWED without doing any work (`host-blocked`, `await-owed-reply`, `await-a-refused-request`,
+ * `await-peer-operation`) and the one that returns DONE (`finished`). Those used to leave the previous arm's
+ * name standing, so a member parked on the host was reported under whatever it last DID, which is precisely
+ * the attribution this instrument exists to get right.
+ * AND ONE OF THOSE FOUR IS NOT PARKED ON THE HOST AT ALL, WHICH IS WHY IT IS A ROW AND NOT A SHADE.
+ * `await-owed-reply` and `await-a-refused-request` leave flow_step through ONE arm and one verdict, and they
+ * are opposite facts about the same frontier: the first is a debt `engine_host_owes` bills for and a host
+ * event will clear, the second is a park the trusted zone REFUSED, which appears on neither join and which no
+ * host event can ever clear. A census that summed them reported a document waiting on a payment nobody could
+ * identify and one whose search is parked until an origin is widened as the same number, and the two take
+ * opposite work — one is a bill to pay and one is a residue to carry into the next session. */
 #ifndef ENGINE_HOST_SOLVER_STEP_UNIT_H
 #define ENGINE_HOST_SOLVER_STEP_UNIT_H
 
@@ -172,10 +182,23 @@
     X(START_ENDED_FRAME,  "start-ended-its-frame")                               \
     X(START_REPORTED,     "start-reported-an-exception")                         \
     X(START_DETACHED,     "start-detached-its-base")                             \
-    /* …and the arms that perform NO work: three flavours of waiting, and done */ \
+    /* …and the arms that perform NO work: five flavours of waiting, and done. */ \
+    /* The count said THREE and the list held four, which is the cheapest      */ \
+    /* check there is and needs no tree: a number beside its own enumeration.  */ \
     X(AWAIT_FETCH_RECORD, "await-fetch-record")                                   \
     X(HOST_BLOCKED,       "host-blocked")                                         \
     X(AWAIT_OWED_REPLY,   "await-owed-reply")                                     \
+    /* THE SAME ARM AND THE SAME VERDICT AS THE ROW ABOVE, AND THE OPPOSITE   */ \
+    /* FACT. flow_step reaches both through `pending_outstanding` — a refused */ \
+    /* entry is still owed TO THE FLOW, which is what keeps the timeline from */ \
+    /* being torn down — and they diverge on `pending_host_outstanding`: the  */ \
+    /* row above is a debt a host event will clear, and this one is a park    */ \
+    /* the trusted zone declined, which `engine_pending_fetches` and          */ \
+    /* `engine_host_requests` both skip so it is not re-asked and re-refused. */ \
+    /* It is §@S's search-not-yet-solved, waiting on a per-origin widening in */ \
+    /* a LATER SESSION, and it is the one resting arm whose residue has to be */ \
+    /* WRITTEN DOWN rather than paid — see engine_sched_slice's close.        */ \
+    X(AWAIT_DECLINED,     "await-a-refused-request")                              \
     X(AWAIT_PEER,         "await-peer-operation")                                 \
     X(FINISHED,           "finished")
 

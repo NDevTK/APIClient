@@ -410,6 +410,18 @@ long engine_work_done(void);
    because a park wants the same moment), but nothing has to TELL the engine any more. */
 int engine_host_owes(void);
 
+/* …AND THE OTHER WAY A FRONTIER CAN HAVE NOTHING LEFT TO CONVERT INTO WORK, which is not a bill and must never
+   be read as one. Every member is parked on a request the TRUSTED ZONE REFUSED: outstanding to its own flow
+   (so the timeline is not torn down) and owed by nobody, because the two joins skip a refused entry precisely
+   so it is not re-asked and re-refused. The bill above therefore answers 0 for such a frontier and is right
+   to; what this answers is the fact that makes that 0 honest rather than a mark resting on an event that can
+   never happen.
+   THE TWO ARE ASKED IN ORDER AND CANNOT BOTH HOLD BY ACCIDENT: one billable member falsifies this, and a
+   refused member can never be what a bill names. `-inf` from a frontier in this state is not "the other
+   document is worth more" and not "pay me" — it is "rank me last and let me write my residue down", which is
+   what engine_sched_slice's close then does before the session ends. */
+int engine_frontier_settled(void);
+
 /* THIS INSTANCE'S DOCUMENT IS ONE ANOTHER INSTANCE HOLDS A REFERENCE INTO, so its timelines may not RUN OUT.
    A document's state IS its flows (engine_perform says so where it attaches an operation to every one of
    them), so a peer that still holds a WindowProxy for this document can ask it something at any moment — and a

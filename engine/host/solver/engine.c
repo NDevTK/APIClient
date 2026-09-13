@@ -3787,6 +3787,28 @@ int engine_host_owes(void) {
     return 0;
 }
 
+/* IS EVERY MEMBER PARKED ON SOMETHING NO HOST EVENT CAN CLEAR — the frontier-arity counterpart of the bill
+ * above, and the OTHER answer a `-inf` can honestly carry. The two are asked in that order and only one of
+ * them is a claim ON the host: `engine_host_owes` says "pay me and I convert a slice into work", and this says
+ * "there is nothing to pay and nothing further I can do, so rank me last and let me write my residue down".
+ * A frontier holding even one billable member answers the first, so these never both hold for a reason: a
+ * refused member is invisible to `engine_pending_fetches` and `engine_host_requests` by design, so it can
+ * never be the thing a bill names.
+ * EVERY MEMBER RATHER THAN ANY, because the claim is about what the ENGINE can do and one runnable or billable
+ * member falsifies it. `pending_declined_outstanding` is the register-arity refusal question (pending.h) and
+ * is asked directly rather than composed out of `outstanding && !host_outstanding`, which is the same answer
+ * for a register whose every owed entry is refused and a different one for a mixed register.
+ * AN EMPTY FRONTIER ANSWERS 0 AND NOT 1. "Every member is settled" over no members is vacuously true and is
+ * the wrong statement to hand a reader: an exhausted frontier is a different fact with a different exit, and a
+ * predicate that conflated them would let the -inf assert below be satisfied by the one state it already has
+ * its own clause for. */
+int engine_frontier_settled(void) {
+    if (flow_count() == 0) return 0;
+    for (int i = 0; i < flow_count(); i++)
+        if (!pending_declined_outstanding(flow_at(i)->pending)) return 0;
+    return 1;
+}
+
 /* Deliver a body for the request `(method, url)` into every flow parked on it. The value lands on the flow's OWN
    pending entry, so the reaction the resolve enqueues belongs to that flow and to its COW delta — which is why
    this is here and not in a register beside it. Returns how many entries it filled.
@@ -8860,10 +8882,33 @@ static int flow_step(JSContext *ctx, Flow *f) {
              * and not the bug: FLOW_STEP_OWED is the only resting verdict there is, this arm has to reach for
              * it, and the crash names the state that has no verdict of its own. Narrowing this test to the host
              * question would send a refused flow to a FINISHED arm, which is the drop §NO BOUNDS forbids.
-             * RETIREMENT: this note goes with the fourth verdict — when a flow that can make no progress and is
-             * owed nothing has a resting state of its own, the two predicates answer one question again. */
+             * AND THE FOURTH VERDICT THAT NOTE ASKED FOR IS NOT THE DIFF, WHICH IS RECORDED HERE RATHER THAN
+             * DELETED BECAUSE IT IS THE READING THE NEXT PERSON RE-DERIVES. It said a flow owed nothing needs
+             * "a resting state of its own". A VERDICT SELECTS AN ACTION, and flow_step has exactly three to
+             * select between — tear the timeline down (DONE), take the member out of the pick (OWED), keep
+             * stepping (MORE). A refused flow wants the SECOND, unchanged: it can convert no slice into work,
+             * and `flow_set_host_owed` neither removes it from the frontier nor touches any term of its
+             * weight, so the mark is rank-neutral by construction and the flow keeps its snapshot, its delta,
+             * its rank and every work item it holds. A fourth verdict would be a second name for that one arm,
+             * which is two right answers to one question and is the shape that drifts.
+             * WHAT WAS ACTUALLY SHORT BY ONE WAS NOT THE VERDICT SET BUT THE TWO ASSERTS THAT READ THE MARK,
+             * and one MECHANISM behind them. The mark is a bit meaning INELIGIBLE, the asserts read it as a
+             * claim about the host's DEBT, and they enumerate the reasons a mark may rest on something —
+             * a reply the host can still send, a peer holding a reference — with the refusal missing. The
+             * mechanism is the one the note's own third clause named and mis-read: "session may close over
+             * it" is not a capability to build, it is what already happens, and what it does is DROP the
+             * survivors. engine_sched_slice's tail now writes them to the cold tier before it closes.
+             * THE UNIT SPLITS AND THE VERDICT DOES NOT, WHICH IS THE WHOLE OF THE CORRECTION. What a census
+             * could not say is which of two opposite facts a resting member holds — a debt to bill, or a
+             * residue to carry — and that is a question about attribution, which is what step_unit.h is for.
+             * `pending_host_outstanding` is the same predicate the mark's own assert asks two seams later, so
+             * the row and the assert cannot disagree about which member is which. */
             else if (pending_outstanding(f->pending)) {
-                g_step_unit = STEP_UNIT_AWAIT_OWED_REPLY;   /* every task source is empty; a reply is not */
+                /* every task source is empty; a reply is not — and the two rows are the two answers to
+                   "can the host still be asked", asked of the register this flow is parked on. */
+                g_step_unit = pending_host_outstanding(f->pending)
+                            ? STEP_UNIT_AWAIT_OWED_REPLY
+                            : STEP_UNIT_AWAIT_DECLINED;
                 return FLOW_STEP_OWED;
             }
             /* HTML §8.1.4.7 "Unhandled promise rejections"'S "notify about rejected promises" IS NOT AN ARM OF
@@ -10056,6 +10101,55 @@ void engine_request_park(void) {
 
 int engine_frontier_paged(void) { return g_parked; }
 
+/* WRITE THE WHOLE FRONTIER DOWN AND STATE THAT IT HAS BEEN WRITTEN — the one park, reached from the two exits
+ * that end a session holding live members. It is ONE function because the two exits are the same act for two
+ * reasons and not two acts: the host asking for RAM back, and the engine having nothing left it can convert
+ * into work while members still hold snapshots. A second copy would be two right answers to one question, and
+ * the half that would have drifted is the half nobody was running.
+ *
+ * THE RUNNING FLOW IS SWITCHED OUT FIRST AND THAT IS THE MECHANISM RATHER THAN AN ORDERING PREFERENCE. Every
+ * flow's decision state has to be in its OWN blob for cold_park's walk to read it, and the one flow whose
+ * state is not is whichever the scheduler is holding — decide.c keeps the running flow's evolving vector in
+ * its globals. From that instant the frontier is a set of snapshots, which is exactly what a park needs and
+ * exactly what §Time-travel-resume says a parked flow is.
+ *
+ * IT IS NOT A DROP AND NOT A BOUND. Nothing is truncated, skipped or forgotten: every member is written, in
+ * full, and the host stores the document under this bundle's key. The flows themselves are released by the
+ * teardown that follows, which is what frees the RAM — and a residue coming back is the SAME admission step,
+ * ranked by the same one order. */
+static void engine_park_frontier(JSContext *ctx, Flow *cur)
+{
+    if (cur) flow_switch_out(ctx, cur);
+    /* THE QUESTIONS THIS INSTANCE WAS ASKED AND DID NOT START ARE HANDED BACK FIRST, before the residue is
+       written, because they are not this instance's work to save: a token is the ZONE's name for a flow
+       suspended in ANOTHER instance, it carries no generation, and it does not outlive the zone session — so
+       it may never enter a recipe (engine.h). Returning them here is what lets cold_park's assert keep naming
+       the one shape that genuinely has no recipe yet: an operation already STARTED. */
+    engine_retract_operations(ctx);
+    cold_park();
+    /* AND THE FOREIGN SEGMENTS THAT RESIDUE CARRIES, announced before the deaths below because they are the
+       opposite statement and the zone acts on them in that order: these worlds belong to PEERS and outlive
+       this session in the park document, so the zone has to hold their deaths for the instance that resumes
+       this document; the ones below are OURS and end here. */
+    {
+        const char *const *carried;
+        int n_carried = world_segments_park(&carried);
+        engine_notify_worlds_parked(ctx, carried, n_carried);
+    }
+    /* AND EVERY WORLD THIS SESSION EVER PUT ON THE WIRE IS DEAD TO ITS PEERS — announced HERE, between the
+       park and the close, because this is the last point at which a notice of ours is still drained. The
+       frontier is recipes from the line above and a resumed session mints in a disjoint generation (world.h),
+       so no name this session sent will ever be used again, while the peer that never left memory still holds
+       a segment for each of them. The flows themselves are released by the teardown the host takes after this
+       returns, and they find nothing left to announce. */
+    {
+        const char *const *gone;
+        int n_gone = world_session_gone(&gone);
+        engine_notify_worlds_gone(ctx, gone, n_gone);
+    }
+    g_parked = 1;
+}
+
 /* ─────────────────────────────────────────────────────────────────────────────────────────────────────────
    THE PARTIAL SELF-PARK — the engine selling its own tail at the RAM floor, which is the OTHER half of the
  * paragraph above. Level-1 eviction is the host giving up a whole DOCUMENT for a document worth more; this is
@@ -10575,11 +10669,24 @@ double engine_top_weight(void) {
        which no host event can ever clear again. flow_set_host_owed asserts that per flow at the instant a mark
        is made; nothing asserted it of the FRONTIER at the instant the mark becomes an answer the host ranks on,
        and a `-inf` that means "nobody can ever wake me" is indistinguishable from one that means "pay me". */
-    DCHECK(b != NULL || flow_count() == 0 || engine_host_owes() || g_referenced,
-           "this engine reported -inf — it can hand the thread to nobody — while the host owes it NOTHING and "
-           "no peer holds a reference into it: every member's mark rests on a register that has already been "
-           "answered, so no host event can clear one, the Level-1 order will rank this document last forever "
-           "and every timeline it holds is unexplored with nothing naming it");
+    /* …AND THE THIRD THING A `-inf` CAN HONESTLY REST ON, WHICH IS NOT A CLAIM ON THE HOST AT ALL. The
+       paragraph above is right that -inf from a non-empty frontier must rest on something and enumerates two
+       things it can rest on — a debt, and a peer that can still ask. A frontier every one of whose members is
+       parked on a request the trusted zone REFUSED rests on a third: a park this engine has recorded and is
+       about to write to the cold tier. It is invisible to the bill BY DESIGN (the joins skip a refused entry
+       so it is not re-asked and re-refused), so `engine_host_owes` answers 0 and is right to, and the honest
+       reading of the -inf is "rank me last and let me write my residue down" rather than "pay me".
+       ASKED SECOND AND NOT FOLDED INTO THE BILL. Widening `engine_host_owes` to admit a refusal would put a
+       refused entry back on a bill the host cannot pay, which is the exact defect that predicate was corrected
+       to remove; these are two questions and each keeps its own spelling.
+       AND THE DEFECT THE ASSERT WAS WRITTEN FOR IS UNTOUCHED: a frontier whose marks rest on ANSWERED entries
+       satisfies neither, because `pend_owed` is false for an answered entry and both walks then answer 0. */
+    DCHECK(b != NULL || flow_count() == 0 || engine_host_owes() || engine_frontier_settled() || g_referenced,
+           "this engine reported -inf — it can hand the thread to nobody — while the host owes it NOTHING, no "
+           "peer holds a reference into it, and its members are not parked on a REFUSAL either: every member's "
+           "mark rests on a register that has already been ANSWERED, so no host event can clear one, the "
+           "Level-1 order will rank this document last forever and every timeline it holds is unexplored with "
+           "nothing naming it");
     return b ? flow_weight(b) : -1.0 / 0.0;
 }
 
@@ -10659,36 +10766,9 @@ static int engine_sched_slice(void) {
        a whole document's engine leaving memory, and its residue coming back is the SAME admission step, ranked
        by the same one order. */
     if (g_park_req) {
-        if (cur) { flow_switch_out(ctx, cur); cur = NULL; }
-        /* THE QUESTIONS THIS INSTANCE WAS ASKED AND DID NOT START ARE HANDED BACK FIRST, before the residue is
-           written, because they are not this instance's work to save: a token is the ZONE's name for a flow
-           suspended in ANOTHER instance, it carries no generation, and it does not outlive the zone session —
-           so it may never enter a recipe (engine.h). Returning them here is what lets cold_park's assert keep
-           naming the one shape that genuinely has no recipe yet: an operation already STARTED. */
-        engine_retract_operations(ctx);
-        cold_park();
-        /* AND THE FOREIGN SEGMENTS THAT RESIDUE CARRIES, announced before the deaths below because they are the
-           opposite statement and the zone acts on them in that order: these worlds belong to PEERS and outlive
-           this session in the park document, so the zone has to hold their deaths for the instance that
-           resumes this document; the ones below are OURS and end here. */
-        {
-            const char *const *carried;
-            int n_carried = world_segments_park(&carried);
-            engine_notify_worlds_parked(ctx, carried, n_carried);
-        }
-        /* AND EVERY WORLD THIS SESSION EVER PUT ON THE WIRE IS DEAD TO ITS PEERS — announced HERE, between the
-           park and the close, because this is the last point at which a notice of ours is still drained. The
-           frontier is recipes from the line above and a resumed session mints in a disjoint generation
-           (world.h), so no name this session sent will ever be used again, while the peer that never left
-           memory still holds a segment for each of them. The flows themselves are released by the teardown the
-           host takes after this returns, and they find nothing left to announce. */
-        {
-            const char *const *gone;
-            int n_gone = world_session_gone(&gone);
-            engine_notify_worlds_gone(ctx, gone, n_gone);
-        }
+        engine_park_frontier(ctx, cur);
+        cur = NULL;
         g_park_req = 0;
-        g_parked = 1;
         g_sess_cur = NULL;
         engine_session_close();
         return ENGINE_STEP_DONE;
@@ -11283,18 +11363,36 @@ static int engine_sched_slice(void) {
                    healthy. It is also the STRICTER predicate: `pending_count > 0` is satisfied by a register
                    whose every entry has already been ANSWERED, and a flow stuck on one of those is precisely
                    the shape no host event can ever clear. Asked per flow, at the instant the mark is made. */
-                DCHECK(pending_host_outstanding(cur->pending) || g_referenced,
-                       "a flow was marked host-owed while the host owes it NOTHING — every entry on its "
-                       "register has already been answered or REFUSED, so no host event can clear this mark and "
-                       "the flow is out of the pick for the rest of the session with its whole timeline "
-                       "unexplored. A REFUSED entry is the live shape: the trusted zone declined the request, "
-                       "flow_decline_fork gave this flow its two arms, and the WAITING one has no debt any host "
-                       "can pay — it is waiting on a per-origin widening that happens in a LATER SESSION. "
-                       "FLOW_STEP_OWED is the only resting verdict this scheduler has and it means `the host "
-                       "owes me`, which is false here; what is unbuilt is a resting state for a flow that can "
-                       "make no progress and is owed nothing — out of the pick, out of the bill, and written "
-                       "down to the cold tier before the session closes, which is §NO BOUNDS' "
-                       "deprioritize-and-page rather than a drop");
+                /* …AND THE THIRD REASON A MARK MAY REST ON SOMETHING, WHICH IS WHY THIS IS THREE CLAUSES AND
+                   NOT TWO. The paragraph above is right that the assert and the selecting arm ask different
+                   questions and WRONG about what follows from it: it concluded that the gap "is the FORCING
+                   FUNCTION" and that a refused flow needed a resting verdict of its own. A mark is a bit
+                   meaning INELIGIBLE, and a refused flow is exactly that — it can convert no slice into work,
+                   and taking it out of the pick is the right and only action. What the assert is really about
+                   is whether the mark RESTS ON ANYTHING, and there are three ways it can: a reply the host can
+                   still send, a peer that can still ask this timeline something, and a refusal this engine has
+                   recorded and can account for. The third was missing, so the one state the design REQUIRES
+                   aborted the dev build.
+                   THE DEFECT IT WAS WRITTEN TO CATCH IS UNTOUCHED, WHICH IS THE WHOLE TEST OF A WIDENING. A
+                   register whose every entry has been ANSWERED satisfies none of the three — `pend_owed` is
+                   false for an answered entry, so both register walks answer 0 — and it fires exactly as
+                   before. The widening admits the refusal and nothing else, which is what the partition assert
+                   in pending.c makes a property rather than a hope.
+                   AND IT MAY ONLY BE WIDENED BECAUSE THE STATE IS NOW CORRECT AT THE OTHER END. Until
+                   engine_sched_slice's tail wrote its survivors to the cold tier, admitting a refused flow
+                   here would have converted a loud dev abort into a silent DROP — a green gate over a
+                   timeline that ends with the process, which is choosing the result over the forcing
+                   function. The park and this clause are one diff for that reason. */
+                DCHECK(pending_host_outstanding(cur->pending) ||
+                       pending_declined_outstanding(cur->pending) || g_referenced,
+                       "a flow was marked host-owed while its mark rests on NOTHING — every entry on its "
+                       "register has already been ANSWERED, so no host event can clear this mark and the flow "
+                       "is out of the pick for the rest of the session with its whole timeline unexplored. A "
+                       "deliverable answered entry is taken by the delivery arm above this one, so what "
+                       "reached here is an entry the host settled and nothing will settle again: find why that "
+                       "delivery did not happen. A REFUSED entry is NOT this state — it is owed to the flow "
+                       "and owed by nobody, it is a park the session writes to the cold tier before it closes, "
+                       "and it satisfies the clause beside this one");
                 flow_set_host_owed(cur);
             }
             /* AND NOTHING IS CLEARED BY PROGRESS, which is a statement about what a slice can do rather than an
@@ -11357,10 +11455,22 @@ static int engine_sched_slice(void) {
            the reason it is a correction rather than a tightening: `pending_count > 0` is true of a register
            whose every entry has already been ANSWERED, and that is not a member waiting on the host, it is a
            member nothing can wake. Counted, it read as a healthy stall; asked this way it names itself. */
+        /* AND THE MESSAGE ASKS THE PREDICATE'S OWN QUESTION NOW, WHICH IT DID NOT, AND THE GAP WAS A TRAP FOR
+           THE NEXT READER RATHER THAN A WORDING SLIP. It read "owed the host NOTHING" over
+           `pending_outstanding`, which is the FLOW question — and a reader who took the message at its word
+           would have "corrected" this to `pending_host_outstanding`, at which point it fires on every frontier
+           parked entirely on REFUSALS: a state that is legitimate, that reaches this walk on the one route
+           that gets past the two STALLED exits above, and whose members are written to the cold tier six lines
+           below. That is the mirror of the two corrections in pending.h, and the predicate here was right
+           while its sentence pointed at the wrong one. What this walk is actually about is a member holding
+           NOTHING AT ALL — a mark laid on a flow that could still have progressed — which is the failure
+           direction the mark's own assert cannot see. */
         DCHECK(pending_outstanding(flow_at(i)->pending) || g_referenced,
-               "the frontier reported a STALL while one of its members owed the host NOTHING — its mark says it "
-               "cannot progress and the host owes it nothing, so it was marked while it still had work to do "
-               "and the exploration of that timeline stops here for no reason at all");
+               "the frontier reported a STALL while one of its members was waiting on NOTHING — every entry on "
+               "its register has been answered and delivered, so its mark was laid down while it still had "
+               "work to do and the exploration of that timeline stops here for no reason at all. A member "
+               "parked on a REFUSAL is not this state: a refused entry is still outstanding to its own flow, "
+               "so it satisfies this and is carried out to the cold tier rather than caught here");
     }
     /* STALLED, not exhausted: the run-queue is empty but flows are parked on something only the host can
        supply. Asked BEFORE closing — the session and every parked snapshot stay live, and the host steps again
@@ -11466,6 +11576,45 @@ static int engine_sched_slice(void) {
                "a property of the vectors alone, not of the schedule");
         (void)zero;
     }
+    /* A SESSION THAT CLOSES OVER LIVE MEMBERS WRITES THEM DOWN FIRST, and until this line it did not — which
+       is the §NO BOUNDS drop, reached by the one route that had nothing else standing in front of it. The
+       walks above are all about work a member HOLDS (a job, a routed record, an owed answer); none of them is
+       about the member ITSELF, and the banner over the per-member walk just above already says the state
+       plainly: "the loop
+       above can also LEAVE with a flow still alive: every member has reported itself host-owed, so no member
+       can be picked, and this line closes the session over the survivors." The survivors then went to
+       flow_registry_free with their snapshots, their deltas and their whole unexplored timelines.
+       IT IS NOT THE SAME EXIT AS AN EXHAUSTED FRONTIER AND THE GUARD IS WHAT SAYS SO. A frontier that DRAINED
+       has no member left to write — every flow ran to its end and flow_finish tore it down — so an empty park
+       there is a different statement (cold_park's own banner: it deletes the origin's entry, which is the
+       honest report for a residue that was resumed and consumed). Routing by `flow_count()` keeps the two
+       answers apart; it is routing and not a fallback by §C-stack's test, because deleting the survivors case
+       leaves the question still asked.
+       WHICH ROUTE REACHES IT, AND WHY NOTHING DID BEFORE. Three exits stand in front of this line and two of
+       them return STALLED — a member the host can still be asked about, and a document a peer holds a
+       reference into. What passes all three is a frontier every one of whose members is parked on a request
+       the trusted zone REFUSED: it is outstanding to the flow (so the timeline is not torn down) and owed by
+       nobody (so `engine_host_owes` correctly answers 0 and there is no bill to hand back). That is §@S's
+       search-not-yet-solved — waiting on a per-origin widening that happens in a LATER SESSION — and a
+       residue is exactly what carries it there. Before `engine_host_owes` asked the host question, this
+       frontier returned STALLED with an empty bill for the rest of the session, which is the livelock that
+       fix removed; what it left behind was this drop, which is better and is still a cap. */
+    if (flow_count() > 0) {
+        engine_park_frontier(ctx, g_sess_cur);
+        g_sess_cur = NULL;
+    }
+    /* AND THE CLAIM IS ASSERTED WHERE IT IS MADE RATHER THAN LEFT TO THE CALL ABOVE BEING REMEMBERED. This is
+       the property §NO BOUNDS actually demands of a resting member — STARVE means deprioritize-and-PAGE,
+       resumable and cross-session, never terminate — and it is a statement about the FRONTIER at the one
+       instant the session stops existing. A member still standing here whose recipe was never written is a
+       timeline that ends with the process, and nothing anywhere would say so: `live` counted it, the census
+       reported it as merely waiting, and the result document named no residue at all. */
+    DCHECK(flow_count() == 0 || engine_frontier_paged(),
+           "the session closed over LIVE members whose recipes were never written — every one of them holds a "
+           "snapshot, a COW delta and an unexplored timeline, and the instance teardown is about to free them "
+           "with nothing anywhere naming the loss. A resting member is deprioritized and PAGED, never dropped; "
+           "if a new exit reaches this line it takes the park above it, and if it must not, it is not an exit "
+           "that may close a session holding members");
     engine_session_close();
     return ENGINE_STEP_DONE;
 }

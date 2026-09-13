@@ -395,6 +395,36 @@ int pending_host_outstanding(JSValueConst reg)
     return 0;
 }
 
+/* …AND THE THIRD MEMBER OF THE PARTITION, WHICH IS WHAT MAKES THE PAIR ABOVE A PAIR RATHER THAN A
+   DIFFERENCE. `pend_host_owed` is `pend_owed && !declined`, so per entry "owed" splits exactly two ways and
+   this is the other half: an entry the trusted zone has REFUSED and this flow is still parked at. It is
+   written as its own walk rather than left to be composed out of the two above for the reason pending.h
+   already gives about the host question — what differs between callers is which KINDS they ask about, never
+   what "owed" means, and a second spelling is the drift that rule exists to prevent. A caller that asked
+   `pending_outstanding(reg) && !pending_host_outstanding(reg)` would be spelling this question in terms of
+   two others, which is exactly how both register-arity readers of the host question got the flow question.
+   THE PARTITION IS ASSERTED HERE AND NOWHERE ELSE, over the register this walk has just read, because this is
+   the one place all three answers are in one hand. It is not vacuous: the three are three independent walks
+   and an edit to any one of them can break the identity, which is the only thing standing between a future
+   reader and a fourth spelling of "owed". */
+int pending_declined_outstanding(JSValueConst reg)
+{
+    int n = pend_len(reg), i, hit_any = 0;
+
+    for (i = 0; i < n; i++) {
+        JSValue e = pending_entry(reg, i);
+        int hit = pend_owed(e) && pending_entry_declined(e);
+        JS_FreeValue(pend_ctx(), e);
+        if (hit) { hit_any = 1; break; }
+    }
+    DCHECK(pending_outstanding(reg) == (pending_host_outstanding(reg) || hit_any),
+           "a register's three outstanding questions stopped partitioning it — `owed` is exactly "
+           "`owed-and-askable` OR `owed-and-refused` per entry, so the three walks over it must agree, and "
+           "they no longer do. One of them has been edited away from `pend_owed`, which means some caller is "
+           "now getting a fourth answer to a question this file states has only three");
+    return hit_any;
+}
+
 int pending_outstanding_kind(JSValueConst reg, int kind)
 {
     int n = pend_len(reg), i;

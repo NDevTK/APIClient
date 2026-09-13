@@ -1381,7 +1381,24 @@ QJS_EXPORT void qjs_teardown(void)
        A parked flow's recipe replays the code that ISSUED the request, so the request is re-made in the
        session that resumes it and answered with today's reply — which is exactly what §Time-travel-resume
        means by a resumed flow re-deriving its values from current sources. The assert is about the flow being
-       LOST, so it asks whether it was written down, not whether it was answered. */
+       LOST, so it asks whether it was written down, not whether it was answered.
+       AND "STEP TO DONE" IN THE TWO MESSAGES BELOW IS NO LONGER A THIRD OPTION BESIDE PARKING — IT IS ONE OF
+       THE TWO EXITS THAT TAKE IT. A DONE that closes over live members now writes them down first
+       (engine_sched_slice's close), so `engine_frontier_paged` is true on that path for the reason it names
+       rather than by the register happening to be empty. The wording stays because a host still has three
+       things it can DO; what changed is that the third is not a way of avoiding the second.
+       NAMED RESIDUAL — THE PREDICATE HERE ASKS THE HOST QUESTION AND MEANS THE FLOW ONE, WHICH IS THE MIRROR
+       OF THE TWO CORRECTIONS IN solver/pending.h AND NOT ANOTHER INSTANCE OF THEM. Those two asked "is this
+       flow still waiting" where they meant "can the host still be asked", and their failure was a FALSE ABORT.
+       This asks what the JOIN lists — and `engine_pending_fetches` deliberately skips a REFUSED entry — where
+       what it means is "is any flow still parked holding a snapshot". Its failure is therefore the opposite
+       and quieter one: a frontier parked entirely on refusals renders the join empty, so the assert PASSES and
+       has nothing to say about the flows it was written to protect. NOT COVERED: a teardown taken over live
+       members by a host that neither parked nor stepped to DONE, when every one of those members is parked on
+       a refusal. WHAT THE NEXT DIFF BUILDS: this pair asked over the FRONTIER — a flow that still holds a
+       snapshot — rather than over the two registers, which is a question solver/engine.h can answer and
+       main.c cannot compose out of the two lists it reads. HOW ITS ABSENCE WOULD SHOW: a `_park` document
+       naming fewer flows than the census reported live at the last step, with both asserts silent. */
     DCHECK(engine_frontier_paged() || *engine_pending_fetches() == '\0',
            "qjs_teardown with replies still owed — every flow parked on one is dropped with its continuation. "
            "Provide them, step to DONE, or park the frontier, before ending the session");

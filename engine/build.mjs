@@ -2068,8 +2068,16 @@ function wfqReading(out) {
    row carried both until solver/step_unit.h split them, and a frontier that admits members and retires none is
    exactly the state in which that difference is the diagnosis), `queue-rendering-opportunity`/`fire-due-timer`
    is unbounded periodic work, the orphan arms are seeding drives, and
-   `host-blocked`/`await-owed-reply`/`await-fetch-record`/`await-peer-operation` are four distinct kinds of
-   waiting. One verdict covered all of them.
+   `host-blocked`/`await-owed-reply`/`await-a-refused-request`/`await-fetch-record`/`await-peer-operation` are
+   five distinct kinds of waiting. One verdict covered all of them, and still does — the split is in the UNIT
+   and not in the verdict, because what a resting member needs from the scheduler (out of the pick, keeping
+   everything it holds) is one action, and what a READER needs to know about it is which of five facts it is.
+   AND THE PAIR TO READ TOGETHER IS `await-owed-reply` AND `await-a-refused-request`, which leave flow_step
+   through ONE arm and are opposite facts about the frontier: the first is a debt engine_host_owes bills for
+   and a host event will clear, the second is a park the trusted zone REFUSED, which appears on neither join,
+   which no host event can ever clear, and which the session writes to the cold tier before it closes. Mass in
+   the second is not a stalled document — it is §@S's search-not-yet-solved, and the diff it asks for is a
+   per-origin widening rather than anything in the engine.
 
    AND `document-lifecycle-stage` IS NOT THE THIRD MEMBER OF THAT PERIODIC PAIR, WHICH IS WHAT THIS PARAGRAPH
    USED TO SAY. solver/step_unit.h's own sentence — the authority, since it is the one place an arm is named —
