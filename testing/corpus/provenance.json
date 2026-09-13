@@ -2208,5 +2208,74 @@
    }
   ],
   "baseUrl": "https://vscode.dev/"
+ },
+ {
+  "id": "mdn",
+  "stack": "webpack (/static/client/runtime.<hash>.js + numbered chunks)",
+  "requestedUrl": "https://developer.mozilla.org/en-US/docs/Web/JavaScript",
+  "finalUrl": "https://developer.mozilla.org/en-US/docs/Web/JavaScript",
+  "status": 200,
+  "contentType": "text/html",
+  "csp": "default-src 'self'; script-src 'report-sample' 'self' 'wasm-unsafe-eval' assets.codepen.io production-assets.codepen.io https://js.stripe.com transcend-cdn.com 'sha256-XNBp89FG76amD8BqrJzyflxOF9PaWPqPqvJfKZPCv7M=' 'sha256-YCNoU9DNiinACbd8n6UPyB/8vj0kXvhkOni9/06SuYw=' 'sha256-PZjP7OR6mBEtnvXIZfCZ5PuOlxoDF1LDZL8aj8c42rw='; script-src-elem 'report-sample' 'self' 'wasm-unsafe-eval' assets.codepen.io production-assets.codepen.io https://js.stripe.com transcend-cdn.com 'sha256-XNBp89FG76amD8BqrJzyflxOF9PaWPqPqvJfKZPCv7M=' 'sha256-YCNoU9DNiinACbd8n6UPyB/8vj0kXvhkOni9/06SuYw=' 'sha256-PZjP7OR6mBEtnvXIZfCZ5PuOlxoDF1LDZL8aj8c42rw='; style-src 'report-sample' 'self' 'unsafe-inline' transcend-cdn.com; object-src 'none'; base-uri 'self'; connect-src 'self' developer.allizom.org bcd.developer.allizom.org bcd.developer.mozilla.org updates.developer.allizom.org updates.developer.mozilla.org https://incoming.telemetry.mozilla.org https://observatory-api.mdn.allizom.net https://observatory-api.mdn.mozilla.net telemetry.transcend.io telemetry.us.transcend.io transcend-cdn.com https://api.github.com/search/issues https://api.stripe.com; font-src 'self'; frame-src 'self' mdn.github.io *.mdnplay.dev *.mdnyalp.dev *.play.test.mdn.allizom.net https://v2.scrimba.com https://scrimba.com jsfiddle.net www.youtube-nocookie.com codepen.io survey.alchemer.com https://js.stripe.com; img-src 'self' data: *.githubusercontent.com *.gravatar.com mozillausercontent.com firefoxusercontent.com profile.stage.mozaws.net profile.accounts.firefox.com developer.mozilla.org mdn.dev wikipedia.org upload.wikimedia.org https://mdn.github.io/shared-assets/ https://mdn.dev/; manifest-src 'self'; media-src 'self' archive.org videos.cdn.mozilla.net https://mdn.github.io/shared-assets/; child-src 'self'; worker-src 'self';",
+  "bytes": 202976,
+  "sha256": "bbb3823c9d8a0823b79246b42d081a747d9d8f424f2358d9ef8224c904314bbd",
+  "fetchedAt": "2026-09-13T08:00:45.730Z",
+  "resources": [
+   {
+    "url": "https://developer.mozilla.org/static/client/runtime.bc85578c9812e00c.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 19705,
+    "sha256": "2ee7dc30393f5a3c983c64e39c770b95b08b4e296c0cec644b60fc0f0a179ec7",
+    "fetchedAt": "2026-09-13T08:00:45.960Z",
+    "path": "developer.mozilla.org/static/client/runtime.bc85578c9812e00c.js"
+   },
+   {
+    "url": "https://developer.mozilla.org/static/client/5909.489e266d049aa182.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 23977,
+    "sha256": "dafc2c6a450e1275d3e794846ced80d7c3165601792e7b9d18e1bc826dd4c63f",
+    "fetchedAt": "2026-09-13T08:00:46.190Z",
+    "path": "developer.mozilla.org/static/client/5909.489e266d049aa182.js"
+   },
+   {
+    "url": "https://developer.mozilla.org/static/client/4585.98853dfcfa18f7de.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 79030,
+    "sha256": "2be92a3063506c14b7bacb1252d88e8157fabb8c690f7def80fc34a9d8d4832e",
+    "fetchedAt": "2026-09-13T08:00:46.440Z",
+    "path": "developer.mozilla.org/static/client/4585.98853dfcfa18f7de.js"
+   },
+   {
+    "url": "https://developer.mozilla.org/static/client/index.5d48dfb349dbf5e3.js",
+    "status": 200,
+    "contentType": "text/javascript",
+    "bytes": 47753,
+    "sha256": "5871bb7a1fce23ec4f2eea04a1259c3e792c0d266ea7fc75e8523291b9a7fc97",
+    "fetchedAt": "2026-09-13T08:00:46.646Z",
+    "path": "developer.mozilla.org/static/client/index.5d48dfb349dbf5e3.js"
+   },
+   {
+    "url": "https://developer.mozilla.org/static/client/jetbrains-mono-latin.119994ed445212c7.woff2",
+    "status": 200,
+    "contentType": "font/woff2",
+    "bytes": 28416,
+    "sha256": "ef10b443983cbd93e78bcae5bb7e8bdd0507976fd84e041f67119d3cfd9b8722",
+    "fetchedAt": "2026-09-13T08:00:46.905Z",
+    "path": "developer.mozilla.org/static/client/jetbrains-mono-latin.119994ed445212c7.woff2"
+   },
+   {
+    "url": "https://developer.mozilla.org/static/client/inter-latin.9a3b1bc220d426ef.woff2",
+    "status": 200,
+    "contentType": "font/woff2",
+    "bytes": 105484,
+    "sha256": "2c0a6f55ecf3fe1b20008ab42c9ae78da3243d21f12ec00baf208bba7105f11c",
+    "fetchedAt": "2026-09-13T08:00:47.148Z",
+    "path": "developer.mozilla.org/static/client/inter-latin.9a3b1bc220d426ef.woff2"
+   }
+  ],
+  "baseUrl": "https://developer.mozilla.org/en-US/docs/Web/JavaScript"
  }
 ]
