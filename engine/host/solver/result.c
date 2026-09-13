@@ -806,6 +806,20 @@ char *result_wfq_json(void) {
                         diffs. Do NOT read `brLiveMin` as the other side: a family ROOT's bucket holds exactly
                         one member by construction, so while the root stands this is 0 or 1 and says nothing
                         about any arm.
+                        AND THE MINT PAIR IS THE BRANCH TERM'S OWN RANGE, WHICH THE LIVE PAIR IS NOT.
+                        flow_branch_bonus returns `1.0 / sub_born`, so `1/brBornLifeMin - 1/brBornLifeMax` is
+                        how many of the one point that term can lift a member it actually spans across this
+                        frontier; the live pair answers CONCENTRATION and orders nothing. Both ends are taken
+                        over buckets holding at least one live member — a weight is read only for a member
+                        that is standing — which is why they sit inside the same guard as `brLiveMax`/`Min`
+                        while `brUsLife*` deliberately keeps every bucket: receipt outlives a departed
+                        subtree, membership does not.
+                        AND AN EXTREMUM OVER THE BUCKETS STANDING IS NOT ITS FIELD'S KIND. `sub_born` per
+                        bucket is never forgiven; a maximum of it ACROSS buckets falls the instant the bucket
+                        that owned it departs whole. So `brBornLife*` is read as a ratio at one instant and
+                        differenced by nobody, exactly like `brLive*`. The only rows on this line a reader may
+                        difference are `brUsLifeSum`, `brRetiredUsLife` and `chargedUsLife`, whose population
+                        is every microsecond ever charged rather than whichever buckets are standing.
                         TWO IDENTITIES DEFINE THESE AND BOTH ARE CHECKABLE ON THIS DOCUMENT, which is the one
                         property of a per-bucket number a reader can check without re-deriving the mechanism:
                         `brLiveSum == members` (the buckets partition the frontier — below is a member counted
@@ -814,7 +828,8 @@ char *result_wfq_json(void) {
                         whose subtree has wholly departed folds its total into the retired term rather than
                         losing it). Both are asserted in flow_wfq_census where every term is in one hand. */
                      "\"branches\":%ld,\"brLiveMax\":%ld,\"brLiveMin\":%ld,\"brLiveSum\":%ld,"
-                     "\"brBornLifeMax\":%ld,\"brUsLifeMax\":%lld,\"brUsLifeMin\":%lld,"
+                     "\"brBornLifeMax\":%ld,\"brBornLifeMin\":%ld,"
+                     "\"brUsLifeMax\":%lld,\"brUsLifeMin\":%lld,"
                      "\"brUsLifeSum\":%lld,\"brRetiredUsLife\":%lld,\"chargedUsLife\":%lld,"
                      "\"brDepthMax\":%d,"
                      /* AND WHICH FORK INSIDE A BUCKET DID THE MINTING, which no row above can say: a bucket
@@ -1005,7 +1020,7 @@ char *result_wfq_json(void) {
                      (long long)w.svc_max, (long long)w.svc_min,
                      (long long)w.svc_fam_max, (long long)w.svc_fam_min, w.families,
                      w.branches, w.br_live_max, w.br_live_min, w.br_live_sum,
-                     w.br_born_max, (long long)w.br_us_max, (long long)w.br_us_min,
+                     w.br_born_max, w.br_born_min, (long long)w.br_us_max, (long long)w.br_us_min,
                      (long long)w.br_us_sum, (long long)w.br_retired_us, (long long)w.charged_us,
                      w.br_depth_max,
                      w.br_fan_max, w.br_fan_sum, w.br_fan_depth,

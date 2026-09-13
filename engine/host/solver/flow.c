@@ -232,7 +232,7 @@ typedef struct FlowAcct {
        and 6 over 71452 in this file's own artifact-58d56516 reading — a STAR, so the named cost is paid. The
        clause was refuted anyway, twice.
        IT WOULD HAVE MOVED A TERM OF THE ORDER, WHICH IS THE ONE THING THIS SCOPE MAY NOT DO. `branch` is read
-       by flow_branch_bonus (`1.0 / (sub_born - sub_gone)` over the bucket), which flow_nonreward sums into
+       by flow_branch_bonus (`1.0 / sub_born` over the bucket), which flow_nonreward sums into
        flow_weight — the field's own paragraph below records three consumers pricing it while two declarations
        denied it. Re-keying `branch` to the nearest fork point is exactly the transfer flow_fork_inherit
        performs in reverse, and that site's own DCHECK states the consequence: delete the transfer and "the
@@ -434,7 +434,7 @@ typedef struct FlowAcct {
        WHAT IT IS FOR, AND THE ORDER READS IT — WHICH IS THE OPPOSITE OF WHAT THIS SAID, AND THE SENTENCE IT
        REPLACES WAS A GUARANTEE RATHER THAN A LABEL, SO IT FAILED IN THE DIRECTION THAT GETS BUILT ON. It read
        "The order reads NOTHING here" and "a weight term over a branch would fail flow_fork_inherit's
-       rank-neutrality equality by construction", and flow_nonreward SUMS flow_branch_bonus — `1.0 / live` over
+       rank-neutrality equality by construction", and flow_nonreward SUMS flow_branch_bonus — `1.0 / sub_born` over
        exactly this bucket — into flow_weight today. Three consumers price it: flow_nonreward adds it,
        FLOW_NONREWARD_MAX carries a `branch: alone in it` line for it, and flow_silence_us_to_sink's bound is
        `+ 2.0` rather than `+ 1.0` precisely because of it. THE CONSUMERS ARE RIGHT AND THE DECLARATION WAS
@@ -1946,14 +1946,15 @@ void flow_fork_inherit(Flow *sib, const Flow *parent) {
        THIS TRANSFER IS LOAD-BEARING FOR THE RANK-NEUTRALITY EQUALITY BELOW, WHICH IS THE REVERSE OF WHAT THIS
        PARAGRAPH SAID. It read "flow_weight reads nothing here, so the equality would pass whether these lines
        existed or not", and flow_weight reads exactly what these lines write: flow_nonreward sums
-       flow_branch_bonus, which is `1.0 / (sub_born - sub_gone)` over the bucket this statement moves the arm
-       into. Delete the transfer and the newborn keeps its own bucket at one live member — bonus 1.0 — against
-       a parent bucket of L, so the equality FIRES for every L above one. It passes because both sides end up
-       reading ONE denominator, and that is this statement's doing.
+       flow_branch_bonus, which is `1.0 / sub_born` over the bucket this statement moves the arm
+       into — and the `br->sub_born++` here is what makes the two sides equal, because BOTH read that bucket
+       AFTER the increment. Delete the transfer and the newborn keeps its own bucket at one minted member —
+       bonus 1.0 — against a parent bucket of L, so the equality FIRES for every L above one. It passes
+       because both sides end up reading ONE denominator, and that is this statement's doing.
        THE ROOT ARM IS THE OTHER CASE AND IT PASSES FOR A DIFFERENT REASON, WHICH IS WHY IT IS ASSERTED AND NOT
        ARGUED. When the parent is a root the arm KEEPS its own bucket, so the two do not share a denominator at
-       all; they are equal because both hold exactly one live member, which holds only while nothing ever
-       raises a root's own `sub_born` past the 1 flow_new wrote. That is a fact about `br`'s definition rather
+       all; they are equal because both stand at `sub_born == 1`, which holds only while nothing ever raises a
+       root's own `sub_born` past the 1 flow_new wrote. That is a fact about `br`'s definition rather
        than about any field either side carries, so a future bucket policy could break it with every other
        check in this file still green. The DCHECK below states it where it is decided. */
     sib->acct->depth = parent->acct->depth + 1;
@@ -1967,21 +1968,30 @@ void flow_fork_inherit(Flow *sib, const Flow *parent) {
                "that no flow corresponds to and the census's membership identity fails on a healthy frontier");
         /* THE ROOT ARM'S NEUTRALITY, ASSERTED WHERE IT IS DECIDED. Where the arm KEEPS its own bucket the
            two sides of this fork do not share a denominator, so flow_branch_bonus is equal across them only
-           while BOTH buckets hold exactly one live member. The arm's is one by the precondition above; the
-           parent's is one only because `br` is never `parent->acct` when the parent is a root, so nothing has
-           ever raised a root's own `sub_born` past the 1 flow_new wrote. That is a property of THIS
+           while BOTH buckets stand at the `sub_born == 1` flow_new wrote. The arm's is one by the
+           precondition above; the parent's is one only because `br` is never `parent->acct` when the parent
+           is a root, so nothing has ever raised a root's own `sub_born` past it. That is a property of THIS
            expression rather than of any field either side carries — a bucket policy that let a root be some
            node's `branch` would leave every other check in this file green and silently make a fork off the
            root a PROMOTION of up to a full point, which is the whole range §scheduler gives one emission.
+           IT NAMES `sub_born` AND `sub_gone` SEPARATELY RATHER THAN THEIR DIFFERENCE, AND THAT IS THE FIELD
+           THE TERM ACTUALLY READS. It used to assert `sub_born - sub_gone == 1`, which was exactly the
+           quantity flow_branch_bonus returned then and is NOT the one it returns now. A live count of one is
+           satisfied by a bucket at (born 100, gone 99), and that bucket is a departed-arm walker rather than
+           a corner: asserting the difference would have gone on passing for a root forked into and shed from
+           while the two sides of the fork read 1/1 against 1/100. The pair is the stronger statement, it is
+           the one the structural fact is actually about, and it entails the difference.
            BOTH OPERANDS ARE REAL PROGRAM STATE AND IT IS NOT THE EQUALITY ONE LINE DOWN. That one compares
            two SUMS and is satisfied by any pair of terms that happen to cancel; this names the structural
            fact that makes THIS term's half of it hold, and it is false for any frontier in which a root has
            been forked into. */
         DCHECK(br != sib->acct ||
-               (parent->acct->branch == parent->acct && parent->acct->sub_born - parent->acct->sub_gone == 1),
-               "a fork left the newborn in its own branch bucket while the parent's bucket holds more than the "
-               "parent — so the two sides of this branch read different `1/live` from flow_branch_bonus and "
-               "branching just changed a flow's own rank, which is the one thing the WFQ may never let it do");
+               (parent->acct->branch == parent->acct &&
+                parent->acct->sub_born == 1 && parent->acct->sub_gone == 0),
+               "a fork left the newborn in its own branch bucket while the parent's bucket has minted or shed "
+               "past the one member flow_new wrote — so the two sides of this branch read different "
+               "`1/sub_born` from flow_branch_bonus and branching just changed a flow's own rank, which is "
+               "the one thing the WFQ may never let it do");
         if (br != sib->acct) { sib->acct->sub_gone++; br->sub_born++; sib->acct->branch = br; }
     }
     /* AND THE PATH'S FORCED MARK — the one thing inherited here that the ranking never reads, and it is stated
@@ -3736,7 +3746,7 @@ double flow_distance(const Flow *f) {
    this file. A caller's address would name which flow was being ranked at the moment, which is not the object
    of the instruction. The tell that the rule does apply is the one absent here — a message whose remedy names
    an action with no object; this one names a place, and the place is where the crash already points. */
-/* HOW MUCH OF ITS OWN BRANCH BUCKET THIS MEMBER IS — the reading that tells the FIRST arm of an unexplored
+/* HOW MANY ARMS THIS MEMBER'S BRANCH HAS EVER TAKEN — the reading that tells the FIRST arm of an unexplored
    branch from the thirty-eight-thousandth arm of one already taken, which no other term of this order can.
    WHY IT IS NEEDED, MEASURED ON A DOCUMENT NOBODY DESIGNED rather than on a fixture. A 4.5 MB real bundle
    replayed from its own mirror: 71452 members and 71451 forks out of FIFTY branch sites at depth 6 over
@@ -3755,15 +3765,45 @@ double flow_distance(const Flow *f) {
    consequence is that this term's own range joins FLOW_NONREWARD_MAX and loosens the silence bound by one
    point — the same shape, and the same arithmetic, as the fitness comparator already there.
    IT IS FORK-NEUTRAL BY CONSTRUCTION AND NOT BY ARGUMENT. A forked sibling JOINS ITS PARENT'S BUCKET (the
-   inheritance above moves its membership there), and this is READ AT THE PICK rather than stored at birth, so
-   at every instant after the branch both arms read ONE number and rank equal — which is what the equality at
-   the fork asserts. It also passes the two-instants test the equality cannot see: two arms of one parent
-   forked at different moments read the bucket as it is NOW, not as it was when each was born.
+   inheritance above moves its membership there, raising `sub_born` BEFORE the equality one line down is
+   evaluated), and this is READ AT THE PICK rather than stored at birth, so at every instant after the branch
+   both arms read ONE number and rank equal — which is what the equality at the fork asserts. It also passes
+   the two-instants test the equality cannot see: two arms of one parent forked at different moments read the
+   bucket as it is NOW, not as it was when each was born. The ROOT-ARM case is equal for the other reason the
+   inheritance states: a root's own bucket is `sub_born == 1` for the life of the root, which is asserted where
+   it is decided rather than argued here.
+   THE DENOMINATOR IS THE LIFETIME MINT COUNT AND IT USED TO BE THE LIVE GAUGE `sub_born - sub_gone`. THE
+   RETIRED READING IS WRITTEN OUT BECAUSE IT IS THE INTUITIVE ONE AND WILL OTHERWISE BE RE-DERIVED: it was
+   "a bucket's OCCUPANCY is that reading", and occupancy FALLS when an arm departs, so the bonus a bucket
+   carries is RESTORED IN FULL by its own arms finishing. A branch that minted a hundred arms and shed
+   ninety-nine of them read 1.0 — exactly what a branch that has taken no arm at all reads — so the order
+   said a walk a hundred positions deep was as fresh as one that had not started. THAT IS A RANK A FLOW
+   CHANGES BY BRANCHING, arriving through the DEPARTURE rather than through the fork, which is why the
+   equality at the fork cannot see it and why every check in this file stayed green. It is the same hole the
+   per-arm `cpu` charge had and that FlowAcct's `fam_us` closed with the departed-arm hand-up, one scope over:
+   there the departing arm handed its SERVICE up, and here it took its OCCUPANCY away with it. `sub_born` is
+   the hand-up already built — a LIFETIME counter that never falls, maintained at the fork and untouched by
+   any departure — so the repair is a reading and not a mechanism.
+   AND `sub_us` IS THE ROW A READER REACHES FOR FIRST AND IT IS INADMISSIBLE HERE. Receipt is the question
+   this scope's rows are FOR, and every per-bucket quantity in the weight must be equal on BOTH sides of a
+   fork off a ROOT, where the arm opens a bucket of its own instead of joining one. `sub_born` and `sub_gone`
+   are (1, 0) on both sides by construction; `sub_us` is not, because a root's own bucket accumulates every
+   microsecond the root itself burns (flow_age_running charges `branch`, and a root's `branch` is itself)
+   while the arm's fresh bucket stands at zero. A term over it would make forking off a root a PROMOTION of
+   up to its whole range, and seeding the arm's bucket with the parent's total is a COPY AT THE FORK INSTANT,
+   which two arms of one root forked at two instants read differently — birth order, which is the LIFO the
+   two-instants test exists to refuse. `depth` fails the same way (0 against 1). So the branch scope admits
+   exactly the membership pair as a weight term, and its receipt rows stay observations.
    WHAT IT COSTS THE GUARANTEE, STATED RATHER THAN DISCOVERED. §scheduler's "a never-run flow is never starved"
    stays true — this term only ever adds, and the reward still dominates — but two never-run members are no
-   longer indistinguishable: one alone in its bucket outranks one of N by (1 - 1/N), bounded by a single point.
-   That is the ordering saying a fresh branch is worth more than another arm of a cross product, which is the
-   one comparison the frontier above had no way to make. */
+   longer indistinguishable: one whose branch has taken no other arm outranks one of N by (1 - 1/N), bounded
+   by a single point. That is the ordering saying a fresh branch is worth more than another arm of a cross
+   product, which is the one comparison the frontier above had no way to make. Its RANGE is unchanged, so
+   FLOW_NONREWARD_MAX's `branch: alone in it` line and flow_silence_us_to_sink's `+ 2.0` are untouched:
+   `sub_born >= 1` and 1 is attainable, so this is still a bonus in (0, 1] that only ever adds.
+   RETIREMENT: this record goes when no reading of a branch bucket's LIVE count can be re-derived as a term
+   of the order — which is when `sub_gone` no longer exists, or when the code makes an occupancy reading
+   impossible rather than merely absent. */
 static double flow_branch_bonus(const Flow *f) {
     const FlowAcct *br;
     long live;
@@ -3778,7 +3818,10 @@ static double flow_branch_bonus(const Flow *f) {
            "a member's own branch bucket reports fewer than one live member while that member is standing in "
            "it — `sub_born`/`sub_gone` are a matched pair moved in one statement, so a count below the member "
            "doing the reading is a departure charged to a bucket the flow had already left");
-    return 1.0 / (double)live;
+    /* AND THE DENOMINATOR IS THE OTHER HALF OF THAT PAIR. The precondition above is kept and is NOT what this
+       returns: it is the pair's own invariant, and it is what makes `sub_born >= 1` a consequence rather than
+       a second thing to believe — `sub_born = live + sub_gone` with `live >= 1` and `sub_gone >= 0`. */
+    return 1.0 / (double)br->sub_born;
 }
 
 static double flow_nonreward(const Flow *f) {
@@ -4344,18 +4387,26 @@ static double wfq_accounted_spread(const WfqCensus *c) {
     return (c->val_max - c->val_min)
          + c->dist_max
          + (1.0 / (double)(1 + c->vis_min) - 1.0 / (double)(1 + c->vis_max))
-         /* …AND THE BRANCH BONUS'S OWN RANGE, which is a reading of the SPARSEST bucket against the most
-            crowded one: the smallest bucket carries the largest bonus, so the extrema invert between the two
-            rows. Guarded because a census that reached no LIVE bucket has no range to report rather than an
+         /* …AND THE BRANCH BONUS'S OWN RANGE, which is a reading of the LEAST-MINTING bucket against the
+            most: the bucket that has taken fewest arms carries the largest bonus, so the extrema invert
+            between the two rows. IT READS THE MINT PAIR AND NOT THE LIVE PAIR, because flow_branch_bonus
+            divides by `sub_born` — and the live pair is NOT a bound on the mint pair's range in either
+            direction: two buckets at one live member apiece span 0.0 of the live reading and 1 - 1/N of this
+            one when one of them has minted N and shed them. A clause left on the live rows would therefore
+            under-bound the spread on exactly the departed-arm frontier the term was changed for, and the
+            assertion at the end of flow_wfq_census would fire on a healthy engine.
+            Guarded because a census that reached no LIVE bucket has no range to report rather than an
             infinite one — and that is now the only population the guard selects. IT USED TO SELECT ANOTHER,
             MUCH LARGER ONE, and the sentence here is why nobody looked: branch_take folded a bucket with ZERO
             live members into these extrema, and the family-root door mints exactly such a bucket the moment a
             family's root flow departs, so `br_live_min` read 0 on 48 of 56 censuses of the SMOKE FIXTURE and
             this whole clause scored 0.0 on every one of them — a term the order genuinely spans, deleted from
             the accounting that exists to say what the order is made of, by a guard whose comment described a
-            census that had reached nothing while the censuses tripping it had reached 198 buckets each. */
-         + (c->br_live_min > 0 && c->br_live_max > 0
-              ? 1.0 / (double)c->br_live_min - 1.0 / (double)c->br_live_max : 0.0)
+            census that had reached nothing while the censuses tripping it had reached 198 buckets each. That
+            is why `br_born_max` was moved inside branch_take's live guard beside the new minimum: a range
+            whose two ends are taken over two populations is not a range. */
+         + (c->br_born_min > 0 && c->br_born_max > 0
+              ? 1.0 / (double)c->br_born_min - 1.0 / (double)c->br_born_max : 0.0)
          + (double)((c->svc_max - c->svc_min) + (c->svc_fam_max - c->svc_fam_min) + 1) * FLOW_AGE_QUANTUM;
 }
 
@@ -4423,10 +4474,26 @@ static void branch_take(WfqCensus *out, FlowAcct *br) {
     if (live > 0) {
         if (out->br_live_min == 0 || live < out->br_live_min) out->br_live_min = live;
         if (live > out->br_live_max) out->br_live_max = live;
+        /* …AND THE MINT PAIR, OVER THE SAME POPULATION AND INSIDE THE SAME GUARD, BECAUSE IT IS THE ORDER'S
+           RANGE AND NOT A RECEIPT. `sub_born` is what flow_branch_bonus divides by, so these two extrema ARE
+           the branch term's range and wfq_accounted_spread reads them as such. A member's weight is only ever
+           read for a member that is STANDING, and a member stands only in a bucket with a live count — so an
+           empty bucket contributes no weight to any comparison, and extrema taken over one describe a range
+           nobody spans. That is `br_live_min`'s own incident, and the reason it is repeated here rather than
+           cited is that the two pairs are folded by two statements and only a guard keeps them one population.
+           `br_born_max` MOVED INSIDE THIS GUARD IN THE DIFF THAT ADDED `br_born_min`, and that is a narrowing
+           of a published row rather than a new row's placement. It used to fold every bucket the walk took,
+           which made it disagree with its own declaration in flow.h ("the most members ever MINTED into one
+           live bucket") and with `br_live_max`, the row flow.h pairs it with. The `br_us_*` pair below
+           deliberately keeps EVERY taken bucket and that is not an inconsistency: RECEIPT is the question
+           those ask, a departed subtree really did receive its thread time, and the burn identity is over the
+           same population. Membership is not receipt, and a maximum that can be owned by a bucket holding
+           nobody is not a statement about the frontier the other row is a share of. */
+        if (out->br_born_min == 0 || br->sub_born < out->br_born_min) out->br_born_min = br->sub_born;
+        if (br->sub_born > out->br_born_max) out->br_born_max = br->sub_born;
     }
     if (out->branches == 1 || br->sub_us > out->br_us_max) out->br_us_max = br->sub_us;
     if (out->branches == 1 || br->sub_us < out->br_us_min) out->br_us_min = br->sub_us;
-    if (br->sub_born > out->br_born_max) out->br_born_max = br->sub_born;
 }
 
 void flow_wfq_census(WfqCensus *out) {
@@ -4491,7 +4558,8 @@ void flow_wfq_census(WfqCensus *out) {
     out->svc_max = out->svc_min = out->svc_fam_max = out->svc_fam_min = 0;
     out->families = 0;
     out->branches = 0;
-    out->br_live_max = out->br_live_min = out->br_live_sum = out->br_born_max = 0;
+    out->br_live_max = out->br_live_min = out->br_live_sum = 0;
+    out->br_born_max = out->br_born_min = 0;
     out->br_us_max = out->br_us_min = out->br_us_sum = 0;
     out->br_depth_max = 0;
     out->br_fan_max = out->br_fan_sum = 0;
@@ -5271,6 +5339,22 @@ void flow_wfq_census(WfqCensus *out) {
            "minted into a bucket and reaches it through `branch`, so a zero here is the live extrema ranging "
            "over a bucket NOBODY stands in, and wfq_accounted_spread is about to score the branch term's "
            "whole range as 0.0 while the order spans it");
+    /* AND THE MINT PAIR AGAINST THE LIVE PAIR IT IS FOLDED BESIDE — the relation that says the two are over
+       ONE population, which is the only thing that makes `1/br_born_min - 1/br_born_max` a RANGE rather than
+       two numbers subtracted. `sub_born = live + sub_gone` with `sub_gone >= 0`, so on any single bucket the
+       mint count dominates the live count; take both extrema over the SAME set of buckets and each end of the
+       mint pair dominates its opposite number.
+       IT IS NOT VACUOUS AND IT IS NOT THE PARTITION IDENTITY RESTATED. The two pairs are written by two
+       statements inside branch_take, and nothing but a shared guard keeps their populations equal — fold the
+       minimum over every taken bucket instead and a departed root's single-member bucket drags `br_born_min`
+       to 1 beneath a `br_live_min` of 2, which fires here and is exactly the defect `br_live_min` already
+       cost this file 48 censuses to find. The partition identity above is satisfied by any set of buckets
+       whose live counts sum correctly and says nothing whatever about which buckets an extremum ranged over. */
+    DCHECK(out->br_born_min >= out->br_live_min && out->br_born_max >= out->br_live_max,
+           "a branch bucket's lifetime mint count is below its own live membership — `sub_born` is `live` "
+           "plus everything that has ever departed the bucket, so this is the mint extrema and the live "
+           "extrema ranging over two different sets of buckets, and the branch term's range is about to be "
+           "published as a difference between two numbers that are not two ends of one reading");
     DCHECK(out->br_us_sum + out->br_retired_us == out->charged_us,
            "the thread time attributed to branch buckets does not add up to the thread time the scheduler has "
            "charged — every microsecond lands on exactly one bucket and a bucket's total is folded into the "

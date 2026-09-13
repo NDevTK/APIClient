@@ -1839,9 +1839,12 @@ function wfqReading(out) {
      nothing at this scope; three consumers priced it the whole time. A reader that renders four of the five
      terms is the same omission one layer out.
      THE KINDS ARE TAKEN FROM THE DECLARATION AND NOT GUESSED: `branches`, `brLive*` and `brDepthMax` are
-     GAUGES and are read at this instant only; `brBornLifeMax`, `brUsLife*`, `brRetiredUsLife` and
-     `chargedUsLife` are LIFETIME microseconds and are read as RATIOS, which is what survives the 2x run-to-run
-     spread every count here is unquotable under. `brLiveMin` is deliberately NOT read as "the other side of
+     GAUGES and are read at this instant only; `brBornLife*`, `brUsLife*`, `brRetiredUsLife` and
+     `chargedUsLife` are LIFETIME counters and are read as RATIOS, which is what survives the 2x run-to-run
+     spread every count here is unquotable under. `brBornLife*` is a lifetime count of MEMBERS and not of
+     microseconds, and solver/flow.h says why its EXTREMUM is nonetheless not differenceable: the per-bucket
+     field is never forgiven, and a maximum of it across the buckets STANDING falls the moment the bucket that
+     owned it departs whole. `brLiveMin` is deliberately NOT read as "the other side of
      the branch" — solver/flow.h says a family root's own bucket holds exactly one member by construction and
      therefore usually OWNS the minimum, so the other side is the REMAINDER of the published totals. */
   /* THE READING IS GATED AND THE IDENTITIES ARE NOT, WHICH IS A CORRECTION TO THIS BLOCK'S FIRST VERSION AND
@@ -1857,7 +1860,7 @@ function wfqReading(out) {
      runs against RELEASE artifacts too, where that DCHECK is compiled out, and against artifacts built before
      it existed — where a 0 is the old defect and the honest rendering is that the term says nothing here
      rather than a range computed by dividing by it. */
-  const brOk = w.branches > 0 && w.brLiveMin > 0;
+  const brOk = w.branches > 0 && w.brLiveMin > 0 && w.brBornLifeMin > 0;
   /* THE TWO CONSERVATION IDENTITIES, CHECKED FROM OUTSIDE THE PROCESS. The engine DCHECKs both in
      flow_wfq_census where every term is in one hand, and that check is compiled OUT of a release build where
      this reader still runs — which is the same reason the pair above this function is checked here. Every term
@@ -1875,16 +1878,23 @@ function wfqReading(out) {
                     `on exactly one bucket and that a wholly-departed bucket folds its total into the retired ` +
                     `term rather than losing it, so a shortfall is thread time attributed to nobody and every ` +
                     `concentration reading below is a fraction of the wrong total.`);
-  const brLift = brOk ? 1 / w.brLiveMin - 1 / w.brLiveMax : 0;
+  /* THE BRANCH TERM'S RANGE IS OVER THE MINT PAIR AND NOT THE LIVE PAIR, BECAUSE flow_branch_bonus DIVIDES
+     BY `sub_born`. This read the live pair while the engine read the live gauge, and both moved together; it
+     is repointed here in the same diff rather than left to agree by coincidence. The two are NOT
+     interchangeable in either direction: two buckets holding one member apiece span 0.0 of the live reading
+     and 1 - 1/N of this one when one of them has minted N arms and shed them, which is exactly the
+     mints-and-sheds frontier the sentence below already names. */
+  const brLift = brOk ? 1 / w.brBornLifeMin - 1 / w.brBornLifeMax : 0;
   const branch = !brOk
-    ? `${w.branches} branch bucket(s) taken and the live minimum reads ${w.brLiveMin}, so the branch ` +
+    ? `${w.branches} branch bucket(s) taken, live minimum ${w.brLiveMin} and mint minimum ` +
+      `${w.brBornLifeMin}, so the branch ` +
       `term's range is not computable from this census — with members standing that is an artifact ` +
       `built before solver/flow.c's branch_take split the live extrema from the burn totals, where ` +
       `a bucket whose root flow had DEPARTED dragged the minimum to zero and deleted this term from ` +
       `wfq_accounted_spread as well`
     : w.branches === 1
-    ? `ONE top-level arm holds the whole frontier, so every member reads the same 1/${w.brLiveMax} from ` +
-      `flow_branch_bonus and that term is a COMMON OFFSET that orders nothing — the same shape as a ` +
+    ? `ONE top-level arm holds the whole frontier, so every member reads the same 1/${w.brBornLifeMax} ` +
+      `from flow_branch_bonus and that term is a COMMON OFFSET that orders nothing — the same shape as a ` +
       `one-family reward one scope up, and the reason a frontier can be branching hard while the one term ` +
       `written to price branching is constant across it. The bucket that received the most thread took ` +
       `${w.chargedUsLife > 0 ? (100 * w.brUsLifeMax / w.chargedUsLife).toFixed(0) : "?"}% of every ` +
@@ -1908,15 +1918,26 @@ function wfqReading(out) {
       `live arm's. The other side of each is the REMAINDER of the published total and never brLiveMin, ` +
       `which a root's own single-member bucket usually owns. ` +
       /* MINTING AND HOLDING ARE TWO DIFFERENT PAGES AND THEY TAKE OPPOSITE DIFFS, which is why flow.h
-         publishes the lifetime born count beside the live gauge rather than only the gauge. */
+         publishes the lifetime born count beside the live gauge rather than only the gauge.
+         AND THIS SAID `THAT BUCKET`, WHICH IS THE SAME ONE-WORD FALSE CLAIM THE PARAGRAPH ABOVE ALREADY
+         CORRECTS FOR THE THREAD MAXIMUM. `brBornLifeMax` and `brLiveMax` are two INDEPENDENT extrema over the
+         live buckets and need not name one arm: per bucket `sub_born >= live`, so the bucket owning the mint
+         maximum can be a different one entirely from the bucket owning the live maximum, and it is exactly a
+         mints-and-sheds arm that pulls them apart — the state this clause exists to report. Both are now
+         folded over the same population (solver/flow.c's branch_take live guard), which makes the COMPARISON
+         meaningful and does not make them one bucket. */
       (w.brBornLifeMax > w.brLiveMax * 2
-        ? `That bucket has MINTED ${w.brBornLifeMax} members ever against ${w.brLiveMax} standing, so it is a ` +
-          `bucket that mints and sheds rather than one that accumulates — its arms are departing, and the ` +
-          `frontier it leaves is not where its cost went`
-        : `It has minted ${w.brBornLifeMax} ever against ${w.brLiveMax} standing, so it ACCUMULATES rather ` +
-          `than mints and sheds — what it forked is still here`) +
+        ? `Across those buckets the largest MINT count is ${w.brBornLifeMax} against ${w.brLiveMax} standing ` +
+          `in the fattest — TWO MAXIMA THAT NEED NOT BE ONE ARM — so some arm mints and sheds rather than ` +
+          `accumulating: its arms are departing, and the frontier it leaves is not where its cost went. That ` +
+          `is the state flow_branch_bonus reads \`sub_born\` rather than the live gauge for, because occupancy ` +
+          `is RESTORED by a departure and the arms taken are not`
+        : `The largest mint count is ${w.brBornLifeMax} against ${w.brLiveMax} standing in the fattest, so ` +
+          `the frontier ACCUMULATES rather than minting and shedding — what was forked is still here`) +
       `; the branch term therefore spans ${brLift.toFixed(3)} points across this frontier ` +
-      `(1/${w.brLiveMin} at the thinnest bucket against 1/${w.brLiveMax} at the fattest), which is ` +
+      `(1/${w.brBornLifeMin} at the bucket that has taken fewest arms against 1/${w.brBornLifeMax} at the ` +
+      `one that has taken most — the MINT pair, which is what flow_branch_bonus divides by, and not the ` +
+      `live pair the concentration reading above is made of), which is ` +
       (brLift > 0.5
         ? `MOST of the one point that term can lift a member: a lone arm is being ranked most of an emission ` +
           `ahead of every member of the crowd, by the crowd's size alone`

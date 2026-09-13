@@ -1714,11 +1714,20 @@ typedef struct {
      *
      * THE KINDS ARE IN THE NAMES BECAUSE THEY DECIDE WHAT MAY BE DONE WITH THE NUMBERS. `branches`,
      * `br_live_*` and `br_depth_max` are GAUGES over the buckets standing NOW and may FALL between samples, so
-     * none of them may be differenced. `br_born_max`, `br_us_*`, `br_retired_us` and `charged_us` are LIFETIME
+     * none of them may be differenced. `br_born_*`, `br_us_*`, `br_retired_us` and `charged_us` are LIFETIME
      * counters, never forgiven and never reset — which is the property that separates them from every `svc*`
      * row above, all of which are silence SINCE an account's last emission and are sent to zero for a whole
      * family in one statement. An arm that burned an hour and then emitted did not RECEIVE less, and receipt
-     * is the question these ask. MICROSECONDS, not notches: the seven `svc*` rows are quotients whose names do
+     * is the question these ask.
+     * AND THE KIND IS THE FIELD'S, NOT THE EXTREMUM'S, WHICH IS A DISTINCTION THE LABEL ALONE CANNOT CARRY.
+     * `sub_born` and `sub_us` are per-bucket LIFETIME counters and neither is ever forgiven. A MAXIMUM or a
+     * MINIMUM of one of them across the buckets a census reached is a different quantity: the set of buckets
+     * moves, so `br_born_max` FALLS the moment the bucket that owned it departs whole, and `br_born_min`
+     * falls the moment a fresher arm opens. So the mint pair is read as a RATIO at one instant — against
+     * `members`, or as the term range `1/br_born_min - 1/br_born_max` — and is DIFFERENCED across samples by
+     * nobody, exactly like the live pair beside it. The only rows here a reader may difference are the SUMS,
+     * `br_us_sum`, `br_retired_us` and `charged_us`, whose population is every microsecond ever charged
+     * rather than whichever buckets happened to be standing. MICROSECONDS, not notches: the seven `svc*` rows are quotients whose names do
      * not say so, and this file records the relay that cost — a notch count read as a dispatch count that
      * exists nowhere in the program. There is no quotient here to be mis-read.
      *
@@ -1727,7 +1736,15 @@ typedef struct {
      * charged_us` is how concentrated the THREAD is, and again the other side is the remainder — which is why
      * both totals are published rather than only the extrema. Those two together are the X and the Y.
      * `br_born_max` beside `br_live_max` separates a bucket that MINTS unboundedly from one that merely HOLDS
-     * a lot at this instant, and those two take opposite diffs. `br_live_min` is 0 or 1 whenever the family
+     * a lot at this instant, and those two take opposite diffs. THE MINT PAIR IS ALSO THE ORDER'S OWN RANGE
+     * AT THIS SCOPE and the live pair is not: flow_branch_bonus returns `1.0 / sub_born`, so
+     * `1/br_born_min - 1/br_born_max` is how many points of the one it can lift a member the branch term
+     * actually spans across this frontier, and wfq_accounted_spread reads exactly that. Both ends are folded
+     * over buckets holding at least one LIVE member, which is the same population `br_live_*` take and is
+     * asserted against them in flow_wfq_census — a weight is only ever read for a member that is standing,
+     * so extrema over an empty bucket describe a range nobody spans. That is why the mint pair is guarded
+     * where the `br_us_*` pair deliberately is not: receipt survives a departed subtree and membership does
+     * not. `br_live_min` is 0 or 1 whenever the family
      * ROOT's own bucket is still standing, because a root's bucket holds exactly one member by construction
      * (every arm it forks opens a bucket of its own) — so the informative floor is over the ARMS and the root
      * is the reason the minimum reads low; do not take `br_live_min` for "the other side of the branch".
@@ -1753,6 +1770,7 @@ typedef struct {
     long br_live_min;   /* GAUGE: the fewest; see above for why the root's bucket usually owns this */
     long br_live_sum;   /* GAUGE: their sum, published because `== members` is the partition identity */
     long br_born_max;   /* LIFETIME: the most members ever MINTED into one live bucket */
+    long br_born_min;   /* LIFETIME: the fewest — the two ends of flow_branch_bonus's own denominator */
     int64_t br_us_max;  /* LIFETIME MICROSECONDS: the most thread time one bucket's subtree ever received */
     int64_t br_us_min;  /* LIFETIME MICROSECONDS: the least */
     int64_t br_us_sum;  /* LIFETIME MICROSECONDS: their sum — one half of the burn identity */
