@@ -37833,8 +37833,38 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 }
                 /* the candidate is BORROWED from the shape, which the trap may reshape under us, so the
                    iterator takes its own reference for the duration of the request. */
+                /* THIS FIRES BECAUSE THE ITERATOR'S RECORD IS SHARED BETWEEN FLOWS, AND THE ABORT IS THE
+                   LOUD SYMPTOM OF A QUIET DEFECT THAT IS WORSE THAN IT. `pending` lives on JSForInIterator,
+                   a C record hung off this object, and `grep FOR_IN_ITERATOR solver/cow.c` answers NOTHING:
+                   none of this record is captured by the per-flow COW delta. A fork copies the frame, and the
+                   operand stack holds the iterator as a JSValue — a REFERENCE — so both arms walk ONE
+                   JSForInIterator. Arm A sets `pending` and parks inside the `has` request; arm B resumes at
+                   this same opcode, re-enters here, and finds the bit up.
+                   THE CURSOR IS IN THE SAME RECORD AND IS THE REAL LOSS. `idx` is the enumeration's position,
+                   so two arms of a fork taken inside `for (k in o)` SHARE it: each advance moves the other's
+                   cursor and the two arms split one enumeration between them, each seeing a fraction of the
+                   keys, with nothing anywhere to say so. That is a wrong answer where this is a crash, and it
+                   is not an edge case — §Solver-half REQUIRES an iteration over unknown input to fork each
+                   iteration as its own parkable flow, so a for-in over a server-injected record is precisely
+                   the shape that forks inside the loop.
+                   WITHOUT THE ASSERT IT IS ALSO A LEAK AND A CROSS-TIMELINE DELIVERY: arm B would overwrite a
+                   dup'd atom arm A still owns, and the deliver would hand arm A's candidate to whichever arm
+                   arrives first.
+                   WHAT THE FIX MUST RECKON WITH, and it is why this is a record and not a one-line repair:
+                   §Architecture's primitive for exactly this shape is cow_capture_host_record(obj, rec,
+                   &LAYOUT) at the point a flow REACHES the record, with the layout naming the record's owned
+                   values and matching what the finalizer frees. This record's owned fields are a JSValue
+                   (`obj`) AND A JSAtom (`pending`), and an atom is not a JSValue — so whether that layout can
+                   express this record at all is the first question, and the honest answers are to widen it or
+                   to move `pending` onto the flow. Either way the CURSOR is the field that decides the design,
+                   because it must be per-flow whether or not a check is in flight.
+                   How its absence shows: this abort on a resume under a quiet schedule, and — far more often
+                   and with no abort at all — a `for...in` over an unknown-keyed record whose arms each report
+                   a different proper subset of the keys. */
                 DCHECK(fit->pending == JS_ATOM_NULL,
-                       "a for-in deletion check is already in flight on this iterator");
+                       "a for-in deletion check is already in flight on this iterator — this iterator's "
+                       "JSForInIterator is shared between two flows because solver/cow.c captures none of "
+                       "it, so its CURSOR is shared too and the two arms are splitting one enumeration");
                 fit->pending = JS_DupAtom(ctx, fprop);
                 gp_obj = fit->obj; gp_atom = fit->pending; gp_op = GP_HAS; gp_val = JS_UNDEFINED;
                 gp_recv = JS_UNINITIALIZED; gp_no_throw = 0;
