@@ -4726,6 +4726,12 @@ function requireEmcc() {
 }
 mkdirSync(OUT, { recursive: true });
 mkdirSync(EXT_QJS, { recursive: true });
+/* THE PRODUCTION LINK LANDS HERE FIRST AND IS INSTALLED ONLY IF IT MAY BE. It used to be written STRAIGHT to
+   EXT_QJS, which made the build and the PUBLICATION one act: the moment emcc succeeded, the artifact every
+   harness driver reads had been replaced, whatever the tree had done underneath. Inside out/, so it is
+   ignored exactly as the rest of this directory is. */
+const ABI_STAGE = join(OUT, "stage-abi");
+mkdirSync(ABI_STAGE, { recursive: true });
 
 /* ── Lexbor DOM (HTML5 parser + DOM + CSS selectors) ─────────────────────────────
    The moat runs the page's real bundle against a real DOM. Lexbor is pure C, compiles
@@ -5533,7 +5539,7 @@ const SMOKE_LINK = link("smoke", [mustObj(ENTRY_SMOKE), mustObj(ENTRY_ABI)], LDF
 const ABI_LINK = ABI_LIST.code
   ? skipped("production ABI link", "the renderer ABI list and main.c's QJS_EXPORT bodies disagree, so this "
                                  + "link's --export= list is known wrong")
-  : link("production ABI", [mustObj(ENTRY_ABI)], LDFLAGS_ABI, join(EXT_QJS, "qjs.mjs"));
+  : link("production ABI", [mustObj(ENTRY_ABI)], LDFLAGS_ABI, join(ABI_STAGE, "qjs.mjs"));
 
 /* THE ARTIFACT RECORDS THE REVISION IT WAS BUILT FROM, because engine/solvergate.mjs runs this file and
    never compiles anything, so without a stamp the only question it could ask about the program was how old
@@ -5547,7 +5553,46 @@ const ABI_LINK = ABI_LIST.code
    ONLY WHEN THAT LINK PRODUCED THE ARTIFACT: stamping after a failed link would mark whatever qjs.mjs a
    PREVIOUS build left on disk as belonging to this revision, which is §Testing's number about nothing with the
    stamp itself doing the lying. */
-if (ABI_LINK.code === 0) stampArtifact(join(EXT_QJS, "qjs.mjs"), ["engine/host", "engine/qjs"]);
+/* …AND THE STAMP NOW GATES THE INSTALL RATHER THAN MERELY RECORDING IT, WHICH IS THE DIFFERENCE BETWEEN A
+   CHECK AND A COMMENT WITH A PIPELINE IN IT. `dirty` was computed here, written honestly, and consumed by
+   NOTHING — so a build whose cone went dirty MID-RUN produced a correct record of that and published the
+   artifact anyway, over the one path every driver reads. CLAUDE.md gives a publication the same gate as a
+   destruction, and this is a publication into shared state.
+   MEASURED, AND THE COORDINATOR DID IT: a build started while the cone was CLEAN — this file said so at its
+   own first line — and a lane edited engine/host/solver mid-compile. The result was stamped `head <sha>`
+   with FOUR dirty paths and installed, replacing a clean artifact under a census pass that was running. It
+   was caught by a lane whose own copy of extension/ made the swap visible, NOT by anything here, and
+   `git status` could never have shown it: these files are ignored, so the shared tree reported nothing.
+   A CLEAN-AT-START CHECK CANNOT REPLACE THIS. The cone was clean when this build began; the dirt arrived
+   during the compile, which is the normal case in a shared checkout and the whole reason the stamp is taken
+   at the END. So the question is asked where the answer is final and acted on there.
+   REFUSING LEAVES THE PREVIOUS ARTIFACT IN PLACE, which is the honest outcome and strictly better than what
+   happened: the last artifact that passed this gate belongs to a revision and says which, whereas the one
+   this build just made belongs to none. An absent result and a wrong one are different facts; so are a stale
+   artifact that names its revision and a fresh one that cannot.
+   A FROZEN SNAPSHOT IS STILL THE RULE AND THIS IS NOT A LICENCE TO SKIP IT — §Testing requires the gate to
+   run from one, and a snapshot's cone cannot go dirty because nobody else is writing to it. This is the
+   backstop for the case that already happened, not a second way to be right. */
+if (ABI_LINK.code === 0) {
+  const stageArtifact = join(ABI_STAGE, "qjs.mjs");
+  const rev = stampArtifact(stageArtifact, ["engine/host", "engine/qjs"]);
+  const why = rev.dirty.length ? rev.dirty.length + " dirty path(s) in the compiled cone: "
+                                 + rev.dirty.map((d) => d.trim()).join(", ")
+            : rev.unasked.length ? rev.unasked.length + " path(s) this tree could not be asked about: "
+                                 + rev.unasked.map((d) => d.trim()).join(", ")
+            : null;
+  if (why === null) {
+    for (const f of ["qjs.mjs", "qjs.wasm", "qjs.mjs" + ".build.json"])
+      if (existsSync(join(ABI_STAGE, f))) renameSync(join(ABI_STAGE, f), join(EXT_QJS, f));
+    console.log("[build] installed -> " + join(EXT_QJS, "qjs.mjs") + " (head " + rev.head + ", clean cone)");
+  } else {
+    console.error("[build] NOT INSTALLED — this artifact belongs to NO REVISION: " + why + ". It is staged at "
+                  + stageArtifact + " with its stamp beside it, and " + join(EXT_QJS, "qjs.mjs")
+                  + " still holds whatever last passed this gate. Read that file's own .build.json before "
+                  + "quoting any number from it. To produce an installable artifact, build from a FROZEN "
+                  + "SNAPSHOT (engine/frozen_snapshot.sh), whose cone no peer can write to.");
+  }
+}
 
 // Milestone smoke test: run test_forced.c's main (the @H merge + @S sink fire-verification on a fixture doc) —
 // the design-correctness signal until the live-Chrome harness is re-wired to a rebuilt production ABI entry.
