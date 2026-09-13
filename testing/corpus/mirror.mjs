@@ -26,7 +26,8 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
-import { readFileSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { siteList } from './list.mjs';
 
 const ROOT = new URL('.', import.meta.url).pathname;
@@ -39,8 +40,23 @@ const ROOT = new URL('.', import.meta.url).pathname;
 const rows = siteList().rows.map(r => [r.id, r.url, r.stack]);
 const only = process.argv[2];
 
+/* THE HEADER DUMP IS PER PROCESS AND IS REMOVED BEFORE EVERY FETCH, because it is SHARED STATE with a name
+   any second mirror would also have chosen, and what it carries is not scratch: the content type and the
+   policy read out of it are WRITTEN INTO provenance.json and frozen there. A fixed path under the world's
+   temp directory means two mirrors running at once read each other's headers, and the corruption is silent
+   and permanent — a row keeps another site's policy for ever, and the solver half reads a mirrored policy to
+   decide whether a breakout it found is real, so a borrowed one makes a dead vector report as live or hides
+   a live one. Naming it after the PROCESS is what makes the collision impossible rather than unlikely.
+   AND IT IS UNLINKED BEFORE EACH CALL rather than merely truncated by the next writer, which closes the
+   second staleness inside ONE run: curl writes this file only when it gets a response, so a transfer that
+   fails after the request went out would otherwise leave the PREVIOUS url's block on disk for this url's
+   read to find. Removing it first makes that read throw, which the catch below turns into the empty string —
+   the honest "no headers observed" — instead of a neighbouring row's answer wearing this row's name. */
+const HDR = join(tmpdir(), `.mirror-headers-${process.pid}.txt`);
+
 function get(url) {
-  const hdr = '/tmp/.mh.txt';
+  const hdr = HDR;
+  rmSync(hdr, { force: true });
   let body;
   try {
     body = execFileSync('curl', ['-sS', '-L', '--max-time', '40', '-D', hdr,
