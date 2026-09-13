@@ -58,6 +58,7 @@ second copy of it that goes quiet when the next document lands:
     node site.mjs control-flight http://127.0.0.1:8905/ <pass>  # a reply whose BODY names addresses
     node site.mjs control-csp  http://127.0.0.1:8906/ <pass>  # a document that carries a POLICY
     node site.mjs control-csp-open http://127.0.0.1:8907/ <pass>  # the same document with none
+    node site.mjs control-method http://127.0.0.1:8908/ <pass>  # the request METHOD axis (non-GET)
 
 ONE PORT PER DOCUMENT AND NOT ONE PATH PER DOCUMENT, because `site.mjs` isolates a row by ORIGIN: it selects
 the row's runs and documents with `d.url.startsWith(origin)`, so three documents on one origin make every

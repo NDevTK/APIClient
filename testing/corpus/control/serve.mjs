@@ -75,7 +75,7 @@
 //     sends `content-type` and nothing else — so both fields had never been non-empty in any run, and a
 //     correct path nobody has seen fire is a path nobody has measured.
 //
-// Nine rows, and a census wants all nine (PORT sets the base; the others follow it):
+// Ten rows, and a census wants all ten (PORT sets the base; the others follow it):
 //     node site.mjs control      http://127.0.0.1:8899/ <pass>
 //     node site.mjs control-sec  http://127.0.0.1:8900/ <pass>
 //     node site.mjs control-url  http://127.0.0.1:8901/ <pass>
@@ -85,6 +85,7 @@
 //     node site.mjs control-flight http://127.0.0.1:8905/ <pass>
 //     node site.mjs control-csp  http://127.0.0.1:8906/ <pass>
 //     node site.mjs control-csp-open http://127.0.0.1:8907/ <pass>
+//     node site.mjs control-method http://127.0.0.1:8908/ <pass>
 import { createServer } from 'node:http';
 import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -114,6 +115,12 @@ const DOCS = [
      downstream is keyed by anything that would notice. New documents go on the end. */
   ['csp-blocked.html', 'control-csp'],
   ['csp-open.html', 'control-csp-open'],
+  /* THE REQUEST-METHOD AXIS, AND IT IS APPENDED FOR THE REASON STATED DIRECTLY ABOVE. Before it, every
+     endpoint rung in this directory issued a GET — zero occurrences of POST/PUT/DELETE/PATCH across the
+     whole control — so the column that certifies the endpoint half exercised only the arm of Fetch §2.2.1
+     "Methods" that works, and a non-GET aborting the run was a state nine green rows could not see. Its
+     regression mode IS an abort, which is why it is its own document rather than a rung in index.html. */
+  ['method-park.html', 'control-method'],
 ];
 
 /* THE ONE NON-SCRIPT SUBRESOURCE ANY ROW FETCHES, and it is answered by every origin for the same reason the
