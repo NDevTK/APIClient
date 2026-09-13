@@ -1,0 +1,42 @@
+<!doctype html><html><head><meta charset="utf-8"><title>transform grammar</title>
+<!-- css-transforms-1 §7 "The Transform Functions" — the FALSIFIER for the <transform-list> grammar.
+     Each element's client rectangle is read below, which is what runs CSSOM VIEW §6 "Extensions to the
+     Element Interface"'s getClientRects() step 3 and therefore the transform chain walk that asks
+     core/css/css_computed_value.c for the computed value. READING THE RECTANGLE IS THE REACHABILITY
+     WITNESS: an abort that never fires and a path never taken render identically, so the console line
+     each read emits is what separates them — a run with no ROTATE-READ line scores nothing, whatever
+     else it does or does not abort on. -->
+<style>
+  #rot   { transform: rotate(45deg); }
+  #t3d   { transform: translate3d(1px, 2px, 3px); }
+  #typo  { transform: translate(2); }
+</style>
+</head><body>
+<div id="rot"><span id="rot_in">r</span></div>
+<div id="t3d"><span id="t3d_in">d</span></div>
+<div id="typo"><span id="typo_in">t</span></div>
+<script>
+/* Read in ARM ORDER, least-to-most expected-to-abort, so a log that stops tells you which arm stopped it.
+   Each line is printed BEFORE the read it is about, so the last line in the log names the arm that died. */
+function probe(id, what) {
+  console.log("TF-READ " + id + " " + what);
+  var r = document.getElementById(id).getBoundingClientRect();
+  console.log("TF-OK " + id + " w=" + r.width + " h=" + r.height);
+}
+/* (1) THE TYPO ARM MUST NOT ABORT. `translate(2)` is CSS Syntax §2.2 "Error Handling"'s invalid
+   declaration — a bare non-zero number is not a <length-percentage> — so the element computes §3's
+   `Initial:` value of `none`, nothing is transformed, and the rectangle is reported. This is the
+   regression guard: before 0b5c14d0 this reached a DCHECK in core/css/css_length.c and aborted the
+   engine from a stylesheet. A run that dies here has REGRESSED. */
+probe("typo_in", "invalid-declaration-must-compute-none");
+/* (2) THE 2D ARM MUST ABORT AT THE MATRIX, NOT AT THE GRAMMAR. The computed value now exists, so what
+   is left is css-transforms-1 §12 "Mathematical Description of Transform Functions" — the abort's text
+   must contain "WHAT IS LEFT is §12" and must NOT be the retired computed-value crash. */
+probe("rot_in", "2d-transform-must-reach-the-matrix-crash");
+/* (3) THE 3D ARM MUST NAME ITS LEVEL. css-transforms-2 §12.2 "3D Transform Functions", and the message
+   must name `translate3d()` specifically rather than reporting a grammar gap. Unreached if (2) aborts
+   first, which is expected — run it alone to score this arm. */
+probe("t3d_in", "level-2-function-must-name-css-transforms-2");
+console.log("TF-END");
+</script>
+</body></html>

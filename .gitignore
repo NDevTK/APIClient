@@ -23,6 +23,15 @@ testing/fixtures/*
 # observable of an unmodified page (a non-ok `<script src>` fires `error`, not `load`, and its body never
 # becomes a program), so it is not one run's scratch — it is the artifact a before/after is taken ON.
 !testing/fixtures/scrstat_*
+# THE css-transforms-1 §7 GRAMMAR FALSIFIER. Re-included by name for the reason the paragraph above gives and
+# for one more that is specific to it: it is a document whose whole content is a PREDICTION, so the run that
+# scores it is one somebody else makes, at a revision somebody else names, and quotes back. A prediction whose
+# document is not in the revision it was predicted about cannot be re-run to check the quote — which is the
+# shape CLAUDE.md §Testing calls a measurement that outlived its instrument, where the number was true, the
+# method was sound, and only the thing that produced it is gone. Its three arms are stated at the arms
+# themselves, and one of them is a REGRESSION GUARD rather than a gap: `transform: translate(2)` must compute
+# `none` and not abort, which is the page-held abort switch 0b5c14d0 removed from core/css.
+!testing/fixtures/tf_grammar.html
 # THE `webpackJsonp` PRESENT/ABSENT PAIR AND THE FOUR BODIES IT LOADS. THREE TRACKED FILES QUOTE NUMBERS
 # MEASURED ON THIS DOCUMENT AND NAME IT BY PATH, and the bytes were in no revision: engine/host/solver/flow.c's
 # argument for why `rankChanges` is not the arrival count (34315 against 34309 at the last of twelve samples,
