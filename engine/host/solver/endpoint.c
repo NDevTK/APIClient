@@ -691,29 +691,14 @@ static int body_params(JSContext *ctx, KvBuf *out, const EndpointBody *body) {
    HOW ITS ABSENCE SHOWS, RESTATED BECAUSE THE OLD OBSERVATION HAS CHANGED ANSWER: it was an abort naming a
    typed-array element store, and that abort is gone from the engine, so the tell is now a request whose body
    this surface reports with no field a reviewer can vary while the run itself had the values in hand.
-   THE BLOCKER IS BUILT AND NOT YET INSTALLED, WHICH IS A THIRD STATE AND NOT EITHER OF THE TWO ABOVE. The
-   artifact this tree loads names the engine revision it was built from, and that revision is an ANCESTOR of
-   the one carrying the store — measured by content rather than by the stamp alone: the store's own abort text
-   is absent from the shipped bytes while the OLD typed-array abort is still present in them, which is the
-   positive control proving such text survives the build at all, so the absence is an answer. Until an install,
-   a run of this engine still meets the old abort, and any claim here about what a byte body does is a claim
-   about the tree and not about the product.
-   AND THAT PARAGRAPH NAMED NO ACTOR, WHICH IS WHAT KEPT IT STANDING RATHER THAN ANYTHING ABOUT THE WORK. It
-   said `until an install` in the passive, so it reads as PENDING — and an artifact carries a name only because
-   somebody BUILT and INSTALLED it, which in this project exactly ONE role may do. Every other reader runs the
-   observation, gets the defer answer, correctly leaves the residual standing, and moves on; nothing anywhere
-   accumulates those readings, so a residual blocked on an INSTALL is indistinguishable from one blocked on
-   unfinished work while taking the opposite action — the first is a REQUEST to the one role that can build,
-   the second is code somebody has to write. So, naming it: THE ACT IS A BUILD FOLLOWED BY AN INSTALL OF
-   `extension/lib/qjs/qjs.wasm`, AND THE MAIN AGENT IS THE ONLY ROLE THAT MAY PERFORM IT — a lane that meets
-   this paragraph asks rather than waits.
-   AND THE OBSERVATION IS A COMMAND, SO IT IS SPELLED OUT HERE RATHER THAN RE-DERIVED: grep the installed
-   `extension/lib/qjs/qjs.wasm` for `a typed-array element span was recorded with a width no element has`,
-   with `10.4.5.18` beside it as the POSITIVE control (abort text survives this build) and an invented string
-   as the NEGATIVE control (an empty answer means absent rather than un-asked). Three greps, one artifact. A
-   subject of 0 under a positive control of non-zero is the defer answer; a subject of non-zero retires THIS
-   paragraph and leaves the rest of the residual standing, because the store being reachable is not the same
-   claim as a byte body recording its fields here.
+   THE TELL ABOVE IS ARMED, WHICH IS A PRECONDITION AND NOT A STATUS LINE: the store this residual is about
+   is reachable in the SHIPPED artifact, so a claim here about what a byte body does is now a claim about the
+   PRODUCT rather than about the tree. It was not always so — the blocker that stood here was an artifact
+   older than the store, and a reader who met it correctly got the defer answer and moved on. What retires
+   that sentence in turn is the same observation that armed it: grep the installed
+   `extension/lib/qjs/qjs.wasm` for the store's own abort text with a control beside it, and a zero under a
+   non-zero control means the artifact has gone backwards and the tell is mute again. It is the artifact and
+   never the stamp that answers, because a stamp names a revision and a residual waits on BYTES.
    IT RETIRES when a body built through that store records its fields here.
    THE CODEC IS THE ENGINE'S OWN, for the reason core/file/file_reader.c gives at its own call: `btoa`'s codec
    is already implemented here and §Solver's rule is that an encoding builtin is modelled faithfully, never
