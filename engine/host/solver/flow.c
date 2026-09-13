@@ -400,10 +400,25 @@ typedef struct FlowAcct {
        and never moves, and every flow reaches its bucket in ONE indirection — the same shape `Flow.family`
        already uses to reach the root without walking, and for the same reason: flow_weight is evaluated inside
        DCHECK conditions, where a walk that compresses is forbidden.
-       WHAT IT IS FOR, AND IT IS AN OBSERVATION RATHER THAN A CHARGE. The order reads NOTHING here. The aging
-       is charged at the two scopes it already has (the member's `Flow.cpu` and the family's `fam_us`), and a
-       weight term over a branch would fail flow_fork_inherit's rank-neutrality equality by construction. What
-       these fields make possible is the one sentence neither existing scope can say: WITHIN a family the
+       WHAT IT IS FOR, AND THE ORDER READS IT — WHICH IS THE OPPOSITE OF WHAT THIS SAID, AND THE SENTENCE IT
+       REPLACES WAS A GUARANTEE RATHER THAN A LABEL, SO IT FAILED IN THE DIRECTION THAT GETS BUILT ON. It read
+       "The order reads NOTHING here" and "a weight term over a branch would fail flow_fork_inherit's
+       rank-neutrality equality by construction", and flow_nonreward SUMS flow_branch_bonus — `1.0 / live` over
+       exactly this bucket — into flow_weight today. Three consumers price it: flow_nonreward adds it,
+       FLOW_NONREWARD_MAX carries a `branch: alone in it` line for it, and flow_silence_us_to_sink's bound is
+       `+ 2.0` rather than `+ 1.0` precisely because of it. THE CONSUMERS ARE RIGHT AND THE DECLARATION WAS
+       WRONG, which is this project's own consumer-outranks-the-declaration rule arriving inside one file.
+       WHY THE EQUALITY PASSES ANYWAY, WHICH IS A REAL INVARIANT AND NOT THE ABSENCE OF A TERM. A branch term
+       is rank-neutral for TWO different reasons in two different cases, and the retired sentence hid both. A
+       fork off a NON-root MOVES the newborn into its parent's bucket (flow_fork_inherit), so parent and arm
+       read ONE `live` and are equal because they share a denominator — the transfer is LOAD-BEARING FOR THE
+       ORDER, which the site performing it also denied. A fork off a ROOT gives the arm its OWN bucket, and the
+       two are equal because BOTH hold exactly one live member: nothing ever raises a root's own `sub_born`
+       past the 1 flow_new wrote, since `br` is never `parent->acct` when the parent is a root. That second
+       case rests on a structural fact rather than on a shared field, so it is the fragile one and it is now
+       ASSERTED at the line that decides it rather than described here.
+       SO THE SCOPE IS BOTH AN OBSERVATION AND A TERM, and what the fields make possible is still the one
+       sentence neither existing scope can say: WITHIN a family the
        branch is invisible, BETWEEN families there is only one family on a page whose flows all descend from
        boot, so "the two sides of this branch received X and Y" was an argument and is now a number.
        AND IT IS WHY acct_compress_dead HAS A THIRD STOP CONDITION. Retention wants a dead spine gone; a
@@ -1848,10 +1863,19 @@ void flow_fork_inherit(Flow *sib, const Flow *parent) {
        — which is the one thing that would stop these being counters at all. The transfer leaves the sibling's
        own node at born == gone, which is a bucket of zero live members that no census will ever reach, because
        nothing points `branch` at it any more.
-       THIS TERM IS NOT IN THE RANK-NEUTRALITY EQUALITY BELOW, and that is a statement rather than an omission:
-       flow_weight reads nothing here, so the equality would pass whether these lines existed or not. A weight
-       term that separated the two sides of a branch would FAIL that equality by construction — see the
-       residual at `up` for why this scope is an observation and must not become a term. */
+       THIS TRANSFER IS LOAD-BEARING FOR THE RANK-NEUTRALITY EQUALITY BELOW, WHICH IS THE REVERSE OF WHAT THIS
+       PARAGRAPH SAID. It read "flow_weight reads nothing here, so the equality would pass whether these lines
+       existed or not", and flow_weight reads exactly what these lines write: flow_nonreward sums
+       flow_branch_bonus, which is `1.0 / (sub_born - sub_gone)` over the bucket this statement moves the arm
+       into. Delete the transfer and the newborn keeps its own bucket at one live member — bonus 1.0 — against
+       a parent bucket of L, so the equality FIRES for every L above one. It passes because both sides end up
+       reading ONE denominator, and that is this statement's doing.
+       THE ROOT ARM IS THE OTHER CASE AND IT PASSES FOR A DIFFERENT REASON, WHICH IS WHY IT IS ASSERTED AND NOT
+       ARGUED. When the parent is a root the arm KEEPS its own bucket, so the two do not share a denominator at
+       all; they are equal because both hold exactly one live member, which holds only while nothing ever
+       raises a root's own `sub_born` past the 1 flow_new wrote. That is a fact about `br`'s definition rather
+       than about any field either side carries, so a future bucket policy could break it with every other
+       check in this file still green. The DCHECK below states it where it is decided. */
     sib->acct->depth = parent->acct->depth + 1;
     {
         FlowAcct *br = parent->acct->up ? parent->acct->branch : sib->acct;
@@ -1861,6 +1885,23 @@ void flow_fork_inherit(Flow *sib, const Flow *parent) {
                "node, or already carrying membership in one — the transfer below is a departure and an "
                "arrival of ONE member, so a sibling arriving with any other count publishes a bucket total "
                "that no flow corresponds to and the census's membership identity fails on a healthy frontier");
+        /* THE ROOT ARM'S NEUTRALITY, ASSERTED WHERE IT IS DECIDED. Where the arm KEEPS its own bucket the
+           two sides of this fork do not share a denominator, so flow_branch_bonus is equal across them only
+           while BOTH buckets hold exactly one live member. The arm's is one by the precondition above; the
+           parent's is one only because `br` is never `parent->acct` when the parent is a root, so nothing has
+           ever raised a root's own `sub_born` past the 1 flow_new wrote. That is a property of THIS
+           expression rather than of any field either side carries — a bucket policy that let a root be some
+           node's `branch` would leave every other check in this file green and silently make a fork off the
+           root a PROMOTION of up to a full point, which is the whole range §scheduler gives one emission.
+           BOTH OPERANDS ARE REAL PROGRAM STATE AND IT IS NOT THE EQUALITY ONE LINE DOWN. That one compares
+           two SUMS and is satisfied by any pair of terms that happen to cancel; this names the structural
+           fact that makes THIS term's half of it hold, and it is false for any frontier in which a root has
+           been forked into. */
+        DCHECK(br != sib->acct ||
+               (parent->acct->branch == parent->acct && parent->acct->sub_born - parent->acct->sub_gone == 1),
+               "a fork left the newborn in its own branch bucket while the parent's bucket holds more than the "
+               "parent — so the two sides of this branch read different `1/live` from flow_branch_bonus and "
+               "branching just changed a flow's own rank, which is the one thing the WFQ may never let it do");
         if (br != sib->acct) { sib->acct->sub_gone++; br->sub_born++; sib->acct->branch = br; }
     }
     /* AND THE PATH'S FORCED MARK — the one thing inherited here that the ranking never reads, and it is stated
@@ -1908,9 +1949,15 @@ void flow_fork_inherit(Flow *sib, const Flow *parent) {
        "prefer flows that have run" tiebreak). Any of those would make the two sides differ here, at the fork,
        instead of six minutes later in a progress line that says `finished 0`.
        RE-DERIVED FOR EVERY TERM, AND IT IS NOT AN ASSUMPTION CARRIED OVER. flow_weight is now
-       `fam_val + (cand_replay + cand_surv + cand_rung)/FLOW_RUNGS_N + 1/(1+visits) − (own_silence + fam_us)*RATE`,
-       so a fork must carry EIGHT things for this to hold and it carries exactly eight through SEVEN
-       assignments: `cand_replay`, `cand_surv` and `cand_rung` (copied above — the fitness comparator's three
+       `fam_val + (cand_replay + cand_surv + cand_rung)/FLOW_RUNGS_N + 1/(1+visits) + 1/branch_live
+       − (own_silence + fam_us)*RATE`,
+       so a fork must carry NINE things for this to hold and it carries exactly nine through EIGHT
+       assignments. THE ENUMERATION USED TO SAY EIGHT AND SEVEN AND OMITTED THE BRANCH TERM ENTIRELY, which is
+       the failure this very paragraph claims to prevent: a re-derivation that is not redone when the formula
+       moves is an assumption carried over wearing a derivation's grammar. The ninth is `1/branch_live`
+       (flow_branch_bonus), carried by the bucket TRANSFER above rather than by a field copy, which is why it
+       escaped a list written out of the assignments — and the eighth assignment is that transfer.
+       The other eight: `cand_replay`, `cand_surv` and `cand_rung` (copied above — the fitness comparator's three
        rung quantities, and the first of them is the one this enumeration most recently gained: the runway
        fraction is a fact about the path both arms SHARE, and decide_fork_blob hands the sibling the parent's
        cursor, so the two arms of one parent forked at two instants read it the same — which is the test this
