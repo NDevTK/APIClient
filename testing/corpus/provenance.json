@@ -1242,5 +1242,236 @@
    }
   ],
   "baseUrl": "https://astexplorer.net/"
+ },
+ {
+  "id": "tldraw",
+  "stack": "Vite (/assets/index-<hash>.js) + an inline /theme-init.js",
+  "requestedUrl": "https://www.tldraw.com/",
+  "finalUrl": "https://www.tldraw.com/",
+  "status": 200,
+  "contentType": "text/html; charset=utf-8",
+  "csp": "default-src 'self'; connect-src 'self' ws: wss: blob: data: http://localhost:8788 http://localhost:8789 https://*.tldraw.xyz https://cdn.tldraw.com https://*.tldraw.workers.dev https://*.ingest.sentry.io https://*.ingest.us.sentry.io https://*.analytics.google.com https://analytics.google.com https://www.google-analytics.com https://*.googletagmanager.com https://www.googletagmanager.com http://localhost:5002 https://*.clerk.accounts.dev https://clerk.tldraw.com https://clerk.staging.tldraw.com https://clerk-telemetry.com https://*.zero.tldraw.com https://zero.tldraw.com http://localhost:4848 https://analytics.tldraw.com https://consent.tldraw.xyz https://stats.g.doubleclick.net https://*.google-analytics.com https://api.reo.dev https://fonts.googleapis.com https://tldrawusercontent.com https://*.tldrawusercontent.com; font-src 'self' https://fonts.googleapis.com https://fonts.gstatic.com data:; frame-src 'self' https:; img-src 'self' http: https: data: blob:; media-src 'self' http: https: data: blob:; script-src 'self' https://challenges.cloudflare.com https://*.clerk.accounts.dev https://clerk.tldraw.com https://clerk.staging.tldraw.com https://gist.github.com https://www.googletagmanager.com https://*.googletagmanager.com https://www.google-analytics.com https://*.google-analytics.com https://analytics.tldraw.com https://static.reo.dev; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; style-src-elem 'self' 'unsafe-inline' https://fonts.googleapis.com https://github.githubassets.com; report-uri https://o578706.ingest.us.sentry.io/api/4504203639193600/security/?sentry_key=ce7a28bffc1048a4bea1292521a8435e",
+  "bytes": 13728,
+  "sha256": "66b8a56cb72a50da5fdb74390069729de0c6a8ca039b617514e6d97f63eb930a",
+  "fetchedAt": "2026-09-13T07:54:46.657Z",
+  "resources": [
+   {
+    "url": "https://www.tldraw.com/theme-init.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 1437,
+    "sha256": "ea1871804740b69c695a523f2b1dc052ee15326ec6d966b8b952b21369060b20",
+    "fetchedAt": "2026-09-13T07:54:47.137Z",
+    "path": "www.tldraw.com/theme-init.js"
+   },
+   {
+    "url": "https://www.tldraw.com/assets/index-DYnRbubU.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 79256,
+    "sha256": "f7df0425e17fec990e0e22efd6f6b760c11d5d75ae74e17b47f81c5989f60d5f",
+    "fetchedAt": "2026-09-13T07:54:47.458Z",
+    "path": "www.tldraw.com/assets/index-DYnRbubU.js"
+   },
+   {
+    "url": "https://www.tldraw.com/assets/Shantell_Sans-Informal_Regular-DT813UET.woff2",
+    "status": 200,
+    "contentType": "font/woff2",
+    "bytes": 153500,
+    "sha256": "071f39874fcae274e7096eb85a5ac43975ba3dcdc2aa4929d734a13b31cffbba",
+    "fetchedAt": "2026-09-13T07:54:47.782Z",
+    "path": "www.tldraw.com/assets/Shantell_Sans-Informal_Regular-DT813UET.woff2"
+   },
+   {
+    "url": "https://www.tldraw.com/assets/IBMPlexSerif-Medium-BpRXNayp.woff2",
+    "status": 200,
+    "contentType": "font/woff2",
+    "bytes": 72604,
+    "sha256": "2eb75e035155ea1d0805fafaa012f7083e5034f935f17cfcc650b17bdf530c2d",
+    "fetchedAt": "2026-09-13T07:54:48.038Z",
+    "path": "www.tldraw.com/assets/IBMPlexSerif-Medium-BpRXNayp.woff2"
+   },
+   {
+    "url": "https://www.tldraw.com/assets/IBMPlexSans-Medium-BQLKo0ot.woff2",
+    "status": 200,
+    "contentType": "font/woff2",
+    "bytes": 66740,
+    "sha256": "5660f8a658f8bb50dbc005232f885eadffd2bc1c235c4f6fbb63469d1f9cde6d",
+    "fetchedAt": "2026-09-13T07:54:48.288Z",
+    "path": "www.tldraw.com/assets/IBMPlexSans-Medium-BQLKo0ot.woff2"
+   },
+   {
+    "url": "https://www.tldraw.com/assets/IBMPlexMono-Medium-B772pXP5.woff2",
+    "status": 200,
+    "contentType": "font/woff2",
+    "bytes": 46724,
+    "sha256": "8c2c290cbd998fa1f647e4572aca6ebbd72589551b0f3f9f8bb8628fbb8219d5",
+    "fetchedAt": "2026-09-13T07:54:48.619Z",
+    "path": "www.tldraw.com/assets/IBMPlexMono-Medium-B772pXP5.woff2"
+   },
+   {
+    "url": "https://www.tldraw.com/assets/0_merged-B4vR05nz.svg",
+    "status": 200,
+    "contentType": "image/svg+xml",
+    "bytes": 55478,
+    "sha256": "65143667393337d6239adc28212b8f92c7a17dd8afad3def551d245885026a70",
+    "fetchedAt": "2026-09-13T07:54:48.900Z",
+    "path": "www.tldraw.com/assets/0_merged-B4vR05nz.svg"
+   },
+   {
+    "url": "https://www.tldraw.com/assets/0_merged_tla-CRouFXcN.svg",
+    "status": 200,
+    "contentType": "image/svg+xml",
+    "bytes": 35280,
+    "sha256": "a810879e8051253e591c5ad23d2fb81a192523c0b3327668d15f7a5cf466a97c",
+    "fetchedAt": "2026-09-13T07:54:49.160Z",
+    "path": "www.tldraw.com/assets/0_merged_tla-CRouFXcN.svg"
+   },
+   {
+    "url": "https://www.tldraw.com/assets/rolldown-runtime-hePW80VL.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 1073,
+    "sha256": "dc7d2e8c43c4d1bd38e1e4c4abe0f178a5fbbb17b4ccdbf761220708153bc4d5",
+    "fetchedAt": "2026-09-13T07:54:49.395Z",
+    "path": "www.tldraw.com/assets/rolldown-runtime-hePW80VL.js"
+   },
+   {
+    "url": "https://www.tldraw.com/assets/react-dom-BzP9Lo1b.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 11417,
+    "sha256": "149a9c1701acd01d1b91ffc2a65e3d08fc748a5d29d40416112c534a04c0d5d7",
+    "fetchedAt": "2026-09-13T07:54:49.615Z",
+    "path": "www.tldraw.com/assets/react-dom-BzP9Lo1b.js"
+   },
+   {
+    "url": "https://www.tldraw.com/assets/dist-CJ_CoDay.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 94599,
+    "sha256": "c6da35d87d6fd1e87167f7dd9ffb07636cf3f3a2ac6e7ec80480f5e2d5b4f502",
+    "fetchedAt": "2026-09-13T07:54:49.933Z",
+    "path": "www.tldraw.com/assets/dist-CJ_CoDay.js"
+   },
+   {
+    "url": "https://www.tldraw.com/assets/jsx-runtime-NZYk81nU.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 842,
+    "sha256": "e58bf0113e7f01f3b9205c7896ab9b71ed9cfcb0326142d83e84d77ddcc24cc7",
+    "fetchedAt": "2026-09-13T07:54:50.196Z",
+    "path": "www.tldraw.com/assets/jsx-runtime-NZYk81nU.js"
+   },
+   {
+    "url": "https://www.tldraw.com/assets/preload-helper-Czpn1I53.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 1553,
+    "sha256": "136b986bacd0fd40930b29ea5ce391c04ae51b7d973f740dea7bbb73a04fd8a3",
+    "fetchedAt": "2026-09-13T07:54:50.428Z",
+    "path": "www.tldraw.com/assets/preload-helper-Czpn1I53.js"
+   },
+   {
+    "url": "https://www.tldraw.com/assets/src-BpFD6v3t.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 1844062,
+    "sha256": "052908a1bdfc2e5d627493da08cf9a8df3d9017a3a7640d25cabddd8823a76da",
+    "fetchedAt": "2026-09-13T07:54:50.814Z",
+    "path": "www.tldraw.com/assets/src-BpFD6v3t.js"
+   },
+   {
+    "url": "https://www.tldraw.com/assets/index.module-BMvhIbkZ.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 18127,
+    "sha256": "61c4b8c649b397eb7f9a896c06fe4fef13da2e7dad2268b519e5ccc52d7efff0",
+    "fetchedAt": "2026-09-13T07:54:51.017Z",
+    "path": "www.tldraw.com/assets/index.module-BMvhIbkZ.js"
+   },
+   {
+    "url": "https://www.tldraw.com/assets/dist-BIBxK_f5.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 58663,
+    "sha256": "062eb8ba8eff4a2951b2256841adcd8b5885a3f3115bb1a1524dcb78733d7ab8",
+    "fetchedAt": "2026-09-13T07:54:51.378Z",
+    "path": "www.tldraw.com/assets/dist-BIBxK_f5.js"
+   },
+   {
+    "url": "https://www.tldraw.com/assets/dist-81mG8ubP.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 8921,
+    "sha256": "72b96f762cc9c4c45985e525efe40fae279e5f183edd4340987666f6072eedd1",
+    "fetchedAt": "2026-09-13T07:54:51.612Z",
+    "path": "www.tldraw.com/assets/dist-81mG8ubP.js"
+   },
+   {
+    "url": "https://www.tldraw.com/assets/hub-D1WpHuyl.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 30715,
+    "sha256": "2f85f469f2909cfeb0c97851cbdc83f3918b799f1be98b4f2dd1f41430006274",
+    "fetchedAt": "2026-09-13T07:54:51.859Z",
+    "path": "www.tldraw.com/assets/hub-D1WpHuyl.js"
+   },
+   {
+    "url": "https://www.tldraw.com/assets/ErrorPage-BC4U9gUh.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 46502,
+    "sha256": "aee3521eb26fbb1066d19d9ba64b639f1a1ed98590a5a6366680fe3cf53463db",
+    "fetchedAt": "2026-09-13T07:54:52.123Z",
+    "path": "www.tldraw.com/assets/ErrorPage-BC4U9gUh.js"
+   },
+   {
+    "url": "https://www.tldraw.com/assets/tdigest-_R3LVgJ9.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 71503,
+    "sha256": "8f381c233068a7d21d3e74bf6a62bbd4e2072e9c623b5033bf354a1a6f0bd29c",
+    "fetchedAt": "2026-09-13T07:54:52.393Z",
+    "path": "www.tldraw.com/assets/tdigest-_R3LVgJ9.js"
+   },
+   {
+    "url": "https://www.tldraw.com/assets/src-eaREpPlw.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 241072,
+    "sha256": "0537c1ccee478c57ec9b4dcb15833b907063b3e9713ce81c80692fb9814f2a1d",
+    "fetchedAt": "2026-09-13T07:54:52.656Z",
+    "path": "www.tldraw.com/assets/src-eaREpPlw.js"
+   },
+   {
+    "url": "https://www.tldraw.com/assets/env-CUFTGclH.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 433,
+    "sha256": "cc6d6d822ee1fbd409677b42cde22f04c49eb95c579d023042ddc346f1b57e98",
+    "fetchedAt": "2026-09-13T07:54:52.927Z",
+    "path": "www.tldraw.com/assets/env-CUFTGclH.js"
+   },
+   {
+    "url": "https://www.tldraw.com/assets/routeDefs-Dxx8TZT5.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 1459,
+    "sha256": "5653d8c50020631fc6ffdb767cacd539ba36c9a0a7507ea65e9a7d4d77f60f6e",
+    "fetchedAt": "2026-09-13T07:54:53.161Z",
+    "path": "www.tldraw.com/assets/routeDefs-Dxx8TZT5.js"
+   },
+   {
+    "url": "https://www.tldraw.com/assets/notFoundError-CuQKqtwM.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 586,
+    "sha256": "5fb8b1c309fdd10b30e2a79729673b3cf182e8970e0b26c44403cb201b310cbe",
+    "fetchedAt": "2026-09-13T07:54:53.382Z",
+    "path": "www.tldraw.com/assets/notFoundError-CuQKqtwM.js"
+   }
+  ],
+  "baseUrl": "https://www.tldraw.com/"
  }
 ]
