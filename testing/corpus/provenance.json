@@ -1821,5 +1821,308 @@
    }
   ],
   "baseUrl": "https://web.telegram.org/k/"
+ },
+ {
+  "id": "jsoncrack",
+  "stack": "NOT AN @H SUBJECT — fails 1 and 2: all 27 chunks the document names were fetched (1.05MB) and the only `/api/` string in any of them is Next's own internal route test `function r(e){return\"/api\"===e||e.startsWith(\"/api/\")}` — no application endpoint exists. Added on bundler diversity to replace the blocked replit row; re-selected against the five tests and it is the squoosh shape a second time. STACK: Next.js pages router (/_next/static/chunks/webpack-<hash>.js, framework-<hash>.js, polyfills-<hash>.js noModule)",
+  "requestedUrl": "https://jsoncrack.com/editor",
+  "finalUrl": "https://jsoncrack.com/editor",
+  "status": 200,
+  "contentType": "text/html; charset=utf-8",
+  "csp": "",
+  "bytes": 29841,
+  "sha256": "fc06ee9f36dcb6be8785396cc525f95b069dbbe8c7582abb34d99f0755317930",
+  "fetchedAt": "2026-09-13T07:55:13.247Z",
+  "resources": [
+   {
+    "url": "https://jsoncrack.com/_next/static/chunks/polyfills-42372ed130431b0a.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 112594,
+    "sha256": "0973c1d64c88adc8e3c950410cb58b288f72118d5965b78049438deb8f2f9683",
+    "fetchedAt": "2026-09-13T07:55:13.511Z",
+    "path": "jsoncrack.com/_next/static/chunks/polyfills-42372ed130431b0a.js"
+   },
+   {
+    "url": "https://jsoncrack.com/_next/static/chunks/5166.1cb87b826a71e46a.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 11810,
+    "sha256": "8844ae3b8f7ce793da6d99cdf55b54de442ae0ce9db96aec0d642da69365d164",
+    "fetchedAt": "2026-09-13T07:55:13.746Z",
+    "path": "jsoncrack.com/_next/static/chunks/5166.1cb87b826a71e46a.js"
+   },
+   {
+    "url": "https://jsoncrack.com/_next/static/chunks/1128.2a33b2a0050961cd.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 420,
+    "sha256": "cdeadbbc37198f65ee20f8ebc3798a14657f80012c67c775f277742429cfc45c",
+    "fetchedAt": "2026-09-13T07:55:14.027Z",
+    "path": "jsoncrack.com/_next/static/chunks/1128.2a33b2a0050961cd.js"
+   },
+   {
+    "url": "https://jsoncrack.com/_next/static/chunks/webpack-42697f7612b047ed.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 14589,
+    "sha256": "6b9ee39ba9bba47fc87c6c48964558071548ab15ee8204e5f59f8cb76903c2e6",
+    "fetchedAt": "2026-09-13T07:55:14.226Z",
+    "path": "jsoncrack.com/_next/static/chunks/webpack-42697f7612b047ed.js"
+   },
+   {
+    "url": "https://jsoncrack.com/_next/static/chunks/framework-ca8e746de2f35a07.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 189737,
+    "sha256": "8400e2a28244c88273a802f20fba7ee3497075268cc324de118ea8bfcec2e9c5",
+    "fetchedAt": "2026-09-13T07:55:14.580Z",
+    "path": "jsoncrack.com/_next/static/chunks/framework-ca8e746de2f35a07.js"
+   },
+   {
+    "url": "https://jsoncrack.com/_next/static/chunks/main-422597294ebdc1be.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 139369,
+    "sha256": "a22cae00443fc48d821f8b7614a2d78ed30d470c96e796ec2ce3cff1828196df",
+    "fetchedAt": "2026-09-13T07:55:14.842Z",
+    "path": "jsoncrack.com/_next/static/chunks/main-422597294ebdc1be.js"
+   },
+   {
+    "url": "https://jsoncrack.com/_next/static/chunks/pages/_app-99b75405da068d00.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 143021,
+    "sha256": "986d689087c94c4bc11c36ab6adb69e9c885f09f7ee93cc01ad1b14bf14d1c3e",
+    "fetchedAt": "2026-09-13T07:55:15.089Z",
+    "path": "jsoncrack.com/_next/static/chunks/pages/_app-99b75405da068d00.js"
+   },
+   {
+    "url": "https://jsoncrack.com/_next/static/chunks/ffef3d7f-6b04632af5e007dc.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 13973,
+    "sha256": "ecd119e6f114ee139fd02a4e26f0007de1554fa70a07fa9d0edeeaf1810cf788",
+    "fetchedAt": "2026-09-13T07:55:15.353Z",
+    "path": "jsoncrack.com/_next/static/chunks/ffef3d7f-6b04632af5e007dc.js"
+   },
+   {
+    "url": "https://jsoncrack.com/_next/static/chunks/3ddfb24a-be664678fea05621.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 3774,
+    "sha256": "8e8746b25f02abc1d051e8e009d9bbadbc7580d120387473a7935fa933b5e338",
+    "fetchedAt": "2026-09-13T07:55:15.603Z",
+    "path": "jsoncrack.com/_next/static/chunks/3ddfb24a-be664678fea05621.js"
+   },
+   {
+    "url": "https://jsoncrack.com/_next/static/chunks/88404cf3-abde7a326d35bde7.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 5212,
+    "sha256": "516fd4a489b0b5ac5035a50787f6a2c6678ea1f484933cfab32323cd2e6af4b3",
+    "fetchedAt": "2026-09-13T07:55:15.957Z",
+    "path": "jsoncrack.com/_next/static/chunks/88404cf3-abde7a326d35bde7.js"
+   },
+   {
+    "url": "https://jsoncrack.com/_next/static/chunks/0d74e804-ccbe46035bfdae2a.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 7354,
+    "sha256": "6927a93f74e6b555d374d2b075dd0029cb259da8572a3255f496858640a90f8f",
+    "fetchedAt": "2026-09-13T07:55:16.199Z",
+    "path": "jsoncrack.com/_next/static/chunks/0d74e804-ccbe46035bfdae2a.js"
+   },
+   {
+    "url": "https://jsoncrack.com/_next/static/chunks/304309dd-2fa2d802211f619b.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 16772,
+    "sha256": "6353a85f1bd2900eccad0e34b196a53a6c5c515be89948d3859614fbcb442494",
+    "fetchedAt": "2026-09-13T07:55:16.426Z",
+    "path": "jsoncrack.com/_next/static/chunks/304309dd-2fa2d802211f619b.js"
+   },
+   {
+    "url": "https://jsoncrack.com/_next/static/chunks/0682a2b3-589b31c9d3a420e5.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 3269,
+    "sha256": "11181c3c84dad1d727356dfd79c94f15a941d712c34e09c1638bf77a77e24407",
+    "fetchedAt": "2026-09-13T07:55:16.655Z",
+    "path": "jsoncrack.com/_next/static/chunks/0682a2b3-589b31c9d3a420e5.js"
+   },
+   {
+    "url": "https://jsoncrack.com/_next/static/chunks/e38aee5f-527a50b3b9f84ffb.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 1932,
+    "sha256": "1d1506e5cc31f2dd2400b092269b9a938c0beee0a1e4c12878f4fafbadc611ef",
+    "fetchedAt": "2026-09-13T07:55:16.856Z",
+    "path": "jsoncrack.com/_next/static/chunks/e38aee5f-527a50b3b9f84ffb.js"
+   },
+   {
+    "url": "https://jsoncrack.com/_next/static/chunks/a1e013e2-c8be2e3bef6b420e.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 2180,
+    "sha256": "5c9661ce6f08747469327458712a4827ddd38ff02f2a8e01fd96fa3015628bdd",
+    "fetchedAt": "2026-09-13T07:55:17.105Z",
+    "path": "jsoncrack.com/_next/static/chunks/a1e013e2-c8be2e3bef6b420e.js"
+   },
+   {
+    "url": "https://jsoncrack.com/_next/static/chunks/70ddf335-7ee79d58906e6d39.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 370,
+    "sha256": "af9461bb411f2a2385b993868f9fd63555c02cbe4a405fbe50a76b3a2f7ac83c",
+    "fetchedAt": "2026-09-13T07:55:17.549Z",
+    "path": "jsoncrack.com/_next/static/chunks/70ddf335-7ee79d58906e6d39.js"
+   },
+   {
+    "url": "https://jsoncrack.com/_next/static/chunks/49e04c48-398c42e7a8fee044.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 434,
+    "sha256": "7d26adea197816a0513de519784761c565b0d8df900762c2410f897a56e5d08c",
+    "fetchedAt": "2026-09-13T07:55:17.770Z",
+    "path": "jsoncrack.com/_next/static/chunks/49e04c48-398c42e7a8fee044.js"
+   },
+   {
+    "url": "https://jsoncrack.com/_next/static/chunks/7243-69a95bb28f362185.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 34317,
+    "sha256": "74347c0c336d19c80942991dd6a40281bf73b37847e65b637eaa4df55940543b",
+    "fetchedAt": "2026-09-13T07:55:18.007Z",
+    "path": "jsoncrack.com/_next/static/chunks/7243-69a95bb28f362185.js"
+   },
+   {
+    "url": "https://jsoncrack.com/_next/static/chunks/9332-4cc1ad2036d7d418.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 7741,
+    "sha256": "aa8f11baaeea871962627319819c0495035a0b00a7197c115f5d42f27f5fb24a",
+    "fetchedAt": "2026-09-13T07:55:18.270Z",
+    "path": "jsoncrack.com/_next/static/chunks/9332-4cc1ad2036d7d418.js"
+   },
+   {
+    "url": "https://jsoncrack.com/_next/static/chunks/1767-aa52c4f27ccdf73c.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 66264,
+    "sha256": "4a689c9e9958cdc77b5795e24fb1709c2512f333eaf546a0e6924cae1a809f62",
+    "fetchedAt": "2026-09-13T07:55:18.522Z",
+    "path": "jsoncrack.com/_next/static/chunks/1767-aa52c4f27ccdf73c.js"
+   },
+   {
+    "url": "https://jsoncrack.com/_next/static/chunks/7286-785bb04633db5e22.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 12648,
+    "sha256": "2b304a37e9486908497ac3ba92076b4cc3e8ddf7f9d13d73c2505bbaadb2433c",
+    "fetchedAt": "2026-09-13T07:55:18.787Z",
+    "path": "jsoncrack.com/_next/static/chunks/7286-785bb04633db5e22.js"
+   },
+   {
+    "url": "https://jsoncrack.com/_next/static/chunks/9441-4ade30e7c91c5fd6.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 202323,
+    "sha256": "12e6cb5a03d47fdb2ea9611a518ea4b79d9351d43777538315837ff1ac4c3341",
+    "fetchedAt": "2026-09-13T07:55:19.006Z",
+    "path": "jsoncrack.com/_next/static/chunks/9441-4ade30e7c91c5fd6.js"
+   },
+   {
+    "url": "https://jsoncrack.com/_next/static/chunks/713-8d2425e362be40c3.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 9999,
+    "sha256": "412f4eaf990ffbaec0dbd1923748659d607520ad84e4b69f90d21b6411fe546b",
+    "fetchedAt": "2026-09-13T07:55:19.235Z",
+    "path": "jsoncrack.com/_next/static/chunks/713-8d2425e362be40c3.js"
+   },
+   {
+    "url": "https://jsoncrack.com/_next/static/chunks/8142-e6808c94962556f8.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 12469,
+    "sha256": "aed2219fbcd567991aa5b78fb2c44e05c76084e53d6355cb128222c09764af7a",
+    "fetchedAt": "2026-09-13T07:55:19.455Z",
+    "path": "jsoncrack.com/_next/static/chunks/8142-e6808c94962556f8.js"
+   },
+   {
+    "url": "https://jsoncrack.com/_next/static/chunks/4279-ac6ddc32229f1646.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 34512,
+    "sha256": "9fa5f233eb64429b3b69ad6db88eaf18d70474c4de85f6e2a039f6fdd13a7fba",
+    "fetchedAt": "2026-09-13T07:55:19.687Z",
+    "path": "jsoncrack.com/_next/static/chunks/4279-ac6ddc32229f1646.js"
+   },
+   {
+    "url": "https://jsoncrack.com/_next/static/chunks/9360-34367babe64b7c2a.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 12249,
+    "sha256": "0e4b3459035239a40e8f33b5a13b80894ba07515167802aa1ae024b40c0ab7a4",
+    "fetchedAt": "2026-09-13T07:55:19.918Z",
+    "path": "jsoncrack.com/_next/static/chunks/9360-34367babe64b7c2a.js"
+   },
+   {
+    "url": "https://jsoncrack.com/_next/static/chunks/pages/editor-871f0d9f8b9bb72b.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 19865,
+    "sha256": "711eeb10181ee08e423c83f8b61d415d718ec420fcd5059aad289d976098c18e",
+    "fetchedAt": "2026-09-13T07:55:20.153Z",
+    "path": "jsoncrack.com/_next/static/chunks/pages/editor-871f0d9f8b9bb72b.js"
+   },
+   {
+    "url": "https://jsoncrack.com/_next/static/PNJOcdKEcr0BT8cf68BkF/_buildManifest.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 2101,
+    "sha256": "b9bc48623a5884aae4042f60d95d9409af7da95e93c51e8eed13c9b78c3eae19",
+    "fetchedAt": "2026-09-13T07:55:20.348Z",
+    "path": "jsoncrack.com/_next/static/PNJOcdKEcr0BT8cf68BkF/_buildManifest.js"
+   },
+   {
+    "url": "https://jsoncrack.com/_next/static/PNJOcdKEcr0BT8cf68BkF/_ssgManifest.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 88,
+    "sha256": "a66383b381b46cccc8f600e19dedea91beedf07e06bb49f011fa7f7073ead591",
+    "fetchedAt": "2026-09-13T07:55:20.593Z",
+    "path": "jsoncrack.com/_next/static/PNJOcdKEcr0BT8cf68BkF/_ssgManifest.js"
+   },
+   {
+    "url": "https://jsoncrack.com/_next/static/media/37e1d48fe87dd79a-s.p.woff2",
+    "status": 200,
+    "contentType": "font/woff2",
+    "bytes": 133748,
+    "sha256": "6bde7bbfcd77d21bf13d8d2199e4299f66d24e9a69c231ae674266951f5c3a6c",
+    "fetchedAt": "2026-09-13T07:55:20.824Z",
+    "path": "jsoncrack.com/_next/static/media/37e1d48fe87dd79a-s.p.woff2"
+   },
+   {
+    "url": "https://jsoncrack.com/_next/static/css/67e3eb8c458fe378.css",
+    "status": 200,
+    "contentType": "text/css; charset=utf-8",
+    "bytes": 211593,
+    "sha256": "de89c9a29b7bb59f3ec91e08e1ed747fb1500ea6159f3149091873023b3ee2f3",
+    "fetchedAt": "2026-09-13T07:55:21.087Z",
+    "path": "jsoncrack.com/_next/static/css/67e3eb8c458fe378.css"
+   },
+   {
+    "url": "https://jsoncrack.com/_next/static/css/ceff766a2a733ffe.css",
+    "status": 200,
+    "contentType": "text/css; charset=utf-8",
+    "bytes": 7989,
+    "sha256": "8206b3ce11631fbc3df0783408abc7ed19469f41f03ee263dbf0c55178275cf2",
+    "fetchedAt": "2026-09-13T07:55:21.314Z",
+    "path": "jsoncrack.com/_next/static/css/ceff766a2a733ffe.css"
+   }
+  ],
+  "baseUrl": "https://jsoncrack.com/editor"
  }
 ]
