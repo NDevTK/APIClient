@@ -9132,33 +9132,46 @@ static void fork_row_impl(const char *js, int *row, const char **why,
                       (int)(sizeof fr_worlds_ / sizeof fr_worlds_[0]), fr_why_, sizeof fr_why_);        \
     } while (0)
 
-/* ONE PARAM OF ONE STATEMENT CARRIES EXACTLY ONE VALUE AND IT IS `val` — the claim the three rows above were
-   trying to make, and the one an `strstr` up to a literal `]` was standing in for. Exactly-one is the whole
-   assertion for a statement whose value the code DETERMINED: a second entry means the flow forked where the
+/* EVERY VALUE ENTRY OF ONE PARAM OF ONE STATEMENT IS `val` — the claim the three rows above were trying to
+   make, and the one an `strstr` up to a literal `]` was standing in for. One value is the whole assertion for
+   a statement whose value the code DETERMINED: an entry that is NOT `val` means the flow forked where the
    fixture says it cannot, which is a finding and not a match.
-   COUNTED OVER THE STATEMENT'S RECORDS AND NOT INSIDE ONE, which is what makes that assertion true rather than
-   nearly true. A fork whose arms are told apart by their provenance grade puts each arm's value on its OWN
-   record (solver/endpoint.c's same_identity), so a per-record count reads "exactly one" for precisely the
-   split this row exists to refuse — the second value is not missing, it is one record along.
-   `val` is compared against the emitted JSON bytes, so a value needing an escape would never match; that is
-   asserted rather than left to be discovered as a row stuck at 0. */
+   IT IS A QUESTION ABOUT THE VALUE SET AND NOT ABOUT THE NUMBER OF ENTRIES, AND THAT IS A CORRECTION. What
+   stood here counted ENTRIES over the statement's records and returned 0 at the second one WHATEVER IT
+   CARRIED. Its argument is rewritten rather than deleted, because a reader who re-derives it will re-introduce
+   it: "a fork whose arms are told apart by their provenance grade puts each arm's value on its OWN record
+   (solver/endpoint.c's same_identity), so a per-record count reads exactly-one for precisely the split this
+   row exists to refuse — the second value is not missing, it is one record along". THE PREMISE IS EXACTLY
+   RIGHT AND IS WHY THIS STILL WALKS EVERY RECORD; the conclusion does not follow from it, because it assumes
+   the second record carries a DIFFERENT value, and nothing makes it.
+   A STATEMENT DOWNSTREAM OF A VALUED BRANCH IS REACHED BY BOTH ARMS AND ONE OF THEM IS FORCED. The arm that
+   contradicts its operand's example is marked by solver/decide.c, and that mark is monotone and
+   fork-inherited (solver/flow.h's flow_mark_forced_arm), so every request the arm builds afterwards is graded
+   FORCED and same_identity files it as its OWN record. Where the value depends on nothing that branch decided,
+   the two records carry the SAME one — param_add_val dedups WITHIN a record and emitted_recs_one_statement
+   refuses two records at one grade, so N identical entries is exactly N GRADES AGREEING. That is the engine
+   being RIGHT, and the old spelling read it as a fork.
+   MEASURED, AND THE FIXTURE IS ITS OWN WITNESS: `/api/bodybytes` stands in the same <script> as
+   `if (addn > 0)`, whose operand is minted carrying the example 1920, and all four of its values are read off
+   one reply and depend on nothing that branch decides. `add-fork` reading 1 in the same census IS that forced
+   arm emitting. The addnum rows already record this mechanism one level up — a check counting RECORDS refused
+   the statement it was written to read — and it survived here because that repair was made where it was found
+   rather than at every site asking the same question the same wrong way.
+   ASKED AS THE TWO COUNTS ABOVE RATHER THAN AS A THIRD WALK, which is param_value_count_of's own instruction:
+   the entries that are NEITHER literal are that count subtracted from param_value_count, and have no other
+   spelling in this file. The escape assertion rides in with it instead of being restated here.
+   NAMED RESIDUAL. WHAT IS NOT COVERED: a 0 here is still TWO findings that take different work — the param
+   carries no `val` at all, so the value came out WRONG; and it carries `val` ALONGSIDE something else, so the
+   flow forked where the statement says it cannot. WHAT THE NEXT DIFF BUILDS: the split at the CALLER, which
+   needs no new primitive — `param_value_count_of(...) == 0` is the first state and a count strictly between 0
+   and `param_value_count(...)` is the second — spelled as two rungs so fold_row keeps whichever happened.
+   HOW ITS ABSENCE WOULD SHOW: a reader meeting a value row at 0 is told which value is missing and never
+   whether something else arrived in its place, so a fork reaching a sink the fixture calls determined reads as
+   an arithmetic mistake in the statement. */
 static int param_value_only(const char *js, const char *url, const char *pname, const char *val) {
-    EmittedRec r[EMITTED_REC_MAX];
-    const char *v, *b, *c;
-    size_t n, m = strlen(val);
-    int cnt, i, plain = 1, seen = 0;
+    const int mine = param_value_count_of(js, url, pname, val);
 
-    for (c = val; *c; c++)
-        if (*c == '"' || *c == '\\' || (unsigned char)*c < 0x20) plain = 0;
-    DCHECK(plain, "a probe's expected param value carries a byte json_buf_str escapes, so it is being compared "
-                  "against a spelling the emitter never writes");
-    cnt = emitted_records(js, url, r, EMITTED_REC_MAX);
-    for (i = 0; i < cnt; i++)
-        for (v = param_values_in(&r[i], pname); v && (v = param_value_next(v, &b, &n)) != NULL; ) {
-            if (seen || n != m || memcmp(b, val, m) != 0) return 0;   /* a second entry, or the wrong one */
-            seen = 1;
-        }
-    return seen;
+    return mine > 0 && mine == param_value_count(js, url, pname);
 }
 
 /* THE STAGE AN @S SEARCH REACHED, read off the entry the report already carries. ONE boolean per sink
@@ -10432,8 +10445,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        the most widely emitted token there is, and the clause meant to prove that THIS header read back null
        rather than `""` was satisfied by any absent value anywhere in the document.
        ASKED AS `_only` AND NOT `_is`, FOR THE REASON THE SIBLING ROW BELOW IS: every one of these six is a
-       value the code DETERMINED — a real `Headers` object answering a real `get` — so a SECOND entry on any of
-       them means the flow forked where this statement cannot, which is a finding rather than a match.
+       value the code DETERMINED — a real `Headers` object answering a real `get` — so a SECOND DISTINCT VALUE on
+       any of them means the flow forked where this statement cannot, which is a finding rather than a match.
        AND THE EXISTENCE CLAUSE LEADS, so "§5 never ran" and "§5 ran and got one of these six wrong" are two
        readings; folded, they were one 0 that named neither. */
     const char *hdrs_why = NULL; int hdrs = 1;
@@ -10465,9 +10478,10 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        generic English word, satisfiable by any statement of any document that ever spells it, and one this
        fixture is free to add tomorrow with nothing to say the row stopped meaning anything.
        `_only` AND NOT `_is`: both values are DETERMINED here — the trap returns `t[k]` and `seen` is assigned
-       exactly once — so a second entry on either means the flow forked where this statement cannot, which is a
-       finding and not a match. AND THE EXISTENCE CLAUSE LEADS, so "the proxy statement never ran" and "it ran
-       and the trap or the header is wrong" are two messages rather than one 0 that named neither. */
+       exactly once — so a second DISTINCT VALUE on either means the flow forked where this statement
+       cannot, which is a finding and not a match. AND THE EXISTENCE CLAUSE LEADS, so "the proxy statement
+       never ran" and "it ran and the trap or the header is wrong" are two messages rather than one 0
+       that named neither. */
     const char *hdrproxy_why = NULL; int hdrproxy = 1;
     fold_row(&hdrproxy, &hdrproxy_why, strstr(js, "\"/api/hdrproxy\"") != NULL,
              "NOT REACHED: there is no /api/hdrproxy record at all, so the §5 record-arm-through-a-Proxy "
@@ -10492,7 +10506,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        by no statement of this fixture and satisfied by every one — and a reader who re-derives the missing
        clause would re-introduce a check that `param_value_only` already subsumes.
        `_only` throughout: every one of these four is a value the code DETERMINED from a real Headers list, so
-       a second entry means the flow forked where this statement cannot. AND THE EXISTENCE CLAUSE LEADS. */
+       a second DISTINCT VALUE means the flow forked where this statement cannot. AND THE EXISTENCE CLAUSE
+       LEADS. */
     const char *hdriter_why = NULL; int hdriter = 1;
     fold_row(&hdriter, &hdriter_why, strstr(js, "\"/api/hdriter\"") != NULL,
              "NOT REACHED: there is no /api/hdriter record at all, so the §5.2 iterable<> statement never ran "
@@ -10935,8 +10950,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     fold_row(&hostreq_tt, &hostreq_why, param_value_only(js, "/api/hostreq", "v", "hr0hr1hr2"),
              "the loop RAN and /api/hostreq's `v` is not exactly `hr0hr1hr2` — an answer landed in a call "
              "that did not ask for it, was reused across iterations, or arrived out of order. Asked as "
-             "`_only` because the concatenation is a value the code DETERMINED: a second entry means the "
-             "flow forked where this statement cannot");
+             "`_only` because the concatenation is a value the code DETERMINED: a second DISTINCT "
+             "VALUE means the flow forked where this statement cannot");
     /* AND ACROSS A FORK: each arm re-issued its own request under its own world, so BOTH answers exist. */
     const char *hostreqfork_why = NULL; int hostreqfork_tt = 1;
     FORK_ROW(js, &hostreqfork_tt, &hostreqfork_why, "/api/hostreqfork", "v",
@@ -12636,8 +12651,8 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        Each is TWO rows, never one, because each has two independent ways to be wrong and a folded row would
        name neither: whether the path RAN, and whether the operand stack was where the next opcode expected it
        when it came back. Every claim is an exactly-one value, because every one of these values is DETERMINED
-       by the code — a second entry means the flow forked where the statement says it cannot, which is a
-       finding rather than a match, and `param_value_only` is what says so. */
+       by the code — a second DISTINCT VALUE means the flow forked where the statement says it cannot,
+       which is a finding rather than a match, and `param_value_only` is what says so. */
 
     /* THE HEAD REJECTED AND ITS HANDLER RAN: `v` is the rethrown Error's own message, which no other statement
        in this document produces. Nothing else here reaches the head's abrupt handler at all — every other
