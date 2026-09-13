@@ -964,7 +964,7 @@ function frontierPrefPut(name, value) {
   }).catch((e) => { RETHROW_FATAL(e); frontierFail("preference write", e); });
 }
 /* A frontier entry (the GLOBAL union spans all origins): { key: origin|hash, sourceUrl, topLevelUrl, origin,
-   responseHeaders, html, code, recipes: "idx,dec;...", emit, visits, credentialed }. Rehydration re-runs
+   responseHeaders, html, code, recipes: "idx,dec;...", emit, visits, credentialed, provenance }. Rehydration re-runs
    (html,code) + resumes recipes -- so a parked flow on ANY site can be advanced later, even when that page
    isn't open. */
 /* THE DOCUMENT HALF OF A COLD-TIER ENTRY, WITH ONE SPELLER FOR BOTH DIRECTIONS. solver/cold.h's recipe is the
@@ -1009,7 +1009,35 @@ function frontierPlace(e, when) {
          "a cold-tier entry " + when + " with no response header list — HTML §7.1.7 \"Policy containers\" " +
          "makes those headers this Document's policy container, so the parked flows would resume under a " +
          "policy nobody delivered and every @S verdict on them would be decided against it");
+  /* AND HOW THE LOAD THAT PUT IT HERE GOT ITS ADDRESS. It is ABSENT-OR-ONE-OF-THREE rather than required,
+     because a store written before this field existed is a real population and `frontierProvenance` states
+     what that absence means; what may never be here is a FOURTH word, which would reach `safeFetch` as an
+     invented grade and be refused by a CHECK one zone in, at a line that cannot say which entry sent it. */
+  DCHECK(e.provenance === undefined || e.provenance === PROVENANCE_OBSERVED ||
+         e.provenance === PROVENANCE_DERIVED || e.provenance === PROVENANCE_FORCED,
+         "a cold-tier entry " + when + " stating the provenance `" + String(e.provenance) + "`, which is none " +
+         "of the three — the re-derivation of a shed entry is decided from this word, and one the chokepoint " +
+         "does not know would abort the fetch rather than be refused by the policy it names");
   return e;
+}
+/* WHAT THE LOAD THAT PUT THIS ENTRY IN THE STORE WAS, FOR THE RE-FETCH THAT BRINGS ITS DOCUMENT BACK — AND
+   THE ONE PLACE THE ABSENCE OF THE FIELD IS ARGUED.
+   AN ENTRY WITH NO `provenance` KEY IS A POSITIVE STATEMENT AND NOT A HOLE, by the same reading this file
+   already makes of an absent `shed`: the field is written by every entry a live build parks (asserted at
+   `frontierPut`, where the record is composed), so the only way to hold none is to have been written by a
+   build in which this zone had NO DOOR ONTO `safeFetchWiden`. At those builds the chokepoint refused every
+   forced load at every origin, so no forced address could reach this store at all and every entry in it came
+   from an ambient navigation (`observed`) or a declared route (`derived`).
+   `derived` IS THE WEAKER OF THOSE TWO AND IS THEREFORE WHAT THE ABSENCE ANSWERS. Under-claiming is the
+   direction a provenance is allowed to be wrong in (solver/engine.h says so at
+   `engine_provenance_of_running_path`), and the whole cost of calling an `observed` entry `derived` is that
+   the destructive-path deny list stays armed across its re-fetch — one refused re-derivation, recorded as a
+   stranded entry rather than lost.
+   WHAT THIS MUST NEVER BECOME is a read of the ADDRESS: deciding a grade from what a URL looks like is the
+   inference §Attacker-sources forbids in as many words, and it is the one thing that would let a widening
+   granted for one origin be re-derived for another. */
+function frontierProvenance(e) {
+  return e.provenance === undefined ? PROVENANCE_DERIVED : e.provenance;
 }
 function frontierDoc(e, when) {
   frontierPlace(e, when);
@@ -1194,9 +1222,13 @@ async function frontierResidency() {
     DCHECK(e, "the cold tier's ranking view named an entry the store does not hold while residency was being " +
               "restored — this zone is the store's only writer, so a row with no entry is the projection and " +
               "the store having drifted apart, and shedding would be deciding about a residue nobody can read");
+    /* `provenance` IS READ THROUGH `frontierProvenance` RATHER THAN COPIED, so an entry written before the
+       field existed leaves this door STATING the word its population supports instead of propagating the
+       absence forward — the argument is made once, where it is written down, and the unstated population
+       shrinks with every shed instead of outliving every build that touches it. */
     const shed = { key: e.key, sourceUrl: e.sourceUrl, topLevelUrl: e.topLevelUrl, origin: e.origin,
                    responseHeaders: e.responseHeaders, recipes: e.recipes, emit: e.emit, visits: e.visits,
-                   credentialed: e.credentialed, shed: true };
+                   credentialed: e.credentialed, provenance: frontierProvenance(e), shed: true };
     frontierRecord(shed, "was shed to the configured share");
     await frontierWrite(e.key, shed);
     if (_frontierIndexBuilt) _frontierIndex.set(e.key, frontierRow(shed));
@@ -1465,28 +1497,28 @@ async function frontierRederive(e) {
        initiator/destination table whose feature is "HTML's navigate algorithm (top-level only)". Not
        script-like, so no CORB: this is a document being re-fetched to rebuild a shed frontier entry, and the
        parser that will read it is the engine's own. */
-    /* AND ITS PROVENANCE, WHICH THIS ENTRY DOES NOT YET PARK AND SO IS STATED HERE WITH ITS PREMISE ASSERTED
-       BESIDE IT. A re-derivation is the SAME LOAD as the one that put this entry in the store, so the right
-       long-term answer is §scheduler's — "an operation that becomes a work item takes its inputs with it" —
-       and the field belongs on the record beside `credentialed`, which is the identical class of fact. It is
-       not there yet, and rather than read a grade back off the address (which is exactly the inference
-       §Attacker-sources forbids) this states the strongest word the store's population can support.
-       `derived` AND NOT `observed`, because under-claiming is the direction a provenance is allowed to be
-       wrong in (solver/engine.h says so at `engine_provenance_of_running_path`): an entry seeded from a
-       person's own navigation is genuinely `observed`, and calling it `derived` costs only the destructive
-       deny list staying armed over a re-fetch — one refused re-derivation, reported as a stranded entry.
-       `derived` AND NOT `forced`, because a FORCED address cannot be in this store: a forced load is refused
-       at the chokepoint unless its origin is widened, and NOTHING WIDENS AN ORIGIN IN THIS ZONE — the
-       extension has no door onto `safeFetchWiden` yet. That premise is the whole of why this line may state
-       a word it did not park, so it is ASSERTED where it is relied on rather than written in a comment that
-       would outlive it: the day the offscreen gains a widening control, this fires and names the parking
-       that must be built before it. */
-    DCHECK(self.safeFetchWidenedOrigins().length === 0,
-           "an origin is widened for exploration in this zone, so the cold tier may now hold a document whose " +
-           "address existed only past a FORCED gate — and this re-derivation states `derived` for every entry " +
-           "because no such entry could exist. Park the load's PROVENANCE on the frontier entry beside " +
-           "`credentialed` (it travels the AST_ANALYZE record the same way) and read it here, before a " +
-           "widening makes a re-fetch claim a grade the person granted to one document about another");
+    /* AND ITS PROVENANCE, WHICH THIS ENTRY NOW PARKS. A re-derivation is the SAME LOAD as the one that put
+       this entry in the store, so §scheduler's "an operation that becomes a work item takes its inputs with
+       it" decides it, and the field sits on the record beside `credentialed` — the identical class of fact,
+       travelling the AST_ANALYZE record the same way.
+       IT USED TO BE THE LITERAL `derived`, STANDING ON A PREMISE THIS FILE ASSERTED ONE LINE BELOW IT: that no
+       forced address could be in this store, because nothing in this zone could widen an origin and the
+       chokepoint refuses a forced load at an unwidened one. That assert NAMED THE PARKING that had to exist
+       before a widening door could, and this is it — so the premise is discharged rather than re-stated, and
+       the word is READ off the entry instead of claimed for a population. At a widened origin a forced
+       document load FIRES, and what it parks is an entry whose address existed only past a gate this engine
+       forced; stating `derived` for that would have a re-fetch claim a grade the person granted to ONE
+       document about another.
+       THE ONE REMAINING ABSENCE IS ARGUED AT `frontierProvenance` AND NOWHERE ELSE — an entry written before
+       this field existed. It is a positive statement about that population rather than a default; see there.
+       `unstated` AND NO LONGER `unpinned`, WHICH THE OLD LINE GOT RIGHT ONLY BECAUSE IT SAID `derived`.
+       safe-fetch.js's own text for the third word is exact about this: `unpinned` is a CLAIM — "every byte of
+       the address came from the document, the server, or the bundle's own text" — and it is FALSE of a forced
+       address whose flow had pinned a witness, which is precisely the population a widening admits. This
+       store parks no witness mark, so the ACT DOES NOT CARRY THE FACT, which is what `unstated` says and is
+       the same word a route declaration passes for the same reason. It costs nothing: the mark refines the
+       SENTENCE a refusal gives and never the decision (`_firingRefusal` reads it only to choose between
+       `forced` and `forced-witness`). */
     /* AND FETCH §2.2.5 "Requests"' CREDENTIALS MODE, WHICH FOR A NAVIGATION IS THE SPEC'S OWN LITERAL. HTML
        §7.4.5 "Populating a session history entry"'s create navigation params by fetching builds "a new
        request, with … destination `document` … credentials mode `include`", so this is not a policy this
@@ -1497,12 +1529,8 @@ async function frontierRederive(e) {
        what lets that composition REQUIRE a mode wherever the session pays, which is the rule that stops a
        credential question being answered by silence. */
     try { r = await self.safeFetch(e.sourceUrl, { pageUrl: e.sourceUrl, pageOrigin: e.origin,
-                                                  destination: "document", provenance: PROVENANCE_DERIVED,
-                                                  /* ENTAILED AND NOT ASSUMED: solver/flow.h nests the witness
-                                                     mark strictly inside `path_forced`, so a request this
-                                                     zone states as DERIVED cannot be carrying one. The
-                                                     chokepoint asserts that pair rather than trusting it. */
-                                                  pinned: "unpinned",
+                                                  destination: "document", provenance: frontierProvenance(e),
+                                                  pinned: "unstated",
                                                   credentials: "include",
                                                   credentialed: navigationCarriesSession(e.sourceUrl, e.origin) }); }
     catch (err) { RETHROW_FATAL(err); r = null; }
@@ -1514,7 +1542,7 @@ async function frontierRederive(e) {
   }
   const strandedEntry = { key: e.key, sourceUrl: e.sourceUrl, topLevelUrl: e.topLevelUrl, origin: e.origin,
                           responseHeaders: e.responseHeaders, recipes: e.recipes, emit: e.emit,
-                          visits: e.visits, credentialed: e.credentialed,
+                          visits: e.visits, credentialed: e.credentialed, provenance: frontierProvenance(e),
                           shed: true, stranded: true };
   frontierRecord(strandedEntry, "was stranded");
   await frontierWrite(e.key, strandedEntry);
@@ -5859,10 +5887,17 @@ const _hostOps = {
            `topLevelUrl` IS ITS OWN ADDRESS because a top-level traversable's environment is its own top
            (§8.1.3.1), and it is `loaded.url` rather than the requested address for §7.5.1's `creationURL`
            reason: after a redirect the Document is AT where the response came from. */
+        /* AND THE WORD THE DECLARING ENGINE STATED, CARRIED ON INTO THE RESIDUE THIS RUN WILL PARK. It is
+           `seed.provenance` and not a literal for the reason the work item carries it at all: the load above
+           was decided from that word, and an entry whose stored grade disagreed with the load that fetched it
+           would have the cold tier re-fetch under a permission nobody granted. It is `derived` BY
+           CONSTRUCTION only while no origin is widened: at a widened one `_seedRefusal` passes a FORCED
+           declaration, and that entry is exactly what this field exists to keep honest. */
         const msg = { type: "AST_ANALYZE", sourceUrl: loaded.url, origin: seed.principalOrigin,
                       groupId: "seed:" + (_nextSeedGroup++), responseHeaders: loaded.headers,
                       topLevelUrl: loaded.url,
                       credentialed: navigationCarriesSession(loaded.url, seed.principalOrigin),
+                      provenance: seed.provenance,
                       persist: true };
         DCHECK(hostClusterOf(clusterKeyOf(msg)) === null,
                "a declared route minted a browsing-context group this pool already runs an instance for — the " +
@@ -5948,7 +5983,7 @@ const _hostOps = {
         doc = frontierDoc({ key: stored.key, sourceUrl: stored.sourceUrl, topLevelUrl: stored.topLevelUrl,
                             origin: stored.origin, responseHeaders: back.headers, html: back.bytes, code: "",
                             recipes: stored.recipes, emit: stored.emit, visits: stored.visits,
-                            credentialed: stored.credentialed },
+                            credentialed: stored.credentialed, provenance: frontierProvenance(stored) },
                           "was re-derived for the cold tier");
       } else {
         doc = frontierDoc(stored, "came back from the cold tier");
@@ -5966,7 +6001,10 @@ const _hostOps = {
       const msg = { type: "AST_ANALYZE", pageHtml: doc.html, code: doc.code, sourceUrl: doc.sourceUrl,
                     origin: doc.origin, groupId: "cold:" + cand.row.key,
                     responseHeaders: doc.responseHeaders,
-                    topLevelUrl: doc.topLevelUrl, credentialed: stored.credentialed, persist: true };
+                    topLevelUrl: doc.topLevelUrl, credentialed: stored.credentialed,
+                    /* THE WORD THIS RESIDUE WAS PARKED UNDER, RE-STATED SO THE ENTRY IT PARKS AGAIN KEEPS IT.
+                       A rehydration does not re-decide how the address was first reached; it replays it. */
+                    provenance: frontierProvenance(stored), persist: true };
       /* THE `try {} catch` AROUND THIS IS GONE WITH THE REPORTING IT DID. A rehydration whose engine ABORTS
          is now bannered by engineBootFailed, at the reservation, together with the pool slot it releases —
          one place on every creation path rather than one arm per call site. What was left in the catch was
@@ -6039,6 +6077,20 @@ const _hostOps = {
              "the parked entry this run resumed carries no admission count (`" + String(prior && prior.visits) +
              "`) — it is the divisor the next Level-1 rank of this address is computed from, and a count that " +
              "restarts here is a document that has been re-fetched many times ranking as one nobody has opened");
+      /* THE PARKED GRADE, ASSERTED BEFORE THE RECORD IS COMPOSED — AND THIS ASSERT IS WHAT MAKES AN ABSENT
+         FIELD MEAN SOMETHING. `frontierProvenance` answers `derived` for an entry carrying none, on the ground
+         that no build able to write one could have parked a forced address; that argument holds only while
+         EVERY entry a live build writes states a word, which is this line. A composer that stopped stating it
+         would not be caught downstream — its entry would quietly rejoin the population whose absence reads as
+         "written by an older store" and be re-fetched under a grade nobody granted it. */
+      DCHECK(eng.msg.provenance === PROVENANCE_OBSERVED || eng.msg.provenance === PROVENANCE_DERIVED ||
+             eng.msg.provenance === PROVENANCE_FORCED,
+             "a run about to park its residue carries the provenance `" + String(eng.msg.provenance) +
+             "` — every composer of an AST_ANALYZE that PERSISTS states one (the ambient seed `observed`, a " +
+             "declared route the word its own engine stated, a rehydration the word it was parked under), so " +
+             "an absent one is a fourth composer nobody told, and the entry it writes would read back as an " +
+             "older store's and be re-fetched as `derived`");
+      const _parkProvenance = eng.msg.provenance;
       await frontierPut(result._fkey, {
         /* THE TOP-LEVEL CREATION URL IS PART OF THE RECIPE, because a resumed flow must resume into the same
            ENVIRONMENT it parked in: §8.1.3.5 decides secure-context from it, so a rehydration that lost it
@@ -6059,6 +6111,12 @@ const _hostOps = {
            outlive the guarantee. This entry is the cross-session frontier's residue, and the shape of the
            failure it would hide is "the recipes joined to the empty string", which reads to the next session
            as an origin that finished rather than one whose parked flows were dropped. */
+        /* AND HOW THE LOAD THAT PRODUCED THIS DOCUMENT GOT ITS ADDRESS — the field `frontierRederive` reads
+           when it fetches these bytes back, carried from the analyze record exactly as `credentialed` is, and
+           bound above rather than computed here for the reason the frontier-share reply names its awaits
+           before it builds its answer: an entry whose receiver is an EXPRESSION is a field no auditor of this
+           record can anchor to it. */
+        provenance: _parkProvenance,
         credentialed: !!eng.msg.credentialed, recipes: result._park.join(";"),
         /* `emit` IS THE SURFACE THIS RUN DEMONSTRATED, AND IT USED TO ACCUMULATE ONE TERM OF IT PER VISIT.
            Its consumer divides: `frontierWeight` computes `emit / visits` and names it "expected emit per
@@ -6625,6 +6683,12 @@ self.astDispatch = async function astDispatch(msg) {
        had already moved to a client route. */
     msg.sourceUrl = loaded.url;
     msg.responseHeaders = loaded.headers;
+    /* AND THE WORD THE LOAD ABOVE WAS PERFORMED UNDER, WRITTEN ONTO THE RECORD RATHER THAN RE-DECIDED. The
+       paragraph over `navigationLoad` argues `observed` in full — the address is the one the browser ACTUALLY
+       NAVIGATED TO — and this run persists (`msg.persist`), so the residue it parks is re-fetched later from
+       whatever this states. Assigning the same constant the load was given is what keeps the stored grade and
+       the performed load one fact: a second literal here could disagree with the one above it. */
+    msg.provenance = PROVENANCE_OBSERVED;
     /* THE WAITER CARRIES BOTH SETTLERS. A Clear must be able to tell a document that was never seated that its
        analysis is not coming, and "cleared" is the exact error _dispatchDocument reads to abandon its tail without
        recording a page-level failure — resolving it with a plausible empty result instead would report the
