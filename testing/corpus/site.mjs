@@ -361,6 +361,33 @@ const row = {
   /* WHICH ENTRY EACH HALF CAME FROM, so the gauge and the counters can never be silently reconciled. */
   wfqFrom: wfqLive ? wfqLive.i : null,
   countersFrom: counted.length ? counted.length - 1 : null,
+  /* AND WHICH *SCOPE* THEY ARE, WHICH IS A SECOND AXIS AND THE ONE A READER ACTUALLY GETS WRONG. The pair
+     above separates two MOMENTS; this separates two POPULATIONS, and the row mixes them by construction:
+     fifteen fields above are read off `counted[counted.length - 1]`, which is ONE RUN's cumulative
+     totals -- the counters behind them are per-instance statics with no reset anywhere, so a fresh run is
+     a fresh set -- while `docsAnswered`, `docsSeenMine`, `siteEndpoints` and `distinctEndpoints` below are
+     UNIONS over every document of every run at this origin. Nothing in the key vocabulary said so, and a
+     number's SCOPE is exactly as unquotable-without as its KIND (CLAUDE.md §A-GAUGE-AND-A-LIFETIME-COUNTER,
+     one axis over).
+     WHAT IT COST, MEASURED: a coordinator read `jobsQueued 176` and `jobsRun 1` off a gitpod row, put them
+     beside `distinctEndpoints 90` in a table, and reported a scheduler lock-out. That row's `runsTotal` is
+     SEVEN. The counters were one run's and the endpoint count was seven runs'; a lane then established the
+     backlog was `jobsFramed` throughout with `jobsOwed` 0 in 229 of 229 censuses, so there was nothing
+     rank-eligible for an ordering to have got wrong and the reported defect did not exist.
+     AND THE COINCIDENCE IS WHY NOBODY CAUGHT IT: on those same rows `endpoints` (one run) and
+     `distinctEndpoints` (the union) are BOTH 90, because one run happened to carry every address. Two
+     differently-scoped fields agreeing is the spot-check that validates a number by the absence of the
+     case it cannot see, and it sat two lines apart in this file's own output.
+     IT IS A STRING AND NOT A COUNT, deliberately: a count can be summed, differenced or compared against a
+     neighbour, which is the whole failure being fixed, and this must only ever be READ. It also does not
+     match a `\w*` sweep over any existing counter name, so every query already written against archived
+     censuses keeps measuring what it measured (CLAUDE.md's rule about a new key matching an old pattern).
+     IT RETIRES when the per-run block states its own scope in its keys -- which is a rename, so it waits
+     for a pass that can re-derive every archived comparison rather than being smuggled in beside a fix. */
+  countersScope: counted.length
+    ? 'ONE RUN (' + counted.length + ' counted of ' + myRuns.length + ' at this origin) -- NOT comparable '
+      + 'with docsAnswered/docsSeenMine/siteEndpoints/distinctEndpoints, which union every run'
+    : null,
   docsAnswered: mine.filter(d => d.answered).length,
   docsSeenMine: mine.length,
   docsAllOrigins: [...new Set((cur.docs || []).map(d => { try { return new URL(d.url).origin; } catch { return d.url; } }))],
