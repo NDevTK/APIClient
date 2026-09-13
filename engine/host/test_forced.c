@@ -17334,9 +17334,14 @@ static void css_property_grammar_selftest(void)
           "is what fails if the conic family is handed the LINEAR position type" },
         { "<image>", "conic-gradient(red calc(25% + 10deg), blue)", true,
           "css-values-4 §5.6's `<angle-percentage> = [ <angle> | <percentage> ]`, whose percentage resolves "
-          "against an angle base. The row is here because `calc(25% + 10deg)` matches NEITHER disjunct alone — "
-          "a component that asked `<angle>` and then `<percentage>` drops it, and css_math_selftest's own "
-          "rows below ask the same question of the production directly" },
+          "against an angle base. `calc(25% + 10deg)` matches the FIRST disjunct and not neither: CSS Typed "
+          "OM 1 §4.3.2 makes matching CONTEXT-RELATIVE, so a percent hint of \"angle\" matches `<angle>` in a "
+          "position that resolves percentages against one. What the row witnesses is the other half of that "
+          "sentence — a component that asks `<angle>` ALONE names a context resolving percentages against "
+          "nothing, §10.9's `<percentage>` terminal then types the `25%` as \"percent\", and percent+angle "
+          "has no consistent hint, so the CALCULATION's type is §4.3.2's FAILURE. It fired when that failure "
+          "was a refusal by the WALK rather than a type, which made `css_math_is_lone_function` answer that "
+          "these bytes are not a math function at all" },
         { "<image>", "linear-gradient(in oklch, red, blue)", true,
           "css-images-4 §3.2.1 \"Adding <color-interpolation-method>\" hangs CSS Color 4 §13.2 \"Color Space "
           "for Interpolation\"'s production off the LINEAR and RADIAL families and not only the conic one, and "
@@ -17530,8 +17535,10 @@ static void css_math_selftest(void)
         { "calc(25% + 10deg)", CSS_MATH_PROD_ANGLE_PERCENTAGE, true,
           "and taken. css-values-4 §5.6 writes `<angle-percentage> = [ <angle> | <percentage> ]`, so §10.9's "
           "`the type is determined as the other type, but with a percent hint set to that other type` reads "
-          "with ANGLE in place of the length above — and the pair is what the hinted context buys, since "
-          "neither disjunct admits this value on its own" },
+          "with ANGLE in place of the length above. WHAT THE PAIR BUYS IS THE CONTEXT AND NOT A THIRD "
+          "ALTERNATIVE: this value MATCHES the first disjunct, because CSS Typed OM 1 §4.3.2 makes matching "
+          "context-relative — `the percent hint must match the other type` — and the row above is the same "
+          "bytes in a context where the terminal rule never produces that hint at all" },
         { "calc(10deg + 0.25turn)", CSS_MATH_PROD_ANGLE_PERCENTAGE, true,
           "a pure `<angle>` satisfies the hinted production too: §4.3.2 matches when the percent hint is "
           "`either null or` the other type, so a hint PERMITS a percentage rather than requiring one" },
@@ -17685,10 +17692,70 @@ static void css_math_selftest(void)
         { "calc(1px + 1s)", CSS_MATH_PROD_LENGTH,
           "§10.9: a calculation whose type is failure makes the math function invalid" },
     };
+    /* §10'S THREE RUNGS OVER ONE TEXT, which is the only place the difference between them is observable.
+       §10.8 "Syntax" asks whether the bytes are ONE math function; §10.9 then asks whether it is VALID
+       ("if the type is failure, the math function is invalid" / "If it can't match any of these, the math
+       function is invalid"); and only then does its last rule ask which production it RESOLVES TO, which is
+       the TYPE table above. Each rung admits strictly fewer texts, and a row's two columns are read as that
+       nesting — a `true`/`false` pair is a text §10.8 admits and §10.9 refuses, and `false`/`true` is
+       unreachable and would mean the rungs had come apart.
+       THE PAIR EXISTS BECAUSE THE COMPONENT ONCE HAD ONLY ONE ANSWER FOR BOTH. While §4.3.2's algebra
+       refused the WALK instead of producing a failure TYPE, a text whose type is failure was reported as not
+       a math function at all, so core/css/css_math.h's own worked example for the syntax rung was false of
+       the code beneath it and a page's typo reached a DFAIL in core/css/css_style_declaration.c. */
+    static const struct { const char *v; bool syntax; bool valid; const char *why; } RUNG[] = {
+        { "calc(1px + 1s)", true, false,
+          "css_math.h's own stated worked example, and the row this whole split exists for: §10.8's grammar "
+          "is `calc( <calc-sum> )` and says nothing about types, so these bytes ARE one math function — "
+          "§10.9 is what makes it invalid. A component that answered false to the first question could not "
+          "tell an author's mistake from a value it had no grammar for" },
+        { "calc(25% + 10deg)", true, false,
+          "the same shape reached through §10.9.1's CALCULATION CONTEXT rather than through two clashing "
+          "units, and the reason the syntax rung may not be asked in a context it invented: with no "
+          "production named, percentages resolve against nothing and this types to failure — while the "
+          "TYPE table above matches the identical bytes against `<angle-percentage>`. One text, both answers, "
+          "and the syntax rung has to be TRUE under either" },
+        { "calc(50% * 50%)", true, false,
+          "§10.9's OTHER invalidity, which is not a failure type at all: «[\"percent\" → 2]» is a "
+          "perfectly good type that matches none of the eight productions that sentence lists, so the two "
+          "arms of the valid rung are separately reachable" },
+        { "calc(50%)", true, true,
+          "and the control for that one: with no production named the context is §10.9's \"Otherwise\" arm, "
+          "so a bare percentage types to «[\"percent\" → 1]» with a hint of \"percent\" and matches "
+          "`<percentage>`. Without it every valid-rung row here reads false and the column would pass against "
+          "an entry that always refused" },
+        { "calc(2em)", true, true,
+          "a font-relative leaf, which has no NUMBER in this process at all — §10.9 is a question about "
+          "types and the valid rung must answer it with no resolver, no realm and no font metrics" },
+        { "calc()", false, false,
+          "THE SYNTAX NEGATIVE CONTROL. Every row above is admitted by §10.8 and separated by §10.9, so all "
+          "of them would still pass against a syntax rung that answered true for any text beginning with a "
+          "math function name — this is the one that would not. §10.8 writes `<calc()> = calc( <calc-sum> )` "
+          "and a `<calc-sum>` has no empty arm, so the refusal is the GRAMMAR's and there is no type here for "
+          "any rule to have judged" },
+        { "calc(2em) hanging", false, false,
+          "css_math.h's other stated example: ONE math function AND NOTHING ELSE is the question, so a longer "
+          "value carrying one is not it. This is the answer css-text-3 §8.1's `text-indent` grammar needs, "
+          "and the case core/css/css_style_declaration.c's multi-component DFAIL is written about" },
+        { "rgb(1, 2, 3)", false, false,
+          "a FUNCTION token that is not one of §10.8's twenty-one, so it fails the syntax rung for a reason "
+          "that has nothing to do with any type at all" },
+    };
     unsigned i;
 
     for (i = 0; i < sizeof(TYPE) / sizeof(TYPE[0]); i++)
         CHECK(css_math_matches(TYPE[i].v, strlen(TYPE[i].v), TYPE[i].want) == TYPE[i].match, TYPE[i].why);
+    for (i = 0; i < sizeof(RUNG) / sizeof(RUNG[0]); i++) {
+        size_t n = strlen(RUNG[i].v);
+
+        CHECK(css_math_is_lone_function(RUNG[i].v, n) == RUNG[i].syntax, RUNG[i].why);
+        CHECK(css_math_is_valid_function(RUNG[i].v, n) == RUNG[i].valid, RUNG[i].why);
+        /* The NESTING itself, which no row states and every row depends on: §10.9's validity is asked of a
+           type §10.8 has already produced, so a text the syntax rung refuses can never be valid. */
+        CHECK(RUNG[i].syntax || !RUNG[i].valid,
+              "a fixture row claims a text that is not one math function is nonetheless a VALID one, which is "
+              "css-values-4 §10's own rungs inverted");
+    }
     for (i = 0; i < sizeof(EVAL) / sizeof(EVAL[0]); i++) {
         CssMathResolver res;
         CssMathValue v;

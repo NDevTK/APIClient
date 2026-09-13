@@ -188,13 +188,82 @@ static bool mth_make_consistent(CssMathType *base, const CssMathType *input)
 {
     DCHECK(!css_math_type_is_failure(base) && !css_math_type_is_failure(input),
            "§10.9's make-a-type-consistent was handed §4.3.2's FAILURE. That algorithm reads a percent hint off "
-           "both operands and a failure has none — every caller here folds an argument whose own type step has "
-           "already returned false for a failure, so one arriving is a fold that stopped propagating");
+           "both operands and a failure has none. Every caller reaches this through `mth_make_consistent_total`, "
+           "which answers a failure operand itself and never calls in with one, so one arriving here is a "
+           "caller that bypassed that entry");
     if (base->hint != CSS_MATH_HINT_NULL && input->hint != CSS_MATH_HINT_NULL && base->hint != input->hint)
         return false;
     if (base->hint == CSS_MATH_HINT_NULL) base->hint = input->hint;
     return true;
 }
+
+/* §10.9'S PROPAGATION RULE, WHICH IS A STATEMENT ABOUT THE CALCULATION'S TYPE AND NEVER ABOUT THE PARSE:
+   "At a + or - sub-expression, attempt to add the types of the left and right arguments. If this returns
+   failure, THE ENTIRE CALCULATION'S TYPE IS FAILURE." A failure IS a type this component can hold — css_math.h
+   spells it in the percent hint for exactly that reason — so §4.3.2's "return failure" becomes that TYPE
+   here, in one place, and never a refusal by the walk. The three entries below are the only callers of the
+   algebra inside this file, so the rule cannot be forgotten at a site: `mth_add` and `mth_multiply` return
+   VOID, which leaves `<calc-sum>` and `<calc-product>` with no type-derived failure branch to write.
+   THE DIFFERENCE IS THE WHOLE OF §10'S OWN SPLIT between §10.8 "Syntax" and §10.9 "Type Checking", and it is
+   OBSERVABLE TWICE. `calc(1px + 1s)` matches §10.8's `<calc()> = calc( <calc-sum> )` and IS one math function,
+   which §10.9 then makes INVALID ("For each of the above, if the type is failure, the math function is
+   invalid") — so a walk that REFUSED it answered instead that those bytes are not a math function at all.
+   `css_math_is_lone_function` exists to tell those two apart and nothing else, so the refusal made its only
+   distinction unmakeable, and core/css/css_style_declaration.c reaches for that entry to keep a page's own
+   typo out of a DFAIL: `text-indent: calc(2em + 1s)` is an author's mistake and was aborting the engine.
+   AND IT MADE THE SYNTAX ANSWER DEPEND ON THE CALCULATION CONTEXT, which is the half that surfaced it.
+   §10.9's `<percentage>` terminal types a percentage as the base the context resolves it against, so
+   `calc(25% + 10deg)` adds angle+angle under an `<angle-percentage>` context and percent+angle under one that
+   resolves percentages against nothing — and only the second returned failure. A caller asking "is this a
+   math function" had to invent a context to ask in, and the answer it got was about the context it invented.
+   With the propagation total the walk reaches EOF either way and `want` decides the TYPE alone, which is the
+   contract css_math.h states for both entries. */
+static CssMathType mth_types_added(const CssMathType *a, const CssMathType *b)
+{
+    CssMathType out;
+
+    return css_math_type_add(a, b, &out) ? out : css_math_type_failure();
+}
+
+static CssMathType mth_types_multiplied(const CssMathType *a, const CssMathType *b)
+{
+    CssMathType out;
+
+    return css_math_type_mul(a, b, &out) ? out : css_math_type_failure();
+}
+
+/* The same rule over §10.9's make-a-type-consistent, which may not be handed a failure (the DCHECK above), so
+   the propagation stands IN FRONT of that algorithm rather than inside it — a fold whose accumulated or
+   incoming type is already failure has nothing left to make consistent, and §10.9's own answer for a pair
+   that cannot be made consistent is "Return failure" rather than a refusal. `base` is written on every path. */
+static void mth_make_consistent_total(CssMathType *base, const CssMathType *input)
+{
+    if (css_math_type_is_failure(base) || css_math_type_is_failure(input) ||
+        !mth_make_consistent(base, input))
+        *base = css_math_type_failure();
+}
+
+/* RESIDUAL — THE PROPAGATION ABOVE IS §10.9'S ALGEBRA AND NOT EVERY TYPE RULE §10 STATES.
+   THE LINE IS §10.8'S OWN AND IS NOT DRAWN HERE: after its grammar css-values-4 §10.8 "Syntax" says "Several of the math functions
+   above have ADDITIONAL CONSTRAINTS on what their <calc-sum> arguments can contain. Check the definitions of
+   the individual functions for details." So the algebra above is §10.9's and belongs to every calculation,
+   and those constraints belong to one function each.
+   NOT COVERED: a constraint a FUNCTION'S OWN SECTION puts on its arguments is still a refusal by the walk
+   rather than a failure type — css-values-4 §10.4 "Trigonometric Functions: sin(), cos(), tan(), asin(),
+   acos(), atan(), and atan2()" says sin/cos/tan "must resolve to either a <number> or an <angle>" and the arc
+   functions "contain a single calculation which must resolve to a <number>"; §10.5's same sentence covers
+   pow/log/sqrt/exp, and §10.3's
+   `line-width` length requirement and its rule for when B may be omitted, and §10.9's "anything else: The
+   calculation's type is failure" for a dimension whose unit names no base type. Each of those texts IS one
+   math function by §10.8's grammar, so this component still reports some of them as not a math function at
+   all — which is the same conflation the algebra had, surviving in the places §10.9 does not own.
+   THE NEXT DIFF makes those refusals produce a failure TYPE exactly as the algebra now does, so that the walk
+   reaches EOF for every text §10.8's grammar admits and §10.8's rung answers TRUE for all of it. What that
+   then buys is the invariant this file cannot assert until it holds: that the SYNTAX rung's answer is
+   independent of `want`, which today is true of every text the algebra decides and false of these.
+   HOW ITS ABSENCE WOULD SHOW: core/css/css_style_declaration.c's multi-component DFAIL is reached for a value
+   whose only defect is a per-function argument type, and its message is about a math function standing as ONE
+   COMPONENT OF A MULTI-COMPONENT VALUE — so it fires naming a value that has no second component in it. */
 
 /* Does the type have exactly one non-zero entry, and is it `base` with exponent 1 — §4.3.2's "A type matches
    <length> if its only non-zero entry is «["length" → 1]». Similarly for <angle>, <time>, <frequency>,
@@ -281,6 +350,32 @@ static bool mth_type_matches(const CssMathType *t, CssMathProduction want)
     }
     DFAIL("a math function's resolved type was matched against a production outside CssMathProduction — the "
           "enum and this switch are one list and have come apart");
+    return false;
+}
+
+/* §10.9'S OWN DEFINITION OF AN *INVALID* MATH FUNCTION, which is its last rule read with no caller's
+   production in hand: "A math function resolves to <number>, <length>, <angle>, <time>, <frequency>,
+   <resolution>, <flex>, or <percentage> according to which of those productions its type matches. (These
+   categories are mutually exclusive.) If it can't match any of these, THE MATH FUNCTION IS INVALID."
+   THE LIST IS §10.9'S OWN AND IS NOT `CssMathProduction`. That enum carries three members this sentence does
+   not name: `<integer>`, which §10.9 admits only as a place a `<number>` may be USED ("math functions that
+   resolve to <number> can be used in any place that only accepts <integer>"), and the two §5.6 mixed types,
+   which CSS Typed OM 1 §4.3.2 defines as the disjunction of two members already here ("A type matches
+   <length-percentage> if it matches <length> or matches <percentage>"). Adding either kind would not widen
+   the answer and would state a rule this sentence does not have. */
+static bool mth_type_is_valid(const CssMathType *t)
+{
+    static const CssMathProduction OF[] = {
+        CSS_MATH_PROD_NUMBER, CSS_MATH_PROD_PERCENTAGE, CSS_MATH_PROD_LENGTH, CSS_MATH_PROD_ANGLE,
+        CSS_MATH_PROD_TIME, CSS_MATH_PROD_FREQUENCY, CSS_MATH_PROD_RESOLUTION, CSS_MATH_PROD_FLEX,
+    };
+    unsigned i;
+
+    /* §10.9's rule BEFORE that one, and it stands first because `mth_type_matches` asserts it is never handed
+       a failure: "For each of the above, if the type is failure, the math function is invalid." */
+    if (css_math_type_is_failure(t)) return false;
+    for (i = 0; i < sizeof OF / sizeof OF[0]; i++)
+        if (mth_type_matches(t, OF[i])) return true;
     return false;
 }
 
@@ -611,17 +706,13 @@ static bool mth_value(Mth *m, MthVal *out)
    children and replace them with a single numeric value containing the sum of the removed nodes." Once the
    TYPES have added, both operands are the same type and both terms are addable in that type's canonical unit —
    which is why the type check is the whole of the validity question and the arithmetic below has none. */
-static bool mth_add(const MthVal *a, const MthVal *b, MthVal *out)
+static void mth_add(const MthVal *a, const MthVal *b, MthVal *out)
 {
-    CssMathType ty;
-
-    if (!css_math_type_add(&a->type, &b->type, &ty)) return false;
-    out->type = ty;
+    out->type = mth_types_added(&a->type, &b->type);
     out->num = css_px_add(a->num, b->num);
     out->pct = a->pct + b->pct;
     out->pct_term = a->pct_term || b->pct_term;
     out->blocked = mth_worse(a->blocked, b->blocked);
-    return true;
 }
 
 /* §10.10.1's Negate over an already-simplified Sum: "If root's child is a numeric value, return an equivalent
@@ -640,18 +731,15 @@ static MthVal mth_negate(const MthVal *a)
    and the rule above it ("If root contains only two children, one of which is a number ... and the other of
    which is a Sum whose children are all numeric values, multiply all of the Sum's children by the number").
    Anything else leaves a live Product node, which is `blocked`. */
-static bool mth_multiply(const MthVal *a, const MthVal *b, MthVal *out)
+static void mth_multiply(const MthVal *a, const MthVal *b, MthVal *out)
 {
-    CssMathType ty;
-
-    if (!css_math_type_mul(&a->type, &b->type, &ty)) return false;
-    out->type = ty;
+    out->type = mth_types_multiplied(&a->type, &b->type);
     out->blocked = mth_worse(a->blocked, b->blocked);
     if (!a->pct_term && !b->pct_term) {
         out->num = css_px_mul(a->num, b->num);
         out->pct = 0.0;
         out->pct_term = false;
-        return true;
+        return;
     }
     /* The percentage-carrying operand keeps its shape only when the other is a pure `<number>` with no surviving
        percentage of its own — which is exactly §10.10.1's number-times-Sum rule. Both operands' environment
@@ -665,14 +753,13 @@ static bool mth_multiply(const MthVal *a, const MthVal *b, MthVal *out)
             out->num = css_px_mul(sum->num, k->num);
             out->pct = sum->pct * k->num.px;
             out->pct_term = true;
-            return true;
+            return;
         }
     }
     out->num = css_px(0.0);
     out->pct = 0.0;
     out->pct_term = a->pct_term || b->pct_term;
     mth_block(out, MTH_UNRESOLVED_TREE);
-    return true;
 }
 
 /* §10.8's `/`, as §10.9 states it: "let left type be the result of finding the types of its left argument, and
@@ -680,7 +767,7 @@ static bool mth_multiply(const MthVal *a, const MthVal *b, MthVal *out)
    sub-expression's type is the result of multiplying the left type and right type." §10.10.1's Invert reduces
    only "if root's child is a number (not a percentage or dimension)", so a divisor carrying a percentage term
    leaves a live Invert node under the Product — which the multiply above then reports as blocked. */
-static bool mth_divide(const MthVal *a, const MthVal *b, MthVal *out)
+static void mth_divide(const MthVal *a, const MthVal *b, MthVal *out)
 {
     MthVal inv;
 
@@ -701,7 +788,7 @@ static bool mth_divide(const MthVal *a, const MthVal *b, MthVal *out)
         inv.pct = 0.0;
         inv.pct_term = false;
     }
-    return mth_multiply(a, &inv, out);
+    mth_multiply(a, &inv, out);
 }
 
 /* §10.8's `<calc-product> = <calc-value> [ [ '*' | / ] <calc-value> ]*`. */
@@ -722,7 +809,8 @@ static bool mth_product(Mth *m, MthVal *out)
         else break;
         mth_take(m);
         if (!mth_value(m, &rhs)) return false;
-        if (!(div ? mth_divide(&lhs, &rhs, &res) : mth_multiply(&lhs, &rhs, &res))) return false;
+        if (div) mth_divide(&lhs, &rhs, &res);
+        else mth_multiply(&lhs, &rhs, &res);
         lhs = res;
     }
     *out = lhs;
@@ -753,7 +841,7 @@ static bool mth_sum(Mth *m, MthVal *out)
         if (!ws_before || !mth_skip_ws(m)) return false;
         if (!mth_product(m, &rhs)) return false;
         if (minus) { neg = mth_negate(&rhs); rhs = neg; }
-        if (!mth_add(&lhs, &rhs, &res)) return false;
+        mth_add(&lhs, &rhs, &res);
         lhs = res;
     }
     *out = lhs;
@@ -948,10 +1036,7 @@ static bool mth_variadic(Mth *m, int kind, MthVal *out)
         } else {
             /* §10.9: the type is "the result of adding the types of its comma-separated calculations". Only the
                TYPES add here — the VALUE is a fold and not a sum, which is why this is not `mth_add`. */
-            CssMathType ty;
-
-            if (!css_math_type_add(&acc.type, &a.type, &ty)) return false;
-            acc.type = ty;
+            acc.type = mth_types_added(&acc.type, &a.type);
         }
         if (a.pct_term) any_pct = true;
         acc.blocked = mth_worse(acc.blocked, a.blocked);
@@ -1045,12 +1130,9 @@ static bool mth_clamp(Mth *m, MthVal *out)
     /* §10.9: clamp()'s type is "the result of adding the types of its comma-separated calculations". `none` is
        a keyword and not a calculation, so it contributes none. */
     for (i = 0; i < 3; i++) {
-        CssMathType sum;
-
         if (!present[i]) continue;
         if (!have_ty) { ty = arg[i].type; have_ty = true; continue; }
-        if (!css_math_type_add(&ty, &arg[i].type, &sum)) return false;
-        ty = sum;
+        ty = mth_types_added(&ty, &arg[i].type);
     }
     DCHECK(have_ty, "clamp()'s central calculation is absent — §10.8's grammar makes only the FIRST and THIRD "
                     "arms admit `none`, and the loop above refuses the keyword in the second position, so a "
@@ -1123,12 +1205,7 @@ static bool mth_round(Mth *m, MthVal *out)
        <rounding-strategy> is line-width, B may also be omitted ... In all other cases, omitting B is invalid." */
     if (!have_b && how != MTH_ROUND_LINE_WIDTH && !mth_no_entries(&a.type)) return false;
     ty = a.type;
-    if (have_b) {
-        CssMathType sum;
-
-        if (!css_math_type_add(&a.type, &b.type, &sum)) return false;
-        ty = sum;
-    }
+    if (have_b) ty = mth_types_added(&a.type, &b.type);
     *out = a;
     out->type = ty;
     out->blocked = mth_worse(a.blocked, have_b ? b.blocked : MTH_RESOLVED);
@@ -1224,7 +1301,7 @@ static bool mth_function(Mth *m, MthVal *out)
         CssMathType ty;
 
         if (!mth_fixed_args(m, 2, arg)) goto done;
-        if (!css_math_type_add(&arg[0].type, &arg[1].type, &ty)) goto done;
+        ty = mth_types_added(&arg[0].type, &arg[1].type);
         *out = arg[0];
         out->type = ty;
         out->blocked = mth_worse(arg[0].blocked, arg[1].blocked);
@@ -1247,7 +1324,7 @@ static bool mth_function(Mth *m, MthVal *out)
         if (!mth_fixed_args(m, 1, arg)) goto done;
         is_angle = mth_only(&arg[0].type, CSS_MATH_ANGLE);
         if (!is_angle && !mth_no_entries(&arg[0].type)) goto done;
-        if (!mth_make_consistent(&ty, &arg[0].type)) goto done;
+        mth_make_consistent_total(&ty, &arg[0].type);
         *out = arg[0];
         out->type = ty;
         if (m->res != NULL) {
@@ -1275,7 +1352,7 @@ static bool mth_function(Mth *m, MthVal *out)
 
         if (!mth_fixed_args(m, 1, arg)) goto done;
         if (!mth_no_entries(&arg[0].type)) goto done;
-        if (!mth_make_consistent(&ty, &arg[0].type)) goto done;
+        mth_make_consistent_total(&ty, &arg[0].type);
         *out = arg[0];
         out->type = ty;
         if (m->res != NULL) {
@@ -1298,8 +1375,8 @@ static bool mth_function(Mth *m, MthVal *out)
         CssMathType sum, ty = css_math_type_of(CSS_MATH_ANGLE);
 
         if (!mth_fixed_args(m, 2, arg)) goto done;
-        if (!css_math_type_add(&arg[0].type, &arg[1].type, &sum)) goto done;
-        if (!mth_make_consistent(&ty, &sum)) goto done;
+        sum = mth_types_added(&arg[0].type, &arg[1].type);
+        mth_make_consistent_total(&ty, &sum);
         *out = arg[0];
         out->type = ty;
         out->blocked = mth_worse(arg[0].blocked, arg[1].blocked);
@@ -1327,8 +1404,8 @@ static bool mth_function(Mth *m, MthVal *out)
         if (is_pow && !have_b) goto done;              /* §10.8: `<pow()> = pow( <calc-sum>, <calc-sum> )` */
         if (!mth_no_entries(&arg[0].type)) goto done;
         if (have_b && !mth_no_entries(&arg[1].type)) goto done;
-        if (!mth_make_consistent(&ty, &arg[0].type)) goto done;
-        if (have_b && !mth_make_consistent(&ty, &arg[1].type)) goto done;
+        mth_make_consistent_total(&ty, &arg[0].type);
+        if (have_b) mth_make_consistent_total(&ty, &arg[1].type);
         *out = arg[0];
         out->type = ty;
         out->blocked = mth_worse(arg[0].blocked, have_b ? arg[1].blocked : MTH_RESOLVED);
@@ -1353,7 +1430,7 @@ static bool mth_function(Mth *m, MthVal *out)
 
         if (!mth_fixed_args(m, 1, arg)) goto done;
         if (!mth_no_entries(&arg[0].type)) goto done;
-        if (!mth_make_consistent(&ty, &arg[0].type)) goto done;
+        mth_make_consistent_total(&ty, &arg[0].type);
         *out = arg[0];
         out->type = ty;
         if (m->res != NULL) {
@@ -1381,7 +1458,7 @@ static bool mth_function(Mth *m, MthVal *out)
         CssMathType ty = css_math_type_number();
 
         if (!mth_fixed_args(m, 1, arg)) goto done;
-        if (!mth_make_consistent(&ty, &arg[0].type)) goto done;
+        mth_make_consistent_total(&ty, &arg[0].type);
         *out = arg[0];
         out->type = ty;
         if (m->res != NULL) {
@@ -1409,17 +1486,34 @@ done:
     return ok;
 }
 
+/* HOW MUCH OF §10 IS PART OF THE ANSWER, which is §10's own division into sections and not a convenience:
+   §10.8 "Syntax" gives the grammar, and §10.9 "Type Checking" gives first a VALIDITY ("if the type is failure,
+   the math function is invalid" / "If it can't match any of these, the math function is invalid") and then a
+   RESOLUTION against a production the caller names. Each rung admits strictly fewer texts than the one above
+   it, and the three public entries below are one rung each.
+   IT IS ONE WALK AND NOT THREE, which is the point: a second scan written to answer "is this one math
+   function" would have to re-derive §10.8's nesting, its comma arities and its `<calc-value>` productions,
+   and the day the two disagreed a caller would be told a value is not a math function by one and refused by
+   the other. */
+typedef enum {
+    MTH_GATE_SYNTAX = 0,   /* §10.8 alone */
+    MTH_GATE_VALID,        /* ... and §10.9's validity */
+    MTH_GATE_PRODUCTION    /* ... and §10.9's last rule against `want` */
+} MthGate;
+
 /* ---- the three public questions -------------------------------------------------------------------------- */
 
-/* Parse the whole of `text` as ONE math function, in §10.9's type-only mode when `res` is NULL.
-   `type_gated` says whether §10.9's LAST RULE is part of the answer. It is for both questions that ask what a
-   math function IS; it is not for the one that asks only whether the text is one at all, and the difference is
-   exactly the SYNTAX/TYPE split §10 draws between §10.8 "Syntax" and §10.9 "Type Checking". The flag exists so
-   that split is made in ONE walk: a second scan written to answer "is this one math function" would have to
-   re-derive §10.8's nesting, its comma arities and its `<calc-value>` productions, and the day the two
-   disagreed the caller would be told a value is not a math function by one and refused by the other. */
+/* Parse the whole of `text` as ONE math function, in §10.9's type-only mode when `res` is NULL. `gate` says
+   which of §10's three rungs the answer is; see MthGate.
+   `want` IS READ UNDER EVERY GATE, including MTH_GATE_SYNTAX, because it names §10.9.1's calculation context
+   and the `<percentage>` terminal types a percentage as the base that context resolves it against. What the
+   gate decides is whether that TYPE can then refuse — the walk itself is total over §4.3.2's failure (see
+   `mth_types_added`), so no type it can compute stops it reaching EOF, and the syntax rung's answer is
+   therefore the same under every `want`. It was not always: while the algebra refused, `calc(25% + 10deg)`
+   was ONE math function under `<angle-percentage>` and not a math function at all under anything else, and
+   the caller that asked had to invent the context it was answered in. */
 static bool mth_top(const char *text, size_t len, const CssMathResolver *res, CssMathProduction want,
-                    bool type_gated, CssMathValue *out)
+                    MthGate gate, CssMathValue *out)
 {
     Mth m = { NULL, res, CSS_MATH_HINT_NULL, 0, false };
     lxb_css_syntax_token_t *t;
@@ -1458,9 +1552,16 @@ static bool mth_top(const char *text, size_t len, const CssMathResolver *res, Cs
     mth_skip_ws(&m);
     t = mth_peek(&m);
     if (t == NULL || t->type != LXB_CSS_SYNTAX_TOKEN__EOF) goto done;
+    /* §10.9's VALIDITY, which is the whole of what a failure type MEANS and is a question of its own: an
+       INVALID math function is still ONE math function, so §10.8's grammar has already been satisfied by the
+       time control is here. The step also has to stand in FRONT of the match below, because
+       `mth_type_matches` asserts it is never handed a failure — and that assert is LIVE rather than
+       decorative only because the algebra above now PRODUCES a failure type where it used to refuse the
+       walk. */
+    if (gate != MTH_GATE_SYNTAX && !mth_type_is_valid(&v.type)) goto done;
     /* §10.9's last rule: "A math function resolves to <number>, <length>, ... according to which of those
        productions its type matches ... If it can't match any of these, the math function is invalid." */
-    if (type_gated && !mth_type_matches(&v.type, want)) goto done;
+    if (gate == MTH_GATE_PRODUCTION && !mth_type_matches(&v.type, want)) goto done;
     ok = true;
     if (res == NULL || out == NULL) goto done;
     if (v.blocked == MTH_UNRESOLVED_FLEX)
@@ -1508,7 +1609,8 @@ static bool mth_top(const char *text, size_t len, const CssMathResolver *res, Cs
            "division's sign on a fact the spec says was erased");
     /* §10.9: "math functions that resolve to <number> can be used in any place that only accepts <integer>; the
        value is rounded to the nearest integer as it resolves." */
-    if (want == CSS_MATH_PROD_INTEGER) out->num.px = mth_round_value(MTH_ROUND_NEAREST, out->num.px, 1.0);
+    if (gate == MTH_GATE_PRODUCTION && want == CSS_MATH_PROD_INTEGER)
+        out->num.px = mth_round_value(MTH_ROUND_NEAREST, out->num.px, 1.0);
 
 done:
     lxb_css_syntax_tokenizer_destroy(m.tkz);
@@ -1517,16 +1619,33 @@ done:
 
 bool css_math_matches(const char *text, size_t len, CssMathProduction want)
 {
-    return mth_top(text, len, NULL, want, true, NULL);
+    return mth_top(text, len, NULL, want, MTH_GATE_PRODUCTION, NULL);
+}
+
+bool css_math_is_valid_function(const char *text, size_t len)
+{
+    /* `want` is genuinely unread under this gate — it reaches only the last rule and the rounding step, and
+       neither runs — but it still names §10.9.1's calculation context, which decides the TYPE the validity
+       question is then asked of. `CSS_MATH_PROD_NUMBER` is the context whose percentages resolve against
+       nothing, which is §10.9's own "Otherwise" arm and the only honest answer for a caller that holds no
+       property grammar: a bare `calc(50%)` is a valid `<percentage>` under it, and `calc(25% + 10deg)` is
+       INVALID under it and valid in a position that states an `<angle-percentage>`. A caller that knows the
+       position asks `css_math_matches` for it instead. */
+    return mth_top(text, len, NULL, CSS_MATH_PROD_NUMBER, MTH_GATE_VALID, NULL);
 }
 
 bool css_math_is_lone_function(const char *text, size_t len)
 {
-    /* `want` is unread on this path — `type_gated` is what decides whether it is consulted at all — and it is
-       passed as `CSS_MATH_PROD_NUMBER` rather than left indeterminate because §10.9's own rounding step reads
-       it, and a value chosen to be harmless is a value a later edit could make load-bearing without noticing.
-       `res` is NULL, so that step is not reached either. */
-    return mth_top(text, len, NULL, CSS_MATH_PROD_NUMBER, false, NULL);
+    /* `want` IS READ on this path and the ANSWER does not depend on it, which are two different facts and
+       only the second is this entry's contract. §10.9's `<percentage>` terminal types a percentage as the base
+       §10.9.1's calculation context resolves it against, and `want` is where that context comes from — so a
+       walk whose TYPE STEP could refuse would answer a different question for every production a caller named,
+       and did: `calc(25% + 10deg)` typed angle+angle under `<angle-percentage>` and percent+angle here, and
+       only the second failed. The type algebra is TOTAL now (see `mth_types_added`), so no type this walk can
+       compute stops it reaching EOF, and `CSS_MATH_PROD_NUMBER` names the context whose percentages resolve
+       against nothing — the one a caller that has not yet decided what it is asking for would mean.
+       `res` is NULL, so §10.9's rounding step — the other reader of `want` — is not reached either. */
+    return mth_top(text, len, NULL, CSS_MATH_PROD_NUMBER, MTH_GATE_SYNTAX, NULL);
 }
 
 bool css_math_eval(const char *text, size_t len, const CssMathResolver *res, CssMathProduction want,
@@ -1536,5 +1655,5 @@ bool css_math_eval(const char *text, size_t len, const CssMathResolver *res, Css
            "a math function was evaluated with no resolver or nowhere to write the result — the TYPE question "
            "needs neither and is `css_math_matches`, so an absent one here is a caller that meant to ask that "
            "one instead");
-    return mth_top(text, len, res, want, true, out);
+    return mth_top(text, len, res, want, MTH_GATE_PRODUCTION, out);
 }

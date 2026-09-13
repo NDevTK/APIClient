@@ -155,11 +155,19 @@ static bool css_tf_number(const char *s, const char *e, double *out)
    `<angle>` is accepted, so `scale(calc(1 + 1))` is a valid declaration this engine does not yet compute — a
    capability and not a mistake — while `scale(rgb(1,2,3))` is a mistake. core/css/css_math.h answers which,
    and `css_math_eval` would answer the VALUE; what is missing is only its `CssMathResolver`, whose `length_px`
-   arm already exists as a static in core/css/css_length.c for exactly these two productions. */
+   arm already exists as a static in core/css/css_length.c for exactly these two productions.
+   THE QUESTION IS §10.9'S TYPE AND NOT §10.8'S SYNTAX, and the two are different populations: `scale(calc(1px
+   + 1s))` IS one math function by §10.8's grammar and its type is §4.3.2's FAILURE, so it is an authoring
+   mistake and must take the dropped declaration rather than this crash — which is why the productions this
+   file would evaluate are named here rather than asking whether the text is a math function at all. The two
+   named are the two the DFAIL's own remedy names, and they are the two css-transforms-1 §7.1 writes. */
 static void css_tf_reject_math(const char *s, const char *e)
 {
+    size_t n;
+
     if (memchr(s, '(', (size_t)(e - s)) == NULL) return;
-    if (!css_math_is_lone_function(s, (size_t)(e - s))) return;
+    n = (size_t)(e - s);
+    if (!css_math_matches(s, n, CSS_MATH_PROD_NUMBER) && !css_math_matches(s, n, CSS_MATH_PROD_ANGLE)) return;
     DFAIL("css-values-4 §10 \"Mathematical Expressions\" admits a math function wherever a <number> or an "
           "<angle> is accepted, and css-transforms-1 §7.1 \"2D Transform Functions\" writes both productions — "
           "so this is a VALID declaration this engine cannot yet compute rather than an authoring mistake, and "

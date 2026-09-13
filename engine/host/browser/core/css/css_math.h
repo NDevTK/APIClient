@@ -142,10 +142,17 @@ typedef enum {
     CSS_MATH_PROD_LENGTH_PERCENTAGE,
     /* §5.6 "Mixing Percentages and Dimensions" gives `<angle-percentage>` the same shape it gives
        `<length-percentage>` — "Equivalent to [ <angle> | <percentage> ]" — so it is a production here for the
-       same reason that one is, and NOT a caller asking `<angle>` and `<percentage>` in turn. The two differ on
-       exactly the value that mixes them: `calc(25% + 10deg)` matches neither half alone and is a value
-       css-images-4 §3.5.1's `<color-stop-angle>` admits, so a caller spelling it as a disjunction would REFUSE
-       a valid declaration — which for a gradient means the page's whole `background` reads as undeclared. */
+       same reason that one is, and NOT a caller asking `<angle>` and `<percentage>` in turn.
+       THE REASON IS THE CONTEXT AND NOT A THIRD ALTERNATIVE, and getting that backwards is the one way to
+       misread this member. `calc(25% + 10deg)` DOES match the first disjunct: CSS Typed OM 1 §4.3.2 says a
+       type matches `<angle>` "if its only non-zero entry is «[ "angle" -> 1 ]»", and then "If the context in
+       which the value is used allows <percentage> values, and those percentages are resolved against another
+       type, then for the type to be considered matching it must either have a null percent hint, OR THE
+       PERCENT HINT MUST MATCH THE OTHER TYPE" — which in an `<angle-percentage>` position it does. What
+       DOES NOT WORK is asking `CSS_MATH_PROD_ANGLE`, because §10.9's `<percentage>` terminal reads
+       §10.9.1's calculation context to type the `25%` at all: a context that resolves percentages against
+       nothing types it "percent", and percent+angle has no consistent hint, so the CALCULATION's type is
+       failure. The banner above is the whole of it — the production a caller names IS the context. */
     CSS_MATH_PROD_ANGLE_PERCENTAGE
 } CssMathProduction;
 
@@ -253,6 +260,24 @@ bool css_math_matches(const char *text, size_t len, CssMathProduction want);
    IT IS THE SAME WALK, which is the point: §10.8's nesting, comma arities and `<calc-value>` productions are
    answered once and the type gate is simply not applied, so there is no second parser to drift. */
 bool css_math_is_lone_function(const char *text, size_t len);
+
+/* THE RUNG BETWEEN THE TWO ABOVE, and §10.9's own word for it: is `text` one math function that is VALID —
+   "A math function resolves to <number>, <length>, <angle>, <time>, <frequency>, <resolution>, <flex>, or
+   <percentage> according to which of those productions its type matches ... If it can't match any of these,
+   the math function is INVALID", with that rule's own predecessor in front of it ("if the type is failure,
+   the math function is invalid"). FALSE for `calc(1px + 1s)` and for `calc(50% * 50%)`, whose type is
+   «["percent" → 2]» and names no production at all; TRUE for every math function §10.9 resolves, whatever
+   it resolves TO.
+   IT IS THE QUESTION A CALLER HAS WHEN IT IS DECIDING WHOSE MISTAKE A VALUE IS. `css_math_matches` answers
+   false for an authoring mistake AND for a math function the property does not admit, and
+   `css_math_is_lone_function` answers true for both; only this one tells an author who wrote something §10.9
+   refuses from an engine that was handed a valid math function and asked the wrong production of it. That is
+   what a DCHECK about a PRODUCER has to be gated on — CLAUDE.md's rule that an assert may stand only on a
+   value this codebase computed, over a value whose bytes a page wrote.
+   NO PRODUCTION IS NAMED, so §10.9.1's calculation context is the one whose percentages resolve against
+   nothing — §10.9's own "Otherwise" arm, and the only honest choice for a caller holding no grammar. A
+   caller that knows the position asks `css_math_matches` for it. */
+bool css_math_is_valid_function(const char *text, size_t len);
 
 /* §10.10.1's "if root is a dimension that is not expressed in its canonical unit, and there is enough
    information available to convert it to the canonical unit, do so" — asked of the CALLER, because WHICH

@@ -307,9 +307,17 @@ static bool val_is_length(const ValLead *lead, const char *span, size_t span_len
 
 /* §5.1's `<length-percentage>`: "Any valid <length> or <percentage> value, any valid <calc()> expression
    combining <length> and <percentage> components." The third clause is ONE question and not the OR of the
-   other two: `calc(1px + 50%)` matches neither `<length>` nor `<percentage>` on its own — CSS Typed OM 1
-   §4.3.2 gives it «["length" → 1]» with a percent hint of "length", which `<length>` refuses for exactly the
-   reason §4.3.2 states — and it is the value the third clause exists for. */
+   other two, and the reason is the CALCULATION CONTEXT rather than a value that falls between the first two.
+   In a `<length-percentage>` position `calc(1px + 50%)` DOES match `<length>`: CSS Typed OM 1 §4.3.2 makes
+   matching context-relative — a type whose only non-zero entry is «["length" → 1]» matches, and "If the
+   context in which the value is used allows <percentage> values, and those percentages are resolved against
+   another type, then for the type to be considered matching it must either have a null percent hint, or the
+   percent hint must match the other type." Under the `<length>` NAME the context resolves percentages against
+   nothing, so css-values-4 §10.9's `<percentage>` terminal types the `50%` as "percent" and the addition has
+   no consistent hint at all: the type is §4.3.2's FAILURE, which is a stronger refusal than a mismatch. That
+   is why the production is passed DOWN rather than the two answers being ORed afterwards, and why the split
+   here is §5.1's own: `<length>` and `<length-percentage>` are two supported names because they are two
+   contexts. */
 static bool val_is_length_percentage(const ValLead *lead, const char *span, size_t span_len)
 {
     if (lead->type == LXB_CSS_SYNTAX_TOKEN_FUNCTION)

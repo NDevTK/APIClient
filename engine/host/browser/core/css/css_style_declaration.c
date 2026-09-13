@@ -463,10 +463,16 @@ static void cssd_decls_collect(CssDecls *d, const char *name, char *value, bool 
        `gap: calc(1rem)` are typed by nothing, collected as raw tokens, and reach the cascade unexamined (which
        is why they have always worked). Asserting over those would abort on two of the commonest declarations
        on the web while proving nothing. A custom property is outside it for the stronger reason that CSS
-       Properties and Values API 1 owns its grammar — `--x: calc(1s)` is a valid declaration whatever it says. */
+       Properties and Values API 1 owns its grammar — `--x: calc(1s)` is a valid declaration whatever it says.
+       AND IT IS SCOPED TO A *VALID* MATH FUNCTION, which is a narrower gate than "is a math function at all"
+       and is the one this assertion may stand on. Its subject is a PRODUCER that asked the wrong production,
+       so the value has to be one css-values-4 §10.9 "Type Checking" RESOLVES: `calc(1px + 1s)` is §4.3.2's
+       failure and `calc(50% * 50%)` types to «["percent" -> 2]», and neither names a production any
+       property could have asked for — they are the PAGE's mistake, and CLAUDE.md forbids an assert standing
+       on bytes a page wrote. The two are told apart by core/css/css_math.h's middle rung, not by this file. */
 #if APICLIENT_DEV
     if (value != NULL && !(name[0] == '-' && name[1] == '-') &&
-        css_property_numeric_audited(name) && css_math_is_lone_function(value, strlen(value))) {
+        css_property_numeric_audited(name) && css_math_is_valid_function(value, strlen(value))) {
         unsigned prods, p;
         bool ok = false;
 

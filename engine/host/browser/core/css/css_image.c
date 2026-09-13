@@ -220,9 +220,16 @@ static bool img_is_angle(const char *w, size_t n)
 
 /* css-values-4 §5.6 "Mixing Percentages and Dimensions"'s `<angle-percentage>` — "Equivalent to
    [ <angle> | <percentage> ]" — which is what css-images-4 §3.5.1's angular positions are written over.
-   THE MATH ARM ASKS ONE PRODUCTION AND NOT TWO, which is the whole reason `CSS_MATH_PROD_ANGLE_PERCENTAGE`
-   exists: `calc(25% + 10deg)` is neither an `<angle>` nor a `<percentage>`, and a caller spelling this as a
-   disjunction would refuse it — dropping a declaration css-images-4 admits. */
+   THE MATH ARM ASKS ONE PRODUCTION AND NOT TWO, and the reason is the CALCULATION CONTEXT rather than a value
+   that falls between the disjuncts. `calc(25% + 10deg)` matches the FIRST one: CSS Typed OM 1 §4.3.2 makes
+   matching context-relative — "If the context in which the value is used allows <percentage> values, and
+   those percentages are resolved against another type, then for the type to be considered matching it must
+   either have a null percent hint, or the percent hint must match the other type" — and here it does. What a
+   caller asking `<angle>` and then `<percentage>` would get is not a near miss but a FAILURE type: css-values-4
+   §10.9's `<percentage>` terminal reads §10.9.1's context to type the `25%` at all, an `<angle>`-only
+   context types it "percent", and percent+angle has no consistent hint. So the production IS the context, and
+   asking the halves separately asks about a world this position is not in — dropping a declaration
+   css-images-4 admits. The literal arm below needs no such care: a `<percentage>` TOKEN is one either way. */
 static bool img_is_angle_percentage(const char *w, size_t n)
 {
     size_t u;
