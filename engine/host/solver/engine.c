@@ -87,10 +87,12 @@ void engine_set_wrap_stats(void (*fn)(long *n, long *cap))
  * asking the second is what parks a flow on an answer that can only ever be a refusal, and the page then sees a
  * load failure for bytes that were already in this address space.
  *
- * WHAT THAT COST, AND WHY IT IS ONE DOOR AND NOT FOUR. Four entries reach this register with an address — a
- * `fetch()`/`fetch_owe` request, a document's own external `<script src>`, an injected or `as soon as possible`
- * one, and a dynamic `import()` — and §4.3 was asked at ONE of them, because that one has a `deliver` closure
- * to run the answer's processResponse steps through and the other three have none. A question some entries ask
+ * WHAT THAT COST, AND WHY IT IS ONE DOOR AND NOT ONE PER ENTRY. Several entries reach this register with an
+ * address — a `fetch()`/`fetch_owe` request, a document's own external `<script src>`, an injected or `as soon
+ * as possible` one, a dynamic `import()`, and a browser algorithm's own subresource (`engine_pending_resource_
+ * url`) — and §4.3 was asked at ONE of them, because that one has a `deliver` closure to run the answer's
+ * processResponse steps through and the rest had none. The count is deliberately not written down: an entry
+ * added later is what this paragraph exists to be true of, and a number is what stops being true when one is. A question some entries ask
  * and others do not is one missing capability wearing two names: `<script src="data:text/javascript,…">` and
  * `import("data:text/javascript,…")` were not requests that failed, they were entries that never ran §4.3 at
  * all. The three doors without a closure do not need one — §4.3's answer IS the reply record their delivery
@@ -209,9 +211,11 @@ static ScriptCspMeta script_csp_meta(JSContext *ctx, lxb_dom_element_t *el)
     return h;
 }
 
-/* FETCH §2.2.5 "Requests"' CREDENTIALS MODE FOR A PARK WHOSE REPLY IS A PROGRAM — the three parks in this
-   file that build their own request record rather than reaching `fetch_owe`, which is where every other
-   producer's mode is asserted (core/fetch/fetch.c). All three take the SAME answer and it is the element's:
+/* FETCH §2.2.5 "Requests"' CREDENTIALS MODE FOR A PARK WHOSE REPLY IS A PROGRAM — the parks in this file
+   that build their own request record AND whose reply is a program, which is a strict subset of the ones that
+   never reach `fetch_owe` (a browser algorithm's own subresource does neither). `fetch_owe` is where every
+   other producer's mode is asserted (core/fetch/fetch.c). All of them take the SAME answer and it is the
+   element's:
    HTML §4.12.1.1 "Processing model" — "Let module script credentials mode be the CORS settings attribute
    credentials mode for el's crossorigin content attribute" — and then "Let options be a script fetch options
    whose … credentials mode is module script credentials mode", for a CLASSIC external script exactly as for
@@ -291,10 +295,17 @@ static void pending_park_request(JSContext *ctx, JSValue e, const FetchRequest *
            "a request parked on an ADDRESS without stating its METHOD — the reply seam is keyed on the pair "
            "(engine.h), so an unnamed method would park this request under another one's identity and settle "
            "it with that request's body. Name the method at the component that built the request");
-    /* AND THE DESTINATION, WHICH A PARK CANNOT DERIVE AND MUST BE TOLD. A `fetch()` and a
-       `<link rel=preload as=script>` are the same KIND of park and opposite answers to "may this reply be
-       ingested as code", so the kind cannot say it and the request record does (Fetch §2.2.5 Requests). The
-       empty string is a real destination and a real answer; a NULL is a producer that stated none. */
+    /* AND THE DESTINATION, WHICH A PARK CANNOT DERIVE AND MUST BE TOLD (Fetch §2.2.5 Requests). The empty
+       string is a real destination and a real answer; a NULL is a producer that stated none.
+       THE ARGUMENT THAT STOOD HERE IS RETIRED AND IS REWRITTEN RATHER THAN DELETED, since it is the one a
+       reader re-derives. It said that a `fetch()` and a `<link rel=preload as=script>` were the same KIND of
+       park with opposite answers to whether the reply may be ingested as code, so the kind could not say it —
+       and they are no longer the same kind: FLOW_PENDING_RESOURCE exists precisely because that conflation
+       had a consumer INSIDE this file, whose delivery compiled a `modulepreload`'s ES module as a classic
+       program. WHAT SURVIVES IS STRONGER THAN THE RETIRED FORM AND IS WHY THE FIELD STAYS: a kind names whose
+       ALGORITHM is owed the reply, and one algorithm asks with MANY destinations — `as=script`, `as=style`
+       and `as=font` are one FLOW_PENDING_RESOURCE and three CORB classes. No kind can ever carry that, so the
+       record does. */
     DCHECK(req->destination != NULL,
            "a request parked on an ADDRESS without stating its DESTINATION — Fetch §2.2.5 Requests gives every "
            "request one (\"unless stated otherwise it is the empty string\"), and the trusted zone reads it to "
@@ -307,15 +318,15 @@ static void pending_park_request(JSContext *ctx, JSValue e, const FetchRequest *
        here rather than turned into it: core/fetch/fetch.h's `FETCH_CREDENTIALS_UNPLACED` is what a zero-fill
        leaves, so writing §2.2.5's default for it would make "the algorithm says same-origin" and "nobody
        plumbed this" the same bytes on the wire. `fetch_owe` asserts the same thing at the other door
-       (core/fetch/fetch.c) and this is the CONSUMER'S half of it, which is what reaches the three parks in
-       this file that build their own record and never pass that door. */
+       (core/fetch/fetch.c) and this is the CONSUMER'S half of it, which is what reaches the parks in this
+       file that build their own record and never pass that door. */
     /* AND ITS MODE, THE CONSUMER'S HALF OF THE GUARD `fetch_owe` MAKES AT THE OTHER DOOR — and the one field
        on this record whose wrong value fails at NO consumer. The destination is refused by three of them and
        the credentials mode is fatal at the wire spelling; the MODE has a single reader, §4.1 step 7's
        Integrity Policy disjunct below, whose early-allow arm is a conjunction with it — so a zero here does
        not produce a wrong wire value or an abort, it silently REFUSES a `<script src integrity crossorigin>`
        that a browser loads, and the only trace is an endpoint surface smaller than the real page's. This is
-       the door the three parks in this file reach that never pass fetch_owe. */
+       the door the parks in this file reach that never pass fetch_owe. */
     DCHECK(req->mode != FETCH_MODE_UNPLACED,
            "a request parked on an ADDRESS without stating its MODE — Fetch §2.2.5 \"Requests\" gives every "
            "request one, and §4.1 step 7's Integrity Policy check reads it in a conjunction with the "
@@ -337,9 +348,9 @@ static void pending_park_request(JSContext *ctx, JSValue e, const FetchRequest *
        address the host is never asked for, and the flow waits forever on a reply nobody owes it. Nothing
        crashes when that happens — the entry simply never settles — which is why the order is stated here
        rather than left to whoever reads the two lines.
-       IT IS ASKED AT THE CONSUMER AS WELL AS AT THE PRODUCERS for the reason step 7 is: the three parks in
-       this file build their own record and pass no producer's door, so a step asked only at the builders is a
-       step those three never take. It is IDEMPOTENT (core/fetch/fetch.h), so the producer having already run
+       IT IS ASKED AT THE CONSUMER AS WELL AS AT THE PRODUCERS for the reason step 7 is: the parks in this
+       file that build their own record pass no producer's door, so a step asked only at the builders is a
+       step those never take. It is IDEMPOTENT (core/fetch/fetch.h), so the producer having already run
        it cannot make this answer differ. */
     up_url = fetch_main_upgrade(ctx, req->url, req->destination, req->initiator);
     use_url = up_url ? up_url : req->url;
@@ -363,8 +374,10 @@ static void pending_park_request(JSContext *ctx, JSValue e, const FetchRequest *
     /* FETCH §4.1 "Main fetch" STEP 7, AND IT IS THE CLOSURE THIS CONVERGENCE IS FOR — asked HERE, at the
        consumer, and not only at the components that build requests. Step 7 precedes §4.3's scheme fetch (step
        12), so this is the last line before the last moment a request can be answered without one, and every
-       async request in this engine passes it: a `fetch()`, an `<img>` and a `<link rel=preload>` reach it
-       through fetch_owe's provider edge, and the three PROGRAM parks reach it directly.
+       async request in this engine passes it: a `fetch()` reaches it through fetch_owe's provider edge, and
+       every other park in this file reaches it directly — the three PROGRAM parks, and the browser-algorithm
+       subresource park an `<img>` and a `<link>` now take. The two elements USED to come through fetch_owe,
+       and moved with the kind that stops their replies being compiled as programs.
        THAT IS WHY A `<script src>` HAD NO CHECK AND NOTHING SAID SO. Step 7 was FOUR hand-written copies, one
        per request-creating component, and §4.12.1.1's fetch was simply not one of the four — so CSP §6.7.1.1
        "Script directives pre-request check", whose principal subject is a script element, was reachable only
@@ -482,7 +495,7 @@ void engine_pending_fetch_url(JSContext *ctx, JSValueConst resolve, JSValueConst
     pending_set(e, PEND_RESOLVE, JS_DupValue(ctx, resolve));
     pending_set(e, PEND_VALUE, JS_DupValue(ctx, value));
     /* AND WHICH DOCUMENT ASKED — the same sentence the `<script src>` park one entry down already makes, and
-       this was the only one of the three parks not making it. The realm this chokepoint was entered with IS
+       the one this park was for a while the only one NOT making. The realm this chokepoint was entered with IS
        the asking document's; `flow_step`'s is the SESSION's, so a delivery that re-derived this would compile
        a reply in whichever realm the session happens to be rooted at rather than in the document that asked.
        IT IS CARRIED RATHER THAN DEFAULTED, and the difference is not theoretical: `PEND_DOC` defaults to 0,
@@ -563,6 +576,66 @@ void engine_pending_module_url(JSContext *ctx, JSValueConst resolve, JSValueCons
        JS_ModuleLoadPending is about to be handed. */
     pending_park_request(ctx, e, &req);
     script_csp_meta_free(ctx, &meta);
+    JS_FreeValue(ctx, e);
+}
+
+/* PARK ON A BROWSER ALGORITHM'S OWN SUBRESOURCE FETCH — HTML §4.2.4.3 "Fetching and processing a resource
+ * from a link element"'s two built link types, and HTML §4.8.4.3.5 "Updating the image data". The same
+ * register, the same dedup, the same stall accounting, and a delivery that differs from `fetch()`'s by ONE
+ * step: the reply record goes to that algorithm's completion steps and nothing is queued as a program. See
+ * solver/pending.h's FLOW_PENDING_RESOURCE for what that step was doing to a `modulepreload`.
+ *
+ * WHY THIS IS AN ENTRY HERE RATHER THAN A FLAG ON `fetch_owe`, AND IT IS THE SHAPE THE THREE PROGRAM PARKS
+ * ALREADY HAVE. `fetch_owe` is the door for a request whose reply is owed to a `fetch()`-SHAPED park, and the
+ * parks whose reply is owed to some other algorithm build their own record and pass it — core/html/
+ * html_script.c reaches engine_pending_script_url for HTML §4.12.1.1 "Processing model"'s fetch in exactly
+ * this way. Everything `fetch_owe` does before the provider, `pending_park_request` does at the consumer and
+ * says so at each of them: Fetch §4.1 "Main fetch" step 6's upgrade, its step 7's
+ * CSP/mixed-content/integrity-policy walk, Fetch §4.3 "Scheme fetch", and the
+ * method/url/destination/mode/credentials guards. The ONE guard that lived only at that door is the
+ * destination ENUMERATION, and it is asked below rather than lost.
+ *
+ * IT DOES NOT ANSWER A `data:` URL IN PLACE, WHICH IS THE ONE OBSERVABLE THAT MOVES AND IT MOVES TOWARD THE
+ * STANDARD. `fetch_owe` runs Fetch §4.3 with the closure in hand and calls it synchronously for a scheme this
+ * agent answers; `pending_park_request` writes the record and `haveValue`, and the delivery calls the closure
+ * on the next pass — which is the route a dynamic `import("data:text/javascript,…")` already takes through
+ * that same door, so this is the established answer and not a second one. HTML §4.6.8.12's step 14 steps and
+ * §4.8.4.3.5's are a fetch's processResponse, which no browser runs inside the algorithm that issued it. */
+void engine_pending_resource_url(JSContext *ctx, JSValueConst deliver, const FetchRequest *req) {
+    Flow *f = flow_running();
+    JSValue e;
+    /* A PARK NEEDS A FLOW, and core/html/html_link.c asserts the same thing at its own trigger with the
+       reason: HTML §4.2.4.3 ends in "Fetch request" with no task and no microtask anywhere in it, so the
+       parser's own elements are served inside a flow rather than issued from the baseline tree walk. The
+       image half never needed that guard — §4.8.4.3.5's "update the image data" queues the STANDARD'S OWN
+       microtask before it fetches, and §scheduler makes every enqueued job a flow. Both ends assert it
+       because only one of them can name the entry that arrived without one. */
+    DCHECK(f != NULL, "a browser algorithm's subresource fetch was issued outside a running flow — it ends in "
+                      "a fetch and a fetch parks on the FLOW's own register, so a caller with none has "
+                      "nowhere to be owed a reply. core/html/html_link.c's trigger names the four entries "
+                      "HTML §4.2.4.3 reaches it from");
+    DCHECK(JS_IsFunction(ctx, deliver),
+           "a browser algorithm's subresource fetch parked with no completion steps — HTML §4.2.4.3's types "
+           "and HTML §4.8.4.3.5 each state theirs as a fetch's processResponse (HTML §4.6.8.12's step 14, "
+           "HTML §4.6.8.20's), and a record without them owes its reply to nobody: the element would never "
+           "fire `load` or `error` and the page would wait forever");
+    /* THE DESTINATION ENUMERATION, WHICH IS THE ONE THING `fetch_owe` ASKED THAT THIS PATH NO LONGER PASSES.
+       Fetch §2.2.5 "Requests" gives every request a destination and the trusted zone reads it to decide
+       whether the reply may be ingested as CODE; its consumers do not fail alike on a word §2.2.5 does not
+       define, so the check belongs where the component that built the request is still on the stack. `fetch`
+       is a POTENTIAL destination (Fetch §2.2.7 "Miscellaneous") and not a destination — HTML §4.6.8.20's
+       step 3 translates it to the empty string, which passes. */
+    DCHECK(fetch_is_destination_type(req->destination),
+           "a browser algorithm's subresource fetch stated a DESTINATION that is not one Fetch §2.2.5 "
+           "\"Requests\" enumerates — run Fetch §2.2.7 \"Miscellaneous\"' translate a potential destination "
+           "over the `as` keyword before stating it, as HTML §4.6.8.20's step 3 does");
+    e = pending_push(&f->pending, FLOW_PENDING_RESOURCE, flow_path_forced(f));
+    pending_set(e, PEND_RESOLVE, JS_DupValue(ctx, deliver));
+    /* AND WHICH DOCUMENT ASKED — the same sentence the parks above make, and for the same reason:
+       `PEND_DOC` defaults to 0, which is a real document id, so a delivery reading an unset field gets a
+       plausible answer rather than an absent one. */
+    pending_set_int(e, PEND_DOC, (int)document_doc(ctx));
+    pending_park_request(ctx, e, req);
     JS_FreeValue(ctx, e);
 }
 
@@ -3711,16 +3784,23 @@ int engine_provide(JSContext *ctx, const char *method, const char *url, JSValueC
            record was changed after it landed" — and the second is a COW/lifetime bug in this file
            rather than a host bug, with a different fix and a different blast radius. Two asserts, one
            contract, and whichever fires names the half.
-           Only for the FETCH kind: a docscript, an injected <script src> and a module load are owed
-           BYTES, and their deliveries read `body` off the same record without ever asking for a list. */
+           NOT FOR THE PROGRAM KINDS: a docscript, an injected <script src> and a module load are owed
+           BYTES, and their deliveries read `body` off the same record without ever asking for a list. THE
+           SUBRESOURCE KIND IS ASKED ALONGSIDE THE FETCH ONE, which is not a widening of the contract but the
+           SAME population it always covered: an `<img>` and a `<link>` used to park FLOW_PENDING_RESOLVE and
+           were judged by this line, and naming only the fetch kind after they moved would have dropped them
+           silently. Their records come from the same two producers as a `fetch()`'s — qjs_provide's parse and
+           Fetch §4.3 "Scheme fetch", which builds one with a url list of its own (core/fetch/scheme_fetch.c)
+           — so there is no arm on which one of them legitimately arrives without a list. */
 #if APICLIENT_DEV
-        if ((int)pending_get_int(p, PEND_KIND) == FLOW_PENDING_RESOLVE && JS_IsObject(value)) {
+        if (((int)pending_get_int(p, PEND_KIND) == FLOW_PENDING_RESOLVE ||
+             (int)pending_get_int(p, PEND_KIND) == FLOW_PENDING_RESOURCE) && JS_IsObject(value)) {
             JSValue ul = JS_GetPropertyStr(ctx, value, "urlList");
 
             DCHECKF(JS_IsArray(ul),
-                    "a reply with no `urlList` is being written onto a fetch entry — the HOST built "
-                    "this record, so the producer is the trusted zone's reply path and not this "
-                    "file's register. request=%s %s", method, url);
+                    "a reply with no `urlList` is being written onto a fetch or subresource entry — the "
+                    "HOST built this record, so the producer is the trusted zone's reply path and not "
+                    "this file's register. request=%s %s", method, url);
             JS_FreeValue(ctx, ul);
         }
 #endif
@@ -4180,7 +4260,18 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
            predicate). THE ORDER MATTERS AND IS THE STANDARD'S: `JS_IsNull` FIRST, because a network error has
            no record to read a status off at all — fetch_reply_status answers §2.2.6's 0 for one, which is a
            second correct route to the same arm and not the one this reads. */
-        if (kind != FLOW_PENDING_RESOLVE &&
+        /* …AND A `<link>`'S IS EXCLUDED FOR THE FETCH KIND'S REASON EXACTLY, WHICH IS THAT ITS FAILURE IS THE
+           ANSWER AND NOT THE ABSENCE OF ONE. HTML §4.6.8.12 Link type "modulepreload" step 14.1 ("If result
+           is null, then fire an event named `error` at el") and HTML §4.6.8.20 Link type "preload"'s
+           network-error branch ARE the element's failure arm and they
+           live at the element, so a null reply and a non-ok status are values core/html/html_link.c's two
+           deliveries read for themselves — link_module_deliver tests both by name. Diverting one here would
+           fire the DCHECK below, which is the check earning its keep rather than a hazard avoided.
+           THE TEST STAYS NEGATIVE AND GAINS A SECOND EXCLUSION rather than becoming the positive one it
+           looks like it wants to be: written as `is this a program kind` the DCHECK below could not
+           disagree with it, and a vacuous assert is a non-check wearing the syntax of one. Negative, that
+           assert is what a SIXTH kind delivered with no arm of its own crashes on. */
+        if (kind != FLOW_PENDING_RESOLVE && kind != FLOW_PENDING_RESOURCE &&
             (JS_IsNull(pv) || !script_fetch_status_ok(fetch_reply_status(ctx, pv)))) {
             DCHECK(kind == FLOW_PENDING_SCRIPT || kind == FLOW_PENDING_DOCSCRIPT ||
                    kind == FLOW_PENDING_MODULE,
@@ -4445,6 +4536,42 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
             }
             JS_FreeValue(ctx, resolve);
             JS_FreeValue(ctx, sv);
+        } else if (kind == FLOW_PENDING_RESOURCE) {
+            /* A BROWSER ALGORITHM'S OWN SUBRESOURCE: hand the record to THAT ALGORITHM's completion steps,
+               and queue NOTHING. This arm is the whole content of the kind — everything else about the park is
+               the fetch kind's — and what it does NOT do is the point: the arm below compiles a
+               JavaScript-typed reply as a program, which is CLAUDE.md §Solver's rule that a fetch whose body
+               is JavaScript is always fetched and EXECUTED — and none of this kind's algorithms evaluates
+               anything at this moment. HTML §4.6.8.12 Link type "modulepreload" in its own words "places the
+               result into the appropriate module map for later evaluation", and its `import()` example spells
+               out the state that leaves: "the module is already ready (but not evaluated) in the module map".
+               HTML §4.6.8.20 Link type "preload" places its result in the preload cache, and HTML §4.8.4.3.5
+               "Updating the image data" decodes its result as an image.
+               THE SOLVER LOSES NO CODE BY DECLINING, WHICH IS WHY THIS IS NOT A NARROWING OF CLAUDE.md
+               §Solver'S RULE. A preloaded chunk is a chunk the document's own `<script type=module>` IMPORTS,
+               and that park is FLOW_PENDING_MODULE, whose delivery hands the source to a compiler that reads
+               `export`. What the RESOLVE arm did with those bytes was compile them CLASSIC and abort at
+               flow_step's no-compile row — so the coverage this declines to take was never taken. An image's
+               reply was never code at all.
+               THE REPLY MAY BE A NETWORK ERROR AND IS STILL DELIVERED: HTML §4.6.8.12's step 14.1 fires
+               `error` at el for a null result and link_module_deliver reads a non-ok status itself, so the
+               failure arm above excludes this kind rather than answering for it. */
+            JSValue deliver = pending_get(p, PEND_RESOLVE);
+            DCHECK(JS_IsObject(pv) || JS_IsNull(pv),
+                   "a browser algorithm's subresource reply arrived as something other than the host's reply "
+                   "record — "
+                   "qjs_provide parses the trusted zone's JSON into one and §4.3's scheme fetch builds one, "
+                   "and JS_NULL is the network error both spell; a bare string here is a host still "
+                   "delivering only bytes, which core/html/html_link.c's deliveries assert against too");
+            /* AS A FLOW, for the reason the settle below is one: §4.6.8.12 step 14's steps fire an event at
+               the element, and an event is the PAGE's listener running. Out of a plain call that listener
+               would run in a C activation with no flow base, which is the drive-to-completion this engine
+               aborts on rather than tolerates. */
+            if (JS_CallAsFlow(ctx, deliver, pv) < 0) {
+                JSValue exc = JS_GetException(ctx);
+                JS_FreeValue(ctx, exc);   /* a listener's throw is the page's to observe, not this step's */
+            }
+            JS_FreeValue(ctx, deliver);
         } else {
             /* A SYNCHRONOUS ANSWER IS TAKEN, NEVER DRAINED, and that is asserted here because this branch is
                where it would land if it were not. The machine that asked resumes through its park and consumes
@@ -5404,8 +5531,11 @@ static int flow_answer_fork(JSContext *ctx, Flow *f) {
  * JS_NULL, and flow_deliver_one_reply is where a JS_NULL becomes each kind's own failure: a `fetch()` rejects
  * the page's promise with it; the two `<script src>` kinds become HTML §4.12.1.1 "Processing model"'s element
  * whose result is null, whose "execute the script element" step 4 fires `error` at the element and runs
- * nothing; and a dynamic `import()` rejects with the TypeError §8.1.6.7.3 HostLoadImportedModule's
- * onSingleFetchComplete names. So this fork writes the SAME value for every kind and holds NO per-kind
+ * nothing; a dynamic `import()` rejects with the TypeError §8.1.6.7.3 HostLoadImportedModule's
+ * onSingleFetchComplete names; and a `<link>`'s resource reaches its own type's completion steps with a null
+ * result, which HTML §4.6.8.12 Link type "modulepreload" step 14.1 ("If result is null, then fire an event
+ * named `error` at el") and HTML §4.6.8.20 Link type "preload"'s network-error branch are the element's
+ * answer to. So this fork writes the SAME value for every kind and holds NO per-kind
  * knowledge at all — which is what makes a refusal and a real network failure one path rather than two, and
  * it is why every one of those arms lives at the delivery and none of them here. This function's entire
  * knowledge of the outcome is the one line that writes JS_NULL. */

@@ -557,6 +557,19 @@ void engine_pending_fetch_url(JSContext *ctx, JSValueConst resolve, JSValueConst
    "promiseCapability.[[Reject]]" with it. `reject` used to be minted by the caller and freed unused, so a
    failed chunk settled `resolve` with the empty source text and `import(u).catch(h)` never ran `h`. */
 void engine_pending_module_url(JSContext *ctx, JSValueConst resolve, JSValueConst reject, const char *url);
+/* The same park for a BROWSER ALGORITHM'S OWN SUBRESOURCE fetch — HTML §4.2.4.3 "Fetching and processing a
+   resource from a link element"'s two built link types and HTML §4.8.4.3.5 "Updating the image data" — whose
+   delivery differs from `fetch()`'s by one step: the reply record is handed to that algorithm's completion
+   steps and NOTHING is queued as a program. All three reached the host through `fetch_owe`, which parks
+   FLOW_PENDING_RESOLVE, and that kind's delivery compiles a JavaScript-typed reply as a CLASSIC program — so
+   a preloaded ES module chunk aborted the run at flow_step's no-compile arm. None of these standards
+   evaluates anything here (HTML §4.6.8.20 Link type "preload"'s preload cache; HTML §4.6.8.12 Link type
+   "modulepreload"'s module map, which its own example calls "already ready (but not evaluated) in the module
+   map"; §4.8.4.3.5's image decode), so the kind says so and the delivery reads it — see solver/pending.h's
+   FLOW_PENDING_RESOURCE.
+   `deliver` IS CALLED FOR A FAILURE TOO, unlike the three program kinds: HTML §4.6.8.12's step 14.1 `error`
+   event and HTML §4.6.8.20's network-error branch ARE the failure arm, and they live at the element. */
+void engine_pending_resource_url(JSContext *ctx, JSValueConst deliver, const FetchRequest *req);
 /* THE FRONTIER'S BEST WEIGHT — what the host ranks this document's engine by against every other live one.
    Level-1 and level-2 are ONE policy (§scheduler): the host orders engines by their best flow exactly as the
    engine orders flows, so this is flow_weight of the flow the SCHEDULER WOULD PICK — flow_next_to_run with no

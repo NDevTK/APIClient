@@ -59,6 +59,34 @@
    compiler `{status: 200, …}` to parse. Same register, same dedup, same stall accounting; only the delivery
    differs, which is what the kind is for. */
 #define FLOW_PENDING_MODULE    4
+/* A BROWSER ALGORITHM'S OWN SUBRESOURCE FETCH, WHOSE REPLY THAT ALGORITHM CONSUMES RATHER THAN RUNS: call
+   its completion steps with the reply RECORD, and queue NO program. HTML §4.2.4.3 "Fetching and processing a
+   resource from a link element"'s two built types and HTML §4.8.4.3.5 "Updating the image data" are its
+   members, and what unites them is not that they are elements — the three PROGRAM kinds above are elements
+   too — it is that a STANDARD states where the bytes go and none of those places is "run them now".
+   IT IS THE MODULE KIND'S STORY ONE ALGORITHM OVER, and the reason is the same sentence: one kind answering
+   two questions. These deliveries want exactly what a `fetch()` wants — the host's reply record, handed to a
+   closure — so they rode FLOW_PENDING_RESOLVE, and that kind's delivery does one thing more than hand the
+   record over: it QUEUES A JAVASCRIPT BODY AS A PROGRAM, which is CLAUDE.md §Solver's rule that a fetch whose
+   body is JavaScript is always fetched and EXECUTED. That step is right for the surface it names — a reply a
+   page holds as DATA, which nothing in the browser will ever compile — and it is wrong for every reply whose
+   disposition a standard states. HTML §4.6.8.20 Link type "preload" places its result in the preload cache;
+   HTML §4.6.8.12 Link type "modulepreload" "places the result into the appropriate module map for later
+   evaluation", which its own example spells out as "already ready (but not evaluated) in the module map";
+   HTML §4.8.4.3.5 decodes its result as an image.
+   WHAT IT COST, AND IT IS NOT A CONFORMANCE DETAIL: a `modulepreload` is how every Vite/Rolldown/esbuild
+   document writes its chunk graph down, so the RESOLVE arm compiled each preloaded ES module as a CLASSIC
+   program and the parser answered `unsupported keyword: export` — a page-script compile failure, which is a
+   DFAIL. The bytes were never the page's to run at that moment, and the graph reaches the same chunks by its
+   own route: the document's `<script type=module>` imports them, and THAT park is FLOW_PENDING_MODULE, whose
+   delivery compiles them as modules. The image half had nothing loud standing under it at all — CORB is asked
+   of SCRIPT-LIKE destinations only (extension/lib/safe-fetch.js), so `image` is not a class it judges, and a
+   JavaScript-typed reply to an `<img>` request reached that same compile.
+   SAME REGISTER, SAME DEDUP, SAME STALL ACCOUNTING; only the delivery differs, which is what the kind is for.
+   AND A FAILURE IS DELIVERED RATHER THAN DIVERTED, which is the one way this kind is not a program kind: a
+   null reply and a non-ok status are what HTML §4.6.8.12's step 14.1 fires `error` at the element FOR, and
+   `link_module_deliver` reads both itself. */
+#define FLOW_PENDING_RESOURCE  5
 
 /* WHAT THIS REQUEST IS EVIDENCE OF — CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's three provenances, recorded
  * on the record at the PUSH because a park is a work item and its provenance is one of the inputs it has to

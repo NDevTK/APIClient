@@ -968,7 +968,21 @@ static JSValue img_update_rest(JSContext *ctx, JSValueConst this_val, int argc, 
         /* THE SAME VALUE §4.1 STEP 7 WAS ASKED WITH, on the request — so the park's own step 7 asks the
            identical question of the identical request rather than re-deriving §4.8.4.3.5's answer. */
         req.metadata = csp_meta;
-        fetch_owe(ctx, deliver, &req);
+        /* …AND IT IS OWED TO §4.8.4.3.5's OWN completion steps, WHICH IS WHAT THE PARK KIND SAYS AND WHAT
+           `fetch_owe` COULD NOT. That door parks FLOW_PENDING_RESOLVE — Fetch §5.6 "Fetch methods"' `fetch()`,
+           whose delivery compiles a JavaScript-typed reply as a CLASSIC program, because a reply a page holds
+           as DATA is one nothing in the browser will ever compile and CLAUDE.md §Solver requires the solver
+           to. An image's reply is never that: §4.8.4.3.5 decodes it, or fires `error` at the element, and
+           there is no arm of it that runs anything. NOTHING LOUD STOOD UNDER THIS — CORB is asked of
+           SCRIPT-LIKE destinations only (extension/lib/safe-fetch.js) and `image` is not one, so a server
+           answering an `<img>` request with `Content-Type: text/javascript` had those bytes queued as a
+           program, which is the threat model CORB exists for arriving through the engine's own register.
+           IT IS THE `<link>` DEFECT'S SIBLING AND LANDED WITH IT: core/html/html_link.c's two types are the
+           measured instance (a `modulepreload`'s ES module compiled classic and aborted the run) and this is
+           the same question asked the same way at the second site. See solver/pending.h's
+           FLOW_PENDING_RESOURCE. Everything `fetch_owe` ran before the provider, `pending_park_request` runs
+           at the consumer; the destination ENUMERATION is asserted at the new entry. */
+        engine_pending_resource_url(ctx, deliver, &req);
         JS_FreeValue(ctx, deliver);
         JS_FreeValue(ctx, uv);
         JS_FreeValue(ctx, gv);

@@ -768,8 +768,16 @@ static void link_fetch_request(JSContext *ctx, lxb_dom_element_t *el, JSValueCon
            reply must be JS-typed or same-origin. `<link rel=preload as=script>` and every `modulepreload`
            whose `as` survives §4.6.8.12 step 3 are therefore code loads and are classified as ones at the
            chokepoint — which is the whole reason this field rides the request: the KIND of park cannot say
-           it, because a preload and a `fetch()` park identically and mean different things about the same
-           bytes. */
+           it.
+           THE REASON THAT USED TO BE GIVEN FOR THAT IS RETIRED AND IS REWRITTEN HERE RATHER THAN DELETED,
+           because a reader who re-derives it will re-derive the wrong half. It read "a preload and a
+           `fetch()` park identically and mean different things about the same bytes", and they no longer
+           park identically: a `<link>`'s reply is owed to this element's own completion steps, which is
+           solver/pending.h's FLOW_PENDING_LINK, and a `fetch()`'s is owed to a promise. WHAT STILL HOLDS,
+           AND IT IS THE PART THE FIELD IS FOR: the kind names WHOSE ALGORITHM is owed the reply and says
+           nothing about WHICH DESTINATION it was asked with, and the chokepoint's class is per-destination —
+           `as=script`, `as=style` and `as=font` are ONE kind and three answers to "may this reply be
+           ingested as code". A kind can never carry that, so the request does. */
         req.destination = destination;
         req.headers = NULL;
         req.body = NULL;
@@ -789,7 +797,35 @@ static void link_fetch_request(JSContext *ctx, lxb_dom_element_t *el, JSValueCon
            "more modern features, where the request's mode is always `cors`". Two `rel` keywords, two
            algorithms, and the same markup answers differently — which is exactly why this is passed. */
         req.mode = mode;
-        fetch_owe(ctx, d, &req);
+        /* …AND IT IS OWED TO THIS ELEMENT'S OWN COMPLETION STEPS, WHICH IS WHAT THE PARK KIND SAYS AND WHAT
+           `fetch_owe` COULD NOT. That door parks FLOW_PENDING_RESOLVE — §5.6's `fetch()`, whose delivery
+           compiles a JavaScript-typed reply as a CLASSIC program, because a reply a page holds as DATA is one
+           nothing in the browser will ever compile and CLAUDE.md §Solver requires the solver to. A `<link>`'s
+           reply is the opposite case and BOTH standards say so: HTML §4.6.8.20 Link type "preload" places its
+           result in the preload cache, and HTML §4.6.8.12 Link type "modulepreload" "places the result into
+           the appropriate module map for later evaluation" — "already ready (but not evaluated) in the module
+           map" is its own example's wording. Riding the fetch kind therefore
+           RAN every preloaded chunk, at the wrong moment and under the wrong algorithm: a modulepreloaded ES
+           module compiled classic and the parser answered `unsupported keyword: export`, which is a DFAIL at
+           flow_step's no-compile row and is how most of a modern bundle's chunk graph aborted the run.
+           THE FILE ALREADY KNEW THE TWO WERE CONFLATED and said so at `req.destination` a few lines up, in a
+           sentence this diff retires there: a preload and a `fetch()` parked identically and meant different
+           things about the same bytes. It was written for the CHOKEPOINT's code-load question, which the
+           destination answers and still must; the same conflation had a SECOND consumer inside the engine,
+           and this is the kind gaining the ability to say what the destination was never asked.
+           THE IMAGE HALF OF §4.2.4.3's SIBLING WALK HAS THE SAME DEFECT AND MOVES IN THE SAME DIFF —
+           core/html/html_image.c — because a JavaScript-typed reply to an `<img>` request reached that same
+           compile with NOTHING loud standing under it: CORB is asked of SCRIPT-LIKE destinations only
+           (extension/lib/safe-fetch.js), and `image` is not one. One question asked the same wrong way at two
+           sites is one defect, and a fix at one of them is where the other recurs from.
+           IT IS NOT A SECOND DOOR. `fetch_owe` serves the requests whose reply is owed to a `fetch()`-shaped
+           park; a request whose reply is owed to some other algorithm states its own kind, which is what
+           core/html/html_script.c does for HTML §4.12.1.1 "Processing model"'s fetch through
+           engine_pending_script_url. Every step `fetch_owe` runs before the provider — Fetch §4.1 "Main
+           fetch" step 6's upgrade, its step 7's walk, Fetch §4.3 "Scheme fetch", and the
+           method/url/destination/mode/credentials guards — `pending_park_request` runs at the consumer, and
+           the destination ENUMERATION is asserted at the new entry. */
+        engine_pending_resource_url(ctx, d, &req);
         JS_FreeValue(ctx, d);
     }
     /* …AND THE METADATA'S BYTES LAST, because the request above BORROWED them: the park copies what it needs

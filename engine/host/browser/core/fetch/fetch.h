@@ -183,8 +183,14 @@ typedef struct {
        the absence it replaced is the kind a reader re-derives: the field was stated on this record for
        several commits while stopping short of the wire, and the sentence describing that gap outlived it.
        A STATED MODE LEAVES THIS RECORD BY EXACTLY TWO DOORS AND THERE IS NO THIRD — `fetch_owe`
-       (core/fetch/fetch.c), which every browser component that owes the host a request reaches, and
-       `pending_park_request` (solver/engine.c), where the parks that build their own record arrive. BOTH
+       (core/fetch/fetch.c), which Fetch §5.6 "Fetch methods"' `fetch()` reaches, and `pending_park_request`
+       (solver/engine.c), where the parks that build their own record arrive. THE FIRST CLAUSE USED TO SAY
+       that every browser component owing the host a request reaches it, and that stopped being true when
+       the elements whose reply their OWN algorithm consumes — an `<img>`, a `<link rel=preload>`, a
+       `<link rel=modulepreload>` — moved to a park kind of their own, because riding `fetch()`'s kind had
+       their JavaScript-typed replies compiled as classic programs (solver/pending.h's FLOW_PENDING_RESOURCE).
+       WHAT THE SENTENCE IS ACTUALLY ABOUT SURVIVES THAT WHOLE AND IS WHY IT IS REWRITTEN RATHER THAN DELETED:
+       there are TWO doors, both refuse the zero, and no producer reaches the wire without passing one. BOTH
        REFUSE THE ZERO, one with the producing component still on the stack and one at the consumer, and the
        wire spelling is `fetch_credentials_token`'s alone and is FATAL on `_UNPLACED` in release too — so the
        token that crosses the seam is one of §2.2.5's three or the program is already dead. On the far side

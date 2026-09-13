@@ -452,7 +452,7 @@ int pending_prov_compose(int kind, int path_forced)
            "a park stated a forced-path mark that is neither set nor clear — it comes from flow_path_forced, "
            "which asserts the same thing at the other end, so a third value is a caller that computed this "
            "somewhere else");
-    DCHECK(kind >= FLOW_PENDING_RESOLVE && kind <= FLOW_PENDING_MODULE,
+    DCHECK(kind >= FLOW_PENDING_RESOLVE && kind <= FLOW_PENDING_RESOURCE,
            "a park stated a kind this register does not define — the provenance is composed from it, so an "
            "unknown kind would be answered by whichever arm of the test below happens to be the else");
     if (path_forced) return PROV_FORCED;
