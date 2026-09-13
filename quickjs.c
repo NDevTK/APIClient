@@ -6699,6 +6699,14 @@ JSValue JS_NewAtomString(JSContext *ctx, const char *str)
    only this function has (the macro captured it), and the PAGE's call into that consumer, which only a
    backtrace has. */
 static void js_why_backtrace(JSContext *ctx, char *dst, size_t n);
+/* ITS TWIN, DECLARED FOR THE SAME REASON AND NOT BECAUSE ONE CALLER NEEDED IT. Every composed `@WHY` in this
+   file renders an unknown's SHAPE beside the frames, and a shape comes from the page, so it is sanitized by
+   this before it reaches a message; a site earlier in the file than its definition therefore reaches for it
+   exactly as it reaches for the backtrace above. Only the backtrace was declared here, so the two were
+   available at different points of one file for no reason either of them states — and the omission is not
+   caught by reading, it is caught by an implicit-declaration error at whichever site happens to be first,
+   which is why the pair is declared together now. */
+static void js_why_sanitize(char *dst, size_t n, const char *src);
 #endif
 
 /* THE ONE CONVERGENCE POINT OF EVERY BYTE CONSUMER IN THE ENGINE AND THE HOST — JS_ToCStringLen2At and
@@ -15646,6 +15654,71 @@ int JS_SetProperty(JSContext *ctx, JSValueConst this_obj, JSAtom prop, JSValue v
 static int JS_SetPropertyValue(JSContext *ctx, JSValueConst this_obj,
                                JSValue prop, JSValue val, int flags)
 {
+#if APICLIENT_DEV
+    /* 10.4.5.18 TypedArraySetElement ( obj, index, value ) READS TWO VALUES THE PAGE SUPPLIES, AND EVERY TEXT
+       IN THIS ENGINE DISCUSSES ONLY ONE. Its steps read `value` and `index`; the arm in JS_CallInternal refuses
+       an unknown VALUE by name. An unknown INDEX is refused by nothing, and it is not a narrower case of the
+       same question — it is a different algorithm with a different answer, which is why it is a crash here and
+       not a clause there.
+       WHAT THE ENGINE DOES WITH ONE TODAY IS WRONG RATHER THAN INCOMPLETE, which is the whole reason this is a
+       DFAIL and not a residual. A concolic is a real JSObject, so it is no tagged int and takes the slow path,
+       where JSConcolicHooks.key_name converts it — and key_name's contract is that an unknown key DENOTES A
+       REAL STRING, its own shape, which is "what makes `o[x] = 1` then `o[x]` find one slot". That contract is
+       correct and is written for an ORDINARY OBJECT. On a TYPED ARRAY it takes an arm no world the unknown
+       denotes would take: 10.4.5.5 [[Set]] routes a key to TypedArraySetElement only when it is a CANONICAL
+       NUMERIC INDEX, and a shape like `{state}.len` is not one, so the write becomes an ordinary named property
+       on the Uint8Array and NOT ONE BYTE IS STORED — while every integer the unknown could actually be IS a
+       canonical numeric index, so the spec's answer for every world in the domain is a store.
+       ITS ABSENCE WOULD SHOW AS A SHORT BODY THAT NOTHING REPORTS AS SHORT. A serializer writing at an unknown
+       offset leaves the backing store holding whatever was there, the request is still built, and
+       solver/endpoint.c records a body it will label as bytes the page sent — which a reviewer REPLAYS. A
+       silently wrong payload is worse than an absent one, and nothing downstream can tell them apart.
+       WHAT TO BUILD IS A PER-POSITION OUTCOME FORK, AND THE SHAPE ALREADY EXISTS THIRTY LINES FROM THE VALUE
+       ARM IN THE SAME CARRIER. 10.4.2.4 ArraySetLength over unknown input asks "is the length being set greater
+       than n?" at each n, through step_fork_run under JSArrayLen's AL_UNKNOWN_SVZ / AL_UNKNOWN_PIN phases, and
+       10.4.5.17 TypedArrayGetElement's read side needs the identical chain — the two sides of an unknown index
+       must answer alike for the same reason the two sides of an unknown length already do. There is no bound on
+       n and there must not be one; what makes it behave like a finite walk is the WFQ.
+       THE RELEASE ARM IS UNCHANGED BY THIS DIFF AND IS NOT THEREBY ENDORSED: without the fork there is nothing
+       correct to do, so release keeps today's named-property write, and this names it rather than leaving a
+       reader to discover it. It stops being a question when the chain above lands. */
+    if (unlikely(JS_VALUE_GET_TAG(this_obj) == JS_TAG_OBJECT && js_value_is_concolic(prop)
+                 && is_typed_array(JS_VALUE_GET_OBJ(this_obj)->class_id))) {
+        /* SIZED FROM THE PARTS, for the reason the VALUE arm's buffer states: the frames go LAST, so a short
+           buffer cuts the address and leaves a crash that still reads complete. 928 bytes of format + 240
+           shape + 40 class name + 10 count + 2048 frames = 3266. */
+        char frames[2048], why[4096], shbuf[256], cbuf[ATOM_GET_STR_BUF_SIZE];
+        JSObject *tap = JS_VALUE_GET_OBJ(this_obj);
+        JSValue sv = JS_UNINITIALIZED;
+
+        snprintf(shbuf, sizeof shbuf, "%s", "(a shape this engine could not spell)");
+        if (g_concolic.key_name) {
+            sv = g_concolic.key_name(ctx, prop);
+            if (JS_IsString(sv)) {
+                const char *s = JS_ToCString(ctx, sv);
+                if (s) { js_why_sanitize(shbuf, sizeof shbuf, s); JS_FreeCString(ctx, s); }
+            }
+        }
+        JS_FreeValue(ctx, sv);
+        js_why_backtrace(ctx, frames, sizeof frames);
+        snprintf(why, sizeof why,
+                 "10.4.5.18 TypedArraySetElement ( obj, index, value ) over an UNKNOWN INDEX `%.240s`: "
+                 "`ta[x] = v` on a %.40s of %u elements, where x is unknown external input. This is the OTHER "
+                 "of the two values that algorithm reads from the page, and the one nothing refuses. A concolic "
+                 "is no tagged int, so key_name converts it to its own shape as a real String — correct for an "
+                 "ordinary object and WRONG here, because 10.4.5.5 [[Set]] routes only a CANONICAL NUMERIC "
+                 "INDEX to TypedArraySetElement, so this becomes a named property and stores NO BYTE, while "
+                 "every integer the unknown could be is a canonical numeric index. Do NOT decide the index. "
+                 "BUILD the per-position outcome fork 10.4.2.4 ArraySetLength already has in this same carrier "
+                 "(JSArrayLen's AL_UNKNOWN_SVZ/AL_UNKNOWN_PIN), asking at each n whether the index is n, and "
+                 "give 10.4.5.17 TypedArrayGetElement the same chain so both sides of an unknown index answer "
+                 "alike. Frames: %s",
+                 shbuf,
+                 JS_AtomGetStr(ctx, cbuf, sizeof cbuf, ctx->rt->class_array[tap->class_id].class_name),
+                 (unsigned)tap->u.array.count, frames);
+        DFAIL(why);
+    }
+#endif
     if (likely(JS_VALUE_GET_TAG(this_obj) == JS_TAG_OBJECT &&
                JS_VALUE_GET_TAG(prop) == JS_TAG_INT)) {
         JSObject *p;
