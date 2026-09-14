@@ -278,6 +278,34 @@ typedef struct JSTrampStepDef JSTrampStepDef;   /* quickjs-step.h, included belo
 #if APICLIENT_DEV
 static const char *js_step_def_algorithm(const JSTrampStepDef *def);
 #endif
+/* HOW MANY PARENTS REPORT ONE CHILD, AND HOW MANY TIMES THE WORST OF THEM DOES — the walk gc_decref_child's
+   abort names as the thing that would let it report the OVER-MARKING parent instead of the TIPPING one. That
+   abort can only ever name the parent whose edge happened to take the count to zero, and which parent that is
+   depends on gc_obj_list order; the two defects it must be read as are the mark side (one parent reporting a
+   child it dup'd once) and the holder side (every parent reporting once, and one of them holding no reference),
+   and NOTHING IN THE ADDRESS OR THE KIND SEPARATES THEM. A count does: more than one report from a single
+   parent is the first, exactly one from every parent is the second, and they send a reader to opposite work.
+   IT LIVES ON THE RUNTIME FOR gc_decref_parent's REASON, stated a few lines below it: a JS_MarkFunc is handed a
+   child and nothing else, so a counting callback cannot see its own census, and a file static would be one slot
+   for however many corpus threads the harness runs. Written UNCONDITIONALLY for that field's other reason — one
+   struct size in both builds — while the walk itself runs only from a dev assert's argument list, which release
+   drops inside `sizeof` without evaluating.
+   `text` IS COMPOSED WHERE ITS SIZE IS VISIBLE, which is why this is a member array and not a caller's buffer
+   reached through a `char *`: -Wformat-truncation fires only where the destination size and the format literal
+   are both in scope at the call, and a pointer parameter retires it. PROBED RATHER THAN ASSERTED, both ways,
+   because a comment claiming a check is live is worth nothing beside a check that is not: an over-long
+   literal composed into this member through a `JSGCEdgeCensus *` WARNS (clang at -Wall, gcc at -O2 — it is a
+   middle-end warning there, so a gcc `-fsyntax-only` reader gets a false negative), and the same site with a
+   format that fits is silent on both. A control that has never spoken has calibrated nothing. */
+typedef struct JSGCEdgeCensus {
+    JSGCObjectHeader *child;    /* the child being counted — set for the length of one walk */
+    JSGCObjectHeader *worst;    /* the parent that reported it most often, NULL if none did */
+    uint32_t cur;               /* reports from the parent currently being walked */
+    uint32_t worst_n;           /* `cur` at its maximum */
+    uint32_t parents;           /* parents reporting it at least once */
+    char text[232];             /* the verdict, composed for the abort that reads it */
+} JSGCEdgeCensus;
+
 struct JSRuntime {
     /* HOST-REGISTERED STEP MACHINES. JS_CFUNC_STEP_DEF names its machine by an id; the built-in ids index a
        static table and a host component's id continues past STEPDEF_COUNT into this array. It is on the RUNTIME
@@ -354,6 +382,10 @@ struct JSRuntime {
        value a debugger can read on either — and it is one increment on a path that already does a load, a
        branch and a store per edge. */
     uint32_t gc_decref_edge;
+    /* AND THE SAME WALK RE-RUN OVER EVERY PARENT, so the abort names the one that over-reports rather than the
+       one that happened to be standing there. See JSGCEdgeCensus above for why a count is the only thing that
+       tells the mark side and the holder side apart, and why it is here rather than in a static. */
+    JSGCEdgeCensus gc_edge_census;
     /* THE POST-COLLECTION SWEEP'S WORKLIST — see js_gc_sweep. It exists because a collection is a phase in
        which some work is unsafe rather than a phase in which nothing may happen: a realm whose last reference
        goes away INSIDE the collection releases its own references there (that half is phase-safe) and parks
@@ -10210,6 +10242,82 @@ static __maybe_unused const char *js_gc_obj_type_name(int t)
     }
 }
 
+/* COUNT EVERY PARENT'S REPORTS TO ONE CHILD — the callback half, which can reach its census only through the
+   runtime because a JS_MarkFunc is handed a child and nothing else. */
+static __maybe_unused void gc_edge_census_child(JSRuntime *rt, JSGCObjectHeader *p)
+{
+    if (p == rt->gc_edge_census.child)
+        rt->gc_edge_census.cur++;
+}
+
+/* RE-RUN mark_children OVER EVERY GC OBJECT AND COMPOSE THE VERDICT gc_decref_child's abort prints.
+   THIS IS SAFE TO RUN AT THE MOMENT THE ACCOUNTING BREAKS, and that is a property of the pass rather than a
+   hope: the decref pass FREES NOTHING — a zero refcount only moves a header onto tmp_obj_list — so the graph
+   here is structurally exactly what it was when the collection started, and mark_children is the same walk the
+   collector already runs over the same list three times per collection with three different callbacks. A
+   fourth with a counting one is that operation and not a new capability.
+   BOTH LISTS, because gc_decref has already MOVED every parent it finished whose own refcount reached zero,
+   and a census that read gc_obj_list alone would under-count exactly the parents furthest through the walk —
+   which is the half most likely to hold the second edge.
+   THE VERDICT IS THE WHOLE POINT AND IT IS A PARTITION, not a hint: >1 report from ONE parent is a mark
+   function reporting a field it dup'd once, and 1 report from EVERY parent is a store that took no reference
+   or gave one back without clearing the field naming it. Those take opposite work, and an abort that names
+   only the tipping parent cannot say which — the kind of that parent is decided by gc_obj_list order and has
+   been measured naming different kinds for one defect. A third arm exists because a zero here is its own
+   finding: an edge reported by something on NEITHER list is not the same question as either.
+   IF THIS WALK ITSELF ABORTS, READ IT AS AN EARLIER REPORT AND NOT AS THE WALK BEING UNSAFE: it reaches
+   every object, including ones the decref pass has not got to yet, so a DCHECK inside a mark function
+   (mark_children's open-cell one, its unknown-kind abort) fires here on an object that would have tripped
+   it moments later. What it names is a real invariant and the census is simply standing where the
+   collector was going.
+   THE THREE ARMS AND THE ABORT'S LITERAL WERE MEASURED AGAINST APICLIENT_QJS_REASON_CAP RATHER THAN
+   EYEBALLED, because this exact message has been cut before and what a cut ate was the clause naming the
+   remedy. Worst case over every arm — every `%p` at a full 16-digit address, every kind name at the
+   longest string js_gc_obj_type_name can return, every ordinal at its widest — the longest arm composes
+   to 206 bytes into a 232-byte field and the whole reason to 488 into a 512-byte cap. A clause added to
+   either without re-running that arithmetic is one that may arrive as `[reason truncated]`. */
+static __maybe_unused const char *gc_edge_census_run(JSRuntime *rt, JSGCObjectHeader *child)
+{
+    JSGCEdgeCensus *c = &rt->gc_edge_census;
+    struct list_head *heads[2], *el;
+    const char *wname;
+    int i;
+
+    c->child = child; c->worst = NULL; c->cur = 0; c->worst_n = 0; c->parents = 0;
+    heads[0] = &rt->gc_obj_list;
+    heads[1] = &rt->tmp_obj_list;
+    for (i = 0; i < 2; i++) {
+        list_for_each(el, heads[i]) {
+            JSGCObjectHeader *q = list_entry(el, JSGCObjectHeader, link);
+            c->cur = 0;
+            mark_children(rt, q, gc_edge_census_child);
+            if (c->cur != 0) {
+                c->parents++;
+                if (c->cur > c->worst_n) { c->worst_n = c->cur; c->worst = q; }
+            }
+        }
+    }
+    c->child = NULL;   /* the field means something only for the length of the walk above */
+    if (c->parents == 0) {
+        snprintf(c->text, sizeof c->text,
+                 "RE-WALK: NO object on either GC list reports this child — the edge came from a holder on "
+                 "neither, which is a third finding and not either of the two below");
+    } else if (c->worst_n > 1) {
+        wname = js_gc_obj_type_name(JS_GC_TYPE(c->worst));
+        snprintf(c->text, sizeof c->text,
+                 "RE-WALK: %u parents report this child; %s(%d) %p reports it %ux — MARK-side over-report: read "
+                 "that kind's mark function for a field marked and never dup'd",
+                 (unsigned)c->parents, wname ? wname : "kind no enum names",
+                 (int)JS_GC_TYPE(c->worst), (void *)c->worst, (unsigned)c->worst_n);
+    } else {
+        snprintf(c->text, sizeof c->text,
+                 "RE-WALK: %u parents report this child, each exactly ONCE — HOLDER-side: one of those %u stores "
+                 "took no reference, or gave one back without clearing the field naming it",
+                 (unsigned)c->parents, (unsigned)c->parents);
+    }
+    return c->text;
+}
+
 static void gc_decref_child(JSRuntime *rt, JSGCObjectHeader *p)
 {
     /* EVERY EDGE mark_children REPORTS MUST BE ONE THE PARENT HOLDS A COUNTED REFERENCE FOR — that is the
@@ -10236,12 +10344,12 @@ static void gc_decref_child(JSRuntime *rt, JSGCObjectHeader *p)
        APICLIENT_QJS_REASON_CAP (quickjs-check.h, 512 — NOT the host emitter's, which is 3776 and would not
        have cut anything): the old reason composed to 532 bytes and arrived as `[reason truncated: 511 of 532
        bytes]`, so the clause naming the producers was the half cut out of every log that carried this abort.
-       THIS RECORD RETIRES WHEN THE ASSERT CAN NAME THE OVER-MARKING PARENT RATHER THAN THE TIPPING ONE, which
-       is a walk this file does not have: on the failing branch, re-run mark_children over the whole
-       gc_obj_list with a counting callback and report every parent that reports THIS child, with its count.
-       A parent reporting it twice is named outright; where every parent reports it once the defect is on the
-       holder side and the list is the set of stores to read. Until that exists the sentence above is the only
-       thing standing between the next reader and the mark function this one sent a lane to.
+       THAT RECORD ASKED FOR A WALK NAMING THE OVER-MARKING PARENT RATHER THAN THE TIPPING ONE, AND
+       gc_edge_census_run IS IT — so what is left here is the incident and not the gap. The verdict it composes
+       is a PARTITION and the abort now carries it: more than one report from one parent names that parent, and
+       exactly one from every parent says the defect is on the holder side and how many stores there are to
+       read. The paragraph above stays because the census answers the question but does not stop a reader
+       drawing the retired conclusion from the address in front of them.
        THIS SAID "JS_REF_COUNT(p) > 0", WHICH IS ITS OWN CONDITION SPELLED TWICE. A reader meeting it learned
        neither what invariant had broken nor where to look, and this callback is reached from every gc_mark in
        the engine — so the message named one line for the whole object graph and the crash had to be
@@ -10249,6 +10357,13 @@ static void gc_decref_child(JSRuntime *rt, JSGCObjectHeader *p)
        of mark functions worth reading, and the two pointers are where a debugger starts. The parent is read
        from the runtime rather than derived here, because a callback cannot see its caller: see
        JSRuntime.gc_decref_parent and gc_decref_edge.
+       THE PARENTHESISED NUMBER AFTER EACH NAME IS THE GC-OBJECT-TYPE ORDINAL AND NOT A REFCOUNT, which two
+       readers of one log have now read as one — `async_function(4)` is "gc type 4, which is async_function",
+       the name and the number being the same field printed twice. The `class` is printed only where that type
+       is JS_OBJECT and is -1 otherwise, so it can never describe a parent that is an activation record, a
+       shape or a cell; a reading on which the child and the parent came out as the same CLASS is one the
+       format string cannot make. The redundancy is deliberate — js_gc_obj_type_name returns NULL for a value
+       no kind names, and a corrupted 7-bit field is then still readable as the raw number.
        THE CHILD'S CLASS IS REPORTED BECAUSE "a js_object" IS EVERY OBJECT IN THE ENGINE. The class id is the
        one field that turns it into a handful of mark functions and one finalizer, it is a plain integer in an
        allocation the sweep has not touched (a zero refcount only moves a header to tmp_obj_list), and it is
@@ -10257,10 +10372,8 @@ static void gc_decref_child(JSRuntime *rt, JSGCObjectHeader *p)
     rt->gc_decref_edge++;   /* 1-based, and BEFORE the assert so the number names THIS edge */
     DCHECKF(JS_REF_COUNT(p) > 0,
             "a mark edge with no counted reference behind it: refcount hit 0 before the walk finished its "
-            "edges. CHILD %p %s(%d) class %d; PARENT %p %s(%d) edge #%u. THE PARENT IS WHERE THE WALK IS, "
-            "NOT NECESSARILY WHERE THE DEFECT IS: its KIND varies run to run. Count that kind's mark "
-            "function to that edge for a field marked and never dup'd; and read the child's holders for a "
-            "reference released without clearing the field naming it",
+            "edges. CHILD %p %s(%d) class %d; PARENT %p %s(%d) edge #%u — the TIPPING parent, named by "
+            "gc_obj_list order. %s",
             (void *)p,
             js_gc_obj_type_name(JS_GC_TYPE(p)) ? js_gc_obj_type_name(JS_GC_TYPE(p)) : "kind no enum names",
             (int)JS_GC_TYPE(p),
@@ -10272,7 +10385,8 @@ static void gc_decref_child(JSRuntime *rt, JSGCObjectHeader *p)
                        : "kind no enum names")
                 : "none (not the decref pass)",
             rt->gc_decref_parent ? (int)JS_GC_TYPE(rt->gc_decref_parent) : -1,
-            (unsigned)rt->gc_decref_edge);
+            (unsigned)rt->gc_decref_edge,
+            gc_edge_census_run(rt, p));
     JS_REF_COUNT(p)--;
     if (JS_REF_COUNT(p) == 0 && JS_GC_MARK(p) == 1) {
         list_del(&p->link);
