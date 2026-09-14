@@ -7945,6 +7945,38 @@ static inline long step_unit_over_total(void)
    lesson made checkable rather than restated. A total incremented on the line beside the bucket would be
    equal by construction and would assert nothing at all. */
 static long g_steps;
+/* …AND WHY A TURN DID NOT END A UNIT OF WORK, WHICH IS THE THREE-STATE ANSWER BEHIND `g_units_done`'s
+   ONE-STATE ZERO. The unit boundary in the dispatch loop is a CONJUNCTION of three clauses — no live frame, no
+   parked continuation on the runtime, no microtask checkpoint still owed — and `g_units_done` counts only the
+   turns where all three held. When it reads low, nothing says WHICH clause refused, and the three take
+   OPPOSITE work:
+
+     a LIVE FRAME says the member is inside a program and the turn advanced it; the trial is still running and
+       this is the state `resume-program` is the arm of. A frontier of forks is framed by construction
+       (engine_sibling_assemble copies the frame taken AT the branch), so this clause refusing in bulk is the
+       frame gate showing up in a throughput row and NOT a thread that did nothing.
+     a PARKED CONTINUATION says the member is suspended on an await or a host reply — a question about what the
+       flow is waiting for, one component away from the scheduler.
+     a CHECKPOINT STILL OWED says the turn is not over: §8.1.4.4 "Calling scripts"' clean up after running
+       script step 3 performs a microtask checkpoint when the stack empties, and the unit ends when the QUEUE
+       does, so the flow's own reactions are eligible and unrun.
+
+   THE RECORDING POINT CANNOT MOVE, WHICH IS WHY THIS IS A SECOND FIELD AND NOT A RELOCATION. `g_units_done` is
+   raised beside `flow_credit_visit`, whose credit IS §scheduler's optimism denominator — a visit is a
+   COMPLETED unit — so hoisting it ahead of the gate would give the number a different meaning and leave the
+   old one unread. What a gated count owes instead is its DISCRIMINATOR published beside it.
+
+   AND THEY PARTITION `g_steps` EXACTLY, which is what makes them counters rather than three more numbers. The
+   boundary is evaluated once per dispatch, on a straight line between flow_step's return and the credit — no
+   `continue`, `break` or `return` stands between them — and `g_steps` is raised at flow_step's own entry, so
+   every turn lands on exactly one of these four. The identity is asserted at the credit, where all four are in
+   one hand: the DOCUMENT carries `_unitsDone` and `steps` in two different objects, so a reader composing the
+   split across them is composing it across two censuses that share no identity unless this line holds it.
+   KEYED SO AN OLD QUERY CANNOT SILENTLY GAIN THEM: the names below fall outside `stepUnit*` and `_unitsDone`,
+   so a script keyed on either measures exactly what it measured before these rows existed. */
+static long g_unit_mid_program;      /* …the member held a live frame: inside a program, the trial continues */
+static long g_unit_parked;           /* …the runtime held a parked continuation: suspended on an await/reply */
+static long g_unit_checkpoint_owed;  /* …the flow still owed its microtask checkpoint: the turn is not over */
 /* …AND WHAT THOSE STEPS COST, IN THE SLICE'S OWN MEASURE. See EngineStepUnitRuns' `step_us` in solver/engine.h
    for what the quantity covers, why the reading is a RATIO against `g_steps` and never a total, and why it is
    in that struct rather than beside any other census row. Declared here because this is where its denominator
@@ -9790,6 +9822,13 @@ void engine_step_unit_runs(EngineStepUnitRuns *out)
     out->sched_us = g_sched_us;
     out->slice_overruns = g_slice_over;
     for (i = 0; i < STEP_UNIT_N; i++) out->over_arms[i] = g_step_unit_over[i];
+    /* AND THE UNIT BOUNDARY'S REFUSAL ARMS, TAKEN IN THE SAME READING AS THE `steps` THEY PARTITION — for
+       `step_us`' reason one line up and with a sharper edge: these three are read against a denominator that
+       the dispatch loop moves, so a copy taken one call later than `out->steps` would be a split of one
+       population reported against the size of another. */
+    out->unit_mid_program     = g_unit_mid_program;
+    out->unit_parked          = g_unit_parked;
+    out->unit_checkpoint_owed = g_unit_checkpoint_owed;
     /* THE CONTAINMENT, ASSERTED WHERE BOTH ARE IN ONE HAND — a count of turns cannot exceed the turns, and a
        subset larger than its population is the one arithmetic tell §CLAUDE.md names as free. It is the same
        obligation the identity below discharges for the two time arms: a fraction whose numerator is raised at
@@ -11133,7 +11172,20 @@ static int engine_sched_slice(void) {
                    "notify below would run on another flow's suspended activations and the visit credit "
                    "would be spent on the wrong member; and the aging charge further down would demote a "
                    "flow that did not burn the time and leave the one that did holding its rank");
-            int unit_ended = !cur->frame && !JS_HasParkedFlow(JS_GetRuntime(ctx)) && !flow_job_microtask(cur);
+            /* …AND WHICH CLAUSE OF IT ANSWERED, RECORDED HERE BECAUSE HERE IS WHERE IT IS DECIDED. The
+               ladder is the SAME conjunction in the SAME order — a live frame, then the runtime's parked slot,
+               then a checkpoint still owed — written as an if/else so the clause that refused has a name
+               instead of being flattened into one bit. Short-circuiting is preserved exactly: each clause is
+               reached only when every clause above it held, so `JS_HasParkedFlow` is still not asked of a
+               member that holds a frame. `unit_ended` is derived from the ladder rather than computed beside
+               it, because two spellings of one predicate is the drift this local already exists to refuse.
+               ONE ARM PER TURN AND THEREFORE A PARTITION: see g_unit_mid_program for why the four counters sum
+               to `g_steps` and where that is asserted. */
+            int unit_ended;
+            if (cur->frame)                                { g_unit_mid_program++;     unit_ended = 0; }
+            else if (JS_HasParkedFlow(JS_GetRuntime(ctx))) { g_unit_parked++;          unit_ended = 0; }
+            else if (flow_job_microtask(cur))              { g_unit_checkpoint_owed++; unit_ended = 0; }
+            else                                             unit_ended = 1;
 
             /* …AND THE STEP OF "PERFORM A MICROTASK CHECKPOINT" THAT COMES FIRST, WHICH WAS NOT HERE AT ALL.
                The algorithm runs the microtask queue to empty and then, verbatim: "For each environment
@@ -11309,6 +11361,25 @@ static int engine_sched_slice(void) {
                whole frontier again to run its own checkpoint. flow_credit_visit asserts it at the origin so no
                future credit site can reintroduce it; this is the predicate that satisfies the assert. */
             if (unit_ended) { flow_credit_visit(cur); g_units_done++; }
+            /* AND THE FOUR ARMS OF THE UNIT BOUNDARY PARTITION THE DISPATCHES, asserted HERE because this
+               is the line the fourth arm is written on and therefore the first instant all four describe this
+               turn. `g_steps` counted it at flow_step's own entry and the ladder above put it on exactly one
+               refusal arm or on none; nothing between the two can `continue`, `break` or `return`, which is
+               what makes this an identity rather than an expectation.
+               WHAT IT CATCHES is a fourth reason to decline a unit added to that conjunction without an arm —
+               after which `_unitsDone` reading low would once again be three states behind one answer, and the
+               reader composing the split across the document's two objects would be composing it out of a
+               total that no longer accounts for every turn. It also catches a nested dispatch: a hook run
+               between the boundary and this line that stepped a flow would move `g_steps` under a turn already
+               charged, which is the same thing `sum(arms) == steps` above fires on and is worth naming twice
+               because the two would fail for one cause. */
+            DCHECKF(g_units_done + g_unit_mid_program + g_unit_parked + g_unit_checkpoint_owed == g_steps,
+                    "the unit-of-work boundary's arms do not partition the dispatches (%ld ended + %ld "
+                    "mid-program + %ld parked + %ld checkpoint-owed against %ld steps) — the boundary is "
+                    "evaluated once per turn on a straight line from flow_step's return to this credit and "
+                    "`g_steps` is raised at that step's entry, so a difference is a clause added to the "
+                    "conjunction with no arm, or a dispatch that happened between the two",
+                    g_units_done, g_unit_mid_program, g_unit_parked, g_unit_checkpoint_owed, g_steps);
             /* THE COOPERATIVE-QUANTUM CONTRACT, ASSERTED AT ITS SITE. A flow_step is supposed to reach a
                suspend point — a bytecode back-edge where the preempt hook runs, a step machine's boundary —
                within the quantum, which is what makes the frontier parkable at all. A path with NO suspend

@@ -1349,6 +1349,33 @@ typedef struct {
      * is uninterrupted because the BYTECODE it is running offered no raise point, and only the page decides
      * that. */
     long over_arms[STEP_UNIT_N];
+    /* WHY THE TURNS THAT DID NOT END A UNIT OF WORK DID NOT — the three-state answer behind `_unitsDone`
+     * reading low, and the rows a reader needs before that number means anything at all.
+     *
+     * `_unitsDone` is a GATED count: the dispatch loop credits a unit only when a conjunction of three clauses
+     * holds, so a low reading is consistent with a thread that did nothing AND with a thread that spent every
+     * turn advancing programs it never got to finish. Those take opposite work — the first is a question about
+     * where the turns went, the second is the frame gate showing up in a throughput row — and until these rows
+     * existed the document could not tell them apart, because the refusal side of that gate was counted
+     * nowhere. `mid_program` dominating is the second reading, and it is the expected shape of a forking
+     * frontier: an arm is born holding the frame taken AT its branch, so it is inside a program by
+     * construction.
+     *
+     * THEY ARE IN THIS STRUCT BECAUSE `steps` IS, AND `steps` IS THE DENOMINATOR. The four arms —
+     * these three and the credited one — sum to `steps` exactly, asserted in engine.c at the line the
+     * credited arm is written on, where all four are in one hand. That matters more than tidiness: the
+     * document carries `_unitsDone` and `steps` in two DIFFERENT objects, so a reader composing the split
+     * across them is composing it across two censuses that share no identity, and the assert is the only
+     * thing that makes the composition legitimate. The credited arm is deliberately NOT repeated here — a
+     * second spelling of one number in one document is the drift the record-field gate exists to catch.
+     *
+     * THEY DECIDE NOTHING AND BOUND NOTHING (§NO BOUNDS). No weight term reads them, no fork carries them and
+     * nothing declines work on them; a per-turn refusal count is exactly the shape a watchdog on a flow that
+     * "never finishes anything" would be built from, which is why that is said here as well as at the
+     * counters. A frontier whose members are all mid-program is the design running, not a population to shed. */
+    long unit_mid_program;      /* …the member held a live frame: inside a program, the trial still running */
+    long unit_parked;           /* …the runtime held a parked continuation: suspended on an await or a reply */
+    long unit_checkpoint_owed;  /* …the flow still owed its microtask checkpoint: its own reactions unrun */
 } EngineStepUnitRuns;
 void engine_step_unit_runs(EngineStepUnitRuns *out);
 
