@@ -1591,8 +1591,14 @@ async function frontierRederive(e) {
        is what the request is, and `safe-fetch.js` composes the two (see `_credentialedOf`). Stating it is
        what lets that composition REQUIRE a mode wherever the session pays, which is the rule that stops a
        credential question being answered by silence. */
+    /* AND THE REACH GRADE IS THE ENTRY'S OWN, WHICH IS THE SAME WORD AND NOT A COPY OF IT. No document
+       ISSUED this request — a parked residue is being re-fetched — so the context it is made from is the
+       document this entry IS, and the grade it was parked under is the whole of what this zone knows about
+       how that document was reached. Reading a different word here would re-fetch a residue under a
+       permission nobody granted it, which is the failure `frontierProvenance` exists to make impossible. */
     try { r = await self.safeFetch(e.sourceUrl, { pageUrl: e.sourceUrl, pageOrigin: e.origin,
                                                   destination: "document", provenance: frontierProvenance(e),
+                                                  docReach: frontierProvenance(e),
                                                   pinned: "unstated",
                                                   credentials: "include",
                                                   credentialed: navigationCarriesSession(e.sourceUrl, e.origin) }); }
@@ -2143,7 +2149,14 @@ function navigationCarriesSession(absUrl, principalOrigin) {
    EMPTINESS IS NOT JUDGED HERE. An OK response with a zero-length body is a perfectly ordinary empty Document
    under §7.4.5, and refusing one is a SEED's rule (a document with no bytes cannot be the bundle), stated at
    the seed rather than imposed on every child navigable a page creates. */
-async function navigationLoad(u, base, principalUrl, principalOrigin, provenance) {
+/* `fromReach` IS HOW THE DOCUMENT ISSUING THIS NAVIGATION WAS ITSELF REACHED, AND IT IS NOT `provenance`.
+   That word is the ENGINE's, about this navigation act; this one is THIS ZONE's, about a load it performed
+   before the issuing document existed, and `safe-fetch.js` reads both because a page this tool chose to open
+   goes on making requests the engine correctly grades `observed`. It is trailing, so no operand shifts, and a
+   caller that omits it composes `undefined` — which `_docReachOf` refuses with a fatal CHECK rather than
+   taking a permissive arm. What the document this load PRODUCES will be reached under is the JOIN of the two
+   (`safeFetchReachJoin`), composed by whoever states that document's analyze record. */
+async function navigationLoad(u, base, principalUrl, principalOrigin, provenance, fromReach) {
   /* THE ADDRESS THIS LOAD ASKED FOR, RESOLVED ONCE AND UP HERE BECAUSE EVERY ARM BELOW OWES A URL. §7.4.5
      determines the loaded Document's ORIGIN over the RESPONSE's URL, and a navigable whose load did not load
      still gets a Document — so "there was no response" is not a reason to answer without one, and the honest
@@ -2244,8 +2257,12 @@ async function navigationLoad(u, base, principalUrl, principalOrigin, provenance
        is what the request is, and `safe-fetch.js` composes the two (see `_credentialedOf`). Stating it is
        what lets that composition REQUIRE a mode wherever the session pays, which is the rule that stops a
        credential question being answered by silence. */
+    /* AND THE ISSUING DOCUMENT'S REACH GRADE, WHICH IS `fromReach` AND NOT THE JOIN: the chokepoint asks
+       about the document this request was made FROM, and for a navigation that is the one that initiated it.
+       The join names the document these bytes will BECOME, which does not exist yet. */
     const r = await self.safeFetch(abs, { pageUrl: principalUrl, pageOrigin: principalOrigin,
                                           destination: "document", provenance: provenance,
+                                          docReach: fromReach,
                                           /* `unstated` BECAUSE THIS PROVENANCE IS A VARIABLE. A navigation's
                                              word comes from `engine_provenance_of_running_path` by way of a
                                              notice, and a notice is not a park, so no witness mark was ever
@@ -3127,8 +3144,24 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
          off the pending line. Their conjunction is `safe-fetch.js`'s, and the mode can only ever narrow it —
          so relaying it takes no new decision today and is what makes the `omit` parks refusable, and the
          `include` ones honest, the day the principal above is wired. */
+      /* AND HOW THE DOCUMENT THIS PARK BELONGS TO WAS REACHED — THE ONE FACT THE ENGINE CANNOT STATE, AND
+         THE ONE THE `observed` DEFAULT ARM IS NOW A CONJUNCTION OVER. `provenance` above is the engine's word
+         about the flow's path INSIDE this document; `msg.provenance` is this zone's word about the load that
+         produced the document, performed before the instance existed. A page this zone chose to open goes on
+         making its own `fetch()`es and the engine grades every one of them `observed`, CORRECTLY — so
+         without this the chokepoint would judge the second act with the first act's word, and one permission
+         would cover two populations with the person's surface showing one.
+         NAMED RESIDUAL. WHAT IS NOT COVERED: a same-origin child navigable that JOINS this instance
+         (`engineJoin`) is a second Document in one agent, and this closure holds the message of the document
+         the instance was ROOTED at — so a joined document reached under a weaker grade has its subresources
+         judged under the root's. WHAT THE NEXT DIFF BUILDS: the park's own document name on the pending line
+         beside its provenance, so this lookup is per-Document rather than per-instance; the engine already
+         routes deliveries by that name. HOW ITS ABSENCE WOULD SHOW: at an origin widened for one reach grade
+         and not another, a person watching which requests fire sees a frontier that drains for documents
+         inside one instance and refuses the identical request made from a top-level document reached the
+         same way. */
       const opts = { pageUrl: msg.sourceUrl, destination, provenance, pinned, credentials,
-                     credentialed: false };
+                     docReach: msg.provenance, credentialed: false };
       const r = await self.safeFetch(abs, opts);
       /* THE CHOKEPOINT'S RECORD IS FIXED — safe-fetch.js returns {ok,status,statusText,headers,body,urlList}
          on every path it has, including every blocked one. `if (!r || typeof r.body !== "string") return null`
@@ -3242,7 +3275,7 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
      would have loaded from one that exists because a gate was forced, and this zone was fetching both, with
      cookies, for as long as the record said nothing. */
   const fetchedDocument = async (u, provenance) => {
-    const r = await navigationLoad(u, msg.sourceUrl, msg.sourceUrl, msg.origin, provenance);
+    const r = await navigationLoad(u, msg.sourceUrl, msg.sourceUrl, msg.origin, provenance, msg.provenance);
     return { url: r.url, headers: r.headers, bytes: r.bytes };
   };
   /* THE ROUTING TABLE IS THE POOL. `docId` is which document this instance holds and `origin` is the value
@@ -3381,8 +3414,12 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
          matters — a flow that pinned a witness has `path_forced` set by the nesting, so precisely the records
          that say `forced` are the ones whose address may hold our bytes — and `pinned` would be a wrong
          sentence the other way. safe-fetch.js's `_pinnedOf` carries the residual and what retires it. */
+      /* AND THE DOCUMENT'S OWN REACH GRADE BESIDE IT, for the reason `fetched` states in full one function
+         up: an XHR is a request the page made, so the engine grades it `observed` whatever this zone did to
+         reach the page — and the chokepoint's default arm asks both. */
       const r = await self.safeFetch(abs, { pageUrl: msg.sourceUrl, destination: "",
                                             provenance: q.provenance, pinned: "unstated",
+                                            docReach: msg.provenance,
                                             credentials: q.credentials, headers: q.headers });
       DCHECK(r && typeof r === "object" && r.body instanceof Uint8Array && typeof r.status === "number" &&
              r.headers && typeof r.headers === "object",
@@ -3469,6 +3506,22 @@ async function engineRoot(eng, code, html, msg, persist, docName, topLevelUrl, i
   eng.lines = lines; eng.fkey = fkey; eng.prior = prior; eng.persist = persist;
   eng.fetched = fetched; eng.fetchedDocument = fetchedDocument; eng.fetchedXhr = fetchedXhr;
   eng.code = code; eng.html = html; eng._forceparkSteps = _forceparkSteps;
+  /* AND THE DOCUMENT'S OWN REACH GRADE, ASSERTED HERE BECAUSE THIS IS THE ONE DOOR EVERY INSTANCE GOES
+     THROUGH AND THE THREE CLOSURES BOUND TWO LINES ABOVE ALL READ IT. `fetched`, `fetchedDocument` and
+     `fetchedXhr` state it to the chokepoint on every request this document ever makes, so a composer that
+     left it off would abort in `_docReachOf` at whichever park happened to run first — a crash naming the
+     chokepoint for a record five functions away. Asserted at the ORIGIN it names the composer instead: the
+     ambient seed, a declared route, a child navigable, a swapped-to document, or a cold rehydration.
+     IT IS NOT SCOPED TO RUNS THAT PERSIST, which is what the park-time assert below it used to be. A run
+     that parks nothing still makes requests, and the grade decides whether they fire. */
+  DCHECK(msg.provenance === PROVENANCE_OBSERVED || msg.provenance === PROVENANCE_DERIVED ||
+         msg.provenance === PROVENANCE_FORCED,
+         "a document is being rooted with the reach grade `" + String(msg.provenance) + "`, which is none of " +
+         "CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's three — every composer of an AST_ANALYZE states one " +
+         "(the ambient seed `observed`, a declared route the join of the declaring document's grade and its " +
+         "own word, a child navigable and a swapped-to document the same join, a rehydration the word it was " +
+         "parked under), so an absent one is a SIXTH composer nobody told, and every request this document " +
+         "makes would be refused at the chokepoint under a word it never stated");
   DCHECK(eng.msg === msg,
          "the reservation this instance is being rooted into carries a different message record than the one " +
          "this document was parsed, fetched and keyed from — the reservation's is what hostNotice stamps a " +
@@ -4163,8 +4216,17 @@ async function hostNotice(eng, line) {
            "carries is the one the creating engine ASKED for, and the principal this zone stamps on a peer " +
            "instance has to be the origin of the URL its bytes CAME from");
     const _childBytes = loaded.bytes === null ? new Uint8Array(0) : loaded.bytes;
+    /* AND HOW THIS DOCUMENT WAS REACHED, WHICH IS THE JOIN AND NOT THE NOTICE'S OWN WORD. This document
+       exists because the creating one did, so `safeFetchReachJoin` composes it under the WEAKER of the
+       creating document's grade and the engine's word for the navigation — taking `f[15]` alone would let a
+       child of a document this zone chose to open read as one the person navigated to, after which every
+       request that child makes is relayed by the default arm this grade exists to hold.
+       IT IS STATED ON EVERY ANALYZE RECORD NOW AND NOT ONLY ON THE ONES THAT PERSIST. `fetched` and the XHR
+       relay read it off this message for every request the document makes, so a composer that left it off
+       would hand the chokepoint `undefined` and abort at the first park rather than at this line. */
     const msg = { type: "AST_ANALYZE", pageHtml: _childBytes, sourceUrl: loaded.url,
                   origin: originOf(loaded.url), groupId: eng.groupId,
+                  provenance: self.safeFetchReachJoin(eng.msg.provenance, f[15]),
                   responseHeaders: {}, credentialed: !!(eng.msg && eng.msg.credentialed) };
     /* THE RESPONSE'S OWN HEADER LIST, WHOLE. The creator's inherited container does NOT go in here — it is
        relayed as a container of its own below, for the reason stated there. */
@@ -4434,9 +4496,18 @@ async function hostNotice(eng, line) {
     DCHECK(typeof swapped.url === "string" && swapped.url !== "",
            "the swapped-to document load answered no RESPONSE URL — §7.1.3.2 provisions a new instance from " +
            "the address the Document is at, which after a redirect is not the address the swap requested");
+    /* AND HOW THIS DOCUMENT WAS REACHED, WHICH IS THE JOIN AND NOT THE NOTICE'S OWN WORD. This document
+       exists because the creating one did, so `safeFetchReachJoin` composes it under the WEAKER of the
+       creating document's grade and the engine's word for the navigation — taking `f[4]` alone would let a
+       child of a document this zone chose to open read as one the person navigated to, after which every
+       request that child makes is relayed by the default arm this grade exists to hold.
+       IT IS STATED ON EVERY ANALYZE RECORD NOW AND NOT ONLY ON THE ONES THAT PERSIST. `fetched` and the XHR
+       relay read it off this message for every request the document makes, so a composer that left it off
+       would hand the chokepoint `undefined` and abort at the first park rather than at this line. */
     const swapMsg = { type: "AST_ANALYZE", pageHtml: swapped.bytes === null ? new Uint8Array(0) : swapped.bytes,
                       sourceUrl: swapped.url, origin: originOf(swapped.url),
                       groupId: "swap:" + (_nextSwapGroup++),
+                      provenance: self.safeFetchReachJoin(eng.msg.provenance, f[4]),
                       responseHeaders: {}, credentialed: !!(eng.msg && eng.msg.credentialed) };
     for (const _n of Object.keys(swapped.headers)) swapMsg.responseHeaders[_n] = swapped.headers[_n];
     /* NO INHERITED POLICY LINE HERE, and its absence is the spec rather than a field this record forgot: the
@@ -4546,8 +4617,13 @@ async function hostNotice(eng, line) {
        ADDRESS, and this is asking whose SESSION pays — SECURITY.md's credentialed-read principal, which is
        the one value in this zone that may never be parsed out of an address. Using the derived one here
        would answer `true` for a sandboxed document the browser refused to give an origin to. */
+    /* AND THE DECLARING DOCUMENT'S OWN REACH GRADE, WHICH IS THE FACT THE REAL REQUEST WILL STATE — a
+       hypothetical answered from fewer facts than the request makes is a permission question about a
+       different request. It is `eng.msg.provenance` and NOT the join: this ask is about a request issued BY
+       the declaring document, and the join names the document the load would produce. */
     const _seedRefusal = self.safeFetchFiringRefusal({
       url: f[1], destination: "document", provenance: f[2], pinned: "unstated",
+      docReach: eng.msg.provenance,
       credentialed: navigationCarriesSession(f[1], eng.origin), headers: null });
     if (_seedRefusal) {
       console.warn("[bridge] a route declaration for `" + f[1] + "` is refused by this origin's egress " +
@@ -4570,8 +4646,12 @@ async function hostNotice(eng, line) {
        through. `navigationLoad` asserts the vocabulary on the way out, so an entry that lost the field would
        stop the admission at the load rather than fetching under a provenance nobody wrote. */
     if (!_seeds.has(f[1]))
+      /* AND THE DECLARING DOCUMENT'S REACH GRADE TRAVELS WITH THE ITEM FOR THE SAME REASON THE TWO
+         PRINCIPALS DO — §scheduler's "an operation that becomes a work item takes its inputs with it". The
+         load happens rounds later and the engine that declared the route may be gone, so a read of the pool
+         at that point would answer about whatever instance is standing there instead. */
       _seeds.set(f[1], { url: f[1], principalUrl: eng.msg.sourceUrl, principalOrigin: eng.origin,
-                         provenance: f[2] });
+                         provenance: f[2], reach: eng.msg.provenance });
     /* AND NOTHING IS KICKED. A `_hostKick()` here would be a call that cannot do anything: this router runs
        inside `serviceFetch`, which runs inside the ONE scheduling loop, so `_hostDriving` is true and the kick
        returns on its first line — a computed call with no effect, which is the read-with-no-writer defect
@@ -5935,7 +6015,7 @@ const _hostOps = {
         /* AND SO IS THE PROVENANCE, for the identical sentence: the engine that declared this route stated
            what its path made the address, and the load is decided from that word and not from the address. */
         const loaded = await navigationLoad(seed.url, seed.principalUrl, seed.principalUrl,
-                                            seed.principalOrigin, seed.provenance);
+                                            seed.principalOrigin, seed.provenance, seed.reach);
         /* AND THE SAME THREE REFUSALS A SEEDED DOCUMENT ALWAYS OWES ITS READER, in the same order and for the
            same reasons stated at the live seed: the chokepoint's own `unavailable`; a response that landed on
            ANOTHER ORIGIN (which is a Document of origin B about to be seated in a cluster keyed on origin A,
@@ -5979,7 +6059,12 @@ const _hostOps = {
                       groupId: "seed:" + (_nextSeedGroup++), responseHeaders: loaded.headers,
                       topLevelUrl: loaded.url,
                       credentialed: navigationCarriesSession(loaded.url, seed.principalOrigin),
-                      provenance: seed.provenance,
+                      /* AND IT IS THE JOIN, FOR THE REASON THE CHILD-NAVIGABLE RECORD STATES: a route only
+                         the bundle names, declared from a document this zone chose to open, is reached under
+                         both. At every setting reachable today the declaring document is `observed` and the
+                         join is the identity, so the stored grade is unchanged — the pairs it separates are
+                         the ones a widening creates. */
+                      provenance: self.safeFetchReachJoin(seed.reach, seed.provenance),
                       persist: true };
         DCHECK(hostClusterOf(clusterKeyOf(msg)) === null,
                "a declared route minted a browsing-context group this pool already runs an instance for — the " +
@@ -6164,14 +6249,18 @@ const _hostOps = {
          that no build able to write one could have parked a forced address; that argument holds only while
          EVERY entry a live build writes states a word, which is this line. A composer that stopped stating it
          would not be caught downstream — its entry would quietly rejoin the population whose absence reads as
-         "written by an older store" and be re-fetched under a grade nobody granted it. */
+         "written by an older store" and be re-fetched under a grade nobody granted it.
+         IT IS NOT REDUNDANT WITH `engineRoot`'s, AND THE DIFFERENCE IS WHICH CONTRACT EACH IS ABOUT. That one
+         is owed to the three fetch closures, which read this word on every request; this one is owed to the
+         STORE, whose entries outlive the build that wrote them. A diff that made a document's grade
+         per-Document rather than per-instance would move the first and leave this one exactly where it is. */
       DCHECK(eng.msg.provenance === PROVENANCE_OBSERVED || eng.msg.provenance === PROVENANCE_DERIVED ||
              eng.msg.provenance === PROVENANCE_FORCED,
              "a run about to park its residue carries the provenance `" + String(eng.msg.provenance) +
-             "` — every composer of an AST_ANALYZE that PERSISTS states one (the ambient seed `observed`, a " +
-             "declared route the word its own engine stated, a rehydration the word it was parked under), so " +
-             "an absent one is a fourth composer nobody told, and the entry it writes would read back as an " +
-             "older store's and be re-fetched as `derived`");
+             "` — every composer of an AST_ANALYZE states one (the ambient seed `observed`, a declared route " +
+             "and a child navigable the JOIN of the reaching document's grade and their own word, a " +
+             "rehydration the word it was parked under), so an absent one is a composer nobody told, and the " +
+             "entry it writes would read back as an older store's and be re-fetched as `derived`");
       const _parkProvenance = eng.msg.provenance;
       await frontierPut(result._fkey, {
         /* THE TOP-LEVEL CREATION URL IS PART OF THE RECIPE, because a resumed flow must resume into the same
@@ -6757,8 +6846,13 @@ self.astDispatch = async function astDispatch(msg) {
          today. The ADDRESS is the origin's own root, which is the only address this surface has — so the
          `url-authority` row it shows reads `unknown`, and that is exactly what that row means and not a
          statement that this origin's addresses carry none. */
+      /* AND THE REACH GRADE IS `forced` FOR THE PROVENANCE'S OWN REASON — it is the grade a permission is
+         most about, so the row this surface shows as `this request` is the one a person is deciding. It is
+         NOT a claim that any document at this origin was reached that way; it is the hardest case, which is
+         what a control surface owes somebody about to tick a box. */
       const _probe = { url: msg.subject + "/", destination: "", provenance: PROVENANCE_FORCED,
-                       pinned: "unstated", credentialed: false, headers: null };
+                       pinned: "unstated", docReach: PROVENANCE_FORCED,
+                       credentialed: false, headers: null };
       return { success: true, result: {
         origins: self.safeFetchWidenedOrigins(),
         subject: msg.subject, subjectUsable: _subjectUsable,
@@ -6850,8 +6944,11 @@ self.astDispatch = async function astDispatch(msg) {
        an ambient observer contributes), so the person's own browser performed this exact credentialed GET
        seconds ago in this same profile. It is stated HERE, by the zone that knows where the seed came from,
        and never derived inside the loader from the shape of the address. */
+    /* AND `observed` FOR THE ISSUING CONTEXT TOO, WHICH IS A SECOND STATEMENT AND NOT A RESTATEMENT: the
+       browser really navigated to the page this seed came from, which is the same sentence the word beside
+       it makes about the navigation itself. */
     const loaded = await navigationLoad(msg.seedUrl, msg.sourceUrl, msg.sourceUrl, msg.origin,
-                                        PROVENANCE_OBSERVED);
+                                        PROVENANCE_OBSERVED, PROVENANCE_OBSERVED);
     /* THE SEED'S OWN RULE, ON TOP OF THE LOADER'S, AND IT IS THE SEED'S BECAUSE IT IS ABOUT A BUNDLE. §7.4.5
        gives an OK response with a zero-length body a perfectly ordinary empty Document, and a child navigable
        gets exactly that — but a SEEDED document with no bytes cannot be the program this run exists to

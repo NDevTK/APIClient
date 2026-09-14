@@ -448,6 +448,62 @@ function _provenanceOf(opts) {
         "network. State `observed`, `derived` or `forced` and mean it");
   return opts.provenance;
 }
+/* ── AND THE SAME QUESTION ASKED ONE LEVEL OUT: HOW WAS THE DOCUMENT HOLDING THIS REQUEST ITSELF REACHED ──
+   `provenance` is a fact about THIS request. This is a fact about the DOCUMENT it was made from, and the two
+   are INDEPENDENT — which is the whole reason this row exists. A page reached by a route only its own bundle
+   names goes on making its own `fetch()`es, and the engine grades every one of them `observed`, CORRECTLY,
+   because the page really did make them. Nothing in the request says that the document it was made from is
+   one nobody observed being reached.
+   IT IS A SECOND ROW AND NOT A JOIN INTO `provenance`, and the difference is the person's to see. One word
+   carrying both would answer two questions with one bit and settle it by the stricter — CLAUDE.md
+   §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS exactly — and the loss lands where it is least visible: a person
+   reading a refusal could no longer tell "this tool forced this request" from "the page made this request,
+   in a document this tool chose to open". Those are different decisions and a control that cannot spell the
+   difference has taken one of them on the person's behalf.
+   IT IS THE ZONE'S WORD AND NOT THE ENGINE'S, which is why it is an option rather than something read off
+   the pending line. The engine grades a PARK; how the document holding that park was reached is a fact about
+   a load THIS ZONE performed, before any instance existed — so the zone that performed it is the only party
+   that holds it, exactly as it is the only party that holds the browser-stated principal.
+   A `CHECK` FOR `_provenanceOf`'s REASON WORD FOR WORD, and the arm an unstated value falls to is the same
+   one: the default arm below is a CONJUNCTION over this signal and `provenance`, so an absent `docReach`
+   would make that conjunction unsatisfiable and the request would be refused — which sounds conservative and
+   is the wrong failure, because the refusal would name a signal the caller never meant to answer and a
+   person would be shown a row holding a request nobody asked about. State the word. */
+function _docReachOf(opts) {
+  CHECK(typeof opts.docReach === "string" && _PROVENANCE_TYPES.indexOf(opts.docReach) >= 0,
+        "safeFetch was called without stating how the DOCUMENT this request was made from was itself " +
+        "reached: " + JSON.stringify(opts.docReach) + " — it is none of the three CLAUDE.md " +
+        "§A-REQUEST-CARRIES-THE-PROVENANCE declares. This file decides whether to FIRE from it beside the " +
+        "request's own grade, and the two are independent: a page this tool chose to open makes its own " +
+        "`fetch()`es, which the engine grades `observed` because the page really made them. A caller that " +
+        "states only the request's grade is describing half the act");
+  return opts.docReach;
+}
+/* ── AND HOW TWO OF THOSE WORDS COMBINE, DECLARED ONCE BECAUSE BOTH HOSTS COMPOSE ONE ─────────────────────
+   A document reached from inside another document is reached under BOTH assumptions: a child navigable of a
+   page this tool chose to open is a page this tool chose to open, however the engine graded the navigation
+   that created it. So the composition is the WEAKER of the two grades, and it is declared here — in the file
+   that declares the vocabulary — rather than in each host, for the reason every other pair in this project
+   is one function: two right answers to one question is the shape that drifts, and a host that composed its
+   own would be the second copy.
+   THE ORDER IS DECLARED AND NOT READ OFF `_PROVENANCE_TYPES`' POSITIONS. An array index names a member only
+   while the array is fixed, and this one is a vocabulary somebody may extend — so a rank taken from a
+   position would silently re-order the day a fourth word is added between two existing ones. The map is
+   explicit and the assert below is what makes an unranked word a crash rather than a `undefined` that
+   compares false against every `Math.max`. */
+var _REACH_RANK = { observed: 0, derived: 1, forced: 2 };
+function safeFetchReachJoin(outer, own) {
+  CHECK(_PROVENANCE_TYPES.indexOf(outer) >= 0 && _PROVENANCE_TYPES.indexOf(own) >= 0,
+        "two reach grades were composed and one of them is not a word this file declares (" +
+        JSON.stringify(outer) + ", " + JSON.stringify(own) + ") — the composition is what stops a child " +
+        "document of a page this tool chose to open reading as a page the person navigated to, and a word " +
+        "with no rank would compose to `undefined` and be refused by whichever caller stated it");
+  CHECK(typeof _REACH_RANK[outer] === "number" && typeof _REACH_RANK[own] === "number",
+        "a reach grade this file declares carries no rank — the vocabulary and the ordering are two " +
+        "statements and this is where they are made to agree, because a word added to one and not the " +
+        "other composes to nothing while every caller reads it as a grade");
+  return _REACH_RANK[outer] >= _REACH_RANK[own] ? outer : own;
+}
 /* …AND THE NARROWER FACT THE ENGINE STATES BESIDE IT — solver/engine.h's `pinned`/`unpinned`, composed at the
    park from solver/flow.h's `path_pinned`. It says whether the parking flow had DETERMINED some source's value
    on an arm nothing observed before it built this address, so that everything the page computed afterwards may
@@ -527,8 +583,8 @@ function _pinnedOf(opts) {
    A CLOSED SET IS A RESTATEMENT OF WHAT THE BODY READS, AND THE DRIFT DIRECTION IS WHY THAT IS SAFE HERE:
    an option added to the body and forgotten in this list aborts on its AUTHOR's own first call, at the line
    they just wrote — while the failure it closes is silent and belongs to somebody else, later. */
-var _SAFEFETCH_OPTIONS = ["pageUrl", "pageOrigin", "destination", "provenance", "pinned", "credentialed",
-                          "credentials", "headers", "signal", "onChunk"];
+var _SAFEFETCH_OPTIONS = ["pageUrl", "pageOrigin", "destination", "provenance", "pinned", "docReach",
+                          "credentialed", "credentials", "headers", "signal", "onChunk"];
 /* FETCH §2.2.5 "Requests"' CREDENTIALS MODE — "which is `omit`, `same-origin`, or `include`" — and these are
    the same three words `core/fetch/fetch.h`'s `fetch_credentials_token` puts on the pending line, which is
    the only place they are spelled on the engine side. Written here rather than derived because this zone is
@@ -814,6 +870,19 @@ var _SIGNALS = [
      `CHECK` in `_provenanceOf` catches a word outside the three and nothing else. */
   { name: "provenance", gates: true, certainty: "stated", values: _PROVENANCE_TYPES,
     of: function (f) { return f.provenance; } },
+  /* AND HOW THE DOCUMENT THIS REQUEST WAS MADE FROM WAS ITSELF REACHED — see `_docReachOf`. It is the same
+     three words about a DIFFERENT ACT, and the pair is what stops one permission answering for two
+     populations: the row above says whose act this request is, and this one says whose act the document
+     holding it was. A page this tool chose to open goes on making its own `fetch()`es, and every one of them
+     is `provenance=observed` because the page really made them.
+     IT SITS DIRECTLY AFTER `provenance` BECAUSE THE REFUSAL'S ORDER IS THIS LIST'S ORDER, and a person told
+     "this origin does not permit requests of this grade" is owed the one-level-out sentence next rather than
+     after four rows about the address.
+     `stated` AND NOT `certain`: the word is composed by whichever zone performed the document load and
+     relayed to this one, and `_docReachOf`'s CHECK catches a word outside the three and nothing else — the
+     same grade `provenance` carries, for the same reason. */
+  { name: "doc-reach", gates: true, certainty: "stated", values: _PROVENANCE_TYPES,
+    of: function (f) { return f.docReach; } },
   /* WHETHER THE PERSON'S COOKIE JAR PAYS, AND IT MEANS COOKIES AND NOTHING WIDER. `credentials:"omit"`
      strips the jar; it does not strip an `Authorization` header, it does not strip authority carried in the
      address, and it says nothing about lineage — which is why those are their own rows rather than readings
@@ -859,6 +928,13 @@ var _SIGNALS = [
      WOULD SHOW: a person auditing what they permitted at an origin finds every request there reading
      `lineage=unknown`, including the ones whose address the bundle demonstrably built out of a logged-in
      reply, so the row cannot separate the population it exists to separate. */
+  /* AND IT IS NOT THE ROW `doc-reach` ANSWERS, WHICH IS SAID HERE SO NEITHER IS RETIRED AS COVERED BY THE
+     OTHER. `doc-reach` is about an ACT this zone performed — how the document holding this request was
+     reached — and it is fully determined today. This row is about the BYTES of the address: whether the
+     values the bundle composed it out of came back from a response fetched with the person's session. A
+     document reached `observed` routinely computes addresses out of credentialed replies, and a document
+     reached `forced` routinely composes them from its own literals, so neither row bounds the other in
+     either direction. */
   { name: "lineage", gates: true, certainty: "undetermined", values: ["unknown"],
     of: function () { return "unknown"; } },
   /* THE METHOD, WHICH IS A FACT ABOUT THIS TRANSPORT AND NOT A CONTROL. `init` hardcodes `method:"GET"` and
@@ -916,6 +992,30 @@ function _signalRegistryCheck() {
           "gating only where this chokepoint can produce exactly one answer, which is a structural fact " +
           "(`method` is a literal, `invalidity` cannot be stated through a closed option set) and stops " +
           "being true the moment that structure changes. Make it gate");
+  }
+  /* AND THE DEFAULT ARMS ARE CHECKED AGAINST THE SAME REGISTRY, HERE, BECAUSE AN ARM IS A PERMISSION AND A
+     PERMISSION THAT CANNOT MATCH IS A PERMISSION THAT WAS SILENTLY REVOKED. An arm naming a signal this file
+     does not declare compares `undefined` against its value and is false for every request for ever — the
+     page's own `fetch()` would stop being relayed, which is the exact silence §Learning-from-replies has
+     already been measured costing a whole session's parks, with no crash and an empty report. An arm naming
+     a VALUE outside a declared space is the same failure one field over.
+     IT IS A `CHECK` AND NOT A `DCHECK` BECAUSE RELEASE CANNOT PROCEED CORRECTLY THROUGH IT. Every other
+     assert in this function guards a control a person reads; this one guards whether the engine can answer
+     the document it is analysing at all, and the failing arm is one this project's own build shipped. */
+  for (i = 0; i < _DEFAULT_ARMS.length; i++) {
+    CHECK(Array.isArray(_DEFAULT_ARMS[i].when) && _DEFAULT_ARMS[i].when.length >= 1,
+          "a default egress arm states no condition — an arm is a permission matched on the conjunction it " +
+          "names, and one naming none would fire for EVERY request at every origin, which is this file's " +
+          "whole decision deleted by an empty array");
+    _DEFAULT_ARMS[i].when.forEach(function (c) {
+      var why = safeFetchSignalUsable(c.signal, c.value);
+      CHECK(why === null,
+            "a default egress arm names `" + c.signal + "=" + c.value + "`, which this file's registry " +
+            "answers `" + why + "` — an arm is matched by comparing the signal's computed value, so an " +
+            "unknown name compares against `undefined` and an unknown value against nothing: the arm is " +
+            "false for every request for ever, and what it was permitting is refused with no crash, no " +
+            "diagnostic and a report that reads as a page with nothing behind it");
+    });
   }
 }
 /* THE VECTOR FOR ONE REQUEST — every signal's value, computed from the facts this file has already
@@ -983,12 +1083,28 @@ var _DEFAULT_ARMS = [
      who asks, and it is PRECISELY the gated surface this product exists to reach. That is why this arm reads
      the destination ALONE: the `witness` row cannot narrow it, because an arm here is a permission and the
      table below only ever widens. */
-  { signal: "destination", value: "program",
+  { when: [{ signal: "destination", value: "program" }],
     why: "a script, a module import or a lazy chunk is the page loading itself — the app's own code, served " +
          "byte-identically to every visitor, revealing nothing about this person" },
-  { signal: "provenance", value: "observed",
-    why: "the page made exactly this request, so relaying it is this browser being a browser; refusing it " +
-         "would leave the engine unable to answer the document's own fetch" }
+  /* AND THIS ARM IS A CONJUNCTION, WHICH IS WHERE THE SOUNDNESS OF ITS OWN `why` IS NOW STATED RATHER THAN
+     ASSERTED ABOUT THE LIST. It used to name `provenance=observed` alone, and that was sound only while
+     every document had itself been reached observably — a property of the OTHER arms, which this function
+     could not ask of the request in front of it and therefore checked over the arm list instead.
+     WHAT THAT MISSED IS ONE LINE AND READS AS A SMALL WIDENING. Fetch §2.2.5 "Requests"' destination for a
+     navigation is `document`, `_isScriptLike` answers false for it, so the `destination: program` arm cannot
+     fire a navigation and in the default configuration a document was loaded through the `observed` arm
+     alone. Add a `provenance: derived` arm — the obvious way to let the tool follow a route only the bundle
+     names, which §A-REAL-NAVIGABLE licenses — and derived NAVIGATIONS begin firing; after which every
+     request those documents make is graded `observed` by the engine, CORRECTLY, and this arm relayed that
+     too. One arm added, TWO populations permitted, and the person's surface showed one.
+     SO THE SECOND POPULATION HAS ITS OWN ROW AND THIS ARM NAMES BOTH. At every setting reachable today the
+     outcome is BYTE-IDENTICAL, because every document is reached `observed` and the second conjunct is
+     satisfied by every request that satisfied the first — which is the property that makes this auditable:
+     the only requests that behave differently are the ones the old arm was permitting without being asked. */
+  { when: [{ signal: "provenance", value: "observed" }, { signal: "doc-reach", value: "observed" }],
+    why: "the page made exactly this request, in a document this browser actually navigated to — so " +
+         "relaying it is this browser being a browser; refusing it would leave the engine unable to answer " +
+         "the document's own fetch" }
 ];
 var _EXPLORED = Object.create(null);
 /* HAS A HOST SPOKEN YET. Two questions, two fields — never one value answering both, because the
@@ -1049,7 +1165,9 @@ function safeFetchSignals() {
    permits nothing is entitled to know why their app's scripts still load, and a surface that explained it in
    its own words would be a second copy of this list that could stop agreeing with it. */
 function safeFetchDefaultArms() {
-  return _DEFAULT_ARMS.map(function (a) { return { signal: a.signal, value: a.value, why: a.why }; });
+  return _DEFAULT_ARMS.map(function (a) {
+    return { when: a.when.map(function (c) { return { signal: c.signal, value: c.value }; }), why: a.why };
+  });
 }
 /* THE HOST STATES THE TABLE, ONCE, BEFORE ANYTHING MAY ASK IT. A host that persists its grants restores them
    here; a host that persists none (the native one — a command line is a sentence for one run) states the
@@ -1244,10 +1362,12 @@ function _firingRefusal(facts) {
         "the firing question was asked with no facts — every signal is computed from them and a caller that " +
         "passed none would be answered by whichever arm this function happens to reach first");
   CHECK(typeof facts.destination === "string" && _PROVENANCE_TYPES.indexOf(facts.provenance) >= 0 &&
+        _PROVENANCE_TYPES.indexOf(facts.docReach) >= 0 &&
         _PINNED_MARKS.indexOf(facts.pinned) >= 0 && typeof facts.credentialed === "boolean" &&
         facts.url !== null && typeof facts.url === "object" && typeof facts.url.origin === "string",
         "the firing question was asked without the facts that decide it — Fetch §2.2.5's DESTINATION says " +
-        "whether this reply becomes a PROGRAM or a VALUE, the provenance says whose act it is, the witness " +
+        "whether this reply becomes a PROGRAM or a VALUE, the provenance says whose act it is, the reach " +
+        "grade says whose act the DOCUMENT it was made from was, the witness " +
         "mark says whether the address may rest on a value this engine chose, the credential flag says " +
         "whether the person's session pays, and the parsed URL is what the address-borne authority is read " +
         "off. A caller that omitted any of them would be answered by this function's permissive arm, which " +
@@ -1262,40 +1382,28 @@ function _firingRefusal(facts) {
         "provenance of `" + facts.provenance + "` — solver/flow.h declares the witness mark strictly nested " +
         "inside the forced-path bit, so this pair cannot both be true and one of the two producers is wrong");
   v = _signalVector(facts);
-  /* AND THE `observed` DEFAULT ARM IS SOUND ONLY WHILE EVERY DOCUMENT WAS ITSELF REACHED OBSERVABLY, WHICH
-     IS A FACT ABOUT THE ARM LIST AND NOT ABOUT THE REQUEST IN FRONT OF THIS FUNCTION — so it is asserted at
-     the consumer, beside the nesting above, where both operands are in hand.
-     READ FROM THE CODE RATHER THAN INFERRED: Fetch §2.2.5 "Requests"' destination for a navigation is
-     `document`, `_isScriptLike` answers false for it, so a navigation is destination `value` and the
-     `destination: program` arm CANNOT fire one. In the default configuration a document is therefore loaded
-     through exactly ONE arm — `provenance: observed` — which is to say only where the page or the person
-     really navigated there. That is what makes that arm's own `why` hold: the `fetch()`es it relays belong
-     to documents this browser actually opened.
-     THE COMPOSITION THAT BREAKS IT IS ONE LINE AND READS AS A SMALL WIDENING. Add `{ signal: "provenance",
-     value: "derived" }` to the defaults — the obvious way to let the tool follow a route only the bundle
-     names — and derived NAVIGATIONS begin firing; after which every request those documents make is graded
-     `observed` by the engine, correctly, and the arm beside it relays that too. One arm added, TWO
-     populations permitted, and the surface shows one. That is not an argument against ever making it —
-     §A-REAL-NAVIGABLE licenses a derived address and nothing is refused at every setting — it is an argument
-     that the second half is a row a person must be able to SEE and refuse, because a signal nobody was
-     offered is not a decision they made.
-     THIS FUNCTION CANNOT ASK IT OF THE REQUEST, which is why the assert is over the list: the facts it is
-     handed say what this request is and nothing about how the document holding it was reached.
-     §A-REQUEST-CARRIES-THE-PROVENANCE names that missing fact — LINEAGE — and puts it on the engine, which
-     already grades every value, rather than here.
-     RETIREMENT: this record goes when a request carries its own document's reach grade, so the question is
-     asked of the request instead of the list standing in for it. */
-  DCHECK(_DEFAULT_ARMS.filter(function (a) { return a.signal === "provenance"; })
-                      .every(function (a) { return a.value === "observed"; }),
-         "a default arm names a provenance other than `observed`, which silently widens the `observed` arm " +
-         "beside it: a derived NAVIGATION that fires makes every request of the document it loads " +
-         "`observed`, so one added arm permits two populations and the person's surface shows one — give " +
-         "the second its own row, or carry the document's reach grade on the request and ask it there");
+  /* AND NO PAIRING OF `provenance` WITH `doc-reach` IS ASSERTED, WHICH IS A DECISION AND NOT AN OMISSION —
+     WRITTEN DOWN BECAUSE THE ASSERT IS THE OBVIOUS THING TO REACH FOR AND IT WOULD FIRE ON THE ONE
+     POPULATION THIS ROW EXISTS TO SEPARATE. The tempting one is `observed` ⇒ not `forced`: a page makes its
+     own requests and this zone forces documents, so surely the two cannot both be true. They can, and that
+     pair IS the hazard — a document this tool chose to open goes on making its own `fetch()`es, and the
+     engine grades every one of them `observed` because the page really made them. An assert there would
+     abort exactly where the conjunction below is doing its work.
+     ALL NINE PAIRS ARE REACHABLE AND EACH IS A DIFFERENT ACT: the request's word is the ENGINE's, about a
+     park inside one document, and the reach grade is THIS ZONE's, about a load performed before that
+     document existed. Neither bounds the other in either direction, which is the whole reason they are two
+     rows — §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS is what one row would have been.
+     THIS IS WHERE THE ARM-LIST DCHECK USED TO STAND AND IT IS RETIRED BY THE FACT ARRIVING. It asserted that
+     no default arm named a provenance other than `observed`, because the `observed` arm's own `why` rested
+     on every document having been reached observably — a property of the OTHER ARMS, which this function
+     could not ask of the request in front of it. It can now: the arm is a CONJUNCTION over `doc-reach`, so
+     the question is asked of the request, and the list is free to grow a `derived` row without silently
+     carrying a second population with it. */
   /* THE DEFAULTS FIRST, BECAUSE THEY ARE PERMISSIONS AND A PERMISSION CANNOT BE NARROWED BY A TABLE THAT
      ONLY EVER WIDENS. Reading the table first would make no difference to any answer and would make the
      order look like a precedence rule somebody could invert. */
   for (i = 0; i < _DEFAULT_ARMS.length; i++)
-    if (v[_DEFAULT_ARMS[i].signal] === _DEFAULT_ARMS[i].value) return null;
+    if (_DEFAULT_ARMS[i].when.every(function (c) { return v[c.signal] === c.value; })) return null;
   /* AND THE TABLE HAS BEEN STATED, WHICH IS THE ONE PREMISE EVERY ANSWER BELOW RESTS ON. An unstated table
      is EMPTY, so the walk would refuse a request at an origin the person HAS permitted and the refusal would
      name a signal in the policy's own voice — indistinguishable from a policy they set. It is conservative,
@@ -1350,7 +1458,7 @@ function safeFetchFiringRefusal(facts) {
         "safeFetchFiringRefusal was asked without an absolute URL — the origin comparison is this file's to " +
         "make and a caller that parsed one for itself would be the second copy of that rule");
   return _firingRefusal({ url: new URL(String(facts.url)), destination: facts.destination,
-                          provenance: facts.provenance, pinned: facts.pinned,
+                          provenance: facts.provenance, pinned: facts.pinned, docReach: facts.docReach,
                           credentialed: !!facts.credentialed, headers: facts.headers });
 }
 /* THE VECTOR FOR A HYPOTHETICAL REQUEST, FOR A SURFACE THAT MUST SHOW A PERSON WHAT THEY ARE DECIDING
@@ -1831,6 +1939,11 @@ async function safeFetch(url, opts) {
      through this function and not only on the ones that reach the firing question — an assert that fires for
      some callers and not others is one whose coverage is an accident of which arm a request took. */
   var pinnedMark = _pinnedOf(opts);
+  /* AND HOW THE DOCUMENT THIS REQUEST WAS MADE FROM WAS REACHED, AT THE SAME DOOR AND FOR THE SAME REASONS —
+     see `_docReachOf`. It is read HERE and not at the two gates below for the reason every fact above it is:
+     the request is judged twice, before the wire and again after a redirect, and a fact re-read at each gate
+     is a fact the two gates can disagree about. */
+  var docReach = _docReachOf(opts);
   /* AND WHETHER THE PERSON'S SESSION PAYS FOR IT, DERIVED ONCE AT THE SAME DOOR — see `_credentialedOf`,
      which is also where the one option this file reads from the UNTRUSTED zone is refused a place on a
      cookie-bearing request. It was derived below, beside the deny list; one derivation is what stops the
@@ -1946,7 +2059,8 @@ async function safeFetch(url, opts) {
      the flow fires the day `safeFetchWiden` is told about this origin, which a flow that has already run its
      failure path cannot do. */
   var _ptok = _firingRefusal({ url: parsed, destination: destination, provenance: provenance,
-                               pinned: pinnedMark, credentialed: credentialed, headers: opts.headers });
+                               pinned: pinnedMark, docReach: docReach,
+                               credentialed: credentialed, headers: opts.headers });
   if (_ptok)
     return _refused("decline", "blocked-signal:" + _ptok, [parsed.href], {});
   // opts.credentialed: replay a learned GET with the user's COOKIES to fetch the REAL
@@ -2152,7 +2266,8 @@ async function safeFetch(url, opts) {
      onto a presigned or token-bearing address is exactly the case `url-authority` exists to see, and reading
      the requested address here would answer that row about a URL the bytes did not come from. */
   var _rptok = _firingRefusal({ url: _finalUrl, destination: destination, provenance: provenance,
-                                pinned: pinnedMark, credentialed: credentialed, headers: opts.headers });
+                                pinned: pinnedMark, docReach: docReach,
+                                credentialed: credentialed, headers: opts.headers });
   if (_rptok)
     return _refused("decline", "blocked-signal-redirect:" + _rptok,
                     _urlList(parsed.href, _finalHref, resp.redirected), {});
@@ -2402,4 +2517,9 @@ if (typeof self !== "undefined") {
   self.safeFetchDefaultArms = safeFetchDefaultArms;
   self.safeFetchFiringRefusal = safeFetchFiringRefusal;
   self.safeFetchWidenedOrigins = safeFetchWidenedOrigins;
+  /* THE GRADE ALGEBRA, EXPORTED BECAUSE BOTH HOSTS COMPOSE A CHILD DOCUMENT'S REACH AND ONE ANSWER IS THE
+     POINT — see `safeFetchReachJoin`. It is not a network policy and does not belong to the chokepoint by
+     that argument; it is the ORDERING of the vocabulary this file declares, and a host that wrote its own
+     would be the second copy of a rule nothing checks. */
+  self.safeFetchReachJoin = safeFetchReachJoin;
 }

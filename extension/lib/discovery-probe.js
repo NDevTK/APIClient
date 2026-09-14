@@ -184,6 +184,12 @@ function _chokepointGetFn(tab, who) {
       pageUrl: tab.url,
       pageOrigin: tab.origin,
       provenance: "derived",
+      /* AND HOW THE DOCUMENT THIS SWEEP IS RUN FROM WAS REACHED, WHICH IS `observed` AND IS A FACT ABOUT THE
+         BROWSER RATHER THAN ABOUT THIS SWEEP. `tab.url` is a page the PERSON navigated to — a content script
+         ran in it, which is the whole reason this function has a principal at all — so the context these
+         addresses are derived in is the person's own act. The word beside it is about the ADDRESSES, which
+         this sweep composed; the two are independent and the chokepoint reads both. */
+      docReach: "observed",
       /* ENTAILED BY THE NESTING AND NOT ASSUMED: solver/flow.h holds the witness mark strictly inside
          `path_forced`, so a request this zone states as DERIVED cannot carry one. safe-fetch.js asserts the
          pair rather than trusting it, which is what makes stating it here a claim and not a formality. */

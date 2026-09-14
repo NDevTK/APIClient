@@ -230,9 +230,19 @@ has to remember:
   literal is still there, because it selects against nothing.
   **PROGRAM LOADS FIRE AT EVERY SETTING AND ARE NOT WHAT THIS CONTROL OPENS** (`<script src>`, a module
   import, a lazy chunk — Fetch §2.2.5's script-like destinations), and so does a request the page itself made
-  (`provenance` `observed`): both are the page loading itself, which the person's own browser would have done.
+  **in a document this browser actually navigated to** (`provenance` `observed` AND `doc-reach` `observed`):
+  both are the page loading itself, which the person's own browser would have done.
   Those two are the DEFAULT ARMS, they are DATA (`safeFetchDefaultArms`), and the surface renders them — a
   person looking at a control that permits nothing is owed the reason their app still works.
+  **THE SECOND ARM IS A CONJUNCTION AND THE SECOND CONJUNCT IS WHAT STOPS ONE ROW PERMITTING TWO
+  POPULATIONS.** It used to name `provenance` `observed` alone, which was sound only while every document had
+  itself been reached observably — a property of the OTHER ARMS rather than of the request, so the chokepoint
+  asserted it over the list. A navigation's Fetch §2.2.5 destination is `document` and is not script-like, so
+  the program arm cannot fire one and a `provenance` `derived` arm added to the defaults would begin firing
+  derived NAVIGATIONS — after which every request those documents make is graded `observed`, correctly, and
+  the arm beside it relayed that too. `doc-reach` is that second act's own row: how the DOCUMENT holding a
+  request was itself reached, stated by whichever zone performed the load, composed down a document chain by
+  `safeFetchReachJoin` so a child of a page this tool chose to open cannot read as one the person opened.
   **THE GRANTS PERSIST IN THE OFFSCREEN'S OWN IndexedDB** (`apiclient-frontier`'s `prefs` store, beside the
   storage share), never `chrome.storage.local`, and the store is written FROM the chokepoint's table rather
   than from the message that changed it — so a grant the policy REFUSED cannot be persisted as one it took.

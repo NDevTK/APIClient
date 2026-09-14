@@ -1145,7 +1145,12 @@ async function renderEgressPolicy(act) {
        every other line in this function is: a surface that explained them in its own words would be a second
        copy of the list that could stop agreeing with it. */
     '<div class="egress-default">Fires without any of this: ' +
-      r.defaults.map((d) => "<code>" + esc(d.signal) + "=" + esc(d.value) + "</code> (" + esc(d.why) + ")")
+    /* AN ARM IS A CONJUNCTION AND EVERY CONDITION IS RENDERED, which is not a formatting choice: an arm
+       fires only where ALL of its conditions hold, so showing one of them would tell a person that a
+       population fires which does not — the same "one row, two populations" the arm list itself was changed
+       to stop. `join(" and ")` is the sentence, and an arm of one condition reads exactly as it did. */
+      r.defaults.map((d) => d.when.map((c) => "<code>" + esc(c.signal) + "=" + esc(c.value) + "</code>")
+                                  .join(" and ") + " (" + esc(d.why) + ")")
                 .join("; ") + '</div>' +
     r.signals.map((sig) => {
       const now = r.vector && r.vector[sig.name] !== undefined ? r.vector[sig.name] : null;

@@ -311,9 +311,14 @@ async function main() {
      answer about a request this gate never makes. Every load this run performs is `derived`: the peer
      addresses are literals the seed's own code composed, and each `/beacon/` address is composed from a value
      the run computed on a path that stood on no contradicted arm. */
+  /* AND THE REACH GRADE IS `observed` AND NOT `derived`, WHICH IS THE PAIR THIS PROBE EXISTS TO EXERCISE.
+     The address is composed by this gate, which is what `derived` says; the document it is composed FROM is
+     the seed, which this harness named on its own command line, which is what `observed` says. Stating one
+     word for both would have this gate testing a request shape the run never makes. */
   const probe = await ZONE.safeFetch(`${peerOrigin}/pna-probe`,
                                      { pageUrl: seedUrl, destination: 'document',
-                                       provenance: 'derived', pinned: 'unpinned', credentialed: false });
+                                       provenance: 'derived', pinned: 'unpinned',
+                                       docReach: 'observed', credentialed: false });
   if (!probe || typeof probe.status !== 'number')
     record('pna', 'missing', 'safeFetch returned no reply record at all');
   else if (probe.status === 0)
