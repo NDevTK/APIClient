@@ -1262,6 +1262,35 @@ function _firingRefusal(facts) {
         "provenance of `" + facts.provenance + "` — solver/flow.h declares the witness mark strictly nested " +
         "inside the forced-path bit, so this pair cannot both be true and one of the two producers is wrong");
   v = _signalVector(facts);
+  /* AND THE `observed` DEFAULT ARM IS SOUND ONLY WHILE EVERY DOCUMENT WAS ITSELF REACHED OBSERVABLY, WHICH
+     IS A FACT ABOUT THE ARM LIST AND NOT ABOUT THE REQUEST IN FRONT OF THIS FUNCTION — so it is asserted at
+     the consumer, beside the nesting above, where both operands are in hand.
+     READ FROM THE CODE RATHER THAN INFERRED: Fetch §2.2.5 "Requests"' destination for a navigation is
+     `document`, `_isScriptLike` answers false for it, so a navigation is destination `value` and the
+     `destination: program` arm CANNOT fire one. In the default configuration a document is therefore loaded
+     through exactly ONE arm — `provenance: observed` — which is to say only where the page or the person
+     really navigated there. That is what makes that arm's own `why` hold: the `fetch()`es it relays belong
+     to documents this browser actually opened.
+     THE COMPOSITION THAT BREAKS IT IS ONE LINE AND READS AS A SMALL WIDENING. Add `{ signal: "provenance",
+     value: "derived" }` to the defaults — the obvious way to let the tool follow a route only the bundle
+     names — and derived NAVIGATIONS begin firing; after which every request those documents make is graded
+     `observed` by the engine, correctly, and the arm beside it relays that too. One arm added, TWO
+     populations permitted, and the surface shows one. That is not an argument against ever making it —
+     §A-REAL-NAVIGABLE licenses a derived address and nothing is refused at every setting — it is an argument
+     that the second half is a row a person must be able to SEE and refuse, because a signal nobody was
+     offered is not a decision they made.
+     THIS FUNCTION CANNOT ASK IT OF THE REQUEST, which is why the assert is over the list: the facts it is
+     handed say what this request is and nothing about how the document holding it was reached.
+     §A-REQUEST-CARRIES-THE-PROVENANCE names that missing fact — LINEAGE — and puts it on the engine, which
+     already grades every value, rather than here.
+     RETIREMENT: this record goes when a request carries its own document's reach grade, so the question is
+     asked of the request instead of the list standing in for it. */
+  DCHECK(_DEFAULT_ARMS.filter(function (a) { return a.signal === "provenance"; })
+                      .every(function (a) { return a.value === "observed"; }),
+         "a default arm names a provenance other than `observed`, which silently widens the `observed` arm " +
+         "beside it: a derived NAVIGATION that fires makes every request of the document it loads " +
+         "`observed`, so one added arm permits two populations and the person's surface shows one — give " +
+         "the second its own row, or carry the document's reach grade on the request and ask it there");
   /* THE DEFAULTS FIRST, BECAUSE THEY ARE PERMISSIONS AND A PERMISSION CANNOT BE NARROWED BY A TABLE THAT
      ONLY EVER WIDENS. Reading the table first would make no difference to any answer and would make the
      order look like a precedence rule somebody could invert. */
