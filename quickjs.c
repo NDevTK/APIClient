@@ -52301,8 +52301,25 @@ static void free_generator_stack_rt(JSRuntime *rt, JSGeneratorData *s)
 {
     if (s->state == JS_GENERATOR_STATE_COMPLETED)
         return;
-    async_func_free(rt, &s->func_state);
+    /* DEAD BEFORE THE TEARDOWN RUNS, NOT AFTER IT — js_async_function_terminate's sentence, and the order its
+       two siblings already use. This flag is the re-entry guard four lines above, and the teardown below CAN
+       re-enter: async_func_free closes the frame's cells, free_var_ref gives each open coro cell's reference
+       back through js_release_coro, and for a GENERATOR that owner is the generator OBJECT — so a release
+       landing here while this call is halfway through the frame used to find the flag still clear, walk the
+       same half-freed frame a second time, and (through js_generator_finalizer) js_free_rt this very `s` under
+       the outer call. Setting it first is what makes that second entry the no-op the early return already
+       promises.
+       THE TWO TWINS ARE THE ARGUMENT, not a hypothetical: js_async_function_terminate clears `is_active` BEFORE
+       async_func_free and says in as many words that the teardown can re-enter, and js_async_generator_complete
+       sets COMPLETED before its own async_func_free. Three coroutine kinds, one ordering rule, and this was the
+       site that had it the other way round — the shape where a defect is repaired at the site it was found and
+       recurs at the sibling nobody greped.
+       REACHABILITY IS NOT ESTABLISHED AND IS NOT CLAIMED: getting here needs the frame's open cells to hold the
+       generator object's LAST references, which no run has been measured doing. The order costs nothing either
+       way, so it is not a guard bought against a risk — it is the state made impossible, which is what the
+       early return above was already trying to say. */
     s->state = JS_GENERATOR_STATE_COMPLETED;
+    async_func_free(rt, &s->func_state);
 }
 
 /* THE C-CONTINUATION A FRAME CARRIES, RELEASED WITH NOBODY TO ANSWER TO. The interpreter's unwind hands an
