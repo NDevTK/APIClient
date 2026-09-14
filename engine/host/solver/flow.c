@@ -12,6 +12,7 @@
 #include "solver/concolic.h"   /* …and its suspended path constraint */
 #include "solver/cold.h"       /* …and the park document written out of all of them */
 #include "solver/reclaim.h"   /* the engine's own allocations ask for a flow back before they fail */
+#include "solver/world.h"    /* …and whether two sending timelines it committed to can both be true */
 #include "check.h"
 #include <stdlib.h>
 
@@ -2863,6 +2864,60 @@ void flow_world_commit_push(JSContext *ctx, Flow *f, const char *vector, int tak
     DCHECK(taken == 0 || taken == 1,
            "a delivery-world commitment carried something other than RECEIVED or FORECLOSED — the two are the "
            "whole vocabulary, and a third value would be read as one of them by whichever test asked first");
+    /* AND THE RECEIVED ROWS STAY PAIRWISE CONSISTENT — the one claim this LIST makes that no row of it makes,
+       asked at the APPEND because that is where a producer hands one over. Two RECEIVED worlds that CONTRADICT
+       are two sending timelines of which neither is the other continued, so no timeline of that document is in
+       both and a flow holding the pair is the off-diagonal member of a cross-product (solver/engine.c's
+       flow_answer_fork is entirely about the asking side of that). This is NOT a second spelling of
+       deliver_admits' gate: that one asks whether an ARRIVING record may be delivered and is a property of one
+       caller, and this asks whether the RECORD ITSELF is coherent, which is what makes it cover a producer
+       that does not exist yet — the delivery path cannot reach it, because deliver_admits refuses a
+       contradicting record before deliver_commit_taken pushes.
+       FORECLOSED rows are skipped and WORLD_REL_INDEPENDENT is not a violation: the first is the far side of a
+       branch and says nothing about what was heard from, and the second is two forests — a different sending
+       document, or a different session of one, which is every row a park replays into a new session.
+       world_vec_relate INTERNS the names it parses, so it is a side effect and may not sit in a DCHECK's
+       condition (solver/engine.c's engine_host_answer takes this shape for the same reason); in release
+       nothing reads the answer, so the block goes with the check.
+       RETIRES when the RECEIVED half of this list holds ONE row per sending document, replaced in place as the
+       timeline descends — deliver_commit_implied already proves those rows are a CHAIN whose deepest member
+       decides every test, and a set of one has no pair to be inconsistent about. */
+#if APICLIENT_DEV
+    if (taken) {
+        int n = flow_world_commits(f), k;
+
+        for (k = 0; k < n; k++) {
+            JSValue row = flow_world_commit_at(f, k);
+            JSValue cv = JS_GetPropertyUint32(ctx, row, 0);
+            JSValue tv = JS_GetPropertyUint32(ctx, row, 1);
+            WorldRel rel = WORLD_REL_INDEPENDENT;
+
+            if (JS_VALUE_GET_TAG(tv) == JS_TAG_INT && JS_VALUE_GET_INT(tv)) {
+                const char *held = JS_ToCString(ctx, cv);
+
+                CHECK(held != NULL, "flow: OOM reading which sending timeline a receiving flow is already in — "
+                                    "a commitment that cannot be read leaves the one pair this list can be "
+                                    "wrong about unchecked");
+                rel = world_vec_relate(vector, held);
+                JS_FreeCString(ctx, held);
+            }
+            DCHECK(rel != WORLD_REL_CONTRADICT,
+                   "a receiving timeline committed to TWO sending worlds that CONTRADICT — neither is the "
+                   "other continued, so no timeline of the sending document is in both and this flow's state "
+                   "now rests on a pair of peer timelines that never coexisted. The delivery path cannot "
+                   "produce it (deliver_admits refuses a contradicting record before deliver_commit_taken "
+                   "pushes), so the producer that fired this is another one — grep `flow_world_commit_push(` "
+                   "for it — and it is RECORDING a fabrication rather than causing one. The repair is at the "
+                   "mechanism that let one flow take state from two contradicting peer timelines, which for a "
+                   "cross-instance answer is engine_perform attaching an UNADDRESSED operation to every "
+                   "timeline the peer has (solver/engine.c's flow_answer_fork names the pin that closes it). "
+                   "Never widen this row to admit the pair");
+            JS_FreeValue(ctx, cv);
+            JS_FreeValue(ctx, tv);
+            JS_FreeValue(ctx, row);
+        }
+    }
+#endif
     e = JS_NewArray(ctx);
     CHECK(!JS_IsException(e), "flow: OOM recording which sending timeline a receiving flow is in — without it "
                               "this timeline would go on to accept a message from the arm it did not take");

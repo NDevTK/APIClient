@@ -2117,12 +2117,31 @@ static int deliver_admits(JSContext *ctx, const Flow *f, const char *vec)
                    refusals whose arm had never been minted at all: the suppression fired on a fact about this
                    receiver's own commitments and left the branch uncovered, so the record was refused here
                    with nothing anywhere to take it. deliver_commit_implied says what that cost and how it was
-                   measured. With the suppression retired there is exactly ONE reason an arm is not minted
-                   (`world_vec_fork_point` answering NULL) and exactly one reason a RECEIVED row is not pushed
-                   (the same predicate), so the arm and the row are minted together and this row's EXISTENCE
-                   is the arm's existence — for every `c` whose vector names an ancestor.
-                   AND THE ARM STILL HOLDS THIS RECORD, which is the other half of "an arm exists" and is what
-                   makes the assert about a delivery rather than about a flow. The arm inherited this flow's
+                   measured. With the suppression retired the two gates are exactly these: a row is pushed iff
+                   `!deliver_commit_implied`, and an arm is minted iff `world_vec_fork_point` answers AND the
+                   same `!deliver_commit_implied` — one answer, because deliver_fork_arm puts its row on the
+                   SIBLING and leaves this flow's list untouched between the two calls. So among the rows that
+                   are HERE, the arm exists iff the vector names an ancestor, which is what this line reads and
+                   is a biconditional rather than a necessary condition. (The sentence that stood here named
+                   `world_vec_fork_point` as the row's gate too. The conclusion was right and the gate was not,
+                   and the gate is the half a later reader builds on — see below for what it cost.)
+                   AND THAT MAKES IT A PROXY FOR `deliver_fork_arm` HAVING RUN, SO IT IS SOUND ONLY FOR ROWS
+                   `deliver_commit_taken` PUSHED. A second producer of a RECEIVED row does not inherit it, and
+                   this file already names the next one: a cross-instance ANSWER is a commitment of exactly
+                   this kind (flow_answer_fork's block), and its sibling arm is minted by flow_answer_fork when
+                   the peer's NEXT answer arrives — not here, and not necessarily ever. Both directions break.
+                   A ROOT answer world carries no comma, so this line would ABORT while the answer arm holds
+                   the record and admits it. A comma'd answer world whose peer timeline answers AFTER the
+                   issuer took its first answer has NO arm — engine_host_take drops the entry and the late
+                   answer reaches engine_host_answer's arm for "a request NO register holds", which says in
+                   its own words that the arm it would have forked is silently missing — so this line PASSES
+                   while the record is consumed and refused by every timeline there is. The second is the one
+                   that SHIPS, and `_routedZeroDelivery` read on a DRAINED receiver is the row it moves.
+                   RETIRES when a RECEIVED row states which mechanism minted its sibling arm, at which point
+                   this asks that question instead of asking the vector's shape.
+                   AND THE ARM STILL HOLDS THIS RECORD — the other half of "an arm exists", scoped to the same
+                   population as the sentence above it and by a mechanism that is delivery-specific for the
+                   same reason: it is what makes the assert about a delivery rather than about a flow. The arm inherited this flow's
                    delivery queue at the instant `c` was consumed (flow_deliver_fork), and a queue is FIFO, so
                    every record this flow consumes after `c` — this one included — is one the arm was handed
                    or is handed by engine_route's attach-to-every-live-flow. It cannot have been dropped in
@@ -2594,9 +2613,15 @@ static void deliver_fork_arm(JSContext *ctx, Flow *f, const char *vec)
     if (fork_point == NULL) return;                    /* a ROOT world: no branch, so no other side to be on */
     free(fork_point);
     /* …AND THIS TIMELINE HAS NOT ALREADY MINTED IT. The arm for a given (flow, world) pair is minted at that
-       flow's FIRST delivery from that world, together with the commitment that records it — one predicate for
-       both, so the arm cannot exist without the row or the row without the arm, which is exactly what the
-       refusal in deliver_admits reads the row as proof of. A world whose commitment is IMPLIED by a deeper one
+       flow's FIRST delivery from that world, together with the commitment that records it: one predicate
+       (deliver_commit_implied) decides both, on a list neither of its two calls changes — the arm's own row
+       goes on the SIBLING — so an arm cannot exist without its row. THE CONVERSE HOLDS ONLY WHERE THE VECTOR NAMES AN
+       ANCESTOR, because the arm carries the extra gate one line above and the row does not: a ROOT world is
+       pushed here as a commitment with NO arm beside it, and that gap is not a slip — it is exactly the state
+       deliver_admits' refusal asserts against, in the one place that can see it. The sentence that stood here
+       said the two gates were one predicate and therefore that the row and the arm imply each other outright,
+       which is the reading that makes the refusal's proof look like a property of the row rather than of its
+       SHAPE. A world whose commitment is IMPLIED by a deeper one
        already on this timeline is covered by that one's arm, whose foreclosure is a SUBTREE containing this
        world.
        WHAT IS NOT ASKED HERE ANY MORE IS WHETHER THIS TIMELINE HAS TAKEN A SIDE AT THE VECTOR'S NEAREST NAMED
@@ -5477,17 +5502,32 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
  *     (remote_op.c's fields are positional, so it is one index and every operand shifts); and engine_perform
  *     attaches an addressed record to the ONE flow whose world it names instead of to all of them, crashing
  *     where that timeline is gone rather than answering out of another."
- *     (i) THE CARRIER EXISTS. `deliver_world_q` is a per-flow list of [vector, taken] pairs that flow.h calls
- *       "what this timeline has already BECOME"; it is pushed by flow_world_commit_push, inherited by
- *       flow_world_commit_fork inside engine_sibling_assemble, written to the cold tier and read back, and
- *       already consumed by a CONTRADICT predicate (deliver_admits). An answer TAKEN from a peer world is a
- *       commitment of exactly the RECEIVED kind and belongs on that list. What is NOT a drop-in, and is the
- *       part to re-derive rather than to copy from here: an arm forked below is a clone taken BEFORE the read
- *       returned, so it never heard from the world its parent's entry holds — inheriting the parent's
- *       RECEIVED row onto it would state the fabrication instead of refusing it, and the arm's row has to be
- *       REPLACED with the world of the answer it was forked over. That is three writes and an inheritance
- *       rule, not one line, and deliver_commit_implied's own measured residual is downstream of the list it
- *       lengthens.
+ *     (i) THE CARRIER EXISTS AND ITS LANDING ORDER IS THE REVERSE OF THIS ONE — the correction to a
+ *       correction, recorded here for the reason the block above is: a remedy clause is read once, by
+ *       somebody who has already decided to do the work. WHAT STANDS: `deliver_world_q` is a per-flow list of
+ *       [vector, taken] pairs that flow.h calls "what it has already BECOME"; an answer TAKEN from
+ *       a peer world is a commitment of exactly the RECEIVED kind and belongs on it; and an arm forked below
+ *       is a clone taken BEFORE the read returned, so it never heard from the world its parent's entry holds
+ *       — inheriting that row would state the fabrication instead of refusing it, and the arm's row has to be
+ *       REPLACED with the world of the answer it was forked over.
+ *       WHAT DOES NOT IS "consumer today: deliver_admits, unmodified". That list is not a neutral carrier,
+ *       and pushing onto it before the pin exists is a behaviour change in the direction that loses messages.
+ *       - THE REFUSAL IS SOUND ONLY WHERE THE ARM IS ALREADY MINTED. deliver_admits refuses a contradicting
+ *         record and ASSERTS the arm that takes it exists; its proof is `strchr(c, ',')`, a proxy for
+ *         deliver_fork_arm having run, and an answer row satisfies neither direction of it (that assert's own
+ *         block now says how). The costly one is a peer timeline that answers AFTER the issuer took its first
+ *         answer: engine_host_take has dropped the entry, so no arm is forked, and every live timeline
+ *         consumes and refuses that peer's messages. `_routedZeroDelivery` on a DRAINED receiver is the row.
+ *       - AND THE PUSH WRITES THE CROSS-PRODUCT DOWN. This block's whole subject is that an unaddressed
+ *         SECOND read is answered by every timeline the peer has, so an arm that took W and then takes an
+ *         answer from a world CONTRADICTING W is an off-diagonal member — and two contradicting RECEIVED rows
+ *         on one flow is that state made writable. flow_world_commit_push now ABORTS on the pair, which is
+ *         the invariant this file wanted and not a cost: the first flow to take two contradicting answers
+ *         would otherwise have recorded the fabrication into the one predicate that decides deliveries.
+ *       SO THE ORDER IS THE INVARIANT, THEN THE PIN ((ii)/(iii)), THEN THE PUSH — a dependency order read as
+ *       a landing order, which is the ordinary trap when the deep member has no consumer yet: the carrier's
+ *       only reader today was built for the delivery mechanism's arm, and the reader it is FOR is
+ *       engine_perform's attach loop, which (iii) builds.
  *     (ii) THE FIELD MAY NOT GO BESIDE THE DOCUMENT. `engine/route.mjs` is trusted-zone JavaScript, which
  *       §A-CROSS-BOUNDARY-DIFF makes LIVE ON WRITE, and it reads this grammar positionally — `split('\t')[1]`
  *       for the holder and `split('\t')[2]` for the asking world — while relaying the record VERBATIM. An
