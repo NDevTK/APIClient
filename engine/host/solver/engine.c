@@ -11057,6 +11057,35 @@ static int engine_sched_slice(void) {
                spellings of one predicate is the drift solver/pending.h refuses for the word "owed", and the
                same argument holds here: what may differ between these readers is what they DO, never what
                "this flow's turn ended" means. */
+            /* WHOSE TURN THIS IS, ASSERTED BEFORE THE FIRST LINE THAT READS THE ANSWER AS `cur`'S. Two of the
+               three terms below are per-flow fields and are correct for any member; the MIDDLE one is not.
+               `JS_HasParkedFlow` asks the RUNTIME, and under an interleaving host the runtime holds exactly
+               ONE flow's parked continuations — the switched-in one's, because flow_switch_out's
+               JS_TakeParkedFlows moves the whole set onto `Flow::parked` and flow_switch_in's
+               JS_PutParkedFlows puts it back, DCHECKing the runtime was empty first. So that term is a fact
+               about `cur` only while `cur` holds the thread, and asked of any other member it answers about a
+               stranger's suspended activations — after which the §8.1.4.7 rejection notify and the §8.1.7.3
+               microtask checkpoint below both run on it, and the visit credit further down spends it.
+               ITS NAME SAYS RUNTIME AND ITS SCOPE IS DECIDED ELSEWHERE, which is why this is asserted rather
+               than left to whoever reads the predicate: quickjs.h states at JS_HasParkedFlow only who may
+               PARK, and states whose parks the runtime HOLDS three declarations further down at
+               JS_TakeParkedFlows. A reader of the predicate has no reason to reach that line, and the
+               reading the name alone offers — `any flow anywhere is parked` — is the one that makes this
+               boundary look like a global-quiescence gate rather than §8.1.4.4's own "the JavaScript
+               execution context stack is now empty". solver/flow.c's flow_between_units says the same thing
+               from the other side and cannot ask this half at all.
+               ONE ASSERT COVERS BOTH READERS BECAUSE THE REGISTER CANNOT MOVE BETWEEN THEM, which is what
+               makes this a hoist and not a second spelling: `flow_set_running` has exactly three callers and
+               all three are this file's own flow_switch_out, flow_switch_in and flow_finish, while the two
+               consumers standing between here and the charge are browser components — unhandled_rejection.h's
+               notify and Indexed Database §2.7.1's registered cleanup — that hold no scheduler entry. */
+            DCHECK(flow_running() == cur,
+                   "the flow the scheduler stepped is not the one holding the thread — the unit-of-work "
+                   "boundary on the next line reads `JS_HasParkedFlow` of the RUNTIME, whose parked set "
+                   "belongs to the switched-in flow alone, so the microtask checkpoint and the rejection "
+                   "notify below would run on another flow's suspended activations and the visit credit "
+                   "would be spent on the wrong member; and the aging charge further down would demote a "
+                   "flow that did not burn the time and leave the one that did holding its rank");
             int unit_ended = !cur->frame && !JS_HasParkedFlow(JS_GetRuntime(ctx)) && !flow_job_microtask(cur);
 
             /* …AND THE STEP OF "PERFORM A MICROTASK CHECKPOINT" THAT COMES FIRST, WHICH WAS NOT HERE AT ALL.
@@ -11096,11 +11125,13 @@ static int engine_sched_slice(void) {
                says is running, and that is only the flow this step advanced while nothing between the switch-in
                above and here has changed it — a step that returned with a different flow running would bill the
                wrong one, and the symptom would be a monopolizer that never ages and a sibling demoted for time
-               it never spent. The finish path clears it, which is why this stands BEFORE the r == DONE branch. */
-            DCHECK(flow_running() == cur,
-                   "the flow the scheduler stepped is not the one it is about to charge for that step's thread "
-                   "time — the aging term would demote a flow that did not burn it and leave the one that did "
-                   "holding its rank");
+               it never spent. The finish path clears it, which is why this stands BEFORE the r == DONE branch.
+               ASSERTED AT THE UNIT BOUNDARY ABOVE RATHER THAN HERE, and this is the retired half of that
+               sentence rather than a pointer added for tidiness: the register was checked at THIS line while
+               the FIRST reader of it is the `unit_ended` predicate above, so the two consumers
+               between — §8.1.4.7's rejection notify and §8.1.7.3's microtask checkpoint — had already acted
+               on a predicate computed from it. An invariant asserted at its second reader is one the first
+               reader has already built on. */
             /* WHAT THE ORDER SAID ABOUT THIS FLOW BEFORE IT WAS CHARGED — held for the resolution assertion
                below, and only in a build that evaluates it. It is `#if`-guarded WITH its assertion rather than
                declared unconditionally, because check.h's release DCHECK still TYPE-CHECKS its condition
