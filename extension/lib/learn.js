@@ -323,14 +323,18 @@ function learnFromAstCallSite(docData, interfaceName, callSite, scriptUrl) {
            three was computed); lib/discovery.js already asks URL.canParse before deriving a basePath from it. */
         rootUrl: csUrl ? csUrl.origin + "/" : _addr.host,
         baseUrl: csUrl ? csUrl.origin + "/" : _addr.host,
-        resources: { learned: { methods: {} } },
-        schemas: {},
+        /* KEYED BY A NAME THE PAGE CHOSE — see lib/stranger-keyed.js. `methods` is keyed by
+           `calculateMethodMetadata`'s answer, which is a URL PATH SEGMENT or a GraphQL `operationName`, and
+           `schemas` by a name composed from one. Minting them with no prototype is the whole repair: every
+           plain `methods[name]` read and write below is then correct, `__proto__` included. */
+        resources: { learned: { methods: strangerKeyedMap() } },
+        schemas: strangerKeyedMap(),
       },
     };
     tab.discoveryDocs.set(interfaceName, docEntry);
   }
   const doc = docEntry.doc;
-  if (!doc.resources.learned) doc.resources.learned = { methods: {} };
+  if (!doc.resources.learned) doc.resources.learned = { methods: strangerKeyedMap() };
 
   if (!csUrl) return { entry: docEntry, method: null };   // dynamic URL: the service exists, no method to register against
 
@@ -1024,16 +1028,16 @@ function learnFromRequest(documentId, interfaceName, entry, headers) {
         rootUrl: url.origin + "/",
         baseUrl: url.origin + "/",
         resources: {
-          learned: { methods: {} },
+          learned: { methods: strangerKeyedMap() },   // keyed by a page-chosen name — lib/stranger-keyed.js
         },
-        schemas: {},
+        schemas: strangerKeyedMap(),                  // keyed by a name composed from one — same file
       },
     };
     tab.discoveryDocs.set(interfaceName, docEntry);
   }
 
   const doc = docEntry.doc;
-  if (!doc.resources.learned) doc.resources.learned = { methods: {} };
+  if (!doc.resources.learned) doc.resources.learned = { methods: strangerKeyedMap() };
 
   // GraphQL: method name = operationName (or first root field). Every op on
   // a /graphql endpoint is its own method entry. Detect by parsing the
@@ -1849,7 +1853,7 @@ function learnFromResponse(documentId, interfaceName, entry) {
   if (isAsyncChunkedResponse(textBody)) {
     const chunks = parseAsyncChunkedResponse(textBody);
     if (chunks) {
-      if (!doc.resources.learned) doc.resources.learned = { methods: {} };
+      if (!doc.resources.learned) doc.resources.learned = { methods: strangerKeyedMap() };
       // Use endpoint path as the method key (e.g. "hpba" from /async/hpba)
       const asyncPath = url.pathname.split("/").filter(Boolean).pop() || methodName;
       for (let i = 0; i < chunks.length; i++) {
@@ -1892,7 +1896,7 @@ function learnFromResponse(documentId, interfaceName, entry) {
   } else if (isBatchExecuteResponse(textBody)) {
     const results = parseBatchExecuteResponse(textBody);
     if (results) {
-      if (!doc.resources.learned) doc.resources.learned = { methods: {} };
+      if (!doc.resources.learned) doc.resources.learned = { methods: strangerKeyedMap() };
       for (const res of results) {
         let callM =
           doc.resources.learned.methods[res.rpcId] ||
@@ -2019,7 +2023,7 @@ function learnFromResponse(documentId, interfaceName, entry) {
           try {
             const json = JSON.parse(part.body);
             const partKey = `${methodName}_part${i}`;
-            if (!doc.resources.learned) doc.resources.learned = { methods: {} };
+            if (!doc.resources.learned) doc.resources.learned = { methods: strangerKeyedMap() };
             let partM = doc.resources.learned.methods[partKey];
             if (!partM) {
               doc.resources.learned.methods[partKey] = {

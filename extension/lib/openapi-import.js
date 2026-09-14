@@ -295,8 +295,15 @@ function convertOpenApiToDiscovery(openapi, sourceUrl) {
     rootUrl,
     servicePath: "",
     baseUrl: rootUrl,
-    resources: {},
-    schemas: {},
+    /* BOTH MAPS ARE KEYED BY NAMES THE IMPORTED DOCUMENT CHOSE — a lowercased TAG for a resource bucket, an
+       operationId or a `$ref` name for a schema — and lib/stranger-keyed.js states what an object literal
+       does with the eight of those that Object.prototype already answers for. Minting them here with no
+       prototype is the whole repair, because this function is the only producer of this record: every plain
+       read and write of them below is then correct, `__proto__` included. What it replaces was not a wrong
+       number: `!doc.resources["constructor"]` was FALSE, the bucket was never created, and reading `.methods`
+       off the Object constructor threw a TypeError that discarded the entire import. */
+    resources: strangerKeyedMap(),
+    schemas: strangerKeyedMap(),
     auth: null,
   };
 
@@ -399,9 +406,12 @@ function convertOpenApiToDiscovery(openapi, sourceUrl) {
         (firstTag === null ? "" : firstTag) ||
         path.split("/").filter(Boolean)[0] ||
         "default";
+      // The bucket name is the document's own TAG, lowercased to ASCII letters, digits and `_` — which
+      // `constructor`, `toString` and the other six survive intact. The map it indexes is minted
+      // prototype-free where this record is built, so these reads need nothing of their own.
       const resourceName = tag.toLowerCase().replace(/[^a-z0-9_]/g, "_");
       if (!doc.resources[resourceName]) {
-        doc.resources[resourceName] = { methods: {} };
+        doc.resources[resourceName] = { methods: strangerKeyedMap() };
       }
       // Two ops can share an operationId but differ by HTTP verb (e.g. a
       // probed POST and learned GET against the same /path). Qualify with

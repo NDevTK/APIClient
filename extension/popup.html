@@ -284,6 +284,13 @@
          with a claim the other two obey. Nothing here can load too early: check.js reads no DOM, no `chrome.*`
          and no other file — it is an IIFE over `self` that installs DCHECK/CHECK/DFAIL/RETHROW_FATAL. -->
     <script src="check.js"></script>
+    <!-- STRANGER-KEYED: the primitive for a map whose KEY is a name a page or a server chose — a URL path
+         segment, a GraphQL operationName, a response body's own field name, an OpenAPI tag. An object
+         literal already answers for eight such names, so a get-or-create over one reads the prototype and
+         skips its own create; the measured outcomes are a page-held abort of this zone and a polluted
+         Object.prototype. Loaded straight after check.js because a file that keys such a map without it
+         throws ReferenceError at the mint, which is the loud failure rather than the quiet one. -->
+    <script src="lib/stranger-keyed.js"></script>
     <!-- lib/field-def.js FIRST among the libraries: it is the ONE definition of the Send panel's field
          record, and every producer below (discovery.js, openapi-import.js, popup-gql.js, popup-form.js)
          builds through it. A realm that loads a producer without it does not assert LESS — it asserts

@@ -636,7 +636,10 @@ function updateOrCreateVirtualDoc(service, seedUrl, probeResult, existingDoc) {
   // Ensure resources structure
   if (!doc.resources) doc.resources = {};
   if (!doc.resources.probed) {
-    doc.resources.probed = { methods: {} };
+    // KEYED BY A NAME THE SERVICE CHOSE — lib/stranger-keyed.js. lib/learn.js reads this map by the same
+    // page-derived method name it keys its own on (`doc.resources.probed?.methods?.[baseMethodName]`),
+    // so an object literal here answers the prototype for the eight names it carries.
+    doc.resources.probed = { methods: strangerKeyedMap() };
   }
 
   // Ensure schemas structure

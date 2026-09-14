@@ -636,14 +636,21 @@ function _mergeDocInto(existingDoc, newDoc, docKey) {
    resource of every later page was read past in silence. The whole-bucket copy one line up hid it: the first
    page's nested methods arrived (the bucket was absent, so it was taken entire) and no page's ever did
    again. */
+/* BOTH LEVELS OF THIS WALK ARE KEYED BY A NAME THIS ZONE DID NOT CHOOSE — see lib/stranger-keyed.js. A
+   RESOURCE bucket is named by a fetched discovery document or by lib/openapi-import.js's lowercased TAG, and a
+   METHOD by lib/grouping.js's answer, which is a URL path segment or a GraphQL `operationName`. The maps
+   themselves are the MOAT's, restored out of IndexedDB by `JSON.parse`, so they carry `Object.prototype`
+   whatever this file mints — which is why the repair here is the READ and the WRITE rather than the mint.
+   `eres["constructor"]` was the `Object` CONSTRUCTOR, so `!eb` was false, `eb.methods = {}` assigned onto the
+   global constructor, and the whole bucket that page learned merged into it and was lost from the moat. */
 function _mergeResourcesInto(eres, nres, docKey) {
   for (const bk in nres) {
     const nb = nres[bk];
     if (!nb) continue;
-    const eb = eres[bk];
-    if (!eb) { eres[bk] = nb; continue; }
+    const eb = strangerKeyHeld(eres, bk) ? eres[bk] : null;
+    if (!eb) { strangerKeySet(eres, bk, nb); continue; }
     if (nb.methods) {
-      if (!eb.methods) eb.methods = {};
+      if (!eb.methods) eb.methods = strangerKeyedMap();
       for (const mk in nb.methods) {
         const nm = nb.methods[mk];
         /* THE SAME NAME FOR TWO VERBS IS TWO ENDPOINTS, and merging them would OR one's bundle-origin onto
@@ -651,19 +658,19 @@ function _mergeResourcesInto(eres, nres, docKey) {
            the incumbent to `<verb>_<name>`; across documents neither page ever saw the other's, so both wrote
            the bare name and this loop was the first place the collision existed. It is resolved the same way,
            and the id — which the Send panel keys on — is re-derived rather than left naming the bare key. */
-        let key = mk, em = eb.methods[key];
+        let key = mk, em = strangerKeyHeld(eb.methods, key) ? eb.methods[key] : null;
         if (em && em.httpMethod !== nm.httpMethod) {
           key = String(nm.httpMethod).toLowerCase() + "_" + mk;
           if (typeof nm.id === "string" && nm.id.lastIndexOf(".") >= 0)
             nm.id = nm.id.slice(0, nm.id.lastIndexOf(".") + 1) + key;
-          em = eb.methods[key];
+          em = strangerKeyHeld(eb.methods, key) ? eb.methods[key] : null;
         }
-        if (!em) { eb.methods[key] = nm; continue; }   // distinct endpoint from another page -> keep both
+        if (!em) { strangerKeySet(eb.methods, key, nm); continue; }   // distinct endpoint from another page -> keep both
         _mergeMethodInto(em, nm, docKey);
       }
     }
     if (nb.resources) {
-      if (!eb.resources) eb.resources = {};
+      if (!eb.resources) eb.resources = strangerKeyedMap();
       _mergeResourcesInto(eb.resources, nb.resources, docKey);
     }
   }

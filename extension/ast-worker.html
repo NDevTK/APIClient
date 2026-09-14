@@ -19,6 +19,13 @@
 <!-- DCHECK/CHECK: the JS mirror of engine/host/check.h, loaded FIRST so every component can fail hard on a
      violated invariant (dev) exactly like the C engine — the confidence + isolation-testability substrate. -->
 <script src="check.js"></script>
+<!-- STRANGER-KEYED: the primitive for a map whose KEY is a name a page or a server chose — a URL path
+     segment, a GraphQL operationName, a response body's own field name, an OpenAPI tag. An object
+     literal already answers for eight such names, so a get-or-create over one reads the prototype and
+     skips its own create; the measured outcomes are a page-held abort of this zone and a polluted
+     Object.prototype. Loaded straight after check.js because a file that keys such a map without it
+     throws ReferenceError at the mint, which is the loud failure rather than the quiet one. -->
+<script src="lib/stranger-keyed.js"></script>
 <!-- MOJO: the IPC primitive, and then the mojom IDL that declares what may cross a process boundary. Loaded
      immediately after check.js because the IDL is VALIDATED as it is declared (an interface with a repeated
      ordinal, a parameter carrying no explanation, or a type this transport cannot serialize aborts here rather
