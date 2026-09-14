@@ -55,7 +55,15 @@ enum { COW_CUR_UNRECORDED = 0, COW_CUR_ABSENT = 1, COW_CUR_PRESENT = 2 };
    iterates in INSERTION order and that order is observable, so a DELETE whose inverse APPENDS rebuilds a
    different collection — `m.delete('a')` on ['a','b','c'] unapplied to ['b','c','a'], and a clear() came back
    reversed. A DELETE carries the position it was removed from; an ADD and an OVERWRITE carry JS_MAP_POS_TAIL,
-   which is the append an add replays and the nothing an overwrite places (its record is already there). */
+   which is the append an add replays and the nothing an overwrite places (its record is already there).
+   A WEAK collection's entry holds NONE of those three in its own fields: base.value, cur.value and map_old stay
+   UNDEFINED and map_weak holds a cell registered on the key instead, because a dup of a WeakMap key would be the
+   one counted reference in the system and would keep every key the collection has ever seen alive for the
+   session, once per flow. Read the three through cow_map_key/_base/_cur and never off the fields, and ask
+   cow_map_live first: a weak entry's key can be collected while the entry still stands, and the entry is then a
+   NO-OP rather than an error, since an unreachable key is a record no arm can look up. map_pos is
+   JS_MAP_POS_TAIL for every weak entry, asserted at the capture and again in the engine, because a weak
+   collection is not iterable and so has no observable order for an inverse to restore. */
 /* A FIFTH entry kind (is_state=1) is an opaque STATE BLOB over internal fields no property hook can see:
    a_base is the baseline state this flow found, a_cur the state this flow produced (saved at unapply, replayed
    at apply) — the same base/cur shape as a property slot. THREE TARGETS share it because they are one concept,
@@ -141,6 +149,7 @@ enum { COW_STATE_KINDS(COW_STATE_KIND_ID) COW_STATE_KIND_N };
 typedef struct { JSValue obj; JSAtom atom; int existed; JSPropertyDescriptor base; JSPropertyDescriptor cur;
                  int cur_state; void *vref;
                  int is_gendata; void *g0; void *g1; int is_map; int map_op; int map_pos; JSValue map_old;
+                 JSCowWeakRef *map_weak;
                  int is_state; int state_kind; void *target; size_t a_len; void *a_base; void *a_cur;
                  const CowRecord *rec; } CowEntry;
 
@@ -161,6 +170,27 @@ static void cow_entry_init(CowEntry *e) {
     e->cur_state = COW_CUR_UNRECORDED;
     e->state_kind = COW_STATE_ASYNC;
 }
+/* A MAP ENTRY'S THREE OPERANDS, WHICHEVER KIND OF COLLECTION IT IS. A STRONG entry dups the key and both
+   values into its own descriptors; a WEAK one may not (it would be the only counted reference to a key the
+   collection itself holds uncounted — see quickjs.h's JSCowWeakRef), so it holds a cell registered on the key
+   and reads them back through that. Three readers and a liveness test rather than a branch at each of the four
+   sites, because the sites differ in WHICH operand they want and not in how a weak entry is read.
+   A DEAD CELL IS NOT AN ERROR AND NOT A LOSS: the key has been collected, so nothing can look the record up
+   again, and a restore that would re-add it and one that would remove it are equally unobservable. The three
+   readers refuse a dead cell (the engine asserts it) and every caller asks cow_map_live first. */
+static int cow_map_live(const CowEntry *e) {
+    return e->map_weak == NULL || JS_CowWeakRefLive(e->map_weak);
+}
+static JSValueConst cow_map_key(const CowEntry *e) {
+    return e->map_weak ? JS_CowWeakRefKey(e->map_weak) : (JSValueConst)e->base.value;
+}
+static JSValueConst cow_map_base(const CowEntry *e) {   /* what an UNAPPLY writes back */
+    return e->map_weak ? JS_CowWeakRefBase(e->map_weak) : (JSValueConst)e->map_old;
+}
+static JSValueConst cow_map_cur(const CowEntry *e) {    /* what an APPLY writes */
+    return e->map_weak ? JS_CowWeakRefCur(e->map_weak) : (JSValueConst)e->cur.value;
+}
+
 /* ONE STATE, DUPLICATED — a restore hands the slot write a descriptor it CONSUMES, and the entry must still
    hold its own for the next switch. Every owned half is dup'd; which halves are live is the flags' business
    and not this function's, because an absent half is JS_UNDEFINED and a dup of that is free. */
@@ -685,7 +715,8 @@ void cow_capture_arr_append(JSContext *ctx, JSValueConst obj, JSAtom atom) {
 
 /* Capture a KNOWN-NEW Set/Map record (JSTimeTravelHooks.map_add): the key is not already in the collection, so
    like an array append it is a fresh entry needing no dedup and no baseline lookup. Flow-private collections (a Set
-   built after the fork) are skipped. base = key, cur = value; unapply deletes, apply re-adds. */
+   built after the fork) are skipped. base = key, cur = value for a STRONG collection; a weak one holds a cell and
+   leaves both UNDEFINED, for the reason the CowEntry comment gives. Unapply deletes, apply re-adds. */
 void cow_capture_map_add(JSContext *ctx, JSValueConst obj, JSValueConst key, JSValueConst val) {
     if (cow_hooks_off() || !g_current) return;
     CowDelta *d = g_current;
@@ -695,17 +726,27 @@ void cow_capture_map_add(JSContext *ctx, JSValueConst obj, JSValueConst key, JSV
     CowEntry *e = &d->e[d->n++];
     cow_entry_init(e);
     e->obj = JS_DupValue(ctx, obj);
-    e->base.value = JS_DupValue(ctx, key);   /* the record's key (owned) */
-    e->cur.value = JS_DupValue(ctx, val);    /* the record's value (owned; UNDEFINED for a Set) */
-    e->cur_state = COW_CUR_PRESENT;   /* the record's value is the entry's own, not a slot read back off the heap */
     e->is_map = 1;                     /* not slot-keyed — kept out of the hash index, like gendata */
     e->map_op = COW_MAP_ADD;
+    if (JS_IsWeakCollection(obj)) {
+        /* A WEAK record's key is the collection's own uncounted one, so this entry holds a CELL instead of a
+           dup — quickjs.h's JSCowWeakRef says why a dup here would pin every key an identity map has seen, for
+           the session, once per flow. An ADD has no BEFORE: its unapply deletes, which needs no value. */
+        e->map_weak = JS_NewCowWeakRef(ctx, key, JS_UNDEFINED, val);
+        CHECK(e->map_weak, "cow: OOM taking a weak handle on a Set/Map record — a lost capture leaks the "
+                           "record into every sibling arm");
+    } else {
+        e->base.value = JS_DupValue(ctx, key);   /* the record's key (owned) */
+        e->cur.value = JS_DupValue(ctx, val);    /* the record's value (owned; UNDEFINED for a Set) */
+        e->cur_state = COW_CUR_PRESENT;   /* the record's value is the entry's own, not read back off the heap */
+    }
     cow_capture_end();
 }
 
 /* Capture a reversible OVERWRITE / DELETE of an existing Set/Map record (JSTimeTravelHooks.map_mutate) as an
    undo-log entry — see the CowEntry comment. op is COW_MAP_OVERWRITE (base=key, cur=new, map_old=old) or
-   COW_MAP_DELETE (base=key, map_old=old). Flow-private collections are skipped. */
+   COW_MAP_DELETE (base=key, map_old=old), those three fields being where a STRONG collection's operands live; a
+   weak one holds them in a cell instead. Flow-private collections are skipped. */
 void cow_capture_map_mutate(JSContext *ctx, JSValueConst obj, JSValueConst key, JSValueConst old_val, JSValueConst val, int op, int pos) {
     if (cow_hooks_off() || !g_current) return;
     CowDelta *d = g_current;
@@ -715,13 +756,25 @@ void cow_capture_map_mutate(JSContext *ctx, JSValueConst obj, JSValueConst key, 
     CowEntry *e = &d->e[d->n++];
     cow_entry_init(e);
     e->obj = JS_DupValue(ctx, obj);
-    e->base.value = JS_DupValue(ctx, key);
-    e->cur.value = JS_DupValue(ctx, val);  /* the new value (OVERWRITE); UNDEFINED for DELETE */
-    e->cur_state = COW_CUR_PRESENT;   /* the record's value is the entry's own, not a slot read back off the heap */
     e->is_map = 1;
     e->map_op = (op == JS_MAP_MUTATE_DELETE) ? COW_MAP_DELETE : COW_MAP_OVERWRITE;
     e->map_pos = pos;                         /* where the inverse must put the record back — see CowEntry */
-    e->map_old = JS_DupValue(ctx, old_val);   /* the prior value, restored on unapply */
+    if (JS_IsWeakCollection(obj)) {
+        /* BOTH values go in the cell, not one: an OVERWRITE's before and after are each a value the page
+           associated with this key, so each can reach it, and an ordinary dup of either is the immortality the
+           cell exists to prevent. A DELETE has no AFTER. */
+        DCHECK(pos == JS_MAP_POS_TAIL,
+               "a WEAK collection's record mutation was captured with a position — a weak collection is not "
+               "iterable, so the order of its records is unobservable and its inverse has nowhere to place one");
+        e->map_weak = JS_NewCowWeakRef(ctx, key, old_val, val);
+        CHECK(e->map_weak, "cow: OOM taking a weak handle on a Set/Map record mutation — a lost capture leaks "
+                           "the mutation into every sibling arm");
+    } else {
+        e->base.value = JS_DupValue(ctx, key);
+        e->cur.value = JS_DupValue(ctx, val);  /* the new value (OVERWRITE); UNDEFINED for DELETE */
+        e->cur_state = COW_CUR_PRESENT;   /* the record's value is the entry's own, not read back off the heap */
+        e->map_old = JS_DupValue(ctx, old_val);   /* the prior value, restored on unapply */
+    }
     cow_capture_end();
 }
 
@@ -1246,10 +1299,16 @@ static void cow_restore_base(JSContext *ctx, CowEntry *e) {
     if (e->is_gendata) { cow_gd_install(e, e->g0); return; }   /* restore the shared original */
     if (e->is_state) { cow_state_restore(ctx, e, e->a_base); return; }
     if (e->is_map) {   /* invert the flow's record mutation: ADD->delete, OVERWRITE/DELETE->restore old value */
-        if (e->map_op == COW_MAP_ADD) JS_MapDeleteRecord(ctx, e->obj, e->base.value);
+        /* A WEAK entry whose key has been collected inverts to NOTHING, and that is exact: the key is
+           unreachable, so no arm can look the record up and neither re-adding it nor removing it is
+           observable. A strong entry is always live. */
+        if (!cow_map_live(e)) return;
+        if (e->map_op == COW_MAP_ADD) JS_MapDeleteRecord(ctx, e->obj, cow_map_key(e));
         /* AT ITS POSITION — a DELETE's inverse CREATES the record, and where it lands is observable. An
-           OVERWRITE's carries JS_MAP_POS_TAIL and never reaches the placement: its record is still there. */
-        else JS_MapAddRecord(ctx, e->obj, e->base.value, e->map_old, e->map_pos);
+           OVERWRITE's carries JS_MAP_POS_TAIL and never reaches the placement: its record is still there.
+           A WEAK entry always carries the tail: its collection is not iterable, so there is no order to put
+           anything back into — the engine asserts that at JS_MapAddRecord. */
+        else JS_MapAddRecord(ctx, e->obj, cow_map_key(e), cow_map_base(e), e->map_pos);
         return;
     }
     if (e->vref) {
@@ -1336,11 +1395,12 @@ static void cow_apply_entries(JSContext *ctx, CowEntry *ents, int n) {
         if (e->is_gendata) { cow_gd_install(e, e->g1); continue; }   /* install this flow's own clone */
         if (e->is_state) { cow_state_restore(ctx, e, e->a_cur); continue; }   /* re-install what this flow produced */
         if (e->is_map) {   /* replay the flow's record mutation: ADD/OVERWRITE->set new value, DELETE->delete */
-            if (e->map_op == COW_MAP_DELETE) JS_MapDeleteRecord(ctx, e->obj, e->base.value);
+            if (!cow_map_live(e)) continue;   /* the key is gone; see the unapply arm */
+            if (e->map_op == COW_MAP_DELETE) JS_MapDeleteRecord(ctx, e->obj, cow_map_key(e));
             /* AT THE TAIL, and that is the OPERATION's position rather than the entry's: an add appended when
                it happened, and a forward replay runs the entries in the order they were captured over the state
                they were captured against, so appending reproduces it. */
-            else JS_MapAddRecord(ctx, e->obj, e->base.value, e->cur.value, JS_MAP_POS_TAIL);
+            else JS_MapAddRecord(ctx, e->obj, cow_map_key(e), cow_map_cur(e), JS_MAP_POS_TAIL);
             continue;
         }
         if (e->cur_state == COW_CUR_UNRECORDED) continue;   /* never switched out: nothing of this flow's to replay */
@@ -1630,6 +1690,13 @@ static void cow_entries_free(JSContext *ctx, CowEntry *e, int n) {
         }
         if (e[i].is_map) {   /* obj + key(base.value) + new(cur.value) + old(map_old); atom is NULL */
             JS_FreeValue(ctx, e[i].obj);
+            /* A WEAK entry owns a CELL and none of the three descriptors — it never dup'd them, so freeing
+               them would release values it does not hold. The cell's own free unlinks the key's weak-ref
+               record where the key is still alive and finds nothing to unlink where the sweep has taken it. */
+            if (e[i].map_weak) {
+                JS_FreeCowWeakRef(JS_GetRuntime(ctx), e[i].map_weak);
+                continue;
+            }
             cow_desc_free(ctx, &e[i].base);
             cow_desc_free(ctx, &e[i].cur);
             JS_FreeValue(ctx, e[i].map_old);
