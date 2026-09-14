@@ -39395,14 +39395,33 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     int width;
                     JSValue ex;
 
-                    /* `ret_val` IS THIS CHAIN'S ONE OWNED RESULT REGISTER, CLEARED BEFORE IT IS REUSED — the
-                       convention AL_TA_WRITE below establishes for this same dispatch, where it MOVES the
-                       register into `coerced` and hands ownership to the store. This arm has no coercion to
-                       hand it to, because the whole point is that the unknown is never coerced, so the
-                       equivalent of that move is a free. Assigning the completion over it without this would
-                       leak whatever the register was holding when the write began. */
-                    JS_FreeValue(ctx, ret_val);
-                    ret_val = JS_UNDEFINED;
+                    /* THE REGISTER IS ALREADY THIS CHAIN'S — do_array_len_start establishes it, and this arm
+                       must not free it. The retired argument is rewritten rather than deleted because it is the
+                       one a reader re-derives: it said `ret_val` is THIS CHAIN'S ONE OWNED RESULT REGISTER,
+                       cleared before reuse exactly as AL_TA_WRITE below MOVES it into `coerced`, so the
+                       equivalent of that move is a free — and that assigning the completion over it would
+                       otherwise leak whatever it held. Its premise is false for THIS arm, and structurally:
+                       AL_TA_PRIM is written only by do_array_len_start and is advanced to AL_TA_WRITE before any
+                       request is issued, so this arm is reached ONLY on a FIRST entry, where the chain has asked
+                       nothing and so has no answer. What stood in the register was the ENCLOSING OPCODE'S, still
+                       ALIASING a value the operand stack owns — for `u8[i] = screen.width` it is the accessor
+                       getter's own result, which is the very unknown being stored — so the free gave back a
+                       reference this chain never took. AL_TA_WRITE's move is untouched: that arm IS a resumed
+                       entry and the register there genuinely is its answer.
+                       MEASURED END TO END under gdb on the native smoke, as one refcount series over the
+                       unknown: `al->val = js_dup(gp_val)` raised it to 3, this line dropped it to 2, the span's
+                       own dup raised it to 3, and the two matching releases then took it to ZERO — with CSSOM
+                       VIEW §4.3's per-realm Screen member record still naming it at index 2 (`width`). The block
+                       was handed straight to js_closure for the next async body, so the record's slot named an
+                       AsyncFunction and gc_decref_child aborted on a mark edge with no counted reference behind
+                       it. Nothing read the freed bytes before they were reused, which is why a sanitizer run
+                       says nothing about this.
+                       NO DCHECK STANDS HERE: with the register established at the chain's start, nothing between
+                       that site and this one writes it, so `JS_IsUndefined(ret_val)` is a condition whose two
+                       sides cannot disagree — a non-check that would read as one.
+                       RETIREMENT: this record goes when a chain's answer stops being a register shared with the
+                       enclosing opcode and becomes the carrier's own field, after which no arm can read one it
+                       did not write. */
 
                     DCHECK(JS_VALUE_GET_TAG(al->obj) == JS_TAG_OBJECT && is_typed_array(tap->class_id),
                            "10.4.5.18 TypedArraySetElement's unknown-input arm was entered with a target that "
@@ -40575,6 +40594,25 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     {
                         JSArrayLen *al = js_mallocz(ctx, sizeof(*al));
                         if (unlikely(!al)) { JS_ThrowOutOfMemory(ctx); goto getprop_throw; }
+                        /* THE CHAIN'S ANSWER REGISTER, ESTABLISHED WHERE THE CHAIN BEGINS. `ret_val` is the
+                           dispatch's one result register and it is SHARED with the enclosing opcode, which has
+                           not written it for this chain: a carrier built here has issued no request, so it has
+                           no answer, and whatever stands in the register is the opcode's — an ALIAS of a value
+                           the operand stack owns, never a reference this chain may spend. Stating that here is
+                           what makes do_array_len_step's one complete-on-first-entry arm (10.4.5.18 over an
+                           unknown) unable to read another chain's register; that arm FREED it, which released a
+                           reference nobody had taken and freed a live unknown out from under the realm record
+                           still naming it. See the argument there for the measurement.
+                           IT IS AN ASSIGN AND NOT A FREE, which is the same choice every sibling in this block
+                           makes — `ret_val = JS_FALSE`, `ret_val = js_bool(dres)` and `ret_val = JS_UNDEFINED`
+                           all stand over it without releasing — because the register is not owned at any of
+                           these points. Freeing here would be the defect this line removes, one level up.
+                           AND THE CANONICAL SPELLING WAS ALREADY ONE LABEL OVER: do_set_recv_start, the other
+                           carrier this dispatch builds to park a keyed write across the page's code, has always
+                           written exactly this line immediately before its own `goto`. Two labels, one contract,
+                           and only this one lacked it — so the arm below had to invent a teardown for a register
+                           that should never have reached it holding anything. */
+                        ret_val = JS_UNDEFINED;
                         al->obj = js_dup(gp_obj);
                         al->val = js_dup(gp_val);
                         al->recv = js_dup(gp_recv_r);
