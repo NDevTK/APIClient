@@ -2035,17 +2035,30 @@ static bool xhr_main_fetch_local(JSContext *ctx, XhrData *d)
        never sees this request because there is nothing to state to it. CLAUDE.md's
        §A-REQUEST-CARRIES-THE-PROVENANCE arrives at the same place from the other side: an XMLHttpRequest is
        credentialed by construction, a method not established to be in RFC 9110 §9.2.1 Safe Methods' safe set
-       is not established to leave the server's state alone, and this one came off a forced arm — the one
-       combination that is never a setting. Its correct output is what that rule names: derive it in full,
-       report it, do not send it. §3.5.6 step 6's endpoint record one frame up is where the report happened.
+       is not established to leave the server's state alone, and this one came off a forced arm. THAT LAST
+       CLAUSE USED TO READ "the one combination that is never a setting", AND IT IS REWRITTEN RATHER THAN
+       DELETED BECAUSE IT IS THE REASONING A READER RE-DERIVES (CLAUDE.md
+       §AND-THAT-ABSOLUTE-IS-RETIRED-BY-THE-PROJECT-OWNER): stripping the cookie never made a request
+       uncorrelated with the person, since the authority can be in the ADDRESS — a presigned URL, a reset or
+       invite token, a signed webhook — and the address can have been DERIVED from a credentialed read; and
+       §9.2.1 grades what a client INTENDS rather than what a server does. Those three are SIGNALS the egress
+       policy surfaces per-origin for a person to decide, and their correct output where nobody has widened
+       the origin is the DEFAULT rather than a refusal — derive it in full, report it, do not send it, a
+       derived-and-unfired request being the report rather than a gap in it. §3.5.6 step 6's endpoint record
+       one frame up is where the report happened.
        IT IS THE SAME SHAPE AS THE BLOCK BELOW AND NOT A SECOND MECHANISM: §3's response IS a network error
        already, so this is nothing written and everything not done — the lifecycle machine's "handle errors"
        fires the request error steps on the way out, which for §3.5.6 is an `error` event.
        NAMED RESIDUAL — NOT COVERED: the world in which the real method IS one §9.2.1 calls safe, where a
        browser would have made the request and the reply would have been learned. WHAT THE NEXT DIFF BUILDS:
        one more ask over the same operand this member already forks at OPEN_METHOD_OP — whether this method is
-       in that safe set — so the flow standing on its true arm composes and fires while the flow standing on
-       the remainder does not, instead of one answer covering both. HOW ITS ABSENCE SHOWS: a bundle whose only
+       in that safe set — so the flow standing on its true arm has a method it can COMPOSE AND STATE while the
+       flow standing on the remainder does not, instead of one answer covering both. THAT CLAUSE SAID "composes
+       and fires", AND THE RETIREMENT ABOVE MOVED THE SECOND VERB OUT OF THIS FILE: safe-set membership is one
+       SIGNAL the chokepoint surfaces per-origin and never the firing decision itself, so what that arm gains
+       is the right to be STATED to safe-fetch.js — whether the act is spent is that file's answer and a
+       person's. The mechanism half of the clause is the original author's and is unchanged here; it is a
+       hypothesis about this tree and is re-derived before it is built. HOW ITS ABSENCE SHOWS: a bundle whose only
        request is built from an uncalled function's argument emits its endpoint and never a reply, so that @H
        record carries no server-learned example values while the sibling arm that took a literal method does. */
     if (concolic_is(d->method))

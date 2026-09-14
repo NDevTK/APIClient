@@ -463,11 +463,27 @@ const _inflight = new Set();
  * sends it with the person's own session attached, at a host the page named. RFC 9110 §9.2.1 "Safe Methods"
  * does not contain POST — "Of the request methods defined by this specification, the GET, HEAD, OPTIONS, and
  * TRACE methods are defined to be safe" — so nothing about the METHOD makes this cheap, and the body is one
- * the app never produced. CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE names credentialed + state-mutating +
- * values-the-app-never-produced as the one combination that is never a setting; what takes this out of that
- * combination is not a property of the request, it is that a person asked for it at a surface naming the
- * endpoint. So the grade is a REQUIRED argument and its absence aborts: this used to be reached from
- * lib/response-decode.js the instant a captured response body was protobuf, with nobody at any surface.
+ * the app never produced.
+ * THE REASON THAT STOOD HERE IS REWRITTEN RATHER THAN DELETED, BECAUSE IT IS THE ONE A READER RE-DERIVES. It
+ * read that CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE "names credentialed + state-mutating +
+ * values-the-app-never-produced as the one combination that is never a setting", and that what took this
+ * call out of that combination was a person asking for it. The project owner has RETIRED that absolute
+ * (CLAUDE.md §AND-THAT-ABSOLUTE-IS-RETIRED-BY-THE-PROJECT-OWNER): NOTHING IS REFUSED AT EVERY SETTING,
+ * because stripping the cookie never made a request uncorrelated with the person — the authority can be in
+ * the ADDRESS (a presigned URL, a reset or invite token, a signed webhook) and the address can have been
+ * DERIVED from a credentialed read. The §9.2.1 quotation above survives as a SIGNAL about what a client
+ * INTENDS and never as a guarantee about what a server DOES, since that section says in its own text that an
+ * implementation may cause side effects anyway.
+ * THE ASSERT DOES NOT MOVE, AND ITS REASON IS NOW THE SMALLER AND TRUER ONE. What replaces the absolute is a
+ * per-signal, per-origin control a person decides — method, credential state, provenance, URL-carried
+ * authority, credential lineage, destination and intended invalidity — whose DEFAULT at an origin nobody has
+ * widened is PROGRAM LOADS ONLY, which a probe is not. So the fallback for this call is to derive it, report
+ * it and not send it, and a derived-and-unfired request is the report rather than a gap in it. What lifts
+ * THIS one above that default is no property of the request at all: it is WHO ACTED — a person at a surface
+ * naming the endpoint, which is the strongest grade SECURITY.md's egress taxonomy has. A fact about who
+ * acted is one no request carries, so it is a REQUIRED argument and its absence aborts rather than
+ * defaulting: this used to be reached from lib/response-decode.js the instant a captured response body was
+ * protobuf, with nobody at any surface.
  */
 async function performProbeAndPatch(documentId, service, targetUrl, apiKey, initiator) {
   pageContextRequireUserInitiated(initiator,

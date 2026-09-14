@@ -685,16 +685,28 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
      looked like protobuf and the discovery document did not already describe the method. Nobody had pressed
      anything: `handleResponseBody` runs on traffic the page made, and the probe is a request THIS TOOL
      composed at somebody else's server on the strength of that traffic arriving.
-     THAT IS THE ONE COMBINATION CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE SAYS IS NEVER A SETTING:
-     credentialed, a method RFC 9110 §9.2.1 "Safe Methods"' safe set does not contain, and a body the app never
-     produced. Its answer is the one that section already gives — "derive it in full, report it, do not send
-     it" — and the derivation is on the record: the endpoint is learned, `seedUrl`/`seedMethod` name the
-     address and the verb the page used, and lib/popup-discovery.js renders a "probe" button for exactly the
-     POST records this arm used to fire at.
+     THE RULE THAT DECIDED THIS IS REWRITTEN RATHER THAN DELETED, BECAUSE THE DELETION SURVIVES IT AND THE
+     REASONING IS THE ONE A READER RE-DERIVES. It read that this is "THE ONE COMBINATION CLAUDE.md
+     §A-REQUEST-CARRIES-THE-PROVENANCE SAYS IS NEVER A SETTING" — credentialed, a method
+     RFC 9110 §9.2.1 "Safe Methods"' safe set does not contain, and a body the app never produced. The project
+     owner has RETIRED that absolute (CLAUDE.md
+     §AND-THAT-ABSOLUTE-IS-RETIRED-BY-THE-PROJECT-OWNER): nothing is refused at every setting, because
+     stripping the cookie never made a request uncorrelated with the person — the authority can be in the
+     ADDRESS and the address can have been DERIVED from a credentialed read — and §9.2.1 grades what a client
+     INTENDS rather than what a server does.
+     THE ARM STILL GOES, AND ITS REASON IS NOW THE ONE THAT WAS ALWAYS DOING THE WORK: NOBODY ASKED. Those
+     three facts are SIGNALS the egress policy surfaces per-origin for a person to decide, and the DEFAULT at
+     an origin nobody has widened is PROGRAM LOADS ONLY — no data fetch, no probe, no discovery. This arm
+     fired on traffic the page made, at an origin nobody had widened, with no person at any surface, so its
+     correct output is the one the retired rule also named: derive it in full, report it, do not send it. A
+     derived-and-unfired request is not a gap in the report, it IS the report — and the derivation is on the
+     record: the endpoint is learned, `seedUrl`/`seedMethod` name the address and the verb the page used, and
+     lib/popup-discovery.js renders a "probe" button for exactly the POST records this arm used to fire at.
      IT COULD NOT MOVE TO THE CHOKEPOINT, AND THAT IS THE FINDING RATHER THAN AN OMISSION. `safeFetch`
-     hardcodes `method:"GET"` and reads neither `opts.method` nor `opts.body`, which is how it enforces §9.2.1
-     structurally; teaching it a POST to keep this arm alive would delete that argument from the one file whose
-     safety rests on it. The capability is not lost — it is at the grade entitled to it, one click away. */
+     hardcodes `method:"GET"` and reads neither `opts.method` nor `opts.body` — a fact about what that
+     transport IS rather than a policy it applies; teaching it a POST to keep this arm alive would delete that
+     fact from the one file whose safety rests on what it can and cannot compose. The capability is not lost
+     — it is at the grade entitled to it, one click away. */
 
   /* AUTOMATIC BACKGROUND DISCOVERY — skip for boring fetches (probing /.well-known/openapi.json on a CDN is
      wasted traffic).
@@ -780,8 +792,10 @@ async function handleResponseBody(tabId, msg, frameId, documentId) {
      attached, deduped by host+path in a module-global set (`_svcInfoProbedUrls`, which goes with it, in
      lib/discovery-probe.js). It provoked a gapi error envelope naming the canonical service/method and the
      required OAuth scopes, and merged those onto the discovery method record.
-     WHY IT CANNOT SIMPLY MOVE: it is a POST, and `safeFetch` reads neither `opts.method` nor `opts.body` — the
-     structural enforcement of RFC 9110 §9.2.1 "Safe Methods" — and it NEEDS the session, because the whole
+     WHY IT CANNOT SIMPLY MOVE: it is a POST, and `safeFetch` reads neither `opts.method` nor `opts.body`, so
+     the one verb it can send is the one RFC 9110 §9.2.1 "Safe Methods" names first — a fact about what that
+     transport IS rather than a guarantee it enforces, since §9.2.1 grades what a client INTENDS and says an
+     implementation may cause side effects anyway — and it NEEDS the session, because the whole
      product is an authenticated error envelope; unauthenticated, the reply is a 401 naming no service, no
      method and no scope. So "route it through the chokepoint uncredentialed" would keep the request and lose
      the answer, which is worse than not asking.

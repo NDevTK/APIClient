@@ -812,8 +812,16 @@ int request_init_apply(JSContext *ctx, JSValueConst init, const RequestRecord *f
              * surface taking the domain-annotated SHAPE (concolic_name_cstr) in the one column an endpoint is
              * identified by, and §4.1 Main fetch answering a method this agent cannot spell INSIDE the agent
              * — credentialed by construction, not established to be in RFC 9110 §9.2.1 Safe Methods' safe set,
-             * and off a forced arm is the one combination that is never a setting, whose correct output is to
-             * derive it, report it and not send it. AND THE FORK NEEDS A MACHINE: this operation is §5.4 steps
+             * and off a forced arm. THAT LAST CLAUSE USED TO READ "the one combination that is never a
+             * setting", AND IT IS REWRITTEN RATHER THAN DELETED BECAUSE IT IS THE REASONING A READER
+             * RE-DERIVES (CLAUDE.md §AND-THAT-ABSOLUTE-IS-RETIRED-BY-THE-PROJECT-OWNER): stripping the cookie
+             * never made a request uncorrelated with the person, since the authority can be in the ADDRESS
+             * and the address can have been DERIVED from a credentialed read, and §9.2.1 grades what a client
+             * INTENDS rather than what a server does. Those three are SIGNALS the egress policy surfaces
+             * per-origin for a person to decide, and their correct output where nobody has widened the origin
+             * is the DEFAULT rather than a refusal: derive it, report it and not send it, a derived-and-
+             * unfired request being the report rather than a gap in it.
+             * AND THE FORK NEEDS A MACHINE: this operation is §5.4 steps
              * 10-27 for BOTH of its callers and holds no JSStepHdr, so step_fork_run cannot be asked here
              * until it takes one — which is the single change that unblocks this member and the TWO
              * `init_str` members above it. It was seven until Web IDL §3.2.18 Enumeration types gained its
