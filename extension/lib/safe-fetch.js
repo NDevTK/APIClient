@@ -2590,4 +2590,3 @@ if (typeof self !== "undefined") {
      would be the second copy of a rule nothing checks. */
   self.safeFetchReachJoin = safeFetchReachJoin;
 }
-
