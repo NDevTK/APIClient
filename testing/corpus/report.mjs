@@ -362,7 +362,16 @@ for (const p of passes) for (const r of p.rows) {
        already splits it -- `finished`/`finishedFlows`/`finishedCands` and `sold`/`soldFlows`/`soldCands` are
        composed into `_cold`, and bridge.js relays `_cold` onto every run record beside `wfq` (GREPPED: the
        relay loop over `["_cold", "_heap", "_swap", "_forkAt", "_absent"]`, and the record write `cold:
-       result._cold`). THE NEXT DIFF reads that pair in site.mjs and prints them as columns here. It is not
+       result._cold`). THE NEXT DIFF reads those in site.mjs and prints them as columns here -- AND IT READS
+       `pagedAsks` WITH THEM, WHICH IS THE HALF THAT MAKES `sold` READABLE AND WHICH THIS RESIDUAL NAMED ONLY
+       THE OUTCOME OF. The sale is not a thing the scheduler decides: `reclaim_install(JS_GetRuntime(ctx),
+       engine_reclaim_tail, NULL)` puts it on the ALLOCATOR'S REFUSAL EDGE, so `sold: 0` is both "the floor was
+       never reached, nothing was ever asked" and "the pager was asked and declined" -- opposite findings, one
+       about a dwell that never filled the heap and one about the pager itself. `pagedAsks` is engine.h's
+       "times the allocator's refusal edge reached this engine" and is composed into `_cold` beside them, which
+       is the record-at-the-ASK that this project's own rule asks for over any gated operation. A next diff
+       that took the two outcome rows alone would rebuild the three-states-behind-one-answer shape this row
+       just spent a commit getting out of. It is not
        done in this one because `_cold` is a SIBLING object of `_wfq`, so a reader of it needs its own sample
        index and its own agreement check against `countersFrom` -- exactly the reconciliation this row just
        stopped needing, and adding it back untested beside the row that shed it is how the two get confused.
