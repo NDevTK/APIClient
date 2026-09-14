@@ -5467,20 +5467,69 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
  * over. THE HALF THAT IS STILL MISSING IS THE PIN, and it is the next thing here and nothing else: a SECOND
  * operation from this arm is still written with no addressee, so the peer performs it in every one of its
  * timelines again and this arm forks over all of them — the cross-product, of which every off-diagonal member
- * is a timeline neither agent was ever in (world_relation calls that pair CONTRADICT, and merging one is the
- * same fabrication as merging two senders' worlds at a delivery). What that needs, in order: the asking flow
- * carries the world it took an answer from (it is on the entry here, and engine_host_take drops the entry, so
- * it has to move onto the flow); the record grammar gains an ADDRESSEE field beside the target document
- * (remote_op.c's fields are positional, so it is one index and every operand shifts); and engine_perform
- * attaches an addressed record to the ONE flow whose world it names instead of to all of them, crashing where
- * that timeline is gone rather than answering out of another.
+ * is a timeline neither agent was ever in (world_vec_relate calls that pair CONTRADICT, and merging one is the
+ * same fabrication as merging two senders' worlds at a delivery).
+ *   WHAT THE NEXT DIFF BUILDS — AND THIS CLAUSE WAS WRONG ON EVERY ONE OF ITS THREE PARTS, WHICH IS RECORDED
+ *     HERE RATHER THAN QUIETLY REPLACED BECAUSE A REMEDY CLAUSE IS READ ONCE, BY SOMEBODY WHO HAS ALREADY
+ *     DECIDED TO DO THE WORK, SO A WRONG ONE IS NOT CAUGHT — IT IS EXECUTED. It read: "the asking flow
+ *     carries the world it took an answer from (it is on the entry here, and engine_host_take drops the entry,
+ *     so it has to move onto the flow); the record grammar gains an ADDRESSEE field beside the target document
+ *     (remote_op.c's fields are positional, so it is one index and every operand shifts); and engine_perform
+ *     attaches an addressed record to the ONE flow whose world it names instead of to all of them, crashing
+ *     where that timeline is gone rather than answering out of another."
+ *     (i) THE CARRIER EXISTS. `deliver_world_q` is a per-flow list of [vector, taken] pairs that flow.h calls
+ *       "what this timeline has already BECOME"; it is pushed by flow_world_commit_push, inherited by
+ *       flow_world_commit_fork inside engine_sibling_assemble, written to the cold tier and read back, and
+ *       already consumed by a CONTRADICT predicate (deliver_admits). An answer TAKEN from a peer world is a
+ *       commitment of exactly the RECEIVED kind and belongs on that list. What is NOT a drop-in, and is the
+ *       part to re-derive rather than to copy from here: an arm forked below is a clone taken BEFORE the read
+ *       returned, so it never heard from the world its parent's entry holds — inheriting the parent's
+ *       RECEIVED row onto it would state the fabrication instead of refusing it, and the arm's row has to be
+ *       REPLACED with the world of the answer it was forked over. That is three writes and an inheritance
+ *       rule, not one line, and deliver_commit_implied's own measured residual is downstream of the list it
+ *       lengthens.
+ *     (ii) THE FIELD MAY NOT GO BESIDE THE DOCUMENT. `engine/route.mjs` is trusted-zone JavaScript, which
+ *       §A-CROSS-BOUNDARY-DIFF makes LIVE ON WRITE, and it reads this grammar positionally — `split('\t')[1]`
+ *       for the holder and `split('\t')[2]` for the asking world — while relaying the record VERBATIM. An
+ *       addressee at index 2 silently re-points that second read at a world nobody asked from. AFTER the world
+ *       vector, at index 3, leaves both reads alone, and the two hosts read no further (main.c's qjs_perform
+ *       is a pass-through; wpt_runner.c's parent walks to the second tab for the document and forwards the
+ *       rest), so the pin does NOT span the JS/C seam and lands as C only. The tail is variadic
+ *       (`object.apply … <arg>*`), so index 3 is the only fixed slot every verb has.
+ *     (iii) ADDRESSING IS NOT IDENTITY, AND THE PRESCRIBED CRASH FIRES ON THE PEER BEING CORRECT. A fork
+ *       RETIRES the world it branched at and mints a child for both arms (world_mint_child), so every live
+ *       flow's world is a LEAF: the world an answer named stops naming any flow the first time that peer
+ *       timeline takes a branch, which is the ordinary thing a flow does and not a timeline being "gone".
+ *       "The ONE flow whose world it names" is therefore empty in the common case, and its descendants — real
+ *       timelines the asker must still explore, each of them the answering one CONTINUED — would be deleted
+ *       rather than refused. The criterion is world.h's own: within one forest "one is a continuation of the
+ *       other" is exactly SAME or ANCESTOR, and everything else is CONTRADICT, "a pair no single receiving
+ *       timeline may hold". So engine_perform's loop refuses the flows the addressee CONTRADICTS and attaches
+ *       to the rest — the mirror of deliver_admits, over this instance's live flows instead of over one
+ *       flow's commitments, and INDEPENDENT is not a refusal there either.
+ *     AND THE METHOD IS THE FINDING RATHER THAN THE THREE ERRORS: all of it was written from a model in which
+ *     a peer's timelines are a STATIC SET that answers and then waits. They are flows on the one frontier that
+ *     keep running, and a fork renames them. The clause also cited `world_relation`, which names nothing in
+ *     this tree — the mechanism it rests on is spelled world_vec_relate, and grepping it would have been the
+ *     one command that reached the file whose contract refutes the design.
+ *   WHAT THE PIN DOES NOT BUY, said plainly because a reader meeting a cross-product reaches for a cost fix:
+ *     it does not shorten the FIRST read. A flow that has taken no cross-instance answer addresses nobody, so
+ *     every one of the peer's timelines answers and every one of those answers is true of the document it was
+ *     computed in — N answers are N facts and the fork over them is required (HTML §7.2.2.1's `closed` is
+ *     both true and false across a peer's arms). The cross-product is wrong because its off-diagonal members
+ *     are worlds neither agent was in, never because there are many of them; a narrowing aimed at the count
+ *     deletes real ones.
  *   HOW ITS ABSENCE SHOWS, stated as an observation rather than as whichever arm forked last, because
  *     that member is whatever the peer branched into most recently: engine_perform reads no addressee,
  *     so the number of timelines answering ONE token is the peer's whole live frontier for EVERY read.
  *     A read made from an arm that ALREADY names a peer timeline is therefore answered by exactly as
  *     many timelines as one made from a flow that has never taken a cross-instance answer, and both
- *     counts move with the PEER's forking and never with the ASKER's lineage. The pin arriving is the
- *     first of those two counts becoming ONE while the second does not. */
+ *     counts move with the PEER's forking and never with the ASKER's lineage. The pin arriving is those
+ *     two counts ceasing to be equal — the addressed one becoming a strict subset whose dropped members
+ *     are exactly the worlds the addressee CONTRADICTS, which is ONE only where the peer has not branched
+ *     since it answered.
+ *   RETIREMENT: this whole block goes when engine_perform's attach loop consults an addressee, at which
+ *     point the refusal is in the code and the reasoning above is re-derivable from it. */
 static int flow_answer_fork(JSContext *ctx, Flow *f) {
     int n = pending_count(f->pending), i;
 
