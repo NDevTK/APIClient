@@ -6256,13 +6256,15 @@ static TfErrEdges g_tf_err_edges[] = {
     { "rejMUTE",      0, 0, 0 },   /* cancelled, then handled — announced at NEITHER edge */
     { "rejRELAPSE",   0, 0, 0 },   /* corrected and then announced AGAIN — the latch's rising edge */
     { "rejTWICE",     0, 0, 0 },   /* two occurrences, one taken back — the row still stands, so no correction */
-    /* …AND THE ONE THIS DOCUMENT RAISES ITSELF, which no chunk can stage. DOM §4.2.3's move step 24.3 enqueues
-       a reaction — that section holds nine lists and exactly one of them reaches step 24, whose single
-       sub-list has three items, so the sub-number is unambiguous. And HTML §4.13.6's
-       `enqueue a custom element callback reaction` list, step 3, synthesizes a
-       disconnected-then-connected body for a class
-       declaring no `connectedMoveCallback`. THE LIST IS NAMED BECAUSE §4.13.6 HOLDS EIGHT OF THEM and four
-       have a step 3, so a bare sub-number there is the unfalsifiable kind rather than the wrong kind.
+    /* …AND THE ONE THIS DOCUMENT RAISES ITSELF, which no chunk can stage.
+       DOM §4.2.3 "Mutation algorithms"'s move step 24.3 enqueues a reaction — that section holds nine lists
+       and exactly one of them reaches step 24, whose single sub-list has three items, so the sub-number is
+       unambiguous. And HTML §4.13.6 "Custom element reactions"' `enqueue a custom element callback reaction`
+       list, step 3, synthesizes a disconnected-then-connected body for a class declaring no
+       `connectedMoveCallback`. THE LIST IS NAMED BECAUSE MORE THAN ONE OF §4.13.6'S LISTS HAS A
+       STEP 3, so a bare sub-number there is the unfalsifiable kind rather than the wrong kind — and the count
+       behind that lives at the `move-throw` ladder and is NOT restated here, because this sentence and two
+       others were three copies of one census and carried one wrong figure between them.
        So `x-throwmoved`'s `disconnectedCallback` runs on `moveBefore` and
        its throw is CORRECT behaviour rather than a defect. The token is the fixture's own — the string this
        document throws — and never a word of any engine message, which is the line the printer's paragraph
@@ -12077,9 +12079,10 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "/api/movebeforethrow",
           "HierarchyRequestError%3AHierarchyRequestError%3ANotFoundError%3AHierarchyRequestError" },
         { "/api/movebeforece",    "ispreserved" },   /* connectedMoveCallback ONLY — not the c/d pair */
-        /* §4.13.6's `enqueue a custom element callback reaction` list, step 3 — the ALGORITHM is named
-           because that section holds EIGHT lists and four of them have a step 3, so a bare sub-number there
-           is the unfalsifiable kind (every candidate reading confirms it) rather than the wrong kind. The
+        /* HTML §4.13.6 "Custom element reactions"' `enqueue a custom element callback reaction` list, step 3 —
+           the ALGORITHM is named because MORE THAN ONE list in that section has a step 3, so a bare
+           sub-number there is the unfalsifiable kind (every candidate reading confirms it) rather than the
+           wrong kind; the count behind that is stated ONCE, at the `move-throw` ladder. The
            SAME move for a class with no connectedMoveCallback. `pair` is step
            3.4's synthesis in order (append 'c', move 'd' then 'c'); `none` is step 3.3's return, which
            enqueues nothing; `abandon` is 3.4.1's rethrow ending the synthesized callback, so 3.4.2 does not
@@ -12237,12 +12240,30 @@ static int probes_eval(const char *js, Probe *out, int cap) {
      *
      * `x-throwmoved`'s `disconnectedCallback` throws on `moveBefore`, and that is the STANDARD's own
      * compatibility default rather than a defect: DOM §4.2.3's move step 24.3 enqueues a reaction, and
-     * HTML §4.13.6's `enqueue a custom element callback reaction` list, step 3 — it holds eight lists,
-     * so the algorithm is named rather than the sub-number left bare — synthesizes a disconnected-then-
-     * connected body for a class declaring no
-     * `connectedMoveCallback`, and §4.13.2.1 says by default a custom element resets its state as if removed
-     * and re-inserted, with preserving it the author's opt-in. So the throw is correct and the fixture owes it
-     * an assertion, not a repair.
+     * HTML §4.13.6 "Custom element reactions"' `enqueue a custom element callback reaction` list, step 3 —
+     * the ALGORITHM is named rather than the sub-number left bare because MORE THAN ONE list in that section
+     * has a step 3 — synthesizes a disconnected-then-connected body for a class declaring no
+     * `connectedMoveCallback`. HTML §4.13.2.1 "Preserving custom element state when moved" states that
+     * default in the standard's own words:
+     * "by default, custom elements reset their state as if they were removed and re-inserted".
+     * `connectedMoveCallback` is the author's OPT-IN out of that, so the throw is correct and the fixture owes
+     * it an assertion, not a repair.
+     * AND THE MISREADING IS NAMED HERE BECAUSE IT IS THE ONE A READER ARRIVES WITH — that `moveBefore` exists
+     * so a node relocates WITHOUT the disconnect/reconnect pair, which makes a `disconnectedCallback` in its
+     * frame list read as a fidelity defect and has been relayed as one. What the member makes a separate
+     * primitive is the TREE EDIT: DOM §4.2.3 "Mutation algorithms"' move step 24.2 carries the note that it
+     * "does not invoke the insertion steps or removing steps for inclusiveDescendant", which is what stops a
+     * move destroying the state a remove-then-insert destroys. The CALLBACKS are the opposite default, by
+     * §4.13.2.1's sentence above, and the engine reaching its own native member is the frame list SAYING so.
+     * THE CENSUS BEHIND `MORE THAN ONE` LIVES HERE AND NOWHERE ELSE: the two sibling sites defer to this
+     * paragraph rather than restate it, because they were three copies of one count that were wrong together,
+     * which is the one shape no per-site reading can catch. Counting depth-1 `<ol>` elements between the
+     * §4.13.6 and §4.13.7 headings of the document fetched from the registry's own `base` gives FIVE lists,
+     * THREE of them carrying a step 3; the figure that stood at all three sites, EIGHT and FOUR, is wrong
+     * against that document. What calibrates the count is not an argument here but a positive control: the
+     * identical count reproduces the NINE this file states for DOM §4.2.3 exactly, and that sibling census is
+     * right. Both repositories are shallow, so whether EIGHT was ever true is NOT ESTABLISHABLE from this
+     * checkout and is not claimed. The CONCLUSION is untouched at three.
      * IT MAY NOT BE MOVED INTO A STAGED CHUNK, and this is measured rather than argued. `stages_page_error`
      * covers an ADDRESS, and the only address that could cover this throw is the document's own — which the
      * printer's paragraph refuses, because it would swallow every statement of a two-thousand-statement
