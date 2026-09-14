@@ -337,6 +337,21 @@ for (const p of passes) for (const r of p.rows) {
        one disk, 35 rows carry `flows`, `wfqMembers` and both indices; the indices AGREE in all 35 and the
        difference is ZERO in all 35, including rows minting 8940, 8220, 5355 and 4291 members -- so it is not a
        small-sample artifact. `parked` reads 0 in all 35 beside it.
+       AND 19 OF THOSE 35 CARRY NO INFORMATION ABOUT RECLAMATION, WHICH THE HEADLINE COUNT HID. The question
+       a sibling lane raised of a different instrument is owed here: is a zero a property of WHEN the table
+       was read rather than of what the engine did? Asked and answered in two parts. It is NOT the sampler
+       defect -- `_wfq` is composed by `result_wfq_json()` once per RESULT DOCUMENT, not by a tick sampler, so
+       there is no first-tick table to mistake for a terminal one. And it is not structural, because the
+       identity `arrivals - departures == members` is DCHECKed INSIDE the census "at the one moment all three
+       terms are in one hand", so `flows - members` is a TRUE reading of `departures` at whatever instant the
+       entry was composed at. What survives is the WEAK form, and it is real: a reading taken early is true and
+       UNINFORMATIVE, because nothing has yet had time to depart. So the rows split. SIXTEEN were composed
+       after work that forbids an early reading -- 8940 members minted against 7648 context switches, 8220
+       against 6916, 5355 against 4210, 4291 against 3124 -- and those carry the finding. NINETEEN read
+       `flows` at 1, 2, 4 or 8, which is indistinguishable from a run that barely started, and their zero says
+       nothing either way. THE FINDING RESTS ON THE SIXTEEN. Quoting 35 was counting rows that cannot speak
+       alongside rows that can, which is the evidence-inflation shape one row up from the usual one: not a
+       derived row counted as independent, but an UNARMED row counted as a witness.
        AND THE WORD THAT STOOD HERE WAS `COMMITTED`, WHICH IS FALSE AND IS THE ONE WORD A READER ACTS ON.
        `git ls-tree -r origin/main -- testing/corpus/` names ZERO of them: `.gitignore` ignores
        `testing/corpus/census-*.jsonl`, DELIBERATELY and with its reason written beside it -- a live run's
