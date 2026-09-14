@@ -299,26 +299,76 @@ for (const p of passes) for (const r of p.rows) {
        AND ITS DENOMINATOR HAS TWO SILENCES THIS COLUMN CANNOT SPLIT: solver/engine.c's own banner says a
        `unitsDone` near zero is either flows reaching that boundary and finding nothing to do, or NO FLOW
        EVER REACHING IT. `jobsQueued`/`jobsRun` is the pair that separates them, and site.mjs carries both.
-       DERIVATION, so the figure above is re-runnable rather than quoted: `node testing/corpus/report.mjs`
-       over the committed `census-cc-*.jsonl` rows. */
+       DERIVATION -- AND THE ONE THAT STOOD HERE DID NOT RUN, WHICH IS WORSE THAN A QUOTED FIGURE BECAUSE IT
+       PROMISED ONE THAT DID. It read "the figure above is re-runnable rather than quoted: `node
+       testing/corpus/report.mjs` over the committed `census-cc-*.jsonl` rows", and BOTH halves are false.
+       That command reads `census.jsonl`, which this argv default names and which does not exist, so it exits
+       ENOENT before parsing a row; and with the files passed it exits again demanding `SITES=`, because the
+       cc corpus walked `apps.tsv` and this reader defaults to `sites.tsv`. Nor are the rows committed --
+       `.gitignore` ignores `testing/corpus/census-*.jsonl` on purpose, so a fresh clone has none of them.
+       Handing a reader a command is the right instinct and is what this file's own header asks for; handing
+       them one nobody ran is the §A-CLAUSE-THAT-NAMES-A-MECHANISM defect, and it is read by exactly one
+       person, once, at the moment they have decided to check. What actually runs, from this directory, is the
+       list the census walked and the files it wrote:
+         SITES=apps.tsv node report.mjs $(ls census-cc-*.jsonl)
+       and it runs only against a corpus a session produced, because the rows are scratch by design. TESTED
+       RATHER THAN OFFERED, which is the whole point of replacing the sentence above: on the disk this was
+       written from that command exits 1, because ONE scratch file carries a row whose `id` is a paragraph of
+       prose and the guard at the row-to-site check refuses it by name. That refusal is this reader WORKING --
+       a census is a measurement OF a list, and a row the list does not name is exactly what it must not
+       average in -- so the command is right and one input was not. Drop the offending file and it exits 0
+       over the other 49. State a command you have run, and say what it did. */
     units: r.unitsDone,
     fpu: (typeof r.flows === 'number' && typeof r.unitsDone === 'number' && r.unitsDone > 0)
       ? Math.round(100 * r.flows / r.unitsDone) / 100 : null,
-    /* AND WHETHER ANYTHING EVER LEFT. `flows` is lifetime-minted and `wfqMembers` is the frontier's size
-       NOW, so the difference is every member that has ever retired, been paged, or otherwise stopped
-       standing — the quantity §scheduler's "STARVE means deprioritize-and-page, NEVER terminate" is about.
-       IT IS TAKEN ONLY WHERE THE TWO HALVES CAME FROM ONE CENSUS ENTRY, which is not a formality: a
-       lifetime total and a gauge differenced across two moments is the defect that has already been paid for
-       here once, and site.mjs publishes `wfqFrom` and `countersFrom` for exactly this reason — "so the gauge
-       and the counters can never be silently reconciled". Where they disagree this reads `-`, which is a
-       statement that the question was not askable of that row rather than a zero.
-       MEASURED over the committed rows that carry both: the two entries AGREE in every one of them and the
-       difference is ZERO in every one of them. Nothing this engine mints on a real document has ever left
-       the frontier — so `sub_gone` is zero by construction out there, and the retention half of any
-       far-below-par reading is live before anybody measures it. */
-    gone: (typeof r.flows === 'number' && typeof r.wfqMembers === 'number'
-           && typeof r.wfqFrom === 'number' && r.wfqFrom === r.countersFrom)
-      ? r.flows - r.wfqMembers : null,
+    /* AND WHETHER ANYTHING EVER LEFT, READ OFF THE ENGINE'S OWN ROW RATHER THAN DERIVED FROM TWO OTHERS.
+       This was `flows - wfqMembers` under a guard that the two halves came from one census entry, and the
+       REPLACEMENT IS NOT A REFUTATION OF THAT READING: `_flows` is flow_created_count(), whose increment sits
+       in flow_new beside `g_arrivals++` -- one constructor, one increment each, neither ever decremented --
+       so the difference WAS `g_departures` exactly, and flow.c asserts that identity both at registry teardown
+       and over the census it publishes. The subtraction was right and it was DERIVED, and solver/result.c
+       already argues at length why a half like that is emitted rather than left to a consumer: it "is a number
+       for every pair of inputs, including the pair where one of them stopped being written". The engine emits
+       both halves into `_wfq`, bridge.js relays that object WHOLE, and site.mjs now reads them through the
+       same `wfqRow` accessor as `members` -- so this is ONE SAMPLE BY CONSTRUCTION and the `wfqFrom ===
+       countersFrom` guard is not weakened here, it is UNNECESSARY here, because there are no longer two
+       differently-selected halves to reconcile.
+       MEASURED, and the finding it was built to state STANDS: over the 50 `census-cc-*.jsonl` files present on
+       one disk, 35 rows carry `flows`, `wfqMembers` and both indices; the indices AGREE in all 35 and the
+       difference is ZERO in all 35, including rows minting 8940, 8220, 5355 and 4291 members -- so it is not a
+       small-sample artifact. `parked` reads 0 in all 35 beside it.
+       AND THE WORD THAT STOOD HERE WAS `COMMITTED`, WHICH IS FALSE AND IS THE ONE WORD A READER ACTS ON.
+       `git ls-tree -r origin/main -- testing/corpus/` names ZERO of them: `.gitignore` ignores
+       `testing/corpus/census-*.jsonl`, DELIBERATELY and with its reason written beside it -- a live run's
+       transcript is one sample, "what survives a live run is the distilled report ... not the transcript".
+       That decision is right and this comment does not ask to undo it. What it means is that this figure is a
+       QUOTE and not a derivation a fresh clone can re-run, so the sentence that offers it must not promise
+       one: a reader who takes `committed` at its word greps a revision, finds nothing, and cannot tell a
+       measurement nobody made from one whose evidence was never trackable. The gitignore's own next clause is
+       the standing instruction -- anything here that deserves to last is quoted somewhere that is not that
+       directory -- and this is that quote. To re-derive rather than trust it, run the corpus again. NOTHING THIS ENGINE MINTS ON A REAL DOCUMENT HAS EVER
+       LEFT THE FRONTIER, and the caller table says why rather than leaving it to be guessed: `flow_remove` has
+       exactly ONE call site, the last line of `flow_release`, and `flow_release` has four -- flow_finish (the
+       flow COMPLETED), the pager's tail sale (RAM pressure), and twice in flow_registry_free's teardown drain.
+       Teardown runs after the document is composed, so out there `departures` is `finished + sold`, and both
+       are zero: nothing completes and nothing is paged.
+       AND THE COMMITTED ROWS READ `-` RATHER THAN 0, WHICH IS A STATEMENT ABOUT THIS READER AND NOT ABOUT THE
+       ENGINE. The artifact that produced them emits `departures`; site.mjs did not ask for it, so the rows do
+       not carry it. A re-run fills them. Defaulting the absence to 0 would turn "this census predates the
+       reader" into "the engine measured no departures", which is the same number reached by a route that
+       proves nothing -- and on this row of all rows, since 0 is the finding.
+       NOT COVERED: `departures` is ONE number for the THREE mechanisms above, so it cannot say whether a
+       frontier that stopped growing retired its members or sold them, which are opposite verdicts. The engine
+       already splits it -- `finished`/`finishedFlows`/`finishedCands` and `sold`/`soldFlows`/`soldCands` are
+       composed into `_cold`, and bridge.js relays `_cold` onto every run record beside `wfq` (GREPPED: the
+       relay loop over `["_cold", "_heap", "_swap", "_forkAt", "_absent"]`, and the record write `cold:
+       result._cold`). THE NEXT DIFF reads that pair in site.mjs and prints them as columns here. It is not
+       done in this one because `_cold` is a SIBLING object of `_wfq`, so a reader of it needs its own sample
+       index and its own agreement check against `countersFrom` -- exactly the reconciliation this row just
+       stopped needing, and adding it back untested beside the row that shed it is how the two get confused.
+       ITS ABSENCE SHOWS as a corpus in which `gone` is nonzero on some row and no column anywhere says which
+       of retirement or paging produced it -- the reader is then back to the state `parked` alone was in. */
+    gone: (typeof r.wfqDepartures === 'number') ? r.wfqDepartures : null,
     /* THE @S ARRIVAL CENSUS, WHICH IS WHAT MAKES `sinks: 0` A FINDING RATHER THAN A SHRUG. Read in the order
        a search travels -- a source is read, a sink is reached, taint arrives at one, the search is declined
        as unforgeable -- so the column says WHERE the zero starts, and a corpus-wide `sinks: 0` stops being

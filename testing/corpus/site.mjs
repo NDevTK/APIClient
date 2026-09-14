@@ -358,6 +358,35 @@ const row = {
   jobWGap: wfqRow('jobWGap'),
   memUnframed: wfqRow('memUnframed'),
   wfqMembers: wfqLive ? wfqLive.w.members : null,
+  /* AND WHETHER ANYTHING HAS EVER LEFT, WHICH THIS ROW DERIVED BY SUBTRACTION WHEN THE ENGINE STATES IT.
+     report.mjs composed `gone` as `flows - wfqMembers` under a guard that the two halves came from ONE
+     census entry, and that subtraction is ARITHMETICALLY SOUND -- `_flows` is flow_created_count(), whose
+     `g_flows_created++` sits in flow_new beside `g_arrivals++`, the two being the same one increment in the
+     one constructor and neither ever decremented, so `_flows - members` IS `g_departures` for all time, and
+     flow.c asserts that identity twice (`g_arrivals - g_departures == g_flows_n`, and again over the census
+     it is about to publish). It was never wrong. It was DERIVED, and a derived half cannot be checked: the
+     subtraction is a number for every pair of inputs, including the pair where one of them stopped being
+     written, which is the argument solver/result.c already makes for emitting `finished` and `sold` as rows
+     rather than leaving either to a consumer. The producer emits both halves here too -- result.c composes
+     `"arrivals":%lld,"departures":%lld` into `_wfq` and states their identity with `members` in the comment
+     directly above it -- and bridge.js relays `_wfq` WHOLE, so this reader needed nothing built and no field
+     plumbed. It is the FIFTH time this row has been the consumer that never asked for the field written to
+     answer its own ambiguity, after `orphansAsked`, `unitsDone`, the @S arrival census and the WFQ split.
+     AND THE GUARD GOES WITH THE SUBTRACTION RATHER THAN SURVIVING IT. `wfqFrom === countersFrom` exists
+     because the two halves were selected by DIFFERENT rules: `flows` off `counted[counted.length - 1]` and
+     `members` off the last entry with a live frontier, which are the same entry only when the run's last
+     counted document still held one. These two are read through `wfqRow` off the SAME object as `members`,
+     so they are one sample BY CONSTRUCTION and there is no reconciliation left to be silent about. The pair
+     below stays: it is still what says which entry the fifteen counters above came from.
+     ABSENT STAYS ABSENT, and here that is a statement about the READER and not the writer: existing
+     `census-cc-*.jsonl` rows carry no `wfqDepartures` because this file never asked for it, while the
+     artifact that produced them emits it -- so those rows read `-` rather than 0, and a re-run is what fills
+     them rather than a default. THAT COSTS NOTHING TO CARRY, because those rows are not tracked at all:
+     `.gitignore` ignores `testing/corpus/census-*.jsonl` deliberately, so there is no historical corpus for
+     this reader to be unable to speak about -- every census that outlives its own session is one this file
+     writes from here on. */
+  wfqArrivals: wfqRow('arrivals'),
+  wfqDepartures: wfqRow('departures'),
   /* WHICH ENTRY EACH HALF CAME FROM, so the gauge and the counters can never be silently reconciled. */
   wfqFrom: wfqLive ? wfqLive.i : null,
   countersFrom: counted.length ? counted.length - 1 : null,
