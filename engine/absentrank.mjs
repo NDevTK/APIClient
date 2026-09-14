@@ -56,6 +56,14 @@
  * new row to list A and re-weighted three, moving one of them to the top — a widening worth taking because it
  * changed the answer, not because it enlarged the table.
  *
+ * AN IDENTIFIER MEANS WHAT ITS BINDING SAYS, SO A FILE THAT BINDS A PLATFORM NAME IS NOT EVIDENCE ABOUT THE
+ * PLATFORM. Every channel matches an identifier, and a bundle is free to declare one: jQuery ships
+ * `function Animation(...)` and a minifier emits `var ...,ML=Object.prototype,...`. Such a name is never
+ * feature-detected — nobody detects their own local — so it has no guard hit and lands in the THROWS band,
+ * which is the band sorted FIRST. Occurrences in a binding file are counted under `shadow` and excluded from
+ * the ranking; the column prints, so a row that falls to zero keeps its reason. The binder is armed positive
+ * AND negative like every channel, and its negative list is the shapes a USE takes.
+ *
  * `instanceof` IS READ ON THE RIGHT. The platform interface in `x instanceof Y` is Y; naming it on the LEFT
  * asks whether an interface OBJECT is an instance of something, which no bundle does. Both are counted and
  * the left-hand one is printed as a CONTROL, so the reading is a measurement rather than an assertion.
@@ -262,8 +270,82 @@ for (const [k, re] of Object.entries(CHANNELS)) {
 }
 const controls = new Map();
 for (const [k, re] of Object.entries(CONTROL)) controls.set(k, tally(re));
-const uses = (n) => [...(hits.get(n) || new Map()).values()].reduce((a, b) => a + b, 0);
-const shape = (n) => [...(hits.get(n) || new Map())].map(([k, v]) => `${k}=${v}`).join(" ");
+
+/* A NAME THE FILE ITSELF BINDS IS THAT FILE'S OWN NAME, AND EVERY CHANNEL ABOVE READS IT AS THE PLATFORM'S.
+   The channels match an IDENTIFIER, and an identifier means whatever its innermost binding says it means — so
+   a bundle shipping `function Animation(...)` makes every `Animation.tweeners` in that file a read of ITS OWN
+   function, and one whose minifier emitted `var ...,ML=Object.prototype,...` makes every `ML.get` a read of
+   ITS OWN alias. THE DAMAGE IS NOT AN INFLATED NUMBER, IT IS THE BAND: nobody feature-detects their own local,
+   so a shadowed name has NO guard hit anywhere and `klass` therefore reads it as THROWS — the band this file
+   sorts FIRST and a reader dispatches from. Measured when this was written, `Animation` and `ML` were the
+   FIRST and THIRD rows of list A at 9 and 4 occurrences, every one of them shadowed, and neither interface is
+   named by any page in the corpus; a reader taking the ranking top-down would have been sent to build the Web
+   Animations API for a corpus that never mentions it.
+   Shadowed occurrences are therefore counted SEPARATELY and the ranking reads the FREE ones. Nothing is
+   hidden: the count prints in its own column and a row that falls to zero still prints, under its own
+   `shadowed` class, so the reason is visible rather than the row silently vanishing — which is the shape the
+   `qjs` column already has and is there for the same reason.
+
+   NAMED RESIDUAL — a match inside a STRING LITERAL or COMMENT is still counted. WHAT IS NOT COVERED: the
+   channels read raw text, so a bundle that embeds source AS DATA — a codegen template, a plugin shipped as a
+   string, a log message naming an API — contributes matches that no page ever evaluates. WHAT THE NEXT DIFF
+   BUILDS: a real JS tokenizer producing a code/not-code mask per file, applied to `.js`/`.mjs` only, with
+   `.html` left whole because its markup is not JS. A SCANNER WAS WRITTEN FOR THIS AND MEASURED AND IS
+   DELIBERATELY NOT LANDED, which is the part worth keeping: a hand-rolled mask that chose DIVISION whenever
+   it could not tell a regex from one — the conservative direction — still mis-masked a span of one real
+   bundle and excluded a genuine `new FontFace(...)` and a genuine `e instanceof ImageData`, i.e. it removed
+   TRUE rows from the very band this file exists to rank, while retiring ~85 occurrences across 13 names that
+   nobody had audited. An exclusion that is wrong in the removing direction is an under-claim, and an
+   under-claim is not found by acting on it. HOW ITS ABSENCE WOULD SHOW: a row whose whole count comes from
+   one file, sitting in the THROWS band, whose sites all read as text a page never runs. */
+const esc = (n) => n.replace(/[$]/g, "\\$");
+const BINDS = (n) => new RegExp(`\\bfunction\\s*\\*?\\s*${esc(n)}\\s*\\(|\\bclass\\s+${esc(n)}\\b|` +
+                                `(?:^|[^\\w$.])${esc(n)}\\s*=(?![=>])`);
+/* ARMED IN BOTH DIRECTIONS BEFORE IT IS READ, exactly as every channel above is. A binder that matched
+   nothing would put the shadowed rows straight back at the top with no sign it had stopped working, and one
+   that matched a USE would retire the table. The negative list is therefore the shapes a USE takes. */
+for (const s of ["function Zz(a){}", "function* Zz(){}", "class Zz extends Q{}", "var a=1,Zz=2", "let Zz=1"])
+  if (!BINDS("Zz").test(s))
+    die(`the binder did not match ${JSON.stringify(s)} — shadowed rows would rank as platform uses.`);
+for (const s of ["q.Zz = 1", "Zz === 1", "new Zz()", "x instanceof Zz", "Zz.member=1", "{Zz: 1}", "Zz=>1"])
+  if (BINDS("Zz").test(s))
+    die(`the binder matched ${JSON.stringify(s)} — it is counting a use as a binding.`);
+
+const shadow = new Map();        /* name -> channel -> occurrences in a file that BINDS the name */
+const perFile = new Map();       /* name -> channel -> occurrences, tallied per file */
+for (const t of parts) {
+  const bound = new Map();
+  for (const [k, re] of Object.entries(CHANNELS)) {
+    for (const m of t.matchAll(new RegExp(re.source, "g"))) {
+      const n = m[1];
+      if (!perFile.has(n)) perFile.set(n, new Map());
+      perFile.get(n).set(k, (perFile.get(n).get(k) || 0) + 1);
+      if (!bound.has(n)) bound.set(n, BINDS(n).test(t));
+      if (!bound.get(n)) continue;
+      if (!shadow.has(n)) shadow.set(n, new Map());
+      shadow.get(n).set(k, (shadow.get(n).get(k) || 0) + 1);
+    }
+  }
+}
+/* THE PARTS SUM TO THE TOTAL, ASSERTED RATHER THAN ASSUMED. `freeOf` SUBTRACTS a per-file count from a count
+   taken over the JOINED corpus, and two tallies over different populations would make that difference mean
+   nothing — and could make it negative, which would read as a name used fewer than zero times. The two are
+   not obviously equal either: the joined text carries a separator between files precisely so a match cannot
+   straddle two of them, and `X.member`'s leading `(?:^|[^\w$.])` anchors differently in a join than in a
+   file. Measured at 0 differing name/channel pairs out of 6344 when this landed. */
+for (const [n, chans] of perFile)
+  for (const [k, c] of chans)
+    if (((hits.get(n) || new Map()).get(k) || 0) !== c)
+      die(`the per-file tally of ${n} on channel ${k} is ${c} and the joined tally is ` +
+          `${(hits.get(n) || new Map()).get(k) || 0}. The shadow count is not a subset of the total, so ` +
+          `subtracting it is a difference between two populations.`);
+
+const shadowOf = (n, k) => ((shadow.get(n) || new Map()).get(k) || 0);
+const freeOf = (n, k) => ((hits.get(n) || new Map()).get(k) || 0) - shadowOf(n, k);
+const shadowed = (n) => [...(shadow.get(n) || new Map()).values()].reduce((a, b) => a + b, 0);
+const uses = (n) => [...(hits.get(n) || new Map()).keys()].reduce((a, k) => a + freeOf(n, k), 0);
+const shape = (n) => [...(hits.get(n) || new Map()).keys()].map((k) => [k, freeOf(n, k)])
+  .filter(([, v]) => v > 0).map(([k, v]) => `${k}=${v}`).join(" ");
 
 /* WHAT AN ABSENCE COSTS IS NOT HOW OFTEN THE NAME APPEARS, AND ORDERING BY COUNT GETS IT BACKWARDS.
    A name a bundle FEATURE-DETECTS costs nothing when it is absent: `"undefined" != typeof X` answers false,
@@ -279,14 +361,20 @@ const shape = (n) => [...(hits.get(n) || new Map())].map(([k, v]) => `${k}=${v}`
    site says which covers which — and it is not promoted above THROWS on the strength of a bigger number. */
 const GUARD_CH = new Set(["typeof X", "window.X", "self.X", "globalThis.X", 'global["X"]']);
 const USE_CH = new Set(["new X(", "X.member", "instanceof X"]);
-const partOf = (n, set) => [...(hits.get(n) || new Map())].filter(([k]) => set.has(k)).reduce((a, b) => a + b[1], 0);
+const partOf = (n, set) =>
+  [...(hits.get(n) || new Map()).keys()].filter((k) => set.has(k)).reduce((a, k) => a + freeOf(n, k), 0);
+/* Every channel is in exactly one of the two sets, so `u + g` IS the free total and `!u && !g` is the name
+   whose every occurrence was shadowed. That gets its own class rather than falling through to detect-only:
+   the corpus does not feature-detect it, so calling it detect-only would be a claim the text does not
+   support, and the honest statement is that this corpus offers no evidence about the platform name at all. */
 const klass = (n) => {
   const u = partOf(n, USE_CH), g = partOf(n, GUARD_CH);
+  if (!u && !g) return "shadowed";
   if (u && !g) return "THROWS";
   if (u && g) return "mixed";
   return "detect-only";
 };
-const RANK = { THROWS: 0, mixed: 1, "detect-only": 2 };
+const RANK = { THROWS: 0, mixed: 1, "detect-only": 2, shadowed: 3 };
 
 /* The submodule string witness for the declared boundary above. Read as a REASON TO OPEN THE FILE. */
 const QJS = join(HERE, "qjs");
@@ -325,16 +413,22 @@ say(`   A page naming one of these gets a ReferenceError on the line that touche
     `the ${distinct.size}-member count: an interface that does not exist has no members to be missing.`);
 say(`   The count is a CEILING. qjs = times the name occurs as a quoted string under engine/qjs, which is ` +
     `outside the audited tree; a non-zero qjs is a row to read before believing.`);
+say(`   shadow = occurrences in a file that BINDS the name itself (a page's own \`function X\`, \`class X\` or ` +
+    `\`X =\`), which are that file's name and not the platform's. They are EXCLUDED from the count and the ` +
+    `class; the column is printed so a row that falls to zero shows why instead of vanishing.`);
 say(`   ORDERED BY WHAT THE ABSENCE COSTS, NOT BY VOLUME: THROWS (every use of this name is unguarded, so it ` +
     `raises a ReferenceError and ends the flow) before mixed (both forms present — read the site) before ` +
     `detect-only (the corpus only ever feature-detects it, so absence is the answer a browser without it gives).`);
 const rankA = [...ABSENT_GLOBAL].filter((n) => hits.has(n))
   .sort((a, b) => RANK[klass(a)] - RANK[klass(b)] || uses(b) - uses(a) || a.localeCompare(b));
 const nThrow = rankA.filter((n) => klass(n) === "THROWS").length;
-say(`   ${rankA.length} of ${ABSENT_GLOBAL.size} absent global name(s) are used by this corpus at all; ` +
-    `${nThrow} of those ${rankA.length} is/are unguarded.`);
+const nShadow = rankA.filter((n) => klass(n) === "shadowed").length;
+say(`   ${rankA.length} of ${ABSENT_GLOBAL.size} absent global name(s) are named by this corpus at all; ` +
+    `${nThrow} of those ${rankA.length} is/are unguarded, and ${nShadow} is/are named ONLY by a file that ` +
+    `binds the name itself, which is no evidence about the platform name either way.`);
 for (const n of rankA.slice(0, TOP))
-  say(`   ${klass(n).padStart(11)}  ${String(uses(n)).padStart(4)}  qjs=${String(qjsHits(n)).padStart(3)}  ${n.padEnd(24)} ${shape(n)}`);
+  say(`   ${klass(n).padStart(11)}  ${String(uses(n)).padStart(4)}  qjs=${String(qjsHits(n)).padStart(3)}  ` +
+      `shadow=${String(shadowed(n)).padStart(3)}  ${n.padEnd(24)} ${shape(n) || "(every occurrence shadowed)"}`);
 
 console.log("");
 say(`── B. INTERFACES THAT EXIST AND CARRY ABSENT MEMBERS, RANKED BY CORPUS USE OF THE INTERFACE NAME ──`);
