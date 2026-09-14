@@ -9603,8 +9603,22 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    inside a machine holding an unanswered synchronous host request has no work at all until the
                    host answers, and reporting it runnable would have the scheduler hand it the thread again
                    immediately — the spin the blocked yield above exists to prevent. OWED is the register the
-                   scheduler already has for exactly this: waiting, not finished. */
-                return flow_blocked(f) ? FLOW_STEP_OWED : 0;
+                   scheduler already has for exactly this: waiting, not finished.
+                   AND THE TWO ARE NOW TWO ROWS, SELECTED BY THE PREDICATE THAT WAS ALREADY BEING ASKED HERE.
+                   `g_step_unit` was set to the frame-live row above, and until this line the two states that
+                   reach it were summed into it: a resume the quantum PREEMPTED, which advanced the program and
+                   is the thread doing what the design asks, and one that suspended owing the host an answer,
+                   which advanced nothing and will advance nothing however often it is re-dispatched. Only the
+                   first is a statement about throughput; the second is a statement about the reply door, one
+                   component over, and they are repaired by different diffs. Read ONCE and spent twice — the
+                   arm and the register are two consumers of one fact, never two spellings of it — which is the
+                   same SELECT-rather-than-skip the frame-clearing outcomes below are, so the four frame-live
+                   rows partition by construction. See solver/step_unit.h for what this narrows and why the
+                   narrowing is stated there rather than discovered by whoever differences an old census. */
+                int blocked = flow_blocked(f);
+                g_step_unit = started_here ? (blocked ? STEP_UNIT_START_BLOCKED  : STEP_UNIT_START_PROGRAM)
+                                           : (blocked ? STEP_UNIT_RESUME_BLOCKED : STEP_UNIT_RESUME_PROGRAM);
+                return blocked ? FLOW_STEP_OWED : 0;
             }
             if (r == JS_FLOW_DETACHED) {
                 /* the base registered itself as a continuation elsewhere (a module body's top-level await): it

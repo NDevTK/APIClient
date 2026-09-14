@@ -182,6 +182,33 @@
     X(START_ENDED_FRAME,  "start-ended-its-frame")                               \
     X(START_REPORTED,     "start-reported-an-exception")                         \
     X(START_DETACHED,     "start-detached-its-base")                             \
+    /* AND THE ONE SPLIT OF THE TWO FRAME-LIVE ROWS ABOVE, which is the half   */ \
+    /* a reader of `resume-program` most needs and the half neither row can    */ \
+    /* state. A resume that returns with its frame LIVE is one of two things   */ \
+    /* and they take OPPOSITE work: the flow was PREEMPTED mid-program, in     */ \
+    /* which case the turn ADVANCED it and the thread is doing exactly what    */ \
+    /* the design asks of it; or it suspended inside a machine holding an      */ \
+    /* UNANSWERED SYNCHRONOUS HOST REQUEST, in which case it has no work at    */ \
+    /* all until the host answers and every re-dispatch of it advances         */ \
+    /* nothing. Summed, "the thread is busy resuming programs" and "the        */ \
+    /* frontier is standing on the reply door" are ONE number, and only the    */ \
+    /* first is a statement about throughput — the second is one component     */ \
+    /* over, at the door, and is repaired by something else entirely.          */ \
+    /* THE PREDICATE IS ALREADY EVALUATED AT THAT LINE: `flow_blocked` is what */ \
+    /* chooses FLOW_STEP_OWED over 0 there, and the engine's own comment names */ \
+    /* the state in as many words ("no work at all until the host answers").   */ \
+    /* So this is the same SELECT-rather-than-skip the start split above is —  */ \
+    /* one read, spending its answer twice — and the four rows partition by    */ \
+    /* construction rather than by two writers agreeing.                       */ \
+    /* IT NARROWS `resume-program` AND `start-a-classic-program`, WHICH IS THE */ \
+    /* PRICE AND IS STATED RATHER THAN DISCOVERED: a figure taken before these */ \
+    /* rows existed counts blocked resumes and one taken after does not, so an */ \
+    /* archived census is not comparable with a new one until these rows are   */ \
+    /* added back into it. That is the same trade the start split made, made   */ \
+    /* for the same reason and recorded so the next reader of an old number    */ \
+    /* does not difference two populations.                                    */ \
+    X(RESUME_BLOCKED,     "resume-blocked-on-a-host-answer")                     \
+    X(START_BLOCKED,      "start-blocked-on-a-host-answer")                      \
     /* …and the arms that perform NO work: five flavours of waiting, and done. */ \
     /* The count said THREE and the list held four, which is the cheapest      */ \
     /* check there is and needs no tree: a number beside its own enumeration.  */ \
