@@ -417,15 +417,21 @@
     }
   }
 
-  // Listen for messages from the background service worker.
-  // Threat model: this content script runs in the web page's renderer process.
-  // It only accepts PING and PAGE_FETCH from background — never reads storage
-  // or handles data-returning message types. See SECURITY.md.
+  /* Listen for messages from the background service worker.
+     THREAT MODEL: this content script runs in the web page's renderer process, so the set it accepts IS its
+     attack surface — it never reads storage and never handles a data-returning message type. See SECURITY.md.
+     THE SET IS THE ARMS BELOW AND THIS LINE USED TO BE A SUMMARY OF IT: "it only accepts PING and PAGE_FETCH".
+     That was wrong in BOTH directions at once, which is why it is now an enumeration a reader can check
+     against the code beneath it rather than a sentence they have to trust. It NAMED a type nothing sends, and
+     it OMITTED FOUR the listener handles — RESHIP and the three per-transport relays — so anybody auditing
+     what an untrusted renderer's script accepts read a surface of two where there were six. An under-claim is
+     not discovered by acting on it: acting on it means not looking at the four it left out.
+     `PING` IS DELETED RATHER THAN LISTED. It answered `{ok:true}` to a liveness probe no part of this product
+     sends: the string occurs nowhere else in the extension, in the engine drivers or in testing/, so the arm
+     could not run, and an arm that cannot run is untested code rather than working code — reviving it later
+     is a behaviour change owed the same reading as writing it, and until then it is surface for nothing.
+     RESHIP, PAGE_FETCH, WS_SEND_MSG, PM_SEND_MSG and MC_SEND_MSG remain, and each has a sender in this tree. */
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-    if (msg.type === "PING") {
-      sendResponse({ ok: true });
-      return;
-    }
     if (msg.type === "RESHIP") {
       // The offscreen brain came up AFTER our initial ship and broadcasts RESHIP
       // so we re-send the seed (the cold-start delivery race — the offscreen wasn't alive when content.js

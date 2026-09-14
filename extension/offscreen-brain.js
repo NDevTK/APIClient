@@ -436,9 +436,20 @@ function getDoc(documentId) {
       title: "",                // multi-tab log label
       closed: false,            // true once the owning tab closes (logs stay visible)
       // ── learned facts (per-document view; the cumulative moat is globalStore) ──
+      /* EACH LEARNED MAP NAMES THE FILE THAT DECLARES ITS RECORD, AND NONE OF THEM RESTATES ONE. Two of
+         these lines used to spell the shape out here, and both had drifted — a restated shape is a second
+         copy of a grammar with nothing checking it against the first, and the first is where the record is
+         actually minted and asserted. `endpoints` read `{ method, service, key, headers, firstSeen }`, of
+         which `key` and `headers` are names lib/endpoint-record.js's CONSTRUCTOR ABORTS ON by name (it walks
+         every key it is handed against the two lists it declares), while the seven it does state — url,
+         method, host, path, service, source, firstSeen — and the seven whose absent value is itself a
+         statement were nowhere in the sentence. `authContext` read `{ sapisid, sapisidhash, cookies }`, and
+         those three strings occur exactly once each in the whole extension: here. lib/response-decode.js
+         writes `{hasAuthorization?, hasCookies?, origin?}` and popup.js DCHECKs that shape at the read. */
       apiKeys: new Map(), // key → an API-key entry (lib/keys.js mints it; shape: lib/store-record.js)
-      endpoints: new Map(), // endpointKey → { method, service, key, headers, firstSeen }
-      authContext: null, // { sapisid, sapisidhash, cookies }
+      endpoints: new Map(), // endpointKey → an endpoint record (lib/merge.js sets it; shape: lib/endpoint-record.js)
+      authContext: null, // the credential context (lib/response-decode.js writes it; null = NO credentialed
+                         // request was observed from this document, which is a finding and not a hole)
       discoveryDocs: new Map(), // service → discovery JSON or status
       probeResults: new Map(), // endpointKey → probe result
       scopes: new Map(), // service → string[] of required scopes
