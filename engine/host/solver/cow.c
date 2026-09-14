@@ -777,7 +777,30 @@ static void cow_gd_unref(JSContext *ctx, const CowEntry *e, void *gd) {
 
 /* JSTimeTravelHooks.async_fork — the async twin of the generator swap. The engine has already cloned the
    activation; this records the toggle so the clone is what this flow's closure names and the original stays the
-   baseline every other arm finds. The delta ADOPTS the clone's creation reference. */
+   baseline every other arm finds. The delta ADOPTS the clone's creation reference.
+
+   AND IT TAKES A SECOND ONE, BECAUSE THE CLOSURE MARKS WHAT IT NAMES. An async resolve/reject closure reports
+   `mark_func(rt, &s->header)` for whatever `u.async_function_data` names (js_async_function_resolve_mark), so
+   the installed pointer is a counted EDGE in gc_decref's arithmetic and must have a counted reference behind
+   it. Adopting the clone's creation reference gives the DELTA one; it gives the EDGE none, so while this flow
+   is applied the clone carried exactly one reference and had exactly one edge reported to it, gc_decref took
+   it to zero, and the collector freed a live per-flow activation the delta still names in `g1`.
+
+   THE ANALOGY THIS WAS WRITTEN FROM IS FALSE IN THE ONE FIELD THE COLLECTOR READS, which is why the sentence
+   below is rewritten rather than deleted: a reader re-derives it. A GENERATOR's swap is sound because
+   js_generator_mark walks the state's CONTENTS (async_func_mark) and reports NO edge to the JSGeneratorData —
+   that struct has no JSGCObjectHeader at all, so its pointer is a pure per-flow toggle with nothing to count.
+   A JSAsyncFunctionData HAS a header and IS collectable, so the same pointer swap moves an EDGE.
+
+   THE SWAP WAS THE SINGLE DISSENTING SITE: the mint takes a reference (js_async_function_resolve_one), the
+   mark reports one, and the finalizer releases whatever is INSTALLED — three sites that all read the closure
+   as owning what it names, against one that did not.
+
+   HOW ITS ABSENCE WOULD SHOW: gc_decref_child aborts on an unbacked mark edge whose CHILD is the async
+   function object the freed clone's teardown released out of its frame's `cur_func`.
+   RETIREMENT: this record goes when the delta publishes a per-kind entry census, so a run can state whether a
+   gendata entry was made at all — no row does today, which is why the path's reachability is unmeasured here
+   rather than asserted. */
 void cow_capture_async_fork(JSContext *ctx, JSValueConst closure, void *base_data, void *cur_data) {
     CowDelta *d = g_current;
     if (!d) {
@@ -797,10 +820,19 @@ void cow_capture_async_fork(JSContext *ctx, JSValueConst closure, void *base_dat
     CowEntry *e = &d->e[d->n++];
     cow_entry_init(e);
     e->obj = JS_DupValue(ctx, closure);
-    /* The POINTER is swapped, not the ownership: the closure's own reference stays on the original exactly as a
-       generator object's stays on its object-owned state, and the delta owns the clone by adopting its creation
-       reference. */
+    /* THE POINTER IS SWAPPED AND SO IS ONE REFERENCE. The closure's own mint reference stays on the ORIGINAL,
+       which is what makes the original the baseline every other arm finds and what the closure is left holding
+       once this delta is unapplied. What the clone needs is TWO: the creation reference, which the delta adopts
+       and releases with the entry, and the one below that backs the mark edge the closure reports while this
+       flow is applied. THIS SAID the ownership was not swapped at all, "exactly as a generator object's stays
+       on its object-owned state" — the half about the original is right and the analogy is not, for the reason
+       the banner gives: a JSGeneratorData is not a GC object and a JSAsyncFunctionData is. */
     e->is_gendata = 2; e->g0 = base_data; e->g1 = cur_data;
+    /* …and the reference that BACKS THE CLOSURE'S MARK EDGE, taken after the kind is set because that is what
+       chooses the pair. It is released with the entry, by which point the delta is unapplied and the closure
+       names the original again — the same "back on its original before teardown" invariant js_generator_
+       finalizer already asserts for the generator twin. */
+    cow_gd_ref(e, cur_data);
     JS_SetObjAsyncData(closure, cur_data);
     cow_capture_end();
 }
@@ -1511,7 +1543,14 @@ void cow_delta_release(JSContext *ctx, CowDelta *d) {
 
 static void cow_entries_free(JSContext *ctx, CowEntry *e, int n) {
     for (int i = 0; i < n; i++) {
-        if (e[i].is_gendata) { JS_FreeValue(ctx, e[i].obj); cow_gd_unref(ctx, &e[i], e[i].g1); continue; }
+        if (e[i].is_gendata) {
+            JS_FreeValue(ctx, e[i].obj);
+            /* THE EDGE-BACKING REFERENCE FIRST, async only — the generator kind never took one because nothing
+               marks a JSGeneratorData. See cow_capture_async_fork for why the async kind needs two. */
+            if (e[i].is_gendata == 2) cow_gd_unref(ctx, &e[i], e[i].g1);
+            cow_gd_unref(ctx, &e[i], e[i].g1);
+            continue;
+        }
         if (e[i].is_state) {
             JS_FreeValue(ctx, e[i].obj);
             cow_state_free(JS_GetRuntime(ctx), &e[i], e[i].a_base);
