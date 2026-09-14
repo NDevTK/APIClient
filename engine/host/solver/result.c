@@ -2212,6 +2212,25 @@ char *result_json(JSContext *ctx) {
                                 extension popup lists an engine-minted exploration TypeError among the page's
                                 own errors, which is a person being shown an error their page did not have. */
                              "\"pageErrorsExplored\":%s,"
+                             /* `_switches` IS NOT `_unitsDone`'S DENOMINATOR, AND THE TWO SIT ON ADJACENT
+                                LINES OF THIS STRING WITH NOTHING SAYING SO. A switch is counted only where
+                                the pick returns a DIFFERENT member (engine.c, beside flow_credit_pick); a
+                                dispatch is counted at every entry into flow_step. A member that holds the
+                                thread across many steps is one switch and many dispatches, so `_unitsDone /
+                                _switches` is units per SWITCH and can legitimately exceed 1 — which reads as
+                                a subset larger than its population, the one arithmetic tell this project
+                                treats as free, fired here by a quotient that is not one.
+                                MEASURED ON THE SURVIVING CENSUS CORPUS rather than feared: of 63 rows
+                                carrying both, 27 have `_unitsDone > _switches`, one of them 25 against 1.
+                                Every one is a correct pair of counters and a division nobody may make.
+                                THE DENOMINATOR EXISTS AND IS NAMED HERE BECAUSE IT IS IN THE OTHER OBJECT:
+                                `steps` in result_cold_json's `engine_step_unit_runs` block, over the same
+                                instance-wide scope as these rows and reset by nothing, is what `_unitsDone`
+                                is a share of — and it is the total solver/engine.h's `unit_mid_program`
+                                partition is asserted against. It is deliberately not re-emitted beside this
+                                row: a second spelling of one number in one document is the drift the
+                                record-field gate exists to catch, so the pointer is the fix and a copy
+                                would be the defect. */
                              "\"_switches\":%d,\"_flows\":%ld,\"_candidates\":%d,"
                              "\"_jobsQueued\":%ld,\"_jobsRun\":%ld,\"_unitsDone\":%ld,"
                              "\"_worldSegmentsHeld\":%d,\"_worldSegmentsMade\":%d,"
