@@ -608,6 +608,21 @@ typedef struct JSVarRef {
     };
 } JSVarRef;
 
+/* IS THIS CELL A GC OBJECT — the one question every holder of a cell asks before reporting it as a mark edge,
+   named here because four walks were spelling it independently and the prose over one of them had drifted. The
+   two bits ARE the membership: get_captured_cell calls add_gc_object only when is_coro, and close_var_ref adds
+   on detach for a cell that was not already there, so a cell is on gc_obj_list iff either bit is set — which
+   mark_children's VAR_REF arm asserts from the other end ("an OPEN cell that roots nothing is on the GC object
+   list"). ASKED THROUGH A NAME SO THE WIDENING CANNOT BE RE-DERIVED: a holder holds one counted reference per
+   cell it names, and a reference is not an edge. add_gc_object is the ONLY writer of a header's mark, type and
+   link, so an unlisted cell has none of the three — reporting one would have gc_decref_child read a stale mark
+   bit out of a recycled arena block and gc_scan_incref_child list_del an uninitialised link on its 0 -> 1
+   restore. Nothing is lost by the narrower set: an unlisted cell is OPEN and owns no value, its storage being
+   the frame slot that frame's own walk marks. */
+static inline bool var_ref_is_gc_object(const JSVarRef *vr) {
+    return vr->is_detached || vr->is_coro;
+}
+
 /* Accessors for the reference count and GC mark/type. These fields live in the
    arena block header (the 8 bytes before every allocation, reached via
    js_rc()), not in the object body. The macros yield lvalues, and the argument
@@ -9760,12 +9775,10 @@ static void js_bytecode_function_mark(JSRuntime *rt, JSValueConst val,
         if (var_refs) {
             for(i = 0; i < b->closure_var_count; i++) {
                 JSVarRef *var_ref = var_refs[i];
-                /* A detached cell is a GC object because it owns its value; an OPEN one is a GC object only
-                   when it roots the owner of the frame it aliases (see get_captured_cell). Those two are the
-                   whole set, and this closure holds a counted reference to each cell it names, so each is one
-                   mark edge — which is the edge that makes a suspended coroutine reachable through a closure
-                   over one of its locals. */
-                if (var_ref && (var_ref->is_detached || var_ref->is_coro)) {
+                /* This closure holds a counted reference to each cell it names, so each cell that IS a GC
+                   object is one mark edge — the edge that makes a suspended coroutine reachable through a
+                   closure over one of its locals. Which cells those are is var_ref_is_gc_object's question. */
+                if (var_ref && var_ref_is_gc_object(var_ref)) {
                     mark_func(rt, &var_ref->header);
                 }
             }
@@ -10088,8 +10101,7 @@ static void mark_children(JSRuntime *rt, JSGCObjectHeader *gp,
                             if (pr->u.getset.setter)
                                 mark_func(rt, &pr->u.getset.setter->header);
                         } else if ((prs->flags & JS_PROP_TMASK) == JS_PROP_VARREF) {
-                            if (pr->u.var_ref->is_detached ||
-                                pr->u.var_ref->is_coro) {
+                            if (var_ref_is_gc_object(pr->u.var_ref)) {
                                 /* Note: the tag does not matter
                                    provided it is a GC object */
                                 mark_func(rt, &pr->u.var_ref->header);
@@ -22580,11 +22592,12 @@ static void js_mapped_arguments_mark(JSRuntime *rt, JSValueConst val,
         if (var_refs) {
             for(i = 0; i < p->u.array.count; i++) {
                 /* mapped arguments hold a counted reference to each cell, so each cell that IS a GC object is
-                   one mark edge — the same predicate every other holder uses. A mapped `arguments` is the one
-                   holder that can name an open cell without any closure existing, so a coroutine's arguments
-                   object escaping is the second way the missing edge was reachable. */
+                   one mark edge — the same predicate every other holder uses, which is now THAT predicate
+                   rather than a fourth spelling of it. A mapped `arguments` is the one holder that can name an
+                   open cell without any closure existing, so a coroutine's arguments object escaping is the
+                   second way the missing edge was reachable. */
                 JSVarRef *vr = var_refs[i];
-                if (vr && (vr->is_detached || vr->is_coro))
+                if (vr && var_ref_is_gc_object(vr))
                     mark_func(rt, &vr->header);
             }
         }
@@ -50548,11 +50561,17 @@ static void async_func_mark(JSRuntime *rt, JSAsyncFunctionState *s,
        conservative once cells root their owner: state -> cell is then counted-and-unmarked while cell -> state
        is counted-and-marked, so gc_decref can never bring the cell to zero, gc_scan restores the state through
        it, and EVERY coroutine with a captured local becomes immortal — a leak the runtime's own gc_obj_list
-       walk would report with nothing naming the cause. One edge per non-NULL slot, which is exactly the one
-       reference this frame holds per slot. */
+       walk would report with nothing naming the cause.
+       THIS SAID "One edge per non-NULL slot, which is exactly the one reference this frame holds per slot", AND
+       ITS PREMISE IS TRUE WHILE ITS CONCLUSION IS AN INSTRUCTION TO CORRUPT THE HEAP — which is why it is
+       rewritten here rather than deleted, since the premise is what a reader re-derives. The frame DOES hold one
+       counted reference per non-NULL slot (get_captured_cell mints at 1, close_var_refs gives it back through
+       free_var_ref); a reference is not an edge, because a mark edge may only ever name a GC OBJECT and an open
+       cell that roots nothing is not one. var_ref_is_gc_object is that question and states at its own site what
+       obeying the retired sentence would cost. */
     for (i = 0; i < sf->var_ref_count; i++) {
         JSVarRef *vr = sf->var_refs[i];
-        if (vr && (vr->is_detached || vr->is_coro))
+        if (vr && var_ref_is_gc_object(vr))
             mark_func(rt, &vr->header);
     }
     if (sf->cur_sp) {
@@ -50563,6 +50582,25 @@ static void async_func_mark(JSRuntime *rt, JSAsyncFunctionState *s,
         for(sp = sf->arg_buf; sp < sf->cur_sp; sp++)
             JS_MarkValue(rt, *sp, mark_func);
     }
+    /* RESIDUAL — s->tramp_top IS NOT WALKED HERE, WHICH IS A NARROWING AND NOT A DEFECT.
+       NOT COVERED: a DEEP-suspended flow stashes its heap call chain in s->tramp_top and this walk names only
+       the BASE frame, so every reference that chain holds is counted-and-unmarked. The set is not a list to
+       keep here — it is the one free_tramp_chain releases, and that walk is where to read it (per frame: the
+       live operands under that frame's own live end, async_promise, close_saved_exc, the callee
+       TRAMP_FRAME_RELEASE names, whatever tramp_cont_free gives back for its cont_state, and the requester a
+       generator frame abandons).
+       THERE IS NOTHING TO CRASH ON BECAUSE THE DIRECTION IS CONSERVATIVE: gc_decref_child's contract is that
+       every edge REPORTED is backed by a counted reference, never that every reference HELD is reported — so an
+       unreported edge leaves the child looking externally referenced and it SURVIVES. Over-reporting is the
+       failure that aborts; under-reporting is the failure that leaks, and this is the second.
+       WHAT THE NEXT DIFF BUILDS: a THIRD walk over the ownership lists the other two already share. A record
+       that can ride a parked chain is answerable by two of them today — free_tramp_chain releases one reference
+       and clone_deep_flow takes a second — and must afterwards be answerable by three: a chain walk here with
+       mark in place of free, and a tramp_cont_mark beside tramp_cont_free and tramp_cont_clone_one, so a field
+       added to a record's *_OWNED macro is marked as well as freed and duped.
+       HOW ITS ABSENCE WOULD SHOW: a coroutine parked inside a call, whose only remaining anchor is a cycle
+       through a value its chain holds, is never collected — JS_FreeRuntime's gc_obj_list walk reports leaked
+       objects and nothing names the cause. */
 }
 
 static void async_func_free(JSRuntime *rt, JSAsyncFunctionState *s)
