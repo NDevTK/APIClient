@@ -281,6 +281,35 @@ static int g_platform_sorted, g_language_sorted;
    AND IT IS NOT ONE ROW: an index makes ECMA-402 a NEIGHBOUR of every indexed standard, and its §8 collides
    head-on with ECMAScript §8 "Syntax-Directed Operations", so the diff is measured over the WHOLE corpus and
    never over the standard being added.
+   THAT OBLIGATION ATTACHES TO THE `SPECS` ROW AND NOT TO THE NAME, WHICH SEPARATES TWO THINGS THIS CLAUSE
+   HAD WELDED TOGETHER — established by reading citegen.mjs's load path rather than inferred from its
+   purpose. `audit()` opens `for (const s of SPECS) { const f = indexFileOf(s.key); ... }`, and NOTHING
+   enumerates engine/specindex: that file's three readdirSync calls are the audited source walk, the qjs
+   directory and the engine's own .mjs list. An index whose key has no SPECS row is therefore never opened by
+   the auditor, so the §8 collision and the whole-corpus measurement are the price of REGISTERING the
+   standard, never of claiming the name. What the row buys in exchange is the only regen path there is —
+   `regen()` resolves through SPEC_BY_KEY and THROWS for an unknown key — so an unregistered index is a
+   generated artifact with nothing to regenerate it. Both costs are real and they are SEPARABLE: a diff that
+   claims the name is not blocked on the corpus measurement, and may leave the citation question open.
+   (The single-page reader is still owed either way, and that half of the clause is verified with a control:
+   tc39.es/ecma402/multipage/ answers 404 where tc39.es/ecma262/multipage/ answers 200, and `regen`'s kind
+   switch has no single-page TC39 arm to reuse.)
+   AND THE DERIVATION NEED NOT READ §8's PROSE AT ALL, WHICH IS WHAT MAKES IT SAFE AGAINST THE TRAP ABOVE BY
+   CONSTRUCTION RATHER THAN BY CARE. Keying on the clause TITLE means parsing its `The Intl Object` wording, an English
+   shape. The MEMBER subclauses spell themselves `Intl.Collator ( . . . )`, so the global name is the RECEIVER
+   THEY SHARE — the leading IdentifierName IMMEDIATELY followed by a dot — and taking the text BEFORE that dot
+   cannot yield `Intl.Collator`, which is precisely the outcome the widening warned against above produces.
+   Measured over §8 as fetched: twelve member subclauses vote and yield exactly ONE receiver, `Intl`, while
+   §8.1.1 `Intl [ %Symbol.toStringTag% ]` is skipped because a SPACE and not a dot follows the identifier,
+   which is the reading that keeps that title's own interior dot out of the answer.
+   ITS FAILURE MODE IS MEASURED RATHER THAN CAUTIONED, AND IT IS WHY THE RULE IS SCOPED TO A CLAUSE AND NEVER
+   RUN OVER A DOCUMENT: applied to the whole of the committed ECMAScript index it recovers 37 receivers, of
+   which 32 are in language_names.h and the five that are not — TypedArray, NativeError, GeneratorFunction,
+   AsyncFunction, AsyncGeneratorFunction — are exactly the anonymous intrinsics ECMAScript gives no global
+   name to. Applied to the 19.x subtree esglobalgen actually reads, it yields NOTHING, so adding it there is
+   additive and cannot move a name into or out of that table.
+   RETIREMENT: all of this goes with the residual, on the diff that makes absent_standard_name answer for
+   `Intl` — it is reasoning about how to build that, not a record to keep afterwards.
    HOW ITS ABSENCE SHOWS: `window.Intl` or `Intl.NumberFormat` in any bundle carrying a locale-formatting
    polyfill mints an unknown with source identity `{Intl}` and its gate forks, where a real browser answers a
    real namespace and where this engine's honest answer is the ReferenceError naming the component to
