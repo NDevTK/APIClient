@@ -135,7 +135,28 @@ void      cow_capture_map_add(JSContext *ctx, JSValueConst obj, JSValueConst key
 
 /* Install as JSTimeTravelHooks.map_mutate: capture a reversible OVERWRITE / DELETE of an existing Set/Map record
    as an undo-log entry (apply replays it, unapply inverts it), completing cow_capture_map_add's add-only capture
-   so ALL shared Set/Map mutations are per-flow isolated. op is JS_MAP_MUTATE_OVERWRITE / _DELETE.
+   so every shared STRONG Set/Map mutation is per-flow isolated. op is JS_MAP_MUTATE_OVERWRITE / _DELETE.
+
+   RESIDUAL — WEAK COLLECTIONS ARE NOT CAPTURED, AND THIS LINE USED TO SAY "ALL". That word is why the gap
+   survived: a reader auditing per-flow isolation reads a total and stops looking, which is the under-claim
+   nobody discovers by acting on it, because acting on it means not looking here.
+   WHAT IS NOT COVERED: a WeakMap/WeakSet write on a collection in the shared baseline. Both hooks are skipped
+   for one, and the derivation is a command rather than a coordinate, because that file moves:
+       git grep -n --recurse-submodules 'g_time_travel.map_\(add\|mutate\) &&' engine/qjs
+   Each hit is guarded on `!s->is_weak`, and the justification standing beside them — "weak collections are
+   never snapshot-shared this way" — is a claim about THIS TREE with no derivation under it. It is false for
+   the commonest weak collection on the web: core-js's internal-state module installs `new WeakMap` while the
+   polyfill chunk runs, which is BOOT, and a boot creation is baseline by construction (§State-isolation).
+   WHAT THE NEXT DIFF BUILDS: route the weak arms through these same two hooks. It is NOT this component's to
+   make — the call sites are in the engine submodule — so it is a request rather than work waiting here. The
+   one thing that differs is the inverse: a weak record hangs off the KEY rather than the hash, so `pos` has
+   no meaning for it (a weak collection is not iterable, so insertion order is unobservable) and the delete
+   inverse must unlink from the key's list.
+   HOW ITS ABSENCE WOULD SHOW: a sibling arm observing a key it never set. The place to observe it is the
+   PAGE'S OWN ERROR SURFACE rather than any counter here, because a collection used as an identity map turns
+   exactly that into a thrown TypeError on the arm that did not write — `enforce`-style guards that refuse a
+   second initialisation are the shape, and a page whose polyfill throws one never finishes that program, so
+   the member stays framed and everything queued behind it stays queued.
    `pos` is WHERE the inverse must put a deleted record back — its POSITION is part of its state, because a
    Set/Map iterates in insertion order and that order is observable. JS_MAP_POS_TAIL for an OVERWRITE, whose
    inverse creates nothing. */
