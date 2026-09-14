@@ -346,6 +346,40 @@ const row = {
      `innerHTML` sites. The @S rungs beside it are uninterpretable without this one. */
   unitsDone: counted.length ? counted[counted.length - 1].unitsDone : null,
   parked: counted.length ? counted[counted.length - 1].park : null,
+  /* WHETHER A RESUMED PROGRAM EVER ENDS, WHICH IS THE ONE QUESTION `jobsFramed` POSES AND CANNOT ANSWER.
+     `jobsFramed` says a backlog waits on members finishing their own programs; it does not say whether any
+     member ever does. solver/step_unit.h splits a resume's FOUR outcomes and states the contract in its own
+     words: "`resume-program` therefore means, and only means, A RESUME THAT LEFT THE FRAME LIVE." Two arms
+     leave the member framed (`resume-program`, `report-an-exception`) and two do not
+     (`resume-ended-its-frame`, `program-detached-its-base`), so reading the first arm alone as "the thread
+     resumes programs that never finish" is the DID-NOT-END half quoted as the whole — the misreading that
+     header's own banner records having happened once already, where 2582 of 2630 steps in that row was
+     "consistent with a frontier ending a program on nearly every step AND with one that has ended nothing
+     since its first — two opposite diagnoses, and the row was the whole of the evidence for both".
+     IT WAS ON THE RUN RECORD THE WHOLE TIME — the SIXTH time this row has been the consumer that never asked
+     for the field written to answer its own ambiguity, after `orphansAsked`, `unitsDone`, the @S arrival
+     census, the WFQ split and the arrivals/departures pair. solver/result.c composes the histogram into every
+     document it builds; bridge.js relays `_cold` WHOLE onto every engine-log row and ASSERTS it (a histogram
+     shape, never defaulted); this file was the only reader missing.
+     LIFETIME, SO IT TAKES THE LAST COUNTED ENTRY and not `wfqLive`'s backward walk. `stepUnitRuns` and
+     `steps` are LIFETIME COUNTS by result.c's own line; `_cold.stepUnits` beside them is a GAUGE over the
+     standing frontier and is deliberately NOT carried here, because pairing a gauge with these would be the
+     two-moments defect one field over. `countersFrom` already says which entry all of these came from.
+     ABSENT STAYS ABSENT: an artifact predating the histogram omits it, and a `{}` would read as an engine
+     that ran no steps. */
+  stepUnitRuns: (() => {
+    if (!counted.length) return null;
+    const c = counted[counted.length - 1].cold;
+    if (!c || typeof c !== 'object' || Array.isArray(c)) return null;
+    const h = c.stepUnitRuns;
+    return (h && typeof h === 'object' && !Array.isArray(h)) ? h : null;
+  })(),
+  steps: (() => {
+    if (!counted.length) return null;
+    const c = counted[counted.length - 1].cold;
+    if (!c || typeof c !== 'object' || Array.isArray(c)) return null;
+    return typeof c.steps === 'number' ? c.steps : null;
+  })(),
   /* …AND WHAT THE JOB BACKLOG ABOVE IS ACTUALLY WAITING ON — see `wfqLive`. Read `jobsReady` with
      `jobWGap` and never alone (a gap of 0 is both "no ready holder" and "the top of the queue holds a
      runnable job"), and read a `jobsReady: 0` with `memUnframed`, which separates its two silences: with
