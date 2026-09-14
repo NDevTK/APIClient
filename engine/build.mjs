@@ -5348,6 +5348,8 @@ for (const l of revisionLines(revAtStart())) console.log(l);
  *                                              nobody reaches for)
  *   node engine/build.mjs native leak       -> LeakSanitizer (which allocation is still live at exit)
  *   node engine/build.mjs native address    -> AddressSanitizer (UAF / double-free / overflow, leaks included)
+ *   … plus `release` for check.h's release exemption (-DAPICLIENT_DEV=0) — see the paragraph below, which is
+ *     where the reason the DEFAULT is `dev` and the reason that default cannot answer every question both live.
  *   … plus `min` to drive the minimal fixture, as the wasm smoke takes it.
  *
  * It used to be a `-fsanitize=address` FLAG ON THE EMCC LINK, and that target could not run: wasm32 addresses
@@ -5362,7 +5364,29 @@ for (const l of revisionLines(revAtStart())) console.log(l);
  * iteration is a gate nobody runs), and a native ASan run over that runner is what named the attribute-lifetime
  * SEGV in one go. The flags below are wpt.mjs's, with the SMOKE entry instead of the WPT one, and DEV on so a
  * DCHECK stays live — a sanitized build with the asserts compiled out reports faults the engine's own
- * invariants would have caught first, at the wrong site. */
+ * invariants would have caught first, at the wrong site.
+ *
+ * THAT ARGUMENT IS RIGHT ABOUT THE DEFAULT AND IS WHY `dev` IS THE DEFAULT. It is NARROWED here rather than
+ * retired, because there is exactly one question it makes unanswerable and that question is the whole reason
+ * anyone reaches for a sanitizer. A DCHECK and a sanitizer do not answer the same thing: the DCHECK asserts an
+ * ACCOUNTING invariant this engine keeps for itself — a refcount that reached zero early, a chain that does not
+ * balance — and the sanitizer asserts what the ALLOCATOR actually did. Where both are armed the DCHECK always
+ * wins, because it aborts AT the accounting error, and the run ends before the allocator has been asked
+ * anything. So `@WHY` fired and ASan was SILENT is not evidence that nothing was freed too early; it is the
+ * shape of a run in which nothing was ever asked — and for the GC's own decref assert that is not a tendency
+ * but a PROOF, readable at the site: the assert stands BEFORE the decrement, and the branch under it only
+ * relinks a zero-refcount header onto `tmp_obj_list`, so the decref pass frees nothing and there is no
+ * allocator event for a sanitizer to have an opinion about. An ASan run paired with a live DCHECK there is
+ * silent by construction, at every revision, whether or not anything is wrong.
+ * `release` IS THEREFORE AN INSTRUMENT AND NOT A SHIPPING MODE. It compiles the DCHECKs out so the sanitizer
+ * gets to answer, and it answers a DIFFERENT question from the default target rather than the same question
+ * more cheaply. Both arms are `-O1 -g -fno-omit-frame-pointer`, so the word names check.h's release exemption
+ * and nothing whatever about optimisation.
+ * AND ITS VERDICT IS WEAKER THAN THE DEFAULT'S, WHICH IS WHY THE TARGET NAME CARRIES IT INTO BOTH THE BINARY
+ * AND THE STAGE LABEL. §Testing's rule is that the DCHECKs ARE the gate, so a PASS from a run with them
+ * compiled out is a smaller claim than a PASS from the default target — and two claims of different size may
+ * not share a name. A reader who cannot tell which of the two a green line came from has a verdict that means
+ * whichever one they assumed. */
 /* ── THE VERDICT HOST'S PROGRAM, BUILT ONCE AND CALLED FROM BOTH TARGETS ──────────────────────────────────
    This body used to be inline in the `native` target and is now a function because the DEFAULT build calls it
    too: CLAUDE.md §Testing puts the build's verdict on the host whose cooperative slice is CPU-denominated, and
@@ -5461,8 +5485,31 @@ function sanitizerRuntime(kind) {
                 + "found). Install llvm's compiler-rt or gcc's libsanitizer (Debian/Ubuntu: libclang-rt-dev, "
                 + "or lib" + lib + (lib === "asan" ? "8" : "0") + " with gcc installed)." };
 }
-function nativeProgram(kind) {
-  const bin = join(OUT, "qjs-native-" + kind);
+function nativeProgram(kind, dev) {
+  /* THE ASSERTION REGIME IS A PARAMETER OF THE TARGET AND NOT A CONSTANT, and it is REQUIRED AT EVERY CALL
+     SITE rather than defaulted. A default would let a caller that never stated it masquerade as one with
+     nothing to say, and the value it would silently take is the one whose silence this whole target exists to
+     distrust — `report()` one screen up refuses an omitted findings list for exactly that reason.
+     THE TWO WORDS ARE check.h's OWN. The emcc CFLAGS below already spell `-DAPICLIENT_DEV=` off a `release`
+     argument and say in their own comment that this is the release exemption; one fact answered in two
+     vocabularies is the hand-copied-list defect with words instead of flags. */
+  if (dev !== "dev" && dev !== "release")
+    throw new Error(`[build] nativeProgram was asked for the assertion regime ${JSON.stringify(dev)}. It is ` +
+                    `"dev" (every DCHECK live, the forcing function) or "release" (-DAPICLIENT_DEV=0, ` +
+                    `check.h's release exemption, so a sanitizer gets to answer where a DCHECK would have ` +
+                    `aborted first). Every caller states it: a target whose assertion regime nobody stated is ` +
+                    `a program whose silence means nothing.`);
+  /* WHAT THIS TARGET IS, NAMED ONCE — because the binary's path, the stage's label and the dialect below are
+     ONE fact, and three spellings of one fact are three chances to disagree. A binary that named two different
+     programs depending on an argument is this file's own recorded lexbor incident wearing a filename: every
+     measurement taken with it is a measurement of a program no invocation describes.
+     THE `dev` ARM CONTRIBUTES NOTHING TO THE NAME, DELIBERATELY. `qjs-native-none` and `qjs-native-address`
+     stay exactly the paths they have always been, which is what keeps the default build byte-identical and
+     what keeps engine/peergate.mjs's and engine/trusted.mjs's hardcoded `qjs-native-none` default pointing at
+     the program it has always pointed at — both take a binary as argv[1] and fall back to that name, so a
+     rename here silently hands them a different engine. Suffix the NEW regime, never rename the old one. */
+  const target = kind + (dev === "dev" ? "" : "-" + dev);
+  const bin = join(OUT, "qjs-native-" + target);
   mkdirSync(OUT, { recursive: true });
   
 /* LEXBOR, NATIVELY — the SAME CALL wpt.mjs makes, which is the whole of the fix for what stood here.
@@ -5492,7 +5539,11 @@ function nativeProgram(kind) {
      hand-copied-list defect this file warns about elsewhere, in miniature. */
   const NATIVE_DIALECT = [
     ...quiet,
-    "-D_GNU_SOURCE", "-DENABLE_DUMPS", '-DCONFIG_VERSION="native"', "-DAPICLIENT_DEV=1",
+    "-D_GNU_SOURCE", "-DENABLE_DUMPS", '-DCONFIG_VERSION="native"',
+    /* THE ONE TOKEN THIS TARGET'S TWO REGIMES DIFFER IN. It is an interpolation into the ONE list rather than
+       a second list beside it, for the reason the paragraph above this array gives: the two clang invocations
+       are the same target and a defines list that can be chosen between is two targets that can drift. */
+    "-DAPICLIENT_DEV=" + (dev === "release" ? "0" : "1"),
     "-Werror=implicit-function-declaration",
     "-I" + QJS, "-I" + HOST, "-I" + join(HOST, "browser"), "-I" + LEXBOR_INC,
   ];
@@ -5502,7 +5553,7 @@ function nativeProgram(kind) {
   const san = kind === "none" ? { flags: [], libs: [] } : sanitizerRuntime(kind);
   if (san.flags === null) {
     console.error("[build] native " + kind + " FAILED — " + san.why);
-    return { bin: null, stage: { label: "native link (" + kind + ")", verdict: "FAILED — " + san.why,
+    return { bin: null, stage: { label: "native link (" + target + ")", verdict: "FAILED — " + san.why,
                                  code: 1, kind: STAGE_KIND.DEFECT } };
   }
   if (kind !== "none") console.log("[build] " + kind + " sanitizer runtime: " + san.how);
@@ -5545,11 +5596,11 @@ function nativeProgram(kind) {
               : cc.status === null ? "clang died on signal " + cc.signal
               : "rc=" + cc.status;
     console.error("[build] native build FAILED — " + why);
-    return { bin: null, stage: { label: "native link (" + kind + ")", verdict: "FAILED — " + why,
+    return { bin: null, stage: { label: "native link (" + target + ")", verdict: "FAILED — " + why,
                                  code: cc.status || 1, kind: STAGE_KIND.DEFECT } };
   }
   console.log("[build] OK -> " + bin + " (both entries: the fixture, and `--abi` over the shipped qjs_* ABI)");
-  return { bin, stage: { label: "native link (" + kind + ")", verdict: "PASS", code: 0, kind: null } };
+  return { bin, stage: { label: "native link (" + target + ")", verdict: "PASS", code: 0, kind: null } };
 }
 
 const NATIVE = process.argv.includes("native");
@@ -5558,8 +5609,14 @@ if (NATIVE) {
      a sanitizer changes both the numbers and the wall-clock by an order of magnitude. */
   const kind = process.argv.includes("address") ? "address"
              : process.argv.includes("leak")    ? "leak" : "none";
+  /* WHICH ASSERTION REGIME — the SAME WORD the emcc CFLAGS below read for the same fact, and inert for them
+     here because this branch ends in `report()`, which always exits, so a `release` on a `native` command line
+     never reaches the wasm link. `dev` is the default and the paragraph above `sanitizerRuntime` says why;
+     `release` is for the one question that default cannot answer, which is whether a sanitizer would have had
+     anything to say had a DCHECK not aborted the run in front of it. */
+  const dev = process.argv.includes("release") ? "release" : "dev";
   /* THE ONE NATIVE BUILD PATH, SHARED WITH THE DEFAULT TARGET. */
-  const built = nativeProgram(kind);
+  const built = nativeProgram(kind, dev);
   const bin = built.bin;
   /* EVERY STAGE THIS TARGET RUNS, IN ONE LIST, because `report()` exits and a stage that reports alone is a
      stage that ends the run. This is the whole reason `cold` could not fall through to the native run. */
@@ -6269,7 +6326,14 @@ const FINDINGS = [];
    same kernel SIGXCPU; what differs is the ENGINE'S OWN cooperative slice, thread-CPU here and WALL on the
    vehicle, which solver/quantum.c states per run on its `@QUANTUM` line and which every verdict in this file
    already carries. Nothing here adds a second denomination tag beside that one. */
-const NATIVE_BUILT = nativeProgram("none");
+/* `"dev"` IS A LITERAL HERE AND NOT THE ARGV READ THE `native` TARGET MAKES, WHICH IS A DECISION AND NOT AN
+   OVERSIGHT. §Testing's rule is that the DCHECKs ARE the gate, so the build's VERDICT is taken from a program
+   whose invariants are armed — and reading `release` from argv at this call site would let `node
+   engine/build.mjs release` silently decide this build's verdict with them compiled out, which is the one
+   reading of that word nobody asking for a release ARTIFACT is requesting. The consequence is stated rather
+   than hidden: a `release` build's wasm is DEV=0 and its verdict host is DEV=1, because the artifact and the
+   claim about the tree are two different things and only one of them ships. */
+const NATIVE_BUILT = nativeProgram("none", "dev");
 STAGES.push(onHost(NATIVE_BUILT.stage, STAGE_HOST.NATIVE));
 const NATIVE_SMOKE = NATIVE_BUILT.bin === null
   ? skipped("native smoke test", "the native program did not link")
