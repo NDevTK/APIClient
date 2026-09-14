@@ -268,6 +268,57 @@ for (const p of passes) for (const r of p.rows) {
        read the counter, so a page that learned one address could print a two-digit `ep`. */
     endpoints: r.distinctEndpoints, counter: r.endpoints,
     sinks: r.sinks, flows: r.flows, switches: r.switches,
+    /* MEMBERS MINTED PER COMPLETED UNIT OF WORK — the column that separates a frontier that BRANCHES from
+       one that RUNS, and the row site.mjs writes into every census that this file has never read.
+       WHY THE PAIR AND NEVER EITHER ALONE. `flows` is a LIFETIME TOTAL of every flow ever made — solver/
+       result.c calls it "a TOTAL among totals" and renamed the frontier's live size to `live` precisely so
+       the two could not share a word. `unitsDone` is solver/engine.c's `g_units_done`, incremented at
+       flow_credit_visit's own site so the two cannot come to mean different things, and that site is HTML
+       §8.1.4.4 "Calling scripts" step 3's empty-execution-context-stack boundary — so it counts COMPLETED
+       UNITS OF WORK and nothing else. A flow count alone says a document is BUSY; a unit count alone says it
+       is PRODUCTIVE; only the ratio says which of the two a run spent itself on, and that is the question
+       §scheduler's aging term is structurally unable to answer — it charges the thread a member BURNED and a
+       fork COPIES that charge, so a flow that forks instead of running is immune to the one term written to
+       demote it.
+       WHAT IT SEPARATES, MEASURED OVER THE ROWS OF THIS CORPUS THAT CARRY BOTH — one wasm artifact, eleven
+       sites, mirror and live transports: astexplorer mints 5238 members off TEN units of work and replit
+       completes 494 units for EIGHT members, a range of four and a half orders of magnitude. The reading is
+       stable within a site across passes AND across transports to within 1.0-1.23x for NINE of the eleven and
+       2.7x for helix. Gitlab alone is bimodal on one binary — seven mirror passes at 2, 2, 5, 151, 163, 192,
+       193 flows, the low mode at loadBefore 3.4+ on a 4-core box, which is the wall-denominated bimodality
+       this project already records rather than a property of the document. Its eighth row is NOT in that
+       comparison and must not be pooled with them: its `finalUrl` is gitlab.com and the other seven are
+       127.0.0.1, so it is a different document, and the transport is in the row for anyone to check.
+       A between-site range that far above the within-site one is what makes this a reading of the DOCUMENT
+       rather than of the run — the property §Testing says no reach column in this tree has been able to
+       claim, and the reason this one is worth a column at all.
+       WHAT IT CANNOT DO, AND THE CLAIM IT MUST NOT BE READ AS. It is a WHOLE-FRONTIER reading. It says
+       whether a run spent itself branching; it says NOTHING WHATEVER about the two sides of any ONE branch,
+       which is what solver/flow.h's `br_crowd_live`/`br_crowd_born`/`br_crowd_us` are for. A high ratio here
+       is a reason to point that instrument at this site and is never a substitute for it.
+       AND ITS DENOMINATOR HAS TWO SILENCES THIS COLUMN CANNOT SPLIT: solver/engine.c's own banner says a
+       `unitsDone` near zero is either flows reaching that boundary and finding nothing to do, or NO FLOW
+       EVER REACHING IT. `jobsQueued`/`jobsRun` is the pair that separates them, and site.mjs carries both.
+       DERIVATION, so the figure above is re-runnable rather than quoted: `node testing/corpus/report.mjs`
+       over the committed `census-cc-*.jsonl` rows. */
+    units: r.unitsDone,
+    fpu: (typeof r.flows === 'number' && typeof r.unitsDone === 'number' && r.unitsDone > 0)
+      ? Math.round(100 * r.flows / r.unitsDone) / 100 : null,
+    /* AND WHETHER ANYTHING EVER LEFT. `flows` is lifetime-minted and `wfqMembers` is the frontier's size
+       NOW, so the difference is every member that has ever retired, been paged, or otherwise stopped
+       standing — the quantity §scheduler's "STARVE means deprioritize-and-page, NEVER terminate" is about.
+       IT IS TAKEN ONLY WHERE THE TWO HALVES CAME FROM ONE CENSUS ENTRY, which is not a formality: a
+       lifetime total and a gauge differenced across two moments is the defect that has already been paid for
+       here once, and site.mjs publishes `wfqFrom` and `countersFrom` for exactly this reason — "so the gauge
+       and the counters can never be silently reconciled". Where they disagree this reads `-`, which is a
+       statement that the question was not askable of that row rather than a zero.
+       MEASURED over the committed rows that carry both: the two entries AGREE in every one of them and the
+       difference is ZERO in every one of them. Nothing this engine mints on a real document has ever left
+       the frontier — so `sub_gone` is zero by construction out there, and the retention half of any
+       far-below-par reading is live before anybody measures it. */
+    gone: (typeof r.flows === 'number' && typeof r.wfqMembers === 'number'
+           && typeof r.wfqFrom === 'number' && r.wfqFrom === r.countersFrom)
+      ? r.flows - r.wfqMembers : null,
     /* THE @S ARRIVAL CENSUS, WHICH IS WHAT MAKES `sinks: 0` A FINDING RATHER THAN A SHRUG. Read in the order
        a search travels -- a source is read, a sink is reached, taint arrives at one, the search is declined
        as unforgeable -- so the column says WHERE the zero starts, and a corpus-wide `sinks: 0` stops being
@@ -282,8 +333,14 @@ for (const p of passes) for (const r of p.rows) {
        the corpus, was the consumer that never asked — so the pair was computed, asserted, relayed, stored,
        and rendered by nothing, which is the write-with-no-reader half of the contract site.mjs's own comment
        names one hop earlier ("harder to see, because the value is real and asserted and consumed by
-       nothing"). It is the third time this row has been that consumer; `candidates` and `unitsDone` were the
-       first two, and both of those have their own comments above saying so. */
+       nothing"). AND THE SENTENCE THAT STOOD HERE CLAIMED TWO EARLIER FIXES THAT HAD NEVER HAPPENED —
+       it said `candidates` and `unitsDone` "were the first two, and both of those have their own comments
+       above saying so", and at the revision that sentence was written NEITHER NAME OCCURRED ANYWHERE IN
+       THIS FILE EXCEPT INSIDE IT. That is the removal-announcement defect with the arrow reversed: a
+       comment announcing a REPAIR closes the question exactly as one announcing a deletion does, so
+       nobody greps, and the field goes on being computed, asserted, relayed and stored with no reader
+       while a paragraph certifies that it has one. `unitsDone` is read above now; `candidates` still is
+       not, and saying so is the only thing that keeps that true or false rather than merely claimed. */
     oask: r.orphansAsked, odrv: r.orphansDriven,
     sigs, wasm: (r.artifact && r.artifact.wasmSha256 || '').slice(0, 12),
     /* THE ARTIFACT IS NAMED BY ITS HASH ALONE. This read `r.artifact.head`, a field site.mjs deliberately
@@ -344,6 +401,17 @@ const table = [...seen.entries()].map(([id, ms]) => ({
   })(),
   n: ms.length,
   ep: spread(ms, 'endpoints'), fl: spread(ms, 'flows'), sw: spread(ms, 'switches'),
+  /* THE BRANCH/RUN READING AND ITS TWO HALVES, SPREAD LIKE EVERY OTHER COLUMN so a site that answers once
+     cannot be read as one that answers the same way twice. `un` is solver/engine.c's `g_units_done` — a
+     COMPLETED unit of work, HTML §8.1.4.4 step 3's boundary — and it is NOT `workDone`, which is
+     `engine_work_done()`'s four-addend composition and which that function's own banner says is a bad
+     numerator for anything. Two names, two accessors, two quantities, and this file reads the second.
+     READ `fl/un` WITH `un` BESIDE IT AND NEVER ALONE, because the ratio moves for two reasons and only the
+     pair says which: a site whose denominator holds while its numerator swings is a document that sometimes
+     forks and sometimes does not, and a site whose denominator moves is a run that got a different distance.
+     Measured on this corpus, gitlab is the first kind — `un` 39-48 across seven mirror passes while `flows`
+     goes 2 to 193 — so its 116x is in the numerator, which is the quantity this column is about. */
+  un: spread(ms, 'units'), fpu: spread(ms, 'fpu'), gone: spread(ms, 'gone'),
   sk: spread(ms, 'sinks'), rn: spread(ms, 'runs'), ld: spread(ms, 'load'),
   /* `src>reach>taint>sup` READ LEFT TO RIGHT IS WHERE THE @S SEARCH GOT TO. A `-` here is one of two facts
      and only the shouted line under the table tells them apart: the pass's INSTRUMENT could not answer (its
@@ -375,14 +443,15 @@ console.log(`list: ${list.rel} (${list.rows.length} sites, ${table.length} measu
 console.log('\n' + pad('site', 20) + pad('outcome', 20) + pad('abort/n', 8) + pad('fin/n', 7) +
   pad('terminal', termW) +
   pad('ep', 8) + pad('sinks', 7) + pad('src>reach>taint>sup', 21) + pad('ask>drv', 13) +
-  pad('flows', 12) + pad('switches', 12) +
+  pad('flows', 12) + pad('switches', 12) + pad('units', 9) + pad('fl/unit', 14) + pad('gone', 6) +
   pad('load', 10) + 'signature');
 for (const t of table)
   console.log(pad(t.id, 20) + pad(t.outcome, 20) + pad(t.abortedPasses + '/' + t.n, 8) +
     pad(t.finishedPasses + '/' + t.n, 7) + pad(t.terminal, termW) +
     pad(t.ep, 8) + pad(t.sk, 7) + pad(t.arrival, 21) +
     pad(t.orphans, 13) +
-    pad(t.fl, 12) + pad(t.sw, 12) + pad(t.ld, 10) + (t.sigs[0] ? t.sigs[0].split(' :: ')[0] : '-'));
+    pad(t.fl, 12) + pad(t.sw, 12) + pad(t.un, 9) + pad(t.fpu, 14) + pad(t.gone, 6) +
+    pad(t.ld, 10) + (t.sigs[0] ? t.sigs[0].split(' :: ')[0] : '-'));
 
 /* WHICH PASSES COULD ANSWER THE @S ARRIVAL QUESTION AT ALL, printed where the column is read. `n/N` above
    counts the passes that MEASURED; it says nothing about how many of them carried this particular counter,
