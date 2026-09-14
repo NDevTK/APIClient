@@ -11075,10 +11075,17 @@ static int engine_sched_slice(void) {
                execution context stack is now empty". solver/flow.c's flow_between_units says the same thing
                from the other side and cannot ask this half at all.
                ONE ASSERT COVERS BOTH READERS BECAUSE THE REGISTER CANNOT MOVE BETWEEN THEM, which is what
-               makes this a hoist and not a second spelling: `flow_set_running` has exactly three callers and
-               all three are this file's own flow_switch_out, flow_switch_in and flow_finish, while the two
-               consumers standing between here and the charge are browser components — unhandled_rejection.h's
-               notify and Indexed Database §2.7.1's registered cleanup — that hold no scheduler entry. */
+               makes this a hoist and not a second spelling — and it is a DERIVATION rather than a count,
+               because a count over a symbol's NAME scores this tree's prose along with its calls. The
+               register is `static` to solver/flow.c, so its whole writer set is enumerable from that ONE FILE
+               rather than from a grep over a tree: the initialiser, flow_registry_init's direct reset at a
+               session boundary, and flow_set_running's body — whose callers are this file's own
+               flow_switch_out, flow_switch_in and flow_finish and nothing else. The two consumers standing
+               between here and the charge are browser components — unhandled_rejection.h's notify and Indexed
+               Database §2.7.1's registered cleanup — that hold no scheduler entry, so none of the three
+               writers can run between these two readers.
+               RETIRES when something that CAN write the register stands between them, at which point the
+               charge is owed an assert of its own again and this one no longer speaks for it. */
             DCHECK(flow_running() == cur,
                    "the flow the scheduler stepped is not the one holding the thread — the unit-of-work "
                    "boundary on the next line reads `JS_HasParkedFlow` of the RUNTIME, whose parked set "
