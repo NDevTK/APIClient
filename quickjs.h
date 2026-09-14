@@ -2215,6 +2215,41 @@ JS_EXTERN void    JS_VarRefSetValue(JSContext *ctx, void *cell, JSValue val);
 JS_EXTERN void JS_MapAddRecord(JSContext *ctx, JSValueConst obj, JSValueConst key, JSValueConst val, int pos);
 JS_EXTERN void JS_MapDeleteRecord(JSContext *ctx, JSValueConst obj, JSValueConst key);
 
+/* A WEAK COLLECTION'S RECORD, HELD BY THE DELTA, WITHOUT KEEPING ITS KEY ALIVE.
+ *
+ * The four functions above serve a WeakMap/WeakSet exactly as they serve a Map/Set — `pos` is the one thing
+ * that differs, and a weak restore must carry JS_MAP_POS_TAIL because a weak collection is not iterable, so
+ * the order of its records is unobservable and there is nowhere to put one back. What a weak entry may NOT do
+ * is hold its key the way a strong entry does.
+ *
+ * A strong entry dups its key, which is right because the collection holds a counted reference too. A weak
+ * collection holds its key UNCOUNTED, so a delta that dup'd one would be the only counted reference in the
+ * system and the key could never die — and flows are never terminated, so that is for the session, once per
+ * flow, for every object an identity map has ever seen. The VALUE is the other half: a weak record's value is
+ * reachable only through its key (the ephemeron rule the engine's own mark walk implements), so holding it
+ * unconditionally makes any value that can reach its key immortal.
+ *
+ * So a weak entry holds THIS instead. It is registered on the key exactly as a record is, and it dies by the
+ * same walk: when the key goes, the cell is NEUTRALISED IN PLACE rather than freed, because the delta still
+ * names it. `JS_CowWeakRefLive` is then false and every operation over the entry is a no-op — which is exact
+ * and not lossy, since a dead weak key is unreachable and neither restoring its record nor removing it can be
+ * observed by anything left that could ask. It is held exactly ONCE: a fork hands the entry array to a
+ * segment and counts the segment, so an entry — and the cell it names — exists once however many arms reach
+ * it. The free unlinks the key's record where the key is alive and finds nothing to unlink where it is not. */
+typedef struct JSCowWeakRef JSCowWeakRef;
+JS_EXTERN JSCowWeakRef *JS_NewCowWeakRef(JSContext *ctx, JSValueConst key,
+                                         JSValueConst v_base, JSValueConst v_cur);
+JS_EXTERN void          JS_FreeCowWeakRef(JSRuntime *rt, JSCowWeakRef *w);
+JS_EXTERN int           JS_CowWeakRefLive(const JSCowWeakRef *w);
+JS_EXTERN JSValueConst  JS_CowWeakRefKey(const JSCowWeakRef *w);
+/* The two values the entry is made of: unapply writes the base, apply writes the cur. An operation that
+   creates nothing on its side leaves that side UNDEFINED — an ADD has no before, a DELETE has no after. */
+JS_EXTERN JSValueConst  JS_CowWeakRefBase(const JSCowWeakRef *w);
+JS_EXTERN JSValueConst  JS_CowWeakRefCur(const JSCowWeakRef *w);
+/* Is this collection weak? The capture side must know, because the two kinds of entry hold their key
+   differently and the hooks carry the collection rather than its state. */
+JS_EXTERN int           JS_IsWeakCollection(JSValueConst obj);
+
 /* A shared object's OWN state (JSTimeTravelHooks.obj_state), saved into an engine-owned blob and put back on a
    context switch. The blob holds a reference on each owned half, so the same one restores any number of times.
    The restore is a SLOT WRITE and never [[SetPrototypeOf]]: its immutable-prototype refusal, its extensible

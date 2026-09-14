@@ -949,7 +949,48 @@ typedef enum {
     JS_WEAK_REF_KIND_MAP,
     JS_WEAK_REF_KIND_WEAK_REF,
     JS_WEAK_REF_KIND_FINALIZATION_REGISTRY_ENTRY,
+    /* A HOLDER OUTSIDE THE COLLECTION THAT MUST NOT KEEP THE KEY ALIVE — see JSCowWeakRef. */
+    JS_WEAK_REF_KIND_COW,
 } JSWeakRefKindEnum;
+
+/* A WEAK COLLECTION'S RECORD, NAMED FROM OUTSIDE IT, FOR AS LONG AS THE KEY LIVES AND NOT ONE COLLECTION PASS
+ * LONGER. The per-flow COW delta needs this and nothing else in the engine did.
+ *
+ * WHY THE DELTA CANNOT SIMPLY HOLD THE KEY. A delta entry for a strong Set/Map dups its key, which is right
+ * because the collection holds one too. A WEAK collection holds its key UNCOUNTED (map_add_record's is_weak arm
+ * takes no reference and hangs a JS_WEAK_REF_KIND_MAP record off the key instead), so a delta that dup'd it
+ * would be the one counted reference in the system and the key could never die. Flows are never terminated —
+ * §NO BOUNDS: starving is deprioritise-and-page — so that reference is held for the session, and a WeakMap used
+ * as an identity map (core-js's internal-state is the one every modern bundle ships) would pin every object it
+ * has ever seen, once per flow. That is not a smaller isolation gap; it is an unbounded leak traded for one.
+ *
+ * AND THE VALUE IS THE SECOND HALF, WHICH A PLAIN DUP ALSO GETS WRONG. A weak record's value is reachable only
+ * while its key is — mark_children marks it through the KEY's weak-ref list (mark_weak_map_value), which is the
+ * ephemeron rule — so a delta holding the value unconditionally makes `wm.set(k, x)` immortal for any x that
+ * can reach k. Those are the two facts a capture of a weak record is about, and neither is a capture question:
+ * they are reference questions, which is why this lives here beside the weak machinery rather than in the delta.
+ *
+ * WHAT IT IS: a cell the holder owns, registered on the key exactly as a record is. While the key lives, `key`
+ * names it (uncounted, like JSMapRecord.key) and `val` is marked through the key. When the key dies,
+ * reset_weak_ref NEUTRALISES the cell in place — releasing `val` and clearing both — and does NOT free it,
+ * because the holder still names it. A neutralised cell answers "not live" and every operation over it is a
+ * no-op, which is correct rather than lossy: a dead key can never be looked up again by anybody, so a restore
+ * that would have re-added it and a restore that would have removed it are equally unobservable.
+ *
+ * `ref_count` is the number of HOLDERS, not of arms: a delta segment frozen at a fork is shared by both arms
+ * (cow_delta_fork hands the same entries to both), so the cell is shared with it and released once per holder. */
+typedef struct JSCowWeakRef {
+    int ref_count;
+    bool live;       /* false once reset_weak_ref has taken the key */
+    JSValue key;     /* BORROWED while live, exactly as JSMapRecord.key is for a weak record */
+    /* THE TWO VALUES A COW ENTRY IS MADE OF, and both are the ephemeron half rather than one of them. An entry
+       is what the record held BEFORE this flow touched it and what it holds AFTER: unapply writes `v_base` and
+       apply writes `v_cur`, and an operation that creates nothing leaves its side UNDEFINED (an ADD has no
+       before, a DELETE has no after). Holding only one of them would leave the other to an ordinary dup, which
+       is the immortality this type exists to prevent — `wm.set(k, x)` twice makes BOTH values able to reach k. */
+    JSValue v_base;  /* OWNED, marked only through the key */
+    JSValue v_cur;   /* OWNED, marked only through the key */
+} JSCowWeakRef;
 
 typedef struct JSWeakRefRecord {
     JSWeakRefKindEnum kind;
@@ -958,6 +999,7 @@ typedef struct JSWeakRefRecord {
         struct JSMapRecord *map_record;
         struct JSWeakRefData *weak_ref_data;
         struct JSFinRecEntry *fin_rec_entry;
+        struct JSCowWeakRef *cow_ref;
     } u;
 } JSWeakRefRecord;
 
@@ -10130,6 +10172,18 @@ static void mark_weak_map_value(JSRuntime *rt, JSWeakRefRecord *first_weak_ref, 
             DCHECK(s->is_weak, "s->is_weak");
             DCHECK(!mr->empty, "!mr->empty"); /* no iterator on WeakMap/WeakSet */
             JS_MarkValue(rt, mr->value, mark_func);
+        } else if (wr->kind == JS_WEAK_REF_KIND_COW) {
+            /* THE SAME EPHEMERON RULE FOR A HOLDER OUTSIDE THE COLLECTION — see JSCowWeakRef. The cell's value
+               is reachable through the KEY and through nothing else, which is the whole reason the delta may
+               hold it at all: marking it here makes it live exactly as long as a record's value would, and
+               leaving it out of this walk would free a value the delta still names. A neutralised cell holds
+               JS_UNDEFINED, which JS_MarkValue skips, so the dead arm needs no test of its own. */
+            DCHECK(wr->u.cow_ref->live,
+                   "a neutralised COW weak cell is still on a key's weak-ref list — reset_weak_ref clears the "
+                   "cell and unlinks the record together, so a dead cell reachable from a live key means one "
+                   "of the two halves ran without the other");
+            JS_MarkValue(rt, wr->u.cow_ref->v_base, mark_func);
+            JS_MarkValue(rt, wr->u.cow_ref->v_cur, mark_func);
         }
     }
 }
@@ -106543,7 +106597,7 @@ static JSValue js_map_set(JSContext *ctx, JSValueConst this_val,
            sibling restores it on unapply. A Set re-add is a no-op (same value) — nothing to capture.
            NO POSITION: an overwrite does not move the record, so its inverse creates nothing and has nothing to
            place — which is why this does not pay map_record_pos's walk. */
-        if (g_time_travel.map_mutate && !s->is_weak && !is_set)
+        if (g_time_travel.map_mutate && !is_set)
             g_time_travel.map_mutate(ctx, this_val, key, mr->value, value, JS_MAP_MUTATE_OVERWRITE,
                                      JS_MAP_POS_TAIL);
         JS_FreeValue(ctx, mr->value);
@@ -106552,8 +106606,14 @@ static JSValue js_map_set(JSContext *ctx, JSValueConst this_val,
         if (!mr)
             return JS_EXCEPTION;
         /* a genuinely NEW record on a shared Set/Map: capture it per-flow so a snapshot-forked sibling stays
-           isolated (unapply deletes it, apply re-adds). Weak collections are never snapshot-shared this way. */
-        if (g_time_travel.map_add && !s->is_weak)
+           isolated (unapply deletes it, apply re-adds).
+           WEAK COLLECTIONS COME THROUGH HERE TOO, AND THE GUARD THAT KEPT THEM OUT SAID "Weak collections are
+           never snapshot-shared this way" — a claim about this tree with no derivation under it, and false for
+           the commonest weak collection on the web: core-js's internal-state module does `new WeakMap` while
+           the polyfill chunk runs, which is BOOT, and a boot creation is baseline by construction
+           (§State-isolation). So every forked arm wrote into ONE uncaptured map. What the capture may not do is
+           dup the key — see JSCowWeakRef. */
+        if (g_time_travel.map_add)
             g_time_travel.map_add(ctx, this_val, key, value);
     }
     mr->value = js_dup(value);
@@ -106577,10 +106637,17 @@ static JSMapState *js_map_cow_state(JSValueConst obj)
     DCHECK(JS_VALUE_GET_TAG(obj) == JS_TAG_OBJECT,
            "a COW delta holds a Set/Map record entry whose collection is not an object");
     p = JS_VALUE_GET_OBJ(obj);
-    DCHECK(p->class_id == JS_CLASS_MAP || p->class_id == JS_CLASS_SET,
-           "a COW delta holds a Set/Map record entry on an object that is neither — a WEAK collection is never "
-           "captured (its records are not iterated and its keys do not survive a park), so the entry was read "
-           "off a different object than the one it names");
+    DCHECK(p->class_id == JS_CLASS_MAP || p->class_id == JS_CLASS_SET ||
+           p->class_id == JS_CLASS_WEAKMAP || p->class_id == JS_CLASS_WEAKSET,
+           "a COW delta holds a Set/Map record entry on an object that is none of the four collection classes "
+           "— so the entry was read off a different object than the one it names");
+    /* THE WEAK ARMS ARE CAPTURED NOW, AND THIS SENTENCE USED TO EXCLUDE THEM: it said a weak collection "is
+       never captured (its records are not iterated and its keys do not survive a park)". Both halves are true
+       and neither is a reason. NOT ITERATED is why `pos` is meaningless for a weak record, not why the record
+       is unobservable — `has`/`get` observe it, so a sibling arm sees a key it never set. KEYS DO NOT SURVIVE A
+       PARK is a fact about the KEY's lifetime that the delta now states instead of assuming: it holds a
+       JSCowWeakRef, which goes dead with the key and makes every operation over it a no-op. What the exclusion
+       actually cost is in cow.h's residual; what it takes to end it is JSCowWeakRef's banner. */
     s = p->u.opaque;
     DCHECK(s != NULL, "a COW delta holds a record entry for a Set/Map with no state — the collection was torn "
                       "down while a parked flow still named it");
@@ -106594,6 +106661,11 @@ void JS_MapAddRecord(JSContext *ctx, JSValueConst obj, JSValueConst key, JSValue
 
     DCHECK(pos == JS_MAP_POS_TAIL || pos >= 0, "a Set/Map record restore was given a position that is neither "
                                                "an append nor a count of the records preceding it");
+    DCHECK(!s->is_weak || pos == JS_MAP_POS_TAIL,
+           "a WEAK collection's record restore was given a position. A weak collection is not iterable, so the "
+           "order of its records is unobservable and there is no place to put one back — the capture states "
+           "that by carrying JS_MAP_POS_TAIL, and a number here is a caller that read the position off a "
+           "strong record's arm");
     nkey = map_normalize_key_const(ctx, key);
     mr = map_find_record(ctx, s, nkey);
     if (mr) {
@@ -106619,6 +106691,110 @@ void JS_MapDeleteRecord(JSContext *ctx, JSValueConst obj, JSValueConst key)
 
     if (mr)
         map_delete_record(ctx->rt, s, mr);
+}
+
+/* THE DELTA'S HANDLE ON A WEAK RECORD — see JSCowWeakRef for why a dup of the key is not one. Registered on the
+   key exactly as map_add_record's is_weak arm registers a record, so the two die together and by the same walk.
+   The key is BORROWED (uncounted) and the value is dup'd but reachable only through the key. */
+JSCowWeakRef *JS_NewCowWeakRef(JSContext *ctx, JSValueConst key, JSValueConst v_base, JSValueConst v_cur)
+{
+    JSCowWeakRef *w;
+    JSWeakRefRecord *wr;
+
+    DCHECK(is_valid_weakref_target(key),
+           "a COW weak handle was asked for on a key no weak collection can hold — the only caller is the "
+           "capture of a record the collection ALREADY made, and that add refused an invalid target first");
+    w = js_malloc(ctx, sizeof(*w));
+    if (!w)
+        return NULL;
+    wr = js_malloc(ctx, sizeof(*wr));
+    if (!wr) {
+        js_free(ctx, w);
+        return NULL;
+    }
+    w->ref_count = 1;
+    w->live = true;
+    w->key = unsafe_unconst(key);   /* borrowed, like JSMapRecord.key */
+    w->v_base = js_dup(v_base);
+    w->v_cur = js_dup(v_cur);
+    wr->kind = JS_WEAK_REF_KIND_COW;
+    wr->u.cow_ref = w;
+    insert_weakref_record(key, wr);
+    return w;
+}
+
+/* Release one holder. The LAST one unlinks the key's record where the key is still alive, and where it is not
+   there is nothing to unlink: reset_weak_ref took the record out of the list and freed it, which is what `live`
+   false records. That asymmetry is the whole contract, and it is why the flag is read here rather than the key
+   being tested for a tag. */
+void JS_FreeCowWeakRef(JSRuntime *rt, JSCowWeakRef *w)
+{
+    JSWeakRefRecord **pwr, *wr;
+
+    if (!w)
+        return;
+    DCHECK(w->ref_count > 0, "a COW weak handle was released more times than it was held");
+    if (--w->ref_count != 0)
+        return;
+    if (w->live) {
+        pwr = get_first_weak_ref(w->key);
+        for (;;) {
+            wr = *pwr;
+            DCHECK(wr != NULL,
+                   "a LIVE COW weak handle is not on its key's weak-ref list — the mint is the only writer of "
+                   "`live` true and it inserts the record in the same call, so the two have parted company");
+            if (wr->kind == JS_WEAK_REF_KIND_COW && wr->u.cow_ref == w)
+                break;
+            pwr = &wr->next_weak_ref;
+        }
+        *pwr = wr->next_weak_ref;
+        js_free_rt(rt, wr);
+        JS_FreeValueRT(rt, w->v_base);
+        JS_FreeValueRT(rt, w->v_cur);
+    } else {
+        DCHECK(JS_IsUndefined(w->v_base) && JS_IsUndefined(w->v_cur) && JS_IsUndefined(w->key),
+               "a NEUTRALISED COW weak handle still names a key or a value — reset_weak_ref clears both, so "
+               "something else wrote the cell after the sweep took its key");
+    }
+    js_free_rt(rt, w);
+}
+
+/* Has the key outlived the delta's need of it? Every operation over a dead cell is a no-op, and that is exact
+   rather than lossy — a dead weak key is unreachable, so neither restoring its record nor removing it is
+   observable by anything that could still ask. */
+int JS_CowWeakRefLive(const JSCowWeakRef *w) { return w != NULL && w->live; }
+
+/* The capture side's own question — see quickjs.h. It reads the STATE's flag rather than comparing class ids,
+   because `is_weak` is the field every arm of this file branches on and a second spelling of it here is the
+   two-copies shape that drifts. */
+int JS_IsWeakCollection(JSValueConst obj)
+{
+    JSObject *p;
+    JSMapState *s;
+
+    if (JS_VALUE_GET_TAG(obj) != JS_TAG_OBJECT)
+        return 0;
+    p = JS_VALUE_GET_OBJ(obj);
+    if (p->class_id != JS_CLASS_MAP && p->class_id != JS_CLASS_SET &&
+        p->class_id != JS_CLASS_WEAKMAP && p->class_id != JS_CLASS_WEAKSET)
+        return 0;
+    s = p->u.opaque;
+    return s != NULL && s->is_weak;
+}
+JSValueConst JS_CowWeakRefKey(const JSCowWeakRef *w)
+{
+    DCHECK(w != NULL && w->live, "a neutralised COW weak handle was asked for its key");
+    return w->key;
+}
+JSValueConst JS_CowWeakRefBase(const JSCowWeakRef *w)
+{
+    DCHECK(w != NULL && w->live, "a neutralised COW weak handle was asked for the value its unapply writes");
+    return w->v_base;
+}
+JSValueConst JS_CowWeakRefCur(const JSCowWeakRef *w)
+{
+    DCHECK(w != NULL && w->live, "a neutralised COW weak handle was asked for the value its apply writes");
+    return w->v_cur;
 }
 
 static JSValue js_map_get(JSContext *ctx, JSValueConst this_val,
@@ -106779,9 +106955,13 @@ static JSValue js_map_delete(JSContext *ctx, JSValueConst this_val,
        snapshot-forked sibling re-adds it where it was (a Set's value is UNDEFINED, harmless). Without the
        position the unapply appended, and `m.delete('a')` on ['a','b','c'] came back as ['b','c','a'] — a
        different collection, since iteration order is insertion order and observable. */
-    if (g_time_travel.map_mutate && !s->is_weak)
+    /* A WEAK record carries NO POSITION and must not be asked for one: map_record_pos walks the record list to
+       count what precedes it, and for a weak collection that number is unobservable (it is not iterable) and
+       the walk is O(records) for nothing. JS_MAP_POS_TAIL is the positive statement of that, and JS_MapAddRecord
+       asserts a weak restore never arrives carrying anything else. */
+    if (g_time_travel.map_mutate)
         g_time_travel.map_mutate(ctx, this_val, key, mr->value, JS_UNDEFINED, JS_MAP_MUTATE_DELETE,
-                                 map_record_pos(s, mr));
+                                 s->is_weak ? JS_MAP_POS_TAIL : map_record_pos(s, mr));
     map_delete_record(ctx->rt, s, mr);
     return JS_TRUE;
 }
@@ -120778,6 +120958,14 @@ static void reset_weak_ref(JSRuntime *rt, JSWeakRefRecord **first_weak_ref)
             fre = wr->u.fin_rec_entry;
             list_del(&fre->link);
             break;
+        case JS_WEAK_REF_KIND_COW:
+            /* NEUTRALISE, NEVER FREE — the cell belongs to the delta that made it and outlives this key. What
+               dies here is the CLAIM: `live` false is what every operation over the cell tests, and clearing
+               the borrowed key with it means nothing can read a pointer the sweep is about to reclaim. The
+               VALUE goes in pass 2, beside the map record's, for the reason the pass split exists. */
+            wr->u.cow_ref->live = false;
+            wr->u.cow_ref->key = JS_UNDEFINED;
+            break;
         default:
             abort();
         }
@@ -120797,6 +120985,16 @@ static void reset_weak_ref(JSRuntime *rt, JSWeakRefRecord **first_weak_ref)
             wrd = wr->u.weak_ref_data;
             JS_SetOpaqueInternal(wrd->obj, &js_weakref_sentinel);
             js_free_rt(rt, wrd);
+            break;
+        case JS_WEAK_REF_KIND_COW:
+            /* The ephemeron half, released with the record's — see the pass-1 arm. THE CELL IS NOT FREED HERE
+               and neither is `wr`: the cell belongs to the delta (JS_FreeCowWeakRef is its one disposer, and it
+               finds `live` already false and unlinks nothing, because this walk is what removed the record),
+               and the RECORD is freed by the common `js_free_rt(rt, wr)` every arm of this loop shares. Freeing
+               it here would be that free twice — which is what the first draft of this arm did. */
+            JS_FreeValueRT(rt, wr->u.cow_ref->v_base);
+            JS_FreeValueRT(rt, wr->u.cow_ref->v_cur);
+            wr->u.cow_ref->v_base = wr->u.cow_ref->v_cur = JS_UNDEFINED;
             break;
         case JS_WEAK_REF_KIND_FINALIZATION_REGISTRY_ENTRY: {
             fre = wr->u.fin_rec_entry;
