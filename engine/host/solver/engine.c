@@ -5473,7 +5473,14 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
  * it has to move onto the flow); the record grammar gains an ADDRESSEE field beside the target document
  * (remote_op.c's fields are positional, so it is one index and every operand shifts); and engine_perform
  * attaches an addressed record to the ONE flow whose world it names instead of to all of them, crashing where
- * that timeline is gone rather than answering out of another. */
+ * that timeline is gone rather than answering out of another.
+ *   HOW ITS ABSENCE SHOWS, stated as an observation rather than as whichever arm forked last, because
+ *     that member is whatever the peer branched into most recently: engine_perform reads no addressee,
+ *     so the number of timelines answering ONE token is the peer's whole live frontier for EVERY read.
+ *     A read made from an arm that ALREADY names a peer timeline is therefore answered by exactly as
+ *     many timelines as one made from a flow that has never taken a cross-instance answer, and both
+ *     counts move with the PEER's forking and never with the ASKER's lineage. The pin arriving is the
+ *     first of those two counts becoming ONE while the second does not. */
 static int flow_answer_fork(JSContext *ctx, Flow *f) {
     int n = pending_count(f->pending), i;
 
