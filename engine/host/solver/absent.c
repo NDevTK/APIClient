@@ -262,11 +262,25 @@ static int g_platform_sorted, g_language_sorted;
    generated table, and quickjs-ng declares no intrinsic for it — so a read of it is answered as
    server-injected app state today, which is the same defect this pair of vocabularies exists to close, one
    standard further out.
-   WHAT THE NEXT DIFF BUILDS: an `ecma402` entry in engine/specindex committed the way `ecmascript.json` is,
-   and §8's subclauses added to esglobalgen.mjs's derivation so `Intl` arrives in LANGUAGE_NAMES by the same
-   rule as every other name in it rather than by being typed into one — engine/specindex holds no ECMA-402
-   index at all at the revision this was written, so the corpus is the work and the derivation is one clause
-   prefix.
+   WHAT THE NEXT DIFF BUILDS: a SINGLE-PAGE reader kind in citegen.mjs, an `ecma402` SPECS row using it, and a
+   derivation in esglobalgen.mjs keyed on the §8 CLAUSE ITSELF. The clause this replaces named none of those
+   three and was wrong AT BIRTH rather than stale, which is why it is rewritten here instead of deleted — a
+   reader who re-derived it from the same reasoning would write it again. It said the row goes in "the way
+   `ecmascript.json` is", and `ecmascript.json` is `kind: "tc39-multipage"` while the multipage form of
+   ECMA-402 answers 404: that document is published single-page only, so the existing reader cannot be reused.
+   It said "§8's subclauses", and those are the Value, Constructor and Function Properties OF THE INTL OBJECT
+   — the members of `Intl`, never names on the global object. Run esglobalgen's own rule over §8 and it yields
+   the EMPTY SET at every depth, which is the part that makes the clause unbuildable rather than merely
+   mis-scoped: at depth 2 the three titles are grouping headings, and at depth 3 they are spelled
+   `Intl.Collator ( . . . )`, which still fails the IdentifierName test after the parameter list is stripped
+   because of the dot. Widening that test to admit the dot is the repair the clause invites and is the worst
+   of the three outcomes — it would enter `Intl.Collator` in a table of GLOBAL names. The name this residual
+   is about is stated in §8's own prose and in no subclause, which is why no subclause rule reaches it.
+   Re-derive before building, rather than trusting this paragraph:
+     curl -s https://tc39.es/ecma402/ | grep -o 'title="[^"]*"><span class=secnum>8[.0-9]*</span>'
+   AND IT IS NOT ONE ROW: an index makes ECMA-402 a NEIGHBOUR of every indexed standard, and its §8 collides
+   head-on with ECMAScript §8 "Syntax-Directed Operations", so the diff is measured over the WHOLE corpus and
+   never over the standard being added.
    HOW ITS ABSENCE SHOWS: `window.Intl` or `Intl.NumberFormat` in any bundle carrying a locale-formatting
    polyfill mints an unknown with source identity `{Intl}` and its gate forks, where a real browser answers a
    real namespace and where this engine's honest answer is the ReferenceError naming the component to
