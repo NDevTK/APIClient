@@ -27,13 +27,20 @@
  * and the generation was never the whole of the fix, because the ANSWER SHAPE of this arm is a SUPPRESSION
  * over a DEFAULT: a name the suppression does not cover is app state, so whatever the suppression is complete
  * FOR decides nothing about the population that escapes it. platform_names.h is complete for Web IDL and was
- * EMPTY for ECMAScript, and TWO standards put names on the global object. So every §19 name a build does not
+ * EMPTY for ECMAScript, and THREE standards put names on the global object. So every §19 name a build does not
  * install — which names those are is a fact about the build and never about this file — fell through to "app
  * state", and a feature-detect on one minted an unknown and FORKED where a real browser answers `undefined`
  * and where this engine owes a component exactly as it owes an unbuilt interface. The second vocabulary is
  * browser/language_names.h, derived by engine/esglobalgen.mjs from the §19 subclauses of the ECMAScript
  * section index this tree already commits for citegen.mjs — the same rule as the first, applied to the other
- * standard, and derived from that standard's own artifact rather than typed here.
+ * standard, and derived from that standard's own artifact rather than typed here. The THIRD is
+ * browser/i18n_names.h, ECMA-402 §8 The Intl Object, derived by engine/i18nglobalgen.mjs — and it arrived by
+ * the same route as the second: the name was in neither table, so it defaulted to app state, and 259
+ * references across 13 of this project's 18 committed mirrors minted unknowns whose gates forked. THAT THE
+ * SAME DEFECT RECURRED TWICE AFTER BEING FIXED ONCE IS THE FACT WORTH KEEPING, and its shape is the one this
+ * file's own header already names: an answer that is a SUPPRESSION over a DEFAULT is wrong about exactly the
+ * population its suppression does not cover, so completing one vocabulary says nothing about the next.
+ * A fourth standard would arrive the same way and be invisible the same way.
  *
  * WHAT THAT DOES NOT FIX, STATED PLAINLY SO THE NEXT READER DOES NOT MISTAKE IT FOR THE WHOLE ANSWER: the
  * default is still a default. A name is answered as server-injected app state because NO vocabulary claimed
@@ -192,16 +199,19 @@
 #include "check.h"
 #include "solver/absent.h"
 #include "solver/concolic.h"
+#include "browser/i18n_names.h"
 #include "browser/language_names.h"
 #include "browser/platform_names.h"
 
 #define PLATFORM_NAMES_N ((int)(sizeof(PLATFORM_NAMES) / sizeof(PLATFORM_NAMES[0])))
 #define LANGUAGE_NAMES_N ((int)(sizeof(LANGUAGE_NAMES) / sizeof(LANGUAGE_NAMES[0])))
+#define I18N_NAMES_N ((int)(sizeof(I18N_NAMES) / sizeof(I18N_NAMES[0])))
 
-/* MEMBERSHIP IN ONE OF THE GENERATED VOCABULARIES — ONE LOOKUP FOR BOTH, because two vocabularies asking one
-   question through two copies of a binary search is two right answers to one question, which is the shape that
-   drifts. Each generated table is SORTED by its generator, so membership is a binary search — a linear scan
-   would run on every unresolved global read, of which a forced-exec run does a great many.
+/* MEMBERSHIP IN ONE OF THE GENERATED VOCABULARIES — ONE LOOKUP FOR ALL THREE, because three vocabularies
+   asking one question through three copies of a binary search is three right answers to one question, which
+   is the shape that drifts. Each generated table is SORTED by its generator, so membership is a binary
+   search — a linear scan would run on every unresolved global read, of which a forced-exec run does a great
+   many.
    AND THE SORT IS NOW ACTUALLY ASSERTED, WHICH THE COMMENT THAT STOOD HERE CLAIMED AND THE CODE DID NOT DO.
    That claim was the dangerous kind: a check announced where the grep answers empty closes the question, so
    nobody looks. It is load-bearing rather than tidy, and the direction it fails in is the silent one — a
@@ -255,67 +265,58 @@ static const char *names_find(const char *const *tbl, int n, const char *name, c
 }
 
 /* One flag per table; the host is one agent per instance and nothing here is entered from a second thread. */
-static int g_platform_sorted, g_language_sorted;
+static int g_platform_sorted, g_language_sorted, g_i18n_sorted;
 
-/* NAMED RESIDUAL — NOT COVERED: `Intl`. ECMA-402 is a THIRD standard that puts a name on the global object,
-   and it puts exactly one there (§8 The Intl Object); this engine does not build it, `Intl` is in neither
-   generated table, and quickjs-ng declares no intrinsic for it — so a read of it is answered as
-   server-injected app state today, which is the same defect this pair of vocabularies exists to close, one
-   standard further out.
-   WHAT THE NEXT DIFF BUILDS: a SINGLE-PAGE reader kind in citegen.mjs, an `ecma402` SPECS row using it, and a
-   derivation in esglobalgen.mjs keyed on the §8 CLAUSE ITSELF. The clause this replaces named none of those
-   three and was wrong AT BIRTH rather than stale, which is why it is rewritten here instead of deleted — a
-   reader who re-derived it from the same reasoning would write it again. It said the row goes in "the way
-   `ecmascript.json` is", and `ecmascript.json` is `kind: "tc39-multipage"` while the multipage form of
-   ECMA-402 answers 404: that document is published single-page only, so the existing reader cannot be reused.
-   It said "§8's subclauses", and those are the Value, Constructor and Function Properties OF THE INTL OBJECT
-   — the members of `Intl`, never names on the global object. Run esglobalgen's own rule over §8 and it yields
-   the EMPTY SET at every depth, which is the part that makes the clause unbuildable rather than merely
-   mis-scoped: at depth 2 the three titles are grouping headings, and at depth 3 they are spelled
-   `Intl.Collator ( . . . )`, which still fails the IdentifierName test after the parameter list is stripped
-   because of the dot. Widening that test to admit the dot is the repair the clause invites and is the worst
-   of the three outcomes — it would enter `Intl.Collator` in a table of GLOBAL names. The name this residual
-   is about is stated in §8's own prose and in no subclause, which is why no subclause rule reaches it.
-   Re-derive before building, rather than trusting this paragraph:
-     curl -s https://tc39.es/ecma402/ | grep -o 'title="[^"]*"><span class=secnum>8[.0-9]*</span>'
-   AND IT IS NOT ONE ROW: an index makes ECMA-402 a NEIGHBOUR of every indexed standard, and its §8 collides
-   head-on with ECMAScript §8 "Syntax-Directed Operations", so the diff is measured over the WHOLE corpus and
-   never over the standard being added.
-   THAT OBLIGATION ATTACHES TO THE `SPECS` ROW AND NOT TO THE NAME, WHICH SEPARATES TWO THINGS THIS CLAUSE
-   HAD WELDED TOGETHER — established by reading citegen.mjs's load path rather than inferred from its
-   purpose. `audit()` opens `for (const s of SPECS) { const f = indexFileOf(s.key); ... }`, and NOTHING
-   enumerates engine/specindex: that file's three readdirSync calls are the audited source walk, the qjs
-   directory and the engine's own .mjs list. An index whose key has no SPECS row is therefore never opened by
-   the auditor, so the §8 collision and the whole-corpus measurement are the price of REGISTERING the
-   standard, never of claiming the name. What the row buys in exchange is the only regen path there is —
-   `regen()` resolves through SPEC_BY_KEY and THROWS for an unknown key — so an unregistered index is a
-   generated artifact with nothing to regenerate it. Both costs are real and they are SEPARABLE: a diff that
-   claims the name is not blocked on the corpus measurement, and may leave the citation question open.
-   (The single-page reader is still owed either way, and that half of the clause is verified with a control:
-   tc39.es/ecma402/multipage/ answers 404 where tc39.es/ecma262/multipage/ answers 200, and `regen`'s kind
-   switch has no single-page TC39 arm to reuse.)
-   AND THE DERIVATION NEED NOT READ §8's PROSE AT ALL, WHICH IS WHAT MAKES IT SAFE AGAINST THE TRAP ABOVE BY
-   CONSTRUCTION RATHER THAN BY CARE. Keying on the clause TITLE means parsing its `The Intl Object` wording, an English
-   shape. The MEMBER subclauses spell themselves `Intl.Collator ( . . . )`, so the global name is the RECEIVER
-   THEY SHARE — the leading IdentifierName IMMEDIATELY followed by a dot — and taking the text BEFORE that dot
-   cannot yield `Intl.Collator`, which is precisely the outcome the widening warned against above produces.
-   Measured over §8 as fetched: twelve member subclauses vote and yield exactly ONE receiver, `Intl`, while
-   §8.1.1 `Intl [ %Symbol.toStringTag% ]` is skipped because a SPACE and not a dot follows the identifier,
-   which is the reading that keeps that title's own interior dot out of the answer.
-   ITS FAILURE MODE IS MEASURED RATHER THAN CAUTIONED, AND IT IS WHY THE RULE IS SCOPED TO A CLAUSE AND NEVER
-   RUN OVER A DOCUMENT: applied to the whole of the committed ECMAScript index it recovers 37 receivers, of
-   which 32 are in language_names.h and the five that are not — TypedArray, NativeError, GeneratorFunction,
-   AsyncFunction, AsyncGeneratorFunction — are exactly the anonymous intrinsics ECMAScript gives no global
-   name to. Applied to the 19.x subtree esglobalgen actually reads, it yields NOTHING, so adding it there is
-   additive and cannot move a name into or out of that table.
-   RETIREMENT: all of this goes with the residual, on the diff that makes absent_standard_name answer for
-   `Intl` — it is reasoning about how to build that, not a record to keep afterwards.
-   HOW ITS ABSENCE SHOWS: `window.Intl` or `Intl.NumberFormat` in any bundle carrying a locale-formatting
-   polyfill mints an unknown with source identity `{Intl}` and its gate forks, where a real browser answers a
-   real namespace and where this engine's honest answer is the ReferenceError naming the component to
-   write. It is visible in a run's `_forkAt` as a row named for that source — and, since it is answered as app
-   state rather than suppressed, it is counted by absent_json under the app-state member and never as a name
-   this engine owes, which is the second reading of the same gap and the one that says how large it is. */
+#if APICLIENT_DEV
+/* THE THREE VOCABULARIES ARE DISJOINT, AND UNTIL THIS RAN THAT WAS TRUE ONLY BY CONVENTION. The lookup below
+   returns the FIRST table that holds a name, so where two tables held one, search ORDER would silently decide
+   which standard a `@WHY` names as owing it — and the order is written for cost (smallest last), which is no
+   basis for answering that. Three generators fed by three independent artifacts cannot promise each other
+   anything, so the promise is checked here instead of assumed: measured at 1285 / 58 / 1 entries with all
+   three pairwise intersections EMPTY, and this is what keeps that true rather than merely observed.
+   It runs ONCE, off the same latch the sort checks use, and the searches are hoisted out of the condition
+   because a DCHECK's condition must be side-effect-free and names_find writes its `checked` latch. */
+static void vocab_assert_disjoint(void)
+{
+    int i;
+
+    for (i = 0; i < LANGUAGE_NAMES_N; i++) {
+        const char *dup = names_find(PLATFORM_NAMES, PLATFORM_NAMES_N, LANGUAGE_NAMES[i],
+                                     "Web IDL [Exposed=Window]", &g_platform_sorted);
+        DCHECKF(dup == NULL, "\"%s\" is in BOTH browser/platform_names.h and browser/language_names.h, so "
+                             "which standard owns it is decided by the order absent_standard_name happens to "
+                             "search — and that order is written for cost. Two standards claiming one global "
+                             "name is a fact about the standards, and this file may not resolve it by luck",
+                LANGUAGE_NAMES[i]);
+    }
+    for (i = 0; i < I18N_NAMES_N; i++) {
+        const char *dp = names_find(PLATFORM_NAMES, PLATFORM_NAMES_N, I18N_NAMES[i],
+                                    "Web IDL [Exposed=Window]", &g_platform_sorted);
+        const char *dl = names_find(LANGUAGE_NAMES, LANGUAGE_NAMES_N, I18N_NAMES[i],
+                                    "ECMAScript §19 global-object", &g_language_sorted);
+        DCHECKF(dp == NULL, "\"%s\" is in BOTH browser/i18n_names.h and browser/platform_names.h — see the "
+                            "disjointness note above", I18N_NAMES[i]);
+        DCHECKF(dl == NULL, "\"%s\" is in BOTH browser/i18n_names.h and browser/language_names.h — ECMA-402 "
+                            "putting a name ECMAScript §19 already names would mean this engine owes it under "
+                            "two standards, which is a fact to read rather than to search past", I18N_NAMES[i]);
+    }
+}
+#endif
+
+/* THE `Intl` RESIDUAL THAT STOOD HERE IS RETIRED BY THE TABLE ABOVE, WHICH IS THE CONDITION IT NAMED. What
+   it argued is now CODE — browser/i18n_names.h and engine/i18nglobalgen.mjs — so the reasoning lives where it
+   is executed rather than where it was deferred, and the one part of it a reader could still re-derive
+   wrongly is kept AT the generator: the global name is the RECEIVER the members share, taken from the text
+   BEFORE the dot, and NEVER by widening an IdentifierName test to admit the dot, which would enter
+   `Intl.Collator` in a table of GLOBAL names.
+   WHAT IS STILL OWED IS THE REGISTRATION AND NOT THE NAME, and the two were welded together until the load
+   path was read: citegen's `audit()` iterates `for (const s of SPECS)` and loads indexes BY KEY, and nothing
+   enumerates engine/specindex — so the §8-against-ECMAScript-§8 collision, and the whole-corpus measurement
+   it forces, are the price of giving ECMA-402 a SPECS row rather than of claiming its name. The row buys the
+   only regen path there is (`regen()` resolves through SPEC_BY_KEY and throws for an unknown key), which is
+   why i18nglobalgen fetches where esglobalgen reads a committed index and why that generator carries its own
+   retirement condition. This engine still builds NO part of ECMA-402; what changed is that its one global
+   name is now answered by a standard instead of defaulting to server-injected app state. */
 const char *absent_standard_name(const char *name, AbsentVocab *vocab)
 {
     const char *e;
@@ -323,6 +324,12 @@ const char *absent_standard_name(const char *name, AbsentVocab *vocab)
     DCHECK(vocab != NULL, "a global name was asked which standard owns it with nowhere to put the answer — "
                           "the vocabulary is the half of this answer a `@WHY` has to be able to state, and a "
                           "caller that wants only the yes/no is a caller that will re-derive it wrongly");
+#if APICLIENT_DEV
+    {
+        static int checked;
+        if (!checked) { checked = 1; vocab_assert_disjoint(); }
+    }
+#endif
     e = names_find(PLATFORM_NAMES, PLATFORM_NAMES_N, name, "Web IDL [Exposed=Window]", &g_platform_sorted);
     if (e) {
         *vocab = ABSENT_VOCAB_WEBIDL;
@@ -331,6 +338,14 @@ const char *absent_standard_name(const char *name, AbsentVocab *vocab)
     e = names_find(LANGUAGE_NAMES, LANGUAGE_NAMES_N, name, "ECMAScript §19 global-object", &g_language_sorted);
     if (e) {
         *vocab = ABSENT_VOCAB_ECMASCRIPT;
+        return e;
+    }
+    /* THE THIRD STANDARD, AND IT IS ASKED LAST ONLY BECAUSE IT IS SMALLEST — the three tables are DISJOINT, so
+       the order is a cost and never a decision. A name in two of them would be a fact about the standards that
+       this file must not resolve by search order, which is what the disjointness assert at the seal is for. */
+    e = names_find(I18N_NAMES, I18N_NAMES_N, name, "ECMA-402 §8 The Intl Object", &g_i18n_sorted);
+    if (e) {
+        *vocab = ABSENT_VOCAB_ECMA402;
         return e;
     }
     return NULL;
@@ -540,7 +555,7 @@ static int global_miss_note(const char *key, JSAtom name)
        so its throw names it. Asked ONLY of the global, because those names live there: `gon.Node` is a
        field of an app record that happens to be spelled like an interface, and suppressing it would
        answer a real unknown with `undefined`.
-       TWO VOCABULARIES, BECAUSE TWO STANDARDS OWN NAMES HERE AND THIS ARM USED TO ASK ABOUT ONE. See this
+       THREE VOCABULARIES, BECAUSE THREE STANDARDS OWN NAMES HERE AND THIS ARM USED TO ASK ABOUT ONE. See this
        file's header for what asking about only Web IDL left falling through. */
     owed = absent_standard_name(key, &vocab);
     if (owed) {
@@ -653,7 +668,8 @@ char *absent_json(void)
        third standard adds a row to this array and to `g_owed_by_vocab`, and nothing else here changes. */
     static const char *const KEY_VOCAB[ABSENT_VOCAB_N] = {
         "_of those owed reads, names Web IDL exposes on Window",
-        "_of those owed reads, names ECMAScript §19 The Global Object puts there"
+        "_of those owed reads, names ECMAScript §19 The Global Object puts there",
+        "_of those owed reads, names ECMA-402 §8 The Intl Object puts there"
     };
     char *out = NULL;
     size_t cap = 0, len = 0;
@@ -748,7 +764,8 @@ char *absent_json(void)
                 DCHECKF(*c != '"' && *c != '\\' && (unsigned char)*c >= 0x20,
                         "the owed-name census is writing a row key holding a byte JSON cannot carry raw "
                         "(\"%s\", byte 0x%02x) — this row is written with no escaping pass because its key is "
-                        "browser/platform_names.h's or browser/language_names.h's OWN entry, keyed by pointer "
+                        "browser/platform_names.h's, browser/language_names.h's or browser/i18n_names.h's OWN "
+                        "entry, keyed by pointer "
                         "so a page's bytes can never reach it. A byte like this means that provenance no "
                         "longer holds, and the document embedding this census would not parse",
                         k, (unsigned char)*c);
