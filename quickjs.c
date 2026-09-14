@@ -278,13 +278,34 @@ typedef struct JSTrampStepDef JSTrampStepDef;   /* quickjs-step.h, included belo
 #if APICLIENT_DEV
 static const char *js_step_def_algorithm(const JSTrampStepDef *def);
 #endif
-/* HOW MANY PARENTS REPORT ONE CHILD, AND HOW MANY TIMES THE WORST OF THEM DOES — the walk gc_decref_child's
-   abort names as the thing that would let it report the OVER-MARKING parent instead of the TIPPING one. That
-   abort can only ever name the parent whose edge happened to take the count to zero, and which parent that is
-   depends on gc_obj_list order; the two defects it must be read as are the mark side (one parent reporting a
-   child it dup'd once) and the holder side (every parent reporting once, and one of them holding no reference),
-   and NOTHING IN THE ADDRESS OR THE KIND SEPARATES THEM. A count does: more than one report from a single
-   parent is the first, exactly one from every parent is the second, and they send a reader to opposite work.
+/* HOW MANY PARENTS REPORT ONE CHILD, WHICH THEY ARE, AND HOW MANY TIMES THE WORST OF THEM DOES. A COUNT WAS
+   ENOUGH TO PARTITION THE TWO DEFECTS AND IS NOT ENOUGH TO ACT ON THE HOLDER ONE, which is what the table
+   below is: the mark arm NAMES its parent (the one reporting more than once) and sends a reader to that kind's
+   mark function, while the holder arm could say only "one of N stores", and N stores is not an address. Two
+   readers in a row then GUESSED which parent was wrong — each correctly eliminating the tipping one, each
+   having to reconstruct the rest of the set by reading every mark function that could name a child of that
+   class — and the walk had the whole set in hand and threw it away. It costs one small fixed table and no
+   second pass: the walk already visits every parent, and the only thing it was missing is the EDGE ORDINAL,
+   which the callback can count because it is called once per edge whether or not the edge matches.
+   SLOT 0 IS THE TIPPER'S, RESERVED. It is the parent gc_decref_child was standing at, so it is the one a
+   reader has already been told about and the one whose kind the abort's prefix used to spell out a second
+   time; reserving its slot is what lets that prefix stop, and it means a table that overflows still names the
+   parent the crash is about. Where there is no tipping parent (the walk reached from something other than the
+   decref pass) the slot is an ordinary one.
+   THREE SLOTS, AND THE NUMBER IS THE OUTPUT OF AN ARITHMETIC THIS BUFFER'S SIZE IS THE OTHER HALF OF. A
+   parent costs at most 40 bytes here — the longest kind name this can print (17, `function bytecode`; an
+   unknown kind prints `t%d` and is shorter, which is why the unknown arm is not the bound), its type ordinal,
+   a 10-digit edge, a class id, the tipper's `*` and the separator — and the reason's own prefix takes 219 of
+   APICLIENT_QJS_REASON_CAP's 512 at ITS worst, which is what leaves this array its 296. MEASURED RATHER THAN
+   ARGUED, by composing the worst case of every field with the real snprintf rather than by counting the
+   literals: 3 parents compose to 261 bytes of text and a 480-byte reason, and the overflow arm at 4294967295
+   parents composes to 287 and 506 — both under the 512 at which quickjs-check.h starts LABELLING a cut, the
+   worst of them by 6 bytes. The measured population of this crash is 2 and 3.
+   A FOURTH PARENT IS COUNTED AND ITS ABSENCE FROM THE LIST IS STATED, never silently dropped; the composer
+   RESERVES that marker's room before it writes a row, because the first version appended it afterwards and
+   three parents at their longest spelling ate it — a list that reads as complete when it is not is the one
+   shape of this table that would make a reader's elimination wrong. A clause added to any arm here without
+   re-running that composition is one that may arrive as `[reason truncated]`.
    IT LIVES ON THE RUNTIME FOR gc_decref_parent's REASON, stated a few lines below it: a JS_MarkFunc is handed a
    child and nothing else, so a counting callback cannot see its own census, and a file static would be one slot
    for however many corpus threads the harness runs. Written UNCONDITIONALLY for that field's other reason — one
@@ -297,13 +318,17 @@ static const char *js_step_def_algorithm(const JSTrampStepDef *def);
    literal composed into this member through a `JSGCEdgeCensus *` WARNS (clang at -Wall, gcc at -O2 — it is a
    middle-end warning there, so a gcc `-fsyntax-only` reader gets a false negative), and the same site with a
    format that fits is silent on both. A control that has never spoken has calibrated nothing. */
+#define JS_GC_EDGE_CENSUS_SLOTS 3
 typedef struct JSGCEdgeCensus {
     JSGCObjectHeader *child;    /* the child being counted — set for the length of one walk */
     JSGCObjectHeader *worst;    /* the parent that reported it most often, NULL if none did */
     uint32_t cur;               /* reports from the parent currently being walked */
+    uint32_t edge;              /* edges the parent currently being walked has reported, 1-based, ANY child */
+    uint32_t first;             /* `edge` at that parent's FIRST report of `child` — the ordinal to name */
     uint32_t worst_n;           /* `cur` at its maximum */
     uint32_t parents;           /* parents reporting it at least once */
-    char text[232];             /* the verdict, composed for the abort that reads it */
+    struct { JSGCObjectHeader *p; uint32_t edge; } who[JS_GC_EDGE_CENSUS_SLOTS];   /* slot 0 = the tipper */
+    char text[296];             /* the verdict, composed for the abort that reads it */
 } JSGCEdgeCensus;
 
 struct JSRuntime {
@@ -10242,12 +10267,69 @@ static __maybe_unused const char *js_gc_obj_type_name(int t)
     }
 }
 
-/* COUNT EVERY PARENT'S REPORTS TO ONE CHILD — the callback half, which can reach its census only through the
-   runtime because a JS_MarkFunc is handed a child and nothing else. */
+/* COUNT EVERY PARENT'S REPORTS TO ONE CHILD, AND WHICH EDGE THE FIRST ONE WAS — the callback half, which can
+   reach its census only through the runtime because a JS_MarkFunc is handed a child and nothing else.
+   THE ORDINAL IS COUNTED ON EVERY EDGE AND NOT ONLY ON A MATCH, which is the whole reason this callback can
+   answer WHICH FIELD a parent reported the child through: `edge` is the position in that parent's mark
+   function, so it is the same number gc_decref_edge gives the tipping parent and it is read the same way —
+   `#1` of an async_function is async_func_mark's cur_func, `#1` of a js_object is always its shape. Counting
+   only matches would number the MATCHES and name no field at all. */
 static __maybe_unused void gc_edge_census_child(JSRuntime *rt, JSGCObjectHeader *p)
 {
-    if (p == rt->gc_edge_census.child)
-        rt->gc_edge_census.cur++;
+    JSGCEdgeCensus *c = &rt->gc_edge_census;
+    c->edge++;                            /* 1-based, and BEFORE the test so the number names THIS edge */
+    if (p == c->child) {
+        if (c->cur == 0)
+            c->first = c->edge;           /* the FIRST report: a second one is the mark-side arm's business */
+        c->cur++;
+    }
+}
+
+/* RECORD ONE REPORTING PARENT. Slot 0 is the TIPPER's and is reserved for it — see the struct's banner — so a
+   table that overflows still names the parent the crash was standing at. Returns nothing: a parent that does
+   not fit is still counted in `parents`, and the composer states the shortfall rather than dropping it. */
+static __maybe_unused void gc_edge_census_note(JSGCEdgeCensus *c, JSGCObjectHeader *q, uint32_t edge,
+                                               const JSGCObjectHeader *tip)
+{
+    int i;
+    if (tip && q == tip) { c->who[0].p = q; c->who[0].edge = edge; return; }
+    for (i = tip ? 1 : 0; i < JS_GC_EDGE_CENSUS_SLOTS; i++)
+        if (c->who[i].p == NULL) { c->who[i].p = q; c->who[i].edge = edge; return; }
+}
+
+/* ONE PARENT, SPELLED — appended at `k` and returning the new offset, clamped so a full buffer is a no-op
+   rather than a negative length. The kind is its NAME where one exists and `t%d` where none does, which is
+   shorter than the "kind no enum names" the prefix spells for the child and is what makes the worst case of
+   this list its LONGEST REAL NAME rather than that sentence; the class is printed only for a JS_OBJECT,
+   because only a JSObject has one and -1 everywhere else would cost four bytes a row to say so. */
+static __maybe_unused int gc_edge_census_spell(JSGCEdgeCensus *c, int k, int lim, int i,
+                                               const JSGCObjectHeader *tip)
+{
+    JSGCObjectHeader *q = c->who[i].p;
+    const char *nm = js_gc_obj_type_name(JS_GC_TYPE(q));
+    int n, room = lim - k;
+
+    if (room <= 1)
+        return k;
+    if (nm)
+        n = snprintf(c->text + k, (size_t)room, "%s%s(%d)#%u",
+                     (tip && q == tip) ? "*" : "", nm, (int)JS_GC_TYPE(q), (unsigned)c->who[i].edge);
+    else
+        n = snprintf(c->text + k, (size_t)room, "%st%d#%u",
+                     (tip && q == tip) ? "*" : "", (int)JS_GC_TYPE(q), (unsigned)c->who[i].edge);
+    if (n < 0 || n >= room)
+        return lim - 1;
+    k += n;
+    if (JS_GC_TYPE(q) == JS_GC_OBJ_TYPE_JS_OBJECT) {
+        room = lim - k;
+        if (room <= 1)
+            return k;
+        n = snprintf(c->text + k, (size_t)room, " c%d", (int)((JSObject *)q)->class_id);
+        if (n < 0 || n >= room)
+            return lim - 1;
+        k += n;
+    }
+    return k;
 }
 
 /* RE-RUN mark_children OVER EVERY GC OBJECT AND COMPOSE THE VERDICT gc_decref_child's abort prints.
@@ -10279,21 +10361,25 @@ static __maybe_unused void gc_edge_census_child(JSRuntime *rt, JSGCObjectHeader 
 static __maybe_unused const char *gc_edge_census_run(JSRuntime *rt, JSGCObjectHeader *child)
 {
     JSGCEdgeCensus *c = &rt->gc_edge_census;
+    const JSGCObjectHeader *tip = rt->gc_decref_parent;
     struct list_head *heads[2], *el;
     const char *wname;
-    int i;
+    unsigned shown;
+    int i, k, n, lim;
 
     c->child = child; c->worst = NULL; c->cur = 0; c->worst_n = 0; c->parents = 0;
+    for (i = 0; i < JS_GC_EDGE_CENSUS_SLOTS; i++) { c->who[i].p = NULL; c->who[i].edge = 0; }
     heads[0] = &rt->gc_obj_list;
     heads[1] = &rt->tmp_obj_list;
     for (i = 0; i < 2; i++) {
         list_for_each(el, heads[i]) {
             JSGCObjectHeader *q = list_entry(el, JSGCObjectHeader, link);
-            c->cur = 0;
+            c->cur = 0; c->edge = 0; c->first = 0;
             mark_children(rt, q, gc_edge_census_child);
             if (c->cur != 0) {
                 c->parents++;
                 if (c->cur > c->worst_n) { c->worst_n = c->cur; c->worst = q; }
+                gc_edge_census_note(c, q, c->first, tip);
             }
         }
     }
@@ -10310,10 +10396,40 @@ static __maybe_unused const char *gc_edge_census_run(JSRuntime *rt, JSGCObjectHe
                  (unsigned)c->parents, wname ? wname : "kind no enum names",
                  (int)JS_GC_TYPE(c->worst), (void *)c->worst, (unsigned)c->worst_n);
     } else {
-        snprintf(c->text, sizeof c->text,
-                 "RE-WALK: %u parents report this child, each exactly ONCE — HOLDER-side: one of those %u stores "
-                 "took no reference, or gave one back without clearing the field naming it",
-                 (unsigned)c->parents, (unsigned)c->parents);
+        /* THE PARENTS, NOT THEIR NUMBER. Every one of them reported once, so the defect is in ONE of these
+           stores and a reader has to read all of them — which is an action with an object only once they are
+           named. `kind(type)#edge` is the position in that kind's mark function (a js_object's `#1` is always
+           its shape, so `#2` is its first marked property or its class mark's first edge) and `c%d` is the
+           class that says WHICH mark function. The `*` is the parent gc_decref_child was standing at, which
+           the prefix no longer spells a second time.
+           THE OVERFLOW MARKER'S ROOM IS RESERVED BEFORE THE LIST IS WRITTEN, and that is the whole reason
+           `lim` exists. A list read as COMPLETE when it is not is the one way this table could make a reader's
+           elimination wrong — the failure the bare count it replaces could not have — so the statement that it
+           is short may not be the thing a full buffer eats. Measured on the worst case rather than argued: with
+           the tail appended after an unbounded list, three parents at their longest spelling filled the buffer
+           and the ` +N more` was silently dropped, which is the only shape of this composition that lies. 17 is
+           that marker at its widest (` +4294967295 more`), reserved by COUNT rather than by composing the
+           string early, because `parents - shown` is not known until the loop has run. */
+        n = (c->parents > (unsigned)JS_GC_EDGE_CENSUS_SLOTS) ? 17 : 0;
+        lim = (int)sizeof c->text - n;
+        k = snprintf(c->text, (size_t)lim,
+                     "RE-WALK: %u parents, each ONCE: HOLDER-side. One took no reference, or gave one back "
+                     "and left its field naming it. Read each (* tipped): ",
+                     (unsigned)c->parents);
+        if (k < 0 || k >= lim)
+            k = lim - 1;
+        shown = 0;
+        for (i = 0; i < JS_GC_EDGE_CENSUS_SLOTS; i++) {
+            if (c->who[i].p == NULL)
+                continue;
+            if (shown != 0 && k + 2 < lim) {
+                c->text[k++] = ';'; c->text[k++] = ' '; c->text[k] = '\0';
+            }
+            k = gc_edge_census_spell(c, k, lim, i, tip);
+            shown++;
+        }
+        if (shown < c->parents && k < (int)sizeof c->text - 1)
+            snprintf(c->text + k, sizeof c->text - (size_t)k, " +%u more", (unsigned)(c->parents - shown));
     }
     return c->text;
 }
@@ -10346,24 +10462,42 @@ static void gc_decref_child(JSRuntime *rt, JSGCObjectHeader *p)
        bytes]`, so the clause naming the producers was the half cut out of every log that carried this abort.
        THAT RECORD ASKED FOR A WALK NAMING THE OVER-MARKING PARENT RATHER THAN THE TIPPING ONE, AND
        gc_edge_census_run IS IT — so what is left here is the incident and not the gap. The verdict it composes
-       is a PARTITION and the abort now carries it: more than one report from one parent names that parent, and
-       exactly one from every parent says the defect is on the holder side and how many stores there are to
-       read. The paragraph above stays because the census answers the question but does not stop a reader
-       drawing the retired conclusion from the address in front of them.
+       is a PARTITION and the abort carries it: more than one report from one parent names that parent, and
+       exactly one from every parent is the holder side. The paragraph above stays because the census answers
+       the question but does not stop a reader drawing the retired conclusion from the address in front of them.
+       AND THE HOLDER ARM SAID "ONE OF %u STORES", WHICH IS NOT AN ADDRESS. It is retired rather than softened
+       for the reason a count of anything is: the partition told a reader WHICH KIND OF WORK to do and left
+       them to reconstruct the set themselves, by reading every mark function in the engine that could name a
+       child of that class. Measured: two readers in a row did exactly that on two instances of this crash,
+       each correctly eliminating the tipping parent and each then GUESSING at the rest — and the walk had had
+       the whole set in hand at every one of those runs and discarded it, because nothing but a counter was
+       written down. The census names every parent now, with the edge ordinal that says which FIELD each one
+       reported through; slot 0 is the tipper's, which is why the prefix below no longer spells that parent's
+       kind a second time and keeps only its POINTER.
        THIS SAID "JS_REF_COUNT(p) > 0", WHICH IS ITS OWN CONDITION SPELLED TWICE. A reader meeting it learned
        neither what invariant had broken nor where to look, and this callback is reached from every gc_mark in
        the engine — so the message named one line for the whole object graph and the crash had to be
-       rediscovered rather than read. The kind of the PARENT is what turns "some edge somewhere" into a handful
+       rediscovered rather than read. The kind of a PARENT is what turns "some edge somewhere" into a handful
        of mark functions worth reading, and the two pointers are where a debugger starts. The parent is read
        from the runtime rather than derived here, because a callback cannot see its caller: see
-       JSRuntime.gc_decref_parent and gc_decref_edge.
+       JSRuntime.gc_decref_parent and gc_decref_edge. Its KIND and its EDGE are in the census's list rather
+       than here; what stays is the ORDINAL, which is the one thing about that parent no list slot can be
+       relied on to carry (the mark arm prints no list). `gc_decref_edge` and the census's own ordinal are two
+       counts of the same thing — the position in one parent's mark walk, counted on every edge — arrived at by
+       two independent walks, so on the HOLDER arm they must PRINT THE SAME NUMBER: each parent reports the
+       child exactly once there, so the tipper's only report IS the tipping edge, and `#N of %p` disagreeing
+       with the `*` row's `#N` is the census's re-walk having taken a different path through one object than
+       gc_decref did. On the MARK arm they legitimately differ, because the census names that parent's FIRST
+       report and this names the one that took the count to zero.
        THE PARENTHESISED NUMBER AFTER EACH NAME IS THE GC-OBJECT-TYPE ORDINAL AND NOT A REFCOUNT, which two
        readers of one log have now read as one — `async_function(4)` is "gc type 4, which is async_function",
-       the name and the number being the same field printed twice. The `class` is printed only where that type
-       is JS_OBJECT and is -1 otherwise, so it can never describe a parent that is an activation record, a
-       shape or a cell; a reading on which the child and the parent came out as the same CLASS is one the
-       format string cannot make. The redundancy is deliberate — js_gc_obj_type_name returns NULL for a value
-       no kind names, and a corrupted 7-bit field is then still readable as the raw number.
+       the name and the number being the same field printed twice. That reading is owed to the census's parent
+       list as much as to the child here, since the list spells its rows the same way. A row's `c%d` is printed
+       only where that type is JS_OBJECT, so it can never describe a parent that is an activation record, a
+       shape or a cell; a reading on which the child and a parent came out as the same CLASS is one the format
+       cannot make. The redundancy is deliberate — js_gc_obj_type_name returns NULL for a value no kind names,
+       and a corrupted 7-bit field is then still readable as the raw number (the list spells that case `t%d`,
+       which is the same fact in the bytes the reason has room for).
        THE CHILD'S CLASS IS REPORTED BECAUSE "a js_object" IS EVERY OBJECT IN THE ENGINE. The class id is the
        one field that turns it into a handful of mark functions and one finalizer, it is a plain integer in an
        allocation the sweep has not touched (a zero refcount only moves a header to tmp_obj_list), and it is
@@ -10372,20 +10506,12 @@ static void gc_decref_child(JSRuntime *rt, JSGCObjectHeader *p)
     rt->gc_decref_edge++;   /* 1-based, and BEFORE the assert so the number names THIS edge */
     DCHECKF(JS_REF_COUNT(p) > 0,
             "a mark edge with no counted reference behind it: refcount hit 0 before the walk finished its "
-            "edges. CHILD %p %s(%d) class %d; PARENT %p %s(%d) edge #%u — the TIPPING parent, named by "
-            "gc_obj_list order. %s",
+            "edges. CHILD %p %s(%d) class %d; the edge that tipped it: #%u of %p. %s",
             (void *)p,
             js_gc_obj_type_name(JS_GC_TYPE(p)) ? js_gc_obj_type_name(JS_GC_TYPE(p)) : "kind no enum names",
             (int)JS_GC_TYPE(p),
             JS_GC_TYPE(p) == JS_GC_OBJ_TYPE_JS_OBJECT ? (int)((JSObject *)p)->class_id : -1,
-            (void *)rt->gc_decref_parent,
-            rt->gc_decref_parent
-                ? (js_gc_obj_type_name(JS_GC_TYPE(rt->gc_decref_parent))
-                       ? js_gc_obj_type_name(JS_GC_TYPE(rt->gc_decref_parent))
-                       : "kind no enum names")
-                : "none (not the decref pass)",
-            rt->gc_decref_parent ? (int)JS_GC_TYPE(rt->gc_decref_parent) : -1,
-            (unsigned)rt->gc_decref_edge,
+            (unsigned)rt->gc_decref_edge, (void *)rt->gc_decref_parent,
             gc_edge_census_run(rt, p));
     JS_REF_COUNT(p)--;
     if (JS_REF_COUNT(p) == 0 && JS_GC_MARK(p) == 1) {
