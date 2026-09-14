@@ -2987,6 +2987,44 @@ function cowStateReading(b) {
          ` (counts, never a ratio: a walk asks per key and records once, so asks running ahead of made is the ` +
          `dedup working)`;
 }
+/* WHETHER THE PER-FLOW COROUTINE-ACTIVATION SWAP HAPPENED AT ALL — the `is_gendata` entry kind, which the
+   pair above is structurally blind to: it partitions `is_state` entries and nothing else, so however cow.h's
+   kind list grows, a run that never swapped a suspended activation prints bytes there identical to one built
+   on them. This is the only place that answers it.
+   IT IS A CALL/ENTRY PAIR AND NOT AN ENTRY COUNT, for the reason solver/cow.c's own counters give: a bare
+   zero of entries is TWO states for the async sub-kind and they take opposite work — the capture was never
+   reached (nothing in the run resumed a SHARED suspended activation), or it was reached and DECLINED because
+   no delta owned the swap, in which case the hook is live and the arm that adopts the clone's references is
+   what never ran. An entry count alone reports both as the same zero.
+   `Calls` IS NOT `Asks` AND THIS READER MUST NOT PHRASE IT AS ONE: cow.c raises a state kind's ask only after
+   `cow_hooks_off() || !g_current`, so that zero means "not reached under a running flow", while these are
+   raised before any gate cow.c owns and this zero means "not reached".
+   THE GAPS ARE NOT ADDED AND ARE NOT A RATIO. The generator producer is handed its delta and its only early
+   return is the dedup-REPLACE of a re-fork inside one flow; the async producer is a hook whose only early
+   return is the decline. Same arithmetic, two different facts.
+   THE GENERATOR PAIR IS SAID TO ARM THE COUNTING AND NOT THE REACHABILITY, and the distinction is the whole
+   value of printing it: the two sub-kinds share this composer, cow.c's accessor and its one entry
+   constructor, so gen recording while async reads zero proves the counting reaches this line and the async
+   zero is a fact about the run. Their CALLERS are different — the scheduler's fork assembly against the
+   interpreter's await-resume — so it is no evidence whatever that the async hook can be reached, and a
+   sentence that let it read as one would be a control for a proposition nobody tested. */
+function coroSwapReading(b) {
+  const g = `generator ${b.coroSwapGenMade}/${b.coroSwapGenCalls}`;
+  const a = `async ${b.coroSwapAsyncMade}/${b.coroSwapAsyncCalls}`;
+  const arming = b.coroSwapGenMade > 0
+    ? `the generator half recorded, so this census reaches the line and the async reading is about the run`
+    : `NEITHER sub-kind recorded, so nothing here is armed and the async zero is not yet a fact about the run`;
+  return `; coroutine-activation swaps — ${g}, ${a} (entries/calls, never a ratio: the generator gap is ` +
+         `re-forks inside one flow and the async gap is declines) — ` +
+         (b.coroSwapAsyncMade > 0
+           ? `the async capture RECORDED, so the clone-ownership arm ran`
+           : b.coroSwapAsyncCalls > 0
+             ? `the async capture was REACHED and every call DECLINED — no delta owned the swap, so the hook ` +
+               `is live and the clone-ownership arm still never ran`
+             : `the async capture was NEVER REACHED — nothing in this run resumed a SHARED suspended async ` +
+               `activation, which is a statement about what the run DID and not about the capture`) +
+         `; ${arming}`;
+}
 function censusReading(out) {
   const h = lastTwo(out, "@HEAP", heapFields(), "solver/result.c's result_heap_json");
   const w = lastTwo(out, "@SWAP", swapFields(), "solver/result.c's result_swap_json");
@@ -3128,7 +3166,8 @@ function censusReading(out) {
     parts.push(`swap: ${w.b.installs} switches over ${w.b.entries} delta entries, ${w.b.mean} each and ` +
                `${w.b.worst} at the worst; chains holding ${w.b.heapSegs} heap segment(s) ` +
                `(${w.b.heapSegEntries} entries) + ${w.b.domSegs} DOM (${w.b.domSegEntries})` +
-               (w.b.heapSegs > w.a.heapSegs ? ` and still growing` : ``) + cowStateReading(w.b));
+               (w.b.heapSegs > w.a.heapSegs ? ` and still growing` : ``) +
+               cowStateReading(w.b) + coroSwapReading(w.b));
   if (c) {
     parts.push(retiredReading(c.b));
     /* WHAT THE PARKED FRONTIER WEIGHS AND WHICH HALF OF IT — the pager's own trade, and the reason

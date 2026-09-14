@@ -775,6 +775,68 @@ static void cow_gd_unref(JSContext *ctx, const CowEntry *e, void *gd) {
     if (e->is_gendata == 2) JS_AsyncDataUnref(ctx, gd); else JS_GenDataUnref(ctx, gd);
 }
 
+/* HOW MANY COROUTINE-ACTIVATION SWAPS THIS SESSION REACHED AND HOW MANY IT RECORDED, per sub-kind. LIFETIME
+   COUNTS, raised by the producers and the one constructor below and lowered by nothing, handed out through
+   cow_coro_swap_stats and printed on the swap census line.
+   THEY ARE NOT cow_state_ask's PAIR AND CANNOT BE. A coroutine swap is an `is_gendata` entry, so it passes
+   through neither cow_state_ask nor cow_state_entry_set and is invisible to that pair however cow.h's kind
+   list grows: a run in which this kind recorded nothing and one in which it carried the traffic print the
+   same bytes there. That is the same blindness the state pair was built to end, one entry kind over.
+   THE PAIR IS A CALL AND AN ENTRY BECAUSE A BARE `made` OF ZERO IS TWO STATES, and for the async sub-kind
+   those two take opposite work: the hook was never reached, or it was reached and DECLINED because no delta
+   owned the swap. The first says nothing in this run resumed a shared suspended activation at all; the second
+   says something did and the ownership arm this constructor performs still never ran. Only the call count
+   separates them, and an entry count alone reports both as the same zero.
+   `calls` IS NOT `asks`, AND THE WORD IS DIFFERENT BECAUSE THE GATE IS. cow_state_ask counts a reach that has
+   already passed `cow_hooks_off() || !g_current`, so its zero means "not reached UNDER A RUNNING FLOW"; these
+   are raised before any gate this file owns, so their zero means "not reached". Spelling them `asks` would
+   claim a denominator they do not have.
+   WHAT THE GAP MEANS IS PER SUB-KIND AND THE TWO DO NOT MERGE, because the two producers have different
+   gates: the generator producer is handed its delta by the fork assembly and its only early return is the
+   dedup-REPLACE of a re-fork inside one flow, so `gen calls - gen made` is re-forks; the async producer is a
+   hook and its only early return is the no-delta decline, so `async calls - async made` is declines. */
+static long g_coro_gen_calls, g_coro_gen_made, g_coro_async_calls, g_coro_async_made;
+
+/* THE ONE CONSTRUCTOR OF A COROUTINE-STATE ENTRY — cow_state_entry_set's twin and written for its reason: the
+   sub-kind and the two activation pointers are set together because an entry carrying one and not the others
+   is read as a property write, and the count rides here so that a sub-kind added later is counted by EXISTING
+   rather than by somebody remembering. The two producers agree on nothing else — one is a hook that must ask
+   whether a delta exists, the other is called by the fork assembly with the delta in hand — and this is the
+   line they share.
+   THE ASSERT IS WHAT KEEPS A CALL FROM DRIFTING AWAY FROM THE ENTRY IT MAKES. A producer that records an
+   entry without having counted its call gives that sub-kind a `made` its `calls` cannot cover, and the census
+   then reports swaps against a denominator that never moved — which reads as a producer nobody reaches, the
+   one answer this census exists to give. It fires on the FIRST such entry rather than on a census somebody
+   reads later; delete either `++` in the producers below and this fires on that sub-kind's next entry. */
+static void cow_gd_entry_set(CowEntry *e, int kind, void *base, void *cur) {
+    long *made, *calls;
+    DCHECK(kind == 1 || kind == 2,
+           "a coroutine-state entry named a sub-kind that is neither a GENERATOR object (1) nor an async "
+           "resolve/reject CLOSURE (2) — cow_gd_install, cow_gd_ref and cow_gd_unref each choose their "
+           "setter/ownership pair by testing for 2, so a third value would silently take the generator arm "
+           "and install a JSAsyncFunctionData through JS_SetObjGenData");
+    e->is_gendata = kind; e->g0 = base; e->g1 = cur;
+    made  = (kind == 2) ? &g_coro_async_made  : &g_coro_gen_made;
+    calls = (kind == 2) ? &g_coro_async_calls : &g_coro_gen_calls;
+    ++*made;
+    DCHECKF(*made <= *calls,
+            "a coroutine-state entry of sub-kind `%s` was recorded without its producer having counted the "
+            "CALL that made it, so this sub-kind's census reports entries against a denominator that never "
+            "moved — which reads as a producer nothing reaches, the one question the pair exists to answer",
+            (kind == 2) ? "async" : "gen");
+}
+
+/* WHICH COROUTINE SUB-KINDS THIS SESSION ACTUALLY SWAPPED — see the counters above for what the two halves of
+   each pair mean and why they are a pair. Four out-params rather than a kind-indexed accessor because there
+   is no list to index: the sub-kind is a field of the entry with two values the code spells directly, and an
+   ordinal over it would be a name only while that stays true. */
+void cow_coro_swap_stats(long *gen_calls, long *gen_made, long *async_calls, long *async_made) {
+    if (gen_calls) *gen_calls = g_coro_gen_calls;
+    if (gen_made) *gen_made = g_coro_gen_made;
+    if (async_calls) *async_calls = g_coro_async_calls;
+    if (async_made) *async_made = g_coro_async_made;
+}
+
 /* JSTimeTravelHooks.async_fork — the async twin of the generator swap. The engine has already cloned the
    activation; this records the toggle so the clone is what this flow's closure names and the original stays the
    baseline every other arm finds. The delta ADOPTS the clone's creation reference.
@@ -798,11 +860,16 @@ static void cow_gd_unref(JSContext *ctx, const CowEntry *e, void *gd) {
 
    HOW ITS ABSENCE WOULD SHOW: gc_decref_child aborts on an unbacked mark edge whose CHILD is the async
    function object the freed clone's teardown released out of its frame's `cur_func`.
-   RETIREMENT: this record goes when the delta publishes a per-kind entry census, so a run can state whether a
-   gendata entry was made at all — no row does today, which is why the path's reachability is unmeasured here
-   rather than asserted. */
+   WHETHER THIS PRODUCER IS REACHED AT ALL IS A NUMBER NOW AND NOT AN OPEN QUESTION: the census below counts
+   the CALL and the ENTRY separately, so `async calls` of zero says nothing in the run resumed a shared
+   suspended activation, and calls above zero with entries at zero says something did and took the decline arm
+   directly beneath this line — the arm in which the ownership argument above is never exercised. */
 void cow_capture_async_fork(JSContext *ctx, JSValueConst closure, void *base_data, void *cur_data) {
     CowDelta *d = g_current;
+    /* COUNTED AHEAD OF THE GATE, which is the whole of what lets the census answer whether this hook fires:
+       the arm below is a legitimate refusal, and at an entry count it is indistinguishable from the hook
+       never having been reached. */
+    g_coro_async_calls++;
     if (!d) {
         /* NO FLOW OWNS THE SWAP, so there is nothing to undo it and nothing to own the clone: DECLINE. The
            closure keeps naming the original, which is correct — with no delta there is no sibling to isolate
@@ -827,7 +894,7 @@ void cow_capture_async_fork(JSContext *ctx, JSValueConst closure, void *base_dat
        flow is applied. THIS SAID the ownership was not swapped at all, "exactly as a generator object's stays
        on its object-owned state" — the half about the original is right and the analogy is not, for the reason
        the banner gives: a JSGeneratorData is not a GC object and a JSAsyncFunctionData is. */
-    e->is_gendata = 2; e->g0 = base_data; e->g1 = cur_data;
+    cow_gd_entry_set(e, 2, base_data, cur_data);
     /* …and the reference that BACKS THE CLOSURE'S MARK EDGE, taken after the kind is set because that is what
        chooses the pair. It is released with the entry, by which point the delta is unapplied and the closure
        names the original again — the same "back on its original before teardown" invariant js_generator_
@@ -1117,6 +1184,10 @@ void cow_capture_varref(JSContext *ctx, void *vref) {
    (a re-fork inside this flow): release the previous clone, adopt the new one, keep the ORIGINAL base pointer. */
 void cow_delta_add_gendata(JSContext *ctx, CowDelta *d, JSValueConst genobj, void *base_gd, void *cur_gd) {
     void *gp = JS_VALUE_GET_PTR(genobj);
+    /* COUNTED AHEAD OF THE DEDUP, which is this producer's only early return — it is handed its delta and has
+       no gate to decline at — so `gen calls - gen made` is exactly the re-forks of one generator inside one
+       flow and never a refusal. */
+    g_coro_gen_calls++;
     for (int i = 0; i < d->n; i++) {
         CowEntry *e = &d->e[i];
         if (e->is_gendata && JS_VALUE_GET_PTR(e->obj) == gp) {
@@ -1135,7 +1206,7 @@ void cow_delta_add_gendata(JSContext *ctx, CowDelta *d, JSValueConst genobj, voi
     CowEntry *e = &d->e[d->n++];
     cow_entry_init(e);
     e->obj = JS_DupValue(ctx, genobj);
-    e->is_gendata = 1; e->g0 = base_gd; e->g1 = cur_gd;   /* adopts cur_gd's creation ref (freed on delta free) */
+    cow_gd_entry_set(e, 1, base_gd, cur_gd);   /* adopts cur_gd's creation ref (freed on delta free) */
     cow_capture_end();
 }
 

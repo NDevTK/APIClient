@@ -361,6 +361,21 @@ void        cow_state_kind_stats(int kind, long *asks, long *made);
    the worst single one. A switch is supposed to be O(divergence); this says what the divergence actually is. */
 void cow_swap_stats(long *count, long *total, long *max);
 
+/* WHICH COROUTINE-ACTIVATION SWAPS THE SESSION REACHED AND WHICH IT RECORDED — the `is_gendata` entry kind,
+   split by its two sub-kinds (a GENERATOR object and an async resolve/reject CLOSURE) and by whether the
+   producer was reached or an entry was actually made. LIFETIME COUNTS, so either half may be differenced
+   across two samples; they are counts and not a ratio, because the gap means a different thing on each side
+   and neither gap is a failure rate.
+   IT IS A SEPARATE ACCESSOR FROM cow_state_kind_stats BECAUSE IT IS A SEPARATE ENTRY KIND. A gendata entry is
+   not an `is_state` entry: it passes through neither cow_state_ask nor cow_state_entry_set, so no growth of
+   cow.h's COW_STATE_KINDS list can ever make that pair speak for it, and a run in which the coroutine swap
+   recorded nothing prints bytes there identical to one in which it carried the traffic.
+   THE CALL HALF IS THE ONE THAT ANSWERS A ZERO, and it is why this is a pair rather than an entry count. An
+   entry count of zero is two states that take opposite work — the producer was never reached, or it was
+   reached and its own arm declined (no delta owns the swap) or deduped (a re-fork inside one flow) — and only
+   the call count tells them apart. See the counters in cow.c for which gap belongs to which sub-kind. */
+void cow_coro_swap_stats(long *gen_calls, long *gen_made, long *async_calls, long *async_made);
+
 /* WHAT THE CHAIN IS HOLDING RIGHT NOW — the frozen segments still referenced and the entries in them. The swap
    counters above say what a SWITCH costs and say nothing about what is RETAINED, so a run whose frontier is
    four flows while its allocator holds gigabytes had no counter that could tell a chain nobody released from

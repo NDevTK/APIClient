@@ -1164,12 +1164,43 @@ static void cow_state_hist_json(char *buf, size_t cap, int want_made, const char
    The identity that does hold is `made <= asks` per kind, and it is asserted in cow.c where an entry is made
    rather than checked here, because that is the one place both numbers are in hand.
 
+   AND THE FOURTH HALF IS AN ENTRY KIND THE THIRD CANNOT SPEAK FOR: the per-flow COROUTINE-ACTIVATION SWAP.
+   `cowStateAsks`/`cowStateMade` partition the `is_state` entry kind and nothing else, so the `is_gendata`
+   entry — a shared generator object's or async closure's execution-state pointer, swapped per flow — passes
+   through neither cow_state_ask nor cow_state_entry_set and is invisible in every row above it: a run that
+   never swapped one prints bytes identical to a run built on them. `coroSwapGenCalls`/`coroSwapGenMade` and
+   `coroSwapAsyncCalls`/`coroSwapAsyncMade` are that kind, split by its two sub-kinds.
+   EACH IS A PAIR FOR THE THIRD HALF'S REASON AND NOT THE SAME ONE. There a bare `made` of zero is three
+   states; here it is two, and for the ASYNC sub-kind they take opposite work — the capture was never reached
+   (nothing in the run resumed a shared suspended activation), or it was reached and DECLINED because no delta
+   owned the swap, in which case the hook is live and the arm that adopts the clone's references still never
+   ran. Only the call count separates those, and it is why an entry count alone would not have answered.
+   THE WORD IS `Calls` AND NOT `Asks` BECAUSE THE GATE IS DIFFERENT, which a key cannot carry: cow.c raises a
+   state kind's ask only after `cow_hooks_off() || !g_current`, so a zero there means "not reached under a
+   running flow", while these are raised before any gate cow.c owns and a zero means "not reached".
+   WHAT THE GAP MEANS IS PER SUB-KIND AND THE TWO MUST NOT BE ADDED. The generator producer is handed its
+   delta by the fork assembly and its only early return is the dedup-REPLACE of a re-fork inside one flow, so
+   `GenCalls - GenMade` is re-forks; the async producer is a hook whose only early return is the decline, so
+   `AsyncCalls - AsyncMade` is declines. Neither is a refusal rate and neither is divided here.
+   THEY ARE FOUR LIFETIME COUNTS (cow.c's `g_coro_*`, raised at the producer and at the entry it makes, and
+   lowered by nothing), so any of them may be differenced across two samples. The identity is `Made <= Calls`
+   per sub-kind and cow.c DCHECKs it at the one entry constructor where both are in hand; that check is
+   compiled out of a release build, so nothing re-derives it here.
+   THE GENERATOR PAIR IS THE ARMING OF THE ASYNC PAIR'S ZERO AND IS NOT A CONTROL FOR ITS REACHABILITY — the
+   distinction matters and is the reason it is on this line at all. The two sub-kinds share this composer, the
+   accessor and the entry constructor, so a nonzero `coroSwapGenMade` beside a zero `coroSwapAsyncMade` proves
+   the counting reaches the census and the async zero is a fact about the run. It proves nothing about whether
+   the async hook CAN be reached: the two producers have different callers entirely — one is the scheduler's
+   fork assembly, the other the interpreter's await-resume — so they share a mechanism and not a reachability.
+
    NO BYTE COUNT — see solver/compose.h's `composef`. */
 char *result_swap_json(void) {
     long sc = 0, st = 0, sm = 0, hs = 0, he = 0, ds = 0, de = 0;
+    long gc = 0, gm = 0, ac = 0, am = 0;
     char asks[COW_STATE_KINDS_JSON_MAX], made[COW_STATE_KINDS_JSON_MAX];
 
     cow_swap_stats(&sc, &st, &sm);
+    cow_coro_swap_stats(&gc, &gm, &ac, &am);
     cow_chain_stats(&hs, &he);
     dom_cow_chain_stats(&ds, &de);
     cow_state_hist_json(asks, sizeof asks, 0, "cowStateAsks");
@@ -1177,8 +1208,11 @@ char *result_swap_json(void) {
     return composef(
                  "{\"installs\":%ld,\"entries\":%ld,\"worst\":%ld,\"mean\":%.1f,"
                  "\"heapSegs\":%ld,\"heapSegEntries\":%ld,\"domSegs\":%ld,\"domSegEntries\":%ld,"
+                 "\"coroSwapGenCalls\":%ld,\"coroSwapGenMade\":%ld,"
+                 "\"coroSwapAsyncCalls\":%ld,\"coroSwapAsyncMade\":%ld,"
                  "\"cowStateAsks\":%s,\"cowStateMade\":%s}",
-                 sc, st, sm, sc ? (double)st / (double)sc : 0.0, hs, he, ds, de, asks, made);
+                 sc, st, sm, sc ? (double)st / (double)sc : 0.0, hs, he, ds, de,
+                 gc, gm, ac, am, asks, made);
 }
 
 /* WHAT THE FRONTIER IS MADE OF AND WHAT ITS PARKED SNAPSHOTS WEIGH — solver/cold.h's ColdCensus, this
