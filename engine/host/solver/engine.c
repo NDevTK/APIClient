@@ -11929,6 +11929,39 @@ void engine_frontier_census(EngineFrontierCensus *out)
             "it, so a sale path that reads it afterwards gets freed memory rather than a wrong count and this "
             "is where that shows",
             out->sold_flows, out->sold_cands, out->sold);
+    /* AND THE TWO TOTALS THEMSELVES PARTITION THE FRONTIER'S DEPARTURES, asserted here for the two above's
+       reason and ONE LEVEL UP FROM THEM. Each of those says what its own total is made of; neither says what
+       the totals are made OF, so the frontier's departure count and this file's two retirement totals were
+       three numbers living in two censuses with no identity anywhere between them — and "this engine retires
+       nothing" is exactly the sentence a reader composes by reading two of them at zero and subtracting.
+       A subtraction across two censuses that share no identity is not a measurement.
+
+       THE PARTITION IS EXACT BY CONSTRUCTION AND THAT IS WHY IT CAN BE ASSERTED RATHER THAN ESTIMATED.
+       solver/flow.c's `flow_remove` is the one line a member ever leaves the frontier on, `flow_release` is
+       its one caller, and it has exactly three on a live instance: flow_finish (which raises `g_finished` on
+       the line beside it), engine_reclaim_tail (which raises `g_flows_sold`), and flow_registry_free's drain
+       (which now raises the third arm). None of the three is reset by a session boundary — the sale totals are
+       asserted to CARRY at engine_sched_begin and the arrival/departure pair is not reset by
+       flow_registry_init — so no boundary can separate this total from its arms.
+
+       THE THIRD TERM IS NOT DECORATION EVEN THOUGH IT READS 0 AT EVERY CENSUS A HOST TAKES TODAY. Every host
+       opens one session per instance and the teardown drain runs after the report is composed, so what the
+       term buys is that the identity is true at every instant of the instance's life rather than only at the
+       instants the census happens to be called — a host that censuses after a partial teardown gets an answer
+       instead of a false fire, and the arm a reader most wants to name is the one that is named.
+
+       WHAT IT CATCHES is a departure path added later that moves the frontier's count without saying which
+       population left, and that is not a hypothetical here: reclamation gated on anything other than
+       completion is a FOURTH arm by construction, so the next diff in this area is precisely the diff this
+       fires on if it forgets to declare itself. */
+    DCHECKF(out->finished + out->sold + (long)flow_departures_teardown() == (long)flow_departures(),
+            "the frontier's departure causes do not partition its departure count (%ld finished + %ld sold + "
+            "%lld gone with the registry against %lld departures) — flow_remove is the one line a member ever "
+            "leaves the frontier on and flow_release is its one caller, so a difference is a FOURTH exit that "
+            "moved the total without crediting an arm, and every reading composed from these rows is then "
+            "about a frontier whose members are not all accounted for",
+            out->finished, out->sold,
+            (long long)flow_departures_teardown(), (long long)flow_departures());
     /* AND THE SEED TABLE'S PARTITION, asserted here for the same reason and about a table built ONCE per
        session rather than per flow: `held` is a row whose source text this instance already has and `awaited`
        is one whose bytes the reply door still owes, which is the whole content of the pair. A difference means

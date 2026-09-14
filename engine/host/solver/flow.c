@@ -189,6 +189,25 @@ static int64_t g_picks_total = 0;
    frontier — which is a leak of every flow standing in it and today has nothing else to fire on. */
 static int64_t g_arrivals = 0;
 static int64_t g_departures = 0;
+/* …AND THE ONE DEPARTURE CAUSE THAT HAD NO COUNTER, WHICH IS WHAT LEFT `g_departures` A BARE TOTAL OVER A
+   POPULATION NOBODY HAD PARTITIONED. `flow_remove` is the ONE line a member ever leaves the frontier on and
+   `flow_release` is its ONE caller, so every departure this instance makes is one of exactly three things: a
+   flow that COMPLETED (engine.c's flow_finish, which credits `finished`), a flow the pager SOLD to the cold
+   tier (engine_reclaim_tail, which credits `sold`), and the drain in flow_registry_free below — which
+   credited nothing, so the two retirement totals could never account for every member that left and the
+   identity between them could not be written down at all.
+
+   IT IS THE ARM THE READING IS ACTUALLY ABOUT, not a tidy-up of the other two. "This engine retires nothing"
+   is composed today by reading `finished` and `sold` at zero and INFERRING that every member left with the
+   instance — two rows from one census, a third from another, and no identity anywhere tying them to the
+   frontier's own count. A member counted here is one the frontier was still holding when its registry went
+   down: not a departure the scheduler chose, the platform's, which is the whole content of the claim.
+
+   COUNTED AT THE RELEASE AND NOT FROM `g_flows_n` TAKEN BEFORE THE LOOP. A release ANNOUNCES a world death to
+   this instance's peers (see the end of flow_release), so a count taken in advance would be a claim about
+   what that announcement cannot do rather than a count of what the loop actually did — the same reason
+   `g_departures` itself is raised on the line that performs the removal and not derived from the gauge. */
+static int64_t g_departures_teardown = 0;
 static Flow *g_running = NULL;   /* the flow currently holding the worker (the scheduler sets it) */
 
 /* THE FORK TREE, which is what the aging term is actually about — and the one thing in this file that is not a
@@ -991,6 +1010,11 @@ long flow_rank_changes(void) { return g_rank_changes; }
    `arrivals / picksLifetime`: members minted per dispatch. See the banner at `g_arrivals`. */
 int64_t flow_arrivals(void) { return g_arrivals; }
 int64_t flow_departures(void) { return g_departures; }
+
+/* …AND HOW MANY OF THOSE DEPARTURES WERE THE INSTANCE GOING DOWN UNDER THEM — the third arm of the departure
+   total, exported so the three can be ASSERTED to sum at the one place all of them are in one hand
+   (engine.c's engine_frontier_census, which holds the other two). See the banner at g_departures_teardown. */
+int64_t flow_departures_teardown(void) { return g_departures_teardown; }
 
 /* HOW MANY TIMES THE SCHEDULER'S OWN PICK RETURNED AN ALREADY-DISPATCHED MEMBER WHILE A NEVER-DISPATCHED ONE
    STOOD AT EXACTLY THE SAME WEIGHT — §scheduler's razor's STARVES, counted at the ONE line that decides which
@@ -2239,6 +2263,9 @@ void flow_registry_free(JSContext *ctx) {
     JSRuntime *rrt = JS_GetRuntime(ctx);
 #endif
     while (g_flows_n) {
+        /* …AND WHICH ARM OF `g_departures` THIS ONE IS, raised on the line that performs it and above
+           the dev/release split because the departure happens in both. See g_departures_teardown. */
+        g_departures_teardown++;
 #if APICLIENT_DEV
         Flow *rf = g_flows[0];
         int had_frame = rf->frame != NULL, had_park = rf->parked != NULL;

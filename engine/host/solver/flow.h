@@ -2433,6 +2433,12 @@ long flow_rank_changes(void);
    for the reading, the identity and why `flow_rank_changes` cannot answer this. */
 int64_t flow_arrivals(void);
 int64_t flow_departures(void);
+/* …AND THE THIRD ARM OF THAT DEPARTURE TOTAL: how many members were still standing when this instance's
+   registry went down. The other two arms are engine.c's (`finished`, `sold`) and live in the frontier census,
+   so the three are only ever in one hand there — which is where the partition is asserted and why this is
+   exported rather than kept private to flow.c. A departure that credits no arm is a fourth exit from the
+   frontier, and that assert is the only thing that can see one. */
+int64_t flow_departures_teardown(void);
 
 /* HOW MANY DISPATCHES THE TIE-BREAK DECIDED AGAINST A STARVED MEMBER — §scheduler's razor's STARVES, made
    countable at the line that chooses. LIFETIME counter; the only kind a reader may difference, and it is read
