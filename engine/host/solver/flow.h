@@ -2134,11 +2134,19 @@ typedef struct {
      *
      *   `jobs_owed`   — the member carries the host-owed mark, so flow_pick REFUSES it (`runnable_only`).
      *                   These jobs wait on the HOST, and nothing about the order can move them.
-     *   `jobs_framed` — the member is inside a program (`frame != NULL`). HTML §8.1.4.4 "Calling scripts",
-     *                   clean up after running script step 3 — "If the JavaScript execution context stack is
-     *                   now empty, perform a microtask checkpoint" — is what every job arm of flow_step is
-     *                   under, and `Flow::frame` IS that stack here. So these jobs wait on the member
-     *                   COMPLETING its unit of work, which is also what advances the optimism term's `visits`.
+     *   `jobs_framed` — the member's execution context stack is NOT empty (`!flow_stack_empty`). The step
+     *                   HTML §8.1.4.4 "Calling scripts" states as clean up after running script step 3 — "If
+     *                   the JavaScript execution context stack is now empty, perform a microtask checkpoint" —
+     *                   is what every job arm of flow_step is under, and flow_stack_empty is this engine's
+     *                   statement of that sentence.
+     *                   So these jobs wait on the member COMPLETING its unit of work, which is also what
+     *                   advances the optimism term's `visits`.
+     *                   AND `Flow::frame` IS NOT THAT STACK, WHICH THIS LINE SAID AND THE CENSUS OBEYED. A
+     *                   live frame is one of the two things flow_stack_empty refuses; the other is a row at
+     *                   the cursor marked DYN_POS_IMMEDIATE, which is the synchronous tail of the program that
+     *                   queued it and is therefore stack the member is still standing on. Read `frame` alone,
+     *                   the split handed those members to `jobs_ready` — see there for what a row naming the
+     *                   wrong component costs, and solver/flow.c's job split for the repair.
      *                   This row is not a defect ON ITS OWN — it is the spec's precondition, measured — AND
      *                   THAT COVERS ONE OF ITS TWO READINGS, which is why the other is written here rather
      *                   than left to whoever meets it. A frontier some of whose members are part-way through a
@@ -2158,6 +2166,12 @@ typedef struct {
      *   `jobs_ready`  — neither: an empty stack and no mark, so the member reaches its jobs at the very next
      *                   pick it wins. These jobs wait on RANK ALONE, and they are the population §scheduler's
      *                   WFQ sentence is about.
+     *                   AND THAT SENTENCE IS THE REASON THIS ROW HAS TO BE ASKED THROUGH THE ARM'S OWN GUARD
+     *                   RATHER THAN A WEAKER PREDICATE: it names the component to open. A job counted here is
+     *                   one the ORDER is holding, and a job the LADDER is holding reported here sends a reader
+     *                   to flow_pick for a defect that is in flow_step — and it sends them with `job_w_gap`
+     *                   beside it reading ~0, which says in as many words that the backlog is not an ordering
+     *                   problem at all. Two rows, one wrong population, and the pair closes the question.
      *                   AND ITS ZERO IS TWO STATES, WHICH THIS SCAN'S OWN SHAPE DECIDES AND WHICH
      *                   `mem_unframed` BELOW IS WHAT SEPARATES. The arm is reached only inside `if (jn > 0)`,
      *                   so 0 is written both when NO member has `frame == NULL` at all and when unframed

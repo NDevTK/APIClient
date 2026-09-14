@@ -4882,15 +4882,43 @@ void flow_wfq_census(WfqCensus *out) {
            member outright, so that question comes first; among the members the pick will consider, HTML
            §8.1.4.4 "Calling scripts"'s clean up after running script step 3 ("If the JavaScript execution
            context stack is now empty, perform a microtask checkpoint") is what every job arm of flow_step is
-           under, and `frame` is that stack. Whatever is left waits on RANK, and it is the only one of the
-           three the ordering can move. Written as if/else-if/else rather than three tests so the classes are
-           disjoint and exhaustive BY CONSTRUCTION: a member holding jobs has exactly one reason, and a fourth
-           reason has nowhere to be folded into. */
+           under. Whatever is left waits on RANK, and it is the only one of the three the ordering can move.
+           Written as if/else-if/else rather than three tests so the classes are disjoint and exhaustive BY
+           CONSTRUCTION: a member holding jobs has exactly one reason, and a fourth reason has nowhere to be
+           folded into.
+           AND `frame` IS NOT THAT STACK, WHICH IS THE RETIRED ARGUMENT AND IS REWRITTEN HERE RATHER THAN
+           DELETED BECAUSE IT IS THE ONE A READER RE-DERIVES. This arm read `f->frame` under a note saying so,
+           and the delivery split twenty lines down said the job rows read `frame` "because that is what THEIR
+           arms read". flow_run_one_job has exactly TWO call sites and NEITHER of them reads `frame` alone: the
+           checkpoint arm is guarded on flow_checkpoint_due, which is `flow_job_microtask && flow_stack_empty`,
+           and flow_stack_empty is this engine's own statement of HTML §8.1.4.4's sentence — a live frame OR
+           a row at the cursor marked DYN_POS_IMMEDIATE, that row being the synchronous tail of the program
+           that queued it, so the stack is not empty for it either. The quotation was right and the predicate
+           named for it was one conjunct short, which is the shape a reviewer passes: the spec sentence checks
+           out.
+           WHAT IT COST IS A ROW POINTING AT THE WRONG COMPONENT. `jobs_ready` is published as "waits on RANK
+           ALONE … the only one of the three the ordering can move", so a member the LADDER holds off was
+           reported as one the ORDER had not got to, and `job_w_gap` — taken over the same holders — then read
+           ~0 and said the backlog "is not an ordering problem at all". Those two sentences together close the
+           question, and they closed it toward the scheduler.
+           ASKED THROUGH THE ARM'S OWN GUARD AND NOT A SECOND SPELLING OF IT, which is also what keeps this
+           honest as the arm moves: flow_stack_empty is the function flow_checkpoint_due calls, so an edit to
+           the checkpoint's precondition reaches this census without anybody remembering to come here.
+           NAMED RESIDUAL — this row is CORRECT for a MICROTASK and NARROWER than the question for a TASK.
+           NOT COVERED: a member that satisfies flow_stack_empty and holds a job with JOB_TASK set while its
+           cursor still names a row. flow_step's task arm binds its `else` to `f->script_i < f->dyn_n` (the
+           engine states that at the arm, and states it as an open defect rather than a design), so no pick
+           reaches that job either and this row still calls it ready. NEXT DIFF: the per-source task queue that
+           arm's own residual names — a source on a `jobs` entry as it is now on a row — after which the arm's
+           reachability stops depending on the cursor and the ready/framed line is exact for both kinds.
+           HOW ITS ABSENCE SHOWS: a census publishing `jobsReady` above zero with `jobWGap` at zero, on a run
+           whose LIFETIME `_jobsRun` never leaves zero — a backlog standing at the front of the order that the
+           order cannot move, which is the pair this row exists to make impossible to say. */
         {
             int jn = flow_job_pending(f);
             if (jn > 0) {
-                if (flow_host_owed(f))   out->jobs_owed   += jn;
-                else if (f->frame)       out->jobs_framed += jn;
+                if (flow_host_owed(f))         out->jobs_owed   += jn;
+                else if (!flow_stack_empty(f)) out->jobs_framed += jn;
                 else {
                     out->jobs_ready += jn;
                     /* THE BEST OF THEM, against which `job_w_gap` is taken below. A maximum and not a first
@@ -4902,9 +4930,12 @@ void flow_wfq_census(WfqCensus *out) {
         }
         /* AND THE SAME THREE QUESTIONS OF THE REPLY BACKLOG — see flow.h. Asked through the delivery arm's
            OWN guard (flow_stack_empty) rather than through `frame` alone, because that is the predicate
-           engine.c's arm is written against and this row exists to say whether that arm can run; the job rows
-           above read `frame` because that is what THEIR arms read. Same if/else-if/else shape, so the three
-           classes are disjoint and exhaustive by construction and a fourth reason has nowhere to hide.
+           engine.c's arm is written against and this row exists to say whether that arm can run. The job rows
+           above are now asked the same way and for the same reason; the clause that stood here saying they
+           read `frame` "because that is what THEIR arms read" was a claim about flow_step that flow_step does
+           not support, and its repair is written out at the job split itself. Same if/else-if/else shape, so
+           the three classes are disjoint and exhaustive by construction and a fourth reason has nowhere to
+           hide.
            `pending_ready` and not `pending_deliverable_count`: the register is walked once per report by
            cold_census for the DEBT, and what this needs is only whether this member holds one. */
         if (pending_ready(f->pending)) {
@@ -5440,12 +5471,16 @@ void flow_wfq_census(WfqCensus *out) {
            "the two has acquired a second writer, or a member joined or left `g_flows` without going through "
            "flow_new or flow_remove, and `arrivals / picksLifetime` is about to be published as the rate at "
            "which THIS frontier grows when it is a rate about some other population");
-    /* THE TWO SPELLINGS OF "UNFRAMED" ARE ONE QUESTION, AND THIS IS THE ONLY THING THAT KEEPS THEM SO. The
-       job split's third arm is reached through `!flow_host_owed(f) && !f->frame`, and `mem_unframed` counts
-       `f->frame == NULL` — the same predicate written at two sites in one loop, so a member holding a ready
-       job and no frame must be inside the count. An edit that re-spells either arm (flow_stack_empty, say,
-       which is what the DELIVERY arm is written against and which asks a wider question) drifts them apart
-       silently, and the row that exists to separate `jobs_ready`'s two zeroes then separates nothing.
+    /* THE TWO SPELLINGS OF "UNFRAMED" ARE A CONTAINMENT AND NOT AN IDENTITY, AND THE DIFFERENCE IS WHAT THIS
+       ASSERT NOW RESTS ON. It used to rest on the two being the SAME predicate written twice in one loop —
+       the job split's third arm reached through `!flow_host_owed(f) && !f->frame`, `mem_unframed` counting
+       `f->frame == NULL` — and warned that re-spelling either arm through flow_stack_empty would drift them
+       apart. That re-spelling has since happened, deliberately and at the job split, because `frame` alone was
+       not the predicate flow_step's job arms are written against. It does NOT drift the pair: flow_stack_empty
+       begins `if (f->frame) return 0;`, so every member reaching the ready arm has a null frame and is inside
+       `mem_unframed` BY CONSTRUCTION rather than by two writers agreeing. What the assert stopped being able
+       to catch is a re-spelling of `mem_unframed`; what it still catches, and is the reading the row is for, is
+       a ready count with nothing unframed under it.
        ONE-SIDED ON PURPOSE, and flow.h says why: `mem_unframed > 0` with no ready job is the SECOND silence,
        which is the state this row was added to name, so the converse is not an invariant and asserting it
        would fire on exactly the reading the row is for. */
@@ -5455,10 +5490,10 @@ void flow_wfq_census(WfqCensus *out) {
            "two are no longer one sample and the pair that separates `jobsReady`'s two zeroes is not a pair");
     DCHECK(out->jobs_ready == 0 || out->mem_unframed > 0,
            "this census reports jobs waiting on RANK ALONE while reporting that every member holds a frame — "
-           "the ready arm is reached only through `!f->frame`, so the two are the same predicate asked twice "
-           "in one loop and cannot disagree unless one of them has been re-spelled. Whichever moved, "
-           "`jobsReady: 0` can no longer be told from `mem_unframed: 0`, which is the one reading this row "
-           "was added for");
+           "the ready arm is reached only through flow_stack_empty, whose first line refuses a live frame, so "
+           "every member it admits is inside `mem_unframed` by construction and the two cannot disagree "
+           "unless `mem_unframed` has been re-spelled. If it has, `jobsReady: 0` can no longer be told from "
+           "`mem_unframed: 0`, which is the one reading this row was added for");
     /* AND THE TWO IDENTITIES THAT DEFINE THE BRANCH ROWS, ASSERTED WHERE BOTH HALVES OF EACH ARE IN ONE HAND.
        They are the only property of a per-bucket number a reader can check without re-deriving the mechanism
        that produced it, and both are exact rather than one-sided because each event has exactly one writer.
