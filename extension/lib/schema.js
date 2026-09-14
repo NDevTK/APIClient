@@ -4,6 +4,54 @@
 // global and resolve their callers at call-time, so load order is safe. KEEPS the protobuf/discovery schema-
 // learning feature -- just relocated out of the 8000-line brain.
 
+/* A MAP KEYED BY A NAME A STRANGER CHOSE HAS NO PROTOTYPE, AND THIS IS THE ONE PLACE THAT SAYS SO.
+   lib/req2proto.js states the identical rule twice and answers it with a `Map` — "A MAP AND NOT AN OBJECT
+   LITERAL, BECAUSE THE KEY IS A STRANGER'S TEXT" — because its tables are LOOKUPS. A learned schema's
+   `properties` cannot be a Map: it is JSON that rides IndexedDB and structured clone. So the same rule needs
+   the other primitive, and `Object.create(null)` is it — a plain object on both transports, with no
+   `Object.prototype` underneath to answer for names no producer ever wrote.
+   WHAT A LITERAL COSTS IS A LEARNED FIELD SILENTLY LOST, NEVER A CRASH — and the reach was measured against
+   THIS FILE'S OWN CODE rather than modelled, because a model of the mechanism proves the mechanism and says
+   nothing about which paths reach it. Three reaches, each run against the previous revision and against this
+   one, each carrying `userId` and `results` as controls that behaved identically on both sides:
+     • a schema this file BUILT, merged with a second observation of the same body — 1 of 10 lost, and it is
+       `__proto__`. The other seven survive here only because the BUILD ran first and shadowed them with own
+       properties, which is why this reach looks almost clean and is not.
+     • a schema out of a DISCOVERY DOCUMENT (a third party's `schemas` object, which is what `doc.schemas`
+       holds for a published API) merged against a newly observed body — 8 OF 10 LOST. Nothing shadowed
+       anything, so `existing.properties["toString"]` answered a function, mergeSchemaInto's
+       `existing.properties[key] ? key : …` read that as "already known", took the match arm, and the `!old`
+       arm that ADDS a field was never reached: no write, no drift entry, nothing logged.
+     • the protobuf tree's repeated-field count — 3 of 4 wrongly typed, a repeated field recorded as a single
+       `string` instead of an `array`, which is a wrong TYPE on the surface this tool exists to produce.
+   `__proto__` is worse again on the BUILD side, where `properties["__proto__"] = x` invokes
+   Object.prototype's SETTER: the field is not stored at all AND the map's own prototype becomes the value,
+   after which `for … in` over `properties` enumerates `type` as though the server had sent a field so named.
+   AND JSON.parse DISAGREES WITH AN OBJECT LITERAL ABOUT EXACTLY ONE OF THE EIGHT, which is why the store's
+   round trip cannot stand in for this check: `JSON.parse('{"__proto__":…}')` yields an OWN `__proto__`, so a
+   schema restored from IndexedDB can hold a field a freshly-minted one cannot. One server, two paths, two
+   answers about what it sent.
+   THE READ SIDE NEEDS ITS OWN SPELLING, because this file does not mint every map it reads: `doc.schemas` is
+   a Google discovery document's own object, or a store record JSON.parse rebuilt, and neither came from here.
+   NEITHER SIDE MAY ASSERT. A property map's values are a stranger's — a discovery document states them — and
+   CLAUDE.md is explicit that asserting on bytes a stranger stated hands that stranger an abort switch for the
+   trusted zone. So the answer to a name nothing wrote is the REFUSAL these two give (it is not held, so it is
+   absent, so the field is ADDED as the observation it is) and never a crash and never a default. */
+function _strangerKeyedMap() { return Object.create(null); }
+function _strangerKeyHeld(map, name) { return Object.prototype.hasOwnProperty.call(map, name); }
+/* AND THE WRITE NEEDS A SPELLING OF ITS OWN, WHICH THE READ FIX ALONE DOES NOT GIVE — measured against the
+   real file rather than assumed. Asking for an OWN property fixes seven of the eight names outright: the
+   match arm stops firing, the `!old` arm runs, and the field is added. `__proto__` survives that repair,
+   because `literal["__proto__"] = v` is not a store at all — it is Object.prototype's SETTER, so the plain
+   write puts the field NOWHERE on a map this file did not mint, which is every map that came out of a
+   discovery document or a JSON.parse of a store record. `defineProperty` states an own data property whatever
+   the target's prototype is, and it round-trips: JSON.stringify and structuredClone both carry it, and the
+   map's own prototype is left alone. A map minted above needs none of this — with no accessor to reach, a
+   plain assignment already stores all eight — so this is for the maps that arrive from elsewhere. */
+function _strangerKeySet(map, name, value) {
+  Object.defineProperty(map, name, { value: value, writable: true, enumerable: true, configurable: true });
+}
+
 function generateSchemaFromPbTree(rootTree, rootName, schemas) {
   // Iterative worklist replaces self-recursion. Each entry is either a
   // "build" (create a fresh schema for tree, attach via slot) or "merge"
@@ -15,10 +63,25 @@ function generateSchemaFromPbTree(rootTree, rootName, schemas) {
   function setSlot(slot, value) {
     if (slot.kind === "result") result = value;
     else if (slot.kind === "schemas") schemas[slot.key] = value;
+    /* A GUARD AND NOT A GAP — the kinds are minted in this same function (the `result` seed above and the
+       `schemas` job buildShell queues), so no input decides which arm is taken and this one is unreachable by
+       construction. Without it an unknown kind attached the built schema to NOTHING and returned in silence,
+       which is a field that vanishes out of the result with nothing anywhere to say a branch went missing. */
+    else DFAIL("a pb-tree schema slot names kind `" + slot.kind + "`, which this worklist does not mint — it " +
+               "mints `result` and `schemas` and nothing else, so a third is a slot built by something else " +
+               "and the schema it carries would attach to nothing and disappear out of the returned tree");
   }
   function buildShell(tree, name, queueOut) {
     // First pass: count field occurrences to detect repeated fields
-    const fieldCounts = {};
+    /* THE COUNT MAP IS STRANGER-KEYED AND THE PROPERTY MAP BELOW IS NOT, which is why only one of them
+       changes. `node.field` is a protobuf field NUMBER on the wire path and a raw JSON KEY on
+       lib/protobuf.js's object-mode path, which builds `{ field: k, … }` straight out of `Object.entries` of
+       a parsed body — so `fieldCounts["constructor"]` answered a FUNCTION, `(fn || 0) + 1` made the count a
+       STRING, and `> 1` is then false for every occurrence: a repeated field by one of those eight names is
+       not detected as repeated. `properties` is keyed by `field${node.field}`, which begins with `field` and
+       therefore cannot collide with any name Object.prototype carries, so it stays a literal — a site that
+       needs nothing, named here rather than swept with the one that did. */
+    const fieldCounts = _strangerKeyedMap();
     for (const node of tree) {
       fieldCounts[node.field] = (fieldCounts[node.field] || 0) + 1;
     }
@@ -99,8 +162,20 @@ function generateSchemaFromPbTree(rootTree, rootName, schemas) {
     } else if (job.kind === "merge") {
       const existing = schemas[job.mergeKey];
       if (existing) {
-        if (!existing.properties) existing.properties = {};
-        for (const [k, v] of Object.entries(built.properties || {})) {
+        if (!existing.properties) existing.properties = _strangerKeyedMap();
+        /* `|| {}` STOOD OVER A FIELD ITS ONLY PRODUCER ALWAYS WRITES. `built` is `buildShell`'s answer and
+           that function has exactly ONE return, `{ id, type, properties }`, with `properties` bound at its
+           top — so the default could not fire, and what it was covering is the day buildShell stops stating
+           the name: this loop would then merge an empty set of fields and report a schema that gained
+           nothing, which reads exactly like a second observation that carried no new field.
+           The keys here are `field${n}` and nothing else, so the read below cannot reach a name
+           Object.prototype carries and is left as a plain index — the mint is prototype-free for uniformity
+           with every other property map in this file, not because this loop needs it. */
+        DCHECK(!!built.properties && typeof built.properties === "object" && !Array.isArray(built.properties),
+               "buildShell answered a schema with no properties map for `" + job.name + "` — it states one on " +
+               "its single return, so an absent one is that function changed shape and this merge would fold " +
+               "in nothing while reporting that it ran");
+        for (const [k, v] of Object.entries(built.properties)) {
           if (!existing.properties[k]) existing.properties[k] = v;
         }
       }
@@ -113,17 +188,34 @@ function generateSchemaFromJson(rootJson, rootName, schemas, rootIsIndexed = fal
   // Iterative worklist replaces self-recursion. Each entry pairs an input
   // (json, name, isIndexed) with a destination "slot" — where the
   // generated schema gets attached. The slot can be:
-  //   - { type: "schemas", key: NAME }   → schemas[NAME] = schemaObj
-  //   - { type: "items", parent: SCHEMA } → SCHEMA.items = schemaObj
-  //   - { type: "result" }                → set the function's return value
+  //   - { kind: "result" }                → set the function's return value
+  //   - { kind: "schemas", key: NAME }    → schemas[NAME] = schemaObj
+  //   - { kind: "items", parent: SCHEMA } → SCHEMA.items = schemaObj
   // This keeps the JS stack at depth 1 even for deeply-nested JSON.
+  // THE FIELD IS `kind` AND THIS LIST SPELLED IT `type` FOR ALL THREE. Nothing reads a comment, so it stayed
+  // wrong: a reader building a fourth slot off this list would have written `{ type: … }` and setSlot would
+  // have matched none of its arms — which, before the arm below existed, was a schema attached to nothing.
   let result = null;
   const queue = [{ json: rootJson, name: rootName, isIndexed: rootIsIndexed, slot: { kind: "result" } }];
   function setSlot(slot, value) {
+    /* A FOURTH ARM STOOD HERE AND COULD NOT RUN — `else if (slot.kind === "prop") slot.parent[slot.key] = value`
+       over a `{kind:"prop"}` this worklist mints NOWHERE: every `slot:` below is `result`, `schemas` or
+       `items`, and the string "prop" occurred exactly once in the whole extension, at that arm. It is DELETED
+       rather than left for somebody to wire up, because WHAT IT WOULD HAVE DONE is the reason not to: a prop
+       slot's `key` is a field name, which on this path is a name a stranger chose, and `slot.parent[slot.key]
+       = value` is that name used as a computed key on an object literal — the exact write `_strangerKeyedMap`
+       above exists to stop, on a `parent` this function does not own. Attaching a nested schema is already
+       what the `schemas` arm does, by $ref, and a dead path is untested code rather than working code.
+       AND THE ELSE IS A GUARD AND NOT A GAP: the three kinds are minted in this same function, so no input
+       decides which arm runs. Without it an unknown kind attached the schema to NOTHING and returned in
+       silence — a branch of the learned shape gone, with no error and no empty value to notice. */
     if (slot.kind === "result") result = value;
     else if (slot.kind === "schemas") schemas[slot.key] = value;
     else if (slot.kind === "items") slot.parent.items = value;
-    else if (slot.kind === "prop") slot.parent[slot.key] = value;
+    else DFAIL("a JSON schema slot names kind `" + slot.kind + "`, which this worklist does not mint — it " +
+               "mints `result`, `schemas` and `items`, all queued in this same function, so a fourth is a " +
+               "slot built by something else and the schema it carries would attach to nothing and " +
+               "disappear out of the tree this call returns");
   }
   while (queue.length > 0) {
     const { json, name, isIndexed, slot } = queue.shift();
@@ -185,7 +277,9 @@ function generateSchemaFromJson(rootJson, rootName, schemas, rootIsIndexed = fal
     }
 
     if (typeof json === "object" && json !== null) {
-      const properties = {};
+      // KEYED BY `for (const key in json)` — the server's own field names, raw. `nestedName` beside it is
+      // `safeKey`-stripped to alphanumerics and so is this file's own composition; the KEY is not.
+      const properties = _strangerKeyedMap();
       const obj = { id: name, type: "object", properties };
       setSlot(slot, obj);
       for (const key in json) {
@@ -257,12 +351,19 @@ function mergeSchemaInto(doc, rootSchemaName, rootNewSchema) {
     const { schemaName, newSchema } = queue.shift();
     if (visited.has(schemaName)) continue;
     visited.add(schemaName);
-    if (!doc.schemas[schemaName]) {
-      doc.schemas[schemaName] = newSchema;
+    /* `doc.schemas` IS NOT A MAP THIS FILE MINTS — it is a Google discovery document's own `schemas` object,
+       or a store record JSON.parse rebuilt — so the prototype-free mint above cannot reach it and the READ is
+       where the rule is applied. Held-AND-truthy keeps the old falsy test EXACTLY for a name a producer wrote
+       (a stored `null` under a real key still takes the assign arm); what it stops is a `$ref` or a schema
+       name that is one of Object.prototype's eight, where `doc.schemas["constructor"]` answered the Object
+       CONSTRUCTOR and this fell through to merge INTO it — `existing.properties = {}` and `existing._drift =
+       []` then being written onto the global `Object` itself. */
+    if (!_strangerKeyHeld(doc.schemas, schemaName) || !doc.schemas[schemaName]) {
+      _strangerKeySet(doc.schemas, schemaName, newSchema);
       continue;
     }
     const existing = doc.schemas[schemaName];
-    if (!existing.properties) existing.properties = {};
+    if (!existing.properties) existing.properties = _strangerKeyedMap();
     if (!existing._drift) existing._drift = [];
     const newProps = newSchema.properties || {};
 
@@ -290,18 +391,27 @@ function mergeSchemaInto(doc, rootSchemaName, rootNewSchema) {
 
     for (const [key, newProp] of Object.entries(newProps)) {
       const fieldNum = pbWireTag(newProp.number) ?? pbWireTag(newProp.id);
-      const matchKey = existing.properties[key] ? key
+      /* THE LINE THE EIGHT NAMES WERE LOST ON, and the only repair it needs is asking for an OWN property.
+         `key` is a field name a server chose and `existing.properties` may be a map this file did not mint,
+         so `existing.properties["toString"]` answered a function from the prototype, `matchKey` became that
+         name, `old` became the function, and the `!old` arm below — the one that ADDS a newly-observed field
+         — was never taken. Nothing was written and nothing was recorded: the field simply was not in the
+         learned surface, this session or any later one.
+         `numToKey` beside it is NOT asked the same question and does not need to be: `pbWireTag` refuses
+         anything that is not an integer in the Protobuf Language Guide's field-number range, so every key in
+         it is a number and no number spells a name Object.prototype carries. */
+      const matchKey = (_strangerKeyHeld(existing.properties, key) && existing.properties[key]) ? key
         : (fieldNum !== null && numToKey[fieldNum]) ? numToKey[fieldNum]
         : null;
       const old = matchKey ? existing.properties[matchKey] : null;
 
       if (!old) {
-        existing.properties[key] = newProp;
+        _strangerKeySet(existing.properties, key, newProp);
         if (fieldNum !== null) numToKey[fieldNum] = key;
         existing._drift.push({ type: "field_added", field: key, fieldType: newProp.type, timestamp: Date.now() });
       } else {
         if (matchKey !== key && !old.customName && !/^field\d+$/.test(key)) {
-          existing.properties[key] = old;
+          _strangerKeySet(existing.properties, key, old);
           delete existing.properties[matchKey];
           /* THE RENAME IS ONLY REACHED THROUGH A REAL TAG. `matchKey !== key` requires the match to have come
              from `numToKey`, which now holds only refused wire tags, so `fieldNum` here is an integer by
@@ -346,8 +456,10 @@ function mergeSchemaInto(doc, rootSchemaName, rootNewSchema) {
         }
         if (newProp.children && !old.children) old.children = newProp.children;
         if (newProp.description && !old.description) old.description = newProp.description;
-        // Queue nested $ref merge instead of recursing.
-        if (newProp.$ref && doc.schemas[newProp.$ref]) {
+        // Queue nested $ref merge instead of recursing. OWN-PROPERTY, for the reason the top of this loop
+        // gives: a `$ref` is a name out of a discovery document, so an inherited one made this push a job
+        // whose `newSchema` was the Object constructor and whose merge then wrote onto it.
+        if (newProp.$ref && _strangerKeyHeld(doc.schemas, newProp.$ref) && doc.schemas[newProp.$ref]) {
           queue.push({ schemaName: newProp.$ref, newSchema: doc.schemas[newProp.$ref] });
         }
       }
