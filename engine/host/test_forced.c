@@ -6352,15 +6352,35 @@ static void tf_page_error(const char *msg, const char *filename, ResultPageError
     fflush(stdout);
 }
 
-/* …AND THE DECLARATION THE READER SUBTRACTS. Printed from the same table the chunks are served from, so there
- * is no second list to keep in step, and printed ONCE per process because it is a statement about the
- * document rather than about a run of it. */
+/* …AND THE DECLARATION THE READER SUBTRACTS. Printed from the same tables the chunks and the edge census are
+ * served from, so there is no third list to keep in step, and printed ONCE per process because it is a
+ * statement about the document rather than about a run of it.
+ * TWO TABLES AND NOT ONE, BECAUSE A CHUNK AND THIS DOCUMENT ARE DECLARABLE IN DIFFERENT UNITS AND ONLY ONE OF
+ * THEM HAD A CHANNEL. An ADDRESS is what a fixture can say about a program it owns whole, and it is the only
+ * thing `stages_page_error` can mean; it cannot reach a throw raised at this document's own address, where a
+ * staged address would cover every statement of a two-thousand-statement program — which the printer's
+ * paragraph above refuses and rightly. The unit that DOES reach it is the one `g_tf_err_edges` has keyed on
+ * since it was written, and that table's own banner already argues this is the side of the printer's line a
+ * fixture-owned marker sits on: a token this document MINTED INTO THE VALUE IT THROWS, never a word of any
+ * engine message. A regression in these scripts cannot produce `synmove` — only the statement that throws it
+ * can — which is the same standard the address meets, stated in the other vocabulary.
+ * IT SUPPRESSES NOTHING, ON A STRICTER CONTRACT THAN THE ADDRESSES ABOVE IT. Every token here is asserted to
+ * have STOOD by a probe row of its own, per EDGE and with `stands_here`, so a declared message that stops
+ * occurring fails LOUDER than a staged address does. What the line adds is the direction nothing could state
+ * before: an uncaught error carrying none of these tokens, from none of those addresses, is one this document
+ * did not stage. */
 static void tf_declare_staged_page_errors(void) {
     static int said;
     if (said) return;
     said = 1;
     for (unsigned i = 0; i < sizeof(TF_CHUNKS) / sizeof(TF_CHUNKS[0]); i++)
         if (TF_CHUNKS[i].stages_page_error) printf("@PAGEERR-STAGED %s\n", TF_CHUNKS[i].at);
+    /* THE WHOLE TABLE AND NEVER A HAND-PICKED HALF OF IT. Five of these tokens are also covered by a staged
+       address above and one is not, and which is which is a fact about where each chunk body lives — a second
+       copy of that here is the drift this file spends its whole design avoiding. The reader asks the address
+       first, so a redundant declaration costs a line and decides nothing. */
+    for (unsigned i = 0; i < sizeof(g_tf_err_edges) / sizeof(g_tf_err_edges[0]); i++)
+        printf("@PAGEERR-STAGED-TOKEN %s\n", g_tf_err_edges[i].tok);
     fflush(stdout);
 }
 

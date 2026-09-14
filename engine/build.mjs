@@ -4271,6 +4271,26 @@ const runDependenceText = (q, stand, aborted) =>
    it has stopped meaning anything. */
 function pageErrorText(out) {
   const staged = new Set([...out.matchAll(/^@PAGEERR-STAGED (\S+)$/gm)].map((m) => m[1]));
+  /* AND THE SAME STATEMENT IN THE ONLY UNIT THAT REACHES A THROW THIS DOCUMENT RAISES ITSELF. `staged` is
+     ADDRESSES because a program is what a fixture owns whole, and there is exactly one throw it can never
+     speak of that way: one raised at the document's own address, where an address-keyed declaration would
+     cover every statement of the program and swallow the regressions this partition exists to surface. The
+     paragraph above refuses that, and refuses a MESSAGE-TEXT list for a different reason — engine prose is
+     shared between programs, so `x-panel` breaking raises a chunk's own words from the document. NEITHER
+     REASON REACHES A TOKEN THE FIXTURE MINTED INTO ITS OWN THROWN VALUE: `g_tf_err_edges` has keyed on exactly
+     that since it was written and argues the point at its own banner, because a regression in the document's
+     scripts cannot produce `synmove` — only the statement that throws it can.
+     THE ABSENCE OF THIS CHANNEL WAS NOT A QUIET ONE, which is why it is a fourth population rather than a
+     widening of a key. The document's staged `synmove` throw was the one error this reader called UNSTAGED on
+     every run there has ever been, while the SAME output carried the probe row `move-throw` asserting that
+     throw stood, carried this document's own address, and reached `pageErrors` — a run refuting its own
+     headline two hundred lines apart. It recruited a lane to hunt a cause that was not there, which is the
+     cost §A-VERDICT-THAT-IS-RED-ON-EVERY-RUN names and the reason a chronic accusation is worse than a
+     missing one: a reader cannot tell it from an informative one, so the body stops being read.
+     NO CONTRACT CHECK, UNLIKE THE TWO BELOW, AND FOR THE REASON `staged` HAS NONE. A declared token matching
+     no announcement is a fixture that stopped exercising something — a FINDING, asserted per edge by that
+     token's own probe row — and never a producer whose key stopped meeting this reader's. */
+  const stagedTok = [...out.matchAll(/^@PAGEERR-STAGED-TOKEN (\S+)$/gm)].map((m) => m[1]);
   /* AND THE ENGINE'S OWN CLAIM ABOUT A ROW IT PRODUCED — solver/result.h. Keyed on the (message, throw site)
      PAIR rather than on an address, and the asymmetry with `staged` is the design: an address is the only unit
      a FIXTURE can speak in, because a program is what a fixture owns, while the ENGINE knows the exact throw
@@ -4352,16 +4372,24 @@ function pageErrorText(out) {
      the stream route, exactly as `pageErrorsRetracted` is on the document route. */
   const retractedText = retracted ? ` (plus ${retracted} reported and retracted, handled in a later task)` : "";
   if (!errs.length) return retracted ? ` — 0 standing page error(s)${retractedText}` : "";
-  /* THREE POPULATIONS AND NOT TWO, IN THAT ORDER, BECAUSE THE CLAIMS ARE ASKED OF DIFFERENT UNITS. The
-     fixture's is an ADDRESS and the engine's is a PAIR, so an error can satisfy both — a chunk that stages a
-     throw the engine also declares its own — and a reader needs each error in exactly one column. The staged
-     claim is asked FIRST because it is the DOCUMENT's statement about a program it owns, and a fixture that
-     stopped exercising its own staged throw must not have that absence hidden by the engine's classification
-     of some other throw at the same address. */
+  /* FOUR POPULATIONS AND NOT THREE, IN THAT ORDER, BECAUSE THE CLAIMS ARE ASKED OF DIFFERENT UNITS. The
+     fixture speaks in TWO of them — an ADDRESS for a program it owns whole, and a TOKEN it minted into the
+     value it throws, for the one throw an address cannot reach — and the engine's is a PAIR, so one error can
+     satisfy several and a reader needs each error in exactly one column. The ADDRESS is asked FIRST because it
+     is the DOCUMENT's statement about a program it owns, and a fixture that stopped exercising its own staged
+     throw must not have that absence hidden by the engine's classification of some other throw at the same
+     address. The TOKEN is asked SECOND, on that same rule one level down: it is still the DOCUMENT's
+     statement, and the engine's classification would hide the identical absence.
+     THE TOKEN IS MATCHED AS A SUBSTRING, WHICH IS NOT THE TEXT-KEYED LIST THE PARTITION REFUSES. That refusal
+     is about ENGINE PROSE, which two programs share; these are markers the fixture planted in values it threw
+     itself, matched here exactly as test_forced.c's own edge census matches them, and a throw this document
+     did not write cannot carry one. */
   const isExplored = (e) => explored.has(pairKey(e.at, e.msg));
+  const isDeclared = (e) => stagedTok.some((t) => e.msg.includes(t));
   const known = errs.filter((e) => staged.has(e.at));
-  const mine = errs.filter((e) => !staged.has(e.at) && isExplored(e));
-  const rogue = errs.filter((e) => !staged.has(e.at) && !isExplored(e));
+  const declared = errs.filter((e) => !staged.has(e.at) && isDeclared(e));
+  const mine = errs.filter((e) => !staged.has(e.at) && !isDeclared(e) && isExplored(e));
+  const rogue = errs.filter((e) => !staged.has(e.at) && !isDeclared(e) && !isExplored(e));
   /* THE STAGED COUNT IS CARRIED EVEN WHEN NOTHING IS WRONG, because its DISAPPEARANCE is the other direction
      this line can report: a run in which the document staged two errors and produced one is a run whose
      fixture stopped exercising something, and a reader shown only the rogue population would see silence. */
@@ -4373,10 +4401,22 @@ function pageErrorText(out) {
      stopped being reached read alike, and only one of them is worth a look. */
   const mineText = mine.length ? `, plus ${mine.length} this engine raised itself exploring a forked completion`
                                : ``;
+  /* AND THIS DOCUMENT'S OWN, CARRIED AS A COUNT AND NEVER AGAINST A DENOMINATOR — the one thing separating it
+     from `stagedText` beside it, which does carry one. An address column can say `known of staged.size`
+     because a staged address is a claim no other column can take: an error either came from that program or it
+     did not. A token CAN be taken by the column asked before it, since a chunk raising the message it declares
+     lands in `known` by its address — so `declared.length` over the declared tokens would be a fraction whose
+     numerator another column is free to steal, and a document that did nothing wrong would read as a
+     shortfall. The shortfall such a fraction would claim to report is reported already and better: every token
+     declared here has a probe row asserting its EDGES over the result document and over this stream, which is
+     a per-occurrence assertion no denominator on this line could make. */
+  const declaredText = declared.length
+    ? `, plus ${declared.length} this document declares by a token it minted into the value it throws`
+    : ``;
   if (!rogue.length)
-    return ` — ${errs.length} page error(s), none unaccounted for: ${stagedText}${mineText}${retractedText}`;
+    return ` — ${errs.length} page error(s), none unaccounted for: ${stagedText}${declaredText}${mineText}${retractedText}`;
   const q = (e) => `${JSON.stringify(e.msg.slice(0, 160))} at ${e.at === "-" ? "no throw site (§8.1.4.6's own answer for a value with no backtrace)" : e.at}`;
-  return ` — ${rogue.length} UNSTAGED UNCAUGHT PAGE ERROR(S) (plus ${stagedText}${mineText}${retractedText}), first: ${q(rogue[0])}` +
+  return ` — ${rogue.length} UNSTAGED UNCAUGHT PAGE ERROR(S) (plus ${stagedText}${declaredText}${mineText}${retractedText}), first: ${q(rogue[0])}` +
          (rogue.length > 1 ? ` (+${rogue.length - 1} more, deduped by solver/result.c on (message, throw site))` : "");
 }
 
