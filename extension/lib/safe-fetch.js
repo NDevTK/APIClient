@@ -1110,6 +1110,22 @@ var _EXPLORED = Object.create(null);
 /* HAS A HOST SPOKEN YET. Two questions, two fields — never one value answering both, because the
    permissive-looking reading of an unstated table is exactly the one that would be wrong. */
 var _EXPLORED_STATED = false;
+/* AND HAS A HOST PROMISED TO SPEAK — THE THIRD STATE, WHICH IS THE ONE THE OFFSCREEN ACTUALLY PASSES
+   THROUGH. A host whose grants are in IndexedDB cannot state the table until a read returns, so between its
+   load and that return the table is neither stated nor absent: it is COMING. A request arriving in that
+   window may not be answered from an empty table — that is the refusal in the policy's own voice this file
+   exists to prevent — and may not be answered by stating one either, since a table stated empty and then
+   filled would refuse a granted origin for exactly as long as the read takes, with the assert that names
+   the harm silenced. The only sound answer is to WAIT, and this is what there is to wait on.
+   IT IS THE HOST'S PROMISE AND NEVER THIS FILE'S, which is what keeps the decision here and the store
+   there. Nothing below reads a preference, opens a database or invents a default; it awaits a promise whose
+   only producer is the host that owns the store, and the host still decides WHAT the table says and WHEN.
+   A HOST THAT REGISTERS NOTHING IS UNCHANGED AND DOES NOT HANG. `null` means no promise was made, so the
+   wait is skipped and the assert below fires exactly as it did — which is what the native host takes (it
+   states synchronously before it reads a flag, so it never has a window) and what a host that forgot both
+   would take. The forcing function survives; what it stops catching is a door, which is not a thing a door
+   can now get wrong. */
+var _EXPLORED_STATING = null;
 /* WHETHER AN ORIGIN CAN BE PERMITTED AT ALL, ANSWERING THE REASON IT CANNOT OR `null` FOR YES — ONE FACT
    ASKED BY TWO CALLERS WITH TWO DIFFERENT OUTCOMES, which is the split that stops a CHECK and a REFUSAL
    becoming two rules free to disagree about a string. `safeFetchWiden` below asks it and ABORTS, because a
@@ -1161,6 +1177,31 @@ function safeFetchSignals() {
     return { name: s.name, gates: s.gates, certainty: s.certainty, values: s.values.slice() };
   });
 }
+/* A HOST PROMISING THAT IT WILL SPEAK, SO EVERY REQUEST WAITS RATHER THAN ONE DOOR REMEMBERING — see
+   `_EXPLORED_STATING`. It is registered ONCE, at the host's own load, and `safeFetch` awaits it before it
+   asks the firing question, so the guarantee is a property of the CHOKEPOINT rather than of whichever entry
+   a request happened to arrive through. That is the whole difference: a chokepoint is by definition every
+   asker, and a door is a list somebody maintains.
+   IT REGISTERS A PROMISE AND NEVER A TABLE. A host that already holds its answer calls `safeFetchEgressStated`
+   and is done; this is for a host whose answer is behind an asynchronous read, and what it hands over is the
+   READ, not a placeholder for it. */
+function safeFetchEgressStating(promise) {
+  CHECK(promise !== null && typeof promise === "object" && typeof promise.then === "function",
+        "a host registered something other than a thenable as its promise to state the per-origin egress " +
+        "table — every request this zone makes waits on it before the firing question is asked, so a value " +
+        "with no `then` would be awaited once, settle immediately, and hand the walk the empty table this " +
+        "promise exists to keep it away from");
+  CHECK(!_EXPLORED_STATED,
+        "a host promised to state its per-origin egress table after it had already stated one — the promise " +
+        "is what a request waits on BEFORE the table exists, and one registered afterwards can only be a " +
+        "second statement in flight, which REPLACES rather than adds and would revoke every grant a surface " +
+        "made in between");
+  CHECK(_EXPLORED_STATING === null,
+        "a host promised twice to state its per-origin egress table — a waiting request awaits ONE promise, " +
+        "so a second would leave which table that request is answered from decided by which registration " +
+        "happened to win");
+  _EXPLORED_STATING = promise;
+}
 /* AND THE DEFAULT ARMS, FOR THE SAME SURFACE AND THE SAME REASON. A person looking at a control that
    permits nothing is entitled to know why their app's scripts still load, and a surface that explained it in
    its own words would be a second copy of this list that could stop agreeing with it. */
@@ -1189,8 +1230,9 @@ function safeFetchEgressStated(table) {
   CHECK(!_EXPLORED_STATED,
         "a host stated its per-origin egress table a second time — the table is the person's standing " +
         "sentence and a re-statement REPLACES it, so a grant made from a surface between the two calls is " +
-        "revoked with nothing anywhere saying so. State it once, at the one door that runs before this zone " +
-        "can answer a firing question, and add to it with safeFetchPermit");
+        "revoked with nothing anywhere saying so. State it ONCE — synchronously before this zone can run, or " +
+        "through the read registered with safeFetchEgressStating, which every request awaits — and add to it " +
+        "with safeFetchPermit");
   _signalRegistryCheck();
   CHECK(table !== null && typeof table === "object" && !Array.isArray(table),
         "a host stated its per-origin egress table as " + JSON.stringify(table) + " rather than as an " +
@@ -1408,18 +1450,27 @@ function _firingRefusal(facts) {
      is EMPTY, so the walk would refuse a request at an origin the person HAS permitted and the refusal would
      name a signal in the policy's own voice — indistinguishable from a policy they set. It is conservative,
      which is why it is a DCHECK and not a CHECK; it is also unreadable, which is why it is asserted at all.
-     THE WINDOW IS CLOSED BY CONSTRUCTION AND THIS CHECKS THE CONSTRUCTION. The table is only ever READ for a
-     request the default arms did not admit, and every engine in the offscreen is created behind
-     `astDispatch`, which states the table before it does anything; the native host states it before it
-     parses its own command line. So this cannot fire unless a host grew a second door into analysis, which
-     is exactly what it should say. */
+     THE WINDOW IS CLOSED AT THE CHOKEPOINT AND THIS CHECKS THAT CONSTRUCTION. `safeFetch` awaits
+     `_EXPLORED_STATING` before it asks, so every caller is behind the host's statement without having to
+     know the statement exists — and a host that neither states nor promises still reaches here, which is
+     what keeps this a forcing function rather than a formality.
+     THE ARGUMENT THIS REPLACES IS REWRITTEN RATHER THAN DELETED, BECAUSE IT IS THE ONE A READER RE-DERIVES.
+     It read: the table is only ever READ for a `forced` request, only an ENGINE composes `forced`, and every
+     engine is created behind the host's DOCUMENT door — so stating it there closes the window. The first
+     clause is false. The table is read for every request the DEFAULT ARMS did not admit, and a plain data
+     GET at `provenance` `derived` is one of those and needs no engine at all; the offscreen composes exactly
+     that from its passive-learning arm, which the document door never runs behind. A premise about WHO
+     composes a grade cannot close a window about WHICH requests read the table, and placing a ZONE-lifetime
+     fact at a per-document event is the same error one level up.
+     RETIREMENT: this record goes when `_firingRefusal` has no caller that can reach it without the wait
+     above, at which point the placement it argues against is not merely wrong but unwritable. */
   DCHECK(_EXPLORED_STATED,
          "the firing question was asked before this host STATED its per-origin egress table — the table is " +
          "empty until a host speaks, so this refusal would tell a person their own standing permission does " +
-         "not exist, in the policy's own voice and indistinguishable from a policy they set. Every host " +
-         "states it at the ONE door that runs before this zone can answer a firing question (the offscreen " +
-         "in astDispatch, the native host before it reads `--explore`), so reaching here unstated is a " +
-         "SECOND door into analysis that was never told");
+         "not exist, in the policy's own voice and indistinguishable from a policy they set. A host either " +
+         "STATES the table before this zone can run (the native host, before it reads `--explore`) or " +
+         "REGISTERS the read that will state it (`safeFetchEgressStating`, which every request awaits), so " +
+         "reaching here unstated is a host that did NEITHER — not a door that was never told");
   for (i = 0; i < _SIGNALS.length; i++) {
     s = _SIGNALS[i];
     if (!s.gates) continue;
@@ -2044,6 +2095,16 @@ async function safeFetch(url, opts) {
      Access, and by Fetch §4.10 "CORS check" besides, both of which reach the page as a network error. */
   if (_isPrivateHost(parsed.hostname) && !_pagePrivate)
     return _refused("network", "blocked-private-from-public", [parsed.href], {});
+  /* AND THE PERSON'S STANDING SENTENCE IS WAITED FOR RATHER THAN ASSUMED — see `_EXPLORED_STATING`. This
+     is the line that makes the assert inside `_firingRefusal` a check on a CONSTRUCTION rather than a
+     property of whichever entry a request arrived through: a chokepoint is by definition every asker, so a
+     wait here covers every door this zone has and every one it grows. It is placed after the gates that
+     refuse a request on facts about ITSELF — an address that will not parse, a scheme this zone cannot
+     speak, a private target from a public page — because those owe the person's policy nothing and waiting
+     for it would delay a refusal that was never going to depend on it.
+     IT IS SKIPPED ONCE THE TABLE IS STATED, so the steady state costs one already-false test and no
+     microtask; `_EXPLORED_STATED` never goes back to false, which is what makes that safe to read once. */
+  if (!_EXPLORED_STATED && _EXPLORED_STATING !== null) await _EXPLORED_STATING;
   /* THE FIRING DECISION, BEFORE THE REQUEST EXISTS — see `_firingRefusal`. It is placed after the
      well-formedness gates and before the credential one because that is the order the questions are
      answerable in: an address that will not parse, names a scheme this zone cannot speak, or points into the
@@ -2476,7 +2537,12 @@ async function safeFetch(url, opts) {
    with no withdrawal is not a preference. `safeFetchEgressStated` is the host restoring what an earlier
    session granted, once, before anything may ask — the two fields above are why it exists — and it ANSWERS
    which stored entries it could not carry forward, so a permission that stopped existing is said out loud
-   rather than left to be noticed. `safeFetchEgressTable` is that answer's other half: what a host persists,
+   rather than left to be noticed. `safeFetchEgressStating` is the half of that a host with an ASYNCHRONOUS
+   store needs: the restore is a read, the read has a window, and a request arriving inside it may neither be
+   refused from an empty table nor answered by stating one — so the host hands over the READ and `safeFetch`
+   awaits it. That pair is what moves the guarantee from a DOOR (a list somebody maintains, and a list this
+   zone has already been wrong about) to the CHOKEPOINT, which is every asker by construction.
+   `safeFetchEgressTable` is that answer's other half: what a host persists,
    in exactly the shape the restore takes, so the round trip is a contract rather than two writers.
    `safeFetchWidenable` and `safeFetchSignalUsable` are the SAME tests `safeFetchPermit` aborts on, exported
    so a surface with a person in front of it can REFUSE WITH THE REASON instead of aborting the zone over a
@@ -2508,6 +2574,7 @@ if (typeof self !== "undefined") {
   self.safeFetchUnwiden = safeFetchUnwiden;
   self.safeFetchPermit = safeFetchPermit;
   self.safeFetchEgressStated = safeFetchEgressStated;
+  self.safeFetchEgressStating = safeFetchEgressStating;
   self.safeFetchEgressTable = safeFetchEgressTable;
   self.safeFetchWidenable = safeFetchWidenable;
   self.safeFetchSignalUsable = safeFetchSignalUsable;
@@ -2523,3 +2590,4 @@ if (typeof self !== "undefined") {
      would be the second copy of a rule nothing checks. */
   self.safeFetchReachJoin = safeFetchReachJoin;
 }
+

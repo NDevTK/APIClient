@@ -301,12 +301,15 @@ async function main() {
      against — a person who types `https://b.test/some/path` means the host, and a string compare against a
      serialized origin would silently authorize nothing. */
   /* THIS HOST STATES ITS WIDENING TABLE BEFORE IT READS A FLAG, AND IT STATES THE EMPTY LIST. The chokepoint
-     holds "stated empty" and "not yet stated" in two different fields, because the OTHER host genuinely
-     passes through the second — its grants are in IndexedDB and come back asynchronously, and a request
-     answered in that window would be refused with the policy's own word for "you did not permit this", said
-     to somebody who did. This process has no such window and no such store: a command line is a sentence for
-     ONE RUN, so "nobody has widened anything" is true here until `--explore` says otherwise, and saying it is
-     what makes every `--explore` below an ADDITION to a table that exists rather than the first write to one
+     holds "stated empty", "not yet stated" and "a read is coming" in three different fields, because the
+     OTHER host genuinely passes through the third — its grants are in IndexedDB and come back
+     asynchronously, so it hands the chokepoint that READ (`safeFetchEgressStating`) and every request awaits
+     it, since a request answered inside that window would be refused with the policy's own word for "you did
+     not permit this", said to somebody who did. This process has no such window and no such store: a command
+     line is a sentence for ONE RUN, so "nobody has widened anything" is true here until `--explore` says
+     otherwise, and saying it SYNCHRONOUSLY is what makes the third field `null` here and the wait a
+     no-op — this host registers nothing because it has nothing to wait for. Saying it at all is also what
+     makes every `--explore` below an ADDITION to a table that exists rather than the first write to one
      that does not.
      IT IS BEFORE THE LOOP AND NOT INSIDE IT, because a run with no `--explore` reaches the network exactly as
      one with three does, and a table stated only on the arm that carries a flag would leave the commonest

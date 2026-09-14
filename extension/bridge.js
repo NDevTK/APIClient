@@ -1017,6 +1017,29 @@ function egressPolicyReady() {
   })();
   return _egressPolicyStated;
 }
+/* AND IT IS KICKED AND HANDED TO THE CHOKEPOINT AT THIS ZONE'S OWN LOAD, WHICH IS WHERE "WHEN IT IS SPOKEN"
+   BELONGS. The table is a fact about this ZONE and about this PERSON, restored once for the life of the
+   document; it was being read when a DOCUMENT arrived, which is a per-document event, and a zone-lifetime
+   fact restored at a per-document event is only ever as early as the first document.
+   IT WAS NOT EARLY ENOUGH, AND THAT IS MEASURED RATHER THAN FEARED. This zone has two entries into work that
+   can spend the network: the engine, behind `astDispatch`, and the PASSIVE-LEARNING arm — a captured
+   response body reaching `handleResponseBody`, whose automatic discovery sweep composes a `derived` data GET
+   and asks the chokepoint directly. The second never passes this function, and it does not merely sometimes
+   win the race: `intercept.js` is a `document_start` content script while `content.js`, which sends the only
+   message that reaches `astDispatch`, is `document_idle` — so on any page whose bundle fetches while it
+   loads, the door that ASKS runs strictly before the door that STATED. Four mirrored production SPAs aborted
+   on it, as the first line of the run.
+   SO THE PROMISE GOES TO THE CHOKEPOINT AND NOT TO A SECOND DOOR. Teaching `handleResponseBody` to await
+   this would fix the arm that was measured and leave the next one to be found the same way; `safeFetch`
+   awaits it instead, which is every asker this zone has by construction. What stays HERE is what this file
+   has always owned and the chokepoint cannot have — WHERE the person's standing sentence is kept, and WHEN
+   the read starts — and starting it at load is the earliest this zone can speak at all. */
+DCHECK(typeof self.safeFetchEgressStating === "function",
+       "this zone has no `safeFetchEgressStating` to hand its egress-policy read to — ast-worker.html loads " +
+       "lib/safe-fetch.js ahead of this file precisely so that the chokepoint exists before the host that " +
+       "feeds it, and without the registration every request would race the restore and be refused with a " +
+       "row of the person's own control they never ticked");
+self.safeFetchEgressStating(egressPolicyReady());
 /* THE WRITE-BACK, TAKEN OFF THE TABLE RATHER THAN OFF THE MESSAGE THAT CHANGED IT — so a grant the
    chokepoint REFUSED cannot be persisted as one it accepted, and the two can never drift. */
 function egressPolicyPersist() {
@@ -6664,18 +6687,22 @@ async function hostClear() {
 
 self.astDispatch = async function astDispatch(msg) {
   try {
-    /* THE PERSON'S STANDING EGRESS SENTENCE IS RESTORED HERE, BEFORE ANYTHING BELOW CAN ASK FOR IT — and
-       this line is the whole of why `_firingRefusal`'s stated-table assert cannot fire. The chokepoint reads
-       its widening table ONLY for a `forced` request; only an ENGINE composes `forced`; and every engine in
-       this zone is created behind this function (the waiting-document queue, the declared-route seed and the
-       cold rehydration all run inside the host loop, which nothing kicks until a document arrives here). So
-       stating it at this one door closes the window by construction rather than by a race that usually goes
-       the right way — and the alternative it replaces is the one this project keeps naming as the worst
-       outcome: a request refused `blocked-signal:<row>` because the policy had not been READ yet, naming a
-       row of the person's own control in words they cannot tell from a permission they never made.
-       IT IS AWAITED FOR EVERY TYPE AND NOT ONLY THE ONE THAT RUNS A DOCUMENT, because which types can reach
-       a fetch is a question about the rest of this function and a premise stated here would go stale inside
-       it. It is one memoized IndexedDB read for the life of this document. */
+    /* THE PERSON'S STANDING EGRESS SENTENCE IS AWAITED HERE BECAUSE THE ARMS BELOW READ THE TABLE
+       SYNCHRONOUSLY, WHICH IS A DIFFERENT REASON FROM THE ONE THAT USED TO STAND HERE. `AST_EGRESS_POLICY`
+       answers a person at a surface through `safeFetchWiden` / `safeFetchPermit` / `safeFetchPermitted` /
+       `safeFetchEgressTable` / `safeFetchWidenedOrigins`, and every one of those is a `CHECK` on the table
+       having been stated — fatal in release too. None of them is a fetch, so none of them is behind the
+       chokepoint's own wait, and this is the only place they can be put behind it.
+       WHAT IT IS NO LONGER IS THE THING THAT KEEPS `_firingRefusal`'s ASSERT QUIET. That is `safeFetch`'s
+       wait on the promise this file registers at load, and the argument that used to stand here is recorded
+       at the assert rather than repeated: it held that the table is read only for a `forced` request, that
+       only an engine composes one, and that every engine is created behind this function — and the first
+       clause was false, so a `derived` data GET from this zone's passive-learning arm reached the assert
+       without passing here at all.
+       IT IS AWAITED FOR EVERY TYPE AND NOT ONLY THE ONE THAT NEEDS IT, because which types reach a
+       synchronous table read is a question about the rest of this function and a premise stated here would
+       go stale inside it. It is the same memoized read the registration at load already started, so by the
+       time any message arrives this is a settled promise and costs a microtask. */
     await egressPolicyReady();
     /* TWO TYPES, AND A THIRD IS AN UNBUILT CAPABILITY THAT SAYS SO. This entry used to answer every type but
        one with `{success:false, error:"unknown type"}`, and the senders wrapped their calls in catches — so
