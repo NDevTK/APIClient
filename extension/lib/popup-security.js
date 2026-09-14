@@ -1315,6 +1315,59 @@ window.addEventListener("message", function (e) {
    value — absent, unknown, or forged — renders as a non-delivery with the token shown. A hostile payload can
    therefore weaken its own report and can never manufacture a fire: the fire verdict is decided in the
    trusted zone against browser-stated facts, never here. */
+/* THE MISS ARMS ARE A TABLE, AND ITS KEYS ARE WHAT THE UNKNOWN-TOKEN LINE ENUMERATES. A ladder stood here
+   whose `else` spelled the vocabulary out in prose — "poc-sandbox.html answers delivered / no-navigable /
+   threw for every run, so this is that contract broken — or a payload that posted its own POC_RAN" — and that
+   file answers FOUR. `unstated` is the fourth, and it is there deliberately, with its own paragraph:
+   `undefined` is not a delivery outcome, it is the sandbox stating that the pocJs it was handed is no longer
+   an expression whose value says what happened, and it crosses "as `unstated` rather than being folded into
+   either real answer, so a delivery arm that grows a second statement shows up as a NAMED contract gap on the
+   card instead of as an engine bug". The `else` folded it straight back — into broken-contract-or-forgery,
+   which sends a reader to suspect the relay or the page when the thing to open is offscreen-brain.js's
+   `buildLiveDelivery`. Two states, one arm, opposite work, on the one surface CLAUDE.md defines as ENGINE
+   AGREEMENT — and the stale half was a CLAIM ABOUT ANOTHER FILE that nobody re-read.
+   SO THE ENUMERATION IS THE TABLE AND NOT A SENTENCE. The unknown-token line names these keys, so the list a
+   reader is shown cannot drift from the list this view dispatches on, and this paragraph needs no standing
+   warning to stay true.
+   A `Map` AND NOT AN OBJECT LITERAL, because `d.outcome` crosses from the frame that EVALS the payload: a
+   payload posting `outcome:"constructor"` indexes an object literal straight onto Object.prototype and gets a
+   FUNCTION back, which is the `(constructor)`-where-a-type-belongs hazard CLAUDE.md records for foreign bytes.
+   A Map has no prototype chain to reach. STILL NO DCHECK ON THE TOKEN, for the reason stated above this
+   function: asserting a vocabulary a page can write hands that page an abort of the popup. */
+var _DELIVERY_MISS = new Map([
+  // VALIDATED, NOT DEFAULTED, and the difference is which side of the seam this is. Everything on a POC_RAN
+  // arrives from the frame that EVALS the payload, so these are checked the way offscreen-brain.js's
+  // `_recordProbeHit` checks a relayed hit — by TYPE, with the miss named — rather than asserted the way a
+  // producer's own record is. A `||` here would read to the next person as a defaulted contract field.
+  ["threw", function (d) {
+    return "NOT DELIVERED — the delivery threw in the attacker sandbox before any navigation "
+      + "happened (" + (typeof d.error === "string" && d.error ? d.error : "the sandbox stated no message")
+      + "), so no document was ever handed the payload. This is a "
+      + "result about the HARNESS: it is NOT an engine-fidelity divergence, and NOT a statement that the sink "
+      + "is safe. The finding stands — the engine fire-verified this breakout.";
+  }],
+  ["no-navigable", function () {
+    return "NOT DELIVERED — window.open created no navigable, so no document was ever handed the "
+      + "payload. HTML §7.2.2.1 “Opening and closing windows” step 14 returns null exactly when the user agent "
+      + "creates none, which is what a popup blocker is: allow popups for this extension and run it again. "
+      + "This is a result about the HARNESS — NOT an engine-fidelity divergence, and NOT a statement that the "
+      + "sink is safe. The finding stands.";
+  }],
+  // THE ARM THE PROSE ABOVE WAS WRITTEN FOR. `unstated` is the sandbox's own statement that the delivery it
+  // evaluated no longer ANSWERS — poc-sandbox.html reads the completion value of `pocJs` as HTML §7.2.2.1's
+  // window open steps result, which is only a value while that pocJs stays ONE ExpressionStatement. So this
+  // names the file and the function to open, because that is the whole remedy and no part of it is here.
+  ["unstated", function () {
+    return "NOT DELIVERED — the delivery ran and the attacker sandbox could not read what it produced. "
+      + "poc-sandbox.html takes the completion value of the delivery expression as the result of "
+      + "HTML §7.2.2.1 “Opening and closing windows”’ window open steps, which it is only while that "
+      + "delivery is ONE expression statement — so this is offscreen-brain.js’s buildLiveDelivery having "
+      + "grown a second statement, and that function is the whole of what to read. This is a CONTRACT GAP "
+      + "in the harness, stated as one on purpose: it is NOT an engine-fidelity divergence, NOT a forged "
+      + "message, and NOT a statement that the sink is safe. The finding stands — the engine fire-verified "
+      + "this breakout.";
+  }],
+]);
 function _reportDelivery(d, ent) {
   var el = ent.resultEl;
   if (d.outcome === "delivered") {
@@ -1324,28 +1377,14 @@ function _reportDelivery(d, ent) {
     return;
   }
   el.className = "verify-result verify-miss";
-  if (d.outcome === "threw") {
-    // VALIDATED, NOT DEFAULTED, and the difference is which side of the seam this is. Everything on a POC_RAN
-    // arrives from the frame that EVALS the payload, so these are checked the way offscreen-brain.js's
-    // `_recordProbeHit` checks a relayed hit — by TYPE, with the miss named — rather than asserted the way a
-    // producer's own record is. A `||` here would read to the next person as a defaulted contract field.
-    el.textContent = "NOT DELIVERED — the delivery threw in the attacker sandbox before any navigation "
-      + "happened (" + (typeof d.error === "string" && d.error ? d.error : "the sandbox stated no message")
-      + "), so no document was ever handed the payload. This is a "
-      + "result about the HARNESS: it is NOT an engine-fidelity divergence, and NOT a statement that the sink "
-      + "is safe. The finding stands — the engine fire-verified this breakout.";
-  } else if (d.outcome === "no-navigable") {
-    el.textContent = "NOT DELIVERED — window.open created no navigable, so no document was ever handed the "
-      + "payload. HTML §7.2.2.1 “Opening and closing windows” step 14 returns null exactly when the user agent "
-      + "creates none, which is what a popup blocker is: allow popups for this extension and run it again. "
-      + "This is a result about the HARNESS — NOT an engine-fidelity divergence, and NOT a statement that the "
-      + "sink is safe. The finding stands.";
-  } else {
-    el.textContent = "NOT DELIVERED — the attacker sandbox did not state what its delivery produced (outcome="
-      + JSON.stringify(d.outcome) + "). poc-sandbox.html answers delivered / no-navigable / threw for every "
-      + "run, so this is that contract broken — or a payload that posted its own POC_RAN. Either way nothing "
-      + "here is evidence about the sink, and nothing here says anything about the engine's model.";
-  }
+  var miss = _DELIVERY_MISS.get(d.outcome);
+  if (miss) { el.textContent = miss(d); return; }
+  var known = ['"delivered"'];
+  _DELIVERY_MISS.forEach(function (_fn, k) { known.push(JSON.stringify(k)); });
+  el.textContent = "NOT DELIVERED — the attacker sandbox stated an outcome this view does not know (outcome="
+    + JSON.stringify(d.outcome) + "). poc-sandbox.html answers " + known.join(" / ") + " for every run, so "
+    + "this is that contract broken — or a payload that posted its own POC_RAN. Either way nothing "
+    + "here is evidence about the sink, and nothing here says anything about the engine's model.";
 }
 async function _handleVerify(btn) {
   // THE PROBE IS THIS VIEW'S OWN JSON, so a parse failure here is this file disagreeing with itself — never a
