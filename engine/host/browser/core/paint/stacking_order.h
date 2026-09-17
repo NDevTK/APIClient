@@ -7,11 +7,32 @@
  * in as many words that it defines the CSS 2.1 painting order in more detail than the rest of the
  * specification does. THAT SENTENCE IS PARAPHRASED AND NOT QUOTED FOR A REASON WORTH THE LINE: it sits in
  * Appendix E's UN-NUMBERED preamble, whose only coordinate is a bare `§E`, and engine/citegen.mjs's
- * bare-section reader does not lex one — measured with a paired control, `§E` reads 0 citations while `§E.1`,
+ * SECTION-SIGN reader does not lex one — measured with a paired control, `§E` reads 0 citations while `§E.1`,
  * `§9.9` and `§B.2` each read 1 — so a quotation anchored there is judged against whichever section is
- * lexable ABOVE it and reported as wrong. The coordinate is right and the tool cannot see it; quoting under a
- * number that IS lexable would have been the actual defect. The thing Appendix E is a more detailed
- * description OF is §9.9.1's seven layers, and the two are not alternatives — §9.9.1 states the ORDER over
+ * lexable ABOVE it. The coordinate is right and the tool cannot see it; quoting under a
+ * number that IS lexable would have been the actual defect.
+ * IT IS THE SECTION-SIGN READER AND NOT THE BARE-NUMBER ONE, WHICH THIS COMMENT NAMED UNTIL THE TRADE WAS
+ * PRICED: the bare-number reader lookbehind excludes any run a section sign introduces, so it never sees this
+ * shape at all, and loosening the SECTION-SIGN reader letter branch — its numeric group from one-or-more to
+ * zero-or-more — is what flips the control from zero to one. The clause is worth naming correctly because a
+ * repair is written against a clause, and these two carry different letter RANGES as well as different
+ * quantifiers, so a letter outside the section-sign reader range needs a second, separately-argued change.
+ * AND THE RED IS SELF-REPAIRING, WHICH `reported as wrong` OVERSTATED: the corpus DOES index the preamble
+ * under the lone letter, so the finding row NAMES it — the accusation carries its own repair rather than
+ * sending a reader to a document nobody cited.
+ * THE LOOSENING WAS MEASURED AND DECLINED, so the next reader re-derives the TRADE and not the proposal. It
+ * admits seven-hundred-odd further runs over the audited set and buys ONE more resolved citation, because
+ * nearly every lone capital after a section sign here opens the name of a HEADING THIS TREE CROSS-REFERENCES
+ * — the design notes cite their own sections that way, in the hundreds — and each then becomes the nearest
+ * preceding citation for the prose beneath it. The headline IMPROVES while the instrument goes blind: the
+ * finding total falls, the quotations COMPARED fall further, and the unjudgeable band grows by far more than
+ * the resolved count gains. DERIVATION rather than the figures, which move as sites are written: run the
+ * auditor over its default set with that numeric group at one-or-more and again at zero-or-more, and read
+ * COMPARED and UNJUDGEABLE beside the finding total — never the total alone, which falls in BOTH the repair
+ * and the blinding direction. WHAT WOULD RETIRE THIS NOTE: a reader admitting a lone capital only where the
+ * file names a standard whose index holds that letter as a section, which separates the appendix coordinate
+ * from the heading cross-reference and makes the trade positive.
+ * THE THING APPENDIX E IS A MORE DETAILED DESCRIPTION OF is §9.9.1's seven layers, and the two are not alternatives — §9.9.1 states the ORDER over
  * boxes, and §E.2 states, inside each of those layers, WHICH INK goes down in which sequence (a background
  * colour, then a background image, then a border; a table's six background levels; a line box's underline,
  * text and
