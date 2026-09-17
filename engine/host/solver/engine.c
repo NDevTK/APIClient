@@ -6890,6 +6890,31 @@ static void engine_queue_into(Flow *f, uint32_t doc, DynBody *body, DynKind kind
            to say. This is the half of the pair §7.5.10's removal walk in flow.c names as its twin; both went
            in the diff that built row identity. */
     }
+    /* AND THE ROW HAS TO BE SOMEWHERE THIS FLOW CAN STILL REACH, WHICH IS THE HALF NOTHING WAS SAYING. Every
+       other statement about the cursor in this engine is made where the cursor MOVES; this is the one made
+       where a program is QUEUED, and it is the only one that can name the program that is about to be lost.
+       A row at a slot BELOW the cursor is never compiled — flow_step's ladder is `script_i < dyn_n` and walks
+       forward only — and flow_programs_unstarted_for_document does not count it either, because it selects
+       `k >= script_i`, so HTML §7.5.10 "Destroying documents" step 7 reads zero tasks to remove for a row
+       that is unstarted. The program does not fail, throw, or appear anywhere: it is written into the column
+       and nothing ever looks at that slot again.
+       IT IS ASKED OF THE FLOW BEING QUEUED INTO AND NOT OF THE RUNNING ONE, which is the whole reason it
+       belongs here rather than beside the cursor. engine_perform appends a cross-agent operation to EVERY
+       LIVE TIMELINE, so one call queues into flows that will not be stepped for a long time and may never be
+       stepped again — and a cursor-side check speaks only for whichever flow next advances. This speaks for
+       each of them, at the instant its row is written.
+       ITS TWO SIDES CANNOT BE THE SAME FACT ASKED TWICE, which is what makes it a check rather than a
+       restatement: the IMMEDIATE arm above derives `at` FROM the cursor (and its own CHECK bounds it against
+       `dyn_n`), while an APPEND takes `dyn_n` and consults the cursor nowhere at all. The append is the
+       shape that can be behind it, and the append is the shape no line was asking about. */
+    DCHECKF(at >= f->script_i,
+            "a program was queued into slot %d of a flow whose cursor already stands at %d — the queue walks "
+            "FORWARD from the cursor, so this row is behind everything this flow will ever look at: it will "
+            "not be compiled, it will not be run, and flow_programs_unstarted_for_document will not count it "
+            "as unstarted either, because that count selects `k >= script_i`. Nothing anywhere will say a "
+            "program was lost. The defect is not here — it is whatever advanced this flow's cursor past "
+            "`dyn_n`, which ENGINE_LEAVE_ROW is the one place that can",
+            at, f->script_i);
     if (at < f->dyn_n) {
         size_t tail = (size_t)(f->dyn_n - at);
         memmove(&f->dyn[at + 1],       &f->dyn[at],       tail * sizeof(DynBody *));
@@ -8237,6 +8262,26 @@ static long g_finished_flows, g_finished_cands;
    get" is nothing but that. So quote this row with the LENGTH of its census series beside it, or not at all,
    and never as a claim about what the engine CAN reach. */
 static int  g_deepest = -1;
+/* AND THE ROW THE CURSOR IS ACTUALLY ONE PAST, WHICH IS NOT THAT ONE AND WAS BEING READ AS IT. `g_deepest`
+   is the deepest program any flow STARTED; this is the deepest ROW of its sequence any flow has LEFT. They
+   are the same number on a document every one of whose rows runs, and they come apart the moment a row is
+   LEGITIMATELY SKIPPED — HTML §4.12.1.1 "Processing model"'s "execute the script element" step 4, "If el's
+   result is null, then fire an event named error at el, and return", which is a row the cursor passes and
+   the compile never sees. A failed external <script src> is therefore not an error state at all, and there
+   are two of them: a document script's row converted in place, and an injected one's row appended by its own
+   failed reply.
+   THE SPLIT IS FORCED AND MERGING THEM COSTS A DIAGNOSIS IN WHICHEVER DIRECTION IT IS MADE. Raising
+   `g_deepest` for a skipped row would report this document as having STARTED a program it never started,
+   which is the one reading engine.h argues that number exists to make checkable; leaving the cursor
+   identity to be asserted against `g_deepest` charges every correct skip as a defect, which is what it did.
+   §AN-INVARIANT-OVER-A-GATED-OPERATION names the shape: step 4 is an arm that legitimately DECLINES to run
+   a program, so an invariant over the cursor censuses the ASK — the flow reached this row and is leaving it
+   — and never the OUTCOME, which is whether a program started. This is that ask.
+   RAISED AT THE ONE LINE A CURSOR MOVES, so it cannot be forgotten by a site added later: see
+   ENGINE_LEAVE_ROW. A FORK does not raise it and must not — `flow_fork`'s `sib->script_i = parent->script_i`
+   copies a position the PARENT already reached and already recorded, so a sibling born at that cursor has
+   left nothing of its own. */
+static int  g_deepest_left = -1;
 /* AND THE OTHER END OF THE SAME PROGRAM — the highest index this document has ever run to COMPLETION. It is a
    separate fact from `g_deepest` and the difference between them is the whole diagnosis, which is exactly why
    one number could not carry both: `deepest 1` says a flow STARTED the second <script>, and it was read — in
@@ -8248,6 +8293,35 @@ static int  g_deepest = -1;
    `deepest` alone cannot say that, because a flow that starts program i proves only that SOME flow completed
    i-1, and says nothing about how many programs the document has left to run. */
 static int  g_completed = -1;
+
+/* THE FLOW LEAVES THE ROW AT ITS CURSOR — the ONE spelling of a cursor advance, and the only one. It is a
+   MACRO EXPANDED AT EACH SITE and never a function called from them, for §AN-ASSERT-THAT-NAMES-A-REMEDY-BUT-
+   NOT-A-SITE's reason exactly: the invariant is over a TRANSITION, so a `@WHY` that named this line would
+   name an action with no object for all five of the places a cursor moves, and the reader would be sent to
+   read every one of them.
+ *
+ * IT ASSERTS THE ROW BEING LEFT EXISTS, WHICH IS THE SAME CLAIM THE TWO COMPLETION SITES USED TO MAKE AFTER
+ * THE FACT AND THE OTHER THREE MADE NOWHERE. `script_i < dyn_n` before the move and `script_i <= dyn_n`
+ * after it are the identical inequality, and asking it BEFORE is what lets the message name the row rather
+ * than the arithmetic — and what extends it from two sites to five, which was never a decision anybody made:
+ * the three arms inside the `script_i < dyn_n` ladder were safe BY POSITION, and a position is not a check.
+ *
+ * AND IT RAISES `g_deepest_left`, because the ask and the advance are one event and an engine that recorded
+ * them at two lines would have a site that moved a cursor without saying so. See that declaration for why
+ * this is a second fact and not a second spelling of `g_deepest`. */
+#define ENGINE_LEAVE_ROW(f) do {                                                                          \
+        Flow *leave_f_ = (f);                                                                             \
+        DCHECK(leave_f_->script_i < leave_f_->dyn_n,                                                      \
+               "a flow is leaving a row its own program queue does not have — the cursor names the row "   \
+               "the flow is AT, so a flow with no row there has nothing to leave. flow.c's "               \
+               "flow_programs_unstarted_for_document states the contract this breaks (\"between two "      \
+               "programs the cursor stands one past the last started row\"), and a cursor beyond `dyn_n` " \
+               "is ahead of the slot every APPEND takes: the next program queued onto this flow lands at "  \
+               "`dyn_n`, which this cursor has already passed, and is never run and never counted as "     \
+               "unstarted. The completion that moved it was not a row of the sequence");                   \
+        if (leave_f_->script_i > g_deepest_left) g_deepest_left = leave_f_->script_i;                      \
+        leave_f_->script_i++;                                                                              \
+    } while (0)
 /* AND THE COUNTS THOSE TWO MAXIMA CANNOT CARRY, WRITTEN AT THE SAME LINE THEY ARE. `deepest` and `completed`
    are MAXIMA over cursors — one member at program 5 and every member at program 5 read the same — so neither
    can say HOW MANY starts a run has performed, nor whose. These are that count, partitioned by the KIND of the
@@ -8830,7 +8904,11 @@ static int flow_step(JSContext *ctx, Flow *f) {
                        ordinary row of this same sequence. */
                     html_script_queue_error(doc_realm(f->dyn_doc[f->script_i]), f->dyn_el[f->script_i]);
                     g_step_unit = STEP_UNIT_SCRIPT_LOAD_FAILED;
-                    f->script_i++;
+                    /* AND THIS IS THE ONE ARM OF THE FIVE THAT LEAVES A ROW NO COMPILE EVER SAW, which is
+                       why `g_deepest_left` exists and is raised here rather than at the compile: step 4 ran
+                       this row's whole algorithm and started nothing, so the document has REACHED index
+                       `script_i` and STARTED nothing at it. See g_deepest_left. */
+                    ENGINE_LEAVE_ROW(f);
                     return 0;
                 }
                 /* AND A ROW THAT REACHES THE COMPILE HOLDS A PROGRAM, not an address. TWO branches above are
@@ -9665,7 +9743,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    candidates, or a page whose modules do not parse — and the work that answers it is at the
                    compile, never at the scheduler. */
                 g_step_unit = STEP_UNIT_NO_COMPILE;
-                f->script_i++;
+                ENGINE_LEAVE_ROW(f);
                 return 0;
             }
             /* A MODULE HAS ALREADY RUN AS FAR AS IT GOES IN THIS UNIT, so this entry is finished here and the
@@ -9682,7 +9760,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                completes. Two arms, two shapes of frontier. */
             if (stype == SCRIPT_TYPE_MODULE) {
                 g_step_unit = STEP_UNIT_EVALUATE_MODULE;
-                f->script_i++;
+                ENGINE_LEAVE_ROW(f);
                 return 0;
             }
         }
@@ -9926,15 +10004,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    because the day a CALL detaches, an unconditional advance is the tail's defect reproduced at
                    a site nobody would think to look at. */
                 if (f->reporting || !is_call) {
-                    f->script_i++;
-                    DCHECK(f->script_i <= f->dyn_n,
-                           "a flow's cursor advanced past the end of its own program queue — flow.c's "
-                           "flow_programs_unstarted_for_document states the contract this breaks (\"between "
-                           "two programs the cursor stands one past the last started row\"), so a cursor "
-                           "beyond `dyn_n` is ahead of the slot every APPEND takes: the next program queued "
-                           "onto this flow lands at `dyn_n`, which this cursor has already passed, and is "
-                           "never run and never counted as unstarted. The completion that moved it was not a "
-                           "row of the sequence");
+                    ENGINE_LEAVE_ROW(f);
                 }
                 /* AND A MODELLED CLOSE REQUEST CANNOT REACH THIS EXIT AT ALL. A detaching base is a
                    MODULE body handing its continuation to an awaited promise, and §6.10.1's task is a
@@ -10074,14 +10144,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
            is what tells the ONE call frame that IS this row's remaining work (§8.1.4.4 step 8's report) from
            the one that is somebody else's. */
         if (f->reporting || !is_call) {
-            f->script_i++;
-            DCHECK(f->script_i <= f->dyn_n,
-                   "a flow's cursor advanced past the end of its own program queue — flow.c's "
-                   "flow_programs_unstarted_for_document states the contract this breaks (\"between two "
-                   "programs the cursor stands one past the last started row\"), so a cursor beyond `dyn_n` is "
-                   "ahead of the slot every APPEND takes: the next program queued onto this flow lands at "
-                   "`dyn_n`, which this cursor has already passed, and is never run and never counted as "
-                   "unstarted. The completion that moved it was not a row of the sequence");
+            ENGINE_LEAVE_ROW(f);
         }
         f->reporting = 0;
         f->frame = NULL;
@@ -12276,6 +12339,7 @@ void engine_frontier_census(EngineFrontierCensus *out)
     out->forks             = decide_fork_total();
     out->deepest           = g_deepest;
     out->completed         = g_completed;
+    out->deepest_left      = g_deepest_left;
     /* THE SEED LENGTH `deepest` AND `completed` ARE READ AGAINST — see EngineFrontierCensus. It is read from
        the SESSION'S table rather than from any flow's `dyn_n`, because a flow's sequence is the seed followed
        by whatever that timeline queued, so per-flow it is a different number per arm and none of them is the

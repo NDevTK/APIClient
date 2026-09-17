@@ -1463,6 +1463,20 @@ typedef struct {
        which is a question about the schedule and not about the document's coverage. */
     int  deepest;           /* highest program this document has STARTED */
     int  completed;         /* highest program it has run to its END */
+    /* AND THE ROW THE CURSOR HISTOGRAM IS ONE PAST, WHICH IS NEITHER OF THOSE TWO. `deepest` is the deepest
+     * program STARTED and this is the deepest ROW any flow has LEFT, started or not. The gap between them is
+     * the one thing the three rows together can say and no two of them can: `deepest -1 / deepestLeft 0`
+     * is a document that reached its first <script> and ran nothing at it, which on a page whose external
+     * scripts 404 is the ordinary state and not an error. HTML §4.12.1.1 "Processing model"'s "execute the
+     * script element" step 4 is that arm — "If el's result is null, then fire an event named error at el,
+     * and return" — a row the cursor passes and the compile never sees, so the two numbers COME APART by
+     * design and a reader who took `deepest` for how far the document got was reading past every skip.
+     * IT IS WHAT THE `programCursors` IDENTITY IS ASSERTED AGAINST, in solver/result.c, and it is the only
+     * one of the three that can be: the cursor moves for a row LEFT and `deepest` moves for a program
+     * STARTED, so asserting the histogram against `deepest` charged every correct skip as a defect. See
+     * solver/cold.h, which declares the identity, and engine.c's g_deepest_left for why merging the two
+     * costs a diagnosis in whichever direction it is merged. */
+    int  deepest_left;      /* highest row of its sequence any flow has LEFT — started or skipped */
     /* AND THE DENOMINATOR THOSE TWO ARE READ AGAINST, WHICH IS THE ONE NUMBER NEITHER CARRIES AND NOTHING
      * ELSE ON THIS LINE SUPPLIES. `deepest 7` says some flow started the eighth program; whether that is the
      * WHOLE of a document or a third of it is not derivable from any other row. The cursor histogram's extent

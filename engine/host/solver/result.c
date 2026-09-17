@@ -1693,20 +1693,33 @@ char *result_cold_json(void) {
        restatement of the partition above: that one asks whether the walk saw every member, and this asks
        whether where they are standing is consistent with how far the document has got.
        THE DERIVATION, so a reader can check it rather than obey it. A cursor of `c` above zero means the
-       member LEFT the program at `c - 1`; every site that advances the cursor is downstream of engine.c's
-       compile block, which raises `deepest` to the index it is about to start before it starts it; therefore
-       `deepest >= c - 1` for every standing member, and the histogram's top index is at most `deepest + 1`.
-       An empty frontier satisfies it too — cold.c gives it the one row 0 and `deepest` is -1.
+       member LEFT the row at `c - 1`; every site that advances a cursor is engine.c's ENGINE_LEAVE_ROW, which
+       raises `deepestLeft` to the row it is about to leave before it leaves it; therefore
+       `deepestLeft >= c - 1` for every standing member, and the histogram's top index is at most
+       `deepestLeft + 1`. An empty frontier satisfies it too — cold.c gives it the one row 0 and
+       `deepestLeft` is -1.
+       IT IS ASSERTED AGAINST `deepestLeft` AND NOT AGAINST `deepest`, AND THAT USED TO BE THE OTHER WAY
+       ROUND. The old derivation said every cursor advance is downstream of the compile block, which raises
+       `deepest` to the index it is about to START. That is false of ONE arm and the arm is not an error
+       state: HTML §4.12.1.1 "Processing model"'s "execute the script element" step 4 — "If el's result is
+       null, then fire an event named error at el, and return" — is a row whose program never existed, so the
+       cursor passes it and `deepest` is never raised for it. A single external `<script src>` that 404s
+       therefore left a member standing at cursor 1 with `deepest` at -1, and this line charged it as a
+       defect. `deepest` is the deepest program STARTED and the cursor is one past the deepest row LEFT, and
+       those are two facts (solver/engine.h): the identity holds of the second and never held of the first.
        WHAT A BREAK MEANS AND WHAT IT DOES NOT. It is one of exactly two things, and neither of them is this
-       histogram being too narrow: a cursor advanced past a program nothing started, or a start that did not
-       raise `deepest`. Both are in engine.c and both make every reading of "has the mass advanced" a statement
-       about a document this run did not execute. Do not widen anything here to accommodate it — the width is
-       measured from the members and is not a choice this file makes. */
-    DCHECK(c.program_cursor_n - 1 <= e.deepest + 1,
-           "the frontier's deepest STANDING cursor is more than one past the deepest program this document has "
-           "ever STARTED — a cursor is one-past-the-program-it-left, so those two numbers are the same fact "
-           "read twice and a member cannot stand beyond a program nothing began. Either the cursor advanced "
-           "for something that was not a started program, or a program started without raising `deepest`");
+       histogram being too narrow: a cursor advanced somewhere other than ENGINE_LEAVE_ROW, or that macro
+       moved a cursor without raising the row it left. Both are in engine.c and both make every reading of
+       "has the mass advanced" a statement about a document this run did not execute. Do not widen anything
+       here to accommodate it — the width is measured from the members and is not a choice this file makes,
+       and widening it to `deepest` is exactly what was wrong with it. */
+    DCHECK(c.program_cursor_n - 1 <= e.deepest_left + 1,
+           "the frontier's deepest STANDING cursor is more than one past the deepest row this document has "
+           "ever LEFT — a cursor is one-past-the-row-it-left, so those two numbers are the same fact read "
+           "twice and a member cannot stand beyond a row nothing reached. Either a cursor advanced somewhere "
+           "other than engine.c's ENGINE_LEAVE_ROW, or that macro moved one without raising `deepestLeft`. "
+           "This is NOT `deepest`: a row HTML §4.12.1.1's step 4 skipped is left without being started, so a "
+           "failed external script legitimately puts a cursor one past a program that never began");
     /* THE REPLY DOOR'S PAIR DESCRIBES ONE POPULATION, said here for the reason engine.c says it of the
        synchronous door's: this is a RATE, and a rate whose numerator can exceed its denominator is two counts
        that have stopped being about the same thing. It holds by construction — pending_index_key DCHECKs a
@@ -1797,7 +1810,7 @@ char *result_cold_json(void) {
     out = composef(
                  "{\"live\":%ld,\"framed\":%ld,\"blocked\":%ld,\"owed\":%d,"
                  "\"finished\":%ld,\"finishedFlows\":%ld,\"finishedCands\":%ld,"
-                 "\"deepest\":%d,\"completed\":%d,"
+                 "\"deepest\":%d,\"completed\":%d,\"deepestLeft\":%d,"
                  /* AND THE NUMBER THOSE TWO MAXIMA ARE READ AGAINST, without which "deepest 7" is equally
                     "this document has eight programs and a flow ran them all" and "it has far more and
                     nothing reached them" — two readings that take opposite work and that no other row on
@@ -1906,7 +1919,7 @@ char *result_cold_json(void) {
                  "\"stepUnits\":%s,\"programCursors\":%s}",
                  c.flows, c.framed, c.blocked, flow_host_owed_count(),
                  e.finished, e.finished_flows, e.finished_cands,
-                 e.deepest, e.completed,
+                 e.deepest, e.completed, e.deepest_left,
                  e.root_programs,
                  e.root_programs_held_at_seed, e.root_programs_awaited_at_seed,
                  e.prog_starts, e.prog_starts_cand, e.prog_starts_other, e.prog_queued_cand,

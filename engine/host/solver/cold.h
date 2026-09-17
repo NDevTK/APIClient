@@ -62,10 +62,22 @@ typedef struct {
        look like an instrument contradicting the maximum beside it. It is not: on a document of eleven programs,
        `deepest 10 / completed 10` and a bucket at 11 are the SAME statement made twice.
        THE IDENTITY THAT SAYS SO IS ASSERTED, at solver/result.c where this census and the frontier census are
-       in one hand: every live member's cursor is at most `deepest + 1`. A cursor of `c` above zero means the
-       member left the program at `c - 1`, and a program is only left after engine.c has STARTED it at the one
-       line that raises `deepest` — so `deepest >= c - 1` for every standing member, and a width above
-       `deepest + 2` is the two rows describing different runs.
+       in one hand: every live member's cursor is at most `deepestLeft + 1`. A cursor of `c` above zero means
+       the member LEFT the row at `c - 1`, and a row is left at exactly one line — engine.c's
+       ENGINE_LEAVE_ROW, which raises `deepestLeft` to the row it is about to leave — so
+       `deepestLeft >= c - 1` for every standing member, and a width above `deepestLeft + 2` is the two rows
+       describing different runs.
+       IT IS `deepestLeft` AND NOT `deepest`, AND THIS BLOCK SAID `deepest` FOR AS LONG AS IT STOOD. The
+       sentence above used to read "a program is only left after engine.c has STARTED it at the one line that
+       raises `deepest`", and that premise is FALSE of one arm — which is not an error state and is not rare.
+       HTML §4.12.1.1 "Processing model"'s "execute the script element" step 4, "If el's result is null, then
+       fire an event named error at el, and return", is this engine's whole algorithm for a row whose external
+       fetch failed: the row keeps its §4.12.1 position, the cursor passes it, and no compile ever sees it. So
+       `deepest` is not raised, the derivation's inequality does not hold, and the assert charged a document
+       with one 404'd `<script src>` as a broken census. A MIRRORED page is where this is densest, because a
+       script whose origin was not mirrored is exactly a script that fails to load. `deepest` still means the
+       deepest program STARTED and is still the right thing to read against for coverage — it is simply not
+       what a cursor is one past, and those are two facts (solver/engine.h).
 
        IT IS THE ROW `deepest` AND `completed` STRUCTURALLY CANNOT CARRY, and those two are otherwise the whole
        of what this engine says about a frontier's progress THROUGH its programs. Both are GLOBAL MAXIMA over
