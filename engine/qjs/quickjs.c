@@ -13549,16 +13549,68 @@ static JSValue js_absent_ask(JSContext *ctx, JSValueConst obj, JSAtom prop)
    an IDENTIFIER's — §12.7 Names and Keywords gives no IdentifierStart that is a decimal digit, so it is
    neither a symbol nor the canonical numeric string §6.1.7 The Object Type makes a tagged integer atom of.
    A filter here would silently drop a route that should never exist; the assert names it. */
-static void js_absent_note_unresolved(JSContext *ctx, JSAtom prop)
+static void js_absent_note_unresolved(JSContext *ctx, JSAtom prop, JSConcolicAbsentOp op)
 {
     if (likely(g_concolic.absent_unresolved == NULL))
         return;
-    DCHECK(JS_AtomIsPublishedName(ctx->rt, prop),
-           "a `typeof` on an unresolvable name reached the injected-state channel with a key the channel "
-           "cannot NAME — this arm is entered only from OP_get_var_undef, whose atom is an identifier's and "
-           "therefore a string atom by the grammar, so a symbol or an index here is an opcode routed to the "
-           "typeof arm that is not a typeof");
-    g_concolic.absent_unresolved(ctx, prop);
+    /* THE KEY RULE IS PER OPERATOR AND THE TWO ARMS ARE NOT ONE RULE WITH TWO SPELLINGS. What is shared — the
+       hook being installed, and the census this speaks to — stays in ONE function for the reason the paragraph
+       above gives; what is NOT shared is who chose the key, and that is the difference between an assert and a
+       filter rather than a matter of strictness. CLAUDE.md §WHOSE-BYTES-STATE-THE-VALUE: a DCHECK may only ever
+       stand on a value this codebase computed, and exactly one of these two keys is one. */
+    if (op == JS_CONCOLIC_ABSENT_IN) {
+        /* §13.10.1's key is `? ToPropertyKey(leftValue)`, which runs the PAGE's own @@toPrimitive over the
+           PAGE's own left operand, so it is input and not an invariant: `Symbol.iterator in window` is a line
+           any bundle may write and a symbol here is that line arriving, never a routing defect. Filtered, it
+           leaves the census counting what it can NAME — which is what its own denominator says it counts —
+           and the operator's answer is untouched either way. Asserted, it would be a page-held abort switch
+           for the whole engine, reached from a feature detect. */
+        if (!JS_AtomIsPublishedName(ctx->rt, prop))
+            return;
+    } else {
+        DCHECK(JS_AtomIsPublishedName(ctx->rt, prop),
+               "a `typeof` on an unresolvable name reached the injected-state channel with a key the channel "
+               "cannot NAME — this arm is entered only from OP_get_var_undef, whose atom is an identifier's and "
+               "therefore a string atom by the grammar, so a symbol or an index here is an opcode routed to the "
+               "typeof arm that is not a typeof");
+    }
+    g_concolic.absent_unresolved(ctx, prop, op);
+}
+
+/* THE THIRD SPELLING OF ONE FEATURE DETECT, AND THE ONE THAT REACHES NEITHER OF THE OTHER TWO ARMS.
+   `window.EventSource` is a [[Get]] that misses the whole chain and asks js_absent_ask; `typeof EventSource`
+   is an unresolvable Reference the arm above records. `"EventSource" in window` is ECMAScript §13.10.1
+   "Runtime Semantics: Evaluation"'s `RelationalExpression : RelationalExpression in ShiftExpression`, whose
+   last step is "Return ? HasProperty(rightValue, ? ToPropertyKey(leftValue))" — §7.3.11
+   "HasProperty ( obj, propertyKey )", which performs no [[Get]] anywhere in it — so it reaches no read hook,
+   throws nothing, and answers `false` for a name a standard owns and this realm has none of. One question
+   about one name, asked three ways, and the census could see two of them.
+   IT IS RECORDED AT THE OPERATOR'S PLACEMENT AND NOT AT THE [[HasProperty]] MISS, which is the whole of why
+   this is a separate function rather than a line in the generic request. `gp_op = GP_HAS` on the global object
+   is ALSO what every identifier resolution issues — the with-machinery raises one for OP_get_var,
+   OP_get_var_undef, OP_put_var and the OP_with_* forms — so a recording site down there would count every
+   unresolved identifier a second time and the census's three-arm identity would fire on the first document.
+   The two are already told apart by the request's own `gp_outer_kind`: identifier resolution is CONT_WITH_HAS
+   and a bytecode operator is CONT_OP_KEYED, so `do_opkeyed_place` is a place identifier resolution cannot
+   reach. What the placement could NOT say by itself is WHICH operator, since `delete` arrives there with the
+   same pop, the same push and, in sloppy code, the same throw_on_false — which is what JSOpKeyed's `op` is.
+   `base` and `answer` are the operator's own operand and its own result, both BORROWED. */
+static void js_absent_note_in(JSContext *ctx, JSValueConst base, JSAtom prop, JSValueConst answer)
+{
+    /* THE NAME IS BOUND: not a miss, and nothing to say about it. Read through JS_ToBool rather than off the
+       tag because §10.5.7 step 8 hands a Proxy's `has` trap result through ToBoolean, so a trap anywhere on a
+       chain is free to have returned something else and the engine's own normalisation is the answer. */
+    if (JS_ToBool(ctx, answer))
+        return;
+    /* AND THE BASE DECIDES WHOSE MISS IT IS. The census's owed arm is about names a standard puts ON THE
+       GLOBAL OBJECT, so `"Node" in gon` is a field of an app record that happens to be spelled like an
+       interface and suppressing or counting it would be the same defect the read hook's own `is_global` test
+       exists to prevent. `window`, `self` and `globalThis` are all this one object, so all three spellings of
+       the receiver are covered by the pointer and none of them is named here. */
+    if (JS_VALUE_GET_TAG(base) != JS_TAG_OBJECT ||
+        JS_VALUE_GET_PTR(base) != JS_VALUE_GET_PTR(ctx->global_obj))
+        return;
+    js_absent_note_unresolved(ctx, prop, JS_CONCOLIC_ABSENT_IN);
 }
 
 /* THE INTERFACE'S OWN NAME, FOR AN ASSERT THAT WOULD OTHERWISE NAME A HUNDRED COMPONENTS AT ONCE.
@@ -27470,6 +27522,16 @@ static int js_proxy_setproto_invariant(JSContext *ctx, JSValueConst target, JSVa
                                   and dropped every C, bound or proxied trap back to a C drive. */
 typedef struct JSOpKeyed {
     JSAtom atom;          /* the ToPropertyKey'd key (owned) */
+    uint8_t op;           /* THE OPCODE THAT ASKED, as `opcode` itself and never as a per-consumer flag. It is
+                             JSWithHas's own `op` one record along and is set the same way, which is the point:
+                             "which opcode requested this continuation" already had a spelling in this file and a
+                             second right answer to one question is the shape that drifts. OP_invalid (0) is what
+                             js_mallocz leaves, so a creation site that forgets is a CRASH at the placement rather
+                             than a request that quietly claims to be opcode zero.
+                             WHAT READS IT: `in` is the only keyed operator whose miss is a FEATURE DETECT — a
+                             name a standard owns and this realm has none of, asked and answered false with no
+                             [[Get]] anywhere in it — and the placement cannot tell it from `delete` otherwise,
+                             since both arrive with pop 2, push 1 and (in sloppy code) throw_on_false 0. */
     uint8_t pop;          /* operands the answer replaces */
     uint8_t push;         /* 1 = the answer IS the operator's value; 0 = a WRITE, which yields none */
     uint8_t throw_on_false; /* `delete` in STRICT code: 13.5.1.2 step 6 turns a false [[Delete]] into a TypeError.
@@ -29250,6 +29312,7 @@ static JSOpKeyed *js_op_keyed_clone(JSContext *ctx, const JSOpKeyed *ok)
     if (unlikely(!n))
         return NULL;
     n->atom = JS_DupAtom(ctx, ok->atom);
+    n->op = ok->op;
     n->pop = ok->pop; n->push = ok->push; n->throw_on_false = ok->throw_on_false;
     return n;
 }
@@ -34551,6 +34614,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     ok = js_mallocz(ctx, sizeof(*ok));
                     if (unlikely(!ok)) { JS_ThrowOutOfMemory(ctx); goto exception; }
                     ok->atom = JS_DupAtom(ctx, atom); ok->pop = 1; ok->push = 1;
+                    ok->op = (uint8_t)opcode;
                     gp_obj = JS_MKPTR(JS_TAG_OBJECT, tramp_px); gp_atom = ok->atom;
                     gp_op = GP_GET; gp_val = JS_UNDEFINED;
                     gp_recv = obj; gp_no_throw = 0;   /* the RECEIVER stays the original base */
@@ -38558,6 +38622,26 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                    the throw, the same way JS_ToBoolFree(JS_EXCEPTION) lost it one level up. */
                 bool refused = !JS_IsException(ret_val) && ok->throw_on_false && !JS_ToBool(ctx, ret_val);
                 if (unlikely(refused)) JS_ThrowTypeErrorAtom(ctx, "could not delete property '%s'", ok->atom);
+                DCHECK(ok->op != OP_invalid,
+                       "a keyed operator's request reached its placement claiming no opcode — `op` is set from "
+                       "`opcode` at every site that mallocs a JSOpKeyed and js_mallocz leaves OP_invalid, so "
+                       "this is a creation site added without it. It is not a cosmetic gap: the `in` arm below "
+                       "is SELECTED by this field, so a request that forgets it is a feature detect that "
+                       "silently stops being counted — which is the one failure this whole surface exists to "
+                       "end, arriving through the record that identifies it");
+                /* `"X" in window` ON A NAME NOTHING BINDS — the third spelling of a feature detect, recorded
+                   here because this is the only point at which the operator, its base and its answer are all
+                   in one hand. See js_absent_note_in. It is read BEFORE the operands are freed two lines down,
+                   which is what the paragraph opening this block guarantees: the request's own arguments never
+                   touched this stack, so `sp[-1]` is still the object the operator was written with. */
+                if (unlikely(ok->op == OP_in) && !refused && !JS_IsException(ret_val)) {
+                    DCHECK(npop == 2,
+                           "the `in` operator's request reached its placement with a stack shape that is not "
+                           "`key obj` — OP_in declares pop 2 and the base it was written with is read off "
+                           "sp[-1] here, so a different shape means the answer would be judged against "
+                           "whatever else is under it rather than against the operator's own receiver");
+                    js_absent_note_in(ctx, sp[-1], ok->atom, ret_val);
+                }
                 JS_FreeAtom(ctx, ok->atom); js_free_rt(rt, ok);
                 cont_st = NULL;
                 if (unlikely(refused || JS_IsException(ret_val))) {
@@ -47093,6 +47177,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                         JSOpKeyed *ok = js_mallocz(ctx, sizeof(*ok));
                         if (unlikely(!ok)) {  JS_ThrowOutOfMemory(ctx); goto exception; }
                         ok->atom = JS_DupAtom(ctx, atom); ok->pop = 1; ok->push = 1;
+                        ok->op = (uint8_t)opcode;
                         gp_obj = JS_MKPTR(JS_TAG_OBJECT, tramp_px); gp_atom = ok->atom; gp_op = GP_GET; gp_val = JS_UNDEFINED;
                         gp_recv = obj; gp_no_throw = 0;   /* the RECEIVER stays the original object */
                         gp_outer = ok; gp_outer_kind = CONT_OP_KEYED;
@@ -47198,6 +47283,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                         JSOpKeyed *ok = js_mallocz(ctx, sizeof(*ok));
                         if (unlikely(!ok)) {  JS_ThrowOutOfMemory(ctx); goto exception; }
                         ok->atom = JS_DupAtom(ctx, atom); ok->pop = 0; ok->push = 1;
+                        ok->op = (uint8_t)opcode;
                         gp_obj = JS_MKPTR(JS_TAG_OBJECT, tramp_px); gp_atom = ok->atom; gp_op = GP_GET; gp_val = JS_UNDEFINED;
                         gp_recv = obj; gp_no_throw = 0;   /* the RECEIVER stays the original object */
                         gp_outer = ok; gp_outer_kind = CONT_OP_KEYED;
@@ -47297,6 +47383,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     ok = js_mallocz(ctx, sizeof(*ok));
                     if (unlikely(!ok)) { JS_ThrowOutOfMemory(ctx); goto exception; }
                     ok->atom = JS_DupAtom(ctx, atom); ok->pop = 2; ok->push = 0;
+                    ok->op = (uint8_t)opcode;
                     gp_obj = obj; gp_atom = ok->atom; gp_op = GP_SET; gp_val = sp[-1];
                     gp_recv = JS_UNINITIALIZED; gp_no_throw = !sf->is_strict_mode;
                     gp_outer = ok; gp_outer_kind = CONT_OP_KEYED;
@@ -47314,6 +47401,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     ok = js_mallocz(ctx, sizeof(*ok));
                     if (unlikely(!ok)) { JS_ThrowOutOfMemory(ctx); goto exception; }
                     ok->atom = JS_DupAtom(ctx, atom); ok->pop = 2; ok->push = 0;
+                    ok->op = (uint8_t)opcode;
                     gp_obj = JS_MKPTR(JS_TAG_OBJECT, tramp_px); gp_atom = ok->atom; gp_op = GP_SET; gp_val = sp[-1];
                     gp_recv = obj; gp_no_throw = !sf->is_strict_mode;   /* the RECEIVER stays the original object */
                     gp_outer = ok; gp_outer_kind = CONT_OP_KEYED;
@@ -47428,6 +47516,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 ok = js_mallocz(ctx, sizeof(*ok));
                 if (unlikely(!ok)) { JS_ThrowOutOfMemory(ctx); goto exception; }
                 ok->atom = JS_DupAtom(ctx, atom); ok->pop = 1; ok->push = 0;
+                ok->op = (uint8_t)opcode;
                 gp_obj = sp[-2]; gp_atom = ok->atom; gp_op = GP_DEFINE; gp_val = sp[-1];
                 gp_recv = JS_UNINITIALIZED; gp_no_throw = 0;   /* CreateDataPropertyOrThrow */
                 gp_outer = ok; gp_outer_kind = CONT_OP_KEYED;
@@ -47731,6 +47820,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                             JSOpKeyed *ok = js_mallocz(ctx, sizeof(*ok));
                             if (unlikely(!ok)) { JS_FreeAtom(ctx, katom); JS_ThrowOutOfMemory(ctx); goto exception; }
                             ok->atom = katom; ok->pop = 2; ok->push = 1;
+                            ok->op = (uint8_t)opcode;
                             gp_obj = JS_MKPTR(JS_TAG_OBJECT, tramp_px); gp_atom = ok->atom; gp_op = GP_GET; gp_val = JS_UNDEFINED;
                             gp_recv = sp[-2]; gp_no_throw = 0;   /* the RECEIVER stays the original object */
                             gp_outer = ok; gp_outer_kind = CONT_OP_KEYED;
@@ -47823,6 +47913,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                             JSOpKeyed *ok = js_mallocz(ctx, sizeof(*ok));
                             if (unlikely(!ok)) { JS_FreeAtom(ctx, katom); JS_ThrowOutOfMemory(ctx); goto exception; }
                             ok->atom = katom; ok->pop = 1; ok->push = 1;
+                            ok->op = (uint8_t)opcode;
                             gp_obj = JS_MKPTR(JS_TAG_OBJECT, tramp_px); gp_atom = ok->atom; gp_op = GP_GET; gp_val = JS_UNDEFINED;
                             gp_recv = sp[-2]; gp_no_throw = 0;   /* the RECEIVER stays the original object */
                             gp_outer = ok; gp_outer_kind = CONT_OP_KEYED;
@@ -47908,6 +47999,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                             JSOpKeyed *ok = js_mallocz(ctx, sizeof(*ok));
                             if (unlikely(!ok)) { JS_FreeAtom(ctx, atom); JS_ThrowOutOfMemory(ctx); goto exception; }
                             ok->atom = atom; ok->pop = 3; ok->push = 1;
+                            ok->op = (uint8_t)opcode;
                             gp_obj = JS_MKPTR(JS_TAG_OBJECT, tramp_px); gp_atom = ok->atom; gp_op = GP_GET; gp_val = JS_UNDEFINED;
                             gp_recv = sp[-3]; gp_no_throw = 0;   /* super's RECEIVER is unchanged either way */
                             gp_outer = ok; gp_outer_kind = CONT_OP_KEYED;
@@ -48044,6 +48136,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                         JSOpKeyed *ok = js_mallocz(ctx, sizeof(*ok));
                         if (unlikely(!ok)) { JS_FreeAtom(ctx, katom); JS_ThrowOutOfMemory(ctx); goto exception; }
                         ok->atom = katom; ok->pop = 3; ok->push = 0;
+                        ok->op = (uint8_t)opcode;
                         gp_obj = sp[-3]; gp_atom = ok->atom; gp_op = GP_SET; gp_val = sp[-1];
                         gp_recv = JS_UNINITIALIZED; gp_no_throw = !sf->is_strict_mode;
                         gp_outer = ok; gp_outer_kind = CONT_OP_KEYED;
@@ -48057,6 +48150,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                         JSOpKeyed *ok = js_mallocz(ctx, sizeof(*ok));
                         if (unlikely(!ok)) { JS_FreeAtom(ctx, katom); JS_ThrowOutOfMemory(ctx); goto exception; }
                         ok->atom = katom; ok->pop = 3; ok->push = 0;
+                        ok->op = (uint8_t)opcode;
                         gp_obj = sp[-3]; gp_atom = ok->atom; gp_op = GP_SET; gp_val = sp[-1];
                         gp_recv = JS_UNINITIALIZED; gp_no_throw = !sf->is_strict_mode;
                         gp_outer = ok; gp_outer_kind = CONT_OP_KEYED;
@@ -48069,6 +48163,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                         JSOpKeyed *ok = js_mallocz(ctx, sizeof(*ok));
                         if (unlikely(!ok)) { JS_FreeAtom(ctx, katom); JS_ThrowOutOfMemory(ctx); goto exception; }
                         ok->atom = katom; ok->pop = 3; ok->push = 0;
+                        ok->op = (uint8_t)opcode;
                         gp_obj = JS_MKPTR(JS_TAG_OBJECT, tramp_px); gp_atom = katom; gp_op = GP_SET; gp_val = sp[-1];
                         gp_recv = sp[-3]; gp_no_throw = !sf->is_strict_mode;   /* the RECEIVER stays the original object */
                         gp_outer = ok; gp_outer_kind = CONT_OP_KEYED;
@@ -48188,6 +48283,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     JSOpKeyed *ok = js_mallocz(ctx, sizeof(*ok));
                     if (unlikely(!ok)) { JS_FreeAtom(ctx, atom); JS_ThrowOutOfMemory(ctx); goto exception; }
                     ok->atom = atom; ok->pop = 4; ok->push = 0;
+                    ok->op = (uint8_t)opcode;
                     gp_obj = tramp_px ? JS_MKPTR(JS_TAG_OBJECT, tramp_px) : sp[-3];
                     gp_atom = ok->atom; gp_op = GP_SET; gp_val = sp[-1];
                     gp_recv = sp[-4]; gp_no_throw = !sf->is_strict_mode;
@@ -48998,6 +49094,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 ok = js_mallocz(ctx, sizeof(*ok));
                 if (unlikely(!ok)) { JS_FreeAtom(ctx, katom); JS_ThrowOutOfMemory(ctx); goto exception; }
                 ok->atom = katom; ok->pop = 2; ok->push = 1;
+                ok->op = (uint8_t)opcode;
                 gp_obj = sp[-1]; gp_atom = katom; gp_op = GP_HAS; gp_val = JS_UNDEFINED;
                 gp_recv = JS_UNINITIALIZED; gp_no_throw = 0;
                 gp_outer = ok; gp_outer_kind = CONT_OP_KEYED;
@@ -49072,6 +49169,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 ok = js_mallocz(ctx, sizeof(*ok));
                 if (unlikely(!ok)) { JS_FreeAtom(ctx, katom); JS_ThrowOutOfMemory(ctx); goto exception; }
                 ok->atom = katom; ok->pop = 2; ok->push = 1; ok->throw_on_false = sf->is_strict_mode;
+                ok->op = (uint8_t)opcode;
                 gp_obj = sp[-2]; gp_atom = katom; gp_op = GP_DELETE; gp_val = JS_UNDEFINED;
                 gp_recv = JS_UNINITIALIZED; gp_no_throw = 1;
                 gp_outer = ok; gp_outer_kind = CONT_OP_KEYED;
@@ -49455,7 +49553,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                            held, so it is not a READ of the name and the census's population is reads. Sharing
                            an arm is not sharing a question. */
                         if (wop == OP_get_var_undef)
-                            js_absent_note_unresolved(ctx, atom);
+                            js_absent_note_unresolved(ctx, atom, JS_CONCOLIC_ABSENT_TYPEOF);
                         js_with_has_free(ctx, wh);
                         *sp++ = (wop == OP_delete_var) ? js_bool(true) : JS_UNDEFINED;
                         BREAK;

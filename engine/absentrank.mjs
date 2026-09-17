@@ -290,6 +290,15 @@ const CHANNELS = {
   "instanceof X":  /\binstanceof\s+([A-Za-z_$][\w$]*)/g,
   "typeof X":      /\btypeof\s+([A-Za-z_$][\w$]*)/g,
   'global["X"]':   /\b(?:window|self|globalThis)\[\s*["']([A-Za-z_$][\w$]*)["']\s*\]/g,
+  /* THE OTHER WAY A BUNDLE ASKS THE SAME QUESTION, AND THE ONE THIS FILE COULD NOT SEE. `"X" in window` is
+     ECMAScript §13.10.1 "Runtime Semantics: Evaluation"'s `RelationalExpression : RelationalExpression in
+     ShiftExpression`, ending at "Return ? HasProperty(rightValue, ? ToPropertyKey(leftValue))" — §7.3.11
+     "HasProperty ( obj, propertyKey )", so an absent name answers `false` and nothing throws. That makes it a
+     GUARD channel by this file's own test, and its absence here was not a smaller list A but a SHORTER one:
+     `rankA` filters on `hits.has(n)`, so a platform global this corpus names ONLY this way had no hit in any
+     channel and was dropped from the ranking outright — not demoted to `shadowed`, which at least prints, but
+     gone. A name absent from an instrument's output cannot be read sceptically. */
+  '"X" in global': /["']([A-Za-z_$][\w$]*)["']\s*in\s+(?:window|self|globalThis)\b/g,
   "X.member":      /(?:^|[^\w$.])([A-Z][\w$]*)\s*\.\s*[A-Za-z_$][\w$]*/g,
   "f(a,X)":        /[\w$)\]]\s*\(\s*[A-Za-z_$][\w$]*\s*,\s*([A-Za-z_$][\w$]*)\s*\)/g,
 };
@@ -317,6 +326,13 @@ const ARM = {
   "instanceof X":  ['x instanceof AbsentRankPos',     'x.instanceofAbsentRankNeg'],
   "typeof X":      ['typeof AbsentRankPos',           'mytypeof AbsentRankNeg'],
   'global["X"]':   ['window["AbsentRankPos"]',        'notwindow["AbsentRankNeg"]'],
+  /* THE NEGATIVES ARE THE TWO WAYS THIS FORM IS REALLY WRITTEN WITHOUT BEING THIS FORM: the same words inside
+     ONE string, which is how prose and error text carry them, and the same operator against a receiver that
+     is not a global, which is what every `"k" in options` in a bundle is. A control that has never rejected
+     the thing it exists to reject is not a control. */
+  '"X" in global': ['"AbsentRankPos" in window',       ['"AbsentRankNeg in window"',
+                                                        '"AbsentRankNeg" in opts',
+                                                        '"AbsentRankNeg" in windowish']],
   "X.member":      ['AbsentRankPos.someMember',       'q.AbsentRankNeg.someMember'],
   /* THE NEGATIVES HERE ARE THE SHAPES THAT WERE MEASURED TO BREAK THE BROAD FORM, never invented near
      misses: a comma word list with no call receiver, the same list as a bundle actually writes it, and a
@@ -433,7 +449,7 @@ const shape = (n) => [...(hits.get(n) || new Map()).keys()].map((k) => [k, freeO
    direction it is read: a name with NO guard hit anywhere cannot have a guarded use, so THROWS is a claim the
    text supports outright. `mixed` is the honest middle — some use and some guard exist and only reading the
    site says which covers which — and it is not promoted above THROWS on the strength of a bigger number. */
-const GUARD_CH = new Set(["typeof X", "window.X", "self.X", "globalThis.X", 'global["X"]']);
+const GUARD_CH = new Set(["typeof X", "window.X", "self.X", "globalThis.X", 'global["X"]', '"X" in global']);
 const USE_CH = new Set(["new X(", "X.member", "instanceof X", "f(a,X)"]);
 /* THE SENTENCE BELOW — "every channel is in exactly one of the two sets, so `u + g` IS the free total" — was
    stated in prose and checked by nothing, which is the one shape that cannot fail loudly: a channel in

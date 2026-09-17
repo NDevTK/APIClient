@@ -9,13 +9,20 @@
 JSValue absent_read_hook(JSContext *ctx, JSValueConst obj, JSAtom name);
 
 /* Install as JSConcolicHooks.absent_unresolved — THE SAME QUESTION REACHED BY AN OPERATOR THAT PERFORMS NO
-   [[Get]]. `typeof X` on a name nothing binds is answered at the opcode by ECMAScript §13.5.3 The typeof
-   Operator's §13.5.3.1 Runtime Semantics: Evaluation step 2.a, so the read hook above is never asked and the
-   census would read clean on a bundle whose whole feature detection is written that way. This RECORDS the
-   read into the same population and the same row and decides nothing — the void return is the contract, since
-   answering would make step 2.b's GetValue run and change what the operator says. See absent.c for why it
-   shares the classification rather than keeping a census of its own. */
-void absent_unresolved_note(JSContext *ctx, JSAtom name);
+   [[Get]], of which there are TWO and `op` says which. `typeof X` on a name nothing binds is answered at the
+   opcode by ECMAScript §13.5.3 The typeof Operator's §13.5.3.1 Runtime Semantics: Evaluation step 2.a;
+   `"X" in window` is answered by §13.10.1 Runtime Semantics: Evaluation's `RelationalExpression :
+   RelationalExpression in ShiftExpression`, whose last step is "Return ? HasProperty(rightValue, ?
+   ToPropertyKey(leftValue))" — §7.3.11 HasProperty ( obj, propertyKey ), which contains no [[Get]] either. So
+   the read hook above is asked by NEITHER, and the census would read clean on a bundle whose whole feature
+   detection is written in one of them. This RECORDS the read into the same population and the same row and
+   decides nothing — the void return is the contract for both, since answering the first would make step 2.b's
+   GetValue run and answering the second would be a value nobody asked for. See absent.c for why the two share
+   the classification and the row rather than keeping a census each, and why they are still two CUTS.
+   `op` IS THE CALLER'S TO STATE AND IS NEVER INFERRED from the name — it is the same rule JSConcolicAddOp and
+   JSConcolicEqOp already carry into this engine, and for the same reason: the party performing the operation
+   is the only one that knows which it performed. */
+void absent_unresolved_note(JSContext *ctx, JSAtom name, JSConcolicAbsentOp op);
 
 /* Install as JSConcolicHooks.present — THE SAME QUESTION FOR A MEMBER THE RECORD HOLDS. A published record's
    extent was chosen against THIS visitor's credentials, so `__FLAGS.admin === false` is a fact about this
@@ -70,7 +77,9 @@ const char *absent_standard_name(const char *name, AbsentVocab *vocab);
    object on the heap (caller frees; NULL only on allocation failure, which every composer on that seam treats
    as "this census is absent" rather than as a reason to fail a run). The composer in absent.c states the
    population, the denominator every number in it is a fraction of, the KIND of every row, the identities they
-   close over, and the one spelling of a feature detect this census still cannot see. */
+   close over, and which shapes of a feature detect this census still cannot see. THAT LAST CLAUSE IS A
+   POINTER AND NEVER A COUNT: it said "the one spelling" while there was one, and the number a reader needs is
+   whatever the named residuals over there currently say rather than whatever this line last remembered. */
 char *absent_json(void);
 
 #endif

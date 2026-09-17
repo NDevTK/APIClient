@@ -2455,6 +2455,25 @@ static const char *HTML =
        rather than measure this one. The observation is the `@RESULT` line. */
     "var absTy = typeof EventSource;"
     "var absRd = window.EventSource;"
+    /* AND THE THIRD SPELLING, WHICH IS A THIRD STATEMENT FOR THE SAME REASON THE OTHER TWO ARE TWO.
+       `"EventSource" in window` is ECMAScript §13.10.1 "Runtime Semantics: Evaluation"'s `RelationalExpression
+       : RelationalExpression in ShiftExpression`, whose last step is "Return ? HasProperty(rightValue, ?
+       ToPropertyKey(leftValue))" — §7.3.11 "HasProperty ( obj, propertyKey )", which performs no [[Get]]
+       anywhere in it. So it reaches NEITHER the read hook the line above reaches nor the unresolvable-Reference
+       arm the line before it reaches: the engine records it at the `in` operator's own placement, where the
+       operator, its base and its answer are in one hand. It answers `false` and nothing throws, exactly as the
+       other two answer `"undefined"` and `undefined`.
+       WHAT TO OBSERVE, since this asserts nothing: in the run's `_absent`, the row `"EventSource"` reads 3
+       rather than 2 — one per spelling — and `_of those, answered by the in operator with no [[Get]]
+       performed` reads at least 1 beside the `typeof` member's at least 1. Both operator members are emitted
+       on every census including zero, so a 0 in either is the positive statement that no read of that shape
+       reached an unresolved name rather than an absent member; and the two are SEPARATE members precisely so
+       that this document can show them moving independently, which one summed member could not.
+       IT IS THE REACHABILITY WITNESS AND NOT A PROBE ROW, for the reason the paragraph above gives: a census
+       member is neither an endpoint nor a param, and a bare `strstr` needle over a census key is one
+       engine/probegate.mjs cannot resolve to any document token this file emits. The observation is the
+       `@RESULT` line. NO PROBE ROW IS ADDED. */
+    "var absIn = 'EventSource' in window;"
 
     /* HTML §4.8.9 "The audio element"'s five top-level steps, counted with list depth tracked against the
        standard's own <ol> so a nested item cannot be promoted to a peer. STEP 3 IS UNCONDITIONAL and is the
