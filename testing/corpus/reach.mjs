@@ -307,18 +307,20 @@ the questions it does not answer. None of them is folded into a figure above.
   THE WHOLE TABLE IS CAPPED BY THE FIXTURE, AND COMPOSED IS CAPPED AT ZERO FOR THE ONE SURFACE THAT MATTERS
     MOST. The entry above says COMPOSED is a floor, and that is a claim about the CLASSIFICATION being
     generous -- it is NOT a claim that the number is a floor on what the ENGINE can do, and it is read as one.
-    mirror.mjs captures a site by fetching, with curl, the document and then every subresource the MARKUP
-    NAMES. It never executes the page. A lazy chunk is BY DEFINITION a resource the markup does not name, so
-    no lazy-chunk body is in any mirror, for any site, at any revision -- structural, not a gap in one
-    capture. \`learned\` here is built from the run's \`siteEndpoints\`, and an address whose fixture answers 404
-    with an empty body teaches nothing downstream, so a chunk graph cannot be walked past its first hop
-    however well the engine composes. The surface this instrument was built to measure is the one the corpus
-    cannot serve.
+    THAT CAP IS RETIRED AND ITS REASONING IS REWRITTEN RATHER THAN DELETED, because a reader who re-derives
+    it will re-add it. IT SAID: mirror.mjs captures a site by fetching, with curl, the document and then every
+    subresource the MARKUP NAMES; it never executes; a lazy chunk is BY DEFINITION a resource the markup does
+    not name, so no lazy-chunk body is in any mirror, for any site, at any revision -- structural, not a gap
+    in one capture. Every clause of that was true of a MARKUP-ONLY capture, and the capture is no longer
+    markup-only: resources discovered by EXECUTION are stored too, carrying \`via: "runtime"\` and the address
+    they were composed from. The mirror SERVES those bodies now, so the derivation below and
+    \`grep -c MISS\` both fall -- WHICH IS THE CAPTURE IMPROVING AND NOT THE ENGINE. Neither is an engine
+    result and the two must never be read as one.
     A READER WHO TAKES \`composed / learned\` FOR AN ENGINE RESULT HAS TAKEN A NUMBER FOR A QUESTION THAT WAS
     NEVER PUT -- which is this file's own sentence, above, applied to its own headline. Quote it with the cap
     or do not lead with it.
-    THE DERIVATION, NOT THE FIGURE, because a capture mechanism that executes is exactly the diff that
-    retires this and the count falls as it lands:
+    THE DERIVATION, NOT THE FIGURE, because the capture mechanism that executes HAS landed and this count
+    fell with it -- it is the capture's unserved tail and it shrinks as the capture grows:
       for d in mirror/*/; do grep -roh '[A-Za-z0-9_./-]*\\.js' "$d" | sed 's#.*/##' | sort -u \\
         | while read n; do find "$d" -name "$n" | grep -q . || echo "$n"; done; done | wc -l
     and the fixture servers log the consequence directly -- \`grep -c MISS logs/<id>.serve\`.
@@ -326,9 +328,25 @@ the questions it does not answer. None of them is folded into a figure above.
     drives the engine, so its access log holds BOTH parties against IDENTICAL BYTES, and both meet the same
     404. An address Chrome requested that the engine never recorded is a differential no property of the
     corpus can flatter -- \`grep -o 'MISS .*\\.m\\?js' logs/<id>.serve | sort -u\` against the row's
-    \`siteEndpoints\`. That comparison is sound TODAY, on a corpus that serves none of those bodies.
-    RETIREMENT: this entry goes when the mirror captures execution-discovered subresources, at which point the
-    derivation above answers near zero and COMPOSED starts measuring the engine rather than the capture.
+    \`siteEndpoints\`. THAT COMPARISON IS RETIRED TOO, AND BY THE SAME LANDING: an address the mirror now
+    SERVES never becomes a MISS, so that population is emptied BY THE CAPTURE and a fall in it says nothing
+    about the engine. Chrome's composed set is a FROZEN, revision-tracked fact instead -- provenance.json's
+    \`via: "runtime"\` entries -- which is the denominator to quote.
+    AND WHAT CAPS \`composed\` NOW IS THE RECORDING GATE, WHICH IS A PROPERTY OF HOW THE SITE DECLARES ITS
+    PROGRAMS AND NOT OF THE ENGINE'S REACH. \`learned\` is the run's \`siteEndpoints\`, and a PROGRAM enters
+    that set unconditionally only from the preload paths -- html_link.c's \`link_preload\` (HTML §4.6.8.20)
+    and \`link_modulepreload\` (HTML §4.6.8.12). html_script.c's one record sits behind the taint shadow map,
+    so it fires only where a SCRIPT ASSIGNED \`src\` a concolic value; an ordinary concrete \`<script src>\`,
+    and a lazy chunk injected as one, is never recorded however well the engine composed its address. A site
+    that declares its module graph with \`<link rel=modulepreload>\` therefore reports its programs and a site
+    that injects \`<script>\` reports none, and this column cannot tell those two apart.
+    THE CHECK IS ONE GREP OF THE DOCUMENT AND IT DECIDES WHETHER A ZERO HERE IS READABLE AT ALL:
+      grep -c 'rel="modulepreload"' mirror/<id>/index.html
+    A zero there means this instrument is blind to that site's programs, so \`composed\` may not be quoted for
+    it in either direction.
+    RETIREMENT: this entry goes when a program load is recorded on the path that LOADS it rather than on the
+    path that happens to DECLARE it, so \`siteEndpoints\` holds a site's programs whichever element fetched
+    them.
 
   THE DENOMINATOR BELONGS TO A REVISION AND THE NUMERATOR DOES NOT. Everything left of the bar is derived
     from testing/corpus/mirror + provenance.json, which are TRACKED, so it is reproducible at a commit.
