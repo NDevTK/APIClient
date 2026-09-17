@@ -134,6 +134,17 @@ CssPx viewport_icb_height(JSContext *ctx)
     return css_px_env(CSS_ENV_ICB_HEIGHT, ctx, viewport_height(ctx));
 }
 
+bool viewport_canvas_region(JSContext *ctx, CssPx out[4])
+{
+    DCHECK(out != NULL, "CSS 2.1 §2.3.1 \"The canvas\"'s rendered region was asked for through no rectangle");
+    if (!viewport_exists(ctx)) return false;
+    out[0] = css_px(0.0);
+    out[1] = css_px(0.0);
+    out[2] = viewport_icb_width(ctx);
+    out[3] = viewport_icb_height(ctx);
+    return true;
+}
+
 /* ONE ROW PER FACT, INDEXED BY THE FACT ITSELF — the one table over `CssEnvFact`, so a length mints its domain
    in one place whether it is a function of one fact or of three.
    THE SECOND COLUMN IS §4's "OR ZERO IF THERE IS NO VIEWPORT", asked per FACT because the facts differ on it

@@ -44,6 +44,9 @@
 #include "core/graphics/raster_path.h"     /* the geometry a fill takes, and its flattening into edges */
 #include "core/graphics/rasterizer.h"      /* HTML §4.12.5.1's two fill rules over one crossing count */
 #include "core/graphics/raster_surface.h"  /* and §4.12.5.1.22's bitmap, which is where the two end up */
+#include "core/paint/display_list_raster.h"  /* and the JOIN: ink becoming pixels, whose EXTENT is an
+                                               operand rather than a field on a list — see
+                                               display_list_raster_selftest */
 #include "core/paint/box_paint.h"   /* CSS 2.1 §E.2 "Painting order"'s ink for one stacking
                                       context — the half that DOES need a document, and the one
                                       document in this fixture that has a realm is `main`'s; see
@@ -19867,6 +19870,206 @@ static void raster_selftest(void)
            RASTER_FLATTEN_TOLERANCE_PX, edges, c.spans, c.pixels, c.area, (unsigned long long)sum_a);
 }
 
+/* AN sRGB COLOUR THIS FILE STATES, which is what core/paint/display_list.c's append asserts every mark
+   carries: CSS Color 4 §11 "Converting Colors" is the PAINTER's to run and a list is downstream of it. */
+static CssColor tf_dlr_srgb(double r, double g, double b, double a)
+{
+    CssColor c;
+
+    c.space = CSS_COLOR_SPACE_SRGB;
+    c.c[0] = r; c.c[1] = g; c.c[2] = b;
+    c.a = a;
+    c.missing = 0u;
+    return c;
+}
+
+static void tf_dlr_append(DisplayList *dl, DisplayMarkKind kind, double x, double y, double w, double h,
+                          CssColor color)
+{
+    DisplayMark m;
+
+    m.kind = kind;
+    m.rect[0] = css_px(x); m.rect[1] = css_px(y); m.rect[2] = css_px(w); m.rect[3] = css_px(h);
+    m.color = color;
+    display_list_append(dl, &m);
+}
+
+/* One rasterization of one freshly built list onto one fresh surface, so no case below inherits another's
+   bytes. Answers the checksum and hands back the count. */
+static uint64_t tf_dlr_raster(const DisplayList *dl, double scale, int w, int h,
+                             DisplayListRasterCount *count)
+{
+    RasterSurface s;
+    uint64_t sum;
+
+    raster_surface_init(&s, w, h);
+    display_list_raster(dl, scale, &s, count);
+    sum = raster_surface_checksum(&s);
+    raster_surface_free(&s);
+    return sum;
+}
+
+static void tf_dlr_pixel(const DisplayList *dl, double scale, int w, int h, int x, int y, uint8_t out[4])
+{
+    RasterSurface s;
+    DisplayListRasterCount count;
+
+    raster_surface_init(&s, w, h);
+    display_list_raster(dl, scale, &s, &count);
+    raster_surface_get(&s, x, y, out);
+    raster_surface_free(&s);
+}
+
+/* core/paint/display_list_raster.h's ENTRY, over lists this file BUILDS — the one half of the road that
+ * needs no realm, no document and no viewport, which is what makes the kind discrimination below something a
+ * run can fail rather than something the header merely states.
+ *
+ * WHY THIS SHAPE. THE WHOLE POINT IS ONE RECTANGLE AND TWO KINDS. `DISPLAY_MARK_FILL_RECT` and
+ * `DISPLAY_MARK_FILL_CANVAS` are given the IDENTICAL four numbers and must produce DIFFERENT pixels, because
+ * core/paint/display_list.h's rule is that "A rasterizer whose own region is larger must EXTEND a canvas fill
+ * and must NOT extend a rectangle fill" — CSS 2.1 §2.3.1 "The canvas" making the canvas's area infinite while
+ * a box's rectangle IS its area. A 4x4 rectangle on a 16x8 surface is 16 pixels and the same four numbers as
+ * a canvas are 128, and no other pair of assertions separates the two kinds at all: give them different
+ * rectangles and a reader cannot tell which fact produced the difference.
+ *
+ * EVERY NUMBER IS DERIVABLE WITH ARITHMETIC AND NO RUN. A rectangle on pixel boundaries has coverage exactly
+ * 1 and exactly one run per row — which is not this file's assumption but what `raster_selftest` above
+ * MEASURES, at three different rectangles — so 4x4 is four runs of four and a 16x8 surface filled outright is
+ * eight runs of sixteen. The scale is a multiply, so the same rectangle at 2 device pixels per CSS pixel is
+ * 8x8 and 64. And `pixels` counts what each mark HANDED the surface, which core/graphics/raster_surface.h
+ * says in its own words, so the two-mark list below is 128 + 16 and not 128: a pixel under two marks is
+ * composited twice and a count that said otherwise would be a count of the surface rather than of the work.
+ *
+ * WHAT IS NOT ASSERTED IS ANY CHECKSUM'S VALUE. A checksum is a function of 512 bytes this file did not
+ * compute, so fixing one would be a change detector; what IS asserted is that two rasterizations of ONE list
+ * agree, which is the determinism core/graphics/rasterizer.h states as its requirement and is a thing a run
+ * can fail. */
+static void display_list_raster_selftest(void)
+{
+    static const int W = 16, H = 8;
+    DisplayList rect_list, canvas_list, both;
+    DisplayListRasterCount count;
+    CssColor red = tf_dlr_srgb(1.0, 0.0, 0.0, 1.0);
+    CssColor green = tf_dlr_srgb(0.0, 1.0, 0.0, 1.0);
+    CssPx region[4];
+    uint8_t px[4];
+    uint64_t sum_a, sum_b;
+    int dw, dh;
+
+    /* 1. THE RECTANGLE KIND, whose rectangle IS its area. */
+    display_list_init(&rect_list);
+    tf_dlr_append(&rect_list, DISPLAY_MARK_FILL_RECT, 0.0, 0.0, 4.0, 4.0, red);
+    (void)tf_dlr_raster(&rect_list, 1.0, W, H, &count);
+    CHECKF(count.marks == 1 && count.spans == 4 && count.pixels == 16,
+           "a 4x4 `DISPLAY_MARK_FILL_RECT` on a 16x8 surface composited %zu marks over %zu runs and %zu "
+           "pixels, where four rows of one run of four pixels is the whole of what that rectangle is. A "
+           "PIXEL COUNT OF 128 IS THE DEFECT THIS NUMBER EXISTS FOR: it is the surface entire, which is what "
+           "a rasterizer that EXTENDED a box's fill would paint — and core/paint/display_list.h's rule is "
+           "that only the canvas kind is extended",
+           count.marks, count.spans, count.pixels);
+
+    /* 2. AND THE CANVAS KIND, GIVEN THE SAME FOUR NUMBERS. CSS 2.1 §2.3.1 "The canvas" says "The canvas is
+       infinite for each dimension of the space, but rendering generally occurs within a finite region of the
+       canvas, established by the user agent according to the target medium", and CSS 2.1 §E.2 "Painting
+       order"'s step 1 asks for "background color of element over the entire canvas" — so the mark's
+       rectangle is the REGION and never the extent, and the intersection of an infinite area with this
+       surface is the surface. */
+    display_list_init(&canvas_list);
+    tf_dlr_append(&canvas_list, DISPLAY_MARK_FILL_CANVAS, 0.0, 0.0, 4.0, 4.0, green);
+    (void)tf_dlr_raster(&canvas_list, 1.0, W, H, &count);
+    CHECKF(count.marks == 1 && count.spans == 8 && count.pixels == 128,
+           "a `DISPLAY_MARK_FILL_CANVAS` carrying a 4x4 region composited %zu marks over %zu runs and %zu "
+           "pixels of a 16x8 surface, where the whole of it is eight runs of sixteen. SIXTEEN IS THE OTHER "
+           "DEFECT AND IT IS THE LIKELIER ONE: a rasterizer that filled the mark's own rectangle would paint "
+           "exactly the region this user agent established and leave every pixel beyond it unpainted — "
+           "invisible at the one size this host establishes today, and a green page with an unpainted border "
+           "the day a surface is asked for at any other",
+           count.marks, count.spans, count.pixels);
+    tf_dlr_pixel(&canvas_list, 1.0, W, H, 8, 4, px);
+    CHECKF(px[0] == 0 && px[1] == 255 && px[2] == 0 && px[3] == 255,
+           "the pixel at (8, 4) of a canvas fill carrying a 4x4 region is (%u, %u, %u, %u) — it lies OUTSIDE "
+           "that region, so this byte is the whole of the difference between the two fill kinds and a "
+           "transparent black here is the extension not having happened",
+           px[0], px[1], px[2], px[3]);
+    tf_dlr_pixel(&rect_list, 1.0, W, H, 8, 4, px);
+    CHECKF(px[3] == 0,
+           "the pixel at (8, 4) of a 4x4 RECTANGLE fill has an alpha of %u — it lies outside the rectangle, "
+           "and §4.12.5.1.22 \"Drawing model\"'s bitmap starts transparent black. THE TWO CHECKS ARE ONE "
+           "CLAIM: the same four numbers under two kinds must reach this pixel differently, and a pass here "
+           "with a fail above is a rasterizer that extends nothing",
+           px[3]);
+
+    /* 3. THE SCALE, which core/graphics/raster_path.h makes this road's one transform. */
+    (void)tf_dlr_raster(&rect_list, 2.0, W, H, &count);
+    CHECKF(count.spans == 8 && count.pixels == 64,
+           "a 4x4 CSS-pixel rectangle at 2 device pixels per CSS pixel covered %zu runs and %zu device "
+           "pixels, where an 8x8 device rectangle is eight runs of eight. The operand is a MULTIPLY on four "
+           "coordinates, so sixteen here is a scale that was read and dropped and four is one applied twice",
+           count.spans, count.pixels);
+    tf_dlr_pixel(&rect_list, 2.0, W, H, 7, 3, px);
+    CHECKF(px[0] == 255 && px[3] == 255,
+           "the pixel at (7, 3) is (%u, %u, %u, %u) at a scale of 2, where a 4x4 CSS rectangle reaches "
+           "device column 7 and an unscaled one stops at 3", px[0], px[1], px[2], px[3]);
+    tf_dlr_pixel(&rect_list, 2.0, W, H, 8, 3, px);
+    CHECKF(px[3] == 0,
+           "the pixel at (8, 3) has an alpha of %u at a scale of 2 — a 4x4 CSS rectangle is 8 device pixels "
+           "wide and its last column is 7, so ink here is a scale applied to the extent and not to the edge",
+           px[3]);
+
+    /* 4. AND THE TWO OF THEM IN ONE LIST, IN CSS 2.1 §E.2's ORDER. core/paint/display_list.h's opening
+       paragraph makes the SEQUENCE a list's whole statement, and a rasterization is where that sequence
+       becomes something observable: the canvas goes down first and the rectangle over it, so the pixel under
+       the rectangle is the rectangle's colour and every other pixel is the canvas's. A rasterizer that
+       walked the list backwards passes every count above and fails exactly this. */
+    display_list_init(&both);
+    tf_dlr_append(&both, DISPLAY_MARK_FILL_CANVAS, 0.0, 0.0, 4.0, 4.0, green);
+    tf_dlr_append(&both, DISPLAY_MARK_FILL_RECT, 0.0, 0.0, 4.0, 4.0, red);
+    sum_a = tf_dlr_raster(&both, 1.0, W, H, &count);
+    CHECKF(count.marks == 2 && count.pixels == 144,
+           "two marks over a 16x8 surface composited %zu marks and %zu pixels, where 128 + 16 is what the "
+           "canvas and the rectangle each HANDED the surface. 128 would be a count of the SURFACE rather "
+           "than of the work, which is the number core/graphics/raster_surface.h's own `pixels` is not",
+           count.marks, count.pixels);
+    tf_dlr_pixel(&both, 1.0, W, H, 0, 0, px);
+    CHECKF(px[0] == 255 && px[1] == 0 && px[2] == 0 && px[3] == 255,
+           "the pixel under both marks is (%u, %u, %u, %u) where the LAST mark laid is opaque red. Green "
+           "here is CSS 2.1 §E.2 \"Painting order\"'s sequence inverted between the list and the bitmap",
+           px[0], px[1], px[2], px[3]);
+    tf_dlr_pixel(&both, 1.0, W, H, 8, 4, px);
+    CHECKF(px[1] == 255 && px[3] == 255,
+           "the pixel under the canvas alone is (%u, %u, %u, %u) where the canvas is opaque green",
+           px[0], px[1], px[2], px[3]);
+
+    /* 5. AND TWICE, WHICH IS THE REQUIREMENT core/graphics/rasterizer.h STATES — "this document must render
+       identically to that one, a comparison inside one engine". Nothing here fixes the VALUE: a checksum of
+       512 bytes is not a number this file derived, and asserting one would be a change detector. */
+    sum_b = tf_dlr_raster(&both, 1.0, W, H, &count);
+    CHECKF(sum_a == sum_b,
+           "one display list rasterized twice produced different bytes (%llu against %llu) — every step of "
+           "this road is a `+`, `-`, `*` or `/` over the same operands, and a difference is state one "
+           "rasterization left behind for the next",
+           (unsigned long long)sum_a, (unsigned long long)sum_b);
+
+    /* 6. THE REGION-TO-SURFACE CONVERSION, over regions this file states rather than over a viewport's. */
+    region[0] = css_px(0.0); region[1] = css_px(0.0);
+    region[2] = css_px(1280.0); region[3] = css_px(720.0);
+    display_list_raster_region_size(region, 1.0, &dw, &dh);
+    CHECKF(dw == 1280 && dh == 720, "a 1280x720 region at a scale of 1 sized a %dx%d surface", dw, dh);
+    display_list_raster_region_size(region, 2.0, &dw, &dh);
+    CHECKF(dw == 2560 && dh == 1440, "a 1280x720 region at a scale of 2 sized a %dx%d surface", dw, dh);
+    region[2] = css_px(100.5); region[3] = css_px(50.25);
+    display_list_raster_region_size(region, 1.0, &dw, &dh);
+    CHECKF(dw == 101 && dh == 51,
+           "a 100.5 x 50.25 region sized a %dx%d surface, where 101x51 is the smallest one that COVERS it. "
+           "100x50 is the truncation that drops a partly covered column and a partly covered row, and the "
+           "ink that lands in them is CSS 2.1 §E.2's step 1 fill, which reaches every pixel of the region",
+           dw, dh);
+
+    display_list_free(&both);
+    display_list_free(&canvas_list);
+    display_list_free(&rect_list);
+}
+
 #define TF_DL_MARKS 20u
 #define TF_DL_KINDS 3u
 
@@ -20230,6 +20433,108 @@ static void box_paint_selftest(JSContext *ctx, lxb_html_document_t *dom)
        written. */
     printf("@PAINT canvas-ink w=%g h=%g env=%u\n", dl.v[1].rect[2].px, dl.v[1].rect[3].px,
            (unsigned)display_list_env(&dl));
+
+    /* AND THE PIXELS — this document's own ink composited onto a bitmap the size of the region CSS 2.1
+       §2.3.1 "The canvas" establishes for it. Everything above is about the LIST; this is the first
+       statement any fixture in this tree makes about a byte of a rendered document.
+       WHAT MAKES IT DERIVABLE IS THE COLOUR AND THE KIND, AND NEITHER IS READ BACK OFF THE ENGINE.
+       `TF_CANVAS_INK` declares `#00ff00`, which is opaque sRGB (0, 1, 0); core/graphics/raster_surface.h
+       quantizes with `floor(v * 255 + 0.5)`, so those three components are 0, 255 and 0 exactly; and the
+       mark's KIND makes it cover the whole surface whatever its rectangle says. So every pixel of the
+       bitmap is (0, 255, 0, 255) and the count of them is the surface's own area — a number this file
+       derives from the document and from nothing the rasterizer computed. */
+    {
+        DisplayList one;
+        RasterSurface surf;
+        DisplayListRasterCount rc;
+        CssPx region[4];
+        uint8_t px[4];
+        uint64_t sum_one, sum_all;
+        size_t green = 0;
+        double dpr = viewport_device_pixel_ratio(ctx);
+        int dw = 0, dh = 0, x, y;
+
+        /* THE REGION A RASTERIZING CALLER ASKS FOR, AND THE ONE THE PAINTER ALREADY LAID, HELD TO EACH
+           OTHER. They are two ROUTES to core/frame/viewport.h's one answer — this one through the realm and
+           the mark's through core/paint/box_paint.c's element — and a disagreement is a surface sized for a
+           region other than the one whose ink is on it. */
+        CHECK(viewport_canvas_region(ctx, region),
+              "CSS 2.1 §2.3.1 \"The canvas\" established no rendered region for a document `main` gave a "
+              "root navigable. The canvas mark above was laid through the same entry, so a false answer "
+              "here with a mark up there is the two roads to one viewport disagreeing");
+        CHECK(region[0].px == dl.v[1].rect[0].px && region[1].px == dl.v[1].rect[1].px &&
+              region[2].px == dl.v[1].rect[2].px && region[3].px == dl.v[1].rect[3].px,
+              "the region a rasterizing caller reads and the one CSS 2.1 §E.2's step 1 filled are different "
+              "rectangles. core/frame/viewport.h owns both, which is the whole reason the painter assembles "
+              "none of the four numbers itself");
+        display_list_raster_region_size(region, dpr, &dw, &dh);
+        CHECKF((double)dw == region[2].px && (double)dh == region[3].px,
+               "a %g x %g CSS-pixel region sized a %dx%d DEVICE surface. THE EQUALITY IS A JOINT CLAIM ABOUT "
+               "TWO THINGS and is the thing to move rather than the entry if either changes: that "
+               "core/frame/viewport.h's `devicePixelRatio` is exactly 1 — it answered %g — and that the "
+               "region's extents are whole numbers, so the round-up this host performs adds nothing",
+               region[2].px, region[3].px, dw, dh, dpr);
+
+        /* THE CANVAS MARK ALONE, so that every number below is a function of the DOCUMENT and not of the
+           seed this file planted above — which another lane is free to change. */
+        display_list_init(&one);
+        display_list_append(&one, &dl.v[1]);
+        raster_surface_init(&surf, dw, dh);
+        display_list_raster(&one, dpr, &surf, &rc);
+        CHECKF(rc.marks == 1 && rc.spans == (size_t)dh &&
+               rc.pixels == (size_t)dw * (size_t)dh,
+               "CSS 2.1 §E.2 \"Painting order\"'s step 1 fill composited %zu marks over %zu runs and %zu "
+               "pixels of a %dx%d surface, where a fill covering every row outright is one run per row and "
+               "the surface's own area. A pixel count equal to the MARK'S rectangle rather than the "
+               "surface's would be the canvas extension not having happened — which at this host's one "
+               "region size is the same number, and is why the arithmetic that separates the two kinds is "
+               "in `display_list_raster_selftest` and not here",
+               rc.marks, rc.spans, rc.pixels, dw, dh);
+        for (y = 0; y < dh; y++)
+            for (x = 0; x < dw; x++) {
+                raster_surface_get(&surf, x, y, px);
+                if (px[0] == 0 && px[1] == 255 && px[2] == 0 && px[3] == 255) green++;
+            }
+        CHECKF(green == (size_t)dw * (size_t)dh,
+               "%zu of a %dx%d surface's %zu pixels are the opaque `#00ff00` `TF_CANVAS_INK` declares. THE "
+               "WHOLE SURFACE IS THE DERIVATION: CSS 2.1 §2.3.1 makes the canvas infinite, so the fill "
+               "reaches every pixel; CSS Color 4 §5.2 \"The RGB Hexadecimal Notations: #RRGGBB\" makes the "
+               "colour exactly (0, 1, 0) with an alpha of 1; and core/graphics/raster_surface.h quantizes "
+               "with `floor(v * 255 + 0.5)`, which takes those to 0, 255 and 0 with no rounding to argue "
+               "about. A SHORTFALL NAMES ITS OWN CAUSE: a count of zero is a colour or a composite that is "
+               "wrong everywhere, and anything between is a fill that reached part of the surface",
+               green, dw, dh, (size_t)dw * (size_t)dh);
+        sum_one = raster_surface_checksum(&surf);
+        raster_surface_free(&surf);
+
+        /* AND THE WHOLE LIST, SEED AND ALL, WHICH MUST COME TO THE SAME BYTES. The canvas mark is laid LAST
+           and is OPAQUE, so source-over leaves nothing of whatever preceded it — which is a statement about
+           the compositing arithmetic and about the order together, and is independent of what the seed
+           above happens to be. */
+        raster_surface_init(&surf, dw, dh);
+        display_list_raster(&dl, dpr, &surf, &rc);
+        sum_all = raster_surface_checksum(&surf);
+        raster_surface_free(&surf);
+        CHECKF(rc.marks == dl.n,
+               "%zu of the list's %zu marks were composited — every kind in this list is a FILL and neither "
+               "has an arm that declines", rc.marks, dl.n);
+        CHECKF(sum_one == sum_all,
+               "the whole list and its canvas mark alone rendered different bytes (%llu against %llu). An "
+               "opaque fill laid last covers every pixel of the surface, so the seed this file planted "
+               "before CSS 2.1 §E.2's walk cannot survive into the image — and if it did, the ORDER between "
+               "the list and the bitmap is what is wrong rather than the seed",
+               (unsigned long long)sum_one, (unsigned long long)sum_all);
+
+        /* THE ROW. `green` is the assertion above restated as something a reader can compare across two
+           artifacts, and `sum` is the reftest oracle core/graphics/raster_surface.h names — neither this
+           file nor any other fixes its VALUE, because a checksum of 3686400 bytes is not a number anybody
+           derived; what is asserted is that two rasterizations of one list agree, which is above. ON AN
+           ARTIFACT BUILT BEFORE THIS ROAD EXISTED THE ROW IS ABSENT ENTIRELY — `grep -c '@PAINT raster'`
+           answers 0 rather than a row of zeros, which is this row's own control. */
+        printf("@PAINT raster w=%d h=%d dpr=%g marks=%zu spans=%zu pixels=%zu green=%zu sum=%llu\n",
+               dw, dh, dpr, rc.marks, rc.spans, rc.pixels, green, (unsigned long long)sum_one);
+        display_list_free(&one);
+    }
     display_list_free(&dl);
 }
 
@@ -21794,6 +22099,10 @@ int main(int argc, char **argv) {
        than earlier only so that its `@RASTER` row sits beside `@PAINT`'s, which is the ink it will one day
        be handed. */
     raster_selftest();
+    /* AND THE JOIN, immediately after the fill it is built on and before the painter whose ink it will be
+       handed. It needs no realm either: the lists it rasterizes are ones this file states, which is what
+       lets it separate the two FILL kinds by arithmetic rather than by a document. */
+    display_list_raster_selftest();
     display_list_selftest(ctx);
     /* AND core/paint/box_paint.h's entry beside it, which is the half that NEEDS a document — a
        realm on the ELEMENT's own document, a navigable presenting it and therefore a viewport. This

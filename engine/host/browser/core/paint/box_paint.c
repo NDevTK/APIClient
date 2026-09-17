@@ -155,18 +155,16 @@ static bool bp_background_propagates_to_canvas(JSContext *ctx, lxb_dom_element_t
 }
 
 /* CSS 2.1 §2.3.1 "The canvas"'s RENDERED REGION FOR THIS DOCUMENT, in the CLIENT coordinates every rectangle
- * in a display list is stated in. CSS 2.1 §2.3.1 makes the canvas infinite and leaves the region "established
- * by the user agent according to the target medium"; CSS 2.1 §10.1 "Definition of "containing block""
- * establishes it for continuous media by making the initial containing block have "the dimensions of the
- * viewport" and be "anchored at the canvas origin", and CSS 2.1 §E.2 anchors the viewport there too —
- * "Initially, the viewport is anchored with its top left corner at the canvas origin".
- * core/paint/display_list.h holds the argument for why a canvas mark carries this rectangle at all rather
- * than leaving it to whoever rasterizes.
+ * in a display list is stated in. core/paint/display_list.h holds the argument for why a canvas mark carries
+ * this rectangle at all rather than leaving it to whoever rasterizes.
  *
- * THE ORIGIN IS (0, 0) WHATEVER THE SCROLL POSITION, and that is a fact about the coordinates rather than an
- * approximation: client coordinates are the viewport's own, the fill covers an INFINITE area, and so
- * whichever part of the canvas the viewport is showing is inside it. Nothing here reads a scroll offset
- * because there is no question for one to answer.
+ * THE FOUR NUMBERS ARE core/frame/viewport.h's AND THIS FILE ASSEMBLES NONE OF THEM, which is what this
+ * function is for: every operand of CSS 2.1 §2.3.1's region — CSS 2.1 §10.1's initial containing block and
+ * the origin it is anchored at — belongs to the component that owns the viewport, and a second assembly of
+ * them here would be a second answer free to disagree with what `innerWidth` reports about the same
+ * viewport. What is left is the one part that is a PAINTER's question and not a frame's: WHICH REALM to ask.
+ * That is also why a rasterizing caller holding a `JSContext` asks `viewport_canvas_region` directly rather
+ * than reaching through an element for it.
  *
  * THE REALM IS THE DOCUMENT'S AND NOT THE WALK'S. core/frame/viewport.h states why they differ — a child
  * navigable's viewport is 300 CSS pixels wide where the top-level traversable's is 1280 — so the ICB is asked
@@ -188,12 +186,8 @@ static bool bp_canvas_region(lxb_dom_element_t *root, CssPx out[4])
                                       "node has no owner document — every node this engine mints belongs to "
                                       "the document that created it");
     dctx = document_active_realm_of(lxb_dom_interface_node(n->owner_document));
-    if (dctx == NULL || !viewport_exists(dctx)) return false;
-    out[0] = css_px(0.0);
-    out[1] = css_px(0.0);
-    out[2] = viewport_icb_width(dctx);
-    out[3] = viewport_icb_height(dctx);
-    return true;
+    if (dctx == NULL) return false;
+    return viewport_canvas_region(dctx, out);
 }
 
 /* CSS 2.1 §E.2's STEP 1, FIRST ITEM — "background color of element over the entire canvas", where WHICH

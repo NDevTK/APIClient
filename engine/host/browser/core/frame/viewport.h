@@ -141,6 +141,26 @@ double viewport_device_pixel_ratio(JSContext *ctx);
 CssPx viewport_icb_width(JSContext *ctx);
 CssPx viewport_icb_height(JSContext *ctx);
 
+/* CSS 2.1 §2.3.1 "The canvas"'s RENDERED REGION for this realm's document, written to `out` as an x, y, width
+   and height in the CLIENT coordinates a display list's rectangles are stated in.
+   IT IS NOT A THIRD GEOMETRY BESIDE THE TWO ABOVE, it is those two plus an ORIGIN. CSS 2.1 §2.3.1 says "The
+   canvas is infinite for each dimension of the space, but rendering generally occurs within a finite region
+   of the canvas, established by the user agent according to the target medium", and for continuous media
+   CSS 2.1 §10.1 establishes it by giving the initial containing block "the dimensions of the viewport"
+   anchored at the canvas origin. It is HERE and not in whoever paints because every operand is this
+   component's and a second assembly of the same four numbers is a second answer free to disagree with what
+   `innerWidth` reports about the same viewport.
+   THE ORIGIN IS (0, 0) WHATEVER THE SCROLL POSITION, which is a fact about the coordinates rather than an
+   approximation: client coordinates are the viewport's own, and the area the region is a window onto is
+   infinite, so whichever part of it the viewport shows is inside. Nothing here reads a scroll offset because
+   there is no question for one to answer.
+   ANSWERS FALSE, LEAVING `out` UNTOUCHED, where this realm's document is presented by no navigable — CSS 2.1
+   §10.1's ICB has the dimensions of the VIEWPORT and `viewport_exists` above is where that is decided, so no
+   region was ever established and there is no rectangle to fill rather than one this component could pick.
+   The two entries above answer a DEFAULT size for such a document, which is right for a length a layout is
+   still owed and wrong for a region a medium never established. */
+bool viewport_canvas_region(JSContext *ctx, CssPx out[4]);
+
 /* THE ONE SEAM A VALUE DERIVED FROM THIS COMPONENT'S FACTS CROSSES to become what the page reads, and the ONE
    table over `CssEnvFact` — so a length that crosses to JS anywhere in this engine mints its domain here or
    not at all. The facts are the ICB's two dimensions and the DEVICE PIXEL RATIO, which css-values §6's
