@@ -49,23 +49,41 @@ typedef enum {
 } ShadowRootFlag;
 bool shadow_root_flag(JSContext *ctx, const lxb_dom_node_t *n, ShadowRootFlag which);
 
-/* "SHADOW-INCLUDING ROOT" — DOM §4.2: the root's host's shadow-including root when the root is a shadow root,
+/* THE FOUR SHADOW-INCLUDING TERMS BELOW ARE DEFINED IN §4.8 "Interface ShadowRoot", AND THIS HEADER SAID
+   §4.2 "Node tree" AT THREE OF THEM WHILE ITS OWN `.c` SAID §4.8 AT BOTH OF ITS. The consumer was right and
+   the declaration was wrong, which is the direction that survives longest: a reader reaches for the header to
+   learn what a member IS, so the wrong number is the one that gets copied — and it was, into a component two
+   directories away, by an author who then had to record at their own site that they had taken it from here.
+   §4.2 is where PLAIN tree order lives, which is what makes the substitution read correctly to anyone who
+   knows the neighbourhood. `attach a shadow root` went the other way for the same reason: it is §4.9
+   "Interface Element"'s, because the algorithm belongs to the element that gets a root rather than to the
+   root, and this file is named for the root.
+   RETIREMENT: this record goes when no two files in this tree cite different sections for one DOM term, which
+   is a question `node engine/citegen.mjs` answers over the whole tree rather than a claim to be re-read
+   here. */
+/* "SHADOW-INCLUDING ROOT" — DOM §4.8 "Interface ShadowRoot": the root's host's shadow-including root when the
+   root is a shadow root,
    otherwise the root. What `getRootNode({composed:true})` answers and what §4.4's `isConnected` is stated
    over, which is why it lives beside node_root rather than inside one member. */
 lxb_dom_node_t *shadow_root_shadow_including_root(lxb_dom_node_t *n);
-/* §4.2's "A is a SHADOW-INCLUDING INCLUSIVE ANCESTOR of B" — the containment relation that CROSSES a shadow
-   boundary, so a host is one of everything in its shadow tree. Every caller of it is a place where the plain
-   ancestor walk answers `false` for a node inside a shadow tree: §2.9's event path uses it to find the boundary
-   to retarget at, §4.13.7's `setValidity` to accept an anchor inside the element's own shadow tree. */
+/* §4.8 "Interface ShadowRoot"'s SHADOW-INCLUDING INCLUSIVE ANCESTOR — "A shadow-including inclusive ancestor
+   is an object or one of its shadow-including ancestors", whose relational half the same section states the
+   other way round ("if and only if B is a shadow-including descendant of A"). The containment relation that
+   CROSSES a shadow boundary, so a host is one of everything in its shadow tree. Every caller of it is a
+   place where the plain ancestor walk answers `false` for a node inside a shadow tree: §2.9's event path
+   uses it to find the boundary to retarget at, HTML §4.13.7 "Element internals"'s `setValidity` to accept
+   an anchor inside the element's own shadow tree. */
 bool shadow_root_is_shadow_including_inclusive_ancestor(const lxb_dom_node_t *a, const lxb_dom_node_t *b);
-/* §4.2's SHADOW-INCLUDING TREE ORDER, one step at a time — node_next_in's shape, with an element's shadow root
+/* §4.8 "Interface ShadowRoot"'s SHADOW-INCLUDING TREE ORDER, one step at a time — node_next_in's shape, with
+   an element's shadow root
    visited just after the element and before its children. NULL once the walk leaves `root`, so
-   "the shadow-including inclusive descendants of R, in shadow-including tree order" is
+   `the shadow-including inclusive descendants of R, in shadow-including tree order` is
    `for (n = R; n; n = shadow_root_next_in_shadow_including(ctx, n, R))`. It takes a `ctx` because the
    element -> shadow root association is a per-flow fact kept on the element's WRAPPER. */
 lxb_dom_node_t *shadow_root_next_in_shadow_including(JSContext *ctx, lxb_dom_node_t *n, lxb_dom_node_t *root);
 
-/* §4.8 "ATTACH A SHADOW ROOT", REACHED FROM C. `attachShadow` is one caller and HTML §13.2.6.4.4's template
+/* §4.9 "Interface Element"'s ATTACH A SHADOW ROOT, REACHED FROM C. `attachShadow` is one caller and
+   HTML §13.2.6.4.4's template
    start tag is the other: the parser runs the SAME algorithm on an element it found in the tree it built, and a
    second copy of five refusals is five places for one of them to go missing. Returns the shadow root's wrapper
    (OWNED), or JS_EXCEPTION with the `NotSupportedError` pending — which the parser CATCHES, because tree
