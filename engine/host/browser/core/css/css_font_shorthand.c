@@ -290,9 +290,9 @@ static int font_words(const char *v, FontWord *w, int max)
  * prefix and begins `<'font-size'>`.
  *
  * `normal` IS AMBIGUOUS BY CONSTRUCTION AND THAT IS WHY IT NEEDS NO DECISION. It is a value of all four
- * prefix terms, and all four state `Initial: normal` (§2.4, §2.7's `<font-variant-css2>` over §6.5's
- * `font-variant-caps`, §2.2, §2.3) — and §2.7 resets every settable sub-property to its initial value before
- * setting any. So whichever slot it is read into holds the value that slot would hold anyway, and the only
+ * prefix terms, and all four state `Initial: normal` (§2.4, §2.7's `<font-variant-css2>` over
+ * css-fonts-4 §6.6 "Capitalization: the font-variant-caps property", §2.2, §2.3) — and §2.7 resets every
+ * settable sub-property to its initial value before setting any. So whichever slot it is read into holds the value that slot would hold anyway, and the only
  * thing the choice can change is how many MORE `normal`s the `||` still has room for. It fills the first
  * unfilled slot for exactly that reason.
  *
