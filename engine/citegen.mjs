@@ -2658,6 +2658,38 @@ const OTHER_SPECS = [
      claim about which standard it means outranks a phrase two documents share. An index row RAISES it; that is
      the next diff and not this one. */
   "css conditional",
+  /* THE NIST PUBLICATIONS THIS ENGINE'S CRYPTOGRAPHIC PRIMITIVES CITE, KEYED ON THE DESIGNATION AND NEVER ON
+     THE PUBLISHER. A one-word `fips`, `nist` or `sp` is the entry-holds-fewer-tokens-than-the-tree-writes
+     defect this project has paid for three times already, and `sp` alone is two generic letters standing in
+     front of every section sign that follows the word. Every site writes the two-word form, anchorTokens
+     offers every suffix of the tail longest-first, and a leading `NIST ` is therefore taken off by the suffix
+     walk rather than by a second row that would give one document two names.
+       WHAT WAS HAPPENING WITHOUT THESE ROWS IS NOT THE SILENT ZERO THE COMPONENTS BELIEVED THEY HAD. Three of
+     this engine's crypto headers say in their own words that the audit counts their citations and checks
+     none of them; that sentence describes the state these rows create and did not describe the state before
+     them. With no anchor obtainable, every one of these citations fell to its file's dominant vote and was
+     counted as WEB CRYPTOGRAPHY's — the standard those same components legitimately cite beside them — which
+     is an attribution this tool PRINTS, in its own by-standard census, for documents nobody cited there. A
+     shielded citation is not an unexamined one; it is one being examined as somebody else's.
+       WHAT THE ROWS BOUGHT AND WHAT THEY COST, MEASURED TOGETHER because neither number means anything alone:
+     41 citations left the file vote and 6 step references left EXISTS, where they had been CONFIRMED against
+     a document their authors never named, and the finding total moved in NO channel. The derivation is one
+     command rather than a figure to quote onward — `node engine/citegen.mjs` at a revision with and without
+     this block, read at the by-standard census line and at the four finding counts on the last line.
+       AN `other:` ROW BUYS SILENCE AND NOT COVERAGE, WHICH IS THE WHOLE OF WHAT IT CLAIMS. A foreign anchor
+     is never audited here, so these citations are now COUNTED AND OPENLY UNCHECKED, which is what this file
+     asks for in place of a zero it cannot distinguish from a clean bill.
+       RESIDUAL — WHAT IS NOT COVERED: a name ending on a designation that NEITHER list holds is still absent
+     from both gap censuses, so the next such publication is unreported rather than merely unindexed. The
+     levelled-name census only sees a name joined to a purely numeric version, and the unknown-name census is
+     gated on a CAPITAL first letter, which a designation does not have. WHAT THE NEXT DIFF BUILDS: that gate
+     widened to the same alphanumeric first character the tail regex now reads, so such a name is at least
+     NAMED as unplaced; an INDEX for these documents is a second and much larger subproblem, and it is a new
+     regen reader and not a row, because NIST publishes PDFs and every reader here reads heading markup. HOW
+     ITS ABSENCE WOULD SHOW: a run over components citing a NIST publication no row below names reports that
+     name in neither census line, while its citations sit in the file-vote band under whichever standard the
+     component cites most — so the report is clean about a standard it never looked at. */
+  "fips 197", "fips 180-4", "fips 198-1", "sp 800-38d",
   "positioned layout", "css viewport", "har",
   /* CSS modules, as this tree spells them when it does not use the levelled shortname */
   "css", "selectors", "cascade", "view", "values", "sizing", "fonts", "backgrounds", "text",
@@ -2812,7 +2844,30 @@ function anchorTokens(before) {
     .exec(tail.replace(MODULE_BEFORE_VERSION, ""));
   if (lv) joinLevel(lv[2], lv[3]);
   joined.missed = missed;
-  const m = /((?:[A-Za-z][A-Za-z0-9+-]*[ \t]+){0,2}[A-Za-z][A-Za-z0-9+-]*)$/.exec(tail);
+  /* AND A STANDARD'S NAME CAN END ON ITS OWN DESIGNATION, WHICH IS A WORD THAT BEGINS WITH A DIGIT — so the
+   * LAST token of the tail is read as alphanumeric where the words before it stay letter-initial. This is not
+   * the level join above wearing another hat: a level is an EDITION written after a name and joined back onto
+   * it, and a designation IS the name of the document. NIST and FIPS publish `FIPS 198-1`, `FIPS 180-4` and
+   * `SP 800-38D`, where the part after the space is the only thing that says WHICH publication and is a level
+   * of nothing.
+   *   AND THE LETTER-INITIAL RULE DID NOT COME BACK EMPTY, WHICH IS WHY THIS SURVIVED SO LONG: the regex
+   * carries no word boundary, so `SP 800-38D` matched the TRAILING LETTER of the designation and answered the
+   * one-character token `D` — a name no list holds and no author wrote. `FIPS 180-4` ends on a digit and
+   * answered nothing at all. Both classify to null and fall to the file vote, so one defect wore two shapes
+   * and neither was reportable: a one-letter token is under the unknown-name census floor and a name with a
+   * hyphenated version reaches no join, so NEITHER gap report could name the standard that was being missed.
+   *   WHY THIS CANNOT INVENT A STANDARD, WHICH IS THE PRICE A WIDENING HERE IS ALWAYS OWED. classifyAnchor
+   * decides a token in two passes and NEITHER of them can newly accept a word beginning with a digit. The
+   * first asks the two LISTS, so it answers only where a row was added deliberately. The second asks LEVELLED,
+   * whose shape is letter-initial, so a digit-initial word cannot match it however it is spelled. The widening
+   * therefore carries no verdict of its own: it makes a TOKEN EXIST, and a row is what decides it — which is
+   * the part of this file that is allowed to be wrong, and the part a reader can check by reading a list.
+   *   MEASURED RATHER THAN ARGUED, because a structural claim about a matcher is still a claim: run
+   * `node engine/citegen.mjs` with this line widened and NO row added beside it, against the same tree, and
+   * the report is BYTE-IDENTICAL — every finding, every count, every band. The unit fact the whole-tree run
+   * cannot show, and which says the edit took effect at all, is that anchorTokens answers `FIPS 180-4` with
+   * the tokens `FIPS 180-4` and `180-4` where it used to answer with none. */
+  const m = /((?:[A-Za-z][A-Za-z0-9+-]*[ \t]+){0,2}[A-Za-z0-9][A-Za-z0-9+-]*)$/.exec(tail);
   if (!m) return joined;
   const w = m[1].split(/[ \t]+/);
   const out = joined;
