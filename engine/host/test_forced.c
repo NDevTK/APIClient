@@ -753,6 +753,39 @@ static const char *HTML =
     "wmIso.set(wmOv1, 'wo1B'); wmIso.set(wmOv2, 'wo2B'); wmIso.set(wmDel1, 'wdB'); wmIso.set(wmDel2, 'wdB');"
     "var wsIso = new WeakSet(); var wsAddA = {}, wsAddP = {}, wsDelA = {}, wsDelP = {};"
     "wsIso.add(wsDelA); wsIso.add(wsDelP);"
+    /* THE STRONG-COLLECTION AND ARRAY BASELINES, HOISTED HERE FOR THE REASON THE WEAK ONES WERE — AND THE
+       REASON IS A FACT ABOUT THE SOLVER THAT WAS READ RATHER THAN ASSUMED. `decide_arm` (solver/decide.c)
+       asks `concolic_branch_decided(key)` FIRST, above the replay and above the fork: a flow that has
+       already answered a predicate REFINES a second test of it — no sibling, no slot — because the other arm
+       is contradicted by the flow's own record. `cfg.admin` is ONE value held on an ordinary object, so
+       every `if (cfg.admin)` in this document composes the same `branch` key, so only the FIRST of them
+       forks and each later one is decided inside the arm that already exists.
+       WHAT THAT DOES TO A ROW IS NOT A DETAIL, IT IS THE WHOLE CLAIM. §State-isolation skips an object the
+       running flow created (cow.c's `JS_ObjFlowGen(obj) > d->fork_gen`), and a fork sets both deltas'
+       fork_gen to the live generation and BUMPS it — so an object minted by a statement that sits AFTER the
+       document's first fork is flow-PRIVATE in every arm, each arm mints its own, and the capture under it
+       never runs at all. These four were minted one line above their own `if`, which is ~2100 lines below
+       the first `cfg.admin` branch: both worlds appeared for a reason that had nothing to do with the
+       delta, and all four rows read 1 with their captures deleted. They were isolation claims measuring
+       reachability.
+       MINTED HERE THEY ARE BASELINE BY CONSTRUCTION, which is the one property a statement placed beside
+       its own branch cannot promise: this <script> is the FIRST in the document to name `state`, so nothing
+       above it can have forked, `JS_ObjFlowGen` is <= every later fork_gen, and the two arms SHARE these
+       objects whichever `cfg.admin` does the forking.
+       THE OVERWRITE AND DELETE SUBJECTS CARRY A BASELINE VALUE FOR THE SAME REASON THE WEAK ONES DO: an
+       overwrite of an absent slot and a delete of an absent key are ADDs wearing another name, and the
+       three mutation kinds would collapse into one. `pfa` is the exception and is empty ON PURPOSE — an
+       append's claim is about what the array ACCUMULATES, so a pre-existing element would be a constant in
+       every world and would say nothing.
+       THIS IS AN INSERTION AND IT RE-POINTS EVERY COLUMN AFTER IT, which the three operand-shape statements
+       near the end of this document state as their reason for being APPENDED rather than inserted: the
+       document is ONE LINE, so a `@WHY` frame's COLUMN is the only coordinate a reader has into it. There is
+       no placement that avoids it here — the whole repair is that these objects must exist BEFORE the
+       document's first fork, and that is the top — and the four statements below changed length in place as
+       well, so the shift is owed either way. A `@WHY` column measured against a revision before this commit
+       does not name the same byte. */
+    "var pfa = []; var owa = ['ow1B', 'ow2B']; var _sad = new Set();"
+    "var _mm = new Map([['mmk1', 'base'], ['mmk2', 'base']]);"
     /* AND THE POSITIVE WITNESS, WHICH IS WHY IT STANDS HERE AND NOT AFTER THE FORK. Every other row of this
        family is a two-world claim whose 0 is "never reached" OR "a world was lost"; this one is a SINGLE
        world emitted by the pre-fork flow, so its 1 says the statement RAN with nothing else folded into it.
@@ -2893,7 +2926,27 @@ static const char *HTML =
     "delete globalThis.gdGone; globalThis.gdTag = cfg.admin ? 'gdADMIN' : 'gdPUBLIC';"
     " fetch('/api/gdel?v=' + globalThis.gdTag + (globalThis.gdGone === undefined ? 'gdSOLE' : 'gdLEAK'));"
     " delete globalThis.gdTag;"
-    "function floc(){ var o = { x: 'base' }; if (cfg.admin) { o.x = 'flocADMIN'; } else { o.x = 'flocPUBLIC'; } fetch('/api/floc?x=' + o.x); } floc();"   /* FLOW-LOCAL post-fork isolation: o is created inside floc() BEFORE the concolic fork; the snapshot shares o across siblings, so each arm's o.x mutation must be captured per-flow (cow_delta_fork forked=1). Both flocADMIN and flocPUBLIC ⇒ no cross-flow leak — settles whether the 'snapshot shares flow_local' comment is real or stale. */
+    /* FLOW-LOCAL post-fork isolation — AND THE QUESTION IT SAID IT WOULD SETTLE IS SETTLED BY READING, WITH
+       THE ANSWER THIS ROW DID NOT EXPECT. The banner here read "o is created inside floc() BEFORE the
+       concolic fork; the snapshot shares o across siblings", and BOTH halves are false of this statement:
+       `floc()` is CALLED ~280 lines below the document's first `cfg.admin` branch, and a second test of one
+       predicate is REFINED rather than forked — solver/decide.c's `decide_arm` asks `concolic_branch_decided`
+       above the replay and above the fork, so this `if` mints no sibling and the two arms that reach it
+       already exist. Each of them therefore runs `var o = { x: 'base' }` ITSELF, `JS_ObjFlowGen(o) >
+       d->fork_gen` holds in both, and cow.c's flow-private skip returns before any capture. The argument is
+       REWRITTEN rather than deleted because it is the one a reader re-derives: "minted one line above its own
+       `if`" reads as pre-fork and is pre-fork only for the document's FIRST branch.
+       WHAT THIS ROW MEASURES IS THEREFORE REACHABILITY OF BOTH ARMS, which is worth having and is not what
+       its name claims — it is also the second half of the same shape, since each arm writes `o.x` and reads
+       back only `o.x`, so even a shared `o` would answer each arm its own write under either ordering.
+       RESIDUAL. NOT COVERED: that a flow-private object's writes are correctly SKIPPED rather than captured,
+       which is §State-isolation's load-bearing O(shared-state-touched) invariant and has no row anywhere.
+       NEXT DIFF: a statement whose arms mutate one BASELINE object and read BOTH slots (the shape `owfork`
+       and `mapmutfork` now carry) is not that check either — what this one needs is a count, asserting that a
+       flow-private write adds NO delta entry, which is a fact about the delta's size rather than about an
+       emitted value. HOW ITS ABSENCE SHOWS: a delta that grows with a loop body's per-iteration transients
+       rather than with shared state touched, observed as the entry count a flow parks with. */
+    "function floc(){ var o = { x: 'base' }; if (cfg.admin) { o.x = 'flocADMIN'; } else { o.x = 'flocPUBLIC'; } fetch('/api/floc?x=' + o.x); } floc();"
     "var acc = 0; for (var i = 0; i < 15; i++) { acc = acc + i; }"   /* a real LOOP (back-edges) so the quantum fires: a flow yields MID-LOOP and the scheduler interleaves parked sibling flows, exercising the COW+decide+pins swap */
     "function* gen(n){ var s=0; for(var i=0;i<n;i++){ s=s+i; } yield s; yield s*2; }"   /* GENERATOR body with a LOOP: .next() runs the body on the tramp chain, the loop preempts the base flow */
     "var git = gen(2000); fetch('/api/gen?a=' + git.next().value + '&b=' + git.next().value);"
@@ -2908,8 +2961,23 @@ static const char *HTML =
     "function* gpar([a,b,c]){ yield a+b+c; } fetch('/api/genparam?v=' + gpar([10,20,30]).next().value);"   /* PARAM-DESTRUCTURING generator: the array destructuring iterates at CREATION on the tramp chain (do_generator_create_tramp) */
     "var _fe=0; [10,20,30].forEach(function(x){ var t=0; for(var i=0;i<50;i++) t++; _fe += x + t; }); fetch('/api/foreach?s=' + _fe);"   /* forEach callback with a LOOP: the callback runs on the tramp chain (do_array_iter_tramp), so its back-edges PARK the base flow and resume — never drive-to-completion -> 60+150=210 */
     "[1,2].forEach(function(e){ var w = cfg.admin ? 'feADMIN' : 'fePUBLIC'; fetch('/api/fefork?e=' + e + w); });"   /* CONCOLIC branch INSIDE a forEach callback: forks DEEP (chain base->iter-callback). clone_deep_flow must clone the callback frame's cont_state (JSArrayEvery) so the sibling continues the iteration independently -> both feADMIN and fePUBLIC over elements 1 AND 2 */
-    "var pfa = []; if (cfg.admin) { pfa.push('pushA'); } else { pfa.push('pushB'); } fetch('/api/pushfork?a=' + pfa.join(','));"   /* SHARED-ARRAY append isolation: pfa is created before the concolic fork (shared by the snapshot); each arm's push must be COW-isolated via the fast-array-append capture (element slot, removed by truncate-to-index on unapply) -> EXACTLY 'pushA' and 'pushB', never the contaminated 'pushA,pushB' */
-    "var owa = ['base']; if (cfg.admin) { owa[0] = 'owA'; } else { owa[0] = 'owB'; } fetch('/api/owfork?a=' + owa[0]);"   /* SHARED-ARRAY OVERWRITE isolation: owa[0] exists before the fork; each arm overwrites the SAME in-bounds element. The overwrite fast-path (set_value on values[idx]) must capture the baseline -> EXACTLY 'owA' and 'owB', never one arm seeing the other's value */
+    /* SHARED-ARRAY append isolation over the BASELINE `pfa` minted in the first <script> — see the paragraph
+       there for why it may not be minted on this line, and for the read of `decide_arm` that settles it. The
+       append's read is already order-independent: `join` renders what the array ACCUMULATED, so whichever arm
+       runs second reads 'pushA,pushB' the instant the fast-array-append capture is missing, and that value
+       names NEITHER world. */
+    "if (cfg.admin) { pfa.push('pushA'); } else { pfa.push('pushB'); } fetch('/api/pushfork?a=' + pfa.join(','));"
+    /* SHARED-ARRAY OVERWRITE isolation over the BASELINE `owa`. EACH ARM OVERWRITES ITS OWN SLOT AND THE READ
+       RENDERS BOTH, which is what makes this a claim about isolation rather than about reachability: an arm
+       that writes a slot and reads back only THAT slot reads its own write whether or not the write was
+       captured, so a leak is invisible and the row degenerates. This statement previously had exactly that
+       shape — both arms wrote `owa[0]` and each read `owa[0]` back — so 'owA' and 'owB' were both emitted
+       under EITHER ordering with the element capture deleted.
+       READING THE SIBLING'S SLOT MEANS WHICHEVER ARM RUNS SECOND SEES THE FIRST ARM'S WRITE the instant the
+       capture is missing, for either ordering, and emits 'owA-owP' — a value NEITHER world names. The two
+       worlds are 'owA-ow2B' (admin overwrote slot 0, slot 1 still baseline) and 'ow1B-owP' (public overwrote
+       slot 1, slot 0 still baseline). This is `weakover`'s `wo1A-wo2P` shape over a plain array. */
+    "if (cfg.admin) { owa[0] = 'owA'; } else { owa[1] = 'owP'; } fetch('/api/owfork?a=' + owa[0] + '-' + owa[1]);"
     "fetch('/api/mapfork?r=' + [1,2].map(function(e){ return (cfg.admin ? 'mA' : 'mP') + e; }).join('-'));"   /* CONCOLIC branch inside a MAP callback: the deep-fork clones the JSArrayEvery cont_state (shared ret array, COW-isolated per arm via fast-array capture). cfg.admin is config (symbolic, forks per element) -> 4 clean combos incl mA1-mA2 and mP1-mP2, none with a dropped element */
     "fetch('/api/arrmap?s=' + [1,2,3,4,5].map(function(x){ return x*2; }).filter(function(x){ return x>4; }).join(','));"   /* map + filter through the step coroutine -> 6,8,10 */
     "var _fc=0; Array.prototype.forEach.call([5,6], function(x){ var t=0; for(var i=0;i<20;i++) t++; _fc += x + t; }); fetch('/api/fecall?s=' + _fc);"   /* .call is CALL-SITE-RESOLVED: unwrapped at the operator site (do_forward_call) and re-dispatched into the array-iter coroutine, so the looping callback still PARKS the base -> 11+40=51 */
@@ -2943,9 +3011,27 @@ static const char *HTML =
     "function* gof(){ if (cfg.admin) { yield 'ofA'; } else { yield 'ofP'; } } var ofr=''; for (const x of gof()) { ofr += x; } fetch('/api/genofork?v=' + ofr);"   /* FOR-OF generator-body concolic fork: the generator is driven by for-of (its object lives on the caller stack, not the tramp frame), so clone_deep_flow recovers it from caller_sp[forof_off] to record the per-flow gen_data swap -> both ofA and ofP */
     "function* aff(){ if (cfg.admin) { yield 'afA'; } else { yield 'afP'; } } fetch('/api/afromfork?v=' + Array.from(aff())[0]);"   /* Array.from(GEN) consumer fork: the gen body branches while CONSUMED by Array.from on the tramp (CONT_ITER_CONSUME), so clone_deep_flow's gen-branch clones the JSIterConsume state -> both afA and afP */
     "function* spf(){ if (cfg.admin) { yield 'spA'; } else { yield 'spP'; } } fetch('/api/spreadfork?v=' + [...spf()][0]);"   /* [...GEN] spread consumer fork: same CONT_ITER_CONSUME machinery, SPREAD sink (append to the literal's array), forks mid-consume -> both spA and spP */
-    "var _sad = new Set(); if (cfg.admin) { _sad.add('sadA'); } else { _sad.add('sadP'); } fetch('/api/setaddfork?v=' + [...(_sad)][0]);"   /* SHARED-SET record isolation: _sad is created before the concolic fork; each arm's Set.add must be COW-isolated via the map_add capture (record removed by JS_MapDeleteRecord on unapply) -> EXACTLY 'sadA' and 'sadP', never a contaminated set holding both */
+    /* SHARED-SET record isolation over the BASELINE `_sad` minted in the first <script>. THE READ IS A
+       POSITION AND NOT A KEY, which is what keeps it order-independent: §24.2 Set Objects iterates in
+       INSERTION order, so `[0]` is whichever arm added FIRST. With the map_add capture present each arm's
+       set holds one record and `[0]` is its own; with it missing the arm that runs SECOND reads the FIRST
+       arm's token, so one of the two worlds is never emitted under either ordering and the row is 0. */
+    "if (cfg.admin) { _sad.add('sadA'); } else { _sad.add('sadP'); } fetch('/api/setaddfork?v=' + [...(_sad)][0]);"
     "function* sef(){ if (cfg.admin) { yield 'seA'; } else { yield 'seP'; } } fetch('/api/setfork?v=' + [...new Set(sef())][0]);"   /* new Set(GEN) consumer fork: the Set consumer (CONT_ITER_CONSUME, SET sink) forks mid-consume; now fork-SAFE via the map_add COW capture -> both seA and seP */
-    "var _mm = new Map([['k','base']]); if (cfg.admin) { _mm.set('k','mmA'); } else { _mm.delete('k'); } fetch('/api/mapmutfork?v=' + (_mm.has('k') ? _mm.get('k') : 'gone'));"   /* SHARED-MAP overwrite/delete isolation: _mm is created before the fork; one arm OVERWRITES 'k', the other DELETES it. The map_mutate undo-log capture (unapply restores the old value / re-adds) keeps them per-flow -> EXACTLY 'mmA' and 'gone', never cross-contaminated */
+    /* SHARED-MAP overwrite/delete isolation over the BASELINE `_mm` minted in the first <script>. EACH ARM
+       MUTATES ITS OWN KEY AND THE READ RENDERS BOTH, for the reason spelled at `owfork` above and at the weak
+       family below. THE PREVIOUS SHAPE COULD NOT DETECT A LEAK AT ALL and this is the row that shape was
+       named from: both arms mutated `'k'` and each read back only `'k'`, so the overwrite arm emitted 'mmA'
+       and the delete arm emitted 'gone' under EITHER ordering with the map_mutate undo log deleted — the row
+       measured that both arms were REACHED while reading as a two-world isolation claim, which is the
+       §A-FIELD-A-CONSUMER-DEFAULTS defect performed on the verification layer.
+       THE TWO WORLDS ARE 'mmA-has' AND 'base-gone', and a leak emits 'mmA-gone' in EITHER ordering — admin
+       first leaves `mmk1` overwritten under the delete arm, public first leaves `mmk2` absent under the
+       overwrite arm, and both compose a value neither world names. `base-gone` carries the English word
+       `gone` this fixture emits from four earlier statements, which costs nothing: `param_value_is` compares
+       the WHOLE value of this endpoint's own `v`, so no other statement's record can satisfy it. */
+    "if (cfg.admin) { _mm.set('mmk1','mmA'); } else { _mm.delete('mmk2'); }"
+    "fetch('/api/mapmutfork?v=' + _mm.get('mmk1') + '-' + (_mm.has('mmk2') ? 'has' : 'gone'));"
     /* THE SAME THREE MUTATIONS OVER A *WEAK* COLLECTION — the siblings of the three rows above, over records
        captured through a JSCowWeakRef cell instead of through a dup of the key. The collections are BASELINE
        and are minted in the document's FIRST <script>; see the paragraph there for why they may not be minted
@@ -2954,8 +3040,10 @@ static const char *HTML =
        need ONE pair of siblings sharing the baseline collections, which is what this gives them.
        EACH ARM MUTATES ITS OWN KEY AND READS *BOTH*, AND THAT IS WHAT MAKES THESE ROWS ORDER-INDEPENDENT. An
        arm that writes a key and reads back only THAT key reads its own write whether or not the write was
-       captured — so a leak is invisible and the row measures reachability, which is `mapmutfork`'s shape one
-       collection kind over. Reading the SIBLING's key instead means whichever arm runs SECOND sees the first
+       captured — so a leak is invisible and the row measures reachability. That was `mapmutfork`'s shape one
+       collection kind over, and `owfork`'s, and it is `floc-iso`'s still; this paragraph is where the shape
+       was named and the two Map/array rows now carry the repair, so what to take from here is the SHAPE
+       rather than a row to go and read. Reading the SIBLING's key instead means whichever arm runs SECOND sees the first
        arm's mutation the instant the capture is missing, for EITHER ordering, and its world is then lost:
        `wa11` for the add, `wo1A-wo2P` for the overwrite, `wd00` for the delete, `ws1100` for the WeakSet.
        Each of those four is a value NEITHER world names, so the row cannot pass on the leak by either route.
@@ -3944,10 +4032,19 @@ static const char *HTML =
    corrupt memory." Keep it SMALL — every added branch multiplies the flow count and the ASan wall-clock. */
 static const char *HTML_MIN =
     "<!doctype html><html><body>"
-    "<script>var cfg = { admin: state.admin };</script>"
+    /* THE BASELINES ARE MINTED IN THIS <script> AND NOT BESIDE THEIR OWN `if`, for the reason the full
+       document's first <script> spells out: a second `if (cfg.admin)` is REFINED rather than forked
+       (solver/decide.c's `decide_arm` asks `concolic_branch_decided` first), so an object minted after the
+       forEach branch below is flow-PRIVATE in every arm and the capture under it never runs. DECLARATIONS
+       ONLY — this fixture is the ASan gate and an added BRANCH would multiply its flow count. */
+    "<script>var cfg = { admin: state.admin };"
+    " var owa = ['ow1B', 'ow2B']; var _sad = new Set();"
+    " var _mm = new Map([['mmk1', 'base'], ['mmk2', 'base']]);</script>"
     "<script>"
     "[1,2].forEach(function(e){ var w = cfg.admin ? 'feADMIN' : 'fePUBLIC'; fetch('/api/fefork?e=' + e + w); });"   /* forEach callback deep clone */
-    "var owa = ['base']; if (cfg.admin) { owa[0] = 'owA'; } else { owa[0] = 'owB'; } fetch('/api/owfork?a=' + owa[0]);"   /* array-element COW */
+    /* array-element COW. Each arm overwrites its OWN slot and the read renders BOTH — see the full
+       document's statement for why reading back only the slot you wrote makes a leak invisible. */
+    "if (cfg.admin) { owa[0] = 'owA'; } else { owa[1] = 'owP'; } fetch('/api/owfork?a=' + owa[0] + '-' + owa[1]);"
     "delete globalThis.gdGone; globalThis.gdTag = cfg.admin ? 'gdADMIN' : 'gdPUBLIC';"   /* slot removal on the EXOTIC global — see the full document */
     " fetch('/api/gdel?v=' + globalThis.gdTag + (globalThis.gdGone === undefined ? 'gdSOLE' : 'gdLEAK'));"
     " delete globalThis.gdTag;"
@@ -3992,9 +4089,10 @@ static const char *HTML_MIN =
        nothing refuses an allocation until the machine does (solver/reclaim.h owns that edge, and `sold` in
        @PROGRESS is what reports it). */
     "var _af = Array.from(state.items); fetch('/api/optiter?n=' + _af.length + '&a=' + _af[0] + '&b=' + _af[1]);"
-    "var _sad = new Set(); if (cfg.admin) { _sad.add('sadA'); } else { _sad.add('sadP'); } fetch('/api/setaddfork?v=' + [...(_sad)][0]);"   /* SHARED-SET record isolation: _sad is created before the concolic fork; each arm's Set.add must be COW-isolated via the map_add capture (record removed by JS_MapDeleteRecord on unapply) -> EXACTLY 'sadA' and 'sadP', never a contaminated set holding both */
+    "if (cfg.admin) { _sad.add('sadA'); } else { _sad.add('sadP'); } fetch('/api/setaddfork?v=' + [...(_sad)][0]);"   /* SHARED-SET record isolation over the BASELINE `_sad` above: each arm's Set.add must be COW-isolated via the map_add capture (record removed by JS_MapDeleteRecord on unapply). The read is a POSITION, so the arm that runs SECOND reads the FIRST arm's token when the capture is missing -> EXACTLY 'sadA' and 'sadP' */
     "function* sef(){ if (cfg.admin) { yield 'seA'; } else { yield 'seP'; } } fetch('/api/setfork?v=' + [...new Set(sef())][0]);"   /* new Set(GEN) consumer fork: the Set consumer (CONT_ITER_CONSUME, SET sink) forks mid-consume; now fork-SAFE via the map_add COW capture -> both seA and seP */
-    "var _mm = new Map([['k','base']]); if (cfg.admin) { _mm.set('k','mmA'); } else { _mm.delete('k'); } fetch('/api/mapmutfork?v=' + (_mm.has('k') ? _mm.get('k') : 'gone'));"   /* SHARED-MAP overwrite/delete isolation: _mm is created before the fork; one arm OVERWRITES 'k', the other DELETES it. The map_mutate undo-log capture (unapply restores the old value / re-adds) keeps them per-flow -> EXACTLY 'mmA' and 'gone', never cross-contaminated */
+    "if (cfg.admin) { _mm.set('mmk1','mmA'); } else { _mm.delete('mmk2'); }"
+    "fetch('/api/mapmutfork?v=' + _mm.get('mmk1') + '-' + (_mm.has('mmk2') ? 'has' : 'gone'));"   /* SHARED-MAP overwrite/delete isolation over the BASELINE `_mm` above: one arm OVERWRITES its own key, the other DELETES a different one, and the read renders BOTH — so a missing map_mutate undo-log entry composes `mmA-gone` in either ordering -> EXACTLY 'mmA-has' and 'base-gone' */
     "(async function(){ function* afsf(){ if (cfg.admin) { yield 'afsA'; } else { yield 'afsP'; } } var out=[]; for await (var x of afsf()) { out.push(x); } fetch('/api/afsfork?v=' + out[0]); })();"   /* for-await(GEN) consumer fork: the sync gen body branches while driven by the async-from-sync consumer (CONT_ASYNC_FROM_SYNC) on the tramp — clone_deep_flow clones the JSAsyncFromSync state with a FRESH wrapper promise per arm -> both afsA and afsP */
     "function* paf(){ if (cfg.admin) { yield Promise.resolve('pafA'); } else { yield Promise.resolve('pafP'); } } Promise.all(paf()).then(function(a){ fetch('/api/paffork?v=' + a[0]); });"   /* Promise.all(GEN) consumer fork at index==0: the gen branches during the FIRST .next() before any element .then is attached (CONT_PROMISE_ALL) — clone_deep_flow clones the JSPromiseAll aggregate fresh per arm -> both pafA and pafP */
     "function* paf2(){ yield Promise.resolve('p0'); if (cfg.admin) { yield Promise.resolve('pf2A'); } else { yield Promise.resolve('pf2P'); } } Promise.all(paf2()).then(function(a){ fetch('/api/paf2fork?v=' + a[0] + '-' + a[1]); });"   /* Promise.all(GEN) consumer fork at index>0: the gen yields element 0 THEN branches (fork during .next() #2, index==1). The retained pre-fork element wrapper (p0) is RE-ATTACHED to the sibling aggregate -> BOTH arms resolve a[0]=='p0' AND their own a[1] (p0-pf2A and p0-pf2P) */
@@ -10840,9 +10938,12 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     /* FLOW-LOCAL post-fork isolation: an object created before a concolic fork (flow_local at creation) is SHARED
        by the snapshot; each arm's mutation must be per-flow. Both values present ⇒ cow_delta_fork's forked=1 keeps
        post-fork flow_local mutations captured — no leak (the older 'snapshot shares flow_local (unsound)' claim). */
+    /* THE SUBJECT NAMES WHAT A 0 HERE WOULD MEAN AND NO LONGER NAMES A CAPTURE, because this row cannot be
+       about one: its object is flow-PRIVATE in both arms (the statement says why), so no capture runs under
+       it and a leak has nothing to travel through. Both arms reaching their own fetch is what it establishes. */
     const char *floc_iso_why = NULL; int floc_iso = 1;
     FORK_ROW(js, &floc_iso, &floc_iso_why, "/api/floc", "x",
-             "cow_delta_fork's forked=1, which is what keeps a post-fork mutation of a flow_local object captured",
+             "BOTH ARMS REACHING THIS STATEMENT AT ALL — and not a capture, which this row cannot be about",
              "flocADMIN", "flocPUBLIC");
     /* CONCOLIC FORK inside a forEach CALLBACK: the branch forks deep (base->iter-callback frame); clone_deep_flow
        clones the JSArrayEvery cont_state so the sibling continues the iteration on its own. All four combinations
@@ -10856,19 +10957,29 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "clone_deep_flow's clone of the JSArrayEvery cont_state, which is what lets a sibling forked "
              "inside the callback go on iterating on its own",
              "1feADMIN", "2feADMIN", "1fePUBLIC", "2fePUBLIC");
-    /* SHARED-ARRAY append isolation: each arm's push into the pre-fork array must be COW-isolated. The values
+    /* SHARED-ARRAY append isolation: each arm's push into the BASELINE array must be COW-isolated. The values
        are matched WHOLE, so the contaminated join `pushA,pushB` satisfies neither world and the row says which
        one it could not find — the quoted-`strstr` spelling was reaching for whole-value equality and this is
-       it, scoped to this endpoint's own param as well. */
+       it, scoped to this endpoint's own param as well.
+       "PRE-FORK" IS NOW TRUE OF THE ARRAY AND USED TO BE TRUE OF NOTHING. `pfa` was minted one line above its
+       own `if`, ~2100 lines BELOW the document's first `cfg.admin` branch — and a second test of one predicate
+       is REFINED rather than forked (solver/decide.c's `decide_arm` asks `concolic_branch_decided` above the
+       replay and above the fork), so that `if` forked nothing, each arm minted its own `pfa`, cow.c's
+       flow-private test skipped every push, and this row read 1 with the append capture deleted. The array is
+       minted in the document's first <script> now, which is the only placement that makes it shared. */
     const char *pushfork_why = NULL; int pushfork_tt = 1;
     FORK_ROW(js, &pushfork_tt, &pushfork_why, "/api/pushfork", "a",
              "the fast-array-append capture, which is what isolates each arm's push into the pre-fork array "
              "(a leak joins both arms into one value and neither world is then found)",
              "pushA", "pushB");
+    /* SHARED-ARRAY element-overwrite isolation. THE WORLDS NAME BOTH SLOTS BECAUSE THE STATEMENT READS
+       BOTH, and what the previous pair asserted was reachability: `owA` and `owB` were each an arm reading
+       back the slot that arm had just written, which answers the same bytes whether or not the write was
+       captured. The pair below cannot be satisfied that way — a leak composes `owA-owP`, which is neither. */
     const char *owfork_why = NULL; int owfork_tt = 1;
     FORK_ROW(js, &owfork_tt, &owfork_why, "/api/owfork", "a",
-             "the in-bounds element-overwrite capture, which is what isolates two arms writing the SAME slot",
-             "owA", "owB");
+             "the in-bounds element-overwrite capture, which is what isolates two arms writing one array",
+             "owA-ow2B", "ow1B-owP");
     /* MAP fork: clean per-arm result arrays, no dropped element. The two canonical arms are matched WHOLE, so
        a dropped element0 (`-mA2`) is no longer that arm's value and the row names the world it lost. The
        leading-dash clause stays as its own fold because it is a claim about the WHOLE document — a third,
@@ -10922,8 +11033,13 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     FORK_ROW(js, &spreadfork_tt, &spreadfork_why, "/api/spreadfork", "v",
              "the SPREAD-sink variant of CONT_ITER_CONSUME, whose arms append to their own COW-isolated array",
              "spA", "spP");
-    /* SHARED-SET record isolation: a pre-fork Set, each arm adds a different record ⇒ the map_add capture
-       isolated each arm's Set.add (JS_MapDeleteRecord on unapply, JS_MapAddRecord on apply). */
+    /* SHARED-SET record isolation: a BASELINE Set, each arm adds a different record ⇒ the map_add capture
+       isolated each arm's Set.add (JS_MapDeleteRecord on unapply, JS_MapAddRecord on apply). The read is
+       `[...(_sad)][0]`, a POSITION rather than a key, so it is the sibling's record that the second arm sees
+       when the capture is missing and one of the two worlds then never appears under either ordering.
+       THE SET IS MINTED IN THE DOCUMENT'S FIRST <script> AND USED TO BE MINTED BESIDE THIS `if`, which made
+       it flow-private in both arms and this row a reachability test — the placement paragraph is there and
+       the reading of `decide_arm` that forces it is at `pushfork` above. */
     const char *setaddfork_why = NULL; int setaddfork_tt = 1;
     FORK_ROW(js, &setaddfork_tt, &setaddfork_why, "/api/setaddfork", "v",
              "the map_add capture, which is what isolates two arms adding to one pre-fork Set",
@@ -10934,40 +11050,38 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     FORK_ROW(js, &setfork_tt, &setfork_why, "/api/setfork", "v",
              "the SET-sink variant of CONT_ITER_CONSUME over the map_add capture",
              "seA", "seP");
-    /* SHARED-MAP overwrite/delete isolation: one arm overwrites a pre-fork Map key, the other deletes it. Both mmA
-       and gone present ⇒ the map_mutate undo-log capture isolated each arm's mutation (restored on unapply).
-       WHAT STOOD HERE SAID THIS ROW WAS THE ONLY ONE OF THE FAMILY THAT NEEDED SCOPING, AND THAT SENTENCE IS
-       REFUTED 31 LINES BELOW ITSELF. It read: "Every other member of this family names its two worlds with a
-       pair minted for it alone (afA/afP, spA/spP, sadA/sadP, seA/seP), so an unscoped `strstr` for one of
-       those can only match the statement that emits it." `/api/paffork` emits `pafA` and `pafP`, which CONTAIN
-       `afA` and `afP` — so `afromfork`'s BOTH world clauses were satisfiable by another statement's records,
-       and the row that sentence certified was broken in exactly the way this one was. The lesson is not that
-       one more token needed minting: A MINT IS NOT A UNIQUENESS PROOF, because it is a claim about every
-       token this document will ever emit, including the ones a later statement adds. Scoping is the proof,
-       and the whole family now goes through FORK_ROW, which composes the endpoint, the param and the world
-       into the message so the remedy has an object.
-       `gone` is an ENGLISH WORD this fixture already emits from four earlier statements — `/api/cegone?v=isgone`,
-       `&removed=gone`, `&del=gone` and the IDB record's `made77gone` — and all four sit EARLIER in this document
-       than the Map statement does. So the delete-arm clause was satisfied by whichever of those ran first and
-       could not fail here: §5558's "a term that cannot fail" defect, in the one row of the family whose token was
-       not minted. The row therefore never asserted the delete world at all, and what it actually measured was
-       `mmA` — reachability of the OVERWRITE arm — while reading as a two-world claim.
-       That is what made its 0 unreadable in a run the CPU budget cut short: a bare conjunction has no `why`, so
-       "the statement never ran" and "one arm's mutation leaked into the other" print the same byte, and a
-       truncated run's 0 is indistinguishable from a COW-isolation regression. Both halves are fixed here — the
-       value clauses are scoped to this endpoint's own `v` param so `gone` means THIS statement's delete arm, and
-       the reachability clause is separated so a 0 says which of the two it is. */
-    const char *mapmutfork_why = NULL;
-    int mapmutfork_tt = 1;
-    fold_row(&mapmutfork_tt, &mapmutfork_why, !!strstr(js, "\"/api/mapmutfork\""),
-             "the Map statement never ran: there is no /api/mapmutfork record at all, so the two clauses below "
-             "are about how far this run got and not about the map_mutate capture");
-    fold_row(&mapmutfork_tt, &mapmutfork_why, param_value_is(js, "/api/mapmutfork", "v", "mmA"),
-             "the admin arm overwrote the pre-fork key and read back something else — its map_mutate undo-log "
-             "entry restored the baseline value under it, or the two arms shared one Map");
-    fold_row(&mapmutfork_tt, &mapmutfork_why, param_value_is(js, "/api/mapmutfork", "v", "gone"),
-             "the else arm deleted the pre-fork key and still found one — the delete's undo-log entry re-added "
-             "the baseline value into the deleting arm's own delta, or the arms shared one Map");
+    /* SHARED-MAP overwrite/delete isolation: one arm overwrites a BASELINE Map key, the other deletes a
+       DIFFERENT one, and the read renders BOTH. Worlds 'mmA-has' and 'base-gone' ⇒ the map_mutate undo-log
+       capture isolated each arm's mutation.
+       THIS ROW COULD NOT DETECT A LEAK AT ALL AND IT IS WHERE THE DEFECT SHAPE WAS NAMED, so the argument is
+       rewritten here rather than deleted — a reader who re-derives the old reasoning writes the old row back.
+       Both arms mutated ONE key `'k'` and each read back only `'k'`: the overwrite arm read its own write and
+       the delete arm read its own delete, so 'mmA' and 'gone' were both emitted under EITHER ordering with
+       the undo log deleted. What it measured was that both arms were REACHED, under a name claiming
+       isolation. §Solver-half's own repair for it is the weak family's and is now this row's: EACH ARM
+       MUTATES ITS OWN KEY AND READS BOTH, so whichever arm runs second sees the first arm's mutation the
+       instant the capture is missing and composes `mmA-gone`, which neither world names.
+       AND THE OBJECT IT MUTATES HAD TO MOVE FOR THE READ SHAPE TO MEAN ANYTHING. `_mm` was minted one line
+       above its own `if`, ~2100 lines below the document's first `cfg.admin` branch, and a second test of one
+       predicate is REFINED rather than forked — solver/decide.c's `decide_arm` asks `concolic_branch_decided`
+       above the replay and above the fork, because the other arm is contradicted by the flow's own record and
+       a bundle testing one flag in twenty places would otherwise cost a million flows. So that `if` forked
+       nothing, each arm minted its OWN Map, and cow.c's flow-private test (`JS_ObjFlowGen(obj) >
+       d->fork_gen`) skipped every mutation. A fixed read shape over a flow-private Map is still a
+       reachability test; the Map is minted in the document's first <script> now.
+       THE EARLIER REPAIRS TO THIS ROW STAND AND ARE WHAT MADE THE REST VISIBLE. `gone` is an ENGLISH WORD
+       four earlier statements emit — `/api/cegone?v=isgone`, `&removed=gone`, `&del=gone`, `made77gone` — so
+       an unscoped `strstr` for it could not fail here at all, and the three-state fold that separates "never
+       reached" from "a world was lost" is what stopped a truncated run reading as a COW regression. Both are
+       kept by going through FORK_ROW, which scopes every world to this endpoint's own `v` param with
+       `param_value_is` and composes the NOT-REACHED clause from the frontier's measured standing rather than
+       from a reader's comparison of neighbouring rows. The three hand-rolled folds this replaces were a
+       second spelling of exactly that. */
+    const char *mapmutfork_why = NULL; int mapmutfork_tt = 1;
+    FORK_ROW(js, &mapmutfork_tt, &mapmutfork_why, "/api/mapmutfork", "v",
+             "the map_mutate undo-log capture, which is what isolates an overwrite in one arm from a delete "
+             "in the other over one baseline Map",
+             "mmA-has", "base-gone");
     /* WEAK-COLLECTION ISOLATION — the claims the three rows above make for a STRONG Map and Set, made over a
        WeakMap and a WeakSet, whose records are captured through a JSCowWeakRef cell (a BORROWED key and up to
        two owned values) instead of through a dup of the key. The statement and its baseline collections are
