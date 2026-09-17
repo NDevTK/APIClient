@@ -1510,6 +1510,27 @@ static const IdlGlobalRow IDL_GLOBALS[] = {
       IDL_GLOBAL_OWN_WINDOW, COUNTOF(IDL_GLOBAL_OWN_WINDOW) },
 };
 
+/* WEB IDL §3.8's PROTOTYPE-ONLY BAND — names a [Global] object reaches UP ITS CHAIN and must NEVER carry
+   as an own property, in ANY realm. It is `globalMemberNames` minus every IDL_GLOBAL_OWN_* band above, so
+   it names exactly the members §3.8 leaves to §3.7.3's interface prototype object.
+   ITS READER NEEDS NO REALM. A name here is wrong on a Window global and wrong on a worker global for the
+   same reason, so core/realm.c asks one bsearch and no row, no mask and no [Global] identifier — which is
+   why `importScripts` and `fonts` are in it beside EventTarget's four: a Window-shaped table could not
+   have named them, and browser/platform_names.h is exactly that Window-shaped table.
+   NEITHER NEIGHBOUR CAN ANSWER THIS. IDL_EXPOSURE is keyed on the identifiers §3.8 `define the global
+   property references` puts on a global, so a MEMBER has no row there at all; IDL_MEMBER_EXPOSURE drops a
+   member whose union over the [Global] interfaces is `*`, which is what EventTarget's operations are. A
+   walk reaching for either to ask whether a name may be OWN gets a clean answer about a population it
+   never examined — engine/idlgen.mjs states that at the derivation, with the residual this band leaves. */
+static const char *const IDL_PROTOTYPE_ONLY[] = {
+    "addEventListener",
+    "dispatchEvent",
+    "fonts",
+    "importScripts",
+    "removeEventListener",
+    "when",
+};
+
 /* WEB IDL §3.7.6 Attributes' "If attr is not exposed in realm, then continue." and §3.7.7 Operations'
    "If op is not exposed in realm, then continue.", as the one fact those two steps need that no
    identifier states: the global names on which a MEMBER of a [Global] interface may stand.
@@ -1822,7 +1843,8 @@ static const IdlMemberExposureRow IDL_MEMBER_EXPOSURE[] = {
    wrong-operand table sitting in the header inviting the next reader to reach for it.
    THE FACT ITSELF IS NOT LOST AND IS STILL LOAD-BEARING IN THE GENERATOR: idlgen.mjs builds that union in
    one pass and refuses to emit anything unless IDL_MEMBER_EXPOSURE is a subset of it AND every row's
-   `own` band is a subset of it, which is what keeps all three arrays answering about one population. A C
+   `own` band is a subset of it. IDL_PROTOTYPE_ONLY above is that union MINUS those bands, so the union is
+   now a derivation and not only a check, and what keeps all four arrays answering about one population. A C
    consumer that needs "is this name a member ANYWHERE on a [Global] chain" — the walk over a finished
    global in core/realm.c is the one that will — re-emits it here WITH that reader, never before. */
 #endif

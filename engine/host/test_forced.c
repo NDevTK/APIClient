@@ -904,6 +904,30 @@ static const char *HTML =
        member that answers null on an element. */
     "var e1 = document.createElement('div'); var e2 = document.createElement('span');"
     "fetch('/api/protoid?v=' + (e1.getAttribute === e2.getAttribute ? 'shared' : 'percopy'));"
+    /* WEB IDL §3.8's OWN-PROPERTY BAND, OBSERVED FROM THE PAGE — the half core/realm.c's walk structurally
+       cannot ask. That walk enumerates the own properties a global HAS and judges each; this asks what the
+       global must NOT have, which is a question about an absence and has no row to stand on. Both are needed
+       and neither is the other: browser/idl_exposure.h's IDL_PROTOTYPE_ONLY makes the wrong-target install
+       abort in a dev build, and this row is what scores the engine when it does not abort, because an absent
+       crash is the weakest evidence a fix can produce.
+       THE FOUR ARMS ARE THE FOUR THINGS A BROWSER ANSWERS, and WPT's window-properties.https.html asserts
+       three of them for these same names: `id in window` true, the descriptor `undefined`, and the value
+       IDENTICAL to the one on EventTarget.prototype. The fourth is window-prototype-chain.html's, and it is
+       why the third can hold — `window` reaches §2.7's prototype in exactly three links, through
+       Window.prototype and the WindowProperties object core/frame/window.c builds between them.
+       `o` IS THE DISCRIMINATING ARM and it is asked of all three operations, because a placement that put one
+       of them back would otherwise be scored by a row that only looked at the first. THE PAYLOAD IS CONSTANTS:
+       every character is a literal, so nothing here can become unknown and turn a run that took the path into
+       a request that never went out. */
+    "var geo = '';"
+    "geo += ('addEventListener' in window) ? 'i' : 'I';"
+    "geo += (Object.getOwnPropertyDescriptor(window, 'addEventListener') === undefined"
+    " && Object.getOwnPropertyDescriptor(window, 'removeEventListener') === undefined"
+    " && Object.getOwnPropertyDescriptor(window, 'dispatchEvent') === undefined) ? 'o' : 'O';"
+    "geo += (window.addEventListener === EventTarget.prototype.addEventListener) ? 's' : 'S';"
+    "geo += (Object.getPrototypeOf(Object.getPrototypeOf(Object.getPrototypeOf(window)))"
+    " === EventTarget.prototype) ? 'c' : 'C';"
+    "fetch('/api/globalown?v=' + (geo === 'iosc' ? 'protoonly' : 'arm' + geo));"
     "var tx = document.createTextNode('base'); e1.appendChild(tx); tx.data = null;"
     "fetch('/api/cdnull?v=' + (tx.data === '' ? 'empty' : 'wrong'));"
     "e1.textContent = null;"

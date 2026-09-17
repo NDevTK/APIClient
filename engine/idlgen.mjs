@@ -2679,7 +2679,8 @@ memberRows.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
 const globalMemberNames = [...memberExposureUnion.keys()].sort();
 for (const [n] of memberRows)
   if (!globalMemberNames.includes(n))
-    throw new Error(`[idl-audit] \`${n}\` has an IDL_MEMBER_EXPOSURE row and is not in IDL_GLOBAL_MEMBERS — ` +
+    throw new Error(`[idl-audit] \`${n}\` has an IDL_MEMBER_EXPOSURE row and is not in this generator's globalMemberNames ` +
+                    `union — which no longer reaches the header as IDL_GLOBAL_MEMBERS, so grep the generator ` +
                     `both are read out of one union over chainOf of every §3.3.8 [Global] interface, so the ` +
                     `first being a subset of the second is what makes core/idl_args.c's no-row arm mean "this ` +
                     `member's exposure set is \`*\`" rather than "this is not a [Global] member". A filter ` +
@@ -2697,9 +2698,10 @@ for (const [n] of memberRows)
                     `agree only over ASCII, and a bsearch over an array sorted the other way answers wrongly`);
 
 /* ---- WEB IDL §3.8's OWN-PROPERTY BAND, PER [Global] INTERFACE ------------------------------------------- */
-/* WHICH MEMBERS MAY STAND ON A REALM'S GLOBAL OBJECT AT ALL — a DIFFERENT question from IDL_GLOBAL_MEMBERS
-   above, which unions the whole inheritance chain, and the two are emitted twenty lines apart so the
-   difference is worth stating flatly. That union exists so a name REACHABLE from a global is never REMOVED
+/* WHICH MEMBERS MAY STAND ON A REALM'S GLOBAL OBJECT AT ALL — a DIFFERENT question from the generator's
+   `globalMemberNames`, which unions the whole inheritance chain. That union is no longer emitted at all and
+   this band is, which is the difference made structural rather than stated: a header that carried both
+   invited the next reader to take the weaker one. That union exists so a name REACHABLE from a global is never REMOVED
    from a realm; this one exists so a name that may only be reached UP THE PROTOTYPE CHAIN is never WRITTEN
    onto the object. A consumer that read the union for this question accepts every inherited member as an own
    property, which is the §3.8 violation whose only symptom is a descriptor read.
@@ -2749,7 +2751,7 @@ const globalOwnOf = new Map(globalRows.map(([iface]) =>
 /* THE SAME TWO REFUSALS THE TABLES ABOVE MAKE, FOR THE SAME TWO REASONS, and they have to be made again
    because this is a third array sorted by a third call. ASCII, because the C reads each row with bsearch and
    strcmp and a JavaScript code-unit sort agrees with strcmp's order only over ASCII. And CONTAINMENT in
-   IDL_GLOBAL_MEMBERS, because the union above is built over `chainOf` of every [Global] interface and this
+   `globalMemberNames`, because that union is built over `chainOf` of every [Global] interface and this
    band is drawn from `declaredBy` plus the chain's unforgeables — both subsets of that walk by construction,
    so a name here that is not there means one of the two derivations has been filtered differently and the two
    arrays have stopped being about one population. */
@@ -2761,13 +2763,81 @@ for (const [iface, own] of globalOwnOf)
                       `two orders agree only over ASCII, and a bsearch over an array sorted the other way ` +
                       `answers wrongly`);
     if (!globalMemberNames.includes(n))
-      throw new Error(`[idl-audit] \`${iface}\` declares \`${n}\` and IDL_GLOBAL_MEMBERS does not carry it — ` +
+      throw new Error(`[idl-audit] \`${iface}\` declares \`${n}\` and this generator's globalMemberNames union does ` +
+                      `not carry it — ` +
                       `that union is taken over \`chainOf\` of every §3.3.8 [Global] interface and this band ` +
                       `over \`declaredBy\` plus the chain's unforgeables, so this is a subset of it by ` +
                       `construction. A filter that broke the containment has made the two arrays answer about ` +
                       `two populations`);
   }
 const ownArrayName = (iface) => `IDL_GLOBAL_OWN_${iface.replace(/[^A-Za-z0-9]/g, "_").toUpperCase()}`;
+
+/* WEB IDL §3.8's PROTOTYPE-ONLY BAND — the names a [Global] object may reach UP ITS CHAIN and must never carry
+   as an OWN property, in any realm this engine builds. It is the set difference of the two derivations above
+   and it states no rule of its own: `globalMemberNames` is every member reachable from some global, each
+   per-interface band is what §3.8 WRITES ONTO that global, so what is in the first and in none of the second
+   is exactly what only a prototype may hold. The sections that decide it are quoted at those two derivations
+   rather than again here — one sentence held at two sites is two chances to go stale.
+   IT IS REALM-INDEPENDENT ON PURPOSE, WHICH IS WHAT LETS ITS CONSUMER ASK NOTHING ABOUT THE REALM. A name is
+   excluded if ANY [Global] interface declares it, so core/realm.c needs no row, no mask and no [Global]
+   identifier to use this — one bsearch over one array, in every realm kind, with no per-realm operand that
+   could be wrong. That is a deliberate UNDER-approximation and the residual below names what it costs.
+   IT IS THE BAND THAT CAN SEE THE DEFECT, WHICH IS NOT TRUE OF ITS NEIGHBOURS, and that is the whole reason it
+   is emitted. IDL_EXPOSURE is keyed on the identifiers §3.8 `define the global property references` puts on a
+   global, so a MEMBER has no row there by construction; IDL_MEMBER_EXPOSURE drops a member whose union over
+   the [Global] interfaces is `*`, which is precisely what `addEventListener` is. A consumer reaching for
+   either of those to ask whether a name may be OWN here gets a clean answer about a population it never saw.
+   MEASURED over this corpus: 285 reachable names, 279 of them own to some [Global] interface, SIX left —
+   EventTarget's `addEventListener`, `removeEventListener`, `dispatchEvent` and Observable's `when`, plus
+   `importScripts` and `fonts`, which a worker global reaches only through WorkerGlobalScope.prototype. Those
+   last two are why this is not a Window-shaped question: browser/platform_names.h is Window-only and could
+   never have named them.
+   NAMED RESIDUAL — A MEMBER ON THE WRONG KIND OF GLOBAL. WHAT IS NOT COVERED: a name own to ONE [Global]
+   interface installed on a DIFFERENT one's global — `close` onto a Window, say — is excluded from this band by
+   the very union that makes it realm-independent, so this cannot see it. WHAT THE NEXT DIFF BUILDS: the
+   per-realm ask, which is core/idl_args.c's `idl_realm_global_declares` over the row's own band; it is static
+   there today and the diff that uses it exports it. HOW ITS ABSENCE WOULD SHOW: a realm's global carries an
+   own property that this band admits and that realm's IDL_GLOBAL_OWN_* array does not list, and no walk
+   anywhere reports it. */
+const globalOwnAnywhere = new Set([...globalOwnOf.values()].flat());
+const prototypeOnlyNames = globalMemberNames.filter((n) => !globalOwnAnywhere.has(n));
+/* AN EMPTY BAND WOULD MAKE ITS C READER A CHECK THAT CANNOT FAIL, which is the largest false clean bill this
+   file could mint and the reason this is a refusal rather than an emitted zero-length array: a walk that
+   bsearches an empty table reports every global clean, on every run, for ever, while reading exactly like a
+   walk that examined something. The same argument BUILT_GLOBALS makes above, one band over. */
+if (!prototypeOnlyNames.length)
+  throw new Error("[idl-audit] every member reachable from a [Global] object is also declared BY one, so Web " +
+                  "IDL §3.8's prototype-only band is empty and core/realm.c's walk over it could not fail — " +
+                  "either the corpus lost every non-[Global] interface a global inherits, or the two " +
+                  "derivations this is the difference of have stopped being about one population");
+/* THE SAME TWO REFUSALS EVERY OTHER ARRAY HERE MAKES. ASCII, because the C reads this with bsearch and strcmp
+   and a JavaScript code-unit sort agrees with that order only over ASCII — and SORTEDNESS is inherited rather
+   than re-imposed: `globalMemberNames` is sorted and `filter` preserves order, so re-sorting here would hide
+   the day that stops being true instead of reporting it.
+   AND DISJOINTNESS FROM IDL_EXPOSURE, which is new and is about the CONSUMER rather than about this array. The
+   walk asks IDL_EXPOSURE first and this band second, so a name carried by both would be classified by the
+   order of two `if`s in a C file rather than by the corpus — an identifier answering as a member, or the
+   reverse, decided by which branch happens to stand first. */
+{
+  const identifiers = new Set(exposureRows.map((r) => r[0]));
+  let prev = null;
+  for (const n of prototypeOnlyNames) {
+    if (!/^[\x20-\x7e]+$/.test(n))
+      throw new Error(`[idl-audit] the prototype-only member \`${n}\` is not ASCII, and core/realm.c reads ` +
+                      `this band with bsearch and strcmp — a JavaScript code-unit sort agrees with strcmp's ` +
+                      `order only over ASCII, so the search would answer wrongly`);
+    if (prev !== null && !(prev < n))
+      throw new Error(`[idl-audit] the prototype-only band is not ascending at \`${prev}\` -> \`${n}\` — it ` +
+                      `inherits its order from globalMemberNames, so that array has stopped being sorted and ` +
+                      `every bsearch keyed on it is now unsound`);
+    if (identifiers.has(n))
+      throw new Error(`[idl-audit] \`${n}\` is BOTH a Web IDL §3.8 property reference identifier and a ` +
+                      `prototype-only member name, and core/realm.c's walk asks IDL_EXPOSURE first — so which ` +
+                      `question this name is judged by would be decided by the order of two branches in a C ` +
+                      `file rather than by the corpus`);
+    prev = n;
+  }
+}
 
 const expW = Math.max(...exposureRows.map((r) => r[0].length + 2));
 const memW = memberRows.length ? Math.max(...memberRows.map((r) => r[0].length + 2)) : 0;
@@ -2848,6 +2918,20 @@ const exposureH =
   globalRows.map(([n, m]) =>
     `    { ${`"${n}",`.padEnd(globW + 1)} ${maskSpelling(m)},\n`
     + `      ${ownArrayName(n)}, COUNTOF(${ownArrayName(n)}) },`).join("\n") + "\n};\n\n" +
+  "/* WEB IDL §3.8's PROTOTYPE-ONLY BAND — names a [Global] object reaches UP ITS CHAIN and must NEVER carry\n" +
+  "   as an own property, in ANY realm. It is `globalMemberNames` minus every IDL_GLOBAL_OWN_* band above, so\n" +
+  "   it names exactly the members §3.8 leaves to §3.7.3's interface prototype object.\n" +
+  "   ITS READER NEEDS NO REALM. A name here is wrong on a Window global and wrong on a worker global for the\n" +
+  "   same reason, so core/realm.c asks one bsearch and no row, no mask and no [Global] identifier — which is\n" +
+  "   why `importScripts` and `fonts` are in it beside EventTarget's four: a Window-shaped table could not\n" +
+  "   have named them, and browser/platform_names.h is exactly that Window-shaped table.\n" +
+  "   NEITHER NEIGHBOUR CAN ANSWER THIS. IDL_EXPOSURE is keyed on the identifiers §3.8 `define the global\n" +
+  "   property references` puts on a global, so a MEMBER has no row there at all; IDL_MEMBER_EXPOSURE drops a\n" +
+  "   member whose union over the [Global] interfaces is `*`, which is what EventTarget's operations are. A\n" +
+  "   walk reaching for either to ask whether a name may be OWN gets a clean answer about a population it\n" +
+  "   never examined — engine/idlgen.mjs states that at the derivation, with the residual this band leaves. */\n" +
+  "static const char *const IDL_PROTOTYPE_ONLY[] = {\n" +
+  prototypeOnlyNames.map((n) => `    "${n}",`).join("\n") + "\n};\n\n" +
   "/* WEB IDL §3.7.6 Attributes' \"If attr is not exposed in realm, then continue.\" and §3.7.7 Operations'\n" +
   "   \"If op is not exposed in realm, then continue.\", as the one fact those two steps need that no\n" +
   "   identifier states: the global names on which a MEMBER of a [Global] interface may stand.\n" +
@@ -2878,7 +2962,8 @@ const exposureH =
   "   wrong-operand table sitting in the header inviting the next reader to reach for it.\n" +
   "   THE FACT ITSELF IS NOT LOST AND IS STILL LOAD-BEARING IN THE GENERATOR: idlgen.mjs builds that union in\n" +
   "   one pass and refuses to emit anything unless IDL_MEMBER_EXPOSURE is a subset of it AND every row's\n" +
-  "   `own` band is a subset of it, which is what keeps all three arrays answering about one population. A C\n" +
+  "   `own` band is a subset of it. IDL_PROTOTYPE_ONLY above is that union MINUS those bands, so the union is\n" +
+  "   now a derivation and not only a check, and what keeps all four arrays answering about one population. A C\n" +
   "   consumer that needs \"is this name a member ANYWHERE on a [Global] chain\" — the walk over a finished\n" +
   "   global in core/realm.c is the one that will — re-emits it here WITH that reader, never before. */\n" +
   "#endif\n";
@@ -2888,7 +2973,9 @@ emitGenerated("idl_exposure.h", exposureH,
               `members those interfaces and their chains declare, the ${memberRows.length} of THOSE ` +
               `whose exposure set can EXCLUDE a realm, and the ` +
               `${[...globalOwnOf.values()].reduce((a, o) => a + o.length, 0)} member placements §3.8 ` +
-              `writes ONTO a global across those ${globalRows.length} interfaces`,
+              `writes ONTO a global across those ${globalRows.length} interfaces, and the ` +
+              `${prototypeOnlyNames.length} of those members that NO [Global] interface declares, so only a ` +
+              `§3.7.3 interface prototype object may carry them`,
               "idl_args.c answers §3.3.7 step 1 off it at every global property reference and at every member " +
               "installed on a global, so a stale table is a name present in a realm the standard says it is " +
               "absent from, or absent from one it is in.");

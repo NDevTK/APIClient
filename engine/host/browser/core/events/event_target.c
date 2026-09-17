@@ -368,13 +368,21 @@ static JSValue js_event_target_ctor(JSContext *ctx, JSValueConst new_target, int
    distrust if it comes back, and five siblings already disagreed with it: core/idl_args.c, core/html/focus.c,
    core/html/simple_dialogs.c, core/frame/window.c and host/test_forced.c each say member OF a [Global]
    INTERFACE, which is the rule, and only this file said member of a [Global] OBJECT'S CHAIN.
-   WHAT THE DELETION GIVES UP, NAMED RATHER THAN GLOSSED: the removed block also DCHECKed that `EventTarget`
-   was already on the global, asserting that core/realm.h's intrinsic column had run before core/platform.c's
-   per-document one. event_target_proto's own DCHECK asserts that same ordering from the operand
-   core/frame/window.c actually consumes — read one call earlier, to build the chain — so what is lost is the
-   narrower case alone: an intrinsic that sets the class proto and skips the property reference.
-   RETIREMENT: this record goes when core/realm.c's global walk judges §3.7.6 attributes and §3.7.7 operations
-   beside §3.8's property references, because a wrong-target install then ABORTS and cannot return by argument. */
+   THE DELETION GIVES UP NOTHING, AND THIS PARAGRAPH SAID OTHERWISE — the correction is kept rather than the
+   claim, because it was an OVER-CLAIM about coverage and those are believed without check. It read: the
+   removed block also DCHECKed that `EventTarget` was already on the global, so what is lost is the narrower
+   case of an intrinsic that sets the class proto and skips the property reference. Half of that stands —
+   event_target_proto's own DCHECK asserts the ORDERING from the operand core/frame/window.c actually
+   consumes, one call earlier, to build the chain. The other half named a gap that was never open:
+   core/realm.c's realm_assert_interface_objects_asked walks the §3.7.3 census this component tags `proto`
+   into and aborts on any tagged prototype whose §3.8 property reference nothing ever asked for, in Window
+   realms from core/platform.c and in worker realms from host/test_forced.c. An intrinsic that set the proto
+   and skipped the reference is exactly what that fires on. The residual was written without reading it.
+   AND core/realm.c NOW JUDGES THE OTHER DIRECTION TOO: browser/idl_exposure.h's IDL_PROTOTYPE_ONLY carries
+   the member names no §3.3.8 [Global] interface declares, and the walk over a finished global aborts on any
+   of them standing as an own property — so re-introducing the deleted placement is no longer an argument
+   somebody can win, in any realm kind. host/test_forced.c scores the same fact from the page, because an
+   absent crash is the weakest evidence a fix can produce. */
 
 void event_target_set_tree(const EventTargetTree *tree)
 {

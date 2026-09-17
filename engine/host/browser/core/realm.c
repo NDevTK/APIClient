@@ -68,6 +68,16 @@ static int idl_exposure_row_name_cmp(const void *key, const void *row)
     return strcmp((const char *)key, ((const IdlExposureRow *)row)->name);
 }
 
+/* bsearch over a plain sorted array of names — browser/idl_exposure.h's IDL_PROTOTYPE_ONLY, and the same shape
+   core/idl_args.c uses over an IDL_GLOBALS row's `own` band. The two are not shared because the natural home
+   for one spelling is core/idl_args.h and this diff does not touch that header; they are one line each and
+   both are checked against arrays engine/idlgen.mjs refuses to emit unsorted or non-ASCII, which is what makes
+   two spellings safe here rather than the shape that drifts. */
+static int idl_name_ptr_cmp(const void *key, const void *el)
+{
+    return strcmp((const char *)key, *(const char *const *)el);
+}
+
 /* WEB IDL §3.8 Platform objects implementing interfaces' DESCRIPTOR, ASSERTED OVER THE FINISHED GLOBAL — the
    one check that can see an install which never called the install entry.
    WHY IT CANNOT LIVE AT THE ENTRY. `define the global property references` has exactly one door here
@@ -180,7 +190,39 @@ void realm_assert_global_property_references(JSContext *ctx)
         /* NO ROW MEANS THIS IS NOT A §3.8 PROPERTY REFERENCE — a §3.7.6 attribute or §3.7.7 operation of the
            [Global] interface, an ECMAScript intrinsic, or a name a host added — and none of those owes either
            question below. See the banner for why that classification is the generated table's to make. */
-        if (row == NULL) { JS_FreeCString(ctx, name); continue; }
+        if (row == NULL) {
+            /* AND A PASSING WALK OVER IDL_EXPOSURE ALONE IS NOT COVERAGE, WHICH IS WHY THIS BRANCH IS NOT A
+               BARE `continue` ANY MORE. That table is keyed on the identifiers §3.8 `define the global property
+               references` puts on a global, so a MEMBER cannot have a row in it — not because none was written
+               but because the table is not about members at all. Every §3.7.6 attribute and §3.7.7 operation
+               therefore reached this line, was classified as "not our question", and left; the walk reported
+               clean about a population its own predicate could not contain. That is a blind spot wearing a
+               check's grammar, and the next reader of a green run will read it as coverage unless it says so
+               here.
+               IDL_PROTOTYPE_ONLY IS THE BAND THAT CAN SEE IT, and it is a fact about the CORPUS rather than
+               about this realm: a name no §3.3.8 [Global] interface declares is one §3.8 never writes onto any
+               global, so it is wrong here whatever kind of global this is. That is why nothing below asks for
+               a row, a mask or a [Global] identifier — the question has no realm in it, which is also what
+               makes it askable in a worker realm, where `importScripts` and `fonts` are two of the six.
+               IT IS A `DCHECK` AND ITS OPERAND IS OURS. The name came off a global this codebase finished
+               building, before one byte of script ran in it — the same precondition the two asserts below
+               stand on, and the same one the banner names as carried by nobody. */
+            DCHECKF(bsearch(name, IDL_PROTOTYPE_ONLY, COUNTOF(IDL_PROTOTYPE_ONLY),
+                            sizeof IDL_PROTOTYPE_ONLY[0], idl_name_ptr_cmp) == NULL,
+                    "`%s` is an OWN property of this realm's global and Web IDL §3.8 Platform objects "
+                    "implementing interfaces never writes it onto one. Its [Global] arm defines the members "
+                    "of the object's PRIMARY interface — §3.7.7 Operations fixes that set as \"the list of "
+                    "regular operations that are members of definition\" — and no §3.3.8 [Global] interface "
+                    "in the corpus declares `%s`, so the only algorithm that could place it is §3.7.3 "
+                    "Interface prototype object, onto the prototype of whichever interface DOES declare it. "
+                    "The one place §3.8 walks the object's chain copies the [[Unforgeables]] slot and nothing "
+                    "else, and this name is not in one. A page sees the difference: "
+                    "`Object.getOwnPropertyDescriptor(globalThis, '%s')` answers a descriptor here and "
+                    "`undefined` in every browser. Install it on the declaring interface's prototype instead: "
+                    "`git grep '\\\"%s\\\"' engine/host/browser` finds the site", name, name, name, name);
+            JS_FreeCString(ctx, name);
+            continue;
+        }
         DCHECKF(!tab[i].is_enumerable,
                 "`%s` is an ENUMERABLE own property of this realm's global, and Web IDL §3.8 Platform objects "
                 "implementing interfaces performs DefineMethodProperty(target, id, interfaceObject, false) for "
