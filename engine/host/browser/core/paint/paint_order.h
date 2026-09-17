@@ -24,10 +24,20 @@
  *
  * THE SUB-LISTS SPLIT INTO TWO KINDS AND ONLY ONE OF THEM IS ORDER. CSS 2.1 §E.2's step 2 block arm is three marks in
  * a fixed sequence — background colour, background image, border — which is a MARK VOCABULARY and belongs to
- * whatever lays ink. CSS 2.1 §E.2's step 2 TABLE arm and its step 7.2 are ENUMERATIONS (six background levels over a
- * table's column groups, columns, row groups, rows and cells; the line boxes of a block and the boxes inside
- * each line), and an enumeration is order and is therefore this component's. Both are named residuals at the
- * foot of this header, with what builds them.
+ * whatever lays ink. CSS 2.1 §E.2's step 2 TABLE arm and its step 7.2 are ENUMERATIONS, and an enumeration is order
+ * and is therefore this component's. The TABLE arm is sequenced here; step 7.2's line boxes are a named
+ * residual at the foot of this header, with what builds them.
+ *
+ * THE TABLE ARM IS SEVEN ITEMS OF WHICH SIX ARE BACKGROUNDS, and both numbers are written down because one
+ * sentence carrying a count and the list it counts is where the two drift. CSS 2.1 §E.2 lists "table backgrounds
+ * (color then image)", then column group, column, row group, row and cell backgrounds — SIX levels, of which
+ * the TABLE's own is the first — and then a seventh item, "all table borders (in tree order for separated
+ * borders)". CSS 2.1 §17.5.1 "Table layers and transparency" states the same six as "six superimposed layers",
+ * bottom-up, in that order: the table box, the column groups, the columns, the row groups, the rows, the cells.
+ * MEASURED by diffing CSS 2.1 §E.2's two table arms item by item rather than by reading either of them: they
+ * differ in EXACTLY ONE item — step 2's item 1 carries "unless it is the root element" and step 4's does not —
+ * and items 2 through 7 are byte-identical, which is why one `PaintStep` serves both arms for every item but
+ * the first and two serve the first.
  *
  * WHY STEP 10 IS A RESIDUAL AND A TABLE IS NOT, WHICH IS THE ONE PLACE THIS FILE MAKES A JUDGEMENT. CLAUDE.md's
  * test is whether the code is WRONG or merely NARROWER. Omitting CSS 2.1 §E.2's step 10 leaves a prefix that IS CSS 2.1 §E.2's
@@ -35,7 +45,7 @@
  * are simply not drawn — so it is narrower and it is named. Omitting a TABLE in the middle of step 4 would
  * leave a sequence that CLAIMS to be steps 1 through 9 and is not one: the consumer would paint every other
  * box and never learn that a box was passed over. That is wrong rather than narrow, so a table arm is offered
- * like any other box and the enumeration inside it is the residual, never a silent skip.
+ * as CSS 2.1 §E.2's own seven items and never as a silent skip; what is left inside item 7 is named below.
  *
  * THE WALK IS OVER ONE DOCUMENT'S TREE AND CANNOT LEAVE IT, WHICH IS A SECURITY INVARIANT AND NOT A SCOPE. A
  * display list carries text runs and URLs read out of a document's DOM, so a CROSS-ORIGIN child's display list
@@ -89,8 +99,30 @@
    (CSS 2.1 §E.2's 7.1 and 7.2), which a numbered enum could not spell. The CSS 2.1 §E.2 coordinate is on each row instead. */
 typedef enum {
     PAINT_STEP_ROOT_BACKGROUND,   /* CSS 2.1 §E.2 step 1   — the root element's background, over the entire canvas */
-    PAINT_STEP_CONTEXT_BOX,       /* CSS 2.1 §E.2 step 2   — the context element's own background and border */
-    PAINT_STEP_DESCENDANT_BOX,    /* CSS 2.1 §E.2 step 4   — an in-flow non-positioned block-level descendant's */
+    PAINT_STEP_CONTEXT_BOX,       /* CSS 2.1 §E.2 step 2's BLOCK arm — the context element's background and border */
+    PAINT_STEP_DESCENDANT_BOX,    /* CSS 2.1 §E.2 step 4's BLOCK arm — an in-flow non-positioned block-level one's */
+    /* CSS 2.1 §E.2's TABLE ARM, item by item. The arm's SEVEN items are offered as seven calls rather than as one,
+       for the reason this header's opening paragraph gives about boxes: the table box contributes item 1 AND
+       item 7 with five other boxes' marks BETWEEN them, so a consumer that painted one offer completely before
+       taking the next would lay a cell background over a row border CSS 2.1 §17.5.1 "Table layers and transparency"
+       puts beneath it. The arm applies to a `display: table` box only — CSS 2.1 §E.2's step 2 arm reads "block level
+       table" and its step 4 arm is inside a walk of block-level descendants, and CSS 2.1 §9.2.1 "Block-level elements
+       and block boxes" closes that list at "'block', 'list-item', and 'table'". An `inline-table` therefore
+       takes neither, exactly as it takes neither arm of step 2 today. */
+    PAINT_STEP_CONTEXT_TABLE_BACKGROUND,    /* step 2's TABLE arm item 1 — "table backgrounds (color then image)
+                                               unless it is the root element" */
+    PAINT_STEP_DESCENDANT_TABLE_BACKGROUND, /* step 4's TABLE arm item 1 — the same without the root clause,
+                                               which is the ONLY item the two arms spell differently */
+    PAINT_STEP_COLUMN_GROUP_BACKGROUND,     /* item 2 — one 'table-column-group' box */
+    PAINT_STEP_COLUMN_BACKGROUND,           /* item 3 — one 'table-column' box */
+    PAINT_STEP_ROW_GROUP_BACKGROUND,        /* item 4 — one row group box */
+    PAINT_STEP_ROW_BACKGROUND,              /* item 5 — one 'table-row' box */
+    PAINT_STEP_CELL_BACKGROUND,             /* item 6 — one 'table-cell' box */
+    /* item 7 — "all table borders (in tree order for separated borders)", offered ONCE carrying the TABLE
+       element. It is the item WHOLE and not the table's own border: the borders of the table and of every
+       internal box inside it are one item of CSS 2.1 §E.2's list, laid after all six background levels. Which boxes
+       and in what order is the residual at the foot of this header. */
+    PAINT_STEP_TABLE_BORDERS,
     PAINT_STEP_INLINE_LINE_BOXES, /* CSS 2.1 §E.2 step 6   — the line boxes an inline stacking context is in */
     PAINT_STEP_REPLACED_CONTENT,  /* CSS 2.1 §E.2 step 7.1 — a block-level replaced element's content, atomically */
     PAINT_STEP_LINE_BOXES,        /* CSS 2.1 §E.2 step 7.2 — the line boxes of a block-level box */
@@ -100,8 +132,22 @@ typedef enum {
 /* ONE OFFER. Returns whether the walk should go on; `false` stops it where it stands, and everything already
    offered stays offered — which is what makes a consumer that meets an operand it cannot compute able to keep
    its prefix instead of losing the run.
-   `el` IS ALWAYS AN ELEMENT OF THE DOCUMENT THE WALK WAS STARTED IN and always generates a box; both are
-   asserted at the walk rather than left to each visitor to re-establish. */
+   `el` IS ALWAYS AN ELEMENT OF THE DOCUMENT THE WALK WAS STARTED IN, and the two halves of the walk guarantee
+   that DIFFERENTLY, which is why this sentence names both rather than claiming one mechanism. The boxes
+   CSS 2.1 §E.2's own steps collect come from core/dom/shadow_root.h's shadow-including walker, whose only edges
+   are a node's children and an element's shadow root, so they cannot leave the Document BY CONSTRUCTION — the
+   paragraph above on a child navigable is that argument. The boxes of CSS 2.1 §E.2's TABLE arm come from
+   core/layout/table_box.h and core/layout/table_column_box.h, which are OTHER components' walks, so that half
+   is ASSERTED at each offer instead.
+   `el` DOES NOT ALWAYS GENERATE A BOX THAT IS PAINTED AS A BOX, AND THE TABLE ARM IS WHY. CSS 2.1 §17.2 "The CSS
+   table model" says "Elements with 'display' set to 'table-column' or 'table-column-group' are not rendered
+   (exactly as if they had 'display: none'), but they are useful, because they may have attributes which induce
+   a certain style for the columns they represent", and CSS 2.1 §17.5.1 "Table layers and transparency"
+   nevertheless gives both a background LAYER. The two sentences do not conflict: such a box EXISTS, occupies
+   grid cells (CSS 2.1 §17.5 "Visual layout of table contents"' rules 3 and 4), is not painted as an ordinary box,
+   and its background is a level of its TABLE's sequence. That is the whole reason this component must
+   enumerate the level — a column box is reachable from no other step of CSS 2.1 §E.2 at all, so a consumer handed
+   only the boxes CSS 2.1 §E.2's steps collect could never learn that one exists. */
 typedef bool (*PaintOrderVisit)(PaintStep step, lxb_dom_element_t *el, void *user);
 
 /* CSS 2.1 §E.2's PAINTING ORDER FOR ONE STACKING CONTEXT, offered one box at a time, in CSS 2.1 §E.2's own sequence. Answers
@@ -119,25 +165,77 @@ typedef bool (*PaintOrderVisit)(PaintStep step, lxb_dom_element_t *el, void *use
    difference between the two kinds. It terminates because every recursion descends. */
 bool paint_order_walk(JSContext *ctx, lxb_dom_element_t *context_el, PaintOrderVisit visit, void *user);
 
-/* NAMED RESIDUAL — CSS 2.1 §E.2's SUB-LIST ENUMERATIONS, WHICH ARE ORDER AND ARE THEREFORE THIS COMPONENT'S.
-   WHAT IS NOT COVERED: three enumerations inside CSS 2.1 §E.2's steps, each offered to the visitor as a single box and
-   none of them sequenced here. (a) The TABLE arm of steps 2 and 4 — "table backgrounds (color then image)",
-   then column group, column, row group, row and cell backgrounds, then "all table borders (in tree order for
-   separated borders)" — which is a walk over a table's internal boxes. (b) Step 7.2's line boxes and the
-   boxes inside each of them, which is where every run of text in a document is placed and which carries its
-   own recursion ("Otherwise, jump to 7.2.1 for that element"). (c) Step 6, which is (b) reached from an inline
-   element that forms a stacking context. A visitor handed one of these offers must sequence it itself, and
-   nothing here states that sequence for it.
-   WHAT THE NEXT DIFF BUILDS: (a) first, because its operands exist — core/layout/table_grid.h and
-   core/layout/table_box.h already enumerate a table's rows, row groups, columns and cells, and
-   CSS 2.1 §17.5.1 "Table layers and transparency" states the same six levels CSS 2.1 §E.2 does, so it is a
-   routing of an existing walk rather than a new one. (b) next, over core/layout/line_box.h's fragments.
+/* NAMED RESIDUAL — CSS 2.1 §E.2's LINE-BOX ENUMERATIONS, WHICH ARE ORDER AND ARE THEREFORE THIS COMPONENT'S.
+   WHAT IS NOT COVERED: two enumerations inside CSS 2.1 §E.2's steps, each offered to the visitor as a single box and
+   neither sequenced here. (b) Step 7.2's line boxes and the boxes inside each of them, which is where every
+   run of text in a document is placed and which carries its own recursion ("Otherwise, jump to 7.2.1 for that
+   element"). (c) Step 6, which is (b) reached from an inline element that forms a stacking context. A visitor
+   handed one of these offers must sequence it itself, and nothing here states that sequence for it. The
+   lettering is (b) and (c) because (a), the TABLE arm, has landed and its clause is retired below.
+   WHAT THE NEXT DIFF BUILDS: (b), over core/layout/line_box.h's fragments.
    HOW ITS ABSENCE WOULD SHOW: two boxes whose marks interleave in CSS 2.1 §E.2 are offered as two whole boxes, so a
-   consumer that paints each offer completely before the next lays a table's cell background over a row border
-   that CSS 2.1 §17.5.1 puts on top of it, and lays a line's text under a background belonging to a box later in tree
-   order. It is observable as ink from one box covering ink from another with no `z-index` between them.
-   RETIREMENT: this record loses a clause as each of the three enumerations lands here, and goes when
+   consumer that paints each offer completely before the next lays a line's text under a background belonging
+   to a box later in tree order. It is observable as ink from one box covering ink from another with no
+   `z-index` between them.
+   RETIREMENT: this record loses a clause as each remaining enumeration lands here, and goes when
    `paint_order_walk` offers no box whose CSS 2.1 §E.2 sub-list is an enumeration it has not sequenced.
+
+   RETIRED CLAUSE (a), KEPT BECAUSE ITS NEXT-DIFF HALF WAS WRONG AND A READER WHO RE-DERIVES IT WILL BE WRONG
+   THE SAME WAY. It called the table arm a routing of an existing walk rather than a new one, over
+   core/layout/table_grid.h and core/layout/table_box.h, which it said already enumerate a table's rows, row
+   groups, columns and cells. Its SPEC half was exact: CSS 2.1 §17.5.1 "Table layers and transparency" does state
+   the same six levels in the same order, and both sections were fetched before this was written. Its TREE
+   half named the wrong files for two of the six. core/layout/table_grid.h says in its own header that it does
+   NOT place the column and column-group boxes, gives CSS 2.1 §17.2 "The CSS table model"'s not-rendered sentence
+   as the reason, calls what is wanted a mapping onto the column indices it already numbers, and hands that
+   mapping to core/layout/table_column_box.h — which the clause never names. So the arm is a routing of THREE
+   components' walks and not two, and a reader who had reached for `table_grid.h` would have found rows and
+   cells there and no column box at any entry. This is the shape CLAUDE.md rates as the commonest: the spec
+   half is a claim about a document anyone can fetch, and the remedy half is a claim about THIS TREE written by
+   someone who knew what was missing and was guessing at what fills it.
+   RETIREMENT: this record goes when no residual in this file names a component without having grepped its
+   entries, which is not a state a diff can reach — so it goes instead when the line-box clauses above land and
+   this whole block is rewritten around what they turn out to have got wrong.
+
+   NAMED RESIDUAL — CSS 2.1 §E.2's TABLE ARM ITEM 7, WHOSE ORDER CSS 2.1 STATES FOR ONE BORDER MODEL AND NOT THE OTHER.
+   WHAT IS NOT COVERED: `PAINT_STEP_TABLE_BORDERS` is offered ONCE, carrying the table element, and the boxes
+   whose borders that item covers are not enumerated. CSS 2.1 §E.2's item is "all table borders (in tree order for
+   separated borders)", so the item is every border of the table and of every internal box inside it, and the
+   parenthesis states an order for the SEPARATED model only. CSS 2.1 §17.6.2 "The collapsing border model" resolves
+   which border WINS at each edge and states no painting order over the boxes, so for a collapsing table
+   CSS 2.1 states no order here at all and this component may not invent one.
+   WHAT THE NEXT DIFF BUILDS: the separated-model half, which is the half CSS 2.1 answers — a tree-order walk of
+   the table's own subtree, which is `po_next` and needs no new walker, gated on the computed `border-collapse`
+   being `separate`. The collapsing half is a SECOND diff and its first question is whether CSS 2.1 §17.6.2's
+   conflict resolution, which core/layout/table_border_collapse.h already runs, leaves an order over EDGES
+   rather than over boxes — in which case item 7 for a collapsing table is not an enumeration of boxes and this
+   residual is asking the wrong question of it.
+   HOW ITS ABSENCE WOULD BE OBSERVED: a consumer that lays every border of one offer before taking the next
+   draws a table with `border-collapse: separate` in whatever order it reaches the boxes, so two cells whose
+   borders touch draw in an order no rule fixed — visible where the two borders differ in colour or width, and
+   never as a crash.
+   RETIREMENT: this record loses its first clause when the separated-model walk lands and goes when
+   `PAINT_STEP_TABLE_BORDERS` names a box rather than the table.
+
+   NAMED RESIDUAL — A TABLE BOX CSS 2.1 §17.2.1 "Anonymous table objects" GENERATES HAS NO ELEMENT TO BE OFFERED AS.
+   WHAT IS NOT COVERED: the table arm is reached from an ELEMENT whose computed `display` generates a table
+   box, so a table box CSS 2.1 §17.2.1's third stage generates — around a `table-row` or a `table-cell` sitting in a
+   `<div>` — is never offered and its six levels are never enumerated. The internal boxes inside such a table
+   are then offered by nobody at all: CSS 2.1 §E.2's step 4 passes over an internal table box precisely because
+   its table's own offer covers it (see `po_is_internal_table_box`), and here there is no such offer to cover
+   it. The ANONYMOUS table box itself contributes no ink either way — CSS 2.1 §9.2.1.1 "Anonymous block boxes" says
+   "The properties of anonymous boxes are inherited from the enclosing non-anonymous box … Non-inherited
+   properties have their initial value", and `background-color`, `background-image` and `border-style` are all
+   non-inherited — so what is lost is the background of the ELEMENTS inside it and never the box's own.
+   WHAT THE NEXT DIFF BUILDS: CSS 2.1 §17.2.1's third stage, "Generate missing parents", which
+   core/layout/table_box.h declines by name and assigns to the BLOCK walk's own child list
+   (core/layout/block_flow.c) because its subject is a child list that is not a table's. That stage is what
+   would give such a box an identity for this walk to offer, and until it exists there is nothing here to
+   route to.
+   HOW ITS ABSENCE WOULD BE OBSERVED: a `<div style="display: table-cell; background: red">` with no table
+   ancestor renders with no background at all, while the byte-identical markup inside a `<table>` renders it —
+   so the same declaration paints or does not paint depending on an ancestor that declares nothing.
+   RETIREMENT: this record goes when the table arm is reachable for a table box no element generates.
 
    NAMED RESIDUAL — CSS 2.1 §E.2 STEP 10's OUTLINES, WHICH ARE BLOCKED ON A PROPERTY AND NOT ON AN ORDER.
    WHAT IS NOT COVERED: `PAINT_STEP_OUTLINES` is declared and never offered, so nothing this component
