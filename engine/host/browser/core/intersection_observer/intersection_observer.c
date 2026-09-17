@@ -677,10 +677,10 @@ static IoRect io_compute_intersection(JSContext *ctx, lxb_dom_node_t *target, JS
    THIS ALGORITHM HAS A COMPUTED ANSWER FOR THIS ENGINE, AND STEP 5 IS THE STEP THAT GIVES IT. Steps 2, 3 and
    4 are facts about the PAGE — a matrix, an opacity, a filter — and this engine can read none of them. Step 5
    is not that kind of step at all: its condition is a fact about THE IMPLEMENTATION, and it is the only step
-   here whose subject is the user agent rather than the document. This engine builds no PAINT ORDER, so it
-   cannot guarantee that any target is completely unoccluded by other page content, so step 5's condition
-   holds and step 5 returns false. That is the section's own outcome for an implementation of this class,
-   reached by the section's own words, and step 6 is unreachable from here whatever steps 2 to 4 would have
+   here whose subject is the user agent rather than the document. This engine cannot guarantee that any target
+   is completely unoccluded by other page content, so step 5's condition holds and step 5 returns false. That
+   is the section's own outcome for an implementation of this class, reached by the section's own words, and
+   step 6 is unreachable from here whatever steps 2 to 4 would have
    said — which is why they are not computed on the way past: three reads that cannot change the result are
    three chances for a wrong answer, not extra rigor. The Note under step 5 is a "should" over the ink
    overflow rectangle, so a false here is CONFORMANT and not a gap wearing a return value.
@@ -699,10 +699,23 @@ static IoRect io_compute_intersection(JSContext *ctx, lxb_dom_node_t *target, JS
    `<transform-list>` computed value (core/css/css_computed_value.c crashes for it by name, citing
    css-transforms-1 §7 "The Transform Functions"' grammar), then §3.2.9 "Calculate a target's Effective
    Transformation Matrix" over it, then the computed `opacity` and `filter` of the chain, and last a paint
-   order with ink overflow rectangles, which is what step 5's condition is actually about. Only that last one
-   moves the ANSWER; the first three only make steps 2 to 4 real. HOW ITS ABSENCE WOULD SHOW: a page that
+   order with ink overflow rectangles, which is what step 5's condition is actually about — of which the ORDER
+   half has landed (core/paint/stacking_order.h) and the INK half has not, so this clause names a smaller thing
+   than it did: the painted and ink-overflow rectangles of the boxes that order already sequences. Only that
+   last one moves the ANSWER; the first three only make steps 2 to 4 real. HOW ITS ABSENCE WOULD SHOW: a page that
    gates on `entry.isVisible` — an impression beacon, a viewability timer — never runs its visible branch, so
    the endpoint behind it is never learned, while a page that only reads `isIntersecting` is unaffected.
+
+   THE CLAUSE ABOVE USED TO ARGUE FROM AN ABSENCE THIS TREE NO LONGER HAS, AND IT IS NARROWED RATHER THAN
+   DELETED because the retired reasoning is what a reader re-derives. It read "this engine builds no PAINT
+   ORDER, so it cannot guarantee that any target is completely unoccluded" — and core/paint/stacking_order.h
+   now builds CSS 2.1 §9.9 "Layered presentation"'s order, which box paints in front of which, so an ORDER
+   exists and step 5 may no longer be argued from its absence. THE CONCLUSION IS UNCHANGED AND ONLY ITS REASON
+   MOVED, which is the whole point of rewriting rather than deleting: what decides step 5 is not an order but
+   an AREA — occlusion is a question about the INK one box lays over another's, so it needs each box's painted
+   and ink-overflow rectangles, and §9.9.1's layers put boxes in a SEQUENCE without stating one square of
+   anything. A reader who re-derives the old sentence from today's tree would find its premise false and might
+   take the answer below with it; the answer stands, on the rectangles instead of on the sequence.
 
    IT IS CONCRETE AND NOT CONCOLIC, WHICH IS A DECISION AND NOT AN OVERSIGHT. §Headless keeps a modelled value
    forkable because the ALTERNATE WORLD IS A DIFFERENT ENVIRONMENT this engine does not know — another

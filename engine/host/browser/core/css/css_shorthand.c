@@ -2138,7 +2138,20 @@ bool css_shorthand_complete_for(const char *longhand)
        PREFIX with that family and nothing else: they are §17.6's two properties about which BORDER MODEL a
        table is in and how far apart separated cell borders sit, not about any one box's own border edge.
        All four are absent from lexbor's property registry, so their grammars are this component's (the §17
-       table above) and a declaration reaching the cascade has been through one. */
+       table above) and a declaration reaching the cascade has been through one.
+
+       `z-index` — NO shorthand in CSS sets it. CSS 2.1 §9.9.1 "Specifying the stack level: the 'z-index'
+       property" declares it as a standalone property with its own `Value:` line (`auto | <integer> |
+       inherit`), and no later module states a container over it: css-position-3 §3.2 "Box Insets Shorthands:
+       the inset-block , inset-inline , and inset properties" is the only shorthand that module adds and it
+       sets the four INSET longhands, which are the box's position along two axes rather than along the
+       z-axis; css-display-3 §3's `order` is a sibling property about a flex or grid item's ORDINAL inside
+       its container and sets nothing. The name it shares a prefix with — nothing — is the reason this row
+       is short: there is no family here to have missed a member of.
+       IT IS IN lexbor's PROPERTY REGISTRY (`LXB_CSS_PROPERTY_Z_INDEX`, initial `LXB_CSS_Z_INDEX_AUTO`), so a
+       `z-index: 3` declaration has been typed and validated all along and this row is what lets the value be
+       READ as a computed one: core/css/css_computed_value.c asserts this predicate before it derives
+       anything. */
     static const char *const RECORDED[] = {
         "overflow-x", "overflow-y", "display", "float", "position", "box-sizing", "color", "white-space",
         "direction", "writing-mode", "transform", "visibility",
@@ -2157,6 +2170,7 @@ bool css_shorthand_complete_for(const char *longhand)
         "border-top-style", "border-right-style", "border-bottom-style", "border-left-style",
         "border-top-color", "border-right-color", "border-bottom-color", "border-left-color",
         "caption-side", "table-layout", "border-collapse", "border-spacing",
+        "z-index",
     };
     unsigned i;
 
