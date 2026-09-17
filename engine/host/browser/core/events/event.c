@@ -57,6 +57,7 @@
 #include "core/events/ui_event.h"
 #include "core/events/mouse_event.h"
 #include "core/events/pointer_event.h"
+#include "core/events/wheel_event.h"
 #include "core/events/keyboard_event.h"
 #include "core/events/focus_event.h"
 #include "core/events/event_path.h"
@@ -1059,6 +1060,11 @@ static void event_declare_subclasses(JSContext *ctx)
        "Event firing"'s fire a synthetic pointer event is this component's too, so `element.click()` reaches
        PointerEvent through it. */
     pointer_event_init(ctx);
+    /* `WheelEvent : MouseEvent` — the same rule one interface over, and beside PointerEvent because both
+       extend the same one. Pointer Events 4 §12.1 "WheelEvent interface" declares it, and §11.1 "MouseEvent
+       interface" declares the one it extends: UI Events hands BOTH names to [POINTEREVENTS4] in its own
+       terms section, which is why neither is cited to UI Events here or in either component. */
+    wheel_event_init(ctx);
     keyboard_event_init(ctx);
     focus_event_init(ctx);
 }
@@ -1073,6 +1079,7 @@ static void event_free_subclasses(JSRuntime *rt)
 {
     focus_event_free(rt);
     keyboard_event_free(rt);
+    wheel_event_free(rt);
     pointer_event_free(rt);
     mouse_event_free(rt);
     ui_event_free(rt);
