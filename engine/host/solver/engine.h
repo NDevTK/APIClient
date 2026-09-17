@@ -32,7 +32,7 @@
  * is the half this said the other way round. A `javascript:` navigation (HTML §7.4.2.2 "Beginning navigation"
  * queues a global task on the navigation and traversal task source to reach §7.4.2.3.2) and a lazy chunk's
  * reply ARE tasks and a task queue is FIFO, so the tail is where they go; a document's own sequence being
- * filled one entry at a time is not a task at all and takes the tail because §4.12.1 fixes its order. Which of
+ * filled one entry at a time is not a task at all and takes the tail because HTML §4.12.1.1 fixes its order. Which of
  * the two a row is, is the row's TaskSource and is stated at each entry below.
  *   §8.7 Timers's STRING HANDLER USED TO BE IN THIS LIST AND IS NOT A ROW ANY MORE. §8.7 creates and runs it
  * inside step 9's task, so core/timing/timer.c runs the program on the firing flow's own trampoline and queues
@@ -115,7 +115,7 @@ void engine_queue_fetched_script(uint32_t doc, const char *body, size_t body_n, 
    only for an inline CLASSIC script — the entry below.
    AND ITS SOURCE IS NONE, WHICH IS A STATEMENT AND NOT A GAP. Nothing queues a task to run an element's
    inline program: the parse that reached the element runs it, and §8.1.7.1 "Definitions" describes a parse as
-   work a task DOES rather than as a task apiece. The tail is where it goes because §4.12.1 fixed its order
+   work a task DOES rather than as a task apiece. The tail is where it goes because HTML §4.12.1.1 fixed its order
    against the scripts written around it, not because a task queue is FIFO. */
 /* `el` IS THAT ELEMENT, and the row carries it for the same reason it carries the type: "execute the script
    element" is a switch on EL, and its "classic" arm sets that document's §3.1.7 `currentScript` to it for the
@@ -149,7 +149,7 @@ void engine_queue_element_script(uint32_t doc, const char *body, size_t body_n, 
    here that named one would be a task asked to interpose ahead of tasks already queued, which is why the
    queueing point asserts the pair rather than either half. */
 void engine_queue_script_immediate(uint32_t doc, const char *body, size_t body_n, lxb_dom_element_t *el);
-/* THE SAME POSITION IN THE SAME SEQUENCE, FOR A SCRIPT WHOSE SOURCE IS AN ADDRESS. §4.12.1 fixes an external
+/* THE SAME POSITION IN THE SAME SEQUENCE, FOR A SCRIPT WHOSE SOURCE IS AN ADDRESS. HTML §4.12.1.1 fixes an external
    script's position against the scripts written around it — a `pending parsing-blocking script` blocks the
    tokenizer (§13.2.6.4.8), and the `list of scripts that will execute when the document has finished parsing`
    runs IN ORDER (§13.2.7) — so the entry occupies that position with only its URL, the flow WAITS there, and the
@@ -166,7 +166,7 @@ void engine_queue_script_immediate(uint32_t doc, const char *body, size_t body_n
    `import('./chunk.js')` resolves against and, for a module, the module map KEY. */
 /* `el` IS THE ELEMENT WHOSE `src` THIS IS — see engine_queue_element_script. It survives the reply exactly as
    the type and the address do: the row is the element's program whether its bytes have arrived or not. */
-/* ITS SOURCE IS NONE, AND THE REASON IS THAT THIS ROW IS A POSITION RATHER THAN A TASK. §4.12.1 fixes where an
+/* ITS SOURCE IS NONE, AND THE REASON IS THAT THIS ROW IS A POSITION RATHER THAN A TASK. HTML §4.12.1.1 fixes where an
    external script runs among the scripts written around it, and this entry is that place being held; the
    NETWORKING task the response eventually queues is a different work item, and the register it lands on is
    what serves it (flow_deliver_one_reply's arm above the sequence). Calling the held slot a networking task
@@ -174,7 +174,7 @@ void engine_queue_script_immediate(uint32_t doc, const char *body, size_t body_n
    THE REQUEST ITSELF IS ISSUED BY THIS CALL AND NOT BY THE FLOW REACHING THE SLOT — HTML §4.12.1.1
    "Processing model" step 33 fetches when the element is prepared and step 35 only decides where the result
    executes, so an entry queued here is on the wire from this moment while the position it holds is still
-   §4.12.1's. solver/engine.c states the whole argument at the park it routes to. */
+   HTML §4.12.1.1's. solver/engine.c states the whole argument at the park it routes to. */
 /* `parser_inserted` IS WHETHER `el` IS PARSER-INSERTED — HTML §4.12.1.1 "Processing
    model"'s `parser document` being non-null — and it is a
    PARAMETER for `html_script_prepare`'s reason exactly: the party that inserted the element is the only one
@@ -244,9 +244,9 @@ void engine_queue_candidate(const char *body, size_t body_n, DynPos pos);
 void engine_queue_javascript_url(uint32_t doc, const char *body, size_t body_n);
 /* Park the running flow on a <script src> WITH NO POSITION TO HOLD: the host fetches it, and the reply becomes
    this flow's next program rather than a promise's value. Two kinds of element are that — one a page INJECTED,
-   and a member of §4.12.1's `set of scripts that will execute as soon as possible`, which is a SET (§13.2.7
+   and a member of HTML §4.12.1.1's `set of scripts that will execute as soon as possible`, which is a SET (§13.2.7
    waits for it only before the load event, so arrival order is a correct order). An element whose position
-   §4.12.1 does fix takes a slot instead: engine_queue_docscript_url.
+   HTML §4.12.1.1 does fix takes a slot instead: engine_queue_docscript_url.
    `stype` travels with the park for the reason it travels with the row above: the reply is a PROGRAM, and
    §4.12.1.1's "execute the script element" switches on the element's type to decide which of §8.1.4.4's two
    algorithms runs it. `<script type=module src>` injected by page code is how a modern bundle loads a chunk. */
@@ -469,7 +469,7 @@ void engine_set_provider(int (*provide)(JSContext *ctx));
    NULL/"" for a document with none. It seeds the frontier INSTEAD of the boot flow, never beside it: a resumed
    flow re-runs the same document under its own recorded arms, so adding a fresh boot flow would explore the
    un-forked path twice and re-fork every branch the residue already stands on.
-   `types[i]` is entry i's HTML §4.12.1 script type, and it is what the compile ASKS rather than assumes: a
+   `types[i]` is entry i's HTML §4.12.1.1 script type, and it is what the compile ASKS rather than assumes: a
    classic script is wrapped in a preemptible program frame (JS_FlowNew) and completes with a value, while a
    MODULE is linked and evaluated (JS_FlowEvalModule) and completes with a PROMISE. The scheduler cannot
    recover the kind from the body — `await` at the top level is a SyntaxError in one and legal in the other,
@@ -920,7 +920,7 @@ void engine_perform(JSContext *ctx, const char *token, const char *record);
    not here to queue anything in, while the outgoing one is local by construction. */
 void engine_unload_document(uint32_t doc);
 
-/* WHO ASKED FOR THE REQUEST, AS A FACT ABOUT THE PARK AND NEVER AS A POLICY. HTML §4.12.1 "The script element"
+/* WHO ASKED FOR THE REQUEST, AS A FACT ABOUT THE PARK AND NEVER AS A POLICY. HTML §4.12.1.1 "Processing model"
  * gives every `script` element a `parser document`: a parser-inserted script is named
  * by the BYTES THE ZONE ITSELF FETCHED; every other park is made by RUNNING CODE.
  * IT IS NOT THE PROVENANCE AND IT NEVER WAS — it is ONE OF THE TWO FACTS the provenance is composed from, and
@@ -939,7 +939,7 @@ void engine_unload_document(uint32_t doc);
  * sound. It shifts the field instead (engine_pending_fetches' join_set_tokens), because the provenance beside
  * it has a VOCABULARY rather than a pair and choosing three tokens of equal length would be picking the words
  * to fit a memcpy. */
-#define PENDING_INITIATOR_PARSER "parser"   /* HTML §4.12.1's parser-inserted script of the loaded document */
+#define PENDING_INITIATOR_PARSER "parser"   /* HTML §4.12.1.1's parser-inserted script of the loaded document */
 #define PENDING_INITIATOR_SCRIPT "script"   /* a park made by running code: fetch(), import(), an injected src */
 
 /* WHAT THE REQUEST IS EVIDENCE OF — CLAUDE.md §A-REQUEST-CARRIES-THE-PROVENANCE's three names, stated by the
@@ -1001,7 +1001,7 @@ void engine_unload_document(uint32_t doc);
  * is asked where code RAN, and no element is in scope at all.
  *   RESIDUAL — CORRECT AND NARROWER, NAMED RATHER THAN CRASHED ON, because the code is right for what it does
  * and there is no case here to abort on. NOT COVERED: a child navigable whose `<iframe src>` came out of the
- * PARSER of bytes the trusted zone itself fetched. §4.12.1's argument reaches it exactly as it reaches a
+ * PARSER of bytes the trusted zone itself fetched. HTML §4.12.1.1's argument reaches it exactly as it reaches a
  * parser-inserted `<script src>` — a real load of this document makes precisely that request — and it is
  * answered `derived` here, which under-claims. WHAT THE NEXT DIFF BUILDS: the parser-inserted conjunct as a
  * PARAMETER of this function, stated at the one site that knows it and threaded rather than inferred —

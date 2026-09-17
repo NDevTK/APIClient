@@ -1789,7 +1789,7 @@ static FetchCredentialsMode xhr_credentials_mode(const XhrData *d)
    IT IS `engine_provenance_of_running_path` AND NOT A LOCAL TERNARY over `flow_path_forced`, for the reason
    that function's own header gives: one composition, in one place, for every request built by running code.
    It answers `derived` or `forced` and never `observed`, which is a fact about this act rather than a
-   narrowing — `observed`'s first conjunct is HTML §4.12.1 "The script element"'s parser-inserted flag, and an
+   narrowing — `observed`'s first conjunct is HTML §4.12.1.1 "Processing model"'s `parser document`, and an
    XMLHttpRequest has no parser behind it by construction. */
 static char *xhr_request_op(JSContext *ctx, XhrData *d)
 {

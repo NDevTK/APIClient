@@ -16,9 +16,9 @@
  *
  * AND THE PAIR IN THAT SENTENCE IS THE ONE THIS LIST GOT WRONG, WHICH IS WORTH STATING BESIDE THE DEFECT IT
  * ENDS. `start` and `resume` are not one state read twice: a step that STARTS a program advanced this flow's
- * §4.12.1 position and is forward progress by construction, while a step that RESUMES one advanced a program
+ * HTML §4.12.1.1 position and is forward progress by construction, while a step that RESUMES one advanced a program
  * counter and may have advanced nothing observable at all. Merged, the row they shared answered the question
- * "is this frontier moving through its documents or grinding inside one program" with a number that is TRUE OF
+ * `is this frontier moving through its documents or grinding inside one program` with a number that is TRUE OF
  * BOTH — and that is precisely the question a frontier which admits members and retires none is asked. The
  * merge was not a naming choice; see the arms below for how the two came to share a row.
  *
@@ -178,7 +178,7 @@
     /* and never reaches that line — and is named anyway for the reason the   */ \
     /* predicate there is written as a predicate: the day a started frame     */ \
     /* detaches, an unconditional assignment would silently take that step    */ \
-    /* out of the row §4.12.1 position advances are counted in.               */ \
+    /* out of the row HTML §4.12.1.1 position advances are counted in.               */ \
     X(START_ENDED_FRAME,  "start-ended-its-frame")                               \
     X(START_REPORTED,     "start-reported-an-exception")                         \
     X(START_DETACHED,     "start-detached-its-base")                             \

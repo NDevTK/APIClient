@@ -4178,7 +4178,7 @@ int engine_decline(JSContext *ctx, const char *method, const char *url, const ch
    whose payload is not a program yet. The entry carries the URL, the flow WAITS at it (flow_step below), and the
    reply REPLACES the address with the source text and this kind with DYN_PAGE_SCRIPT (flow_deliver_one_reply), after
    which it is an ordinary program of the sequence.
-   IT IS WHAT GIVES EVERY DOCUMENT OF THIS AGENT §4.12.1's ORDER. The SESSION's document already had it — a slot
+   IT IS WHAT GIVES EVERY DOCUMENT OF THIS AGENT HTML §4.12.1.1's ORDER. The SESSION's document already had it — a slot
    per script INDEX that the flow stops at — and no other document did: a child navigable's (core/frame/
    navigable.c) and a joined one's (engine_join_document) external scripts could only park on their replies and
    become programs when those DRAINED, which is after everything queued in that pass and in ARRIVAL order among
@@ -4194,7 +4194,7 @@ int engine_decline(JSContext *ctx, const char *method, const char *url, const ch
    IT IS A ROW AND NOT AN EVENT QUEUED AT THE DELIVERY, because step 4 is a step of EXECUTE and this engine
    executes a script element when the cursor reaches its position. Firing at the delivery would order the
    `error` by when the reply landed rather than by where the element stands, which is exactly the ordering
-   §4.12.1 fixes between the scripts of one document — a page whose first of two chunks 404s would see its
+   HTML §4.12.1.1 fixes between the scripts of one document — a page whose first of two chunks 404s would see its
    `onerror` run against the second chunk's execution in whichever order the network answered.
    THE ROW KEEPS ITS ADDRESS AS ITS BODY and takes no address column: a row that runs nothing has no §8.1.4.2
    created-script base URL, and the address is the account a reader gets of which load failed. */
@@ -4215,7 +4215,7 @@ static int flow_pending_ready(const Flow *f) { return pending_ready(f->pending);
    with the response's `Content-Type` charset as a LABEL (Fetch §3.5's legacy extract an encoding, then Encoding
    §6.1's decode, whose BOM sniff can overrule that label), and a module script is UTF-8 whatever the response
    says. `doc_ctx` is the realm of the document the program belongs to, and it is read ONLY on the classic arm —
-   §4.12.1 says so about the element too: "if el's type is `module`, this encoding will be ignored."
+   HTML §4.12.1.1 says so about the element too: "if el's type is `module`, this encoding will be ignored."
    AND `bodyBytes` IS NOW ACTUALLY BYTES. This read was `JS_ToCStringLen` over a record field that every
    producer had already run a decode to build — the extension's `resp.text()` and, one step earlier, C's own
    `JS_NewStringLen` — so the classic entry's whole reason to exist, honouring the response's charset LABEL,
@@ -4503,7 +4503,7 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
             } else {
                 if (kind == FLOW_PENDING_DOCSCRIPT) {
                     /* THE ROW IS ALREADY THERE AND IT IS CONVERTED IN PLACE, NEVER REMOVED — and the reason
-                       is now §4.12.1's ORDER rather than anybody's bookkeeping. A failed load still holds its
+                       is now HTML §4.12.1.1's ORDER rather than anybody's bookkeeping. A failed load still holds its
                        element's position against the scripts written around it (see the DYN_SCRIPT_FAILED arm
                        in flow_step, which is this engine's "execute the script element" for it), so the row
                        has to stay. It used to have to stay for a second reason as well — other records named
@@ -4526,7 +4526,7 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
                 } else {
                     /* AN INJECTED `<script src>` HAS NO ROW YET — its reply is what CREATES one (the branch
                        below queues the program), so its failure creates the row that runs nothing. It takes
-                       the tail exactly as the program would: §4.12.1's `list of scripts that will execute in
+                       the tail exactly as the program would: HTML §4.12.1.1's `list of scripts that will execute in
                        order as soon as possible` holds these elements' places against one another, and a
                        failed member still EXECUTES (step 4) at its place. The body is the address, which is
                        the only account of the row there is; the address COLUMN stays null because a row that
@@ -4880,7 +4880,7 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
                site a flow is switched in and it is the flow that made the fetch, which is also what
                §State-isolation requires — N flows parked on one URL each get their own delivery, so each
                compiles the chunk on the timeline that asked for it rather than one arm's answer serving both.
-               AND IT IS BEFORE THE SETTLE, not after: the row takes §4.12.1's networking-task-source position
+               AND IT IS BEFORE THE SETTLE, not after: the row takes HTML §4.12.1.1's networking-task-source position
                ahead of the page's own reaction, which is exactly what the `<script src>` sibling arm above
                gives a chunk the page loaded through an element. A chunk that arrives after the reaction that
                was waiting for it is a chunk whose endpoints the reaction has already not seen.
@@ -6598,7 +6598,7 @@ static long g_prog_queued_cand;
    every markup `<script>` has been reached by the parser before the sequence exists, and every one of them is
    therefore prepared before the first of them executes. engine_queue_into is the ONE site that turns an
    element into a row, so it is the one site at which step 33 can be owed exactly once per element.
-   §4.12.1's ORDER IS UNTOUCHED, WHICH IS THE POINT: the row keeps the position it was queued at, flow_step
+   HTML §4.12.1.1's ORDER IS UNTOUCHED, WHICH IS THE POINT: the row keeps the position it was queued at, flow_step
    still stops at it until its OWN bytes arrive, and document_exec_scripts still lays the rows down in
    §13.2.7's milestone order. Only the moment the request is ISSUED moves.
    THE REALM IS THE ROW'S DOCUMENT'S, WHICH IS STEP 32 — "Let settings object be el's node document's relevant
@@ -6850,8 +6850,8 @@ static void engine_queue_into(Flow *f, uint32_t doc, DynBody *body, DynKind kind
         at = f->frame ? f->script_i + 1 : f->script_i;
         /* …AND BEHIND WHAT HAS ALREADY BEEN INTERPOSED AT THAT SAME SLOT. The expression above is the slot for
            a first interposition and the wrong slot for a second: both compute it identically, so the second
-           shifts the first down and the two run in the REVERSE of the order they were prepared in. §4.12.1
-           "The script element" ends "prepare the script element" with "Otherwise, immediately execute the
+           shifts the first down and the two run in the REVERSE of the order they were prepared in. HTML §4.12.1.1
+           "Processing model" ends "prepare the script element" with "Otherwise, immediately execute the
            script element el, even if other scripts are already executing" — in a browser that run happens
            INSIDE the causing program, so two elements one program prepares run in the order it prepared them:
            `document.write("<script>a()</script><script>b()</script>")` runs `a` then `b`, and so does
@@ -6998,7 +6998,7 @@ static void engine_queue(uint32_t doc, const char *body, size_t body_n, DynKind 
 /* A DOCUMENT'S SCRIPT INVENTORY, SEEDED AS THE ROWS OF ONE FLOW'S SEQUENCE — the ONE thing that turns a
    document's <script> elements into work items, used by the root document's seeding (flow_set_seed_hook) and
    by a joined document's boot flow, because those are the same operation about two documents.
-   §4.12.1's ORDER IS THE SEQUENCE'S ORDER, and both halves are positions in it: a row whose SOURCE TEXT is
+   HTML §4.12.1.1's ORDER IS THE SEQUENCE'S ORDER, and both halves are positions in it: a row whose SOURCE TEXT is
    here is a program queued in place, a row that is still owed its bytes is a DYN_SCRIPT_SRC row queued in
    place holding its address until the reply fills it and stopping the flow there. `urls` are already
    §4.12.1.1's encoding-parsed addresses — the resolution is the CALLER's because it belongs to the document
@@ -7033,13 +7033,13 @@ static void engine_seed_scripts(Flow *f, uint32_t doc, const RootScript *rows, i
                "no position, so a row that is nothing would park the flow on nothing for the rest of the "
                "session");
         /* THE POSITION A ROW IS QUEUED AT IS THE POSITION IT IS ADDRESSED AT, which is the whole point of the
-           one sequence: `i` is this element's place in §4.12.1's document order and the cursor indexes the same
+           one sequence: `i` is this element's place in HTML §4.12.1.1's document order and the cursor indexes the same
            table, so the two cannot come apart. Asserted per row rather than described once. */
         DCHECK(f->dyn_n == i, "a document's scripts left the seed out of document order — the row about to be "
                               "queued is not the one the sequence is at, so the flow's cursor would reach this "
                               "element at some other element's position");
         /* AND THE ELEMENT TRAVELS WITH THE ROW, at both positions: §4.12.1.1's "execute the script element"
-           is a switch on EL whichever half of §4.12.1 put the row here, and an EXTERNAL row is that element's
+           is a switch on EL whichever half of §4.12.1.1 put the row here, and an EXTERNAL row is that element's
            program from the moment it takes its slot rather than from the moment its bytes arrive.
            NULL IS A STATEMENT AND NOT A HOLE — a host driving a SYNTHESIZED program list (wpt_runner.c's
            harness prologue and epilogue) has rows no `<script>` produced, and §3.1.7's answer while one of
@@ -7056,11 +7056,11 @@ static void engine_seed_scripts(Flow *f, uint32_t doc, const RootScript *rows, i
            whole bundle into every flow it created. The ADDRESS row still makes a body, because its body IS the
            address until the reply replaces it and that string is the table's, not this row's; it is tens of
            bytes and it is released here, the row keeping the reference engine_queue_into took. */
-        /* NO TASK SOURCE, AT EITHER POSITION, AND THAT IS §4.12.1's ORDER RATHER THAN AN OMISSION. A
+        /* NO TASK SOURCE, AT EITHER POSITION, AND THAT IS HTML §4.12.1.1's ORDER RATHER THAN AN OMISSION. A
            document's own scripts are run by the parse that reached them — §8.1.7.1 "Definitions" describes
            that as work a task DOES ("The HTML parser tokenizing one or more bytes, and then processing any
            resulting tokens, is typically a task") and not as one task per element — and the order they hold is
-           the one §4.12.1 fixed against each other, which the sequence IS. Naming a source here would claim
+           the one §4.12.1.1 fixed against each other, which the sequence IS. Naming a source here would claim
            the tail is FIFO among tasks of that source, which is a different reason for the same position and
            the wrong one. */
         if (rows[i].body) {
@@ -7226,7 +7226,7 @@ void engine_queue_element_script(uint32_t doc, const char *body, size_t body_n, 
    executing" — so an inline classic script a page INSERTED runs at the slot after the program that inserted it,
    and everything the sequence already holds runs after it. This engine had the classification (html_script.c
    computes SCRIPT_SCHED_IMMEDIATE and its own DCHECK names this very step) and then queued the result at the
-   tail, which is the position of the one destination §4.12.1 says it does NOT take. */
+   tail, which is the position of the one destination HTML §4.12.1.1 says it does NOT take. */
 /* THE TYPE IS CLASSIC AND IS NOT A PARAMETER, because §4.12.1.1 reaches this step for no other: "If el's type
    is `classic` and el has a src attribute, OR el's type is `module`" sends every module — inline or not — to
    one of the three lists above, and only what falls past that switch reaches "Otherwise, immediately execute
@@ -7244,7 +7244,7 @@ void engine_queue_script_immediate(uint32_t doc, const char *body, size_t body_n
 /* …AND ITS EXTERNAL SIBLING, which takes the same position with only an ADDRESS — see DYN_SCRIPT_SRC. The
    caller resolved the URL because §8.1.3.2 "Environment settings objects"' API base URL belongs to the
    document whose element it is (§4.4 stood here and is "Grouping content").
-   APPEND, and that is §4.12.1's own answer rather than a default: this entry is the `list of scripts that will
+   APPEND, and that is HTML §4.12.1.1's own answer rather than a default: this entry is the `list of scripts that will
    execute in order as soon as possible`, whose elements hold their places against one another, so a new one
    goes behind the ones already there. */
 void engine_queue_docscript_url(uint32_t doc, const char *url, ScriptType stype, lxb_dom_element_t *el,
@@ -8666,7 +8666,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
             }
             /* THE FLOW'S SEQUENCE, AND THERE IS ONLY ONE OF THEM. Two arms stood here: the SESSION document's
                static scripts, read out of a borrowed `bodies` array at `script_i`, and then this flow's own
-               rows at `script_i - n`. They differed in nothing a program cares about — both are §4.12.1
+               rows at `script_i - n`. They differed in nothing a program cares about — both are HTML §4.12.1.1
                positions of some document of this agent, both can be inline or external, both carry a type and
                an address — and the split cost this engine the one position §4.12.1.1's "immediately execute the
                script element" needs (engine_queue_into). One arm now, over one table. */
@@ -8684,13 +8684,13 @@ static int flow_step(JSContext *ctx, Flow *f) {
                     /* AN EXTERNAL SCRIPT OF SOME DOCUMENT OF THIS AGENT, AT ITS POSITION. The entry holds its
                        ADDRESS — §4.12.1.1's encoding-parsed url, never the raw markup attribute, because the
                        host is a different zone with a different base and would resolve a relative `src` against
-                       its own — so the flow WAITS here: §4.12.1 fixes this script's position against the scripts
+                       its own — so the flow WAITS here: HTML §4.12.1.1 fixes this script's position against the scripts
                        written around it, and running what comes after a bundle before the bundle is a different
                        program. The reply REPLACES this entry and the next pass compiles it.
                        WHAT THIS ARM NO LONGER DOES IS ISSUE THE FETCH. HTML §4.12.1.1 "Processing model" step
                        33 fetches when the element is PREPARED and step 35 only decides where the result runs,
                        so the request went out when the row was created (engine_queue_into) and this arm is now
-                       purely §4.12.1's ORDER: every external script of this document is already on the wire,
+                       purely HTML §4.12.1.1's ORDER: every external script of this document is already on the wire,
                        and the flow stops here because THIS row's bytes have not come back.
                        A REPLY THAT HAD ALREADY ARRIVED WAS DELIVERED BEFORE THIS ROW WAS EVEN READ, so the
                        second delivery that stood here is gone rather than moved. It existed because this arm
@@ -8783,7 +8783,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                        grants the freedom, "keeping the interface responsive but not starving other task
                        queues".
                        SO THE ROW IS RECORDED AS A WAIT AND THE LADDER BELOW IS ASKED. The flow still runs no
-                       program of its own: HTML §4.12.1 "The script element" fixes this script's position against the scripts written
+                       program of its own: HTML §4.12.1.1 "Processing model" fixes this script's position against the scripts written
                        around it, `seq_compiles` stays 0, and the cursor does not move. If every source below
                        answers no, the OWED arm reports the flow host-owed — the same rest this line used to
                        reach directly, and the same verdict.
@@ -8800,7 +8800,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    null, then fire an event named error at el, and return". This row IS an element whose result
                    is null (flow_deliver_one_reply's null arm made it one), and reaching it is this engine's
                    "execute the script element" for that element's position: the cursor advances, the switch on
-                   el's type in step 6 is never reached, and NOTHING RUNS. §4.12.1's order is kept because the
+                   el's type in step 6 is never reached, and NOTHING RUNS. HTML §4.12.1.1's order is kept because the
                    position is kept — an element that failed to load still holds its place against the scripts
                    written around it, which is the whole reason the failure is a row.
                    THE FIRE IS A QUEUED ELEMENT TASK AND THE STANDARD'S STEP 4 IS A BARE SYNCHRONOUS FIRE, AND
@@ -9713,7 +9713,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                the compile itself and not a second record of it. A flow that arrived here with a live frame did
                not enter the block at all and reads the value it entered with.
                THE TWO ARE OPPOSITE FACTS ABOUT A FRONTIER, WHICH IS WHY ONE ROW COULD NOT CARRY THEM: a START
-               has advanced this flow's §4.12.1 position — a program of the document that had never run is now
+               has advanced this flow's HTML §4.12.1.1 position — a program of the document that had never run is now
                running — and a RESUME has advanced a program counter inside one that already was. A census in
                which every step is a resume and one in which every step starts a new program are the same
                census when they share a row, and "the members are not retiring" is exactly the state in which
@@ -9962,7 +9962,7 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    gated on. It has its own row now. A module that starts returns at EVALUATE_MODULE above and
                    never reaches this line, so this arm is unreachable today and is named anyway for the
                    reason the predicate was written as a predicate: the day a started frame detaches, the
-                   alternative silently takes that step out of the row §4.12.1 position advances are counted
+                   alternative silently takes that step out of the row HTML §4.12.1.1 position advances are counted
                    in. */
                 g_step_unit = started_here ? STEP_UNIT_START_DETACHED : STEP_UNIT_DETACH_PROGRAM;
                 f->frame = NULL;
@@ -10965,7 +10965,7 @@ void engine_sched_begin(JSContext *ctx, char **bodies, char **srcs, const Script
  * address until the reply fills it and stopping the flow there. It used to be a reply this flow was merely OWED,
  * joining the sequence when the register drained — after everything queued in this pass — so an inline script
  * FOLLOWING an external one ran before the bundle it is written after, and that was a named abort.
- * WHAT IS STILL NOT EXPRESSED IS §4.12.1's SCHEDULE, because it does not arrive: the inventory reaching this
+ * WHAT IS STILL NOT EXPRESSED IS HTML §4.12.1.1's SCHEDULE, because it does not arrive: the inventory reaching this
  * entry carries bodies, srcs and types and not `sched`, so every external here takes its PARSE POSITION — right
  * for a `pending parsing-blocking script`, and an over-ordering for an `async` one, which belongs to a SET that
  * §13.2.7 waits for only before the load event. The hosts all compute the column (DocScripts.sched) and drop it

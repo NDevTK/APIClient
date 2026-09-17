@@ -354,8 +354,8 @@ guarantees, in one auditable place:
   the next subproblem", and live code cited this passage by name as its authority for leaving a gate unbuilt
   while the vocabulary existed — the stale standing claim CLAUDE.md ranks above a missing mechanism, because a
   missing mechanism is discovered by the next reader and a stale one is BELIEVED. OBSERVED / DERIVED / FORCED
-  is composed in the engine at the PARK, out of the two facts that own it — the park's own kind (HTML §4.12.1
-  "The script element"'s parser-inserted flag) and whether the parking flow's path had stood on an arm its own
+  is composed in the engine at the PARK, out of the two facts that own it — the park's own kind (HTML §4.12.1.1
+  "Processing model"'s `parser document`) and whether the parking flow's path had stood on an arm its own
   concrete example contradicts — and it rides the pending line beside the method and the destination, where
   both hosts' doors already refuse a token outside the three. **THE READER EXISTS, AND THIS PARAGRAPH SAID IT
   DID NOT FOR LONGER THAN THAT WAS TRUE** — the same failure it records one sentence up, made a second time

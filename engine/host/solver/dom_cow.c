@@ -20,7 +20,7 @@
                                             C walk can see — which is why BOTH halves of a private tree have to
                                             ask for it by name, and is a different edge from the BASELINE
                                             owning one the node-death dispatcher follows */
-#include "core/html/html_script.h"       /* §4.12.1's pair: `already started`, which §13.4's Inert mode sets */
+#include "core/html/html_script.h"       /* HTML §4.12.1.1's pair: `already started`, which §13.4's Inert mode sets */
 #include "core/html/media_element.h"     /* §4.8.11 — state on the wrapper, and no cloning steps at all */
 #include "core/html/nonce_attribute.h"   /* §2.5.6's pair, over every HTML element and not one tag */
 #include <lexbor/core/avl.h>   /* the node->node map: a pointer map with no structure to invent */
@@ -1393,7 +1393,7 @@ static lxb_dom_node_t *dom_private_copy_one(JSContext *ctx, lxb_dom_document_t *
            "a copied flow-private node belongs to a different document than the node it was copied from — its "
            "interned tag and attribute ids are then meaningless against the document it will be placed into");
     /* §4.4 STEP 3's CLONING STEPS, which are these two component entries and not a list restated here — the
-       same two core/dom/node.c's clone-a-node machine calls at its own step 3. HTML §4.12.1's pair carries a
+       same two core/dom/node.c's clone-a-node machine calls at its own step 3. HTML §4.12.1.1's pair carries a
        `<script>`'s `already started`, without which a fork undoes §13.4's Inert mode; HTML §2.5.6's carries
        [[CryptographicNonce]] for every HTML element, and the attribute the clone above already copied is the
        STALE half of that pair by design. Both are unconditional on §4.4's `subtree`, so both run per node. */

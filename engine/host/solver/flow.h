@@ -724,7 +724,7 @@ typedef struct Flow {
        there is no half to be in — which is also what makes §4.12.1.1's "immediately execute the script element"
        expressible at every position rather than only past the document's last <script>.
        A POSITION MAY BE A SCRIPT WHOSE SOURCE HAS NOT ARRIVED, and the flow STOPS at it — which is what gives
-       every document of this agent §4.12.1's order rather than the order its replies happen to land in. The
+       every document of this agent HTML §4.12.1.1's order rather than the order its replies happen to land in. The
        row is this flow's own (engine.c's DYN_SCRIPT_SRC), holding the address until the reply replaces it with
        the program; one host fetch still answers every flow parked on that address, because engine_provide
        fills every register that names it.
@@ -742,7 +742,7 @@ typedef struct Flow {
        replay re-executes side effects the flow already performed against a delta that already holds them. */
     int   last_compiled;   /* -1 until the flow compiles its first program */
     /* WHERE A RUN OF INTERPOSED PROGRAMS HAS REACHED, so that a SECOND interposition at one slot goes BEHIND
-     * the first instead of in front of it. HTML §4.12.1 "The script element"'s "prepare the script element"
+     * the first instead of in front of it. HTML §4.12.1.1 "Processing model"'s "prepare the script element"
      * ends "Otherwise, immediately execute the script element el, even if other scripts are already
      * executing", and in a browser that run happens INSIDE the causing program — so two elements one program
      * prepares run in the order it prepared them. This engine expresses "inside" as the slot after the cursor,

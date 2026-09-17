@@ -582,7 +582,7 @@ static int script_sched_pass(ScriptSchedule s)
     if (s == SCRIPT_SCHED_WHEN_PARSED) return SCRIPT_PASS_WHEN_PARSED;
     DCHECK(s != SCRIPT_SCHED_IN_ORDER_ASAP,
            "a PARSED document's script inventory holds a member of the `list of scripts that will execute in "
-           "order as soon as possible` — §4.12.1 reaches that list only for an element that is NOT "
+           "order as soon as possible` — HTML §4.12.1.1 reaches that list only for an element that is NOT "
            "parser-inserted, and the HTML parser gives every element it inserts a parser document, so this "
            "schedule was read off something that is not a parse product");
     return SCRIPT_PASS_PARSE_POSITION;
@@ -590,7 +590,7 @@ static int script_sched_pass(ScriptSchedule s)
 
 /* A DOCUMENT'S OWN SCRIPTS ARE PROGRAMS OF THE ONE FRONTIER, AND SEEDING THEM IS THE DOCUMENT'S OWN BEHAVIOUR
  * RATHER THAN A HOST EDGE. §7.11's create-and-initialize-a-Document ends by handing the response's bytes to the
- * parser, and what the parser does with a `<script>` is §4.12.1 — so a Document this agent built out of a
+ * parser, and what the parser does with a `<script>` is HTML §4.12.1.1 — so a Document this agent built out of a
  * response and never ran the scripts of is not a document that has been analysed at all. It is here because
  * this is the ONE place a same-origin Document of this agent comes into existence.
  *
@@ -604,7 +604,7 @@ static int script_sched_pass(ScriptSchedule s)
  * its own scripts) reported the child's. A host builds a platform surface; WHICH programs a Document runs is
  * the Document's, and the two hosts that never wrote the line are the reason it may not live there.
  *
- * THE ORDER IS THE DOCUMENT'S ORDER, AND IT IS NOT ONE WALK OF THE INVENTORY. §4.12.1's last steps sort each
+ * THE ORDER IS THE DOCUMENT'S ORDER, AND IT IS NOT ONE WALK OF THE INVENTORY. HTML §4.12.1.1's last steps sort each
  * element into one of the Document's four queues, and §13.2.7 "The end" runs those queues — so the document's
  * run order is the PASSES below, and a `defer`red script written between two inline ones runs after both of
  * them. Every entry of the ordered passes becomes a POSITION in the flow's sequence: an inline script's program
