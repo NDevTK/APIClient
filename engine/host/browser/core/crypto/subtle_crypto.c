@@ -1,7 +1,9 @@
 /* Web Cryptography API §14.3's methods and §18.4.4's normalize an algorithm — the FOUR members of §14 this
  * engine performs, each as a step machine, plus the promise capability all four are wrapped in. §14.3.5's
- * digest reaches §32.3.1's Digest; §14.3.3's sign, §14.3.4's verify and §14.3.9's importKey reach §31's HMAC
- * operations, whose algorithm is core/crypto/hmac.c. See subtle_crypto.h for why those four and no others.
+ * digest reaches §32.3.1's Digest; §14.3.3's sign and §14.3.4's verify reach §31's HMAC operations, whose
+ * algorithm is core/crypto/hmac.c; §14.3.9's importKey reaches EITHER §31.6.4 or §29.4.4, whose algorithm is
+ * core/crypto/aes_gcm_key.c, because the operation it performs is the one §18.4.4 step 5's registry lookup
+ * selected. See subtle_crypto.h for why those four members and no others.
  *
  * THE FILE IS ORDERED digest, then sign/verify, then importKey, and each machine's own banner states what it
  * is. What they SHARE is stated once, at the top: the promise capability, §32.2's registry order, and §18.4.4's
@@ -62,6 +64,7 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/agent_state.h"
+#include "core/crypto/aes_gcm_key.h"
 #include "core/crypto/crypto_key.h"
 #include "core/crypto/hmac.h"
 #include "core/crypto/secure_hash.h"
@@ -988,20 +991,29 @@ static const IdlStepDecl SV_DECL = {
 
 /* ---- §14.3.9 The importKey method -------------------------------------------------------------------------- */
 
-/* §14.3.9's sixteen steps, and §31.6.4 HMAC Import Key's sixteen, meet in one machine because the method's
- * step 9 is "Let result be the CryptoKey object that results from performing the import key operation
- * specified by normalizedAlgorithm" — so the method reads §31.3's members, hands them over, and applies its own
- * steps 10-12 to what comes back. The split between the two files is exactly that sentence: everything about
- * WHAT AN HMAC KEY IS lives in core/crypto/hmac.c, and everything about how a promise is settled and which
- * slots §14.3.9 itself writes lives here.
+/* §14.3.9's steps and the registered operation's meet in one machine because the method's step 9 is "Let
+ * result be the CryptoKey object that results from performing the import key operation specified by
+ * normalizedAlgorithm" — so the method normalizes, hands over, and applies its own steps 10-12 to what comes
+ * back. The split between the files is exactly that sentence: everything about WHAT A KEY OF ONE ALGORITHM IS
+ * lives in that algorithm's own component — core/crypto/hmac.c for §31, core/crypto/aes_gcm_key.c for §29 —
+ * and everything about how a promise is settled and which slots §14.3.9 itself writes lives here.
  *
- * §18.4.4's MEMBER WALK IS WHY THERE ARE SIX READING STAGES AND NOT ONE. Step 9 builds "a list consisting of
- * the IDL dictionary type desiredType and all of desiredType's inherited dictionaries, in order from least to
- * most derived", and step 10 walks each dictionary's members "in order" — so for `HmacImportParams : Algorithm`
- * that is Algorithm's `name`, then HmacImportParams' `hash` and `length`. EVERY ONE OF THOSE IS A READ OF THE
- * PAGE'S OBJECT, one accessor or Proxy trap away from the page's own code, so each is a REQUEST that can
- * suspend and not a JS_GetPropertyStr. The ORDER is observable in three lines of script: an algorithm object
- * whose `name` getter logs and whose `hash` getter throws tells you which ran.
+ * §18.4.4's MEMBER WALK IS WHY THERE ARE SIX READING STAGES AND NOT ONE, AND WHY FIVE OF THEM ARE ONE ROW'S.
+ * Step 9 builds "a list consisting of the IDL dictionary type desiredType and all of desiredType's inherited
+ * dictionaries, in order from least to most derived", and step 10 walks each dictionary's members "in order" —
+ * so for `HmacImportParams : Algorithm` that is Algorithm's `name`, then HmacImportParams' `hash` and
+ * `length`. EVERY ONE OF THOSE IS A READ OF THE PAGE'S OBJECT, one accessor or Proxy trap away from the page's
+ * own code, so each is a REQUEST that can suspend and not a JS_GetPropertyStr. The ORDER is observable in three
+ * lines of script: an algorithm object whose `name` getter logs and whose `hash` getter throws tells you which
+ * ran.
+ *
+ * WHICH DICTIONARY THAT IS COMES FROM THE REGISTRATION AND NOT FROM THIS METHOD, so the walk is a different
+ * LENGTH per row rather than the same six stages with some of them idle. §31.2 gives HMAC's importKey row the
+ * Parameters `HmacImportParams`; §29.2 gives AES-GCM's the Parameters `None`, and §18.3 Specification
+ * Conventions says that column "will contain the IDL type to use for algorithm normalization for that
+ * operation" — so an AES-GCM import's desiredType is the base Algorithm, its member walk is the `name` step 2
+ * already read, and IK_SELECT transfers straight to IK_DONE. The five stages between them are HmacImportParams'
+ * and are named for it.
  *
  * AND `hash` IS NORMALIZED RECURSIVELY, which is what makes it two stages of its own. Step 10's per-member
  * dispatch says so by type: "If member is of the type HashAlgorithmIdentifier: Set the dictionary member on
@@ -1012,10 +1024,33 @@ static const IdlStepDecl SV_DECL = {
 static const char IK_FORK_OP[]      = "SubtleCrypto.importKey/normalizeAlgorithm";
 static const char IK_FORK_OP_HASH[] = "SubtleCrypto.importKey/normalizeAlgorithm/hash";
 
-/* §31.2 Registration's `importKey` row is the only one this engine registers for that operation — see the
-   sign/verify machine's note on §18.5.1 for why an empty registry elsewhere is conformant. */
-#define IK_REGISTERED_N 1
+/* §18.4.4's `registeredAlgorithms` FOR THE "importKey" OPERATION — the name each chapter's Registration
+   section states: §31.2's "The recognized algorithm name for this algorithm is "HMAC"." and §29.2's, which
+   says the same of "AES-GCM". See the sign/verify machine's note on §18.5.1 for why an empty registry
+   elsewhere is conformant.
+   THE ORDER IS THE FORK'S NUMBERING AND NOT THE STANDARD'S CHAPTER ORDER, exactly as SD_REGISTERED's is:
+   step_fork_run's rule is that outcome 0 is the one a run with no forking policy takes, and HMAC is outcome 0
+   because it was the only row before AES-GCM joined it — so a recipe recorded against this operation still
+   names the arm it named when it was written, and the arm that MOVED is the NotSupportedError one, which a
+   candidate re-fire must not be diverted onto in either numbering.
+   THE NAMES ARE HERE, WHICH IS THE OPPOSITE OF SD_REGISTERED's ARRANGEMENT AND IS THE SAME RULE READ AGAINST A
+   DIFFERENT TREE. secure_hash_name exists because the four members of that enum are named in three places and
+   one statement of the four is what stops them drifting. These two are named nowhere a host can reach, and the
+   other sites that write them are writing a DIFFERENT SENTENCE of the standard: hmac.c puts "HMAC" in §31.4's
+   `name` attribute at §31.6.4's step 12 and aes_gcm_key.c puts "AES-GCM" in §27.4's at §29.4.4's step 6. A
+   second column of strings here would be a copy; those are not. */
+typedef enum { IK_ALG_HMAC = 0, IK_ALG_AES_GCM } IkAlgorithm;
+static const char *const IK_REGISTERED[] = { "HMAC", "AES-GCM" };
+#define IK_REGISTERED_N ((int)COUNTOF(IK_REGISTERED))
+/* The one outcome past the registered rows: §18.4.4's "Otherwise: Return a new NotSupportedError". */
 #define IK_FORK_OUTCOMES (IK_REGISTERED_N + 1)
+/* THE TABLE AND THE ENUM ARE ONE FACT, because the fork answers with a POSITION IN THIS TABLE and every branch
+   below reads that position as an IkAlgorithm. A row added without its enumerator would leave the new arm
+   reading as the row before it — a real registered algorithm performing another one's import — which is the
+   one way these two can disagree and the one thing no runtime check would see. */
+_Static_assert(IK_REGISTERED_N == (int)IK_ALG_AES_GCM + 1,
+               "IK_REGISTERED and IkAlgorithm have come apart — the fork's arm index is read as an "
+               "IkAlgorithm, so every row of the table needs its enumerator");
 
 #define IK_STAGES(X)                                                                                          \
     X(IK_NAME, "Web Cryptography §18.4.4 normalizing an algorithm step 2 (Get(alg, \"name\") for the "         \
@@ -1048,6 +1083,7 @@ typedef struct {
     uint32_t  usages;      /* §9's normalized value of the usages list, as a CryptoKeyUsage mask */
     uint32_t  length;      /* §31.3's `length` after §3.2.4.9's conversion, in bits */
     uint8_t   hash;        /* the SecureHashAlgorithm the inner normalization selected */
+    uint8_t   alg;         /* the IkAlgorithm §18.4.4 step 5's lookup selected */
     uint8_t   has_length;
     uint8_t   extractable;
 } IkState;
@@ -1152,6 +1188,7 @@ static int ik_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
         s->usages = 0;
         s->length = 0;
         s->hash = (uint8_t)SECURE_HASH_SHA256;
+        s->alg = (uint8_t)IK_ALG_HMAC;
         s->has_length = 0;
         s->extractable = 0;
         sc_promise_begin(ctx, &s->p);
@@ -1222,19 +1259,38 @@ static int ik_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
                                  "the algorithm named is not a registered `importKey` algorithm");
             return sc_reject(ctx, &s->p, presult);
         }
+        s->alg = (uint8_t)arm;
     } else {
         const char *nm = JS_ToCString(ctx, s->name_v);
-        bool known;
+        int i;
 
         CHECK(nm != NULL, "§18.4.4's algName could not be read back as UTF-8");
-        known = sd_name_matches(nm, "HMAC");
-        if (!known) {
+        for (i = 0; i < IK_REGISTERED_N; i++)
+            if (sd_name_matches(nm, IK_REGISTERED[i])) break;
+        if (i == IK_REGISTERED_N) {
             JS_ThrowDOMException(ctx, "NotSupportedError", "'%s' is not a registered `importKey` algorithm",
                                  nm);
             JS_FreeCString(ctx, nm);
             return sc_reject(ctx, &s->p, presult);
         }
         JS_FreeCString(ctx, nm);
+        s->alg = (uint8_t)i;
+    }
+    /* §18.4.4 step 9's `dictionaries` — "a list consisting of the IDL dictionary type desiredType and all of
+       desiredType's inherited dictionaries, in order from least to most derived" — AND WHICH DICTIONARY THAT
+       IS, IS WHAT THE ROW JUST SELECTED DECIDES. §31.2 gives HMAC's importKey row the type HmacImportParams,
+       so the five stages below walk its `hash` and its `length`; §29.2 gives AES-GCM's the type `None`, whose
+       desiredType is the base Algorithm and whose only member is the `name` step 2 has already read.
+       SO THE SKIP IS THE MEMBER WALK BEING SHORTER AND NOT AN OPTIMISATION, AND IT IS OBSERVABLE: an algorithm
+       object whose `hash` getter logs tells a page which of the two rows it named, and `importKey("raw", buf,
+       "AES-GCM", true, ["encrypt"])` — §18.4.4's DOMString arm, an Algorithm with a name and nothing else —
+       resolves where the same call naming HMAC is a TypeError for a required member it has no object to find.
+       STEP_JUMP RATHER THAN A FALL-THROUGH, because the stage list is in ALGORITHM order and the arms this row
+       does not take lie between IK_SELECT and IK_DONE. It crosses no work at all — those stages are not steps
+       of this algorithm — which is the one condition quickjs-step.h puts on the transfer. */
+    if ((IkAlgorithm)s->alg != IK_ALG_HMAC) {
+        STEP_GOTO(hdr->stage, IK_DONE, &hdr->get_phase, &hdr->str_phase, &hdr->num_phase, NULL);
+        STEP_JUMP(IK_DONE);
     }
     STEP_GOTO(hdr->stage, IK_HASH, &hdr->get_phase, &hdr->str_phase, &hdr->num_phase, NULL);
 
@@ -1412,7 +1468,6 @@ static int ik_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
     STEP_ARM(IK_DONE);
     JS_FreeValue(ctx, cb_result);
     {
-        HmacImportParams params;
         const char *format = JS_ToCString(ctx, format_v);
         JSValue key;
 
@@ -1444,22 +1499,56 @@ static int ik_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
                 return sc_reject(ctx, &s->p, presult);
             }
         }
-        params.hash = (SecureHashAlgorithm)s->hash;
-        params.has_length = s->has_length != 0;
-        params.length = s->length;
-        /* §14.3.9 STEP 9, which is the whole of §31.6.4 HMAC Import Key. Steps 11 and 12 — "Set the
-           [[extractable]] internal slot of result to extractable" and "Set the [[usages]] internal slot of
-           result to the normalized value of usages" — are the mint's two arguments rather than two writes
-           after the fact, because a CryptoKey whose slots are filled in afterwards is a CryptoKey that
-           briefly exists with the wrong ones. */
-        key = hmac_import_key(ctx, format, key_data, &params, s->extractable != 0, s->usages);
+        /* §14.3.9 STEP 9: "Let result be the CryptoKey object that results from performing the import key
+           operation specified by normalizedAlgorithm using keyData, algorithm, format, extractable and
+           usages" — which is the whole of §31.6.4 HMAC Import Key or the whole of §29.4.4 AES-GCM Import Key,
+           and the row §18.4.4 step 5 selected is what says which. Steps 11 and 12 — "Set the [[extractable]]
+           internal slot of result to extractable" and "Set the [[usages]] internal slot of result to the
+           normalized value of usages" — are the mint's two arguments rather than two writes after the fact,
+           because a CryptoKey whose slots are filled in afterwards is a CryptoKey that briefly exists with the
+           wrong ones. THE PARAMETERS ARE ONE ROW'S AND NOT THE METHOD'S: §29.2 registers AES-GCM's importKey
+           with `None`, so there is no dictionary to hand it and the five stages that would have read one never
+           ran. */
+        switch ((IkAlgorithm)s->alg) {
+        case IK_ALG_HMAC: {
+            HmacImportParams params;
+
+            params.hash = (SecureHashAlgorithm)s->hash;
+            params.has_length = s->has_length != 0;
+            params.length = s->length;
+            key = hmac_import_key(ctx, format, key_data, &params, s->extractable != 0, s->usages);
+            break;
+        }
+        case IK_ALG_AES_GCM:
+            key = aes_gcm_import_key(ctx, format, key_data, s->extractable != 0, s->usages);
+            break;
+        default:
+            /* UNREACHABLE BY CONSTRUCTION and asserted rather than defended: IK_REGISTERED is this engine's
+               own table, the fork's range check refused an arm outside it and the concrete arm returned
+               before assigning, so a value here is those three having come apart rather than anything a page
+               said. */
+            JS_FreeCString(ctx, format);
+            DFAILF("§18.4.4 step 5 selected registry row %u, which IkAlgorithm does not name — the fork "
+                   "declared IK_FORK_OUTCOMES over IK_REGISTERED and this row is in neither",
+                   (unsigned)s->alg);
+            /* RELEASE: the row cannot be performed, which is what §18.4.4's own Otherwise answers for a name
+               it cannot resolve. Stated rather than left to whatever happened to be pending, because
+               sc_reject settles with the live exception and an arm that throws nothing would settle with
+               none — a rejected promise carrying no reason, which is the quiet return §Offensive-programming
+               forbids wearing a rejection. */
+            JS_ThrowDOMException(ctx, "NotSupportedError", "%s",
+                                 "the algorithm named is not a registered `importKey` algorithm");
+            return sc_reject(ctx, &s->p, presult);
+        }
         JS_FreeCString(ctx, format);
         if (JS_IsException(key))
             return sc_reject(ctx, &s->p, presult);
         /* §14.3.9 STEP 10: "If the [[type]] internal slot of result is \"secret\" or \"private\" and usages is
-           empty, then throw a SyntaxError." An HMAC key's type is always "secret" (§31.6.4 step 10), so this
-           is the empty-usages test — and it is the METHOD's step rather than the algorithm's, which is why it
-           runs on what comes back and not inside hmac_import_key. */
+           empty, then throw a SyntaxError." BOTH rows mint a "secret" key — §31.6.4 step 10 and §29.4.4 step
+           4 each say so outright — so this is the empty-usages test for either, and it is the METHOD's step
+           rather than the algorithm's, which is why it runs on what comes back and not inside the operation.
+           IT READS THE MASK AND NOT THE KEY'S OWN SLOT, which is sound only while that is true of every row:
+           the day a row mints a "public" key, this test is the one that has to read [[type]] back. */
         if (s->usages == 0) {
             JS_FreeValue(ctx, key);
             JS_ThrowDOMException(ctx, "SyntaxError", "%s",

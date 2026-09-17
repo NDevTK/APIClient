@@ -57,7 +57,10 @@
  * THE LANDING ORDER, NUMBERED BY WHAT HAS A CONSUMER AND NOT BY WHAT DEPENDS ON WHAT. (1) §29.4.4 "Import
  * Key"'s "raw" arm with its §18.4.4 row, on the `importKey` that ALREADY EXISTS — it flips no feature detect by
  * construction, since the member is installed either way, and it mints the key every other AES entry point
- * takes. (2) §29.4.1 "Encrypt" and §29.4.2 "Decrypt" as ONE landing: they share §29.3's AesGcmParams, the byte
+ * takes. THAT ONE IS BUILT (core/crypto/aes_gcm_key.c) and its "jwk" arm is not: §29.4.4's step 2 holds three
+ * sibling lists and only the `raw` one and the `Otherwise` are performed, so a JSON Web Key naming AES-GCM
+ * reaches a DFAIL that names the eight sub-steps to build. The crash is where that is recorded, which is why
+ * this list does not carry it as a member. (2) §29.4.1 "Encrypt" and §29.4.2 "Decrypt" as ONE landing: they share §29.3's AesGcmParams, the byte
  * copy and the whole §7.1/§7.2 walk, so splitting them is churn and not decomposition. (3) §29.4.3 "Generate
  * Key", which needs §10.1.1's stream reached from a SubtleCrypto — the residual below. (4) §29.4.5 "Export
  * Key" and §14.3.10 "The exportKey method", whose "jwk" arm stands on the same JSON Web Key layer §31.6.4's
@@ -65,10 +68,24 @@
  * is a separate subproblem and belongs to core/crypto/crypto_key.c.
  *
  * ADDING A ROW TO ONE OF THOSE REGISTRIES IS SAFE FOR A REASON WORTH NOT UNDOING. Each method's normalization
- * forks over its own registry and names the NOT-REGISTERED arm by the registry's computed length rather than by
- * a literal, so a new row moves that arm's ordinal and nothing has to be kept in step with it by hand. A
- * literal written there would be an ordinal over a set this component edits —
+ * forks over its own registry and names the NOT-REGISTERED arm SYMBOLICALLY — `arm == <X>_REGISTERED_N` at all
+ * four fork sites — so a new row moves that arm's ordinal and nothing at the site has to be kept in step with
+ * it by hand. A literal written THERE would be an ordinal over a set this component edits —
  * CLAUDE.md §AN-INDEX-NAMES-A-THING-ONLY-WHILE-THE-SET-IS-FIXED, one revision apart, not one call apart.
+ *
+ * THIS PARAGRAPH SAID `by the registry's computed length rather than by a literal`, AND THAT WAS TRUE OF THE
+ * SITES AND FALSE OF TWO OF THE THREE REGISTRIES — rewritten rather than deleted, because the two halves are
+ * one sentence apart and a reader who checks the SITES finds the claim confirmed and stops. What the sites
+ * spell symbolically is a NAME; what that name is DEFINED as is the other half, and `digest` alone defined it
+ * over a table (`COUNTOF(SD_REGISTERED)`) while `sign`/`verify` and `importKey` each defined it as a bare `1`
+ * with no table to count. A bare `1` is not wrong — it is the whole statement of a one-row set — but it is not
+ * what this paragraph promised, and the promise is the thing a reader adding a row relies on.
+ * `importKey` now has its table and its length is counted from it. `sign`/`verify`'s `SV_REGISTERED_N` is
+ * still the literal, and no row is queued behind it. Whether the claim was WRONG WHEN WRITTEN or went stale is
+ * NOT ESTABLISHABLE FROM THIS CHECKOUT, which is a shallow clone — `git log -S` at a graft answers with the
+ * graft commit for every pre-existing line, so the honest statement is that the disagreement predates it.
+ * RETIREMENT: this note goes when every `*_REGISTERED_N` in the component is counted from a table the fork
+ * numbers, so the sentence above cannot be half-true again.
  *
  * NAMED RESIDUAL — §10.1.1's STREAM IS REACHED FROM A Crypto AND §29.4.3 RUNS ON A SubtleCrypto. NOT COVERED:
  * core/crypto/crypto.c draws random bytes through a file-static helper whose first argument is the Crypto
@@ -107,7 +124,8 @@
  * §14.4's EXCEPTIONS, over the four methods that exist. A "NotSupportedError" DOMException from §18.4.4 for an
  * algorithm name no row registers, at all four. An "InvalidAccessError" from §14.3.3 step 9 / step 10 and
  * §14.3.4 step 10 / step 11, for a key minted for another algorithm or without the usage the call needs. A
- * "DataError" and a "SyntaxError" from §31.6.4's steps 1, 3, 7 and 8, plus §14.3.9 step 10's SyntaxError for a
+ * "DataError" and a "SyntaxError" from §31.6.4's steps 1, 3, 7 and 8 and from §29.4.4's step 1 and its `raw`
+ * arm's second item, plus §14.3.9 step 10's SyntaxError for a
  * secret key imported with no usages. And an "OperationError" for an operation that FAILS, which none of these
  * four can: they are pure functions over bytes with no device behind them, so that exception is asserted
  * against rather than written. */
