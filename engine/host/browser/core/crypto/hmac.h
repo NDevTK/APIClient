@@ -6,9 +6,13 @@
  * operations divide by what primitive they stand on. HMAC stands on a MESSAGE DIGEST and on nothing else:
  * FIPS 198-1 §4 is a CONSTRUCTION over an approved hash function H, so with core/crypto/secure_hash.c already
  * computing SHA-1/256/384/512 there is no new number theory, no ASN.1, no JWK and no field arithmetic between
- * this file and a working `sign`. Every other algorithm of §20-§34 needs a bignum or a curve this engine does
- * not have and cannot bind to, so it is a different and larger piece of work; CLAUDE.md §Do-subproblems-IN-ORDER
- * is what puts this one first rather than a preference.
+ * this file and a working `sign`. THIS SENTENCE USED TO END "Every other algorithm of §20-§34 needs a bignum
+ * or a curve this engine does not have and cannot bind to, so it is a different and larger piece of work", and
+ * it is rewritten rather than deleted because a reader who re-derives it from THIS ladder will re-add it: AES
+ * needs neither, and core/crypto/aes.c and core/crypto/aes_gcm.c arrived to prove it, so AES-GCM is the second
+ * algorithm and the claim now holds only of RSA, ECDSA/ECDH and X25519/Ed25519. subtle_crypto.h carries the
+ * same retirement and the landing order it implies. CLAUDE.md §Do-subproblems-IN-ORDER is what put HMAC first
+ * rather than a preference, and it is not an argument that nothing could follow it.
  *
  * THE BIND-BEFORE-BUILD LADDER FOR **THIS** PRIMITIVE, WALKED RATHER THAN INHERITED. secure_hash.h reports the
  * ladder for the DIGEST and lands on rung four, the faithful spec port. HMAC's ladder is shorter and ends one
@@ -30,8 +34,10 @@
  * The quotations below are pasted from the fetched document. NOTE FOR ANY READER CHECKING THEM: FIPS 198-1 is
  * a NIST publication and `engine/specindex` holds no index for it, so `engine/citegen.mjs` COUNTS every
  * citation in this file and CHECKS none of them — not the number, not the title and not the quotation. That is
- * a silent zero rather than a clean bill, and it is why each citation here names the section's own title and
- * quotes its own words: a reader with the PDF open is the only instrument these have.
+ * a COUNTED zero rather than a clean bill: the standard is NAMED, with its tally, on the auditor's
+ * "standards seen but not indexed" census line, so this is a blind spot a reader can see the size of
+ * rather than a silence. It is still why each citation here names the section's own title and quotes its
+ * own words — a reader with the PDF open is the only instrument these have.
  *
  * §4's ONE EQUATION, VERBATIM:  MAC(text) = HMAC(K, text) = H((K0 ^ opad )|| H((K0 ^ ipad) || text))
  *

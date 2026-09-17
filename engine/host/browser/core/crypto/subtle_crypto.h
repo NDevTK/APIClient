@@ -25,12 +25,62 @@
  *
  * WHAT REMAINS ABSENT, AND WHY IT IS NOT AN ORDERING ANYONE CHOSE. `encrypt`, `decrypt`, `generateKey`,
  * `deriveKey`, `deriveBits`, `exportKey`, `wrapKey` and `unwrapKey` are absent — the page's own TypeError names
- * each, and engine/idlgen.mjs's audit prints the list. Every remaining algorithm behind them (AES, RSA,
- * ECDSA/ECDH, X25519/Ed25519) needs a field or bignum layer this engine does not have and cannot bind to, so
- * they are a different and larger piece of work rather than the next one. The two of them that HMAC alone could
- * reach are §31.6.3's Generate Key, which needs §10.1.1's random source spent on key material, and §31.6.5's
- * Export Key, whose "raw" arm is small and whose "jwk" arm needs the same JSON Web Key layer §31.6.4's jwk arm
- * does (named as a residual at hmac.h's `hmac_import_key`).
+ * each, and engine/idlgen.mjs's audit prints the list. The two of them that HMAC alone could reach are
+ * §31.6.3's Generate Key, which needs §10.1.1's random source spent on key material, and §31.6.5's Export Key,
+ * whose "raw" arm is small and whose "jwk" arm needs the same JSON Web Key layer §31.6.4's jwk arm does (named
+ * as a residual at hmac.h's `hmac_import_key`).
+ *
+ * THIS PARAGRAPH USED TO GO ON "Every remaining algorithm behind them (AES, RSA, ECDSA/ECDH, X25519/Ed25519)
+ * needs a field or bignum layer this engine does not have and cannot bind to, so they are a different and
+ * larger piece of work rather than the next one", AND IT IS REWRITTEN RATHER THAN DELETED BECAUSE A READER WHO
+ * RE-DERIVES IT FROM HMAC'S LADDER WILL RE-ADD IT. It holds for RSA, for ECDSA/ECDH and for X25519/Ed25519. It
+ * is FALSE of AES, and it was made false inside this component: core/crypto/aes.c computes FIPS 197's CIPHER()
+ * and core/crypto/aes_gcm.c walks SP 800-38D §7.1 and §7.2, with no bignum, no curve and no ASN.1 between them
+ * and a working §29.4.1 "Encrypt" — aes_gcm.h argues that ladder in full and this sentence went on denying it.
+ * THE DIRECTION IS WHY IT IS WORTH A PARAGRAPH RATHER THAN A DELETION: a claim that something is out of reach
+ * is read by one population, people deciding what to build next, and obeying it means NOT LOOKING — so nothing
+ * about it is ever discovered by acting on it, which is the failure CLAUDE.md rates as the silent one. hmac.h
+ * held the same sentence and is rewritten with this one. RETIREMENT: this note goes when no sentence in this
+ * component says an unbuilt algorithm stands behind a primitive the component already holds.
+ *
+ * SO AES-GCM IS NEXT, AND ITS MEMBERS DO NOT ARRIVE IN THE ORDER §14.3 LISTS THEM. They arrive in the order
+ * real pages CHAIN them, and that order is what decides what a landing is worth. An AEAD is a TRANSPORT, so a
+ * page's key nearly always crosses a boundary — a worker, an IndexedDB record, a shared link — and the call
+ * that mints the CryptoKey the sink actually receives is then an import or an export arm rather than §29.4.3
+ * "Generate Key". That is structural rather than a census: it follows from what an authenticated cipher is
+ * FOR. Derive today's set instead of trusting this sentence — run
+ *     `grep -rloE 'subtle\.(encrypt|decrypt|generateKey|importKey|exportKey)' testing/corpus/mirror`
+ * and read each hit's CONTINUATION, because the member a site calls first is not the member its next line
+ * needs. A decomposition drawn from §14.3's list instead installs an arm no site calls while leaving every site
+ * dying one call earlier, which is CLAUDE.md §AND-THE-SAME-MEASUREMENT-DECIDES-THE-UNIT.
+ *
+ * THE LANDING ORDER, NUMBERED BY WHAT HAS A CONSUMER AND NOT BY WHAT DEPENDS ON WHAT. (1) §29.4.4 "Import
+ * Key"'s "raw" arm with its §18.4.4 row, on the `importKey` that ALREADY EXISTS — it flips no feature detect by
+ * construction, since the member is installed either way, and it mints the key every other AES entry point
+ * takes. (2) §29.4.1 "Encrypt" and §29.4.2 "Decrypt" as ONE landing: they share §29.3's AesGcmParams, the byte
+ * copy and the whole §7.1/§7.2 walk, so splitting them is churn and not decomposition. (3) §29.4.3 "Generate
+ * Key", which needs §10.1.1's stream reached from a SubtleCrypto — the residual below. (4) §29.4.5 "Export
+ * Key" and §14.3.10 "The exportKey method", whose "jwk" arm stands on the same JSON Web Key layer §31.6.4's
+ * does. A key that crosses IndexedDB additionally needs §13.5 "Serialization and deserialization steps", which
+ * is a separate subproblem and belongs to core/crypto/crypto_key.c.
+ *
+ * ADDING A ROW TO ONE OF THOSE REGISTRIES IS SAFE FOR A REASON WORTH NOT UNDOING. Each method's normalization
+ * forks over its own registry and names the NOT-REGISTERED arm by the registry's computed length rather than by
+ * a literal, so a new row moves that arm's ordinal and nothing has to be kept in step with it by hand. A
+ * literal written there would be an ordinal over a set this component edits —
+ * CLAUDE.md §AN-INDEX-NAMES-A-THING-ONLY-WHILE-THE-SET-IS-FIXED, one revision apart, not one call apart.
+ *
+ * NAMED RESIDUAL — §10.1.1's STREAM IS REACHED FROM A Crypto AND §29.4.3 RUNS ON A SubtleCrypto. NOT COVERED:
+ * core/crypto/crypto.c draws random bytes through a file-static helper whose first argument is the Crypto
+ * OBJECT, because the draw position is latched into the running flow's COW delta AGAINST that object — which is
+ * what makes two forked arms mint DIFFERENT key material rather than the same bytes twice. core/crypto/crypto.h
+ * exports only `crypto_init` and `crypto_free`, so this interface has neither the object nor an entry, and
+ * §29.4.3's "Generate an AES key of length equal to the length member of normalizedAlgorithm" has no source it
+ * may use. THE NEXT DIFF BUILDS the route from a SubtleCrypto to its realm's Crypto and draws through the SAME
+ * object the getter latches on, so one stream serves both members and neither can rewind the other. HOW ITS
+ * ABSENCE WOULD SHOW: a second source latched on a different object would leave two flows forked above a
+ * `generateKey` holding byte-identical key material — a solver defect and not a cryptographic one, observable
+ * as two arms that cannot be told apart downstream of the key rather than as any wrong ciphertext.
  *
  * WHAT DIGEST IS FOR IN THIS ENGINE, WHICH IS TWO THINGS AND NEITHER IS OPTIONAL. Real bundles call it: an
  * IDL triage over this corpus found `crypto.subtle.digest` referenced by two bundles across twenty call sites,
