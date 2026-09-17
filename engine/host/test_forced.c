@@ -41,6 +41,9 @@
 #include "core/paint/display_list.h"   /* CSS 2.1 §E.2 "Painting order"'s ink, whose ORDER is its whole
                                           statement — the half a fixture can hold to an answer with no
                                           document under it; see display_list_selftest */
+#include "core/graphics/raster_path.h"     /* the geometry a fill takes, and its flattening into edges */
+#include "core/graphics/rasterizer.h"      /* HTML §4.12.5.1's two fill rules over one crossing count */
+#include "core/graphics/raster_surface.h"  /* and §4.12.5.1.22's bitmap, which is where the two end up */
 #include "core/paint/box_paint.h"   /* CSS 2.1 §E.2 "Painting order"'s ink for one stacking
                                       context — the half that DOES need a document, and the one
                                       document in this fixture that has a realm is `main`'s; see
@@ -19496,6 +19499,324 @@ static void tree_construction_write_selftest(void)
  * `css_px_env` asserts that a fact and a realm travel together, "because the mint at the JS boundary needs
  * both (which viewport, and which of its dimensions), and a length carrying one without the other could not be
  * turned into a domain". */
+/* core/graphics — THE RASTERIZER, HELD TO PIXELS A READER CAN DERIVE BY HAND.
+ *
+ * IT TAKES NO `JSContext`, AND THAT IS THE ASSERTION RATHER THAN AN ECONOMY. core/graphics/raster_path.h's
+ * interface decision is that a fill takes a C stream and not the JS Array core/canvas/canvas_path.h holds a
+ * path in; the one thing that proves the decision was taken rather than described is a caller that has no
+ * realm to offer. Everything below runs before any rendering context exists and would run in a host with no
+ * JS in it at all.
+ *
+ * WHY THESE SHAPES. Every count below is derivable with arithmetic and no run: an axis-aligned rectangle on
+ * pixel boundaries has coverage exactly 1 and exactly one run per row, the same rectangle moved half a pixel
+ * has a run of exactly 0.5 beside it, and two squares wound the SAME way separate HTML §4.12.5.1's two fill
+ * rules by construction — "nonzero" saturates a crossing count of two and "evenodd" answers zero to it, so
+ * one path gives a filled square under one rule and a one-pixel ring under the other. A shape whose pixels
+ * nobody can derive by hand is the circle at the end, and what that one is held to is what IS derivable:
+ * which pixels are deep inside, which are far outside, and that two independent builds of it agree byte for
+ * byte, which is the determinism rasterizer.h states as the requirement.
+ *
+ * THE COUNTS ARE PRINTED AS WELL AS ASSERTED, and the printed ones are the arc's. `@RASTER` carries the edge
+ * count a 10-pixel circle flattens to at the stated tolerance, which is a number the FLATTENER computes and
+ * no assert here fixes: a change to `RASTER_FLATTEN_TOLERANCE_PX`, to the second-derivative bound or to the
+ * quadrant floor moves it, and a reader comparing two artifacts' rows can see which. */
+typedef struct { size_t spans, pixels; double min_cov, max_cov, area; } TfRasterCount;
+
+/* `area` IS THE STRONGEST NUMBER A RASTERIZER PRODUCES, AND IT IS THE ONE EVERY DEFECT MOVES. The coverage
+   of a pixel is the area of that pixel inside the shape, so the sum of coverage over the whole surface is the
+   AREA OF THE SHAPE — and for the rectangles below that is a number the geometry states outright. A lost
+   span, a column off by one, a fold answering the other rule's question and a mass leak at either clip all
+   move it by at least half a pixel, while nothing correct can. It is what a span count cannot do: a count is
+   a fact about how the runs were CUT and two different cuttings of one shape are both right. */
+static void tf_raster_count(void *user, int y, int x, int len, double coverage)
+{
+    TfRasterCount *c = (TfRasterCount *)user;
+
+    (void)y; (void)x;
+    c->spans++;
+    c->pixels += (size_t)len;
+    c->area += (double)len * coverage;
+    if (coverage < c->min_cov) c->min_cov = coverage;
+    if (coverage > c->max_cov) c->max_cov = coverage;
+}
+
+static void tf_raster_count_init(TfRasterCount *c)
+{
+    c->spans = 0; c->pixels = 0; c->min_cov = 2.0; c->max_cov = -1.0; c->area = 0.0;
+}
+
+/* THE AREA IS COMPARED WITHIN A TOLERANCE AND THE TOLERANCE IS NOT A HEDGE. A transliteration of this
+   arithmetic answers these rectangles EXACTLY — 16, 14, 11.375, 64 — because every operand is a dyadic
+   fraction and every step is one multiply or one subtraction; what the tolerance covers is the compiler's
+   freedom to contract a multiply and an add into one FMA, which moves a low bit and cannot move a pixel. No
+   defect this check exists for is smaller than half a pixel. */
+#define TF_RASTER_AREA_EPS 1e-9
+
+/* One fill of one freshly built path, so that no test below inherits another's state. */
+static size_t tf_raster_fill_count(const RasterPath *p, RasterFillRule rule, int w, int h,
+                                   TfRasterCount *c, size_t *edges_out)
+{
+    RasterEdges e;
+    size_t spans;
+
+    raster_edges_init(&e);
+    raster_path_flatten(p, RASTER_FLATTEN_TOLERANCE_PX, &e);
+    if (edges_out) *edges_out = e.n;
+    tf_raster_count_init(c);
+    spans = raster_fill(&e, rule, w, h, tf_raster_count, c);
+    raster_edges_free(&e);
+    return spans;
+}
+
+static uint64_t tf_raster_paint_checksum(const RasterPath *p, RasterFillRule rule, int w, int h,
+                                         RasterPaint *paint_out)
+{
+    RasterEdges e;
+    RasterSurface s;
+    RasterPaint paint;
+    uint64_t sum;
+
+    raster_edges_init(&e);
+    raster_path_flatten(p, RASTER_FLATTEN_TOLERANCE_PX, &e);
+    raster_surface_init(&s, w, h);
+    raster_paint_init(&paint, &s, 1.0, 0.0, 0.0, 1.0);   /* opaque red */
+    raster_fill(&e, rule, w, h, raster_paint_span, &paint);
+    sum = raster_surface_checksum(&s);
+    /* The counters travel and the SURFACE does not: `s` is this function's own and a copied pointer to it
+       would outlive it, which is a dangling field a reader would eventually dereference. */
+    if (paint_out) { *paint_out = paint; paint_out->surface = NULL; }
+    raster_surface_free(&s);
+    raster_edges_free(&e);
+    return sum;
+}
+
+static void raster_selftest(void)
+{
+    RasterPath p, q;
+    RasterEdges e;
+    RasterSurface s;
+    RasterPaint paint;
+    TfRasterCount c;
+    uint8_t px[4];
+    uint64_t sum_rect, sum_open, sum_a, sum_b;
+    size_t spans, edges;
+
+    /* 1. AN AXIS-ALIGNED RECTANGLE ON PIXEL BOUNDARIES, WHOSE EVERY NUMBER IS DERIVABLE. `rect(2, 2, 4, 4)`
+       on an 8x8 region covers columns 2..5 of rows 2..5 and nothing else, at coverage exactly 1 — the left
+       edge contributes its whole signed extent to column 2 and the right edge cancels it at column 6, so the
+       running total is a single step function and the row is ONE run. Four rows, four runs, sixteen pixels. */
+    raster_path_init(&p);
+    raster_path_rect(&p, 2.0, 2.0, 4.0, 4.0);
+    spans = tf_raster_fill_count(&p, RASTER_FILL_NONZERO, 8, 8, &c, &edges);
+    CHECKF(spans == 4 && c.spans == 4 && c.pixels == 16,
+           "a rectangle on pixel boundaries did not fill its own area — %zu runs returned, %zu received, %zu "
+           "pixels, where four rows of one run of four pixels is the whole of what that rectangle is",
+           spans, c.spans, c.pixels);
+    CHECK(c.min_cov == 1.0 && c.max_cov == 1.0,
+          "a rectangle on pixel boundaries produced a coverage other than 1. An edge at an integer coordinate "
+          "splits no pixel, so every reported run is interior and anything else is the accumulation leaking "
+          "into the column beside it");
+    CHECKF(fabs(c.area - 16.0) <= TF_RASTER_AREA_EPS,
+           "a 4x4 rectangle covers %g pixels of area where its geometry says sixteen — the coverage of a "
+           "pixel IS the area of it inside the shape, so this sum is the shape's own area and a rasterizer "
+           "that agrees with it on a rectangle is one whose accumulation conserves mass", c.area);
+
+    /* AND THE SAME RECTANGLE WITH NO `closePath` ON IT. HTML §4.12.5.1.13 "Drawing paths to the canvas" says
+       "Open subpaths must be implicitly closed when being filled (without affecting the actual subpaths)",
+       so a three-line open subpath and a `rect()` are the same INK out of two different streams — four edges
+       against six, two of the six being the zero-length ones `rect()`'s own step 4 subpath leaves behind.
+       Byte-identical surfaces is the only statement that separates a close that HAPPENS from a close that is
+       merely written down. */
+    raster_path_init(&q);
+    raster_path_move_to(&q, 2.0, 2.0);
+    raster_path_line_to(&q, 6.0, 2.0);
+    raster_path_line_to(&q, 6.0, 6.0);
+    raster_path_line_to(&q, 2.0, 6.0);
+    sum_rect = tf_raster_paint_checksum(&p, RASTER_FILL_NONZERO, 8, 8, &paint);
+    sum_open = tf_raster_paint_checksum(&q, RASTER_FILL_NONZERO, 8, 8, NULL);
+    CHECKF(sum_rect == sum_open,
+           "a rectangle and the same four points left open rendered different pixels (%llu against %llu) — "
+           "§4.12.5.1.13's implicit close is what makes them one shape, and a fill that skipped it would "
+           "leave the fourth side of every unclosed subpath unpainted",
+           (unsigned long long)sum_rect, (unsigned long long)sum_open);
+    CHECKF(paint.spans == 4 && paint.pixels == 16,
+           "the compositing sink received %zu runs and %zu pixels where the fill emitted four and sixteen — "
+           "the fill's own count and the sink's are two counters in two components and a disagreement is a "
+           "run that was reported to nobody",
+           paint.spans, paint.pixels);
+    raster_path_free(&q);
+
+    /* AND THE BYTES. Opaque red at coverage 1 is (255, 0, 0, 255) under a non-premultiplied source-over onto
+       transparent black, and a pixel outside the rectangle is the transparent black §4.12.5.1.22 "Drawing
+       model" starts every bitmap at. */
+    raster_edges_init(&e);
+    raster_path_flatten(&p, RASTER_FLATTEN_TOLERANCE_PX, &e);
+    raster_surface_init(&s, 8, 8);
+    raster_paint_init(&paint, &s, 1.0, 0.0, 0.0, 1.0);
+    raster_fill(&e, RASTER_FILL_NONZERO, 8, 8, raster_paint_span, &paint);
+    raster_surface_get(&s, 2, 2, px);
+    CHECKF(px[0] == 255 && px[1] == 0 && px[2] == 0 && px[3] == 255,
+           "an interior pixel of an opaque red fill is (%u, %u, %u, %u) — source-over of an opaque source is "
+           "the source, and a value below 255 in the red channel is the quantization or the compositing and "
+           "not the coverage", px[0], px[1], px[2], px[3]);
+    raster_surface_get(&s, 1, 1, px);
+    CHECKF(px[3] == 0, "a pixel outside the filled rectangle has an alpha of %u — §4.12.5.1.22's bitmap starts "
+                       "transparent black and nothing outside the shape may touch it", px[3]);
+    raster_surface_free(&s);
+    raster_edges_free(&e);
+    raster_path_free(&p);
+
+    /* 2. THE SAME RECTANGLE MOVED HALF A PIXEL, WHICH IS THE ANALYTIC HALF. `rect(2.5, 2, 3.5, 4)` leaves
+       column 2 exactly half covered and columns 3..5 whole, so each row is TWO runs — one pixel at 0.5 and
+       three at 1 — and the half is a number the geometry determines rather than a sample grid. Opaque red at
+       coverage one half is (255, 0, 0, 128) and not (128, 0, 0, 128): the components are non-premultiplied
+       (core/graphics/raster_surface.h), so it is the OPACITY that halves and never the colour. */
+    raster_path_init(&p);
+    raster_path_rect(&p, 2.5, 2.0, 3.5, 4.0);
+    spans = tf_raster_fill_count(&p, RASTER_FILL_NONZERO, 8, 8, &c, NULL);
+    CHECKF(spans == 8 && c.pixels == 16,
+           "a rectangle whose left edge splits a pixel gave %zu runs over %zu pixels where four rows of a "
+           "half-covered pixel beside three whole ones is eight and sixteen", spans, c.pixels);
+    CHECKF(c.min_cov == 0.5 && c.max_cov == 1.0,
+           "a left edge at x = 2.5 gave coverages in [%g, %g] — the area of [2, 3] to the right of 2.5 is one "
+           "half exactly, so a value near but not at it is the accumulation and not the geometry",
+           c.min_cov, c.max_cov);
+    CHECKF(fabs(c.area - 14.0) <= TF_RASTER_AREA_EPS,
+           "a 3.5-by-4 rectangle covers %g pixels of area where its geometry says fourteen — the SAME sixteen "
+           "pixels as the whole-pixel rectangle above carry two less area, which is the analytic half of this "
+           "rasterizer stated as a number rather than as an adjective", c.area);
+    raster_edges_init(&e);
+    raster_path_flatten(&p, RASTER_FLATTEN_TOLERANCE_PX, &e);
+    raster_surface_init(&s, 8, 8);
+    raster_paint_init(&paint, &s, 1.0, 0.0, 0.0, 1.0);
+    raster_fill(&e, RASTER_FILL_NONZERO, 8, 8, raster_paint_span, &paint);
+    raster_surface_get(&s, 2, 2, px);
+    CHECKF(px[0] == 255 && px[3] == 128,
+           "a half-covered pixel of an opaque red fill is (%u, ., ., %u) where non-premultiplied source-over "
+           "gives red 255 and alpha 128 — a red of 128 would be the premultiplied representation, which HTML "
+           "§4.12.5.7 \"Premultiplied alpha and the 2D rendering context\" makes a lossy one for a surface a "
+           "page reads back", px[0], px[3]);
+    raster_surface_free(&s);
+    raster_edges_free(&e);
+    raster_path_free(&p);
+
+    /* 3. THE TWO FILL RULES, OVER ONE PATH THAT SEPARATES THEM. Two squares wound the SAME way — `rect()`
+       always lays its four points in one order — give the inner region a crossing count of two, and
+       HTML §4.12.5.1 "The 2D rendering context" answers that count differently under each rule: "nonzero"
+       calls a point outside only when the crossings in the two directions are equal, so two is inside and
+       the outer 6x6 square fills whole; "evenodd" calls a point outside when the count is even, so two is
+       OUTSIDE and what remains is the outer square MINUS the inner one — 36 less 16, which is the set
+       difference stated as arithmetic. One accumulation, two folds, and no fold can answer both.
+       THE AREA IS THE ASSERTION AND THE RUN COUNT IS THE WITNESS BESIDE IT, WHICH IS A DISTINCTION THIS
+       TEST COST A CORRECTION TO LEARN. A hand derivation of the even-odd case predicted two runs of one
+       pixel in each of six rows — TWELVE runs over twelve pixels — and a transliteration of this arithmetic
+       answered TEN over twenty, because the inner square spans rows 2..5 while the outer spans 1..6: the two
+       rows the inner square does not reach are SOLID, one run of six each, and only the four rows between
+       them are the two-pixel ring the derivation had in mind. The AREA was right under both readings. So a
+       run count is a fact about how a row was CUT and is easy to be wrong about; an area is a fact about the
+       SHAPE, and it is the number to reason from. */
+    raster_path_init(&p);
+    raster_path_rect(&p, 1.0, 1.0, 6.0, 6.0);
+    raster_path_rect(&p, 2.0, 2.0, 4.0, 4.0);
+    spans = tf_raster_fill_count(&p, RASTER_FILL_NONZERO, 8, 8, &c, NULL);
+    CHECKF(spans == 6 && c.pixels == 36 && fabs(c.area - 36.0) <= TF_RASTER_AREA_EPS,
+           "two same-wound squares under the nonzero rule gave %zu runs over %zu pixels of area %g, where "
+           "the outer square whole is six rows of six — a crossing count of two saturating to one is what "
+           "makes the inner square disappear, and a smaller area says the fold is answering the even-odd "
+           "question", spans, c.pixels, c.area);
+    spans = tf_raster_fill_count(&p, RASTER_FILL_EVENODD, 8, 8, &c, NULL);
+    CHECKF(spans == 10 && c.pixels == 20 && fabs(c.area - 20.0) <= TF_RASTER_AREA_EPS,
+           "two same-wound squares under the even-odd rule gave %zu runs over %zu pixels of area %g, where "
+           "the outer square less the inner one is 36 - 16 = 20 — a crossing count of two folding to zero is "
+           "the whole of what separates this rule from the one above it", spans, c.pixels, c.area);
+    raster_path_free(&p);
+
+    /* 3b. AND THE SAME SHAPE RUN OFF THE REGION, WHICH IS THE ONE CASE THAT EXERCISES THE COLUMN FOLD AT
+       BOTH ENDS OF A ROW. Everything left of the region folds into its first column and everything right of
+       it into a slot past its last, and the conservation that makes the fill's own per-row residual an
+       identity is exactly the claim that neither fold loses or invents mass. A 20x20 rectangle laid over an
+       8x8 region therefore covers that region ENTIRELY, and one whose left half is off the region covers the
+       columns that remain and no more. HTML §4.12.5.1.22 "Drawing model" is where the discard is stated:
+       "When compositing onto the output bitmap, pixels that would fall outside of the output bitmap must be
+       discarded." */
+    raster_path_init(&p);
+    raster_path_rect(&p, -5.0, -5.0, 20.0, 20.0);
+    spans = tf_raster_fill_count(&p, RASTER_FILL_NONZERO, 8, 8, &c, NULL);
+    CHECKF(spans == 8 && c.pixels == 64 && fabs(c.area - 64.0) <= TF_RASTER_AREA_EPS,
+           "a rectangle covering the whole region gave %zu runs over %zu pixels of area %g where an 8x8 "
+           "region is eight runs of eight and sixty-four — a shortfall is mass the clip dropped and an "
+           "excess is mass it invented, and the fold at the two ends of a row is the only thing that decides "
+           "which", spans, c.pixels, c.area);
+    raster_path_free(&p);
+    raster_path_init(&p);
+    raster_path_rect(&p, 6.0, 2.0, 8.0, 4.0);
+    spans = tf_raster_fill_count(&p, RASTER_FILL_NONZERO, 8, 8, &c, NULL);
+    CHECKF(spans == 4 && c.pixels == 8 && fabs(c.area - 8.0) <= TF_RASTER_AREA_EPS,
+           "a rectangle running off the right of the region gave %zu runs over %zu pixels of area %g where "
+           "columns 6 and 7 of four rows is four runs of two and eight — the mass beyond the region folds "
+           "into a slot that is not a pixel, and a leak out of it would paint a column that is not there",
+           spans, c.pixels, c.area);
+    raster_path_free(&p);
+
+    /* 4. A CIRCLE, WHICH IS THE ONE SHAPE HERE WHOSE PIXELS NOBODY DERIVES BY HAND — so it is held to what
+       is derivable and its counts are PRINTED rather than fixed. HTML §4.12.5.1.6 "Building paths"' ellipse
+       steps make an end angle a full turn beyond the start the whole circumference, and it is flattened at
+       the tolerance raster_path.h states: an angular step of sqrt(8·tolerance/radius), held at a quadrant
+       so that an ellipse smaller than the tolerance cannot collapse to a chord.
+       WHAT IS ASSERTED IS GEOMETRY. The pixel at the centre lies inside the inscribed polygon whatever the
+       step count, the pixel six rows above the top of the circle lies outside the circumscribed one, and two
+       INDEPENDENTLY BUILT paths must render byte for byte — which is the determinism requirement stated as
+       something a run can fail rather than as a property of the code. */
+    raster_path_init(&p);
+    raster_path_ellipse(&p, 16.0, 16.0, 10.0, 10.0, 0.0, 0.0, 2.0 * M_PI, false);
+    spans = tf_raster_fill_count(&p, RASTER_FILL_NONZERO, 32, 32, &c, &edges);
+    CHECKF(spans > 0 && c.pixels > 0 && c.max_cov == 1.0,
+           "a filled circle of radius 10 produced %zu runs over %zu pixels with a greatest coverage of %g — "
+           "a shape 300 pixels in area has interior, and an interior pixel is covered outright",
+           spans, c.pixels, c.max_cov);
+    raster_edges_init(&e);
+    raster_path_flatten(&p, RASTER_FLATTEN_TOLERANCE_PX, &e);
+    raster_surface_init(&s, 32, 32);
+    raster_paint_init(&paint, &s, 1.0, 0.0, 0.0, 1.0);
+    raster_fill(&e, RASTER_FILL_NONZERO, 32, 32, raster_paint_span, &paint);
+    raster_surface_get(&s, 16, 16, px);
+    CHECKF(px[3] == 255, "the centre pixel of a filled circle has an alpha of %u — the inscribed polygon of a "
+                         "23-sided approximation of radius 10 contains a circle of radius 9.9, so the centre "
+                         "is interior at every step count this tolerance can produce", px[3]);
+    raster_surface_get(&s, 16, 8, px);
+    CHECKF(px[3] == 255, "a pixel 8 rows above the centre of a circle of radius 10 has an alpha of %u — its "
+                         "farthest corner is 8.07 from the centre and the inscribed polygon's own radius is "
+                         "9.9, so the whole pixel is inside", px[3]);
+    raster_surface_get(&s, 16, 3, px);
+    CHECKF(px[3] == 0, "a pixel 13 rows above the centre of a circle of radius 10 has an alpha of %u — its "
+                       "nearest corner is 12 from the centre, which is outside the CIRCUMSCRIBED circle and "
+                       "therefore outside every polygon inscribed in it", px[3]);
+    sum_a = raster_surface_checksum(&s);
+    raster_surface_free(&s);
+    raster_edges_free(&e);
+
+    raster_path_init(&q);
+    raster_path_ellipse(&q, 16.0, 16.0, 10.0, 10.0, 0.0, 0.0, 2.0 * M_PI, false);
+    sum_b = tf_raster_paint_checksum(&q, RASTER_FILL_NONZERO, 32, 32, NULL);
+    CHECKF(sum_a == sum_b,
+           "two independently built circles rendered different bytes (%llu against %llu). rasterizer.h's "
+           "requirement is not agreement with another engine's pixels — HTML states no coverage rule — it is "
+           "that one document renders identically twice, which is the only oracle a reftest is made of",
+           (unsigned long long)sum_a, (unsigned long long)sum_b);
+    raster_path_free(&q);
+    raster_path_free(&p);
+
+    /* THE ROW. `edges` is the arc's flattened segment count plus the one edge HTML §4.12.5.1.13 "Drawing
+       paths to the canvas"' implicit close adds; `area` is the coverage sum, which for a circle is the area
+       of the INSCRIBED polygon and not of the circle — (n/2)·r²·sin(2π/n), which for 23 segments at radius
+       10 is 310.27 against the circle's 314.16, and the gap IS the flattening tolerance made visible. None
+       of them is asserted: a tolerance, a curvature bound or a quadrant floor that moved would move them
+       all, and this row is what lets a reader see WHICH by comparing two artifacts rather than by reading
+       this file. */
+    printf("@RASTER circle r=10 tol=%g edges=%zu spans=%zu pixels=%zu area=%.4f sum=%llu\n",
+           RASTER_FLATTEN_TOLERANCE_PX, edges, c.spans, c.pixels, c.area, (unsigned long long)sum_a);
+}
+
 #define TF_DL_MARKS 20u
 #define TF_DL_KINDS 3u
 
@@ -21344,6 +21665,11 @@ int main(int argc, char **argv) {
     /* core/paint/display_list.h's ORDER, its growth and its environment union — the half of the ink a fixture
        can hold to an answer with no document under it. It needs only a realm, to NAME an environment fact on a
        length; see the function for why the painter beside it is not exercised here. */
+    /* core/graphics' RASTERIZER, which takes NO realm — see the function for why a fill that needs none is
+       the assertion its interface decision is actually being made rather than described. It is here rather
+       than earlier only so that its `@RASTER` row sits beside `@PAINT`'s, which is the ink it will one day
+       be handed. */
+    raster_selftest();
     display_list_selftest(ctx);
     /* AND core/paint/box_paint.h's entry beside it, which is the half that NEEDS a document — a
        realm on the ELEMENT's own document, a navigable presenting it and therefore a viewport. This
