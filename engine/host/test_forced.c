@@ -20900,32 +20900,6 @@ int main(int argc, char **argv) {
        address it is installed at below — and `https:` makes it a SECURE CONTEXT, which is what a real bundle
        runs in and therefore what the fixture must exercise. */
     tf_agent_init(ctx, "https://x.test", "https://x.test/p");
-    /* WEB IDL §3.3.7 [Exposed] step 1 discriminates, measured both ways — AND THIS CALL'S POSITION IS NOT
-       PART OF THE MEASUREMENT. Both arms build realms of their own: the WORKER arm always did, and the WINDOW
-       arm now builds one beside them, so every row of its table whose Window column is `false` means
-       `core/realm.h's per-realm column did not place this` about a realm no document is EVER installed over,
-       and the function asserts that precondition immediately before its loop rather than inheriting it from
-       where this line sits. Those names are core/platform.c's PER-DOCUMENT column's — the rows of that file's
-       list carrying a third field — so read the two lists against each other rather than trusting a count
-       here, which moves whenever a lane adds a row.
-       WHAT THE ARGUMENT BELOW NOW DECIDES, WHICH IS THE ONE THING MOVING THIS LINE CAN STILL GET WRONG. The
-       address is what that Window realm is BUILT at, so it is HTML §8.1.3.1's top-level creation URL of the
-       realm the table probes and no longer only the operand of the §8.1.3.5 step 2 control below it.
-       Web IDL §3.3.13 [SecureContext] installs or omits members by that answer, so an address whose answer
-       differs from the agent's would hand the table a realm carrying a different set of interface objects —
-       exposure_selftest asserts the two agree rather than trusting the caller, and the value here is the one
-       tf_agent_init is given on the line above.
-       THE RESIDUAL THAT STOOD HERE IS DISCHARGED, AND ITS NEXT-DIFF CLAUSE WAS RIGHT ABOUT THE MECHANISM AND
-       LOW ABOUT THE SCOPE — recorded because the only reader of such a clause is someone who has already
-       decided to build it, so a wrong one is executed rather than caught. It named SIX comments in the table
-       as losing their subject. The set is larger and is not a number worth writing down, since it was a
-       property of how many groups the table had on the day the clause was written: what actually had to be
-       rewritten is every clause explaining a row by where this call sits, the banner over the function, the
-       IdleDeadline paragraph's remedy, and every spelling of `this table's own moment`, which is the phrase
-       that carried the retired reason. The mechanism half — JS_NewContext plus realm_install_intrinsics with
-       Window, exactly as the worker contexts are made — was exact.
-       RETIREMENT: this record goes when no clause in this file explains a table row by where this call sits. */
-    exposure_selftest(ctx, "https://x.test/p");
     navigable_set_realm_builder(tf_child_realm);
     int min_doc = arg_has(argc, argv, "--min");   /* fast per-change memory gate: the minimal clone/COW doc */
     /* THE CLOSE-REQUEST DOCUMENT, which is a document and not a flag on another one: its whole verdict is an
@@ -21171,6 +21145,49 @@ int main(int argc, char **argv) {
            conjunction's false terms ARE what failed, and each row already carries its own `why` above. */
         printf("FAIL: %s — that is the whole of what this run left unanswered; each named row states its own "
                "claim where it is computed, and the @H stream above carries its diagnostic\n", unanswered);
+
+    /* WEB IDL §3.3.7 [Exposed] step 1 discriminates, measured both ways — AND THIS CALL'S POSITION IS NOT PART
+       OF THE MEASUREMENT, WHICH IS THE WHOLE REASON IT MAY SIT HERE. Both arms build realms of their own: the
+       WORKER arm always did, and the WINDOW arm now builds one beside them, so every row of its table whose
+       Window column is `false` means `core/realm.h's per-realm column did not place this` about a realm no
+       document is EVER installed over, and the function asserts that precondition immediately before its loop
+       rather than inheriting it from where this line sits. Those names are core/platform.c's PER-DOCUMENT
+       column's — the rows of that file's list carrying a third field — so read the two lists against each other
+       rather than trusting a count here, which moves whenever a lane adds a row. The banner over
+       exposure_selftest carries the retired reason this call USED to rest on and why a reader must not
+       re-derive it; the residual that stood with it is discharged, its next-diff clause having been exact
+       about the mechanism and low about the scope.
+       AND THE PER-REALM INTRINSIC LIST IS THE ONE THING THAT COULD STILL MAKE THIS LINE'S POSITION MATTER,
+       WHICH IS WHY IT IS NAMED RATHER THAN ASSUMED. The Window realm the table probes is built AT THIS CALL,
+       so it runs core/realm.c's `g_list` AS OF THIS MOMENT — a dependency the previous arrangement did not
+       have, since the caller's realm was already built. It is sound because that list is closed before the
+       first realm exists: platform_agent_init runs its whole declare column and only THEN calls
+       realm_install_intrinsics, and every realm_declare_intrinsic in engine/host/browser sits in a
+       declare-column function. realm_declare_intrinsic does not itself refuse a late declaration — a guard
+       there would make this true by construction rather than by that reading.
+       WHY IT SITS AT THE END, WHICH IS A STATEMENT ABOUT THE FIXTURE AND NOT ABOUT THE TABLE. This selftest
+       aborts inside its own realm construction, on a member core/realm.h's list installs into a
+       DedicatedWorkerGlobalScope realm; from the head of main that abort arrived BEFORE the first fixture
+       statement, so every witness this document prints and every row probes_report answers read as an
+       unreached 0 — which is indistinguishable from a defect and was read as one. Standing here, the run says
+       everything it has to say and THEN dies, at the same site, on the same member, with the same cond.
+       NOTHING IS GATED, SWALLOWED OR SOFTENED AND THIS IS NOT A FIX FOR THAT ABORT: engine/build.mjs decides
+       that a run died by matching `@WHY`/`@E ` at the START OF A LINE anywhere in the stream, so a verdict
+       sentence printed above one cannot make a red stage green.
+       WHAT THE MOVE DOES NOT ESTABLISH, SAID HERE SO THE NEXT READER DOES NOT READ A 0 AS A DEFECT. The rows
+       become READABLE and that is the whole of it; reading them is a separate act. A row behind an `await`, a
+       `.then`, a timer or a delivery is answered by a JOB, so it is unanswerable in a run whose `jobs run` is
+       0 HOWEVER much `workDone` that run reports — two different quantities, and the second does not buy the
+       first. This move adds and removes no row, so `asked` does not move and answered/asked is comparable
+       across it, which is what makes a before/after over this commit mean anything at all.
+       WHAT THE ARGUMENT BELOW DECIDES. The address is what that Window realm is BUILT at, so it is HTML
+       §8.1.3.1's top-level creation URL of the realm the table probes and not only the operand of the
+       §8.1.3.5 step 2 control inside it. Web IDL §3.3.13 [SecureContext] installs or omits members by that
+       answer, so an address whose answer differs from the agent's would hand the table a realm carrying a
+       different set of interface objects — exposure_selftest asserts the two agree rather than trusting the
+       caller, and the value is the one tf_agent_init was given at the top of this function.
+       RETIREMENT: this record goes when no clause in this file explains a table row by where this call sits. */
+    exposure_selftest(ctx, "https://x.test/p");
 
     free(js);
     /* THE FRONTIER FIRST, BECAUSE A SUSPENDED FLOW IS A LIVE ACTIVATION OF THE BROWSER — solver/engine.h states
