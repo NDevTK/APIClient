@@ -214,6 +214,26 @@ static const JSCFunctionListEntry js_node_filter_consts[] = {
     JS_PROP_INT32_DEF("SHOW_NOTATION",               0x800, IDL_CONSTANT_PROP_FLAGS),
 };
 
+/* `acceptNode` IS NOT A MEMBER OF THIS OBJECT AND MUST NOT BECOME ONE — the gap auditor reports it ABSENT and
+   this is the OTHER arm of what that report means, not a member to write. Web IDL §3.11.1 "Legacy callback
+   interface object" builds the object by an algorithm with exactly one member-placing step: "Let F be
+   CreateBuiltinFunction(steps, 0, id, « », realm). Define the constants of interface on F given
+   realm. Return F." Constants, and nothing else — so a real browser answers `NodeFilter.acceptNode` with
+   `undefined`, and placing a function there would be a member no engine has and a page can feature-detect.
+   WHERE THE OPERATION ACTUALLY LIVES IS THE PAGE, which is what makes this an exclusion rather than a gap.
+   Web IDL §3.11 "Callback interfaces": "callback interfaces can be implemented in script by any JavaScript
+   object … the implementation of the operation is calling the result of invoking the internal [[Get]] method
+   on the object with a property name that is the identifier of the operation." That [[Get]] is the one this
+   file already performs on the PAGE's filter — see the call machine above — so `acceptNode` is read from the
+   page's object per call and is never owned by this one. The same section adds that "JavaScript objects need
+   not have properties corresponding to constants on them", which is the mirror of the same split.
+   IT IS DECLARED RATHER THAN LEFT IMPLICIT because an absent member and an unbuilt one are indistinguishable
+   to the auditor and to the next reader, and because the declaration ASSERTS per realm that the object indeed
+   lacks the name — so a later diff that placed it would abort here instead of shipping a member the standard
+   does not define. `acceptNode` reaching @webref/idl at all is §3.11's own doing: a callback interface
+   declares its operation so that a CONVERSION can name it, not so that an object carries it. */
+static const char *const NODE_FILTER_EXCLUDED[] = { "acceptNode" };
+
 void node_filter_install(JSContext *ctx, JSValueConst global)
 {
     /* §3.11.1's object is a BUILT-IN FUNCTION, so `typeof NodeFilter` is "function". It was JS_NewObject here,
@@ -223,5 +243,12 @@ void node_filter_install(JSContext *ctx, JSValueConst global)
 
     JS_SetPropertyFunctionList(ctx, obj, js_node_filter_consts,
                                (int)(sizeof(js_node_filter_consts) / sizeof(js_node_filter_consts[0])));
+    idl_members_excluded(ctx, obj, "NodeFilter", NODE_FILTER_EXCLUDED,
+                         (int)(sizeof(NODE_FILTER_EXCLUDED) / sizeof(NODE_FILTER_EXCLUDED[0])),
+                         "Web IDL §3.11.1 \"Legacy callback interface object\" places only constants on "
+                         "it — \"Define the constants of interface on F given realm\" is the algorithm's one "
+                         "member-placing step — and §3.11 \"Callback interfaces\" puts the operation on the "
+                         "PAGE's object, reached by \"invoking the internal [[Get]] method on the object with a "
+                         "property name that is the identifier of the operation\"");
     idl_define_global_property_reference(ctx, global, "NodeFilter", obj);
 }
