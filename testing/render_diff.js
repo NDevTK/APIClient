@@ -104,7 +104,23 @@ function check(cond, msg) { if (!cond) fail(msg); }
  * the page never sees it), so `JSON.stringify` over one yields a concolic string rather than a String.
  * Keeping the collector's output an object leaves the serialisation to whoever is driving it, which is where
  * that problem actually lives and where it has to be solved once.
- * RETIREMENT: this paragraph goes when the engine side exists, because a reader can then run both sides
+ *   AND THAT IS TRUE AND TOO WEAK, WHICH MATTERS BECAUSE THE WEAK VERSION READS AS SURVIVABLE. A concolic
+ *   String carries an EXAMPLE, so a reader who stops at the sentence above concludes the page-side route costs
+ *   one resolve at the boundary and is therefore the smaller diff. It is not survivable, and both halves of
+ *   why were MEASURED through the production ABI rather than read — re-derivable with
+ *   `node testing/render_geometry_probe.mjs --glue <a built qjs.mjs> --case stringify`.
+ *     IT FORKS. `JSON.stringify(ART)` reads `ART.toJSON` — ECMAScript §25.5.4.2 SerializeJSONProperty step
+ *   2.a's `GetV(value, "toJSON")` — and `ART` is a record the document published onto its global, so a member
+ *   such a record does not hold is unknown INPUT in this engine (solver/absent.h) and step 2.b's
+ *   `If IsCallable(toJSON) is true` is a branch on a concolic. The flow forks. `_flows` 2, with a `_forkAt` census naming exactly that site by its operands.
+ *   The collector's removed `typeof` guard was this same defect one level down; putting the serialisation in
+ *   the page puts it back one level up.
+ *     AND ITS EXAMPLE IS EMPTY. `ART.toJSON` has no example — there is no such member to have one — so the
+ *   walk is `exampleless` and ECMAScript §25.5.4 "JSON.stringify ( value [ , replacer [ , space ] ] )"'s
+ *   machine derives an unknown String with NO text behind it
+ *   (`sj_finish`): measured, `validValues` `[]` for the stringified artifact, and `S.length` reaching the host
+ *   as the concrete `-1` on the arm where `S` is falsy. There is no example at the boundary to resolve.
+ * RETIREMENT: this paragraph goes when the engine side has RUN, because a reader can then run both sides
  * instead of reading which members cross.
  *
  * THE KEY IS STRUCTURAL, NOT AN ORDINAL INTO A LIST. A row is named by its path from the root — each step a
@@ -682,35 +698,54 @@ async function main() {
   catch (e) { console.error(e.stack || e.message || e); process.exit(1); }
 }
 
-/* NAMED RESIDUAL — THE COMPARATOR HAS ONE SIDE. Chrome produces artifacts; this engine does not, and the
- *   reason is a CHANNEL rather than a missing member or a missing layout.
- *   WHAT IS NOT COVERED: there is no `producer: "apiclient-engine"` artifact, so `compare` has never joined
- *     two dumps and `selfcheck`'s negative control is Chrome against itself. What is NOT the obstacle, each
- *     established by driving a stamped artifact through the production ABI rather than by reading: CSSOM VIEW
- *     §6 "Extensions to the Element Interface"'s `getBoundingClientRect` ANSWERS over a laid-out document,
- *     with no abort and no page error and with used values that are right; `COLLECTOR` runs verbatim as page
- *     script, walks the element tree and returns; and every number the artifact wants exists as a concolic's
- *     example. The obstacle is that no channel hands a driver a JS value with its examples resolved — the
- *     production ABI (engine/host/qjs_abi.h) declares no entry that evaluates a script and returns one;
- *     the Console Standard's printer (core/console/console.c) renders an object as the literal `[object]` and
- *     a concolic as its SHAPE, so it carries neither; and the fetch/@H route carries shapes in `qjs_pending`
- *     and examples in `qjs_result().fetchCallSites[].params[].validValues`, which is TEXT (it cannot tell the
- *     Number 0 from the String "0", the distinction `compare` keys on) and is the PRODUCT'S OWN FINDING
- *     SURFACE, so an artifact riding it is the masquerade this file's first paragraph refuses.
- *   WHAT THE NEXT DIFF BUILDS: a host-side serialiser that walks a JSValue and writes JSON, resolving a
- *     concolic leaf through `solver/concolic.h`'s `concolic_example` (the idiom `concolic_is(v) ?
- *     concolic_example(ctx, v) : JS_DupValue(ctx, v)` is already this engine's routine spelling for it) and
- *     CRASHING on a kind it cannot express rather than writing a zero; and a seam that runs `collectorSource()`
- *     in a document's realm and hands its return value to that serialiser. What must EXIST afterward is an
- *     artifact BODY a driver can hand to `checkArtifactBody`, with the four members as Numbers. Note before
- *     starting that the ABI list is ENFORCED against `engine/host/main.c`'s `QJS_EXPORT` bodies IN BOTH
- *     DIRECTIONS by `abiCheck` in engine/build.mjs, so an entry is two files and neither may be landed alone.
- *   HOW ITS ABSENCE WOULD BE OBSERVED: `compare` is only ever reachable with two artifacts whose `producer` is
- *     the same string, and `selfcheck` reports its negative control as one browser against itself. A reader
- *     watching only the report sees five columns summing correctly over a population no engine contributed to.
- *   WHO MAY DISCHARGE IT: it needs a BUILD, so it is not a lane's to land — the act is `node engine/build.mjs`
- *     by whoever owns builds, and the diff above it is C. A lane meeting this residual can re-derive every
- *     measurement in it with `node testing/render_geometry_probe.mjs` against an already-built artifact. */
+/* THE ENGINE SIDE EXISTS, AND THE CLAUSE THAT SAID HOW TO BUILD IT WAS WRONG IN BOTH ITS HALVES — RECORDED
+ *   HERE RATHER THAN DELETED WITH IT, because a next-diff clause is read once, by somebody who has already
+ *   decided to do the work, so a wrong one is not caught, it is EXECUTED. It read: "a host-side serialiser
+ *   that walks a JSValue and writes JSON … and a seam that runs `collectorSource()` in a document's realm and
+ *   hands its return value to that serialiser."
+ *     THE SERIALISER HALF NAMED NO CONSTRAINT, AND WITHOUT ONE IT IS A DELETED SYSTEM RE-ADDED. `quickjs.h`
+ *   deletes `JS_JSONStringify` BY NAME — "serialization runs the page's code — toJSON, the replacer, every
+ *   element and member read, and a Proxy's ownKeys/getOwnPropertyDescriptor traps — so it is a step machine
+ *   reached through the flow machinery, and a C entry beside it would be a second implementation of the same
+ *   algorithm" — and quickjs.c's deletion note names the four symbols that went with it. A C walker that
+ *   consulted a `toJSON`, took a replacer, performed a [[Get]] or reached a trap would be that system under a
+ *   new name. What was built instead is a DUMP in the family §Architecture names (`JS_DumpValue`,
+ *   `JS_DumpGCObject`): it reads SLOTS through `JS_GetOwnSlot`, which refuses an accessor rather than calling
+ *   one, it aborts on a Proxy, and it CRASHES on every kind it cannot express. That refusal to run page code
+ *   is the whole of its licence to exist — see engine/host/solver/value_dump.h.
+ *     THE SEAM HALF IS IMPOSSIBLE AS WRITTEN. An ABI entry is called BETWEEN two steps, and `qjs_step` asserts
+ *   on the way out that the cooperative quantum's slice is closed; solver/engine.c's `preempt_hook` then
+ *   aborts by name when the scheduler's preempt policy is consulted with NO SLICE OPEN. So an entry that
+ *   evaluated the collector there would die at the first loop back-edge it reached — and the collector is a
+ *   tree walk. The seam is a scheduler ROW: `qjs_request_dump` records the ask, every live timeline gets the
+ *   program at the tail of its own sequence, and the SCHEDULER evaluates it. That is the same division
+ *   `qjs_request_park` already makes, and it is the only one this engine has.
+ *     AND IT SAID NOTHING ABOUT THE ANSWER BEING PER-TIMELINE, which is what decides the channel's SHAPE. The
+ *   DOM is per-flow, so `getBoundingClientRect` has N true answers for N timelines; a register with one slot
+ *   would silently pick one, which is the defect solver/engine.c records having measured one layer over. Each
+ *   record names the WORLD that produced it and `testing/render_engine.mjs` REFUSES to write "the" artifact
+ *   out of several.
+ *
+ * NAMED RESIDUAL — THE ENGINE SIDE HAS NEVER RUN.
+ *   WHAT IS NOT COVERED: every line of it is source. `engine/host/solver/value_dump.c`, the `DYN_VALUE_DUMP`
+ *     row and `qjs_request_dump`/`qjs_dumps` are landed and compile (`clang -fsyntax-only` at
+ *     `-DAPICLIENT_DEV=1` and `=0`), and the ABI list agrees with main.c's `QJS_EXPORT` bodies in both
+ *     directions, which is what `abiCheck` in engine/build.mjs enforces. None of that is evidence that a
+ *     single artifact has been produced: a compile is a statement about the text and the claim is about a run.
+ *   THE ACT THAT RETIRES IT, AND WHO MAY PERFORM IT: `node engine/build.mjs`, by whoever owns builds, then
+ *     `node testing/render_engine.mjs collect <out.json> --glue extension/lib/qjs/qjs.mjs --doc <f.html>`.
+ *     A lane may not build, so this is a REQUEST and not work waiting to be done — and it is worth saying
+ *     which, because a residual blocked on an install reads exactly like one blocked on unfinished code and
+ *     the two take opposite action.
+ *   HOW ITS ABSENCE WOULD BE OBSERVED, in constants a run either writes or does not: `render_engine.mjs dump`
+ *     prints `timelines that answered: 0` for a document with elements in it, or `collect` writes a file whose
+ *     `producer` does not begin `apiclient-engine@`. Either way `compare` is still only ever reachable with
+ *     two artifacts whose `producer` is the same string and `selfcheck`'s negative control is still one
+ *     browser against itself. The POSITIVE form is the one to look for and it is cheap: a `collect` that
+ *     writes a file at all has already been through `checkArtifactBody`, so `elementCount` agreeing with the
+ *     row count and a viewport of two Numbers is the engine having produced an artifact rather than a text.
+ *
+ */
 /* NAMED RESIDUAL — the artifact covers the ELEMENT TREE OF ONE DOCUMENT AND NOTHING ELSE.
  *   WHAT IS NOT COVERED: a document's `children` walk does not descend into a shadow root's tree or into a
  *     child navigable's document, so an element inside either contributes no row on either side. This is a

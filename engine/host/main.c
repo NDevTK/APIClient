@@ -1930,6 +1930,52 @@ QJS_EXPORT void qjs_request_park(void)
     engine_request_park();
 }
 
+/* A HOST INSTRUMENT'S PROGRAM, ASKED OF EVERY LIVE TIMELINE — the seam a driver outside this engine uses to
+   obtain a JS VALUE computed in the analysed document's realm, with this engine's unknowns standing on their
+   concrete examples. solver/engine.h states the whole contract at engine_request_dump; what belongs here is
+   what is true of this ENTRY.
+   ASKING IS NOT RUNNING, exactly as it is not for the park above, and here that is a hard constraint rather
+   than a convenience: this entry is called between two steps, where qjs_step has just asserted that the slice
+   is closed, the flow stamp is down and the capture route is NULL. The interpreter may not be entered on that
+   time at all — solver/engine.c's preempt_hook aborts by name when the scheduler's policy is consulted with
+   no slice open — so an entry that evaluated the program here would die at the first loop back-edge it
+   reached, and the bytes it was handed would name the cause of nothing. The ask is recorded and the SCHEDULER
+   evaluates it, which is also what makes the answer a fact about a TIMELINE rather than about whichever
+   document state happened to be applied when the host called.
+   `program` CROSSES AS A NUL-TERMINATED STRING AND NOT AS A (POINTER, LENGTH) PAIR, which every other entry
+   here that carries bytes does take. The pair exists for bytes whose LENGTH is not their terminator — a
+   document that may legally hold a 0x00 (qjs_init), a reply body (qjs_provide, qjs_host_answer). This is the
+   TRUSTED ZONE'S OWN INSTRUMENT TEXT, composed by the driver that is asking, so a length beside it would be a
+   second statement of one fact, free to disagree with the terminator the binding already writes.
+   A PRODUCTION HOST DOES NOT CALL THIS. The program is evaluated in the analysed document's realm and can
+   write there like any other script; the zone that hands it over is trusted, so nothing crosses a privilege
+   boundary — but a zone analysing a page for findings has no reason to add a program to it, and one that did
+   would be reporting on a document it had changed. */
+QJS_EXPORT void qjs_request_dump(const char *program)
+{
+    DCHECK(g_begun, "a dump was asked of an engine whose frontier was never seeded — there is no timeline to "
+                    "run the program in, and the register the driver then reads reports a document that "
+                    "produced nothing rather than a question nobody was there to answer");
+    DCHECK(program != NULL && *program,
+           "a dump was asked with no program — the ABI's string parameters cross as addresses and address "
+           "zero converts to the EMPTY STRING, so a caller that composed nothing arrives here looking exactly "
+           "like one that asked for an empty program, and every live flow would be handed a row to compile");
+    engine_request_dump(program);
+}
+
+/* …AND THE ANSWERS, DRAINED. One record per timeline that ran the program, `<world><TAB><json>`, newline
+   separated, "" when there are none. The pointer is this file's to own for the same reason qjs_result's is:
+   the previous answer is released before a new one is asked for.
+   IT IS NOT `qjs_result` AND MUST NOT BECOME PART OF ONE. The result document is the PRODUCT'S findings —
+   §What-the-tool-produces' endpoint surface and its verified sinks — and an instrument's artifact folded into
+   it is a measurement wearing a finding's clothes, which is the masquerade testing/render_diff.js refuses in
+   its own first paragraph. Two registers, two kinds of thing, and a host that wants both asks twice. */
+QJS_EXPORT const char *qjs_dumps(void)
+{
+    DCHECK(g_begun, "the dump register was read from an engine that never ran");
+    return engine_take_dumps();
+}
+
 /* STREAM what is known so far. The host reads findings off the print sink, so this writes the same one result
    document qjs_result returns, on the same @RESULT line the smoke entry uses — a long analysis reports as it
    goes instead of only at the end. It READS: no flow is touched, nothing is drained, and the frontier the next

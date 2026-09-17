@@ -24,6 +24,7 @@
 #include "solver/concolic.h"
 #include "solver/cow.h"
 #include "solver/world.h"   /* the routed record's world vector: whose timeline a delivery belongs to */
+#include "solver/value_dump.h"   /* a host instrument's completion value, dumped with its examples resolved */
 #include "core/dom/document.h"   /* which DOCUMENT a parked program belongs to: the realm it is compiled in */
 #include "core/dom/document_current_script.h"   /* §4.12.1.1's bracket around the classic arm of a row */
 #include "core/dom/node.h"       /* the ELEMENT a row is the program of, crossing a park as its wrapper */
@@ -1738,6 +1739,16 @@ const char *engine_host_requests(void) {
 static char  *g_notices;
 static size_t g_notices_n, g_notices_cap;
 
+/* …AND THE OTHER ONE-WAY LINE, WHICH IS AN INSTRUMENT'S AND NOT THE PLATFORM'S. A host-instrument program's
+   dumped completion value goes here and NOT onto the notices buffer above, which a reader may be tempted to
+   share because the two have the same shape. They are not the same thing: a notice is a PLATFORM EVENT the
+   trusted zone must route (a navigable was created, a world died), and routing an instrument's measurement
+   through it would put a test artifact into a production channel the zone acts on. It is also why this is not
+   folded into the result document — §What-the-tool-produces' surface is the product's FINDINGS, and an
+   artifact riding it is a measurement wearing a finding's clothes. One buffer, appended to and drained whole. */
+static char  *g_dumps;
+static size_t g_dumps_n, g_dumps_cap;
+
 void engine_host_notify(JSContext *ctx, const char *op) {
     size_t len;
     (void)ctx;
@@ -3184,6 +3195,18 @@ const char *engine_host_notices(void) {
     return drained ? drained : "";
 }
 
+/* See engine.h. The same drain as the notices one above, held apart from it for the reason stated at the
+   buffer: one is the platform speaking to the zone that routes it, and this is an instrument speaking to the
+   driver that asked. */
+const char *engine_take_dumps(void) {
+    static char *drained;
+    free(drained);
+    drained = g_dumps;
+    g_dumps = NULL;
+    g_dumps_n = g_dumps_cap = 0;
+    return drained ? drained : "";
+}
+
 /* IS THIS A METHOD — Fetch §2.2.1 Methods, "a byte sequence that matches the method token production", whose
    production is RFC 9110 §5.6.2 Tokens. Asked of what the HOST hands back at the provide edge, because the one
    thing a delivery keyed on the pair cannot survive is a key that is not the shape the join emitted: a host
@@ -4198,8 +4221,22 @@ int engine_decline(JSContext *ctx, const char *method, const char *url, const ch
    `onerror` run against the second chunk's execution in whichever order the network answered.
    THE ROW KEEPS ITS ADDRESS AS ITS BODY and takes no address column: a row that runs nothing has no §8.1.4.2
    created-script base URL, and the address is the account a reader gets of which load failed. */
+/* AND A HOST INSTRUMENT'S PROGRAM — the seventh kind, and the only one the PAGE did not cause to run. It
+   answers this enum's two questions the way a cross-agent operation does and for a different reason: its text
+   is the HOST's (testing/render_diff.js's one collector, handed across the ABI), so a compile failure is that
+   instrument's bug rather than the page's and asserting on it is right; and its COMPLETION VALUE is the whole
+   product — dumped as JSON with every unknown standing on its own example (solver/value_dump.h) and handed
+   back on a register the host drains.
+   IT IS A ROW AND NOT A C EVALUATION, WHICH IS THE ONLY THING THAT MAKES IT POSSIBLE AT ALL. An ABI entry that
+   called JS_Eval between two steps would reach the interpreter on the HOST's own time, where preempt_hook
+   asserts by name that the scheduler's policy is being consulted with no slice open — a flow nobody is
+   driving, measured against a budget belonging to nothing. So the host ASKS and the scheduler runs it, exactly
+   as a park request is asked and performed.
+   IT IS ATTACHED TO EVERY LIVE TIMELINE, for engine_perform's reason and not by analogy: the DOM is per-flow
+   (§State-isolation), so `getBoundingClientRect` has N answers for N timelines and a channel with one answer
+   slot would silently pick one. Each flow dumps its own, and each record carries the WORLD that produced it. */
 typedef enum { DYN_PAGE_SCRIPT = 0, DYN_CANDIDATE, DYN_JAVASCRIPT_URL, DYN_CROSS_AGENT_OP,
-               DYN_SCRIPT_SRC, DYN_SCRIPT_FAILED } DynKind;
+               DYN_SCRIPT_SRC, DYN_SCRIPT_FAILED, DYN_VALUE_DUMP } DynKind;
 
 /* Deliver ONE of this flow's answered pending entries (the network completed) — see flow_deliver_one_reply. */
 /* Is any of this flow's pending fetches deliverable? A flow with only host-owed entries has no work — it stalls
@@ -7334,6 +7371,55 @@ void engine_queue_javascript_url(uint32_t doc, const char *body, size_t body_n) 
                  TASK_SOURCE_NAVIGATION_AND_TRAVERSAL, DYN_POS_APPEND);
 }
 
+/* A HOST INSTRUMENT'S PROGRAM, QUEUED INTO EVERY LIVE TIMELINE — see engine.h.
+   NOTHING RUNS INSIDE THIS CALL, which is the same sentence engine_route and engine_perform carry and here it
+   is the whole reason the entry has this shape: it is called between two steps, on the host's own time, where
+   there is no flow running, no slice open and no flow base for an exception. What it does is C bookkeeping on
+   each flow's own sequence — the program is compiled and evaluated later, by the scheduler, with that flow
+   switched in and its COW delta applied, which is what makes the answer a fact about THAT timeline's document.
+   THE SESSION'S DOCUMENT, for engine_queue_candidate's reason: an instrument's question is about the document
+   this instance was rooted at, and there is no other document a caller of this entry could mean — a child
+   navigable's geometry is reached by walking into it from that root, which is the instrument's business and
+   not this entry's.
+   APPENDED. Two dumps asked before a flow has run the first are two ordinary questions in turn, each answered
+   under its own row; nothing here forks, because two asks from one host are not two contradictory worlds.
+   AND `flow_clear_host_owed` IS PART OF THE ASK AND NOT A TIDY-UP. A flow that reported host-owed is not
+   offered the thread again until something that could change its answer names it (flow.h), and this is such an
+   event: the flow now holds a row it did not hold. Without the clear, the instrument's question would be
+   answered by every flow EXCEPT the ones parked on a reply — which on a real page is most of them, and the
+   artifact would then describe the timelines that happened not to be waiting. */
+void engine_request_dump(const char *program) {
+    int n, i;
+    DynBody *b;
+
+    DCHECK(program != NULL && *program,
+           "a host instrument asked for a dump with no program to run — there is nothing to evaluate and "
+           "nothing to take a completion value from, so every flow would be given an empty row to compile");
+    DCHECK(g_sess_live, "a dump was asked of an instance with no live session — there is no scheduler to run "
+                        "the program and no timeline whose document it would be about");
+    /* ITS LENGTH IS ITS `strlen` AND THAT IS A STATEMENT ABOUT WHO WROTE IT, exactly as it is for a
+       cross-agent operation's program: this text is the HOST's instrument, handed across an ABI whose string
+       parameters are NUL-terminated by construction, and it is not page bytes, not a percent-decoding and not
+       an attacker-shaped payload — the three populations that made every other queueing entry take a pair. A
+       length parameter here would be a second statement of a fact the terminator already carries, free to
+       disagree with it. */
+    b = dyn_body_new(program, strlen(program));
+    CHECK(b != NULL, "engine: OOM making the body of a host instrument's program");
+    n = flow_count();
+    DCHECK(n > 0,
+           "a dump was asked of a document whose every timeline had already finished — there is no flow to "
+           "run the program, so the answer would be an empty register the driver reads as a document that "
+           "produced nothing rather than as a question nobody was left to answer");
+    for (i = 0; i < n; i++) {
+        Flow *f = flow_at(i);
+        engine_queue_into(f, g_sess_doc, b, DYN_VALUE_DUMP, SCRIPT_TYPE_CLASSIC,
+                          NULL, NULL, TASK_SOURCE_NOT_A_TASK, DYN_POS_APPEND, NULL,
+                          /*parser_inserted*/0);   /* the host's own text, and no element at all */
+        flow_clear_host_owed(f);
+    }
+    dyn_body_unref(b);   /* every row took its own reference; this entry's copy is spent */
+}
+
 /* THE OPERATION BECOMES THIS FLOW'S NEXT PROGRAM. Not a call: a peer answers by RUNNING a program, and every one
    of these is the page's own code — an IDL getter, a page's setter, a page's function — which a C activation
    has no flow base under. Queued with the flow switched in, so the operands the program reads are written into
@@ -7425,6 +7511,58 @@ static void flow_perform(JSContext *ctx, Flow *f)
    error instead would lose it and answer `undefined`.
    IT CROSSES AS AN EMISSION, one-way: nothing here waits for it, so nothing has to un-send it when this flow
    parks or is outranked — the same argument that makes a cross-document message an emission. */
+/* A HOST INSTRUMENT'S PROGRAM HAS COMPLETED, AND ITS VALUE IS THE PRODUCT — dumped as JSON with every unknown
+   standing on its own example, and recorded as `<world><TAB><json>`.
+   THE WORLD IS NOT A DIAGNOSTIC. This document's state IS its flows, so the program ran in every one of them
+   and the host receives N answers to one question; with the timelines unnamed they are N interchangeable
+   claims about one document, which is the defect flow_answer_perform records having measured one layer over
+   (one page's `w.closed` answered `true` and then `false` out of two contradictory timelines). The name is
+   world_serialize's — the ONE spelling of a world on the wire — so a driver can compare it, keep it beside the
+   artifact it belongs to, and refuse a second delivery of the same one.
+   THE JSON CARRIES NO TAB AND NO NEWLINE BY CONSTRUCTION (value_dump.h says why, and json_buf.c's escaping
+   loop is what makes it true), so it is the record's last field and needs no encoding step. It is asserted
+   anyway, because a record separator inside a field is the one corruption a reader's field COUNT still passes:
+   the tail would be read as a second record under no world at all.
+   THE REALM IS THE PROGRAM'S, asked the way flow_answer_perform asks it — §3.7 gives every realm its own
+   intrinsics, and a value read through another document's is read by a platform that is not the one that
+   produced it. */
+static void flow_emit_dump(JSContext *ctx, Flow *f, JSValueConst cv)
+{
+    char world[1024];
+    char *json;
+    size_t wn, jn;
+
+    world_serialize(f->world, world, sizeof world);
+    json = value_dump_json(doc_realm(flow_dyn_doc(f)), cv);
+    CHECK(json != NULL, "engine: a host instrument's completion value could not be dumped — value_dump_json "
+                        "aborts rather than answering nothing, so a null here is that contract broken");
+    DCHECK(strchr(json, '\n') == NULL && strchr(json, '\t') == NULL,
+           "a dumped completion value carries a record separator — every string it holds goes through "
+           "json_buf_str, which escapes every C0 byte, so a raw tab or newline in it means the dump wrote "
+           "bytes some other way and the host would read this record's tail as a second one under no world");
+    wn = strlen(world);
+    jn = strlen(json);
+    if (g_dumps_n + wn + jn + 3 > g_dumps_cap) {
+        size_t cap = g_dumps_cap ? g_dumps_cap * 2 : 1024;
+        char *g;
+        while (cap < g_dumps_n + wn + jn + 3) cap *= 2;
+        g = realloc(g_dumps, cap);
+        CHECK(g != NULL, "engine: OOM recording a host instrument's dump — the artifact this flow just "
+                         "computed is dropped at the one line that would have handed it over, and the driver "
+                         "reads a timeline that answered nothing from one that was never asked");
+        g_dumps = g;
+        g_dumps_cap = cap;
+    }
+    memcpy(g_dumps + g_dumps_n, world, wn);
+    g_dumps_n += wn;
+    g_dumps[g_dumps_n++] = '\t';
+    memcpy(g_dumps + g_dumps_n, json, jn);
+    g_dumps_n += jn;
+    g_dumps[g_dumps_n++] = '\n';
+    g_dumps[g_dumps_n] = 0;
+    free(json);
+}
+
 static void flow_answer_perform(JSContext *ctx, Flow *f, JSValueConst cv)
 {
     JSValue thrown = JS_UNDEFINED;
@@ -9716,7 +9854,10 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    message and, through the error's stack slot, the position — so the DCHECK's own text is where
                    that belongs, exactly as the reader of a `@WHY` gets a file:line and no stack. */
 #if APICLIENT_DEV
-                if (kind == DYN_PAGE_SCRIPT || kind == DYN_CROSS_AGENT_OP) {
+                /* AND A HOST INSTRUMENT'S PROGRAM IS TEXT THE HOST WROTE, so it parses or the instrument
+                   is wrong — skipping it would leave the driver with an empty register and nothing anywhere
+                   saying the program never ran, which reads as a document that produced no geometry. */
+                if (kind == DYN_PAGE_SCRIPT || kind == DYN_CROSS_AGENT_OP || kind == DYN_VALUE_DUMP) {
                     char et[320];
 
                     result_error_text(ctx, exc, et, sizeof et);
@@ -9724,9 +9865,13 @@ static int flow_step(JSContext *ctx, Flow *f) {
                            kind == DYN_PAGE_SCRIPT
                                ? "flow_step: a page <script>/chunk did not start — its source did not COMPILE "
                                  "(a classic script's program, or a module script's 16.2.1.7.1 ParseModule)"
-                               : "the program that performs a cross-agent operation did not compile — it is "
+                           : kind == DYN_CROSS_AGENT_OP
+                               ? "the program that performs a cross-agent operation did not compile — it is "
                                  "this engine's own text, and skipping it parks the asking flow on an answer "
-                                 "nothing will send",
+                                 "nothing will send"
+                               : "a host instrument's program did not compile — its text crossed the ABI from "
+                                 "the driver that asked for the dump (engine_request_dump), so this is that "
+                                 "instrument's own SyntaxError and not the page's",
                            *et ? et : "(a throw this engine could not describe)");
                 }
 #endif
@@ -9848,6 +9993,18 @@ static int flow_step(JSContext *ctx, Flow *f) {
                is not a preference. */
             else if (r == 0 && flow_dyn_kind(f) == DYN_CROSS_AGENT_OP)
                 flow_answer_perform(ctx, f, cv);
+            /* A HOST INSTRUMENT'S COMPLETION IS ITS ANSWER, AND IT STANDS BESIDE THE ONE ABOVE FOR THE SAME
+               REASON: it is read as a VALUE, so it is taken before every throw arm below, each of which would
+               otherwise report it as this document's page error and hand the driver an empty register.
+               ITS THROW IS NOT HANDLED HERE AND THAT IS DELIBERATE, NOT AN OMISSION. A cross-agent operation's
+               throw belongs to the peer that asked, so that arm carries the completion TYPE; an instrument's
+               throw belongs to nobody — the program is the host's own text over the page's platform, so a
+               throw escaping it is a capability this engine does not have, which §Offensive-programming makes
+               a crash naming what to build rather than a value to report. It falls through to the classic
+               script's report arm below, which records the thrown value's own text in the result document's
+               `pageErrors` where a reader can act on it. */
+            else if (r == 0 && flow_dyn_kind(f) == DYN_VALUE_DUMP)
+                flow_emit_dump(ctx, f, cv);
             /* THE REPORT ITSELF COMPLETING ABRUPTLY IS THIS ENGINE'S DEFECT, and it is asked FIRST because a
                report frame is a call root and so is a driven orphan's — the arm below would read it as the
                exploration surface and swallow it, which is the one reading that hides an engine bug inside the

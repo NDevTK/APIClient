@@ -95,4 +95,11 @@ QJS_EXPORT void qjs_set_yield_floor(double floor);
 QJS_EXPORT void qjs_request_park(void);
 QJS_EXPORT void qjs_emit_partial(void);
 
+/* THE INSTRUMENT SEAM — a program a DRIVER wants evaluated in the analysed document's realm, and the dumped
+   completion values coming back, one per live timeline. Its contract is at its body in main.c and its whole
+   design at solver/engine.h's engine_request_dump; what is worth knowing from a declaration is that the two
+   are a PAIR and that neither is part of the product's finding surface. */
+QJS_EXPORT void qjs_request_dump(const char *program);
+QJS_EXPORT const char *qjs_dumps(void);
+
 #endif

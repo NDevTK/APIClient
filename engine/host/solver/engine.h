@@ -242,6 +242,33 @@ void engine_queue_candidate(const char *body, size_t body_n, DynPos pos);
    That is the pair of orderings no arrangement of two arms can both serve, and it is observable from page
    code with nothing but an `<iframe>` and a `location` write. */
 void engine_queue_javascript_url(uint32_t doc, const char *body, size_t body_n);
+/* A HOST INSTRUMENT'S PROGRAM, MADE A WORK ITEM OF EVERY LIVE TIMELINE — and the one queueing entry on this
+ * header whose program the PAGE did not cause to run.
+ *   WHAT IT IS FOR. A driver outside this engine (testing/render_diff.js's ONE collector, and anything else
+ * shaped like it) needs a JS VALUE computed in a document's realm, with this engine's unknowns standing on
+ * their concrete examples. There is no other route: the Console Standard's printer renders an object as the
+ * literal `[object]` and a concolic as its SHAPE, so it carries neither; and the fetch/@H surface carries
+ * shapes and examples as TEXT in a URL, where the Number 0 and the String "0" are one byte sequence — and it
+ * is the product's own finding surface, so an artifact riding it is a measurement wearing a finding's clothes.
+ *   WHY IT IS A ROW AND NOT AN EVALUATION. The host calls this between two steps, where no flow is running and
+ * no slice is open; preempt_hook asserts by name that the policy may not be consulted there, so a JS_Eval on
+ * this path would abort at the first suspend point the program reached. The ask is recorded, the SCHEDULER
+ * runs the program, and the answer comes back on the register below. That is the same division qjs_request_park
+ * already makes and it is the only one this engine has.
+ *   EVERY LIVE TIMELINE, because the DOM is per-flow: one question has N true answers and a channel with one
+ * slot would silently pick one. Each answer names the WORLD that produced it.
+ *   ITS COMPLETION VALUE IS READ AND ITS THROW IS NOT. The value is dumped (solver/value_dump.h); a throw is a
+ * capability this engine does not have met by the host's own text over the page's platform, so it reports as
+ * this document's page error and the dev build aborts at it. That is the forcing function, not a loss.
+ *   IT IS AN INSTRUMENT SEAM AND A PRODUCTION HOST DOES NOT CALL IT. The program it runs is evaluated in the
+ * analysed document's realm, so it can WRITE there like any other script; what makes that sound is that the
+ * text is the trusted zone's own and never a stranger's, and what makes it honest is that a zone analysing a
+ * page for findings has no reason to add a program to it. */
+void engine_request_dump(const char *program);
+/* The dumps recorded since the last call, newline-joined and DRAINED by the call; "" when there are none.
+ * Each record is `<world><TAB><json>` — the world in world_serialize's own spelling, and the JSON one LINE by
+ * construction (value_dump.h). A record per timeline that ran the program, in the order they completed. */
+const char *engine_take_dumps(void);
 /* Park the running flow on a <script src> WITH NO POSITION TO HOLD: the host fetches it, and the reply becomes
    this flow's next program rather than a promise's value. Two kinds of element are that — one a page INJECTED,
    and a member of HTML §4.12.1.1's `set of scripts that will execute as soon as possible`, which is a SET (§13.2.7

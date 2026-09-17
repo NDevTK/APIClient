@@ -29,6 +29,14 @@
  * likely such a witness is to fire. The channel is `qjs_pending`, read by this driver; it is deliberately not
  * the console, which the renderer does not tee and which renders an object as `[object]` in any case.
  *
+ * ONE CASE HERE IS A REFUTATION RATHER THAN AN OBSERVATION, AND IT IS THE REASON THE ARTIFACT IS SERIALISED
+ * BY THE HOST. `stringify` asks whether the PAGE can serialise its own artifact — the smaller-looking route,
+ * and the one a reader reaches for first. It cannot: `JSON.stringify(ART)` reads `ART.toJSON`, which is a
+ * member a published record does not hold and is therefore unknown INPUT (solver/absent.h), so ECMAScript
+ * §25.5.4.2 SerializeJSONProperty step 2.b's `IsCallable` is a branch on a concolic and the flow FORKS — and the unknown carries no example, so
+ * the machine derives a String with no text behind it. Both halves are in this case's own output: `_flows` 2,
+ * a `_forkAt` entry naming that site by its operands, and `validValues` `[]` for the stringified artifact.
+ *
  * usage:  node testing/render_geometry_probe.mjs --glue <path/to/qjs.mjs> [--case <name> | --doc <file.html>]
  *         node testing/render_geometry_probe.mjs --glue <…> --list
  */
@@ -117,6 +125,22 @@ if (typeof auto.width === "number") { fetch("/rd-AUTO-number"); } else { fetch("
     html: `<!doctype html><html><body><script>
 var o = {a: "lit", n: 7};
 fetch("/rd-o=" + o.a + "/" + o.n);
+<\/script></body></html>`,
+  },
+  stringify: {
+    ask: 'can the PAGE serialise the artifact — the route a reader reaches for before the host-side dump',
+    html: `<!doctype html><html><body>
+<div id=a style="width:100px;height:50px">hello</div><p>para</p>
+<script>
+fetch("/rd-enter");
+var ART = %COLLECTOR%;
+fetch("/rd-collector-returned");
+var S = JSON.stringify(ART);
+fetch("/rd-stringified");
+fetch("/rd-typeof=" + (typeof S));
+fetch("/rd-len=" + (S ? S.length : -1));
+fetch("/rd-head=" + S);
+fetch("/rd-done");
 <\/script></body></html>`,
   },
   collector: {
