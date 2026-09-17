@@ -74,16 +74,38 @@ function check(cond, msg) { if (!cond) fail(msg); }
  * selector engine and no serialiser to run it: the element tree (`documentElement` and `children`);
  * CSSOM VIEW §6 "Extensions to the Element Interface"'s `getBoundingClientRect`;
  * CSSOM VIEW §4 "Extensions to the Window Interface"'s `innerWidth` and `innerHeight`, which "must return the
- * viewport width, including the size of a rendered scroll bar (if any), or zero if there is no viewport";
+ * viewport width including the size of a rendered scroll bar (if any), or zero if there is no viewport";
  * and `location.href`. Each standard is NAMED at its own number rather than carried from the line above —
  * a resolver takes the NEAREST named standard, so a quotation after a list of them is judged against whichever
  * came last.
  *
- * IT RETURNS AN OBJECT RATHER THAN A STRING, DELIBERATELY. Every number in a rectangle this engine reports is
- * a CONCOLIC whose example is derived from the initial containing block, so composing one into a string is the
- * defect CLAUDE.md §A-WITNESS-MAY-NOT-BE-COMPOSED records: the payload never becomes concrete and the witness
- * silently never fires. Keeping the collector's output an object leaves the serialisation to whoever is
- * driving it, which is where that problem actually lives and where it has to be solved once.
+ * IT RETURNS AN OBJECT RATHER THAN A STRING, DELIBERATELY, AND THE REASON THAT USED TO STAND HERE WAS WRONG IN
+ * BOTH ITS HALVES. It said "EVERY number in a rectangle this engine reports is a CONCOLIC whose example is
+ * derived from the initial containing block", and that the composed payload "never becomes concrete and the
+ * witness silently never fires". The DECISION survives; the reason is replaced by what was measured, because a
+ * reader who inherits the reason builds the wrong thing — it says every member needs help and names one
+ * mechanism, and the truth is that most members need none and there are two mechanisms.
+ *   A MEMBER IS CONCOLIC EXACTLY WHEN ITS USED VALUE DEPENDS ON SOMETHING THIS ENGINE MODELS AS UNKNOWN, which
+ *   is a property of the BOX and not of the member. `<div style="width:100px;height:50px">` under body's UA
+ *   margin answers x 8, y 8, width 100, height 50, all concrete and all correct, and `documentElement`'s
+ *   height answers 66. What is concolic is an auto-width block, whose used width is `{initialContainingBlock.
+ *   width}`, and an auto-height block containing text, whose used height is `{defaultFontSize} & {fontAscent}
+ *   & {fontDescent}` — the FONT family, which the old sentence did not name at all and which is the one a
+ *   comparison against a real browser will meet on every paragraph.
+ *   AND IT IS NOT SILENT. The request goes out carrying the concolic's DISPLAY SHAPE, and the example is
+ *   resolved: `fetch("/w=" + document.body.getBoundingClientRect().width)` reaches `qjs_pending` as
+ *   `/w={initialContainingBlock.width}` and reaches `qjs_result().fetchCallSites[].params[].validValues` as
+ *   `w=1264` — which is 1280 minus body's two 8px margins, so the engine's example IS the layout this file
+ *   pins Chrome to. THE EXAMPLES ALL EXIST; what is missing is a channel that is not the product's own
+ *   finding surface and does not stringify (see the residual at the foot of this file).
+ * SO THE DECISION STANDS FOR A NARROWER AND CHECKABLE REASON: a page cannot serialise this artifact, because a
+ * property read off a page-built object is itself concolic in this engine (measured: `var o = {a:"lit"};
+ * fetch("/o=" + o.a)` reaches the host as `/{o=o.a}` with `validValues` `["o=lit"]` — the example is right and
+ * the page never sees it), so `JSON.stringify` over one yields a concolic string rather than a String.
+ * Keeping the collector's output an object leaves the serialisation to whoever is driving it, which is where
+ * that problem actually lives and where it has to be solved once.
+ * RETIREMENT: this paragraph goes when the engine side exists, because a reader can then run both sides
+ * instead of reading which members cross.
  *
  * THE KEY IS STRUCTURAL, NOT AN ORDINAL INTO A LIST. A row is named by its path from the root — each step a
  * tag name and its index among its parent's ELEMENT children. Two walks that disagree about the tree then
@@ -101,11 +123,33 @@ function COLLECTOR() {
       var r = el.getBoundingClientRect();
       /* The four members CSSOM VIEW §6 "Extensions to the Element Interface" names, each read separately: a
          rectangle that answered some members and not others is a row with some fields and an `unanswered`
-         reason, never a row with zeros in the gaps. */
+         reason, never a row with zeros in the gaps.
+         THERE IS NO `typeof` GUARD HERE, AND ITS REMOVAL IS THE ONE CHANGE THAT MAKES AN ENGINE SIDE POSSIBLE
+         AT ALL. A loop asking `typeof f[k] !== "number"` stood here and discarded the whole rectangle when one
+         member failed it. It was a NON-CHECK on the only side that has ever run — GEOMETRY INTERFACES §3 "The
+         DOMRect interfaces" declares x, y, width and height as `unrestricted double`, so a conforming agent
+         answers `"number"` for all four including NaN and the infinities, and the arm is unreachable. It was
+         WORSE than redundant on the side that has not: this engine's used geometry is concolic wherever the
+         used value depends on something it models as unknown, so `typeof` on such a member is a branch on a
+         concolic and the engine FORKS it — which is the engine obeying §Solver-half, not a defect to narrow.
+         The collector then produced one artifact PER PATH rather than one artifact, and 2^k of them for k
+         concolic members. MEASURED through the production ABI, and the witness is
+         armed in BOTH directions rather than being an absence: `node testing/render_geometry_probe.mjs
+         --glue <a built qjs.mjs>` prints the artifact's own stamp and its distance from the branch, and its
+         `guardauto` case runs this predicate over a member whose used width is ICB-derived — `_flows` 2, and
+         a `_forkAt` census holding exactly ONE named site, a `typeof` over
+         `{viewport#1}initialContainingBlock.width` against `"number"`, which is this loop by its own
+         operands. Its `guard` case runs the identical predicate over a FIXED-size box and forks nothing, so
+         what forks is the CONCOLIC and not the `typeof`. And its `collector` case runs the whole COLLECTOR as
+         page script with this loop GONE: `_flows` 1, `_forkAt` EMPTY, no page error, six rows, and
+         `rows[0].key` resolving to `html[0]`. One flow is the property an engine-side artifact needs, and
+         this loop was the only thing in the collector taking it away.
+         AND THE QUESTION IT ASKED IS STILL ASKED, BY THE ONE PARTY THAT CAN ANSWER IT. `compare` already
+         classifies a field that is not a Number as `unanswered`, PER FIELD and with a reason naming the side,
+         where this loop threw away the other three members with it. Two answers to one question is the shape
+         that drifts, and this was the copy that could fork. What is left here is the try/catch, which reports
+         a member that really THREW — an absence this engine can state and `typeof` never could. */
       f = { x: r.x, y: r.y, width: r.width, height: r.height };
-      for (var k in f) {
-        if (typeof f[k] !== "number") { un = "getBoundingClientRect()." + k + " is not a Number"; f = null; break; }
-      }
     } catch (e) {
       un = "getBoundingClientRect() threw: " + (e && e.name ? e.name : "?") + ": " + (e && e.message ? e.message : "");
     }
@@ -638,6 +682,35 @@ async function main() {
   catch (e) { console.error(e.stack || e.message || e); process.exit(1); }
 }
 
+/* NAMED RESIDUAL — THE COMPARATOR HAS ONE SIDE. Chrome produces artifacts; this engine does not, and the
+ *   reason is a CHANNEL rather than a missing member or a missing layout.
+ *   WHAT IS NOT COVERED: there is no `producer: "apiclient-engine"` artifact, so `compare` has never joined
+ *     two dumps and `selfcheck`'s negative control is Chrome against itself. What is NOT the obstacle, each
+ *     established by driving a stamped artifact through the production ABI rather than by reading: CSSOM VIEW
+ *     §6 "Extensions to the Element Interface"'s `getBoundingClientRect` ANSWERS over a laid-out document,
+ *     with no abort and no page error and with used values that are right; `COLLECTOR` runs verbatim as page
+ *     script, walks the element tree and returns; and every number the artifact wants exists as a concolic's
+ *     example. The obstacle is that no channel hands a driver a JS value with its examples resolved — the
+ *     production ABI (engine/host/qjs_abi.h) declares no entry that evaluates a script and returns one;
+ *     the Console Standard's printer (core/console/console.c) renders an object as the literal `[object]` and
+ *     a concolic as its SHAPE, so it carries neither; and the fetch/@H route carries shapes in `qjs_pending`
+ *     and examples in `qjs_result().fetchCallSites[].params[].validValues`, which is TEXT (it cannot tell the
+ *     Number 0 from the String "0", the distinction `compare` keys on) and is the PRODUCT'S OWN FINDING
+ *     SURFACE, so an artifact riding it is the masquerade this file's first paragraph refuses.
+ *   WHAT THE NEXT DIFF BUILDS: a host-side serialiser that walks a JSValue and writes JSON, resolving a
+ *     concolic leaf through `solver/concolic.h`'s `concolic_example` (the idiom `concolic_is(v) ?
+ *     concolic_example(ctx, v) : JS_DupValue(ctx, v)` is already this engine's routine spelling for it) and
+ *     CRASHING on a kind it cannot express rather than writing a zero; and a seam that runs `collectorSource()`
+ *     in a document's realm and hands its return value to that serialiser. What must EXIST afterward is an
+ *     artifact BODY a driver can hand to `checkArtifactBody`, with the four members as Numbers. Note before
+ *     starting that the ABI list is ENFORCED against `engine/host/main.c`'s `QJS_EXPORT` bodies IN BOTH
+ *     DIRECTIONS by `abiCheck` in engine/build.mjs, so an entry is two files and neither may be landed alone.
+ *   HOW ITS ABSENCE WOULD BE OBSERVED: `compare` is only ever reachable with two artifacts whose `producer` is
+ *     the same string, and `selfcheck` reports its negative control as one browser against itself. A reader
+ *     watching only the report sees five columns summing correctly over a population no engine contributed to.
+ *   WHO MAY DISCHARGE IT: it needs a BUILD, so it is not a lane's to land — the act is `node engine/build.mjs`
+ *     by whoever owns builds, and the diff above it is C. A lane meeting this residual can re-derive every
+ *     measurement in it with `node testing/render_geometry_probe.mjs` against an already-built artifact. */
 /* NAMED RESIDUAL — the artifact covers the ELEMENT TREE OF ONE DOCUMENT AND NOTHING ELSE.
  *   WHAT IS NOT COVERED: a document's `children` walk does not descend into a shadow root's tree or into a
  *     child navigable's document, so an element inside either contributes no row on either side. This is a
