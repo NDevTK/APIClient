@@ -2323,11 +2323,19 @@ static int proxy_indexed_get_own(JSContext *ctx, JSPropertyDescriptor *desc, con
  * pointing where it does for now: §7.2.3.5 steps 4-6 let a CROSS-ORIGIN read walk to this same surface for
  * §7.2.1.3.1's names, so routing those walks through §7.2.3.1 — which answers null there — would take
  * `otherW.postMessage` away from every page. Which members are affected is window.c's answer and not this
- * one's: Web IDL §3.7.3 Interface prototype object makes every member of a [Global] object an OWN property of
- * it (which is why `window.hasOwnProperty("addEventListener")` is true in every browser, and why
- * event_target.c places its three there), and window.c still declares part of Window's surface on
- * Window.prototype instead. That placement is what closes this: with every member own, the cross-origin
- * surface no longer needs to be reachable up a chain, and the walks can ask §7.2.3.1 like everything else. */
+ * one's: a member of an interface declared [Global] is an own property of every object that implements THAT
+ * interface, which Web IDL §3.7.7 Operations and §3.7.6 Attributes each state of their own member kind — and
+ * all thirteen of the names above are Window's own, declared on `interface Window` or on a mixin it includes,
+ * which §2.3 Interface mixins makes members of the including interface. window.c still declares part of that
+ * surface on Window.prototype instead, and moving it is what closes this: with those thirteen own, the
+ * cross-origin surface no longer needs to be reachable up a chain and the walks can ask §7.2.3.1 like
+ * everything else.
+ * THIS CITED §3.7.3 FOR A CLAIM ABOUT THE OBJECT'S WHOLE CHAIN, and offered an EventTarget operation being an
+ * own property of `window` as the evidence. Both halves were wrong: the [Global] condition is read off the
+ * interface the member is declared on, DOM §2.7 Interface EventTarget is not declared [Global], and its three
+ * operations are own properties of no global — core/events/event_target.c carries the whole argument. They
+ * are reached here up the chain and always will be, so the closure above is about Window's own members only,
+ * and no future placement makes an inherited member own. */
 
 /* §7.2.3's OWN SURFACE FOR ONE NAME, AND IT IS AN OWN PROPERTY OF THIS OBJECT — not a prototype hit.
  *

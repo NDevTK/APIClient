@@ -7190,14 +7190,19 @@ static void exposure_selftest(JSContext *ctx, const char *top_level_url)
            same column wearing a different spelling, and the reason a placement census keyed on the COLUMN
            rather than on the thunk is what found it.
            `addEventListener` IS THE DISCRIMINATING ROW, AND ITS DISCRIMINATION IS IN THE WINDOW ARM. DOM §2.7
-           declares it as an operation, and the function that placed `EventTarget` on the global ALSO placed
-           `addEventListener`, `removeEventListener` and `dispatchEvent` there as OWN properties — Web IDL
-           §3.7.3 Interface prototype object's [Global] half, which is a claim about ONE GLOBAL OBJECT and its
-           interface chain rather than about a realm. The obvious conversion moves that whole function to the
-           per-realm column, and it passes all four rows above; what it also does is define `addEventListener`
-           as an own property of the WINDOW realm's global at intrinsic time, and this table runs before
-           core/frame/window.c has built that global a prototype chain at all — so the Window arm reads `true`
-           where §3.7.3 owes nothing yet, and the row fails.
+           declares it as an operation, and the function that placed `EventTarget` on the global ONCE placed
+           `addEventListener`, `removeEventListener` and `dispatchEvent` there as OWN properties too, on the
+           ground that a global owes every member of every interface in its chain. THAT PLACEMENT IS GONE: Web
+           IDL §3.7.7 Operations reads its [Global] condition off the interface the operation is declared on,
+           and DOM §2.7 Interface EventTarget is not declared [Global], so the three are own properties of no
+           global in any realm — core/events/event_target.c carries the argument and what refutes it.
+           THE ROW IS UNCHANGED BY THAT, AND IT IS WORTH SAYING WHY. It reads the Window arm `false` because
+           this table runs before core/frame/window.c has built that global a prototype chain at all, which was
+           true before the deletion and is true after it; what the deletion removes is the SECOND way the arm
+           could have gone `true` — a conversion moving that whole function to the per-realm column, which
+           passes all four rows above and would have defined `addEventListener` as an own property of the
+           WINDOW realm's global at intrinsic time. That conversion is now unspellable rather than merely
+           unwise, because there is no function left to move.
            THE WORKER ARM IS `true` AND CANNOT DISCRIMINATE, WHICH IS WHY IT IS SAID HERE RATHER THAN ASSUMED.
            `[[HasProperty]]` WALKS THE PROTOTYPE CHAIN, and core/workers/worker_global_scope.c's own realm
            intrinsic performs Web IDL §3.7.3's proto step twice — `WorkerGlobalScope : EventTarget` and

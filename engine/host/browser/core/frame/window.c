@@ -939,12 +939,16 @@ void window_install(JSContext *ctx, JSValueConst global, const char *url)
        "[object global]" where every browser answers "[object Window]". That own property is the plain-host
        global's, not a Window's: HTML's global IS the Window, and the tag it carries is the interface's. */
     JS_DeleteProperty(ctx, g, JS_WellKnownSymbolAtom(JS_WKS_TO_STRING_TAG), 0);
-    /* DOM §2.7 Interface EventTarget's Web IDL §3.7.3 [Global] members on THIS global, now that its prototype
-       is in the chain above. Its Web IDL §3.8 Platform objects implementing interfaces property reference is NOT
-       placed here any more: that algorithm is given a REALM and DOM §2.7 Interface EventTarget is `[Exposed=*]`,
-       so core/realm.h's intrinsic list has already put `EventTarget` on every realm — including the ones no
-       Document is ever installed over. */
-    event_target_install_global_members(ctx, g);
+    /* DOM §2.7 Interface EventTarget PLACES NOTHING ON THIS GLOBAL, and the chain built above is the whole of
+       what puts its three operations within reach. A call here used to define `addEventListener`,
+       `removeEventListener` and `dispatchEvent` as own properties of `g`. Web IDL §3.7.7 Operations reads its
+       [Global] condition off the interface the operation is a MEMBER of — "Let operations be the list of
+       regular operations that are members of definition" — and EventTarget is not declared [Global], so those
+       three belong to `EventTarget.prototype`, which is two links up from `g` and is what `etp` chained in
+       above. core/events/event_target.c carries the argument that put them here and what refutes it.
+       ITS Web IDL §3.8 Platform objects implementing interfaces PROPERTY REFERENCE IS NOT PLACED HERE EITHER:
+       that algorithm is given a REALM and §2.7 is `[Exposed=*]`, so core/realm.h's intrinsic list has already
+       put `EventTarget` on every realm — including the ones no Document is ever installed over. */
     idl_define_global_property_reference(ctx, g, "Window", idl_interface_object(ctx, "Window", gp));
 
     /* 7.2.2: window, self and frames all return THIS Window's proxy, and the global object IS that proxy here —
