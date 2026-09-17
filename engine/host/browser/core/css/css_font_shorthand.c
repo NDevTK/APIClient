@@ -7,8 +7,8 @@
 #include <string.h>
 
 #include "check.h"
-#include "core/css/css_code_point.h"   /* CSS Syntax §4.2 is asked of a CODE POINT, never of a byte */
 #include "core/css/css_defaulting.h"
+#include "core/css/css_font_family.h"
 #include "core/css/css_font_shorthand.h"
 #include "core/css/css_length.h"
 #include "core/css/css_shorthand.h"
@@ -221,101 +221,23 @@ static bool font_line_height_valid(const char *w, size_t len)
     return font_length_percentage_nonneg(w, len);
 }
 
-/* css-fonts-4 §2.1.1 "Syntax of <font-family-name>": `<font-family-name> = <string> | <custom-ident>+`, over
- * §2.1's `<'font-family'> = [ <family-name> | <generic-family> ]#`. A `<generic-family>` is an ident, so the
- * `<custom-ident>+` arm covers it and the two need no separate test.
+/* §2.1.1's `<font-family-name>` IS core/css/css_font_family.h's AND IS NOT TESTED HERE, which is a decision
+ * rather than a move for tidiness — a reader who re-derives it from §2.7's shape will re-add a local predicate,
+ * so here is the reason not to. What stood here was a VALIDITY TEST: it answered whether the trailing text was
+ * a `<'font-family'>` and the sequence below then stored that text VERBATIM. That is sound for §2.7 alone and
+ * wrong the moment the same grammar has to answer CSSOM, which does not accept or reject a declaration but
+ * READS ONE BACK — and `font: 12px 'A B'` and `font: 12px "A B"` are one value spelled two ways, of which
+ * exactly one is what a page reads out of `font-family` afterwards. A predicate cannot produce that and a
+ * serializer written beside it over the ORIGINAL TEXT cannot either, so the parse and the serializer are one
+ * component and this file asks it.
  *
- * §2.1.1's OWN THREE INVALID EXAMPLES ARE THE TEST: `Red/Black`, `"Lucida" Grande` and `Ahem!` are each named
- * there as an invalid declaration. So a comma-separated part is either ONE `<string>` and nothing else, or a
- * sequence of idents each of which starts with an ident-start code point — CSS Syntax §4.2's "A letter, a
- * non-ASCII ident code point, or U+005F LOW LINE (_)", plus a leading hyphen or escape, which §4.3.9 admits —
- * and carries no delimiter. That refuses all three, and admits `Palatino`, `new century schoolbook`
- * unquoted and `"new century schoolbook"` quoted.
- *
- * IT IS NOT A CHARACTER-EXACT `<custom-ident>` PARSE, AND THE RESIDUAL RUNS IN BOTH DIRECTIONS — which the
- * example that stood here got backwards, and it was MEASURED rather than re-read. An ESCAPE is admitted by its
- * backslash without its hex digits being read, so `\310th` passes; that is the direction §2.1.1's own note
- * points ("most punctuation characters and digits at the start of each token must be escaped"), and the
- * looseness there admits a valid spelling rather than a value the grammar rejects. But `\31 0th` — the
- * spelling this comment used to name as the admitted one — is REFUSED, both before and after the code-point
- * diff below, because CSS Syntax §4.3.7 "Consume an escaped code point"'s "If the next input code point is
- * whitespace, consume it as well" is not run here: the space reads as a name separator, and the `0th` left
- * behind it opens with a digit.
- *   WHAT IS NOT COVERED, THEN: an escape is a BACKSLASH to this file and not an algorithm, so the whitespace
- *   §4.3.7 makes part of one is a separator here.
- *   WHAT THE NEXT DIFF BUILDS: §4.3.12 "Consume an ident sequence" over this text — the walk that consumes an
- *   escape together with the whitespace §4.3.7 ends it with, so one ident is one ident.
- *   HOW ITS ABSENCE WOULD SHOW: `font: 12px \31 0th` is an invalid declaration here and sets `font-family` to
- *   `10th` in a browser, so every one of §2.7's nineteen longhands keeps its cascaded value instead.
- *
- * AND THE WORD "ident" IN §4.2's DEFINITION IS WHY THE TEST BELOW IS NOT A BYTE TEST. A non-ASCII ident code
- * point is an ENUMERATED SET and not "any code point above ASCII", so §4.2 is asked here of a DECODED code
- * point through core/css/css_code_point.h, which owns that set and §3.3's filter that decides what §4.2 is
- * ever asked about. What stood here was `isalpha(c) || c == '_' || c == '-' || c == '\\' || c >= 0x80` over one
- * BYTE, and every byte of the UTF-8 encoding of U+00D7 MULTIPLICATION SIGN, U+00F7 DIVISION SIGN, U+037E GREEK
- * QUESTION MARK, U+FFFE and U+FFFF is >= 0x80 — so `font-family: ×Arial` was a valid declaration here and an
- * invalid one in a browser, and `getComputedStyle(el).fontFamily` reported it instead of the inherited value.
- *   THE `-` AND THE `\` STAY AND ARE NOT ROUTED, because they are not §4.2 classes: they are §4.3.9 "Check if
- * three code points would start an ident sequence"'s leading hyphen and escape, which this component admits
- * loosely (the escape's hex digits are not read — the paragraph above owns that residual). Folding them into
- * the §4.2 question is what made one predicate answer two of them.
- *   AND `isalpha` WAS WRONG IN A SECOND WAY THAT HAD NOTHING TO DO WITH BYTES: §4.2's letter is "An uppercase
- * letter or a lowercase letter", each an ASCII range it defines, and `isalpha` answers the C locale's
- * question instead. */
-static bool font_family_ident_start(const char *s, size_t n, size_t i)
-{
-    uint32_t cp = css_cp_at(s + i, s + n, NULL);
-
-    return cp == '-' || cp == '\\' || css_cp_is_ident_start(cp);
-}
-
-static bool font_family_part_valid(const char *s, size_t n)
-{
-    size_t i = 0;
-
-    while (n > 0 && isspace((unsigned char)s[n - 1])) n--;
-    while (i < n && isspace((unsigned char)s[i])) i++;
-    if (i >= n) return false;   /* an empty list item: `font-family: a,,b` is not `#` */
-    if (s[i] == '"' || s[i] == '\'') {
-        char q = s[i];
-
-        /* ONE `<string>` AND NOTHING ELSE — §2.1.1's `"Lucida" Grande` is its own invalid example. */
-        for (i++; i < n; i++)
-            if (s[i] == q) break;
-        return i == n - 1;
-    }
-    while (i < n) {
-        size_t start = i;
-
-        if (!font_family_ident_start(s, n, i)) return false;
-        while (i < n && !isspace((unsigned char)s[i])) {
-            /* §2.1.1's `Red/Black` and `Ahem!`: a delimiter inside an unquoted family name is invalid. */
-            if (strchr("/()[]{}!\"'`;:@#$%^&*=+<>?|~,\\", s[i]) != NULL && s[i] != '\\') return false;
-            i++;
-        }
-        if (i == start) return false;
-        while (i < n && isspace((unsigned char)s[i])) i++;
-    }
-    return true;
-}
-
-/* §2.1's `#` multiplier over the whole trailing text. A comma inside a `<string>` is not a list separator. */
-static bool font_family_valid(const char *s, size_t n)
-{
-    size_t i = 0, start = 0;
-    char q = '\0';
-
-    if (n == 0) return false;
-    for (i = 0; i < n; i++) {
-        if (q != '\0') { if (s[i] == q) q = '\0'; continue; }
-        if (s[i] == '"' || s[i] == '\'') { q = s[i]; continue; }
-        if (s[i] != ',') continue;
-        if (!font_family_part_valid(s + start, i - start)) return false;
-        start = i + 1;
-    }
-    if (q != '\0') return false;   /* an unterminated string */
-    return font_family_part_valid(s + start, n - start);
-}
+ * THE CODE-POINT ARGUMENT MOVES WITH IT AND IS NOT REPEATED: §4.2's non-ASCII ident code point is an
+ * ENUMERATED set, so the test is asked of a DECODED code point through core/css/css_code_point.h and never of
+ * a byte — `font-family: \xC3\x97Arial` was a valid declaration in this engine and an invalid one in a browser.
+ * THE ESCAPE RESIDUAL THAT STOOD HERE IS RETIRED RATHER THAN MOVED: this file admitted a `\` as an ident code
+ * point without reading its hex digits, so `font: 12px \31 0th` was an INVALID declaration here and sets
+ * `font-family` to `10th` in a browser. css_font_family.c runs §4.3.12 "Consume an ident sequence" over
+ * §4.3.7 "Consume an escaped code point", so the escape and the whitespace that ends it are one identifier. */
 
 /* ---- §2.7's SEQUENCE ------------------------------------------------------------------------------------- */
 
@@ -472,7 +394,7 @@ static bool font_parse(const char *value, char **out)
     bool has_lh = false;
     int n, i = 0, slot, consumed, taken, k;
     const char *family;
-    size_t family_n;
+    char *family_value;
 
     n = font_words(value, w, FONT_MAX_WORDS);
     if (n < 1) return false;
@@ -531,9 +453,12 @@ static bool font_parse(const char *value, char **out)
     /* `<'font-family'>#` is the LAST term and consumes the rest of the declaration verbatim — a family list
        carries commas and spaces that no component split may take apart. */
     family = w[i].s;
-    family_n = strlen(family);
-    while (family_n > 0 && isspace((unsigned char)family[family_n - 1])) family_n--;
-    if (!font_family_valid(family, family_n)) return false;
+    /* §2.1's OWN GRAMMAR AND ITS OWN SERIALIZATION, in one call: the `font` shorthand sets `font-family` like
+       any other longhand, so what it stores must be the value CSSOM reads back and not the author's spelling
+       of it. NULL is an invalid `<'font-family'>`, which makes the whole `font` declaration invalid — §2.7's
+       `<'font-family'>#` is a required term, so none of the nineteen longhands is set. */
+    family_value = css_font_family_value(family);
+    if (!family_value) return false;
 
     for (k = 0; k <= FONT_SLOT_STRETCH; k++) {
         if (!filled[k]) { out[k] = font_strdup("normal"); continue; }
@@ -541,7 +466,7 @@ static bool font_parse(const char *value, char **out)
     }
     out[FONT_SLOT_SIZE] = font_dupn(size.s, size.n);
     out[FONT_SLOT_LH] = has_lh ? font_dupn(lh.s, lh.n) : font_strdup("normal");
-    out[FONT_SLOT_FAMILY] = font_dupn(family, family_n);
+    out[FONT_SLOT_FAMILY] = family_value;
     return true;
 }
 

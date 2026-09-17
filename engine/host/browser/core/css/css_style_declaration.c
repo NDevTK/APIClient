@@ -99,6 +99,7 @@
 #include "core/css/css_cascade.h"
 #include "core/css/css_computed_value.h"
 #include "core/css/css_defaulting.h"
+#include "core/css/css_font_family.h"
 #include "core/css/css_keyframes.h"
 #include "core/css/css_math.h"
 #include "core/css/css_page.h"
@@ -2316,6 +2317,26 @@ char *cssom_parse_a_css_value(const char *name, const char *value)
     char *out = NULL;
 
     DCHECK(name != NULL && value != NULL, "a declaration's value was parsed with no property name or no value");
+    /* css-fonts-4 §2.1 "Font family: the font-family property", AHEAD OF LEXBOR AND NOT AFTER IT — the one
+       property in this file whose grammar is taken back from the registry, and the reason is that lexbor
+       cannot express it rather than that this engine prefers its own answer.
+       §2.1.1's `<font-family-name> = <string> | <custom-ident>+` admits a family name spelled as SEVERAL
+       identifiers, and lexbor's `font-family` state accepts exactly ONE token per list item: after the first
+       it asks for a comma or the end, so `font-family: New Century Schoolbook` is a parse failure there and a
+       valid declaration in a browser. THAT IS NOT A SERIALIZATION BUG AND CANNOT BE REPAIRED DOWNSTREAM —
+       `css_shorthand_validates_longhand`, the hook this file already has for a longhand grammar, runs on the
+       value this call RETURNS, so it never sees a value lexbor refused. The parse is the part that has to
+       move, which is why the branch is here and not there; that hook's own contract stays true, since it
+       still answers FALSE for every property lexbor types.
+       AND IT MUST BE THIS ENTRY RATHER THAN setProperty's, because CSSOM §6.6.1 "The CSSStyleDeclaration
+       Interface"'s setProperty is not the only caller: CSS Conditional Rules 3 §7.5 "The CSS namespace, and the supports() function"'s
+       two-argument `CSS.supports(property, value)` ends in "and value successfully parses according to that
+       property's grammar" and asks the same question here. A branch at either caller alone would make the two
+       members disagree about what a `font-family` is — and `css/css-fonts/parsing/font-family-computed.html`
+       asserts both, `CSS.supports` before every one of its ten values and `getComputedStyle` after.
+       THE NAME IS COMPARED CASE-SENSITIVELY BECAUSE THIS ENTRY IS, which its own paragraph below states: a
+       caller holding a page's spelling has already resolved it through cssom_supported_css_property_named. */
+    if (strcmp(name, "font-family") == 0) return css_font_family_value(value);
     css_buf_add(&text, name);
     css_buf_add(&text, ":");
     css_buf_add(&text, value);
