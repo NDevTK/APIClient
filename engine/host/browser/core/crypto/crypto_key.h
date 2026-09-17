@@ -41,18 +41,47 @@
  * hangs off is keyed by a private Symbol the page never receives, so §13.1's "opaque reference to keying
  * material" holds exactly as it does for the other six slots.
  *
- * §13.5's SERIALIZATION IS A RESIDUAL, AND ITS OLD STATEMENT OF WHY WAS WRONG — recorded here rather than
- * silently rewritten, because the next reader will otherwise re-derive the claim it made. That statement said
- * "the diff that adds [[handle]] is the diff that must add §13.5 beside it, because a clone that drops the
- * handle would produce a key that is not the key." The premise does not hold: structured_clone.c's writer
- * answers a platform object it does not know with HTML §2.7's "DataCloneError" DOMException, which is a REFUSAL
- * and not a drop — there is no path on which a clone silently loses the handle, so adding the slot creates no
- * obligation on that file at all. WHAT IS ACTUALLY NOT COVERED is §13.5's five serialization and five
- * deserialization steps, which structured_clone.c would have to route. WHAT THE NEXT DIFF BUILDS is that
- * routing, over the six slots below plus this handle. HOW ITS ABSENCE SHOWS is a `structuredClone(key)` or a
- * `postMessage(key)` throwing a DataCloneError where a browser hands back an equal key — reachable from three
- * lines, and from any page that round-trips a key through an IndexedDB store, which is §5.2 Key Storage's own
- * stated use of this interface.
+ * §13.5's SERIALIZATION IS A RESIDUAL, AND BOTH STATEMENTS OF WHY HAVE BEEN WRONG — each recorded rather than
+ * silently rewritten, because the next reader will otherwise re-derive the claim it made. THE FIRST said "the
+ * diff that adds [[handle]] is the diff that must add §13.5 beside it, because a clone that drops the handle
+ * would produce a key that is not the key." Its premise does not hold: a platform object the serializer has no
+ * encoding for is REFUSED, and core/structured_clone.c re-reports that refusal as HTML §2.7's "DataCloneError"
+ * DOMException, so no path ever silently lost the handle. THE SECOND said the ten steps are ones
+ * `structured_clone.c would have to route`, AND THAT FILE HAS NO ARM TO ROUTE THEM: it hands the whole value
+ * to the engine's own writer and owns only which values are refused and with which exception. The refusal is
+ * that writer's per-class dispatch in engine/qjs/quickjs.c falling through to its default arm — which
+ * core/indexeddb/idb_key_path.c already states in as many words, about Blob, in a component this clause's
+ * author never opened. THE METHOD IS THE FINDING: a clause written in ONE file reasons from where its author
+ * is standing, so it names the nearest file it can see rather than the one that decides.
+ *
+ * WHAT IS NOT COVERED IS TWO SUBPROBLEMS AND §13.5 IS THE SECOND. HTML §2.7.1 "Serializable objects" makes a
+ * platform object serializable "if their primary interface is decorated with the [Serializable] IDL extended
+ * attribute", and this engine has NO ARM FOR THAT AT ALL: core/structured_clone.h registers HTML §2.7.2's
+ * TRANSFERABLE interfaces, which MOVE and detach, and nothing registers a serializable one — so CryptoKey
+ * would be the first, and every other [Serializable] interface in this tree is refused by that same default.
+ *
+ * WHAT THE NEXT DIFF BUILDS, AS ONE LANDING, because a seam with no registrant is a write with no reader:
+ * (1) the engine's serializable seam — a wire tag beside BC_TAG_TRANSFER_REFERENCE carrying HTML §2.7.3
+ * StructuredSerializeInternal step 19's "the identifier of the primary interface of value" and then ONE
+ * sub-value emitted by the SAME writer under the SAME `memory`, which is what makes it a sub-serialization
+ * and not a second encoding; a host hook pair beside JSTransferWriteHook; and a reader frame that RESERVES its
+ * object-reference slot before that sub-value is read and patches it after, which is the order BCR_TA already
+ * uses and the only one under which the writer's numbering and the reader's agree. (2) a registry in
+ * core/structured_clone.c keyed by that IDENTIFIER and never by a row index, because these bytes outlive the
+ * turn. (3) §13.5's ten steps here, as that registry's row.
+ *
+ * AND §13.5 CARRIES FIVE OF §13.3's SEVEN SLOTS, NOT SEVEN. Its serialization steps set [[Type]],
+ * [[Extractable]], [[Algorithm]], [[Usages]] and [[Handle]], and its deserialization steps mirror them — five
+ * and five, counted as the top-level items of two flat lists. Neither names a CACHED slot, because
+ * HTML §2.7.1 hands the deserialization steps a value that is "a newly-created instance of the platform
+ * object type in question, with none of its internal data set up": §9 Terminology's two cached objects are
+ * RE-MINTED in the target realm out of the deserialized slots, which is what the mint below already does and
+ * what keeps one key's `algorithm` from being another key's.
+ *
+ * HOW ITS ABSENCE SHOWS is a `structuredClone(key)` or a `postMessage(key)` throwing a DataCloneError where a
+ * browser hands back an equal key, and any page that round-trips a key through an IndexedDB store, which is
+ * §5.2 Key Storage's own stated use of this interface. RETIREMENT: this record goes when a registry of
+ * serializable interfaces exists and this interface is a row in it.
  *
  * §13.2's TWO ENUMS ARE C ENUMS AND THE USAGES ONE IS A BITMASK, which is not a compression of §13.3's
  * "Sequence<KeyUsage>" but a faithful model of it: §9 Terminology defines the "usage intersection" of two

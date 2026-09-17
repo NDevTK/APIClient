@@ -1,6 +1,10 @@
 /* Web Cryptography API §13's CryptoKey — the interface, its four members and §13.3's internal slots. See
- * crypto_key.h for the IDL, for why this comes before every absent method of §14, and for the two NAMED
- * RESIDUALS ([[handle]] and §13.5's serialization steps) this file is narrower than the standard by.
+ * crypto_key.h for the IDL, for why this comes before every absent method of §14, and for the ONE NAMED
+ * RESIDUAL (§13.5's serialization steps) this file is narrower than the standard by. This line said TWO and
+ * named [[handle]] as the other; the mint below takes [[handle]] as a REQUIRED parameter and has since the
+ * header's own record of that retirement was written. A count that names a BUILT thing as unbuilt is the one
+ * direction of staleness that sends the next reader to build what is already there, so it is corrected here
+ * rather than dropped.
  *
  * ONE PROBLEM: a key is a VALUE. §13 declares four readonly attributes and no operations, so this file holds a
  * mint, four getters and nothing else. WHICH keys exist, what their bytes are and what an algorithm may do
@@ -102,8 +106,8 @@ static JSValue ck_slots(JSContext *ctx, JSValueConst this_val)
        concolic for an internal slot — right for the page's own reads, wrong here. */
     if (JS_GetOwnSlot(ctx, &st, this_val, g_slot_atom) <= 0)
         st = JS_UNDEFINED;
-    DCHECK(JS_IsObject(st), "a CryptoKey carries no slot record — crypto_key_new sets all six of §13.3's slots "
-                            "before the key exists, so an object branded CryptoKey without one was built "
+    DCHECK(JS_IsObject(st), "a CryptoKey carries no slot record — crypto_key_new sets all SEVEN of §13.3's "
+                            "slots before the key exists, so an object branded CryptoKey without one was built "
                             "somewhere other than that mint");
     return st;
 }

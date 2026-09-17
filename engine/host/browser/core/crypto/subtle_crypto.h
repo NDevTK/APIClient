@@ -74,8 +74,13 @@
  * copy and the whole §7.1/§7.2 walk, so splitting them is churn and not decomposition. (3) §29.4.3 "Generate
  * Key", which needs §10.1.1's stream reached from a SubtleCrypto — the residual below. (4) §29.4.5 "Export
  * Key" and §14.3.10 "The exportKey method", whose "jwk" arm stands on the same JSON Web Key layer §31.6.4's
- * and §29.4.4's do — core/crypto/jwk.c, which now exists, in the DECODING direction only. A key that crosses IndexedDB additionally needs §13.5 "Serialization and deserialization steps", which
- * is a separate subproblem and belongs to core/crypto/crypto_key.c.
+ * and §29.4.4's do — core/crypto/jwk.c, which now exists, in the DECODING direction only. A key that crosses
+ * IndexedDB additionally needs §13.5 "Serialization and deserialization steps", and THIS LINE USED TO SAY THAT
+ * subproblem `belongs to core/crypto/crypto_key.c` — which is half of it. Its first half belongs to no crypto
+ * file at all: HTML §2.7.1 "Serializable objects" has NO arm in this engine, so a registry of serializable
+ * interfaces and the engine-side wire tag that reaches it have to exist before §13.5 can be a row in one.
+ * crypto_key.h holds that decomposition and its landing order; a lane briefed off this line alone would open
+ * two crypto files and find nothing in either to change.
  *
  * ADDING A ROW TO ONE OF THOSE REGISTRIES IS SAFE FOR A REASON WORTH NOT UNDOING. Each method's normalization
  * forks over its own registry and names the NOT-REGISTERED arm SYMBOLICALLY — `arm == <X>_REGISTERED_N` at all
