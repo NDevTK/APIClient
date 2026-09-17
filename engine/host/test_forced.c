@@ -19508,7 +19508,16 @@ static void display_list_selftest(JSContext *ctx)
     /* A SECOND ROW RATHER THAN A FIELD ON THE FIRST, so that any reader keyed on the row above reads exactly
        what it read before. `kinds` is the number of `DisplayMarkKind` members this selftest appends at least
        one of, which is every member the vocabulary defines; it is a CONSTANT, and on an artifact built before
-       the canvas kind existed `grep -c '@PAINT canvas-mark'` answers 0, which is this row's own control. */
+       the canvas kind existed `grep -c '@PAINT canvas-mark'` answers 0, which is this row's own control.
+       IT IS HAND-KEPT BECAUSE THE VOCABULARY MAY NOT EXPORT A COUNT, which is a DECISION with a reason rather
+       than a number nobody got round to deriving. A `DISPLAY_MARK_KIND_COUNT` sentinel is the obvious way to
+       derive it, and it would be a member of `DisplayMarkKind` that no switch should ever handle — so every
+       switch over the vocabulary would need an arm for it or a `default:`, and a `default:` is precisely what
+       core/paint/display_list.c and core/paint/box_paint.c refuse in order to have -Wswitch name them the day
+       a kind is added. Deriving this number would cost the compile-time obligation that makes a kind's arrival
+       loud in both of those files, which is worth more than a figure in a witness row. What KEEPS it honest is
+       therefore those two crashes and not this constant: a kind added without an append here under-reports
+       this selftest's coverage and cannot make any assertion above it pass wrongly. */
     printf("@PAINT canvas-mark kinds=%u\n", TF_DL_KINDS);
 }
 
