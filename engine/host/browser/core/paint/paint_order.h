@@ -109,8 +109,16 @@ typedef enum {
        table" and its step 4 arm is inside a walk of block-level descendants, and CSS 2.1 §9.2.1 "Block-level elements
        and block boxes" closes that list at "'block', 'list-item', and 'table'". An `inline-table` therefore
        takes neither, exactly as it takes neither arm of step 2 today. */
-    PAINT_STEP_CONTEXT_TABLE_BACKGROUND,    /* step 2's TABLE arm item 1 — "table backgrounds (color then image)
-                                               unless it is the root element" */
+    /* THE ROOT CLAUSE IS CARRIED BY THESE TWO MEMBERS AND APPLIED BY NEITHER, which is why the arm needs two
+       and not one. CSS 2.1 §E.2's step 2 item reads "table backgrounds (color then image) unless it is the root
+       element" and step 4's omits that clause, so the step a box was offered under is what says whether the
+       clause can apply at all — a step-4 member is never the root. APPLYING it is a statement about a MARK and
+       not about an order, and CSS 2.1 §14.2 "The background" is where it is made: "The background of the root
+       element becomes the background of the canvas and covers the entire canvas … The root element does not
+       paint this background again." So the walk offers the root's table background here exactly as it offers
+       `PAINT_STEP_CONTEXT_BOX` for a root block, and the suppression belongs to whatever lays the ink. A root
+       arm in the walk would be this component deciding a mark. */
+    PAINT_STEP_CONTEXT_TABLE_BACKGROUND,    /* step 2's TABLE arm item 1 */
     PAINT_STEP_DESCENDANT_TABLE_BACKGROUND, /* step 4's TABLE arm item 1 — the same without the root clause,
                                                which is the ONLY item the two arms spell differently */
     PAINT_STEP_COLUMN_GROUP_BACKGROUND,     /* item 2 — one 'table-column-group' box */
@@ -118,6 +126,22 @@ typedef enum {
     PAINT_STEP_ROW_GROUP_BACKGROUND,        /* item 4 — one row group box */
     PAINT_STEP_ROW_BACKGROUND,              /* item 5 — one 'table-row' box */
     PAINT_STEP_CELL_BACKGROUND,             /* item 6 — one 'table-cell' box */
+    /* AN OFFER IS A POSITION IN A SEQUENCE AND NEVER A RECTANGLE, WHICH THE TABLE ARM IS THE FIRST STEP TO
+       MAKE LOAD-BEARING. For every other step the offered element's own box is where its marks go, so the
+       distinction costs nothing and a consumer that conflated the two was never wrong. CSS 2.1 §17.5.1 "Table
+       layers and transparency" breaks it: it states the bottom and top layers as the BOXES THEMSELVES — "The
+       lowest layer is a single plane, representing the table box itself" and "The topmost layer contains the
+       cells themselves" — and the FOUR between them as areas DERIVED FROM THE CELLS. Of those four, three
+       carry one sentence with the box's own name substituted in, of which the column's reads "The background
+       covers exactly the full area of all cells that originate in the column, even if they span outside the
+       column, but this difference in area does not affect background image positioning"; the row group's is
+       worded differently and derives the same way, "Each row group extends from the top left corner of its
+       topmost cell in the first column to the bottom right corner of its bottommost cell in the last column".
+       So a column group, a column, a row group and a row are offered HERE for their place in the order, and
+       the area their ink covers is not their element's box and is not this component's to state — it is the
+       ink vocabulary's, over a grid, and a consumer that painted one of these four at the offered element's
+       own box would put ink where CSS 2.1 §17.5.1 does not. That is not a gap in the offer; it is the same line
+       this header draws at its top between an ENUMERATION, which is order, and a MARK, which is not. */
     /* item 7 — "all table borders (in tree order for separated borders)", offered ONCE carrying the TABLE
        element. It is the item WHOLE and not the table's own border: the borders of the table and of every
        internal box inside it are one item of CSS 2.1 §E.2's list, laid after all six background levels. Which boxes
