@@ -1146,6 +1146,35 @@ static bool idl_type_is_length_split(IdlArgType t)
     return t == IDL_USVSTRING_OR_DICT || t == IDL_UNRESTRICTED_DOUBLE_OR_DICT;
 }
 
+/* §3.6's SAME-LENGTH SPLIT — the other half of what `a member declaring two overload entries` can mean,
+   and the half whose surviving entry is a fact about the page's VALUE rather than about the call's arity.
+   Both type lists are the same length, so steps 3-4 remove neither at any arity the member can be called at
+   and the whole decision is step 12's clause chain at the distinguishing argument index.
+   IT IS A SEPARATE PREDICATE BECAUSE THE CONVERSION LOOP CAN REWRITE A DECLARED TYPE ONLY FROM `argc`.
+   `step4_only_longer` is `idl_split_longer_survived(m, argc) && s->i == m->split_at`, so the one position whose
+   type may be replaced is the split itself and the fact that replaces it is the ARGUMENT COUNT. Where step 12
+   chose the entry instead, that choice is recorded nowhere a later position could read it — which is what the
+   seal refuses below, and which is why the two kinds of split may not share one predicate.
+ *
+ * NAMED RESIDUAL — A SAME-LENGTH SPLIT WITH ANY POSITION BEHIND IT. WHAT IS NOT COVERED: this pool declares
+ * ONE `types` list per member, so where step 12 picked the surviving entry from the page's value, every
+ * position behind the split would be converted with whichever arm's type that single list happens to name,
+ * and §3.6 step 15.2 reads the type "in the type list of the REMAINING entry". The seal refuses such a
+ * declaration outright, INCLUDING one whose two entries would agree at every later position, because one list
+ * cannot state that they agree. WHAT THE NEXT DIFF BUILDS: the surviving entry recorded per CALL at the moment
+ * step 12 resolves, a second `IdlArgType *` on IdlMember carrying the other entry's own types from the split
+ * onward, and `idl_first_optional` reading that entry's optional index — after which HTML §8.11.1 The ImageData
+ * interface's constructor becomes declarable, its two entries being `(unsigned long, unsigned long,
+ * ImageDataSettings)` and `(ImageDataArray, unsigned long, unsigned long)`, which coexist at argument count 3
+ * and differ at position 2 by a DICTIONARY against a NUMBER. HOW ITS ABSENCE WOULD SHOW: a member whose two
+ * overload entries are the same length and whose split is not its last declared position aborts at the seal,
+ * before any realm is built and before a page can call it, naming the member rather than converting one of its
+ * arguments at the other entry's type. */
+static bool idl_type_is_value_split(IdlArgType t)
+{
+    return t == IDL_SEQUENCE_OBJECT_OR_DICT;
+}
+
 /* THE TYPE THE LONGER ENTRY DECLARES AT THAT POSITION — what step 4 leaves standing once the shorter entry is
    gone. It is a total function over the rows above and crashes for anything else, so a split row added without
    a longer-entry type names itself here rather than falling through to the shorter entry's dictionary. */
@@ -1233,11 +1262,27 @@ static void idl_seal_check_splits(void)
                "Overloading expands a variadic entry and steps 3-4 remove a shorter one, and this pool models "
                "only one of the two at a time, so its §3.7.7 length and its arity check would both be read off "
                "an entry set that was never computed");
-        for (k = 0; k < m->nargs; k++)
+        for (k = 0; k < m->nargs; k++) {
             DCHECK(!idl_type_is_length_split(m->types[k]) || m->split_at == k,
                    "a member's length-differing §3.6 split was not recorded at the position its type list "
                    "declares it — the position is READ from the types at declaration, so the two disagreeing "
                    "means a second split was declared and one of them decides every arity");
+            /* A SAME-LENGTH SPLIT IS THE MEMBER'S LAST DECLARED POSITION — see idl_type_is_value_split, whose
+               residual names what would have to exist for it not to be. The conversion loop's ONE type rewrite
+               reads `argc`, and this split's surviving entry was chosen from a VALUE, so a position behind one
+               has a type per entry and this pool carries a single list. */
+            DCHECK(!idl_type_is_value_split(m->types[k]) || k == m->nargs - 1,
+                   "a member declared a §3.6 overload split whose two entries are the SAME LENGTH and then "
+                   "declared a position behind it — step 12 chooses the surviving entry from the page's value, "
+                   "so every later position has one type PER ENTRY while this pool declares one list. A member "
+                   "whose entries would agree at every later position is refused here too, because one list "
+                   "cannot state that they agree");
+            DCHECK(!idl_type_is_value_split(m->types[k]) || m->split_at < 0,
+                   "a member declared BOTH a §3.6 same-length overload split and a length-differing one — "
+                   "steps 3-4 remove an entry by ARGUMENT COUNT and step 12 removes one by VALUE, so such a "
+                   "member has two answers to which entry survived and whichever is read first decides every "
+                   "arity");
+        }
     }
 }
 
