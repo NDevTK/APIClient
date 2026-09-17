@@ -1155,21 +1155,37 @@ static bool idl_type_is_length_split(IdlArgType t)
    type may be replaced is the split itself and the fact that replaces it is the ARGUMENT COUNT. Where step 12
    chose the entry instead, that choice is recorded nowhere a later position could read it — which is what the
    seal refuses below, and which is why the two kinds of split may not share one predicate.
+   THE TWO PREDICATES DO NOT PARTITION WHAT A SPLIT CAN BE, and reading them as if they did is how the residual
+   below was first written wrong. Web IDL §2.5.8 "Overloading" expands each ENTRY into one tuple per arity, so
+   two entries of DIFFERENT length still meet as equal-length tuples at every arity both reach, and step 8 sets
+   a distinguishing argument index there exactly as it does for two entries that end together. Such a member is
+   BOTH kinds at once — steps 3-4 remove the shorter entry only at the arities the longer one alone reaches —
+   and the seal below refuses it under whichever of the two predicates its declared type happens to name.
  *
- * NAMED RESIDUAL — A SAME-LENGTH SPLIT WITH ANY POSITION BEHIND IT. WHAT IS NOT COVERED: this pool declares
- * ONE `types` list per member, so where step 12 picked the surviving entry from the page's value, every
- * position behind the split would be converted with whichever arm's type that single list happens to name,
- * and §3.6 step 15.2 reads the type "in the type list of the REMAINING entry". The seal refuses such a
- * declaration outright, INCLUDING one whose two entries would agree at every later position, because one list
- * cannot state that they agree. WHAT THE NEXT DIFF BUILDS: the surviving entry recorded per CALL at the moment
- * step 12 resolves, a second `IdlArgType *` on IdlMember carrying the other entry's own types from the split
- * onward, and `idl_first_optional` reading that entry's optional index — after which HTML §8.11.1 The ImageData
- * interface's constructor becomes declarable, its two entries being `(unsigned long, unsigned long,
- * ImageDataSettings)` and `(ImageDataArray, unsigned long, unsigned long)`, which coexist at argument count 3
- * and differ at position 2 by a DICTIONARY against a NUMBER. HOW ITS ABSENCE WOULD SHOW: a member whose two
- * overload entries are the same length and whose split is not its last declared position aborts at the seal,
- * before any realm is built and before a page can call it, naming the member rather than converting one of its
- * arguments at the other entry's type. */
+ * NAMED RESIDUAL — A VALUE-RESOLVED SPLIT WITH A DISAGREEING POSITION BEHIND IT. WHAT IS NOT COVERED: this
+ * pool declares ONE `types` list per member, so where step 12 picked the surviving entry from the page's
+ * value, a position behind the distinguishing argument index at which the two entries declare DIFFERENT types
+ * would be converted with whichever of the two that single list happens to name, and §3.6 step 15.2 reads the
+ * type "in the type list of the REMAINING entry". The seal refuses such a declaration outright, INCLUDING one
+ * whose two entries agree at every later position, because one list cannot state that they agree.
+ * WHAT THE NEXT DIFF BUILDS: a per-CALL record of the entry step 12 chose — written at the distinguishing
+ * index, read by every later position of the same call, and carried across a park — plus a declared type at
+ * each DISAGREEING position that reads it and collapses to that entry's own type. HOW ITS ABSENCE WOULD SHOW:
+ * a member whose declared type names a split the seal refuses aborts when the platform is sealed, before any
+ * realm is built and before a page can call one, naming the member rather than converting one of its arguments
+ * at the other entry's type.
+ * THE CLAUSE THAT STOOD HERE WAS WRONG WHEN IT WAS WRITTEN and its METHOD is what to carry. It gave a member's
+ * two entries as `(unsigned long, unsigned long, D)` and `(A, unsigned long, unsigned long)` and called them
+ * the same length, which is one entry's TYPE LIST beside the OTHER'S ARITY-3 TUPLE out of §2.5.8's effective
+ * overload set. A tuple is what step 4 compares; an ENTRY is what step 15.2 reads, so writing one for the other
+ * turns a four-position entry into a three-position one and hides the length-differing half of the very member
+ * it was offered as the worked example for. It over-scoped the remedy twice in consequence, and both are
+ * checkable rather than matters of taste: a second `IdlArgType *` "from the split onward" is the WHOLE list
+ * wherever the distinguishing index is 0, and a per-entry `idl_first_optional` has nothing to choose between
+ * wherever the two entries' optional positions begin at the same index. READ A PROPOSED ENTRY'S TYPE LIST OFF
+ * THE IDL THE CORPUS RECORDS, never off the arity whichever call site you have in mind happens to use.
+ * RETIREMENT: this record goes when the seal can no longer refuse a member for declaring a position behind its
+ * distinguishing argument index at which its two entries' types differ. */
 static bool idl_type_is_value_split(IdlArgType t)
 {
     return t == IDL_SEQUENCE_OBJECT_OR_DICT;
