@@ -7891,9 +7891,18 @@ static bool idl_global_member_refused(JSContext *ctx, JSValueConst target, const
        filter the walk does not, and the filter is what makes the positive form sound.
        THE REMEDY LIST BELOW WAS EXTENDED RATHER THAN REWRITTEN, because the cause it was missing is the one
        that actually fires: it offered a wrong target, a misspelling and a stale corpus, and a reader with the
-       tree in front of them spent the day on the last two. RETIREMENT: the added paragraph goes when a member
-       whose declaring interface is not this realm's [Global] one can be installed on that interface's §3.7.3
-       prototype from another component — at which point this is a wrong target again and nothing else. */
+       tree in front of them spent the day on the last two.
+       AND THE STATED RETIREMENT HAS BEEN REACHED WITHOUT SPENDING THE PARAGRAPH, WHICH IS WORTH RECORDING
+       BECAUSE IT IS THE CONDITION THAT WAS WRITTEN WRONG RATHER THAN THE PARAGRAPH. It read: this goes when a
+       member whose declaring interface is not this realm's [Global] one CAN BE installed on that interface's
+       §3.7.3 prototype from another component, at which point this is a wrong target again and nothing else.
+       It can be — idl_install_replaceable_on and idl_install_accessor both place one, and two components do
+       — and this is NOT a wrong target again, because the members that have not been moved yet still arrive
+       here and the crash is still the only thing that says so. A CAPABILITY EXISTING IS NOT THE SAME EVENT AS
+       EVERY CALLER USING IT, and a retirement condition keyed on the first retires a crash the second still
+       needs. RETIREMENT: this goes when every member of a non-[Global] ancestor reaches its own interface's
+       §3.7.3 prototype, which is core/workers/worker_global_scope.c's residual (7) and is what the crash
+       below now names as the work rather than as an unbuilt mechanism. */
     DCHECKF(idl_realm_global_declares(ctx, name),
             "%s:%d installs `%s` as a member on the global object of a realm whose Web IDL §3.3.8 [Global] "
             "interface is `%s`, and `%s` is not a member `%s` DECLARES. §3.8 Platform objects implementing "
@@ -7909,13 +7918,19 @@ static bool idl_global_member_refused(JSContext *ctx, JSValueConst target, const
             "and the global reaches it UP THE PROTOTYPE CHAIN, where a page observes the difference as "
             "`globalThis.hasOwnProperty(\"%s\")`. browser/idl_exposure.h's IDL_GLOBALS row for `%s` carries "
             "that band, which is what §3.8 WRITES rather than what a global can REACH. "
-            "THE COMMONEST SHAPE IS AN INHERITED MEMBER WITH NOWHERE TO GO, AND IT IS AN UNBUILT CAPABILITY "
-            "RATHER THAN A WRONG VARIABLE: `%s` may be declared by a NON-[Global] ANCESTOR of `%s`, whose "
-            "§3.7.3 prototype is a DIFFERENT object that this component may not be able to reach or to install "
-            "onto at all. core/workers/worker_global_scope.c's banner over `g_dwgs_class` is the named "
-            "residual for exactly that, states the three things such an install needs and why they cannot "
-            "land separately, and names THIS abort as how its absence shows — read it before treating this "
-            "as a mistake at the call site. AND A FIFTH CAUSE READS AS THAT FOURTH ONE AND IS NOT IT: THE "
+            "THE COMMONEST SHAPE IS AN INHERITED MEMBER WITH SOMEWHERE ELSE TO GO, AND THE MECHANISM FOR IT "
+            "EXISTS: `%s` may be declared by a NON-[Global] ANCESTOR of `%s`, whose §3.7.3 Interface "
+            "prototype object is a DIFFERENT object — and §3.7.3's own arm, \"If interface is not declared "
+            "with the [Global] extended attribute, then: Define the regular attributes of interface on "
+            "interfaceProtoObj, given realm\", is what places it there. Ask the component that BUILDS that "
+            "prototype for the object (core/workers/worker_global_scope.c's worker_global_scope_proto is the "
+            "one such entry today) and install onto whichever object you get: a plain readonly attribute "
+            "through idl_install_accessor, a [Replaceable] one through idl_install_replaceable_on, which "
+            "takes the declaring interface's own receiver predicate as §3.7.6's `target`. THIS SENTENCE USED "
+            "TO CALL THAT AN UNBUILT CAPABILITY and to send its reader to that file's banner to find out what "
+            "the three missing pieces were; they are built, and the banner now records what they WERE. What "
+            "is still owed is per MEMBER and not per mechanism — that file's residual (7) is the list. "
+            "AND A FIFTH CAUSE READS AS THAT FOURTH ONE AND IS NOT IT: THE "
             "NAME IS AN ANCESTOR'S, AND IS ALSO A DIFFERENT MEMBER OF A DIFFERENT TYPE THAT THIS COMPONENT "
             "DOES NOT HOLD. HTML §10.2.1.1 \"The WorkerGlobalScope common interface\" gives WorkerGlobalScope "
             "its own `readonly attribute WorkerNavigator navigator` and `readonly attribute WorkerLocation "
@@ -8701,7 +8716,9 @@ static void idl_check_global_target(JSContext *ctx, JSValueConst target, const c
            "interface is [Global], so an accessor minted here for an ordinary interface is placed by the "
            "wrong arm, and its read resolves a receiver through the realm's [Global] interface rather than "
            "through the one that declared it. Give the install the declaring interface's own brand as data, "
-           "the way IdlExposure and IdlAttrForge are stated. THIS REMEDY IS THIS ARM'S AND IS NOT "
+           "the way IdlExposure and IdlAttrForge are stated — for a [Replaceable] attribute that entry is "
+           "idl_install_replaceable_on, which takes the predicate and the identifier and is checked by "
+           "idl_check_proto_target directly above. THIS REMEDY IS THIS ARM'S AND IS NOT "
            "idl_attribute_this'S: it is per-INSTALL because §3.7.3's arm places a member on the interface "
            "that DECLARES it, and a member on a global takes §3.8's [Global] arm instead, where `target` is "
            "the realm's own [[PrimaryInterface]] and is therefore per-REALM. Quoting this sentence at that "

@@ -122,33 +122,47 @@ static JSClassID g_dwgs_class;
    members `WorkerGlobalScope includes WindowOrWorkerGlobalScope` brings in — a Window realm places those on
    its global because Window IS [Global], and a worker realm may not, so each is owed THIS object.
    AND A CLASS ID ALONE WOULD NOT HAVE SERVED IT, which is what a reader obeying the old clause would have
-   found only after building the slot. Such a member needs three things, and they cannot land separately
-   because none of them has a reader until the last one is there:
-     (a) THE OBJECT, EARLY ENOUGH. core/realm.h runs the intrinsics in core/platform.c's DECLARATION order and
-         this row is declared after the components that would ask, so the prototype does not exist when their
-         installs run. Derive that order rather than remembering it — the rows move:
+   found only after building the slot. THE THREE THINGS SUCH A MEMBER NEEDED ARE BUILT, IN ONE DIFF, because
+   none of them had a reader until the last one was there — and what each one WAS is rewritten rather than
+   deleted, because it is what a reader re-derives when the next member arrives:
+     (a) THE OBJECT, EARLY ENOUGH — worker_global_scope_proto above, which reads §3.7.3's chain back off the
+         per-realm class-proto slot and needs no second class id. What made it (a) is that core/realm.h runs
+         the intrinsics in core/platform.c's DECLARATION order, so this row has to stand ahead of every
+         component that asks; it now does, and that entry ASSERTS it rather than leaving it remembered.
+         Derive the order rather than trusting this sentence — the rows move:
            `git grep -nE '^ *\{ "(performance|crypto|indexed_db|worker_global_scope)",' -- '*core/platform.c'`
-     (b) §3.7.6's PREAMBLE OVER AN INTERFACE THAT IS NOT Window. core/idl_args.c's idl_attribute_this asserts
-         idl_global_names_are_window at every read of an attribute minted for the realm's global, and its
-         idl_check_global_target DFAILs a [Replaceable] install whose target is not that global. THIS ENTRY
-         USED TO QUOTE THE SECOND CRASH'S REMEDY — give the install the declaring interface's own brand as
-         data — AS THE WORK THE FIRST ONE OWES, and the two crashes are the two arms THIS FILE'S OWN HEADER
-         ALREADY QUOTES. §3.7.3's not-[Global] arm places a member on the interface that DECLARES it, so
-         there the brand is the INSTALL's to state and idl_check_global_target's remedy is right about it; a
-         member on a GLOBAL takes §3.8's create-instance arm, which the paragraph above `onmessage` reads
-         here, and there `target` is the instance's own [[PrimaryInterface]] — the REALM's to state, which
-         no install holds. So the entry contradicted its own file rather than the standard, and the spec
-         sentences are NOT re-quoted here: this file already carries both, and a third copy is a third chance
-         to go stale. Recorded rather than deleted because the two crashes sit one screen apart in one file
-         and only the wrong one spells a remedy out. The shape is (5)(a)'s, and it is ONE datum.
-         RETIREMENT: this record goes when idl_attribute_this takes its brand from the realm, because the
-         per-install sentence is then unquotable here.
-     (c) THE INSTALL, on `wgs_p`, with its placement asserted by WGS_ASSERT_PLACED as §10.2.1.1's `self` is.
-   HOW THE ABSENCE SHOWS: a realm whose §3.3.8 [Global] names are a worker's aborts while its intrinsics are
-   still installing, at core/idl_args.c's idl_realm_global_declares DCHECKF, which names the member and the
-   installing site — so the member is not merely misplaced, it is unreachable in that realm.
-   RETIREMENT: this record goes when a member WorkerGlobalScope declares is installed on this prototype from
-   another component, because the clause it corrects is spent the moment one is. */
+     (b) §3.7.6's PREAMBLE OVER AN INTERFACE THAT IS NOT Window — core/idl_args.c's idl_install_replaceable_on,
+         which takes §3.7.6 step 1.1.2.3's `target` as the declaring interface's own predicate and identifier
+         and carries it to idl_attribute_this as an argument. IT IS THE PER-INSTALL DATUM AND NOT THE
+         PER-REALM ONE, WHICH IS THE HALF A READER GETS BACKWARDS AND WHICH THIS ENTRY ITSELF ONCE DID: it
+         quoted idl_check_global_target's remedy — give the install the declaring interface's own brand as
+         data — as the work idl_attribute_this's crash owes, and the two crashes are two ARMS. §3.7.3's
+         not-[Global] arm places a member on the interface that DECLARES it, so there the brand is the
+         INSTALL's to state and idl_check_global_target's remedy is right about it; a member on a GLOBAL takes
+         §3.8's create-instance arm and there `target` is the instance's own [[PrimaryInterface]] — the
+         REALM's to state, which no install holds. What is built is the FIRST arm only.
+         SO THE SECOND ARM IS STILL OWED AND IS NAMED HERE RATHER THAN LEFT TO BE READ OUT OF THIS RECORD'S
+         ABSENCE. NOT COVERED: §3.7.6's preamble for a member on the worker GLOBAL — the five §10.2.1.2
+         declares, of which `name` is `[Replaceable]`. NEXT DIFF: idl_attribute_this's NULL-`target` arm takes
+         its brand from the realm, the way core/events/event_target.h's event_target_set_click_terms takes a
+         predicate from a component a layer may not name. HOW ITS ABSENCE SHOWS: that function's own DCHECKF
+         over idl_global_names_are_window fires in a dev build at the first READ of such a member, and in
+         release the read throws naming interface Window from the worker global's own realm.
+     (c) THE INSTALLS, on `wgs_p` — core/timing/performance.c's `performance` and
+         core/indexeddb/indexed_db.c's `indexedDB`, each placed by the component that owns the member for
+         `Window`, because Web IDL §2.3 "Interface mixins" makes a mixin's members the INCLUDING interface's
+         own. This entry said their placement would be asserted by WGS_ASSERT_PLACED as §10.2.1.1's `self` is,
+         and it is NOT: that macro takes the three objects this file holds and those installs are in two other
+         components, so what asserts them is core/idl_args.c's pair over the generated band, from both arms —
+         which is stronger than a witness here could be, because it does not need this file to know which
+         members exist. Corrected rather than dropped because a reader who re-derives it from `self`'s
+         neighbour will add a witness row here for a member this file must not name.
+   HOW THE ABSENCE SHOWED: a realm whose §3.3.8 [Global] names are a worker's aborted while its intrinsics
+   were still installing, at core/idl_args.c's idl_realm_global_declares DCHECKF, which named the member and
+   the installing site — so the member was not merely misplaced, it was unreachable in that realm. That is
+   still what a member of residual (7) reaching a worker global looks like, which is why the sentence stays.
+   RETIREMENT: this record goes when every member `WorkerGlobalScope includes WindowOrWorkerGlobalScope`
+   brings is placed by §3.7.3's arm, because the three things are then not a shape anybody has to re-derive. */
 
 bool worker_global_scope_implements(JSValueConst v)
 {
@@ -754,9 +768,14 @@ void worker_global_scope_free(JSRuntime *rt)
  *           says the next diff must build and which that half of the machine already has. §10.2.1.2's
  *           `onmessage`/`onmessageerror` are step accessors, so they are installed above and this blocks
  *           nothing about them.
- *           WHAT IT DOES STILL BLOCK is every PLAIN-C attribute on a worker global, which is `name` here
- *           (`[Replaceable]`, so idl_install_replaceable) and every WindowOrWorkerGlobalScope attribute in
- *           residual (7).
+ *           WHAT IT DOES STILL BLOCK is every PLAIN-C attribute ON A WORKER GLOBAL, which is `name` here
+ *           (`[Replaceable]`, so idl_install_replaceable). IT NO LONGER BLOCKS RESIDUAL (7), AND THAT CLAUSE
+ *           IS CORRECTED RATHER THAN DROPPED because the reasoning that put it here is the reasoning a
+ *           reader repeats: every WindowOrWorkerGlobalScope attribute is declared by `WorkerGlobalScope`,
+ *           which is NOT [Global], so §3.7.3's not-[Global] arm places it on the PROTOTYPE and it is not on a
+ *           global at all — idl_install_replaceable_on states its `target` there and idl_install_accessor
+ *           mints a plain getter raw, so neither reaches this step. What blocks (7)'s members now is that
+ *           each is a member of a component that has not asked for that object yet.
  *           NEXT DIFF: §3.7.6 step 1.1.2.3's `target` becomes THIS realm's [Global] interface — THE BRAND
  *           ALONE, WHICH IS ONE DATUM AND NOT THREE. This clause used to say the receiver resolution AND the
  *           brand both had to come from that interface, and two of the three opening steps refute it, each by
@@ -830,9 +849,16 @@ void worker_global_scope_free(JSRuntime *rt)
  *     NEXT DIFF: none of them alone — each mixin member belongs to the component that already owns it for
  *     Window (core/timing/timer.c's four timer names, core/fetch/fetch.c's `fetch`, core/structured_clone.c's
  *     `structuredClone`), so what this owes is a per-realm install in each of those components rather than a
- *     line here; the subproblem underneath every one of them is (5)(a), because each is an own property of a
- *     [Global] object and would be minted through the Window brand at step 1.1.2.3 — not, as this line used
- *     to say, through the receiver resolution, which names no interface at all. See (5)(a).
+ *     line here. THE SUBPROBLEM UNDERNEATH THEM IS NO LONGER (5)(a), AND THE SENTENCE IS REWRITTEN RATHER
+ *     THAN DELETED BECAUSE ITS REASONING IS WHAT A READER REPEATS. It said each of these is an own property of
+ *     a [Global] object and would be minted through the Window brand at step 1.1.2.3 — and the first half is
+ *     what was wrong: `WorkerGlobalScope` is NOT [Global], so §3.7.3's not-[Global] arm puts every one of
+ *     them on this file's `wgs_p` and none of them on a global. The banner over `g_dwgs_class` holds the arm
+ *     that was owed and it is built; what each of these members needs now is the two lines
+ *     core/timing/performance.c and core/indexeddb/indexed_db.c write, in its own component. (5)(a) is still
+ *     the subproblem under the five members §10.2.1.2 DECLARES, which really are own properties of the
+ *     global. (The earlier correction that stands is the second half: step 1.1.2.3's brand, never the
+ *     receiver resolution, which names no interface at all.)
  *     ABSENCE SHOWS AS: `typeof setTimeout` is `"undefined"` in a worker realm, so the very first line of most
  *     bundled worker code throws — and, in the auditor rather than the engine, as the ABSENT counts idlgen
  *     prints against these two interfaces, which were ZERO before this component existed because an interface
