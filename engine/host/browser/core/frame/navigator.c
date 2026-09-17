@@ -403,6 +403,31 @@ static void navigator_install_realm(JSContext *ctx)
     JSValue proto, prev, global, nav;
     int i;
 
+    /* WEB IDL §3.8 "Platform objects implementing interfaces"' internally create a new object implementing the
+       interface, STEP 1: "Assert: interface is exposed in realm." — asked of the ONE generated table that
+       states it, the way core/workers/worker_global_scope.c asks §3.8's other exposure step at the head of its
+       own install. `Navigator` is `[Exposed=Window]`, so a realm whose §3.3.8 [Global] interface is a
+       WorkerGlobalScope has nothing to build here: not the instance step 1 names, not §3.7.3's prototype and
+       not §3.7.1's interface object.
+       IT IS A REFUSAL AND NOT A MISPLACEMENT. HTML §10.2.1.1 "The WorkerGlobalScope common interface" gives a
+       worker realm its OWN `readonly attribute WorkerNavigator navigator` — a DIFFERENT member of a DIFFERENT
+       type, which this build does not have — so moving THIS object onto WorkerGlobalScope.prototype would put
+       an interface the realm does not expose into it. Until WorkerNavigator exists the member is honestly
+       ABSENT (§NO STUBS).
+       NAMED RESIDUAL — THE MIXINS THAT ADD TO THIS OBJECT DO NOT ASK THIS QUESTION YET, AND ONE OF THEM ASKS
+       FOR THE OBJECT AT INSTALL TIME. WHAT IS NOT COVERED: a component whose partial interface adds a member
+       to `Navigator` reaches this realm's Navigator through navigator_object, which in a worker realm now
+       answers with nothing. WHAT THE NEXT DIFF BUILDS: that component's own §3.8 step 1 over the interface
+       IT declares its member on — Storage §8 declares `partial interface Navigator` AND
+       `partial interface WorkerNavigator`, so the member is not absent in a worker, it belongs on an object
+       this build has not got, and the gate is over `Navigator` rather than over its own interface (which IS
+       exposed in a worker and is why the component runs at all). HOW ITS ABSENCE SHOWS: a worker realm whose
+       intrinsics get past this row aborts at a DCHECK complaining the realm has no Navigator, whose stated
+       remedy is declaration order — true of the fact and wrong about the cause, which is this refusal.
+       THIS IS THE ALGORITHM ANSWERING AND NOT A FALLBACK BEING SELECTED: delete the thing it selects against
+       and Web IDL still has to ask whether this interface is exposed in this realm. */
+    if (!idl_exposed_in_realm(ctx, "Navigator")) return;
+
     prev = JS_GetClassProto(ctx, g_nav_class);
     DCHECK(JS_IsNull(prev), "navigator_install_realm ran twice in one realm — everything already holding the "
                             "first Navigator.prototype would answer out of a discarded object");

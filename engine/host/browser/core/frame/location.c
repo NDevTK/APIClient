@@ -1334,6 +1334,23 @@ static void location_install_realm(JSContext *ctx)
     JSValue proto, prev, global, loc;
     int i;
 
+    /* WEB IDL §3.8 "Platform objects implementing interfaces"' internally create a new object implementing the
+       interface, STEP 1: "Assert: interface is exposed in realm." — asked of the ONE generated table that
+       states it, the way core/workers/worker_global_scope.c asks §3.8's other exposure step at the head of its
+       own install. `Location` is `[Exposed=Window]`, so a realm whose §3.3.8 [Global] interface is a
+       WorkerGlobalScope has nothing to build here: not the instance step 1 names, not §3.7.3's prototype and
+       not §3.7.1's interface object, since §3.8's define the global property references draws its list from
+       the same exposure answer.
+       IT IS A REFUSAL AND NOT A MISPLACEMENT, WHICH IS THE READING TO GET RIGHT. HTML §10.2.1.1 "The
+       WorkerGlobalScope common interface" gives a worker realm its OWN
+       `readonly attribute WorkerLocation location` — a DIFFERENT member of a DIFFERENT type, which this build
+       does not have — so moving this object onto WorkerGlobalScope.prototype would put an interface the realm
+       does not expose into it. Until WorkerLocation exists the member is honestly ABSENT (§NO STUBS) and a
+       worker's own `self.location` throws where a browser answers, which is the forcing function.
+       THIS IS THE ALGORITHM ANSWERING AND NOT A FALLBACK BEING SELECTED: delete the thing it selects against
+       and Web IDL still has to ask whether this interface is exposed in this realm. */
+    if (!idl_exposed_in_realm(ctx, "Location")) return;
+
     prev = JS_GetClassProto(ctx, g_loc_class);
     DCHECK(JS_IsNull(prev), "location_install_realm ran twice in one realm — everything already holding the "
                             "first Location would answer out of a discarded object");
