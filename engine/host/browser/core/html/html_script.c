@@ -819,6 +819,15 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inse
        and for the same reason: `get_attribute` answers NULL for an attribute whose value is absent, so a
        presence test written over the VALUE let `<script src="">` fall through to the child-text branch and RUN
        it — markup a browser runs nothing for. */
+    /* …AND THE CONCRETE ARM BELOW RECORDS NOTHING HERE, WHICH IS A ROUTE AND NOT AN OMISSION — the asymmetry
+       with the arm above is the whole of why it is written down. A TAINTED `src` has no address to fetch, so
+       nothing parks and this is the only place that sighting can be made; a concrete one PARKS, and every
+       park whose reply becomes a program is recorded at solver/engine.c's one park door, where the two
+       destinations below and the dynamic `import()` all arrive and where the grade this element's schedule
+       already composed is on the record. A second `endpoint_record` here would be a second door for one
+       address, graded by a different computation.
+       RETIREMENT: this note goes when the park door's recording is what a reader of this branch meets first —
+       an assert here, or the two destinations named at their own declarations as recording entries. */
     if (has_src) {
         char *u;
 

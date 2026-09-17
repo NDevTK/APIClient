@@ -117,6 +117,24 @@
    stood on); a caller states the half it owns and this states the other. It is not a policy — the engine
    decides nothing about firing here, it names what the request IS, and the trusted zone decides. */
 int pending_prov_compose(int kind, int path_forced);
+/* …AND WHETHER THIS PARK'S REPLY BECOMES A PROGRAM, WHICH IS THE ONE QUESTION THE THREE KINDS ABOVE ALREADY
+   ANSWER TOGETHER AND WHICH NOTHING COULD ASK. Their own documentation names them as a set — an injected
+   `<script src>`, a document's own external script and a dynamic `import()` — and FLOW_PENDING_RESOURCE's
+   entry is written AGAINST that set ("the three PROGRAM kinds above are elements too"), so the grouping is
+   this register's own fact rather than a classification a consumer invents. It is a function here because a
+   consumer that spelled the disjunction itself would be a second copy of a list this file owns, and the
+   member it forgot would be the one added next.
+   WHAT READS IT: solver/engine.c's park door, to record the address on the @H surface. Every OTHER request in
+   this engine is recorded by the component that COMPOSED it — a `fetch()`, an XHR, a form submission, an
+   `<img>`, a `<link>` — and a program load has no such component to record at: its three producers hand this
+   register an ADDRESS and nothing else, so the door that receives them is the only place that sees all three.
+   That is the same argument `pending_park_request` already makes in its own words about Fetch §4.1 "Main
+   fetch" step 7, which was four hand-written copies with HTML §4.12.1.1 "Processing model"'s fetch not among
+   them.
+   EXHAUSTIVE BY CONSTRUCTION, AND THE DEFAULT IS A GUARD RATHER THAN A GAP: the operand is a value THIS
+   register enumerates, so a kind that reaches the abort is a kind somebody defined without classifying it —
+   never a capability this engine has yet to build. */
+int pending_kind_is_program(int kind);
 /* …AND THE NARROWER FACT THE SAME PARK STAMPS BESIDE IT: may this request's ADDRESS rest on a value the
  * parking flow itself DETERMINED on an arm nothing observed? Composed here rather than read off the flow at
  * the join for `pending_prov_compose`'s reason exactly — the walk that joins the register runs arbitrarily

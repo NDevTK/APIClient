@@ -342,6 +342,45 @@ static void pending_park_request(JSContext *ctx, JSValue e, const FetchRequest *
            "writes as its else. State the mode the algorithm creating this request names "
            "(core/html/cors_settings_attribute.h holds HTML §2.5.1's and §2.5.4's two answers over an "
            "element's `crossorigin` state, and they differ)");
+    /* THE ADDRESS AS THE @H SURFACE MUST SEE IT, FOR THE THREE PARKS WHOSE REPLY BECOMES A PROGRAM — asked
+       HERE, at the consumer, for the reason step 7 below is asked here and in the same words: a copy per
+       entry cannot report the entry that has none.
+       IT IS THE ONE ENDPOINT QUESTION NO COMPOSING COMPONENT COULD ANSWER. Every other request in this engine
+       is recorded by the component that BUILT it — core/fetch/fetch.c, core/xhr/xml_http_request.c,
+       core/html/html_form.c, core/html/html_image.c, core/html/html_link.c — because each of those holds a
+       method, a header list and a body the page composed. A PROGRAM load holds none of that: HTML §4.12.1.1
+       "Processing model" hands this register an ADDRESS and an element, and its three producers are a
+       `<script src>` an insertion prepared, a document's own external script taking its slot, and a dynamic
+       `import()`. All three arrive here and nowhere else, so this is the only line that sees the set.
+       WHAT ITS ABSENCE COST IS THE PRODUCT'S OWN HEADLINE CLAIM — the API surface a bundle CAN reach and did
+       not, of which a lazy chunk is the address that claim is most about. Every one of them was fetched,
+       executed and learned from, and none of them was ever NAMED. A `<link
+       rel=modulepreload>` chunk WAS named, because that algorithm's own component records it, so a document
+       that preloads its graph reported its chunks and a document that only loads them reported none: one
+       surface with two answers, decided by which element the bundler happened to emit.
+       THE GRADE IS THE PARK'S OWN AND IS READ RATHER THAN RECOMPUTED. `engine_prov_of_running_path` is what
+       the neighbouring recorders call and it is the WRONG answer here twice over: solver/engine.h states in
+       its own words that it can never answer `observed`, and `observed`'s first conjunct is HTML §4.12.1.1
+       "Processing model"'s parser-inserted flag — which is exactly what a document's own markup `<script src>`
+       has and what this
+       register already composed one line before `pending_push` returned. Asking a second time would be two
+       computations of one fact, free to disagree; reading PEND_PROV cannot. WHAT THAT ONE COMPUTATION IS
+       NARROWER THAN is a named residual at `pending_prov_compose` (solver/pending.c): the parser-inserted
+       conjunct is inferred from the park's KIND, and a kind chosen for a QUEUE POSITION answers a question
+       about ORIGIN. This line inherits that grade exactly and adds nothing to it, which is the point — a
+       second reading here would hide the one place the fact can be repaired.
+       BEFORE STEP 6 AND BEFORE STEP 7, which is where core/html/html_link.c and core/fetch/fetch.c put
+       theirs and for their stated reason: the endpoint is what the page's code COMPOSED, so a policy that
+       refuses it and an upgrade that rewrites it both leave a request the bundle can still make. */
+    if (pending_kind_is_program((int)pending_get_int(e, PEND_KIND))) {
+        JSValue uv = JS_NewString(ctx, req->url);
+        CHECK(!JS_IsException(uv), "engine: OOM naming a program load for the endpoint surface");
+        /* HTML §8.1.4.2 "Fetching scripts" creates every one of these requests without setting a method, so
+           it is Fetch §2.2.5 "Requests"' `GET` — and `req->method` is what the producer stated one frame up
+           and what the DCHECK above has already refused to be absent, so it is read rather than restated. */
+        endpoint_record(ctx, req->method, uv, NULL, 0, NULL, (int)pending_get_int(e, PEND_PROV));
+        JS_FreeValue(ctx, uv);
+    }
     /* FETCH §4.1 "Main fetch" STEP 6, AND IT RUNS BEFORE THE KEY IS COMPOSED — WHICH IS THE ORDERING THIS
        WHOLE PARK DEPENDS ON. The reply seam is keyed on (method, url); step 6 REWRITES that url; so composing
        PEND_URL from the pre-upgrade address and then fetching the post-upgrade one parks the request under an
