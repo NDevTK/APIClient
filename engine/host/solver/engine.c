@@ -7523,9 +7523,10 @@ static void flow_perform(JSContext *ctx, Flow *f)
    loop is what makes it true), so it is the record's last field and needs no encoding step. It is asserted
    anyway, because a record separator inside a field is the one corruption a reader's field COUNT still passes:
    the tail would be read as a second record under no world at all.
-   THE REALM IS THE PROGRAM'S, asked the way flow_answer_perform asks it — §3.7 gives every realm its own
-   intrinsics, and a value read through another document's is read by a platform that is not the one that
-   produced it. */
+   THE REALM IS THE PROGRAM'S, asked the way flow_answer_perform asks it — Web IDL §3.7 "Interfaces" gives
+   every realm its own intrinsics ("for every interface that is exposed in a given realm … a corresponding
+   property exists on the realm's global object"), and a value read through another document's is read by a
+   platform that is not the one that produced it. */
 static void flow_emit_dump(JSContext *ctx, Flow *f, JSValueConst cv)
 {
     char world[1024];
@@ -7598,9 +7599,16 @@ static void flow_answer_perform(JSContext *ctx, Flow *f, JSValueConst cv)
         completion = ENGINE_COMPLETION_THROW;
         cv = thrown;
     }
-    /* ENCODED IN THE REALM THE PROGRAM RAN IN, because the value is that realm's — §3.7 gives every realm its
-       own intrinsics, and a value converted through another document's is converted by a platform that is not
-       the one that produced it. It is the same realm the program was compiled in, asked the same way. */
+    /* ENCODED IN THE REALM THE PROGRAM RAN IN, because the value is that realm's — Web IDL §3.7 "Interfaces"
+       gives every realm its own intrinsics, and a value converted through another document's is converted by a
+       platform that is not the one that produced it. It is the same realm the program was compiled in, asked
+       the same way.
+       THE STANDARD IS NAMED HERE AND AT THE SIBLING ABOVE, AND IT WAS NOT. A bare `§3.7` resolves on the FILE
+       VOTE, which this file carries for HTML — so the audit read it as `html §3.7`, a section that standard
+       does not have, and filed it in the listing it explicitly does not accuse. Nothing under an unresolved
+       citation is ever checked, which is why an un-anchored one is not merely unchecked but SHIELDED. Both
+       sites are repaired together because they are one sentence written twice and a repair at one leaves the
+       other asking the same question the same wrong way. */
     enc = remote_completion_encode(doc_realm(flow_dyn_doc(f)), completion, cv);
     /* world_serialize CRASHES on its own truncation rather than sending a prefix, which is what makes the name
        on this notice the same name every other record of this world carries. */
