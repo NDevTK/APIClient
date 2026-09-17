@@ -2625,7 +2625,8 @@ function programCursorReading(b) {
   /* AND THE HISTOGRAM'S EXTENT IS NOT THE TABLE'S LENGTH, WHICH THIS LINE ASSERTED AND `rootPrograms` NOW
      REFUTES. It read "the slots run one wider than the document's programs", which is true only when the
      furthest flow has started the LAST row: the buckets come from the live members, so they stop at
-     `deepest + 1` however many rows the document has. `engine_seed_scripts` queues the WHOLE table at flow
+     `deepestLeft + 1` however many rows the document has (this clause said `deepest + 1` while that was the
+     maximum a cursor could reach; the block below records why it no longer is). `engine_seed_scripts` queues the WHOLE table at flow
      creation, so a member's `dyn_n` is the document's count from birth and a top bucket is where the mass
      GOT TO, never where the sequence ends. Read the old way, a top bucket of 8 on a 24-row document says the
      156 members standing there have nothing left to run, when in fact sixteen rows remain and every one of
@@ -2639,9 +2640,24 @@ function programCursorReading(b) {
      11" beside `document deepest 10`, that reads as a gauge naming a program the document does not have, and
      it was read that way: a lane took the pair for two instruments contradicting each other and stopped, which
      is the right instinct applied to a disagreement that does not exist. The unit is named on the line now,
-     the cursor that MEANS "finished the deepest program" is spelled out, and solver/result.c asserts the
-     identity (top cursor <= deepest + 1) at the composer where both numbers are in one hand. */
-  const finishedAll = b.deepest + 1;
+     the cursor that MEANS "finished the deepest program" is spelled out.
+
+     AND THE MAXIMUM IT IS READ AGAINST IS `deepestLeft`, NOT `deepest` — THIS LINE SAID `deepest` FOR AS LONG
+     AS IT STOOD, and the sentence above it named solver/result.c as asserting `top cursor <= deepest + 1`,
+     which that file no longer asserts. The retired reading is rewritten rather than deleted because it is
+     exactly true of a document every row of which RAN, which is what it was measured on. `deepest` is raised
+     only where a program is COMPILED, and a failed external `<script src>` keeps its position, has its cursor
+     advanced and compiles nothing — so on any document with a script that fails to load, `deepest` is short by
+     the number of skipped rows and this row reported a document as having finished fewer programs than it
+     left. That is densest on a MIRRORED page, where a script whose origin was not mirrored is exactly a script
+     that fails to load. `deepestLeft` is the deepest row any flow has LEFT, started or skipped, raised by
+     solver/engine.c's ENGINE_LEAVE_ROW at the transition itself; it is a SECOND FACT and not a re-spelling,
+     since raising `deepest` for a skipped row would report a program started that never started, which is the
+     one reading that number exists to make checkable. No `||` and no `??` here deliberately: `deepestLeft` is
+     in `coldFields()`'s derived required set, taken from result_cold_json's own composer, so an artifact that
+     does not publish it throws at the census instead of arriving here as a plausible NaN.
+     RETIREMENT: this record goes when no reader in this file compares a cursor against `deepest`. */
+  const finishedAll = b.deepestLeft + 1;
   /* AND THE NUMBER `deepest` AND `completed` ARE A FRACTION OF, which is what stops "deepest 7" reading as a
      finished document on one run and as a ceiling on the next. `rootPrograms` is the ROOT DOCUMENT'S OWN
      <script> count, and a flow's sequence runs PAST it — every lazy chunk, injected element and @S candidate
