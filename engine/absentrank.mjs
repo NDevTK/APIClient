@@ -56,6 +56,52 @@
  * new row to list A and re-weighted three, moving one of them to the top — a widening worth taking because it
  * changed the answer, not because it enlarged the table.
  *
+ * AN IDENTIFIER PASSED AS AN ARGUMENT IS EVALUATED, AND EVERY CHANNEL ABOVE READS ONLY THE OPERATORS.
+ * `new X(`, `instanceof X` and `X.member` are the three shapes that evaluate a binding, and they are all
+ * OPERATOR shapes — so `Ue(a, ImageData)` names the interface, throws a ReferenceError when it is absent, and
+ * was seen by nothing here. That gap is not spread evenly: an argument read is UNGUARDED, so what it is
+ * missing from is the THROWS band specifically, which is the band this file sorts FIRST and the only part a
+ * reader dispatches from. A name whose reads are ALL of this shape reported no unguarded use at all.
+ *
+ * IT IS CALL-ANCHORED, AND THAT ANCHOR IS THE WHOLE CHANNEL RATHER THAN A TIDY-UP. The obvious pattern —
+ * a bare identifier between `(`/`,` and `,`/`)` — was BUILT AND MEASURED AND REFUSED, which is the part
+ * worth keeping. Over this corpus it put 36 names and 115 occurrences on list A, of which TWENTY were names
+ * no other channel had ever seen, and every one of those twenty is SOURCE-AS-DATA read by reading the sites:
+ * Sentry's `"EventTarget,Window,Node,...,TextTrackList,...".split(",")` and core-js's
+ * `"CSSRuleList,...,SVGLengthList,...".split(",")` are comma-separated STRING LISTS whose shape is exactly a
+ * bare argument list, plus vscode localisation prose ("Request access to USB, serial, HID, and Bluetooth"),
+ * a TextMate grammar's `\b(external)\b`, and a CSS `content:" (external)"`. None is an identifier read —
+ * a library that then does `global[name]` is performing the GUARDED lookup, the opposite of a throw — and
+ * all twenty would have landed in THROWS with no guard hit anywhere to pull them out, several ABOVE the rows
+ * that are real. That is the `Animation`/`ML` incident below at twenty times the scale, so the broad form
+ * buys a ranking made of other people's word lists.
+ * WHAT SEPARATES THEM COSTS ONE CHARACTER CLASS: a call has a RECEIVER before its paren and a string list has
+ * nothing before its commas. Anchored on `[\w$)\]]\s*\(`, the same corpus gives THREE names and FIVE
+ * occurrences on list A — `Ue(a,ImageData)` and three rrweb-shaped `isInstanceOfElement(node,
+ * SVGImageElement)` helpers in three unrelated bundles and one `Ue(u,DragEvent)` — with ZERO names no other
+ * channel had seen and ZERO occurrences that reading the site does not confirm. The measured pair is
+ * therefore +5 true occurrences against +0 false names, and what it BUYS is a re-weighting rather than a row:
+ * `SVGImageElement` goes from a single `instanceof` to four uses and moves from the bottom of the THROWS
+ * band to its head, which is a change in the dispatch order and is the only reason to take a widening at all.
+ * THE ONE-ARGUMENT FORM `f(X)` IS MEASURED AND DECLINED IN THE SAME BREATH: it adds `external` and `GPU`,
+ * both prose inside a string, for two true occurrences on a name already classed `mixed`.
+ *
+ * ITS RAW TOP ROWS ARE SINGLE-LETTER MINIFIER LOCALS AND THAT IS SAID RATHER THAN HIDDEN. Over 78863
+ * occurrences the channel's own top identifiers are `t`, `n`, `e`, `r` — a channel reading the minifier and
+ * not the platform, which is the tell this project uses to refuse one. It is harmless HERE for the same
+ * reason the receiver channel's `Object`/`Math`/`Q` tops are: nothing is ranked that is not in
+ * ABSENT_GLOBAL, and a minifier local cannot collide with a platform name. It is stated because the raw
+ * number is what a reader would otherwise quote.
+ *
+ * NAMED RESIDUAL — a FUNCTION PARAMETER at the second position is counted as an argument. WHAT IS NOT
+ * COVERED: `f(a,B)` and `function f(a,B)` and `{m(a,B){}}` are one shape to this pattern, so a bundle
+ * declaring a parameter named after a platform interface is read as using it — and because nobody
+ * feature-detects their own parameter, it would land in THROWS. WHAT THE NEXT DIFF BUILDS: the code/not-code
+ * mask the residual below already names, which subsumes this one, since the same mask is what separates a
+ * declaration's parameter list from a call's argument list once a tokenizer is producing both. HOW ITS
+ * ABSENCE WOULD SHOW: a list-A row in the THROWS band whose whole count is on this channel and whose sites
+ * all read as the head of a function rather than as a call.
+ *
  * AN IDENTIFIER MEANS WHAT ITS BINDING SAYS, SO A FILE THAT BINDS A PLATFORM NAME IS NOT EVIDENCE ABOUT THE
  * PLATFORM. Every channel matches an identifier, and a bundle is free to declare one: jQuery ships
  * `function Animation(...)` and a minifier emits `var ...,ML=Object.prototype,...`. Such a name is never
@@ -77,6 +123,26 @@
  * makes suspect are visible in the output instead of having to be remembered. A non-zero qjs column is a row
  * to READ before believing; it is not itself proof of an install, because a name can be a submodule module
  * export (`quickjs-libc.c`'s os `Worker`) that no Window realm ever sees.
+ * AND THE TWO READINGS OF A NON-ZERO qjs ARE NOT EQUALLY LIKELY, WHICH THAT SENTENCE LEAVES OPEN AND A READER
+ * RESOLVES THE WRONG WAY. The module-export escape hatch is real and it is SMALL — the whole submodule exports
+ * SIX names from a module, and the derivation is one command rather than a figure that rots:
+ *   git grep -hoE 'JS_(Add|Set)ModuleExport[[:space:]]*\([^)]*"[A-Za-z_$][A-Za-z0-9_$]*"' -- 'engine/qjs/*.c' \
+ *     | grep -oE '"[A-Za-z_$][A-Za-z0-9_$]*"' | tr -d '"' | sort -u
+ * Measured: `Point Worker default err in out`, of which `Worker` is the ONLY platform name — the caveat's own
+ * example is its only platform member. So a non-zero qjs is USUALLY an install a realm reaches, which makes
+ * such a row a FALSE POSITIVE in list A rather than a curiosity, and reading it as "probably a module export"
+ * gets it backwards. The mixed band's TOP row is the worked case: `DOMException` carries qjs=3, and
+ * `JS_AddIntrinsicDOMException` is called on EVERY realm this host builds under an always-fatal CHECK, beside
+ * `realm_install_intrinsics` — so it is reachable and list A is accusing it, exactly as it accuses the
+ * `btoa`/`atob` named above. The column flags all of them and does not SEPARATE them from `Worker`; only
+ * reading the site has ever told the two apart, which is a confession a dispatcher cannot act on.
+ * IT IS NOT FIXED HERE AND THE REASON IS A REFUSAL RATHER THAN A DEFERRAL: the sound instrument is a RUNTIME
+ * invariant over the finished artifact — what a built realm's global actually holds — and CLAUDE.md records a
+ * receiver-anchored static sweep of global installs being wrong TWICE in this project, a static derivation
+ * over source text being a lower bound wearing a total's clothes. A third static guess would land in the
+ * ACCUSING direction, which needs more suspicion than the quiet one and not less.
+ * RETIREMENT: this paragraph goes when list A's denominator is taken from what a built realm reports rather
+ * than from a walk of engine/host/browser, at which point the qjs column goes with it.
  *
  *   node engine/absentrank.mjs [--host <tree>] [--corpus <dir>] [--top N]
  *
@@ -225,6 +291,7 @@ const CHANNELS = {
   "typeof X":      /\btypeof\s+([A-Za-z_$][\w$]*)/g,
   'global["X"]':   /\b(?:window|self|globalThis)\[\s*["']([A-Za-z_$][\w$]*)["']\s*\]/g,
   "X.member":      /(?:^|[^\w$.])([A-Z][\w$]*)\s*\.\s*[A-Za-z_$][\w$]*/g,
+  "f(a,X)":        /[\w$)\]]\s*\(\s*[A-Za-z_$][\w$]*\s*,\s*([A-Za-z_$][\w$]*)\s*\)/g,
 };
 const CONTROL = {
   "X instanceof (control)":   /\b([A-Za-z_$][\w$]*)\s+instanceof\b/g,
@@ -251,12 +318,19 @@ const ARM = {
   "typeof X":      ['typeof AbsentRankPos',           'mytypeof AbsentRankNeg'],
   'global["X"]':   ['window["AbsentRankPos"]',        'notwindow["AbsentRankNeg"]'],
   "X.member":      ['AbsentRankPos.someMember',       'q.AbsentRankNeg.someMember'],
+  /* THE NEGATIVES HERE ARE THE SHAPES THAT WERE MEASURED TO BREAK THE BROAD FORM, never invented near
+     misses: a comma word list with no call receiver, the same list as a bundle actually writes it, and a
+     quoted argument. A control that has never rejected the thing it exists to reject is not a control. */
+  "f(a,X)":        ['Ue(a,AbsentRankPos)',             ['"Screen,SharedWorker,AbsentRankNeg,WebSocket"',
+                                                        'q="Screen,AbsentRankNeg,WebSocket".split(",")',
+                                                        'Ue(a,"AbsentRankNeg")']],
 };
 for (const [k, re] of Object.entries(CHANNELS)) {
   const [pos, neg] = ARM[k] || die(`channel ${k} has no positive/negative control — add one before reading it.`);
   const got = (s) => [...s.matchAll(new RegExp(re.source, "g"))].map((m) => m[1]);
   if (!got(pos).includes("AbsentRankPos")) die(`channel ${k} did not match its own form in ${JSON.stringify(pos)} — its 0 would mean nothing.`);
-  if (got(neg).includes("AbsentRankNeg")) die(`channel ${k} matched its near miss ${JSON.stringify(neg)} — it is counting something else.`);
+  for (const bad of Array.isArray(neg) ? neg : [neg])
+    if (got(bad).includes("AbsentRankNeg")) die(`channel ${k} matched its near miss ${JSON.stringify(bad)} — it is counting something else.`);
 }
 const hits = new Map();          /* name -> channel -> occurrences */
 const perChannel = new Map();
@@ -360,7 +434,22 @@ const shape = (n) => [...(hits.get(n) || new Map()).keys()].map((k) => [k, freeO
    text supports outright. `mixed` is the honest middle — some use and some guard exist and only reading the
    site says which covers which — and it is not promoted above THROWS on the strength of a bigger number. */
 const GUARD_CH = new Set(["typeof X", "window.X", "self.X", "globalThis.X", 'global["X"]']);
-const USE_CH = new Set(["new X(", "X.member", "instanceof X"]);
+const USE_CH = new Set(["new X(", "X.member", "instanceof X", "f(a,X)"]);
+/* THE SENTENCE BELOW — "every channel is in exactly one of the two sets, so `u + g` IS the free total" — was
+   stated in prose and checked by nothing, which is the one shape that cannot fail loudly: a channel in
+   NEITHER set contributes to neither `u` nor `g`, so a name reached only by it reads `!u && !g` and is
+   classed `shadowed` — "this corpus offers no evidence about the platform name" — while the corpus was in
+   fact using it unguarded. That is a silent demotion out of the band this file sorts first, caused by adding
+   a channel and forgetting one line. A channel in BOTH sets is double-counted into both halves instead.
+   Asserted over the channel list rather than over a remembered pair, so the next channel cannot skip it. */
+for (const k of Object.keys(CHANNELS)) {
+  const n = (USE_CH.has(k) ? 1 : 0) + (GUARD_CH.has(k) ? 1 : 0);
+  if (n !== 1) die(`channel ${k} is in ${n} of USE_CH/GUARD_CH and must be in exactly 1 — ` +
+                   `${n ? "it is counted twice" : "a name reached only by it would be classed shadowed, " +
+                    "which reads as no evidence about the platform name at all"}.`);
+}
+for (const k of [...USE_CH, ...GUARD_CH])
+  if (!(k in CHANNELS)) die(`USE_CH/GUARD_CH names ${k}, which is not a channel — the class sets have gone stale.`);
 const partOf = (n, set) =>
   [...(hits.get(n) || new Map()).keys()].filter((k) => set.has(k)).reduce((a, k) => a + freeOf(n, k), 0);
 /* Every channel is in exactly one of the two sets, so `u + g` IS the free total and `!u && !g` is the name
