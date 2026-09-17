@@ -110,15 +110,18 @@ void structured_register_transferable(const StructuredTransferable *t);
  *       a history entry, a broadcast, a routed message, the IDB cold tier. A row ordinal names a different
  *       interface the moment a registrant is added, which is one park away rather than one release away.
  *
- * WHAT IT IS NOT YET IS SCOREABLE, AND THAT IS WHY IT IS RECORDED AND NOT BUILT. The corpus's own oracle for
- * the first consumer is WebCryptoAPI/serialization/, nineteen collected documents that share one META script;
- * every one of them calls crypto.subtle.generateKey and crypto.subtle.exportKey. THIS SENTENCE USED TO END
- * "and neither is installed — `git grep -c '"generateKey"' -- '*.c' '*.h'` answers nothing at all", and both
- * are installed now; it is rewritten rather than deleted because the CONCLUSION is unchanged and a reader who
- * checks the premise would otherwise discard it. What blocks those documents is that no ALGORITHM has a row in
- * both members' registries — §14.3.6's one row is AES-GCM and §14.3.10's one row is HMAC — so they still fail
- * before they reach structuredClone, and a seam landed today would still move their verdict by zero: an absent
- * crash is not a correct value. core/crypto/crypto_key.h states the resulting landing order. */
+ * AND IT IS SCOREABLE NOW, BY ONE DOCUMENT, WHICH IS A CHANGE OF STATE RATHER THAN OF PLAN. The corpus's own
+ * oracle for the first consumer is WebCryptoAPI/serialization/, nineteen collected documents that share one
+ * META script; every one of them calls crypto.subtle.generateKey and crypto.subtle.exportKey. TWO PREMISES
+ * HAVE BEEN FALSIFIED HERE IN TURN AND BOTH ARE KEPT, because each is one a reader re-derives. The first was
+ * "neither is installed — `git grep -c '"generateKey"' -- '*.c' '*.h'` answers nothing at all"; both are
+ * installed. The second was that no ALGORITHM has a row in both members' registries, on the ground that
+ * §14.3.6 registered AES-GCM alone and §14.3.10 registered HMAC alone — so those documents failed before
+ * reaching structuredClone and a seam landed then would have moved their verdict by zero. §29.4.5 AES-GCM Export Key has landed and AES-GCM
+ * is now a row in BOTH, so `aes-gcm.https.any.js` generates, exports, and ARRIVES HERE. What it meets is this
+ * seam's own absence. The other eighteen are still blocked one call earlier, so the oracle is one document
+ * and not nineteen — which is enough to score a seam and not enough to read as coverage.
+ * core/crypto/crypto_key.h states the decomposition and what is still owed. */
 
 /* THE TRANSFER LIST IS A DECLARED IDL TYPE AND NOT A WALK THIS FILE PERFORMS. It used to be one — a
  * function reading `list.length` and one index per entry — and that is the ARRAY-LIKE algorithm rather than

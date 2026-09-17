@@ -4130,6 +4130,50 @@ static const char *HTML =
     " await Promise.resolve('r');"
     " fetch('/api/modtla?w=resumed');"
     "</script>"
+    /* WEB CRYPTOGRAPHY §29.4.5 AES-GCM EXPORT KEY — THE REACHABILITY WITNESS FOR THE ROW ABOVE IT AS WELL AS
+       FOR ITSELF. Before this statement existed, `crypto.subtle` appeared NOWHERE in this fixture — no
+       `generateKey`, no `importKey`, no `exportKey` — so a build was equally consistent with §14.3.6 and
+       §14.3.10 being correct and with neither having ever executed, which is §AN-ABSENT-CRASH-IS-NOT-A-CORRECT
+       -VALUE exactly: the prediction "no abort fires" was satisfied by a path nobody took.
+       EVERY EMITTED PAYLOAD IS A CONSTANT, AND THAT IS A REQUIREMENT RATHER THAN A STYLE. A witness is an ACT
+       WITH A PAYLOAD, and in an engine whose purpose is to make values unknown a payload composed from
+       anything the engine COMPUTED can itself be concolic — at which point the request is never issued and an
+       arm that RAN reads exactly like an arm that aborted. `kty`, `alg` and the `key_ops` members are string
+       literals THIS ENGINE wrote at §29.4.5's own sub-steps; `ext` is the boolean this statement passed in;
+       and the raw arm's length is asked as a COMPARISON against a literal, so the emitted byte is `ok` either
+       way and a concolic length would show as TWO values of one param rather than as silence.
+       THE KEY MATERIAL ITSELF IS CONCRETE and is deliberately never emitted: core/crypto/crypto.h's stream is
+       a counter mixer, reproducible by construction, so `k` would in fact travel — but a witness that carries
+       generated key bytes is one whose payload becomes unknown the day that source is device-backed, and the
+       arms would then go silent without anybody editing this line.
+       THE CHANNEL IS THE RESULT DOCUMENT AND NOT THE CONSOLE, for the reason §MEASURE-WHAT-THE-SHIPPED-PATH
+       -WRITES gives: the renderer deliberately does not tee stdout, so a console scrape means "cannot see" and
+       renders identically to "did not run". `fetch` emits an endpoint RECORD, which is what probes_eval reads.
+       IT IS UNANSWERABLE IN A RUN WHOSE `jobs run` IS 0, HOWEVER MUCH `workDone` THAT RUN REPORTS. Every one
+       of these four records is behind an `await`, and §14.3.6 and §14.3.10 both settle through sc_resolve's
+       JS_EnqueueCallJob — so these rows are answered by the JOB pump and not by straight-line work. A reader
+       meeting them at 0 checks the job counter BEFORE reading them as a defect: measured on this fixture, a
+       run at 3003 units of work with zero jobs answered 36 statements and one at 1003 units with 88 jobs
+       answered 69, so work is the wrong denominator for anything behind an await.
+       APPENDED IN FRONT OF `</body></html>` AND NOT INSERTED, for the reason the module statement above and
+       the three operand-shape statements state: this document is ONE LINE, so a `@WHY` frame's COLUMN is the
+       only coordinate a reader has into it and an insertion re-points every column after it. */
+    "<script>"
+    "(async function(){ var _xk;"
+    " try { _xk = await crypto.subtle.generateKey({name:'AES-GCM',length:256}, true, ['encrypt','decrypt']); }"
+    " catch (_e) { fetch('/api/xkreach?d=no&n=' + _e.name); return; }"
+    " fetch('/api/xkreach?d=ok');"
+    " try { var _r = await crypto.subtle.exportKey('raw', _xk);"
+    "       fetch('/api/xkraw?d=' + (_r.byteLength === 32 ? 'ok' : 'wrong')); }"
+    " catch (_e) { fetch('/api/xkraw?d=' + _e.name); }"
+    " try { var _j = await crypto.subtle.exportKey('jwk', _xk);"
+    "       fetch('/api/xkjwk?kty=' + _j.kty + '&alg=' + _j.alg + '&ext=' + _j.ext"
+    "             + '&ops=' + _j.key_ops.join('.')); }"
+    " catch (_e) { fetch('/api/xkjwk?kty=' + _e.name); }"
+    " try { await crypto.subtle.exportKey('spki', _xk); fetch('/api/xkspki?d=resolved'); }"
+    " catch (_e) { fetch('/api/xkspki?d=' + _e.name); }"
+    "})();"
+    "</script>"
     "</body></html>";
 
 /* MINIMAL ASan fixture (APICLIENT_ASAN_MIN=1) — the memory-sensitive CLONE/COW/verify paths ONLY, with tiny
@@ -14118,6 +14162,74 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "not in MIME Sniffing §4.6's JavaScript group — the type gate is not a gate, and `reply-program` "
              "above is therefore not evidence that a TYPE decided anything");
 
+    /* WEB CRYPTOGRAPHY §29.4.5 AES-GCM EXPORT KEY'S THREE ARMS, AND THE ROW THAT SAYS WHETHER ANY OF THEM RAN.
+       `xk-reach` stands FIRST for `td-reach`'s and `bs-reach`'s reason, and here it carries MORE than those
+       two do: it is emitted after §14.3.6 generateKey RESOLVES, so it is simultaneously the reachability
+       witness for the generateKey landing that preceded this one — which had none at all, and whose "no abort
+       fires" prediction was therefore satisfied identically by a correct implementation and by a statement
+       nobody executed.
+       ITS TWO ZEROS ARE TOLD APART BY THE RECORD ITSELF, which is why the arms below can be read at all. NO
+       /api/xkreach record means no flow reached this statement in this run — every row below is then about how
+       far the run got and not about §29.4.5. A record whose `d` carries `no` means generateKey itself rejected
+       and its `n` param NAMES the DOMException, which is this fixture asking for a capability rather than the
+       export answering wrongly.
+       EACH ARM IS `param_value_only` AND NOT `_has`: every one of these settlements is DETERMINED — the key's
+       length, its usages and its extractability are all fixed by the statement's own literals and §29.4.5
+       branches on nothing else — so a param carrying two values means the flow forked where this statement
+       says it cannot, which is a finding and not a match. `_has` is also a SUBSTRING test, so an `ok` row
+       would be satisfied by a failure spelling that happened to contain it. */
+    const char *xkreach_why = NULL; int xk_reach = 1;
+    fold_row(&xk_reach, &xkreach_why, param_value_only(js, "/api/xkreach", "d", "ok"),
+             "§14.3.6 generateKey over §29.4.3 AES-GCM did not resolve, so NOTHING below is about §29.4.5. "
+             "Its TWO readings are told apart by the record: no /api/xkreach record at all means no flow "
+             "reached this statement — check `jobs run` before reading it as a defect, because every record "
+             "here is behind an await and settles through sc_resolve's JS_EnqueueCallJob, so a run with zero "
+             "jobs cannot answer it however much `workDone` it reports; a record whose `d` carries `no` means "
+             "generateKey REJECTED and its `n` param names the DOMException");
+    /* STEP 2's `raw` ARM, BOTH SUB-STEPS. The length is asked as a COMPARISON so the emitted byte is a literal
+       on both paths — a concolic byteLength would show as TWO values of `d` rather than as an absent record,
+       which is the failure this fixture must be able to SEE rather than be silenced by. */
+    const char *xkraw_why = NULL; int xk_raw = 1;
+    fold_row(&xk_raw, &xkraw_why, xk_reach, xkreach_why);
+    fold_row(&xk_raw, &xkraw_why, param_value_only(js, "/api/xkraw", "d", "ok"),
+             "§29.4.5 step 2's `raw` arm did not hand back the key's 32 octets: `d` carries `wrong` (the "
+             "ArrayBuffer came back a different length than §29.4.3 step 3 drew), or a DOMException name (the "
+             "arm threw where the standard defines no throw for `raw`), or two values (the flow forked over a "
+             "length this statement pins with a literal)");
+    /* STEP 2's `jwk` ARM — ALL SEVEN SUB-STEPS, as four params of one record. `kty` and `alg` are the two
+       this chapter WRITES ("oct", and "A256GCM" for a 256-bit key); `ext` and `ops` are the two it copies off
+       the key, and `ops` asserts the ORDER as well as the membership, which core/crypto/crypto_key.h names as
+       the load-bearing half — §9's recognized order is `encrypt, decrypt, …`, so two walks agreeing on which
+       usages a key has could still disagree here and no membership test would report it. */
+    const char *xkjwk_why = NULL; int xk_jwk = 1;
+    fold_row(&xk_jwk, &xkjwk_why, xk_reach, xkreach_why);
+    fold_row(&xk_jwk, &xkjwk_why, param_value_only(js, "/api/xkjwk", "kty", "oct"),
+             "§29.4.5 step 2's `jwk` arm did not set `kty` to \"oct\" — or it threw, in which case `kty` "
+             "carries the DOMException name instead, which is the same param deliberately so that a throw "
+             "cannot read as an absent record");
+    fold_row(&xk_jwk, &xkjwk_why, param_value_only(js, "/api/xkjwk", "alg", "A256GCM"),
+             "§29.4.5's `alg` sub-step answered the wrong clause for a 256-bit key. Its three clauses are "
+             "128/192/256 against A128GCM/A192GCM/A256GCM and it has NO Otherwise, so a wrong value here is "
+             "the length selector disagreeing with §29.4.3 step 8's `length`, not a page's input");
+    fold_row(&xk_jwk, &xkjwk_why, param_value_only(js, "/api/xkjwk", "ext", "true"),
+             "§29.4.5's `ext` sub-step did not copy the [[extractable]] slot this statement set to true");
+    fold_row(&xk_jwk, &xkjwk_why, param_value_only(js, "/api/xkjwk", "ops", "encrypt.decrypt"),
+             "§29.4.5's `key_ops` sub-step did not answer §9's recognized ORDER. The statement asked for "
+             "['encrypt','decrypt'] and §9 lists encrypt before decrypt, so `decrypt.encrypt` here is the two "
+             "walks core/crypto/crypto_key.h keeps as one having come apart, and a membership test would miss "
+             "it");
+    /* STEP 2's `Otherwise`, WHICH IS THE ONLY THROW §29.4.5 DEFINES. It is a separate row and not a clause of
+       the jwk one because it is the arm a page reaches with an ordinary call and the two DER formats are its
+       whole population: §14.1's KeyFormat has four values and Web IDL §3.2.18 refused every other string
+       before §14.3.10 step 1 ran, so `spki` is a page's own input and this is the refusal the standard names
+       for it. A row asserting `resolved` here would be asserting the bug. */
+    const char *xkspki_why = NULL; int xk_spki = 1;
+    fold_row(&xk_spki, &xkspki_why, xk_reach, xkreach_why);
+    fold_row(&xk_spki, &xkspki_why, param_value_only(js, "/api/xkspki", "d", "NotSupportedError"),
+             "§29.4.5 step 2's `Otherwise: throw a NotSupportedError` did not fire for \"spki\": `d` carries "
+             "`resolved` (an AES-GCM key was exported in a format §29.4.5 defines no arm for) or another "
+             "DOMException name (the refusal happened for a different reason than the format)");
+
     /* EVERY ROW NAMES THE STATEMENT IT IS ABOUT, and the two cold sessions are two answers and not one: they run
        the same document and one is about what a park WROTE while the other is about what a resume REBUILT. */
     Probe probes[] = {
@@ -14184,6 +14296,13 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "orphan-ccode", orphan_ccode, "orphanCharCode", SESS_EXPLORE, orphan_why },
         { "orphan-update", orphan_update, "orphanUpdate", SESS_EXPLORE, orphan_why },
         { "orphan-clamp", orphan_clamp, "orphanClamp", SESS_EXPLORE, orphan_why },
+        /* §29.4.5's THREE ARMS AND THEIR REACH ROW. The key is each row's own endpoint, so a 0 is already a
+           localisation; `xk-reach` is keyed on the same statement and stands first because it is what says
+           whether the three below it are about §29.4.5 or about how far the run got. */
+        { "xk-reach", xk_reach, "/api/xkreach", SESS_EXPLORE, xkreach_why },
+        { "xk-raw", xk_raw, "/api/xkraw", SESS_EXPLORE, xkraw_why },
+        { "xk-jwk", xk_jwk, "/api/xkjwk", SESS_EXPLORE, xkjwk_why },
+        { "xk-spki", xk_spki, "/api/xkspki", SESS_EXPLORE, xkspki_why },
         { "module-entry", modentry_tt, "/api/modreach", SESS_EXPLORE, modentry_why },
         { "module-tla", modtla_tt, "/api/modtla", SESS_EXPLORE, modtla_why },
         { "frame-ctl", frame_ctl, "/api/framectl", SESS_EXPLORE, frame_ctl_why },

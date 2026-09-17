@@ -70,4 +70,21 @@ JSValue aes_gcm_import_key(JSContext *ctx, const char *format, JSValueConst key_
    the two chapters name different exceptions and a page reads which one it got. */
 JSValue aes_gcm_generate_key(JSContext *ctx, uint32_t length_bits, bool extractable, uint32_t usages);
 
+/* §29.4.5 Export Key, WHOLE — the operation §14.3.10 step 8 performs when the `name` member of the key's
+   [[algorithm]] slot is "AES-GCM": "Let result be the result of performing the export key operation specified
+   by the [[algorithm]] internal slot of key using key and format."
+   `format` is §14.1's KeyFormat, already checked against the enumeration's four values by the argument
+   conversion, and `key` is a CryptoKey §14.3.10 step 7 has already found extractable.
+   IT TAKES NO usages AND NO extractable ARGUMENT, and that absence is the operation's shape rather than an
+   omission: both are read off the KEY — step 2's jwk arm sets `key_ops` from "the usages attribute of key" and
+   `ext` from "the [[extractable]] internal slot of key" — so passing them would be a second spelling of state
+   the key already carries, which is the copy that drifts.
+   THE SECTION HAS THREE TOP-LEVEL STEPS, counted with list depth tracked: step 2 is ONE `<li>` holding the
+   whole format switch, and a flat item count promotes that switch's arms and the jwk arm's seven sub-steps to
+   peers. A citation of a "step 5" here names a step §29.4.5 does not have.
+   Returns JS_EXCEPTION with the exception pending: step 2's "Otherwise: throw a NotSupportedError" for the two
+   DER formats, which is the only throw this operation can reach for a key this engine minted. Step 1's
+   OperationError is a DCHECK here for the reason §31.6.5's is — see aes_gcm_key.c. */
+JSValue aes_gcm_export_key(JSContext *ctx, const char *format, JSValueConst key);
+
 #endif

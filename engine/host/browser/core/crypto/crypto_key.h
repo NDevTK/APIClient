@@ -101,27 +101,27 @@
  * browser hands back an equal key, and any page that round-trips a key through an IndexedDB store, which is
  * §5.2 Key Storage's own stated use of this interface.
  *
- * AND NOTHING IN THIS TREE CAN SCORE THAT YET, WHICH DECIDES THE ORDER AND WAS NOT PART OF THE CLAUSE ABOVE.
- * The corpus's oracle for it is WebCryptoAPI/serialization/ — nineteen documents, collected (WebCryptoAPI is
- * an entry of engine/wpt.mjs's own path list), every one of them a thin vector list over the single META
- * script serialization.js, which calls crypto.subtle.generateKey and then crypto.subtle.exportKey to compare
- * the round trip. THIS PARAGRAPH SAID `NEITHER IS INSTALLED` AND NAMED A `git grep -c` THAT ANSWERED NOTHING,
- * AND BOTH MEMBERS ARE INSTALLED NOW — it is rewritten rather than deleted because its CONCLUSION survives its
- * premises and a reader who finds the premises false will discard the conclusion with them. What decides those
- * documents is not whether the two members exist but whether ONE ALGORITHM has a row in BOTH registries, and
- * none does: §14.3.6's registry is one row and that row is AES-GCM, §14.3.10's is one row and that row is
- * HMAC. So `aes-gcm.https.any.js` now reaches exportKey and takes step 6's NotSupportedError there,
- * `hmac.https.any.js` takes §18.4.4's at generateKey, and every other vector names an algorithm neither
- * registry has. They still fail before structuredClone is reached, so the seam above would still move their
- * verdict by ZERO — its absence of a crash would not be a correct value.
- * SO THE ORDER IS §29.4.5 AES-GCM Export Key — the row that closes that gap on the `exportKey` that already
- * exists — THEN the seam. The `generateKey` half of this order is DONE; the sentence used to put it first and
- * the reasoning that put it there is unchanged, since 60 of this standard's documents name generateKey against
- * the nineteen that need the seam and are already blocked. What can score the seam WITHOUT them is a
- * key made by the importKey that does exist and used by the sign that does exist — import a raw HMAC key,
- * clone it, sign with both and compare — and no collected document does that, so building one is a diff of
- * its own and is named here rather than assumed. RETIREMENT: this record goes when a registry of serializable
- * interfaces exists and this interface is a row in it.
+ * AND WHAT CAN SCORE IT HAS CHANGED, WHICH IS THE WHOLE OF WHY THIS PARAGRAPH IS REWRITTEN AGAIN. The
+ * corpus's oracle is WebCryptoAPI/serialization/ — nineteen documents, collected (WebCryptoAPI is an entry of
+ * engine/wpt.mjs's own path list), every one a thin vector list over the single META script serialization.js,
+ * which calls crypto.subtle.generateKey and then crypto.subtle.exportKey to compare the round trip.
+ * TWO PREMISES HAVE NOW BEEN FALSIFIED HERE IN TURN AND BOTH ARE KEPT, because each is one a reader
+ * re-derives. The first said NEITHER MEMBER IS INSTALLED; both are. The second said no ALGORITHM has a row in
+ * BOTH registries, on the ground that §14.3.6 registered AES-GCM alone and §14.3.10 registered HMAC alone —
+ * so those documents failed before structuredClone and a seam landed then would have moved their verdict by
+ * ZERO. §29.4.5 AES-GCM Export Key has landed, so AES-GCM is now a row in BOTH, and that
+ * sentence is false of exactly one algorithm.
+ * SO THE BLOCKING CLAIM IS NARROWER AND THE ORDER IT DECIDED IS SPENT. `aes-gcm.https.any.js` no longer stops
+ * at an exportKey refusal: it generates, exports, and reaches structuredClone — which has no arm for this
+ * interface, so what it meets there is the seam's own absence rather than a registry gap. That is the first
+ * time anything in this tree can score the seam, and it is ONE document rather than nineteen: `hmac.https.
+ * any.js` still takes §18.4.4's refusal at generateKey (HMAC has an importKey row and no generateKey row), and
+ * every other vector names an algorithm neither registry has.
+ * THE SEAM IS THEREFORE THE NEXT DIFF AND IT NOW HAS AN ORACLE. What this paragraph used to offer INSTEAD of
+ * one — a raw HMAC key imported, cloned, signed with both and compared, built as a fixture statement because
+ * no collected document does it — is still the cheaper witness and is still not written; it is kept as the
+ * fallback for the day the collected document cannot be run. RETIREMENT: this record goes when a registry of
+ * serializable interfaces exists and this interface is a row in it.
  *
  * §13.2's TWO ENUMS ARE C ENUMS AND THE USAGES ONE IS A BITMASK, which is not a compression of §13.3's
  * "Sequence<KeyUsage>" but a faithful model of it: §9 Terminology defines the "usage intersection" of two

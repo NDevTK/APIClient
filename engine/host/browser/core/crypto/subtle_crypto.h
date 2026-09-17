@@ -89,8 +89,12 @@
  * DETECT THAT LANDING FLIPS WAS PRICED FIRST and subtle_crypto.c's §14.3.6 banner states the derivation; what
  * it turned on is that the branch the guard selects calls `digest`, `importKey` and `sign` over SHA-1 and
  * SHA-256, all three of which were already registered for those algorithms. (4) §29.4.5 "Export
- * Key" and §14.3.10 "The exportKey method", whose "jwk" arm stands on the same JSON Web Key layer §31.6.4's
- * and §29.4.4's do — core/crypto/jwk.c, which now exists, in the DECODING direction only. A key that crosses
+ * Key" on the §14.3.10 "The exportKey method" that ALREADY EXISTED — BUILT, and it was a registry ROW plus
+ * this chapter's own `alg` sub-step, exactly as the exportKey machine's next-diff clause had predicted. THIS
+ * LINE SAID core/crypto/jwk.c EXISTS "in the DECODING direction only", and the ENCODING direction is what that
+ * landing used: `jwk_oct_export` was already there, written when §31.6.5 landed and diffed against §29.4.5
+ * rather than assumed to match it, so the arm cost one call and one `alg` selection. A reader who takes the
+ * decoding-only clause at face value will re-derive an encoder this directory already has. A key that crosses
  * IndexedDB additionally needs §13.5 "Serialization and deserialization steps", and THIS LINE USED TO SAY THAT
  * subproblem `belongs to core/crypto/crypto_key.c` — which is half of it. Its first half belongs to no crypto
  * file at all: HTML §2.7.1 "Serializable objects" has NO arm in this engine, so a registry of serializable

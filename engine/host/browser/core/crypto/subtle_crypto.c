@@ -2364,18 +2364,43 @@ static const IdlStepDecl IK_DECL = {
  * a record in an own slot the page cannot reach. There is one world, so a fork here would mint arms over a
  * value that is already concrete, which §Solver-half's concretize-on-pin forbids in the other direction.
  *
- * THE REGISTRY IS ONE ROW AND THAT IS CONFORMANT, on the same sentence the sign/verify machine rests on:
- * §18.5.1 states "there are no algorithms that conforming user agents are required to implement". §29.4.5
- * AES-GCM Export Key is the named next diff and is a ROW plus its own `alg` sub-step, not a change here — the
- * shared run of its jwk arm is already in core/crypto/jwk.c, diffed against §31.6.5's rather than assumed to
- * match it. WHAT ITS ABSENCE LOOKS LIKE: `exportKey("raw", aesGcmKey)` rejects with NotSupportedError from
- * step 6 where a browser resolves with the key's octets, and WebCryptoAPI/import_export/symmetric_importKey's
- * `runTests("AES-GCM")` round trip reports it while `runTests("HMAC")` passes.
+ * THE REGISTRY IS TWO ROWS, AND A SHORT ONE IS CONFORMANT on the sentence the sign/verify machine rests on:
+ * §18.5.1 states "there are no algorithms that conforming user agents are required to implement".
+ * THIS PARAGRAPH SAID "ONE ROW" AND NAMED §29.4.5 AES-GCM Export Key AS THE NEXT DIFF, WITH "WHAT ITS ABSENCE
+ * LOOKS LIKE" BESIDE IT — `exportKey("raw", aesGcmKey)` rejecting with NotSupportedError from step 6 where a
+ * browser resolves with the key's octets. That diff has landed, so both halves are false; it is rewritten
+ * rather than deleted because the next-diff clause was RIGHT about the shape and a reader who re-derives it
+ * from the one-row registry would re-add it. What it predicted is what happened: a ROW plus its own `alg`
+ * sub-step, with the shared run of the jwk arm already in core/crypto/jwk.c — nothing in this file's step 8
+ * changed but the dispatch that was a single call.
  *
  * THE COMPARISON IS sd_name_matches AND NOT strcmp, which says something slightly stronger than this operand
  * needs and is deliberate: §18.4.4's identification is ASCII case-insensitive everywhere, and using the one
  * comparator that states it keeps step 6 reading as the same identification the other three methods perform.
  * The operand is engine-written, so the two answer alike for every key this engine can mint. */
+
+/* §14.3.10 step 6's `registeredAlgorithms` FOR THE "exportKey" OPERATION — the two chapters whose §.2
+   Registration tables carry an `exportKey` row. §31.2 "Registration" states "The recognized algorithm name for
+   this algorithm is "HMAC"." and §29.2 "Registration" states it of "AES-GCM"; BOTH give that row the
+   Parameters `None` and the Result `object`, which is why neither arm below is handed a normalized dictionary
+   and why §14.3.10 has no algorithm argument to normalize one from.
+   THAT FIRST NUMBER WAS WRITTEN HERE AS §32.2 AND FETCHING REFUTED IT: §32.2 is SHA's Registration, and SHA is
+   the chapter this file's `digest` machine reads — an adjacent, plausible, wrong section of the same standard,
+   which is the shape a number recalled rather than looked up takes.
+   The table and the enum are ONE fact for
+   IK_REGISTERED's reason: the lookup answers with a POSITION and step 8's dispatch reads it as an XkAlgorithm.
+   THE ORDER IS IK_REGISTERED's, DELIBERATELY. These two registries now hold the same two names, and a reader
+   comparing them is comparing the round trip a page actually performs — `importKey` then `exportKey` on one
+   key — so the rows lining up is what makes a mismatch visible at a glance rather than something to re-derive.
+   IT IS NOT A SHARED TABLE: §18.4.4's registry is per-OPERATION by construction, and two operations that
+   happen to register the same names today are one row apart from not doing so. */
+typedef enum { XK_ALG_HMAC = 0, XK_ALG_AES_GCM = 1 } XkAlgorithm;
+static const char *const XK_REGISTERED[] = { "HMAC", "AES-GCM" };
+#define XK_REGISTERED_N ((int)COUNTOF(XK_REGISTERED))
+_Static_assert(XK_REGISTERED_N == (int)XK_ALG_AES_GCM + 1,
+               "XK_REGISTERED and XkAlgorithm have come apart — step 6's lookup answers with a row index and "
+               "step 8's dispatch reads it as an XkAlgorithm, so a name in one and not the other is a row "
+               "performed as its neighbour");
 
 #define XK_STAGES(X)                                                                                          \
     X(XK_DONE, "Web Cryptography §14.3.10 steps 6-11 (the registered-algorithm lookup over the key's own "     \
@@ -2429,7 +2454,7 @@ static int xk_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
         const char *format = JS_ToCString(ctx, format_v);
         JSValue algorithm, name;
         const char *nm;
-        bool known;
+        int row;
         JSValue result;
 
         CHECK(format != NULL, "§14.1's KeyFormat could not be read back as UTF-8 — the argument conversion "
@@ -2447,8 +2472,12 @@ static int xk_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
         JS_FreeValue(ctx, name);
         CHECK(nm != NULL, "a CryptoKey's [[algorithm]] `name` could not be read back as UTF-8 — this engine "
                           "wrote it from the registration section of the chapter that minted the key");
-        known = sd_name_matches(nm, "HMAC");
-        if (!known) {
+        /* THE LOOKUP IS A LOOP AND NOT A FORK, which the banner above argues at length: the operand is a
+           string THIS ENGINE wrote at the minting chapter's registration step, off a record in an own slot no
+           page can reach, so there is one world and a fork here would mint arms over a concrete value. */
+        for (row = 0; row < XK_REGISTERED_N; row++)
+            if (sd_name_matches(nm, XK_REGISTERED[row])) break;
+        if (row == XK_REGISTERED_N) {
             /* THE REFUSAL IS THE STANDARD'S AND NOT AN ASSERT. A key of an algorithm this engine registers for
                `importKey` and not for `exportKey` is a state a PAGE reaches with two ordinary calls, so it
                takes step 6's own error — and the message names the key's algorithm rather than the format,
@@ -2478,7 +2507,31 @@ static int xk_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
            step 4's format dispatch and its NotSupportedError arm included. The split between the files is that
            sentence, exactly as it is for §14.3.9: what a key of one algorithm IS lives in that algorithm's own
            component, and what §14.3.10 itself does lives here. */
-        result = hmac_export_key(ctx, format, key);
+        switch ((XkAlgorithm)row) {
+        case XK_ALG_HMAC:
+            result = hmac_export_key(ctx, format, key);
+            break;
+        case XK_ALG_AES_GCM:
+            result = aes_gcm_export_key(ctx, format, key);
+            break;
+        default:
+            /* UNREACHABLE BY CONSTRUCTION AND A GUARD RATHER THAN A GAP — the distinction CLAUDE.md draws at
+               §AND-A-CRASH-IN-THE-`default:`-ARM. `row` is bounded by the loop above, which either stops
+               inside XK_REGISTERED or leaves the arm that already returned, so the operand is enumerated by
+               THIS engine's own table and not by the standard. Nothing is owed here; it fires only if those
+               two have come apart. */
+            JS_FreeCString(ctx, format);
+            DFAILF("§14.3.10 step 6 selected registry row %d, which XkAlgorithm does not name — the lookup "
+                   "ranges over XK_REGISTERED and the dispatch over XkAlgorithm, and this row is in neither",
+                   row);
+            /* RELEASE: the row cannot be performed, which is what step 6 already answers for a name it cannot
+               resolve. Stated rather than left to whatever happened to be pending, for the reason the
+               importKey dispatch's own Otherwise gives — sc_reject settles with the LIVE exception, so an arm
+               that throws nothing settles a rejected promise carrying no reason. */
+            JS_ThrowDOMException(ctx, "NotSupportedError", "%s",
+                                 "this key's algorithm is not a registered `exportKey` algorithm");
+            return sc_reject(ctx, &s->p, presult);
+        }
         JS_FreeCString(ctx, format);
         if (JS_IsException(result))
             return sc_reject(ctx, &s->p, presult);
@@ -2530,11 +2583,15 @@ static const IdlStepDecl XK_DECL = {
  *
  * WHAT EACH SITE DOES NEXT IS THE OTHER HALF OF THAT READING AND IT IS NOT UNIFORM. One AES-GCM site
  * (helixapp's) goes straight from the key to §14.3.1's encrypt, which is built, and COMPLETES. The other three
- * call §14.3.10's exportKey on what comes back, whose registry §14.3.10 step 6 answers over is one row and
- * that row is HMAC — so they reach a "NotSupportedError" one call later. That is a REFUSAL THE STANDARD
- * DEFINES rather than a gap wearing a resolved promise, and it is strictly further than those sites got
- * before, where the member's absence was a TypeError on the call itself. §29.4.5 AES-GCM Export Key is what
- * moves them, and the exportKey machine's own comment already names it.
+ * call §14.3.10's exportKey on what comes back. THIS PARAGRAPH SAID THEY REACH A "NotSupportedError" ONE CALL
+ * LATER because that method's registry was one HMAC row, and §29.4.5 has since landed, so they now run the
+ * export. It is rewritten rather than deleted because the READING is what matters and is unchanged: which row
+ * to build was decided by asking what each call site does NEXT, not by §14.3's member list, and that question
+ * is the one a reader re-derives. The same derivation over the export side is `subtle\.exportKey`, which
+ * answers TWELVE occurrences across eight files — a LARGER population than generateKey's nine and not a subset
+ * of it, since telegram exports keys it never generates. Both formats are named there: `exportKey("raw", …)`
+ * at vscodedev and all three telegram sites, `exportKey("jwk", …)` at excalidraw, which then reads `.k` off
+ * the result — so the jwk arm's `k` sub-step is load-bearing for a real page rather than completeness.
  *
  * THE FEATURE DETECT THIS FLIPS, PRICED BEFORE IT WAS LANDED. meticulous.js — served into this corpus's
  * grafana mirror — carries `["decrypt","digest","encrypt","exportKey","generateKey","importKey","sign",

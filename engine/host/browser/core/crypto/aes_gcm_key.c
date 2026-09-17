@@ -297,3 +297,121 @@ JSValue aes_gcm_generate_key(JSContext *ctx, uint32_t length_bits, bool extracta
            "chapters agree only while the draw is exactly length/8 bytes");
     return aes_gcm_key_from_bytes(ctx, material, length_bits / 8u, extractable, usages);
 }
+
+/* §29.4.5 Export Key — THREE TOP-LEVEL STEPS, and the count is the first thing a reader needs because the
+ * section LOOKS longer than it is. Step 2 is ONE `<li>` holding a `<dl>` switch whose jwk arm holds seven
+ * sub-steps of its own, so a flat `<li>` count reads eleven or twelve and every citation drawn from it names a
+ * step this section does not have. Counted with list depth tracked: 1, 2, 3.
+ *
+ * THE SHAPE IS §31.6.5's MIRRORED, AND THE ONE STRUCTURAL DIFFERENCE IS WHERE THE OCTETS ARE NAMED. §31.6.5
+ * HOISTS them above its format dispatch ("Let bits be the raw bits…", "Let data be a byte sequence containing
+ * bits") and §29.4.5 names them INSIDE each arm — "a byte sequence containing the raw octets of the key
+ * represented by the [[handle]] internal slot of key" in the raw arm, and "the raw octets of the key
+ * represented by the [[handle]] internal slot of key" in the jwk arm's `k` sub-step. Both arms read the same
+ * [[handle]], which is why one read above the dispatch is faithful and not a hoist this chapter forbids;
+ * core/crypto/jwk.h states that diff as the reason the octets are a parameter there rather than a second
+ * reader.
+ *
+ * ITS `alg` SUB-STEP HAS THREE CLAUSES AND NO OTHERWISE, WHICH IS THE WHOLE REASON THE NULL BELOW IS A DCHECK
+ * AND NOT A THROW. §29.4.4's same-named sub-step has a FOURTH clause — "Otherwise: throw a DataError" — and
+ * that clause is the jwk import arm's entire length validation, so aes_gcm_jwk_alg_for's NULL is a page's
+ * input being unusual THERE and is this engine's own logic being wrong HERE. One leaf, two questions, and the
+ * caller answers its own chapter's: §29.4.3 step 2 ("If the length member of normalizedAlgorithm is not equal
+ * to one of 128, 192 or 256, then throw an OperationError") and §29.4.4 step 2's two arms are the only writers
+ * of an AES-GCM key's material, and all of them admit exactly the three lengths these clauses cover. A key
+ * outside them is one this codebase minted wrong, which is what a DCHECK asserts.
+ *
+ * AND THE SELECTOR IS THE HANDLE'S BYTE COUNT WHERE THE STANDARD SAYS "the length attribute of key", WHICH IS
+ * ASSERTED RATHER THAN LEFT TO A READER TO NOTICE. The two are the same number by construction — §29.4.4 step
+ * 7 sets `length` from the bit length of `data` and §29.4.3 step 8 sets it from the length step 3 generated —
+ * but "by construction" is a claim about two OTHER chapters, and this one would answer a wrong `alg` in
+ * silence if either came apart. The byte count is what indexes, for aes_gcm_jwk_alg_for's own stated reason
+ * (a `uint32_t` bit length overflows above 512MB), and the slot's `length` is read beside it purely so the
+ * equality can fire. */
+JSValue aes_gcm_export_key(JSContext *ctx, const char *format, JSValueConst key)
+{
+    JSValue handle = crypto_key_handle(ctx, key);
+    uint32_t len = 0;
+    const uint8_t *bits;
+    JSValue result;
+
+    DCHECK(format != NULL, "§29.4.5 step 2's format dispatch was asked with no format");
+
+    /* STEP 1: "If the underlying cryptographic key material represented by the [[handle]] internal slot of key
+       cannot be accessed, then throw an OperationError."
+       IT IS A DCHECK AND NOT THAT THROW, for the reason §31.6.5's own step 1 is one in core/crypto/hmac.c:
+       §13.3's [[handle]] is an ArrayBuffer THIS ENGINE minted into an own slot that is never handed out, and
+       the one operation that reads it back is this one, gated on §14.3.10 step 7. The only route to an
+       unreadable handle is a key this codebase built wrong. A page that could detach the material would make
+       this a real OperationError, and nothing in this engine can produce one. */
+    bits = JS_GetBufferBytes(handle, &len);
+    DCHECK(bits != NULL || len == 0,
+           "an AES-GCM key's [[handle]] could not be read — §13.3's slot holds an ArrayBuffer this engine "
+           "minted and never hands out, so a detached one is a key built somewhere other than crypto_key_new");
+
+    /* STEP 2's DISPATCH. The three arms are the standard's own, in its own order. */
+    if (strcmp(format, "raw") == 0) {
+        /* THE RAW ARM, BOTH SUB-STEPS: "Let data be a byte sequence containing the raw octets of the key
+           represented by the [[handle]] internal slot of key" and "Let result be data". §14.3.10 step 10's
+           otherwise arm then creates the ArrayBuffer, which for this engine is the carrier the byte sequence
+           already travels in — the same identity core/crypto/hmac.h argues for §31.6.5's raw arm. */
+        result = JS_NewArrayBufferCopy(ctx, bits ? bits : (const uint8_t *)"", len);
+        CHECK(!JS_IsException(result), "§14.3.10 step 10's ArrayBuffer for an exported AES-GCM key could not "
+                                       "be allocated");
+    } else if (strcmp(format, "jwk") == 0) {
+        /* THE JWK ARM, ALL SEVEN SUB-STEPS. Six of them — the dictionary, `kty`, `k`, `key_ops`, `ext` and
+           "Let result be jwk" — are what §31.6.5's arm states word for word, so they are core/crypto/jwk.c's
+           one run; jwk.h carries the measured diff of the two chapters. The `alg` sub-step is this chapter's
+           alone and is the argument. */
+        const char *alg = aes_gcm_jwk_alg_for(len);
+
+        /* THE TWO-SIDED ASSERT THE BANNER ARGUES FOR: §27.4's `length` and the [[handle]]'s octets are two
+           independent statements of one fact, written by two different chapters, and this is the one place
+           both are in hand. It is not the dispatch's guard — the dispatch reads the byte count either way —
+           it is what stops a disagreement between them being spent as a silently wrong `alg`.
+           THE READ IS INSIDE `#if APICLIENT_DEV` AND NOT MERELY THE COMPARISON, because a DCHECK is only
+           "always safe to ship" while its OPERANDS cost nothing either: `((void)sizeof(cond))` drops the
+           comparison in release and would leave a property read, a coercion and two frees running on every
+           jwk export to feed an assert that is no longer there. */
+#if APICLIENT_DEV
+        {
+            JSValue algorithm = crypto_key_algorithm(ctx, key);
+            JSValue slot_len;
+            uint32_t attr_bits = 0;
+
+            DCHECK(JS_IsObject(algorithm),
+                   "§29.4.5's jwk arm read a key whose [[algorithm]] slot is not a dictionary — §13.3 declares "
+                   "the slot on every key and crypto_key_new is its only writer");
+            slot_len = JS_GetPropertyStr(ctx, algorithm, "length");
+            JS_FreeValue(ctx, algorithm);
+            if (JS_ToUint32(ctx, &attr_bits, slot_len) < 0)
+                attr_bits = 0;
+            JS_FreeValue(ctx, slot_len);
+            DCHECK(attr_bits == len * 8u,
+                   "§27.4's `length` and §13.3's [[handle]] disagree about an AES-GCM key's size — §29.4.5's "
+                   "`alg` sub-step selects on the length attribute and this engine indexes on the handle's "
+                   "octets, and the two agree only while §29.4.3 step 8 and §29.4.4 step 7 write what was "
+                   "drawn");
+        }
+#endif
+        DCHECK(alg != NULL,
+               "§29.4.5's `alg` sub-step has three clauses and NO Otherwise, and this key's length matched "
+               "none of them — §29.4.3 step 2 and §29.4.4 step 2's two arms are the only writers of an "
+               "AES-GCM key's material and every one of them admits exactly 128, 192 and 256 bits");
+        result = jwk_oct_export(ctx, bits, len, alg, crypto_key_usages(ctx, key),
+                                crypto_key_extractable(ctx, key));
+    } else {
+        /* STEP 2's "Otherwise: throw a NotSupportedError." REACHED BY "spki" AND "pkcs8" AND BY NOTHING ELSE:
+           §14.1's KeyFormat has four values and the argument position is declared IDL_ENUM, so Web IDL
+           §3.2.18 refused every other string before §14.3.10 step 1 ran. They are a page's own input and this
+           is the refusal the standard names for them, never an assert — an AES-GCM key is a "secret" key and
+           neither of those two formats carries one. */
+        JS_ThrowDOMException(ctx, "NotSupportedError",
+                             "an AES-GCM key cannot be exported as \"%s\" — §29.4.5 Export Key defines the "
+                             "\"raw\" and \"jwk\" formats and no other", format);
+        result = JS_EXCEPTION;
+    }
+    JS_FreeValue(ctx, handle);
+    /* STEP 3: "Return result." */
+    return result;
+}
