@@ -17877,20 +17877,29 @@ static void xml_document_selftest(void)
  * answer in — Namespaces in XML 1.0 3e §6 "Applying Namespaces to Elements and Attributes" applied at the
  * depth an element stands at, and §6.3 "Uniqueness of Attributes" over a whole tag's EXPANDED names.
  *
- * THOSE TWO NUMBERS ARE NAMESPACES IN XML'S AND THE CITATION AUDITOR MAY REPORT THEM AS CSSOM VIEW'S — DO NOT
- * "REPAIR" THEM. Both were verified against `https://www.w3.org/TR/xml-names/` itself: §6 is "Applying
- * Namespaces to Elements and Attributes" and §6.3 is "Uniqueness of Attributes", verbatim. What produces the
- * finding is that `engine/citegen.mjs`'s foreign list holds `namespaces in xml` and `namespaces-in-xml-1-0`
- * while this line writes the EDITION too — `Namespaces in XML 1.0 3e` — and anchorTokens matches TAILS, so
- * five tokens never reach a four-token entry and the number falls to this file's standard vote. MEASURED by
- * isolation at c3a27509: this file carries THREE `CSSOM VIEW §6` citations and the vote is one short of
- * flipping, so appending a single further one anywhere in these 21,000 lines moves this site from the
- * never-accused band into a QUOTE-NOT-FOUND against a standard it never named — base 1 report line, base plus
- * one `CSSOM VIEW §6` line 2, and removing that one anchor again 1. It is therefore ANY lane's to trip and
- * nobody's to have caused. THE ROOT FIX IS ONE FOREIGN-LIST ENTRY holding the spelling this tree writes, which
- * is the third measured instance of the shape CLAUDE.md names — an entry whose token count is lower than the
- * token count the tree writes for that standard is an entry protecting nothing.
- * RETIREMENT: this note goes when that list holds the editioned spelling, which is the day the finding stops.
+ * THOSE TWO NUMBERS ARE NAMESPACES IN XML'S — DO NOT "REPAIR" THEM. Both were verified against
+ * `https://www.w3.org/TR/xml-names/` itself: §6 is "Applying Namespaces to Elements and Attributes" and §6.3
+ * is "Uniqueness of Attributes", verbatim. That is the durable half of this note and it stays.
+ * THE OTHER HALF WAS A DIAGNOSIS, IT WAS WRONG, AND IT IS REWRITTEN RATHER THAN DELETED BECAUSE A READER WHO
+ * RE-DERIVES IT WILL PROPOSE IT AGAIN. It said the auditor reported these as CSSOM VIEW's because that tool's
+ * foreign list holds `namespaces in xml` and `namespaces-in-xml-1-0` while this line writes the EDITION too,
+ * so `five tokens never reach a four-token entry` — and that THE ROOT FIX WAS ONE FOREIGN-LIST ROW holding the
+ * editioned spelling. NO SUCH ROW COULD EVER HAVE FIRED. classifyAnchor only ever tests strings anchorTokens
+ * EMITTED; anchorTokens reads at most THREE whitespace-separated words and cannot read a dotted version as a
+ * word at all, so this line emitted exactly the two characters of its edition and `XML 1.0 (Fifth Edition)`
+ * emitted nothing whatever. A row naming the standard is a row with NO READER — the `mixed` failure that
+ * tool's own list already records twice. The fix was in the TOKENIZER, where an edition is now trimmed like a
+ * level, and this site anchors by its own name; see `EDITION_SUFFIX` in engine/citegen.mjs for the armed
+ * control that separates the two claims.
+ * WHAT THE OLD NOTE GOT RIGHT IS WORTH KEEPING AND IS WHY THE TOKENIZER WAS THE RIGHT PLACE. The finding was
+ * ANY lane's to trip and nobody's to have caused: measured by isolation at c3a27509, this file carried THREE
+ * `CSSOM VIEW §6` citations and the vote stood one short of flipping, so appending a single further
+ * `CSSOM VIEW §6` anywhere in these 21,000 lines moved this site into a QUOTE-NOT-FOUND against a standard it
+ * never named. A citation that resolves by its OWN NAME cannot be moved by a neighbour; a quieter vote would
+ * only have postponed it.
+ * RETIREMENT: this note goes when Namespaces in XML has a committed index, because the two numbers above are
+ * then asserted by every run instead of by a fetch nobody here can re-run — a foreign row is a refusal and an
+ * index row is an answer, which is that list's own stated rule for retiring one.
  *
  * THE §6.3 ROWS ARE THE STANDARD'S OWN WORKED EXAMPLES, copied from §6.3's text rather than invented, and they
  * are a PAIR ON PURPOSE. `<bad n1:a n2:a/>` with both prefixes bound to one namespace name is ILLEGAL, and

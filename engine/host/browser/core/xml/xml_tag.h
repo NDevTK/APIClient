@@ -87,12 +87,19 @@
  * [WFC: Unique Att Spec] IS BY THE LITERAL Name, WHICH IS NOT THE WHOLE OF UNIQUENESS AND IS THE WHOLE OF THIS
  * SECTION'S. XML §3.1 "Start-Tags, End-Tags, and Empty-Element Tags" says "An attribute name MUST NOT appear
  * more than once in the same start-tag or empty-element tag", and a Name is a byte run, so a byte comparison
- * decides it exactly. Namespaces in XML 1.0
- * (Third Edition) §6.3 Uniqueness of Attributes adds a SECOND sentence — "Namespace constraint: Attributes
- * Unique" also forbids two attributes "with qualified names with the same local part and with prefixes which
- * have been bound to namespace names that are identical" — and that one cannot be answered here at all,
- * because binding a prefix needs the scope core/xml/xml_ns.h holds and the declarations are attributes of THIS
- * tag, so they are not in scope until the tag is finished. It belongs to whoever pushes the scope.
+ * decides it exactly. Namespaces in XML 1.0 (Third Edition) §6.3 Uniqueness of Attributes adds a SECOND
+ * sentence — "Namespace constraint: Attributes Unique" also forbids two attributes "with qualified names
+ * with the same local part and with prefixes which have been bound to namespace names that are identical"
+ * — and that one cannot be answered here at all, because binding a prefix needs the scope core/xml/xml_ns.h
+ * holds and the declarations are attributes of THIS tag, so they are not in scope until the tag is finished.
+ * It belongs to whoever pushes the scope.
+ * THAT STANDARD'S WHOLE NAME STANDS ON THE LINE ITS SECTION SIGN IS ON, AND MUST — it used to be wrapped one
+ * word early and the wrap was the defect. engine/citegen.mjs reads a FIXED COUNT OF CHARACTERS back from the
+ * sign, so a wrap inside the name delivers its first word as a FRAGMENT; the level join then cannot build the
+ * long base, falls through to the shorter one this name CONTAINS, and the citation is judged against XML 1.0,
+ * which has no such subsection. Measured: the site was silent before the edition trim landed and became an
+ * accusation against a correct citation the moment it resolved at all. RETIREMENT: this note goes when that
+ * fall-through is refused for a truncated window, which is the residual recorded at EDITION_SUFFIX there.
  *
  * EVERY ERROR IS FATAL AND IS RETURNED RATHER THAN ASSERTED, AND A FAILED SCAN CONSUMES NOTHING — for
  * core/xml/xml_markup.h's reasons, which are that a malformed document is a page's INPUT and that the position

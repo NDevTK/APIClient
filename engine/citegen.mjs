@@ -2731,6 +2731,48 @@ const LEVELLED = /^[a-z]+(-[a-z0-9]+)*-[0-9]+$/;
 const MODULE_BEFORE_LEVEL = /[ \t]+Module(?=[ \t]+Level[ \t]+[0-9]+(?:\.[0-9]+)*$)/i;
 const MODULE_BEFORE_VERSION = /[ \t]+Module(?=[ \t]+[0-9]+(?:\.[0-9]+)*$)/i;
 
+/* AN EDITION IS AN EDITION SUFFIX EXACTLY AS `Level N` IS, AND IT IS TRIMMED FOR THE SAME REASON — BUT WHY IT
+   NEEDED A PATTERN RATHER THAN A LIST ROW IS THE PART WORTH KEEPING, BECAUSE THIS TREE ASKED IN WRITING FOR
+   THE LIST ROW AND NO LIST ROW COULD EVER HAVE FIRED. The two spellings are `XML 1.0 (Fifth Edition)` and
+   `Namespaces in XML 1.0 3e`, and a note at one of those sites said the root fix was ONE OTHER_SPECS row
+   holding the editioned spelling. It is not, and the refutation is structural rather than a matter of degree:
+   classifyAnchor only ever tests strings anchorTokens EMITTED, the tail regex below reads AT MOST THREE
+   whitespace-separated words, and a dotted version is not a word it can read. So the first spelling emits
+   NOTHING AT ALL — a tail ending on a close parenthesis cannot end that regex and carries no trailing digits
+   for the join either — and the second emits exactly the two characters of its edition and nothing else.
+   MEASURED WITH AN ARMED CONTROL, which is the half that makes it a result and not an argument: with every
+   spelling of the proposed row appended to OTHER_SPECS — the spaced editioned name, its hyphenated form, the
+   parenthesised form and both shorter tails — all four PROBED SPELLINGS still classify NULL, and with the
+   bare edition token appended the abbreviated spellings classify as that token. The probe speaks; no
+   NAMEABLE row reaches them.
+   Such a row would have been the `mixed` and `directory entries api` failure this file already records twice:
+   a row present, a reader satisfied, and no citation ever matching it.
+   IT CANNOT TAKE A RESOLUTION AWAY, which is the price a widening here is always owed, and both arms answer
+   that by construction rather than by measurement. A tail ending on a close parenthesis classifies NULL TODAY
+   at every site, always, so the parenthesised arm can only ADD. A tail ending on a digit and `e` emits that
+   token plus at most two letter-initial words before it, and the only way such a token classifies today is a
+   list row ending the same way or a LEVELLED match — LEVELLED requires a trailing DIGIT, and of the 218 rows
+   on the two lists NONE ends in a digit and `e`, none contains a parenthesis and none holds more than three
+   words. Read off the lists rather than reasoned from them.
+   AND IT IS CASE-INSENSITIVE FOR THE REASON THE FOUR SHAPE PATTERNS ABOVE ARE: this codebase writes a banner
+   in CAPITALS, so an arm enumerating one casing of `Edition` would miss the spelling a banner uses.
+   NAMED RESIDUAL — WHAT THIS DOES NOT COVER. Trimming an edition EXPOSES a hazard that was always in
+   joinLevel and had nothing reaching it: the anchor window is a FIXED COUNT OF CHARACTERS read back from the
+   section sign, so where a multi-word standard's name begins BEFORE that window starts, its first word
+   arrives as a FRAGMENT. joinLevel then cannot build the long base and falls through to a SHORTER one, and
+   where that shorter base is an indexed anchor the citation is resolved to a standard whose name the longer
+   one merely CONTAINS. WHAT THE NEXT DIFF MUST MAKE TRUE: a base shorter than the longest the window offered
+   may not be joined where the window's first word MAY BE a fragment — which anchorTokens cannot decide by
+   itself, because whether the window was truncated is a fact only its CALLER holds. HOW ITS ABSENCE WOULD
+   SHOW: a citation of a standard whose name contains an indexed standard's anchor, standing far enough into
+   a line that the window cuts its first word, is reported at a section the CONTAINED standard does not have
+   — an accusation against a correct citation, which is the one direction this audit must not fail in. It was
+   measured while this pattern was being landed and repaired AT THE SITE, by moving the name onto the line
+   its section sign is on; that repair is per-site and this residual is the general one.
+   RETIREMENT: this record goes when no site in this tree writes an edition in front of a section sign, which
+   is the day the pattern has no reader. */
+const EDITION_SUFFIX = /(?:[ \t]*\([^()]{0,30}Edition\)|[ \t]+[0-9]+e)$/i;
+
 /* HOW FAR BACK A CITATION IS READ FOR ITS STANDARD'S NAME, DECLARED ONCE BECAUSE THREE THINGS NOW DEPEND ON
    IT and a bound restated at each of them is the second copy that drifts. The scan uses it; the sibling test
    below asks whether another standard was NAMED inside the same span; and the truncation marker asks what a
@@ -2756,7 +2798,11 @@ function anchorTokens(before) {
    * needs an anchor — whether the standard HAS the number. A spelled-out level is the same fact as the
    * levelled shortname LEVELLED already reads out of `css-syntax-3`, so it is trimmed for the same reason
    * `Standard` is: the words after the name say which document, and the name is what decides which index. */
-  const trimmed = flat.replace(/[\s'"’(\[]+$/, "");
+  /* AND THE EDITION COMES OFF BEFORE EITHER READER BELOW, because the join and the tail both read the END of
+   * this string: an edition left on makes a name end on a close parenthesis, which the tail regex cannot end
+   * on and the join cannot find a version in, so the citation arrives with NO ANCHOR AT ALL and its file's
+   * vote answers for it. See EDITION_SUFFIX for why a foreign-list row cannot reach those sites. */
+  const trimmed = flat.replace(/[\s'"’(\[]+$/, "").replace(EDITION_SUFFIX, "");
   /* AND `Module` IS THE SAME WORD AS `Standard`, WHICH IS NOT A GUESS ABOUT WHAT READS WELL — IT IS WHAT THE
    * SHORTNAME SAYS. The CSS WG publishes `CSS Nesting Module Level 1` at `css-nesting-1` and `CSS Color
    * Module Level 4` at `css-color-4`: the word is in the TITLE and in no shortname, so a citation that writes
