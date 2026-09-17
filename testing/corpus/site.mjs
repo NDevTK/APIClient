@@ -468,6 +468,44 @@ const row = {
   sinkReached: counted.length ? counted[counted.length - 1].sinkReached : null,
   sinkTainted: counted.length ? counted[counted.length - 1].sinkTainted : null,
   sinkSuppressed: counted.length ? counted[counted.length - 1].sinkSuppressed : null,
+  /* THE ABSENT-GLOBAL CENSUS, WHICH IS THE ONLY THING THAT SEPARATES "THIS PAGE HAD NOTHING BEHIND THAT
+     GUARD" FROM "WE COULD NOT LOOK" — the same defect as the five fields above, one rung further out.
+     §NO-STUBS: a page writes `if (window.X)`, this engine does not have `X`, the read is CORRECTLY decided
+     false, the fallback branch runs, and every endpoint and sink behind the true branch is unreachable with
+     nothing anywhere saying so. That is the one absence this project's forcing function cannot surface,
+     because nothing throws — so it needs an instrument rather than a crash. `solver/absent.c` has been
+     counting it and `bridge.js` has been relaying it onto every run record; measured before this diff, ZERO
+     of the 85 committed censuses carried it, so the row that RANKS the corpus was once again the consumer
+     that never asked.
+     BOTH NUMBERS OR NEITHER, because the FRACTION is the whole point and a numerator alone reproduces the
+     ambiguity this row exists to remove: `absentOwed: 0` against `absentAsked > 0` is the positive statement
+     that this engine answered every name the standards were asked for, and `absentOwed: 0` against
+     `absentAsked: 0` is a census that was never reached. Opposite findings, one digit.
+     A MISSING KEY IS FATAL RATHER THAN NULL. `null` means the question was not asked — no counted run, or an
+     artifact too old to publish the census. A census that IS present and does not carry these rows is a
+     RENAMED KEY in absent.c, and defaulting that to 0 would report a clean engine for as long as the drift
+     stood. The keys are matched by a distinctive SUBSTRING and the match is asserted to be exactly one, so a
+     rename is loud and a punctuation edit is survivable; a hand-copied full key would go quietly to null.
+     RETIREMENT: this record goes when this file derives its census key names from absent_json()'s own
+     composer rather than matching copies of them. */
+  ...(() => {
+    const pick = (a, needle) => {
+      const hits = Object.keys(a).filter((k) => k.includes(needle));
+      if (hits.length !== 1) return { err: hits.length + ' keys of the `absent` census contain ' +
+        JSON.stringify(needle) + ' — solver/absent.c renamed or duplicated a composer row and this file ' +
+        'matches a copy of it; re-derive from absent_json() rather than defaulting to 0' };
+      if (typeof a[hits[0]] !== 'number') return { err: 'the `absent` census states ' +
+        JSON.stringify(hits[0]) + ' as a non-number' };
+      return { v: a[hits[0]] };
+    };
+    if (!counted.length) return { absentAsked: null, absentOwed: null };
+    const a = counted[counted.length - 1].absent;
+    if (a === undefined || a === null) return { absentAsked: null, absentOwed: null };
+    const asked = pick(a, 'reads of the global object');
+    const owed = pick(a, 'a standard owns it');
+    if (asked.err || owed.err) return { absentFatal: asked.err || owed.err };
+    return { absentAsked: asked.v, absentOwed: owed.v };
+  })(),
   /* THE ORPHAN SURFACE, WHICH IS THE HEADLINE ONE AND HAD NO COLUMN. §What-the-tool-produces is "what the
      bundle CAN do but didn't", and until the engine's own pair crossed the result document, whether a session
      ever drove a function the page never called could only be read off a stdout the renderer does not tee.
