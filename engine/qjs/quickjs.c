@@ -96891,6 +96891,546 @@ static const char *const js_str_sup_steps[] = {
         "B.2.2.14 step 2, CreateHTML steps 3-8 (<sup> around contentsString)")
     NULL };
 
+/* ============ ECMA-402 §6.2.1 IsWellFormedLanguageTag, and the ECMA-402 §15.5 operations it reads ===========
+   THIS IS THE FIRST HOP OF THE LOCALE LAYER THE `locales` ARGUMENT STAGE BELOW CRASHES FOR, AND ITS BOUNDARY
+   IS NOT A CONVENIENCE — IT IS WHERE THE ALGORITHM STOPS NEEDING DATA. Everything here is a predicate over
+   ASCII bytes and a grammar printed in one table of UTS #35 Part 1 Core; the very next operation ECMA-402
+   §9.2.1 calls, ECMA-402 §6.2.2 CanonicalizeUnicodeLocaleId, cannot be written at all without CLDR's alias
+   table, because its step 1 is UTS #35 Part 1 Core Annex C LocaleId Canonicalization. So the two are split
+   HERE rather than at some point chosen for size, and the split is checkable: this block reads no table.
+
+   WHY IT LIVES IN quickjs.c RATHER THAN UNDER engine/host, WHICH IS A DECISION AND NOT AN ACCIDENT.
+   `engine/build.mjs` compiles the fork's four translation units and every browser and solver source into ONE
+   program with ONE include set (`ENGINE_INCLUDE_ROOTS` = qjs, host, host/browser, lexbor), so a host header
+   CAN be included here and a host function CAN be called from here. Nothing in the build stops it. What stops
+   it is that the dependency has never gone this way: every `#include` in this file names a fork-local header,
+   `engine/host` has many files including "quickjs.h" and `engine/qjs` has none including a host header, and
+   `quickjs-check.h` exists as a MIRROR of `engine/host/check.h` for exactly that reason. Putting an operation
+   this file must call under `engine/host` would make the fork depend on the host — a LARGER delta, not a
+   smaller one — and would falsify the mirror's own argument. The alternative, a new `.c` beside this one, is
+   worse for a different reason: `engine/citegen.mjs`'s `walk()` skips the whole `qjs` directory and
+   `defaultTargets()` re-adds exactly `qjs/quickjs.c` and `qjs/quickjs.h` BY NAME, so a new file here would be
+   permanently unaudited and every citation in this banner would be read by nothing. quickjs.c is the one
+   place that is both callable and audited, and ECMA-402 is this engine's own standard rather than the
+   browser's. RETIREMENT: this paragraph goes when the fork declares a supported direction for that dependency
+   — either a hook table entry the host installs, the way JSFlowControlHooks and JSTimeTravelHooks already do,
+   or a stated licence to include host headers — at which point the choice is made by that declaration
+   instead of by this comment.
+
+   THE GRAMMAR, QUOTED FROM THE TABLES IN UTS #35 Part 1 Core "Unicode Language and Locale Identifiers":
+     unicode_language_id = "root" | (unicode_language_subtag (sep unicode_script_subtag)?
+                                     | unicode_script_subtag) (sep unicode_region_subtag)?
+                                    (sep unicode_variant_subtag)* ;
+     unicode_language_subtag = alpha{2,3} | alpha{5,8};   unicode_script_subtag = alpha{4} ;
+     unicode_region_subtag   = (alpha{2} | digit{3}) ;
+     unicode_variant_subtag  = (alphanum{5,8}| digit alphanum{3}) ;
+     unicode_locale_id = unicode_language_id  extensions*  pu_extensions? ;
+     extensions = unicode_locale_extensions| transformed_extensions | other_extensions ;
+     unicode_locale_extensions = sep [uU]  ((sep keyword)+  |(sep uattribute)+ (sep ufield)*) ;
+     transformed_extensions = sep [tT]  ((sep tlang (sep tfield)*)  | (sep tfield)+) ;
+     pu_extensions = sep [xX]  (sep alphanum{1,8})+ ;
+     other_extensions = sep [alphanum-[tTuUxX]]  (sep alphanum{2,8})+ ;
+     ufield = ukey (sep uvalue)? ;   ukey = alphanum alpha ;   uvalue = alphanum{3,8} (sep alphanum{3,8})* ;
+     uattribute = alphanum{3,8} ;
+     tlang = unicode_language_subtag (sep unicode_script_subtag)? (sep unicode_region_subtag)?
+             (sep unicode_variant_subtag)* ;
+     tfield = tkey tvalue;   tkey = alpha digit ;   tvalue = alphanum{3,8}  (sep alphanum{3,8})+ ;
+     sep = [-_] ;  digit = [0-9] ;  alpha = [A-Z a-z] ;  alphanum = [0-9 A-Z a-z] ;
+
+   TWO OF THOSE LINES ARE NOT IMPLEMENTED AS PRINTED, AND THE REASON IS THAT AS PRINTED THEY MATCH NOTHING AT
+   ALL — which is a stronger ground than preferring one reading to another. `tfield = tkey tvalue` puts no
+   `sep` between the two, and `tkey` is exactly two characters while `tvalue` begins with `alphanum{3,8}`; a
+   `tkey` abutting a `tvalue` with no separator is a single run of five or more alphanumerics, and no
+   production admits one in that position. So the literal reading makes `transformed_extensions` UNMATCHABLE,
+   and with it every `-t-` tag that has ever been written. The document's own examples settle what was meant,
+   and they are not one or two: `af-t-k0-android`, `ja-t-k0-chromeos`, `en-t-hi-h0-hybrid`,
+   `hi-t-en-h0-hybrid`, `en-Deva-t-hi-h0-hybrid`, `hi-Latn-t-en-h0-hybrid`, `ja-Kana-JP-t-it-latn-it`,
+   `en-t-zh-hant`, `en-t-xxx-u-yyy` and `en-u-yyy-t-xxx` all appear in UTS #35 Part 1 Core. Each is a `tkey`
+   followed by a separator and its value subtags, and `k0-android` carries exactly ONE value subtag where
+   `tvalue`'s printed `(sep alphanum{3,8})+` demands two — while the sibling `uvalue` one row up is printed
+   with a `*`. So this implements `tfield` as `tkey (sep alphanum{3,8})+`, which is the only reading under
+   which the ten examples are well-formed. HOW A WRONG CHOICE HERE WOULD SHOW: `"x".toLocaleLowerCase("en-t-hi-h0-hybrid")`
+   throwing a RangeError, where a browser returns a string.
+
+   AND THE WELL-FORMEDNESS CONSTRAINTS PRINTED UNDER THAT TABLE ARE DELIBERATELY NOT ENFORCED HERE, WHICH IS
+   NOT AN OMISSION BUT WHAT ECMA-402 §6.2.1's OWN SHAPE REQUIRES. Its step 2 asks whether lowerLocale "can be
+   matched by the unicode_locale_id Unicode locale nonterminal" — the NONTERMINAL, which is the EBNF — and
+   then its steps 6.a and 11.a go on to check for duplicate variant subtags and duplicate singleton subtags
+   BY HAND. Those two are among the constraints printed beside the grammar, so a matcher that enforced them
+   would make ECMA-402 §6.2.1's own steps dead code, and a reader would then be unable to tell which of the
+   two places decides. One constraint is therefore enforced by the caller and one by this matcher only where
+   the EBNF itself carries it: `extensions* pu_extensions?` is why a `-x-` sequence must come last, and that
+   IS in the grammar. The constraint that "there cannot be more than one ukey or tkey" is enforced NOWHERE,
+   by neither this matcher nor ECMA-402 §6.2.1, so `en-u-ca-buddhist-ca-islamic` is well-formed as far as this
+   engine's answer to that question goes — which is what the algorithm says, and is a fact about ECMA-402
+   rather than about this file.  =========================================================================== */
+
+/* THE ALPHABET. The buffer these read is ASCII-lowercased by ECMA-402 §6.2.1 step 1 before anything else
+   looks at it, so `A`-`Z` cannot occur — but the range stays in the predicate rather than being dropped,
+   because these are the UTS #35 character classes and a class narrowed to what one caller happens to pass is
+   a class that means something different from the one it is named after. */
+static bool js_loc_is_alpha(int c)  { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); }
+static bool js_loc_is_digit(int c)  { return c >= '0' && c <= '9'; }
+static bool js_loc_is_alnum(int c)  { return js_loc_is_alpha(c) || js_loc_is_digit(c); }
+static bool js_loc_is_sep(int c)    { return c == '-' || c == '_'; }
+
+static bool js_loc_all_alpha(const char *s, int i, int n)
+{ while (n-- > 0) if (!js_loc_is_alpha((unsigned char)s[i++])) return false; return true; }
+static bool js_loc_all_digit(const char *s, int i, int n)
+{ while (n-- > 0) if (!js_loc_is_digit((unsigned char)s[i++])) return false; return true; }
+static bool js_loc_all_alnum(const char *s, int i, int n)
+{ while (n-- > 0) if (!js_loc_is_alnum((unsigned char)s[i++])) return false; return true; }
+
+/* EVERY PRODUCTION IN THAT TABLE REQUIRES A NON-EMPTY SUBTAG, so a leading separator, a trailing separator or
+   two in a row cannot be matched by any of them. Rejecting all three up front is not an optimisation: it is
+   what lets every cursor below take "the subtag at `i` has length >= 1" for granted, and in particular what
+   makes `i - 1` the end of the region a matcher consumed. Without it `"en-"` would run the cursor to `len`
+   with a zero-length subtag nobody ever examined and be accepted. */
+static bool js_loc_no_empty_subtag(const char *s, int len)
+{
+    int i;
+    if (len == 0) return false;
+    if (js_loc_is_sep((unsigned char)s[0]) || js_loc_is_sep((unsigned char)s[len - 1])) return false;
+    for (i = 1; i < len; i++)
+        if (js_loc_is_sep((unsigned char)s[i]) && js_loc_is_sep((unsigned char)s[i - 1])) return false;
+    return true;
+}
+
+/* THE ONE CURSOR CONVENTION, STATED ONCE BECAUSE EVERY MATCHER BELOW SHARES IT. A cursor is the index at
+   which the NEXT UNCONSUMED SUBTAG STARTS, and it equals `len` when there is nothing left — never the index
+   of a separator. `*pnext` is that cursor for the subtag beginning at `i`, and the return is that subtag's
+   length. A matcher returns the new cursor, or -1 for no match; the END of what it consumed is `len` when
+   the cursor reached the end and `cursor - 1` otherwise, which is exact precisely because the check above
+   has already refused a doubled separator. */
+static int js_loc_subtag(const char *s, int len, int i, int *pnext)
+{
+    int j = i;
+    while (j < len && !js_loc_is_sep((unsigned char)s[j])) j++;
+    *pnext = (j < len) ? j + 1 : len;
+    return j - i;
+}
+static int js_loc_consumed_end(int len, int cursor) { return cursor >= len ? len : cursor - 1; }
+
+static bool js_loc_is_language_subtag(const char *s, int i, int n)
+{ return (n == 2 || n == 3 || (n >= 5 && n <= 8)) && js_loc_all_alpha(s, i, n); }
+static bool js_loc_is_script_subtag(const char *s, int i, int n)
+{ return n == 4 && js_loc_all_alpha(s, i, n); }
+static bool js_loc_is_region_subtag(const char *s, int i, int n)
+{ return (n == 2 && js_loc_all_alpha(s, i, n)) || (n == 3 && js_loc_all_digit(s, i, n)); }
+static bool js_loc_is_variant_subtag(const char *s, int i, int n)
+{ return (n >= 5 && n <= 8 && js_loc_all_alnum(s, i, n)) ||
+         (n == 4 && js_loc_is_digit((unsigned char)s[i]) && js_loc_all_alnum(s, i, n)); }
+
+/* `unicode_language_id`, and `tlang` when `allow_script_first` is false — ONE function because the two
+   productions differ in exactly that clause: `tlang` is spelled `unicode_language_subtag (sep
+   unicode_script_subtag)? (sep unicode_region_subtag)? (sep unicode_variant_subtag)*`, which is
+   `unicode_language_id`'s second alternative with the bare-script opening removed. Two copies of one
+   production is the shape that drifts.
+   GREEDY WITH NO BACKTRACKING, AND THAT IS A PROPERTY OF THE GRAMMAR RATHER THAN AN ASSUMPTION. At every
+   choice point the candidate productions are disjoint on the SHAPE of one subtag: a script is four alphas, a
+   region is two alphas or three digits, a variant is five-to-eight alphanumerics or four beginning with a
+   digit, and a language subtag is two, three, or five-to-eight alphas. The only length two productions share
+   is four, where script is all-alpha and variant is digit-first. So no subtag can be taken by two of them and
+   there is nothing a longer match could be traded for.
+   The `"root"` alternative of `unicode_language_id` needs no arm of its own: `root` is four alphas, so the
+   second alternative already matches it as a bare `unicode_script_subtag`, and does so with the region and
+   variant suffixes the `"root"` arm has none of — which is the LONGER match, and length is what the one
+   caller that cares (ECMA-402 §15.5.1) asks for. ECMA-402 §6.2.1 step 3 is where a leading `root` is
+   refused, and it refuses it by name. */
+static int js_loc_match_language_id(const char *s, int len, int i, bool allow_script_first)
+{
+    int n, next;
+    if (i >= len) return -1;
+    n = js_loc_subtag(s, len, i, &next);
+    if (js_loc_is_language_subtag(s, i, n)) {
+        i = next;
+        if (i < len) {
+            n = js_loc_subtag(s, len, i, &next);
+            if (js_loc_is_script_subtag(s, i, n)) i = next;
+        }
+    } else if (allow_script_first && js_loc_is_script_subtag(s, i, n)) {
+        i = next;
+    } else {
+        return -1;
+    }
+    if (i < len) {
+        n = js_loc_subtag(s, len, i, &next);
+        if (js_loc_is_region_subtag(s, i, n)) i = next;
+    }
+    for (;;) {
+        if (i >= len) break;
+        n = js_loc_subtag(s, len, i, &next);
+        if (!js_loc_is_variant_subtag(s, i, n)) break;
+        i = next;
+    }
+    return i;
+}
+
+/* ONE `extensions` ALTERNATIVE, entered with `i` at the SINGLETON subtag. `pu_extensions` is deliberately not
+   one of the arms: `unicode_locale_id` is `unicode_language_id extensions* pu_extensions?`, so a private-use
+   sequence is not an extension that happens to come last, it is a separate trailing production — which is
+   exactly what makes "the private use extension must come after all other extensions" a rule the EBNF itself
+   carries rather than one a caller has to check. Returning -1 for `x` is therefore the grammar, not a guard. */
+static int js_loc_match_extension(const char *s, int len, int i)
+{
+    int n, next, c, count;
+    n = js_loc_subtag(s, len, i, &next);
+    if (n != 1 || !js_loc_is_alnum((unsigned char)s[i])) return -1;
+    c = (unsigned char)s[i];
+    i = next;
+    if (c == 'x' || c == 'X') return -1;
+    if (c == 'u' || c == 'U') {
+        /* `(sep keyword)+ | (sep uattribute)+ (sep ufield)*`, where the table's own parenthetical says a
+           `keyword` IS a `ufield`. Both alternatives are therefore a run of subtags each of which is a
+           `ukey` (`alphanum alpha`, so exactly two characters with an alpha second) or a three-to-eight
+           alphanumeric run — the latter reading as a `uattribute` before the first `ukey` and as part of a
+           `uvalue` after it. Nothing in the grammar distinguishes those two by shape, and nothing needs to:
+           whichever it is, the same subtag is admitted, so one loop is the whole of both alternatives. What
+           the alternation does require is that the run be non-empty, which `count` carries. A two-character
+           subtag whose second character is a digit is neither, and ends the run — after which the caller
+           will try to read it as the next singleton, fail on its length, and reject the tag. */
+        count = 0;
+        for (;;) {
+            if (i >= len) break;
+            n = js_loc_subtag(s, len, i, &next);
+            if (n == 2 && js_loc_is_alnum((unsigned char)s[i]) && js_loc_is_alpha((unsigned char)s[i + 1])) {
+                /* ukey */
+            } else if (n >= 3 && n <= 8 && js_loc_all_alnum(s, i, n)) {
+                /* uattribute, or a subtag of a uvalue */
+            } else {
+                break;
+            }
+            count++;
+            i = next;
+        }
+        return count >= 1 ? i : -1;
+    }
+    if (c == 't' || c == 'T') {
+        /* `(sep tlang (sep tfield)*) | (sep tfield)+` — the alternation is decided by ONE subtag and needs no
+           lookahead, because a `tkey` is `alpha digit` and every subtag a `tlang` may open with is all-alpha. */
+        count = 0;
+        if (i < len) {
+            n = js_loc_subtag(s, len, i, &next);
+            if (js_loc_is_language_subtag(s, i, n)) {
+                int j = js_loc_match_language_id(s, len, i, false);
+                if (j < 0) return -1;
+                i = j;
+                count++;
+            }
+        }
+        for (;;) {
+            int vals;
+            if (i >= len) break;
+            n = js_loc_subtag(s, len, i, &next);
+            if (n != 2 || !js_loc_is_alpha((unsigned char)s[i]) || !js_loc_is_digit((unsigned char)s[i + 1]))
+                break;
+            /* `tfield = tkey tvalue` read as `tkey (sep alphanum{3,8})+` — see the banner above: as printed
+               it has no separator between the two and `tvalue` demands two value subtags, and under that
+               reading no `-t-` tag the standard itself prints is well-formed. */
+            i = next;
+            vals = 0;
+            for (;;) {
+                if (i >= len) break;
+                n = js_loc_subtag(s, len, i, &next);
+                if (!(n >= 3 && n <= 8 && js_loc_all_alnum(s, i, n))) break;
+                vals++;
+                i = next;
+            }
+            if (vals < 1) return -1;
+            count++;
+        }
+        return count >= 1 ? i : -1;
+    }
+    /* `other_extensions = sep [alphanum-[tTuUxX]] (sep alphanum{2,8})+` */
+    count = 0;
+    for (;;) {
+        if (i >= len) break;
+        n = js_loc_subtag(s, len, i, &next);
+        if (!(n >= 2 && n <= 8 && js_loc_all_alnum(s, i, n))) break;
+        count++;
+        i = next;
+    }
+    return count >= 1 ? i : -1;
+}
+
+/* `pu_extensions = sep [xX] (sep alphanum{1,8})+` */
+static int js_loc_match_pu(const char *s, int len, int i)
+{
+    int n, next, count;
+    n = js_loc_subtag(s, len, i, &next);
+    if (n != 1 || (s[i] != 'x' && s[i] != 'X')) return -1;
+    i = next;
+    count = 0;
+    for (;;) {
+        if (i >= len) break;
+        n = js_loc_subtag(s, len, i, &next);
+        if (!(n >= 1 && n <= 8 && js_loc_all_alnum(s, i, n))) break;
+        count++;
+        i = next;
+    }
+    return count >= 1 ? i : -1;
+}
+
+/* `unicode_locale_id = unicode_language_id extensions* pu_extensions?`, matched against the WHOLE region — a
+   prefix match is not what ECMA-402 §6.2.1 step 2 asks about, and the trailing `i == len` is the difference. */
+static bool js_loc_match_locale_id(const char *s, int len)
+{
+    int i;
+    if (!js_loc_no_empty_subtag(s, len)) return false;
+    i = js_loc_match_language_id(s, len, 0, true);
+    if (i < 0) return false;
+    for (;;) {
+        int j = js_loc_match_extension(s, len, i);
+        if (j < 0) break;
+        i = j;
+    }
+    if (i < len) {
+        int j = js_loc_match_pu(s, len, i);
+        if (j < 0) return false;
+        i = j;
+    }
+    return i == len;
+}
+
+/* ECMA-402 §15.5.1 GetLocaleBaseName ( locale ) — "Return the longest prefix of locale matched by the
+   unicode_language_id Unicode locale nonterminal", reported as a LENGTH because every caller wants a region
+   of the buffer it already holds and a copy would be a second string that can disagree with the first. */
+static int js_loc_base_name_len(const char *s, int len)
+{
+    int cur = js_loc_match_language_id(s, len, 0, true);
+    DCHECK(cur >= 0, "ECMA-402 §15.5.1 GetLocaleBaseName step 1 asserts that its argument can be matched by "
+                     "the unicode_locale_id Unicode locale nonterminal, and a unicode_locale_id opens with a "
+                     "unicode_language_id — so a locale reaching here with no such prefix is one that never "
+                     "went through ECMA-402 §6.2.1 step 2, which is the only caller that establishes it");
+    return js_loc_consumed_end(len, cur);
+}
+
+/* ECMA-402 §15.5.5 GetLocaleVariants ( locale ) — `undefined` is a FALSE return rather than an empty region,
+   because ECMA-402 §6.2.1 steps 6 and 11.g both test "is not undefined" before looking inside, and an empty
+   region would answer that test the same way a present-but-empty one would. The String it otherwise returns
+   is `s[*poff .. *poff + *pn)`.
+   ITS STEP 3 SPLITS ON "-" AND THIS SPLITS ON THE UTS #35 `sep`, WHICH IS `[-_]`. The two agree only because
+   ECMA-402 §6.2.1 step 3 has already refused every tag containing `_` before step 5 makes the first call, and
+   the tlang handed to the second call at step 11.f is a substring of that same refused-or-clean buffer. That
+   is a derivation about the ORDER of one algorithm's steps rather than a property of this function, so it is
+   asserted here instead of trusted. */
+static bool js_loc_variants(const char *s, int len, int *poff, int *pn)
+{
+    int bn, dash, i, next, n;
+    DCHECK(memchr(s, '_', (size_t)len) == NULL,
+           "ECMA-402 §15.5.5 GetLocaleVariants step 3 splits on \"-\" alone, and this walk treats the "
+           "UTS #35 `sep` [-_] as the separator — which is the same split only for a locale ECMA-402 §6.2.1 "
+           "step 3 has already refused for using the backwards-compatibility `_`; a caller that skipped "
+           "step 3 would silently get a different set of subtags here than the standard names");
+    bn = js_loc_base_name_len(s, len);
+    n = js_loc_subtag(s, bn, 0, &next);
+    dash = n;
+    i = next;
+    while (i < bn) {
+        n = js_loc_subtag(s, bn, i, &next);
+        if (js_loc_is_variant_subtag(s, i, n)) { *poff = dash + 1; *pn = bn - (dash + 1); return true; }
+        dash = dash + n + 1;
+        i = next;
+    }
+    return false;
+}
+
+/* ECMA-402 §6.2.1 step 6.a and step 11.g: "If variants contains any duplicate subtags, return false." */
+static bool js_loc_dup_variant_subtags(const char *s, int off, int end)
+{
+    int i = off, n, next, j, jn, jnext;
+    while (i < end) {
+        n = js_loc_subtag(s, end, i, &next);
+        for (j = next; j < end; j = jnext) {
+            jn = js_loc_subtag(s, end, j, &jnext);
+            if (jn == n && memcmp(s + i, s + j, (size_t)n) == 0) return true;
+        }
+        i = next;
+    }
+    return false;
+}
+
+/* ECMA-402 §6.2.1 step 11.a: "If extensions contains any duplicate singleton subtags, return false." A
+   singleton is a one-character subtag, which in this region is an extension's leading letter and nothing
+   else — every other production here is two characters or more. */
+static bool js_loc_dup_singletons(const char *s, int off, int end)
+{
+    int i = off, n, next, j, jn, jnext;
+    while (i < end) {
+        n = js_loc_subtag(s, end, i, &next);
+        if (n == 1) {
+            for (j = next; j < end; j = jnext) {
+                jn = js_loc_subtag(s, end, j, &jnext);
+                if (jn == 1 && s[i] == s[j]) return true;
+            }
+        }
+        i = next;
+    }
+    return false;
+}
+
+/* ECMA-402 §6.2.1 IsWellFormedLanguageTag ( locale ), over the ASCII-lowercased buffer its step 1 produces.
+   ITS STEPS 2 AND 3 TOGETHER ARE WHAT THE OPERATION'S OWN DESCRIPTION CALLS A `unicode_bcp47_locale_id`, and
+   seeing that is what makes step 3 checkable instead of a list to be copied. The description says it
+   "determines whether locale is a well-formed language tag conforming with the well-formedness constraints
+   of a unicode_bcp47_locale_id" while step 2 names the wider `unicode_locale_id`; UTS #35 Part 1 Core gives
+   the difference as two constraints — "The EBNF sep is restricted to only [-]" and "The first subtag must be
+   a unicode_language_subtag", the latter excluding both a script subtag and a "root" subtag — and its
+   Section 3.3 BCP 47 Conformance lists the same three things as the syntax allowed "for backwards
+   compatibility (not BCP 47-compatible)": the "_" separator, the "root" subtag, and a tag that "may begin
+   with a script subtag rather than a language subtag". Step 3 is those three, and they are exactly the gap
+   between the two nonterminals. The `root` test is REDUNDANT with the script test and is written anyway:
+   `root` is four alphas, so step 2 can only have matched it as a `unicode_script_subtag`, and a reader who
+   deletes the script arm would otherwise leave a clause of Section 3.3 unenforced with nothing to say so. */
+static bool js_loc_is_well_formed(const char *s, int len)
+{
+    int bn, n, next, i, xend, voff, vn, tsing, tend, tl, tlend;
+
+    if (!js_loc_match_locale_id(s, len)) return false;                       /* step 2 */
+
+    for (i = 0; i < len; i++) if (s[i] == '_') return false;                 /* step 3, the `_` separator */
+    n = js_loc_subtag(s, len, 0, &next);
+    if (n == 4 && memcmp(s, "root", 4) == 0) return false;                   /* step 3, the `root` subtag */
+    if (js_loc_is_script_subtag(s, 0, n)) return false;                      /* step 3, a leading script */
+
+    bn = js_loc_base_name_len(s, len);                                       /* step 4 */
+    if (js_loc_variants(s, bn, &voff, &vn))                                  /* step 5 */
+        if (js_loc_dup_variant_subtags(s, voff, voff + vn)) return false;    /* step 6 */
+
+    /* steps 7-10. `extensions` is the suffix of lowerLocale following baseName, so it is the region
+       [bn, len) and it opens with a separator; step 9's StringIndexOf is a LITERAL search for "-x-", which
+       can only land on a one-character `x` subtag because every subtag is alphanumeric, and a one-character
+       `x` subtag can only be the opening of `pu_extensions` — `other_extensions` excludes [tTuUxX] by name
+       and no other production admits a single character. So the truncation cuts exactly at the private-use
+       sequence, which is what leaves a region that is still a whole number of `extensions`. */
+    xend = len;
+    for (i = bn; i + 3 <= len; i++)
+        if (s[i] == '-' && s[i + 1] == 'x' && s[i + 2] == '-') { xend = i; break; }
+
+    if (xend <= bn) return true;                                             /* step 11's test */
+    if (js_loc_dup_singletons(s, bn + 1, xend)) return false;                /* step 11.a */
+
+    /* step 11.b: the longest substring of extensions matched by `transformed_extensions`. Step 11.a has just
+       refused a repeated singleton, so there is at most one `-t-` sequence and "longest" names it uniquely. */
+    tsing = -1; tend = -1;
+    i = bn + 1;
+    for (;;) {
+        int j = js_loc_match_extension(s, xend, i);
+        if (j < 0) break;
+        if (s[i] == 't') { tsing = i; tend = js_loc_consumed_end(xend, j); }
+        i = j;
+    }
+    if (tsing < 0) return true;                                              /* step 11.b's early return */
+
+    /* step 11.c's assert, and step 11.d's `tPrefix` = the substring from 3, which is (tsing-1)+3. */
+    DCHECK(s[tsing - 1] == '-' && s[tsing] == 't' && s[tsing + 1] == '-',
+           "ECMA-402 §6.2.1 step 11.c asserts that the substring of transformExtension from 0 to 3 is "
+           "\"-t-\", and this transformExtension was located by walking `extensions` from its own leading "
+           "separator, so a failure means the walk and the region disagree about where an extension begins");
+    tl = js_loc_match_language_id(s, tend, tsing + 2, false);                /* step 11.e */
+    if (tl < 0) return true;                                                 /* step 11.e's early return */
+    tlend = js_loc_consumed_end(tend, tl);
+    if (js_loc_variants(s + tsing + 2, tlend - (tsing + 2), &voff, &vn))     /* step 11.f */
+        if (js_loc_dup_variant_subtags(s + tsing + 2, voff, voff + vn)) return false;  /* step 11.g */
+    return true;                                                             /* step 12 */
+}
+
+/* ECMA-402 §6.2.1 step 1's `lowerLocale`, materialized as ASCII bytes: 0 built, 1 not ASCII, -1 exception.
+   THREE OUTCOMES AND THREE ANSWERS, because a NULL buffer would say "not a language tag" and "the allocation
+   failed" with one value, and those are not the same fact — one is a page's input and the other is this
+   engine's floor.
+   A CODE UNIT ABOVE 0x7F IS REFUSED RATHER THAN COPIED, and that is the same answer by the same reasoning one
+   allocation earlier: the ASCII-lowercase of such a unit is itself, and every terminal in the UTS #35 grammar
+   is an ASCII alphanumeric or a separator, so ECMA-402 §6.2.1 step 2 cannot match a string containing one.
+   IT WALKS THE ROPE ITERATOR RATHER THAN `JS_VALUE_GET_STRING`, WHICH IS NOT A REFINEMENT — IT IS THE
+   DIFFERENCE BETWEEN READING THE STRING AND READING A DIFFERENT STRUCT. `JS_IsString` answers true for
+   JS_TAG_STRING_ROPE as well as JS_TAG_STRING, and `JS_VALUE_GET_STRING` on a rope hands back a
+   `JSStringRope *` wearing a `JSString *`'s type, so `p->len` would be read out of a node that has no such
+   field. `string_rope_iter_next` returns a flat leaf for either tag — its first act is to return the value
+   itself when the tag is JS_TAG_STRING — so one walk covers both and there is no arm to forget.
+   NOTHING CAPS THE LENGTH: a `char[N]` here would be a bound on how long a language tag a page may pass. */
+static int js_loc_lower_ascii(JSContext *ctx, JSValueConst v, char **pbuf, int *plen)
+{
+    JSStringRopeIter it;
+    JSString *p;
+    int64_t total = 0;
+    int i, n, k;
+    char *buf;
+
+    *pbuf = NULL;
+    *plen = 0;
+    string_rope_iter_init(&it, v);
+    while ((p = string_rope_iter_next(&it)) != NULL) {
+        for (i = 0, n = p->len; i < n; i++)
+            if (string_get(p, i) > 0x7F) return 1;
+        total += n;
+    }
+    DCHECK(total <= INT32_MAX, "a language tag longer than a 32-bit index can address reached ECMA-402 "
+                               "§6.2.1 step 1 — quickjs's own string length invariant is what makes that "
+                               "impossible, so this fires on a rope whose leaves outgrew it rather than on "
+                               "anything a page can write");
+    buf = js_malloc(ctx, (size_t)total + 1);
+    if (!buf) return -1;
+    k = 0;
+    string_rope_iter_init(&it, v);
+    while ((p = string_rope_iter_next(&it)) != NULL) {
+        for (i = 0, n = p->len; i < n; i++) {
+            int c = string_get(p, i);
+            buf[k++] = (char)((c >= 'A' && c <= 'Z') ? c + ('a' - 'A') : c);
+        }
+    }
+    DCHECK(k == (int)total, "the two walks of one rope disagreed about how many code units it holds, and the "
+                            "buffer was sized by the first");
+    buf[k] = '\0';
+    *pbuf = buf;
+    *plen = k;
+    return 0;
+}
+
+/* ECMA-402 §9.2.1 CanonicalizeLocaleList ( locales ) — THE ARM ITS STEP 3 TAKES FOR A STRING, WHICH IS THE
+   ARM THAT RUNS NO PAGE CODE, AND THAT IS WHY THIS DIFF CAN EXIST WITHOUT A STEP MACHINE.
+   Step 3 reads "If locales is a String or locales is an Object and locales has an [[InitializedLocale]]
+   internal slot, then Let localesObj be CreateArrayFromList(« locales »)" — so a String never reaches step
+   4's `? ToObject(locales)`. What steps 5-7 then iterate is an array this algorithm just minted with one
+   element: `LengthOfArrayLike` reads an own data property of a fresh Array, `HasProperty("0")` finds an own
+   property and never walks a prototype, `Get` reads it, and step 7.c.iv's `? ToString(element)` is handed a
+   String. Not one of those can reach a getter, a Proxy trap or a `toString`, so the whole of ECMA-402 §9.2.1
+   is inert for this argument shape and there is nothing for a suspend point to be needed for. The OTHER arm
+   is the opposite in every one of those five places, which is why it crashes below instead of being
+   approximated here — that is a separate algorithm's worth of rest points and it is subproblem (2d).
+   THE `[[InitializedLocale]]` DISJUNCT OF STEP 3 IS UNREACHABLE AND NOT UNIMPLEMENTED: the slot is installed
+   only by the constructor ECMA-402 §15.4 "Properties of Intl.Locale Instances" describes — "Intl.Locale
+   instances have an [[InitializedLocale]] internal slot." — and `git grep -c InitializedLocale -- engine`
+   answers NOTHING AT ALL,
+   so no object in this engine can carry it. The name `Intl` occurs in one place — `browser/i18n_names.h`,
+   which is a table of names solver/absent.c SUPPRESSES rather than an installation — so there is no
+   constructor to reach the slot through either. When Intl.Locale is built, the disjunct's arm arrives WITH
+   it, because the same diff is what makes an object able to answer the test.
+   WHAT THIS RETURNS IS THE THROW AND NOTHING ELSE. Step 7.c.vi's canonicalized tag has nowhere to go until
+   ECMA-402 §6.2.2 exists, so no `seen` List is built and no value is written — a List assembled here and
+   read by nobody would be the write-with-no-reader defect, and the one observable ECMA-402 §9.2.1 owes at
+   this point is step 7.c.v's RangeError, which IS produced, in dev and in release alike. */
+static int js_loc_canonicalize_locale_list_string(JSContext *ctx, JSValueConst locales)
+{
+    char *buf;
+    int len, r;
+    bool ok;
+
+    r = js_loc_lower_ascii(ctx, locales, &buf, &len);                        /* step 1 of ECMA-402 §6.2.1 */
+    if (r < 0) return -1;
+    ok = (r == 0) && js_loc_is_well_formed(buf, len);                        /* step 7.c.v */
+    if (!ok) {
+        /* "If IsWellFormedLanguageTag(tag) is false, throw a RangeError exception." The tag goes into the
+           message because an engine that refuses a page's locale and will not say which one leaves the page
+           author and this engine's own reader with the same non-answer. */
+        JS_ThrowRangeError(ctx, "invalid language tag: %s", buf ? buf : "(not ASCII)");
+        js_free(ctx, buf);
+        return -1;
+    }
+    js_free(ctx, buf);
+    return 0;
+}
+
 static int js_str_recv_step(JSContext *ctx, void *st, JSValue cb_result, JSValue **out_cb, int *out_argc)
 {
     JSStrRecv *s = st;
@@ -96938,37 +97478,75 @@ static int js_str_recv_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
                 }
             }
             break;
-        case STRRECV_TOLOCALELOWER: case STRRECV_TOLOCALEUPPER:
+        case STRRECV_TOLOCALELOWER: case STRRECV_TOLOCALEUPPER: {
             /* ECMA-402 §20.1.2.1 TransformCase step 1 is `? CanonicalizeLocaleList(locales)`, and ECMA-402 §9.2.1
                step 1 is "If locales is undefined, then Return a new empty List." — so undefined is not an
                argument this stage SKIPS, it is the one value the algorithm's own first step answers outright
                without reading it. That is why the test below is an equality with undefined and not a check on
                argc: `f(undefined)` and `f()` are the same call to ECMA-402 §9.2.1 and must stay the same call here.
-               EVERY OTHER VALUE OWES THE LOCALE LAYER, AND THIS ENGINE HAS NONE — §Offensive-programming's
-               category (2), a feature that should exist and does not, which crashes at its site naming what to
-               build rather than returning the answer for a locale nobody resolved. The crash is reached by
-               PAGE-SUPPLIED INPUT and that is the established shape here, not an exception to
-               §whose-bytes-state-the-value: this asserts no invariant over a stranger's bytes, it declares an
-               unbuilt capability, exactly as the C-side [[GetPrototypeOf]]-reached-a-Proxy aborts do.
-               HOW MUCH OF THE MIRRORED CORPUS REACHES IT is a question for a command and not for a number that
-               rots as the corpus grows:
+               EVERY OTHER VALUE SPLITS AT ECMA-402 §9.2.1 STEP 3, AND THE SPLIT IS THE STANDARD'S OWN — a
+               String takes `CreateArrayFromList(« locales »)` and an Object that is not an Intl.Locale takes
+               step 4's `? ToObject(locales)`. The first of those runs no page code anywhere in steps 5-7 and
+               is BUILT; the second can run the page's code at five separate operations and is not, so it
+               crashes here naming what it needs. §Offensive-programming's category (2): a feature that
+               should exist and does not, crashing at its site rather than returning the answer for a locale
+               nobody resolved. Both crashes are reached by PAGE-SUPPLIED INPUT and that is the established
+               shape here rather than an exception to §whose-bytes-state-the-value: neither asserts an
+               invariant over a stranger's bytes, they declare unbuilt capabilities, exactly as the C-side
+               [[GetPrototypeOf]]-reached-a-Proxy aborts do. The RangeError below is the other thing
+               entirely — a page's malformed tag is INPUT, so it gets a spec-mandated throw and never an
+               assert, in dev and release alike.
+               HOW MUCH OF THE MIRRORED CORPUS REACHES ANY OF THIS is a question for a command and not for a
+               number that rots as the corpus grows:
                  grep -rhoE 'toLocale(Lower|Upper)Case\([^)]' testing/corpus/mirror --include=*.js | wc -l
                against the same pattern ending `\(\)`. Run the first with a line you know matches before
                believing a zero, because the two answers are read in opposite directions. */
-            DCHECK(JS_IsUndefined(step_arg(&s->hdr, 0)),
-                   "ECMA-402 §20.1.2.1 TransformCase step 1 hands `locales` to ECMA-402 §9.2.1 CanonicalizeLocaleList "
-                   "and this engine has no locale layer to hand it to. What the next diff builds, in the order "
-                   "the standard's own call graph gives: ECMA-402 §6.2.1 IsWellFormedLanguageTag (whose steps 4-5 need "
-                   "ECMA-402 §15.5.1 GetLocaleBaseName and ECMA-402 §15.5.5 GetLocaleVariants, and whose step 2 needs the "
-                   "unicode_locale_id nonterminal of UTS #35 Part 1 Core); ECMA-402 §6.2.2 CanonicalizeUnicodeLocaleId "
-                   "(whose step 1 is UTS #35 Part 1 Core Annex C LocaleId Canonicalization, needing CLDR "
-                   "alias data and, for Annex C's Territory Exception, likely-subtag data; and whose step 2.c "
-                   "needs ECMA-402 §9.2.5 UnicodeExtensionComponents); ECMA-402 §6.2.3 DefaultLocale; ECMA-402 §9.2.1 itself, which must "
-                   "be a step machine because its loop runs ToObject, LengthOfArrayLike, HasProperty, Get and "
-                   "ToString; and ECMA-402 §9.2.3 LookupMatchingLocaleByPrefix. Until all of those exist a malformed "
-                   "tag is ignored where ECMA-402 §9.2.1 step 7.c.v throws a RangeError, and a well-formed one selects "
-                   "nothing");
+            JSValueConst locales = step_arg(&s->hdr, 0);
+            if (JS_IsUndefined(locales))
+                break;
+            if (JS_IsString(locales)) {
+                r = js_loc_canonicalize_locale_list_string(ctx, locales);
+                if (r < 0) return -1;
+                /* NAMED RESIDUAL. WHAT IS NOT COVERED: a well-formed tag is validated and then DISCARDED,
+                   because ECMA-402 §9.2.1 step 7.c.vi's `CanonicalizeUnicodeLocaleId(tag)` has nowhere to
+                   put its answer yet — so `"x".toLocaleLowerCase("tr")` still takes the `und` transformation
+                   the body below computes. WHAT THE NEXT DIFF BUILDS, and the reason it is a diff of its own
+                   rather than the rest of this one: ECMA-402 §6.2.2 CanonicalizeUnicodeLocaleId, whose step 1
+                   is UTS #35 Part 1 Core Annex C LocaleId Canonicalization and therefore needs CLDR's alias
+                   table (and, for Annex C's Territory Exception, its likely-subtag table) generated into this
+                   tree the way `encgen.mjs`, `idnagen.mjs` and `pslgen.mjs` generate theirs, plus ECMA-402
+                   §9.2.5 UnicodeExtensionComponents for its step 2.c. Everything above this line reads no
+                   table at all, which is what makes that the seam rather than a size. Then ECMA-402 §9.2.3
+                   LookupMatchingLocaleByPrefix and ECMA-402 §20.1.2.1 steps 2-6, and last the object arm
+                   below with ECMA-402 §6.2.3 DefaultLocale, which ECMA-402 §20.1.2.1 step 3.a reaches only
+                   when requestedLocales is EMPTY and a one-element String list never is.
+                   HOW ITS ABSENCE WOULD SHOW: a reader driving this engine beside a browser sees the two
+                   agree on every malformed tag — both throw a RangeError — and disagree on a well-formed one
+                   naming a language the Unicode Character Database conditions its case mappings on, where the
+                   browser's answer is the tailored one and this engine's is the default conversion.
+                   RETIREMENT: goes when ECMA-402 §6.2.2 exists and this abort is replaced by the append to
+                   `seen` that step 7.c.vii performs. */
+                DFAIL("ECMA-402 §9.2.1 step 7.c.vi hands the tag to ECMA-402 §6.2.2 CanonicalizeUnicodeLocaleId "
+                      "and this engine has no canonicalizer: UTS #35 Part 1 Core Annex C LocaleId "
+                      "Canonicalization needs CLDR's alias data, which no table in this tree carries. A tag "
+                      "reaching here is WELL-FORMED — ECMA-402 §6.2.1 has just said so — and returning it "
+                      "uncanonicalized would be WRONG rather than narrower, because ECMA-402 §9.2.3 "
+                      "LookupMatchingLocaleByPrefix then truncates `tur` to nothing where the canonical `tr` "
+                      "matches. Build ECMA-402 §6.2.2 with a generated alias table, then ECMA-402 §9.2.5 for "
+                      "its step 2.c, then ECMA-402 §9.2.3 and ECMA-402 §20.1.2.1 steps 2-6");
+            } else {
+                DFAIL("ECMA-402 §9.2.1 step 4 is `? ToObject(locales)` for a `locales` that is neither "
+                      "undefined nor a String, and steps 5-7 then run LengthOfArrayLike, HasProperty, Get "
+                      "and ToString over it — five operations that can each reach a getter, a Proxy trap or "
+                      "a `toString`, which is the page's own code. That makes ECMA-402 §9.2.1 a STEP MACHINE "
+                      "on this arm and not a function: it holds `seen`, `length` and `k` across a callback, "
+                      "so it needs its own stages and its own `visit` for the List it accumulates. The "
+                      "String arm above needs none of that because ECMA-402 §9.2.1 step 3's "
+                      "`CreateArrayFromList(« locales »)` makes every one of those five operations inert. "
+                      "Build the machine, then widen this arm to it");
+            }
             break;
+        }
         case STRRECV_NORMALIZE:
             /* an absent or undefined form is NFC and coerces nothing. The UTF-32 conversion the C body did first
                runs no user code, so reading the form before it is not observable. `arg` staying UNDEFINED IS the
