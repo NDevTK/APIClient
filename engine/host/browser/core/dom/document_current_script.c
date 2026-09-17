@@ -10,7 +10,7 @@
 #include "core/dom/document_current_script.h"
 #include "core/dom/node.h"
 #include "core/dom/shadow_root.h"
-#include "core/loader/document_scripts.h"   /* §4.12.1's type-string steps and its LAST STEPS, over the element in this slot */
+#include "core/loader/document_scripts.h"   /* HTML §4.12.1.1's type-string steps and its LAST STEPS, over the element in this slot */
 #include "core/idl_args.h"
 #include "core/realm.h"
 
@@ -76,7 +76,7 @@ bool document_current_script_is_from_external_file(JSContext *ctx)
     bool external = false;
 
     /* "FROM AN EXTERNAL FILE" is set when the script's source text came from a fetch, which for an element
-       that is EXECUTING is exactly its having a `src`: §4.12.1's own steps take the src branch on the
+       that is EXECUTING is exactly its having a `src`: HTML §4.12.1.1's own steps take the src branch on the
        ATTRIBUTE's presence, and an element whose src did not fetch never reaches execution at all. */
     if (n != NULL && n->type == LXB_DOM_NODE_TYPE_ELEMENT)
         external = lxb_dom_element_has_attribute(lxb_dom_interface_element(n),
@@ -90,7 +90,7 @@ bool document_current_script_is_from_external_file(JSContext *ctx)
  * which of a document's scripts is running.
  *
  * THE QUESTION IS ABOUT THE SCHEDULE AND NOT ABOUT THE READINESS, and getting that wrong is a crash in the
- * wrong place. "The parser is standing inside this script" is true for exactly two of §4.12.1's five
+ * wrong place. "The parser is standing inside this script" is true for exactly two of §4.12.1.1's five
  * destinations — an inline classic script and the pending parsing-blocking script — because those are the two
  * §13.2.6.4.8 'The "text" insertion mode' runs WITH the insertion point defined and the tokenizer stopped. A
  * `defer` script and a module run from §13.2.7 "The end" step 5, after the parse; the two `as soon as
@@ -114,7 +114,7 @@ bool document_current_script_is_parser_executed(JSContext *ctx)
         /* PARSER-INSERTED WITH `force async` FALSE are facts about the element in this slot rather than
            defaults: §4.12.1.1's classic arm is what wrote it, and core/loader/document_scripts.c states the
            same pair for the parse scan that collects these elements. An element a SCRIPT inserted reaches
-           §4.12.1 through core/html/html_script.c, where neither holds — and a document whose own script is
+           §4.12.1.1 through core/html/html_script.c, where neither holds — and a document whose own script is
            not running has a null slot, which never gets here. */
         if (script_type_executes(ty)) {
             ScriptSchedule sc = script_block_schedule(el, ty, /*parser_inserted*/true, /*force_async*/false);

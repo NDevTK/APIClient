@@ -298,7 +298,7 @@ typedef struct Document {
        an XMLDocument. It decides this document's wrapper's prototype, so it is read at node_wrap. */
     DocumentInterface    iface;
     /* DOM §4.5 Interface Document's "Each document has an associated encoding (an encoding)"
-       — an id in the Encoding registry (core/encoding), and the fact HTML §4.12.1 falls back to when a
+       — an id in the Encoding registry (core/encoding), and the fact HTML §4.12.1.1 falls back to when a
        `<script>` has no `charset` attribute: "let encoding be el's node document's the encoding". It is a
        FIELD and not a constant at each asker because it is per-document state that a navigation's response
        decides; what will WRITE it is HTML §13.2.3.2's encoding sniffing algorithm over the response's bytes

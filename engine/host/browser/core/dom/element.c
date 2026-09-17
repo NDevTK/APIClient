@@ -2838,7 +2838,7 @@ static void element_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const ch
        above is: a content attribute has more than one spelling (`l.href = u`, `setAttribute`,
        `attributes.href.value = u`) and the IDL reflection's setter answers for exactly one of them. */
     html_link_attr_changed(rctx, el, ns, local);
-    /* HTML §4.12.1's `async` change step: "when an async attribute is added to a script element el, the user
+    /* HTML §4.12.1.1's `async` change step: "when an async attribute is added to a script element el, the user
        agent must set el's force async to false". Here for the reason `src` above is: a content attribute has
        more than one spelling, and the IDL setter answers for one of them. */
     html_script_attr_changed(rctx, el, ns, local, val);
@@ -3086,7 +3086,7 @@ void element_init(JSContext *ctx)
     realm_declare_intrinsic(element_install_proto);
     element_view_init(ctx);   /* CSSOM VIEW §6's `partial interface Element`, installed on the prototype below */
     custom_elements_init(ctx);
-    html_script_init(ctx);    /* §4.12.1's `already started` slot, which the fragment parse below writes */
+    html_script_init(ctx);    /* HTML §4.12.1.1's `already started` slot, which the fragment parse below writes */
     html_base_element_init(ctx);   /* §4.2.3's `href` setter, whose getter is not a reflection */
     cssom_init(ctx);          /* CSSStyleDeclaration, which HTMLElement's `style` attribute names */
     css_style_sheet_init(ctx);   /* CSSOM §6.1's StyleSheet and CSSStyleSheet, which a `<style>` element creates */

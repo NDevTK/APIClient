@@ -262,7 +262,7 @@ lxb_dom_element_t *document_frozen_base_element(const lxb_dom_document_t *dom);
    receives one, which is §2.4.3's null. */
 void document_set_about_base_url(JSContext *ctx, const char *url);
 /* HTML §3.1.1's "the encoding" of this realm's active document, as an id in the Encoding registry
-   (core/encoding/encoding.h). It is what HTML §4.12.1 falls back to when a `<script>` carries no `charset`
+   (core/encoding/encoding.h). It is what HTML §4.12.1.1 falls back to when a `<script>` carries no `charset`
    attribute — "let encoding be el's node document's the encoding" — and therefore what HTML §8.1.4.2's fetch a
    classic script decodes a fetched body with when the response names no charset of its own. ONE component owns
    it, exactly as one owns the document's address. */

@@ -78,7 +78,7 @@
    boundary for the same reason. */
 #include "core/html/custom_elements.h"
 #include "core/html/html_script.h"
-#include "core/html/nonce_attribute.h"   /* §2.5.6's cloning steps, on §4.4 step 3 beside §4.12.1's */
+#include "core/html/nonce_attribute.h"   /* §2.5.6's cloning steps, on §4.4 step 3 beside HTML §4.12.1.1's */
 #include "solver/engine.h"
 #include "core/events/event.h"
 #include "core/events/event_target.h"
@@ -2169,7 +2169,7 @@ static JSValue js_pi_target(JSContext *ctx, JSValueConst this_val, int magic)
 #define PI_ATTRS_SLOT_FLAGS (JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE)
 
 /* THE SLOT KEY — one Symbol per AGENT, minted at node_init and released at node_free, exactly as
-   core/html/html_script.c's three §4.12.1 flags are and for the same reason: a second key would leave a map
+   core/html/html_script.c's three HTML §4.12.1.1 flags are and for the same reason: a second key would leave a map
    written under the first invisible under the second. */
 static JSValue g_pi_attrs_key = JS_UNDEFINED;
 static JSAtom  g_atom_pi_attrs = JS_ATOM_NULL;
@@ -3525,12 +3525,12 @@ int node_clone_run(JSContext *ctx, JSStepHdr *hdr, NodeCloneState *s, int base)
     if (phase == NODE_CLONE_PHASE_TEMPLATE) {
         /* HTML §4.12.3's cloning steps, step 1: "If subtree is false, then return." */
         lxb_dom_node_t *content = s->deep ? node_template_content(s->src) : NULL;
-        /* STEP 3 IS EVERY ELEMENT'S CLONING STEPS AND NOT ONLY `<template>`'s. HTML §4.12.1 states another
+        /* STEP 3 IS EVERY ELEMENT'S CLONING STEPS AND NOT ONLY `<template>`'s. HTML §4.12.1.1 states another
            pair on this same step — "the cloning steps for script elements given node, copy, and subtree are to
            set copy's already started to node's already started" — and it is not bookkeeping: a script the
            fragment parse marked inert would otherwise have a live CLONE, so
            `host.appendChild(parsed.cloneNode(true))` runs exactly the code §13.4's Inert mode exists to stop.
-           It is unconditional on `subtree` because §4.12.1's steps are, unlike §4.12.3's above. */
+           It is unconditional on `subtree` because HTML §4.12.1.1's steps are, unlike §4.12.3's above. */
         html_script_cloned(ctx, s->src, s->cnode);
         /* AND HTML §2.5.6 Nonce attributes STATES A THIRD PAIR ON THIS SAME STEP, over a far wider set than
            either of the two above: "The cloning steps for elements that include HTMLOrSVGOrMathMLElement given
@@ -3538,7 +3538,7 @@ int node_clone_run(JSContext *ctx, JSStepHdr *hdr, NodeCloneState *s, int base)
            every HTML element, not one tag. It is not made redundant by the attribute the clone already copied:
            §2.5.6 exists precisely to make the slot and the attribute stop agreeing, so a copy whose nonce came
            from the attribute is the STALE one, and under a `script-src 'nonce-…'` policy that is the difference
-           between a cloned script that runs and one that does not. Unconditional on `subtree`, like §4.12.1's
+           between a cloned script that runs and one that does not. Unconditional on `subtree`, like HTML §4.12.1.1's
            above and unlike §4.12.3's. */
         nonce_attribute_cloned(ctx, s->src, s->cnode);
         hdr->stage = base + NODE_CLONE_PHASE_CHILDREN;
@@ -5554,7 +5554,7 @@ void node_install_protos(JSContext *ctx)
                was a wrong conclusion drawn from it. TRUE: solver/dom_cow.h's `dom_cow_set_prop_taint` takes an
                `lxb_dom_element_t *`, so a processing instruction cannot reach it. FALSE: that no store existed.
                Per-node platform state in this engine is a hidden slot on the node's WRAPPER — the store
-               core/html/html_script.c keeps §4.12.1's three flags in and core/html/custom_elements.c keeps
+               core/html/html_script.c keeps HTML §4.12.1.1's three flags in and core/html/custom_elements.c keeps
                DOM §4.9's is value in — and a JS value in a slot is a property write the per-flow COW delta
                captures already, which is the whole of what the clause asked a new mechanism to provide.
                ITS SECOND CLAIM WAS THAT THE MAP MUST BE MATERIALIZED AT EVERY CREATION SITE, and that is

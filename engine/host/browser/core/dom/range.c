@@ -1536,7 +1536,7 @@ static const IdlStepDecl RANGE_SURROUND = { rs_step, sizeof(RsState), rs_visit, 
  * executed as soon as they are inserted into the document as part of a the HTML fragment parsing algorithm,
  * ignoring async and defer attributes. This mode is used by createContextualFragment()." — and step 7 passes
  * `Fragment` outright. So a `<script>` in the markup is NOT marked already started, does not run while the
- * fragment is detached (HTML §4.12.1 "The script element" step 7, "If el is not connected, then return"), and
+ * fragment is detached (HTML §4.12.1.1 "Processing model" step 7, "If el is not connected, then return"), and
  * runs the moment the page appends the fragment to a document. That is a SOLVER-VISIBLE difference and not
  * only a fidelity one: a
  * bundle that builds DOM this way ships code whose execution the engine would otherwise never reach.
