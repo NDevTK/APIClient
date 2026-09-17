@@ -20737,7 +20737,31 @@ int main(int argc, char **argv) {
        address it is installed at below — and `https:` makes it a SECURE CONTEXT, which is what a real bundle
        runs in and therefore what the fixture must exercise. */
     tf_agent_init(ctx, "https://x.test", "https://x.test/p");
-    exposure_selftest(ctx, "https://x.test/p");   /* §3.3.7 [Exposed] step 1 discriminates, measured both ways */
+    /* WEB IDL §3.3.7 [Exposed] step 1 discriminates, measured both ways — AND THIS CALL'S POSITION IS PART OF
+       THE MEASUREMENT RATHER THAN A PLACEMENT. Its WORKER arm builds realms of its own, so that half is
+       position-free; its WINDOW arm probes the agent's OWN global, so every row of its table whose Window
+       column is `false` means "core/realm.h's per-realm column did not place this", which is true only while
+       no document has been installed over this realm. The loop's own CHECKF says so in the message it fires
+       with. Those names are core/platform.c's PER-DOCUMENT column's — the rows of that file's list carrying a
+       third field — so read the two lists against each other rather than trusting a count here, which moves
+       whenever a lane adds a row.
+       MOVING THIS CALL BELOW ANY DOCUMENT IS SAFE ONLY WHILE A WORKER REALM ABORTS DURING CONSTRUCTION, AND
+       THAT IS THE TRAP AND NOT THE REASSURANCE. The abort is inside this function's own
+       realm_install_intrinsics and the table loop is BELOW it, so while one stands a move LOOKS harmless — the
+       rows are never reached — and it silently arms an ALWAYS-FATAL CHECKF, dev and release, on every
+       absent-in-Window row, which detonates in the diff that FIXES the abort, for a reader with no context for
+       it. The move was proposed for exactly the right reason — two lanes' witnesses are unreadable while the
+       fixture dies at a tenth of a second — and declined for this one.
+       NAMED RESIDUAL — THE DEPENDENCY NEED NOT EXIST. WHAT IS NOT COVERED: the Window arm shares the agent's
+       realm, so it probes a global other code is still building, and the worker arm two screens down is the
+       shape that does not. WHAT THE NEXT DIFF BUILDS: a Window realm of this selftest's own — JS_NewContext
+       plus realm_install_intrinsics with "Window", exactly as the two worker contexts are made — after which
+       this call is position-free and may sit anywhere, and the six comments in the table that currently have
+       to explain the ordering lose their subject. HOW ITS ABSENCE WOULD BE OBSERVED: this line is moved for an
+       unrelated reason and the failure arrives as a spec-conformance verdict about step 1, naming an interface
+       and a standard, when what it reports is where a call sits in main.
+       RETIREMENT: this record goes when the Window arm builds its own realm. */
+    exposure_selftest(ctx, "https://x.test/p");
     navigable_set_realm_builder(tf_child_realm);
     int min_doc = arg_has(argc, argv, "--min");   /* fast per-change memory gate: the minimal clone/COW doc */
     /* THE CLOSE-REQUEST DOCUMENT, which is a document and not a flag on another one: its whole verdict is an
