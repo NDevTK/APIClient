@@ -304,6 +304,32 @@ the questions it does not answer. None of them is folded into a figure above.
     the document and against every shipped script. A generous test can only move an address OUT of composed,
     so this file can UNDER-state execution-derived learning and cannot over-state it.
 
+  THE WHOLE TABLE IS CAPPED BY THE FIXTURE, AND COMPOSED IS CAPPED AT ZERO FOR THE ONE SURFACE THAT MATTERS
+    MOST. The entry above says COMPOSED is a floor, and that is a claim about the CLASSIFICATION being
+    generous -- it is NOT a claim that the number is a floor on what the ENGINE can do, and it is read as one.
+    mirror.mjs captures a site by fetching, with curl, the document and then every subresource the MARKUP
+    NAMES. It never executes the page. A lazy chunk is BY DEFINITION a resource the markup does not name, so
+    no lazy-chunk body is in any mirror, for any site, at any revision -- structural, not a gap in one
+    capture. \`learned\` here is built from the run's \`siteEndpoints\`, and an address whose fixture answers 404
+    with an empty body teaches nothing downstream, so a chunk graph cannot be walked past its first hop
+    however well the engine composes. The surface this instrument was built to measure is the one the corpus
+    cannot serve.
+    A READER WHO TAKES \`composed / learned\` FOR AN ENGINE RESULT HAS TAKEN A NUMBER FOR A QUESTION THAT WAS
+    NEVER PUT -- which is this file's own sentence, above, applied to its own headline. Quote it with the cap
+    or do not lead with it.
+    THE DERIVATION, NOT THE FIGURE, because a capture mechanism that executes is exactly the diff that
+    retires this and the count falls as it lands:
+      for d in mirror/*/; do grep -roh '[A-Za-z0-9_./-]*\\.js' "$d" | sed 's#.*/##' | sort -u \\
+        | while read n; do find "$d" -name "$n" | grep -q . || echo "$n"; done; done | wc -l
+    and the fixture servers log the consequence directly -- \`grep -c MISS logs/<id>.serve\`.
+    WHAT IS NOT CAPPED, AND IS THE BETTER INSTRUMENT: the fixture serves REAL CHROME in the same run that
+    drives the engine, so its access log holds BOTH parties against IDENTICAL BYTES, and both meet the same
+    404. An address Chrome requested that the engine never recorded is a differential no property of the
+    corpus can flatter -- \`grep -o 'MISS .*\\.m\\?js' logs/<id>.serve | sort -u\` against the row's
+    \`siteEndpoints\`. That comparison is sound TODAY, on a corpus that serves none of those bodies.
+    RETIREMENT: this entry goes when the mirror captures execution-discovered subresources, at which point the
+    derivation above answers near zero and COMPOSED starts measuring the engine rather than the capture.
+
   THE DENOMINATOR BELONGS TO A REVISION AND THE NUMERATOR DOES NOT. Everything left of the bar is derived
     from testing/corpus/mirror + provenance.json, which are TRACKED, so it is reproducible at a commit.
     The census .jsonl files this run was handed are NOT tracked by git: quote a figure from them with the
