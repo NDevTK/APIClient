@@ -477,13 +477,41 @@ static void storage_manager_install_realm(JSContext *ctx)
     realm_value_set(ctx, g_obj_slot, obj);
 
     /* THE MEMBER GOES ON THE NAVIGATOR THIS REALM ALREADY BUILT — a mixin adds to the object, it does not make
-       a second one. Storage §8 marks the whole `NavigatorStorage` mixin `[SecureContext]`. */
-    nav = navigator_object(ctx);
-    DCHECK(JS_IsObject(nav), "Storage §8's `storage` was installed on a realm with no Navigator — navigator.c's "
-                             "intrinsic has to be DECLARED first, and core/realm.h runs them in declaration "
-                             "order");
-    idl_install_accessor_exposed(ctx, nav, "storage", sm_get_storage, 0, -1, IDL_SECURE_CONTEXT);
-    JS_FreeValue(ctx, nav);
+       a second one. Storage §8 "API" marks the whole `NavigatorStorage` mixin `[SecureContext]`.
+       WEB IDL §3.8 "Platform objects implementing interfaces" STEP 1 IS ASKED OF THE INCLUDER, AND THAT IS THE
+       WHOLE OF THIS ARM. Web IDL §3.7.3 "Interface prototype object" gives an `interface mixin` no prototype
+       object of its own, so `NavigatorStorage`'s one member has no object anywhere until an INCLUDER supplies
+       one — and Storage §8 writes two of them: `Navigator includes NavigatorStorage;` on one line and
+       `WorkerNavigator includes NavigatorStorage;` on the next. So the question this gate asks is never
+       whether `StorageManager` is exposed (it is `Exposed=(Window,Worker)`, which is why every line above this
+       one runs in a worker realm) and never whether the MEMBER is: Web IDL §3.3.7 "[Exposed]"'s own algorithm
+       sets a mixin member's construct to its HOST
+       interface, so `storage`'s exposure set is the union of its two includers' and answers TRUE in both
+       realms. It is WHICH INCLUDER THIS REALM HAS. `Navigator` is `[Exposed=Window]`, and
+       core/frame/navigator.c's install refuses on exactly that Web IDL §3.8 step — so a worker realm has no
+       Navigator to add to, and this component owes nothing rather than owing it somewhere else.
+       A DCHECK STOOD HERE AND COULD NOT FIRE, AND ITS MESSAGE NAMED THE WRONG CAUSE. It read `JS_IsObject(nav)`
+       under text saying a realm with no Navigator meant navigator.c's intrinsic had been DECLARED late. The
+       cause is that refusal and not declaration order; and the condition was unreachable-as-a-failure either
+       way, because its operand is produced by `navigator_object`, and reading a realm slot the install never
+       set aborts inside core/realm.c's `realm_value_get` ONE FRAME EARLIER. The ordering fact it claimed to
+       guard is still guarded there — what that abort does not carry is a SITE, its message naming a shared
+       helper every per-realm value in the engine is read through. */
+    if (idl_exposed_in_realm(ctx, "Navigator")) {
+        nav = navigator_object(ctx);
+        idl_install_accessor_exposed(ctx, nav, "storage", sm_get_storage, 0, -1, IDL_SECURE_CONTEXT);
+        JS_FreeValue(ctx, nav);
+    }
+    /* NAMED RESIDUAL — THE OTHER INCLUDER. WHAT IS NOT COVERED: `WorkerNavigator includes NavigatorStorage;`.
+       browser/idl_exposure.h gives `WorkerNavigator` IDL_GLOBAL_WORKER, so a worker realm IS exposed that
+       interface and this build has no component that declares it — the arm above installs the member on the
+       one includer this engine builds and the worker realm gets none. WHAT THE NEXT DIFF BUILDS: HTML §10.3.2
+       "The WorkerNavigator interface" as a component beside core/frame/navigator.c, which is the same thing
+       core/workers/worker_global_scope.c's own residual names for HTML §10.2.1.1's `navigator`; this arm
+       then gains a sibling over `WorkerNavigator`, never a second gate here. HOW ITS ABSENCE SHOWS: in a realm
+       whose global implements a WorkerGlobalScope, `StorageManager` and its prototype are reachable as globals
+       while nothing in that realm can produce an instance of it — an interface object with no path to the
+       object it describes, which is what a Web IDL §3.7.3 census over such a realm would read. */
 }
 
 void storage_manager_init(JSContext *ctx)

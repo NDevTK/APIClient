@@ -258,7 +258,10 @@ static JSValue js_nav_permissions(JSContext *ctx, JSValueConst this_val, int mag
     return permissions_object(ctx);
 }
 
-/* HTML §7.2.5's two Window members that name this object. `navigator` is a plain `readonly attribute Navigator`
+/* HTML §7.2.2 "The Window object"'s two Window members that name this object — that is where the IDL sits, and
+   HTML §8.10.1 "The Navigator object" is where their steps do: "The navigator and clientInformation getter
+   steps are to return this's associated Navigator." (§7.2.5 stood here for both and is "The History
+   interface".) `navigator` is a plain `readonly attribute Navigator`
    and `clientInformation` is `[Replaceable] readonly attribute Navigator` — the legacy alias, which the IDL
    marks replaceable and the real one does not, so they install through different helpers. BOTH read the ONE
    realm slot rather than one of them holding a second reference: `navigator === clientInformation` is what HTML
@@ -269,10 +272,20 @@ static JSValue js_win_navigator(JSContext *ctx, JSValueConst this_val, int magic
     return realm_value_get(ctx, g_obj_slot);   /* OWNED — realm_value_get asserts the realm ran its install */
 }
 
-/* THIS REALM'S Navigator, for a PARTIAL INTERFACE another component owns. Storage §2's `navigator.storage` is
-   declared on `partial interface Navigator` by a different standard, so the member belongs to that component
-   and the OBJECT belongs to this one — which is exactly the shape a partial interface has. It reads the one
-   realm slot, so a partial member is installed on the same object §7.2.5 hands the page. OWNED. */
+/* THIS REALM'S Navigator, FOR A MEMBER ANOTHER STANDARD PUTS ON IT — AND A CALLER ASKS WEB IDL §3.8 "Platform
+   objects implementing interfaces" STEP 1 OF `Navigator` BEFORE CALLING, because this realm may not have one.
+   The install below refuses outright where it does not, so the slot this reads is unset in a worker realm and
+   core/realm.c's realm_value_get aborts: there is no soft answer here and there must not be one.
+   TWO CITATIONS THAT STOOD HERE WERE WRONG AND ARE CORRECTED RATHER THAN DROPPED, because a reader who
+   re-derives them writes them again. The member was given as `Storage §2's navigator.storage declared on
+   partial interface Navigator`: Storage §2 is "Terminology" and declares nothing, the member is Storage §8
+   "API"'s, and Storage §8 declares no partial interface at all — it declares `interface mixin
+   NavigatorStorage` with an `includes` statement for `Navigator`, which Web IDL §3.7.3 "Interface prototype
+   object" treats differently from a partial interface in the one way that matters here: a mixin has no
+   prototype object of its own, so its member has no object until an includer supplies one. The page-facing
+   member was given as HTML §7.2.5's, which is "The History interface"; `Window`'s `navigator` and
+   `clientInformation` are declared in HTML §7.2.2 "The Window object" and this object is HTML §8.10.1 "The
+   Navigator object"'s. OWNED. */
 JSValue navigator_object(JSContext *ctx)
 {
     return realm_value_get(ctx, g_obj_slot);
@@ -414,16 +427,23 @@ static void navigator_install_realm(JSContext *ctx)
        type, which this build does not have — so moving THIS object onto WorkerGlobalScope.prototype would put
        an interface the realm does not expose into it. Until WorkerNavigator exists the member is honestly
        ABSENT (§NO STUBS).
-       NAMED RESIDUAL — THE MIXINS THAT ADD TO THIS OBJECT DO NOT ASK THIS QUESTION YET, AND ONE OF THEM ASKS
-       FOR THE OBJECT AT INSTALL TIME. WHAT IS NOT COVERED: a component whose partial interface adds a member
-       to `Navigator` reaches this realm's Navigator through navigator_object, which in a worker realm now
-       answers with nothing. WHAT THE NEXT DIFF BUILDS: that component's own §3.8 step 1 over the interface
-       IT declares its member on — Storage §8 declares `partial interface Navigator` AND
-       `partial interface WorkerNavigator`, so the member is not absent in a worker, it belongs on an object
-       this build has not got, and the gate is over `Navigator` rather than over its own interface (which IS
-       exposed in a worker and is why the component runs at all). HOW ITS ABSENCE SHOWS: a worker realm whose
-       intrinsics get past this row aborts at a DCHECK complaining the realm has no Navigator, whose stated
-       remedy is declaration order — true of the fact and wrong about the cause, which is this refusal.
+       THE NAMED RESIDUAL THAT STOOD HERE IS RETIRED — core/file/storage_manager.c ASKS ITS OWN WEB IDL §3.8
+       STEP 1 OVER `Navigator` NOW, which its remedy clause asked for, and the clause was RIGHT that the gate
+       belongs over the includer rather than over that component's own interface. It is kept as a correction
+       because two of the things it told its reader were wrong in ways the next reader would reproduce.
+       (a) IT NAMED THE WRONG CONSTRUCT. It said Storage §8 declares `partial interface Navigator` AND
+       `partial interface WorkerNavigator`; the harvested IDL every instrument here consumes declares
+       `interface mixin NavigatorStorage` and two `includes` statements. Web IDL §3.7.3 "Interface prototype
+       object" gives a mixin no prototype of its own, so a mixin member has no object ANYWHERE until an includer
+       supplies one — which is the reason the gate is over the includer, and a `partial interface` would not
+       have had it.
+       (b) ITS ABSENCE-SHOWS CLAUSE NAMED AN ABORT THAT COULD NOT FIRE. It said a worker realm getting past
+       this row aborts at a DCHECK complaining the realm has no Navigator. That DCHECK tested a value
+       `navigator_object` produces, and reading a realm slot this install never set aborts inside
+       core/realm.c's `realm_value_get` ONE FRAME EARLIER — so what a worker realm really took was a shared
+       helper's abort naming no site, and the clause pointed its reader at a component the crash never named.
+       The lesson is the one that generalises: an absence-shows clause about a CRASH is a claim about a call
+       CHAIN, so it is checked by reading what the condition's operand is computed by.
        THIS IS THE ALGORITHM ANSWERING AND NOT A FALLBACK BEING SELECTED: delete the thing it selects against
        and Web IDL still has to ask whether this interface is exposed in this realm. */
     if (!idl_exposed_in_realm(ctx, "Navigator")) return;
@@ -483,13 +503,13 @@ void navigator_init(JSContext *ctx)
     CHECK(JS_NewClass(JS_GetRuntime(ctx), g_nav_class, &d) == 0,
           "Navigator: the per-realm prototype slot could not be declared");
     g_vals_slot = realm_value_declare(ctx, "HTML §8.10.1 the Navigator's member values");
-    g_obj_slot  = realm_value_declare(ctx, "HTML §7.2.5 the Window's associated Navigator");
+    g_obj_slot  = realm_value_declare(ctx, "HTML §8.10.1 the Window's associated Navigator");
     /* DECLARED once per agent and INSTALLED per realm, like every other member: a declaration builds a pool
        entry and a member has ONE, so declaring inside the install would mint a second entry for the second
        realm's prototype — which is what the pool's seal asserts against. */
     g_id_java_enabled = idl_method_id(ctx, NULL, 0, js_nav_java_enabled, 0);
     agent_state_id("navigator", &g_vals_slot, "§8.10.1's member-values realm slot, and the declaration latch");
-    agent_state_id("navigator", &g_obj_slot, "§7.2.5's associated-Navigator realm slot");
+    agent_state_id("navigator", &g_obj_slot, "HTML §8.10.1's associated-Navigator realm slot");
     agent_state_id("navigator", &g_id_java_enabled, "§8.10.1's javaEnabled declaration");
     /* BEACON §2.1's member, declared HERE for the reason Permissions §6's whole component is declared below:
        a host that has a Navigator has `navigator.sendBeacon`, so a per-host line would be exactly the
