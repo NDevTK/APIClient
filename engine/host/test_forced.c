@@ -7225,11 +7225,24 @@ static JSValue tf_own_data_value(JSContext *ctx, JSValueConst obj, const char *i
  * silently stopped installing anything fails on the control instead of passing on the absence.
  *
  * EVERY ROW'S IDENTIFIER MUST BE PLACED BY THE PER-REALM COLUMN, AND THAT IS WHAT THE TABLE MEASURES RATHER
- * THAN AN ASSUMPTION IT MAKES. This runs immediately after platform_agent_init and before any document is
- * installed over any realm, so the only §3.8 property references either global carries are the ones
- * core/realm.h's intrinsic list placed. An identifier installed from core/platform.c's per-document column is
- * therefore absent from BOTH realms here — which is the state the Window arm below reports, and it is a
- * statement about the COLUMN and not about the component. */
+ * THAN AN ASSUMPTION IT MAKES. Every realm this function probes is one it BUILT — the Window arm's as well as
+ * both worker arms' — and it installs no document over any of them, so the only §3.8 property references any
+ * of those globals carries are the ones core/realm.h's intrinsic list placed. An identifier installed from
+ * core/platform.c's per-document column is therefore absent from EVERY realm here — which is the state the
+ * Window arm below reports, and it is a statement about the COLUMN and not about the component.
+ *
+ * THAT USED TO BE A FACT ABOUT WHERE THIS FUNCTION IS CALLED, AND THE RETIRED REASON IS WRITTEN DOWN RATHER
+ * THAN DELETED BECAUSE A READER WHO RE-DERIVES IT WILL RE-INTRODUCE IT. The Window arm probed the CALLER'S
+ * realm, so each `false` in its column meant `the per-document column has not run YET` — true only while
+ * this call sat between platform_agent_init and the first platform_document_install. The two failure
+ * directions of that were not alike: moving the call is what ARMS the whole `false` column, every row of it
+ * an always-fatal CHECKF in dev and in release, and the arming was invisible while a realm aborted during
+ * construction ABOVE the loop, so the move read as free and detonated in the diff that fixed the abort. The
+ * realm built below removes the dependency rather than documenting it — a realm this function creates and
+ * frees cannot have a document installed over it by anybody, at any call position — and the precondition is
+ * ASSERTED before the loop instead of being a property of the host's call order.
+ * RETIREMENT: this record goes when nothing in this function can name a realm a document has been installed
+ * over, at which point the assertion before the loop can no longer fail and the reason cannot be re-derived. */
 static void exposure_selftest(JSContext *ctx, const char *top_level_url)
 {
     static const struct { const char *name; bool in_window, in_worker; } EXPECT[] = {
@@ -7319,8 +7332,7 @@ static void exposure_selftest(JSContext *ctx, const char *top_level_url)
            browser/idl_exposure.h for the same reason the mixin is: an enum gets no row, that header states
            that a name with no row is EXPOSED, so `idl_exposed_in_realm("XMLHttpRequestResponseType")` answers
            TRUE and the door would place it in both realms without a word.
-           AT THE PARENT REVISION the four rows below FAIL — §3's three and §5's, in BOTH arms, because this
-           runs after tf_agent_init and before tf_realm_install reaches platform_document_install, so no
+           AT THE PARENT REVISION the four rows below FAIL — §3's three and §5's, in BOTH arms, because no
            document column has run over either realm. The enum row passes at the parent and passes here; it is
            a discriminator against a wrong conversion, never a calibration row, and it is reported as such. */
         { "XMLHttpRequestEventTarget",  true, true },   /* XHR §3, [Exposed=(Window,DedicatedWorker,SharedWorker)] */
@@ -7407,7 +7419,7 @@ static void exposure_selftest(JSContext *ctx, const char *top_level_url)
            states (Window, Worker) for it, which is the OTHER thing this row says: a worker realm is owed the
            member and does not get it, and core/workers/worker_global_scope.c's item (7) already names this
            component's `fetch` as one of the members it owes. `false` in the worker arm is therefore that
-           known absence and `false` in the Window arm is this table's own moment, exactly as the six
+           known absence and `false` in the Window arm is this table's own realm, exactly as the six
            `[Exposed=Window]` rows above say those two halves apart.
            `Body` IS `TextDecoderCommon`'S TEST OVER THIS STANDARD, AND BOTH MOVED FETCH INTERFACES INCLUDE IT.
            Fetch §5.3 "Body mixin" is an `interface mixin`, and Web IDL §3.7.1 "Interface object" is written of
@@ -7429,12 +7441,11 @@ static void exposure_selftest(JSContext *ctx, const char *top_level_url)
            itself cannot show; and a conversion that rebuilds blob_init or blob_install_protos and drops the
            call takes `FileList` out of EVERY realm while `Blob` and `File` go on passing. It reads `true` in
            both arms before this change and after it.
-           AT THE PARENT REVISION the six `[Exposed=(Window,Worker)]` rows FAIL in BOTH arms, because this runs
-           after tf_agent_init and before tf_realm_install reaches platform_document_install, so no document
-           column has run over either realm. `fetch`, `Body` and `FileList` read the same at the parent as
+           AT THE PARENT REVISION the six `[Exposed=(Window,Worker)]` rows FAIL in BOTH arms, because no
+           document column has run over either realm. `fetch`, `Body` and `FileList` read the same at the parent as
            here; they are discriminators against a wrong conversion, never calibration rows, and are reported
-           as such. Established by READING main's call order and core/platform.c's two columns, never by a
-           run — a subagent does not build. */
+           as such. Established by READING core/platform.c's two columns and the realms this function builds,
+           never by a run — a subagent does not build. */
         { "Headers",                          true,  true  },  /* Fetch §5.1 "Headers class" */
         { "Request",                          true,  true  },  /* Fetch §5.4 "Request class" */
         { "Response",                         true,  true  },  /* Fetch §5.5 "Response class" */
@@ -7492,8 +7503,7 @@ static void exposure_selftest(JSContext *ctx, const char *top_level_url)
            as many words — a name with no row is EXPOSED, and a mixin gets no row — so
            `idl_exposed_in_realm("ReadableStreamGenericReader")` answers TRUE and the door would place the name
            in BOTH realms without a word.
-           AT THE PARENT REVISION the thirteen rows below FAIL in BOTH arms, because this runs after
-           tf_agent_init and before tf_realm_install reaches platform_document_install, so no document column
+           AT THE PARENT REVISION the thirteen rows below FAIL in BOTH arms, because no document column
            has run over either realm. The mixin row passes at the parent and passes here; it is a discriminator
            against a wrong conversion, never a calibration row, and it is reported as such. */
         { "ReadableStream",                   true, true },   /* Streams §4.2, [Exposed=*] */
@@ -7546,7 +7556,7 @@ static void exposure_selftest(JSContext *ctx, const char *top_level_url)
            THE WORKER HALF IS AN EXPOSURE ASSERTION AND THE WINDOW HALF IS A COLUMN ONE, and they are said
            apart rather than counted together: `false` in the worker arm is what Web IDL §3.3.7 [Exposed] step
            1 requires of `[Exposed=Window]` in a DedicatedWorkerGlobalScope realm HOWEVER the name is placed,
-           and `false` in the Window arm is this table's own moment — the banner above says an identifier
+           and `false` in the Window arm is this table's own realm — the banner above says an identifier
            installed from the per-document column is absent from both realms here.
            THAT SPLIT IS WHAT MAKES THEM DISCRIMINATE RATHER THAN CONFIRM. `dom_rect` and `dom_rect_list` are
            ADJACENT core/platform.c rows in one directory under one comment, and the three resize_observer
@@ -7569,9 +7579,9 @@ static void exposure_selftest(JSContext *ctx, const char *top_level_url)
            §4's own row goes on passing. It reads `true` in both arms before this change and after it.
 
            AT THE PARENT REVISION the three `[Exposed=(Window,Worker)]` rows FAIL in BOTH arms and `SVGRect`
-           FAILS in the Window arm, because this runs after tf_agent_init and before tf_realm_install reaches
-           platform_document_install, so no document column has run over either realm. Established by READING
-           main's call order and core/platform.c's two columns, never by a run — a subagent does not build. */
+           FAILS in the Window arm, because no document column has run over either realm. Established by
+           READING core/platform.c's two columns and the realms this function builds, never by a run — a
+           subagent does not build. */
         { "DOMRectReadOnly",                  true,  true  },  /* Geometry §3, [Exposed=(Window,Worker)] */
         { "DOMRect",                          true,  true  },  /* Geometry §3, [Exposed=(Window,Worker)] */
         { "PerformanceObserver",              true,  true  },  /* Perf Timeline §4, [Exposed=(Window,Worker)] */
@@ -7581,7 +7591,7 @@ static void exposure_selftest(JSContext *ctx, const char *top_level_url)
         { "PerformanceObserverEntryList",     true,  true  },
         /* THE SIX THIS CONVERSION REFUSED: each `[Exposed=Window]`, so the worker arm is Web IDL §3.3.7 step
            1's own answer, and each still core/platform.c's per-document column, so the Window arm is this
-           table's moment rather than a claim about the interface */
+           table's realm rather than a claim about the interface */
         { "DOMRectList",                      false, false },  /* Geometry Interfaces §4 */
         { "IntersectionObserver",             false, false },  /* Intersection Observer §2.2 */
         { "IntersectionObserverEntry",        false, false },  /* Intersection Observer §2.3 */
@@ -7602,7 +7612,7 @@ static void exposure_selftest(JSContext *ctx, const char *top_level_url)
            THE REFUSAL IS ASSERTED RATHER THAN ARGUED, AND THE TWO ARMS ARE TWO DIFFERENT CLAIMS. `false` in
            the worker arm is what Web IDL §3.3.7 [Exposed] step 1 requires of `[Exposed=Window]` in a
            DedicatedWorkerGlobalScope realm HOWEVER the name is placed; `false` in the Window arm is this
-           table's own moment, which the banner above states — an identifier installed from
+           table's own realm, which the banner above states — an identifier installed from
            core/platform.c's per-document column is absent from both realms here. Moved to the realm column
            they would read `true` in the Window arm, because that is where the intrinsics have run, so every
            row below fails under the one mistake this group offers.
@@ -7627,7 +7637,7 @@ static void exposure_selftest(JSContext *ctx, const char *top_level_url)
            either function whole reads `true` in the Window arm and fails, exactly as it does on the
            twenty-six rows above, and one that deleted the thunk takes the member out of EVERY realm. All
            three carry an IDL_MEMBER_EXPOSURE row of IDL_GLOBAL_WINDOW, which idl_install_method asks through
-           idl_global_member_refused, so the worker arm is that gate's own answer and not this table's moment.
+           idl_global_member_refused, so the worker arm is that gate's own answer and not this table's realm.
 
            `CSS` IS THE ROW THAT ASSERTS THE PREMISE THE REFUSAL RESTS ON, AND IT IS A CONSTRUCT WEB IDL §3.8
            DOES NOT REACH. Its step 1 population is interfaces, and a namespace is not one — Web IDL §3.13
@@ -7645,8 +7655,11 @@ static void exposure_selftest(JSContext *ctx, const char *top_level_url)
            to `idle_callback`, which is that table working as designed and is also why the chain is invisible
            from the row. That is `ProgressEvent`'s and `FileList`'s shape, and this table CANNOT catch the
            deletion form of it: the name reads `false, false` before such a mistake and after it, because
-           `[Exposed=Window]` puts it outside both arms at this moment. WHAT WOULD CATCH IT is a Window-arm
-           reading taken AFTER platform_document_install, which this fixture does not take for any row.
+           `[Exposed=Window]` puts it outside both arms in the realms this table probes. WHAT WOULD CATCH IT
+           is a Window-arm reading over a realm a document HAS been installed over, and that is a SECOND table
+           over a SECOND realm rather than a different call position for this one: the realm this table's
+           Window column probes is one this function builds and frees, and the assertion before the loop
+           refuses a realm the per-document column has run on.
            HOW ITS ABSENCE WOULD SHOW: `new IdleDeadline` and `IdleDeadline` in a page would be undefined on
            every document while every idle callback went on receiving a correctly-branded deadline object,
            since idle_deadline_new mints over the class prototype its own realm intrinsic built. The row below
@@ -7654,9 +7667,8 @@ static void exposure_selftest(JSContext *ctx, const char *top_level_url)
 
            AT THE PARENT REVISION EVERY ROW BELOW READS EXACTLY AS IT DOES HERE, which is what a refusal means
            and is reported as such: these are discriminators against a wrong conversion and never calibration.
-           Established by READING core/platform.c's two columns, core/dom/document.c's install and main's call
-           order — this fixture runs after tf_agent_init and before tf_realm_install reaches
-           platform_document_install — never by a run. */
+           Established by READING core/platform.c's two columns, core/dom/document.c's install and the realms
+           this function builds — no document column has run over any of them — never by a run. */
         { "CSSRule",                 false, false },  /* CSSOM §6.4.2 "The CSSRule Interface" */
         { "CSSGroupingRule",         false, false },  /* CSSOM §6.4.5 "The CSSGroupingRule Interface" */
         { "CSSStyleRule",            false, false },  /* CSSOM §6.4.3 "The CSSStyleRule Interface" */
@@ -7721,7 +7733,7 @@ static void exposure_selftest(JSContext *ctx, const char *top_level_url)
            THE WORKER HALF IS AN EXPOSURE ASSERTION AND THE WINDOW HALF IS A COLUMN ONE, and they are said
            apart rather than counted together: `false` in the worker arm is what Web IDL §3.3.7 [Exposed] step
            1 requires of `[Exposed=Window]` in a DedicatedWorkerGlobalScope realm HOWEVER the name is placed,
-           and `false` in the Window arm is this table's own moment — the banner above says an identifier
+           and `false` in the Window arm is this table's own realm — the banner above says an identifier
            installed from the per-document column is absent from both realms here.
            THAT SPLIT IS WHAT MAKES THEM DISCRIMINATE RATHER THAN CONFIRM, AND THE POPULATION IS WHY THERE ARE
            NINETEEN OF THEM. This is the largest single directory in the conversion — twenty-two Web IDL §3.8
@@ -7759,12 +7771,11 @@ static void exposure_selftest(JSContext *ctx, const char *top_level_url)
            deliberately: the control fires the check (§6.3 IS placed, and by the column this table measures)
            before the discriminator is asked, so a zero here is a judgement and not an unarmed probe.
 
-           AT THE PARENT REVISION the two `[Exposed=*]` rows FAIL in BOTH arms, because this runs after
-           tf_agent_init and before tf_realm_install reaches platform_document_install, so no document column
+           AT THE PARENT REVISION the two `[Exposed=*]` rows FAIL in BOTH arms, because no document column
            has run over either realm. The eighteen refusal rows and `EventListener` read the same at the parent
            as here; they are discriminators against a wrong conversion, never calibration rows, and are
-           reported as such. Established by READING main's call order and core/platform.c's two columns, never
-           by a run — a subagent does not build.
+           reported as such. Established by READING core/platform.c's two columns and the realms this function
+           builds, never by a run — a subagent does not build.
 
            WHAT WAS DELIBERATELY LEFT HAS ARRIVED, AND ITS TWO ROWS ARE BELOW. core/dom/observable.c's two
            sites were the remaining `MOVE` in this directory and the diff that moves them is the one that adds
@@ -7791,7 +7802,7 @@ static void exposure_selftest(JSContext *ctx, const char *top_level_url)
         /* THE EIGHTEEN LISTED TOGETHER, ONE PER core/dom FILE THAT HOLDS A REFUSED Web IDL §3.8 SITE
            (`NodeFilter`, the nineteenth refusal, stands below with the pair it controls): each
            `[Exposed=Window]`, so the worker arm is Web IDL §3.3.7 step 1's own answer, and each still
-           core/platform.c's per-document column, so the Window arm is this table's moment rather than a claim
+           core/platform.c's per-document column, so the Window arm is this table's realm rather than a claim
            about the interface */
         { "Node",              false, false },   /* DOM §4.4, and the site that names eighty-six identifiers */
         { "Document",          false, false },   /* DOM §4.5, the head of that same helper's list */
@@ -7877,26 +7888,25 @@ static void exposure_selftest(JSContext *ctx, const char *top_level_url)
            WHAT THESE ROWS CATCH AND WHAT THEY DO NOT, SAID PLAINLY RATHER THAN COUNTED TOGETHER. `false` in
            the worker arm is what Web IDL §3.3.7 [Exposed] step 1 requires of `[Exposed=Window]` in a
            DedicatedWorkerGlobalScope realm HOWEVER the name is placed. `false` in the Window arm is this
-           table's own moment — it runs before any document is installed over any realm — so a conversion that
-           moved any of these to the per-realm column reads `true` there and FAILS, which is the mistake this
+           table's own realm, over which no document is installed — so a conversion that moved any of these to
+           the per-realm column reads `true` there and FAILS, which is the mistake this
            group offers. A conversion that DELETED one of the eleven calls instead would leave the name absent
            from both realms and these rows would pass; that direction is caught by core/platform.c's
            PLATFORM_WITNESS probe for the names it has rows for, and by nothing at all for the ones it does
            not, which is the honest state and is stated here rather than left to be assumed.
 
-           AT THE PARENT REVISION the three `MOVE` rows FAIL in BOTH arms, because this runs after
-           tf_agent_init and before tf_realm_install reaches platform_document_install, so no document column
+           AT THE PARENT REVISION the three `MOVE` rows FAIL in BOTH arms, because no document column
            has run over either realm. The twelve refusals, the typedef and the dictionary read the same at the
            parent as here; they are discriminators against a wrong conversion, never calibration rows, and are
-           reported as such. Established by READING main's call order and core/platform.c's two columns, never
-           by a run — a subagent does not build. */
+           reported as such. Established by READING core/platform.c's two columns and the realms this function
+           builds, never by a run — a subagent does not build. */
         { "FormData",              true,  true  },  /* XHR §4 "Interface FormData", [Exposed=(Window,Worker)] */
         /* HTML §2.6.5 "The DOMStringList interface", [Exposed=(Window,Worker)] */
         { "DOMStringList",         true,  true  },
         /* HTML §8.1.4.7 "Unhandled promise rejections", [Exposed=*] — every realm, by §3.3.7 step 1's return */
         { "PromiseRejectionEvent", true,  true  },
         /* THE TWELVE REFUSED: each `[Exposed=Window]`, so the worker arm is Web IDL §3.3.7 step 1's own answer,
-           and each still core/platform.c's per-document column, so the Window arm is this table's moment */
+           and each still core/platform.c's per-document column, so the Window arm is this table's realm */
         { "CustomElementRegistry", false, false },  /* HTML §4.13.4 "The CustomElementRegistry interface" */
         { "ElementInternals",      false, false },  /* HTML §4.13.7.1 "The ElementInternals interface" */
         { "CustomStateSet",        false, false },  /* HTML §4.13.7.5 "Custom state pseudo-class" */
@@ -7922,6 +7932,11 @@ static void exposure_selftest(JSContext *ctx, const char *top_level_url)
            html.idl and converted by that interface's own constructor; §3.8 defines no reference for one */
         { "PromiseRejectionEventInit", false, false },
     };
+    /* THE WINDOW ARM'S REALM IS THIS FUNCTION'S OWN, WHICH IS WHAT TAKES ITS CALL POSITION OUT OF ITS
+       MEASUREMENT. See the banner above for the dependency this removes and for the reason a reader must not
+       re-derive it; the three lines below are the three engine/host/main.c's engine_realm_new writes for a
+       Window realm, so this is a realm a host can build and not a shape only a fixture has. */
+    JSContext *win = JS_NewContext(JS_GetRuntime(ctx));
     JSContext *worker = JS_NewContext(JS_GetRuntime(ctx));
     /* THE SECOND WORKER REALM IS THE OTHER ARM OF ONE STEP, and it is a second REALM because that is the only
        thing that differs between the two: §8.1.3.5 step 1.2.1's operand is per-environment, so measuring both
@@ -7931,11 +7946,35 @@ static void exposure_selftest(JSContext *ctx, const char *top_level_url)
     bool owner_secure;
     int i;
 
-    CHECK(worker != NULL && worker_insecure != NULL,
+    CHECK(win != NULL && worker != NULL && worker_insecure != NULL,
           "a realm for the §3.3.7 [Exposed] step 1 measurement could not be created");
+    CHECK(JS_AddIntrinsicDOMException(win) == 0, "the DOMException intrinsic failed to install in a realm");
     CHECK(JS_AddIntrinsicDOMException(worker) == 0, "the DOMException intrinsic failed to install in a realm");
     CHECK(JS_AddIntrinsicDOMException(worker_insecure) == 0,
           "the DOMException intrinsic failed to install in a realm");
+    /* THE WINDOW REALM IS BUILT FIRST BECAUSE IT IS THE CONTROL, and a control is only a control while it is
+       the first thing that can speak: the EXPECT table's Window column is what says the per-realm intrinsic
+       list ran at all, so a build in which THAT construction is what has something to say must fail on it
+       rather than on whichever realm happens to be built next.
+       AND NOTHING SAYS THIS REALM IS FINISHED, WHICH IS THE ASYMMETRY WITH THE WORKER PAIR BELOW AND NOT AN
+       OMISSION. core/realm.h's owed half may be asked only where no further placement will happen, and a
+       WINDOW realm's construction has a SECOND end — core/platform.c's per-document column, which this realm
+       never reaches. realm_assert_interface_objects_asked here would therefore fire on every interface object
+       that column places, which is the same population the table's Window `false` rows are about. */
+    realm_install_intrinsics(win, top_level_url, "Window", false);   /* §8.1.3.5 step 1.2.1: no owner set */
+    /* AND IT HAS THE SURFACE THE AGENT'S OWN WINDOW REALM HAS, ASKED OF THE ONE FACT THAT COULD MAKE THEM
+       DIFFER. Web IDL §3.3.13 [SecureContext]'s members are installed or absent by HTML §8.1.3.5's answer, so
+       a Window realm built here at an address whose answer differs from the caller's would carry a DIFFERENT
+       set of interface objects and the table below would be measuring a surface no document of this agent
+       has. The two sides are two realms' own stored §8.1.3.1 top-level creation URLs, so they can disagree:
+       what makes them agree is that this call was handed the address the agent was brought up at. */
+    CHECKF(secure_context_is(win) == secure_context_is(ctx),
+           "the realm this exposure table's Window arm probes answered HTML §8.1.3.5 Secure contexts %d where "
+           "the agent's own Window realm answers %d — Web IDL §3.3.13 [SecureContext] installs or omits "
+           "members by that answer, so these two realms do not carry the same platform surface and every row "
+           "below would be a statement about a Window no document of this agent is installed over. This realm "
+           "was built at `%s`, which is the address the caller stated; the agent's is core/platform.c's",
+           (int)secure_context_is(win), (int)secure_context_is(ctx), top_level_url);
     /* WHAT THE OWNER WOULD SAY, ASKED OF THE OWNER — HTML §8.1.3.5 Secure contexts step 1.2.1 reads "global's
        owner set[0]'s relevant settings object is a secure context", and the realm this fixture is standing in
        is the Window that would be creating the worker. Taking the answer from the owner rather than restating
@@ -7964,14 +8003,45 @@ static void exposure_selftest(JSContext *ctx, const char *top_level_url)
     realm_assert_interface_objects_asked(worker);
     realm_assert_interface_objects_asked(worker_insecure);
 #endif
-    win_global = JS_GetGlobalObject(ctx);
+    win_global = JS_GetGlobalObject(win);
     worker_global = JS_GetGlobalObject(worker);
+    /* AND NO DOCUMENT HAS BEEN INSTALLED OVER THE REALM THE WINDOW COLUMN IS ABOUT — the ONE precondition
+       every `false` in that column rests on, asserted once here rather than discovered as a row.
+       IT IS ASKED OF `document` AND NOT OF A TABLE NAME, which is what makes it a precondition and not a
+       second copy of a row. HTML §7.2.2's `document` is a §3.7.6 attribute of the [Global] interface, so
+       Web IDL §3.8 Platform objects implementing interfaces puts it on the INSTANCE — "If interface is
+       declared with the [Global] extended attribute, then: ... Define the regular attributes of interface on
+       instance" — and core/dom/document.c's per-document install is the one place in this engine that makes
+       that call. So the name is the per-document column's most characteristic member and is a row of no
+       table.
+       IT IS A CHECKF AND NOT A DCHECK BECAUSE THE ROWS IT GUARDS ARE. Each of them is always fatal, dev and
+       release, so an assertion compiled out of release would leave a release build detonating on a row that
+       reports Web IDL §3.3.7 [Exposed] step 1 for a question about WHICH REALM was probed. */
+    {
+        JSAtom d = JS_NewAtom(win, "document");
+        int has_doc;
+
+        CHECK(d != JS_ATOM_NULL, "the `document` witness name could not be interned");
+        has_doc = JS_HasProperty(win, win_global, d);
+        JS_FreeAtom(win, d);
+        CHECK(has_doc >= 0,
+              "the per-document probe threw — [[HasProperty]] over a realm's global runs no page code");
+        CHECKF(has_doc == 0,
+               "a document has been installed over the realm this exposure table's Window arm probes: its "
+               "global carries HTML §7.2.2's `document`, which Web IDL §3.8 Platform objects implementing "
+               "interfaces places on the instance of a [Global] interface and which core/dom/document.c "
+               "installs from core/platform.c's PER-DOCUMENT column. Every `false` in this table's Window "
+               "column means `core/realm.h's per-realm intrinsic list did not place this`, and over a realm "
+               "that column HAS run on it means nothing of the kind — so the %d rows below would report §3.3.7 "
+               "[Exposed] step 1 for a defect in WHICH REALM was handed to the loop",
+               (int)(sizeof EXPECT / sizeof EXPECT[0]));
+    }
     for (i = 0; i < (int)(sizeof EXPECT / sizeof EXPECT[0]); i++) {
         JSAtom a = JS_NewAtom(ctx, EXPECT[i].name);
         int in_win, in_worker;
 
         CHECK(a != JS_ATOM_NULL, "an exposure witness name could not be interned");
-        in_win = JS_HasProperty(ctx, win_global, a);
+        in_win = JS_HasProperty(win, win_global, a);
         in_worker = JS_HasProperty(worker, worker_global, a);
         JS_FreeAtom(ctx, a);
         CHECK(in_win >= 0 && in_worker >= 0,
@@ -7982,11 +8052,12 @@ static void exposure_selftest(JSContext *ctx, const char *top_level_url)
                "about step 1. Web IDL §3.8 Platform objects implementing interfaces is \"To define the global "
                "property references on target, given realm realm\", and its step 1 is \"Let interfaces be a "
                "list that contains every interface that is exposed in realm\" — a REALM, with no Document in "
-               "the algorithm. This measurement runs before any document is installed over any realm, so `%s` "
-               "is owed by core/realm.h's per-realm intrinsic list: either that install stopped running, or "
-               "the §3.8 property reference for `%s` is still being placed from core/platform.c's PER-DOCUMENT "
-               "column, where it is absent from every realm no Document is installed over — a worker realm "
-               "always, and a Window realm until one is",
+               "the algorithm. This realm is one this function BUILT and no document is installed over it — "
+               "asserted before this loop rather than assumed — so `%s` is owed by core/realm.h's per-realm "
+               "intrinsic list: either that install stopped running, or the §3.8 property reference for `%s` "
+               "is still being placed from core/platform.c's PER-DOCUMENT column, where it is absent from "
+               "every realm no Document is installed over — a worker realm always, and a Window realm unless "
+               "one is",
                in_win ? "carries" : "does not carry", EXPECT[i].name,
                EXPECT[i].in_window ? "must be there" : "must not", EXPECT[i].name, EXPECT[i].name);
         CHECKF((in_worker == 1) == EXPECT[i].in_worker,
@@ -8375,8 +8446,9 @@ static void exposure_selftest(JSContext *ctx, const char *top_level_url)
            (int)secure_context_is(ctx),
            (int)secure_context_url_potentially_trustworthy(top_level_url), top_level_url);
 
-    JS_FreeValue(ctx, win_global);
+    JS_FreeValue(win, win_global);
     JS_FreeValue(worker, worker_global);
+    JS_FreeContext(win);
     JS_FreeContext(worker);
     JS_FreeContext(worker_insecure);
 }
@@ -20783,30 +20855,31 @@ int main(int argc, char **argv) {
        address it is installed at below — and `https:` makes it a SECURE CONTEXT, which is what a real bundle
        runs in and therefore what the fixture must exercise. */
     tf_agent_init(ctx, "https://x.test", "https://x.test/p");
-    /* WEB IDL §3.3.7 [Exposed] step 1 discriminates, measured both ways — AND THIS CALL'S POSITION IS PART OF
-       THE MEASUREMENT RATHER THAN A PLACEMENT. Its WORKER arm builds realms of its own, so that half is
-       position-free; its WINDOW arm probes the agent's OWN global, so every row of its table whose Window
-       column is `false` means "core/realm.h's per-realm column did not place this", which is true only while
-       no document has been installed over this realm. The loop's own CHECKF says so in the message it fires
-       with. Those names are core/platform.c's PER-DOCUMENT column's — the rows of that file's list carrying a
-       third field — so read the two lists against each other rather than trusting a count here, which moves
-       whenever a lane adds a row.
-       MOVING THIS CALL BELOW ANY DOCUMENT IS SAFE ONLY WHILE A WORKER REALM ABORTS DURING CONSTRUCTION, AND
-       THAT IS THE TRAP AND NOT THE REASSURANCE. The abort is inside this function's own
-       realm_install_intrinsics and the table loop is BELOW it, so while one stands a move LOOKS harmless — the
-       rows are never reached — and it silently arms an ALWAYS-FATAL CHECKF, dev and release, on every
-       absent-in-Window row, which detonates in the diff that FIXES the abort, for a reader with no context for
-       it. The move was proposed for exactly the right reason — two lanes' witnesses are unreadable while the
-       fixture dies at a tenth of a second — and declined for this one.
-       NAMED RESIDUAL — THE DEPENDENCY NEED NOT EXIST. WHAT IS NOT COVERED: the Window arm shares the agent's
-       realm, so it probes a global other code is still building, and the worker arm two screens down is the
-       shape that does not. WHAT THE NEXT DIFF BUILDS: a Window realm of this selftest's own — JS_NewContext
-       plus realm_install_intrinsics with "Window", exactly as the two worker contexts are made — after which
-       this call is position-free and may sit anywhere, and the six comments in the table that currently have
-       to explain the ordering lose their subject. HOW ITS ABSENCE WOULD BE OBSERVED: this line is moved for an
-       unrelated reason and the failure arrives as a spec-conformance verdict about step 1, naming an interface
-       and a standard, when what it reports is where a call sits in main.
-       RETIREMENT: this record goes when the Window arm builds its own realm. */
+    /* WEB IDL §3.3.7 [Exposed] step 1 discriminates, measured both ways — AND THIS CALL'S POSITION IS NOT
+       PART OF THE MEASUREMENT. Both arms build realms of their own: the WORKER arm always did, and the WINDOW
+       arm now builds one beside them, so every row of its table whose Window column is `false` means
+       `core/realm.h's per-realm column did not place this` about a realm no document is EVER installed over,
+       and the function asserts that precondition immediately before its loop rather than inheriting it from
+       where this line sits. Those names are core/platform.c's PER-DOCUMENT column's — the rows of that file's
+       list carrying a third field — so read the two lists against each other rather than trusting a count
+       here, which moves whenever a lane adds a row.
+       WHAT THE ARGUMENT BELOW NOW DECIDES, WHICH IS THE ONE THING MOVING THIS LINE CAN STILL GET WRONG. The
+       address is what that Window realm is BUILT at, so it is HTML §8.1.3.1's top-level creation URL of the
+       realm the table probes and no longer only the operand of the §8.1.3.5 step 2 control below it.
+       Web IDL §3.3.13 [SecureContext] installs or omits members by that answer, so an address whose answer
+       differs from the agent's would hand the table a realm carrying a different set of interface objects —
+       exposure_selftest asserts the two agree rather than trusting the caller, and the value here is the one
+       tf_agent_init is given on the line above.
+       THE RESIDUAL THAT STOOD HERE IS DISCHARGED, AND ITS NEXT-DIFF CLAUSE WAS RIGHT ABOUT THE MECHANISM AND
+       LOW ABOUT THE SCOPE — recorded because the only reader of such a clause is someone who has already
+       decided to build it, so a wrong one is executed rather than caught. It named SIX comments in the table
+       as losing their subject. The set is larger and is not a number worth writing down, since it was a
+       property of how many groups the table had on the day the clause was written: what actually had to be
+       rewritten is every clause explaining a row by where this call sits, the banner over the function, the
+       IdleDeadline paragraph's remedy, and every spelling of `this table's own moment`, which is the phrase
+       that carried the retired reason. The mechanism half — JS_NewContext plus realm_install_intrinsics with
+       Window, exactly as the worker contexts are made — was exact.
+       RETIREMENT: this record goes when no clause in this file explains a table row by where this call sits. */
     exposure_selftest(ctx, "https://x.test/p");
     navigable_set_realm_builder(tf_child_realm);
     int min_doc = arg_has(argc, argv, "--min");   /* fast per-change memory gate: the minimal clone/COW doc */
