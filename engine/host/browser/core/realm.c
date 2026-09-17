@@ -132,7 +132,10 @@ static int idl_name_ptr_cmp(const void *key, const void *el)
    So the enumeration is now every own string-keyed property and the row decides which QUESTION is owed:
    `JS_GPN_SET_ENUM` fills in `is_enumerable` per property (quickjs.h declares that as the flag's whole
    purpose), the descriptor half is asserted from that field, and the exposure half is asked of
-   idl_exposed_in_realm — §3.3.7 step 1's ONE statement, never re-spelled here as `row->set & global names`,
+   idl_exposed_in_realm — §3.3.7 step 1's ONE statement, asked ON BOTH SIDES OF THE ROW SINCE §3.3.7's subject
+   list is "An interface, callback interface, namespace, or member construct", through idl_exposed_in_realm
+   for a row-bearing identifier and through core/idl_args' idl_member_exposed_in_realm for a member — never
+   re-spelled here as `row->set & global names`,
    which is why this pays for a second bsearch it could have avoided. core/idl_args.h states that rule from the
    other side: an auditor that spelled the condition itself would be a second copy of the standard, and two
    right answers to one question is the shape that drifts.
@@ -188,8 +191,10 @@ void realm_assert_global_property_references(JSContext *ctx)
         row = bsearch(name, IDL_EXPOSURE, sizeof IDL_EXPOSURE / sizeof IDL_EXPOSURE[0],
                       sizeof IDL_EXPOSURE[0], idl_exposure_row_name_cmp);
         /* NO ROW MEANS THIS IS NOT A §3.8 PROPERTY REFERENCE — a §3.7.6 attribute or §3.7.7 operation of the
-           [Global] interface, an ECMAScript intrinsic, or a name a host added — and none of those owes either
-           question below. See the banner for why that classification is the generated table's to make. */
+           [Global] interface, an ECMAScript intrinsic, or a name a host added — so none of those owes the
+           DESCRIPTOR question below, which is §3.8's alone. A MEMBER does owe §3.3.7 [Exposed] step 1, and
+           that is asked INSIDE this branch rather than below it, because the branch is where the members are.
+           See the banner for why the classification is the generated table's to make. */
         if (row == NULL) {
             /* AND A PASSING WALK OVER IDL_EXPOSURE ALONE IS NOT COVERAGE, WHICH IS WHY THIS BRANCH IS NOT A
                BARE `continue` ANY MORE. That table is keyed on the identifiers §3.8 `define the global property
@@ -220,6 +225,70 @@ void realm_assert_global_property_references(JSContext *ctx)
                     "`Object.getOwnPropertyDescriptor(globalThis, '%s')` answers a descriptor here and "
                     "`undefined` in every browser. Install it on the declaring interface's prototype instead: "
                     "`git grep '\\\"%s\\\"' engine/host/browser` finds the site", name, name, name, name);
+
+            /* AND WEB IDL §3.3.7 [Exposed] STEP 1 OF THE *MEMBER*, WHICH IS THE TWIN OF THE EXPOSURE ASSERT IN
+               THE ROW-BEARING ARM BELOW AND HAD NO SITE UNTIL NOW. §3.3.7 names its own subjects — "An
+               interface, callback interface, namespace, or member construct is exposed in a given realm" — so
+               the step is owed by a MEMBER exactly as by an interface object, and the only reason the arm
+               below could not ask it is that its operand is IDL_EXPOSURE, whose key is the identifier §3.8
+               puts on a global. A member has no row there, so every §3.7.6 attribute and §3.7.7 operation
+               arrives HERE and was asked only the realm-independent IDL_PROTOTYPE_ONLY band above.
+               THE DIRECTION IS `PRESENT ⇒ PERMITTED` AND THAT IS WHY IT IS ASKABLE OVER AN OUTCOME AT ALL.
+               core/idl_args.h's rule is that an invariant over a GATED operation censuses the ASK, because a
+               census of what LANDED cannot tell a component that never asked from one the gate correctly
+               refused. The gate here is §3.7.6's "If attr is not exposed in realm, then continue." and
+               §3.7.7's "If op is not exposed in realm, then continue.", and a refusal is an ABSENCE: the
+               member is not placed, so it is not a property, so this walk never enumerates it. An
+               `owed ⇒ present` census would fire on every Window-only member in a worker realm; this one
+               cannot fire on a refusal because a refusal contributes nothing to the population. What it can
+               see is the opposite and is the thing no ask-side check reaches — a member that got here without
+               being asked.
+               ITS POPULATION IS SAFE BECAUSE THE SILENCE IS, not because this branch is filtered. A name with
+               no IDL_MEMBER_EXPOSURE row is EXPOSED (§3.3.7's `*`, and core/idl_args.h states why the silent
+               direction is the sound one), and every ECMAScript intrinsic, every `__apiclient*` operand
+               binding and every fixture host surface is exactly such a name — none of them is in any of the
+               four generated bands. So this asserts a POSITIVE over a population it does not control, and it
+               is sound only because the predicate answers TRUE for everything outside the corpus. That is the
+               whole reason §3.8's own-property band is not also asked here: `idl_realm_global_declares` answers FALSE for
+               `Object`, for `Math` and for every host name, so asking it in this branch would abort on the
+               first intrinsic the walk reaches. See the residual below for the operand that question needs.
+               IT IS THE MEMBER HALF OF WHAT core/idl_args.c's idl_global_member_refused ASKS AT THE DOOR, and
+               the two are not a second copy: that one is the ASK and runs in release because §3.7.6's
+               continue-step is the standard's own behaviour, this one is the OUTCOME and exists in a dev build
+               only, and neither can see what the other sees. A member placed with a raw JS_SetPropertyStr
+               reaches no door at all, which is the population this line is for.
+               NAMED RESIDUAL — §3.8's OWN-PROPERTY BAND IS STILL NOT ASKED OF A MEMBER. WHAT IS NOT COVERED: a member
+               that IS exposed in this realm under §3.3.7 step 1 and that this realm's own §3.3.8 [Global]
+               interface does not DECLARE — §3.8 takes one arm for a global, "If interface is declared with
+               the [Global] extended attribute, then: Define the regular operations of interface on instance,
+               given realm", and §3.7.7 fixes that set as "the list of regular operations that are members of
+               definition", so an INHERITED member belongs on §3.7.3's interface prototype object and never as
+               an own property. IDL_PROTOTYPE_ONLY sees only the members NO [Global] interface declares, so a
+               member declared by ANOTHER [Global] interface passes both checks here. WHAT THE NEXT DIFF
+               BUILDS: the chain-wide union of every [Global] interface's members, re-emitted by
+               engine/idlgen.mjs with a reader — browser/idl_exposure.h's own foot names this walk as the
+               consumer that would, and says the union is deliberately not emitted until one exists — used as
+               the POPULATION FILTER that the per-realm band check is missing: a name in the union but not in
+               this realm's IDL_GLOBALS row is the defect, and a name outside the union is an intrinsic or a
+               host surface and owes nothing. HOW ITS ABSENCE WOULD BE OBSERVED: a global object answers
+               `Object.getOwnPropertyDescriptor(globalThis, id)` with a descriptor for a member the realm's
+               own [Global] interface does not declare, where a browser answers `undefined` because the member
+               is reached up the prototype chain — and no assert in this file speaks, because step 1 answers
+               true for it and IDL_PROTOTYPE_ONLY does not contain it. */
+            DCHECKF(idl_member_exposed_in_realm(ctx, name),
+                    "`%s` is an own property of this realm's global and Web IDL §3.3.7 [Exposed] step 1 says "
+                    "it must not be — \"If construct's exposure set is not `*`, and realm.[[GlobalObject]] "
+                    "does not implement an interface that is in construct's exposure set, then return "
+                    "false\" — and §3.3.7 asks that of a MEMBER as much as of an interface, its own subject "
+                    "list being \"An interface, callback interface, namespace, or member construct is exposed "
+                    "in a given realm\". So a browser answers `'%s' in globalThis` FALSE for a global object "
+                    "of this kind. The one place that step is asked of a member is core/idl_args' "
+                    "idl_global_member_refused, which every §3.7.6 attribute and §3.7.7 operation entry in "
+                    "that file calls and which makes the entry return without building anything — so a member "
+                    "standing here despite it did not come through one of those entries. Its descriptor may "
+                    "well be right, which is why no check above caught it. Route the install through "
+                    "core/idl_args' member entries: `git grep '\\\"%s\\\"' engine/host/browser` finds it",
+                    name, name, name);
             JS_FreeCString(ctx, name);
             continue;
         }

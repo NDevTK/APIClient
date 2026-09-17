@@ -7846,11 +7846,17 @@ static bool idl_global_member_refused(JSContext *ctx, JSValueConst target, const
        WHAT NEITHER ARM CAN SEE: a member-shaped own property placed on the global with a raw JS_SetPropertyStr
        never reaches this call. core/frame/remote_op.c's `__apiclient*` operand bindings and the fixtures' own
        host surfaces are that, deliberately — outside this population rather than exempted from it.
-       RETIREMENT: this record goes when core/realm.c's own-property walk over a FINISHED global asks the
-       member half of this question — it classifies every §3.7.6 attribute and §3.7.7 operation into its
-       no-row branch and asks only the realm-independent IDL_PROTOTYPE_ONLY band of it — because an outcome
-       census over members is then what proves this door exhaustive, and the ordering stops being the only
-       thing standing between a refused member and a global. */
+       AND THE STEP-1 HALF IS NOW ASKED OVER THE OUTCOME TOO: core/realm.c's own-property walk over a FINISHED
+       global asks idl_member_exposed_in_realm of every name that lands in its no-row branch, which is where
+       every §3.7.6 attribute and §3.7.7 operation lands. That is what an outcome census can prove and this
+       door cannot — a member that reached a global without calling any entry in this file — and it is the
+       reason the raw-JS_SetPropertyStr population named just above is now audited rather than merely named.
+       RETIREMENT: this record goes when that walk also asks §3.8's own-property band of a member, which needs an operand
+       neither file has today — the chain-wide union of every [Global] interface's members, as the population
+       filter that keeps a positive band assert off ECMAScript intrinsics and host surfaces. Until then the
+       ORDERING here is still the only thing standing between a refused member and a global, because step 1
+       answers TRUE for a member declared by some OTHER [Global] interface and the walk has nothing to catch
+       it with; browser/idl_exposure.h's foot names that union and says why it is not emitted yet. */
     if (!idl_member_exposed_in_realm(ctx, name)) {
         /* AND THE TWO GENERATED TABLES AGREE ABOUT THE REFUSAL, which is what makes the silence sound rather
            than merely quiet. It is the shape idl_define_legacy_window_alias already uses for §3.8 step 3.1.4
