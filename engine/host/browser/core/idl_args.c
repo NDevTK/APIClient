@@ -7880,7 +7880,20 @@ static bool idl_global_member_refused(JSContext *ctx, JSValueConst target, const
        attributes are exposed on the interface prototype object, unless the attribute is unforgeable or if the
        interface was declared with the [Global] extended attribute, in which case they are exposed on every
        object that implements the interface", and the same sentence for operations. So a name standing on this
-       object is a member of THIS REALM'S [Global] interface or it is a property no browser has anywhere. */
+       object is a member of THIS REALM'S [Global] interface or it is a property no browser has anywhere.
+       THE POSITIVE ASSERTION IS ENTITLED TO ITS OPERAND HERE AND WOULD NOT BE OVER A FINISHED GLOBAL, which
+       is the distinction a reader meeting this abort reaches for first and gets backwards. The statement at
+       the head of this function has already established that the target IS the realm's global, so the
+       population is exactly the member names one of this engine's own installers passed — not every own
+       property a global happens to carry. Asked over the latter, `idl_realm_global_declares` answers FALSE
+       for `Object`, for `Math` and for every host surface, none of which is in any generated band; that is
+       why core/realm.c's walk asks §3.3.7 step 1 of a member and does NOT ask this band. The door has a
+       filter the walk does not, and the filter is what makes the positive form sound.
+       THE REMEDY LIST BELOW WAS EXTENDED RATHER THAN REWRITTEN, because the cause it was missing is the one
+       that actually fires: it offered a wrong target, a misspelling and a stale corpus, and a reader with the
+       tree in front of them spent the day on the last two. RETIREMENT: the added paragraph goes when a member
+       whose declaring interface is not this realm's [Global] one can be installed on that interface's §3.7.3
+       prototype from another component — at which point this is a wrong target again and nothing else. */
     DCHECKF(idl_realm_global_declares(ctx, name),
             "%s:%d installs `%s` as a member on the global object of a realm whose Web IDL §3.3.8 [Global] "
             "interface is `%s`, and `%s` is not a member `%s` DECLARES. §3.8 Platform objects implementing "
@@ -7895,13 +7908,24 @@ static bool idl_global_member_refused(JSContext *ctx, JSValueConst target, const
             "attribute, then: Define the regular attributes of interface on interfaceProtoObj, given realm\") "
             "and the global reaches it UP THE PROTOTYPE CHAIN, where a page observes the difference as "
             "`globalThis.hasOwnProperty(\"%s\")`. browser/idl_exposure.h's IDL_GLOBALS row for `%s` carries "
-            "that band, which is what §3.8 WRITES rather than what a global can REACH. Either this member "
-            "belongs on an interface PROTOTYPE and the line was "
-            "handed the wrong target, or the identifier is misspelt, or the corpus has moved and the table is "
-            "stale "
+            "that band, which is what §3.8 WRITES rather than what a global can REACH. "
+            "THE COMMONEST SHAPE IS AN INHERITED MEMBER WITH NOWHERE TO GO, AND IT IS AN UNBUILT CAPABILITY "
+            "RATHER THAN A WRONG VARIABLE: `%s` may be declared by a NON-[Global] ANCESTOR of `%s`, whose "
+            "§3.7.3 prototype is a DIFFERENT object that this component may not be able to reach or to install "
+            "onto at all. core/workers/worker_global_scope.c's banner over `g_dwgs_class` is the named "
+            "residual for exactly that, states the three things such an install needs and why they cannot "
+            "land separately, and names THIS abort as how its absence shows — read it before treating this "
+            "as a mistake at the call site. TWO READINGS THIS CRASH DOES NOT HAVE, each refuted by "
+            "measurement rather than by reasoning: the generated band is NOT dropping mixin members (a "
+            "member of a plain `interface mixin` and one of a `partial interface mixin` sit in it "
+            "identically, and a member declared through no mixin at all is excluded identically — the "
+            "discriminator is INHERITANCE, not mixin flattening), and the band is NOT empty for this "
+            "interface (the members it declares ITSELF are in it). Only once those are excluded: the "
+            "identifier is misspelt, or the corpus has moved and the table is stale "
             "(`node engine/idlgen.mjs --regen`)",
             at_file, at_line, name, idl_realm_global_interface(ctx), name,
-            idl_realm_global_interface(ctx), name, idl_realm_global_interface(ctx));
+            idl_realm_global_interface(ctx), name, idl_realm_global_interface(ctx),
+            name, idl_realm_global_interface(ctx));
     /* AND §3.7.6's CONTINUE-STEP DOES NOT FIRE: the member is exposed in this realm and this realm's own
        [Global] interface declares it, so §3.8 writes it onto the global and the caller builds it. */
     return false;
