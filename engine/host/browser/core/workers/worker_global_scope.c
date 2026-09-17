@@ -130,9 +130,19 @@ static JSClassID g_dwgs_class;
            `git grep -nE '^ *\{ "(performance|crypto|indexed_db|worker_global_scope)",' -- '*core/platform.c'`
      (b) §3.7.6's PREAMBLE OVER AN INTERFACE THAT IS NOT Window. core/idl_args.c's idl_attribute_this asserts
          idl_global_names_are_window at every read of an attribute minted for the realm's global, and its
-         idl_check_global_target DFAILs a [Replaceable] install whose target is not that global. The second of
-         those crashes states the work in its own words: give the install the declaring interface's own brand
-         as data, the way IdlExposure and IdlAttrForge are stated.
+         idl_check_global_target DFAILs a [Replaceable] install whose target is not that global. THIS ENTRY
+         USED TO QUOTE THE SECOND CRASH'S REMEDY — give the install the declaring interface's own brand as
+         data — AS THE WORK THE FIRST ONE OWES, and the two crashes are the two arms THIS FILE'S OWN HEADER
+         ALREADY QUOTES. §3.7.3's not-[Global] arm places a member on the interface that DECLARES it, so
+         there the brand is the INSTALL's to state and idl_check_global_target's remedy is right about it; a
+         member on a GLOBAL takes §3.8's create-instance arm, which the paragraph above `onmessage` reads
+         here, and there `target` is the instance's own [[PrimaryInterface]] — the REALM's to state, which
+         no install holds. So the entry contradicted its own file rather than the standard, and the spec
+         sentences are NOT re-quoted here: this file already carries both, and a third copy is a third chance
+         to go stale. Recorded rather than deleted because the two crashes sit one screen apart in one file
+         and only the wrong one spells a remedy out. The shape is (5)(a)'s, and it is ONE datum.
+         RETIREMENT: this record goes when idl_attribute_this takes its brand from the realm, because the
+         per-install sentence is then unquotable here.
      (c) THE INSTALL, on `wgs_p`, with its placement asserted by WGS_ASSERT_PLACED as §10.2.1.1's `self` is.
    HOW THE ABSENCE SHOWS: a realm whose §3.3.8 [Global] names are a worker's aborts while its intrinsics are
    still installing, at core/idl_args.c's idl_realm_global_declares DCHECKF, which names the member and the
@@ -694,9 +704,17 @@ void worker_global_scope_free(JSRuntime *rt)
  *           WHAT IT DOES STILL BLOCK is every PLAIN-C attribute on a worker global, which is `name` here
  *           (`[Replaceable]`, so idl_install_replaceable) and every WindowOrWorkerGlobalScope attribute in
  *           residual (7).
- *           NEXT DIFF: §3.7.6 step 1.1.2.3's `target` becomes THIS realm's [Global] interface, with the
- *           receiver resolution and the brand coming from that interface rather than from
- *           core/frame/window_proxy.c. idl_attribute_this now asserts exactly that gap at its own head —
+ *           NEXT DIFF: §3.7.6 step 1.1.2.3's `target` becomes THIS realm's [Global] interface — THE BRAND
+ *           ALONE, WHICH IS ONE DATUM AND NOT THREE. This clause used to say the receiver resolution AND the
+ *           brand both had to come from that interface, and two of the three opening steps refute it, each by
+ *           its own body rather than by where it was written: 1.1.2.1 is window_proxy_this_object, which
+ *           returns the realm's global for an absent receiver and otherwise dups the one it was handed,
+ *           naming no interface at all — js_wgs_self above writes those same two lines by hand for a
+ *           WorkerGlobalScope receiver — and 1.1.2.2 is window_proxy_security_check, whose own first step
+ *           returns for a receiver that is neither a Window nor a Location, so it falls through for any other
+ *           interface already. Only 1.1.2.3, window_proxy_implements_window, is Window's. The cost of the old
+ *           clause was a repair priced at three mechanisms rather than one, which is the only thing about
+ *           the SIZE of this work that correction moves. idl_attribute_this asserts exactly that gap at its own head —
  *           a DCHECKF over idl_global_names_are_window(realm_global_names(ctx)) — so the crash names the
  *           repair from inside the file that owes it, and the retired argument beside it (that Window was the
  *           only [Global] interface here) is recorded there rather than left standing.
@@ -760,7 +778,8 @@ void worker_global_scope_free(JSRuntime *rt)
  *     Window (core/timing/timer.c's four timer names, core/fetch/fetch.c's `fetch`, core/structured_clone.c's
  *     `structuredClone`), so what this owes is a per-realm install in each of those components rather than a
  *     line here; the subproblem underneath every one of them is (5)(a), because each is an own property of a
- *     [Global] object and would be minted through the receiver resolution that names Window.
+ *     [Global] object and would be minted through the Window brand at step 1.1.2.3 — not, as this line used
+ *     to say, through the receiver resolution, which names no interface at all. See (5)(a).
  *     ABSENCE SHOWS AS: `typeof setTimeout` is `"undefined"` in a worker realm, so the very first line of most
  *     bundled worker code throws — and, in the auditor rather than the engine, as the ABSENT counts idlgen
  *     prints against these two interfaces, which were ZERO before this component existed because an interface

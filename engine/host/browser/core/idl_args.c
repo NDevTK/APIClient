@@ -8142,13 +8142,34 @@ int idl_replace_with_value(JSContext *ctx, JSValueConst obj, const char *name, J
  * lives. A page tells the two refusals apart by name — "SecurityError" against TypeError — which is exactly
  * what cross-origin-objects.html asserts.
  *
- * THE WHOLE OF THIS ALGORITHM IS Window'S, AND THAT IS NOW A CLAIM ABOUT THE REALM RATHER THAN ABOUT THE
- * ENGINE. All three lines below name one interface: 1.1.2.1's resolution unwraps a WindowProxy, 1.1.2.2's
- * check is §7.2.1's Window/Location list, and 1.1.2.3's `target` is Window. That used to be justified by
- * there being no other [Global] interface to be, and it no longer is — `DedicatedWorkerGlobalScope` is
- * `[Global=(Worker,DedicatedWorker)]`, core/realm.c builds a realm on it, and Web IDL §3.3.7 [Exposed] step 1
- * then exposes into that realm every construct whose exposure set meets its §3.3.8 [Global] names.
- * SO THE FACT THAT MAKES THE THREE RIGHT IS ASSERTED AT THE HEAD, AGAINST THE REALM THAT IS ASKING. It is not
+ * EXACTLY ONE OF THE THREE LINES BELOW IS Window'S, AND THIS PARAGRAPH USED TO SAY ALL THREE WERE — that
+ * 1.1.2.1's resolution unwraps a WindowProxy, that 1.1.2.2's check is §7.2.1's Window/Location list, and
+ * that 1.1.2.3's `target` is Window. It is REWRITTEN rather than deleted because a reader who re-derives it
+ * FROM THE FILENAMES will re-introduce it: all three entries live in core/frame/window_proxy.c, and that is
+ * a fact about where they were WRITTEN and not about what they DO. Each body is one `sed` away, and two of
+ * the three refute it.
+ *   1.1.2.1 window_proxy_this_object is `if (wp_this_absent(this_val)) return JS_GetGlobalObject(ctx);` and
+ *           then `return JS_DupValue(ctx, this_val);` — the step's own sentence and nothing else. It unwraps
+ *           NO WindowProxy: 1.1.2.3's brand ACCEPTS one (window_proxy_is), so nothing here ever had to.
+ *           core/workers/worker_global_scope.c's js_wgs_self writes those same two lines by hand for a
+ *           WorkerGlobalScope receiver — ONE algorithm spelled twice, rather than two algorithms.
+ *   1.1.2.2 window_proxy_security_check's own step 1 returns for a receiver that is neither a Window nor a
+ *           Location — the sentence is quoted four lines below the DCHECKF, and the body falls through to
+ *           `return 0` for every other receiver — so it is ALREADY right for any interface. That comment
+ *           and this paragraph stood four lines apart, disagreeing, and the comment was the correct one.
+ *   1.1.2.3 window_proxy_implements_window is `window_is(v) || window_proxy_is(v)`. THIS one is Window's,
+ *           and it is the whole of what another [Global] interface's realm cannot use.
+ * THE COST WAS A REPAIR PRICED AT THREE MECHANISMS RATHER THAN ONE, and the over-claim had already been
+ * inherited twice: the crash below told its reader that `the receiver resolution and the brand` must BOTH
+ * come from the interface, and core/workers/worker_global_scope.c's (5)(a) residual carries the same pair.
+ * What a realm must state is ONE predicate, so the hand-off that keeps this out of one diff with that file
+ * is one datum and not three — which is the only thing about the SIZE of that work this correction moves.
+ * WHY IT IS ASKED AT ALL IS UNCHANGED: `DedicatedWorkerGlobalScope` is `[Global=(Worker,DedicatedWorker)]`,
+ * core/realm.c builds a realm on it, and Web IDL §3.3.7 [Exposed] step 1 then exposes into that realm every
+ * construct whose exposure set meets its §3.3.8 [Global] names.
+ * RETIREMENT: this record goes when 1.1.2.3's brand is a datum the realm states and no line in this
+ * function names window_proxy_implements_window, because the enumeration it corrects is then unwritable.
+ * SO THE FACT THAT MAKES THE BRAND RIGHT IS ASSERTED AT THE HEAD, AGAINST THE REALM THAT IS ASKING. It is not
  * asserted at the install: IDL_CHECK_GLOBAL_TARGET below answers whether `target` is the realm's global, which
  * was the whole question while there was one kind of global and is half of it now — a worker realm's global
  * PASSES that check and is not a Window, so the install-side guard cannot carry this and the read must.
@@ -8167,14 +8188,28 @@ static JSValue idl_attribute_this(JSContext *ctx, JSValueConst this_val, const c
     JSValue js;
 
     DCHECKF(idl_global_names_are_window(realm_global_names(ctx)),
-            "Web IDL §3.7.6 Attributes' opening steps were asked for `%s` in a realm whose §3.3.8 [Global] "
-            "interface is not Window — all three steps below are Window's: 1.1.2.1 unwraps a WindowProxy, "
-            "1.1.2.2 runs §7.2.1's Window/Location security check, and 1.1.2.3's `target` is Window, so this "
-            "realm's own global object fails a brand it was never meant to be asked. Build §3.7.6 step "
-            "1.1.2.3's `target` as THIS realm's [Global] interface: the realm already states it "
-            "(core/realm.c's global names, read by realm_global_names just above), and the receiver "
-            "resolution and the brand must come from that interface rather than from core/frame/window_proxy.c",
-            name);
+            "Web IDL §3.7.6 \"Attributes\" was asked for its opening steps for `%s` in a realm "
+            "whose §3.3.8 [Global] interface is `%s` — and of the three steps below EXACTLY ONE is "
+            "Window's. 1.1.2.1 and 1.1.2.2 are already right for ANY interface: the enumeration above this "
+            "function reads their bodies and says why. 1.1.2.3's brand, window_proxy_implements_window, is "
+            "not, so this realm's own global object fails a brand it was never meant to be asked. SO BUILD "
+            "ONE DATUM AND NOT THREE: §3.7.6 step 1.1.2.3's `target`, as the receiver predicate THIS "
+            "realm's [Global] interface states. AND `target` IS A PER-REALM FACT HERE RATHER THAN A "
+            "PER-INSTALL ONE, which is the half a reader gets backwards. §3.7.6 creates a getter "
+            "\"given an attribute attribute, a namespace or interface target, and a realm realm\", and its "
+            "caller hands it `definition`: "
+            "\"Let getter be the result of creating an attribute getter given attr, definition, and realm\". "
+            "For a member on a GLOBAL that `definition` is the `interface` of §3.8 \"Platform objects "
+            "implementing interfaces\"' [Global] arm, "
+            "\"Define the regular attributes of interface on instance, given realm\" — this global's own "
+            "[[PrimaryInterface]], which the realm states and no install does. So the predicate is "
+            "registered where the realm's global class is given, the way core/events/event_target.h's "
+            "event_target_set_click_terms hands a component's predicate to a layer that must not name it — "
+            "core/idl_args.c may not include core/workers/. THE PER-INSTALL READING IS "
+            "idl_check_global_target's, one screen down, and it is right about ITS OWN arm: "
+            "§3.7.3 \"Interface prototype object\", where the declaring interface is the INSTALL's to "
+            "state",
+            name, idl_realm_global_interface(ctx));
     js = window_proxy_this_object(ctx, this_val);   /* 1.1.2.1 / 4.5.1, written once */
 
     /* 1.1.2.2 / 4.5.2. window_proxy_security_check's own step 1 is "If platformObject is not a Window or
@@ -8567,7 +8602,11 @@ static void idl_check_global_target(JSContext *ctx, JSValueConst target, const c
            "interface is [Global], so an accessor minted here for an ordinary interface is placed by the "
            "wrong arm, and its read resolves a receiver through the realm's [Global] interface rather than "
            "through the one that declared it. Give the install the declaring interface's own brand as data, "
-           "the way IdlExposure and IdlAttrForge are stated", form, name);
+           "the way IdlExposure and IdlAttrForge are stated. THIS REMEDY IS THIS ARM'S AND IS NOT "
+           "idl_attribute_this'S: it is per-INSTALL because §3.7.3's arm places a member on the interface "
+           "that DECLARES it, and a member on a global takes §3.8's [Global] arm instead, where `target` is "
+           "the realm's own [[PrimaryInterface]] and is therefore per-REALM. Quoting this sentence at that "
+           "crash prices its repair at the wrong mechanism, which has happened", form, name);
 }
 #define IDL_CHECK_GLOBAL_TARGET(c, t, n, f) idl_check_global_target((c), (t), (n), (f))
 #else
