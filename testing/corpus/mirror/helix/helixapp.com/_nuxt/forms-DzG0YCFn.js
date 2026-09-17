@@ -1,0 +1,2 @@
+var u=(e=>(e.Denom="denom",e.Search="search",e.Address="address",e.Required="required",e.MemoValue="memo-value",e.DoubleCheck="double-check",e.MemoRequired="memo-required",e.Amount="bank-transfer-amount",e))(u||{}),m=(e=>(e.Amount="neptune-usdt-amount",e))(m||{}),t=(e=>(e.Name="name",e.Email="email",e))(t||{}),r=(e=>(e.TermsAccepted="terms-accepted",e))(r||{}),a=(e=>(e.Amount="mega-vault-withdraw-amount",e))(a||{});export{u as B,t as C,a as M,m as N,r as R};
+//# sourceMappingURL=forms-DzG0YCFn.js.map

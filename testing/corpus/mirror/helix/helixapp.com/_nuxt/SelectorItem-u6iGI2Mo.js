@@ -1,0 +1,2 @@
+import{a1 as c,M as l,aG as u,aA as m,as as i,a2 as p}from"./injective-sdk-XS13liJR.js";const d=c({__name:"SelectorItem",props:{modelValue:{type:[String,Number],default:""},value:{type:[String,Number],required:!0}},emits:["update:modelValue"],setup(t,{emit:a}){const e=t,o=a,n=l(()=>e.modelValue===e.value);function s(){o("update:modelValue",e.value)}return(r,_)=>(m(),u("div",{onClick:s},[i(r.$slots,"default",{isActive:p(n)})]))}}),v=Object.assign(d,{__name:"SharedSelectorItem"});export{v as _};
+//# sourceMappingURL=SelectorItem-u6iGI2Mo.js.map

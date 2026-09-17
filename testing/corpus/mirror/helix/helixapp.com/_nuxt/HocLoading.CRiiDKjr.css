@@ -1,0 +1,1 @@
+.logo-line{animation:lines-animation 1.3s ease infinite;transform-origin:center}@keyframes lines-animation{0%{transform:translateY(0)}25%{transform:translateY(-5px)}50%{transform:translateY(0)}to{transform:translateY(0)}}

@@ -1,0 +1,1 @@
+.accordion .header[data-v-c6591f2f]{-webkit-user-select:none;-moz-user-select:none;user-select:none}.accordion .content[data-v-c6591f2f]{display:grid;transition:all .3s}.accordion .content>div[data-v-c6591f2f]{overflow:hidden}.accordion .open[data-v-c6591f2f]{grid-template-rows:1fr}.accordion .closed[data-v-c6591f2f]{grid-template-rows:0fr}

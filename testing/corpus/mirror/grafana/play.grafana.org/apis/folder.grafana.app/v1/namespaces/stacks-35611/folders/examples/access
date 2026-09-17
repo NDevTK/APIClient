@@ -1,0 +1,18 @@
+{
+  "kind": "FolderAccessInfo",
+  "apiVersion": "folder.grafana.app/v1",
+  "canSave": false,
+  "canEdit": false,
+  "canAdmin": false,
+  "canDelete": false,
+  "accessControl": {
+    "alert.rules:read": true,
+    "alert.silences:read": true,
+    "annotations:read": true,
+    "dashboards:read": true,
+    "folders:read": true,
+    "library.panels:read": true,
+    "notebooks:read": true,
+    "variables:read": true
+  }
+}

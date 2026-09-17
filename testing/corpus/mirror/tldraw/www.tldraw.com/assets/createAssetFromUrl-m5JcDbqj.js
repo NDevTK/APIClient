@@ -1,0 +1,5 @@
+
+!function(){try{var e="undefined"!=typeof window?window:"undefined"!=typeof global?global:"undefined"!=typeof globalThis?globalThis:"undefined"!=typeof self?self:{},n=(new e.Error).stack;n&&(e._sentryDebugIds=e._sentryDebugIds||{},e._sentryDebugIds[n]="ebb46b7b-55c0-5e22-afdc-dbafb1ee37c0")}catch(e){}}();
+import{hr as e,ii as t,si as n}from"./src-BpFD6v3t.js";import{t as r}from"./config-NsufzJAg.js";function i(e){let t={};return typeof e?.imageWidth==`number`&&(t.imageWidth=e.imageWidth),typeof e?.imageHeight==`number`&&(t.imageHeight=e.imageHeight),t}async function a({url:a}){let o=t(a);try{let t=r+`?`+new URLSearchParams({url:a}).toString(),s=await(await n(t,{method:`POST`})).json();return{id:e.createId(o),typeName:`asset`,type:`bookmark`,props:{src:a,description:s?.description??``,image:s?.image??``,favicon:s?.favicon??``,title:s?.title??``},meta:i(s)}}catch(t){return console.error(t),{id:e.createId(o),typeName:`asset`,type:`bookmark`,props:{src:a,description:``,image:``,favicon:``,title:``},meta:{}}}}export{a as t};
+//# sourceMappingURL=createAssetFromUrl-m5JcDbqj.js.map
+//# debugId=ebb46b7b-55c0-5e22-afdc-dbafb1ee37c0

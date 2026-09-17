@@ -1,0 +1,11 @@
+{
+  "kind": "FolderInfoList",
+  "apiVersion": "folder.grafana.app/v1beta1",
+  "metadata": {},
+  "items": [
+    {
+      "name": "examples",
+      "title": "Examples"
+    }
+  ]
+}

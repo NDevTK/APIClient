@@ -1,0 +1,5 @@
+
+!function(){try{var e="undefined"!=typeof window?window:"undefined"!=typeof global?global:"undefined"!=typeof globalThis?globalThis:"undefined"!=typeof self?self:{},n=(new e.Error).stack;n&&(e._sentryDebugIds=e._sentryDebugIds||{},e._sentryDebugIds[n]="2bd4ba3a-90ca-5ea3-9592-482db745b105")}catch(e){}}();
+import{r as e}from"./rolldown-runtime-hePW80VL.js";import{n as t}from"./react-dom-BzP9Lo1b.js";import{rr as n}from"./src-BpFD6v3t.js";import{t as r}from"./jsx-runtime-NZYk81nU.js";var i=e(t());function a(){(0,i.useEffect)(()=>{function e(e){e.isSpecialRedispatchedEvent||n(e)}return document.addEventListener(`dragover`,e),document.addEventListener(`drop`,e),()=>{document.removeEventListener(`dragover`,e),document.removeEventListener(`drop`,e)}},[])}var o={anonLayout:`_anonLayout_tysm9_1`,anonEditorWrapper:`_anonEditorWrapper_tysm9_9`},s=r();function c({children:e}){return a(),(0,s.jsx)(`div`,{className:o.anonLayout,children:(0,s.jsx)(`div`,{className:o.anonEditorWrapper,children:e})})}export{a as n,c as t};
+//# sourceMappingURL=TlaAnonLayout-BnJEqlPU.js.map
+//# debugId=2bd4ba3a-90ca-5ea3-9592-482db745b105
