@@ -1,4 +1,4 @@
-/* The `script` element's parse state, HTML §4.12.1's preparation and its `async` member — see html_script.h for
+/* The `script` element's parse state, HTML §4.12.1.1's preparation and HTML §4.12.1's `async` member — see html_script.h for
    why two booleans nobody else can store are a component. */
 #include <stdbool.h>
 #include <stdlib.h>
@@ -22,19 +22,19 @@
 #include "core/events/event.h"           /* §4.12.1.1's error arm dispatches an Event, so it MINTS one */
 #include "core/events/event_target.h"    /* …through DOM §2.9's one dispatch, which runs the PAGE's listeners */
 #include "core/idl_args.h"       /* the `async` attribute's setter, declared like every other IDL member's */
-#include "core/url/url.h"        /* §4.12.1's "encoding-parsing a URL given src, relative to el's node document" */
-#include "core/loader/document_scripts.h"   /* §4.12.1's type-string steps, asked ONCE for both halves */
+#include "core/url/url.h"        /* HTML §4.12.1.1's "encoding-parsing a URL given src, relative to el's node document" */
+#include "core/loader/document_scripts.h"   /* HTML §4.12.1.1's type-string steps, asked ONCE for both halves */
 #include "core/html/html_script.h"
 
-/* §4.12.1's `already started`, on the element's wrapper under a Symbol this file minted and never published —
+/* HTML §4.12.1.1's `already started`, on the element's wrapper under a Symbol this file minted and never published —
    the store DOM §4.9's custom element state uses, for the two reasons html_script.h gives. */
 static JSValue g_started_key = JS_UNDEFINED;
 static JSAtom  g_atom_started = JS_ATOM_NULL;
-/* …and §4.12.1's `force async`, in the same store under its own key. Two keys and not one record: each is a
+/* …and HTML §4.12.1.1's `force async`, in the same store under its own key. Two keys and not one record: each is a
    bare boolean the standard writes independently, and a record would be a third thing to keep consistent. */
 static JSValue g_force_async_key = JS_UNDEFINED;
 static JSAtom  g_atom_force_async = JS_ATOM_NULL;
-/* …and §4.12.1's `parser document`, as the boolean §4.12.1 reads off it ("script elements with non-null parser
+/* …and HTML §4.12.1.1's `parser document`, as the boolean §4.12.1.1 reads off it ("script elements with non-null parser
    documents are known as parser-inserted"). A third key rather than a member of a record beside the two above,
    for the reason they are two: each is written independently by a different step. */
 static JSValue g_parser_doc_key = JS_UNDEFINED;
@@ -233,7 +233,7 @@ bool html_script_is(const lxb_dom_node_t *n)
            n->local_name == LXB_TAG_SCRIPT && (n->ns == LXB_NS_HTML || n->ns == LXB_NS_SVG);
 }
 
-/* §4.12.1's `already started` for an element. ABSENT IS FALSE — the standard's own initial value — so this
+/* HTML §4.12.1.1's `already started` for an element. ABSENT IS FALSE — the standard's own initial value — so this
    reads through node_wrap_peek and never mints a wrapper: an element nothing has marked is an element nothing
    has written, and allocating one to learn a default would put a wrapper on every `<script>` a page inserts. */
 static bool script_already_started(JSContext *ctx, const lxb_dom_node_t *n)
@@ -267,13 +267,13 @@ static void script_set_already_started(JSContext *ctx, lxb_dom_node_t *n)
     DCHECK(html_script_is(n), "`already started` was written onto a node that is not an HTML `script` element");
     wrap = node_wrap(ctx, n);
     CHECK(JS_IsObject(wrap), "a script element could not be wrapped to carry its `already started` — an "
-                             "unmarked script is one §4.12.1 step 1 lets run, so failing quietly here would "
+                             "unmarked script is one §4.12.1.1 step 1 lets run, so failing quietly here would "
                              "execute markup the fragment parse is required to keep inert");
     JS_DefinePropertyValue(ctx, wrap, g_atom_started, JS_TRUE, SCRIPT_SLOT_FLAGS);
     JS_FreeValue(ctx, wrap);
 }
 
-/* §4.12.1's `force async` for an element. ABSENT IS TRUE — "a script element has a force async boolean,
+/* HTML §4.12.1.1's `force async` for an element. ABSENT IS TRUE — "a script element has a force async boolean,
    INITIALLY TRUE" — which is the opposite of `already started` above and is why the two cannot share a reader:
    an element nothing has written is one whose flag still holds its initial value, and here that value is the
    one that decides the ASAP SET. So a `createElement('script')` needs no wrapper to answer true, exactly as an
@@ -297,8 +297,8 @@ static bool script_force_async(JSContext *ctx, const lxb_dom_node_t *n)
     return r != 0;
 }
 
-/* Write it. Unlike `already started` this writes BOTH values: false is the interesting one (§4.12.1's three
-   writers all clear it) and true has to be expressible because §4.12.1 sets it back on an element whose
+/* Write it. Unlike `already started` this writes BOTH values: false is the interesting one (§4.12.1.1's three
+   writers all clear it) and true has to be expressible because §4.12.1.1 sets it back on an element whose
    preparation returned early, so a writer that could only clear would make that step unstatable. */
 static void script_set_force_async(JSContext *ctx, lxb_dom_node_t *n, bool on)
 {
@@ -309,13 +309,13 @@ static void script_set_force_async(JSContext *ctx, lxb_dom_node_t *n, bool on)
     DCHECK(html_script_is(n), "`force async` was written onto a node that is not an HTML `script` element");
     wrap = node_wrap(ctx, n);
     CHECK(JS_IsObject(wrap), "a script element could not be wrapped to carry its `force async` — the flag "
-                             "decides whether §4.12.1 puts the element in the ASAP SET or in the ordered list, "
+                             "decides whether §4.12.1.1 puts the element in the ASAP SET or in the ordered list, "
                              "so losing a write would silently unorder the page's own lazy chunks");
     JS_DefinePropertyValue(ctx, wrap, g_atom_force_async, JS_NewBool(ctx, on), SCRIPT_SLOT_FLAGS);
     JS_FreeValue(ctx, wrap);
 }
 
-/* §4.12.1's `parser document`, recorded as the boolean the standard reads off it — "script elements with
+/* HTML §4.12.1.1's `parser document`, recorded as the boolean the standard reads off it — "script elements with
    non-null parser documents are known as parser-inserted". WRITTEN ON EVERY PREPARATION AND IN BOTH
    DIRECTIONS, which is what makes its ABSENCE mean that §4.12.1.1 has not run over this element at all,
    rather than that it ran and found no parser document: those are two different facts and html_script.h
@@ -425,8 +425,8 @@ void html_script_install(JSContext *ctx, JSValueConst proto)
 /* HTML §4.12.1.1 "Processing model": "The script HTML element POST-CONNECTION STEPS, given insertedNode, are:
  * 1. If insertedNode is parser-inserted, then return. 2. Prepare the script element given insertedNode."
  *
- * IT IS THE ENTRY POINT, AND THIS FILE HAD ONE CALLER FOR THREE OF THEM. The comment below already said "a page
- * loads code conditionally in three ways and this is the second", and only the second was wired: `prepare` was
+ * IT IS THE ENTRY POINT, AND THIS FILE HAD ONE CALLER FOR THREE OF THEM. The comment below already said `a page
+ * loads code conditionally in three ways and this is the second`, and only the second was wired: `prepare` was
  * reached from DOM §4.2.3's insertion steps and from nowhere else. The spec reaches these same steps from the
  * CHILDREN CHANGED STEPS and from the ATTRIBUTE CHANGE STEPS as well, and both of those are ordinary
  * lazy-loader idioms that this engine silently dropped:
@@ -450,7 +450,7 @@ static void script_post_connection(JSContext *ctx, lxb_dom_element_t *el, Script
        script mutated while detached prepares when it is inserted, through the insertion half, and preparing it
        here as well would run one element's code twice. */
     if (!node_is_connected(lxb_dom_interface_node(el))) return;
-    /* THE ELEMENT'S OWN DOCUMENT'S REALM, never the realm that performed the write. §4.12.1 step 32 is "let
+    /* THE ELEMENT'S OWN DOCUMENT'S REALM, never the realm that performed the write. §4.12.1.1 step 32 is "let
        settings object be el's NODE DOCUMENT's relevant settings object" and step 34's base URL is that
        document's, and two same-origin documents are ONE agent — so `frame.contentDocument.body.appendChild(s)`
        reaches these steps from the parent's realm about a child's element. core/dom/element.c's own walk made
@@ -483,7 +483,7 @@ static void script_post_connection(JSContext *ctx, lxb_dom_element_t *el, Script
  * because the walk drains one list in one order.
  * THE REALM IS NOT TAKEN HERE: node.h states that `ctx` is the MUTATING realm, and the drain resolves the
  * node's own document's realm per entry. This hook took the mutating one and handed it to `prepare` as if it
- * were §4.12.1 step 32's settings object. */
+ * were §4.12.1.1 step 32's settings object. */
 static void script_children_changed(JSContext *ctx, lxb_dom_node_t *parent)
 {
     (void)ctx;
@@ -565,7 +565,7 @@ void html_script_parsed(JSContext *ctx, lxb_dom_node_t *root, bool inert)
                elements they insert" — EVERY parse, not only the inert one, which is why this walk is no longer
                the Inert marking alone. Without it a parsed `<script>` kept the boolean's initial TRUE and its
                `async` getter answered true for markup that has no `async` attribute; the ordered-list branch of
-               §4.12.1 would be unreachable for it too. */
+               §4.12.1.1 would be unreachable for it too. */
             script_set_force_async(ctx, n, false);
             /* …and §13.2.4.5's INERT mode's own stamp, which is the FRAGMENT parse's alone. */
             if (inert) script_set_already_started(ctx, n);
@@ -603,7 +603,7 @@ void html_script_cloned(JSContext *ctx, lxb_dom_node_t *src, lxb_dom_node_t *cop
     if (script_already_started(ctx, src)) script_set_already_started(ctx, copy);
 }
 
-/* HTML §4.12.1 "The script element"'s "prepare the script element" — the one body, reached by both of the two
+/* HTML §4.12.1.1 "Processing model"'s "prepare the script element" — the one body, reached by both of the two
  * ways a `script` element becomes a program in this engine.
  *
  * THE INSERTION HALF is DOM §4.2.3's insertion steps and the §4.12.1.1 post-connection/children-changed steps
@@ -616,7 +616,7 @@ void html_script_cloned(JSContext *ctx, lxb_dom_node_t *src, lxb_dom_node_t *cop
  *
  * THE PARSER HALF is HTML §13.2.6.4.8 'The "text" insertion mode' — "An end tag whose tag name is 'script' …
  * prepare the script element script" — which is `html_script_parser_inserted` below, and which is why
- * `parser_inserted` is a PARAMETER. §4.12.1 step 2 reads it off the element's `parser document`, a field this
+ * `parser_inserted` is a PARAMETER. §4.12.1.1 step 2 reads it off the element's `parser document`, a field this
  * engine does not keep (html_script.h says why it was a stub); the CALLER is the party that holds it, because
  * the caller is either §13.2.6 tree construction, which is the thing that sets it, or page code, which cannot.
  * It was a hardcoded `false` with a paragraph arguing that everything reaching here was page-inserted, and that
@@ -637,12 +637,12 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inse
     /* THE REPORT IS EMPTIED FIRST AND ON EVERY PATH, which is what lets a caller read it as a POSITIVE
        statement rather than as a field it must remember whether anything wrote. `prepare` has fifteen returns
        and every one of them means "no nested run is owed"; only the arm at the very bottom fills it. */
-    DCHECK(imm != NULL, "§4.12.1 was prepared with nowhere to report step 36 — the record is mandatory because "
+    DCHECK(imm != NULL, "§4.12.1.1 was prepared with nowhere to report step 36 — the record is mandatory because "
                         "the one destination it names is a nested run, and a caller with nowhere to put it is "
                         "a caller that would silently drop the page's own code");
     imm->text = NULL; imm->text_n = 0; imm->el = NULL;
     if (!html_script_is(n)) return;
-    /* §4.12.1's `parser document`, RECORDED BEFORE STEP 1 AND THEREFORE ON EVERY PATH THROUGH THESE STEPS.
+    /* HTML §4.12.1.1's `parser document`, RECORDED BEFORE STEP 1 AND THEREFORE ON EVERY PATH THROUGH THESE STEPS.
        The caller states it and this is the only place it is written. It goes ahead of step 1 rather than
        beside the later step that reads it into script fetch options, because it is not an OUTPUT of this
        algorithm at all: §13.2.6.4.4 'The "in head" insertion mode' set the parser document when the element
@@ -685,7 +685,7 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inse
     /* THE TYPE-STRING STEPS, WHICH THIS HALF NEVER ASKED — so an injected `<script type="application/json">`
        was handed to the compiler and RAN, as did an import map, while the document-scan half had recognised
        both since it was written. One element, one question: `script_block_type` is that question, and the two
-       halves of §4.12.1 must not disagree about what a `type` attribute means. */
+       halves of §4.12.1.1 must not disagree about what a `type` attribute means. */
     {
         st = script_block_type(el);
         /* HTML's null and the two data types: "No script is executed." An import map and a set of speculation
@@ -704,7 +704,7 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inse
                wrong in two observable ways at once — the element is left UNMARKED, so a later prepare runs
                the whole algorithm again, and the `error` the standard owes is never fired.
                IT CRASHES RATHER THAN FIRING THE EVENT FROM HERE, because firing it at step 13 would be the
-               observable half of a step whose other half (step 15's mark, and step 18's scripting-disabled
+               observable half of a step whose other half (step 15's `already started`, and step 18's scripting-disabled
                test, which can legitimately suppress the event entirely) would still be missing — a half-fix
                wearing a fixed one. What the next diff builds is the fall-through: the two data types reach
                steps 15 and 18 alongside the executing types and branch at step 33, where
@@ -735,7 +735,7 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inse
            because a script the parser prepares at its own end tag reaches this line BEFORE that stamp runs —
            the stamp is applied to the finished tree and the end tag is inside the parse. */
         if (parser_inserted) script_set_force_async(ctx, n, false);
-        /* §4.12.1's LAST STEPS, asked of the same element by the same function the document scan asks — one
+        /* HTML §4.12.1.1's LAST STEPS, asked of the same element by the same function the document scan asks — one
            element, one classification. */
         sched = script_block_schedule(el, st, parser_inserted, script_force_async(ctx, n));
     }
@@ -744,7 +744,7 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inse
        steps, then the attribute change steps) and ran the same program twice, and a `<script>` the §13.2.6.4.8
        route below prepares would be prepared again by any later reach at all. The flag is what makes
        "prepare" idempotent, which is the whole of step 1's job, and step 1 had nothing to read.
-       IT IS AFTER THE TYPE STEPS AND AHEAD OF EVERY REMAINING RETURN, which is where §4.12.1 puts it: an
+       IT IS AFTER THE TYPE STEPS AND AHEAD OF EVERY REMAINING RETURN, which is where §4.12.1.1 puts it: an
        element whose type runs nothing is left unmarked (step 13 returns before this), and an element whose
        `src` does not parse is marked and then abandoned (step 33's own arms return after it), so a page that
        fixes the URL afterwards does NOT get a second run. */
@@ -808,14 +808,14 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inse
            two facts cannot both hold, and a day they do is a day this element's provenance is being composed
            from the wrong one of them rather than a day the grade is merely coarse. */
         DCHECK(!parser_inserted,
-               "a PARSER-INSERTED `<script>` reached §4.12.1 with a TAINTED `src` — the taint shadow map is "
+               "a PARSER-INSERTED `<script>` reached §4.12.1.1 with a TAINTED `src` — the taint shadow map is "
                "written only by a script assigning the attribute, so either the parser has started routing "
                "attribute values through it (and this request's provenance is `observed`, which the running "
                "path cannot say) or an element's shadow entry is being read for the wrong element");
         endpoint_record(ctx, "GET", t, NULL, 0, NULL, engine_prov_of_running_path());
         return;
     }
-    /* §4.12.1's `src` BRANCH IS ENTERED ON THE ATTRIBUTE, which is the same correction the document scan needed
+    /* HTML §4.12.1.1's `src` BRANCH IS ENTERED ON THE ATTRIBUTE, which is the same correction the document scan needed
        and for the same reason: `get_attribute` answers NULL for an attribute whose value is absent, so a
        presence test written over the VALUE let `<script src="">` fall through to the child-text branch and RUN
        it — markup a browser runs nothing for. */
@@ -838,7 +838,7 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inse
            arm: `has_src` was answered by `has_attribute`, so the attribute IS present and an absent VALUE is
            the empty string — which is exactly what the step names. */
         if (!src || !n_len) { html_script_queue_error(ctx, el); return; }
-        /* "ENCODING-PARSING A URL GIVEN src, RELATIVE TO EL'S NODE DOCUMENT" — §4.12.1's own step, and the
+        /* "ENCODING-PARSING A URL GIVEN src, RELATIVE TO EL'S NODE DOCUMENT" — §4.12.1.1's own step, and the
            realm this chokepoint was entered with IS that document (core/dom/element.c hands the inserted node's
            document, not the mutating one). It was missing: the raw ATTRIBUTE went to the host, so an injected
            `<script src="./chunk.js">` named an address only the host's own base could resolve — and the host
@@ -859,7 +859,7 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inse
         /* WHICH OF THE TWO ASAP DESTINATIONS, and the difference is a POSITION. The `set of scripts that will
            execute as soon as possible` has none — §13.2.7 waits for that set only before the load event — so it
            parks and its reply becomes a program whenever it drains. The `list of scripts that will execute in
-           order as soon as possible` is what `s.async = false` puts an element in, and §4.12.1's own steps for
+           order as soon as possible` is what `s.async = false` puts an element in, and §4.12.1.1's own steps for
            it are "if scripts[0] is not el, then abort" — the element holds its place against the others, so it
            takes a slot in the flow's sequence and the flow stops there until the reply fills it. */
         /* AND §4.12.1.1's `parser document` TRAVELS WITH EITHER DESTINATION, because the request each one
@@ -872,7 +872,7 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inse
         if (sched == SCRIPT_SCHED_ASAP) engine_pending_script_url(ctx, u, st, el, parser_inserted);
         else {
             /* …AND THE THREE ORDERED DESTINATIONS ARE ONE DESTINATION HERE, WHICH IS A STATEMENT ABOUT THIS
-               ENGINE'S ONE SEQUENCE AND NOT A COLLAPSE OF THREE SPEC STEPS INTO ONE. §4.12.1's `list of scripts
+               ENGINE'S ONE SEQUENCE AND NOT A COLLAPSE OF THREE SPEC STEPS INTO ONE. §4.12.1.1's `list of scripts
                that will execute in order as soon as possible`, its `list of scripts that will execute when the
                document has finished parsing` and its `pending parsing-blocking script` differ in WHEN §13.2.7
                "The end" drains them relative to the document's OWN scripts — and a script reaching this line
@@ -888,7 +888,7 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inse
                ORDER is right either way, which is what this destination is chosen for. */
             DCHECK(sched == SCRIPT_SCHED_IN_ORDER_ASAP || sched == SCRIPT_SCHED_PARSER_BLOCKING ||
                    sched == SCRIPT_SCHED_WHEN_PARSED,
-                   "an external script was scheduled somewhere other than the four destinations §4.12.1 has "
+                   "an external script was scheduled somewhere other than the four destinations §4.12.1.1 has "
                    "for one — the fifth is `immediately execute the script element`, which the standard "
                    "reaches only for what falls past \"if el's type is `classic` and el has a src attribute\", "
                    "so an element with one cannot be standing there");
@@ -914,7 +914,7 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inse
            this engine's own reads). A second read rather than a saved buffer because the first is discarded on
            the path that keeps going, and holding it would mean owning it across the type steps' returns. */
         DCHECK(txt != NULL && n_len != 0,
-               "§4.12.1's step 15 marked a `script` element already started and then found it has no program — "
+               "§4.12.1.1's step 15 marked a `script` element already started and then found it has no program — "
                "step 6 returns for an element with no `src` whose source text is empty, and nothing between "
                "that step and this one can change the element's children, so an empty one here means the two "
                "reads of the child text content disagree");
@@ -949,7 +949,7 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inse
                     engine_queue_element_script(document_doc(ctx), (const char *)txt, n_len, st, el);
                 } else {
                     /* STEP 36'S LAST SUB-STEP — "Otherwise, immediately execute the script element el, even if
-                       other scripts are already executing" — REPORTED. Every OTHER destination §4.12.1 has is a
+                       other scripts are already executing" — REPORTED. Every OTHER destination §4.12.1.1 has is a
                        POSITION IN A SEQUENCE (a list, a set, a pending slot) and a row in the flow's program
                        sequence expresses each of them exactly; this one is a NESTED RUN inside the operation
                        that reached these steps, which no position can say. The queue's nearest expression of it
@@ -1006,7 +1006,7 @@ void html_script_end_of_file(lxb_dom_node_t *script)
            "\"if the current node is a script element\", so the test belongs to the caller and a node that "
            "failed it should never have arrived");
     /* A DOCUMENT NO REALM HAS EVER REACHED HAS NO WRAPPER TO WRITE THE FLAG ON, and it needs none: nothing can
-       read the flag either, because reading it is `already started` and the only readers are §4.12.1's step 1
+       read the flag either, because reading it is `already started` and the only readers are §4.12.1.1's step 1
        and its cloning steps, both of which run in a realm. A solver scratch parse (solve_html.c's witness
        documents) is the population, and its `<script>` elements are never prepared by anything. */
     if (!ctx) return;

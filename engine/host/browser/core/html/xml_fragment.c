@@ -338,7 +338,7 @@ int xml_fragment_step(JSContext *ctx, XmlFragmentParse *s)
            be set to true." §14.4 names no scripting mode and §14.2's default is ENABLED, so this parser is one
            — and UNCONDITIONALLY inert, which is the opposite of the answer §13.4 gives the same member: a
            `createContextualFragment` in an HTML document passes §13.2.4.5's Fragment scripting mode precisely
-           so its scripts run, and in an XML document the identical call produces scripts §4.12.1 step 1 stops.
+           so its scripts run, and in an XML document the identical call produces scripts HTML §4.12.1.1 step 1 stops.
            There is no mode to consult here, so none is taken.
            AT THE PARSE BOUNDARY and before any node is placed, for core/html/html_script.h's own reason: this
            parse runs no page code, so nothing can look at a `script` element between the start tag that

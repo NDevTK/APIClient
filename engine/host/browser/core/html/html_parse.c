@@ -10,7 +10,7 @@
 #include "core/dom/node_heap.h"
 #include "core/html/html_parse.h"
 /* HTML §13.2.6.4.8 'The "text" insertion mode' prepares the `script` element it just closed, and that is the
-   component that owns §4.12.1 — this file supplies only the moment. */
+   component that owns HTML §4.12.1.1 — this file supplies only the moment. */
 #include "core/html/html_script.h"
 /* HTML §13.2.6.1 "Creating and inserting nodes"' create an element for the token step 5 reads the `is`
    attribute off the TOKEN, and the token exists only inside this component — so this file supplies the moment

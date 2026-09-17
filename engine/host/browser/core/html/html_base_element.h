@@ -56,7 +56,7 @@ void html_base_element_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const
    inserts the element, so a `<base href>` in the page's own markup is in force before the first script runs
    AND before anything else in the document resolves a URL — which is why core/dom/document.c runs this FIRST
    among its parsed walks: §4.8.5's iframe walk resolves `src`, §4.8.11.2's media walk resolves `src`, and
-   §4.12.1's scripts resolve theirs, all against the document base URL this decides. `root` is the DOCUMENT
+   HTML §4.12.1.1's scripts resolve theirs, all against the document base URL this decides. `root` is the DOCUMENT
    node, because §4.2.3 says "in its Document" and a `<base>` the parser put outside `<head>` is still in it. */
 void html_base_element_parsed(JSContext *ctx, lxb_dom_node_t *root);
 

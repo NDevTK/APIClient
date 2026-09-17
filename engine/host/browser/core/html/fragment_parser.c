@@ -9,7 +9,7 @@
    It completes inside one opcode over bytes, and the tree builder never runs a `<script>` it parses: what
    §13.2.4.5's scripting mode decides is what the FRAG_FEED boundary STAMPS on the ones it produced. Under
    INERT — the default, and what four of the six members take — that stamp is `already started`, which
-   §4.12.1 step 1 reads when the placement's insertion steps prepare the element, so the script is dead. Under
+   HTML §4.12.1.1 step 1 reads when the placement's insertion steps prepare the element, so the script is dead. Under
    FRAGMENT the stamp is not applied and the script runs when the fragment reaches a document, which is the
    whole of what §13.2.4.5 means by "executed as soon as they are inserted".
    Re-entry is what a violation would look like: page code running mid-parse and reaching one of these again.
@@ -454,10 +454,10 @@ int fragment_parse_step(JSContext *ctx, JSStepHdr *hdr, FragmentParse *s)
              "If the parser's scripting mode is Inert, then set the script element's already started to true.
            (fragment case)" — THE ONE THIS BRANCHES ON. That flag is the only thing that stops a placed script
            from running: the placement goes through dom_cow_append_child, which runs §4.2.3's insertion steps,
-           which prepare an inserted `<script>`, and §4.12.1 step 1 is where the flag is read. So under INERT
+           which prepare an inserted `<script>`, and HTML §4.12.1.1 step 1 is where the flag is read. So under INERT
            the markup's scripts are dead and under FRAGMENT they are live, and NOTHING ELSE about the parse
            differs — which is what makes `range.createContextualFragment("<script>…")` a fragment whose script
-           has not run (§4.12.1 step 7: "If el is not connected, then return") and which runs the moment the
+           has not run (HTML §4.12.1.1 step 7: "If el is not connected, then return") and which runs the moment the
            page appends it to a document.
            IT RUNS AT THIS BOUNDARY, beside the namespace correction above and before the declarative-shadow
            conversion below, because the scripts the parse produced are still children of `frag`: the

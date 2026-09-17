@@ -190,7 +190,7 @@ bool document_open_steps(JSContext *ctx, JSValueConst doc_obj, lxb_dom_document_
      * ERASE the page the script is running in, in the one case the standard singles out for being left alone.
      * So it crashes, and the crash is what keeps the two halves of this algorithm distinguishable.
      * THE CONDITION IS THE STANDARD'S OWN AND IT IS ASKED OF THE ELEMENT, NOT OF THE READINESS. §4.12.1.1
-     * parks the running classic script in `currentScript`, and its §4.12.1 SCHEDULE says whether the parser is
+     * parks the running classic script in `currentScript`, and its HTML §4.12.1.1 SCHEDULE says whether the parser is
      * standing inside it — core/dom/document_current_script.c states the whole argument, including the three
      * schedules whose writes ARE destructive in a browser and the cross-document `w.document.open()` that the
      * readiness alone would have refused. Asked of the TARGET document's realm, because step 5 is about
@@ -415,7 +415,7 @@ void document_close_input_stream(JSContext *ctx, JSValueConst doc_obj, lxb_dom_d
        html_script_parser_inserted at every non-fragment `</script>`: a written `<script src>` IS prepared, and
        measurably reaches the same program-compile as a `<script src>` the markup carried.
        WHAT DECIDES IT NOW IS THAT THIS ENGINE HAS NO SUCH FIELD, and that is a positive statement rather than
-       an absent one. §4.12.1's `pending parsing-blocking script` exists so §13.2.6.4.8 'The "text" insertion
+       an absent one. HTML §4.12.1.1's `pending parsing-blocking script` exists so §13.2.6.4.8 'The "text" insertion
        mode' can BLOCK THE TOKENIZER on it; this engine's tokenizer does not block — core/html/html_script.c
        sends a parser-inserted external script to the flow's own sequence instead, and names the
        parser-suspension capability that would change it. So there is nothing for this step to read, and it

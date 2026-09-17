@@ -1,6 +1,6 @@
-/* THE `script` ELEMENT'S PARSE STATE AND HTML §4.12.1's "prepare the script element".
+/* THE `script` ELEMENT'S PARSE STATE AND HTML §4.12.1.1 "Processing model"'s "prepare the script element".
  *
- * WHY IT IS A COMPONENT AND NOT A STATIC IN element.c. §4.12.1 step 1 is "if el's already started is true,
+ * WHY IT IS A COMPONENT AND NOT A STATIC IN element.c. HTML §4.12.1.1 step 1 is "if el's already started is true,
  * then return", and `already started` is not a property of the element's markup — it is written by the PARSER
  * that built the element, read by the preparation that would run it, and copied by §4.12.1.1 "Processing
  * model"'s cloning steps.
@@ -15,7 +15,7 @@
  * algorithm." So Inert is not a mode this engine chooses — §13.4 makes it the default of every fragment parse,
  * and all five of this engine's markup members (innerHTML, outerHTML, insertAdjacentHTML, setHTML,
  * setHTMLUnsafe) are §13.4 with no scriptingMode argument.
- * With no flag there was nothing for §4.12.1 step 1 to return on, and the fragment machine's placement puts
+ * With no flag there was nothing for §4.12.1.1 step 1 to return on, and the fragment machine's placement puts
  * every parsed node through dom_cow_append_child, which runs §4.2.3's insertion steps, which prepare an
  * inserted `<script>`. So `el.innerHTML = "<script>…</script>"` EXECUTED that script and `<script src=…>`
  * RECORDED an endpoint no browser would ever fetch — a fidelity bug in both halves at once: the browser half
@@ -26,7 +26,7 @@
  * published — the same store DOM §4.9's custom element state uses (core/html/custom_elements.c), and for the
  * same two reasons: nothing outside can reach a key the page cannot mint, and the write is an ordinary
  * property write, so the heap COW captures it and one flow's marked script is not another flow's. ABSENT MEANS
- * FALSE *for `already started`*, which is §4.12.1's own initial value for that flag, so the reader never
+ * FALSE *for `already started`*, which is §4.12.1.1's own initial value for that flag, so the reader never
  * allocates a wrapper to learn a default — an element the parser never marked is one nothing has written, and
  * node_wrap_peek answers for it without minting anything. The other flag's initial value is the other one, and
  * its reader answers absent accordingly; see below.
@@ -48,7 +48,7 @@
  * `html_script_prepare` WRITES what it was told, so that a request built out of this element long afterwards
  * can be told the same thing. It was a hardcoded `false` while the parser half did not exist.
  *
- * ITS ABSENCE IS NOT ITS FALSE, WHICH IS WHY THE READER ANSWERS THREE THINGS AND NOT TWO. §4.12.1 makes a
+ * ITS ABSENCE IS NOT ITS FALSE, WHICH IS WHY THE READER ANSWERS THREE THINGS AND NOT TWO. HTML §4.12.1.1 makes a
  * `parser document` "initially null", so an element nothing has written is genuinely not parser-inserted for
  * the questions asked of the ELEMENT — but a REQUEST's parser metadata is set by §4.12.1.1, and an element
  * `html_script_prepare` never ran over has had that algorithm run over it never. Those two are different
@@ -59,9 +59,9 @@
  * `force async` IS HERE NOW, AND IT IS THE SECOND FLAG BECAUSE IT GAINED THE TWO READERS THE OTHER STILL LACKS.
  * §4.12.1.1: "A script element has a force async boolean, INITIALLY TRUE. It is set to false by the HTML parser
  * and the XML parser on script elements they insert, and when the element gets an async content attribute
- * added." Its readers are §4.12.1's destination branch — "if el has an async attribute or el's force async is
+ * added." Its readers are §4.12.1.1's destination branch — "if el has an async attribute or el's force async is
  * true", the test that puts an element in the `set of scripts that will execute as soon as possible` rather than
- * in the `list of scripts that will execute in order as soon as possible` — and the `async` IDL getter, whose
+ * in the `list of scripts that will execute in order as soon as possible` — and §4.12.1's `async` IDL getter, whose
  * step 1 is "if this's force async is true, then return true". Without it `s = createElement('script'); s.async
  * = false; s.src = u` was an UNORDERED script: the setter is the whole of how a page asks for in-order lazy
  * loading, and it wrote nothing this engine read, so the two chunks a bundler emits in a fixed order ran in
@@ -83,7 +83,7 @@
    HTML's `script` and SVG's are both script elements, and lexbor's own `lxb_html_tree_node_is` answers only
    for the first because it hardcodes the HTML namespace. It is exported because §4.12.1 is asked of an
    element by more than this file — core/loader/data_block.c has to know it is looking at a `script` before
-   the section's type-string steps mean anything, and a private copy of the test there would be two answers to
+   §4.12.1.1's type-string steps mean anything, and a private copy of the test there would be two answers to
    one question, differing on SVG the first time either changed. */
 bool html_script_is(const lxb_dom_node_t *n);
 
@@ -113,7 +113,7 @@ void html_script_parsed(JSContext *ctx, lxb_dom_node_t *root, bool inert);
  *
  * Step 36 is the LAST of "prepare the script element"'s thirty-six steps and it ends: "Otherwise, immediately
  * execute the script element el, EVEN IF OTHER SCRIPTS ARE ALREADY EXECUTING." It is the one destination
- * §4.12.1 has that is NOT A POSITION IN A SEQUENCE — the other four are a list, a set, a pending slot and the
+ * §4.12.1.1 has that is NOT A POSITION IN A SEQUENCE — the other four are a list, a set, a pending slot and the
  * parser's own resumption, and a row in the flow's program sequence expresses each of them exactly — because it
  * is a NESTED RUN inside the operation that reached these steps. Expressed as the nearest slot the sequence
  * has (the one after the running program) it puts the REST OF THE CAUSING PROGRAM IN FRONT of it, so
@@ -220,7 +220,7 @@ void html_script_exec_release(JSContext *ctx, ScriptExec *x);
    its throw owes), 0 = "execute the script element" has finished. */
 int html_script_exec_run(JSContext *ctx, ScriptExec *x, JSValue in, JSValue **out_cb, int *out_argc);
 
-/* HTML §4.12.1 "The script element"'s "prepare the script element", reached from DOM §4.2.3's insertion steps
+/* HTML §4.12.1.1 "Processing model"'s "prepare the script element", reached from DOM §4.2.3's insertion steps
    and from §4.12.1.1's post-connection and attribute change steps. `el` is any inserted element; one that is
    not a `script` returns having done nothing, because the caller is a walk over every node of an inserted
    subtree and the tag test is that walk's filter rather than a step of the algorithm.
@@ -228,7 +228,7 @@ int html_script_exec_run(JSContext *ctx, ScriptExec *x, JSValue in, JSValue **ou
    element here (see above): the caller is the only party that can answer — it is either §13.2.6 tree
    construction, which is the thing that sets it, or page code, which cannot — and the recording is what lets a
    request this element causes be judged after the caller's frame is gone. It decides steps 4 and 14's `force
-   async` round trip and, through it, which of §4.12.1's five destinations the element takes — so it was not a
+   async` round trip and, through it, which of §4.12.1.1's five destinations the element takes — so it was not a
    formality while it was hardcoded false, it was a parsed `<script src>` being filed in a list it does not
    belong to.
    `imm` IS STEP 36'S ANSWER AND IT IS MANDATORY — see the record below. It is written on EVERY path and is
@@ -240,8 +240,8 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inse
  * "parser-inserted" if el is parser-inserted, and "not-parser-inserted" otherwise" — as the request field
  * Fetch §2.2.5 "Requests" makes it, read back from what `html_script_prepare` was told.
  *
- * THREE ANSWERS, BECAUSE UNSTATED IS NOT NOT-PARSER-INSERTED. §4.12.1 makes `parser document` "initially
- * null", so an element nothing marked answers §4.12.1's own ELEMENT question "not parser-inserted"; but the
+ * THREE ANSWERS, BECAUSE UNSTATED IS NOT NOT-PARSER-INSERTED. HTML §4.12.1.1 makes `parser document` "initially
+ * null", so an element nothing marked answers §4.12.1.1's own ELEMENT question "not parser-inserted"; but the
  * REQUEST field is a thing §4.12.1.1 sets, and an element that algorithm never ran over has no answer of its
  * own to report. §2.2.5's empty string is exactly that state, and the caller is what turns UNSTATED into it —
  * see core/frame/policy_container.h's CspParserMetadata, which spells the same three.
@@ -268,7 +268,7 @@ HtmlScriptParserMetadata html_script_parser_metadata(const lxb_dom_element_t *el
  *   HTML §14.2 "Parsing XML documents" — "When the element's end tag is subsequently parsed, the user agent
  * must perform a microtask checkpoint, and then prepare the script element", for a parser invoked with XML
  * scripting support enabled. core/loader/xml_document.c is that caller and owns the checkpoint, the scripting
- * mode and the end-tag boundary; what it must NOT own is a second preparation, because §4.12.1's type steps,
+ * mode and the end-tag boundary; what it must NOT own is a second preparation, because §4.12.1.1's type steps,
  * its `already started` and its five destinations would then be right in one file and drifting in the other.
  * The XML side is not a copy of the HTML side in ANY other respect — there is no raw-text tokenizer state in
  * XML, so a `script` body is ordinary XML §3.1's [43] `content` — and this is the one thing the two share.
@@ -285,7 +285,7 @@ HtmlScriptParserMetadata html_script_parser_metadata(const lxb_dom_element_t *el
  * core/html/html_parse.c's token-done wrapper for why §13.2.4.5's Inert mode is answered by whether the parse
  * is a §13.4 fragment parse, and why `html_script_parsed` stays the ONE writer of the flag those scripts get.
  *
- * THERE IS NO REALM PARAMETER BECAUSE §4.12.1 DERIVES IT: step 32 is "let settings object be el's node
+ * THERE IS NO REALM PARAMETER BECAUSE HTML §4.12.1.1 DERIVES IT: step 32 is "let settings object be el's node
  * document's relevant settings object" and step 34's base URL is that document's. §13.2.6 runs inside the
  * vendored parser and there is no realm on that path to hand over, so asking the element's document is not the
  * loose way to get this — it is the only place the standard says the answer is.
@@ -318,7 +318,7 @@ void html_script_parser_inserted(lxb_dom_node_t *script);
 
 /* HTML §13.2.6.4.8 'The "text" insertion mode' — "An end-of-file token: … If the current node is a script
    element, then set its already started to true." A `<script>` the input stream ended inside runs nothing, in
-   this parse or in any later reach: the flag is what says so, and §4.12.1 step 1 is what reads it.
+   this parse or in any later reach: the flag is what says so, and §4.12.1.1 step 1 is what reads it.
    IT IS SEPARATE FROM THE END-TAG ENTRY BECAUSE IT IS A DIFFERENT TOKEN'S STEP with a different outcome — that
    one prepares, this one refuses to — and a shared body with a "do not prepare" flag would be one function
    answering for two rows of one dispatch table. The realm is derived the same way and for the same reason. */
@@ -344,7 +344,7 @@ void html_script_cloned(JSContext *ctx, lxb_dom_node_t *src, lxb_dom_node_t *cop
    member answers from. */
 void html_script_install(JSContext *ctx, JSValueConst proto);
 
-/* §4.12.1's "when an async attribute is added to a script element el, the user agent must set el's force async
+/* HTML §4.12.1.1's "when an async attribute is added to a script element el, the user agent must set el's force async
    to false", as one of §4.9's ATTRIBUTE CHANGE STEPS — registered on core/dom/element.c's element_attr_changed
    beside media_element_attr_changed, and there rather than in the `async` setter for the same reason: `s.async =
    true`, `s.setAttribute('async','')` and `s.attributes.async.value = ''` are one write of one attribute, and a

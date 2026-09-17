@@ -30,7 +30,7 @@
  * scripting mode, and §14.2 "Parsing XML documents" says XML parsers are invoked with XML scripting support
  * ENABLED "except where otherwise specified" — so this parser has it enabled, and §14.2's very next sentence
  * is the one that decides the outcome: "If the parser was created as part of the XML fragment parsing
- * algorithm, then the element's already started must be set to true." §4.12.1 "The script element"'s prepare
+ * algorithm, then the element's already started must be set to true." HTML §4.12.1.1 "Processing model"'s prepare
  * step 1 returns for an already-started element, so every script this algorithm produces is dead. §13.4's
  * Fragment scripting mode exists precisely so that `createContextualFragment` produces LIVE scripts; in an XML
  * document the identical call produces dead ones, and the mode the member passed is not consulted at all.

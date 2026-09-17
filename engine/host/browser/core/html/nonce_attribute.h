@@ -25,7 +25,7 @@
  * element's value lives, and for the same three reasons: the value is a STRING a source can be stashed in, it
  * must TIME-TRAVEL so a forked arm's assignment is that arm's alone, and the shadow is keyed on the Lexbor
  * element so the attribute change steps below can write it with no wrapper in hand. A slot on the wrapper is
- * right for a BOOLEAN nothing can taint (§4.12.1's `already started` is one); it is the wrong home for a value
+ * right for a BOOLEAN nothing can taint (HTML §4.12.1.1's `already started` is one); it is the wrong home for a value
  * a page computes. */
 #ifndef ENGINE_HOST_BROWSER_CORE_HTML_NONCE_ATTRIBUTE_H
 #define ENGINE_HOST_BROWSER_CORE_HTML_NONCE_ATTRIBUTE_H
@@ -71,7 +71,7 @@ void nonce_attribute_attr_changed(JSContext *ctx, lxb_dom_element_t *el, const c
    copy's nonce is the stale attribute, which under a `script-src 'nonce-…'` policy is the difference between a
    cloned script that runs and one that does not.
    `src` and `copy` may be any node kind; a pair that is not two elements including the mixin is a no-op, for
-   the same reason §4.12.1's cloning steps beside it tolerate one. */
+   the same reason HTML §4.12.1.1's cloning steps beside it tolerate one. */
 void nonce_attribute_cloned(JSContext *ctx, lxb_dom_node_t *src, lxb_dom_node_t *copy);
 
 /* §2.5.6's [[CryptographicNonce]], READ BY A COMPONENT RATHER THAN BY THE MEMBER — "the current value of el's
