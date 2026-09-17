@@ -112,11 +112,33 @@
    realm happened to build it first. */
 static JSClassID g_dwgs_class;
 
-/* WHY THERE IS NO SECOND CLASS FOR §10.2.1.1's PROTOTYPE. WorkerGlobalScope.prototype is reachable in its
-   realm as `WorkerGlobalScope.prototype` and as the [[Prototype]] of the object below it, and nothing in this
-   build asks a realm for it by hand — so a class id whose only purpose is a slot nobody reads would be
-   plumbing built ahead of its consumer. §10.2.1.3's SharedWorkerGlobalScope is the diff that needs one, and
-   it is the diff that should add it. */
+/* WHY THERE IS NO SECOND CLASS FOR §10.2.1.1's PROTOTYPE, AND WHY THE CONSUMER THIS ONCE NAMED IS THE WRONG
+   ONE. WorkerGlobalScope.prototype is reachable in its realm as `WorkerGlobalScope.prototype` and as the
+   [[Prototype]] of the object below it, and nothing in this build asks a realm for it by hand — so a class id
+   whose only purpose is a slot nobody reads would be plumbing built ahead of its consumer. THAT ARGUMENT IS
+   KEPT, because it is still why the slot is absent. What was wrong is the next-diff clause that stood beneath
+   it, naming §10.2.1.3's SharedWorkerGlobalScope as the diff that needs one: that interface is built NOWHERE
+   in this tree, and a consumer has arrived which is not it. It is Web IDL §3.7.3's not-[Global] arm over the
+   members `WorkerGlobalScope includes WindowOrWorkerGlobalScope` brings in — a Window realm places those on
+   its global because Window IS [Global], and a worker realm may not, so each is owed THIS object.
+   AND A CLASS ID ALONE WOULD NOT HAVE SERVED IT, which is what a reader obeying the old clause would have
+   found only after building the slot. Such a member needs three things, and they cannot land separately
+   because none of them has a reader until the last one is there:
+     (a) THE OBJECT, EARLY ENOUGH. core/realm.h runs the intrinsics in core/platform.c's DECLARATION order and
+         this row is declared after the components that would ask, so the prototype does not exist when their
+         installs run. Derive that order rather than remembering it — the rows move:
+           `git grep -nE '^ *\{ "(performance|crypto|indexed_db|worker_global_scope)",' -- '*core/platform.c'`
+     (b) §3.7.6's PREAMBLE OVER AN INTERFACE THAT IS NOT Window. core/idl_args.c's idl_attribute_this asserts
+         idl_global_names_are_window at every read of an attribute minted for the realm's global, and its
+         idl_check_global_target DFAILs a [Replaceable] install whose target is not that global. The second of
+         those crashes states the work in its own words: give the install the declaring interface's own brand
+         as data, the way IdlExposure and IdlAttrForge are stated.
+     (c) THE INSTALL, on `wgs_p`, with its placement asserted by WGS_ASSERT_PLACED as §10.2.1.1's `self` is.
+   HOW THE ABSENCE SHOWS: a realm whose §3.3.8 [Global] names are a worker's aborts while its intrinsics are
+   still installing, at core/idl_args.c's idl_realm_global_declares DCHECKF, which names the member and the
+   installing site — so the member is not merely misplaced, it is unreachable in that realm.
+   RETIREMENT: this record goes when a member WorkerGlobalScope declares is installed on this prototype from
+   another component, because the clause it corrects is spent the moment one is. */
 
 bool worker_global_scope_implements(JSValueConst v)
 {
