@@ -56,6 +56,9 @@
 #include "core/frame/window_proxy.h"
 #include "core/realm.h"
 #include "core/url/origin.h"
+/* HTML §10.2.1.1 "The WorkerGlobalScope common interface" builds the Web IDL §3.7.3 prototype this
+   component places `indexedDB` on in a worker realm — see the install below. */
+#include "core/workers/worker_global_scope.h"
 
 static JSClassID g_factory_class;
 static int       g_obj_slot = -1;
@@ -488,7 +491,7 @@ static JSValue js_idb_get_factory(JSContext *ctx, JSValueConst this_val, int mag
 
 static void indexed_db_install_realm(JSContext *ctx)
 {
-    JSValue proto, prev, ctor, obj, global;
+    JSValue proto, prev, ctor, obj, global, wgs_p;
 
     DCHECK(g_factory_class != 0, "a realm asked for IDBFactory before the interface was declared");
     prev = JS_GetClassProto(ctx, g_factory_class);
@@ -515,7 +518,25 @@ static void indexed_db_install_realm(JSContext *ctx)
     CHECK(!JS_IsException(obj), "the realm's IDBFactory could not be allocated");
     realm_value_set(ctx, g_obj_slot, obj);
 
-    idl_install_accessor(ctx, global, "indexedDB", js_idb_get_factory, 0, -1);
+    /* Indexed Database §4.3 "Interface IDBFactory"'s `[SameObject] readonly attribute IDBFactory indexedDB`,
+       declared by `WindowOrWorkerGlobalScope`. WHICH OBJECT IT LANDS ON IS WEB IDL §3.7.3's CONDITIONAL, for
+       the same reason and by the same two arms core/timing/performance.c states: §2.3 "Interface mixins"
+       makes it a `Window` member in a Window realm and a `WorkerGlobalScope` member in a worker one, and
+       §3.7.3's "If interface is not declared with the [Global] extended attribute" arm then decides the
+       object. It is ROUTING and not a fallback — delete either arm and §3.7.3 still has to be asked.
+       IT NEEDS NO `target` STATED AND `performance` DOES, WHICH IS AN IDL DIFFERENCE AND NOT A CHOICE HERE.
+       This member is plain readonly: §3.7.6 "Attributes"' opening steps reach it only through the getter, and
+       a plain-C getter minted on anything but the realm's global is minted RAW — so it runs none of them on
+       either object, which is this engine's standing state for every prototype accessor and is the residual
+       core/idl_args.c names by shape. `performance` is `[Replaceable]`, so it ALSO gets §3.7.6's setter, and
+       that setter runs all three steps wherever it is installed — which is the whole of why that member
+       needs the declaring interface's brand as data and this one does not. */
+    wgs_p = worker_global_scope_proto(ctx);
+    if (JS_IsObject(wgs_p))
+        idl_install_accessor(ctx, wgs_p, "indexedDB", js_idb_get_factory, 0, -1);
+    else
+        idl_install_accessor(ctx, global, "indexedDB", js_idb_get_factory, 0, -1);
+    JS_FreeValue(ctx, wgs_p);
     JS_FreeValue(ctx, global);
 }
 

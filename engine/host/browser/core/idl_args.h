@@ -2451,6 +2451,9 @@ void idl_install_value_attribute_at(JSContext *ctx, JSValueConst target, const c
    tables already use. */
 void idl_lenient_setters_free(void);
 
+/* And for §3.7.3's [Replaceable] `target` table, which is the same shape for the same reason. */
+void idl_replaceable_targets_free(void);
+
 JSValue idl_interface_object(JSContext *ctx, const char *name, JSValueConst proto);
 
 /* WEB IDL §3.8's `define the global property references`, as the ONE door an interface's name reaches the
@@ -3002,8 +3005,16 @@ void idl_install_accessor_unforgeable_at(JSContext *ctx, JSValueConst target, co
    undefined, or realm's global object otherwise", then a TypeError when it does not implement the interface.
    So `desc.set.call(null, v)` replaces the member on the GLOBAL rather than defining a property on `null`, and
    `Object.create(globalThis).origin = x` throws instead of quietly shadowing the accessor on an unrelated
-   object. The interface branded against is Window, and that is ASSERTED at the install rather than assumed at
-   the read: `target` must be the realm's global object.
+   object.
+   WHICH INTERFACE IS BRANDED AGAINST IS THE ARM'S, AND THIS ONCE SAID IT WAS ALWAYS Window. It read `the
+   interface branded against is Window, and that is ASSERTED at the install rather than assumed at the read:
+   target must be the realm's global object`, which is exactly right about THIS entry and false of the pair:
+   the sentence is rewritten rather than dropped because a reader who re-derives it from this form alone will
+   re-introduce it. This form is §3.8 "Platform objects implementing interfaces"' [Global] arm, where §3.7.6's
+   `target` is the instance's own [[PrimaryInterface]] — the REALM's to state — so the install asserts only
+   that the target IS the realm's global and the READ asks which [Global] interface that realm has.
+   `idl_install_replaceable_on` below is §3.7.3's not-[Global] arm, where the same member lands on the
+   interface prototype object of the interface that DECLARES it and `target` is the INSTALL's to state.
    THE `IdlGetter` FORM'S GETTER STEPS STILL SEE AN UNRESOLVED RECEIVER, because §3.7.6's check belongs to the
    mint and a raw C getter cannot be wrapped without carrying a function pointer through the closure's data —
    which JSCFunctionType must never hold. Those getters answer per-realm and so answer correctly; what they do
@@ -3012,6 +3023,30 @@ void idl_install_replaceable_at(JSContext *ctx, JSValueConst target, const char 
                                 IdlGetter getter, int getter_magic, const char *at_file, int at_line);
 #define idl_install_replaceable(ctx, target, name, getter, magic) \
     idl_install_replaceable_at((ctx), (target), (name), (getter), (magic), IDL_SITE)
+/* THE SAME [Replaceable] ATTRIBUTE ON A §3.7.3 INTERFACE PROTOTYPE OBJECT — Web IDL §3.7.3 "Interface
+   prototype object": "If interface is not declared with the [Global] extended attribute, then: Define the
+   regular attributes of interface on interfaceProtoObj, given realm".
+   WHEN A COMPONENT TAKES THIS ARM RATHER THAN THE ONE ABOVE IS NOT A PREFERENCE AND NOT A REALM TEST: it is
+   WHICH INTERFACE DECLARES THE MEMBER IN THIS REALM. A mixin included by a [Global] interface and by a
+   non-[Global] one lands on two different objects for that reason and for no other — HTML §8.2 "The
+   WindowOrWorkerGlobalScope mixin" is included by `Window`, which IS [Global], and by `WorkerGlobalScope`,
+   which is NOT, so HR-TIME's `performance` is an own property of a Window and an own property of
+   `WorkerGlobalScope.prototype` in a worker. browser/idl_exposure.h's IDL_GLOBALS band is what states the
+   split, and BOTH arms assert it: this one that the realm's [Global] interface does NOT declare the member,
+   the one above (through idl_global_member_refused) that it DOES.
+   `this_is`/`iface` ARE §3.7.6's `target`, the declaring interface's own predicate and identifier, exactly as
+   idl_install_accessor_lenient_setter_at takes them and for the same sentence of §3.7.6. They are the
+   INSTALL's to state here because a realm holds several §3.7.3 prototypes and only the object being installed
+   onto says which one this is.
+   THE GETTER STEPS STILL SEE AN UNRESOLVED RECEIVER, exactly as on the form above and for the same reason —
+   a plain-C getter on anything but the realm's global is minted raw. What this arm adds is the SETTER's
+   preamble, which is where a [Replaceable] member's receiver was being checked against Window in a realm that
+   has none. */
+void idl_install_replaceable_on_at(JSContext *ctx, JSValueConst target, const char *name,
+                                   IdlGetter getter, int getter_magic, IdlThisIs this_is, const char *iface,
+                                   const char *at_file, int at_line);
+#define idl_install_replaceable_on(ctx, target, name, getter, magic, this_is, iface) \
+    idl_install_replaceable_on_at((ctx), (target), (name), (getter), (magic), (this_is), (iface), IDL_SITE)
 /* The half of that setter a member with its OWN setter steps still needs: Web IDL's
    CreateDataPropertyOrThrow(receiver, name, V), which REPLACES the accessor on that object. HTML §7.2.5's
    `opener` setter ends in exactly this operation for a non-null value, so it is one implementation reached from

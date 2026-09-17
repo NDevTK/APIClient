@@ -779,12 +779,45 @@ static const PlatformComponent PLATFORM[] = {
     { "text_stream",         d_text_stream,         NULL },
     /* §2.7 before §7.2.5, and its per-document half is inside window_install for the reason above. */
     { "event_target",        d_event_target,        NULL,        r_event_target },
-    /* HR-TIME §7's Performance, whose position is fixed from BOTH sides and by nothing else. `interface
-       Performance : EventTarget`, so its per-realm install calls event_target_derived_proto and must follow the
-       row above; and §7.1/§7.2 are the two operations of §4 that `hr_time` owns, which is the FIRST row of this
-       list. It depends on nothing else and nothing else depends on it — §8.1's `performance` goes on the global
-       through this component's own realm intrinsic, so a child navigable gets its own Performance object over
-       its own time origin, which is the whole reason the two members are per realm. */
+    /* HTML §10.2.1.1 The WorkerGlobalScope common interface and §10.2.1.2 Dedicated workers and the
+       DedicatedWorkerGlobalScope interface — the objects a WORKER realm's global object is made of. It is
+       after `event_target` because its per-realm install calls event_target_derived_proto and core/realm.h
+       runs the intrinsics in DECLARATION order.
+       AND IT IS NOW FIXED FROM THE OTHER SIDE TOO, WHICH IS WHY IT MOVED. It used to sit far below, and the
+       reason recorded here was that placing it immediately after that row would spoil the argument
+       `performance` made for its own position by naming "the row above" — which was true, and that argument
+       has been rewritten at its own row instead, because the constraint it was weighed against did not exist
+       yet. Web IDL §3.7.3 "Interface prototype object" puts every member `WorkerGlobalScope` declares, and
+       every member its `includes WindowOrWorkerGlobalScope` brings, on the prototype THIS row builds — so
+       every component that owns one of those members for `Window` (`performance` below, `indexed_db` further
+       down) asks this component for that object, and a row standing after one of them has nothing to give it.
+       worker_global_scope_proto asserts exactly that, so the ordering is a checked fact and not a remembered
+       one. It still reads no other component's state, which is what keeps the constraint one-sided.
+       ITS THIRD COLUMN IS EMPTY AND ALWAYS WILL BE. The third column is the PER-DOCUMENT install, and a
+       WorkerGlobalScope realm has no Document to be installed over — HTML §10.2.6.2 Script settings for
+       workers is what a worker environment states instead. That is the whole reason Web IDL §3.8 Platform
+       objects implementing interfaces had to be given a REALM before this component could exist.
+       AND IT HAS NO WITNESS ROW, deliberately. The witness loop runs inside the per-document install, so it
+       only ever stands in a WINDOW realm — where §3.3.7 [Exposed] step 1 makes both of these names UNOWED
+       and the row would assert nothing but their absence. A row that can never see the install it is named
+       for reads as coverage and checks nothing of it; engine/host/test_forced.c's exposure_selftest is the
+       oracle for this component, because it is the one place a second realm is actually built. */
+    { "worker_global_scope", d_worker_global_scope, NULL,        r_worker_global_scope },
+    /* HR-TIME §7's Performance, whose position is fixed from BOTH sides. `interface Performance : EventTarget`,
+       so its per-realm install calls event_target_derived_proto and must follow `event_target`; and §7.1/§7.2
+       are the two operations of §4 that `hr_time` owns, which is the FIRST row of this list.
+       THAT CONSTRAINT WAS SPELLED "the row above" AND THE ROW ABOVE IS NO LONGER `event_target`, so it names
+       the row instead: an ordinal names a thing only while the set is fixed, and this list is one every
+       component adds to. The rewrite is the whole of what the insertion above cost.
+       AND "nothing else depends on it" IS RETIRED, which is the other half and is why the insertion is there.
+       §8.1's `performance` is declared by `WindowOrWorkerGlobalScope`, so Web IDL §2.3 "Interface mixins" makes
+       it a `Window` member in a Window realm and a `WorkerGlobalScope` member in a worker one — and §3.7.3
+       "Interface prototype object" then places it on the global in the first and on
+       `WorkerGlobalScope.prototype` in the second. So this row must follow `worker_global_scope` as well,
+       which is now the row directly above it. The sentence is corrected rather than deleted because a reader
+       who re-derives independence from §7 alone will re-introduce it: the dependency is §8.1's, not §7's.
+       WHAT IS UNCHANGED is why the member is per realm at all — this component's own realm intrinsic builds
+       the Performance object, so a child navigable gets its own over its own time origin. */
     { "performance",         d_performance,         NULL,        r_performance },
     /* PERFORMANCE TIMELINE §3's PerformanceEntry, and USER TIMING §2 over it. BOTH POSITIONS ARE FIXED FROM
        BOTH SIDES. §3's own prototype chains to %Object.prototype% and it depends on no row above it, but
@@ -971,22 +1004,6 @@ static const PlatformComponent PLATFORM[] = {
        is the banner's own remedy for a name whose install changes component. */
     { "report_exception",    d_report_exception,    NULL,        r_report_exception },
     { "message_port",        d_message_port,        NULL,        r_message_port },
-    /* HTML §10.2.1.1 The WorkerGlobalScope common interface and §10.2.1.2 Dedicated workers and the
-       DedicatedWorkerGlobalScope interface — the objects a WORKER realm's global object is made of. It is
-       after `event_target` because its per-realm install calls event_target_derived_proto and core/realm.h
-       runs the intrinsics in DECLARATION order, and that is the only constraint this diff has: it reads no
-       other component's state. It is placed here rather than immediately after that row so the argument
-       `performance` makes for its own position — which names "the row above" — keeps meaning what it says.
-       ITS THIRD COLUMN IS EMPTY AND ALWAYS WILL BE. The third column is the PER-DOCUMENT install, and a
-       WorkerGlobalScope realm has no Document to be installed over — HTML §10.2.6.2 Script settings for
-       workers is what a worker environment states instead. That is the whole reason Web IDL §3.8 Platform
-       objects implementing interfaces had to be given a REALM before this component could exist.
-       AND IT HAS NO WITNESS ROW, deliberately. The witness loop runs inside the per-document install, so it
-       only ever stands in a WINDOW realm — where §3.3.7 [Exposed] step 1 makes both of these names UNOWED
-       and the row would assert nothing but their absence. A row that can never see the install it is named
-       for reads as coverage and checks nothing of it; engine/host/test_forced.c's exposure_selftest is the
-       oracle for this component, because it is the one place a second realm is actually built. */
-    { "worker_global_scope", d_worker_global_scope, NULL,        r_worker_global_scope },
     /* NO DOCUMENT HALF. XHR §3 Interface XMLHttpRequest declares `XMLHttpRequestEventTarget`,
        `XMLHttpRequestUpload` and `XMLHttpRequest` `[Exposed=(Window,DedicatedWorker,SharedWorker)]` and XHR §5
        Interface ProgressEvent declares `ProgressEvent` `[Exposed=(Window,Worker)]`, and Web IDL §3.8 Platform

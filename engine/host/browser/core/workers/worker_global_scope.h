@@ -28,4 +28,25 @@ void worker_global_scope_free(JSRuntime *rt);
  * reaches that step through this one function too. */
 bool worker_global_scope_implements(JSValueConst v);
 
+/* WEB IDL §3.7.3 "Interface prototype object" — `WorkerGlobalScope.prototype` in THIS realm, or JS_UNDEFINED
+ * where this realm's §3.3.8 [Global] names are not a worker's. OWNED by the caller.
+ *
+ * IT IS ASKED BY THE COMPONENT THAT OWNS A MEMBER, NOT BY A REALM TEST. Web IDL §2.3 "Interface mixins" makes
+ * a mixin's members the including interface's own, so every member HTML §8.2 "The WindowOrWorkerGlobalScope
+ * mixin" brings is a `Window` member in a Window realm and a `WorkerGlobalScope` member in a worker one — and
+ * §3.7.3's [Global] conditional then places it on the global in the first and on THIS object in the second.
+ * A component owning one of those members asks for this object and installs onto whichever it gets; the
+ * choice is §3.7.3's arm and browser/idl_exposure.h's IDL_GLOBALS band is what asserts it on both sides.
+ *
+ * IT IS THIS DIRECTORY'S TO ANSWER AND THE OTHER DIRECTION WOULD BE WRONG: core/idl_args.c may not include
+ * this header — core/ depending on workers/ inverts the dependency and would make every host that installs
+ * an attribute link the worker layer — which is why §3.7.6's `target` travels to that file as DATA (this
+ * header's predicate above) rather than as a name it could look up.
+ * WHAT WOULD RETIRE THE CALL ALTOGETHER is a PRODUCTION Web IDL §3.7.3 census on core/realm.h: that file
+ * already records every interface prototype object a realm builds, by identifier and BY OBJECT, and
+ * realm_interface_prototype_object hands it back — but the whole census is `#if APICLIENT_DEV`, so no release
+ * build can reach an interface's prototype by name. The day it is not, a component asks the realm for
+ * `WorkerGlobalScope`'s prototype and names no component at all. */
+JSValue worker_global_scope_proto(JSContext *ctx);
+
 #endif

@@ -8181,12 +8181,43 @@ int idl_replace_with_value(JSContext *ctx, JSValueConst obj, const char *name, J
  * from. It is a crash and not a named residual because the code is WRONG here rather than narrower: a browser
  * answers `self.performance` inside a worker.
  *
+ * AND §3.7.6's `target` IS AN ARGUMENT, WHICH IS WHAT SPLITS THE TWO ARMS THE PARAGRAPHS ABOVE ALREADY
+ * DISTINGUISH. §3.7.6 creates a getter "given an attribute attribute, a namespace or interface target, and a
+ * realm realm", and which definition that is depends on WHICH ARM PLACED THE MEMBER. §3.8 "Platform objects
+ * implementing interfaces"' [Global] arm defines a member on the instance, and there `target` is that
+ * instance's own [[PrimaryInterface]] — the REALM's to state, which no install holds, so this file asks the
+ * realm and the DCHECKF below is that question. §3.7.3 "Interface prototype object"'s not-[Global] arm defines
+ * it on the interface prototype object of the interface that DECLARES it, and there `target` is the INSTALL's
+ * to state, because one realm holds several such prototypes and the object being installed onto is the only
+ * thing that says which. `is` NULL is the first arm and the whole of what this function used to be.
+ * IT IS ONE SPELLING OF THE THREE OPENING STEPS AND NOT TWO, which is why the arms are a parameter rather than
+ * a sibling entry: the steps are identical and only 1.1.2.3's operand differs, which the enumeration above
+ * establishes by reading the other two bodies.
+ *
  * Returns the resolved jsValue OWNED, or JS_EXCEPTION with §3.7.6's TypeError or §3.5's SecurityError pending. */
 static JSValue idl_attribute_this(JSContext *ctx, JSValueConst this_val, const char *name,
-                                  WindowProxySecurityType type)
+                                  WindowProxySecurityType type, IdlThisIs is, const char *iface)
 {
     JSValue js;
 
+    /* §3.7.3's ARM STATES ITS OWN `target` AND IS NOT ASKING THE REALM ANYTHING, so the question below is
+       neither asked nor owed for it: a member on WorkerGlobalScope.prototype is a WorkerGlobalScope member in
+       every realm that has one, which is exactly what makes it the install's fact. */
+    if (is != NULL) {
+        DCHECK(iface != NULL && *iface,
+               "Web IDL §3.7.6 \"Attributes\" was given a receiver predicate and no interface identifier to "
+               "name in its TypeError — §3.7.6's throw names `target`, and a brand with nothing to be called is "
+               "a refusal a page cannot read");
+        js = window_proxy_this_object(ctx, this_val);   /* 1.1.2.1 / 4.5.1, written once */
+        if (window_proxy_security_check(ctx, js, name, type) < 0) {   /* 1.1.2.2 / 4.5.2 */
+            JS_FreeValue(ctx, js);
+            return JS_EXCEPTION;
+        }
+        if (is(js)) return js;                          /* 1.1.2.3 / 4.5.3 */
+        JS_FreeValue(ctx, js);
+        return JS_ThrowTypeError(ctx, "'%s' called on an object that does not implement interface %s",
+                                 name, iface);
+    }
     DCHECKF(idl_global_names_are_window(realm_global_names(ctx)),
             "Web IDL §3.7.6 \"Attributes\" was asked for its opening steps for `%s` in a realm "
             "whose §3.3.8 [Global] interface is `%s` — and of the three steps below EXACTLY ONE is "
@@ -8338,7 +8369,7 @@ static JSValue idl_global_attribute_get(JSContext *ctx, JSValueConst this_val, i
            "a §3.7.6 global attribute getter ran at an index this table never made — the index rides the "
            "function object's magic and is written only by idl_global_attr_declare");
     a = &g_gattr[magic];
-    js = idl_attribute_this(ctx, this_val, a->name, WP_SEC_GETTER);
+    js = idl_attribute_this(ctx, this_val, a->name, WP_SEC_GETTER, NULL, NULL);
     if (JS_IsException(js)) return JS_EXCEPTION;
     r = a->getter(ctx, js, a->magic);   /* step 1.1.3, with idlObject as this */
     JS_FreeValue(ctx, js);
@@ -8485,6 +8516,68 @@ static JSValue idl_lenient_set(JSContext *ctx, JSValueConst this_val, JSValueCon
     return JS_UNDEFINED;   /* §3.7.6: "…then return undefined." */
 }
 
+/* WEB IDL §3.7.6's `target` FOR A [Replaceable] ATTRIBUTE PLACED BY §3.7.3's NOT-[Global] ARM.
+ *
+ * §3.7.3 "Interface prototype object": "If interface is not declared with the [Global] extended attribute,
+ * then: Define the regular attributes of interface on interfaceProtoObj, given realm" — so a member of a
+ * NON-[Global] interface lands on that interface's prototype object, and §3.7.6's `target` is that interface.
+ * One realm holds several such prototypes, so the answer differs per INSTALL and not per realm, which is the
+ * opposite of the §3.8 arm one screen down; idl_attribute_this's own head states both and why.
+ *
+ * THE TABLE IS THE SHAPE g_lenient AND g_gattr ALREADY USE, for the identical reason: a C function's `magic`
+ * is an int, what §3.7.6 step 1.1.2.3 needs is a function pointer and an identifier, and the same member
+ * installed once per realm must find its entry rather than append a second one per realm for the life of the
+ * agent. The MEMBER's own identifier is NOT a field here — the [Replaceable] setter already carries it as
+ * data[0] because its steps end in CreateDataPropertyOrThrow(jsValue, id, V), and a second copy would be a
+ * second thing to keep in step with the first.
+ *
+ * `iface` IS THE CALLER'S STATIC, never a string this file owns: it is the identifier a component spells in
+ * its own install, exactly as idl_install_accessor_lenient_setter_at's is, so there is nothing to copy and
+ * nothing to free but the array. */
+typedef struct IdlReplaceableTarget {
+    IdlThisIs   is;      /* §3.7.6 step 1.1.2.3's "jsValue does not implement target" */
+    const char *iface;   /* the identifier that TypeError names; a static, per the caller */
+} IdlReplaceableTarget;
+static IdlReplaceableTarget *g_rtarget;
+static int                   g_rtarget_n, g_rtarget_cap;
+
+static int idl_replaceable_target_declare(IdlThisIs is, const char *iface)
+{
+    int i;
+
+    DCHECK(is != NULL,
+           "a Web IDL §3.7.3 [Replaceable] install stated no receiver predicate — §3.7.6 Attributes' setter "
+           "throws a TypeError when validThis is false, and a setter that cannot ask has no arm to take");
+    DCHECK(iface != NULL && *iface,
+           "a Web IDL §3.7.3 [Replaceable] install stated a receiver predicate and no interface identifier");
+    for (i = 0; i < g_rtarget_n; i++)
+        if (g_rtarget[i].is == is && strcmp(g_rtarget[i].iface, iface) == 0) return i;
+    if (g_rtarget_n == g_rtarget_cap) {
+        int cap = g_rtarget_cap ? g_rtarget_cap * 2 : 4;
+        IdlReplaceableTarget *t = realloc(g_rtarget, (size_t)cap * sizeof *t);
+
+        CHECK(t != NULL, "the Web IDL §3.7.3 [Replaceable] target table could not grow");
+        g_rtarget = t;
+        g_rtarget_cap = cap;
+    }
+    g_rtarget[g_rtarget_n].is = is;
+    g_rtarget[g_rtarget_n].iface = iface;
+    return g_rtarget_n++;
+}
+
+void idl_replaceable_targets_free(void)
+{
+    free(g_rtarget);
+    g_rtarget = NULL;
+    g_rtarget_n = g_rtarget_cap = 0;
+}
+
+/* THE SETTER'S `magic` IS §3.7.6's `target`, AND −1 IS THE §3.8 ARM. A NEGATIVE index is the [Global] arm
+   rather than an absence, which is why it is spelled as a sentinel this file mints and never as a default a
+   caller could reach by forgetting: idl_define_replaceable states one or the other at every call, and a
+   value outside both ranges aborts below rather than silently meaning Window. */
+#define IDL_REPLACEABLE_TARGET_IS_REALM_GLOBAL (-1)
+
 static JSValue idl_replaceable_set(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv,
                                    int magic, JSValue *data)
 {
@@ -8492,7 +8585,11 @@ static JSValue idl_replaceable_set(JSContext *ctx, JSValueConst this_val, int ar
     JSValue js;
     int r;
 
-    (void)magic; (void)argc;
+    (void)argc;
+    DCHECK(magic >= IDL_REPLACEABLE_TARGET_IS_REALM_GLOBAL && magic < g_rtarget_n,
+           "a Web IDL §3.7.6 [Replaceable] setter ran with a `target` no declaration in this agent's table "
+           "matches — the index is minted by idl_replaceable_target_declare and −1 is the §3.8 arm, so a "
+           "value outside both is one this engine computed and then lost");
     /* §3.7.6 steps 1-2: "Let V be undefined. If any arguments were passed, then set V to the value of the
        first argument passed." A ZERO-ARGUMENT CALL IS SPEC-LEGAL — `desc.set.call(null)` writes it — and
        reading argv[0] is still right, because js_call_c_function_data pads arg_buf to the mint's `length` of
@@ -8501,7 +8598,9 @@ static JSValue idl_replaceable_set(JSContext *ctx, JSValueConst this_val, int ar
        spelling and of no other: it aborted the engine on a call the spec defines. */
     name = JS_ToCString(ctx, data[0]);   /* the function's own data: a string this file put there */
     if (!name) return JS_EXCEPTION;
-    js = idl_attribute_this(ctx, this_val, name, WP_SEC_SETTER);   /* §3.7.6 steps 4.5.1-4.5.4 */
+    js = idl_attribute_this(ctx, this_val, name, WP_SEC_SETTER,   /* §3.7.6 steps 4.5.1-4.5.4 */
+                            magic < 0 ? NULL : g_rtarget[magic].is,
+                            magic < 0 ? NULL : g_rtarget[magic].iface);
     if (JS_IsException(js)) { JS_FreeCString(ctx, name); return JS_EXCEPTION; }
     r = idl_replace_with_value(ctx, js, name, argv[0]);
     JS_FreeValue(ctx, js);
@@ -8528,7 +8627,7 @@ static JSValue idl_held_value_get(JSContext *ctx, JSValueConst this_val, int arg
     (void)argc; (void)argv; (void)magic;
     name = JS_ToCString(ctx, data[1]);
     if (!name) return JS_EXCEPTION;
-    js = idl_attribute_this(ctx, this_val, name, WP_SEC_GETTER);   /* §3.7.6 step 1's try-list, 1.1.2.1-1.1.2.3 */
+    js = idl_attribute_this(ctx, this_val, name, WP_SEC_GETTER, NULL, NULL);   /* §3.7.6 1.1.2.1-1.1.2.3 */
     JS_FreeCString(ctx, name);
     if (JS_IsException(js)) return JS_EXCEPTION;
     DCHECK(window_proxy_receiver_is_own_realm(ctx, js),
@@ -8608,19 +8707,89 @@ static void idl_check_global_target(JSContext *ctx, JSValueConst target, const c
            "the realm's own [[PrimaryInterface]] and is therefore per-REALM. Quoting this sentence at that "
            "crash prices its repair at the wrong mechanism, which has happened", form, name);
 }
+/* THE OTHER ARM'S STATEMENT, ASKED WHERE THE OTHER ONE IS AND ASSERTING ITS NEGATION. The entry above answers
+ * §3.8's question — is this install putting a member on the realm's [Global] object — and DFAILs when it is
+ * not, because until now every [Replaceable] attribute in this engine was. §3.7.3's not-[Global] arm is the
+ * other half of that same conditional, and an install that takes it states its `target` rather than asking the
+ * realm; this is where that statement is checked.
+ *
+ * THE THREE QUESTIONS ARE ONE PARTITION AND NOT THREE PRECAUTIONS. (i) The target must NOT be the realm's
+ * global, because a member on the global takes §3.8's arm and its `target` is the realm's own
+ * [[PrimaryInterface]], which no install holds — so a brand stated there would be a second answer to a
+ * question the realm already answers. (ii) This realm's §3.3.8 [Global] interface must NOT declare the
+ * member, which is the exact negation of the positive DCHECKF idl_global_member_refused makes for the other
+ * arm: between them the two doors say that every member reaching either is placed by exactly one of §3.7.3's
+ * and §3.8's arms, and neither can quietly become the fallback for the other. (iii) The identifier the install
+ * states must be the one THIS REALM recorded for THIS OBJECT, asked of the §3.7.3 census by IDENTITY rather
+ * than by reading the object's class string — which is what keeps a copy-paste that took a neighbouring
+ * component's predicate AND its identifier together from being self-consistent, the defect
+ * idl_assert_receiver_is_target names for the pool door.
+ *
+ * IT DOES NOT CHECK THE PREDICATE AGAINST THE IDENTIFIER, and that is a NAMED RESIDUAL rather than an
+ * omission. WHAT IS NOT COVERED: that `is` really answers "implements `iface`" — an install may state a
+ * predicate that brands a sibling interface while naming this one, and (iii) only establishes that the OBJECT
+ * is the right prototype. WHAT THE NEXT DIFF BUILDS: the two-sided seal idl_seal_check_receivers already makes
+ * over the pool's declarations, widened to this table, once a second interface declares a [Replaceable]
+ * member through this arm and the pairing has something to disagree with. HOW ITS ABSENCE WOULD SHOW: a
+ * [Replaceable] member on a §3.7.3 prototype refusing every receiver a page reaches it on, with a TypeError
+ * naming an interface the page never touched.
+ * It is inside the block idl_check_global_target opened above, which is where every dev-only install-side
+ * assert in this file lives — a second `#if APICLIENT_DEV` here would be a second nesting of one condition. */
+static void idl_check_proto_target(JSContext *ctx, JSValueConst target, const char *name, const char *iface)
+{
+    JSValue recorded;
+
+    DCHECKF(!idl_target_is_realm_global(ctx, target),
+            "the [Replaceable] attribute `%s` was installed on the realm's GLOBAL object while stating `%s` "
+            "as Web IDL §3.7.6 Attributes' `target` — a member on a global is placed by §3.8 \"Platform "
+            "objects implementing interfaces\"' [Global] arm, \"Define the regular attributes of interface on "
+            "instance, given realm\", whose `interface` is that instance's own [[PrimaryInterface]] and is "
+            "therefore the REALM's to state and not this install's. Drop the brand and use the §3.8 form",
+            name, iface);
+    DCHECKF(!idl_realm_global_declares(ctx, name),
+            "the [Replaceable] attribute `%s` was installed on `%s`'s Web IDL §3.7.3 Interface prototype "
+            "object, and browser/idl_exposure.h's IDL_GLOBALS band says this realm's §3.3.8 [Global] "
+            "interface `%s` DECLARES `%s` — so §3.8 WRITES that name onto the global object of this realm and "
+            "a page reads `globalThis.hasOwnProperty(\"%s\")` as true. The two arms of one conditional cannot "
+            "both place one member: either this install has the wrong target, or the band and the interface "
+            "the install names disagree (`node engine/idlgen.mjs --regen`)",
+            name, iface, idl_realm_global_interface(ctx), name, name);
+    recorded = realm_interface_prototype_object(ctx, iface);
+    DCHECKF(JS_IsObject(recorded) && JS_IsSameValue(ctx, recorded, target),
+            "`%s` was installed on an object this realm did not build as `%s`'s Web IDL §3.7.3 Interface "
+            "prototype object — §3.7.6 Attributes' `target` is \"the definition whose members are being "
+            "defined on this object\", so the identifier the install states and the object it was handed are "
+            "one fact asked two ways. Either the install was given the wrong prototype, or the component that "
+            "builds `%s`'s prototype has not run in this realm yet, which is core/platform.c's DECLARATION "
+            "order and is what core/workers/worker_global_scope.c's banner over `g_dwgs_class` calls (a)",
+            name, iface, iface);
+    JS_FreeValue(ctx, recorded);
+}
 #define IDL_CHECK_GLOBAL_TARGET(c, t, n, f) idl_check_global_target((c), (t), (n), (f))
+#define IDL_CHECK_PROTO_TARGET(c, t, n, i)  idl_check_proto_target((c), (t), (n), (i))
 #else
 #define IDL_CHECK_GLOBAL_TARGET(c, t, n, f) ((void)0)
+#define IDL_CHECK_PROTO_TARGET(c, t, n, i)  ((void)0)
 #endif
 
-/* Both forms end here: an accessor with §3.7.6's shared setter, at an IDL attribute's flags. */
-static void idl_define_replaceable(JSContext *ctx, JSValueConst target, const char *name, JSValue getter)
+/* Both forms end here: an accessor with §3.7.6's shared setter, at an IDL attribute's flags.
+   `this_is`/`iface` state §3.7.6's `target` for §3.7.3's not-[Global] arm and are NULL for §3.8's, which is
+   the one thing the two arms differ by — the descriptor, the mint and the define below are identical, so the
+   arm is an ARGUMENT and not a second entry with a second copy of them. */
+static void idl_define_replaceable(JSContext *ctx, JSValueConst target, const char *name, JSValue getter,
+                                   IdlThisIs this_is, const char *iface)
 {
     JSAtom a = JS_NewAtom(ctx, name);
     JSValue nm, setter;
     char nb[IDL_ACCESSOR_NAME_MAX];
+    int tgt = IDL_REPLACEABLE_TARGET_IS_REALM_GLOBAL;
 
-    IDL_CHECK_GLOBAL_TARGET(ctx, target, name, "[Replaceable]");
+    if (this_is == NULL) {
+        IDL_CHECK_GLOBAL_TARGET(ctx, target, name, "[Replaceable]");
+    } else {
+        IDL_CHECK_PROTO_TARGET(ctx, target, name, iface);
+        tgt = idl_replaceable_target_declare(this_is, iface);
+    }
     DCHECK(a != JS_ATOM_NULL, "a replaceable attribute name could not be interned");
     /* THE DATA IS THE IDENTIFIER AND THE NAME IS §3.7.6'S — the one place in this file where the distinction
        is load-bearing for something other than a reported name. `nm` reaches idl_replaceable_set, whose steps
@@ -8629,7 +8798,7 @@ static void idl_define_replaceable(JSContext *ctx, JSValueConst target, const ch
     nm = JS_NewString(ctx, name);
     CHECK(!JS_IsException(nm), "a replaceable attribute's name could not be allocated");
     setter = JS_NewCFunctionData2(ctx, idl_replaceable_set,
-                                  idl_accessor_name(nb, sizeof nb, name, IDL_ACCESSOR_SET), 1, 0, 1,
+                                  idl_accessor_name(nb, sizeof nb, name, IDL_ACCESSOR_SET), 1, tgt, 1,
                                   (JSValueConst *)&nm);
     CHECK(!JS_IsException(setter), "a replaceable attribute's setter could not be allocated");
     JS_FreeValue(ctx, nm);
@@ -8650,7 +8819,30 @@ void idl_install_replaceable_at(JSContext *ctx, JSValueConst target, const char 
        idl_define_replaceable because that entry CONSUMES a getter this line has not built yet, and the
        cheapest correct refusal is the one that never mints. */
     if (idl_global_member_refused(ctx, target, name, at_file, at_line)) return;
-    idl_define_replaceable(ctx, target, name, idl_mint_plain_getter(ctx, target, name, getter, getter_magic));
+    idl_define_replaceable(ctx, target, name, idl_mint_plain_getter(ctx, target, name, getter, getter_magic),
+                           NULL, NULL);
+}
+
+/* WEB IDL §3.7.3's NOT-[Global] ARM FOR THE SAME ATTRIBUTE — the same [Replaceable] member, on the interface
+   prototype object of the interface that DECLARES it, with that interface's own receiver predicate as
+   §3.7.6's `target`. See idl_args.h for when a component takes this arm rather than the one above.
+   §3.7.6's CONTINUE-STEP IS STILL ASKED, and it answers by declining to answer: idl_global_member_refused
+   tests the TARGET first and returns for anything that is not the realm's global, because
+   IDL_MEMBER_EXPOSURE holds only the members of [Global] interfaces and their ancestors and a prototype
+   member's name looked up there would be answered out of an unrelated construct's exposure set. The call is
+   kept so that every member-placing entry in this file reaches the one door, and so that widening the table
+   widens this arm with the rest rather than leaving it the one form nobody remembered. */
+void idl_install_replaceable_on_at(JSContext *ctx, JSValueConst target, const char *name,
+                                   IdlGetter getter, int getter_magic, IdlThisIs this_is, const char *iface,
+                                   const char *at_file, int at_line)
+{
+    DCHECK(getter != NULL, "a replaceable attribute with no getter — it is READONLY, so the read is all it has");
+    DCHECK(this_is != NULL,
+           "Web IDL §3.7.3's not-[Global] arm was taken with no receiver predicate — this entry exists to state "
+           "§3.7.6 Attributes' `target`, and an install with nothing to state takes the §3.8 form instead");
+    if (idl_global_member_refused(ctx, target, name, at_file, at_line)) return;
+    idl_define_replaceable(ctx, target, name, idl_mint_plain_getter(ctx, target, name, getter, getter_magic),
+                           this_is, iface);
 }
 
 /* THE HELD-VALUE GETTER'S DATA IS TWO VALUES, and the second is the member's own NAME. §3.7.6's TypeError
@@ -8682,7 +8874,7 @@ void idl_install_replaceable_value_at(JSContext *ctx, JSValueConst target, const
        a refusal frees it — a caller that got it back would have two shapes to write instead of one, which is
        the same argument §3.8's own door makes about the interface object it declines to define. */
     if (idl_global_member_refused(ctx, target, name, at_file, at_line)) { JS_FreeValue(ctx, value); return; }
-    idl_define_replaceable(ctx, target, name, idl_held_value_getter(ctx, name, value));
+    idl_define_replaceable(ctx, target, name, idl_held_value_getter(ctx, name, value), NULL, NULL);
 }
 
 /* §3.7.6's READONLY ATTRIBUTE OVER A VALUE THE REALM ALREADY HOLDS — the primitive four members needed and
@@ -9525,6 +9717,9 @@ void idl_args_pool_free(void)
        through its own entry rather than by touching the statics from here, so the one file that owns the table
        owns its lifetime. */
     idl_lenient_setters_free();
+    /* AND §3.7.3's [Replaceable] TARGET TABLE, which is the same kind of table for the same reason and goes
+       back through its own entry for the same one. */
+    idl_replaceable_targets_free();
 #if APICLIENT_DEV
     /* AND THE §3.7.1 CONSTRUCTOR-MINT RECORD, which is the same kind of table again — malloc'd, holding no
        JSValue and no atom, and its entries naming a previous agent's identifiers. The strings are COPIES this

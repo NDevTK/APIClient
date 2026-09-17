@@ -9,6 +9,10 @@
 #include "core/realm.h"
 #include "core/timing/hr_time.h"
 #include "core/timing/performance.h"
+/* HTML §10.2.1.1 "The WorkerGlobalScope common interface"'s §3.7.3 prototype, for §8.1's `performance` in a
+   worker realm — see the install below for why the member's OBJECT is asked of the component that builds it
+   rather than the member being handed to that component. */
+#include "core/workers/worker_global_scope.h"
 
 static JSClassID g_perf_class;
 static int g_perf_slot = -1;   /* §8.1's "the Performance object" of THIS realm's global */
@@ -185,7 +189,7 @@ static JSValue js_win_performance(JSContext *ctx, JSValueConst this_val, int mag
    first realm's clock and time origin. */
 static void performance_install(JSContext *ctx)
 {
-    JSValue proto, prev, global, obj;
+    JSValue proto, prev, global, obj, wgs_p;
 
     prev = JS_GetClassProto(ctx, g_perf_class);
     DCHECK(JS_IsNull(prev), "performance_install ran twice in one realm — everything already holding the first "
@@ -216,7 +220,32 @@ static void performance_install(JSContext *ctx)
     CHECK(!JS_IsException(obj), "this realm's Performance object could not be allocated");
     realm_value_set(ctx, g_perf_slot, obj);
 
-    idl_install_replaceable(ctx, global, "performance", js_win_performance, 0);
+    /* HR-TIME §8.1 "The performance attribute" — `[Replaceable] readonly attribute Performance performance`,
+       declared by `WindowOrWorkerGlobalScope`. WHICH OBJECT IT LANDS ON IS WEB IDL §3.7.3's CONDITIONAL AND
+       NOT A REALM TEST. §2.3 "Interface mixins" makes a mixin's members the INCLUDING interface's own — "all
+       objects implementing an interface I ... must additionally include the members of interface mixin M" —
+       so this is a `Window` member in a Window realm and a `WorkerGlobalScope` member in a worker one, and
+       §3.7.3's "If interface is not declared with the [Global] extended attribute" arm then puts it on the
+       global in the first (Window IS [Global]) and on `WorkerGlobalScope.prototype` in the second.
+       IT IS ROUTING AND NOT A FALLBACK, by §C-stack's own test: delete either arm and the question still has
+       to be asked, because §3.7.3 asks it of every realm this component builds into. Neither arm is a
+       narrowing of the other and neither is reached by a predicate failing — the two objects exist in
+       different realms, and browser/idl_exposure.h's IDL_GLOBALS band ASSERTS the split from both sides:
+       idl_install_replaceable_on asserts that this realm's [Global] interface does NOT declare the name, and
+       idl_global_member_refused asserts that it DOES for the arm below it.
+       THE SETTER IS WHAT NEEDED THE BRAND, NOT THE GETTER. §3.7.6 "Attributes" gives create an attribute
+       getter and create an attribute setter the same opening steps, and a plain-C getter minted on anything
+       but the realm's global is minted RAW — so the getter runs none of them on either object today, which is
+       this engine's standing state for every prototype accessor. The [Replaceable] SETTER runs all three
+       wherever it is installed, and its step 1.1.2.3 asks whether the receiver implements `target`; without
+       `WorkerGlobalScope` stated here that question is asked against Window in a realm that has none. */
+    wgs_p = worker_global_scope_proto(ctx);
+    if (JS_IsObject(wgs_p))
+        idl_install_replaceable_on(ctx, wgs_p, "performance", js_win_performance, 0,
+                                   worker_global_scope_implements, "WorkerGlobalScope");
+    else
+        idl_install_replaceable(ctx, global, "performance", js_win_performance, 0);
+    JS_FreeValue(ctx, wgs_p);
     JS_FreeValue(ctx, global);
 }
 

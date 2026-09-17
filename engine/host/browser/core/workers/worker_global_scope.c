@@ -160,6 +160,59 @@ bool worker_global_scope_implements(JSValueConst v)
     return JS_IsObject(v) && g_dwgs_class != 0 && JS_GetClassID(v) == g_dwgs_class;
 }
 
+/* WEB IDL §3.7.3 "Interface prototype object" — `WorkerGlobalScope.prototype` IN THIS REALM, which is where
+ * §3.7.3's not-[Global] arm puts every member `WorkerGlobalScope` declares and every member its
+ * `includes WindowOrWorkerGlobalScope` brings. JS_UNDEFINED in a realm that has none. OWNED.
+ *
+ * IT IS THE `(a)` OF THE BANNER OVER `g_dwgs_class` AND IT NEEDS NO SECOND CLASS ID. A realm's copy of the
+ * object below it is quickjs's per-context class-proto slot, and §3.7.3's chain is built parent-first four
+ * lines apart in one function — so the parent IS the [[Prototype]] of the child, and reading it back is one
+ * hop rather than a slot of its own. What a second class id would buy is a place to put an object this
+ * already has a place for, which is the plumbing-ahead-of-its-consumer that banner declines.
+ *
+ * THE CONSUMER IS A COMPONENT THAT OWNS ONE OF THOSE MEMBERS FOR Window ALREADY — core/timing/performance.c
+ * and core/indexeddb/indexed_db.c today — because Web IDL §2.3 "Interface mixins" makes a mixin's members the
+ * INCLUDING interface's own, so `performance` is a `Window` member in a Window realm and a `WorkerGlobalScope`
+ * member in a worker one, and the value, the getter and the magic are that component's either way. Handing
+ * those to this file instead would move the member away from the section that defines it.
+ *
+ * THE ORDER IS A CHECKED FACT AND NOT A REMEMBERED ONE, which is the whole of what the assert below is for:
+ * core/realm.h runs the per-realm intrinsics in core/platform.c's DECLARATION order, so this component's row
+ * must stand ahead of every component that asks — and a row that drifts back past one of them would otherwise
+ * show up as that component's own install aborting one file away, at core/idl_args.c's
+ * idl_realm_global_declares DCHECKF, naming a member instead of an ordering. */
+JSValue worker_global_scope_proto(JSContext *ctx)
+{
+    JSValue dwgs_p, wgs_p;
+
+    DCHECK(g_dwgs_class != 0,
+           "WorkerGlobalScope.prototype was asked for before worker_global_scope_init declared the class — "
+           "core/platform.c runs every row's DECLARE column before any realm is built, so a realm asking this "
+           "of an undeclared class is an agent that never ran that column");
+    dwgs_p = JS_GetClassProto(ctx, g_dwgs_class);
+    if (!JS_IsObject(dwgs_p)) {
+        DCHECK(!idl_exposed_in_realm(ctx, "DedicatedWorkerGlobalScope"),
+               "a realm whose Web IDL §3.3.8 [Global] names are a worker's was asked for "
+               "WorkerGlobalScope.prototype and this component has not built it yet — core/realm.h runs the "
+               "per-realm intrinsics in core/platform.c's DECLARATION order, so the `worker_global_scope` row "
+               "has drifted BACK past the row that is asking. Move it ahead of that row, keeping it after "
+               "`event_target`, whose derived-prototype entry this component calls");
+        JS_FreeValue(ctx, dwgs_p);
+        return JS_UNDEFINED;
+    }
+    /* §3.7.3's proto step, read back: "set proto to the interface prototype object in realm of that inherited
+       interface" — `DedicatedWorkerGlobalScope : WorkerGlobalScope`, established at construction below. */
+    wgs_p = JS_GetPrototype(ctx, dwgs_p);
+    JS_FreeValue(ctx, dwgs_p);
+    CHECK(!JS_IsException(wgs_p), "reading WorkerGlobalScope.prototype off its child's [[Prototype]] threw");
+    DCHECK(JS_IsObject(wgs_p),
+           "DedicatedWorkerGlobalScope.prototype's [[Prototype]] is not an object — Web IDL §3.7.3 chains it "
+           "to WorkerGlobalScope.prototype at construction and §3.7.3's immutable-prototype exotic behaviour "
+           "is the named residual at the foot of this file, so a page has replaced a link this engine has not "
+           "yet made unreplaceable");
+    return wgs_p;
+}
+
 /* THE SAME BRAND, IN THE SHAPE core/events/event_target.h REGISTERS PREDICATES IN — a named forwarder that
    drops the realm, exactly as core/dom/node.c writes one per tree term. The events layer may not name this
    directory (a host that installs events would then link the worker interfaces), so the fact travels as data

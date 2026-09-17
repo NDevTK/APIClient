@@ -21290,8 +21290,15 @@ int main(int argc, char **argv) {
        have, since the caller's realm was already built. It is sound because that list is closed before the
        first realm exists: platform_agent_init runs its whole declare column and only THEN calls
        realm_install_intrinsics, and every realm_declare_intrinsic in engine/host/browser sits in a
-       declare-column function. realm_declare_intrinsic does not itself refuse a late declaration — a guard
-       there would make this true by construction rather than by that reading.
+       declare-column function.
+       AND IT NOW HOLDS BY CONSTRUCTION RATHER THAN BY THAT READING, WHICH THIS LINE USED TO SAY IT DID NOT.
+       It read that realm_declare_intrinsic does not itself refuse a late declaration and that a guard there
+       would make this true by construction — the guard is there: that entry sets its own built flag before
+       the walk and DCHECKs it at every declaration, so a component declaring after the first realm of an
+       agent has been built ABORTS naming the ordering. The sentence is rewritten rather than deleted because
+       it was the one site in this tree stating the obligation, and a reader who re-derives the hand reading
+       of a hundred and fifty call sites will re-introduce the caveat it carried. What the hand reading could
+       never cover is the site somebody adds next, which is exactly what the guard covers.
        WHY IT SITS AT THE END, WHICH IS A STATEMENT ABOUT THE FIXTURE AND NOT ABOUT THE TABLE. This selftest
        aborts inside its own realm construction, on a member core/realm.h's list installs into a
        DedicatedWorkerGlobalScope realm; from the head of main that abort arrived BEFORE the first fixture
