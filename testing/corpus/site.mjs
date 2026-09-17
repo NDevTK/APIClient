@@ -22,7 +22,7 @@
 // read-with-no-writer defect with a filename for a field. The name is now WRITTEN here and CARRIED on the
 // row (`logFile`), so the reader is told rather than left to guess between two spellings.
 import puppeteer from 'puppeteer';
-import { writeFileSync, readFileSync } from 'node:fs';
+import { writeFileSync, readFileSync, readdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { loadavg, cpus } from 'node:os';
 
@@ -203,6 +203,48 @@ try {
    one question and a reader can now see both; an id that does not change between two rows whose `extDir`
    does is a `restart` that was refused, which is the state that produced this session's worst measurement. */
 artifact.loadedExtId = loadedExtId;
+
+/* THE TRUSTED ZONE CHROME LOADED, HASHED FOR THE SAME REASON `wasmSha256` IS. That hash is defended above as
+   "a hash OF the bytes Chrome loaded rather than of a neighbour's", and the argument was made for one half of
+   a two-half program. The other half is this zone's JavaScript, which CLAUDE.md §A-CROSS-BOUNDARY-DIFF calls
+   INTERPRETED FROM THE TREE and therefore DEPLOYED ON WRITE: it needs no build, so NOTHING in
+   `qjs.mjs.build.json` moves when it changes and every engine-side field on this row reads identically across
+   two runs of two different programs.
+   MEASURED, AND IT COST A LANE ITS PREMISE: two full 18-site censuses carried byte-identical `artifact`
+   blocks — same `wasmSha256`, same `builtFromHeadClaim`, same `cleanTreeClaimIs: clean(asked, nothing
+   differs)` — and one ran a trusted zone five fixes older than the other's tree, because the lane's pinned
+   copy predated those fixes and a pin is not re-read. A later reader took the newer census for an AFTER of
+   those fixes on exactly that evidence; what refuted it was hashing the pin's own safe-fetch.js by hand
+   against the commit that fixed it. `cleanTreeClaimIs` is the trap rather than the cure — it is a claim about
+   the ENGINE CONE at BUILD time and reads like one about the whole program.
+   THE POPULATION IS DERIVED, NOT LISTED, AND THAT IS THE LOAD-BEARING HALF. A hand-kept list of the files
+   this zone loads is the second copy CLAUDE.md forbids, and it would have been WRONG for the very change that
+   motivated this field: one of those five fixes ADDS A FILE, so a list written the day before would have
+   hashed unchanged files and reported no movement across the commit that added the primitive. Everything
+   under the extension directory is hashed except the engine artifact already hashed above, and the FILE COUNT
+   is published beside the digest so a population that changed size is visible in the row rather than
+   recoverable only by re-deriving it.
+   IT IS A DIGEST AND NOT A REVISION ON PURPOSE. A pin may hold uncommitted edits, a peer may have written one
+   between the copy and the run, and a revision name cannot express either; the bytes can. */
+artifact.trustedZone = (() => {
+  const skip = EXT + '/lib/qjs';
+  const files = [];
+  (function walk(d) {
+    let ents; try { ents = readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of ents) {
+      const p = d + '/' + e.name;
+      if (e.isDirectory()) { if (p !== skip) walk(p); } else if (e.isFile()) files.push(p);
+    }
+  })(EXT);
+  if (!files.length) return null;
+  files.sort();
+  const h = createHash('sha256');
+  for (const p of files) {
+    h.update(p.slice(EXT.length + 1)); h.update('\0');
+    h.update(createHash('sha256').update(readFileSync(p)).digest()); h.update('\0');
+  }
+  return { files: files.length, sha256: h.digest('hex') };
+})();
 
 /* A RUN SAYS WHICH OF FOUR STATES IT IS IN, AND IT SAYS IT IN `run`. This file asked `r.crashed`, a boolean
    bridge.js DELETED — its own comment says why, at the site: "IT IS `run` AND NOT `crashed:true`, AND THE

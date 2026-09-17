@@ -116,14 +116,23 @@ for _row in "${SITE_ROWS[@]}"; do
   SRV=
   TARGET=$url
   if [ "$AT" = frozen ]; then
-    node "$CORP/serve-faithful.mjs" "$id" "$FIXPORT" >"$CORP/logs/$id.serve" 2>&1 &
+    # THE SERVE LOG IS PASS-QUALIFIED FOR THE REASON site.mjs QUALIFIES THE CONSOLE TRANSCRIPT, and it was
+    # the one artifact still written to a single path per site. That file is the ONLY record of what the
+    # browser actually REQUESTED -- the MISS lines are how a lazy chunk the markup never named is known to
+    # have been composed at runtime -- so losing it loses the half of a run that the census row cannot
+    # reconstruct. MEASURED, BY A LANE THAT HAD ALREADY WRITTEN DOWN THE HAZARD AND STILL LOST THE DATA: a
+    # second pass launched seconds after the first finished, and the next pass's server TRUNCATED this file
+    # while the lane was copying it aside; the first pass's squoosh log survived as 43 bytes (its bind line)
+    # against the 37203 bytes and 1252 MISS lines the same site produced in the pass that was not raced. A
+    # snapshot taken "after the pass" is not protection, because the next pass owns the same path.
+    node "$CORP/serve-faithful.mjs" "$id" "$FIXPORT" >"$CORP/logs/$LABEL-$id.serve" 2>&1 &
     SRV=$!
     sleep 1
     # THE SERVER MUST BE *THIS* SITE'S. One fixture port is reused for every row, so a server that failed to die
     # would still be bound and would answer with the PREVIOUS site's document -- a row measuring the wrong site
     # under the right name, which no counter in the census could contradict. serve-faithful prints "<id> on
     # <port>" only after a successful listen, so that line is the proof, and its absence is fatal for the row.
-    if ! grep -q "^$id on $FIXPORT " "$CORP/logs/$id.serve"; then
+    if ! grep -q "^$id on $FIXPORT " "$CORP/logs/$LABEL-$id.serve"; then
       echo "{\"id\":\"$id\",\"url\":\"$url\",\"fatal\":\"fixture server for $id did not bind $FIXPORT\"}" >> "$OUT"
       kill $SRV 2>/dev/null; wait $SRV 2>/dev/null; continue
     fi
