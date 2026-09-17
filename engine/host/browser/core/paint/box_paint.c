@@ -3,6 +3,7 @@
    residuals that name the steps this file counts and does not paint. */
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <lexbor/dom/dom.h>
@@ -16,6 +17,8 @@
                                         the ELEMENT's document's, never the running realm's */
 #include "core/dom/element_view.h"
 #include "core/frame/viewport.h"
+#include "core/layout/used_value.h"   /* used_value_border_widths_px — CSS 2.1 §8.5's four USED widths, which
+                                         the cascade does not hold for a table box under either border model */
 #include "core/paint/box_paint.h"
 #include "core/paint/display_list.h"
 #include "core/paint/paint_order.h"
@@ -241,6 +244,105 @@ static bool bp_background_color(BpState *st, lxb_dom_element_t *el)
     return true;
 }
 
+/* CSS 2.1 §8.5.3 "Border style: 'border-top-style', 'border-right-style', 'border-bottom-style',
+ * 'border-left-style', and 'border-style'"' COMPUTED KEYWORD FOR ONE SIDE, as the ink vocabulary's enumerator.
+ * THE KEYWORD TABLE IS §8.5.3's `<border-style>` IN §8.5.3's ORDER, so the index IS the enumerator and the two
+ * cannot come apart by a rotation — the same device `CSS_BORDER_SIDES` uses one component over.
+ * IT IS A SECOND LIST OF THOSE TEN NAMES AND THAT IS A DECISION. core/css/css_shorthand.c holds the first, as
+ * a GRAMMAR: it decides what the parser admits, so that CSS Syntax drops a `border-style: nope` before it can
+ * reach a computed value. That list is `static` and the component does not export it, and a painter is not
+ * where an export to `core/css/` belongs. What keeps the two from drifting is the crash below rather than a
+ * shared array: the grammar filters every declaration, so a computed style outside these ten is this engine's
+ * GRAMMAR and this engine's VOCABULARY disagreeing and is not a keyword any document wrote — which is exactly
+ * the line CLAUDE.md draws for what a DCHECK may stand on, and is the same standing core/layout/used_value.c's
+ * `box-sizing` and `border-*-width` asserts have over the same road.
+ * THE RELEASE ARM IS `none`, WHICH PAINTS NOTHING. A style this engine cannot name is one whose ink it cannot
+ * draw, so the two available answers are no ink and a guess; §8.5.3's own initial value is `none` and no ink
+ * is the one of the two that cannot put the WRONG thing on a page. */
+static DisplayBorderStyle bp_border_style(lxb_dom_element_t *el, int side)
+{
+    static const char *const NAMES[4] = {
+        "border-top-style", "border-right-style", "border-bottom-style", "border-left-style",
+    };
+    static const char *const KEYWORDS[] = {
+        "none", "hidden", "dotted", "dashed", "solid", "double", "groove", "ridge", "inset", "outset",
+    };
+    char *v;
+    unsigned i;
+
+    DCHECK(side >= 0 && side < 4, "CSS 2.1 §8.5.3's line style was asked for a box side outside CSS 2.1 §8.1 "
+                                  "\"Box dimensions\"' four");
+    v = css_computed_value(el, NAMES[side < 0 ? 0 : side]);
+    DCHECK(v != NULL, "the cascade produced no computed value for a `border-*-style`. CSS 2.1 §8.5.3's "
+                      "`Initial:` line is `none` and core/css/css_style_declaration.c carries that initial for "
+                      "all four sides, so CSS Cascade §7.1's last defaulting layer always answers");
+    for (i = 0; v != NULL && i < sizeof KEYWORDS / sizeof KEYWORDS[0]; i++) {
+        if (strcmp(v, KEYWORDS[i]) == 0) {
+            free(v);
+            return (DisplayBorderStyle)i;
+        }
+    }
+    free(v);
+    DFAIL("a `border-*-style` computed to a keyword outside CSS 2.1 §8.5.3 \"Border style: "
+          "'border-top-style', 'border-right-style', 'border-bottom-style', 'border-left-style', and "
+          "'border-style'\"' `<border-style>` value type. That type is a CLOSED list of ten and "
+          "core/css/css_shorthand.c validates every `border-*-style` declaration against it, dropping the ones "
+          "that do not match — so this is not a keyword a document wrote. Either that grammar admitted a value "
+          "it should have dropped, or CSS 2.1 §8.5.3 gained a value and core/paint/display_list.h's "
+          "`DisplayBorderStyle` was not grown with it. BUILD the missing enumerator in that vocabulary and add "
+          "its keyword to the table above, which is the same ten in the same order");
+    return DISPLAY_BORDER_STYLE_NONE;
+}
+
+/* CSS 2.1 §E.2's "border of element" — the THIRD item of its step 2 and step 4 block arms, and ONE mark for
+ * the whole box. core/paint/display_list.h holds the argument for why it is one and not four.
+ * THE RECTANGLE IS THE BORDER BOX, the same four numbers the background mark above takes, because CSS 2.1
+ * §8.1 "Box dimensions"' border edge is the outer edge of both areas — the background covers "the content,
+ * padding and border areas" and the border is drawn inward from that same edge. Taking it from
+ * `element_view_bounding_box_px` rather than assembling it here is the background mark's own reason: a second
+ * derivation of one rectangle is a second answer free to disagree with what `getBoundingClientRect` reports.
+ * THE WIDTHS COME FROM core/layout/used_value.h AND NOT FROM THE CASCADE, which is that entry's whole reason
+ * for existing: CSS 2.1 §17.6.1 "The separated borders model" makes a row, row group, column or column group
+ * box's border widths zero and CSS 2.1 §17.6.2 "The collapsing border model" replaces a table's and a cell's
+ * with halves of resolved edges, and none of those is a value `border-*-width` holds.
+ * A BOX WHOSE FOUR USED WIDTHS ARE ALL ZERO GETS NO MARK, which is the same rule `bp_background_color` applies
+ * to an alpha of zero and is exact rather than an approximation: a border area of zero extent on every side
+ * covers no pixel, so a mark for it is one nothing downstream could distinguish from its absence. A single
+ * zero side is NOT that case and is stated positively beside its three siblings — that is what one mark per
+ * box buys, and display_list.h says why.
+ * A TRANSPARENT SIDE IS STILL A SIDE, deliberately, and the asymmetry with the background is CSS 2.1 §8.5.3's
+ * own: it says of `groove`, `ridge`, `inset` and `outset` that their colour "depends on the element's border
+ * color properties, but UAs may choose their own algorithm to calculate the actual colors used". So an alpha
+ * of zero on a border side does not settle whether that side paints, and dropping ink on it here would be this
+ * component answering a question CSS 2.1 leaves to whoever rasterizes. */
+static bool bp_border(BpState *st, lxb_dom_element_t *el)
+{
+    static const char *const COLORS[4] = {
+        "border-top-color", "border-right-color", "border-bottom-color", "border-left-color",
+    };
+    DisplayMark mark;
+    CssPx width[4];
+    int i;
+    bool any = false;
+
+    used_value_border_widths_px(el, width);
+    for (i = 0; i < 4; i++)
+        if (width[i].px != 0.0) any = true;
+    if (!any) return true;
+    for (i = 0; i < 4; i++) {
+        mark.side[i].width = width[i];
+        mark.side[i].style = bp_border_style(el, i);
+        /* CSSOM §9 puts all four `border-*-color` longhands in its unconditional used-value list, so this is a
+           question that entry answers rather than one it crashes on; a FALSE is this engine having no used
+           colour for the property at all, and its own crash at the site says which absence that is. */
+        if (!css_used_color(el, COLORS[i], &mark.side[i].color)) return false;
+    }
+    mark.kind = DISPLAY_MARK_BORDER;
+    element_view_bounding_box_px(el, mark.rect);
+    display_list_append(st->out, &mark);
+    return true;
+}
+
 static bool bp_visit(PaintStep step, lxb_dom_element_t *el, void *user)
 {
     BpState *st = user;
@@ -264,21 +366,40 @@ static bool bp_visit(PaintStep step, lxb_dom_element_t *el, void *user)
        not paint this background again" — so painting here would be ink at the root's border box that no
        browser lays, which is WRONG rather than narrow and is the one thing a painter may not be. */
     case PAINT_STEP_CONTEXT_BOX:
+        /* AND THE ROOT CLAUSE REACHES THE BACKGROUND AND NOT THE BORDER, which is why this member no longer
+           shares an arm with the table one. CSS 2.1 §E.2's step 2 block arm is three items and the clause is
+           written on TWO of them — "background color of element unless it is the root element", "background
+           image of element unless it is the root element", "border of element" — so a root element paints no
+           background here and DOES paint its border. CSS 2.1 §14.2 "The background" is the same sentence from
+           the other side and is about the background alone: it moves "the background properties" onto the
+           canvas and says "The root element does not paint this background again", naming nothing of §8.5's
+           twelve. An arm that returned early for the root would therefore suppress ink CSS 2.1 §E.2 lays for
+           every bordered root in every document. */
+        if (!bp_is_root_element(el) && !bp_background_color(st, el)) return false;
+        return bp_border(st, el);
+    /* CSS 2.1 §E.2's step 2 TABLE arm item 1, which carries the clause on the item itself — "table
+       backgrounds (color then image) unless it is the root element". That arm's borders are its item 7 and are
+       `PAINT_STEP_TABLE_BORDERS` below, offered separately with five background levels between them. */
     case PAINT_STEP_CONTEXT_TABLE_BACKGROUND:
         if (bp_is_root_element(el)) return true;
         return bp_background_color(st, el);
     /* CSS 2.1 §E.2's STEP 4, BOTH ARMS. Neither carries the root clause and neither needs one: step 4 walks a
        context's DESCENDANTS and the root element is nothing's descendant. */
     case PAINT_STEP_DESCENDANT_BOX:
+        return bp_background_color(st, el) && bp_border(st, el);
     case PAINT_STEP_DESCENDANT_TABLE_BACKGROUND:
     /* CSS 2.1 §17.5.1 "Table layers and transparency"' SIXTH LAYER — the cells. A cell's background is its own
        box's, which is what makes it the one internal level this mark can place; the four between it and the
        table box are box_paint.h's third residual. */
     case PAINT_STEP_CELL_BACKGROUND:
         return bp_background_color(st, el);
-    /* NO MARK KIND YET — counted as offers and painted nowhere. The four intermediate table background levels
-       are box_paint.h's third residual and are a GEOMETRY this engine does not derive; the borders and the
-       three content steps are its second, and are a mark VOCABULARY core/paint/display_list.h does not have. */
+    /* NO MARK LAID — counted as offers and painted nowhere, for two different reasons. The four intermediate
+       table background levels are box_paint.h's third residual and are a GEOMETRY this engine does not derive.
+       The three content steps are its second and are a mark VOCABULARY core/paint/display_list.h does not
+       have. `PAINT_STEP_TABLE_BORDERS` is neither: the MARK now exists, and what that item still wants is the
+       ENUMERATION of which boxes' borders it covers and in what order — CSS 2.1 §E.2's item is "all table
+       borders (in tree order for separated borders)" and paint_order.h offers it ONCE carrying the table, so
+       painting the table's own border here would be one box's ink where CSS 2.1 §E.2 asks for every box's. */
     case PAINT_STEP_COLUMN_GROUP_BACKGROUND:
     case PAINT_STEP_COLUMN_BACKGROUND:
     case PAINT_STEP_ROW_GROUP_BACKGROUND:

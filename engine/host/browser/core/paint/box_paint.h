@@ -50,21 +50,35 @@
  * RETIREMENT: this record goes when `box_paint_stacking_context` appends a mark for CSS 2.1 §E.2's step 1
  * second item.
  *
- * NAMED RESIDUAL — THE STEPS WHOSE MARK KIND DOES NOT EXIST YET.
+ * NAMED RESIDUAL — THE FOUR STEPS THAT STILL APPEND NOTHING, AND THE ONE OF THEM THAT IS NO LONGER WAITING ON
+ * A MARK KIND.
  * WHAT IS NOT COVERED: `PAINT_STEP_TABLE_BORDERS`, `PAINT_STEP_INLINE_LINE_BOXES`,
  * `PAINT_STEP_REPLACED_CONTENT` and `PAINT_STEP_LINE_BOXES` are each counted as an offer and append nothing.
- * They are CSS 2.1 §E.2's table-arm item 7 — "all table borders (in tree order for separated borders)" — and
- * its steps 6, 7.1 and 7.2, which reach "the replaced content, atomically" and a line-box sub-list ending in
- * "the text": a BORDER mark, a SURFACE and a TEXT mark, none of which core/paint/display_list.h has a kind for.
- * WHAT THE NEXT DIFF BUILDS: the BORDER mark first, because every operand of it exists — CSS 2.1 §8.5 "Border
- * properties"' widths, styles and colours are each in lexbor's property registry and core/layout/used_value.h
- * answers the used width per side — and it lands for the block arms this file already paints before it lands
- * for item 7, whose own enumeration over a table's internal boxes is paint_order.h's residual rather than this
- * one's. The TEXT mark is next and carries core/layout/text_run.h's OWN advances: the geometry
- * core/dom/element_view.h reports was measured with core/fonts/open_type_metrics.h, so a rasterizer that
- * measures text for itself composites one engine's ink onto another engine's layout.
- * HOW ITS ABSENCE WOULD SHOW: a painted document is flat coloured areas with no text, no images and no borders
- * — every rectangle where CSS 2.1 §E.2 puts it and nothing drawn inside any of them.
+ * Three of them want a VOCABULARY — CSS 2.1 §E.2's steps 6, 7.1 and 7.2 reach "the replaced content,
+ * atomically" and a line-box sub-list ending in "the text", which are a SURFACE and a TEXT mark that
+ * core/paint/display_list.h has no kind for. `PAINT_STEP_TABLE_BORDERS` wants neither: the BORDER mark exists
+ * and this file lays it for CSS 2.1 §E.2's step 2 and step 4 BLOCK arms. What that item wants is an
+ * ENUMERATION — its text is "all table borders (in tree order for separated borders)" and paint_order.h offers
+ * it ONCE carrying the table element, so the boxes whose borders it covers are not named and painting the
+ * table's own border at that offer would lay one box's ink where CSS 2.1 §E.2 asks for every box's.
+ * AND THE STYLE THIS FILE READS IS THE ELEMENT'S OWN, WHICH IS THE OTHER HALF OF WHY ITEM 7 IS NOT THIS DIFF.
+ * `bp_border_style` reads `border-<side>-style` off the box, and for a table or a cell under CSS 2.1 §17.6.2
+ * "The collapsing border model" the style that WON at an edge is that model's answer and not the element's
+ * declaration — so the widths (which core/layout/used_value.h resolves per model) and the styles would
+ * disagree. It is NOT reachable from the two arms painted here: CSS 2.1 §9.2.1 "Block-level elements and block
+ * boxes" closes block-level at "'block', 'list-item', and 'table'", a `display: table` box takes CSS 2.1
+ * §E.2's TABLE arm rather than its block arm, and every other collapsed-model box is a cell — so every box
+ * these two arms reach is one the separated model covers. It becomes reachable the day item 7 is painted, and
+ * the diff that paints it owes the collapsed style beside the collapsed width.
+ * WHAT THE NEXT DIFF BUILDS: item 7's separated-model enumeration, which is paint_order.h's own residual — a
+ * tree-order walk of the table's subtree gated on `border-collapse` being `separate`, after which this file's
+ * arm for that step calls `bp_border` per offered box and needs nothing new here. The TEXT mark is next and
+ * carries core/layout/text_run.h's OWN advances: the geometry core/dom/element_view.h reports was measured
+ * with core/fonts/open_type_metrics.h, so a rasterizer that measures text for itself composites one engine's
+ * ink onto another engine's layout.
+ * HOW ITS ABSENCE WOULD SHOW: a document's block boxes come out with their borders and a TABLE comes out with
+ * none of them — no rule between its cells, none round the table — while every background level the table has
+ * is painted; and no document has any text or any image inside any of its areas.
  * RETIREMENT: this record loses a clause as each of the four steps gains ink, and goes when every step
  * paint_order.h offers appends at least one mark or a surface.
  *

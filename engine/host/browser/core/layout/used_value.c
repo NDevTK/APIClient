@@ -3197,6 +3197,32 @@ CssPx used_value_leading_border_px(lxb_dom_element_t *el, bool vertical)
     return uv_leading_side(el, vertical).border;
 }
 
+/* CSS 2.1 §8.5 "Border properties"' FOUR USED WIDTHS AT ONCE, in the top/right/bottom/left order §8.5.1's
+   `border-width` shorthand is defined over ("If there are four values, they apply to the top, right, bottom,
+   and left, respectively") and `UvSide`'s index already carries.
+   IT IS ONE ENTRY FOR FOUR SIDES RATHER THAN FOUR ASKS OF THE ENTRY ABOVE, which is `uv_collapsed_edges`'
+   own cost argument read one level out: CSS 2.1 §17.6.2 The collapsing border model's widths are answered by
+   GATHERING THE TABLE'S BOXES AND BUILDING ITS GRID per ask, so four separate asks would build one table's
+   grid four times for one box. The model and the collapsed edges are therefore derived once here and the four
+   sides read off them, which is also what makes the four ANSWERS one derivation: a caller assembling four
+   independent asks could be handed widths from two different builds of one grid.
+   ITS CALLER IS core/paint/box_paint.c's CSS 2.1 §E.2 "Painting order" BORDER MARK, which needs all four and
+   needs them together — the corner between two sides belongs to neither of them alone, so a painter holding
+   one side's width cannot place that side's own edge. */
+void used_value_border_widths_px(lxb_dom_element_t *el, CssPx out[4])
+{
+    TableCollapsedEdges collapsed = { { 0.0, CSS_ENV_NONE, NULL }, { 0.0, CSS_ENV_NONE, NULL },
+                                      { 0.0, CSS_ENV_NONE, NULL }, { 0.0, CSS_ENV_NONE, NULL } };
+    UvEdgeModel model;
+    int side;
+
+    DCHECK(el != NULL, "CSS 2.1 §8.5's four used border widths were asked for with no element");
+    DCHECK(out != NULL, "CSS 2.1 §8.5's four used border widths were derived with nowhere to put them");
+    model = uv_edge_model(el);
+    if (uv_edge_model_is_collapsed(model)) collapsed = uv_collapsed_edges(el, model);
+    for (side = 0; side < 4; side++) out[side] = uv_side(el, model, &collapsed, side).border;
+}
+
 CssPx used_value_leading_edge_px(lxb_dom_element_t *el, bool vertical)
 {
     UvSide s;

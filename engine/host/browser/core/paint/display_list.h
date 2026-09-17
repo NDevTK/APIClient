@@ -61,6 +61,54 @@
  * for a WORLD and not for a MOMENT, and a rasterizer that asked a realm for the viewport at raster time would
  * read whichever world it happened to be standing in, when two arms of one fork have two viewports.
  *
+ * THE BORDER IS A THIRD KIND AND IT IS ONE MARK FOR THE BOX, NEVER ONE PER SIDE — WHICH IS THE DESIGN A
+ * READER WILL REACH FOR, SINCE THE FOUR SIDES HAVE FOUR WIDTHS, FOUR STYLES AND FOUR COLOURS AND NOTHING
+ * OBVIOUSLY TIES THEM TOGETHER. What ties them together is that CSS 2.1 §E.2 "Painting order" lists ONE item.
+ * Its step 2 block arm is "background color of element unless it is the root element", "background image of
+ * element unless it is the root element", "border of element"; its step 4 block arm is the same three without
+ * the root clause; and its step 7.2.1 sub-list reaches "border of element" the same way. Three sub-lists, and
+ * in each of them the border is a SINGLE item of the sequence. This header's opening paragraph is why that
+ * settles it: the order a list holds is its whole statement and there is deliberately no entry that sorts or
+ * compares two marks, so FOUR marks where CSS 2.1 §E.2 has one would not be four ways of saying the same
+ * thing — they would BE an order over the four sides, stated by whichever loop appended them, and CSS 2.1
+ * states none. CSS 2.1 §8.5 "Border properties" agrees from the other side in its own first sentence: the
+ * properties "specify the width, color, and style of the border area of a box", which is ONE area belonging
+ * to a box rather than four areas belonging to four sides.
+ *
+ * AND A PER-SIDE RECTANGLE WOULD NOT BE AN AREA CSS 2.1 DEFINES. Two adjacent sides meet in a region that is
+ * not a rectangle and belongs to neither of them, and CSS 2.1 says nothing whatever about it — the string
+ * "corner" does not occur anywhere in CSS 2.1 §8 "Box model". So a mark carrying one side's rectangle would
+ * have to state an area no sentence of CSS 2.1 states, which is the same refusal core/paint/paint_order.h
+ * makes about the collapsing model's painting order: where CSS 2.1 states no answer this engine may not
+ * invent one. One mark carrying all four sides hands a rasterizer BOTH sides of every corner, which is what
+ * resolving one needs, and leaves the resolution where the destination is — exactly as the quantization of a
+ * colour is left there.
+ *
+ * A ZERO-WIDTH SIDE IS AN ANSWER AND A ZERO-WIDTH BOX IS NO MARK, AND THOSE ARE NOT THE SAME DECISION. CSS 2.1
+ * §8.5.3 "Border style: 'border-top-style', 'border-right-style', 'border-bottom-style', 'border-left-style',
+ * and 'border-style'" says of `none` that it is "No border; the computed border width is zero", so a zero
+ * width is something the cascade COMPUTED and not something nobody derived. Because the mark is per BOX there
+ * is no arm here that omits a side: the zero is stated positively beside its three siblings, and that is one
+ * more thing the per-side design could not do — under it a zero side would have to be left out, and a
+ * consumer could not tell a side that was omitted from a side nobody asked about. A box whose four widths are
+ * ALL zero gets NO MARK AT ALL, by the same rule core/paint/box_paint.c already applies to an alpha of zero:
+ * ink that changes no pixel is a mark nothing downstream could distinguish from its absence.
+ *
+ * `none` AND `hidden` ARE BOTH IN THE VOCABULARY THOUGH NEITHER EVER PAINTS, because CSS 2.1 §8.5.3 keeps
+ * them apart and says exactly why: `hidden` is "Same as 'none', except in terms of border conflict resolution
+ * for table elements". A mark states the style the cascade computed; collapsing two values CSS 2.1
+ * distinguishes would be this component answering CSS 2.1 §17.6.2 "The collapsing border model"'s question in
+ * advance and getting it wrong for the one case that separates them.
+ *
+ * THE FOUR WIDTHS ARE UNION-VISIBLE IN `display_list_env` AND THAT IS NOT A DETAIL — it is the same property
+ * the canvas kind's rectangle exists for, one field over. core/layout/used_value.h states that a
+ * `border: 1px solid` "arrives carrying the DEVICE PIXEL RATIO's" fact, because css-values §6 snaps a border
+ * width to a whole number of device pixels. So a border width is very often a function of a PICKED
+ * environment fact, and a union taken over `rect` alone would report `CSS_ENV_NONE` for a list whose only ink
+ * is a bordered box at determined coordinates — a POSITIVE statement that this ink is the same ink under
+ * every arm, made about ink that moves. The widths are therefore `CssPx` and not `double`, exactly as the
+ * rectangle is, and the union reads them.
+ *
  * WHICH FINITE REGION, AND WHY IT SITS AT THE CLIENT ORIGIN WHATEVER THE SCROLL POSITION. CSS 2.1 §E.2 says of
  * the canvas that "It is infinite in extent and contains the root element. Initially, the viewport is anchored
  * with its top left corner at the canvas origin", and CSS 2.1 §10.1 "Definition of "containing block"" says
@@ -90,18 +138,15 @@
  * one on the merits here: a dropped mark is ink that is silently absent from a sequence whose whole statement
  * is that it is complete and in order, and nothing downstream could tell that list from a shorter document.
  *
- * NAMED RESIDUAL — TWO MARK KINDS, WHICH ARE ONE MARK OVER TWO AREAS RATHER THAN TWO MARKS.
- * WHAT IS NOT COVERED: both kinds below are a SOLID COLOUR over an area, so a list can say that an area is one
- * colour and can say nothing else. CSS 2.1 §E.2's step 1 is TWO items and only the first has a kind here, the
- * second being "background image of element, over the entire canvas, anchored at the origin that would be used
- * if it was painted for the root element"; its step 2 block arm is three marks in a fixed sequence —
- * "background color of element", "background image of element", "border of element" — of which this vocabulary
- * has the first; its step 7.2 sub-list reaches "the text" and the three decoration lines over and under it;
- * and its step 7.1 reaches "the replaced content, atomically", which is a SURFACE rather than a mark.
- * WHAT THE NEXT DIFF BUILDS: the BORDER mark, because it is the one whose operands all exist — CSS 2.1
- * §8.5 "Border properties"' four widths, styles and colours are each in lexbor's property registry, and
- * core/layout/used_value.h's `used_value_leading_border_px` already answers the width per side. The TEXT mark
- * is next and is the one with a contract: core/layout/text_run.h and core/fonts/open_type_metrics.h produced
+ * NAMED RESIDUAL — THE KINDS CSS 2.1 §E.2's SUB-LISTS NAME AND THIS VOCABULARY STILL HAS NO WORD FOR.
+ * WHAT IS NOT COVERED: every remaining item is an IMAGE, a TEXT run or a SURFACE. CSS 2.1 §E.2's step 1 is
+ * TWO items and only the first has a kind here, the second being "background image of element, over the
+ * entire canvas, anchored at the origin that would be used if it was painted for the root element"; its step
+ * 2 block arm is three marks in a fixed sequence — "background color of element", "background image of
+ * element", "border of element" — of which this vocabulary now has the first and the LAST and not the middle
+ * one; its step 7.2 sub-list reaches "the text" and the three decoration lines over and under it; and its
+ * step 7.1 reaches "the replaced content, atomically", which is a SURFACE rather than a mark.
+ * WHAT THE NEXT DIFF BUILDS: the TEXT mark, and it is the one with a contract: core/layout/text_run.h and core/fonts/open_type_metrics.h produced
  * the advances that core/dom/element_view.h reports as geometry, so a text mark carries THOSE advances and a
  * rasterizer that re-measures is comparing two engines rather than painting one. The IMAGE mark is ONE gap and
  * not one per step, because what every image item of every step wants is the same operand: an `<image>` that
@@ -109,8 +154,8 @@
  * whether a component value matches css-images-3 §2 "Image Values: the <image> type" and deliberately keeps
  * the author's own bytes — so nothing anywhere turns a `<url>` into anything a surface could composite, and
  * the diff that lands the image mark is the one that makes such a thing exist.
- * HOW ITS ABSENCE WOULD SHOW: a painted document is flat areas of colour with no borders, no text and no
- * images — every area at the position CSS 2.1 §E.2 puts it and nothing drawn inside any of them.
+ * HOW ITS ABSENCE WOULD SHOW: a painted document is flat areas of colour inside plain rules, with no text and
+ * no images — every area at the position CSS 2.1 §E.2 puts it and nothing written inside any of them.
  * RETIREMENT: this record loses a clause as each kind lands, and goes when every mark CSS 2.1 §E.2's
  * sub-lists name has a kind here. */
 #ifndef ENGINE_HOST_BROWSER_CORE_PAINT_DISPLAY_LIST_H
@@ -125,9 +170,51 @@
    is the LIST's, and a reader who takes a kind's ordinal for a paint order has read the wrong component. */
 typedef enum {
     DISPLAY_MARK_FILL_RECT = 0,  /* one rectangle, filled with one sRGB colour */
-    DISPLAY_MARK_FILL_CANVAS     /* the CANVAS, filled with one sRGB colour — the rectangle is the finite
+    DISPLAY_MARK_FILL_CANVAS,    /* the CANVAS, filled with one sRGB colour — the rectangle is the finite
                                     region this user agent established for it, never the extent of the fill */
+    DISPLAY_MARK_BORDER          /* ONE box's border, all four sides — the rectangle is its BORDER BOX and the
+                                    four sides are drawn INWARD from its four edges. See the header's own
+                                    paragraph for why this is one mark and not four */
 } DisplayMarkKind;
+
+/* CSS 2.1 §8.5.3 "Border style: 'border-top-style', 'border-right-style', 'border-bottom-style',
+   'border-left-style', and 'border-style'"' `<border-style>` VALUE TYPE, entire and in that section's own
+   order, which is also the order core/css/css_shorthand.c's grammar lists it in.
+   IT IS A VOCABULARY AND NOT A SECOND GRAMMAR, which is the line between this enum and that list. That one
+   decides what the PARSER admits, so that a `border-style: nope` is dropped by CSS Syntax instead of reaching
+   a computed value; this one is what a MARK SAYS, which is this component's to define exactly as
+   `DisplayMarkKind` is. They are two jobs over one set of ten names and they are kept from drifting by the
+   assert at the mapping in core/paint/box_paint.c: a computed style outside these ten has come THROUGH that
+   grammar, so it is this engine's two lists disagreeing rather than anything a document declared.
+   `none` AND `hidden` BOTH PAINT NOTHING AND ARE BOTH HERE — CSS 2.1 §8.5.3 gives `none` as "No border; the
+   computed border width is zero" and `hidden` as "Same as 'none', except in terms of border conflict
+   resolution for table elements", so the two differ in exactly one place and this vocabulary is not where
+   that difference is decided. */
+typedef enum {
+    DISPLAY_BORDER_STYLE_NONE = 0,
+    DISPLAY_BORDER_STYLE_HIDDEN,
+    DISPLAY_BORDER_STYLE_DOTTED,
+    DISPLAY_BORDER_STYLE_DASHED,
+    DISPLAY_BORDER_STYLE_SOLID,
+    DISPLAY_BORDER_STYLE_DOUBLE,
+    DISPLAY_BORDER_STYLE_GROOVE,
+    DISPLAY_BORDER_STYLE_RIDGE,
+    DISPLAY_BORDER_STYLE_INSET,
+    DISPLAY_BORDER_STYLE_OUTSET
+} DisplayBorderStyle;
+
+/* ONE SIDE OF ONE BORDER — the three things CSS 2.1 §8.5 "Border properties" says a border has, in its own
+   words: the properties "specify the width, color, and style of the border area of a box".
+   `width` IS THE USED WIDTH and is a `CssPx` for the header's own reason — core/layout/used_value.h states
+   that a `border: 1px solid` carries the DEVICE PIXEL RATIO's fact, so a `double` here would drop a picked
+   fact between the layout that derived it and `display_list_env`. Zero is a legitimate answer and means CSS
+   2.1 §8.5.3's `none` or `hidden`, or a width the cascade computed to zero; which of those it was is the
+   `style` beside it and is never inferred from the number. */
+typedef struct {
+    CssPx              width;
+    DisplayBorderStyle style;
+    CssColor           color;
+} DisplayBorderSide;
 
 /* ONE MARK. `rect` is x, y, width and height in CSSOM VIEW §6 "Extensions to the Element Interface"'s CLIENT
    COORDINATES, in that order — the same four numbers and the same order `element_view_bounding_box_px`
@@ -136,11 +223,24 @@ typedef enum {
    WHAT `rect` MEANS IS THE KIND'S, and the two kinds do not mean the same thing by it: for a
    `DISPLAY_MARK_FILL_RECT` it is the area to fill, and for a `DISPLAY_MARK_FILL_CANVAS` it is the RENDERED
    REGION of an area CSS 2.1 §2.3.1 "The canvas" makes infinite. The header's own paragraph on the second kind
-   is why a rectangle rides one at all and why it is anchored at the client origin. */
+   is why a rectangle rides one at all and why it is anchored at the client origin. For a
+   `DISPLAY_MARK_BORDER` it is the BORDER BOX — the same four numbers `element_view_bounding_box_px` answers
+   for the background, because CSS 2.1 §8.1 "Box dimensions"' border edge is the outer edge of both — and each
+   of `side`'s four widths is measured INWARD from the corresponding edge of it.
+   `side` IS INDEXED top, right, bottom, left, which is the order every four-side rule in CSS states and the
+   order CSS 2.1 §8.5.1 defines its own shorthand over; it is also the order
+   `used_value_border_widths_px` writes, so the index cannot come apart from the derivation by a rotation.
+   WHICH FIELDS A MARK USES IS ITS KIND'S, exactly as what `rect` MEANS is: `color` is the two FILL kinds' and
+   `side` is the border kind's, and `display_list_append` asserts over a SWITCH so that each kind is held to
+   the fields it actually uses. A field a kind does not use is therefore one no consumer of that kind may
+   read — which is why this is a struct rather than a union: a union would make reading the wrong member
+   undefined where a plain field leaves it merely unasserted and unread, and `-Wswitch` over the kind is what
+   names every consumer the day a third set of fields arrives. */
 typedef struct {
-    DisplayMarkKind kind;
-    CssPx           rect[4];
-    CssColor        color;
+    DisplayMarkKind   kind;
+    CssPx             rect[4];
+    CssColor          color;
+    DisplayBorderSide side[4];
 } DisplayMark;
 
 /* A SEQUENCE OF MARKS, in the order CSS 2.1 §E.2 "Painting order" offered them. A zeroed struct is a valid

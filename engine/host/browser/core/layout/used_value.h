@@ -233,6 +233,26 @@ CssPx used_value_border_edge_px(lxb_dom_element_t *el, bool vertical);
    inward by this one edge on each axis. */
 CssPx used_value_leading_border_px(lxb_dom_element_t *el, bool vertical);
 
+/* CSS 2.1 §8.5 "Border properties"' FOUR USED BORDER WIDTHS AT ONCE, written to `out` in the top/right/bottom/
+   left order every four-side rule in CSS states — which is the order CSS 2.1 §8.5.1 "Border width:
+   'border-top-width', 'border-right-width', 'border-bottom-width', 'border-left-width', and 'border-width'"
+   defines its own shorthand over ("If there are four values, they apply to the top, right, bottom, and left,
+   respectively").
+   IT IS ONE ENTRY FOR FOUR SIDES RATHER THAN FOUR ASKS OF THE ENTRY ABOVE, AND THE ENTRY ABOVE CANNOT ANSWER
+   THREE OF THEM ANYWAY. `used_value_leading_border_px` is the LEADING side of one axis — the top for
+   `vertical` and the left otherwise — so between its two arms it reaches two of the four sides and there is no
+   argument it takes that names the right or the bottom. A caller wanting all four has to have this entry.
+   AND FOUR SEPARATE ASKS WOULD NOT MERELY BE SLOWER, THEY COULD DISAGREE. CSS 2.1 §17.6.2 "The collapsing
+   border model"'s widths are answered by gathering the table's boxes and BUILDING ITS GRID per ask
+   (core/layout/table_border_collapse.h names that cost), so four asks build one table's grid four times — and
+   a caller assembling four independent answers could be handed widths from two different builds of one grid.
+   Deriving the model and the collapsed edges ONCE here is what makes the four answers one derivation.
+   ITS CALLER IS core/paint/box_paint.c's CSS 2.1 §E.2 "Painting order" BORDER MARK, which needs all four and
+   needs them TOGETHER: CSS 2.1 §8 states no rule anywhere for where two borders meet — the string "corner"
+   does not occur in it — so the region between two adjacent sides belongs to neither of them alone, and a
+   painter holding one side's width cannot place even that side's own area. */
+void used_value_border_widths_px(lxb_dom_element_t *el, CssPx out[4]);
+
 /* THE SAME SIDE'S TWO EDGES — that border width plus that side's USED padding, which is CSS 2.1 §8.1's
    distance from a box's BORDER edge to its CONTENT edge on the leading side of one axis.
    ITS CALLERS ARE §10.1's SECOND CASE AND §9.4.2's FRAGMENTS, both core/layout/flow_position.c: a containing

@@ -19469,7 +19469,7 @@ static void tree_construction_write_selftest(void)
  * both (which viewport, and which of its dimensions), and a length carrying one without the other could not be
  * turned into a domain". */
 #define TF_DL_MARKS 20u
-#define TF_DL_KINDS 2u
+#define TF_DL_KINDS 3u
 
 static void display_list_selftest(JSContext *ctx)
 {
@@ -19563,12 +19563,57 @@ static void display_list_selftest(JSContext *ctx)
           "establishes it for continuous media out of the viewport, so the extent of a page background is "
           "viewport-derived ink — and a list that reported CSS_ENV_NONE for it would be claiming this ink is "
           "the same ink under every arm of a fact it moves with");
-    CHECK(dl.n == TF_DL_MARKS + 3 && dl.v[dl.n - 1].kind == DISPLAY_MARK_FILL_CANVAS &&
-          dl.v[0].kind == DISPLAY_MARK_FILL_RECT,
+    /* THE BORDER KIND, AND THE ONE PROPERTY THAT SEPARATES CARRYING ITS FOUR WIDTHS AS `CssPx` FROM CARRYING
+       THEM AS `double`. A border mark's RECTANGLE below is entirely determined and one of its four USED WIDTHS
+       is not: core/layout/used_value.h states that a `border: 1px solid` "arrives carrying the DEVICE PIXEL
+       RATIO's" fact, because css-values §6 snaps a border width to a whole number of device pixels. So a
+       union taken over `rect` alone — which is what `display_list_env` did before this kind existed — would
+       report this list unchanged by the append, and a list whose only ink were such a box would report
+       `CSS_ENV_NONE`: the POSITIVE statement that this ink is a function of no picked fact, made about ink
+       that moves with the display it is drawn on. This append is that assertion, and it is the same one the
+       canvas mark's extent is checked by two blocks up.
+       THE FOUR WIDTHS ARE DISTINCT so that a side which MOVED is distinguishable from a side that was
+       dropped, exactly as the twenty rectangles above carry distinct x values: core/paint/display_list.h
+       indexes `side` top, right, bottom, left and says the index cannot come apart from
+       `used_value_border_widths_px`' order by a rotation, which is only checkable if the four differ. */
+    m.kind = DISPLAY_MARK_BORDER;
+    m.rect[0] = css_px(0.0);
+    m.rect[1] = css_px(0.0);
+    m.rect[2] = css_px(100.0);
+    m.rect[3] = css_px(50.0);
+    for (i = 0; i < 4; i++) {
+        m.side[i].width = css_px((double)(i + 1));
+        m.side[i].style = DISPLAY_BORDER_STYLE_SOLID;
+        m.side[i].color = CSS_COLOR_OPAQUE_BLACK;
+    }
+    m.side[1].width = css_px_env(CSS_ENV_DEVICE_PIXEL_RATIO, ctx, 2.0);
+    m.side[1].style = DISPLAY_BORDER_STYLE_DOUBLE;
+    display_list_append(&dl, &m);
+    CHECK(display_list_env(&dl) ==
+          (CSS_ENV_BIT(CSS_ENV_ICB_WIDTH) | CSS_ENV_BIT(CSS_ENV_DEFAULT_FONT_SIZE) |
+           CSS_ENV_BIT(CSS_ENV_ICB_HEIGHT) | CSS_ENV_BIT(CSS_ENV_DEVICE_PIXEL_RATIO)),
+          "a display list holding a BORDER mark does not report the fact one of its four used widths is a "
+          "function of. The mark's rectangle is determined and its width is not, so a union taken over the "
+          "rectangle alone reports this ink as the same ink at every device pixel ratio — which is the "
+          "identical defect carrying the canvas kind's extent exists to prevent, one field over");
+    CHECK(dl.v[dl.n - 1].side[0].width.px == 1.0 && dl.v[dl.n - 1].side[1].width.px == 2.0 &&
+          dl.v[dl.n - 1].side[2].width.px == 3.0 && dl.v[dl.n - 1].side[3].width.px == 4.0 &&
+          dl.v[dl.n - 1].side[1].style == DISPLAY_BORDER_STYLE_DOUBLE &&
+          dl.v[dl.n - 1].side[0].style == DISPLAY_BORDER_STYLE_SOLID,
+          "a border mark's four SIDES came back in an order other than the one they were appended in. "
+          "core/paint/display_list.h indexes them top, right, bottom, left — the order every four-side rule in "
+          "CSS states and the order core/layout/used_value.h's `used_value_border_widths_px` writes — so a "
+          "rotation here would put one side's width and style on another side's edge, which is ink in a place "
+          "no cascade asked for and never a crash");
+
+    CHECK(dl.n == TF_DL_MARKS + 4 && dl.v[dl.n - 1].kind == DISPLAY_MARK_BORDER &&
+          dl.v[dl.n - 2].kind == DISPLAY_MARK_FILL_CANVAS && dl.v[0].kind == DISPLAY_MARK_FILL_RECT,
           "a mark's KIND changed where the list put it. core/paint/display_list.h has no entry that sorts or "
           "compares two marks, so a canvas mark is APPENDED like every other and lands where its builder put "
           "it — CSS 2.1 §E.2 \"Painting order\" makes the canvas step 1 because step 1 is offered first, never "
-          "because a consumer moved it to the front");
+          "because a consumer moved it to the front. The border appended after it stays after it for the same "
+          "reason, though CSS 2.1 §E.2 lays every border above every background: the ORDER is the builder's "
+          "and this list never sorts one");
 
     display_list_free(&dl);
     CHECK(dl.n == 0 && dl.v == NULL && dl.cap == 0,
