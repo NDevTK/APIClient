@@ -2232,6 +2232,10 @@ enum {   /* the STEPDEF_* ids used at the registration sites */
        on the step id, so the tag has to come from the id. */
     STEPDEF_STR_HTML_BASE, STEPDEF_STR_HTML_LAST = STEPDEF_STR_HTML_BASE + 12,
     STEPDEF_SHADOWREALM_CTOR, STEPDEF_SHADOWREALM_EVALUATE, STEPDEF_SHADOWREALM_IMPORTVALUE,
+    /* APPENDED rather than placed beside STEPDEF_STR_TOLOWER, which is where they belong by subject and not by
+       numbering: STEPDEF_STR_HTML_BASE is thirteen CONTIGUOUS ids and a host component's registration is
+       STEPDEF_COUNT + n, so an id inserted mid-enum renumbers both populations for a tidier neighbourhood. */
+    STEPDEF_STR_TOLOCALELOWER, STEPDEF_STR_TOLOCALEUPPER,
     STEPDEF_COUNT
 };
 #define HINT_NONE    2
@@ -32391,6 +32395,17 @@ enum { STRRECV_TRIM_START = 1, STRRECV_TRIM_END = 2, STRRECV_TRIM_BOTH = 3,
        STRRECV_SLICE, STRRECV_SUBSTR, STRRECV_REPEAT,
        STRRECV_PADSTART, STRRECV_PADEND, STRRECV_LOCALECOMPARE,
        STRRECV_TOLOWER, STRRECV_TOUPPER,
+       /* ECMA-402 §20.1.2 and ECMA-402 §20.1.3 ARE NOT THE TWO ABOVE, AND ONE MODE FOR BOTH PAIRS WAS A FALSE CLAIM
+          ABOUT WHERE A PARKED MACHINE IS. Both pairs end today in the same Unicode Default Case Conversion, so
+          sharing looked free; what it shared is the machine's REST-POINT IDENTITY. quickjs-step.h states the
+          contract — `steps[stage]` is "the spec step that stage rests at" and a resume RESOLVES that label back
+          to an index — and a flow parked in toLocaleLowerCase rests at ECMA-402 §20.1.2.1 TransformCase's steps
+          while one parked in toLowerCase rests at ECMAScript §22.1.3.28's. One def cannot say both, so the
+          shared def answered the parked-machine question wrongly for whichever caller it was not written for.
+          It is also the only place `locales` can arrive, and there was no site: ECMAScript §22.1.3.28 takes no
+          argument at all, so a check placed in the shared body would have fired for `"x".toLowerCase(anything)`,
+          which that section correctly ignores. Splitting the mode is what makes the argument addressable. */
+       STRRECV_TOLOCALELOWER, STRRECV_TOLOCALEUPPER,
        /* B.2.2 CreateHTML, one mode per tag: `arg` is STRRECV_HTML_BASE + the method's magic, so the thirteen
           share one machine and one body the way they shared one C function. */
        STRRECV_HTML_BASE };
@@ -88810,6 +88825,8 @@ static const char *const js_str_padEnd_steps[];
 static const char *const js_str_localeCmp_steps[];
 static const char *const js_str_toLower_steps[];
 static const char *const js_str_toUpper_steps[];
+static const char *const js_str_toLocaleLower_steps[];
+static const char *const js_str_toLocaleUpper_steps[];
 static const char *const js_str_anchor_steps[];
 static const char *const js_str_big_steps[];
 static const char *const js_str_blink_steps[];
@@ -88874,12 +88891,24 @@ static const JSTrampStepDef js_str_padEnd_def     = { sizeof(JSStrRecv), js_str_
 static const JSTrampStepDef js_str_localeCmp_def  = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_LOCALECOMPARE, .visit = js_str_recv_visit,
                                                     .algorithm = "22.1.3.12 String.prototype.localeCompare",
                                                     .steps = js_str_localeCmp_steps };
+/* THE `, and 22.1.3.26 .toLocaleLowerCase` THAT STOOD IN THIS NAME IS GONE, AND IT WAS NOT MERELY UNTIDY — IT
+   NAMED A DEFINITION THE STANDARD ITSELF RETIRES. ECMA-402 §20.1.2 "String.prototype.toLocaleLowerCase ( [
+   locales ] )" opens "This definition supersedes the definition provided in ECMA-262, 22.1.3.26.", and ECMA-402 §20.1.3
+   says the same of 22.1.3.27. `algorithm` is the machine's own name for itself in every abort it raises, so a
+   machine driving toLocaleLowerCase was telling every crash it produced that it was running a section no
+   conforming implementation runs. The two locale-sensitive functions have their own defs below. */
 static const JSTrampStepDef js_str_toLower_def    = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_TOLOWER, .visit = js_str_recv_visit,
-                                                    .algorithm = "22.1.3.28 String.prototype.toLowerCase, and 22.1.3.26 .toLocaleLowerCase",
+                                                    .algorithm = "22.1.3.28 String.prototype.toLowerCase",
                                                     .steps = js_str_toLower_steps };
 static const JSTrampStepDef js_str_toUpper_def    = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_TOUPPER, .visit = js_str_recv_visit,
-                                                    .algorithm = "22.1.3.30 String.prototype.toUpperCase, and 22.1.3.27 .toLocaleUpperCase",
+                                                    .algorithm = "22.1.3.30 String.prototype.toUpperCase",
                                                     .steps = js_str_toUpper_steps };
+static const JSTrampStepDef js_str_toLocaleLower_def = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_TOLOCALELOWER, .visit = js_str_recv_visit,
+                                                    .algorithm = "ECMA-402 §20.1.2 String.prototype.toLocaleLowerCase",
+                                                    .steps = js_str_toLocaleLower_steps };
+static const JSTrampStepDef js_str_toLocaleUpper_def = { sizeof(JSStrRecv), js_str_recv_step, js_str_recv_fini, STRRECV_TOLOCALEUPPER, .visit = js_str_recv_visit,
+                                                    .algorithm = "ECMA-402 §20.1.3 String.prototype.toLocaleUpperCase",
+                                                    .steps = js_str_toLocaleUpper_steps };
 /* Written out rather than built by a macro: each tag is its own Annex B algorithm with its own steps
    array, and a macro body carrying `.steps` as a PARAMETER names an array the step gate cannot resolve. */
 static const JSTrampStepDef js_str_html_defs[STRRECV_HTML_COUNT] = {
@@ -91218,6 +91247,8 @@ static const JSTrampStepDef *const js_tramp_step_defs[STEPDEF_COUNT] = {
     [STEPDEF_DISPOSABLE_CTOR] = &js_disposable_ctor_def,
     [STEPDEF_STR_TOLOWER] = &js_str_toLower_def,
     [STEPDEF_STR_TOUPPER] = &js_str_toUpper_def,
+    [STEPDEF_STR_TOLOCALELOWER] = &js_str_toLocaleLower_def,
+    [STEPDEF_STR_TOLOCALEUPPER] = &js_str_toLocaleUpper_def,
     [STEPDEF_SHADOWREALM_CTOR]        = &js_shadow_realm_ctor_def,
     [STEPDEF_SHADOWREALM_EVALUATE]    = &js_shadow_realm_evaluate_def,
     [STEPDEF_SHADOWREALM_IMPORTVALUE] = &js_shadow_realm_importvalue_def,
@@ -96744,6 +96775,30 @@ static const char *const js_str_toUpper_steps[] = {
         SRV_NO_ARG1,
         "22.1.3.30 states no algorithm - 22.1.3.28 steps 4-7 with toUppercase in place of toLowercase")
     NULL };
+/* ECMA-402 §20.1.2 and ECMA-402 §20.1.3 STATE THEIR OWN THREE STEPS, which is why these cite them directly rather than
+   deferring the way js_str_toUpper_steps has to defer to 22.1.3.28. Stage SRV_ARG0 is the one that matters: it
+   is TransformCase step 1, the algorithm's FIRST act after the receiver's ToString, and every rest point the
+   locale layer will ever need is inside it — ECMA-402 §9.2.1's loop runs ToObject, LengthOfArrayLike, HasProperty, Get
+   and ToString, all of which run the page's code. A label is a parked machine's identity across builds, so
+   these say what the stage rests at and not what it currently does. */
+static const char *const js_str_toLocaleLower_steps[] = {
+    STRRECV_STAGES(JS_STEP_STAGE_LABEL,
+        "ECMA-402 §20.1.2 steps 1-2 (thisValue is RequireObjectCoercible'd; string is ToString(thisValue))",
+        "ECMA-402 §20.1.2 step 3 into ECMA-402 §20.1.2.1 TransformCase step 1 (requestedLocales is "
+        "CanonicalizeLocaleList(locales), whose ECMA-402 §9.2.1 loop is where the page's code runs)",
+        SRV_NO_ARG1,
+        "ECMA-402 §20.1.2.1 TransformCase steps 2-10 (requestedLocale, the Available Locales List, "
+        "LookupMatchingLocaleByPrefix, locale, and the lowercase transformation of codePoints)")
+    NULL };
+static const char *const js_str_toLocaleUpper_steps[] = {
+    STRRECV_STAGES(JS_STEP_STAGE_LABEL,
+        "ECMA-402 §20.1.3 steps 1-2 (thisValue is RequireObjectCoercible'd; string is ToString(thisValue))",
+        "ECMA-402 §20.1.3 step 3 into ECMA-402 §20.1.2.1 TransformCase step 1 (requestedLocales is "
+        "CanonicalizeLocaleList(locales), whose ECMA-402 §9.2.1 loop is where the page's code runs)",
+        SRV_NO_ARG1,
+        "ECMA-402 §20.1.2.1 TransformCase steps 2-10 (requestedLocale, the Available Locales List, "
+        "LookupMatchingLocaleByPrefix, locale, and the uppercase transformation of codePoints)")
+    NULL };
 static const char *const js_str_anchor_steps[] = {
     STRRECV_STAGES(JS_STEP_STAGE_LABEL,
         "B.2.2.2 step 2, CreateHTML steps 1-2 (contentsString is ToString(RequireObjectCoercible(string)))",
@@ -96882,6 +96937,37 @@ static int js_str_recv_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
                     if (r) return r < 0 ? -1 : r;
                 }
             }
+            break;
+        case STRRECV_TOLOCALELOWER: case STRRECV_TOLOCALEUPPER:
+            /* ECMA-402 §20.1.2.1 TransformCase step 1 is `? CanonicalizeLocaleList(locales)`, and ECMA-402 §9.2.1
+               step 1 is "If locales is undefined, then Return a new empty List." — so undefined is not an
+               argument this stage SKIPS, it is the one value the algorithm's own first step answers outright
+               without reading it. That is why the test below is an equality with undefined and not a check on
+               argc: `f(undefined)` and `f()` are the same call to ECMA-402 §9.2.1 and must stay the same call here.
+               EVERY OTHER VALUE OWES THE LOCALE LAYER, AND THIS ENGINE HAS NONE — §Offensive-programming's
+               category (2), a feature that should exist and does not, which crashes at its site naming what to
+               build rather than returning the answer for a locale nobody resolved. The crash is reached by
+               PAGE-SUPPLIED INPUT and that is the established shape here, not an exception to
+               §whose-bytes-state-the-value: this asserts no invariant over a stranger's bytes, it declares an
+               unbuilt capability, exactly as the C-side [[GetPrototypeOf]]-reached-a-Proxy aborts do.
+               HOW MUCH OF THE MIRRORED CORPUS REACHES IT is a question for a command and not for a number that
+               rots as the corpus grows:
+                 grep -rhoE 'toLocale(Lower|Upper)Case\([^)]' testing/corpus/mirror --include=*.js | wc -l
+               against the same pattern ending `\(\)`. Run the first with a line you know matches before
+               believing a zero, because the two answers are read in opposite directions. */
+            DCHECK(JS_IsUndefined(step_arg(&s->hdr, 0)),
+                   "ECMA-402 §20.1.2.1 TransformCase step 1 hands `locales` to ECMA-402 §9.2.1 CanonicalizeLocaleList "
+                   "and this engine has no locale layer to hand it to. What the next diff builds, in the order "
+                   "the standard's own call graph gives: ECMA-402 §6.2.1 IsWellFormedLanguageTag (whose steps 4-5 need "
+                   "ECMA-402 §15.5.1 GetLocaleBaseName and ECMA-402 §15.5.5 GetLocaleVariants, and whose step 2 needs the "
+                   "unicode_locale_id nonterminal of UTS #35 Part 1 Core); ECMA-402 §6.2.2 CanonicalizeUnicodeLocaleId "
+                   "(whose step 1 is UTS #35 Part 1 Core Annex C LocaleId Canonicalization, needing CLDR "
+                   "alias data and, for Annex C's Territory Exception, likely-subtag data; and whose step 2.c "
+                   "needs ECMA-402 §9.2.5 UnicodeExtensionComponents); ECMA-402 §6.2.3 DefaultLocale; ECMA-402 §9.2.1 itself, which must "
+                   "be a step machine because its loop runs ToObject, LengthOfArrayLike, HasProperty, Get and "
+                   "ToString; and ECMA-402 §9.2.3 LookupMatchingLocaleByPrefix. Until all of those exist a malformed "
+                   "tag is ignored where ECMA-402 §9.2.1 step 7.c.v throws a RangeError, and a well-formed one selects "
+                   "nothing");
             break;
         case STRRECV_NORMALIZE:
             /* an absent or undefined form is NFC and coerces nothing. The UTF-32 conversion the C body did first
@@ -97090,8 +97176,36 @@ static int js_str_recv_step(JSContext *ctx, void *st, JSValue cb_result, JSValue
         s->result = js_string_CreateHTML(ctx, s->str, s->arg, mode - STRRECV_HTML_BASE);
         return JS_IsException(s->result) ? (s->result = JS_UNDEFINED, -1) : 0;
     }
-    if (mode == STRRECV_TOLOWER || mode == STRRECV_TOUPPER) {
-        s->result = js_string_case_body(ctx, s->str, mode == STRRECV_TOLOWER);
+    /* THE FOUR SHARE A BODY AND THAT IS A DERIVED RESULT RATHER THAN THE ALIASING THIS DIFF JUST ENDED.
+       With `locales` undefined the whole of ECMA-402 §20.1.2.1 reduces, step by step, to what this call
+       already computes. Step 1 gives an empty List (ECMA-402 §9.2.1 step 1). Step 2's test fails, so step 3.a takes
+       DefaultLocale(); ECMA-402 §6.2.3's own Note says that "In browser environments, it should match
+       navigator.language to avoid providing any additional distinguishing information.", and this engine's
+       navigator.language carries the example `en-US`. Step 4's Available Locales List is "an Available Locales
+       List which includes the language tags for which the Unicode Character Database contains
+       language-sensitive case mappings" — the UCD's SpecialCasing.txt names exactly three languages in its
+       conditional entries, and en is not among them, so step 5's LookupMatchingLocaleByPrefix truncates
+       `en-US` to `en` to the empty String and returns undefined. Step 6 therefore gives locale = `und`, and
+       step 8.a's transformation for it is the Unicode Default Case Conversion algorithm, which is what
+       js_string_case_body performs: lre_case_conv's FULL mapping, multi-code-point results included, with
+       Final_Sigma's context condition. ECMA-402 §20.1.2.1 permits this outright — "Regardless of tailoring, a
+       conforming implementation's case transformation algorithm must always yield the same result given the
+       same input code points, locale, and target case." — so this is the §NO-STUBS exception's own shape: the
+       answer is COMPUTED and correct, not a placeholder standing in for one.
+       NAMED RESIDUAL. WHAT IS NOT COVERED: a receiver holding a code point for which the Unicode Character
+       Database states a LANGUAGE-CONDITIONAL case mapping, where the answer depends on a locale this engine
+       does not resolve — and the locale is doubly unresolved, because navigator.language is concolic here, so
+       the honest answer for such a receiver is not one string but a fork. WHAT THE NEXT DIFF BUILDS:
+       ECMA-402 §20.1.2.1 steps 1-6, i.e. the locale layer the argument stage above crashes for, after which
+       step 8.a is a transformation USING locale rather than one that ignores it. HOW ITS ABSENCE WOULD SHOW: these two
+       functions' results are byte-identical to toLowerCase and toUpperCase for every receiver, so a reader
+       driving this engine beside a browser whose locale is one the UCD conditions on sees this engine give the
+       `und` answer where the browser does not — and sees it with NO argument passed, which is the case the
+       crash above cannot reach. RETIREMENT: goes when steps 1-6 are built and the DCHECK above is deleted. */
+    if (mode == STRRECV_TOLOWER || mode == STRRECV_TOUPPER ||
+        mode == STRRECV_TOLOCALELOWER || mode == STRRECV_TOLOCALEUPPER) {
+        s->result = js_string_case_body(ctx, s->str,
+                                        mode == STRRECV_TOLOWER || mode == STRRECV_TOLOCALELOWER);
         return JS_IsException(s->result) ? (s->result = JS_UNDEFINED, -1) : 0;
     }
     DCHECK(mode == STRRECV_NORMALIZE, "string receiver machine: unknown mode");
@@ -98934,8 +99048,10 @@ static const JSCFunctionListEntry js_string_proto_funcs[] = {
     JS_CFUNC_STEP_DEF("normalize", 0, STEPDEF_STR_NORMALIZE ),
     JS_CFUNC_STEP_DEF("toLowerCase", 0, STEPDEF_STR_TOLOWER ),
     JS_CFUNC_STEP_DEF("toUpperCase", 0, STEPDEF_STR_TOUPPER ),
-    JS_CFUNC_STEP_DEF("toLocaleLowerCase", 0, STEPDEF_STR_TOLOWER ),
-    JS_CFUNC_STEP_DEF("toLocaleUpperCase", 0, STEPDEF_STR_TOUPPER ),
+    /* `length` stays 0: ECMA-402 §20.1.2 is "String.prototype.toLocaleLowerCase ( [ locales ] )" and a
+       bracketed parameter is optional, so the count of non-optional arguments is unchanged by this split. */
+    JS_CFUNC_STEP_DEF("toLocaleLowerCase", 0, STEPDEF_STR_TOLOCALELOWER ),
+    JS_CFUNC_STEP_DEF("toLocaleUpperCase", 0, STEPDEF_STR_TOLOCALEUPPER ),
     JS_CFUNC_STEP_DEF("[Symbol.iterator]", 0, STEPDEF_STR_ITERATOR ),
     /* ES6 Annex B 2.3.2 etc. */
     JS_CFUNC_STEP_DEF("anchor", 1, STEPDEF_STR_HTML_BASE + magic_string_anchor ),
