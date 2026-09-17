@@ -176,6 +176,16 @@ reclaim_snapshot() {
 #
 # LIVE IS A REFUSAL RATHER THAN A DELETE, because the only way this path is live is that a second freeze is
 # already running into it, which is the pack-file-destroying incident exactly.
+#
+# RESIDUAL — REUSE READS TRACKED FILES ONLY. `status --untracked-files=no` is what lets a fully built snapshot
+# read as clean, and the same flag means an UNTRACKED path a previous command left behind — one that is not a
+# build output and not covered by the revision's own ignore rules — survives into the reused tree, so a later
+# command can read a tree that is not exactly the revision. The next diff refuses an untracked path that the
+# ignore rules AT THIS SHA do not account for, derived from those rules rather than from a list of build
+# outputs somebody types, because a typed list is the hand-picked-list defect this file already pays for
+# twice. Its absence shows as a command in a reused snapshot reading a file that `git -C <snap> status
+# --porcelain` reports as untracked, where the same command in a freshly cloned snapshot of the same SHA
+# cannot see it.
 REUSE=""
 if [ -e "$DIR" ]; then
   if snapshot_is_live "$DIR"; then
