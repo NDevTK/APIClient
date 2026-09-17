@@ -9,6 +9,8 @@
 #include "solver/decide.h"
 #include "solver/flow.h"
 #include "solver/world.h"
+#include "core/crypto/aes.h"
+#include "core/crypto/aes_gcm.h"
 #include "core/crypto/hmac.h"
 #include "core/crypto/secure_hash.h"
 #include "core/xml/xml_char.h"   /* XML §2.2/§2.3[3]/§2.11 — the layer every XML production reads through */
@@ -5210,6 +5212,314 @@ static void hmac_selftest(void)
               "difference that is only tested at the front is a comparison that verifies any signature");
         CHECK(!hmac_mac_equal(A, sizeof A, A, 3),
               "§31.6.2's comparison accepted a signature shorter than the MAC — a prefix is not a MAC");
+    }
+}
+
+/* A hexadecimal known-answer row, as bytes. The rows below are pasted from NIST response files, where a value
+   is always an even number of lowercase hex digits and an ABSENT value is the empty string — so this is the
+   one place in the fixture that turns a published vector into an operand, and it CHECKS rather than trusts:
+   an odd digit count or a row longer than the buffer it was sized for is a transcription error in the table
+   above, which is exactly the defect a known-answer test exists to be trustworthy about. It is a CHECK and not
+   a DCHECK because a row that overran its buffer would corrupt the fixture's stack in release too. */
+static size_t kat_unhex(const char *hex, uint8_t *out, size_t out_size)
+{
+    size_t n = strlen(hex), i;
+
+    CHECK(n % 2 == 0, "a known-answer row has an odd number of hex digits — it was truncated in transcription");
+    CHECK(n / 2 <= out_size, "a known-answer row is longer than the buffer this fixture sized for it");
+    for (i = 0; i < n; i++) {
+        char     c = hex[i];
+        unsigned v;
+        if      (c >= '0' && c <= '9') v = (unsigned)(c - '0');
+        else if (c >= 'a' && c <= 'f') v = (unsigned)(c - 'a') + 10u;
+        else if (c >= 'A' && c <= 'F') v = (unsigned)(c - 'A') + 10u;
+        else { CHECK_FAIL("a known-answer row holds a character that is not a hex digit"); return 0; }
+        if (i % 2 == 0) out[i / 2] = (uint8_t)(v << 4);
+        else            out[i / 2] = (uint8_t)(out[i / 2] | v);
+    }
+    return n / 2;
+}
+
+/* NIST SP 800-38D, CHECKED AGAINST PUBLISHED KNOWN ANSWERS, for secure_hash_selftest's reason and one more of
+ * its own. A cryptographic primitive that agrees with itself proves nothing at all — and an AEAD is the case
+ * where that is most nearly a trap, because an encrypt/decrypt ROUND TRIP succeeds for ANY keystream, a
+ * constant one included, and for any tag function at all as long as both directions compute the same wrong
+ * thing. So the oracle has to come from outside, and the rows below are transcribed from NIST's Cryptographic
+ * Algorithm Validation Program: the GCM Validation System's `gcmEncryptExtIV128/192/256.rsp` response files,
+ * each row carrying the file, the bracketed length header and the `Count` that identifies it in that file.
+ *
+ * THE ROWS ARE CHOSEN FOR THE BRANCH AND NOT FOR VARIETY, which is the whole of why there are twelve rather
+ * than twelve hundred:
+ *   IVlen = 96   takes SP 800-38D's Algorithm 4 step 2's FIRST arm, "J_0 = IV || 0^31 || 1" — the arm every real page uses, and
+ *                the one both AES-GCM sites in testing/corpus/mirror take (a twelve-byte getRandomValues).
+ *   IVlen = 8    and IVlen = 1024 take the SECOND arm, J_0 = GHASH_H(IV || 0^(s+64) || [len(IV)]_64), which is
+ *                an entirely different derivation reached by no other row; 8 bits is a sub-block IV that is
+ *                all padding, and 1024 bits is a whole number of blocks so that `s` is ZERO and the pad-to-a-
+ *                boundary step must do NOTHING. Those two are the boundary either side of that step.
+ *   PTlen = 0    makes SP 800-38D's Algorithm 3 (GCTR) step 1's "If X is the empty string" the whole of the text walk.
+ *   AADlen = 160 and PTlen = 408 are 20 and 51 bytes — NOT multiples of sixteen, so each forces SP 800-38D's Algorithm 4 step 4's
+ *                `0^v` and `0^u` padding, which is the step a streaming implementation gets wrong.
+ *   Taglen = 32 and 120 are Web Cryptography §29.4.1 step 4's shortest and second-longest, so MSB_t is a real truncation rather
+ *                than the identity it is at 128.
+ *   Keylen = 192 and 256 reach FIPS 197's KEYEXPANSION() -- aes.h carries its numbered citation -- and its OTHER two key schedules, including the Nk > 6 arm that applies
+ *                SUBWORD() a second time and which AES-128 and AES-192 never take.
+ *
+ * AND EVERY ROW IS DRIVEN THROUGH EVERY SPLIT, which is the property the Web Cryptography §14.3.1 caller will depend on and
+ * which no published vector states. The mode feeds ONE block per turn and yields between them, so a partial-
+ * block buffer that mishandled a boundary would produce a different ciphertext for the same plaintext
+ * depending on where the scheduler happened to preempt the walk — a page's data would then decrypt or not
+ * according to machine load. secure_hash_selftest takes every split of its 56-byte vector for exactly this
+ * reason; this takes every split of the IV, of the additional data and of the text, independently. */
+static void aes_gcm_selftest(void)
+{
+    static const struct { const char *key, *iv, *pt, *aad, *ct, *tag; } KAT[] = {
+        /* gcmEncryptExtIV128.rsp, [Keylen = 128] [IVlen = 96] [PTlen = 0] [AADlen = 0]
+           [Taglen = 128], Count = 0 */
+        { "11754cd72aec309bf52f7687212e8957",
+          "3c819d9a9bed087615030b65",
+          "",
+          "",
+          "",
+          "250327c674aaf477aef2675748cf6971" },
+        /* gcmEncryptExtIV128.rsp, [Keylen = 128] [IVlen = 96] [PTlen = 128] [AADlen = 0]
+           [Taglen = 128], Count = 0 */
+        { "7fddb57453c241d03efbed3ac44e371c",
+          "ee283a3fc75575e33efd4887",
+          "d5de42b461646c255c87bd2962d3b9a2",
+          "",
+          "2ccda4a5415cb91e135c2a0f78c9b2fd",
+          "b36d1df9b9d5e596f83e8b7f52971cb3" },
+        /* gcmEncryptExtIV128.rsp, [Keylen = 128] [IVlen = 96] [PTlen = 128] [AADlen = 160]
+           [Taglen = 128], Count = 0 */
+        { "d4a22488f8dd1d5c6c19a7d6ca17964c",
+          "f3d5837f22ac1a0425e0d1d5",
+          "7b43016a16896497fb457be6d2a54122",
+          "f1c5d424b83f96c6ad8cb28ca0d20e475e023b5a",
+          "c2bd67eef5e95cac27e3b06e3031d0a8",
+          "f23eacf9d1cdf8737726c58648826e9c" },
+        /* gcmEncryptExtIV128.rsp, [Keylen = 128] [IVlen = 96] [PTlen = 408] [AADlen = 720]
+           [Taglen = 128], Count = 0 */
+        { "2c1f21cf0f6fb3661943155c3e3d8492",
+          "23cb5ff362e22426984d1907",
+          "42f758836986954db44bf37c6ef5e4ac0adaf38f27252a1b82d02ea949c8a1a2dbc0d68b5615ba7c1220ff6510e259f0"
+            "6655d8",
+          "5d3624879d35e46849953e45a32a624d6a6c536ed9857c613b572b0333e701557a713e3f010ecdf9a6bd6c9e3e44b065"
+            "208645aff4aabee611b391528514170084ccf587177f4488f33cfb5e979e42b6e1cfc0a60238982a7aec",
+          "81824f0e0d523db30d3da369fdc0d60894c7a0a20646dd015073ad2732bd989b14a222b6ad57af43e1895df9dca2a534"
+            "4a62cc",
+          "57a3ee28136e94c74838997ae9823f3a" },
+        /* gcmEncryptExtIV128.rsp, [Keylen = 128] [IVlen = 8] [PTlen = 128] [AADlen = 128]
+           [Taglen = 128], Count = 0 */
+        { "83f9d97d4ab759fddcc3ef54a0e2a8ec",
+          "cf",
+          "77e6329cf9424f71c808df9170bfd298",
+          "6dd49eaeb4103dac8f97e3234946dd2d",
+          "50de86a7a92a8a5ea33db5696b96cd77",
+          "aa181e84bc8b4bf5a68927c409d422cb" },
+        /* gcmEncryptExtIV128.rsp, [Keylen = 128] [IVlen = 1024] [PTlen = 128] [AADlen = 128]
+           [Taglen = 128], Count = 0 */
+        { "ca91e2414409a439b06573d772f90afb",
+          "177008f920a06169ccdf753a338553fefd46845869c9244da44997f83d4ce805a18707c84d114f9c68427b22841591e6"
+            "caecf5c3e72a25167aa860c51bdc1aa56dcd69f29a2f35e70a322b9eba092a98d66a956b4d294383a0ebab26f7c4df1a"
+            "5d4060dfc45a14155100ea7d9e32debb6537406b757291710505142e7659fc77",
+          "28003e30c4a4ca9e41aafefac1e1c3de",
+          "bfeb15fcf7b15f0e14c04439b67950bd",
+          "00e472971f3a7770aa7158fd92f17bb7",
+          "16661b85eb51646c94cf2be4e42d7a8e" },
+        /* gcmEncryptExtIV128.rsp, [Keylen = 128] [IVlen = 96] [PTlen = 128] [AADlen = 128]
+           [Taglen = 32], Count = 0 */
+        { "6dfb5dc68af6ae2f3242e9184f100918",
+          "37d36f5c54d53479d4745dd1",
+          "47809d16c2c6ec685962c90e53fe1bba",
+          "dd0fa6e494031139d71ee45f00d56fa4",
+          "418d6c132a4f5bbe245133936ada9c73",
+          "9ae38ddb" },
+        /* gcmEncryptExtIV128.rsp, [Keylen = 128] [IVlen = 96] [PTlen = 408] [AADlen = 160]
+           [Taglen = 120], Count = 0 */
+        { "818764b6b4b09a3ff683d1fcfaad0ed6",
+          "b7d89cb6313e845c79b5a26e",
+          "f34ab4e0ffb13daed82bbeb8af5f5fb03f4e67251b4529c2ae3d3d90ce645eca4d961299c584075916d71ae114d3a6ef"
+            "a7e425",
+          "2f0190fb6d7c1992533c4726428cb88565fcf43a",
+          "88af11a5fa1994e6c2bb7f68f9621c532340dc3bc452f0e88c87b19acb1cb52496da9c99fb1e38f540695eb2071295c8"
+            "0ed3f9",
+          "1bef6a307e9c90699c3334be062dfe" },
+        /* gcmEncryptExtIV192.rsp, [Keylen = 192] [IVlen = 96] [PTlen = 128] [AADlen = 160]
+           [Taglen = 128], Count = 0 */
+        { "95e5c8dcee4ef17571e1becc3f2d4ac8d5aa73e74b3f1115",
+          "e3b91649120f92b4f712644b",
+          "eca3606b9e2a0c7a1c6c4b765176f643",
+          "68b093733bd1e77448fe5687b74796834d1797cf",
+          "0ff6d858cf0f5309c0f4b2747f6b551f",
+          "94d6ac2796a9b9901933a0f9e5377979" },
+        /* gcmEncryptExtIV192.rsp, [Keylen = 192] [IVlen = 1024] [PTlen = 408] [AADlen = 720]
+           [Taglen = 128], Count = 0 */
+        { "9dfffa5bcb2c5a5e9e2ca7e2dcaa474763ccc6978b0c2c17",
+          "4407dd3b93339b7f67fbf0471b7da6870536e979b30e1b8dfc6f1d4620c842b885fc44f07e80bb3bf62ac6684fb989ab"
+            "56246deeedd7607d7be12dc2f1f7b1e68e4e49560a9c297d58d9da241474c866164528ce022bd6e48ebe4f0c3a27824d"
+            "269869d4579dd98263252167464bae1b2972c7f3f942578d6a2592083aa421b9",
+          "a39e9b9a53dde1751d54be6a0191eba32ab631b3b830b27e0ab2282c25769ea551dfab10133ac174a74e71b9a0ec8f28"
+            "42c123",
+          "b0a54df5cc522dbe273a7e4aa9c6fa6d01e2071418f596015b7c0252b54a039dfcb2424a37fe47b735d195f2ebfbb66e"
+            "5695e4437eb07efdfb5162a688c0ce42345d29f64299fada69eef182d6d99f20b0825bcd88e318cf949c",
+          "3d48d2551e0203bf9a9ee7ffc30bfd3f3043eb98476b5a349d469fc8105d8abed6f6256ddf15d8decfb60b63e3252474"
+            "bf5e9f",
+          "897e580db5d905febaa0289276c82948" },
+        /* gcmEncryptExtIV256.rsp, [Keylen = 256] [IVlen = 96] [PTlen = 128] [AADlen = 160]
+           [Taglen = 128], Count = 0 */
+        { "83688deb4af8007f9b713b47cfa6c73e35ea7a3aa4ecdb414dded03bf7a0fd3a",
+          "0b459724904e010a46901cf3",
+          "33d893a2114ce06fc15d55e454cf90c3",
+          "794a14ccd178c8ebfd1379dc704c5e208f9d8424",
+          "cc66bee423e3fcd4c0865715e9586696",
+          "0fb291bd3dba94a1dfd8b286cfb97ac5" },
+        /* gcmEncryptExtIV256.rsp, [Keylen = 256] [IVlen = 1024] [PTlen = 408] [AADlen = 720]
+           [Taglen = 128], Count = 0 */
+        { "65b7171b55b22edd711a076f2eb6a125e873993e8d54564cd62d03c665cd6374",
+          "54d118d32a56138f04212684b1e47c5d6808c128996e1d6ebf739ef9ff138aac1181fcde820a5f68749e1fed791314c7"
+            "3c54169aee5556bf206998d95432719fc9ffe22fbbc4925f32774d31e075393c0907e27c3f40da02c424b402eff596f6"
+            "300b881b8f561d5ae4535a1fa9d4bafe86dd6751b0da245ae7b74ddcc3f5033c",
+          "0521e41d827d6104ecdab1f8e7fb70cd8abca87500ecd36e65906194327b1b61014fd310f4e1bf7d5bf356a5d731c0d0"
+            "d47c7e",
+          "4a3b04decbec0a549666e87036e78433b896270792e7932810c38eb063139ade6a4befd4dfdb38d53cdb95accbdee7ad"
+            "5478c3bc55a21226c2b0fa79fe7c30262fa5383de3d3b45e951d7ef955f3a18b9689783898bedb66f0b8",
+          "2ecf7a3a35abb50d212588c2ef50880212b53c052738767c9ea215709208afae6e94acd68980207bf63382495be1acde"
+            "784b92",
+          "49563e12797eefbee2fd75a1e844869b" },
+    };
+    size_t k;
+
+    for (k = 0; k < sizeof KAT / sizeof KAT[0]; k++) {
+        uint8_t key[32], iv[128], pt[64], aad[128], ct[64], tag[AES_GCM_MAX_TAG];
+        uint8_t got_ct[64], got_pt[64], got_tag[AES_GCM_MAX_TAG];
+        size_t  key_n, iv_n, pt_n, aad_n, ct_n, tag_n, cut, i;
+
+        key_n = kat_unhex(KAT[k].key, key, sizeof key);
+        iv_n  = kat_unhex(KAT[k].iv,  iv,  sizeof iv);
+        pt_n  = kat_unhex(KAT[k].pt,  pt,  sizeof pt);
+        aad_n = kat_unhex(KAT[k].aad, aad, sizeof aad);
+        ct_n  = kat_unhex(KAT[k].ct,  ct,  sizeof ct);
+        tag_n = kat_unhex(KAT[k].tag, tag, sizeof tag);
+        CHECK(ct_n == pt_n,
+              "a GCM known-answer row's ciphertext is not the length of its plaintext — SP 800-38D's Algorithm 4 step 3's C is "
+              "GCTR over P and GCTR's output has the length of its input, so the row is a transcription error");
+
+        /* ---- CLAIM ONE: the vector's own answer, at EVERY SPLIT OF EVERY REGION. `cut` walks 0 .. n, so
+                each region is fed as two calls at every boundary there is, which is every state the sixteen-
+                byte partial-block buffer can be left in. ---- */
+        for (cut = 0; cut <= iv_n + aad_n + pt_n; cut++) {
+            AesGcm g;
+            size_t ic = cut <= iv_n  ? cut : iv_n;
+            size_t ac = cut <= aad_n ? cut : aad_n;
+            size_t tc = cut <= pt_n  ? cut : pt_n;
+
+            aes_gcm_begin(&g, key, key_n, (uint64_t)iv_n, tag_n, false);   /* SP 800-38D's Algorithm 4, GCM-AE */
+            aes_gcm_iv_update(&g, iv, ic);
+            aes_gcm_iv_update(&g, iv + ic, iv_n - ic);
+            aes_gcm_iv_end(&g);
+            aes_gcm_aad_update(&g, aad, ac);
+            aes_gcm_aad_update(&g, aad + ac, aad_n - ac);
+            aes_gcm_aad_end(&g);
+            aes_gcm_text_update(&g, pt, got_ct, tc);
+            aes_gcm_text_update(&g, pt + tc, got_ct + tc, pt_n - tc);
+            aes_gcm_encrypt_finish(&g, got_tag, tag_n);
+            CHECK(memcmp(got_ct, ct, ct_n) == 0,
+                  "SP 800-38D answered a PUBLISHED known-answer vector's CIPHERTEXT wrongly — the port is "
+                  "wrong, and everything this engine has ever encrypted is with it");
+            CHECK(memcmp(got_tag, tag, tag_n) == 0,
+                  "SP 800-38D answered a PUBLISHED known-answer vector's TAG wrongly — the ciphertext may "
+                  "still be right, so this is the authentication half, and nothing about it is recoverable "
+                  "by a page that only checks whether decryption returned bytes");
+
+            aes_gcm_begin(&g, key, key_n, (uint64_t)iv_n, tag_n, true);    /* SP 800-38D's Algorithm 5, GCM-AD */
+            aes_gcm_iv_update(&g, iv, ic);
+            aes_gcm_iv_update(&g, iv + ic, iv_n - ic);
+            aes_gcm_iv_end(&g);
+            aes_gcm_aad_update(&g, aad, ac);
+            aes_gcm_aad_update(&g, aad + ac, aad_n - ac);
+            aes_gcm_aad_end(&g);
+            aes_gcm_text_update(&g, ct, got_pt, tc);
+            aes_gcm_text_update(&g, ct + tc, got_pt + tc, ct_n - tc);
+            CHECK(aes_gcm_decrypt_verify(&g, tag, tag_n),
+                  "SP 800-38D refused a PUBLISHED known-answer vector's own tag — SP 800-38D's Algorithm 5 step 8 answered FAIL "
+                  "for a ciphertext this engine had just produced, so every decrypt() would throw");
+            CHECK(memcmp(got_pt, pt, pt_n) == 0,
+                  "SP 800-38D recovered the wrong PLAINTEXT from a published vector's ciphertext");
+        }
+
+        /* ---- CLAIM TWO: SP 800-38D's Algorithm 5 step 8's OTHER arm, which the rows above cannot reach. A round trip that only
+                ever succeeds proves nothing whatever about an AEAD — a verify that returned true
+                unconditionally passes every assertion above it — so the REFUSALS are asserted separately.
+                These do not depend on where the walk was split, which is why they are not inside that loop. */
+        for (i = 0; i < tag_n; i++) {
+            AesGcm  g;
+            uint8_t forged[AES_GCM_MAX_TAG];
+
+            memcpy(forged, tag, tag_n);
+            forged[i] ^= 0x80u;
+            aes_gcm_begin(&g, key, key_n, (uint64_t)iv_n, tag_n, true);
+            aes_gcm_iv_update(&g, iv, iv_n);
+            aes_gcm_iv_end(&g);
+            aes_gcm_aad_update(&g, aad, aad_n);
+            aes_gcm_aad_end(&g);
+            aes_gcm_text_update(&g, ct, got_pt, ct_n);
+            CHECK(!aes_gcm_decrypt_verify(&g, forged, tag_n),
+                  "SP 800-38D's Algorithm 5 step 8 ACCEPTED a tag with one bit flipped — the authentication is not being computed "
+                  "at all, and every forged ciphertext a page is handed would decrypt");
+        }
+        if (ct_n > 0) {
+            /* A flipped CIPHERTEXT bit rather than a flipped tag bit: the tag would still be right if C never
+               reached SP 800-38D's Algorithm 4 step 5's GHASH, which is the defect that authenticates the AAD alone. */
+            AesGcm  g;
+            uint8_t forged_ct[64];
+
+            memcpy(forged_ct, ct, ct_n);
+            forged_ct[0] ^= 0x01u;
+            aes_gcm_begin(&g, key, key_n, (uint64_t)iv_n, tag_n, true);
+            aes_gcm_iv_update(&g, iv, iv_n);
+            aes_gcm_iv_end(&g);
+            aes_gcm_aad_update(&g, aad, aad_n);
+            aes_gcm_aad_end(&g);
+            aes_gcm_text_update(&g, forged_ct, got_pt, ct_n);
+            CHECK(!aes_gcm_decrypt_verify(&g, tag, tag_n),
+                  "SP 800-38D's Algorithm 5 step 8 ACCEPTED a ciphertext with one bit flipped — the ciphertext is not reaching "
+                  "SP 800-38D's Algorithm 4 step 5's GHASH, so the tag authenticates the additional data alone");
+        }
+        if (aad_n > 0) {
+            /* And a flipped ADDITIONAL-DATA bit, which is the mirror: A is not encrypted and is authenticated
+               only by step 5's first region, so an implementation that dropped the A region entirely would
+               still round-trip every plaintext and pass both checks above. */
+            AesGcm  g;
+            uint8_t forged_aad[128];
+
+            memcpy(forged_aad, aad, aad_n);
+            forged_aad[0] ^= 0x01u;
+            aes_gcm_begin(&g, key, key_n, (uint64_t)iv_n, tag_n, true);
+            aes_gcm_iv_update(&g, iv, iv_n);
+            aes_gcm_iv_end(&g);
+            aes_gcm_aad_update(&g, forged_aad, aad_n);
+            aes_gcm_aad_end(&g);
+            aes_gcm_text_update(&g, ct, got_pt, ct_n);
+            CHECK(!aes_gcm_decrypt_verify(&g, tag, tag_n),
+                  "SP 800-38D's Algorithm 5 step 8 ACCEPTED additional authenticated data with one bit flipped — A is not "
+                  "reaching SP 800-38D's Algorithm 4 step 5's GHASH, and a page's AAD is then authenticating nothing");
+        }
+        if (tag_n > 1u) {
+            /* A tag of the wrong LENGTH is SP 800-38D's Algorithm 5 step 1's "len(T) != t" and answers FAIL before any byte is
+               compared — the one refusal that may exit early, because the length is the page's own argument
+               and not a secret. */
+            AesGcm g;
+
+            aes_gcm_begin(&g, key, key_n, (uint64_t)iv_n, tag_n, true);
+            aes_gcm_iv_update(&g, iv, iv_n);
+            aes_gcm_iv_end(&g);
+            aes_gcm_aad_update(&g, aad, aad_n);
+            aes_gcm_aad_end(&g);
+            aes_gcm_text_update(&g, ct, got_pt, ct_n);
+            CHECK(!aes_gcm_decrypt_verify(&g, tag, tag_n - 1u),
+                  "SP 800-38D's Algorithm 5 step 1's len(T) != t was answered as a match — a truncated tag was accepted against a "
+                  "longer one, which is a forgery that costs an attacker nothing");
+        }
     }
 }
 
@@ -19964,6 +20274,11 @@ int main(int argc, char **argv) {
        otherwise be reported as a CSP verdict being wrong. */
     secure_hash_selftest();
     hmac_selftest();
+    /* AFTER the two digest primitives and for their reason: this one stands on FIPS 197's cipher
+       and on nothing they compute, so its failure is its own — but it shares their tier, and a
+       primitive's row must be reported at the primitive rather than at the §14 method that will
+       later call it. */
+    aes_gcm_selftest();
     html_scripting_flag_selftest();   /* HTML §13.2.4.5's scripting flag, read through §13.2.6.4.7's
                                         `noscript` rule — both arms, because one arm alone passes for a
                                         parser that never reads the flag */
