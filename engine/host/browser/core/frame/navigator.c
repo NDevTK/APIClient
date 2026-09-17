@@ -54,6 +54,7 @@
 #include "quickjs.h"
 #include "solver/concolic.h"
 #include "core/agent_state.h"
+#include "core/file/storage_manager.h"
 #include "core/frame/navigator.h"
 #include "core/frame/navigator_beacon.h"
 #include "core/html/user_activation.h"
@@ -427,10 +428,14 @@ static void navigator_install_realm(JSContext *ctx)
        type, which this build does not have — so moving THIS object onto WorkerGlobalScope.prototype would put
        an interface the realm does not expose into it. Until WorkerNavigator exists the member is honestly
        ABSENT (§NO STUBS).
-       THE NAMED RESIDUAL THAT STOOD HERE IS RETIRED — core/file/storage_manager.c ASKS ITS OWN WEB IDL §3.8
-       STEP 1 OVER `Navigator` NOW, which its remedy clause asked for, and the clause was RIGHT that the gate
-       belongs over the includer rather than over that component's own interface. It is kept as a correction
-       because two of the things it told its reader were wrong in ways the next reader would reproduce.
+       THE NAMED RESIDUAL THAT STOOD HERE IS RETIRED, AND SO IS THE GATE THAT RETIRED IT. Its remedy clause
+       asked for core/file/storage_manager.c to ask this same Web IDL §3.8 step 1 over `Navigator`, and that
+       landed and has since been DELETED — the clause was right that the question belongs to the INCLUDER and
+       one step short about where: this refusal IS the includer's answer, and it returns before there is a
+       §3.7.3 prototype to hand anybody, so that component is now CALLED from below rather than gated. There
+       is no realm in which it can be reached and owe nothing, which is why the state a gate would look for no
+       longer exists. The clause is kept as a correction because two of the things it told its reader were
+       wrong in ways the next reader would reproduce.
        (a) IT NAMED THE WRONG CONSTRUCT. It said Storage §8 declares `partial interface Navigator` AND
        `partial interface WorkerNavigator`; the harvested IDL every instrument here consumes declares
        `interface mixin NavigatorStorage` and two `includes` statements. Web IDL §3.7.3 "Interface prototype
@@ -469,6 +474,20 @@ static void navigator_install_realm(JSContext *ctx)
        the instance would be an own property of `navigator`, absent from `Navigator.prototype`, and deletable —
        the four things this file's own header names as what makes an interface an interface. */
     navigator_beacon_install(ctx, proto);
+    /* STORAGE §8 "API"'s `NavigatorStorage` MIXIN — the same rule, and it arrives here for a reason worth one
+       extra sentence. Web IDL §3.7.3 "Interface prototype object" gives an `interface mixin` no prototype of
+       its own, so the member has no object until an INCLUDER supplies one, and `Navigator includes
+       NavigatorStorage;` makes THIS the object. It was installed on the NAVIGATOR ITSELF from that
+       component's own intrinsic, which §3.7.6 "Attributes" makes a wrong answer rather than a narrow one:
+       "Regular attributes are exposed on the interface prototype object, unless the attribute is unforgeable
+       or if the interface was declared with the [Global] extended attribute" — and `storage` is neither, so
+       `'storage' in Navigator.prototype` was false where a browser answers true, the descriptor was an own
+       accessor on `navigator` where a browser has none, and `delete navigator.storage` succeeded.
+       IT IS CALLED FROM HERE RATHER THAN REACHING FOR A PROTOTYPE OF ITS OWN, which is the whole reason that
+       component no longer asks Web IDL §3.8 "Platform objects implementing interfaces" step 1 over
+       `Navigator`: this install has already returned above where the answer is no, so a worker realm cannot
+       reach the line below and there is no state left for a gate to look for. */
+    storage_manager_install_navigator_storage(ctx, proto);
     idl_members_excluded(ctx, proto, "Navigator", NAV_MODE_EXCLUDED,
                          (int)(sizeof NAV_MODE_EXCLUDED / sizeof NAV_MODE_EXCLUDED[0]),
                          "HTML §8.10.1.1: the user agent supports this partial interface only if the "

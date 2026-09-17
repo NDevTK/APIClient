@@ -438,13 +438,63 @@ static const IdlStepDecl SG_DECL = {
    minted with the realm. */
 static JSValue sm_get_storage(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    (void)this_val; (void)magic;
+    JSValue own;
+    bool same;
+
+    (void)magic;
+    /* WEB IDL §3.7.6 "Attributes"' ATTRIBUTE GETTER, the step every regular attribute begins with: "If jsValue
+       does not implement target, then: If attribute was specified with the [LegacyLenientThis] extended
+       attribute, then return undefined. Otherwise, throw a TypeError." `storage` carries no
+       [LegacyLenientThis], so it is the throw — and it is a real TypeError and never an assert, because the
+       receiver is PAGE-SUPPLIED INPUT and a DCHECK on one hands any page an abort switch. A feature detector
+       that probes the descriptor and applies the getter reads the throw as "this is a real interface", which
+       is a different branch from `undefined`.
+       IT BECAME REACHABLE-BY-DESIGN WITH THE MOVE TO THE PROTOTYPE, and it was owed before: the getter
+       ignored `this_val` entirely, so `Object.getOwnPropertyDescriptor(navigator, "storage").get.call(null)`
+       answered this realm's StorageManager where a browser throws. The brand is asked of the component that
+       owns the class, which is what makes it a class-id comparison a page cannot forge rather than a shape
+       test of this file's own. */
+    if (!navigator_is(this_val)) {
+        JS_ThrowTypeError(ctx, "storage was reached on something that is not a Navigator");
+        return JS_EXCEPTION;
+    }
+    /* THE HALF OF "THIS's relevant settings object" THIS ENGINE CAN ANSWER — the same assert
+       core/frame/navigator.c makes of its own members and core/frame/navigator_beacon.c of §2.1's, here for
+       the same reason and newly OWED, because a member on a prototype can be applied to another realm's
+       Navigator and a member on the instance could not. `js_call_c_function` takes `ctx` from the FUNCTION
+       object, so the line below answers out of the realm whose prototype the call went through — and §8 says
+       "The storage getter steps are to return this's relevant settings object's StorageManager object", which
+       is THIS's realm and not the getter's. The two coincide for every ordinary `navigator.storage`. */
+    own = navigator_object(ctx);
+    same = JS_VALUE_GET_PTR(own) == JS_VALUE_GET_PTR(this_val);
+    JS_FreeValue(ctx, own);
+    DCHECK(same, "Storage §8's storage was reached through ONE realm's Navigator.prototype on ANOTHER realm's "
+                 "Navigator — the getter answers out of its own realm's slot, so the page would be handed a "
+                 "StorageManager belonging to a document that did not make the call, and [SameObject] would "
+                 "be false of two reads through two prototypes. BUILD the Navigator that carries its own "
+                 "realm (core/frame/navigator.c names the same gap)");
     return realm_value_get(ctx, g_obj_slot);
+}
+
+/* See storage_manager.h for why this takes the PROTOTYPE and why the includer calls it rather than this
+   component reaching for a prototype of its own. */
+void storage_manager_install_navigator_storage(JSContext *ctx, JSValueConst proto)
+{
+    DCHECK(g_obj_slot >= 0, "Storage §8's `storage` was installed before storage_manager_init declared the "
+                            "realm slot the getter answers from — the member would be defined on a prototype "
+                            "whose getter aborts in core/realm.c on the first read. This component is gone "
+                            "from core/platform.c's table, or its row was moved after core/frame/navigator.c "
+                            "stopped being a declaration and became a caller");
+    /* Storage §8 marks the whole `NavigatorStorage` mixin `[SecureContext]`, and Web IDL §3.3.13
+       "[SecureContext]" REMOVES the member in a non-secure realm rather than making it throw — so
+       `'storage' in navigator` is false there, which is a different program from one that answers
+       undefined. */
+    idl_install_accessor_exposed(ctx, proto, "storage", sm_get_storage, 0, -1, IDL_SECURE_CONTEXT);
 }
 
 static void storage_manager_install_realm(JSContext *ctx)
 {
-    JSValue proto, prev, global, obj, nav;
+    JSValue proto, prev, global, obj;
 
     prev = JS_GetClassProto(ctx, g_sm_class);
     DCHECK(JS_IsNull(prev), "storage_manager_install_realm ran twice in one realm");
@@ -476,42 +526,39 @@ static void storage_manager_install_realm(JSContext *ctx)
     CHECK(!JS_IsException(obj), "the Navigator's StorageManager could not be allocated");
     realm_value_set(ctx, g_obj_slot, obj);
 
-    /* THE MEMBER GOES ON THE NAVIGATOR THIS REALM ALREADY BUILT — a mixin adds to the object, it does not make
-       a second one. Storage §8 "API" marks the whole `NavigatorStorage` mixin `[SecureContext]`.
-       WEB IDL §3.8 "Platform objects implementing interfaces" STEP 1 IS ASKED OF THE INCLUDER, AND THAT IS THE
-       WHOLE OF THIS ARM. Web IDL §3.7.3 "Interface prototype object" gives an `interface mixin` no prototype
-       object of its own, so `NavigatorStorage`'s one member has no object anywhere until an INCLUDER supplies
-       one — and Storage §8 writes two of them: `Navigator includes NavigatorStorage;` on one line and
-       `WorkerNavigator includes NavigatorStorage;` on the next. So the question this gate asks is never
-       whether `StorageManager` is exposed (it is `Exposed=(Window,Worker)`, which is why every line above this
-       one runs in a worker realm) and never whether the MEMBER is: Web IDL §3.3.7 "[Exposed]"'s own algorithm
-       sets a mixin member's construct to its HOST
-       interface, so `storage`'s exposure set is the union of its two includers' and answers TRUE in both
-       realms. It is WHICH INCLUDER THIS REALM HAS. `Navigator` is `[Exposed=Window]`, and
-       core/frame/navigator.c's install refuses on exactly that Web IDL §3.8 step — so a worker realm has no
-       Navigator to add to, and this component owes nothing rather than owing it somewhere else.
-       A DCHECK STOOD HERE AND COULD NOT FIRE, AND ITS MESSAGE NAMED THE WRONG CAUSE. It read `JS_IsObject(nav)`
-       under text saying a realm with no Navigator meant navigator.c's intrinsic had been DECLARED late. The
-       cause is that refusal and not declaration order; and the condition was unreachable-as-a-failure either
-       way, because its operand is produced by `navigator_object`, and reading a realm slot the install never
-       set aborts inside core/realm.c's `realm_value_get` ONE FRAME EARLIER. The ordering fact it claimed to
-       guard is still guarded there — what that abort does not carry is a SITE, its message naming a shared
-       helper every per-realm value in the engine is read through. */
-    if (idl_exposed_in_realm(ctx, "Navigator")) {
-        nav = navigator_object(ctx);
-        idl_install_accessor_exposed(ctx, nav, "storage", sm_get_storage, 0, -1, IDL_SECURE_CONTEXT);
-        JS_FreeValue(ctx, nav);
-    }
+    /* THE MEMBER IS NOT INSTALLED HERE AT ALL, AND THE GATE THAT USED TO DECIDE IT IS GONE WITH IT.
+       Web IDL §3.7.3 "Interface prototype object" gives an `interface mixin` no prototype object of its own,
+       so `NavigatorStorage`'s one member has no object anywhere until an INCLUDER supplies one — and
+       Storage §8 "API" writes two of them: `Navigator includes NavigatorStorage;` on one line and `WorkerNavigator
+       includes NavigatorStorage;` on the next. The includer is therefore the only thing that knows both
+       whether it exists in this realm and what its §3.7.3 prototype is, so it CALLS
+       `storage_manager_install_navigator_storage` with that prototype from its own per-realm intrinsic —
+       which is the rule core/frame/navigator_beacon.h already states for Beacon §2.1's member.
+       WHAT THAT DELETED IS A WEB IDL §3.8 "Platform objects implementing interfaces" STEP 1 GATE ASKED HERE,
+       OVER `Navigator`. It was right about the question — the member's own [Exposed] set is the union of its
+       two includers' and answers TRUE in both realms, so the thing that varies is WHICH INCLUDER A REALM HAS
+       — and asking it from this side made this component decide a fact about another one. It is now answered
+       BY CONSTRUCTION: core/frame/navigator.c's install refuses at its own §3.8 step 1 and returns before it
+       has a prototype to pass, so in a worker realm nothing calls in here and there is no state left for a
+       gate to detect. That is §Fix-the-ROOT's own shape — make the state impossible, then delete the check
+       that was looking for it — and it is why this arm is not merely moved.
+       THE RESIDUAL BELOW USED TO SAY THIS ARM WOULD `GAIN A SIBLING OVER WorkerNavigator`, AND THAT CLAUSE
+       WAS WRONG ABOUT THE MECHANISM WHILE BEING RIGHT ABOUT THE GAP. It is recorded here rather than dropped
+       because it is the shape a reader re-derives: a second includer does not add a second arm to a gate in
+       this file, it adds a second CALLER of the installer above. */
     /* NAMED RESIDUAL — THE OTHER INCLUDER. WHAT IS NOT COVERED: `WorkerNavigator includes NavigatorStorage;`.
        browser/idl_exposure.h gives `WorkerNavigator` IDL_GLOBAL_WORKER, so a worker realm IS exposed that
-       interface and this build has no component that declares it — the arm above installs the member on the
-       one includer this engine builds and the worker realm gets none. WHAT THE NEXT DIFF BUILDS: HTML §10.3.2
-       "The WorkerNavigator interface" as a component beside core/frame/navigator.c, which is the same thing
-       core/workers/worker_global_scope.c's own residual names for HTML §10.2.1.1's `navigator`; this arm
-       then gains a sibling over `WorkerNavigator`, never a second gate here. HOW ITS ABSENCE SHOWS: in a realm
-       whose global implements a WorkerGlobalScope, `StorageManager` and its prototype are reachable as globals
-       while nothing in that realm can produce an instance of it — an interface object with no path to the
-       object it describes, which is what a Web IDL §3.7.3 census over such a realm would read. */
+       interface and this build has no component that declares it — `storage_manager_install_navigator_storage`
+       has exactly one caller and it is the Window-side includer, so a worker realm gets the member from
+       nobody. WHAT THE NEXT DIFF BUILDS: HTML §10.3.2 "The WorkerNavigator interface" as a component beside
+       core/frame/navigator.c, which is the same thing core/workers/worker_global_scope.c's own residual names
+       for HTML §10.2.1.1's `navigator`; that component becomes the SECOND CALLER of the installer above,
+       passing its own §3.7.3 prototype — no new gate, no second accessor, and the brand check in
+       `sm_get_storage` grows an `|| worker_navigator_is(this_val)` arm because §3.7.6's "does not implement
+       target" is then true of two interfaces. HOW ITS ABSENCE SHOWS: in a realm whose global implements a
+       WorkerGlobalScope, `StorageManager` and its prototype are reachable as globals while nothing in that
+       realm can produce an instance of it — an interface object with no path to the object it describes,
+       which is what a Web IDL §3.7.3 census over such a realm would read. */
 }
 
 void storage_manager_init(JSContext *ctx)
