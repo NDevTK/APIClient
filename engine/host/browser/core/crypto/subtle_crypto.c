@@ -64,6 +64,7 @@
 #include "quickjs.h"
 #include "quickjs-step.h"
 #include "core/agent_state.h"
+#include "core/crypto/aes_gcm.h"
 #include "core/crypto/aes_gcm_key.h"
 #include "core/crypto/crypto_key.h"
 #include "core/crypto/hmac.h"
@@ -80,9 +81,14 @@ static int       g_id_sign = -1;
 static int       g_id_verify = -1;
 static int       g_id_import_key = -1;
 static int       g_id_export_key = -1;
+static int       g_id_encrypt = -1;
+static int       g_id_decrypt = -1;
 static JSAtom    g_atom_name = JS_ATOM_NULL;
 static JSAtom    g_atom_hash = JS_ATOM_NULL;
 static JSAtom    g_atom_length = JS_ATOM_NULL;
+static JSAtom    g_atom_iv = JS_ATOM_NULL;
+static JSAtom    g_atom_additional_data = JS_ATOM_NULL;
+static JSAtom    g_atom_tag_length = JS_ATOM_NULL;
 /* THE RUNTIME THE ATOM BELONGS TO. An interned name is agent state and is freed against the runtime it was
    interned in; a release that cannot name one leaks a JSAtomStruct, which JS_FreeRuntime's atom walk reports
    by description and nothing else would have shown. */
@@ -672,10 +678,12 @@ typedef struct {
 } SvState;
 
 /* THE BYTES AN OPERAND CONTRIBUTES TO THE WALK. A known BufferSource contributes its own copy; an unknown one
-   contributes its EXAMPLE's copy when it has a BufferSource example, and the empty sequence otherwise. Written
-   once because sign has one such operand and verify has two, and because the "does this example hold bytes"
-   test is the same three-way brand §14.3.5's digest asks of its own. */
-static JSValue sv_operand_bytes(JSContext *ctx, JSValueConst v, bool *unknown, bool *has_example)
+   contributes its EXAMPLE's copy when it has a BufferSource example, and the empty sequence otherwise.
+   THE NAME IS `sc_` AND NOT `sv_` BECAUSE THREE MACHINES ASK IT AND NOT ONE. It was written for sign's single
+   operand and verify's two; §14.3.1 and §14.3.2 ask it of `data` and of §29.3 AesGcmParams' two BufferSource
+   members, which is the same three-way brand §14.3.5's digest asks of its own. A helper named for one caller
+   is the shape that grows a second copy the day a second caller cannot see itself in the name. */
+static JSValue sc_operand_bytes(JSContext *ctx, JSValueConst v, bool *unknown, bool *has_example)
 {
     JSValue ex, copy;
 
@@ -862,12 +870,12 @@ static int sv_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
         if (verifying) {
             if (concolic_is(sig))
                 s->unknown_arg = 2;
-            s->sig = sv_operand_bytes(ctx, sig, &unknown, &has_example);
+            s->sig = sc_operand_bytes(ctx, sig, &unknown, &has_example);
             CHECK(!JS_IsException(s->sig), "§14.3.4 step 4's copy of the signature could not be allocated");
         }
         if (concolic_is(data))
             s->unknown_arg = (uint8_t)(verifying ? 3 : 2);
-        s->bytes = sv_operand_bytes(ctx, data, &unknown, &has_example);
+        s->bytes = sc_operand_bytes(ctx, data, &unknown, &has_example);
         CHECK(!JS_IsException(s->bytes), "the copy of the message could not be allocated");
         s->unknown = unknown ? 1 : 0;
         s->has_example = (unknown && has_example) ? 1 : 0;
@@ -987,6 +995,776 @@ static const IdlStepDecl SV_DECL = {
     "Web Cryptography §14.3.3 sign / §14.3.4 verify", SV_STEPS,
     /* catches_abrupt: step 3 REJECTS for every error normalizing an algorithm produced, and a `name` getter
        that throws after suspending is one of them. */
+    1
+};
+
+/* ---- §14.3.1 The encrypt method / §14.3.2 The decrypt method --------------------------------------------- */
+
+/* ONE MACHINE FOR BOTH, which is the same statement §14.3.3/§14.3.4 make one section over and for a stronger
+ * reason: sign and verify differ in their ARGUMENT LISTS, and these two do not. Their fourteen steps are
+ * word-for-word identical but for the `op` step 2 normalizes with, the usage step 10 demands, and which of
+ * §29.4.1 / §29.4.2 step 11 performs — so two machines would be one algorithm written twice, and the seam
+ * between them is where the two would drift.
+ *
+ * WHY AES-GCM ALONE IS THE REGISTRY. §29.2 Registration gives BOTH `encrypt` and `decrypt` the Parameters
+ * `AesGcmParams` and the Result `byte sequence`; §22.2, §24.2 and §26.2-§28.2 are the other chapters' rows and
+ * none of them is built, because each needs a bignum, a curve or a block mode this engine does not have.
+ * §18.5.1 Recommendations is explicit that an engine may register nothing at all: "there are no algorithms
+ * that conforming user agents are required to implement".
+ *
+ * THE MODE IS core/crypto/aes_gcm.c AND THE OPERATION IS HERE, which is the split §31's HMAC already stands on
+ * the other side of: core/crypto/hmac.c is FIPS 198-1's MAC and §14.3.3's promise, its two InvalidAccessErrors
+ * and its walk are in this file. NIST SP 800-38D's Algorithm 4 and Algorithm 5 are likewise a pure C primitive
+ * that knows no JSContext, and §29.4.1 steps 1-8 / §29.4.2 steps 1-9 are Web IDL algorithm steps over page
+ * values — they read a dictionary, refuse lengths and settle a promise, none of which belongs in a cipher.
+ * core/crypto/aes_gcm_key.c is the third piece and is neither: it is what an AES-GCM CryptoKey IS.
+ *
+ * IT IS BLOCK-AT-A-TIME FOR §Every-runtime-job's REASON. Three of this algorithm's inputs are of the PAGE'S
+ * size — §29.3's `iv` ("May be up to 2^64-1 bytes long"), its `additionalData`, and `data` — so each walk
+ * rests on JS_STEP_YIELD every AES_BLOCK bytes exactly as §14.3.3's message walk does, and the whole of what
+ * rides the park is the POD AesGcm beside the two buffers.
+ *
+ * NAMED RESIDUAL — §29.3's `tagLength` IS CONVERTED HERE AND NOT AT ITS TYPE. WHAT IS NOT COVERED: Web IDL
+ * declares it `[EnforceRange] octet`, and core/idl_args.h has no row for `octet` at all — its integer list runs
+ * long, unsigned long, unsigned short, long long and unsigned long long, each with its [EnforceRange] twin — so
+ * §3.2.4.9 ConvertToInt's four steps at bounds 0..255 are spelled at EN_TAGLEN_NUM instead of once at the type,
+ * exactly as §31.3's `length` is spelled at IK_LENGTH_NUM. WHAT THE NEXT DIFF BUILDS: an IDL_OCTET_ENFORCE row
+ * beside IDL_UNSIGNED_LONG_ENFORCE, admitted by idl_is_integer and given its bounds in idl_num_of, after which
+ * this member is declared rather than coerced. HOW ITS ABSENCE WOULD SHOW: an integer member of some other
+ * dictionary declared `octet` has to reach for a wider row, and the value a page may write to it is then a
+ * range this engine chose rather than the one its IDL states.
+ *
+ * NAMED RESIDUAL — AN EXAMPLE-FREE UNKNOWN `data` CONTRIBUTES THE EMPTY BYTE SEQUENCE. WHAT IS NOT COVERED:
+ * sc_operand_bytes answers the empty sequence for unknown external input carrying no BufferSource example,
+ * which is §14.3.5's own honest answer for a digest and is a DIFFERENT fact here — for §14.3.2 an empty
+ * ciphertext is refused by §29.4.2 step 4, so the promise rejects with an OperationError whose REASON is this
+ * engine's missing bytes rather than the page's short argument. The observable matches a browser handed an
+ * empty ciphertext, which is why this is narrower than the spec and not wrong. WHAT THE NEXT DIFF BUILDS: the
+ * bytes of an unknown BufferSource, the world core/idl_args.h's IDL_BUFFERSOURCE_OR_DICT row names at its
+ * outcome 1 — after which an unknown ciphertext is walked and the rejection, if any, is the tag's. HOW ITS
+ * ABSENCE WOULD SHOW: a §14.3.2 call over a ciphertext this run never made concrete rejects at the LENGTH
+ * refusal, so no fork of the tag comparison is ever recorded for it and the derived unknown carries no example.
+ *
+ * NAMED RESIDUAL — THE PRESENCE OF AN OPTIONAL MEMBER READ OFF AN UNKNOWN ALGORITHM OBJECT IS NOT FORKED.
+ * WHAT IS NOT COVERED: where `algorithm` is itself unknown external input, each member read answers the
+ * unknown (§14.3.9's machine does the same for §31.3's `length`), so §3.2.17 step 4.1.4's "If jsMemberValue is
+ * not undefined" is DECIDED present for `additionalData` — the absent world, in which §29.4.1 step 5 supplies
+ * the empty byte sequence, is never explored. WHAT THE NEXT DIFF BUILDS: that presence question as a
+ * step_fork_run at this seam, which is the ask core/idl_args.h's IdlDictWalk already reserves its `ask` buffer
+ * for and names in its own words. HOW ITS ABSENCE WOULD SHOW: two AES-GCM ciphertexts over one unknown
+ * algorithm object differ only in whether additional data was authenticated, and a run over such an object
+ * records exactly one of the two.
+ *
+ * WHOSE BYTES DECIDE WHAT. Every value this algorithm branches on is the PAGE'S — the `iv`'s length, the
+ * `tagLength`, the ciphertext's length, and the authentication tag itself — so each of them is a REFUSAL and
+ * never an assert: an `OperationError` for §29.4.1 step 3's Otherwise, for §29.4.2 step 4's short ciphertext,
+ * for an empty IV, and for §29.4.2 step 8's "FAIL". Asserting on any of them would hand a page an abort
+ * switch over the whole engine, which CLAUDE.md §WHOSE-BYTES-STATE-THE-VALUE forbids by name. What this file
+ * DOES assert is what IT computed: that the walks stop where their own lengths say, and that the tag length it
+ * hands the mode is one of the seven the step above it already refused every other value for. */
+
+enum { SC_M_ENCRYPT = 0, SC_M_DECRYPT };
+
+/* step_fork_run keeps a BORROWED pointer to the operation string, so each must outlive the ask; and a fork's
+   operation is its CROSS-SESSION NAME, so it is a static and never a string composed at the ask. */
+static const char EN_FORK_OP_ENC[]     = "SubtleCrypto.encrypt/normalizeAlgorithm";
+static const char EN_FORK_OP_DEC[]     = "SubtleCrypto.decrypt/normalizeAlgorithm";
+static const char EN_FORK_OP_TAG_ENC[] = "SubtleCrypto.encrypt/AesGcmParams.tagLength";
+static const char EN_FORK_OP_TAG_DEC[] = "SubtleCrypto.decrypt/AesGcmParams.tagLength";
+
+#define EN_REGISTERED_N 1
+#define EN_FORK_OUTCOMES (EN_REGISTERED_N + 1)
+
+/* §29.4.1 Encrypt step 3 / §29.4.2 Decrypt step 1's SEVEN, IN BITS: "If the tagLength member of
+   normalizedAlgorithm is one of 32, 64, 96, 104, 112, 120 or 128".
+   128 IS FIRST AND THE STANDARD'S LIST IS NOT. step_fork_run's one rule on the numbering is that outcome 0 is
+   the arm a run with no forking policy takes, and for an unknown `tagLength` that must be the arm an absent
+   member takes — step 3's "If the tagLength member of normalizedAlgorithm is not present: Let tagLength be
+   128" — so a recorded recipe and a candidate re-fire both land on the value every page that omits the member
+   already gets. The two arms past the seven are the two REFUSALS this member has, and they are separate
+   because they are different exceptions from different documents: outcome 7 is §29.4.1 step 3's "Otherwise:
+   throw an OperationError" (a value the octet accepted and this list does not), and outcome 8 is Web IDL
+   §3.3.6 [EnforceRange]'s TypeError, which fires at §18.4.4 step 6's CONVERSION and therefore before any step
+   of §29.4 runs at all. A fork that dropped either would delete a world the page can observe through a
+   `.catch` that reads `e.name`. */
+static const uint16_t EN_TAG_BITS[] = { 128, 32, 64, 96, 104, 112, 120 };
+#define EN_TAG_N ((int)COUNTOF(EN_TAG_BITS))
+#define EN_TAG_OUTCOMES (EN_TAG_N + 2)
+
+#define EN_STAGES(X)                                                                                          \
+    X(EN_NAME, "Web Cryptography §18.4.4 normalizing an algorithm step 2 (Get(alg, \"name\") for the encrypt " \
+               "or decrypt operation)")                                                                       \
+    X(EN_NAME_STR, "Web Cryptography §18.4.4 normalizing an algorithm step 2 (converting alg[\"name\"] to its "\
+                   "DOMString)")                                                                              \
+    X(EN_SELECT, "Web Cryptography §18.4.4 normalizing an algorithm step 5 (the case-insensitive lookup of "   \
+                 "algName in the encrypt or decrypt operation's registeredAlgorithms)")                        \
+    X(EN_AAD, "Web Cryptography §18.4.4 normalizing an algorithm steps 6 and 10 (§29.3 AesGcmParams' "         \
+              "`additionalData`, first of that dictionary's own members in Web IDL §3.2.17's read order)")      \
+    X(EN_IV, "Web Cryptography §18.4.4 normalizing an algorithm steps 6 and 10 (§29.3 AesGcmParams' required " \
+             "`iv`)")                                                                                          \
+    X(EN_TAGLEN, "Web Cryptography §18.4.4 normalizing an algorithm step 6 (§29.3 AesGcmParams' `tagLength`, " \
+                 "last of that dictionary's own members in Web IDL §3.2.17's read order)")                      \
+    X(EN_TAGLEN_NUM, "Web IDL §3.2.4.9 Abstract operations' ConvertToInt under §3.3.6 [EnforceRange], over "   \
+                     "§29.3's `tagLength` member, whose declared type is `octet`")                              \
+    X(EN_CHECK, "Web Cryptography §14.3.1 steps 4 and 9-10 / §14.3.2 steps 4 and 9-10, then §29.4.1 steps "    \
+                "1-5 / §29.4.2 steps 1-7 (the copy of `data`, the two InvalidAccessError refusals over the "    \
+                "key, and this chapter's own refusals over the page's lengths)")                                \
+    X(EN_IVWALK, "NIST SP 800-38D §7.1 step 2 / §7.2 step 3 for ONE block of the IV — J_0 being formed by "     \
+                 "whichever of its two arms len(IV) selects")                                                   \
+    X(EN_AADWALK, "NIST SP 800-38D §7.1 step 5 / §7.2 step 6 for ONE block of the A region")                     \
+    X(EN_TEXT, "NIST SP 800-38D §7.1 steps 3 and 5 / §7.2 steps 4 and 6 for ONE block of the text region, "     \
+               "interleaved under §7's own licence that \"equivalent sets of steps that produce the correct "   \
+               "output are permitted\"")                                                                        \
+    X(EN_FINISH, "Web Cryptography §14.3.1 steps 12-14 / §14.3.2 steps 12-14 (queue a global task on the "      \
+                 "crypto task source, create the ArrayBuffer and resolve promise), over §7.1 step 6's T or "    \
+                 "§7.2 step 8's comparison")
+enum { IDL_STEP_STAGE_BASE(EN_STAGES) EN_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const EN_STEPS[] = { EN_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct {
+    ScPromise p;
+    JSValue   name_v;      /* alg["name"] as read, then as its DOMString, or the concolic itself (owned) */
+    JSValue   iv;          /* §18.4.4 step 10's copy of `iv`'s bytes (owned) */
+    JSValue   aad;         /* the same of `additionalData`; JS_UNDEFINED when the member is ABSENT (owned) */
+    JSValue   tag_v;       /* alg["tagLength"] as read, before its conversion (owned) */
+    JSValue   bytes;       /* §14.3.1 step 4's copy of `data`, or the concolic's example's (owned) */
+    JSValue   out;         /* §14.3.1 step 13's ArrayBuffer, filled block by block (owned) */
+    /* THE CONCOLIC THE RESULT NAMES AS ITS SOURCE, HELD RATHER THAN INDEXED. §14.3.3's machine keeps an index
+       into argv because every operand it can derive from IS an argument; here an unknown can arrive as a
+       MEMBER of the algorithm object, and argv[0] is then the object and not the unknown —
+       concolic_builtin_hook answers JS_UNINITIALIZED for a known operand, so an index would have named a value
+       the derivation declines. It is the LAST unknown in §3.2.17's read order for §14.3.4's reason: `data` is
+       the operand an @S candidate injects at, and it is read last. (owned) */
+    JSValue   src;
+    AesGcm    gcm;         /* POD, and that is load-bearing — it rides forks, parks and resumes as bytes */
+    uint64_t  iv_off;      /* how much of `iv` §7.1 step 2 has absorbed */
+    uint32_t  aad_off;     /* how much of `aad` §7.1 step 5 has absorbed */
+    uint32_t  off;         /* how much of the text region §7.1 step 3 has enciphered */
+    uint32_t  text_len;    /* §29.4.2 step 6's actualCiphertext length; for encrypt, all of `bytes` */
+    uint16_t  tag_bits;    /* §7.1's `t`, in BITS — the unit §29.4.x states it in */
+    uint8_t   unknown;     /* an operand was unknown external input, so the result is */
+    uint8_t   has_example; /* EVERY unknown operand supplied bytes, so the result is a real observation */
+} EnState;
+
+static void en_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    EnState *s = st;
+
+    sc_promise_visit(ctx, &s->p, v);
+    if (!s->p.started)
+        return;
+    v->val(ctx, &s->name_v);
+    v->val(ctx, &s->iv);
+    v->val(ctx, &s->aad);
+    v->val(ctx, &s->tag_v);
+    v->val(ctx, &s->bytes);
+    v->val(ctx, &s->out);
+    v->val(ctx, &s->src);
+}
+
+/* §18.4.4 step 10's BufferSource ARM, WHICH IS NOT THE ARGUMENT MACHINE'S AND SAYS SO HERE. §3.2.17's member
+ * loop in core/idl_args.c has arms for the numeric types, the strings, the enumerations, the booleans, the
+ * interfaces and the types that push a level, and NONE for IDL_BUFFERSOURCE — a member declared it falls past
+ * every arm and is PLACED UNCONVERTED, so §3.2.26 Buffer source types' brand test and its two refusals would
+ * not be performed at all. §29.3 AesGcmParams is the first dictionary in this engine to declare one.
+ *
+ * WHAT IS NOT COVERED: this is §3.2.26's conversion written at ONE site rather than at the type, so a second
+ * dictionary declaring a BufferSource member gets no conversion from it and none from the member loop either.
+ * WHAT THE NEXT DIFF BUILDS is an IDL_BUFFERSOURCE arm in idl_level_run's member loop, beside the
+ * `idl_is_numeric` one, performing the brand test and then idl_buffer_source_refuse's [AllowShared] and
+ * [AllowResizable] refusals — that file already holds both halves. HOW ITS ABSENCE WOULD SHOW: a page passing
+ * a SharedArrayBuffer or a length-tracking view over a resizable buffer to a BufferSource-typed member of some
+ * OTHER dictionary is accepted where a browser throws a TypeError at the conversion, and the algorithm behind
+ * it then reads a window that no longer describes its allocation.
+ *
+ * Returns -1 with a TypeError live, or 0 with `*out` owning the copy (JS_UNDEFINED for an absent OPTIONAL
+ * member — `required` is the caller's to state, because the two members differ in exactly that). */
+static int en_member_bytes(JSContext *ctx, EnState *s, JSValueConst v, const char *member, bool required,
+                           JSValue *out)
+{
+    *out = JS_UNDEFINED;
+    /* §3.2.17 step 4.1.4: "If jsMemberValue is not undefined" — an undefined member is an ABSENT one, and for
+       `required BufferSource iv` step 4.1.6 is "if member is a required dictionary member, then throw a
+       TypeError". */
+    if (JS_IsUndefined(v)) {
+        if (!required)
+            return 0;
+        JS_ThrowTypeError(ctx, "the algorithm passed to SubtleCrypto has no `%s`, which §29.3 AesGcmParams "
+                               "declares as a required member", member);
+        return -1;
+    }
+    if (concolic_is(v)) {
+        JSValue ex = concolic_example(ctx, v);
+        bool holds = JS_IsArrayBuffer(ex) || JS_GetTypedArrayType(ex) >= 0 || JS_IsDataView(ex);
+
+        /* §3.2.26's "get a copy of the bytes held by the buffer source" HAS NO ANSWER OVER AN UNKNOWN, which is
+           the same sentence core/idl_args.h's IDL_BUFFERSOURCE_OR_DICT row writes at its own buffer arm. An
+           EXAMPLE that holds bytes is a real observation of them and is walked; one that does not is a world
+           this engine cannot execute, and an empty byte sequence here would not be a narrower answer — it is a
+           zero-length IV, which §5.2.1.1 Input Data forbids outright, so the page would be told its own
+           argument was empty when the truth is that this engine had no bytes to give the mode. */
+        if (!holds) {
+            JS_FreeValue(ctx, ex);
+            DFAILF("§29.3 AesGcmParams' `%s` is unknown external input carrying no BufferSource example, and "
+                   "§3.2.26 Buffer source types' \"get a copy of the bytes held by the buffer source\" has no "
+                   "answer over an unknown. Build the bytes of an unknown BufferSource — the same world "
+                   "core/idl_args.h's IDL_BUFFERSOURCE_OR_DICT row names at its outcome 1 — rather than "
+                   "letting an empty sequence stand in for them, which would render as the page's own empty "
+                   "`%s`", member, member);
+            /* THE RELEASE ARM, WHICH IS A THROW AND NOT A QUIET RETURN. In release the DFAILF above vanishes,
+               so this line is the shipped answer: an OperationError ENDS the algorithm, where returning the
+               empty sequence would hand §29.4's steps a zero-length IV and report the engine's own gap as the
+               page's argument. An arm beneath a DFAIL that returns successfully is what leaves a sibling
+               component a state it will never test for. */
+            JS_ThrowDOMException(ctx, "OperationError",
+                                 "AES-GCM's `%s` is unknown external input whose bytes this engine cannot "
+                                 "supply", member);
+            return -1;
+        }
+        s->unknown = 1;
+        JS_FreeValue(ctx, s->src);
+        s->src = JS_DupValue(ctx, v);
+        *out = sc_copy_buffer_source(ctx, ex);
+        JS_FreeValue(ctx, ex);
+        CHECK(!JS_IsException(*out), "§18.4.4 step 10's copy of an unknown member's example could not be "
+                                     "allocated");
+        return 0;
+    }
+    /* §3.2.26's BRAND, which the member loop would have performed had it an arm for this type: "an ArrayBuffer,
+       a typed array or a DataView crosses as itself and anything else is a TypeError". It is asked BEFORE the
+       two refusals below, which is the order §3.2.26's own four algorithms state. */
+    if (!JS_IsArrayBuffer(v) && JS_GetTypedArrayType(v) < 0 && !JS_IsDataView(v)) {
+        JS_ThrowTypeError(ctx, "§29.3 AesGcmParams' `%s` is declared BufferSource, and Web IDL §3.2.26 Buffer "
+                               "source types admits only an ArrayBuffer, a typed array or a DataView", member);
+        return -1;
+    }
+    /* §3.2.26's TWO REFUSALS. §4.2 BufferSource carries neither [AllowShared] nor [AllowResizable] — its own
+       note says [AllowShared] "cannot be used with BufferSource as ArrayBuffer does not support it" — so both
+       are unconditional at this position. The resizable one is the memory-safety boundary and not pedantry: a
+       length-tracking view reports a byte length recomputed at every read, and this algorithm lets the page's
+       code run between the read and the walk at every one of its rest points. */
+    if (JS_IsSharedBufferSource(v)) {
+        JS_ThrowTypeError(ctx, "§3.2.26 Buffer source types refuses a SharedArrayBuffer to §29.3 AesGcmParams' "
+                               "`%s`: §4.2 BufferSource carries no [AllowShared] extended attribute and cannot "
+                               "carry one", member);
+        return -1;
+    }
+    if (!JS_IsFixedLengthBufferSource(v)) {
+        JS_ThrowTypeError(ctx, "§3.2.26 Buffer source types refuses a resizable buffer to §29.3 AesGcmParams' "
+                               "`%s`: the position carries no §3.3.1 [AllowResizable] extended attribute", member);
+        return -1;
+    }
+    *out = sc_copy_buffer_source(ctx, v);
+    CHECK(!JS_IsException(*out), "§18.4.4 step 10's copy of a BufferSource member could not be allocated");
+    return 0;
+}
+
+/* §29.4.1 steps 1-2 and 4 / §29.4.2 steps 2-3, WHICH THIS ENGINE'S REPRESENTATION DISCHARGES RATHER THAN
+   TESTS. Every one of them refuses a length ("greater than 2^64 - 1 bytes", "greater than 2^39 - 256 bytes")
+   that a buffer in this engine cannot reach: JS_GetBufferBytes reports a uint32_t, so the comparison would be
+   an assert whose two sides cannot disagree — a NON-check wearing the syntax of one. What is asserted instead
+   is the PREMISE, at compile time, so the day that type widens the steps stop being discharged and this line
+   is what says so. */
+_Static_assert((uint64_t)UINT32_MAX < UINT64_MAX,
+               "§29.4.1 steps 1-2's \"greater than 2^64 - 1 bytes\" is discharged by the buffer length type, "
+               "and that type is now wide enough to reach the bound — the two steps need real comparisons");
+_Static_assert((uint64_t)UINT32_MAX < 549755813632ull,
+               "§29.4.1 step 4's \"greater than 2^39 - 256 bytes\" is discharged by the buffer length type, "
+               "and that type is now wide enough to reach the bound — the step needs a real comparison");
+
+static int en_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                   JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    EnState *s = st;
+    const int magic = idl_step_magic(hdr);
+    const bool decrypting = magic == SC_M_DECRYPT;
+    const char *const op = decrypting ? "decrypt" : "encrypt";
+    /* §14.3.1 step 1 / §14.3.2 step 1's "the algorithm and key parameters", and step 4's `data`. The two IDLs
+       are identical, which is why one argument list serves both. */
+    JSValueConst alg  = argc > 0 ? argv[0] : JS_UNDEFINED;
+    JSValueConst key  = argc > 1 ? argv[1] : JS_UNDEFINED;
+    JSValueConst data = argc > 2 ? argv[2] : JS_UNDEFINED;
+    int r;
+
+    *presult = JS_UNDEFINED;
+
+    if (!s->p.started) {
+        s->name_v = s->iv = s->aad = s->tag_v = s->bytes = s->out = s->src = JS_UNDEFINED;
+        memset(&s->gcm, 0, sizeof s->gcm);
+        s->iv_off = 0;
+        s->aad_off = 0;
+        s->off = 0;
+        s->text_len = 0;
+        s->tag_bits = 0;
+        s->unknown = 0;
+        s->has_example = 1;
+        sc_promise_begin(ctx, &s->p);
+        DCHECK(argc >= 3,
+               "§14.3.1 or §14.3.2 ran with fewer than its three declared arguments — Web IDL §3.6 step 5 "
+               "refuses that in the prologue and §3.7.7 turns the refusal into a rejection, so the body is "
+               "only ever entered with all of them");
+        DCHECK(magic == SC_M_ENCRYPT || magic == SC_M_DECRYPT,
+               "the encrypt/decrypt machine ran under a magic neither member declares");
+    }
+    /* THE STAGES THAT PARK ON A REQUEST ABLE TO THROW ARE THE ONES THAT RUN THE PAGE'S CODE, and the condition
+       below is the list rather than a count of it: EN_NAME, its ToString, the three §29.3 member reads and
+       `tagLength`'s own coercion. EN_SELECT parks on step_fork_run alone, EN_TAGLEN_NUM parks on either, and
+       EN_IVWALK / EN_AADWALK / EN_TEXT rest on JS_STEP_YIELD, which the driver re-enters with JS_UNDEFINED. */
+    DCHECK(!JS_IsException(cb_result) || hdr->stage == EN_NAME || hdr->stage == EN_NAME_STR ||
+               hdr->stage == EN_AAD || hdr->stage == EN_IV || hdr->stage == EN_TAGLEN ||
+               hdr->stage == EN_TAGLEN_NUM,
+           "§14.3.1/§14.3.2 was delivered an abrupt completion at a stage that parks on no request able to "
+           "throw — only the `name` read, its ToString, the three §29.3 member reads and `tagLength`'s own "
+           "coercion run the page's code");
+
+    STEP_DISPATCH(EN_STAGES, hdr->stage, "Web Cryptography §14.3.1 encrypt / §14.3.2 decrypt", JS_STEP_ABRUPT);
+
+    STEP_ARM(EN_NAME);
+    if (JS_IsString(alg) || concolic_is(alg)) {
+        /* §18.4.4's DOMString arm IS the name, and unknown external input stands for whatever the page was
+           given, so neither reads a member. */
+        JS_FreeValue(ctx, cb_result);
+        cb_result = JS_UNDEFINED;
+        s->name_v = JS_DupValue(ctx, alg);
+    } else {
+        r = step_getprop_run(ctx, hdr, alg, g_atom_name, cb_result, &s->name_v, out_cb, out_argc);
+        if (r > 0) return r;
+        if (r < 0) return sc_reject(ctx, &s->p, presult);
+        cb_result = JS_UNDEFINED;
+    }
+    STEP_GOTO(hdr->stage, EN_NAME_STR, &hdr->get_phase, &hdr->str_phase, &hdr->num_phase, NULL);
+
+    STEP_ARM(EN_NAME_STR);
+    if (JS_IsUndefined(s->name_v)) {
+        JS_FreeValue(ctx, cb_result);
+        JS_ThrowTypeError(ctx, "the algorithm passed to SubtleCrypto.%s has no `name`, which the Algorithm "
+                               "dictionary declares as a required member", op);
+        return sc_reject(ctx, &s->p, presult);
+    }
+    if (!JS_IsString(s->name_v) && !concolic_is(s->name_v)) {
+        JSValue str;
+
+        r = step_tostring_run(ctx, hdr, s->name_v, cb_result, &str, out_cb, out_argc);
+        if (r > 0) return r;
+        if (r < 0) return sc_reject(ctx, &s->p, presult);
+        JS_FreeValue(ctx, s->name_v);
+        s->name_v = str;
+    } else {
+        JS_FreeValue(ctx, cb_result);
+    }
+    cb_result = JS_UNDEFINED;
+    STEP_GOTO(hdr->stage, EN_SELECT, &hdr->get_phase, &hdr->str_phase, &hdr->num_phase, NULL);
+
+    STEP_ARM(EN_SELECT);
+    JS_FreeValue(ctx, cb_result);
+    cb_result = JS_UNDEFINED;
+    if (concolic_is(s->name_v)) {
+        int arm = 0;
+
+        /* §18.4.4 step 5 OVER A NAME NOBODY KNOWS — a fork for §14.3.3's reason: deciding it with a comparison
+           against a shape would delete every arm but one, and the arm it kept would be the failing one. */
+        r = step_fork_run(ctx, hdr, s->name_v, decrypting ? EN_FORK_OP_DEC : EN_FORK_OP_ENC,
+                          EN_FORK_OUTCOMES, JS_OUTCOME_REAL_UNSTATED, &arm);
+        if (r > 0) return r;
+        DCHECK(arm >= 0 && arm < EN_FORK_OUTCOMES,
+               "§18.4.4's registry fork answered with an outcome it did not declare");
+        if (arm == EN_REGISTERED_N) {
+            JS_ThrowDOMException(ctx, "NotSupportedError", "the algorithm named is not a registered `%s` "
+                                 "algorithm", op);
+            return sc_reject(ctx, &s->p, presult);
+        }
+    } else {
+        const char *nm = JS_ToCString(ctx, s->name_v);
+        bool known;
+
+        CHECK(nm != NULL, "§18.4.4's algName could not be read back as UTF-8 after its own ToString produced "
+                          "it");
+        known = sd_name_matches(nm, "AES-GCM");
+        if (!known) {
+            JS_ThrowDOMException(ctx, "NotSupportedError", "'%s' is not a registered `%s` algorithm", nm, op);
+            JS_FreeCString(ctx, nm);
+            return sc_reject(ctx, &s->p, presult);
+        }
+        JS_FreeCString(ctx, nm);
+    }
+    STEP_GOTO(hdr->stage, EN_AAD, &hdr->get_phase, &hdr->str_phase, &hdr->num_phase, NULL);
+
+    /* THE THREE MEMBERS ARE READ IN WEB IDL §3.2.17's ORDER AND NOT IN §29.3's DECLARATION ORDER, which is the
+       one thing about this dictionary a page can observe with three getters and a log. §3.2.17 reads the
+       inherited dictionaries first ("in order from least to most derived" — Algorithm's `name`, already read)
+       and then each level's own members in LEXICOGRAPHIC order, so `additionalData` precedes `iv` precedes
+       `tagLength` where the IDL declares iv, additionalData, tagLength. */
+    STEP_ARM(EN_AAD);
+    {
+        JSValue raw = JS_UNDEFINED;
+
+        if (concolic_is(alg)) {
+            /* A MEMBER READ OFF AN UNKNOWN OBJECT IS ITSELF UNKNOWN, which is what §14.3.9's machine already
+               says of HmacImportParams' `length`: unknown external input stands for whatever the page was
+               given, and that includes whatever `additionalData` it held. */
+            JS_FreeValue(ctx, cb_result);
+            cb_result = JS_UNDEFINED;
+            raw = JS_DupValue(ctx, alg);
+        } else if (JS_IsString(alg)) {
+            /* §18.4.4's DOMString arm builds "a new Algorithm dictionary whose name attribute is alg" and
+               nothing else — so there is no member to read at all, and `iv` being REQUIRED makes that a
+               TypeError at EN_IV. */
+            JS_FreeValue(ctx, cb_result);
+            cb_result = JS_UNDEFINED;
+        } else {
+            r = step_getprop_run(ctx, hdr, alg, g_atom_additional_data, cb_result, &raw, out_cb, out_argc);
+            if (r > 0) return r;
+            if (r < 0) return sc_reject(ctx, &s->p, presult);
+            cb_result = JS_UNDEFINED;
+        }
+        r = en_member_bytes(ctx, s, raw, "additionalData", false, &s->aad);
+        JS_FreeValue(ctx, raw);
+        if (r < 0) return sc_reject(ctx, &s->p, presult);
+    }
+    STEP_GOTO(hdr->stage, EN_IV, &hdr->get_phase, &hdr->str_phase, &hdr->num_phase, NULL);
+
+    STEP_ARM(EN_IV);
+    {
+        JSValue raw = JS_UNDEFINED;
+
+        if (concolic_is(alg)) {
+            JS_FreeValue(ctx, cb_result);
+            cb_result = JS_UNDEFINED;
+            raw = JS_DupValue(ctx, alg);
+        } else if (JS_IsString(alg)) {
+            JS_FreeValue(ctx, cb_result);
+            cb_result = JS_UNDEFINED;
+        } else {
+            r = step_getprop_run(ctx, hdr, alg, g_atom_iv, cb_result, &raw, out_cb, out_argc);
+            if (r > 0) return r;
+            if (r < 0) return sc_reject(ctx, &s->p, presult);
+            cb_result = JS_UNDEFINED;
+        }
+        r = en_member_bytes(ctx, s, raw, "iv", true, &s->iv);
+        JS_FreeValue(ctx, raw);
+        if (r < 0) return sc_reject(ctx, &s->p, presult);
+    }
+    STEP_GOTO(hdr->stage, EN_TAGLEN, &hdr->get_phase, &hdr->str_phase, &hdr->num_phase, NULL);
+
+    STEP_ARM(EN_TAGLEN);
+    if (concolic_is(alg)) {
+        JS_FreeValue(ctx, cb_result);
+        cb_result = JS_UNDEFINED;
+        s->tag_v = JS_DupValue(ctx, alg);
+    } else if (JS_IsString(alg)) {
+        JS_FreeValue(ctx, cb_result);
+        cb_result = JS_UNDEFINED;
+        s->tag_v = JS_UNDEFINED;
+    } else {
+        r = step_getprop_run(ctx, hdr, alg, g_atom_tag_length, cb_result, &s->tag_v, out_cb, out_argc);
+        if (r > 0) return r;
+        if (r < 0) return sc_reject(ctx, &s->p, presult);
+        cb_result = JS_UNDEFINED;
+    }
+    STEP_GOTO(hdr->stage, EN_TAGLEN_NUM, &hdr->get_phase, &hdr->str_phase, &hdr->num_phase, NULL);
+
+    STEP_ARM(EN_TAGLEN_NUM);
+    /* §3.2.17: for a dictionary member `undefined` IS absence, and `tagLength` carries no `= …`, so an absent
+       one does not exist on normalizedAlgorithm at all — which is the POSITIVE statement §29.4.1 step 3's
+       first arm reads ("If the tagLength member of normalizedAlgorithm is not present: Let tagLength be
+       128"). */
+    if (JS_IsUndefined(s->tag_v)) {
+        JS_FreeValue(ctx, cb_result);
+        cb_result = JS_UNDEFINED;
+        s->tag_bits = 128;
+    } else if (concolic_is(s->tag_v)) {
+        int arm = 0;
+
+        JS_FreeValue(ctx, cb_result);
+        cb_result = JS_UNDEFINED;
+        r = step_fork_run(ctx, hdr, s->tag_v, decrypting ? EN_FORK_OP_TAG_DEC : EN_FORK_OP_TAG_ENC,
+                          EN_TAG_OUTCOMES, JS_OUTCOME_REAL_UNSTATED, &arm);
+        if (r > 0) return r;
+        DCHECK(arm >= 0 && arm < EN_TAG_OUTCOMES,
+               "§29.4.1 step 3's tag-length fork answered with an outcome it did not declare");
+        if (arm == EN_TAG_N) {
+            /* §29.4.1 step 3 / §29.4.2 step 1's "Otherwise: throw an OperationError" — a value the octet
+               accepted and this list does not. */
+            JS_ThrowDOMException(ctx, "OperationError", "%s",
+                                 "AES-GCM's `tagLength` must be one of 32, 64, 96, 104, 112, 120 or 128");
+            return sc_reject(ctx, &s->p, presult);
+        }
+        if (arm == EN_TAG_N + 1) {
+            /* Web IDL §3.3.6 [EnforceRange]'s TypeError, which §18.4.4 step 6's conversion raises BEFORE any
+               step of §29.4 runs — a different exception from a different document, which is why it is its own
+               outcome rather than folded into the one above. */
+            JS_ThrowTypeError(ctx, "%s", "the `tagLength` of the algorithm passed to SubtleCrypto is not a "
+                                         "finite number in the range of an octet, and its member enforces a "
+                                         "range");
+            return sc_reject(ctx, &s->p, presult);
+        }
+        s->tag_bits = EN_TAG_BITS[arm];
+    } else {
+        double d = 0.0;
+
+        r = step_todouble_run(ctx, hdr, s->tag_v, cb_result, &d, out_cb, out_argc);
+        if (r > 0) return r;
+        if (r < 0) return sc_reject(ctx, &s->p, presult);
+        cb_result = JS_UNDEFINED;
+        /* §3.3.6 [EnforceRange]'s ARM of §3.2.4.9 Abstract operations' ConvertToInt, at the bounds `octet`
+           states: "If x is NaN, +∞, or −∞, then throw a TypeError"; "Set x to IntegerPart(x)"; "If x <
+           lowerBound or x > upperBound, then throw a TypeError". THE BOUNDS ARE THE TYPE'S AND NOT §29.4.1's:
+           an octet is 0..255, so 200 converts here and is refused by step 3 with an OperationError while 300
+           never reaches step 3 at all. A page reading `e.name` in a `.catch` distinguishes them. */
+        if (!isfinite(d)) {
+            JS_ThrowTypeError(ctx, "%s", "the `tagLength` of the algorithm passed to SubtleCrypto is not a "
+                                         "finite number");
+            return sc_reject(ctx, &s->p, presult);
+        }
+        d = (d < 0 ? -1.0 : 1.0) * floor(fabs(d));
+        if (d < 0 || d > 255.0) {
+            JS_ThrowTypeError(ctx, "%s", "the `tagLength` of the algorithm passed to SubtleCrypto is outside "
+                                         "the range of an octet");
+            return sc_reject(ctx, &s->p, presult);
+        }
+        {
+            int i, found = -1;
+
+            for (i = 0; i < EN_TAG_N; i++)
+                if ((double)EN_TAG_BITS[i] == d) { found = i; break; }
+            if (found < 0) {
+                JS_ThrowDOMException(ctx, "OperationError", "%s",
+                                     "AES-GCM's `tagLength` must be one of 32, 64, 96, 104, 112, 120 or 128");
+                return sc_reject(ctx, &s->p, presult);
+            }
+            s->tag_bits = EN_TAG_BITS[found];
+        }
+    }
+    STEP_GOTO(hdr->stage, EN_CHECK, &hdr->get_phase, &hdr->str_phase, &hdr->num_phase, NULL);
+
+    STEP_ARM(EN_CHECK);
+    JS_FreeValue(ctx, cb_result);
+    cb_result = JS_UNDEFINED;
+    {
+        bool unknown = false, has_example = true;
+        uint32_t data_len = 0, iv_len = 0, handle_len = 0;
+        const uint8_t *kp;
+        JSValue handle;
+        size_t tag_bytes = (size_t)(s->tag_bits / 8u);
+        uint64_t out_len;
+
+        /* §14.3.1 step 4 / §14.3.2 step 4: "getting a copy of the bytes held by the data parameter", which the
+           standard numbers BEFORE the two refusals below. The copy runs none of the page's code, so the order
+           is not observable here — it is the spec's order because there is no reason for it to be anything
+           else. */
+        s->bytes = sc_operand_bytes(ctx, data, &unknown, &has_example);
+        CHECK(!JS_IsException(s->bytes), "§14.3.1 step 4's copy of `data` could not be allocated");
+        if (unknown) {
+            s->unknown = 1;
+            JS_FreeValue(ctx, s->src);
+            s->src = JS_DupValue(ctx, data);
+        }
+        if (!has_example)
+            s->has_example = 0;
+        /* §14.3.1 step 9 / §14.3.2 step 9: "If the name member of normalizedAlgorithm is not equal to the name
+           attribute of the [[algorithm]] internal slot of key then throw an InvalidAccessError." The
+           comparison is EXACT and not §18.4.4 step 5's case-insensitive one, because both operands are names
+           THIS ENGINE wrote — step 5's own sub-step 1 sets algName to "the value of the matching key", and the
+           key's is what §29.4.4 step 6 stored. */
+        if (!sv_key_algorithm_is(ctx, key, "AES-GCM")) {
+            JS_ThrowDOMException(ctx, "InvalidAccessError", "%s",
+                                 "the key was not created for the algorithm this call names");
+            return sc_reject(ctx, &s->p, presult);
+        }
+        /* §14.3.1 step 10 / §14.3.2 step 10: "If the [[usages]] internal slot of key does not contain an entry
+           that is \"encrypt\"" (respectively "decrypt"), "then throw an InvalidAccessError." */
+        if ((crypto_key_usages(ctx, key) &
+             (uint32_t)(decrypting ? CRYPTO_KEY_USAGE_DECRYPT : CRYPTO_KEY_USAGE_ENCRYPT)) == 0) {
+            JS_ThrowDOMException(ctx, "InvalidAccessError", "the key's usages do not include '%s'", op);
+            return sc_reject(ctx, &s->p, presult);
+        }
+        (void)JS_GetBufferBytes(s->bytes, &data_len);
+        (void)JS_GetBufferBytes(s->iv, &iv_len);
+        /* §29.4.2 step 4: "If ciphertext has a length in bits less than tagLength, then throw an
+           OperationError." IN BITS, which is the unit the whole of §29.4 states this member in, so the
+           comparison is written that way rather than in the bytes this engine holds — the seven admissible
+           values are all multiples of eight and a bytes-only reading would be right by that accident. */
+        if (decrypting && (uint64_t)data_len * 8u < (uint64_t)s->tag_bits) {
+            JS_ThrowDOMException(ctx, "OperationError", "%s",
+                                 "the ciphertext is shorter than the authentication tag it must end with");
+            return sc_reject(ctx, &s->p, presult);
+        }
+        /* NIST SP 800-38D §5.2.1.1 Input Data's "1 <= len(IV) <= 2^64-1", WHICH §29.4 DOES NOT RESTATE AND
+           WHICH ITS step 6 INHERITS by performing that function. §29.4.1 states only the upper bound, so the
+           lower one arrives as a prerequisite of the algorithm the step names — and a prerequisite a page can
+           violate is a REFUSAL, not an assert. core/crypto/aes_gcm.h says in its own words that this method
+           owes the OperationError before the mode is begun, and aes_gcm_begin's DCHECK is the other half of
+           that one sentence. */
+        if (iv_len == 0) {
+            JS_ThrowDOMException(ctx, "OperationError", "%s",
+                                 "AES-GCM's `iv` must hold at least one byte");
+            return sc_reject(ctx, &s->p, presult);
+        }
+        /* §29.4.1 step 7's "ciphertext be equal to C | T" sizes the encrypt output, and §29.4.2 step 6's
+           "removing the last tagLength bits from ciphertext" sizes the decrypt one. */
+        s->text_len = decrypting ? (uint32_t)(data_len - (uint32_t)tag_bytes) : data_len;
+        out_len = decrypting ? (uint64_t)s->text_len : (uint64_t)data_len + (uint64_t)tag_bytes;
+        s->out = JS_NewArrayBufferCopy(ctx, NULL, (size_t)out_len);
+        CHECK(!JS_IsException(s->out), "§14.3.1 step 13's ArrayBuffer could not be allocated");
+        /* §31.6.1's opening clause one chapter over, said of this algorithm: the key material is what §13.3's
+           [[handle]] internal slot holds, and §29.4.4 step 9 put FIPS 197 §6.1's 16, 24 or 32 bytes there. */
+        handle = crypto_key_handle(ctx, key);
+        kp = JS_GetBufferBytes(handle, &handle_len);
+        DCHECK(kp != NULL && (handle_len == 16u || handle_len == 24u || handle_len == 32u),
+               "an AES-GCM CryptoKey's [[handle]] is detached or is not one of FIPS 197 §6.1's three key "
+               "lengths — §29.4.4 Import Key refuses every other length, so this key was not minted by it");
+        aes_gcm_begin(&s->gcm, kp, handle_len, (uint64_t)iv_len, tag_bytes, decrypting);
+        JS_FreeValue(ctx, handle);
+        s->iv_off = 0;
+        s->aad_off = 0;
+        s->off = 0;
+    }
+    STEP_GOTO(hdr->stage, EN_IVWALK, &hdr->get_phase, &hdr->str_phase, &hdr->num_phase, NULL);
+
+    STEP_ARM(EN_IVWALK);
+    JS_FreeValue(ctx, cb_result);
+    cb_result = JS_UNDEFINED;
+    {
+        uint32_t len = 0;
+        const uint8_t *p = JS_GetBufferBytes(s->iv, &len);
+        uint64_t left = aes_gcm_iv_left(&s->gcm);
+        size_t take;
+
+        DCHECK(p != NULL, "this algorithm's own copy of the `iv` is detached");
+        DCHECK(left == (uint64_t)len - s->iv_off, "the IV walk and the mode disagree about how much is left");
+        take = left < (uint64_t)AES_BLOCK ? (size_t)left : (size_t)AES_BLOCK;
+        if (take > 0) {
+            aes_gcm_iv_update(&s->gcm, p + s->iv_off, take);
+            s->iv_off += (uint64_t)take;
+            /* ONE BLOCK, THEN ASK — §29.3's `iv` "May be up to 2^64-1 bytes long". */
+            return JS_STEP_YIELD;
+        }
+        aes_gcm_iv_end(&s->gcm);
+    }
+    STEP_GOTO(hdr->stage, EN_AADWALK, &hdr->get_phase, &hdr->str_phase, &hdr->num_phase, NULL);
+
+    STEP_ARM(EN_AADWALK);
+    JS_FreeValue(ctx, cb_result);
+    cb_result = JS_UNDEFINED;
+    {
+        uint32_t len = 0;
+        const uint8_t *p = JS_IsUndefined(s->aad) ? NULL : JS_GetBufferBytes(s->aad, &len);
+        size_t take;
+
+        /* §29.4.1 step 5: "Let additionalData be the additionalData member of normalizedAlgorithm if present
+           or an empty byte sequence otherwise" — which is this walk running zero times, and not a special
+           case. */
+        /* `p` IS NULL FOR A PRESENT-BUT-EMPTY MEMBER AS WELL AS FOR AN ABSENT ONE, and the difference is the
+           page's: `additionalData: new Uint8Array(0)` is a value a page really writes and §29.4.1 step 5 gives
+           it the same empty byte sequence an absent member gets. Asserting `p != NULL` for a present member
+           would have made that call abort the engine — a refusal over the PAGE'S bytes, which is exactly what
+           CLAUDE.md §WHOSE-BYTES-STATE-THE-VALUE forbids. What is asserted is what this engine computed: a
+           copy it made is either readable or empty. */
+        DCHECK(p != NULL || len == 0, "this algorithm's own copy of `additionalData` is detached");
+        DCHECK(s->aad_off <= len, "the additional-data walk is past the end of its own copy");
+        take = (size_t)len - s->aad_off < AES_BLOCK ? (size_t)len - s->aad_off : (size_t)AES_BLOCK;
+        if (take > 0) {
+            aes_gcm_aad_update(&s->gcm, p + s->aad_off, take);
+            s->aad_off += (uint32_t)take;
+            return JS_STEP_YIELD;
+        }
+        aes_gcm_aad_end(&s->gcm);
+    }
+    STEP_GOTO(hdr->stage, EN_TEXT, &hdr->get_phase, &hdr->str_phase, &hdr->num_phase, NULL);
+
+    STEP_ARM(EN_TEXT);
+    JS_FreeValue(ctx, cb_result);
+    cb_result = JS_UNDEFINED;
+    {
+        uint32_t len = 0;
+        const uint8_t *in = JS_GetBufferBytes(s->bytes, &len);
+        size_t out_n = 0;
+        uint8_t *out = JS_GetArrayBuffer(ctx, &out_n, s->out);
+        size_t take;
+
+        DCHECK(in != NULL || len == 0, "this algorithm's own copy of `data` is detached");
+        /* `out` IS NULL FOR A ZERO-LENGTH BUFFER, which §29.4.2 reaches on a page value rather than on a
+           defect: a ciphertext that is exactly its own tag decrypts to the empty plaintext, and step 4 admits
+           it ("a length in bits LESS than tagLength" is what it refuses). */
+        DCHECK(out != NULL || out_n == 0,
+               "§14.3.1 step 13's ArrayBuffer is detached — nothing but this algorithm holds it");
+        DCHECK(s->off <= s->text_len && s->text_len <= len,
+               "the text walk is past the end of the region §29.4.1 step 6 / §29.4.2 step 8 was given");
+        take = (size_t)(s->text_len - s->off) < AES_BLOCK ? (size_t)(s->text_len - s->off)
+                                                          : (size_t)AES_BLOCK;
+        if (take > 0) {
+            aes_gcm_text_update(&s->gcm, in + s->off, out + s->off, take);
+            s->off += (uint32_t)take;
+            return JS_STEP_YIELD;
+        }
+        DCHECK(s->off == s->text_len, "the text walk stopped short with a whole block still in it");
+    }
+    STEP_GOTO(hdr->stage, EN_FINISH, &hdr->get_phase, &hdr->str_phase, &hdr->num_phase, NULL);
+
+    STEP_ARM(EN_FINISH);
+    JS_FreeValue(ctx, cb_result);
+    {
+        size_t tag_bytes = (size_t)(s->tag_bits / 8u);
+        JSValue result;
+
+        if (decrypting) {
+            uint32_t len = 0;
+            const uint8_t *in = JS_GetBufferBytes(s->bytes, &len);
+
+            DCHECK(in != NULL, "this algorithm's own copy of the ciphertext is detached");
+            /* §29.4.2 step 5's "Let tag be the last tagLength bits of ciphertext", then step 8: "If the result
+               of the algorithm is the indication of inauthenticity, \"FAIL\": throw an OperationError."
+               A TAG MISMATCH IS THE PAGE'S DATA AND NEVER THIS ENGINE'S LOGIC, so it is a refusal. The
+               plaintext already written into `out` is DISCARDED with it — §7.2 step 8 makes P the output only
+               once T' = T, and handing back the bytes of a rejected decryption is a decryption oracle. */
+            if (!aes_gcm_decrypt_verify(&s->gcm, in + s->text_len, tag_bytes)) {
+                JS_ThrowDOMException(ctx, "OperationError", "%s",
+                                     "the ciphertext did not authenticate under this key, iv and "
+                                     "additionalData");
+                return sc_reject(ctx, &s->p, presult);
+            }
+        } else {
+            size_t out_n = 0;
+            uint8_t *out = JS_GetArrayBuffer(ctx, &out_n, s->out);
+
+            DCHECK(out != NULL && out_n == (size_t)s->text_len + tag_bytes,
+                   "§29.4.1 step 7's C | T does not fill the buffer this algorithm sized for it");
+            /* NOT `out != NULL || out_n == 0` HERE, which is the sibling walk's admission and would be wrong
+               at this site: §7.1's `t` is at least four bytes, so an encrypt output is never empty and a NULL
+               here is this engine's defect rather than a page's value. The two asserts differ because the two
+               quantities do, not by oversight. */
+            /* §7.1 steps 4-6 produce T, written straight after C — which IS step 7's "ciphertext be equal to
+               C | T, where '|' denotes concatenation". */
+            aes_gcm_encrypt_finish(&s->gcm, out + s->text_len, tag_bytes);
+        }
+        /* §14.3.1 step 13: "Let result be the result of creating an ArrayBuffer in realm, containing
+           ciphertext." The realm is THIS one — a C member runs in the realm that defined it, which is the realm
+           whose prototype carries this member, which is step 5's relevant realm of `this`. */
+        result = s->out;
+        s->out = JS_UNDEFINED;
+        if (s->unknown) {
+            JSValue example = s->has_example ? result : JS_UNDEFINED;
+
+            DCHECK(concolic_is(s->src),
+                   "the result was recorded as derived from unknown external input and the source held is not "
+                   "a concolic — concolic_builtin_hook declines a known operand, so the two halves of that one "
+                   "fact have come apart");
+            if (!s->has_example)
+                JS_FreeValue(ctx, result);
+            result = concolic_builtin_hook(ctx, s->src, op, example);
+            DCHECK(!JS_IsUninitialized(result),
+                   "an argument was recorded as unknown external input and the derivation declined it — the "
+                   "two are one fact read at two stages, and they have come apart");
+        }
+        return sc_resolve(ctx, &s->p, result, presult);
+    }
+}
+
+static const IdlStepDecl EN_DECL = {
+    en_step, sizeof(EnState), en_visit, NULL,
+    "Web Cryptography §14.3.1 encrypt / §14.3.2 decrypt", EN_STEPS,
+    /* catches_abrupt: step 3 REJECTS for every error normalizing an algorithm produced, and a `name`, `iv`,
+       `additionalData` or `tagLength` accessor that throws after suspending is one of them. */
     1
 };
 
@@ -1740,6 +2518,8 @@ static void subtle_crypto_install_realm(JSContext *ctx)
     /* §14's interface is `[SecureContext]` as a whole, and Web IDL §3.3.13 [SecureContext] REMOVES a member in
        a non-secure realm rather than making it throw — `'digest' in crypto.subtle` is what a bundle
        feature-detects with, and absent, throwing and undefined are three different branches. */
+    idl_install_method_exposed(ctx, proto, "encrypt", g_id_encrypt, IDL_SECURE_CONTEXT);
+    idl_install_method_exposed(ctx, proto, "decrypt", g_id_decrypt, IDL_SECURE_CONTEXT);
     idl_install_method_exposed(ctx, proto, "digest", g_id_digest, IDL_SECURE_CONTEXT);
     idl_install_method_exposed(ctx, proto, "sign", g_id_sign, IDL_SECURE_CONTEXT);
     idl_install_method_exposed(ctx, proto, "verify", g_id_verify, IDL_SECURE_CONTEXT);
@@ -1768,6 +2548,10 @@ void subtle_crypto_init(JSContext *ctx)
     /* §14's `Promise<ArrayBuffer> sign(AlgorithmIdentifier algorithm, CryptoKey key, BufferSource data)` and
        `Promise<boolean> verify(AlgorithmIdentifier algorithm, CryptoKey key, BufferSource signature,
        BufferSource data)` — two lists over ONE step definition, which is what the magic is for. */
+    /* §14's `Promise<ArrayBuffer> encrypt(AlgorithmIdentifier algorithm, CryptoKey key, BufferSource data)`
+       and the IDENTICAL list `decrypt` declares — which is why one declaration serves both members and one
+       machine serves both algorithms. */
+    static const IdlArgType EN_ARGS[] = { IDL_STRING_UNLESS_OBJECT, IDL_INTERFACE, IDL_BUFFERSOURCE };
     static const IdlArgType SV_ARGS_SIGN[]   = { IDL_STRING_UNLESS_OBJECT, IDL_INTERFACE, IDL_BUFFERSOURCE };
     static const IdlArgType SV_ARGS_VERIFY[] = { IDL_STRING_UNLESS_OBJECT, IDL_INTERFACE, IDL_BUFFERSOURCE,
                                                  IDL_BUFFERSOURCE };
@@ -1858,14 +2642,23 @@ void subtle_crypto_init(JSContext *ctx)
     CHECK(JS_NewClass(JS_GetRuntime(ctx), g_subtle_class, &d) == 0,
           "SubtleCrypto: the per-realm prototype slot could not be declared");
     g_obj_slot = realm_value_declare(ctx, "Web Cryptography §10.2.1 this realm's SubtleCrypto");
-    /* THE THREE MEMBER NAMES §18.4.4 step 10's WALK READS, INTERNED ONCE. A keyed request holds its atom
-       across a suspension, so each is agent state and not a string composed at the read. */
+    /* THE MEMBER NAMES §18.4.4 step 6's CONVERSION AND step 10's WALK READ, INTERNED ONCE. A keyed request
+       holds its atom across a suspension, so each is agent state and not a string composed at the read. The
+       count is deliberately not written here: it was "THREE" while HmacImportParams was the only declared
+       dictionary, and §29.3 AesGcmParams' three members made that sentence wrong without touching a line of
+       it. What the reader needs is the RULE, and the list below is the list. */
     g_atom_name = JS_NewAtom(ctx, "name");
     CHECK(g_atom_name != JS_ATOM_NULL, "the Algorithm dictionary's `name` could not be interned");
     g_atom_hash = JS_NewAtom(ctx, "hash");
     CHECK(g_atom_hash != JS_ATOM_NULL, "HmacImportParams' `hash` could not be interned");
     g_atom_length = JS_NewAtom(ctx, "length");
     CHECK(g_atom_length != JS_ATOM_NULL, "HmacImportParams' `length` could not be interned");
+    g_atom_iv = JS_NewAtom(ctx, "iv");
+    CHECK(g_atom_iv != JS_ATOM_NULL, "AesGcmParams' `iv` could not be interned");
+    g_atom_additional_data = JS_NewAtom(ctx, "additionalData");
+    CHECK(g_atom_additional_data != JS_ATOM_NULL, "AesGcmParams' `additionalData` could not be interned");
+    g_atom_tag_length = JS_NewAtom(ctx, "tagLength");
+    CHECK(g_atom_tag_length != JS_ATOM_NULL, "AesGcmParams' `tagLength` could not be interned");
     g_id_digest = idl_method_id_step(ctx, SD_ARGS, 2, NULL, 0, &SD_DECL, 0);
     /* §14's `Promise<ArrayBuffer> digest(...)`: Web IDL §3.7.7 makes EVERY throw of this member — the brand
        check, the arity, both argument conversions and the algorithm itself — a rejected promise. */
@@ -1893,6 +2686,16 @@ void subtle_crypto_init(JSContext *ctx)
        position 4's ELEMENT type. */
     idl_arg_enum(0, KEY_FORMATS);
     idl_arg_enum(4, CRYPTO_KEY_USAGE_NAMES);
+    /* §14.3.1 and §14.3.2, TWO MEMBERS OVER ONE STEP DEFINITION — the same magic the sign/verify pair uses,
+       and here the two argument lists are identical as well, so the magic is the whole of the difference. */
+    g_id_encrypt = idl_method_id_step(ctx, EN_ARGS, 3, NULL, 0, &EN_DECL, SC_M_ENCRYPT);
+    idl_returns_promise();
+    idl_this_iface(subtle_crypto_is, "SubtleCrypto");
+    idl_iface_brand(crypto_key_class());
+    g_id_decrypt = idl_method_id_step(ctx, EN_ARGS, 3, NULL, 0, &EN_DECL, SC_M_DECRYPT);
+    idl_returns_promise();
+    idl_this_iface(subtle_crypto_is, "SubtleCrypto");
+    idl_iface_brand(crypto_key_class());
     g_id_export_key = idl_method_id_step(ctx, XK_ARGS, 2, NULL, 0, &XK_DECL, 0);
     idl_returns_promise();
     idl_this_iface(subtle_crypto_is, "SubtleCrypto");
@@ -1911,9 +2714,14 @@ void subtle_crypto_init(JSContext *ctx)
     agent_state_id("crypto", &g_id_verify, "§14.3.4's verify machine");
     agent_state_id("crypto", &g_id_import_key, "§14.3.9's importKey machine");
     agent_state_id("crypto", &g_id_export_key, "§14.3.10's exportKey machine");
+    agent_state_id("crypto", &g_id_encrypt, "§14.3.1's encrypt machine");
+    agent_state_id("crypto", &g_id_decrypt, "§14.3.2's decrypt machine");
     agent_state_atom("crypto", &g_atom_name, "the Algorithm dictionary's `name` member name");
     agent_state_atom("crypto", &g_atom_hash, "HmacImportParams' `hash` member name");
     agent_state_atom("crypto", &g_atom_length, "HmacImportParams' `length` member name");
+    agent_state_atom("crypto", &g_atom_iv, "AesGcmParams' `iv` member name");
+    agent_state_atom("crypto", &g_atom_additional_data, "AesGcmParams' `additionalData` member name");
+    agent_state_atom("crypto", &g_atom_tag_length, "AesGcmParams' `tagLength` member name");
     agent_state_ptr("crypto", &g_rt, "the runtime that `name` was interned in");
     realm_declare_intrinsic(subtle_crypto_install_realm);
 }
@@ -1927,12 +2735,18 @@ void subtle_crypto_free(void)
     JS_FreeAtomRT(g_rt, g_atom_name);
     JS_FreeAtomRT(g_rt, g_atom_hash);
     JS_FreeAtomRT(g_rt, g_atom_length);
+    JS_FreeAtomRT(g_rt, g_atom_iv);
+    JS_FreeAtomRT(g_rt, g_atom_additional_data);
+    JS_FreeAtomRT(g_rt, g_atom_tag_length);
     g_atom_name = g_atom_hash = g_atom_length = JS_ATOM_NULL;
+    g_atom_iv = g_atom_additional_data = g_atom_tag_length = JS_ATOM_NULL;
     g_obj_slot = -1;
     g_id_digest = -1;
     g_id_sign = -1;
     g_id_verify = -1;
     g_id_import_key = -1;
     g_id_export_key = -1;
+    g_id_encrypt = -1;
+    g_id_decrypt = -1;
     g_rt = NULL;
 }
