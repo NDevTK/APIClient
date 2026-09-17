@@ -419,8 +419,11 @@ int navigable_realm_count(void);
  *
  * THAT COMPARISON IS A FACT ABOUT A RUN AND NOT ABOUT A STATE, which is why no DCHECK here makes it: there is
  * no instant at which "a realm has been reclaimed by now" is an invariant, so a should-never-happen would
- * fire on a run that had simply not reached its first collection. It is asserted where a run can be asked —
- * test_forced.c's `realm-reclaim` row — and published on every host through solver/result.c's `_heap`.
+ * fire on a run that had simply not reached its first collection. It is published on every host through
+ * solver/result.c's `_heap`, and READ — not asserted — by test_forced.c's `realm-reclaim` row, which asserts
+ * the ASK instead (`destroyStep9Releases`; see window_proxy.h). The outcome's gate may decline for a good
+ * reason and the ask's cannot, and the paragraph below beginning "test_forced.c's `realm-reclaim` row runs
+ * under SESS_EXPLORE" is where that was established.
  *
  * READ THEM BEFORE navigable_free, which clears all three: they are a census of ONE agent. */
 int navigable_realm_made(void);
@@ -510,8 +513,13 @@ int navigable_realm_peak(void);
  * parked before the removal therefore holds the Window, which is CORRECT (that arm is a timeline in which the
  * frame still exists, and §NO BOUNDS never terminates it) and is invisible to every row this census prints,
  * because these rows count references to the REALM. `made == peak` is then the EXPECTED steady state on a
- * forking document until the frontier drains, and the `realm-reclaim` row reads it as a defect — which is a
- * question about that row's session rather than about this file.
+ * forking document until the frontier drains.
+ * THE `realm-reclaim` ROW USED TO READ THAT AS A DEFECT AND NO LONGER DOES, which is this paragraph's own
+ * next-diff clause discharged rather than a claim left standing. It asserted the OUTCOME of an operation whose
+ * gate legitimately declines, so it was red on every forking run — and a verdict red on every run becomes
+ * furniture, which is how a reader comes to dispatch somebody at a reclamation that is already built. It now
+ * asserts the ASK — HTML §7.5.10 "Destroying documents" step 9's release, counted where it is performed and
+ * published as `destroyStep9Releases` — and reports the comparison unasserted beside it.
  * RETIREMENT: this record goes when a run is quoted whose collection is known to have followed step 9 — the
  * probe's late control RAN beside its realm counts — so which candidate stands is a measurement and not an
  * argument.

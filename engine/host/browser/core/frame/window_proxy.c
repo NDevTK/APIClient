@@ -1161,6 +1161,13 @@ bool window_proxy_closed(JSContext *ctx, JSValueConst proxy)
     return p->closing != 0 || window_proxy_browsing_context_null(ctx, proxy);
 }
 
+/* THE ASK §7.5.10 STEP 9 IS, COUNTED WHERE IT IS PERFORMED — see window_proxy.h for why the OUTCOME cannot
+   be asserted and this can. Lifetime, per agent, and NOT on the record: it counts asks across arms, so a
+   rewound arm that destroys again is a second ask rather than the same one seen twice. */
+static long long g_step9_releases;
+
+long long window_proxy_destroy_releases(void) { return g_step9_releases; }
+
 /* §7.5.10 STEPS 8 AND 9 — the completion of a destruction, written only by the destroy job. See window_proxy.h
    for why the two steps are one write and why the second of them is this engine's only reclamation edge.
    Step 8 is also what §7.5.10 step 5's wait reads off each child, which is why it is asked separately from
@@ -1199,6 +1206,10 @@ void window_proxy_set_destroyed(JSContext *ctx, JSValueConst proxy)
     DCHECK(p->realm == NULL && JS_IsUndefined(p->window),
            "§7.5.10 step 9 left a destroyed navigable still naming a Document — the realm behind it can then "
            "never be reclaimed, because this reference is the one the collector cannot get past");
+    /* THE ASK IS RECORDED HERE AND NOWHERE ELSE, after the release has happened rather than at the call that
+       asked for it: this line is the release, so a count taken here cannot report a step that returned early.
+       It is the last statement for that reason and not for tidiness. */
+    g_step9_releases++;
 }
 
 /* §7.1.3.2 STEP 10's DISCARD — the OTHER writer of the state §7.2.2 "The Window object" spells
@@ -3856,6 +3867,9 @@ void window_proxy_free(JSRuntime *rt)
     free(g_remote_navs);
     g_remote_navs = NULL;
     g_remote_navs_n = g_remote_navs_cap = 0;
+    /* THE STEP-9 ASK IS A CENSUS OF ONE AGENT, like navigable.h's three, so it goes back with the agent that
+       performed the releases rather than accumulating across a host that builds a second browser. */
+    g_step9_releases = 0;
     /* THE FIVE POOL ENTRIES COME BACK, and they are the slots this release used to keep. A declaration is a
        registration in a RUNTIME that is going away, so a carried id is an index into a pool the next agent has
        not built — read by window_proxy_install_proto at the first realm that agent creates, which installs

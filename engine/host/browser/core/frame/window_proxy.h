@@ -226,6 +226,38 @@ bool window_proxy_is_top_level(JSValueConst proxy);
 void window_proxy_set_destroyed(JSContext *ctx, JSValueConst proxy);
 bool window_proxy_destroyed(JSValueConst proxy);
 
+/* HOW MANY TIMES §7.5.10 "Destroying documents" STEP 9'S RELEASE HAS RUN — the ASK, counted where the release
+ * is PERFORMED and never inferred from whether a realm came back.
+ *
+ * IT EXISTS BECAUSE THE OUTCOME IS GATED AND THE GATE MAY DECLINE FOR A GOOD REASON. A realm is given back
+ * only once nothing holds it, and on a FORKING session something legitimately does: `window` is on this
+ * file's PROXY_VALS, so cow_capture_host_record DUPS the child's Window into the delta of every flow that
+ * reached this proxy while the slot was still set, and §NO BOUNDS never terminates those flows. A parked arm
+ * is a timeline in which the frame still exists and is RIGHT to hold it. So `childRealmsMade ==
+ * childRealmsPeak` is the EXPECTED steady state on a forking document until the frontier drains, and a census
+ * of the OUTCOME cannot tell that correct refusal from a release that never ran — it fires on both. This
+ * count is independent of every arm the gate has, because it answers "did anyone ask", which is a fact about
+ * this codebase's own components and therefore the only kind an assert may stand on.
+ *
+ * IT IS A LIFETIME COUNTER AND MAY BE DIFFERENCED, unlike `navigable_realm_count()` and like
+ * `navigable_realm_made()`: it states how many releases this agent has performed, never how many stand now.
+ *
+ * IT COUNTS ASKS ACROSS ARMS AND IS DELIBERATELY NOT COW-CAPTURED. `destroyed` is on the record and rewinds
+ * with the flow, so a rewound arm that destroys the same navigable again performs a SECOND release and is a
+ * second ask. "Did anyone ask" is a fact about the RUN; a per-flow count would answer it only for whichever
+ * timeline happened to be current at the census, which is the question nobody is asking.
+ *
+ * IT IS NOT `childRealmRefsReleased`, which counts REFERENCE drops attributed to no origin (navigable.h). This
+ * counts one spec step running.
+ *
+ * RESET BY window_proxy_free — a census of ONE agent, like navigable.h's three.
+ *
+ * RETIREMENT: this goes when the outcome itself becomes attributable — navigable.h's named residual (take-site
+ * attribution over a GC object, so a host record holding another realm's Window is nameable) — because a row
+ * could then asserts the outcome and name its holder, and the ask would no longer be the strongest decidable
+ * claim. */
+long long window_proxy_destroy_releases(void);
+
 /* THE OTHER END OF THAT SAME WRITE, ASKED AT THE MOMENT A REALM DIES — the proxy-side half of the bracket
  * whose first half is the post-step-9 assert in window_proxy_set_destroyed. That one says "after the
  * transition this record names no realm and no Window"; this one says "at the instant a realm is torn down, no

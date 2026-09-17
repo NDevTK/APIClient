@@ -100,10 +100,20 @@ static int         g_realms_n, g_realms_cap;
    MADE is monotone — every realm this component has ever recorded — and PEAK is the high-water live. Together
    they make reclamation a MEASUREMENT rather than an argument: `made` equal to `peak` says every realm this
    run ever built was live at one instant, so not one was ever reclaimed, and `made` above `peak` says at least
-   one realm died while others were being made. That comparison is the assertion the reclamation owes, and it
-   is a fact about a RUN rather than about a state, which is why it is read by a fixture row (test_forced.c's
-   `realm-reclaim`) and not by a DCHECK: there is no instant at which "a realm has been reclaimed by now" is an
-   invariant, so a should-never-happen here would fire on a run that had merely not got there yet.
+   one realm died while others were being made. It is a fact about a RUN rather than about a state, which is
+   why it is read by a fixture row (test_forced.c's `realm-reclaim`) and not by a DCHECK: there is no instant
+   at which "a realm has been reclaimed by now" is an invariant, so a should-never-happen here would fire on a
+   run that had merely not got there yet.
+   AND IT IS NOT "THE ASSERTION THE RECLAMATION OWES", WHICH IS WHAT THIS PARAGRAPH USED TO CALL IT. The
+   comparison is a census of the OUTCOME of an operation whose gate may DECLINE FOR A GOOD REASON: a realm is
+   given back only once nothing holds it, and on a forking run a parked arm's COW delta legitimately holds the
+   child's Window (window_proxy.c's `PROXY_VALS`), an arm §NO BOUNDS never terminates. So `made == peak` is the
+   EXPECTED steady state there until the frontier drains, and a row asserting the comparison fires on every
+   correct refusal — which is what the fixture row did, on every forking run, until it was changed. What IS
+   assertable is the ASK: whether HTML §7.5.10 "Destroying documents" step 9's release ran at all, counted at
+   the site that performs it (window_proxy.h's window_proxy_destroy_releases) and published beside these two as
+   `destroyStep9Releases`. That is the discriminator saying which of the comparison's two readings applies, and
+   it is a fact about this codebase's own components, which is the only kind an assert may stand on.
    NEITHER IS A BOUND. Nothing reads them to decide whether a realm may be built, and no code path branches on
    either — they are counted and published, which is what §NO BOUNDS distinguishes from a cap. */
 static int         g_realms_made, g_realms_peak;

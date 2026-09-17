@@ -3095,11 +3095,26 @@ function censusReading(out) {
                   the mistake this row exists to stop. The verdict is the comparison and never the count. */
                `; child realms ${h.b.childRealms} live / ${h.b.childRealmsPeak} peak / ` +
                `${h.b.childRealmsMade} made` +
+               /* AND THE THIRD ARM IS SPLIT BY THE ASK, BECAUSE `made == peak` IS TWO STATES AND THIS LINE
+                  USED TO REPORT THEM AS ONE. It read "NOT ONE RECLAIMED … which is the ceiling" for both a
+                  release that never ran and a realm a PARKED FLOW is legitimately holding — `window` is on
+                  window_proxy.c's PROXY_VALS, so a forking run dups the child's Window into every arm's COW
+                  delta and §NO BOUNDS never terminates those arms. Those take opposite work: one is a defect
+                  with a single localisation, the other is the expected steady state until the frontier drains,
+                  and a verdict that cannot tell them apart is red on every forking run and becomes furniture.
+                  `destroyStep9Releases` is the discriminator (HTML §7.5.10 "Destroying documents" step 9,
+                  counted where it is performed), published BESIDE the comparison rather than replacing it:
+                  relocating the number would have changed what it means and left the old meaning unread. */
                (h.b.childRealmsMade === 0
                  ? ` — none built, so this run says nothing about reclamation`
                  : h.b.childRealmsMade > h.b.childRealmsPeak
                    ? ` — RECLAIMED: at least one realm died while others were being made`
-                   : ` — NOT ONE RECLAIMED: every realm this run built was live at once, which is the ceiling`) +
+                   : h.b.destroyStep9Releases === 0
+                     ? ` — NOT ONE RECLAIMED and §7.5.10 step 9's release NEVER RAN: no navigable stopped ` +
+                       `naming its Document, which is a DEFECT with one localisation`
+                     : ` — NOT ONE RECLAIMED, and step 9's release ran ${h.b.destroyStep9Releases} time(s): ` +
+                       `UNATTRIBUTABLE here, because a parked arm's COW delta holding the child's Window is ` +
+                       `correct and reads the same as a leak from this line`) +
                /* AND WHO IS HOLDING THEM, WHICH THE THREE COUNTS ABOVE CANNOT SAY. They establish THAT a realm
                   is held; this says by HOW MANY, and that separates two repairs of very different size — see
                   core/frame/navigable.h. Flat and O(1) while flows run to thousands points at a single edge no

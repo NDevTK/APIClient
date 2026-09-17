@@ -26,6 +26,7 @@
    is the one that answers. §A-CAPABILITY-MATERIALIZED-PER-FLOW makes it a ceiling, and navigable.c's own OOM
    CHECK sends its reader to this number by name. */
 #include "core/frame/navigable.h"
+#include "core/frame/window_proxy.h"   /* the ASK behind the realm census — see window_proxy_destroy_releases */
 /* §8.1.4.6 "Runtime script errors"'s throw site — one component derives it, this one reports it. */
 #include "core/events/report_exception.h"
 
@@ -2033,7 +2034,7 @@ char *result_heap_json(JSContext *ctx) {
                  "{\"allocations\":%lld,\"atoms\":%lld,\"strings\":%lld,\"objects\":%lld,"
                  "\"shapes\":%lld,\"props\":%lld,\"funcs\":%lld,\"funcCode\":%lld,\"arrays\":%lld,"
                  "\"miscBytes\":%lld,\"miscParts\":%lld,\"childRealms\":%d,"
-                 "\"childRealmsMade\":%d,\"childRealmsPeak\":%d,"
+                 "\"childRealmsMade\":%d,\"childRealmsPeak\":%d,\"destroyStep9Releases\":%lld,"
                  "\"childRealmRefsMin\":%d,\"childRealmRefsMax\":%d,\"childRealmRefsTotal\":%lld,"
                  "\"childRealmRefsReleased\":%lld,\"childRealmRefSites\":%s,"
                  "\"objBytes\":%lld,\"propBytes\":%lld,\"shapeBytes\":%lld,\"strBytes\":%lld,"
@@ -2045,6 +2046,7 @@ char *result_heap_json(JSContext *ctx) {
                  (long long)mem.js_func_count, (long long)mem.js_func_code_size, (long long)mem.array_count,
                  (long long)mem.memory_used_size, (long long)mem.memory_used_count,
                  navigable_realm_count(), navigable_realm_made(), navigable_realm_peak(),
+                 (long long)window_proxy_destroy_releases(),
                  rmin, rmax, (long long)rtotal, (long long)rreleased, rsites_json,
                  (long long)mem.obj_size, (long long)mem.prop_size, (long long)mem.shape_size,
                  (long long)mem.str_size, (long long)mem.atom_size, (long long)mem.js_func_size,

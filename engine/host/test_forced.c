@@ -11985,18 +11985,34 @@ static int probes_eval(const char *js, Probe *out, int cap) {
        a should-never-happen would fire on a run that had simply not reached its first collection. What IS an
        invariant is the three-number law, and that is asserted in C at both sites that move the numbers
        (core/frame/navigable.c).
-       THE COMPARISON IS `made` AGAINST `peak` AND NEVER THE LIVE COUNT. `made` is monotone and `peak` is the
-       high-water live, so `made == peak` says every child realm this run built was alive at ONE INSTANT — not
-       one was ever given back — while `made > peak` says at least one realm died while others were being made.
-       The live count answers neither: a small one is what "built none" and "built many, reclaimed all" both
-       look like, and those are opposite verdicts on this row.
-       WHAT MAKES IT FALSIFIABLE: HTML §7.5.10 "Destroying documents" step 9 ("Set document's node navigable's
-       active session history entry's document state's document to null") is the one release — the fixture's
-       `document.body.removeChild(_if)` reaches it, core/frame/window_proxy.c's window_proxy_set_destroyed
-       performs it, and the Window it releases is the only counted reference this engine holds to a child
-       realm. Break any link — the release, the collector breaking the cycle its function objects and its
-       Window hold together, or navigable.c's teardown hook forgetting the member — and this row is the thing
-       that says so, by name, instead of the run reaching an OOM whose message can only guess. */
+       IT ASSERTS THE ASK AND REPORTS THE OUTCOME, AND IT USED TO ASSERT THE OUTCOME. The clause that stood
+       here was `navigable_realm_made() > navigable_realm_peak()` under the text "child realms were built and
+       NOT ONE was reclaimed … the ceiling is real in this build". That is a census of the RESULT of an
+       operation whose gate MAY DECLINE FOR A GOOD REASON, which CLAUDE.md
+       §AN-INVARIANT-OVER-A-GATED-OPERATION forbids: a realm is given back only once nothing holds it, and on
+       THIS row's session something legitimately does. `window` is on window_proxy.c's PROXY_VALS, so
+       cow_capture_host_record DUPS the child's Window into the delta of every flow that reached that proxy
+       while the slot was still set, and §NO BOUNDS never terminates those flows — a parked arm is a timeline
+       in which the frame still exists and is RIGHT to hold it. So `made == peak` is the EXPECTED steady state
+       on a forking document until the frontier drains, and this row is registered at SESS_EXPLORE, which
+       forks, on a run the CPU budget ends before any drain. The row was therefore red for a correct refusal,
+       and core/frame/navigable.h had already written that down — "the `realm-reclaim` row reads it as a
+       defect, which is a question about that row's session rather than about this file" — while the row went
+       on saying the ceiling was real. A verdict that is red on every run becomes furniture, and this one was:
+       it is what a coordinator reads when dispatching somebody to build a reclamation that is already built.
+       WHAT IT ASSERTS NOW IS INDEPENDENT OF EVERY ARM THE GATE HAS. HTML §7.5.10 "Destroying documents" step
+       9 ("Set document's node navigable's active session history entry's document state's document to null")
+       is the one release — the fixture's `document.body.removeChild(_if)` reaches it and
+       core/frame/window_proxy.c's window_proxy_set_destroyed performs it — and whether it RAN is a fact about
+       this codebase's own components, which is the only kind an assert may stand on. A 0 there is a defect
+       with ONE localisation, where the outcome's 0 folded three together and could name none of them.
+       THE OUTCOME IS NOT LOST, IT IS UNASSERTED AND PUBLISHED. `childRealmsMade`, `childRealmsPeak` and now
+       `destroyStep9Releases` ride solver/result.c's `_heap` on every host, so a reader gets the comparison
+       AND the discriminator that says which of its two readings applies — which is the repair for a METRIC,
+       where relocating the number would have changed what it means and left the old meaning unread.
+       WHAT WOULD MAKE THE OUTCOME ASSERTABLE AGAIN is navigable.h's named residual: take-site attribution
+       over a GC object, so a host record holding another realm's WINDOW is nameable the way JS_DupContext's
+       callers already are. Until then this row can say the release ran and cannot say who kept the realm. */
     const char *realmback_why = NULL; int realmback_tt = 1;
     fold_row(&realmback_tt, &realmback_why, navigable_realm_made() > 0,
              "NOT REACHED: this run recorded no child realm at all, so the removal had nothing to give back "
@@ -12004,14 +12020,14 @@ static int probes_eval(const char *js, Probe *out, int cap) {
              "(`_cw.document`) is what materializes the initial about:blank; without it every member above it "
              "is answered from the navigable's own record and no realm is ever built. That is the SCHEDULE "
              "reaching the statement, not the reclamation");
-    fold_row(&realmback_tt, &realmback_why, navigable_realm_made() > navigable_realm_peak(),
-             "child realms were built and NOT ONE was reclaimed — the high-water live count equals the total "
-             "ever made, so every realm this run created was alive at the same instant. §7.5.10 step 9's "
-             "release ran or did not (window_proxy_set_destroyed), the collector broke the cycle or did not, "
-             "and navigable.c's teardown hook forgot the member or did not: this row cannot tell you which, "
-             "and the next thing to read is `_heap.childRealms` against `childRealmsMade` over the run rather "
-             "than a single OOM's guess. What it DOES tell you is that the ceiling is real in this build — one "
-             "realm per flow that reaches through a navigable, none returned");
+    fold_row(&realmback_tt, &realmback_why, window_proxy_destroy_releases() > 0,
+             "child realms were built and §7.5.10 step 9's RELEASE NEVER RAN — not once in this whole run did "
+             "a navigable stop naming its Document, so nothing downstream of it can have run either and the "
+             "ceiling is real for a reason this row CAN name. The removal reached neither "
+             "core/frame/document_lifecycle.c's destroy job nor window_proxy_set_destroyed: read "
+             "`_heap.destroyStep9Releases` against `childRealmsMade` over the run. This is the ASK and not "
+             "the outcome, deliberately — a realm still standing AFTER the release is a flow legitimately "
+             "holding its Window and is not this row's to accuse");
     /* §7.4.4 step 8 moved this Document's address to a route the run COMPUTED out of a reply, and the notice
        that carries that address off this instance said `derived`. FOUR CONDITIONS AND NOT ONE, folded so the
        row NAMES the one that failed: they fail for four different reasons, three of them in different
