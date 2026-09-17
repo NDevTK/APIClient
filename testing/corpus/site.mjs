@@ -99,6 +99,21 @@ const PROBE = `(() => ({
      performed inside the instrument built to detect it. Every level of the walk is optional in the producer,
      so each is tested rather than chained — a naive \`?.\` chain yields null for a shape that is
      present-but-empty and cannot tell the two readings apart either.
+     AND \`params\` IS THE WRONG DENOMINATOR FOR THEM, WHICH IS WHY \`astParams\` SITS BESIDE IT. Only a param
+     lib/learn.js minted from a FORCED-EXECUTION call site can ever carry a domain: that arm alone runs
+     _mergeExcludes/_mergeBounds/_mergePredicates, and it alone writes \`_astInferred\`. The other producers in
+     that file mint a param from LIVE TRAFFIC — a query name off an observed URL, a path segment observed to
+     vary, a concrete segment aligned with a hole — and none of them passes through a domain merge at all, so
+     they are rows that CANNOT contribute to the numerator however well the engine narrows. A ratio over
+     \`params\` therefore mixes two populations that take opposite readings, and its zero is consistent with
+     the engine never having learned a single forced-execution param — which is a finding about the LEARNED
+     SURFACE one component upstream, not about the domain machinery this column is pointed at.
+     SO THE ENTAILMENT IS PUBLISHED RATHER THAN LEFT TO BE RE-DERIVED. \`astParams:0\` makes all three domain
+     columns entailed zeros carrying no information about a domain, and \`astParams>0\` with all three at 0 is
+     the reading that is actually about this machinery. It is also the reachability witness for the whole
+     chain: solver/decide.c records a gate under a hole key, solver/endpoint.c reads it back at kv_add and
+     emits \`excludes\`/\`bounds\`/\`predicates\`, and lib/learn.js merges those onto exactly the objects walked
+     here — every hop present with a live caller, and nothing at any level asserting that one arrives.
      THERE ARE THREE DOMAIN COLUMNS BECAUSE THERE ARE THREE WAYS A GATE NARROWS ONE, and they must be counted
      apart or a page whose only gates are prefix checks reads as a page with no gates. An equality determines
      a value and fills \`withExcl\`; an ordering determines an interval and fills \`withBnd\`; a METHOD CALL
@@ -106,7 +121,7 @@ const PROBE = `(() => ({
      Summing them would hide exactly the case each column exists to find, which is a page gated only by the
      third. */
   domains: (() => {
-    let params = 0, withExcl = 0, withBnd = 0, withPred = 0, reached = false;
+    let params = 0, astParams = 0, withExcl = 0, withBnd = 0, withPred = 0, reached = false;
     for (const svc of globalStore.discoveryDocs.values()) {
       const methods = svc && svc.doc && svc.doc.resources && svc.doc.resources.learned
                    && svc.doc.resources.learned.methods;
@@ -116,13 +131,14 @@ const PROBE = `(() => ({
         reached = true;
         for (const p of Object.values(m.parameters)) {
           params++;
+          if (p && p._astInferred) astParams++;
           if (p && Array.isArray(p._excludedValues) && p._excludedValues.length) withExcl++;
           if (p && p._bounds && Object.keys(p._bounds).length) withBnd++;
           if (p && Array.isArray(p._predicates) && p._predicates.length) withPred++;
         }
       }
     }
-    return reached ? { params, withExcl, withBnd, withPred } : null;
+    return reached ? { params, astParams, withExcl, withBnd, withPred } : null;
   })(),
 }))()`;
 
