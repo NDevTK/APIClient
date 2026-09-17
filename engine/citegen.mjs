@@ -4723,6 +4723,20 @@ function forkAttribution(pre) {
  * `treeProse` builds an audited file's — `proseSpans` then `quoteTokens` — because what counts as this
  * project's prose may not come to mean two things depending on which side of the submodule boundary a file
  * sits on. The one difference is the blanking, and its argument is at `forkSources` above. */
+/* NAMED RESIDUAL — THIS CORPUS STILL READS THE WORKING TREE, WHERE `treeProse` READS THE RUN'S OWN BYTES.
+ * NOT COVERED: an engine source that `defaultTargets` does NOT read. A delta run cannot substitute one,
+ *   because its base map is built from the files the audit READS and this set is disjoint from those by
+ *   construction, so a diff that ADDS a sentence to an unaudited engine source grants the base half a HELD
+ *   verdict its own revision does not support — the same clearing-its-own-base shape `treeProse` carried,
+ *   in the same benign direction, and over the smaller population.
+ * WHAT MUST EXIST AFTERWARD: base bytes for every path the diff TOUCHES rather than for the audited subset
+ *   of them. The delta lists every changed path before it filters by `inScope`, so what has to move is that
+ *   filter; this reader then takes the run's reader exactly as `treeProse` does, and the absent-at-ref arm
+ *   must answer what an unreadable file answers here rather than an empty one, or a file the diff CREATED
+ *   would band as unheld where today it has no attribution to ask about.
+ * HOW ITS ABSENCE WOULD SHOW: a delta over a diff that edits an unaudited engine source, at a tree where a
+ *   quotation is attributed to that source, reports a RETIRED count below what a standalone audit of the
+ *   base tree gives for the same files, with the difference standing in the HELD band of the tip run. */
 const FORK_TEXT = new Map();
 function forkText(name) {
   if (FORK_TEXT.has(name)) return FORK_TEXT.get(name);
@@ -4775,13 +4789,39 @@ function engineHolding(frags, except) {
   return null;
 }
 
-let TREE_PROSE = null;
-function treeProse() {
-  if (TREE_PROSE) return TREE_PROSE;
-  TREE_PROSE = [];
+/* THE RUN'S OWN BYTES AND NOT THE DISK'S, AND MEMOIZED PER READER RATHER THAN ONCE PER PROCESS. `audit`
+ * takes an `srcOf` so a caller can audit a file at SOME OTHER REVISION, and this corpus used to read the
+ * working tree unconditionally — so a delta run's two audits shared ONE corpus, built from the tip, and the
+ * second audit's clearances were granted by text the first one's own diff had written.
+ *
+ * THE DIRECTION IS FLATTERING IN REVERSE, WHICH IS WHY IT STOOD. This corpus only ever CLEARS: a quotation
+ * whose words stand in this tree's own unquoted prose leaves the findings. So a diff that de-claims a run by
+ * putting it in backticks CLEARED ITS OWN BASE — the run stops being quoted at the tip, joins this corpus,
+ * and exonerates the very finding at the base revision that the repair had just retired. The delta's RETIRED
+ * count fell while its INTRODUCED count stayed sound, and nobody investigates work that under-credits them.
+ *
+ * MEASURED BEFORE IT WAS CHANGED, on the commit that de-claimed two runs in the trusted zone's network
+ * chokepoint: the base half of that delta reported 3 findings where a standalone audit of the identical base
+ * tree reports 5, and the two it lost are exactly the two runs the commit put in backticks. RETIRED read 1
+ * and the answer is 3.
+ *
+ * A KEYED MEMO AND NOT A RESET. A reset is a mutation at a distance that every future caller has to
+ * remember, where a key makes the tip run's corpus unreachable from the base run BY CONSTRUCTION rather than
+ * by ordering; two audits in one process ask two different questions of this corpus and each keeps its own
+ * answer. A run has one reader, so the map has at most one entry per audit.
+ *
+ * RETIREMENT: this record goes when EVERY corpus an audit builds reads through the run's reader, because the
+ * rule it argues for can no longer be re-derived wrongly once there is nothing left that reads the disk on
+ * its own. The one that still does is named as a residual at `forkText`, and it is what stands between this
+ * paragraph and an invariant that could simply be asserted. */
+const TREE_PROSE = new Map();
+function treeProse(read = null) {
+  if (TREE_PROSE.has(read)) return TREE_PROSE.get(read);
+  const out = [];
+  TREE_PROSE.set(read, out);
   for (const f of defaultTargets()) {
     let src;
-    try { src = readFileSync(f, "utf8"); } catch { continue; }
+    try { src = read ? read(f) : readFileSync(f, "utf8"); } catch { continue; }
     let prose = "";
     for (const sp of proseSpans(src, f)) prose += src.slice(sp[0], sp[1]) + "\n \n";
     /* BOTH MARKS AND IN ONE ORDER, for PASS 4's reason: the blanking walks the runs left to right and a run
@@ -4795,9 +4835,9 @@ function treeProse() {
       if (stop > cur) cur = stop;
     }
     kept += prose.slice(cur);
-    TREE_PROSE.push({ file: relative(ROOT, f), text: quoteTokens(kept, false) });
+    out.push({ file: relative(ROOT, f), text: quoteTokens(kept, false) });
   }
-  return TREE_PROSE;
+  return out;
 }
 
 /* WHICH FILE OF THIS TREE AUTHORED EACH CANDIDATE'S WORDS, or none. Sets `authoredAt` on the record.
@@ -4810,7 +4850,7 @@ function treeProse() {
  * `containsAnyForm` is what decides, on the candidate's every authoring and every fragment in order, exactly
  * as the verification and the WRONG-SECTION probe decide. The same two-step is what `alt` already does one
  * channel over, for the same reason and at the same floor. */
-function treeAuthored(cands) {
+function treeAuthored(cands, read) {
   if (!cands.length) return;
   const want = new Map();
   for (const c of cands) {
@@ -4824,7 +4864,7 @@ function treeAuthored(cands) {
     }
   }
   if (!want.size) return;
-  for (const { file, text } of treeProse()) {
+  for (const { file, text } of treeProse(read)) {
     if (!text) continue;
     const w = text.split(" ");
     const hit = new Set();
@@ -7383,7 +7423,9 @@ function audit(argv, opts = {}) {
    * PASS's own counts and are deliberately not adjusted: they state what was compared and what the comparison
    * answered, and this is a later question asked of a subset of one of them. */
   const ownProse = [];
-  treeAuthored(ownCands);
+  /* THE RUN'S OWN READER, because this corpus decides which findings LEAVE and a run auditing one revision
+   * must not be cleared by another's prose — the argument is at `treeProse`. */
+  treeAuthored(ownCands, opts.srcOf);
   {
     const kept = quotes.filter((q) => (q.authoredAt ? (ownProse.push(q), false) : true));
     quotes.length = 0;
@@ -8652,9 +8694,20 @@ function since(ref, argv) {
       { cwd: ROOT, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] })); }
     catch { baseSrc.set(p, ""); }        /* absent at ref — a new file owns every finding in it */
   }
+  /* AND IT ANSWERS FOR EVERY PATH THE AUDIT READS, NOT ONLY FOR THE CHANGED ONES. The base audit builds a
+     whole-tree corpus of this project's own unquoted prose and CLEARS findings against it, so a reader that
+     spoke only for the changed files left that corpus standing on the working tree and judged the base half
+     against the TIP's prose — which a de-claiming repair writes itself, and which is exactly the clearance
+     that repair was landed to retire. The argument and the measurement are at `treeProse`.
+     DISK IS THE CORRECT ANSWER FOR A PATH THIS MAP DOES NOT HOLD, and that is a precision argument rather
+     than a convenience: the changed list above is `git diff --name-only <ref>`, which compares <ref> against
+     the WORKING TREE, so a path missing from it has the same bytes at <ref> as on disk. A delta is only ever
+     sensitive to a file whose two versions DIFFER, the corpus reads exactly the population `inScope` was
+     built from, and every file of that population that differs is in this map by construction. */
+  const baseOf = (p) => (baseSrc.has(p) ? baseSrc.get(p) : readFileSync(p, "utf8"));
   const key = (f) => `${f.file}\u0000${f.kind}\u0000${f.no}\u0000${f.msg}\u0000${f.qtext || ""}`.replace(/:\d+/g, "");
   const tip = audit(argv, { files, quiet: true });
-  const base = audit(argv, { files, quiet: true, srcOf: (p) => baseSrc.get(p) });
+  const base = audit(argv, { files, quiet: true, srcOf: baseOf });
   const had = new Set(base.map(key));
   const added = tip.filter((f) => !had.has(key(f)));
   const gone = base.filter((f) => !new Set(tip.map(key)).has(key(f)));
