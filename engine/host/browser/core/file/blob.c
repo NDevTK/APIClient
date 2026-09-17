@@ -592,7 +592,7 @@ static const ByteReaderIface BLOB_READER_IFACE = {
 
 /* ---- §3.1's attributes and slice() ------------------------------------------------------------------------ */
 
-enum { BLOB_SIZE = 0, BLOB_TYPE, FILE_NAME, FILE_LAST_MODIFIED };
+enum { BLOB_SIZE = 0, BLOB_TYPE, FILE_NAME, FILE_LAST_MODIFIED, FILE_WEBKIT_RELATIVE_PATH };
 
 static JSValue js_blob_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
@@ -606,6 +606,27 @@ static JSValue js_blob_get(JSContext *ctx, JSValueConst this_val, int magic)
     case FILE_NAME:
         if (!b->name) return JS_ThrowTypeError(ctx, "not a File");
         return JS_NewString(ctx, b->name);
+    /* FILE AND DIRECTORY ENTRIES API §4 "The File Interface"'s partial: "The webkitRelativePath getter steps
+       are to return this's relative path, or the empty string if not specified." The empty string is the
+       COMPUTED answer for every File this agent can produce, not a placeholder standing in for one: that
+       standard specifies a relative path in exactly one place — FILE AND DIRECTORY ENTRIES API §5 "HTML:
+       Forms" — where selecting a directory
+       sets "the webkitRelativePath property of each File ... to a relative path starting from (and including)
+       the selected directory to the file". No algorithm here selects a directory, so "not specified" holds of
+       the whole population and this getter states the arm the standard gives for it.
+       THE RECEIVER CHECK IS `b->name`, which is this component's established File discriminator rather than a
+       second answer to the same question: §4's members live on File.prototype and a Blob shares the class id,
+       so `File.prototype.webkitRelativePath` read off a Blob reaches here and Web IDL §3.7.6 Attributes
+       requires a TypeError. It is a THROW and never a DCHECK, because the receiver is page-supplied input.
+       NAMED RESIDUAL — a File whose relative path IS specified is not covered. THE NEXT DIFF BUILDS FILE AND
+       DIRECTORY ENTRIES API §5 "HTML: Forms"'s `webkitdirectory` on HTMLInputElement together with the directory selection that sets each
+       selected File's relative path; both that content attribute and `webkitEntries` beside it are absent
+       here, so there is no path by which a specified one could reach this getter today. ITS ABSENCE WOULD SHOW
+       as a directory upload reporting the empty string for every file where a browser reports a path carrying
+       a separator, which is observable at any page that reads the attribute off a directory selection. */
+    case FILE_WEBKIT_RELATIVE_PATH:
+        if (!b->name) return JS_ThrowTypeError(ctx, "not a File");
+        return JS_NewString(ctx, "");
     default:
         DCHECK(magic == FILE_LAST_MODIFIED,
                "a Blob attribute was declared with a magic this component does not answer");
@@ -1017,6 +1038,7 @@ void blob_install_protos(JSContext *ctx)
     idl_interface_tag(ctx, file_p, "File");
     idl_install_accessor(ctx, file_p, "name", js_blob_get, FILE_NAME, -1);
     idl_install_accessor(ctx, file_p, "lastModified", js_blob_get, FILE_LAST_MODIFIED, -1);
+    idl_install_accessor(ctx, file_p, "webkitRelativePath", js_blob_get, FILE_WEBKIT_RELATIVE_PATH, -1);
 
     /* §3's AND §4's INTERFACE OBJECTS, on THIS realm's global. Both are minted while the two prototypes are
        still LOCALS: JS_SetClassProto TAKES the reference, so the Web IDL §3.7.1 Interface object pairing reads

@@ -2307,6 +2307,28 @@ const OTHER_SPECS = [
      answer to it moved from "decide nothing" to "decide the right document" the day that standard got a row.
      anchorTokens tries the longest tail first, so a listed multi-word name wins over its own last word. */
   "namespaces in xml", "selection api",
+  /* FILE AND DIRECTORY ENTRIES API, and it is the sharpest instance of the rule stated directly above:
+     the standard whose name BEGINS with an indexed standard's own subject. "Selection API is not the
+     File API" is the note beside it; this one is not the File API either, and it is far likelier to be
+     taken for it, because it declares a PARTIAL of the very interface File API owns and its own fourth
+     section carries the title "The File Interface" WORD FOR WORD, which is the title File API gives the
+     section of the same number. So the two collide on the number AND on the title at once, and nothing
+     downstream can tell them apart: a quotation pasted verbatim from the document the site NAMES is
+     compared against the other document and reported as diverging at its first word.
+     THE ACCUSING DIRECTION IS WHY THIS IS A ROW AND NOT A SHRUG. An unindexed standard whose numbers do
+     not collide buys silence, which is honest; one that collides buys a FINDING against the sites whose
+     authors quoted the fetched text, since a citation carrying no quotation has nothing to fail on. The
+     population this protects is therefore enriched for the most careful writing in the tree.
+     ITS ANCHOR IS THE THREE-WORD TAIL AND MUST BE, for the reason the Cookie Store API row gives:
+     anchorTokens reads AT MOST THREE trailing words, so the five-word name this standard publishes can
+     never be produced by the tokenizer and listing it would be an entry with NO READER — the mirror of
+     the Mixed Content failure above, which listed too SHORT a head. Too long and too short fail the
+     same way and are equally invisible: the row is present, the reader is satisfied, and no citation
+     ever matches it. `directory entries` alone is NOT listed, because nothing here writes it in front
+     of a section sign and an anchor no citation produces is a claim about a spelling.
+     RETIRED THE DAY THIS STANDARD IS INDEXED, by the same rule that retired webcrypto and uievents — a
+     foreign row is a refusal to answer and an index is an answer, so the row goes when one exists. */
+  "directory entries api",
   /* FILE SYSTEM ACCESS, and it is here because the audit's own gap report asked for it: `Access=32` stood in
      the capitalised-tokens line — "a standard among these is coverage this audit is not getting" — while
      `core/file/file_picker.c`, whose banner reads "FILE SYSTEM ACCESS §3", had every one of its §3.x crash
