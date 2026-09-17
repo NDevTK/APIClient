@@ -81,6 +81,7 @@ static int       g_id_sign = -1;
 static int       g_id_verify = -1;
 static int       g_id_import_key = -1;
 static int       g_id_export_key = -1;
+static int       g_id_generate_key = -1;
 static int       g_id_encrypt = -1;
 static int       g_id_decrypt = -1;
 static JSAtom    g_atom_name = JS_ATOM_NULL;
@@ -1914,7 +1915,7 @@ IDL_ENUM_VALUES_EXTERN(CRYPTO_KEY_USAGE_NAMES, "encrypt", "decrypt", "sign", "ve
  * SO THE ONLY THING THAT CAN FAIL HERE IS THIS ENGINE'S OWN INVARIANT, and it is asserted rather than
  * reported: a name this list does not hold means the declaration and this list have drifted apart, which is
  * impossible while they ARE one list. */
-static void ik_usages_normalize(JSContext *ctx, JSValueConst list, uint32_t *out)
+static void sc_usages_normalize(JSContext *ctx, JSValueConst list, uint32_t *out)
 {
     uint32_t n = 0, i;
     JSValue len_v;
@@ -1978,7 +1979,7 @@ static int ik_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueCo
            IDL §3.2.18 refused every string that is not a KeyUsage during the argument conversion — which §3.6
            runs LEFT TO RIGHT and finishes before this body's step 1, so a bogus usage is a TypeError with none
            of the algorithm object's getters having run. */
-        ik_usages_normalize(ctx, argc > 4 ? argv[4] : JS_UNDEFINED, &s->usages);
+        sc_usages_normalize(ctx, argc > 4 ? argv[4] : JS_UNDEFINED, &s->usages);
     }
     DCHECK(!JS_IsException(cb_result) || hdr->stage == IK_NAME || hdr->stage == IK_NAME_STR ||
                hdr->stage == IK_HASH || hdr->stage == IK_HASH_NAME || hdr->stage == IK_LENGTH ||
@@ -2498,6 +2499,340 @@ static const IdlStepDecl XK_DECL = {
     0
 };
 
+/* ---- §14.3.6 The generateKey method ------------------------------------------------------------------------
+ *
+ * THE ONLY METHOD OF §14.3 THAT MINTS A KEY OUT OF NOTHING, and every difference below follows from that. It
+ * takes no CryptoKey and no BufferSource, so its whole input is `AlgorithmIdentifier algorithm`, a boolean and
+ * a `sequence<KeyUsage>` — which means the six stages here are §18.4.4's normalization and nothing else, and
+ * the algorithm's own work is one call.
+ *
+ * ITS SOURCE IS §10.1's STREAM AND THAT IS WHAT MADE IT WAIT. §29.4.3 step 3 says to "Generate an AES key of
+ * length equal to the length member of normalizedAlgorithm", and this interface has no randomness of its own:
+ * core/crypto/crypto.h's `crypto_random_bytes` is the route, drawing through the SAME object this realm's
+ * `crypto` getter latches its draw position on, so a forked pair of flows above a generateKey draws from the
+ * position the FORK was taken at rather than minting identical material twice. That header argues the whole of
+ * it; a second stream is invisible downstream of the key, which is why the route is an entry and not a helper
+ * each caller could reproduce.
+ *
+ * THE REGISTRY IS ONE ROW, AND THE ROW IS THE ONE REAL PAGES CALL. §18.5.1 states "there are no algorithms
+ * that conforming user agents are required to implement", so a short registry is conformant; which row is here
+ * was decided by reading the CALL SITES rather than §14.3's member list. Of this corpus's `crypto.subtle
+ * .generateKey` calls, four name AES-GCM (two of them through a constant — `W.ALGORITHM="AES-GCM"` and
+ * `ns="AES-GCM"` — which a literal grep does not see), three name ECDSA over P-256 and one names
+ * RSASSA-PKCS1-v1_5; ZERO name HMAC. §31.6.3's HMAC row is therefore not the next diff even though HMAC is the
+ * algorithm this component is deepest in: it would install an arm no site calls.
+ *
+ * WHAT EACH SITE DOES NEXT IS THE OTHER HALF OF THAT READING AND IT IS NOT UNIFORM. One AES-GCM site
+ * (helixapp's) goes straight from the key to §14.3.1's encrypt, which is built, and COMPLETES. The other three
+ * call §14.3.10's exportKey on what comes back, whose registry §14.3.10 step 6 answers over is one row and
+ * that row is HMAC — so they reach a "NotSupportedError" one call later. That is a REFUSAL THE STANDARD
+ * DEFINES rather than a gap wearing a resolved promise, and it is strictly further than those sites got
+ * before, where the member's absence was a TypeError on the call itself. §29.4.5 AES-GCM Export Key is what
+ * moves them, and the exportKey machine's own comment already names it.
+ *
+ * THE FEATURE DETECT THIS FLIPS, PRICED BEFORE IT WAS LANDED. meticulous.js — served into this corpus's
+ * grafana mirror — carries `["decrypt","digest","encrypt","exportKey","generateKey","importKey","sign",
+ * "verify"].every(n => typeof subtle[n] === "function")`, so installing this member takes it from 7/8 to 8/8
+ * and flips a guard that was false. §NO-STUBS is explicit that an all-or-nothing guard flipped into an
+ * incompletable branch is worse in BOTH arms, so what the branch CALLS was derived rather than assumed: its
+ * two consumers are an SHA-1 wrapper and an SHA-256 wrapper, and the calls behind them are `digest`
+ * ({name:"SHA-1"} / {name:"SHA-256"}), `importKey("raw", …, {name:"HMAC",hash:{name:"SHA-…"}}, false,
+ * ["sign"])` and `sign({name:"HMAC",hash:…}, key, data)` — the keyed pair being what the AWS SigV4 signer's
+ * `hmac(ctor, key, data)` reaches. All three are installed and all three are registered for those algorithms,
+ * so the branch completes. The SHA-1 consumer is the sharper half: its false arm is `throw new
+ * Error("SHA1 not supported")` with no fallback at all, so for that wrapper the guard being false was already
+ * the dead end and any completion is an advance. */
+
+static const char GK_FORK_OP[] = "SubtleCrypto.generateKey/normalizeAlgorithm";
+
+/* §18.4.4's `registeredAlgorithms` FOR THE "generateKey" OPERATION — §29.2's "The recognized algorithm name
+   for this algorithm is "AES-GCM"." The table and the enum are ONE fact for IK_REGISTERED's reason: the fork
+   answers with a POSITION and every branch reads it as a GkAlgorithm. */
+typedef enum { GK_ALG_AES_GCM = 0 } GkAlgorithm;
+static const char *const GK_REGISTERED[] = { "AES-GCM" };
+#define GK_REGISTERED_N ((int)COUNTOF(GK_REGISTERED))
+/* The one outcome past the registered rows: §18.4.4's "Otherwise: Return a new NotSupportedError". */
+#define GK_FORK_OUTCOMES (GK_REGISTERED_N + 1)
+_Static_assert(GK_REGISTERED_N == (int)GK_ALG_AES_GCM + 1,
+               "GK_REGISTERED and GkAlgorithm have come apart — the fork's arm index is read as a "
+               "GkAlgorithm, so every row of the table needs its enumerator");
+
+#define GK_STAGES(X)                                                                                          \
+    X(GK_NAME, "Web Cryptography §18.4.4 normalizing an algorithm step 2 (Get(alg, \"name\") for the "        \
+               "generateKey operation)")                                                                      \
+    X(GK_NAME_STR, "Web Cryptography §18.4.4 normalizing an algorithm step 2 (converting alg[\"name\"] to "    \
+                   "its DOMString)")                                                                          \
+    X(GK_SELECT, "Web Cryptography §18.4.4 normalizing an algorithm step 5 (the case-insensitive lookup of "   \
+                 "algName in the generateKey operation's registeredAlgorithms)")                               \
+    X(GK_LENGTH, "Web Cryptography §18.4.4 normalizing an algorithm step 10 (the per-member walk reaching "    \
+                 "§27.5 AesKeyGenParams' required `length`)")                                                  \
+    X(GK_LENGTH_NUM, "Web IDL §3.2.4.9 Abstract operations' ConvertToInt under §3.3.6 [EnforceRange], over "   \
+                     "§27.5's `length` member, whose declared type is `unsigned short`")                       \
+    X(GK_DONE, "Web Cryptography §14.3.6 steps 8-12 (perform §29.4.3 AES-GCM Generate Key, apply step 9's "    \
+               "empty-usages test and resolve promise with the key)")
+enum { IDL_STEP_STAGE_BASE(GK_STAGES) GK_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const GK_STEPS[] = { GK_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+typedef struct {
+    ScPromise p;
+    JSValue   name_v;      /* alg["name"], then its DOMString, or the concolic itself (owned) */
+    JSValue   len_v;       /* §27.5's `length` as read (owned) */
+    uint32_t  usages;      /* §9's normalized value of the usages list, as a CryptoKeyUsage mask */
+    uint32_t  length;      /* §27.5's `length` after §3.2.4.9's conversion, in bits */
+    uint8_t   alg;         /* the GkAlgorithm §18.4.4 step 5's lookup selected */
+    uint8_t   extractable;
+} GkState;
+
+static void gk_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    GkState *s = st;
+
+    sc_promise_visit(ctx, &s->p, v);
+    if (!s->p.started)
+        return;
+    v->val(ctx, &s->name_v);
+    v->val(ctx, &s->len_v);
+}
+
+static int gk_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                   JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    GkState *s = st;
+    /* §14.3.6 step 1: "Let algorithm, extractable and usages be the algorithm, extractable and keyUsages
+       parameters passed to the generateKey() method, respectively." */
+    JSValueConst alg = argc > 0 ? argv[0] : JS_UNDEFINED;
+    int r;
+
+    *presult = JS_UNDEFINED;
+
+    if (!s->p.started) {
+        s->name_v = s->len_v = JS_UNDEFINED;
+        s->usages = 0;
+        s->length = 0;
+        s->alg = (uint8_t)GK_ALG_AES_GCM;
+        s->extractable = 0;
+        sc_promise_begin(ctx, &s->p);
+        DCHECK(argc >= 3, "§14.3.6's generateKey ran with fewer than its three declared arguments — Web IDL "
+                          "§3.6 step 5 refuses that in the prologue and §3.7.7 turns the refusal into a "
+                          "rejection");
+        s->extractable = (uint8_t)(JS_ToBool(ctx, argc > 1 ? argv[1] : JS_UNDEFINED) != 0);
+        /* §9's NORMALIZED VALUE, AS A MASK — the same operation §14.3.9's step 12 names, which is why the
+           walk is sc_ and not ik_. It cannot fail: the position is declared IDL_SEQUENCE_ENUM, so Web IDL
+           §3.2.18 refused every string that is not a KeyUsage during the argument conversion. */
+        sc_usages_normalize(ctx, argc > 2 ? argv[2] : JS_UNDEFINED, &s->usages);
+    }
+    DCHECK(!JS_IsException(cb_result) || hdr->stage == GK_NAME || hdr->stage == GK_NAME_STR ||
+               hdr->stage == GK_LENGTH || hdr->stage == GK_LENGTH_NUM,
+           "§14.3.6 was delivered an abrupt completion at a stage that parks on no request able to throw — the "
+           "member reads and their coercions are the only stages that run the page's code");
+
+    STEP_DISPATCH(GK_STAGES, hdr->stage, "Web Cryptography §14.3.6 generateKey(algorithm, extractable, "
+                                         "keyUsages)", JS_STEP_ABRUPT);
+
+    STEP_ARM(GK_NAME);
+    if (JS_IsString(alg) || concolic_is(alg)) {
+        JS_FreeValue(ctx, cb_result);
+        cb_result = JS_UNDEFINED;
+        s->name_v = JS_DupValue(ctx, alg);
+    } else {
+        r = step_getprop_run(ctx, hdr, alg, g_atom_name, cb_result, &s->name_v, out_cb, out_argc);
+        if (r > 0) return r;
+        if (r < 0) return sc_reject(ctx, &s->p, presult);
+        cb_result = JS_UNDEFINED;
+    }
+    STEP_GOTO(hdr->stage, GK_NAME_STR, &hdr->get_phase, &hdr->str_phase, &hdr->num_phase, NULL);
+
+    STEP_ARM(GK_NAME_STR);
+    if (JS_IsUndefined(s->name_v)) {
+        JS_FreeValue(ctx, cb_result);
+        JS_ThrowTypeError(ctx, "%s", "the algorithm passed to SubtleCrypto.generateKey has no `name`, which "
+                                     "the Algorithm dictionary declares as a required member");
+        return sc_reject(ctx, &s->p, presult);
+    }
+    if (!JS_IsString(s->name_v) && !concolic_is(s->name_v)) {
+        JSValue str;
+
+        r = step_tostring_run(ctx, hdr, s->name_v, cb_result, &str, out_cb, out_argc);
+        if (r > 0) return r;
+        if (r < 0) return sc_reject(ctx, &s->p, presult);
+        JS_FreeValue(ctx, s->name_v);
+        s->name_v = str;
+    } else {
+        JS_FreeValue(ctx, cb_result);
+    }
+    cb_result = JS_UNDEFINED;
+    STEP_GOTO(hdr->stage, GK_SELECT, &hdr->get_phase, &hdr->str_phase, &hdr->num_phase, NULL);
+
+    STEP_ARM(GK_SELECT);
+    JS_FreeValue(ctx, cb_result);
+    cb_result = JS_UNDEFINED;
+    if (concolic_is(s->name_v)) {
+        int arm = 0;
+
+        r = step_fork_run(ctx, hdr, s->name_v, GK_FORK_OP, GK_FORK_OUTCOMES, JS_OUTCOME_REAL_UNSTATED, &arm);
+        if (r > 0) return r;
+        DCHECK(arm >= 0 && arm < GK_FORK_OUTCOMES,
+               "§18.4.4's registry fork answered with an outcome it did not declare");
+        if (arm == GK_REGISTERED_N) {
+            JS_ThrowDOMException(ctx, "NotSupportedError", "%s",
+                                 "the algorithm named is not a registered `generateKey` algorithm");
+            return sc_reject(ctx, &s->p, presult);
+        }
+        s->alg = (uint8_t)arm;
+    } else {
+        const char *nm = JS_ToCString(ctx, s->name_v);
+        int i;
+
+        CHECK(nm != NULL, "§18.4.4's algName could not be read back as UTF-8");
+        for (i = 0; i < GK_REGISTERED_N; i++)
+            if (sd_name_matches(nm, GK_REGISTERED[i])) break;
+        if (i == GK_REGISTERED_N) {
+            JS_ThrowDOMException(ctx, "NotSupportedError", "'%s' is not a registered `generateKey` algorithm",
+                                 nm);
+            JS_FreeCString(ctx, nm);
+            return sc_reject(ctx, &s->p, presult);
+        }
+        JS_FreeCString(ctx, nm);
+        s->alg = (uint8_t)i;
+    }
+    STEP_GOTO(hdr->stage, GK_LENGTH, &hdr->get_phase, &hdr->str_phase, &hdr->num_phase, NULL);
+
+    STEP_ARM(GK_LENGTH);
+    /* §18.4.4 step 9's `dictionaries` for the row step 5 selected: §29.2 gives AES-GCM's generateKey row the
+       Parameters type `AesKeyGenParams`, whose ONE member is `required [EnforceRange] unsigned short length`.
+       `required`, so §3.2.17's dictionary conversion is what refuses an absent one — asked below, after the
+       read, because `undefined` IS absence for a dictionary member and the read is what tells them apart. */
+    if (concolic_is(alg)) {
+        /* UNKNOWN EXTERNAL INPUT IS NOT AN OBJECT TO READ A MEMBER OFF — it stands for whatever the page was
+           given, so `length` is unknown too and GK_LENGTH_NUM's own arm is where that is answered. */
+        JS_FreeValue(ctx, cb_result);
+        cb_result = JS_UNDEFINED;
+        s->len_v = JS_DupValue(ctx, alg);
+    } else if (JS_IsString(alg)) {
+        /* §18.4.4's DOMString arm builds "a new Algorithm dictionary whose name attribute is alg" and nothing
+           else, so there is no `length` member to find — and `length` is REQUIRED, so `generateKey("AES-GCM",
+           …)` is the required member's TypeError where the same spelling resolves for an importKey whose row
+           takes `None`. The two members answer that string differently and both answers are their own row's. */
+        JS_FreeValue(ctx, cb_result);
+        cb_result = JS_UNDEFINED;
+        s->len_v = JS_UNDEFINED;
+    } else {
+        r = step_getprop_run(ctx, hdr, alg, g_atom_length, cb_result, &s->len_v, out_cb, out_argc);
+        if (r > 0) return r;
+        if (r < 0) return sc_reject(ctx, &s->p, presult);
+        cb_result = JS_UNDEFINED;
+    }
+    if (JS_IsUndefined(s->len_v)) {
+        JS_ThrowTypeError(ctx, "%s", "the algorithm passed to SubtleCrypto.generateKey has no `length`, which "
+                                     "AesKeyGenParams declares as a required member");
+        return sc_reject(ctx, &s->p, presult);
+    }
+    STEP_GOTO(hdr->stage, GK_LENGTH_NUM, &hdr->get_phase, &hdr->str_phase, &hdr->num_phase, NULL);
+
+    STEP_ARM(GK_LENGTH_NUM);
+    if (concolic_is(s->len_v)) {
+        JS_FreeValue(ctx, cb_result);
+        /* THE THREE-VALUE TEST §29.4.3 STEP 2 MAKES IS A BRANCH ON THIS OPERAND, and this one is unknown
+           external input — 128, 192, 256 and the OperationError are four feasible outcomes, and deciding them
+           against a shape would delete every world but one. Declare a step_fork_run over those outcomes here,
+           named "SubtleCrypto.generateKey/AesKeyGenParams.length", exactly as GK_SELECT declares §18.4.4 step
+           5's; a comparison in C is what must NOT appear at this site. */
+        DFAIL("§29.4.3 step 2 BRANCHES on AesKeyGenParams' `length`, and this one is unknown external input — "
+              "the three admitted lengths and the OperationError are four feasible outcomes, and deciding "
+              "them against a shape would delete every arm but one. Declare a step_fork_run over those "
+              "outcomes here, named \"SubtleCrypto.generateKey/AesKeyGenParams.length\", exactly as GK_SELECT "
+              "declares §18.4.4 step 5's; a comparison in C is what must NOT appear at this site");
+        return JS_STEP_ABRUPT;
+    } else {
+        double d = 0.0;
+
+        r = step_todouble_run(ctx, hdr, s->len_v, cb_result, &d, out_cb, out_argc);
+        if (r > 0) return r;
+        if (r < 0) return sc_reject(ctx, &s->p, presult);
+        cb_result = JS_UNDEFINED;
+        /* §3.3.6 [EnforceRange]'s ARM of §3.2.4.9 Abstract operations' ConvertToInt: a non-finite value, or
+           one whose integer part falls outside the type's range, is a TypeError rather than the modulo an
+           unadorned `unsigned short` would take. §27.5's `length` is 16-bit and unsigned, which is NARROWER
+           than §31.3's `unsigned long` one atom over — the same member name at two declared widths, so 70000
+           is a TypeError here and a number there. */
+        if (!isfinite(d)) {
+            JS_ThrowTypeError(ctx, "%s", "the `length` of the algorithm passed to SubtleCrypto.generateKey is "
+                                         "not a finite number");
+            return sc_reject(ctx, &s->p, presult);
+        }
+        d = trunc(d);   /* §3.2.4.9's IntegerPart: the value truncated toward zero */
+        if (d < 0 || d > 65535.0) {
+            JS_ThrowTypeError(ctx, "%s", "the `length` of the algorithm passed to SubtleCrypto.generateKey is "
+                                         "outside the range of an unsigned short");
+            return sc_reject(ctx, &s->p, presult);
+        }
+        s->length = (uint32_t)d;
+    }
+    STEP_GOTO(hdr->stage, GK_DONE, &hdr->get_phase, &hdr->str_phase, &hdr->num_phase, NULL);
+
+    STEP_ARM(GK_DONE);
+    JS_FreeValue(ctx, cb_result);
+    {
+        JSValue key;
+
+        /* §14.3.6 STEP 8: "Let result be the result of performing the generate key operation specified by
+           normalizedAlgorithm using algorithm, extractable and usages" — the whole of §29.4.3. `extractable`
+           and `usages` are the mint's arguments rather than writes after the fact, for the reason §14.3.9's
+           own step 11 and 12 are: a CryptoKey whose slots are filled in afterwards is a CryptoKey that
+           briefly exists with the wrong ones. */
+        switch ((GkAlgorithm)s->alg) {
+        case GK_ALG_AES_GCM:
+            key = aes_gcm_generate_key(ctx, s->length, s->extractable != 0, s->usages);
+            break;
+        default:
+            /* UNREACHABLE BY CONSTRUCTION and asserted rather than defended: GK_REGISTERED is this engine's
+               own table, the fork's range check refused an arm outside it and the concrete arm returned
+               before assigning, so a value here is those three having come apart rather than anything a page
+               said. */
+            DFAILF("§18.4.4 step 5 selected registry row %u, which GkAlgorithm does not name — the fork "
+                   "declared GK_FORK_OUTCOMES over GK_REGISTERED and this row is in neither",
+                   (unsigned)s->alg);
+            /* RELEASE: the row cannot be performed, which is what §18.4.4's own Otherwise answers for a name
+               it cannot resolve. Stated rather than left to whatever happened to be pending, because
+               sc_reject settles with the live exception and an arm that throws nothing would settle with
+               none. */
+            JS_ThrowDOMException(ctx, "NotSupportedError", "%s",
+                                 "the algorithm named is not a registered `generateKey` algorithm");
+            return sc_reject(ctx, &s->p, presult);
+        }
+        if (JS_IsException(key))
+            return sc_reject(ctx, &s->p, presult);
+        /* §14.3.6 STEP 9's FIRST ARM: "If result is a CryptoKey object: If the [[type]] internal slot of
+           result is "secret" or "private" and usages is empty, then throw a SyntaxError." §29.4.3 step 9 mints
+           a "secret" key outright, so this is the empty-usages test for the one registered row, and it is the
+           METHOD's step rather than the algorithm's — which is why it runs on what comes back.
+           STEP 9's SECOND ARM IS A WORLD NO REGISTERED ROW REACHES, and that is §29.2's Result column
+           ("generateKey … CryptoKey") rather than a narrowing this file chose: an AES key is symmetric, so
+           there is no CryptoKeyPair for its [[usages]]-of-privateKey test to be about. A row whose Result is a
+           pair is what builds that arm, and it builds CryptoKeyPair with it — the interface does not exist in
+           this engine at all, so there is nothing here that could answer the test wrongly.
+           IT READS THE MASK AND NOT THE KEY'S OWN SLOT, which is sound only while every row mints a "secret"
+           key: the day a row mints a "public" one, this test is what has to read [[type]] back. */
+        if (s->usages == 0) {
+            JS_FreeValue(ctx, key);
+            JS_ThrowDOMException(ctx, "SyntaxError", "%s",
+                                 "a secret key must be generated with at least one usage");
+            return sc_reject(ctx, &s->p, presult);
+        }
+        /* STEPS 10-12: queue the task, convert to an ECMAScript object in realm (a CryptoKey already is one),
+           and resolve. */
+        return sc_resolve(ctx, &s->p, key, presult);
+    }
+}
+
+static const IdlStepDecl GK_DECL = {
+    gk_step, sizeof(GkState), gk_visit, NULL,
+    "Web Cryptography §14.3.6 generateKey(algorithm, extractable, keyUsages)", GK_STEPS,
+    /* catches_abrupt: §14.3.6 step 3 REJECTS for every error normalizing an algorithm produced, and both of
+       the member getters can throw after suspending. */
+    1
+};
+
 /* ---- the per-realm install ------------------------------------------------------------------------------ */
 
 JSValue subtle_crypto_object(JSContext *ctx)
@@ -2525,6 +2860,7 @@ static void subtle_crypto_install_realm(JSContext *ctx)
     idl_install_method_exposed(ctx, proto, "verify", g_id_verify, IDL_SECURE_CONTEXT);
     idl_install_method_exposed(ctx, proto, "importKey", g_id_import_key, IDL_SECURE_CONTEXT);
     idl_install_method_exposed(ctx, proto, "exportKey", g_id_export_key, IDL_SECURE_CONTEXT);
+    idl_install_method_exposed(ctx, proto, "generateKey", g_id_generate_key, IDL_SECURE_CONTEXT);
     JS_SetClassProto(ctx, g_subtle_class, JS_DupValue(ctx, proto));
 
     global = JS_GetGlobalObject(ctx);
@@ -2696,6 +3032,13 @@ void subtle_crypto_init(JSContext *ctx)
     idl_returns_promise();
     idl_this_iface(subtle_crypto_is, "SubtleCrypto");
     idl_iface_brand(crypto_key_class());
+    /* §14's `Promise<(CryptoKey or CryptoKeyPair)> generateKey(AlgorithmIdentifier algorithm, boolean
+       extractable, sequence<KeyUsage> keyUsages)` — §14.3.9's LAST THREE POSITIONS EXACTLY, with its `format`
+       and its `keyData` union removed from the front. The three rows are therefore the same three rows that
+       list ends in, written the same way for the same reasons: a bare `AlgorithmIdentifier` is §18.4.4's
+       `(object or DOMString)`, `boolean` is §3.2.2's total ToBoolean, and the sequence's element type is
+       stated by idl_arg_enum below rather than by the row. */
+    static const IdlArgType GK_ARGS[] = { IDL_STRING_UNLESS_OBJECT, IDL_BOOLEAN, IDL_SEQUENCE_ENUM };
     g_id_export_key = idl_method_id_step(ctx, XK_ARGS, 2, NULL, 0, &XK_DECL, 0);
     idl_returns_promise();
     idl_this_iface(subtle_crypto_is, "SubtleCrypto");
@@ -2703,6 +3046,12 @@ void subtle_crypto_init(JSContext *ctx)
        same two statements sign and importKey make, over the same class and the same value list. */
     idl_iface_brand(crypto_key_class());
     idl_arg_enum(0, KEY_FORMATS);
+    g_id_generate_key = idl_method_id_step(ctx, GK_ARGS, 3, NULL, 0, &GK_DECL, 0);
+    idl_returns_promise();
+    idl_this_iface(subtle_crypto_is, "SubtleCrypto");
+    /* §3.2.18's `E` for the ELEMENT type of position 2's `sequence<KeyUsage>` — the same list §14.3.9's
+       position 4 declares, and the reason sc_usages_normalize cannot fail. */
+    idl_arg_enum(2, CRYPTO_KEY_USAGE_NAMES);
     /* DECLARED UNDER THE ROW THAT RELEASES IT, which is `crypto` — §10's component declares this one and its
        release reaches this one's, so core/platform.c's two-sided check ("a row with a release that declared no
        agent state cannot be asserted to have undone anything") is asking about the pair. Naming a component
@@ -2714,11 +3063,17 @@ void subtle_crypto_init(JSContext *ctx)
     agent_state_id("crypto", &g_id_verify, "§14.3.4's verify machine");
     agent_state_id("crypto", &g_id_import_key, "§14.3.9's importKey machine");
     agent_state_id("crypto", &g_id_export_key, "§14.3.10's exportKey machine");
+    agent_state_id("crypto", &g_id_generate_key, "§14.3.6's generateKey machine");
     agent_state_id("crypto", &g_id_encrypt, "§14.3.1's encrypt machine");
     agent_state_id("crypto", &g_id_decrypt, "§14.3.2's decrypt machine");
     agent_state_atom("crypto", &g_atom_name, "the Algorithm dictionary's `name` member name");
     agent_state_atom("crypto", &g_atom_hash, "HmacImportParams' `hash` member name");
-    agent_state_atom("crypto", &g_atom_length, "HmacImportParams' `length` member name");
+    agent_state_atom("crypto", &g_atom_length, "the `length` member name of §31.3's HmacImportParams and "
+                                               "of §27.5's AesKeyGenParams — ONE atom because it is one "
+                                               "string, and TWO dictionaries because the declared types "
+                                               "differ: §31.3's is `unsigned long` and §27.5's is `unsigned "
+                                               "short`, so their [EnforceRange] ranges are not the same and "
+                                               "neither machine may read the other's");
     agent_state_atom("crypto", &g_atom_iv, "AesGcmParams' `iv` member name");
     agent_state_atom("crypto", &g_atom_additional_data, "AesGcmParams' `additionalData` member name");
     agent_state_atom("crypto", &g_atom_tag_length, "AesGcmParams' `tagLength` member name");
@@ -2746,6 +3101,7 @@ void subtle_crypto_free(void)
     g_id_verify = -1;
     g_id_import_key = -1;
     g_id_export_key = -1;
+    g_id_generate_key = -1;
     g_id_encrypt = -1;
     g_id_decrypt = -1;
     g_rt = NULL;

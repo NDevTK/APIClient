@@ -1,4 +1,9 @@
-/* Web Cryptography API §14 SubtleCrypto interface — and, of its twelve methods, the FOUR this engine performs.
+/* Web Cryptography API §14 SubtleCrypto interface — and, of its twelve methods, the EIGHT this engine
+ * performs. THAT NUMBER IS A COUNT AND IT HAS BEEN WRONG HERE, which is why it is followed by the derivation
+ * rather than trusted: it read FOUR for as long as `encrypt`, `decrypt` and `exportKey` had been landed, and a
+ * count in prose goes stale the turn after somebody does the work. Ask the installer instead —
+ *     `grep -c idl_install_method_exposed core/crypto/subtle_crypto.c`
+ * over subtle_crypto_install_realm, which is the one place a member becomes performed.
  *
  *   [SecureContext,Exposed=(Window,Worker)]
  *   interface SubtleCrypto {
@@ -23,10 +28,16 @@
  * engine lacks, because FIPS 198-1 §4 is a CONSTRUCTION over the message digest already here (core/crypto/
  * hmac.h walks the ladder), so `importKey`, `sign` and `verify` follow it and nothing else can.
  *
- * WHAT REMAINS ABSENT, AND WHY IT IS NOT AN ORDERING ANYONE CHOSE. `encrypt`, `decrypt`, `generateKey`,
- * `deriveKey`, `deriveBits`, `exportKey`, `wrapKey` and `unwrapKey` are absent — the page's own TypeError names
- * each, and engine/idlgen.mjs's audit prints the list. The two of them that HMAC alone could reach are
- * §31.6.3's Generate Key, which needs §10.1.1's random source spent on key material, and §31.6.5's Export Key,
+ * WHAT REMAINS ABSENT, AND WHY IT IS NOT AN ORDERING ANYONE CHOSE. `deriveKey`, `deriveBits`, `wrapKey` and
+ * `unwrapKey` are absent — the page's own TypeError names each, and engine/idlgen.mjs's audit prints the list.
+ * THIS LIST HELD `encrypt`, `decrypt`, `generateKey` AND `exportKey` AND IS REWRITTEN RATHER THAN SHORTENED,
+ * because a list of ABSENCES is read by exactly one population — people who have come to build one of the
+ * entries — so it is wrong the moment it is useful and wrong in the direction that makes the work look bigger.
+ * What is durable is the DERIVATION and the SHAPE: run `node engine/idlgen.mjs` for today's set, and expect the
+ * missing ones to be the members whose algorithms need a field or bignum layer rather than members nobody got
+ * to. The one of them that HMAC alone could reach is §31.6.3's Generate Key — a second registry row on the
+ * `generateKey` that now exists, needing nothing built, and NOT the next diff for the reason the landing order
+ * below gives: zero sites in this corpus call it. Its sibling is §31.6.5's Export Key,
  * whose "raw" arm is small and whose "jwk" arm stands on the same JSON Web Key layer §31.6.4's jwk arm does.
  * THAT LAYER IS core/crypto/jwk.c AND THIS SENTENCE USED TO POINT AT A RESIDUAL INSTEAD — "named as a residual
  * at hmac.h's `hmac_import_key`" — which was true when written, went stale the day that arm landed, and is
@@ -72,7 +83,12 @@
  * building to it would have admitted a key of any length AND refused the one `use` a real AES-GCM JSON Web Key
  * carries. Both halves were checkable against the fetched document in one command, and neither was checked. (2) §29.4.1 "Encrypt" and §29.4.2 "Decrypt" as ONE landing: they share §29.3's AesGcmParams, the byte
  * copy and the whole §7.1/§7.2 walk, so splitting them is churn and not decomposition. (3) §29.4.3 "Generate
- * Key", which needs §10.1.1's stream reached from a SubtleCrypto — the residual below. (4) §29.4.5 "Export
+ * Key" with §14.3.6 "The generateKey method" and the route to §10.1.1's stream, AS ONE LANDING — BUILT, and
+ * the three could not be split for §A-FIELD-A-CONSUMER-DEFAULTS' reason: the route is a write with no reader
+ * until the algorithm calls it, and the algorithm has no caller until the method is installed. THE FEATURE
+ * DETECT THAT LANDING FLIPS WAS PRICED FIRST and subtle_crypto.c's §14.3.6 banner states the derivation; what
+ * it turned on is that the branch the guard selects calls `digest`, `importKey` and `sign` over SHA-1 and
+ * SHA-256, all three of which were already registered for those algorithms. (4) §29.4.5 "Export
  * Key" and §14.3.10 "The exportKey method", whose "jwk" arm stands on the same JSON Web Key layer §31.6.4's
  * and §29.4.4's do — core/crypto/jwk.c, which now exists, in the DECODING direction only. A key that crosses
  * IndexedDB additionally needs §13.5 "Serialization and deserialization steps", and THIS LINE USED TO SAY THAT
@@ -102,17 +118,20 @@
  * RETIREMENT: this note goes when every `*_REGISTERED_N` in the component is counted from a table the fork
  * numbers, so the sentence above cannot be half-true again.
  *
- * NAMED RESIDUAL — §10.1.1's STREAM IS REACHED FROM A Crypto AND §29.4.3 RUNS ON A SubtleCrypto. NOT COVERED:
- * core/crypto/crypto.c draws random bytes through a file-static helper whose first argument is the Crypto
- * OBJECT, because the draw position is latched into the running flow's COW delta AGAINST that object — which is
- * what makes two forked arms mint DIFFERENT key material rather than the same bytes twice. core/crypto/crypto.h
- * exports only `crypto_init` and `crypto_free`, so this interface has neither the object nor an entry, and
- * §29.4.3's "Generate an AES key of length equal to the length member of normalizedAlgorithm" has no source it
- * may use. THE NEXT DIFF BUILDS the route from a SubtleCrypto to its realm's Crypto and draws through the SAME
- * object the getter latches on, so one stream serves both members and neither can rewind the other. HOW ITS
- * ABSENCE WOULD SHOW: a second source latched on a different object would leave two flows forked above a
- * `generateKey` holding byte-identical key material — a solver defect and not a cryptographic one, observable
- * as two arms that cannot be told apart downstream of the key rather than as any wrong ciphertext.
+ * THE RESIDUAL THAT STOOD HERE IS RETIRED AND ITS ARGUMENT IS KEPT, because a reader who re-derives the
+ * problem will re-invent the wrong answer to it. It read: §10.1.1's stream is reached from a Crypto and §29.4.3
+ * runs on a SubtleCrypto, core/crypto/crypto.c draws through a file-static helper whose first argument is the
+ * Crypto OBJECT — the draw position being latched into the running flow's COW delta AGAINST that object, which
+ * is what makes two forked arms mint DIFFERENT key material rather than the same bytes twice — and crypto.h
+ * exported only `crypto_init` and `crypto_free`, so §29.4.3 had no source it might use. Its NEXT DIFF clause
+ * said to build the route from a SubtleCrypto to its realm's Crypto and draw through the SAME object the
+ * getter latches on, and that is exactly what `crypto_random_bytes` is: it reads the per-realm slot the
+ * `crypto` getter reads, so one stream serves both members and neither can rewind the other.
+ * WHAT THE ARGUMENT STILL FORBIDS, once the route exists: any SECOND source. A member that built its own
+ * record, or latched on anything but that object, would leave two flows forked above a `generateKey` holding
+ * byte-identical key material — a solver defect and not a cryptographic one, observable as two arms that
+ * cannot be told apart downstream of the key rather than as any wrong ciphertext. crypto.h states that at the
+ * entry, which is where a reader reaching for a shortcut will be standing.
  *
  * WHAT DIGEST IS FOR IN THIS ENGINE, WHICH IS TWO THINGS AND NEITHER IS OPTIONAL. Real bundles call it: an
  * IDL triage over this corpus found `crypto.subtle.digest` referenced by two bundles across twenty call sites,

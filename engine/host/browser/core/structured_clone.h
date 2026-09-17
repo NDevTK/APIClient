@@ -112,10 +112,13 @@ void structured_register_transferable(const StructuredTransferable *t);
  *
  * WHAT IT IS NOT YET IS SCOREABLE, AND THAT IS WHY IT IS RECORDED AND NOT BUILT. The corpus's own oracle for
  * the first consumer is WebCryptoAPI/serialization/, nineteen collected documents that share one META script;
- * every one of them calls crypto.subtle.generateKey and crypto.subtle.exportKey, and neither is installed —
- * `git grep -c '"generateKey"' -- '*.c' '*.h'` answers nothing at all, against two for "importKey". So those
- * nineteen fail before they reach structuredClone, and a seam landed today would move their verdict by zero:
- * an absent crash is not a correct value. core/crypto/crypto_key.h states the resulting landing order. */
+ * every one of them calls crypto.subtle.generateKey and crypto.subtle.exportKey. THIS SENTENCE USED TO END
+ * "and neither is installed — `git grep -c '"generateKey"' -- '*.c' '*.h'` answers nothing at all", and both
+ * are installed now; it is rewritten rather than deleted because the CONCLUSION is unchanged and a reader who
+ * checks the premise would otherwise discard it. What blocks those documents is that no ALGORITHM has a row in
+ * both members' registries — §14.3.6's one row is AES-GCM and §14.3.10's one row is HMAC — so they still fail
+ * before they reach structuredClone, and a seam landed today would still move their verdict by zero: an absent
+ * crash is not a correct value. core/crypto/crypto_key.h states the resulting landing order. */
 
 /* THE TRANSFER LIST IS A DECLARED IDL TYPE AND NOT A WALK THIS FILE PERFORMS. It used to be one — a
  * function reading `list.length` and one index per entry — and that is the ARRAY-LIKE algorithm rather than

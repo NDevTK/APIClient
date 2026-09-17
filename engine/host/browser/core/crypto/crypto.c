@@ -55,6 +55,32 @@ static void crypto_stream_take(JSContext *ctx, JSValueConst crypto_obj, CryptoSt
     s->drawn += (n + 7) / 8;
 }
 
+/* crypto.h's ENTRY, and the two lines above it are the whole of it: this realm's Crypto, and a draw through
+   the same object.
+   THE OBJECT IS THE ONE THE GETTER ANSWERS WITH, read out of the same per-realm slot `crypto_get_crypto`
+   reads, so the position `cow_capture_host_state` latches is the position every §10.1.1 draw latches. A
+   SubtleCrypto member that reached for its own record — or built one lazily — would be a SECOND stream, and
+   crypto.h states what that costs: two forked arms minting identical key material, which is invisible
+   downstream of the key.
+   IT IS NOT A DCHECK THAT THE SLOT IS FILLED. core/realm.h runs the per-realm installs in DECLARATION order
+   and subtle_crypto_init is called from crypto_init, so §14's members exist only in a realm §10's install has
+   already finished — but a caller reaching this from some later-declared component is a state the assert
+   cannot be compiled out of, since the dereference below is load-bearing in release. */
+void crypto_random_bytes(JSContext *ctx, uint8_t *out, size_t n)
+{
+    JSValue obj = realm_value_get(ctx, g_obj_slot);
+    CryptoStream *s;
+
+    CHECK(!JS_IsUndefined(obj), "§10.1's draw was asked for before this realm's Crypto existed — the stream "
+                                "is built with the realm and a draw before that would be a second stream, "
+                                "which is the one thing crypto.h says must not happen");
+    s = JS_GetOpaque(obj, g_crypto_class);
+    CHECK(s != NULL, "this realm's Crypto carries no §10.1 draw position — crypto_install_realm sets the "
+                     "opaque on the object it puts in the slot, so the two have come apart");
+    crypto_stream_take(ctx, obj, s, out, n);
+    JS_FreeValue(ctx, obj);
+}
+
 /* THE RECORD AS A COLLECTOR ENTRY SEES IT — JS_GetAnyOpaque, and never JS_GetOpaque(val, g_crypto_class).
    core/agent_state.h states the rule and the reason: crypto_free gives the class id back, and the collection
    that finalizes this agent's object graph runs AFTER core/platform.h's release column, so a lookup against

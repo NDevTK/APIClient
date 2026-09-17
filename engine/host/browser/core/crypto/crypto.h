@@ -79,10 +79,32 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_CRYPTO_CRYPTO_H
 #define ENGINE_HOST_BROWSER_CORE_CRYPTO_CRYPTO_H
 
+#include <stddef.h>
+#include <stdint.h>
+
 #include "quickjs.h"
 
 /* Declared ONCE PER AGENT; the per-realm install registers itself through core/realm.h. */
 void crypto_init(JSContext *ctx);
 void crypto_free(void);
+
+/* §10.1's STREAM, REACHED FROM A SIBLING INTERFACE RATHER THAN FROM A MEMBER OF THIS ONE.
+ *
+ * §14.3.6's generateKey runs on a SubtleCrypto and its algorithm steps say to generate key material —
+ * Web Cryptography §29.4.3 "Generate Key" step 3 is "Generate an AES key of length equal to the length member
+ * of normalizedAlgorithm" — so the one source this agent has must be reachable from outside §10's own members.
+ *
+ * IT DRAWS THROUGH THE SAME OBJECT THE `crypto` GETTER LATCHES ON, WHICH IS THE WHOLE OF WHY THIS IS AN ENTRY
+ * AND NOT A SECOND HELPER. The draw position lives on the realm's Crypto and is captured against THAT object,
+ * so a second source latched anywhere else would give the two members two streams: two flows forked above a
+ * `generateKey` would then mint byte-identical key material where a rewound-and-replayed execution must see
+ * the position the FORK was taken at. That is a solver defect and not a cryptographic one, which is exactly
+ * why it has to be stated here rather than discovered — it shows as two arms nothing downstream of the key can
+ * tell apart, never as a wrong ciphertext.
+ *
+ * `out` RECEIVES `n` BYTES AND THE POSITION ADVANCES BY THEM. The stream is a counter mixer standing in for a
+ * device and everything the paragraphs above say about what must never rest on it holds here unchanged: this
+ * is reproducible by construction, so a key drawn from it is a key a replay reproduces. */
+void crypto_random_bytes(JSContext *ctx, uint8_t *out, size_t n);
 
 #endif

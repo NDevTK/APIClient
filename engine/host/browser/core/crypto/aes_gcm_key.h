@@ -58,4 +58,16 @@
 JSValue aes_gcm_import_key(JSContext *ctx, const char *format, JSValueConst key_data, bool extractable,
                            uint32_t usages);
 
+/* §29.4.3 Generate Key, WHOLE — the operation §14.3.6 step 8 performs when normalizedAlgorithm names AES-GCM.
+   `length_bits` is §27.5 AesKeyGenParams' required `length` member, which §29.2's Registration gives as this
+   row's Parameters type, already converted under Web IDL §3.3.6 [EnforceRange] by the normalization; step 2's
+   three-value test is the STANDARD's and is performed here, on the page's number, as a rejection.
+   IT TAKES NO `format` AND RETURNS A CryptoKey AND NOT A PAIR, which is §29.2's Result column for this row
+   ("generateKey … CryptoKey") rather than a narrowing: an AES key is symmetric, so §14.3.6 step 9's
+   CryptoKeyPair arm is a world no registered row of this engine reaches.
+   Returns JS_EXCEPTION with the exception pending: a "SyntaxError" for step 1 and an "OperationError" for
+   step 2. Note that step 2's exception is NOT the `raw` import arm's "DataError" for the same three lengths —
+   the two chapters name different exceptions and a page reads which one it got. */
+JSValue aes_gcm_generate_key(JSContext *ctx, uint32_t length_bits, bool extractable, uint32_t usages);
+
 #endif

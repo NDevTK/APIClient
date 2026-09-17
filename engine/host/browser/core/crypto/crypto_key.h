@@ -105,13 +105,19 @@
  * The corpus's oracle for it is WebCryptoAPI/serialization/ — nineteen documents, collected (WebCryptoAPI is
  * an entry of engine/wpt.mjs's own path list), every one of them a thin vector list over the single META
  * script serialization.js, which calls crypto.subtle.generateKey and then crypto.subtle.exportKey to compare
- * the round trip. NEITHER IS INSTALLED: core/crypto/subtle_crypto.c installs digest, sign, verify and
- * importKey and nothing else, and `git grep -c '"generateKey"' -- '*.c' '*.h'` answers nothing at all against
- * two for "importKey". So all nineteen fail at their first await, before structuredClone is reached, and the
- * seam above would move their verdict by ZERO — its absence of a crash would not be a correct value.
- * SO THE ORDER IS §14.3.6's generateKey, THEN §14.3.10's exportKey, THEN the seam, and the first two are the
- * larger landing rather than the detour: 60 of this standard's documents name generateKey, against the
- * nineteen that need the seam and are already blocked twice over. What can score the seam WITHOUT them is a
+ * the round trip. THIS PARAGRAPH SAID `NEITHER IS INSTALLED` AND NAMED A `git grep -c` THAT ANSWERED NOTHING,
+ * AND BOTH MEMBERS ARE INSTALLED NOW — it is rewritten rather than deleted because its CONCLUSION survives its
+ * premises and a reader who finds the premises false will discard the conclusion with them. What decides those
+ * documents is not whether the two members exist but whether ONE ALGORITHM has a row in BOTH registries, and
+ * none does: §14.3.6's registry is one row and that row is AES-GCM, §14.3.10's is one row and that row is
+ * HMAC. So `aes-gcm.https.any.js` now reaches exportKey and takes step 6's NotSupportedError there,
+ * `hmac.https.any.js` takes §18.4.4's at generateKey, and every other vector names an algorithm neither
+ * registry has. They still fail before structuredClone is reached, so the seam above would still move their
+ * verdict by ZERO — its absence of a crash would not be a correct value.
+ * SO THE ORDER IS §29.4.5 AES-GCM Export Key — the row that closes that gap on the `exportKey` that already
+ * exists — THEN the seam. The `generateKey` half of this order is DONE; the sentence used to put it first and
+ * the reasoning that put it there is unchanged, since 60 of this standard's documents name generateKey against
+ * the nineteen that need the seam and are already blocked. What can score the seam WITHOUT them is a
  * key made by the importKey that does exist and used by the sign that does exist — import a raw HMAC key,
  * clone it, sign with both and compare — and no collected document does that, so building one is a diff of
  * its own and is named here rather than assumed. RETIREMENT: this record goes when a registry of serializable

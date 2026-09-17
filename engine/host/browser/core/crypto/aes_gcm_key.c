@@ -55,6 +55,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "core/crypto/aes_gcm_key.h"
+#include "core/crypto/crypto.h"
 #include "core/crypto/crypto_key.h"
 #include "core/crypto/jwk.h"
 #include "core/idl_slots.h"
@@ -66,6 +67,15 @@
    §27's and §28's Import Key permit only encrypt and decrypt, so a shared constant here would be four
    algorithms' different sentences under one name. */
 #define AES_GCM_IMPORT_USAGES                                                                                 \
+    ((uint32_t)(CRYPTO_KEY_USAGE_ENCRYPT | CRYPTO_KEY_USAGE_DECRYPT | CRYPTO_KEY_USAGE_WRAP_KEY |             \
+                CRYPTO_KEY_USAGE_UNWRAP_KEY))
+
+/* §29.4.3 step 1's four usages. THE SAME FOUR WORDS AS THE CONSTANT ABOVE AND A SECOND CONSTANT ANYWAY, on
+   that one's own argument read one chapter further: these are two sentences of the standard that happen to
+   agree, and a single name would make a later edition's disagreement invisible — the §31 chapter's import and
+   generate rows already differ from each other in exactly this way. The cost of the duplicate is one line; the
+   cost of the share is that nothing would report the day they part. */
+#define AES_GCM_GENERATE_USAGES                                                                               \
     ((uint32_t)(CRYPTO_KEY_USAGE_ENCRYPT | CRYPTO_KEY_USAGE_DECRYPT | CRYPTO_KEY_USAGE_WRAP_KEY |             \
                 CRYPTO_KEY_USAGE_UNWRAP_KEY))
 
@@ -123,9 +133,17 @@ static const char *aes_gcm_jwk_alg_for(uint32_t byte_len)
 /* §29.4.4 STEPS 3-9, OVER THE `data` STEP 2 PRODUCED — ONE TAIL FOR BOTH ARMS, which is what step 2 being a
    dispatch means: its `raw` and `jwk` arms differ in how they obtain `data` and in nothing after that. It is a
    function of its own so that the jwk arm's decoded key material has exactly ONE owner and exactly one free,
-   rather than a `free` before each of that arm's throws. */
-static JSValue aes_gcm_import_key_data(JSContext *ctx, const uint8_t *bytes, uint32_t byte_len,
-                                       bool extractable, uint32_t usages);
+   rather than a `free` before each of that arm's throws.
+   AND IT IS §29.4.3 STEPS 5-13 AS WELL, WHICH IS WHY IT NO LONGER CARRIES `import` IN ITS NAME. The two
+   chapters write the same eight writes in a different order and differ in exactly ONE sentence: §29.4.4 step 7
+   is "Set the length attribute of algorithm to the length, in bits, of data" and §29.4.3 step 8 is "Set the
+   length attribute of algorithm to equal the length member of normalizedAlgorithm". Those are the same
+   number for a generated key and they are the same number BY CONSTRUCTION rather than by resemblance —
+   §29.4.3 step 3 generates a key OF that length — so the generate path asserts the equality at its own call
+   rather than relying on a reader noticing it. A name saying `import` over a body two chapters reach would be
+   this file's AES_GCM_IMPORT_USAGES hazard one level up: one name standing for two sentences. */
+static JSValue aes_gcm_key_from_bytes(JSContext *ctx, const uint8_t *bytes, uint32_t byte_len,
+                                      bool extractable, uint32_t usages);
 
 JSValue aes_gcm_import_key(JSContext *ctx, const char *format, JSValueConst key_data, bool extractable,
                            uint32_t usages)
@@ -148,7 +166,7 @@ JSValue aes_gcm_import_key(JSContext *ctx, const char *format, JSValueConst key_
        arm writes word for word, measured against the fetched document sentence by sentence rather than assumed
        from the two arms looking alike; that header states the diff, including which sub-steps are NOT shared.
        The decoded key material is this function's for exactly as long as the tail needs it, which is the whole
-       reason aes_gcm_import_key_data is a separate function: one owner, one free. */
+       reason aes_gcm_key_from_bytes is a separate function: one owner, one free. */
     if (strcmp(format, "jwk") == 0) {
         uint8_t *data = NULL;
         const char *want;
@@ -176,7 +194,7 @@ JSValue aes_gcm_import_key(JSContext *ctx, const char *format, JSValueConst key_
             free(data);
             return JS_EXCEPTION;
         }
-        r = aes_gcm_import_key_data(ctx, data, byte_len, extractable, usages);
+        r = aes_gcm_key_from_bytes(ctx, data, byte_len, extractable, usages);
         free(data);
         return r;
     }
@@ -203,25 +221,79 @@ JSValue aes_gcm_import_key(JSContext *ctx, const char *format, JSValueConst key_
     if (byte_len != 16 && byte_len != 24 && byte_len != 32)
         return JS_ThrowDOMException(ctx, "DataError", "%s",
                                     "an AES-GCM key must be 128, 192 or 256 bits long");
-    return aes_gcm_import_key_data(ctx, bytes, byte_len, extractable, usages);
+    return aes_gcm_key_from_bytes(ctx, bytes, byte_len, extractable, usages);
 }
 
-static JSValue aes_gcm_import_key_data(JSContext *ctx, const uint8_t *bytes, uint32_t byte_len,
-                                       bool extractable, uint32_t usages)
+static JSValue aes_gcm_key_from_bytes(JSContext *ctx, const uint8_t *bytes, uint32_t byte_len,
+                                      bool extractable, uint32_t usages)
 {
     JSValue algorithm, handle;
     uint32_t length = byte_len * 8u;
 
-    /* STEP 3: "Let key be a new CryptoKey object representing an AES key with value data." §13.3's [[handle]]
-       is those bytes, as an ArrayBuffer — core/crypto/crypto_key.h states why it is a JS value and not a
-       malloc'd buffer. */
+    /* §29.4.4 STEP 3 / §29.4.3 STEP 5: "Let key be a new CryptoKey object representing an AES key with value
+       data", and "Let key be a new CryptoKey object representing the generated AES key". §13.3's [[handle]] is
+       those bytes, as an ArrayBuffer — core/crypto/crypto_key.h states why it is a JS value and not a malloc'd
+       buffer. */
     handle = JS_NewArrayBufferCopy(ctx, bytes ? bytes : (const uint8_t *)"", byte_len);
-    CHECK(!JS_IsException(handle), "§13.3's [[handle]] for an imported AES-GCM key could not be allocated");
-    /* STEPS 5-7. The name is §29.4.4 step 6's own literal rather than the key the registry matched: §18.4.4
-       step 5 sets algName to "the value of the matching key", so a page naming "aes-gcm" normalizes to the
-       registry's spelling, and step 6 then writes the one this chapter states. */
+    CHECK(!JS_IsException(handle), "§13.3's [[handle]] for an AES-GCM key could not be allocated");
+    /* §29.4.4 STEPS 5-7 / §29.4.3 STEPS 6-8. The name is each chapter's own literal rather than the key the
+       registry matched: §18.4.4 step 5 sets algName to "the value of the matching key", so a page naming
+       "aes-gcm" normalizes to the registry's spelling, and the step then writes the one this chapter states.
+       THE `length` IS THE ONE SENTENCE THE TWO CHAPTERS DO NOT SHARE — see the forward declaration — and it is
+       derived from `byte_len` here, which is §29.4.4 step 7's own wording; the generate path's call is where
+       §29.4.3 step 8's operand is asserted equal to it. */
     algorithm = aes_key_algorithm_new(ctx, "AES-GCM", length);
-    /* STEPS 4, 8 AND 9, plus §14.3.9's steps 11 and 12 — see the file comment for why those two are arguments
-       of the mint rather than writes after it. */
+    /* §29.4.4 STEPS 4, 8 AND 9 / §29.4.3 STEPS 9-13, plus §14.3.9's steps 11 and 12 and §14.3.6's `extractable`
+       and `usages` — see the file comment for why those are arguments of the mint rather than writes after it. */
     return crypto_key_new(ctx, CRYPTO_KEY_TYPE_SECRET, extractable, algorithm, usages, handle);
+}
+
+
+/* §29.4.3 "Generate Key", WHOLE — the operation §14.3.6 step 8 performs when normalizedAlgorithm names
+   AES-GCM: "Let result be the result of performing the generate key operation specified by normalizedAlgorithm
+   using algorithm, extractable and usages."
+   `length_bits` is §27.5 AesKeyGenParams' `length` member, already through Web IDL §3.2.4.9's ConvertToInt
+   under §3.3.6 [EnforceRange] at the normalization — so it is a number this engine computed and the range test
+   below is the STANDARD's step 2 rather than a conversion this file repeats. */
+JSValue aes_gcm_generate_key(JSContext *ctx, uint32_t length_bits, bool extractable, uint32_t usages)
+{
+    uint8_t material[32];
+
+    DCHECK((usages & ~(uint32_t)CRYPTO_KEY_USAGES_ALL) == 0,
+           "§29.4.3 was given a usages mask with a bit outside §13.2's list of recognized key usage values — "
+           "§9's normalized value is what this argument is, and this engine is the only thing that builds one");
+    /* STEP 1. §29.4.4's list is the same four words and IS A DIFFERENT SENTENCE, which is why this is a second
+       constant and not a reuse of AES_GCM_IMPORT_USAGES — that constant's own comment states the rule, and the
+       two happening to agree today is not a reason to make one name answer for both. */
+    if ((usages & ~AES_GCM_GENERATE_USAGES) != 0)
+        return JS_ThrowDOMException(ctx, "SyntaxError", "%s",
+                                    "an AES-GCM key may only be generated to encrypt, to decrypt, to wrap a "
+                                    "key or to unwrap one");
+    /* STEP 2: "If the length member of normalizedAlgorithm is not equal to one of 128, 192 or 256, then throw
+       an OperationError." A PAGE SUPPLIES THAT NUMBER, so it is the standard's refusal and never an assert —
+       `generateKey({name:"AES-GCM",length:7}, …)` is a rejected promise in every browser and an abort here
+       would hand any page a switch. It is an OperationError and not the `raw` import arm's DataError: the two
+       chapters name different exceptions for the same three lengths and a page reads which it got. */
+    if (length_bits != 128 && length_bits != 192 && length_bits != 256)
+        return JS_ThrowDOMException(ctx, "OperationError", "%s",
+                                    "an AES-GCM key must be 128, 192 or 256 bits long");
+    /* STEP 3: "Generate an AES key of length equal to the length member of normalizedAlgorithm." The source is
+       §10.1's stream, reached through crypto.h's entry so that BOTH members draw from the one position this
+       realm's Crypto carries — that header states what a second stream would cost a forked search.
+       STEP 4 — "If the key generation step fails, then throw an OperationError" — HAS NO ARM HERE AND THAT IS
+       A STATEMENT RATHER THAN AN OMISSION: the draw is a counter mixer over a position that cannot fail, so
+       the step's condition is false by construction. A device-backed source would put its failure here. */
+    DCHECK(length_bits / 8u <= sizeof material,
+           "§29.4.3 step 3 was asked for more key material than step 2 admits — the three lengths step 2 "
+           "leaves standing are 128, 192 and 256 bits and this buffer holds the largest of them");
+    crypto_random_bytes(ctx, material, length_bits / 8u);
+    /* STEPS 5-13. `byte_len * 8` inside that tail IS §29.4.3 step 8's "the length member of
+       normalizedAlgorithm", and the equality is asserted rather than left to the reader — the two chapters
+       write that one sentence differently and they agree here only because step 3 drew exactly this many
+       bytes. */
+    DCHECK((length_bits / 8u) * 8u == length_bits,
+           "§29.4.3 step 8's `length` member and step 3's generated key have come apart — the tail sets the "
+           "AesKeyAlgorithm's `length` from the byte count, which is §29.4.4 step 7's wording, and the two "
+           "chapters agree only while the draw is exactly length/8 bytes");
+    return aes_gcm_key_from_bytes(ctx, material, length_bits / 8u, extractable, usages);
 }
