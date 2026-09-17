@@ -41,87 +41,35 @@
  * hangs off is keyed by a private Symbol the page never receives, so §13.1's "opaque reference to keying
  * material" holds exactly as it does for the other six slots.
  *
- * §13.5's SERIALIZATION IS A RESIDUAL, AND BOTH STATEMENTS OF WHY HAVE BEEN WRONG — each recorded rather than
- * silently rewritten, because the next reader will otherwise re-derive the claim it made. THE FIRST said "the
- * diff that adds [[handle]] is the diff that must add §13.5 beside it, because a clone that drops the handle
- * would produce a key that is not the key." Its premise does not hold: a platform object the serializer has no
- * encoding for is REFUSED, and core/structured_clone.c re-reports that refusal as HTML §2.7's "DataCloneError"
- * DOMException, so no path ever silently lost the handle. THE SECOND said the ten steps are ones
- * `structured_clone.c would have to route`, AND THAT FILE HAS NO ARM TO ROUTE THEM: it hands the whole value
- * to the engine's own writer and owns only which values are refused and with which exception. The refusal is
- * that writer's per-class dispatch in engine/qjs/quickjs.c falling through to its default arm — which
- * core/indexeddb/idb_key_path.c already states in as many words, about Blob, in a component this clause's
- * author never opened. THE METHOD IS THE FINDING: a clause written in ONE file reasons from where its author
- * is standing, so it names the nearest file it can see rather than the one that decides.
+ * §13.5's SERIALIZATION AND DESERIALIZATION STEPS ARE BUILT, AS A ROW OF HTML §2.7.1's REGISTRY — the ten
+ * steps are in crypto_key.c beside the mint whose slots they read, and the seam they are a row of is in
+ * core/structured_clone.h. The NAMED RESIDUAL that stood here is retired by that landing, which is the
+ * condition it stated; TWO OF ITS FINDINGS SURVIVE IT and are kept, because each is one a reader re-derives
+ * from the nearest thing that looks like it:
+ *   - A CLAUSE WRITTEN IN ONE FILE REASONS FROM WHERE ITS AUTHOR IS STANDING. This residual twice named the
+ *     wrong file as the one that had to change — first claiming a clone could silently lose the handle (a
+ *     platform object with no encoding is REFUSED, not dropped), then that the ten steps were ones
+ *     core/structured_clone.c would `route`, when that file hands the whole value to the engine's own writer
+ *     and owns only which values are refused. The file that decided was engine/qjs/quickjs.c's per-class
+ *     dispatch, which core/indexeddb/idb_key_path.c had already said in as many words, about Blob, in a
+ *     component the clause's author never opened.
+ *   - THE SEAM AND THE ROW LANDED AS ONE COMMIT, and that is §NO STUBS rather than convenience: a registry
+ *     with no row is a write with no reader, and a row whose steps are a shape makes structuredClone appear
+ *     to succeed and hand back something that is not the key.
  *
- * WHAT IS NOT COVERED IS TWO SUBPROBLEMS AND §13.5 IS THE SECOND. HTML §2.7.1 "Serializable objects" makes a
- * platform object serializable "if their primary interface is decorated with the [Serializable] IDL extended
- * attribute", and this engine has NO ARM FOR THAT AT ALL: core/structured_clone.h registers HTML §2.7.2's
- * TRANSFERABLE interfaces, which MOVE and detach, and nothing registers a serializable one — so CryptoKey
- * would be the first, and every other [Serializable] interface in this tree is refused by that same default.
+ * §13.5 CARRIES FIVE OF §13.3's SEVEN SLOTS, NOT SEVEN, and neither of its lists names a CACHED slot — so §9
+ * Terminology's two cached objects are re-minted in the target realm out of the deserialized ones, which is
+ * what keeps one key's `algorithm` from being another key's. crypto_key.c states that at the steps.
  *
- * WHAT THE NEXT DIFF BUILDS, AS ONE LANDING, because a seam with no registrant is a write with no reader:
- * (1) the engine's serializable seam — a wire tag beside BC_TAG_TRANSFER_REFERENCE carrying HTML §2.7.3
- * StructuredSerializeInternal step 19's "the identifier of the primary interface of value" and then ONE
- * sub-value emitted by the SAME writer under the SAME `memory`, which is what makes it a sub-serialization
- * and not a second encoding; a host hook pair beside JSTransferWriteHook; and a reader that CREATES its
- * instance, registers it, and only then reads that sub-value. (2) a registry in core/structured_clone.c keyed
- * by that IDENTIFIER and never by a row index, because these bytes outlive the turn. (3) §13.5's ten steps
- * here, as that registry's row. core/structured_clone.h holds the derivation of all three from §2.7.3 and
- * §2.7.6; what follows is only what is specific to THIS interface.
- *
- * AND (1) USED TO END `a reader frame that RESERVES its object-reference slot before that sub-value is read
- * and patches it after, which is the order BCR_TA already uses and the only one under which the writer's
- * numbering and the reader's agree` — WHICH IS THE WRONG IDIOM, recorded rather than quietly swapped because
- * it is the one a reader re-derives from the nearest thing in the engine that looks like it. §2.7.6 step 22
- * CREATES the instance, step 23 sets memory[serialized] to it, and step 24 performs the deserialization steps
- * — so the object is registered BEFORE any sub-value is read, and §2.7.1 says the steps receive "a
- * newly-created instance of the platform object type in question, with none of its internal data set up".
- * BC_TAG_TYPED_ARRAY reserves-and-patches because a typed array cannot exist before its buffer; a
- * serializable can, and a row is therefore TWO operations, create and fill, rather than one. The clause was
- * right that the two halves must agree about the numbering and wrong about which order achieves it.
- *
- * AND `ONE sub-value` IS THIS ENGINE'S CHOICE AND NOT §13.5's COUNT. §13.5 performs TWO sub-serializations —
- * step 3's [[algorithm]] and step 4's [[usages]] — beside three plain field copies, so a row that hands the
- * writer ONE value is handing it a HOLDER that carries all five and lets the walk reach the two nested ones
- * under the same `memory`. That is a sound design and it is a design; a residual that reads it as a spec fact
- * would send its next reader to look for a one-sub-value sentence that is not there. What makes it cheap here
- * is that all five slots are already JS values in the record below — [[handle]] is the ArrayBuffer the mint
- * was given — so the holder needs no encoding this file does not already hold.
- *
- * AND §13.5 CARRIES FIVE OF §13.3's SEVEN SLOTS, NOT SEVEN. Its serialization steps set [[Type]],
- * [[Extractable]], [[Algorithm]], [[Usages]] and [[Handle]], and its deserialization steps mirror them — five
- * and five, counted as the top-level items of two flat lists. Neither names a CACHED slot, because
- * HTML §2.7.1 hands the deserialization steps a value that is "a newly-created instance of the platform
- * object type in question, with none of its internal data set up": §9 Terminology's two cached objects are
- * RE-MINTED in the target realm out of the deserialized slots, which is what the mint below already does and
- * what keeps one key's `algorithm` from being another key's.
- *
- * HOW ITS ABSENCE SHOWS is a `structuredClone(key)` or a `postMessage(key)` throwing a DataCloneError where a
- * browser hands back an equal key, and any page that round-trips a key through an IndexedDB store, which is
- * §5.2 Key Storage's own stated use of this interface.
- *
- * AND WHAT CAN SCORE IT HAS CHANGED, WHICH IS THE WHOLE OF WHY THIS PARAGRAPH IS REWRITTEN AGAIN. The
- * corpus's oracle is WebCryptoAPI/serialization/ — nineteen documents, collected (WebCryptoAPI is an entry of
- * engine/wpt.mjs's own path list), every one a thin vector list over the single META script serialization.js,
- * which calls crypto.subtle.generateKey and then crypto.subtle.exportKey to compare the round trip.
- * TWO PREMISES HAVE NOW BEEN FALSIFIED HERE IN TURN AND BOTH ARE KEPT, because each is one a reader
- * re-derives. The first said NEITHER MEMBER IS INSTALLED; both are. The second said no ALGORITHM has a row in
- * BOTH registries, on the ground that §14.3.6 registered AES-GCM alone and §14.3.10 registered HMAC alone —
- * so those documents failed before structuredClone and a seam landed then would have moved their verdict by
- * ZERO. §29.4.5 AES-GCM Export Key has landed, so AES-GCM is now a row in BOTH, and that
- * sentence is false of exactly one algorithm.
- * SO THE BLOCKING CLAIM IS NARROWER AND THE ORDER IT DECIDED IS SPENT. `aes-gcm.https.any.js` no longer stops
- * at an exportKey refusal: it generates, exports, and reaches structuredClone — which has no arm for this
- * interface, so what it meets there is the seam's own absence rather than a registry gap. That is the first
- * time anything in this tree can score the seam, and it is ONE document rather than nineteen: `hmac.https.
- * any.js` still takes §18.4.4's refusal at generateKey (HMAC has an importKey row and no generateKey row), and
- * every other vector names an algorithm neither registry has.
- * THE SEAM IS THEREFORE THE NEXT DIFF AND IT NOW HAS AN ORACLE. What this paragraph used to offer INSTEAD of
- * one — a raw HMAC key imported, cloned, signed with both and compared, built as a fixture statement because
- * no collected document does it — is still the cheaper witness and is still not written; it is kept as the
- * fallback for the day the collected document cannot be run. RETIREMENT: this record goes when a registry of
- * serializable interfaces exists and this interface is a row in it.
+ * WHAT CAN SCORE IT is WebCryptoAPI/serialization/aes-gcm.https.any.js and, today, nothing else in that
+ * directory: its nineteen documents share one META script that calls crypto.subtle.generateKey and then
+ * crypto.subtle.exportKey, and AES-GCM is the one algorithm with a row in BOTH of those operations'
+ * registries — `hmac.https.any.js` still takes §18.4.4's refusal at generateKey, and every other vector names
+ * an algorithm neither registry has. ONE document and three subtests (the META script asks for AES-GCM at 128,
+ * 192 and 256 bits), which is enough to score a seam and not enough to read as coverage. The cheaper witness
+ * this file used to offer instead — a raw HMAC key imported, cloned, signed with both and compared, as a
+ * fixture statement, because no collected document does it — is still not written, and is still the fallback
+ * for the day the collected document cannot be run.
  *
  * §13.2's TWO ENUMS ARE C ENUMS AND THE USAGES ONE IS A BITMASK, which is not a compression of §13.3's
  * "Sequence<KeyUsage>" but a faithful model of it: §9 Terminology defines the "usage intersection" of two

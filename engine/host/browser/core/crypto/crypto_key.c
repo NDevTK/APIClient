@@ -1,10 +1,13 @@
-/* Web Cryptography API §13's CryptoKey — the interface, its four members and §13.3's internal slots. See
- * crypto_key.h for the IDL, for why this comes before every absent method of §14, and for the ONE NAMED
- * RESIDUAL (§13.5's serialization steps) this file is narrower than the standard by. This line said TWO and
- * named [[handle]] as the other; the mint below takes [[handle]] as a REQUIRED parameter and has since the
- * header's own record of that retirement was written. A count that names a BUILT thing as unbuilt is the one
- * direction of staleness that sends the next reader to build what is already there, so it is corrected here
- * rather than dropped.
+/* Web Cryptography API §13's CryptoKey — the interface, its four members, §13.3's internal slots and §13.5's
+ * serialization and deserialization steps. See crypto_key.h for the IDL and for why this comes before every
+ * absent method of §14.
+ * THIS LINE HAS NAMED A COUNT OF NAMED RESIDUALS TWICE AND BEEN WRONG BOTH TIMES, and the shape is the same
+ * each time rather than two accidents: it said TWO and named [[handle]] as one when the mint already took it
+ * as a REQUIRED parameter, then ONE and named §13.5's steps when the landing that built them is the commit
+ * this sentence is in. A count of what is MISSING is the artifact CLAUDE.md's opening rates worst — it is read
+ * by exactly the person about to invalidate it — so there is no count here now: what this file is narrower
+ * than the standard by is stated at the sites, by named residuals, and `git grep -n RESIDUAL` over this
+ * directory is the derivation that cannot go stale.
  *
  * ONE PROBLEM: a key is a VALUE. §13 declares four readonly attributes and no operations, so this file holds a
  * mint, four getters and nothing else. WHICH keys exist, what their bytes are and what an algorithm may do
@@ -37,6 +40,7 @@
 #include "core/idl_args.h"
 #include "core/idl_slots.h"
 #include "core/realm.h"
+#include "core/structured_clone.h"
 
 /* §13.2: "The recognized key type values are "public", "private", and "secret"", indexed by CryptoKeyType. */
 static const char *const CK_TYPE_NAMES[CRYPTO_KEY_TYPE_N] = { "public", "private", "secret" };
@@ -324,6 +328,33 @@ JSClassID crypto_key_class(void)
 
 /* ---- the mint --------------------------------------------------------------------------------------------- */
 
+/* Web Cryptography §13.3's SEVEN SLOTS, WRITTEN ONTO A KEY THAT ALREADY EXISTS — the mint's second half, and
+   the whole body of Web Cryptography §13.5's deserialization steps. It is ONE function rather than two because
+   a key has one set of slots: the pair would be two statements of which slots §13.3 declares, and the one that
+   drifts is whichever of them a new slot is not added to. `algorithm` and `handle` are CONSUMED by both
+   callers. */
+static void ck_set_slots(JSContext *ctx, JSValueConst key, CryptoKeyType type, bool extractable,
+                         JSValue algorithm, uint32_t usages, JSValue handle)
+{
+    JSValue st = idl_slots_new(ctx);
+
+    CHECK(!JS_IsException(st), "a CryptoKey's slot record could not be allocated");
+    JS_SetPropertyStr(ctx, st, CK_SLOT_TYPE, JS_NewInt32(ctx, (int32_t)type));
+    JS_SetPropertyStr(ctx, st, CK_SLOT_EXTRACT, JS_NewBool(ctx, extractable));
+    /* THE CACHED OBJECTS ARE BUILT BEFORE THE SLOTS THEY CACHE ARE HANDED OVER, so the conversion reads the
+       [[algorithm]] this mint was given and not a value some later step could have replaced. */
+    JS_SetPropertyStr(ctx, st, CK_SLOT_ALG_CACHED, ck_dictionary_to_es_object(ctx, algorithm));
+    JS_SetPropertyStr(ctx, st, CK_SLOT_ALGORITHM, algorithm);   /* CONSUMED */
+    JS_SetPropertyStr(ctx, st, CK_SLOT_USAGES, JS_NewInt32(ctx, (int32_t)usages));
+    JS_SetPropertyStr(ctx, st, CK_SLOT_USE_CACHED, crypto_key_usages_sequence(ctx, usages));
+    /* §13.3's [[handle]]. It has NO CACHED OBJECT beside it and no member of §13.4 answers with it: §13.1 calls
+       a CryptoKey "an opaque reference to keying material", and the whole of that opacity is that the bytes are
+       reachable only from this record, which hangs off a private Symbol. §31.6.5 Export Key is the one
+       operation that ever reads them back out to the page, and it is gated on [[extractable]]. */
+    JS_SetPropertyStr(ctx, st, CK_SLOT_HANDLE, handle);         /* CONSUMED */
+    JS_SetProperty(ctx, key, g_slot_atom, st);
+}
+
 JSValue crypto_key_new(JSContext *ctx, CryptoKeyType type, bool extractable, JSValue algorithm,
                        uint32_t usages, JSValue handle)
 {
@@ -348,24 +379,166 @@ JSValue crypto_key_new(JSContext *ctx, CryptoKeyType type, bool extractable, JSV
     JS_FreeValue(ctx, proto);
     CHECK(!JS_IsException(key), "a CryptoKey could not be allocated");
 
-    st = idl_slots_new(ctx);
-    CHECK(!JS_IsException(st), "a CryptoKey's slot record could not be allocated");
-    JS_SetPropertyStr(ctx, st, CK_SLOT_TYPE, JS_NewInt32(ctx, (int32_t)type));
-    JS_SetPropertyStr(ctx, st, CK_SLOT_EXTRACT, JS_NewBool(ctx, extractable));
-    /* THE CACHED OBJECTS ARE BUILT BEFORE THE SLOTS THEY CACHE ARE HANDED OVER, so the conversion reads the
-       [[algorithm]] this mint was given and not a value some later step could have replaced. */
-    JS_SetPropertyStr(ctx, st, CK_SLOT_ALG_CACHED, ck_dictionary_to_es_object(ctx, algorithm));
-    JS_SetPropertyStr(ctx, st, CK_SLOT_ALGORITHM, algorithm);   /* CONSUMED */
-    JS_SetPropertyStr(ctx, st, CK_SLOT_USAGES, JS_NewInt32(ctx, (int32_t)usages));
-    JS_SetPropertyStr(ctx, st, CK_SLOT_USE_CACHED, crypto_key_usages_sequence(ctx, usages));
-    /* §13.3's [[handle]]. It has NO CACHED OBJECT beside it and no member of §13.4 answers with it: §13.1 calls
-       a CryptoKey "an opaque reference to keying material", and the whole of that opacity is that the bytes are
-       reachable only from this record, which hangs off a private Symbol. §31.6.5 Export Key is the one
-       operation that ever reads them back out to the page, and it is gated on [[extractable]]. */
-    JS_SetPropertyStr(ctx, st, CK_SLOT_HANDLE, handle);         /* CONSUMED */
-    JS_SetProperty(ctx, key, g_slot_atom, st);
+    ck_set_slots(ctx, key, type, extractable, algorithm, usages, handle);
     return key;
 }
+
+/* ---- §13.5's serialization and deserialization steps ------------------------------------------------------ */
+
+/* Web Cryptography §13.5 "Serialization and deserialization steps": "CryptoKey objects are serializable
+ * objects." FIVE steps each way, counted as the top-level items of two flat lists — the IDL's
+ * `[Serializable]` on Web Cryptography §13's interface is what HTML §2.7.1 reads, and
+ * core/structured_clone.h holds the registry this is a row of and the whole derivation of its shape. THE
+ * DERIVATION IS THERE AND NOT HERE ON PURPOSE: a citation lives in the file whose algorithm it describes, and
+ * a run of foreign section numbers dropped into a file whose own standard is Web Cryptography is what moves
+ * that file's own citations out from under it.
+ *
+ * THE HOLDER'S FIELDS ARE Web Cryptography §13.5's OWN Record FIELDS, SPELLED AS IT SPELLS THEM, and it is a
+ * null-prototype record because it is `serialized` and never a value a page receives. The registry hands the
+ * writer ONE value, so all five ride one record that the SAME walk reaches under the SAME `memory` — which is
+ * what makes the two genuinely nested ones ([[algorithm]] and [[handle]]) sub-serializations rather than a
+ * second encoding. core/structured_clone.h states why it is one value rather than a Record of fields.
+ *
+ * [[Handle]] IS A SUB-SERIALIZATION HERE AND A PLAIN COPY IN Web Cryptography §13.5, AND THAT IS THIS
+ * ENGINE'S SLOT AND NOT A DIVERGENCE. Its step 5 is "Set serialized.[[Handle]] to the [[handle]] internal slot
+ * of value", and Web Cryptography §13.3 makes that slot "whatever data the underlying cryptographic
+ * implementation uses to represent a logical key" — a spec-level opaque with no realm in it. In this engine
+ * the representation IS a JS ArrayBuffer, for the reason crypto_key.h states at length, so putting it in the
+ * holder is what carries its bytes; the reader builds a NEW buffer, which is the realm-independent form the
+ * seam requires and not an extra copy this row chose to make.
+ *
+ * NEITHER LIST NAMES A CACHED SLOT, which is why the deserialization side re-mints both. The seam hands these
+ * steps a value with none of its internal data set up, so Web Cryptography §9 Terminology's two cached objects
+ * are built in the TARGET realm out of the deserialized slots — which is what keeps one key's `algorithm` from
+ * being another key's. */
+#define CK_SER_TYPE    "Type"
+#define CK_SER_EXTRACT "Extractable"
+#define CK_SER_ALG     "Algorithm"
+#define CK_SER_USAGES  "Usages"
+#define CK_SER_HANDLE  "Handle"
+
+/* THE ROW'S OWN BRAND TEST — which of the registry's interfaces this value is, if any. The CLASS is the
+   question and not the slot record, for ck_slots' reason: a slot record is an own property anything could be
+   given, and the class is what cannot be forged — and the reader hands this predicate an instance whose record
+   is deliberately not set up yet. */
+static bool ck_is(JSContext *ctx, JSValueConst v)
+{
+    (void)ctx;
+    return g_ready && JS_GetClassID(v) == g_key_class;
+}
+
+/* Web Cryptography §13.5's FIVE SERIALIZATION STEPS. */
+static JSValue ck_serialize(JSContext *ctx, JSValueConst v)
+{
+    JSValue st = ck_slots(ctx, v), out, f;
+
+    DCHECK(!JS_IsException(st), "Web Cryptography §13.5's serialization steps were performed on something "
+                                "that is not a CryptoKey — the serializer reaches them only through this "
+                                "row's own brand test");
+    out = idl_slots_new(ctx);
+    CHECK(!JS_IsException(out), "Web Cryptography §13.5's `serialized` record could not be allocated");
+
+    /* STEP 1: "Set serialized.[[Type]] to the [[type]] internal slot of value." The slot holds the KeyType,
+       which is this engine's spelling of §13.2's three recognized values and travels as itself. */
+    f = JS_GetPropertyStr(ctx, st, CK_SLOT_TYPE);
+    DCHECK(JS_IsNumber(f), "a CryptoKey's [[type]] slot does not hold a KeyType");
+    JS_SetPropertyStr(ctx, out, CK_SER_TYPE, f);
+    /* STEP 2: "Set serialized.[[Extractable]] to the [[extractable]] internal slot of value." */
+    f = JS_GetPropertyStr(ctx, st, CK_SLOT_EXTRACT);
+    DCHECK(JS_IsBool(f), "a CryptoKey's [[extractable]] slot does not hold a boolean");
+    JS_SetPropertyStr(ctx, out, CK_SER_EXTRACT, f);
+    /* STEP 3: "Set serialized.[[Algorithm]] to the sub-serialization of the [[algorithm]] internal slot of
+       value." The SLOT and never §13.4's cached object — handing the cached one across would make the clone's
+       slot the page-owned object, which is the aliasing crypto_key.h's whole cached-object argument prevents. */
+    f = JS_GetPropertyStr(ctx, st, CK_SLOT_ALGORITHM);
+    DCHECK(JS_IsObject(f), "a CryptoKey's [[algorithm]] slot is not a dictionary");
+    JS_SetPropertyStr(ctx, out, CK_SER_ALG, f);
+    /* STEP 4: "Set serialized.[[Usages]] to the sub-serialization of the [[usages]] internal slot of value."
+       The slot is §9 Terminology's normalized value as a mask, which crypto_key.h argues IS that sequence. */
+    f = JS_GetPropertyStr(ctx, st, CK_SLOT_USAGES);
+    DCHECK(JS_IsNumber(f), "a CryptoKey's [[usages]] slot does not hold a normalized usage mask");
+    JS_SetPropertyStr(ctx, out, CK_SER_USAGES, f);
+    /* STEP 5: "Set serialized.[[Handle]] to the [[handle]] internal slot of value." */
+    f = JS_GetPropertyStr(ctx, st, CK_SLOT_HANDLE);
+    DCHECK(JS_IsArrayBuffer(f), "a CryptoKey's [[handle]] is not the ArrayBuffer its mint was given");
+    JS_SetPropertyStr(ctx, out, CK_SER_HANDLE, f);
+
+    JS_FreeValue(ctx, st);
+    return out;
+}
+
+/* THE REGISTRY'S `create` — a new CryptoKey in this realm, with none of its internal data set up. IT SETS NO
+   SLOTS, and that is HTML §2.7.1's own requirement rather than an economy: the value handed to the
+   deserialization steps has "none of its internal data set up; setting that up is the job of these steps".
+   Between this and ck_deserialize the key is branded and recordless, which no page code can observe — the
+   reader puts it in its reference map and then fills it, with nothing of the page's running in between. */
+static JSValue ck_create(JSContext *ctx)
+{
+    JSValue proto, key;
+
+    DCHECK(g_ready, "Web Cryptography §13.5's deserialization was asked for a CryptoKey before "
+                    "crypto_key_init declared the interface");
+    proto = JS_GetClassProto(ctx, g_key_class);
+    DCHECK(!JS_IsNull(proto), "a CryptoKey was deserialized into a realm that never ran its prototype install");
+    key = JS_NewObjectProtoClass(ctx, proto, g_key_class);
+    JS_FreeValue(ctx, proto);
+    CHECK(!JS_IsException(key), "a deserialized CryptoKey could not be allocated");
+    return key;
+}
+
+/* Web Cryptography §13.5's FIVE DESERIALIZATION STEPS.
+   THE HOLDER IS ASSERTED AND NOT REFUSED, which is the same answer core/structured_clone.c's ArrayBuffer
+   transfer holder already gives: it is a record THIS engine's own serialization steps wrote, so a field of the
+   wrong shape is this codebase disagreeing with itself. The value a page hands `structuredClone` never reaches
+   here — a shape §2.7 refuses was refused by the writer, with the "DataCloneError" the standard names. The one
+   path on which these bytes are not this agent's own is the routed message core/structured_clone.h's residual
+   is about, and it is the whole deserializer's question rather than this row's. */
+static int ck_deserialize(JSContext *ctx, JSValueConst key, JSValueConst sub)
+{
+    JSValue f, algorithm, handle;
+    int32_t type = -1;
+    int64_t usages = 0;
+    bool extractable;
+
+    DCHECK(JS_IsObject(sub), "Web Cryptography §13.5's deserialization steps were handed a `serialized` that "
+                             "is not the record its serialization steps wrote");
+    /* STEP 1: "Initialize the [[type]] internal slot of value to serialized.[[Type]]." */
+    f = JS_GetPropertyStr(ctx, sub, CK_SER_TYPE);
+    JS_ToInt32(ctx, &type, f);
+    JS_FreeValue(ctx, f);
+    DCHECK(type >= 0 && type < CRYPTO_KEY_TYPE_N,
+           "a serialized CryptoKey's [[Type]] is not one of §13.2's three recognized key type values");
+    /* STEP 2: "Initialize the [[extractable]] internal slot of value to serialized.[[Extractable]]." */
+    f = JS_GetPropertyStr(ctx, sub, CK_SER_EXTRACT);
+    DCHECK(JS_IsBool(f), "a serialized CryptoKey's [[Extractable]] is not a boolean");
+    extractable = JS_ToBool(ctx, f) != 0;
+    JS_FreeValue(ctx, f);
+    /* STEP 4, READ BEFORE STEP 3 IS SPENT: "Initialize the [[usages]] internal slot of value to the
+       sub-deserialization of serialized.[[Usages]]." Both are read before anything is written, so a record
+       that fails one of these assertions has had nothing built out of it. */
+    f = JS_GetPropertyStr(ctx, sub, CK_SER_USAGES);
+    JS_ToInt64(ctx, &usages, f);
+    JS_FreeValue(ctx, f);
+    DCHECK(usages >= 0 && (uint64_t)usages <= (uint64_t)CRYPTO_KEY_USAGES_ALL,
+           "a serialized CryptoKey's [[Usages]] carries a bit §13.2 does not recognize — the slot is §9 "
+           "Terminology's normalized value of a usages list, which cannot contain one");
+    /* STEP 3: "Initialize the [[algorithm]] internal slot of value to the sub-deserialization of
+       serialized.[[Algorithm]]." */
+    algorithm = JS_GetPropertyStr(ctx, sub, CK_SER_ALG);
+    DCHECK(JS_IsObject(algorithm), "a serialized CryptoKey's [[Algorithm]] is not a dictionary");
+    /* STEP 5: "Initialize the [[handle]] internal slot of value to serialized.[[Handle]]." It is a NEW
+       ArrayBuffer the reader built out of the bytes the write copied, which is why the clone's key material is
+       its own and not the source key's buffer under a second name. */
+    handle = JS_GetPropertyStr(ctx, sub, CK_SER_HANDLE);
+    DCHECK(JS_IsArrayBuffer(handle), "a serialized CryptoKey's [[Handle]] is not an ArrayBuffer");
+
+    ck_set_slots(ctx, key, (CryptoKeyType)type, extractable, algorithm, (uint32_t)usages, handle);
+    return 0;
+}
+
+static const StructuredSerializable CK_SERIALIZABLE = {
+    "CryptoKey", ck_is, ck_serialize, ck_create, ck_deserialize
+};
 
 /* ---- the per-realm install --------------------------------------------------------------------------------- */
 
@@ -424,6 +597,11 @@ void crypto_key_init(JSContext *ctx)
     agent_state_value("crypto", &g_slot_key, "§13.3's internal-slot record key");
     agent_state_atom("crypto", &g_slot_atom, "§13.3's internal-slot record key, interned");
     agent_state_ptr("crypto", &g_rt, "the runtime the §13.3 slot key was interned in");
+    /* Web Cryptography §13's `[Serializable]` EXTENDED ATTRIBUTE, AS THE ROW HTML §2.7.1 READS IT AS.
+       Registered from this `_init` and not from the per-realm install, because the registry is the AGENT's —
+       every realm of an agent runs the same intrinsic list, which is why core/structured_clone.c answers the
+       not-exposed-in-targetRealm question out of registry membership. */
+    structured_register_serializable(&CK_SERIALIZABLE);
     realm_declare_intrinsic(crypto_key_install_realm);
 }
 

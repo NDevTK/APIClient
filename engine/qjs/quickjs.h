@@ -3028,12 +3028,16 @@ typedef struct JSSABTab {
 /* HTML §2.7.7's `memory`, SEEDED WITH THE TRANSFER LIST — the one fact a serializer cannot derive from the
  * graph it is walking, because it is a fact about the CALL and not about the value.
  *
- * §2.7.7 step 1 puts every entry of transferList into `memory` before StructuredSerializeInternal runs, and
- * §2.7.1's first step is "if memory[value] exists, then return memory[value]" — so a transferable REACHED FROM
- * INSIDE the message body serializes as its data holder rather than being cloned or refused. §2.7.8 is the
- * mirror: it fills `memory` with the objects its transfer-receiving steps built and only then deserializes, and
- * §2.7.2's first step reads that map, so such a reference comes back as THE SAME OBJECT as the corresponding
- * entry of [[TransferredValues]] — not a copy of it. That identity is the whole point: it is what makes
+ * HTML §2.7.7 step 1 puts every entry of transferList into `memory` before StructuredSerializeInternal runs,
+ * and HTML §2.7.3's step 2 is "If memory[value] exists, then return memory[value]" — so a transferable REACHED
+ * FROM INSIDE the message body serializes as its data holder rather than being cloned or refused. HTML §2.7.8
+ * is the mirror: it fills `memory` with the objects its transfer-receiving steps built and only then
+ * deserializes, and HTML §2.7.6's step 2 reads that map, so such a reference comes back as THE SAME OBJECT as
+ * the corresponding entry of [[TransferredValues]] — not a copy of it.
+ * THOSE TWO NUMBERS WERE §2.7.1 AND §2.7.2 AND WERE A RETIRED EDITION'S — `memory` belongs to
+ * StructuredSerializeInternal, which is §2.7.3, and §2.7.1 is "Serializable objects". They were invisible while
+ * this banner named no standard, and the diff that added HTML anchors here is what moved them into the judged
+ * population: writing a standard's name at ONE site re-decides every bare number in the file. That identity is the whole point: it is what makes
  * `port.postMessage({p: other}, [other])` deliver a message whose `p` IS the moved port.
  *
  * THE MAP IS A PARAMETER, NOT A SCOPE. It belongs to ONE serialization: a writer and a reader running in the
@@ -3059,6 +3063,57 @@ typedef struct JSTransferReadHook {
     void *opaque;
 } JSTransferReadHook;
 
+/* HTML §2.7.1's SERIALIZABLE OBJECTS — the host's answer for a platform object, which this writer cannot
+ * derive and must not guess. HTML §2.7.1 "Serializable objects" makes the property one of an INTERFACE —
+ * "Platform objects can be serializable objects if their primary interface is decorated with the
+ * [Serializable] IDL extended attribute" — and the writer below knows only CLASSES. Without these two hooks
+ * its class dispatch falls through to a refusal, which is HTML §2.7.3 step 20's answer for a platform object
+ * that is NOT serializable and a wrong answer for one that is.
+ *
+ * THE WIRE CARRIES AN IDENTIFIER AND THEN ONE SUB-VALUE. HTML §2.7.3 StructuredSerializeInternal ( value,
+ * forStorage [ , memory ] ) step 19 is "Otherwise, if value is a platform object that is a serializable
+ * object:", whose sub-steps are "Let typeString be the identifier of the primary interface of value", "Set
+ * serialized to { [[Type]]: typeString }" and "Set deep to true"; its step 26's THIRD arm then performs "the
+ * serialization steps for value's primary interface". Those steps "may need to perform a sub-serialization",
+ * which the same step defines as "an operation which takes as input a value subValue, and returns
+ * StructuredSerializeInternal(subValue, forStorage, memory)" — the SAME walk under the SAME `memory`. So the
+ * one value `serialize` answers is pushed on this writer's own work stack rather than handed to a nested
+ * JS_WriteObject, which would open a second object_list and neither terminate a cycle nor preserve `===`.
+ *
+ * THE READER CREATES BEFORE IT FILLS, AND THAT IS HTML §2.7.6's OWN ORDER RATHER THAN A PREFERENCE. Step 22
+ * is "Otherwise:" — "Let interfaceName be serialized.[[Type]]", "If the interface identified by interfaceName
+ * is not exposed in targetRealm, then throw a \"DataCloneError\" DOMException", "Set value to a new instance
+ * of the interface identified by interfaceName, created in targetRealm", "Set deep to true". Step 23 is "Set
+ * memory[serialized] to value". Step 24's last arm performs the deserialization steps. So the instance is in
+ * the object-reference list BEFORE any sub-value is read, which is what makes a graph reaching one platform
+ * object twice come back as ONE object.
+ * BC_TAG_TYPED_ARRAY's reserve-and-patch is the wrong idiom to copy and it is the nearest one: it reserves
+ * because a typed array cannot exist before its buffer, and HTML §2.7.1 says of these steps that value "will
+ * be a newly-created instance of the platform object type in question, with none of its internal data set up;
+ * setting that up is the job of these steps". A serializable CAN exist first, so a row is TWO operations. */
+typedef struct JSSerializableWriteHook {
+    /* HTML §2.7.3 step 19's "the identifier of the primary interface of value", or NULL when `obj` is not a
+       serializable platform object — in which case step 20's refusal stands. Called for objects no JavaScript
+       arm of the walk took. */
+    const char *(*interface_of)(JSContext *ctx, void *opaque, JSValueConst obj);
+    /* HTML §2.7.3 step 26's third arm, as ONE owned value the writer then sub-serializes, or JS_EXCEPTION
+       with a throw live. ONE value rather than a Record of fields is this embedding's choice and not the
+       standard's count: a host that has several fields to write puts them in a holder the same walk reaches. */
+    JSValue (*serialize)(JSContext *ctx, void *opaque, JSValueConst obj);
+    void *opaque;
+} JSSerializableWriteHook;
+
+typedef struct JSSerializableReadHook {
+    /* HTML §2.7.6 step 22's "a new instance of the interface identified by interfaceName, created in
+       targetRealm", with none of its internal data set up — or JS_EXCEPTION, which is that step's own
+       refusal for an interface the target realm does not expose. */
+    JSValue (*create)(JSContext *ctx, void *opaque, const char *name);
+    /* HTML §2.7.6 step 24's last arm, given the instance `create` answered and the sub-deserialization of the
+       one value the write produced. 0, or -1 with a throw live. */
+    int (*deserialize)(JSContext *ctx, void *opaque, JSValueConst value, JSValueConst sub);
+    void *opaque;
+} JSSerializableReadHook;
+
 /* Object Writer/Reader (currently only used to handle precompiled code) */
 #define JS_WRITE_OBJ_BYTECODE  (1 << 0) /* allow function/module */
 #define JS_WRITE_OBJ_BSWAP     (0)      /* byte swapped output (obsolete, handled transparently) */
@@ -3074,6 +3129,14 @@ JS_EXTERN uint8_t *JS_WriteObject2(JSContext *ctx, size_t *psize, JSValueConst o
 JS_EXTERN uint8_t *JS_WriteObject3(JSContext *ctx, size_t *psize, JSValueConst obj,
                                    int flags, JSSABTab *psab_tab,
                                    const JSTransferWriteHook *transfer);
+/* ... and with HTML §2.7.1's serializable seam beside it. NULL is a write with no seam, which refuses every
+   platform object exactly as step 20 does. The two maps are separate parameters because they answer two
+   questions: one is about the CALL (which objects did the caller name in its transfer list), the other about
+   the INTERFACE (which platform objects does the host serialize at all). */
+JS_EXTERN uint8_t *JS_WriteObject4(JSContext *ctx, size_t *psize, JSValueConst obj,
+                                   int flags, JSSABTab *psab_tab,
+                                   const JSTransferWriteHook *transfer,
+                                   const JSSerializableWriteHook *serializable);
 
 /* WARNING: only enable JS_READ_OBJ_BYTECODE on input from a trusted
    writer. The bytecode format is not designed to resist a hostile
@@ -3092,6 +3155,12 @@ JS_EXTERN JSValue JS_ReadObject2(JSContext *ctx, const uint8_t *buf, size_t buf_
 JS_EXTERN JSValue JS_ReadObject3(JSContext *ctx, const uint8_t *buf, size_t buf_len,
                                  int flags, JSSABTab *psab_tab,
                                  const JSTransferReadHook *transfer);
+/* ... and with HTML §2.7.1's serializable seam. A stream naming a serialized platform object is refused
+   outright by a read given none: the tag has no meaning a reader may invent. */
+JS_EXTERN JSValue JS_ReadObject4(JSContext *ctx, const uint8_t *buf, size_t buf_len,
+                                 int flags, JSSABTab *psab_tab,
+                                 const JSTransferReadHook *transfer,
+                                 const JSSerializableReadHook *serializable);
 /* Instantiate and evaluate a bytecode function. Only used when reading a script or module with JS_ReadObject().
    FOR A MODULE THIS IS THE WHOLE OF HTML §8.1.4.4 Calling scripts' "run a module script": it LOADS the graph
    (16.2.1.6.1.1 LoadRequestedModules), and only upon that load's fulfilment LINKS and EVALUATES it — so it

@@ -1,7 +1,10 @@
 /* STRUCTURED SERIALIZATION — HTML §2.7.
  *
- * WHAT IT IS FOR. Three separate places in this engine need "a copy of this value in this realm, deep, cyclic,
- * and refusing what cannot be copied", and each of them is currently either missing or wrong:
+ * WHAT IT IS FOR. Three separate places in this engine need a copy of this value in this realm — deep, cyclic,
+ * and refusing what cannot be copied — and each of them is currently either missing or wrong:
+ * (THE QUOTATION MARKS THAT STOOD ROUND THAT PHRASE WERE THIS TREE'S OWN PROSE IN A SPEC CLAIM'S CLOTHES, and
+ * the citation auditor reported it as a divergence from HTML §2.7 for as long as they were there. A quoted run
+ * beside a citation IS a claim about the standard; a spelling being SHOWN takes backticks or nothing.)
  *   - HTML 9.4.2's MessagePort.postMessage, which delivers a SERIALIZED message — a port that handed the same
  *     object reference to both sides would not be a port, it would be a shared variable.
  *   - HTML 9.4.4's window.postMessage, the same.
@@ -40,9 +43,15 @@
 #include "core/structured_clone.h"
 #include "solver/concolic.h"
 
-/* ---- §2.7.1's `memory`, AND THE TWO THINGS THAT SEED IT ------------------------------------------------------
+/* ---- HTML §2.7.3's `memory`, AND THE TWO THINGS THAT SEED IT ------------------------------------------------
  *
- * §2.7.1 step 2 is "if memory[value] exists, then return memory[value]", and the standard SEEDS that map before
+ * THESE THREE NUMBERS WERE §2.7.1, §2.7.1 AND §2.7.2 AND WERE A RETIRED EDITION'S, which is recorded rather
+ * than quietly corrected because the cluster agreed with itself and so no sibling-diff could see it: the map
+ * belongs to StructuredSerializeInternal, which is §2.7.3, and §2.7.1 is "Serializable objects" — the seam at
+ * the foot of this file. They were exposed by the diff that built that seam, because writing a standard's
+ * name at a site MOVES every bare number in the file into the judged population.
+ *
+ * HTML §2.7.3 step 2 is "If memory[value] exists, then return memory[value]", and the standard SEEDS that map before
  * the walk begins: §2.7.7 step 1 puts every entry of the transfer list in it, which is what makes a transferable
  * reached from INSIDE the message body write its holder's index instead of being cloned or refused. §2.7.8's
  * mirror is seeded with [[TransferredValues]], so the reference comes back as the MOVED object.
@@ -145,15 +154,27 @@ static JSValue sc_memory_value(JSContext *ctx, void *opaque, uint32_t index)
     return v;
 }
 
+/* HTML §2.7.1's SERIALIZABLE SEAM, WHOSE REGISTRY IS AT THE FOOT OF THIS FILE. Declared here because it is a
+   PARAMETER of the one serialization, exactly as the transfer map is, and for the same reason: it belongs to
+   one write and one read rather than to the runtime. */
+static const char *sc_interface_of(JSContext *ctx, void *opaque, JSValueConst obj);
+static JSValue sc_serialization_steps(JSContext *ctx, void *opaque, JSValueConst obj);
+static JSValue sc_create_instance(JSContext *ctx, void *opaque, const char *name);
+static int sc_deserialization_steps(JSContext *ctx, void *opaque, JSValueConst value, JSValueConst sub);
+
 /* THE ONE SERIALIZATION, under whatever seeded `memory` its caller has. There is no unseeded form: the map is
    what answers for an object the writer would otherwise refuse, so a path that seeds nothing still supplies the
    map that says so. */
 static int sc_serialize(JSContext *ctx, JSValueConst v, StructuredData *out, SCWriteMemory *memory)
 {
     JSTransferWriteHook hook;
+    JSSerializableWriteHook serializable;
 
     hook.index_of = sc_memory_index;
     hook.opaque = memory;
+    serializable.interface_of = sc_interface_of;
+    serializable.serialize = sc_serialization_steps;
+    serializable.opaque = NULL;
     out->buf = NULL;
     out->len = 0;
     /* THE SYMBOL CHECK THAT STOOD HERE IS GONE, AND THE REASON IT GAVE WAS FALSE — recorded rather than
@@ -167,14 +188,19 @@ static int sc_serialize(JSContext *ctx, JSValueConst v, StructuredData *out, SCW
        bytecode write, at every depth, so this check could no longer fire and a second answer to one question
        is the shape that drifts. What a top-level Symbol gets instead is the SAME "DataCloneError" with the
        generic message below; a page catches this by `.name`, which is what §2.7 and every test of it assert.
-       THE METHOD IS THE FINDING AND IT IS THE SAME ONE §2.7.1's absence has: this file has NO PER-VALUE ARM.
-       Its only per-value decision is the transfer map's index_of, so every §2.7.3 step that is not about the
-       whole value has to be asked in the writer, and a check written here is a check asked once. */
-    /* §2.7.1 StructuredSerialize, then §2.7.2 StructuredDeserialize into THIS realm — which is the whole of
-       §2.7.3's structuredClone(), and the whole of what a same-agent port delivery needs.
+       THE METHOD IS THE FINDING: at the time this was written the file had NO PER-VALUE ARM — its only
+       per-value decision was the transfer map's index_of — so every §2.7.3 step that is not about the whole
+       value had to be asked in the writer, and a check written HERE was a check asked once. That is still the
+       rule for §2.7.3's REFUSALS and it is no longer the shape of the file: HTML §2.7.1's seam below is asked
+       per value too, and the two are the same mechanism — the host answering the writer about ONE value
+       rather than about the whole graph. The Symbol arm stays in the writer because the question it asks is
+       about a VALUE KIND the engine already knows; the serializable one is a hook because the question is
+       about an INTERFACE, which it does not. */
+    /* HTML §2.7.4 StructuredSerialize, then HTML §2.7.6 StructuredDeserialize into THIS realm — which is the
+       whole of §2.7.10's structuredClone(), and the whole of what a same-agent port delivery needs.
        JS_WRITE_OBJ_REFERENCE is `memory`: a value reached twice comes back as the SAME object on the other
        side, and a cycle terminates instead of recursing. Without it `const a = {}; a.self = a` is a hang. */
-    out->buf = JS_WriteObject3(ctx, &out->len, v, JS_WRITE_OBJ_REFERENCE, NULL, &hook);
+    out->buf = JS_WriteObject4(ctx, &out->len, v, JS_WRITE_OBJ_REFERENCE, NULL, &hook, &serializable);
     if (!out->buf) {
         /* THE ENGINE'S REFUSAL IS THE STANDARD'S, RE-REPORTED. The writer throws its own error for a value it
            cannot encode — a function (§2.7.3 step 21), a Proxy (step 23), a Promise (step 22), a Symbol
@@ -185,8 +211,9 @@ static int sc_serialize(JSContext *ctx, JSValueConst v, StructuredData *out, SCW
            is not recoverable from here by reading the exception: `message` is reached through Error.prototype,
            so a page that puts an accessor there would run its code from an activation with no flow base under
            it. Naming the refused value therefore needs a channel that is not a property read — which is the
-           same host seam §2.7.1 needs below, since both are the writer telling this file something about ONE
-           value rather than about the whole graph. */
+           same host seam HTML §2.7.1 uses below, since both are the writer telling this file something about
+           ONE value rather than about the whole graph. That seam is built and this one is not, so what the
+           refusal still cannot say is WHICH value it refused. */
         JS_FreeValue(ctx, JS_GetException(ctx));
         JS_ThrowDOMException(ctx, "DataCloneError", "the value could not be cloned");
         return -1;
@@ -213,9 +240,14 @@ void structured_data_free(JSContext *ctx, StructuredData *d)
 
 static JSValue sc_deserialize(JSContext *ctx, const StructuredData *in, const JSTransferReadHook *transfer)
 {
+    JSSerializableReadHook serializable;
     JSValue out;
+
     DCHECK(in->buf != NULL, "a serialized record was deserialized after it had been freed");
-    out = JS_ReadObject3(ctx, in->buf, in->len, JS_READ_OBJ_REFERENCE, NULL, transfer);
+    serializable.create = sc_create_instance;
+    serializable.deserialize = sc_deserialization_steps;
+    serializable.opaque = NULL;
+    out = JS_ReadObject4(ctx, in->buf, in->len, JS_READ_OBJ_REFERENCE, NULL, transfer, &serializable);
     if (JS_IsException(out)) {
         /* A GRAPH THE WRITER PRODUCED AND THE READER REFUSED is not a page error — it is these two halves
            disagreeing, which is a should-never-happen and is worth a crash rather than a DOMException that
@@ -356,6 +388,105 @@ static const StructuredTransferable *transferable_named(const char *type)
     for (i = 0; i < g_transferable_n; i++)
         if (!strcmp(g_transferable[i]->type, type)) return g_transferable[i];
     return NULL;
+}
+
+/* ---- HTML §2.7.1's SERIALIZABLE OBJECTS ---------------------------------------------------------------------
+ *
+ * The registry structured_clone.h declares, and the two pairs of hooks that carry it into the engine's own
+ * writer and reader. Everything about WHY it has this shape is in the header; what is here is the lookup and
+ * the assertions that keep the two ends agreeing. */
+
+#define SC_MAX_SERIALIZABLE 8
+static const StructuredSerializable *g_serializable[SC_MAX_SERIALIZABLE];
+static int g_serializable_n;
+
+void structured_register_serializable(const StructuredSerializable *sz)
+{
+    int i;
+    DCHECK(sz != NULL && sz->name && sz->is && sz->out && sz->create && sz->fill,
+           "a serializable interface was registered without its identifier and all four of its steps");
+    for (i = 0; i < g_serializable_n; i++) {
+        DCHECK(g_serializable[i] != sz,
+               "one serializable interface registered itself twice — its component declares once per agent, "
+               "so a second registration is a second declaration pass over a registry that was never given "
+               "back");
+        DCHECK(strcmp(g_serializable[i]->name, sz->name) != 0,
+               "two serializable interfaces registered under one identifier — HTML §2.7.6 step 22 chooses the "
+               "deserialization steps by that name, so a record would be received by whichever of them the "
+               "walk reached first");
+    }
+    CHECK(g_serializable_n < SC_MAX_SERIALIZABLE, "more serializable interfaces than this registry holds");
+    g_serializable[g_serializable_n++] = sz;
+}
+
+/* HTML §2.7.3 step 19's "a platform object that is a serializable object", asked of ONE value. */
+static const StructuredSerializable *serializable_of(JSContext *ctx, JSValueConst v)
+{
+    int i;
+    for (i = 0; i < g_serializable_n; i++)
+        if (g_serializable[i]->is(ctx, v)) return g_serializable[i];
+    return NULL;
+}
+
+/* HTML §2.7.6 step 22's "the interface identified by interfaceName", or NULL — which that step turns into a
+   "DataCloneError" for an interface "not exposed in targetRealm". Every realm of this agent runs the same
+   intrinsic list, so registry membership IS that question here, exactly as it is for a transferable. */
+static const StructuredSerializable *serializable_named(const char *name)
+{
+    int i;
+    for (i = 0; i < g_serializable_n; i++)
+        if (!strcmp(g_serializable[i]->name, name)) return g_serializable[i];
+    return NULL;
+}
+
+static const char *sc_interface_of(JSContext *ctx, void *opaque, JSValueConst obj)
+{
+    const StructuredSerializable *sz = serializable_of(ctx, obj);
+
+    (void)opaque;
+    return sz ? sz->name : NULL;
+}
+
+static JSValue sc_serialization_steps(JSContext *ctx, void *opaque, JSValueConst obj)
+{
+    const StructuredSerializable *sz = serializable_of(ctx, obj);
+
+    (void)opaque;
+    DCHECK(sz != NULL, "the writer asked for the serialization steps of a value no row claims — it asks only "
+                       "after the same predicate answered with a name, so the two answers came apart between "
+                       "one call and the next");
+    return sz->out(ctx, obj);
+}
+
+static JSValue sc_create_instance(JSContext *ctx, void *opaque, const char *name)
+{
+    const StructuredSerializable *sz = serializable_named(name);
+
+    (void)opaque;
+    if (!sz) {
+        /* §2.7.6 step 22's "If the interface identified by interfaceName is not exposed in targetRealm, then
+           throw a \"DataCloneError\" DOMException". Reachable only from bytes another agent wrote — see the
+           residual in the header, whose subject is what happens to this throw on that path. */
+        return JS_ThrowDOMException(ctx, "DataCloneError",
+                                    "the record names an interface this realm does not expose");
+    }
+    return sz->create(ctx);
+}
+
+static int sc_deserialization_steps(JSContext *ctx, void *opaque, JSValueConst value, JSValueConst sub)
+{
+    /* THE ROW IS RE-DERIVED FROM THE INSTANCE AND NOT CARRIED FROM THE NAME, WHICH IS ONE QUESTION ASKED TWICE
+       RATHER THAN TWO QUESTIONS. `value` is what sc_create_instance's row just built, so `is` answers with
+       that same row — and this DCHECK is what says so rather than a comment. A row whose `create` produces
+       something its own `is` does not claim is the one way that could stop being true, and it is this
+       codebase's own logic being wrong. */
+    const StructuredSerializable *sz = serializable_of(ctx, value);
+
+    (void)opaque;
+    DCHECK(sz != NULL, "the deserialization steps were asked of an instance no row claims — HTML §2.7.6 step "
+                       "22 built it from a registered row, so the row's `create` and its `is` disagree about "
+                       "what that row's interface is");
+    return sz->fill(ctx, value, sub);
 }
 
 uint32_t structured_transfer_len(JSContext *ctx, JSValueConst arr)
@@ -582,6 +713,7 @@ void structured_clone_init(JSContext *ctx)
     idl_optional_from(1);   /* `structuredClone(value, optional StructuredSerializeOptions options = {})` */
     agent_state_id("structured_clone", &g_id_clone, "§2.7.10's structuredClone declaration");
     agent_state_flag("structured_clone", &g_transferable_n, "the platform's transferable-interface registry");
+    agent_state_flag("structured_clone", &g_serializable_n, "the platform's serializable-interface registry");
 }
 
 void structured_clone_free(JSRuntime *rt)
@@ -593,6 +725,9 @@ void structured_clone_free(JSRuntime *rt)
        and no lifetime to get wrong — what is agent state is the COUNT, and a count carried into a second agent
        is a platform that reports interfaces registered by a runtime that no longer exists. */
     g_transferable_n = 0;
+    /* HTML §2.7.1's registry, on the same argument and for the same reason: a row is a pointer to a `static
+       const` the registrant never allocated, so what is agent state is the COUNT. */
+    g_serializable_n = 0;
     g_id_clone = -1;
 }
 

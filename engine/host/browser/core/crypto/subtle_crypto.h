@@ -96,11 +96,11 @@
  * rather than assumed to match it, so the arm cost one call and one `alg` selection. A reader who takes the
  * decoding-only clause at face value will re-derive an encoder this directory already has. A key that crosses
  * IndexedDB additionally needs §13.5 "Serialization and deserialization steps", and THIS LINE USED TO SAY THAT
- * subproblem `belongs to core/crypto/crypto_key.c` — which is half of it. Its first half belongs to no crypto
- * file at all: HTML §2.7.1 "Serializable objects" has NO arm in this engine, so a registry of serializable
- * interfaces and the engine-side wire tag that reaches it have to exist before §13.5 can be a row in one.
- * crypto_key.h holds that decomposition and its landing order; a lane briefed off this line alone would open
- * two crypto files and find nothing in either to change.
+ * subproblem `belongs to core/crypto/crypto_key.c` — which was half of it, and THEN that HTML §2.7.1
+ * `Serializable objects` `has NO arm in this engine`, which was true when written. Both are kept because each
+ * is one a reader re-derives: the decomposition was real, the seam it named was landed WITH §13.5's row in one
+ * commit for §NO STUBS' reason, and §13.5 IS now a row of core/structured_clone.h's registry, registered from
+ * crypto_key_init. A lane briefed off either sentence today would go looking for work that is done.
  *
  * ADDING A ROW TO ONE OF THOSE REGISTRIES IS SAFE FOR A REASON WORTH NOT UNDOING. Each method's normalization
  * forks over its own registry and names the NOT-REGISTERED arm SYMBOLICALLY — `arm == <X>_REGISTERED_N` at all

@@ -75206,7 +75206,25 @@ typedef enum BCTagEnum {
        §2.7.7 serializes the body at step 3 and only runs the transfer steps at step 5. Readable only by a read
        given the map that resolves it (JSTransferReadHook); every other read refuses the tag. */
     BC_TAG_TRANSFER_REFERENCE,
+    /* HTML §2.7.1: a platform object whose "primary interface is decorated with the [Serializable] IDL
+       extended attribute". It carries HTML §2.7.3 step 19's "the identifier of the primary interface of
+       value" and then ONE sub-value, which is that interface's serialization steps performed as a
+       sub-serialization — the same walk under the same `memory`, so a cycle through a platform object
+       terminates and a graph reaching one twice comes back as one object. Readable only by a read given the
+       seam that creates an instance for a name (JSSerializableReadHook); every other read refuses the tag.
+       NO BC_VERSION BUMP, and the reason is the same one the transfer tag was added under: a tag appended
+       here changes the meaning of no byte any earlier write produced, so every record already in the cold
+       tier stays readable — and a bump would make all of them unreadable, which is a regression rather than
+       a protection. */
+    BC_TAG_SERIALIZABLE,
 } BCTagEnum;
+
+/* THE LONGEST INTERFACE IDENTIFIER BC_TAG_SERIALIZABLE CARRIES. It is a bound on a NAME and not on a graph,
+   so it is not the kind of cap that truncates work: Web IDL §2.4 Interfaces gives an interface an identifier,
+   and no identifier any standard declares is near this. The reader needs it because the name arrives from
+   bytes that may have crossed an instance, so it reads into a fixed buffer and refuses a longer one rather
+   than allocating whatever a stream asks for. */
+#define BC_SERIALIZABLE_NAME_MAX 63
 
 /* 29: a regexp's compiled byte code changed shape — a capture or register index is a u32 where it was a
    byte, and the header grew with it.
@@ -75268,6 +75286,9 @@ typedef struct BCWriterState {
        consulted BEFORE object_list, because §2.7.1 consults `memory` before it does anything else — and because
        a transferable must not take a reference slot the reader will not fill. */
     const JSTransferWriteHook *transfer;
+    /* HTML §2.7.1's serializable seam, or NULL for a write that has none — under which every platform object
+       takes HTML §2.7.3 step 20's refusal, which is the right answer for a write that cannot ask. */
+    const JSSerializableWriteHook *serializable;
     /* THE SERIALISER'S WORK STACK. The writer was a nine-function recursion whose depth the WRITTEN GRAPH
        picks — a nested array through JS_WriteObject threw between depth 5000 and 20000, measured — and the
        js_check_stack_overflow in front of it turned a graph the format can represent into a RangeError.
@@ -75306,6 +75327,7 @@ static const char * const bc_tag_str[] = {
     "Set",
     "Symbol",
     "TransferReference",
+    "Serializable",
 };
 
 static const char *bc_tag_name(uint8_t tag)
@@ -76030,8 +76052,10 @@ static int bcw_step_value(BCWriterState *s, JSValueConst obj)
             JSObject *p = JS_VALUE_GET_OBJ(obj);
             int ret, idx;
 
-            /* HTML §2.7.1 STEP 2, "if memory[value] exists, then return memory[value]" — asked FIRST, which is
-               where the standard asks it. A value the call put in its transfer list is not cloned here and not
+            /* HTML §2.7.3 STEP 2, "If memory[value] exists, then return memory[value]" — asked FIRST, which is
+               where the standard asks it. THE NUMBER WAS §2.7.1 AND WAS A RETIRED EDITION'S: `memory` is
+               StructuredSerializeInternal's, and §2.7.1 is "Serializable objects", which is the seam the
+               default arm below now asks. A value the call put in its transfer list is not cloned here and not
                refused below: it is written as the index of its data holder, and the reader turns that back into
                the object §2.7.8's transfer-receiving steps built. Reached twice, it writes the same index
                twice and comes back as one object, which is the identity `memory` exists to preserve. */
@@ -76114,11 +76138,48 @@ static int bcw_step_value(BCWriterState *s, JSValueConst obj)
                 if (is_typed_array(p->class_id) || p->class_id == JS_CLASS_DATAVIEW) {
                     ret = JS_WriteTypedArray(s, obj);
                 } else {
-                    /* Everything left is a host object with no encoding, which HTML §2.7 refuses as a
-                       "DataCloneError". A TRANSFERABLE one never arrives here: the transfer map above answered
-                       for it, and if it did not, then the call did not name it and refusing it is the answer. */
-                    JS_ThrowTypeError(s->ctx, "unsupported object class");
-                    ret = -1;
+                    /* HTML §2.7.3 STEPS 19 AND 20, IN THAT ORDER AND IN THIS PLACE. Steps 7-18 are the
+                       JavaScript-specification arms above; what reaches here is what none of them took, which
+                       is step 19's "Otherwise, if value is a platform object that is a serializable object:"
+                       followed by step 20's "Otherwise, if value is a platform object, then throw a
+                       \"DataCloneError\" DOMException". The host answers the first question because
+                       "serializable" is a property of an INTERFACE and this writer knows only classes.
+                       A TRANSFERABLE one never arrives here at all: the transfer map above answered for it,
+                       and if it did not, then the call did not name it and refusing it is the answer. */
+                    const char *iface = s->serializable
+                        ? s->serializable->interface_of(s->ctx, s->serializable->opaque, obj)
+                        : NULL;
+
+                    if (iface) {
+                        /* STEP 26's THIRD ARM, "perform the serialization steps for value's primary
+                           interface", as the ONE value those steps answer with. It is fetched BEFORE the tag
+                           is emitted so that a throw from them leaves no half-written record behind; the
+                           object is already in object_list, which is what step 25's "Set memory[value] to
+                           serialized" does and is why the reader may register its instance at the same point. */
+                        JSValue sub = s->serializable->serialize(s->ctx, s->serializable->opaque, obj);
+                        size_t nlen = strlen(iface);
+
+                        if (JS_IsException(sub)) {
+                            ret = -1;
+                        } else {
+                            DCHECK(nlen > 0 && nlen <= BC_SERIALIZABLE_NAME_MAX,
+                                   "a serializable interface answered an identifier this stream cannot carry "
+                                   "— HTML §2.7.6 step 22 chooses the deserialization steps BY that name, so "
+                                   "a name the reader cannot read back is a record no realm can resolve");
+                            bc_put_u8(s, BC_TAG_SERIALIZABLE);
+                            bc_put_leb128(s, (uint32_t)nlen);
+                            dbuf_put(&s->dbuf, (const uint8_t *)iface, nlen);
+                            /* THE SUB-SERIALIZATION IS ONE MORE ITEM ON THIS WRITER'S OWN STACK. HTML §2.7.3
+                               step 26 defines it as "an operation which takes as input a value subValue, and
+                               returns StructuredSerializeInternal(subValue, forStorage, memory)" — the same
+                               walk under the same `memory` — so a nested JS_WriteObject would be a second
+                               object_list and would neither terminate a cycle nor preserve `===`. */
+                            ret = bcw_push(s, bcw_val(sub, true));
+                        }
+                    } else {
+                        JS_ThrowTypeError(s->ctx, "unsupported object class");
+                        ret = -1;
+                    }
                 }
                 break;
             }
@@ -76141,8 +76202,11 @@ static int bcw_step_value(BCWriterState *s, JSValueConst obj)
                "the engine's writer has no arm that refuses one"; the arm BELOW is that arm and it ACCEPTED one,
                so `structuredClone({s: Symbol()})` came back with an `s` where a browser throws. A top-level
                guard cannot be the answer to a step of a recursive algorithm, and that file HAS no per-value arm
-               to move it into — its only per-value decision is the transfer map's index_of — which is the same
-               gap HTML §2.7.1 "Serializable objects" needs closed and core/structured_clone.h now records.
+               to move it into — its only per-value decision was the transfer map's index_of — which is the
+               same gap HTML §2.7.1 "Serializable objects" needed closed. That gap IS closed: the arm below
+               asks a host seam per value, and a Symbol stays here rather than moving there because this
+               question is about a VALUE KIND the engine already knows and that one is about an INTERFACE,
+               which it does not.
                THE DISCRIMINATOR IS THE BYTECODE FLAG AND IT IS NOT INCIDENTAL. §2.7.1 requires a serialized
                form "independent of any given realm", and a symbol has none: the tag below writes an ATOM, and
                the reader mints a symbol out of the reading runtime's atom table — a NEW symbol with the same
@@ -76393,9 +76457,10 @@ static int JS_WriteObjectAtoms(BCWriterState *s)
     return -1;
 }
 
-uint8_t *JS_WriteObject3(JSContext *ctx, size_t *psize, JSValueConst obj,
+uint8_t *JS_WriteObject4(JSContext *ctx, size_t *psize, JSValueConst obj,
                          int flags, JSSABTab *psab_tab,
-                         const JSTransferWriteHook *transfer)
+                         const JSTransferWriteHook *transfer,
+                         const JSSerializableWriteHook *serializable)
 {
     BCWriterState ss, *s = &ss;
     uint32_t h;
@@ -76404,9 +76469,14 @@ uint8_t *JS_WriteObject3(JSContext *ctx, size_t *psize, JSValueConst obj,
     DCHECK(!transfer || transfer->index_of != NULL,
            "a transfer map was supplied to the writer without the function that answers it — HTML §2.7.7's "
            "`memory` IS that lookup, so a map that cannot be asked is not a seeded memory at all");
+    DCHECK(!serializable || (serializable->interface_of != NULL && serializable->serialize != NULL),
+           "HTML §2.7.1's serializable seam was supplied without both of its halves — step 19 names the "
+           "interface and step 26's third arm performs its serialization steps, and a seam that answers one "
+           "of those emits a tag whose sub-value nothing wrote");
     memset(s, 0, sizeof(*s));
     s->ctx = ctx;
     s->transfer = transfer;
+    s->serializable = serializable;
     s->allow_bytecode = ((flags & JS_WRITE_OBJ_BYTECODE) != 0);
     s->allow_sab = ((flags & JS_WRITE_OBJ_SAB) != 0);
     s->allow_reference = ((flags & JS_WRITE_OBJ_REFERENCE) != 0);
@@ -76452,6 +76522,13 @@ uint8_t *JS_WriteObject3(JSContext *ctx, size_t *psize, JSValueConst obj,
     return NULL;
 }
 
+uint8_t *JS_WriteObject3(JSContext *ctx, size_t *psize, JSValueConst obj,
+                         int flags, JSSABTab *psab_tab,
+                         const JSTransferWriteHook *transfer)
+{
+    return JS_WriteObject4(ctx, psize, obj, flags, psab_tab, transfer, NULL);
+}
+
 uint8_t *JS_WriteObject2(JSContext *ctx, size_t *psize, JSValueConst obj,
                          int flags, JSSABTab *psab_tab)
 {
@@ -76478,7 +76555,7 @@ typedef struct BCRFrame {
     uint32_t u1, u2, u3;/* TA: class id, length, byte offset (u3 = the reserved ref slot) */
 } BCRFrame;
 enum { BCR_READ, BCR_ARRAY, BCR_OBJ, BCR_MAP, BCR_DATE, BCR_OBJVAL,
-       BCR_TA, BCR_FUNC, BCR_MODULE };
+       BCR_TA, BCR_FUNC, BCR_MODULE, BCR_SERIALIZABLE };
 
 typedef struct BCReaderState {
     JSContext *ctx;
@@ -76498,6 +76575,9 @@ typedef struct BCReaderState {
        began, or NULL for a read that is not a StructuredDeserializeWithTransfer. A stream naming a transferred
        value is refused outright without it — the tag has no meaning a reader may invent. */
     const JSTransferReadHook *transfer;
+    /* HTML §2.7.1's serializable seam — what creates an instance of a named interface in THIS realm and runs
+       its deserialization steps — or NULL for a read that has none, which refuses the tag outright. */
+    const JSSerializableReadHook *serializable;
     /* SAB references */
     uint8_t **sab_tab;
     int sab_tab_len;
@@ -77463,6 +77543,56 @@ static JSValue JS_ReadObjectValue(BCReaderState *s)
     return JS_UNDEFINED;
 }
 
+/* HTML §2.7.6 STEPS 22 AND 23 — and the SPLIT between them and step 24 is the whole of why this is a frame.
+   Step 22 creates the instance, step 23 is "Set memory[serialized] to value", and only step 24 reads what the
+   serialization steps wrote. So the object is in the reference list BEFORE its sub-value, which is what makes
+   a graph reaching one platform object twice come back as ONE object — and it is NOT BC_TAG_TYPED_ARRAY's
+   reserve-and-patch, which exists because a typed array cannot be built before its buffer. HTML §2.7.1 says
+   of a serializable that value "will be a newly-created instance of the platform object type in question,
+   with none of its internal data set up; setting that up is the job of these steps", so it can. */
+static JSValue JS_ReadSerializable(BCReaderState *s)
+{
+    JSContext *ctx = s->ctx;
+    char name[BC_SERIALIZABLE_NAME_MAX + 1];
+    uint32_t len;
+    JSValue obj;
+
+    /* THE BYTES ARE INPUT AND THIS IS A REFUSAL, NOT AN ASSERT. A record read back in a later turn — a
+       history entry, a queued delivery, the cold tier — is not this activation's own value, and a read given
+       no seam has no meaning to give the tag. */
+    if (!s->serializable)
+        return JS_ThrowSyntaxError(ctx, "a serialized platform object is named by a stream read with no "
+                                        "serializable seam to create one");
+    if (bc_get_leb128(s, &len))
+        return JS_EXCEPTION;
+    if (len == 0 || len > BC_SERIALIZABLE_NAME_MAX)
+        return JS_ThrowSyntaxError(ctx, "a serialized platform object names an interface identifier of %u "
+                                        "bytes, which no Web IDL interface has", len);
+    if (bc_get_buf(s, name, len))
+        return JS_EXCEPTION;
+    name[len] = '\0';
+    /* STEP 22, including its own "If the interface identified by interfaceName is not exposed in targetRealm,
+       then throw a \"DataCloneError\" DOMException" — which is the seam's answer and not this reader's,
+       because exposure is a fact about a realm that only the host holds. */
+    obj = s->serializable->create(ctx, s->serializable->opaque, name);
+    if (JS_IsException(obj))
+        return JS_EXCEPTION;
+    /* STEP 23, BEFORE the sub-value is read. */
+    if (BC_add_object_ref(s, obj))
+        goto fail;
+    if (bcr_push(s) < 0)
+        goto fail;
+    {
+        BCRFrame *f = &s->r_stack[s->r_sp - 1];
+        f->kind = BCR_SERIALIZABLE;
+        f->obj = obj;
+    }
+    return JS_UNDEFINED;
+ fail:
+    JS_FreeValue(ctx, obj);
+    return JS_EXCEPTION;
+}
+
 static JSValue JS_ReadMap(BCReaderState *s);
 static JSValue JS_ReadSet(BCReaderState *s);
 
@@ -77623,6 +77753,9 @@ static JSValue bcr_read_one(BCReaderState *s)
             }
             obj = s->transfer->value_at(ctx, s->transfer->opaque, val);
         }
+        break;
+    case BC_TAG_SERIALIZABLE:
+        obj = JS_ReadSerializable(s);
         break;
     case BC_TAG_MAP:
         obj = JS_ReadMap(s);
@@ -77787,6 +77920,27 @@ static JSValue JS_ReadObjectRec(BCReaderState *s)
                     s->r_sp--;
                     continue;
                 }
+                if (f->kind == BCR_SERIALIZABLE) {
+                    /* HTML §2.7.6 STEP 24's LAST ARM: "Perform the appropriate deserialization steps for the
+                       interface identified by serialized.[[Type]], given serialized, value, and targetRealm."
+                       `result` is the sub-deserialization of the one value the serialization steps wrote —
+                       "a specialization of StructuredDeserialize to be consistent within this invocation",
+                       which is what reading it through this same driver under this same object list is. */
+                    int r;
+
+                    DCHECK(s->serializable != NULL,
+                           "a serializable frame is being filled by a read that has no seam — the frame is "
+                           "pushed only by the arm that already refused the tag without one, so the read's "
+                           "hooks changed under a graph it was half way through");
+                    r = s->serializable->deserialize(ctx, s->serializable->opaque, f->obj, result);
+                    JS_FreeValue(ctx, result);
+                    result = f->obj;
+                    f->obj = JS_UNDEFINED;
+                    s->r_sp--;
+                    if (r < 0)
+                        goto fail;
+                    continue;
+                }
                 if (f->kind == BCR_MODULE) {
                     JSModuleDef *m = f->p1;
                     m->func_obj = result;
@@ -77850,7 +78004,8 @@ static JSValue JS_ReadObjectRec(BCReaderState *s)
                     continue;
                 }
             } else if (f->kind == BCR_DATE || f->kind == BCR_OBJVAL ||
-                       f->kind == BCR_TA || f->kind == BCR_MODULE) {
+                       f->kind == BCR_TA || f->kind == BCR_MODULE ||
+                       f->kind == BCR_SERIALIZABLE) {
                 f->phase = 1;
                 need_read = true;
                 continue;
@@ -77971,9 +78126,10 @@ static void bc_reader_free(BCReaderState *s)
     js_free(s->ctx, s->objects);
 }
 
-JSValue JS_ReadObject3(JSContext *ctx, const uint8_t *buf, size_t buf_len,
+JSValue JS_ReadObject4(JSContext *ctx, const uint8_t *buf, size_t buf_len,
                        int flags, JSSABTab *psab_tab,
-                       const JSTransferReadHook *transfer)
+                       const JSTransferReadHook *transfer,
+                       const JSSerializableReadHook *serializable)
 {
     BCReaderState ss, *s = &ss;
     JSValue obj;
@@ -77984,9 +78140,14 @@ JSValue JS_ReadObject3(JSContext *ctx, const uint8_t *buf, size_t buf_len,
     DCHECK(!transfer || transfer->value_at != NULL,
            "a transfer map was supplied to the reader without the function that answers it — a map that cannot "
            "be asked would let the tag through and then have nothing to resolve it to");
+    DCHECK(!serializable || (serializable->create != NULL && serializable->deserialize != NULL),
+           "HTML §2.7.1's serializable seam was supplied to the reader without both of its halves — step 22 "
+           "creates the instance and step 24's last arm fills it, and a seam that answers one of those hands "
+           "back an instance with none of its internal data set up");
     memset(s, 0, sizeof(*s));
     s->ctx = ctx;
     s->transfer = transfer;
+    s->serializable = serializable;
     s->buf_start = buf;
     s->buf_end = buf + buf_len;
     s->ptr = buf;
@@ -78010,6 +78171,13 @@ JSValue JS_ReadObject3(JSContext *ctx, const uint8_t *buf, size_t buf_len,
     }
     bc_reader_free(s);
     return obj;
+}
+
+JSValue JS_ReadObject3(JSContext *ctx, const uint8_t *buf, size_t buf_len,
+                       int flags, JSSABTab *psab_tab,
+                       const JSTransferReadHook *transfer)
+{
+    return JS_ReadObject4(ctx, buf, buf_len, flags, psab_tab, transfer, NULL);
 }
 
 JSValue JS_ReadObject2(JSContext *ctx, const uint8_t *buf, size_t buf_len,

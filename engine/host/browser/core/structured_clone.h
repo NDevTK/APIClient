@@ -21,11 +21,14 @@ void structured_clone_free(JSRuntime *rt);
    the platform that says "a serialized copy" performs this: a MessagePort delivering a message, a window post,
    §4.9.1's tee with cloneForBranch2. Answers a new owned value, or JS_EXCEPTION with the "DataCloneError"
    DOMException live for a value §2.7 refuses (a function, a Proxy, a Promise, a Symbol, a platform object).
-   THE LAST ENTRY IS THIS ENGINE'S ANSWER AND NOT THE STANDARD'S, which is why it is spelled out below rather
-   than left reading as a fact about §2.7: HTML §2.7.1 "Serializable objects" says a platform object IS
-   serializable "if their primary interface is decorated with the [Serializable] IDL extended attribute", and
-   §2.7.3 step 20 refuses only the ones that are not. Every platform object is refused HERE because §2.7.1 has
-   no arm in this engine at all — see the §2.7.1 block below. */
+   THE LAST ENTRY IS THE ONES WITH NO ROW, WHICH IS THE STANDARD'S ANSWER AND NOT THIS ENGINE'S: HTML §2.7.1
+   "Serializable objects" says a platform object IS serializable "if their primary interface is decorated with
+   the [Serializable] IDL extended attribute", and HTML §2.7.3 step 20 refuses only the ones that are not. A
+   registered interface takes step 19 instead — see the §2.7.1 block below. THIS SENTENCE USED TO READ THAT
+   EVERY platform object is refused because §2.7.1 had no arm in this engine at all, and it is rewritten rather
+   than dropped because a reader who finds the seam and re-derives the old reason will re-add the refusal to
+   the list of things this file owns. What the file owns is which values are refused; WHICH platform objects
+   are serializable is the registry's, and the registry is the INTERFACES'. */
 JSValue structured_clone(JSContext *ctx, JSValueConst v);
 
 /* §2.7's TWO OPERATIONS, SEPARATELY — which is what the standard defines and what a MessagePort needs. A post
@@ -62,66 +65,68 @@ typedef struct {
 } StructuredTransferable;
 void structured_register_transferable(const StructuredTransferable *t);
 
-/* ---- §2.7.1's SERIALIZABLE OBJECTS — THE MISSING HALF, AND WHAT ITS SEAM HAS TO BE ------------------------
+/* ---- HTML §2.7.1's SERIALIZABLE OBJECTS ---------------------------------------------------------------------
  *
- * THIS REGISTRY'S SIBLING DOES NOT EXIST. §2.7.2's transferables MOVE and detach and register above; §2.7.1's
- * serializables are COPIED, and nothing registers one — so every [Serializable] interface in this tree
- * (CryptoKey, Blob, FileList, the File System Access handles) is refused by engine/qjs/quickjs.c's per-class
- * dispatch falling through to its default arm, which this file re-reports as the "DataCloneError" above.
+ * The transferables above MOVE and detach; a serializable is COPIED. HTML §2.7.1 "Serializable objects" makes
+ * the property one of an INTERFACE — "Platform objects can be serializable objects if their primary interface
+ * is decorated with the [Serializable] IDL extended attribute" — and requires that interface to "define the
+ * following algorithms": serialization steps and deserialization steps. So the row is the INTERFACE'S, exactly
+ * as a transferable's two algorithms are, and this file knows what a CryptoKey is no more than it knows what a
+ * MessagePort is.
  *
- * AND THE ABSENCE IS ALREADY COSTING SOMETHING THAT IS NOT A PLATFORM OBJECT, WHICH IS THE PART WORTH KNOWING
- * BEFORE ANYBODY PRICES IT. §2.7.3's per-value steps are steps of a RECURSIVE algorithm and this file has no
- * per-value arm to ask them in — its ONE per-value decision is the transfer map's index_of — so a step that is
- * not about the whole value has to be asked in the writer or asked once. Step 5's Symbol refusal was asked
- * once, at the top level, and `structuredClone({s: Symbol()})` therefore came back with an `s`. That is now
- * fixed in the writer; it is recorded here because it is the same gap wearing a different §2.7.3 step, and
- * because it is the evidence that the seam below is owed today rather than when the first [Serializable]
- * interface wants it.
+ * `name` IS HTML §2.7.3 step 19's "the identifier of the primary interface of value", and it is the key at
+ * BOTH ends: step 19 writes it as serialized.[[Type]] and HTML §2.7.6 step 22 reads it back as "Let
+ * interfaceName be serialized.[[Type]]" and chooses by it. IT IS NEVER A ROW INDEX, and that is not a style
+ * preference — these bytes outlive the turn (a history entry, a broadcast, a routed message, the IDB cold
+ * tier), so an ordinal would name a different interface the moment a registrant is added, which is one park
+ * away rather than one release away.
  *
- * THE SEAM IS NOT THE ONE §2.7.2's IS, AND IT IS NOT BCR_TA's EITHER. Three facts decide its shape and each is
- * read off the standard rather than off the nearest thing in this engine that looks like it:
+ * `out` IS THE SERIALIZATION STEPS AND `create`/`fill` ARE THE DESERIALIZATION ONES, SPLIT IN TWO BECAUSE
+ * §2.7.6 SPLITS THEM. Step 22 creates the instance, step 23 is "Set memory[serialized] to value", and only
+ * step 24 performs the deserialization steps — so the instance is in the reference map BEFORE any sub-value is
+ * read, and HTML §2.7.1 says the steps receive a value that "will be a newly-created instance of the platform
+ * object type in question, with none of its internal data set up; setting that up is the job of these steps".
+ * A row is therefore TWO operations and not one.
  *
- *   (1) THE WIRE CARRIES AN IDENTIFIER AND THEN A SUB-SERIALIZATION. §2.7.3 step 19 is "Otherwise, if value is
- *       a platform object that is a serializable object:", whose sub-steps are "Let typeString be the
- *       identifier of the primary interface of value", "Set serialized to { [[Type]]: typeString }" and "Set
- *       deep to true"; step 26's third arm then runs the interface's serialization steps, which "may need to
- *       perform a sub-serialization". A sub-serialization is the SAME walk under the SAME `memory` — so it is
- *       one more value pushed on the writer's own work stack, never a nested JS_WriteObject, which would open
- *       a second object_list and neither terminate a cycle nor preserve `===`.
+ * THE HOLDER IS ONE JS VALUE OF THE ROW'S OWN CHOOSING, WHICH IS THIS ENGINE'S CHOICE AND NOT A SPEC COUNT.
+ * §2.7.3 step 26's third arm lets an interface's steps write as many fields of `serialized` as it likes and
+ * perform a sub-serialization for each; a row here answers with ONE value, and a row with several fields puts
+ * them in a record the same walk reaches. That is what keeps it a SUB-serialization: the holder rides the
+ * writer's own work stack under the ONE `memory`, so a cycle through a platform object terminates and a graph
+ * reaching one twice comes back as one object. A nested JS_WriteObject would open a second object list and do
+ * neither.
  *
- *   (2) THE READER CREATES BEFORE IT FILLS, AND THAT IS §2.7.6's OWN ORDER RATHER THAN A PREFERENCE. Step 22
- *       is "Otherwise:" — "Let interfaceName be serialized.[[Type]]", "If the interface identified by
- *       interfaceName is not exposed in targetRealm, then throw a \"DataCloneError\" DOMException", "Set value
- *       to a new instance of the interface identified by interfaceName, created in targetRealm", "Set deep to
- *       true". Step 23 is "Set memory[serialized] to value". Step 24 is "If deep is true:", whose last arm
- *       performs the deserialization steps. So the instance is IN `memory` before any sub-value is read, and
- *       §2.7.1 says in as many words that it arrives "with none of its internal data set up; setting that up
- *       is the job of these steps". A ROW IS THEREFORE TWO OPERATIONS, create and fill, and not one.
- *       THE RESERVE-AND-PATCH IDIOM IS THE WRONG ONE TO COPY, AND IT IS THE OBVIOUS ONE. quickjs's reader has
- *       exactly this shape already, at BC_TAG_TYPED_ARRAY: `idx = s->objects_count; BC_add_object_ref1(s,
- *       NULL);`, a frame, one sub-value, then `s->objects[f->i] = ...`. It reserves because a typed array
- *       CANNOT exist before its buffer — the constructor needs it. A serializable can, and §2.7.6 step 23
- *       requires it, so copying that idiom imports a narrowing the standard does not have: the slot is NULL
- *       while the sub-value is read, so a serializable whose own data reaches back to it resolves against
- *       `!s->objects[val]` and is refused as a corrupt stream. The line number is right and the ROLE is not.
- *
- *   (3) THE KEY IS THE IDENTIFIER AND NEVER A ROW INDEX. §2.7.6 step 22 chooses BY interfaceName, exactly as
- *       §2.7.8 chooses the receiving steps by a holder's [[Type]] above — and these bytes outlive the turn:
- *       a history entry, a broadcast, a routed message, the IDB cold tier. A row ordinal names a different
- *       interface the moment a registrant is added, which is one park away rather than one release away.
- *
- * AND IT IS SCOREABLE NOW, BY ONE DOCUMENT, WHICH IS A CHANGE OF STATE RATHER THAN OF PLAN. The corpus's own
- * oracle for the first consumer is WebCryptoAPI/serialization/, nineteen collected documents that share one
- * META script; every one of them calls crypto.subtle.generateKey and crypto.subtle.exportKey. TWO PREMISES
- * HAVE BEEN FALSIFIED HERE IN TURN AND BOTH ARE KEPT, because each is one a reader re-derives. The first was
- * "neither is installed — `git grep -c '"generateKey"' -- '*.c' '*.h'` answers nothing at all"; both are
- * installed. The second was that no ALGORITHM has a row in both members' registries, on the ground that
- * §14.3.6 registered AES-GCM alone and §14.3.10 registered HMAC alone — so those documents failed before
- * reaching structuredClone and a seam landed then would have moved their verdict by zero. §29.4.5 AES-GCM Export Key has landed and AES-GCM
- * is now a row in BOTH, so `aes-gcm.https.any.js` generates, exports, and ARRIVES HERE. What it meets is this
- * seam's own absence. The other eighteen are still blocked one call earlier, so the oracle is one document
- * and not nineteen — which is enough to score a seam and not enough to read as coverage.
- * core/crypto/crypto_key.h states the decomposition and what is still owed. */
+ * WHAT A ROW MAY ASSERT, AND WHAT IT MAY NOT. `out` reads state THIS engine wrote, so a malformed slot is this
+ * codebase's own logic being wrong and is a DCHECK. `fill` reads a holder that came back through bytes, and in
+ * the SAME-TURN clone those bytes are this agent's own — see the residual below for the path where they are
+ * not. The value a page hands `structuredClone` is never any of this: a shape §2.7 refuses gets the
+ * "DataCloneError" the standard names, which is a refusal and not an assert, because an assert on page input
+ * is a page-held abort switch. */
+typedef struct {
+    const char *name;                                  /* §2.7.3 step 19's identifier of the primary interface */
+    bool    (*is)(JSContext *ctx, JSValueConst v);     /* step 19's "a platform object that is a serializable
+                                                          object", for THIS interface */
+    JSValue (*out)(JSContext *ctx, JSValueConst v);    /* the serialization steps, as one holder; or
+                                                          JS_EXCEPTION with a throw live */
+    JSValue (*create)(JSContext *ctx);                 /* §2.7.6 step 22's new instance, no data set up */
+    int     (*fill)(JSContext *ctx, JSValueConst v, JSValueConst holder);  /* the deserialization steps */
+} StructuredSerializable;
+void structured_register_serializable(const StructuredSerializable *s);
+
+/* NAMED RESIDUAL — narrower than §2.7.6 and CORRECT for what it does, so there is nothing here to crash on.
+ * WHAT IS NOT COVERED: a record whose bytes this agent did not write. Every refusal the READER can make —
+ * this seam's unknown interface name, a Symbol tag, a transfer reference with no map — is turned into an abort
+ * by structured_deserialize's DFAIL, on the argument that a graph the writer produced and the reader refused
+ * is the two halves disagreeing. That argument holds for every caller this file has today and stops holding
+ * the day a ROUTED message carries a body: those bytes were written by another instance, which SECURITY.md
+ * grades as attacker-controlled, and §2.7.6 step 22's own answer for an interface the realm does not expose is
+ * a "DataCloneError" rather than a crash.
+ * WHAT THE NEXT DIFF BUILDS: a reader refusal this file can tell apart from a format disagreement — one
+ * channel out of JS_ReadObject4 that says WHICH of the two it was — after which structured_deserialize
+ * re-reports the first as the DOMException §2.7.6 names and keeps the DFAIL for the second.
+ * HOW ITS ABSENCE WOULD SHOW: an abort in a delivery task, naming the writer/reader disagreement, on a
+ * message a peer instance composed — observable as the engine dying on a document it did not itself
+ * serialize. It is not shown by any row of a run that only ever clones in one agent. */
 
 /* THE TRANSFER LIST IS A DECLARED IDL TYPE AND NOT A WALK THIS FILE PERFORMS. It used to be one — a
  * function reading `list.length` and one index per entry — and that is the ARRAY-LIKE algorithm rather than
@@ -140,8 +145,8 @@ void structured_register_transferable(const StructuredTransferable *t);
  *
  * `memory` IS SEEDED WITH THE TRANSFER LIST, which is what makes these two more than "serialize, then move the
  * named objects separately". A transferable REACHED FROM INSIDE the message body is neither cloned nor refused:
- * §2.7.1's first step finds it in `memory` and writes its dataHolder, and §2.7.2's first step finds that holder
- * in §2.7.8's `memory` and answers with the object the transfer-receiving steps built — THE SAME object as the
+ * HTML §2.7.3's step 2 finds it in `memory` and writes its dataHolder, and HTML §2.7.6's step 2 finds that
+ * holder in §2.7.8's `memory` and answers with the object the transfer-receiving steps built — THE SAME object as the
  * matching entry of [[TransferredValues]], never a copy. So `port.postMessage({p: other}, [other])` delivers a
  * message whose `p` is the moved port, and `event.ports[0] === event.data.p`.
  * The seam is a PAIR OF HOOKS passed as parameters of the one serialization — JSTransferWriteHook answering an
