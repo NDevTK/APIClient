@@ -250,10 +250,26 @@ for (const p of passes) for (const r of p.rows) {
         `  is reported as the old one. Teach this file the word, or fix the producer.`);
   /* AND THE PARTS SUM TO THE TOTAL, asserted where both are in one hand. A partition whose members can drift
      from the count they are drawn from is one nobody can reason from, and this is the single check that makes
-     `terminal` quotable beside `runs`. site.mjs builds both off the SAME `myRuns` array, so it holds for all
-     54 rows today: it costs nothing and can only fire on a real regression. */
+     `terminal` quotable beside `runs`. site.mjs builds both off the SAME `myRuns` array, so where a row was
+     measured at all the two cannot legitimately disagree.
+     AND IT IS GUARDED BY `!r.fatal`, LIKE ITS THREE SIBLINGS ABOVE, BECAUSE A FATAL ROW HAS NO POPULATION FOR
+     THE PARTS TO BE DRAWN FROM. A fatal row never drove the site: `runsMine` is `undefined` and `outc` is `{}`,
+     so `0 !== undefined` and this throws -- the invariant has no SUBJECT there rather than being violated, which
+     is the §AN-INVARIANT-OVER-A-GATED-OPERATION shape, an outcome check firing on an arm that correctly did
+     nothing.
+     THE RETIRED ARGUMENT IS KEPT BECAUSE A READER WHO RE-DERIVES IT WILL RE-REMOVE THE GUARD. This comment used
+     to end "it holds for all 54 rows today: it costs nothing and can only fire on a real regression", and that
+     is exactly §A-CURE-VALIDATED-ON-A-SHORT-EXAMPLE: the sentence is true, and it was checked against a census
+     with no fatal row in it -- the one population where the defect cannot appear. It is not rare. run.sh emits a
+     fatal row whenever a fixture server fails to bind, and a frozen apps.tsv census ALWAYS carries one, because
+     that list deliberately keeps a row with no mirror. So the throw is GUARANTEED on precisely the census this
+     project runs against frozen bytes.
+     AND THE DIRECTION IS THE ONE THAT COSTS MOST: this does not make a number wrong, it makes the ENTIRE report
+     unreadable, so one unbound fixture server hides every other site's measurement behind a stack trace about a
+     row nobody was asking about. A lane hit it and worked around it by filtering the fatal row out of its own
+     input, which is a reader repairing an instrument's refusal at the one place the repair cannot be seen. */
   const outcSum = Object.values(outc).reduce((a, b) => a + b, 0);
-  if (outcSum !== r.runsMine)
+  if (!r.fatal && outcSum !== r.runsMine)
     throw new Error(`report.mjs: row \`${r.id}\` (pass ${p.label}) reports ${r.runsMine} runs at its origin\n` +
       `  while its runOutcomesMine sums to ${outcSum}. site.mjs composes both from the same \`myRuns\` array,\n` +
       `  so a disagreement means one of them is being built over a different population and the outcome\n` +
