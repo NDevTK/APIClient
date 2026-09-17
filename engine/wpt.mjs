@@ -245,10 +245,12 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                       Its only ancestor is `css` itself, whose own level cone mode has already materialized for
                       the three standards above and which holds two blobs, neither a test.
                       THE OTHER HELPERS THOSE ABORTS NAME ARE DELIBERATELY NOT HERE, because they are not the
-                      same shape: `css/mediaqueries/resources`, `css/css-scroll-snap/support` and
-                      `css/css-fonts/support` each sit under a standard whose OWN LEVEL cone mode would then
-                      materialize — 106, 92 and 680 blobs respectively — so each is a decision about running
-                      that standard, not a helper that costs nothing, and each belongs to whoever takes it. */
+                      same shape: `css/mediaqueries/resources` and `css/css-scroll-snap/support` each sit under
+                      a standard whose OWN LEVEL cone mode would then materialize — 106 and 92 blobs
+                      respectively — so each is a decision about running that standard, not a helper that costs
+                      nothing, and each belongs to whoever takes it. THE THIRD OF THEM, `css/css-fonts/support`,
+                      IS NOW INSIDE A LISTED ENTRY, because that decision was taken: its standard is the row two
+                      below this one, and 680 is that standard's own level rather than a cost this entry pays. */
                    "css/support",
                    /* CSS TYPED OM LEVEL 1 — §4.3.1 "Common Numeric Operations, and the CSSNumericValue
                       Superclass", §4.3.2 "Numeric Value Typing", §4.3.3 "Value + Unit: CSSUnitValue objects" and
@@ -293,6 +295,67 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                       thirds of this directory written about StylePropertyMap have no component to answer them
                       and each abort NAMES that, which is the work queue read off the run. */
                    "css/css-typed-om",
+                   /* CSS FONTS LEVEL 4 §2.1 "Font family: the font-family property", §2.1.1 "Syntax of
+                      <font-family-name>" and §2.1.2 "Syntax of <generic-font-family>". Section numbers and
+                      titles read out of the fetched draft, not recalled. Two built things answer them and
+                      NEITHER HAD A CONFORMANCE ORACLE IN THIS TREE: core/css/css_font_shorthand.c carries
+                      §2.1.1's `<font-family-name> = <string> | <custom-ident>+` as the grammar §2.7's
+                      `<'font-family'>#` term is validated against, and core/css/css_style_declaration.c's
+                      `cssom_initial_value` answers §2.1's `Initial:` line — which that property's own
+                      `Inherited: yes` makes the base case of every element in every document. The live cone
+                      under `/css/` held css-typed-om, css-values, cssom, cssom-view and support and nothing
+                      else, so `getComputedStyle(el).fontFamily` was judged by NO gate here at any value.
+                      WHAT IT COSTS AND WHAT IT COLLECTS, DERIVED RATHER THAN ESTIMATED. At the pinned revision
+                      the subtree is 2481 files, of which `testKind` answers `document` for 163, `script` for
+                      NONE and `unreadable` for none — 83 under `parsing`, 45 at the standard's own level, 15
+                      `animations`, 14 `variations`, 4 `math-script-level-and-math-style`, 1 `matching` and 1
+                      `font-display`. The 2318 that collect are mostly not tests at all: 1438 `.glif` and the
+                      rest of the 1525 under `support` are a UFO font source tree, which `nameIsNonTest` refuses
+                      by path part. The derivation is `testKind` ITSELF read out of this file and run over
+                      `git ls-tree -r bf4714d -- css/css-fonts`, calibrated first against the three counts the
+                      css-typed-om row above already publishes (348 documents, 11 scripts, 19 non-`.yml` nulls)
+                      and against `css/css-values`' 268 — reproduced to the digit, which is what makes 163 a
+                      measurement and not an estimate.
+                      IT MOVES THE DENOMINATOR AND THE NUMBER IS SAID RATHER THAN LEFT TO BE NOTICED. The walk
+                      collects 5969 files (4907 documents, 1062 scripts), so this is +163 documents and +2.73%.
+                      A pass count taken across this entry is a fraction of a different population from one
+                      taken before it, and the two are not comparable as totals.
+                      AND THAT DENOMINATOR IS DERIVED OVER THE PINNED TREE, NEVER OVER THE CHECKOUT. This gate's
+                      first act is `sparse-checkout set ...WPT_PATHS` followed by a hard fail on any entry still
+                      absent, so what a RUN collects is what the TREE holds for the listed entries — while the
+                      directory on disk is free to lag the list, and did: three roots stood unmaterialized when
+                      this entry was written, so the same walk read off DISK answers 5601 (4540, 1061), short by
+                      exactly their 367 documents and 1 script. A denominator taken from the checkout a previous
+                      run happened to leave behind is a figure about THAT RUN rather than about this gate — the
+                      re-sparsification warning above, read from the other end, and a coverage figure whose
+                      population is not the one it names. RETIRED when a run prints its own collected total per
+                      entry, because the number is then re-derived by the gate instead of restated here.
+                      EVERY FIXTURE THE 163 DECLARE RESOLVES, CHECKED BEFORE THE ENTRY WENT IN and by this
+                      file's own `docScriptFixtures` rather than by eye. They name exactly ten paths:
+                      `/resources/testharness.js` and `/resources/testharnessreport.js` (163 each),
+                      `css/support/parsing-testcommon.js` (53), `computed-testcommon.js` (25),
+                      `interpolation-testcommon.js` (16), `inheritance-testcommon.js` (1) and
+                      `shorthand-testcommon.js` (1, reached as `../../support/…` from `parsing`), plus
+                      `/resources/idlharness.js` and webidl2 through SERVER_REWRITES — all under the listed
+                      `resources` and `css/support` — and `css/css-fonts/support/font-family-keywords.js` (3),
+                      which is INSIDE this subtree. Nothing is unresolved and nothing is absent upstream.
+                      IT MUST BE A WPT_PATHS ENTRY AND NOT A WPT_OWN_LEVEL ONE, for the css-typed-om row's
+                      reason and for a second: that helper is inside the subtree, and 83 of the 163 — the
+                      `parsing` directory, which is where the computed-value oracle lives — are not at the own
+                      level at all. `css`'s own level is already materialized by the rows above and holds
+                      `.htaccess` and `README.md`, neither a test, so this entry adds no intermediate own level
+                      and the stray census stays at zero.
+                      THE `idlharness.html` FIXTURE SET WAS CHECKED TOO: `idl_test(["css-fonts-5", "css-fonts"],
+                      ["cssom"])`, and all three `.idl` files are present under the listed `interfaces`.
+                      NOTHING IS PREDICTED HERE ABOUT WHAT IT SCORES. CSS Fonts 4 §2.1 "Font family: the
+                      font-family property" states a `Computed value:` that is a LIST — "list, each item a
+                      string and/or <generic-font-family> keywords" — and this engine answers the SPECIFIED
+                      text for a declared value, so `parsing/` is expected to disagree — but which files and
+                      how is what the run says, and a number written here would be a guess sitting where the
+                      next reader takes it for a fact. Per §A-DIRECTORY-THAT-ABORTS
+                      a count arriving where there was no result is the first honest measurement of an area and
+                      never a regression to revert. */
+                   "css/css-fonts",
                    /* THE COMPONENTS' OWN SPEC DIRECTORIES, each named because the component exists in
                       engine/host/browser/core and its tests were not being collected: request.c and body.c
                       (fetch/api/headers and .../response were checked out and their two siblings were not),
