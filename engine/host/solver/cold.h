@@ -58,9 +58,14 @@ typedef struct {
        tail — while a PROGRAM index runs over [0, dyn_n) and is the domain solver/engine.h's `deepest` and
        `completed` live in. The histogram is therefore ONE BUCKET WIDER than the document has programs, and its
        top bucket is the members that have run out of rows. Read as a program index that bucket names a program
-       the document does not have, which is how the row a reader is told to compare against `deepest` came to
-       look like an instrument contradicting the maximum beside it. It is not: on a document of eleven programs,
-       `deepest 10 / completed 10` and a bucket at 11 are the SAME statement made twice.
+       the document does not have, which is how the row a reader is told to compare against `deepestLeft` came
+       to look like an instrument contradicting the maximum beside it. It is not: on a document of eleven
+       programs every one of which ran, `deepest 10 / deepestLeft 10 / completed 10` and a bucket at 11 are the
+       SAME statement made three times.
+       THE MAXIMUM TO COMPARE IT AGAINST IS `deepestLeft` AND NOT `deepest`, and this block named `deepest`
+       for as long as it stood. They are one number on a document every row of which ran and they separate on
+       every row that was LEFT without being STARTED — see below, and solver/engine.h for why that is two
+       facts rather than one number read twice.
        THE IDENTITY THAT SAYS SO IS ASSERTED, at solver/result.c where this census and the frontier census are
        in one hand: every live member's cursor is at most `deepestLeft + 1`. A cursor of `c` above zero means
        the member LEFT the row at `c - 1`, and a row is left at exactly one line — engine.c's

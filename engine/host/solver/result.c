@@ -1417,6 +1417,15 @@ char *result_swap_json(void) {
    program ANY FLOW HAS STARTED" is `deepest + 1`, not `deepest`. The mass sitting AT `deepest + 1` is the
    second diagnosis; a top bucket one above `deepest` is not two instruments disagreeing, which is how it has
    been read. `outOfPrograms` beside them is the count of members standing there with no row left at all.
+   AND `deepest + 1` IS A CEILING ONLY WHERE EVERY ROW RAN, WHICH IS NOT GUARANTEED AND IS NOT RARE — the
+   number the top bucket is bounded by is `deepestLeft + 1`, and that is what the identity below asserts. A
+   row HTML §4.12.1.1 "Processing model"'s "execute the script element" step 4 skipped — an external
+   `<script src>` whose fetch failed — is LEFT without being STARTED, so the cursor passes it and `deepest`
+   does not move. The gap `deepestLeft - deepest` is exactly how far the mass has run ahead of the deepest
+   program that actually began, and on a MIRRORED page, where a script whose origin was not mirrored is
+   precisely a script that fails to load, it is the ordinary state rather than a fault. Read the top bucket
+   against `deepest + 1` and every such skip reads as the two instruments disagreeing, which is the one
+   misreading this whole block exists to end.
    THAT USED TO READ "the deepest program THE DOCUMENT HAS", AND THOSE ARE DIFFERENT NUMBERS — `rootPrograms`
    is the document's own count and `deepest` is how far anybody got, so a top bucket at `deepest + 1` says
    where the MASS reached and never that the sequence ends there. `engine_seed_scripts` queues the whole table

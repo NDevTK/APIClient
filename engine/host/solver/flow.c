@@ -90,8 +90,15 @@ static int64_t g_picks_total = 0;
    are standing at 8's.
    THE CLAUSE THAT STOOD HERE — "with nothing of the document's own table left to run" — WAS FALSE AND IS
    REWRITTEN, BECAUSE IT WAS DERIVED FROM THE HISTOGRAM'S EXTENT AND THE EXTENT IS NOT THE TABLE. The buckets
-   run to `deepest + 1` because that is how far any LIVE MEMBER has got, so a top bucket reads exactly the same
-   whether the sequence ends there or continues for another sixteen rows. `engine_seed_scripts` queues the
+   run to `deepestLeft + 1` because that is how far any LIVE MEMBER has got, so a top bucket reads exactly the
+   same whether the sequence ends there or continues for another sixteen rows.
+   `deepestLeft` AND NOT `deepest`, WHICH THIS PARAGRAPH SAID AND WHICH IS TRUE ONLY OF A DOCUMENT EVERY ROW
+   OF WHICH RAN — as this one's did, which is why the reading above holds and is not being withdrawn. The two
+   numbers separate when a row is LEFT without being STARTED: HTML §4.12.1.1 "Processing model"'s "execute the
+   script element" step 4 runs nothing for an external `<script src>` whose fetch failed, and the cursor
+   passes it while `deepest` stays put. A page of this shape with row 3 failing would read `deepest 7` with a
+   top bucket at 9, and a reader holding the retired sentence would call that an instrument disagreeing with
+   the maximum beside it. `engine_seed_scripts` queues the
    WHOLE of a document's table at flow creation, so every member's `dyn_n` is 24 from birth and cursor 8 means
    SIXTEEN ROWS REMAIN. The row that separates those two states is `outOfPrograms`, which this reading did not
    quote — and that is the same defect as the one above it, one row over: a number read against the wrong
