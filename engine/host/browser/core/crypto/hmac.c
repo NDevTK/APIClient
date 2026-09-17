@@ -466,3 +466,80 @@ SecureHashAlgorithm hmac_key_hash(JSContext *ctx, JSValueConst key)
     JS_FreeCString(ctx, nm);
     return alg;
 }
+
+/* §31.6.5 Export Key's jwk arm, the `alg` sub-step — the half of that arm §29.4.5 does NOT share, which is why
+   it is here and not in core/crypto/jwk.c. §31.6.5 selects on "the name attribute of hash" with four clauses
+   and a fifth; §29.4.5 selects on "the length attribute of key" with three. One leaf, two selections.
+   THE FIFTH CLAUSE IS UNREACHABLE AND IS A DCHECK RATHER THAN A DEFAULT: "Otherwise, the name attribute of
+   hash is defined in another applicable specification: Perform any key export steps defined by other
+   applicable specifications, passing format and key and obtaining alg." §32.2 Registration's recognized names
+   are exactly these four, secure_hash_by_name is what put one of them on the key, and this engine registers no
+   other — so an arm here is this codebase's own logic being wrong and never a page's input being unusual.
+   A `default:` returning some string would be §A-FIELD-A-CONSUMER-DEFAULTS' plausible datum: a key exported
+   under an `alg` no JWA registry names, which re-imports as a DataError somewhere else entirely. */
+static const char *hmac_jwk_alg(SecureHashAlgorithm hash)
+{
+    switch (hash) {
+    case SECURE_HASH_SHA1:   return "HS1";
+    case SECURE_HASH_SHA256: return "HS256";
+    case SECURE_HASH_SHA384: return "HS384";
+    case SECURE_HASH_SHA512: return "HS512";
+    }
+    DFAIL("an HMAC key's inner hash is outside §32.2 Registration's four recognized names — §31.6.5's fifth "
+          "`alg` clause defers to another applicable specification and this engine registers none");
+    return NULL;
+}
+
+JSValue hmac_export_key(JSContext *ctx, const char *format, JSValueConst key)
+{
+    JSValue handle = crypto_key_handle(ctx, key);
+    uint32_t len = 0;
+    const uint8_t *bits;
+    JSValue result;
+
+    DCHECK(format != NULL, "§31.6.5 step 4's format dispatch was asked with no format");
+
+    /* STEP 1: "If the underlying cryptographic key material represented by the [[handle]] internal slot of key
+       cannot be accessed, then throw an OperationError."
+       IT IS A DCHECK AND NOT THAT THROW, because the material is an ArrayBuffer THIS ENGINE minted and keeps
+       in an own slot nothing hands out — §13.3's [[handle]] is never exposed to a page, and the one operation
+       that reads it back out is this one, gated on §14.3.10 step 7. So the only way to reach an unreadable
+       handle is for this codebase to have built a key wrong, which is what a DCHECK asserts. A key whose
+       material a page could detach would make this a real OperationError, and nothing in this engine can
+       produce one.
+       STEPS 2 AND 3: "Let bits be the raw bits of the key represented by the [[handle]] internal slot of key"
+       and "Let data be a byte sequence containing bits" — one read, because the engine's byte sequence is the
+       buffer's own bytes and §31.6.5 splits them only to give the jwk arm's `k` sub-step a name to use. */
+    bits = JS_GetBufferBytes(handle, &len);
+    DCHECK(bits != NULL || len == 0,
+           "an HMAC key's [[handle]] could not be read — §13.3's slot holds an ArrayBuffer this engine minted "
+           "and never hands out, so a detached one is a key built somewhere other than crypto_key_new");
+
+    /* STEP 4's DISPATCH. The three arms are the standard's own, in its own order. */
+    if (strcmp(format, "raw") == 0) {
+        /* THE RAW ARM: "Let result be data." §14.3.10 step 10's otherwise arm then creates the ArrayBuffer,
+           which for this engine is the carrier the byte sequence already travels in — see hmac.h. */
+        result = JS_NewArrayBufferCopy(ctx, bits ? bits : (const uint8_t *)"", len);
+        CHECK(!JS_IsException(result), "§14.3.10 step 10's ArrayBuffer for an exported HMAC key could not be "
+                                       "allocated");
+    } else if (strcmp(format, "jwk") == 0) {
+        /* THE JWK ARM. Everything §29.4.5 states word for word is core/crypto/jwk.c's; the `alg` sub-step is
+           this chapter's and is the argument. §31.6.5's own step 4 of the arm — "Let algorithm be the
+           [[algorithm]] internal slot of key" — and its step 5 — "Let hash be the hash attribute of
+           algorithm" — are together hmac_key_hash, which is the same pair §31.6.1 Sign reads. */
+        result = jwk_oct_export(ctx, bits, len, hmac_jwk_alg(hmac_key_hash(ctx, key)),
+                                crypto_key_usages(ctx, key), crypto_key_extractable(ctx, key));
+    } else {
+        /* STEP 4's "Otherwise: throw a NotSupportedError." REACHED BY "spki" AND "pkcs8" AND BY NOTHING ELSE:
+           §14.1's KeyFormat has four values and the argument position is declared IDL_ENUM, so Web IDL §3.2.18
+           refused every other string before §14.3.10 step 1 ran. They are a page's own input and this is the
+           refusal the standard names for them, never an assert — an HMAC key is a "secret" key and neither of
+           those two formats carries one. */
+        JS_ThrowDOMException(ctx, "NotSupportedError",
+                             "an HMAC key cannot be exported as \"%s\" — §31.6.5 Export Key defines the "
+                             "\"raw\" and \"jwk\" formats and no other", format);
+        result = JS_EXCEPTION;
+    }
+    JS_FreeValue(ctx, handle);
+    return result;
+}

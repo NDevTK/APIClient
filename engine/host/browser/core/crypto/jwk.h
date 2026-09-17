@@ -79,4 +79,42 @@ int jwk_alg_is(JSContext *ctx, JSValueConst jwk, const char *want);
    Returns 0, or -1 with the "DataError" of whichever sub-step refused pending. */
 int jwk_oct_tail(JSContext *ctx, JSValueConst jwk, const char *use_value, uint32_t usages, bool extractable);
 
+/* ---- THE EXPORT DIRECTION: §29.4.5 Export Key's and §31.6.5 Export Key's jwk arms ---------------------------
+ *
+ * THE SAME METHOD AS THE IMPORT RUN ABOVE — the two chapters were DIFFED rather than assumed to agree, and the
+ * shared run is what came back identical. §14.3.10 has no algorithm argument at all, so neither chapter's arm
+ * reads anything of the page's and neither can suspend.
+ *   IDENTICAL, word for word, and therefore here:
+ *     "Let jwk be a new JsonWebKey dictionary."
+ *     "Set the kty attribute of jwk to the string \"oct\"."
+ *     "Set the key_ops attribute of jwk to equal the usages attribute of key."
+ *     "Set the ext attribute of jwk to equal the [[extractable]] internal slot of key."
+ *     "Let result be jwk."
+ *   THE SAME OCTETS THROUGH DIFFERENT WORDS, and therefore here as the `data` parameter: the `k` sub-step is
+ *     "…a string containing the raw octets of the key represented by the [[handle]] internal slot of key,
+ *     encoded according to Section 6.4 of JSON Web Algorithms [JWA]" in §29.4.5 and "…a string containing
+ *     data, encoded according to Section 6.4 of JSON Web Algorithms [JWA]" in §31.6.5. NOT word for word: the
+ *     difference is that §31.6.5 HOISTS the octets into two steps of its own above the format dispatch ("Let
+ *     bits be the raw bits of the key represented by the [[handle]] internal slot of key" and "Let data be a
+ *     byte sequence containing bits") where §29.4.5 names them inside each arm. Both arms encode the same
+ *     [[handle]], which is why the octets are an argument and not a second reader.
+ *   DIFFERENT IN STRUCTURE, and therefore NOT here: the `alg` sub-step, exactly as on the import side.
+ *     §29.4.5 selects on the key's LENGTH with three clauses and no Otherwise; §31.6.5 selects on the NAME of
+ *     the hash with four clauses and a fifth deferring to another applicable specification. The caller
+ *     performs its own chapter's selection and hands the answer in.
+ *
+ * AND THE IMPORT RUN'S SPLIT INTO A HEAD AND A TAIL IS NOT REPEATED, which is a difference between the two
+ * directions rather than an inconsistency. The import arm is split because its sub-steps THROW — each is a
+ * refusal a page can observe, so the ORDER they are asked in is observable and is carried by the call
+ * sequence. Every sub-step of the export arm is a WRITE onto a dictionary that does not exist yet; none of
+ * them can fail, so there is no order for a caller to get wrong and nothing for a split to protect. One call
+ * is therefore the honest shape, and it is also what makes the MEMBER ORDER below statable in one place.
+ *
+ * `alg` IS REQUIRED AND NOT OPTIONAL. Neither chapter can reach this with no `alg` decided: §29.4.5's three
+ * clauses cover every length §29.4.4 Import Key and §29.4.3 Generate Key admit, and §31.6.5's four cover every
+ * hash §32.2 Registration recognizes. A NULL would mean a caller had reached an arm its own chapter does not
+ * define, which is this engine's logic being wrong rather than a page's input being unusual. */
+JSValue jwk_oct_export(JSContext *ctx, const uint8_t *data, uint32_t len, const char *alg, uint32_t usages,
+                       bool extractable);
+
 #endif

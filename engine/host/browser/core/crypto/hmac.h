@@ -218,4 +218,22 @@ JSValue hmac_import_key(JSContext *ctx, const char *format, JSValueConst key_dat
  * HmacKeyAlgorithm's fact and not §13's: another algorithm's KeyAlgorithm has no `hash` at all. */
 SecureHashAlgorithm hmac_key_hash(JSContext *ctx, JSValueConst key);
 
+/* §31.6.5 Export Key, WHOLE — steps 1 to 5, including step 4's format dispatch and its "Otherwise: throw a
+ * NotSupportedError". The dispatch is the ALGORITHM's step and not §14.3.10's, which is why `format` is an
+ * argument here rather than a branch at the caller: §14.3.10 hands the format to the operation ("performing
+ * the export key operation specified by the [[algorithm]] internal slot of key using key and format") and
+ * never looks at it again except at step 10.
+ *
+ * IT ANSWERS WITH ONE VALUE OF TWO KINDS, which is what §14.3.10 step 10 then converts and is why this returns
+ * a JSValue rather than octets: the raw arm's result is a BYTE SEQUENCE and the jwk arm's is a DICTIONARY, and
+ * the engine's carriers for those are an ArrayBuffer and an object. Step 10's two arms — "creating an
+ * ArrayBuffer in realm, containing result" and "converting result to an ECMAScript Object in realm" — are
+ * therefore the identity on what comes back, and the realm is THIS one because a C member runs in the realm
+ * that defined it, which is the same argument §14.3.3 step 13's ArrayBuffer rests on.
+ *
+ * Returns JS_EXCEPTION with the DOMException step 4's Otherwise arm names pending for any other format. A
+ * format outside §14.1's KeyFormat cannot reach here at all: the argument position is declared IDL_ENUM, so
+ * Web IDL §3.2.18 refused it during the conversion. */
+JSValue hmac_export_key(JSContext *ctx, const char *format, JSValueConst key);
+
 #endif

@@ -256,3 +256,95 @@ int jwk_oct_tail(JSContext *ctx, JSValueConst jwk, const char *use_value, uint32
                -1;
     return 0;
 }
+
+/* ---- the export direction ---------------------------------------------------------------------------------- */
+
+/* THE CONVERSE OF jwk_k_bytes, AND DELEGATED TO THE SAME ENGINE CODEC FOR THE SAME REASON. RFC 7515 §2
+ * Terminology defines base64url as "Base64 encoding using the URL- and filename-safe character set defined in
+ * Section 5 of RFC 4648 [RFC4648], with all trailing '=' characters omitted (as permitted by Section 3.2) and
+ * without the inclusion of any line breaks, whitespace, or other additional characters", so the encode is
+ * RFC 4648 §4's base64 — which is JS_Base64Encode, the same codec `btoa` runs — followed by the two alphabet
+ * substitutions §5 names and the padding removal §2 requires. Nothing here re-implements base64.
+ *
+ * THE TRUNCATION IS AT THE FIRST `=` AND NOT A TRAILING SCAN, because b64_encode writes padding ONLY as the
+ * last one or two characters of the output and never inside it — so the first `=` is the start of the run
+ * §2 says to omit, and finding it costs nothing the walk below is not already doing.
+ *
+ * Returns a malloc'd NUL-terminated string the caller frees. */
+static char *jwk_k_string(const uint8_t *data, uint32_t len)
+{
+    size_t cap = JS_Base64EncodedSize(len);
+    char *b64 = malloc(cap + 1);
+    size_t got, i;
+
+    CHECK(b64 != NULL, "the jwk arm's `k` sub-step: OOM encoding a key's octets as base64url");
+    got = JS_Base64Encode(b64, cap, data, len);
+    /* `got` IS 0 FOR AN EMPTY KEY AND FOR A BUFFER TOO SMALL, and those are told apart by `cap` rather than
+       by the return: JS_Base64EncodedSize is what sized the buffer one line above, so the too-small arm is
+       this file disagreeing with the codec about its own arithmetic. */
+    CHECK(got == cap, "JS_Base64Encode wrote a different number of characters than JS_Base64EncodedSize "
+                      "reserved — the two are one statement of RFC 4648 §4's output length and have come "
+                      "apart");
+    for (i = 0; i < got; i++) {
+        /* RFC 4648 §5's URL- and filename-safe alphabet, which is §4's with two characters replaced. */
+        if (b64[i] == '+') b64[i] = '-';
+        else if (b64[i] == '/') b64[i] = '_';
+        else if (b64[i] == '=') break;
+    }
+    b64[i] = '\0';
+    return b64;
+}
+
+JSValue jwk_oct_export(JSContext *ctx, const uint8_t *data, uint32_t len, const char *alg, uint32_t usages,
+                       bool extractable)
+{
+    JSValue jwk;
+    char *k;
+
+    DCHECK(alg != NULL, "an export operation's jwk arm reached the shared run with no `alg` decided — §29.4.5's "
+                        "three clauses cover every length §29.4.4 admits and §31.6.5's four cover every hash "
+                        "§32.2 recognizes, so a NULL is a chapter having reached an arm it does not define");
+    DCHECK(data != NULL || len == 0, "an export operation's jwk arm was handed no octets for a non-empty key");
+
+    /* "Let jwk be a new JsonWebKey dictionary." §15 declares no member as required and none has a default, so
+       the dictionary a browser hands back carries EXACTLY the members the arm set — which is what a
+       null-prototype object with own data properties is.
+       THE PROTOTYPE IS `null` BECAUSE §14.3.10 STEP 10 IS A DICTIONARY CONVERSION AND NOT AN OBJECT LITERAL:
+       "Let result be the result of converting result to an ECMAScript Object in realm, as defined by
+       [WebIDL]", and Web IDL's converse of §3.2.17 builds the object from the dictionary's members alone. A
+       page reading `jwk.constructor` off a %Object.prototype%-backed object would be reading this realm's
+       Object, which the conversion never put there. */
+    jwk = JS_NewObjectProto(ctx, JS_NULL);
+    CHECK(!JS_IsException(jwk), "the JsonWebKey dictionary an export operation returns could not be allocated");
+
+    /* THE MEMBERS ARE SET IN LEXICOGRAPHIC ORDER AND NOT IN THE ORDER THE CHAPTERS WRITE THEM, and that is the
+       conversion's order rather than the algorithm's. §29.4.5 and §31.6.5 set `kty`, then `k`, then `alg`,
+       then `key_ops`, then `ext` — but what a page receives is §14.3.10 step 10's CONVERSION of that
+       dictionary, and Web IDL walks a dictionary's members in lexicographical order within a level exactly as
+       it does when reading one (which is the order core/crypto/subtle_crypto.c's JWK_MEMBERS table is sorted
+       by, for the same sentence read the other way). JsonWebKey inherits nothing, so all twenty members are
+       one level and these five sort `alg`, `ext`, `k`, `key_ops`, `kty`.
+       IT IS OBSERVABLE, which is why it is worth being right about: `Object.keys(exported)` and
+       `JSON.stringify(exported)` both report it, and neither is what the round-trip oracle compares — so this
+       is a divergence no test here would have caught and a page would. */
+    CHECK(JS_SetPropertyStr(ctx, jwk, "alg", JS_NewString(ctx, alg)) >= 0,
+          "the `alg` attribute of an exported JsonWebKey could not be set");
+    /* "Set the ext attribute of jwk to equal the [[extractable]] internal slot of key." §14.3.10 step 7 has
+       already refused a key whose slot is false, so this is `true` for every key that reaches here — written
+       from the slot rather than as a literal, because the day another step reaches this run the literal would
+       be a claim and the read is a fact. */
+    CHECK(JS_SetPropertyStr(ctx, jwk, "ext", JS_NewBool(ctx, extractable)) >= 0,
+          "the `ext` attribute of an exported JsonWebKey could not be set");
+    k = jwk_k_string(data, len);
+    CHECK(JS_SetPropertyStr(ctx, jwk, "k", JS_NewString(ctx, k)) >= 0,
+          "the `k` attribute of an exported JsonWebKey could not be set");
+    free(k);
+    /* "Set the key_ops attribute of jwk to equal the usages attribute of key" — §13.4's `usages`, which is the
+       sequence crypto_key.c builds from this same mask. ONE WALK, declared there: see that entry's own note
+       for why a second one here would be the copy that drifts. */
+    CHECK(JS_SetPropertyStr(ctx, jwk, "key_ops", crypto_key_usages_sequence(ctx, usages)) >= 0,
+          "the `key_ops` attribute of an exported JsonWebKey could not be set");
+    CHECK(JS_SetPropertyStr(ctx, jwk, "kty", JS_NewString(ctx, "oct")) >= 0,
+          "the `kty` attribute of an exported JsonWebKey could not be set");
+    return jwk;
+}

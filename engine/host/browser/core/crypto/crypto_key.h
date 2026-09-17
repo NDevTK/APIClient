@@ -202,6 +202,27 @@ JSValue crypto_key_algorithm(JSContext *ctx, JSValueConst key);
    \"sign\"" asks about. */
 uint32_t crypto_key_usages(JSContext *ctx, JSValueConst key);
 
+/* §13.3's [[extractable]], as the boolean the mint was given. TWO STEPS OF ONE METHOD READ IT: §14.3.10 step 7
+   ("If the [[extractable]] internal slot of key is false, then throw an InvalidAccessError") and the `ext`
+   sub-step of every export operation's jwk arm, which §29.4.5 and §31.6.5 state word for word — "Set the ext
+   attribute of jwk to equal the [[extractable]] internal slot of key".
+   IT IS THE SLOT AND NOT §13.4's MEMBER, exactly as the three readers above are. The two agree by construction
+   — §13.4's `extractable` "Reflects the [[extractable]] internal slot" and js_ck_get reads this same slot —
+   and an algorithm that went through the member would be reading an accessor off the prototype rather than
+   state the brand protects. */
+bool crypto_key_extractable(JSContext *ctx, JSValueConst key);
+
+/* §9's "normalized value of a usages list" AS Web IDL §3.2.21 Sequences' sequence<KeyUsage> — a new Array
+   carrying the recognized usages the mask names, "in the order listed in the list of recognized key usage
+   values".
+   IT IS DECLARED BECAUSE §13.4's `usages` AND AN EXPORT'S `key_ops` ARE ONE WALK AND NOT TWO. §29.4.5's and
+   §31.6.5's jwk arms each read "Set the key_ops attribute of jwk to equal the usages attribute of key", so
+   what an export writes must be what §13.4 would answer with — and a second loop over the same mask in
+   another file is the second copy of a fact, which is the copy that drifts. The ORDER is the load-bearing
+   part: a jwk round trip compares `key_ops` as a stringified array, so two walks agreeing on membership and
+   disagreeing on order would be a defect no membership test could see. */
+JSValue crypto_key_usages_sequence(JSContext *ctx, uint32_t usages);
+
 /* THE CLASS §3.2.15 Interface types' BRAND TESTS AGAINST for a `CryptoKey key` argument position — what
    idl_iface_brand is given by every §14.3 method that declares one. It is this component's fact: the class is
    what cannot be forged, because §13.3's slots live in an own property anything could be given. */

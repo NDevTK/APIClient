@@ -79,6 +79,7 @@ static int       g_id_digest = -1;
 static int       g_id_sign = -1;
 static int       g_id_verify = -1;
 static int       g_id_import_key = -1;
+static int       g_id_export_key = -1;
 static JSAtom    g_atom_name = JS_ATOM_NULL;
 static JSAtom    g_atom_hash = JS_ATOM_NULL;
 static JSAtom    g_atom_length = JS_ATOM_NULL;
@@ -1569,6 +1570,156 @@ static const IdlStepDecl IK_DECL = {
     1
 };
 
+/* ---- §14.3.10 The exportKey method ------------------------------------------------------------------------
+ *
+ * THE ONE METHOD OF §14.3 WITH NO ALGORITHM ARGUMENT, AND EVERY DIFFERENCE BELOW FOLLOWS FROM THAT. `Promise<
+ * (ArrayBuffer or JsonWebKey)> exportKey(KeyFormat format, CryptoKey key)` declares an enumeration and an
+ * interface, so §3.6's conversion settles BOTH operands before step 1 — there is no `Get(alg, "name")`, no
+ * ToString, and no §18.4.4 member walk. The five reading stages the importKey machine needs do not exist here
+ * and neither does a sixth: NOTHING IN STEPS 6-11 RUNS THE PAGE'S CODE, so the machine cannot suspend and has
+ * exactly one stage.
+ *
+ * WHICH IS ALSO WHY STEP 6 IS NOT A FORK. §14.3.9's registry lookup is `step_fork_run` over a name the PAGE
+ * supplied, which may be concolic and whose arms are worlds the solver must keep. §14.3.10 step 6 reads "the
+ * name member of the [[algorithm]] internal slot of key" — a string THIS ENGINE wrote at §31.6.4 step 12, off
+ * a record in an own slot the page cannot reach. There is one world, so a fork here would mint arms over a
+ * value that is already concrete, which §Solver-half's concretize-on-pin forbids in the other direction.
+ *
+ * THE REGISTRY IS ONE ROW AND THAT IS CONFORMANT, on the same sentence the sign/verify machine rests on:
+ * §18.5.1 states "there are no algorithms that conforming user agents are required to implement". §29.4.5
+ * AES-GCM Export Key is the named next diff and is a ROW plus its own `alg` sub-step, not a change here — the
+ * shared run of its jwk arm is already in core/crypto/jwk.c, diffed against §31.6.5's rather than assumed to
+ * match it. WHAT ITS ABSENCE LOOKS LIKE: `exportKey("raw", aesGcmKey)` rejects with NotSupportedError from
+ * step 6 where a browser resolves with the key's octets, and WebCryptoAPI/import_export/symmetric_importKey's
+ * `runTests("AES-GCM")` round trip reports it while `runTests("HMAC")` passes.
+ *
+ * THE COMPARISON IS sd_name_matches AND NOT strcmp, which says something slightly stronger than this operand
+ * needs and is deliberate: §18.4.4's identification is ASCII case-insensitive everywhere, and using the one
+ * comparator that states it keeps step 6 reading as the same identification the other three methods perform.
+ * The operand is engine-written, so the two answer alike for every key this engine can mint. */
+
+#define XK_STAGES(X)                                                                                          \
+    X(XK_DONE, "Web Cryptography §14.3.10 steps 6-11 (the registered-algorithm lookup over the key's own "     \
+               "[[algorithm]], the [[extractable]] refusal, the export key operation, and the resolve)")
+enum { IDL_STEP_STAGE_BASE(XK_STAGES) XK_STAGES(JS_STEP_STAGE_ENUM) };
+static const char *const XK_STEPS[] = { XK_STAGES(JS_STEP_STAGE_LABEL) NULL };
+
+/* THE STATE IS THE PROMISE AND NOTHING ELSE, because every value this algorithm touches is read and spent
+   inside one stage — there is no suspension point for anything to have to survive. */
+typedef struct {
+    ScPromise p;
+} XkState;
+
+static void xk_visit(JSContext *ctx, void *st, JSStepVisit *v)
+{
+    XkState *s = st;
+
+    /* THE GUARD IS `started`, for the reason every sibling's visit states: a fork can land on a state whose
+       prologue has not run, and a zeroed JSValue is the INTEGER 0 rather than a live value. */
+    sc_promise_visit(ctx, &s->p, v);
+}
+
+static int xk_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSValueConst *argv,
+                   JSValue cb_result, JSValue *presult, JSValue **out_cb, int *out_argc)
+{
+    XkState *s = st;
+    /* §14.3.10 step 1: "Let format and key be the format and key parameters passed to the exportKey() method,
+       respectively." */
+    JSValueConst format_v = argc > 0 ? argv[0] : JS_UNDEFINED;
+    JSValueConst key      = argc > 1 ? argv[1] : JS_UNDEFINED;
+
+    *presult = JS_UNDEFINED;
+
+    if (!s->p.started) {
+        /* STEPS 3-4: "Let promise be a new Promise" and "Return promise and perform the remaining steps in
+           parallel". Step 2's realm is THIS one — a C member runs in the realm that defined it. */
+        sc_promise_begin(ctx, &s->p);
+        DCHECK(argc >= 2, "§14.3.10's exportKey ran with fewer than its two declared arguments — Web IDL §3.6 "
+                          "step 5 refuses that in the prologue and §3.7.7 turns the refusal into a rejection");
+    }
+    DCHECK(!JS_IsException(cb_result),
+           "§14.3.10 was delivered an abrupt completion, and it parks on no request at all — the method takes "
+           "an enumeration and an interface, both settled by §3.6's conversion before step 1, so there is "
+           "nothing between the prologue and the resolve that can run a page's code");
+
+    STEP_DISPATCH(XK_STAGES, hdr->stage, "Web Cryptography §14.3.10 exportKey(format, key)", JS_STEP_ABRUPT);
+
+    STEP_ARM(XK_DONE);
+    JS_FreeValue(ctx, cb_result);
+    {
+        const char *format = JS_ToCString(ctx, format_v);
+        JSValue algorithm, name;
+        const char *nm;
+        bool known;
+        JSValue result;
+
+        CHECK(format != NULL, "§14.1's KeyFormat could not be read back as UTF-8 — the argument conversion "
+                              "already checked it against the enumeration's four values");
+
+        /* STEP 6: "If the name member of the [[algorithm]] internal slot of key does not identify a registered
+           algorithm that supports the export key operation, then throw a NotSupportedError." */
+        algorithm = crypto_key_algorithm(ctx, key);
+        DCHECK(JS_IsObject(algorithm),
+               "§14.3.10 step 6 read a key whose [[algorithm]] slot is not a dictionary — §13.3 declares the "
+               "slot on every key and crypto_key_new is its only writer");
+        name = JS_GetPropertyStr(ctx, algorithm, "name");
+        JS_FreeValue(ctx, algorithm);
+        nm = JS_ToCString(ctx, name);
+        JS_FreeValue(ctx, name);
+        CHECK(nm != NULL, "a CryptoKey's [[algorithm]] `name` could not be read back as UTF-8 — this engine "
+                          "wrote it from the registration section of the chapter that minted the key");
+        known = sd_name_matches(nm, "HMAC");
+        if (!known) {
+            /* THE REFUSAL IS THE STANDARD'S AND NOT AN ASSERT. A key of an algorithm this engine registers for
+               `importKey` and not for `exportKey` is a state a PAGE reaches with two ordinary calls, so it
+               takes step 6's own error — and the message names the key's algorithm rather than the format,
+               because that is the operand this step refused. */
+            JS_ThrowDOMException(ctx, "NotSupportedError",
+                                 "'%s' is not a registered `exportKey` algorithm", nm);
+            JS_FreeCString(ctx, nm);
+            JS_FreeCString(ctx, format);
+            return sc_reject(ctx, &s->p, presult);
+        }
+        JS_FreeCString(ctx, nm);
+
+        /* STEP 7: "If the [[extractable]] internal slot of key is false, then throw an InvalidAccessError."
+           AFTER STEP 6 AND NOT BEFORE IT, which is observable: a non-extractable key of an unregistered
+           algorithm rejects with NotSupportedError and not InvalidAccessError, and a page that exports one
+           reads which of the two it got. */
+        if (!crypto_key_extractable(ctx, key)) {
+            JS_ThrowDOMException(ctx, "InvalidAccessError", "%s",
+                                 "this key was created non-extractable, so its key material cannot be "
+                                 "exported");
+            JS_FreeCString(ctx, format);
+            return sc_reject(ctx, &s->p, presult);
+        }
+
+        /* STEP 8: "Let result be the result of performing the export key operation specified by the
+           [[algorithm]] internal slot of key using key and format" — the whole of §31.6.5 HMAC Export Key,
+           step 4's format dispatch and its NotSupportedError arm included. The split between the files is that
+           sentence, exactly as it is for §14.3.9: what a key of one algorithm IS lives in that algorithm's own
+           component, and what §14.3.10 itself does lives here. */
+        result = hmac_export_key(ctx, format, key);
+        JS_FreeCString(ctx, format);
+        if (JS_IsException(result))
+            return sc_reject(ctx, &s->p, presult);
+        /* STEPS 9-11: queue the task, perform step 10's conversion, and resolve. BOTH OF STEP 10's ARMS ARE
+           THE IDENTITY ON WHAT CAME BACK — see hmac.h: the engine's carrier for the raw arm's byte sequence is
+           the ArrayBuffer the operation built, and for the jwk arm's dictionary the object core/crypto/jwk.c
+           built, both in this realm. sc_resolve is the queue. */
+        return sc_resolve(ctx, &s->p, result, presult);
+    }
+}
+
+static const IdlStepDecl XK_DECL = {
+    xk_step, sizeof(XkState), xk_visit, NULL,
+    "Web Cryptography §14.3.10 exportKey(format, key)", XK_STEPS,
+    /* catches_abrupt: ZERO, and it is the only one of these four that is. The flag exists for a machine that
+       PARKS on a request the page can complete abruptly; this one parks on nothing, so there is no abrupt
+       completion for it to catch and claiming otherwise would assert a rest point it does not have. */
+    0
+};
+
 /* ---- the per-realm install ------------------------------------------------------------------------------ */
 
 JSValue subtle_crypto_object(JSContext *ctx)
@@ -1593,6 +1744,7 @@ static void subtle_crypto_install_realm(JSContext *ctx)
     idl_install_method_exposed(ctx, proto, "sign", g_id_sign, IDL_SECURE_CONTEXT);
     idl_install_method_exposed(ctx, proto, "verify", g_id_verify, IDL_SECURE_CONTEXT);
     idl_install_method_exposed(ctx, proto, "importKey", g_id_import_key, IDL_SECURE_CONTEXT);
+    idl_install_method_exposed(ctx, proto, "exportKey", g_id_export_key, IDL_SECURE_CONTEXT);
     JS_SetClassProto(ctx, g_subtle_class, JS_DupValue(ctx, proto));
 
     global = JS_GetGlobalObject(ctx);
@@ -1631,6 +1783,11 @@ void subtle_crypto_init(JSContext *ctx)
        `format` states KeyFormat and `keyUsages` states KeyUsage as its element type. */
     static const IdlArgType IK_ARGS[] = { IDL_ENUM, IDL_BUFFERSOURCE_OR_DICT, IDL_STRING_UNLESS_OBJECT,
                                           IDL_BOOLEAN, IDL_SEQUENCE_ENUM };
+    /* §14's `Promise<(ArrayBuffer or JsonWebKey)> exportKey(KeyFormat format, CryptoKey key)`. BOTH POSITIONS
+       ARE SETTLED BY §3.6's CONVERSION and neither can suspend, which is the whole reason §14.3.10's machine
+       has one stage: an enumeration is a membership test over a string and an interface is a brand test over a
+       class, and there is no dictionary here for a page to hang a getter on. */
+    static const IdlArgType XK_ARGS[] = { IDL_ENUM, IDL_INTERFACE };
     /* ---- §15 "JsonWebKey dictionary", AS THE IDL DECLARES IT ---------------------------------------------
        `dictionary RsaOtherPrimesInfo { DOMString r; DOMString d; DOMString t; };` — the element type of
        JsonWebKey's `oth`, and a dictionary NO OTHER declaration in this engine reaches. It is declared here
@@ -1682,8 +1839,12 @@ void subtle_crypto_init(JSContext *ctx)
     /* §14.1 Data Types: "enum KeyFormat { \"raw\", \"spki\", \"pkcs8\", \"jwk\" };" — the value list IS the
        type, so `importKey("RAW", …)` is a TypeError from §3.2.18 before any step of §14.3.9 runs. Written with
        IDL_ENUM_VALUES because that macro SUPPLIES the terminator both readers of a value list scan for; a
-       hand-written list is a list whose last element can be left off. */
-    IDL_ENUM_VALUES(IK_FORMATS, "raw", "spki", "pkcs8", "jwk");
+       hand-written list is a list whose last element can be left off.
+       IT IS NAMED FOR THE TYPE AND NOT FOR A MEMBER because TWO declarations state it — §14.3.9's position 0
+       and §14.3.10's — and §3.2.18's `E` is a fact about the TYPE that each position restates. A second
+       four-string list beside the second declaration would be the copy that drifts, and the day §14.1 grows a
+       value it would be the copy nobody updates. */
+    IDL_ENUM_VALUES(KEY_FORMATS, "raw", "spki", "pkcs8", "jwk");
 
     DCHECK(g_obj_slot < 0, "subtle_crypto_init ran twice — the class, the slot and the member's pool id are "
                            "the AGENT's");
@@ -1730,8 +1891,15 @@ void subtle_crypto_init(JSContext *ctx)
     idl_this_iface(subtle_crypto_is, "SubtleCrypto");
     /* §3.2.18's `E` AT EACH OF THE TWO POSITIONS §14.3.9's IDL declares one at — position 0's own type, and
        position 4's ELEMENT type. */
-    idl_arg_enum(0, IK_FORMATS);
+    idl_arg_enum(0, KEY_FORMATS);
     idl_arg_enum(4, CRYPTO_KEY_USAGE_NAMES);
+    g_id_export_key = idl_method_id_step(ctx, XK_ARGS, 2, NULL, 0, &XK_DECL, 0);
+    idl_returns_promise();
+    idl_this_iface(subtle_crypto_is, "SubtleCrypto");
+    /* §3.2.15's `I` for the `CryptoKey key` position and §3.2.18's `E` for the `KeyFormat format` one — the
+       same two statements sign and importKey make, over the same class and the same value list. */
+    idl_iface_brand(crypto_key_class());
+    idl_arg_enum(0, KEY_FORMATS);
     /* DECLARED UNDER THE ROW THAT RELEASES IT, which is `crypto` — §10's component declares this one and its
        release reaches this one's, so core/platform.c's two-sided check ("a row with a release that declared no
        agent state cannot be asserted to have undone anything") is asking about the pair. Naming a component
@@ -1742,6 +1910,7 @@ void subtle_crypto_init(JSContext *ctx)
     agent_state_id("crypto", &g_id_sign, "§14.3.3's sign machine");
     agent_state_id("crypto", &g_id_verify, "§14.3.4's verify machine");
     agent_state_id("crypto", &g_id_import_key, "§14.3.9's importKey machine");
+    agent_state_id("crypto", &g_id_export_key, "§14.3.10's exportKey machine");
     agent_state_atom("crypto", &g_atom_name, "the Algorithm dictionary's `name` member name");
     agent_state_atom("crypto", &g_atom_hash, "HmacImportParams' `hash` member name");
     agent_state_atom("crypto", &g_atom_length, "HmacImportParams' `length` member name");
@@ -1764,5 +1933,6 @@ void subtle_crypto_free(void)
     g_id_sign = -1;
     g_id_verify = -1;
     g_id_import_key = -1;
+    g_id_export_key = -1;
     g_rt = NULL;
 }

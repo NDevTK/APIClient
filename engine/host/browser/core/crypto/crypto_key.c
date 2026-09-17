@@ -180,8 +180,14 @@ static JSValue ck_dictionary_to_es_object(JSContext *ctx, JSValueConst dict)
 /* §9's other cached object: [[usages]] is a Sequence<KeyUsage>, and Web IDL §3.2.21 Sequences — sequence< T >
    converts one to "a new Array object created as if by the expression []" filled by CreateDataPropertyOrThrow
    at 0..n-1. The sequence is §9's normalized value, so its entries are the recognized usages the mask names,
-   "in the order listed in the list of recognized key usage values" — which is this walk. */
-static JSValue ck_usages_to_es_object(JSContext *ctx, uint32_t usages)
+   "in the order listed in the list of recognized key usage values" — which is this walk.
+   IT IS THIS COMPONENT'S ENTRY RATHER THAN A FILE STATIC because §29.4.5 and §31.6.5 each end their jwk arm
+   with "Set the key_ops attribute of jwk to equal the usages attribute of key", and the `usages` attribute is
+   the object this builds. An export that walked the mask itself would be a SECOND statement of the order, and
+   the order is exactly what a jwk round trip compares — `key_ops` is checked as a stringified array, so two
+   walks could agree on which usages a key has and still disagree about the value, which is the shape no
+   membership test anywhere would report. */
+JSValue crypto_key_usages_sequence(JSContext *ctx, uint32_t usages)
 {
     JSValue arr = JS_NewArray(ctx);
     uint32_t n = 0;
@@ -275,6 +281,25 @@ JSValue crypto_key_algorithm(JSContext *ctx, JSValueConst key)
     return v;
 }
 
+bool crypto_key_extractable(JSContext *ctx, JSValueConst key)
+{
+    JSValue st = ck_slots(ctx, key), v;
+    bool ext;
+
+    DCHECK(!JS_IsException(st), "an algorithm read the [[extractable]] of something that is not a CryptoKey");
+    v = JS_GetPropertyStr(ctx, st, CK_SLOT_EXTRACT);
+    JS_FreeValue(ctx, st);
+    /* THE ASSERT IS THE TYPE AND NOT THE VALUE, which is the whole of what may be asserted here: the slot is
+       written by crypto_key_new from §14.3.9's own `extractable` argument, so BOTH booleans are states this
+       engine legitimately puts in it and neither is an invariant. A non-boolean is this codebase's own logic
+       being wrong, which is what a DCHECK is for. */
+    DCHECK(JS_IsBool(v), "a CryptoKey's [[extractable]] slot does not hold a boolean — §13.3 declares the slot "
+                         "on every key and crypto_key_new is the only writer of it");
+    ext = JS_ToBool(ctx, v) != 0;
+    JS_FreeValue(ctx, v);
+    return ext;
+}
+
 uint32_t crypto_key_usages(JSContext *ctx, JSValueConst key)
 {
     JSValue st = ck_slots(ctx, key), v;
@@ -332,7 +357,7 @@ JSValue crypto_key_new(JSContext *ctx, CryptoKeyType type, bool extractable, JSV
     JS_SetPropertyStr(ctx, st, CK_SLOT_ALG_CACHED, ck_dictionary_to_es_object(ctx, algorithm));
     JS_SetPropertyStr(ctx, st, CK_SLOT_ALGORITHM, algorithm);   /* CONSUMED */
     JS_SetPropertyStr(ctx, st, CK_SLOT_USAGES, JS_NewInt32(ctx, (int32_t)usages));
-    JS_SetPropertyStr(ctx, st, CK_SLOT_USE_CACHED, ck_usages_to_es_object(ctx, usages));
+    JS_SetPropertyStr(ctx, st, CK_SLOT_USE_CACHED, crypto_key_usages_sequence(ctx, usages));
     /* §13.3's [[handle]]. It has NO CACHED OBJECT beside it and no member of §13.4 answers with it: §13.1 calls
        a CryptoKey "an opaque reference to keying material", and the whole of that opacity is that the bytes are
        reachable only from this record, which hangs off a private Symbol. §31.6.5 Export Key is the one
