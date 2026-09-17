@@ -813,7 +813,80 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                       each abort
                       NAMES. Per §A-DIRECTORY-THAT-ABORTS a count arriving where there was no result is the
                       first honest measurement of an area and never a regression to revert. */
-                   "pointerevents"];
+                   "pointerevents",
+                   /* THE CANVAS ELEMENT — HTML §4.12.5 "The canvas element" and §4.12.5.1 "The 2D rendering
+                      context", whose §4.12.5.1.16 "Pixel manipulation" road has just landed as core/canvas/
+                      canvas_rendering_context_2d.c, image_data.c, canvas_path.c, path_2d.c and svg_path_data.c.
+                      Section numbers and titles read out of the fetched multipage spec, not recalled.
+                      THE AREA WAS NOT MERELY UNLISTED, IT WAS ABSENT FROM DISK, which is the level BELOW an
+                      uncollected test and the one this file's own header calls worse: a gate that walks what it
+                      finds, collects correctly and reports honest pass counts is SILENT about everything
+                      outside the cone. Measured rather than assumed, and BOTH halves separately because a
+                      directory that is absent and a directory that is empty look alike from an `ls`: `grep -i
+                      canvas .git/info/sparse-checkout` answers NOTHING against 99 lines, and `ls html/canvas`
+                      answers ENOENT while `git ls-files html/canvas` answers 4688. The only canvas-named files
+                      on disk were 9 service-worker tainting tests and one custom-elements reaction file, none
+                      of them about this interface. So `getContext`, the context, ImageData and Path2D shipped
+                      into a tree where no WPT subtest could score them at any value.
+                      IT IS `element` AND NOT `html/canvas`, AND THE LINE IS A COMPONENT BOUNDARY RATHER THAN A
+                      PREFERENCE ABOUT NUMBERS. The sibling `offscreen` is §4.12.5.3 "The OffscreenCanvas
+                      interface" — a DIFFERENT interface, and one this engine does not have: NO component
+                      declares or installs it, and its only non-comment occurrence anywhere in core is the
+                      STRING LITERAL in html_canvas_element.c's placeholder-mode throw, whose own comment says
+                      that arm is unreachable because the member entering that mode does not exist. (The name
+                      occurs 8 times in core; seven are comments recording its absence, which is why the
+                      question is asked of the INSTALLER and never of a `grep -c` over the interface.) That
+                      subtree is 2481 files and 2058 collected tests, 1014 of them `.worker.js`/`.any.js` wanting a
+                      DedicatedWorkerGlobalScope this engine also does not have, so naming it would roughly
+                      double this entry to measure a component nobody has written. It is the `css` row's rule —
+                      only the standards whose components exist — and its standing statement is the one every
+                      unlisted path carries: untested rather than passing. It becomes a row the day
+                      OffscreenCanvas does. `tools` is generator tooling that `nameIsNonTest` refuses by path
+                      part, and it is on the path to nothing listed, so it stays absent too.
+                      WHAT IS NOT NARROWED IS THE DRAWING ROAD, AND THAT IS DELIBERATE. canvas_rendering_
+                      context_2d.h states that every drawing member is ABSENT rather than present-and-inert, so
+                      `fill-and-stroke-styles` (257), `compositing`, `text` (108), `layers`, `shadows`,
+                      `line-styles` and `transformations` will reach a member that is not there. Picking only
+                      the directories whose members landed would be choosing the good numbers, which is the
+                      excluded test this gate exists to catch; what each failure NAMES is the work queue.
+                      `html/canvas/resources` COMES WITH IT AND IS NOT OPTIONAL. Every generated canvas test
+                      carries `<script src="/html/canvas/resources/canvas-tests.js">` — 1145 of the 1252
+                      documents — and that helper defines the `_addTest`/`_assertSame`/`_assertPixel` wrappers
+                      the test bodies are written in. Without it this area is the idlharness family again: it
+                      would collect, run, and report a floor per file because the thing it fetches is on
+                      nobody's disk. Its last path part is `resources`, so `nameIsNonTest` refuses all 18 of its
+                      files and it contributes NO test — checked out to BE USED, the same standing as
+                      `css/support`, `html/resources` and `wai-aria/scripts`. It also carries `2x2.png`, which
+                      is the only pixel source any of these tests are handed.
+                      EVERY DECLARED FIXTURE WAS RESOLVED BEFORE THE ENTRY WENT IN, by extracting each
+                      collected file's `<script src>` and `// META: script=` lines at the pinned revision. The
+                      1253 tests name 14 distinct paths, and they add up: FIVE under `resources/` (testharness
+                      and testharnessreport at 1252 each, testdriver and its two siblings at 5 each), THREE
+                      under `common/` (media.js at 10, get-host-info.sub.js at 3, and namespaces.js, which is
+                      the next paragraph), ONE at `dom/events/scrolling/scroll_support.js` under the listed
+                      `dom/events`, THREE inside this subtree (canvas-display-p3.js at 11, imagebitmap's
+                      common.sub.js at 8, CanvasWidgetWithImages.https.sub.js at 1), and TWO under
+                      `html/canvas/resources` above — canvas-tests.js at 1145, wait-for-canvas-paint.js at 65.
+                      Thirteen of the fourteen are PRESENT at the pinned revision, checked one by one.
+                      AND ONE THAT IS NOT THERE, SAID RATHER THAN DISCOVERED. `manual/imagebitmap/
+                      createImageBitmap-serializable.html` names `/common/namespaces.js`, and at bf4714d the
+                      only `namespaces.js` in the whole corpus is `trusted-types/support/namespaces.js`. It is
+                      broken UPSTREAM at this revision exactly like css-typed-om's `comparisons.js`, so no
+                      WPT_PATHS entry can supply it and that ONE file aborts naming it.
+                      IT COSTS 2161 BLOBS AND 3899 KiB — 2143 under `element` and 18 under `resources`.
+                      IT MOVES THE DENOMINATOR AND THE NUMBER IS SAID RATHER THAN LEFT TO BE NOTICED: the walk
+                      collects 6133 over the lists as they stand at this revision, and these three entries make
+                      it 7390 — +1257 (+1253 documents, +4 scripts), +20.50%, the largest single move this list
+                      has taken. A pass count across this entry is a fraction of a different population from one
+                      taken before it, and the two are not comparable as totals. The derivation is `testKind`
+                      and `nameIsNonTest` READ OUT OF THIS FILE and run over `git ls-tree -r bf4714d`, never
+                      over the checkout, and it was calibrated first against the three counts the rows above
+                      already publish — css-typed-om's 381/348/11 and its 19 non-`.yml` nulls, css-values' 268,
+                      css-fonts' 2481/163/0/2318 — and against the 1062 scripts the css-fonts row states for
+                      the whole walk. All reproduced to the digit, which is what makes these measurements and
+                      not estimates. RETIRED when a run prints its own collected total per entry.
+                      NOTHING IS PREDICTED HERE ABOUT WHAT IT SCORES. */
+                   "html/canvas/element", "html/canvas/resources"];
 
 /* AND THE DIRECTORIES WHOSE OWN LEVEL CONE MODE HAS ALREADY PUT ON DISK. A cone-mode checkout materializes every
    file of every directory ON THE PATH to a listed one, so naming one helper's `resources` lands its standard's
@@ -861,7 +934,19 @@ const WPT_OWN_LEVEL = [
      into `service-workers`, for that list's own reason: `service-workers`'s row is the standard's single
      idlharness file, and burying seventeen CacheStorage tests inside it is a number in which neither subject is
      visible. */
-  "service-workers/cache-storage"];
+  "service-workers/cache-storage",
+  /* The four test files at `html/canvas`'s own level, on disk because `html/canvas/element` and
+     `html/canvas/resources` are listed in WPT_PATHS and cone mode materializes every directory ON THE PATH:
+     one document (`canvas-css-random.html`) and three scripts (`color.window.js`, `historical.any.js`,
+     `historical.window.js`). Its two `-crash.html` siblings are dropped at the NAME by `testKind`, before any
+     content is read. Its unlisted subtrees are `offscreen/` and `tools/`, which that WPT_PATHS row explains
+     and which stay absent.
+     THESE FOUR ARE NOT A SMALLER VERSION OF THE SUBTREE, WHICH IS WHY THE LEVEL IS CLAIMED RATHER THAN LEFT
+     TO THE CENSUS. `historical.*` asks which canvas members must NOT exist — its one assertion is
+     `assert_equals(OffscreenCanvasRenderingContext2D.prototype.commit, undefined)` — which is the opposite
+     question from everything under `element/`, and in this engine that name is absent outright, so the file
+     reaches its assertion through a ReferenceError rather than through a member. */
+  "html/canvas"];
 
 if (!existsSync(join(WPT, "resources", "testharness.js"))) {
   /* NO --depth 1. The corpus is PINNED, and a depth-1 clone has only the tip — `git checkout bf4714d` in it
