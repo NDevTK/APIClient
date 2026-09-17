@@ -129,9 +129,16 @@ static void dump_push(JSContext *ctx, DumpStack *st, JsonBuf *b, JSValue holder)
            property, so the read cannot reach a getter and cannot reach the prototype — and a Proxy, whose
            `get` trap WOULD be page code, has already been refused by name. */
         int lr = JS_GetLength(ctx, holder, &f->alen);
-        DCHECK(lr == 0,
-               "an Array answered no `length` — JS_GetLength reads the array's own length slot and this value "
-               "has just been established to be one, so the two disagree about the same object");
+        /* ALWAYS FATAL AND NOT A DCHECK, and the reason is the RELEASE ARM rather than the likelihood. A
+           failure leaves `alen` at the -1 this frame was initialised with, which is the value that says "this
+           frame is an OBJECT" — so the walk would take the object branch over an array with no key table,
+           close it as `{}` and hand back an artifact in which an array became an empty object. There is no
+           value this can proceed with, which is CLAUDE.md's test for CHECK over DCHECK. */
+        CHECK(lr == 0,
+              "value_dump: an Array answered no `length`. JS_GetLength reads the array's own length slot and "
+              "this value has just been established to be one, so either the two disagree about the same "
+              "object or the read was an allocation failure — and the artifact being composed is lost either "
+              "way, because the frame has no extent to walk");
         json_buf_raw(b, "[");
     } else {
         /* OWN, ENUMERABLE, STRING-KEYED, IN THE OBJECT'S OWN ORDER — §25.5.4.5 SerializeJSONObject's
@@ -139,10 +146,16 @@ static void dump_push(JSContext *ctx, DumpStack *st, JsonBuf *b, JSValue holder)
            not walk one; a non-enumerable slot is not the page's data. */
         int er = JS_GetOwnPropertyNames(ctx, &f->tab, &f->n, holder,
                                         JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY);
-        DCHECK(er == 0,
-               "the own-property enumeration of a plain object failed — it allocates and it walks a shape, and "
-               "a Proxy (whose enumeration is the `ownKeys` TRAP) has already been refused above, so there is "
-               "no page code here that could have thrown");
+        /* ALWAYS FATAL for dump_push's other reason exactly: this call writes `tab` and `n` THROUGH POINTERS,
+           so a failure leaves them in whatever state it left them in, and the walk below would then read a key
+           table that was never filled. A Proxy — whose enumeration is the `ownKeys` TRAP and therefore the
+           page's own code — has already been refused by name above, so what remains that can fail here is an
+           allocation, which is exactly the case that may not be continued past. */
+        CHECK(er == 0,
+              "value_dump: the own-property enumeration of a plain object failed. A Proxy has already been "
+              "refused above, so there is no page code here that could have thrown and this is an allocation "
+              "failure — the key table the walk is about to read was never filled, and the artifact being "
+              "composed is lost with it");
         json_buf_raw(b, "{");
     }
 }
@@ -273,24 +286,44 @@ char *value_dump_json(JSContext *ctx, JSValueConst v)
                "something other than dump_push");
 
         if (f->alen >= 0) {
-            JSValue el;
+            /* INITIALISED BEFORE THE READ THAT MAY NOT WRITE IT. `JS_GetOwnSlot` fills `*pval` only when it
+               answers 1; on 0 (absent, or an accessor it refuses) and on -1 it does not, so a variable left
+               undeclared-and-unwritten would be freed below as whatever the stack held. This is the same rule
+               as the one that keeps an out-parameter call out of a DCHECK's condition, one step later: there
+               the release build never performs the write, here it performs a call that legitimately does not. */
+            JSValue el = JS_UNDEFINED;
             JSAtom at;
             int got;
 
             if (f->i >= f->alen) { dump_pop(ctx, &st, &b); continue; }
             if (f->i) json_buf_raw(&b, ",");
             at = JS_NewAtomUInt32(ctx, (uint32_t)f->i);
-            DCHECK(at != JS_ATOM_NULL, "an array index could not be interned");
+            CHECK(at != JS_ATOM_NULL,
+                  "value_dump: an array index could not be interned — that is an allocation failure, and the "
+                  "element it names cannot be read without it, so the artifact being composed is lost");
             got = JS_GetOwnSlot(ctx, &el, f->holder, at);
             JS_FreeAtom(ctx, at);
-            DCHECK(got >= 0,
-                   "the own-slot read of an array element failed — JS_GetOwnSlot performs no [[Get]] and "
-                   "refuses an accessor rather than calling one, so there is no page code here that could "
-                   "have thrown and a failure is this engine disagreeing with itself about the slot");
+            /* ALWAYS FATAL, AND THE `-1` ARM IS THE WHOLE REASON. A refusal would have to write SOMETHING in
+               the element's position, and every candidate is a lie: `null` is §25.5.4.6 step 8.b's answer for
+               an index the array DOES NOT HOLD, which is a different fact from a read that failed. So the two
+               are kept apart by aborting on the one that cannot be expressed. JS_GetOwnSlot performs no
+               [[Get]] and refuses an accessor rather than calling one, so nothing the page wrote can reach
+               this. */
+            CHECK(got >= 0,
+                  "value_dump: the own-slot read of an array element failed. JS_GetOwnSlot performs no "
+                  "[[Get]] and refuses an accessor rather than calling one, so there is no page code here "
+                  "that could have thrown — and `null` in this element's place would state that the array "
+                  "does not hold the index, which is a different fact from a read this engine could not make");
             f->i++;
             /* A HOLE IS §25.5.4.6 SerializeJSONArray step 8.b's `null` — the standard's own answer for an
-               index the array does not hold,
-               and the reason this walk reads indices instead of own keys. */
+               index the array does not hold, and the reason this walk reads indices instead of own keys.
+               AN ACCESSOR ANSWERS 0 HERE TOO, which JS_GetOwnSlot's contract makes the same return as an
+               absent slot, so an array holding one is written as a hole. That is the one place this dump
+               cannot tell two states apart, and it is narrower than it looks: the artifact this seam exists
+               to carry is a page-built data graph, and an accessor on an array INDEX is a shape no producer
+               of one makes. Where it matters, the read that separates them is JS_GetOwnSlotDesc, whose
+               descriptor carries the accessor bit — that is the next diff, and its absence shows as an
+               element silently reading `null` for an index the array does hold. */
             if (got == 0) { json_buf_raw(&b, "null"); continue; }
             if (dump_value(ctx, &st, &b, el)) { JS_FreeValue(ctx, el); continue; }
             JS_FreeValue(ctx, el);
@@ -298,28 +331,45 @@ char *value_dump_json(JSContext *ctx, JSValueConst v)
         }
 
         {
-            JSValue val;
+            /* INITIALISED FOR THE ARRAY BRANCH'S REASON EXACTLY: `JS_GetOwnSlot` fills `*pval` only when it
+               answers 1, and both of the other answers are reachable here. */
+            JSValue val = JS_UNDEFINED;
             const char *key;
             int got;
 
             if (f->i >= (int64_t)f->n) { dump_pop(ctx, &st, &b); continue; }
             got = JS_GetOwnSlot(ctx, &val, f->holder, f->tab[(size_t)f->i].atom);
-            DCHECK(got >= 0,
-                   "the own-slot read of an enumerated key failed — the key came from this same object's own "
-                   "enumeration one moment ago and JS_GetOwnSlot runs no page code, so the enumeration and "
-                   "the read disagree about a slot nothing could have changed in between");
-            /* AN ACCESSOR ANSWERS 0 HERE, WHICH IS JS_GetOwnSlot'S CONTRACT ("an accessor is refused on this
-               side") AND NOT AN ABSENCE, so the two must not be summed. A page-built artifact holding a
-               getter is a value whose members are the page's CODE, and reading one is exactly the [[Get]]
-               this file exists not to perform. */
-            DCHECK(got == 1,
-                   "an enumerated own key has no data slot — JS_GetOwnSlot answers 0 for an ACCESSOR as well "
-                   "as for an absent slot, and the key was enumerated a moment ago, so this member is a "
-                   "getter. Reading it is the page's own code, which this dump may not run: the artifact's "
-                   "producer must hand over data, or the dump must become a scheduler flow");
+            CHECK(got >= 0,
+                  "value_dump: the own-slot read of an enumerated key failed. The key came from this same "
+                  "object's own enumeration one moment ago and JS_GetOwnSlot runs no page code, so either "
+                  "the enumeration and the read disagree about a slot nothing could have changed in between, "
+                  "or this is an allocation failure — and neither leaves a value to write in the member's "
+                  "place");
             key = JS_AtomToCString(ctx, f->tab[(size_t)f->i].atom);
-            CHECK(key != NULL, "value_dump: OOM reading a member name");
+            CHECK(key != NULL, "value_dump: OOM reading a member name — the member cannot be written without "
+                               "it, and the artifact being composed is lost");
             f->i++;
+            /* AN ACCESSOR ANSWERS 0 HERE, WHICH IS JS_GetOwnSlot'S CONTRACT ("an accessor is refused on this
+               side") AND NOT AN ABSENCE, so the two must not be summed — and the key was enumerated a moment
+               ago, which settles which of the two this is. A page-built artifact holding a getter is a value
+               whose members are the page's CODE, and reading one is exactly the [[Get]] this file exists not
+               to perform.
+               ITS RELEASE ARM WRITES THE MEMBER AS A STATED ABSENCE rather than skipping it, and the choice
+               matters: a skipped key is indistinguishable from a member the producer never wrote, while a
+               refusal string says the member EXISTS and could not be read without running the page. The key
+               is written first, so the absence is attributed to the member it belongs to. */
+            if (got != 1) {
+                DFAIL("an enumerated own key has no data slot — JS_GetOwnSlot answers 0 for an ACCESSOR as "
+                      "well as for an absent slot, and the key was enumerated a moment ago, so this member is "
+                      "a getter. Reading it is the page's own code, which this dump may not run: the "
+                      "artifact's producer must hand over data, or the dump must become a scheduler flow");
+                if (b.n && b.b[b.n - 1] != '{') json_buf_raw(&b, ",");
+                json_buf_str(&b, key);
+                json_buf_raw(&b, ":");
+                JS_FreeCString(ctx, key);
+                dump_refuse(&b, "an accessor, whose read is the page's own code");
+                continue;
+            }
             /* §25.5.4.5 SerializeJSONObject step 8.b: a member whose serialization is `undefined` is NOT
                written at all — the key goes with it. That is how an absent member stays absent instead of
                becoming a `null` a consumer would read as an answer. */
@@ -330,7 +380,9 @@ char *value_dump_json(JSContext *ctx, JSValueConst v)
             }
             /* THE COMMA IS DECIDED BY WHAT HAS BEEN WRITTEN AND NOT BY THE CURSOR, because the skip above
                advances the cursor without writing anything — a comma keyed on `i` would emit a leading one
-               after a dropped first member. `n` holding the count of members ALREADY written is that fact. */
+               after a dropped first member. The last byte written is `{` only when this frame has written no
+               member yet: every JSON value ends in `"`, a digit, `e`, `l`, `}` or `]`, so no earlier member
+               can leave one there. */
             if (b.n && b.b[b.n - 1] != '{') json_buf_raw(&b, ",");
             json_buf_str(&b, key);
             json_buf_raw(&b, ":");
