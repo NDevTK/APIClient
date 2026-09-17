@@ -316,6 +316,83 @@ const wfqLive = (() => {
 /* ABSENT STAYS ABSENT. An artifact older than a given row omits it, and `|| 0` would turn "this build does
    not publish that row" into "the engine measured zero" — the defaulted-field defect, in the instrument. */
 const wfqRow = (k) => (wfqLive && typeof wfqLive.w[k] === 'number' ? wfqLive.w[k] : null);
+/* THE POPULATION `flow_step`'s LADDER CANNOT REACH AT ALL, WHICH THIS FILE HAS NEVER CARRIED AND WHICH NO
+   ROW ABOVE CAN BE DERIVED INTO. Running a queued task, host-blocking, the lifecycle events, resuming a
+   parked orphan drive, seeding an orphan, a rendering opportunity, a due timer, an idle period, a host-owed
+   reply, a close request and FINISHED all sit in the ELSE of solver/engine.c's `if (f->script_i < f->dyn_n)`
+   — so a member whose cursor still names a program row can reach NONE of them, and `live - outOfPrograms` is
+   exactly how many members stand in that state. NO COUNT OF THOSE ARMS IS STATED HERE: the list moves and the
+   CONDITION is the durable fact, so grep that test inside `flow_step` for the set this engine has today.
+   It was an INFERENCE FROM ARM HISTOGRAMS until this row, and the two halves of the subtraction are ONE
+   WALK AT ONE INSTANT: solver/cold.c raises `out->flows++` at the top of the loop and
+   `out->out_of_programs++` inside the same body, and solver/result.c splices both into ONE `composef` whose
+   format opens `{"live":%ld` and closes `"programCursors":%s}`. That is the whole reason they are carried
+   together in one object rather than flat beside the lifetime counters above: flat, a reader would subtract
+   `wfqMembers` — a DIFFERENT walk's count, taken at whichever entry `wfqFrom` names — and that subtraction is
+   the two-moments defect this file already had to publish two indices to refuse.
+   IT IS A GAUGE, SO IT TAKES `wfqLive`'s BACKWARD WALK AND NOT `counted[last]`. solver/cold.h states the
+   hazard by name: the walk visits the frontier's STANDING members, so "a census taken when `live` is 0
+   reports 0 whatever every member did before it left", and it measured both readings in one session — a real
+   bundle holding this row at ~1 live member in 10 from the first census through the 129th while orphan asks
+   stayed 0, and a DRAINING fixture whose terminal census read this row 0 with `programCursors` `{0: 0}` and
+   `live` 0 after asking 1536 orphans on the way. The same 0, and the opposite fact. `steps` and
+   `stepUnitRuns` above take the LAST counted entry because result.c calls them lifetime counts and they
+   cannot fall; this one can, so the last entry that observed a STANDING frontier is the only one that
+   observed anything at all, and `from` says which entry that was so a reader can align it with `wfqFrom` and
+   `countersFrom` instead of assuming.
+   THE PARTITION IS DERIVED AND NEVER HAND-TYPED. The rows beneath the total are whatever numeric keys the
+   composer spells with that prefix, so a fourth arm added to cold.c's if/else chain is carried by this row
+   the day it lands — which is the SEVENTH time this file would otherwise have been the consumer that never
+   asked for the field written to answer its own ambiguity, after `orphansAsked`, `unitsDone`, the @S arrival
+   census, the WFQ split, the arrivals/departures pair and the step histogram. `outOfProgramsAtTheLadderUnits`
+   is spliced with `%s` and is an OBJECT, so the numeric test excludes it — the same split engine/build.mjs's
+   `censusRowSet` makes by reading the CONVERSION in the format string rather than an exclusion list beside it.
+   AND THE SUM IS THE CONTRACT, WHICH IS WHY IT STOPS THE ROW. cold.c DCHECKs
+   `unrun + framed + atTheLadder == outOfPrograms` where the whole population is in hand and one member was
+   not — and a DCHECK is compiled out of the release build this census drives, so this is the only place that
+   identity is checked on the artifact a corpus run actually measures. A disagreement means an arm was added
+   without a row and the breakdown is "a SELECTION being read as a partition" in cold.c's own words, which
+   makes the total and every part under it a guess — the same reason a missing `run` word stops the row above
+   rather than being counted as a run of some kind.
+   ABSENT STAYS ABSENT, AND THE TWO SILENCES ARE DIFFERENT FACTS. No counted entry ever holding a standing
+   frontier is `null`, exactly as `wfqMembers` is. An artifact whose build predates these rows yields the
+   object with `live` stated and the total absent — so "this census never saw a frontier" and "this build does
+   not publish the row" are never the same value, and neither is ever `0`. */
+const coldLive = (() => {
+  for (let i = counted.length - 1; i >= 0; i--) {
+    const c = counted[i].cold;
+    if (c && typeof c === 'object' && !Array.isArray(c) && c.live > 0) return { c, i };
+  }
+  return null;
+})();
+const frontierPrograms = (() => {
+  if (!coldLive) return null;
+  const c = coldLive.c;
+  const out = { live: c.live };
+  if (typeof c.outOfPrograms === 'number') {
+    const parts = Object.keys(c).filter(k => k !== 'outOfPrograms' && k.startsWith('outOfPrograms')
+                                             && typeof c[k] === 'number');
+    /* THE PARTS ARE ONLY CHECKED AGAINST THE TOTAL WHERE THERE ARE PARTS. A build publishing the total and
+       no breakdown is an older artifact, not a broken partition, and summing nothing to a non-zero total
+       would stop the row for having measured an engine that never claimed a partition at all. */
+    if (parts.length) {
+      const sum = parts.reduce((a, k) => a + c[k], 0);
+      if (sum !== c.outOfPrograms) {
+        console.log('ROW ' + JSON.stringify({ id, url, fatal: 'the frontier census breaks `outOfPrograms` ' +
+          c.outOfPrograms + ' into rows summing to ' + sum + ' — solver/cold.c raises them on one if/else ' +
+          'chain over one walk and DCHECKs the identity, so a disagreement on this artifact is an arm added ' +
+          'without a row and the breakdown is a SELECTION being published as a partition', cold: c }));
+        process.exit(0);
+      }
+      for (const k of parts) out[k] = c[k];
+    }
+    out.outOfPrograms = c.outOfPrograms;
+  }
+  const pc = c.programCursors;
+  if (pc && typeof pc === 'object' && !Array.isArray(pc)) out.programCursors = pc;
+  out.from = coldLive.i;
+  return out;
+})();
 const row = {
   id, url, finalUrl, status, nav, artifact, measuredAt: new Date().toISOString(),
   dwellMs: DWELL, cores: cpus().length, loadBefore, loadAfter,
@@ -429,6 +506,11 @@ const row = {
     if (!c || typeof c !== 'object' || Array.isArray(c)) return null;
     return typeof c.steps === 'number' ? c.steps : null;
   })(),
+  /* …AND HOW MANY OF THOSE STANDING MEMBERS COULD REACH `flow_step`'s LADDER AT ALL — `live` and the
+     out-of-programs partition it is taken over, from ONE walk, so `live - outOfPrograms` is the size of the
+     population every arm below that cursor test excludes. Composed above `row` with its own backward walk;
+     see that block for why it is not `counted[last]` and why the three rows are derived rather than named. */
+  frontierPrograms,
   /* …AND WHAT THE JOB BACKLOG ABOVE IS ACTUALLY WAITING ON — see `wfqLive`. Read `jobsReady` with
      `jobWGap` and never alone (a gap of 0 is both "no ready holder" and "the top of the queue holds a
      runnable job"), and read a `jobsReady: 0` with `memUnframed`, which separates its two silences: with
