@@ -26,6 +26,21 @@
  *     must reproduce idlgen's published "platform_names.h current — N global names";
  *   - what this tree puts on a global comes from idl_installed.mjs, and the Web IDL §3.8 record count must
  *     reproduce idlgen's published "§3.8 ... N identifier(s) this engine defines on a global".
+ * THE CORPUS IS THE FOURTH SUCH POPULATION AND WAS THE LAST TO STOP BEING A GUESS. Which mirrored files are
+ * PROGRAMS was read off the FILENAME EXTENSION, and testing/corpus/mirror.mjs folds a URL query into the
+ * saved name as a `__q<sha256[0:8]>` suffix -- so three shipped bundles, a 1.5 MB telegram worker among them,
+ * have extensions no list reaches and were dropped in silence. engine/corpus_programs.mjs takes the
+ * population from testing/corpus/provenance.json's recorded Content-Type instead. Its calibration is not a
+ * reproduced total, because a manifest publishes none: it is an ACCOUNTING -- every file under the corpus is
+ * typed by the manifest, every essence that reaches disk is classified, and the three parts sum to the files
+ * walked -- and each of those THROWS. That is the same discipline in the shape the artifact allows, and the
+ * line this file prints carries all four numbers so a reader can check the sum without running anything.
+ * ITS MEASURED PRICE, by the same standard the two channel widenings below are held to: it added NO new name
+ * to list A -- 67 of 816 named, 13 unguarded, 3 shadow-only, all unchanged -- left the THROWS band
+ * BYTE-IDENTICAL, and re-weighted exactly three mixed rows, which moved `WebAssembly` past `DOMException` to
+ * the head of that band. A widening worth taking because it changed the answer, not because it enlarged the
+ * table. It changed no ranking in engine/nsguardrank.mjs, which shares the fix; that is recorded rather than
+ * smoothed over, because the two instruments held the IDENTICAL wrong selector and only one of them moved.
  * There is no pasted member list and no pasted name list anywhere in this file. A hand list is the second copy
  * of a generated fact, and this project has been wrong about that list before; a probe that silently measures
  * a SUBSET reports a smaller absence and reads as progress, which is the one direction nothing here would
@@ -154,6 +169,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join, extname, resolve, relative } from "node:path";
 import { loadEnvironment, installedMembers } from "./idl_installed.mjs";
 import { loadIdl } from "./idl_members.mjs";
+import { corpusPrograms } from "./corpus_programs.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const argOf = (flag, dflt) => {
@@ -266,19 +282,19 @@ if (n38 !== PUB_G38)
   die(`counted ${n38} Web IDL §3.8 global defines and engine/idlgen.mjs publishes ${PUB_G38}.`);
 const ABSENT_GLOBAL = new Set([...PLATFORM].filter((n) => !REACHED.has(n)));
 
-/* ---- the corpus ---------------------------------------------------------------------------------------- */
-const files = [];
-(function walk(d) {
-  for (const e of readdirSync(d)) {
-    const p = join(d, e);
-    if (statSync(p).isDirectory()) { walk(p); continue; }
-    if ([".js", ".mjs", ".html", ".htm"].includes(extname(p).toLowerCase())) files.push(p);
-  }
-})(CORPUS);
-if (!files.length) die(`no .js/.html under ${CORPUS} — a corpus that is not there reads as a corpus with no uses.`);
-let bytes = 0;
+/* ---- the corpus, from the artifact that owns it -------------------------------------------------------- */
+/* WHICH FILES ARE PROGRAMS IS THE SERVER'S ANSWER AND NOT THIS FILE'S GUESS. This selected by FILENAME
+   EXTENSION until it was measured: testing/corpus/mirror.mjs folds a URL's query into the saved name as a
+   `__q<sha256[0:8]>` suffix, so a bundle fetched with a query is saved as `all.js__q54b3907e` and its
+   extension is in no list anybody would write. THREE shipped bundles in the committed mirror are spelled
+   that way -- a 1.5 MB telegram worker and two openlibrary bundles -- and all three were dropped in silence,
+   which reports a smaller absence and reads as progress. engine/corpus_programs.mjs takes the population
+   from testing/corpus/provenance.json's recorded Content-Type instead, joined by CONTENT so that it copies
+   no part of the mirror's naming rule, and it THROWS rather than going quietly short. Its header holds the
+   measurement and the two traps on the path route. */
+const { files, bytes, onDisk, nProgram, nDocument, nExcluded } = corpusPrograms(CORPUS, "absentrank");
 const parts = [];
-for (const f of files) { const t = readFileSync(f, "utf8"); bytes += Buffer.byteLength(t); parts.push(t); }
+for (const f of files) parts.push(readFileSync(f, "utf8"));
 const SRC = parts.join("\n;/*absentrank-file-break*/;\n");
 
 /* Occurrences, never lines: a minified bundle is ONE enormous line, which is exactly where the two diverge. */
@@ -501,7 +517,7 @@ say(`calibration — absent members ${distinct.size} distinct / ${pairs} pairs, 
     `Web IDL §3.8 defines ${n38}: all three reproduce engine/idlgen.mjs's own published totals`);
 say(`this tree reaches ${REACHED.size} distinct name(s) on a global — ${n38} §3.8 define(s) and ${nMember} ` +
     `member install(s) on ${chain.join("/")} — leaving ${ABSENT_GLOBAL.size} platform global name(s) it does not`);
-say(`corpus ${relative(join(HERE, ".."), CORPUS)} — ${files.length} file(s), ${bytes} byte(s)`);
+say(`corpus ${relative(join(HERE, ".."), CORPUS)} — ${files.length} file(s), ${bytes} byte(s): ${nProgram} program + ${nDocument} document, ${nExcluded} other, ${onDisk} on disk — typed by the server's own Content-Type in provenance.json, never by extension`);
 for (const [k, t] of perChannel)
   say(`  channel ${k.padEnd(15)} ${String([...t.values()].reduce((a, b) => a + b, 0)).padStart(6)} occurrence(s), ` +
       `${String(t.size).padStart(4)} distinct identifier(s)`);

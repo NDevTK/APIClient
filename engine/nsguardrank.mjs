@@ -64,9 +64,10 @@
  * landed. HOW ITS ABSENCE WOULD SHOW: a namespace whose carrying count is zero while its `no-member-in-window`
  * count is not, with the printed sites reading as guards that plainly do call a member.
  * RETIREMENT: this residual goes when the association is expression-scoped rather than windowed. */
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { dirname, join, extname, resolve, relative } from "node:path";
+import { dirname, join, resolve, relative } from "node:path";
+import { corpusPrograms } from "./corpus_programs.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const argOf = (flag, dflt) => {
@@ -102,16 +103,18 @@ const CANDIDATES = new Set([
   ...vocab("i18n_names.h", "I18N_NAMES"),
 ]);
 
-/* ---- the corpus ----------------------------------------------------------------------------------------- */
-const files = [];
-(function walk(d) {
-  for (const e of readdirSync(d)) {
-    const p = join(d, e);
-    if (statSync(p).isDirectory()) { walk(p); continue; }
-    if ([".js", ".mjs", ".html", ".htm"].includes(extname(p).toLowerCase())) files.push(p);
-  }
-})(CORPUS);
-if (!files.length) die(`no .js/.html under ${CORPUS} — a corpus that is not there reads as a corpus with no uses.`);
+/* ---- the corpus, from the artifact that owns it ---------------------------------------------------------- */
+/* WHICH FILES ARE PROGRAMS IS THE SERVER'S ANSWER AND NOT THIS FILE'S GUESS. This selected by FILENAME
+   EXTENSION until it was measured, in the same words engine/absentrank.mjs used and with the same three
+   files missing: testing/corpus/mirror.mjs folds a URL's query into the saved name as a `__q<sha256[0:8]>`
+   suffix, so a bundle fetched with a query is saved as `all.js__q54b3907e` and no extension list reaches it.
+   A namespace ranking that cannot see a 1.5 MB worker bundle under-reports what installing that namespace
+   would cost, which is the direction that reads as permission. engine/corpus_programs.mjs takes the
+   population from testing/corpus/provenance.json's recorded Content-Type, joined by CONTENT so it copies no
+   part of the mirror's naming rule, and THROWS rather than going quietly short. ONE statement of that rule,
+   two consumers — two right answers to one question is the shape that drifts, and this file and absentrank
+   held the identical wrong one. */
+const { files, onDisk, nProgram, nDocument, nExcluded } = corpusPrograms(CORPUS, "nsguardrank");
 
 /* ---- the two channels, armed ---------------------------------------------------------------------------- */
 const esc = (n) => n.replace(/[$]/g, "\\$");
@@ -282,7 +285,7 @@ const GLOBAL_SELF = new Set(["window", "self", "globalThis"]);
 const ranked = [...rows].filter(([n, r]) => r.reads.size && !GLOBAL_SELF.has(n))
   .sort((a, b) => b[1].carries - a[1].carries ||
         [...b[1].reads.values()].reduce((x, y) => x + y, 0) - [...a[1].reads.values()].reduce((x, y) => x + y, 0));
-say(`${files.length} corpus file(s) under ${CORPUS}; ${CANDIDATES.size} candidate global name(s) from the three ` +
+say(`${files.length} corpus file(s) under ${CORPUS} (${nProgram} program + ${nDocument} document, ${nExcluded} other, ${onDisk} on disk — typed by the server's own Content-Type in provenance.json, never by extension); ${CANDIDATES.size} candidate global name(s) from the three ` +
     `committed vocabularies; ${ranked.length} of them have a member read here.`);
 say(`ORDERED BY WHAT INSTALLING THE NAMESPACE ALONE WOULD COST: a CARRYING guard tests only the namespace and ` +
     `then CALLS, CONSTRUCTS or DEREFERENCES a member, so it runs a working fallback today and raises a ` +
