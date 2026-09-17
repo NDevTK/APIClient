@@ -8359,6 +8359,16 @@ static int flow_step(JSContext *ctx, Flow *f) {
             /* WHICH OF THE ORPHAN STEP'S THREE OUTCOMES HAPPENED — held so the branch can name its own work
                rather than labelling three unrelated things with the name of one of them. */
             int orphan_step;
+            /* WHAT THE CURSOR SAYS THIS STEP CAN DO WITH THE FLOW'S OWN SEQUENCE — two readings of one row,
+               because HOLDING a program and being able to RUN one are different facts and the ladder below
+               was keyed on the first.
+               `seq_compiles` is `a program starts on THIS step`, and it is what selects the fall-through to
+               the compile ~200 lines below. `seq_awaits` is `the row at the cursor is an external script
+               whose bytes have not come back`, which is HTML §4.12.1.1 "Processing model" step 31's
+               parser-blocking wait and is NOT a reason for the flow to do nothing — see there. They are never
+               both true and the third state (neither) is the cursor past the last row. */
+            int seq_compiles = 0;
+            int seq_awaits = 0;
             /* THE PARSER'S OWN `<link>` ELEMENTS, AHEAD OF EVERYTHING ELSE THIS FLOW COULD DO — HTML §4.6.8.20
                Link type "preload"'s "when the external resource link's link element becomes browsing-context
                connected", for the elements a parse produced. THE POSITION IS THE SPEC AND NOT A PREFERENCE: a
@@ -8628,13 +8638,58 @@ static int flow_step(JSContext *ctx, Flow *f) {
                                "reply the host is never asked for");
                     }
 #endif
-                    /* AND THE RECORD THE HOST REALLY DOES OWE NAMES ITSELF. This return performs no work, so
-                       it used to leave the PREVIOUS arm's name standing and the step was attributed to
-                       whatever this flow last did — the census then reported a member parked on a fetch under
+                    /* AND THE FLOW DOES NOT STOP HERE — IT SPINS THE EVENT LOOP, which is the whole of this
+                       diff and is the opposite of what this arm used to do.
+                       A PARSER-BLOCKING SCRIPT BLOCKS THE TOKENIZER AND NOTHING ELSE. HTML §13.2.6.4.8 "The 'text' insertion mode" says
+                       it in one sentence: "Block the tokenizer for this instance of the HTML parser, such
+                       that the event loop will not run tasks that invoke the tokenizer." Every task that
+                       does NOT invoke the tokenizer still runs — a queued callback, a delivered message, a
+                       `setTimeout(f, 0)` an earlier script of this same document set, a rendering
+                       opportunity — and the same section reaches that state by spinning the event loop,
+                       whose expansion HTML §8.1.7.3 "Processing model" gives in its own steps and ends:
+                       "This causes the event loop's main set of steps or the perform a microtask checkpoint
+                       algorithm to continue." XML says the identical thing for its own parser at HTML §14.2
+                       "Parsing XML documents" — block it "such that the event loop will not run tasks that
+                       invoke it" — so this is one rule with two statements of it and not a parsing quirk.
+                       AND THIS FILE ALREADY SAID SO, AT THE DECLARATION OF THE VERY ROW THIS ARM STANDS ON.
+                       DYN_SCRIPT_SRC's own entry in the DynKind documentation states the rule correctly and
+                       in the standard's words, cites the same section, and then — in the next clause of the
+                       same paragraph — says "the flow WAITS at it (flow_step below)". The declaration was
+                       right and the enforcement four thousand lines down did the opposite of what the
+                       declaration describes: it did not block the tokenizer, it stopped the event loop.
+                       THAT IS THE ONE FAILURE NO INSTRUMENT HERE CAN SEE. The citation resolves, the title
+                       matches, the quotation is verbatim — every channel of the citation auditor reads clean,
+                       because the prose is not wrong about the STANDARD, it is wrong about what the code
+                       beneath it does. §A-FILE-MAY-NOT-BE-ITS-OWN-AUDITOR names the shape and names the tell,
+                       which held exactly: the paragraph is unusually good, so scrutiny stopped at it. The
+                       reading to carry is that a well-argued declaration is a CLAIM ABOUT THIS TREE and is
+                       checked by reading the enforcement, never by re-reading the argument.
+                       WHAT THIS ARM USED TO DO WAS `return FLOW_STEP_OWED` AT THIS LINE, WHICH STOPPED THE
+                       DOCUMENT'S EVENT LOOP. A flow IS this document's timeline, and the OWED verdict takes
+                       a member out of the pick until a HOST EVENT clears it — so one `<script src>` in the
+                       air excluded this document's queued tasks, its lifecycle stages, its due timers, its
+                       rendering opportunities and the orphan surface for as long as the bytes took, and a
+                       document that keeps arranging subresource loads is excluded for as long as it does
+                       that. §scheduler's razor names what that is: a flow that is starved or forgotten is a CAP, and it
+                       is banned — quoted verbatim four times in this file already, and once is enough.
+                       The exclusion was not a preference between
+                       task sources that HTML §8.1.7.3 "Processing model" step 2.1 leaves open — it was a source being unreachable,
+                       which HTML §8.1.7.1 "Definitions" — its own worked example rules out in the same breath as it
+                       grants the freedom, "keeping the interface responsive but not starving other task
+                       queues".
+                       SO THE ROW IS RECORDED AS A WAIT AND THE LADDER BELOW IS ASKED. The flow still runs no
+                       program of its own: HTML §4.12.1 "The script element" fixes this script's position against the scripts written
+                       around it, `seq_compiles` stays 0, and the cursor does not move. If every source below
+                       answers no, the OWED arm reports the flow host-owed — the same rest this line used to
+                       reach directly, and the same verdict.
+                       AND THE RECORD THE HOST REALLY DOES OWE STILL NAMES ITSELF, one rung down rather than
+                       here. The argument for naming it has not changed and is why `seq_awaits` is carried
+                       instead of being recomputed: a step that performs no work used to leave the PREVIOUS
+                       arm's name standing, so the census reported a member parked on a fetch under
                        `run-a-task` or `microtask-checkpoint`, which is the one attribution an instrument
-                       separating waiting from working must not get wrong. */
-                    g_step_unit = STEP_UNIT_AWAIT_FETCH_RECORD;
-                    return FLOW_STEP_OWED;
+                       separating waiting from working must not get wrong. What changed is only WHERE the
+                       name is set, because this line no longer decides that the flow rests. */
+                    seq_awaits = 1;
                 }
                 /* HTML §4.12.1.1 "Processing model", "execute the script element" STEP 4 — "If el's result is
                    null, then fire an event named error at el, and return". This row IS an element whose result
@@ -8677,11 +8732,50 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    what make that true and this is what says so, because a body that is still a URL would be
                    compiled as one: a DYN_SCRIPT_SRC row holds the flow until its reply arrives, and a
                    DYN_SCRIPT_FAILED row — whose body is that same address, kept as the account of what did not
-                   load — takes §4.12.1.1's step 4 and never reaches a compile at all. */
-                DCHECK(body != NULL,
-                       "a row of this flow's sequence reached the compile with no body — a row is created with "
-                       "one (engine_queue_into asserts it) and the two kinds whose body is an ADDRESS rather "
-                       "than a program are both taken by the branches directly above this line");
+                   load — takes §4.12.1.1's step 4 and never reaches a compile at all.
+                   THE FIRST OF THOSE TWO NO LONGER RETURNS, so what used to be a property of the control flow
+                   is now a read: `seq_awaits` is the SRC branch's whole effect, and this test is the one place
+                   the difference between the two branches above has to be spelled out rather than inherited.
+                   The condition is also what carries the assertion's own premise — a body that is an ADDRESS
+                   is non-NULL, so without the guard this DCHECK would PASS on the row it is written about. */
+                if (!seq_awaits) {
+                    DCHECK(body != NULL,
+                           "a row of this flow's sequence reached the compile with no body — a row is created "
+                           "with one (engine_queue_into asserts it) and the two kinds whose body is an ADDRESS "
+                           "rather than a program are both taken by the branches directly above this line");
+                    /* AND THIS IS THE ONE STATE THAT FALLS THROUGH TO THE COMPILE, which used to be said by
+                       the absence of a `return` and is now said by a value the ladder below reads. */
+                    seq_compiles = 1;
+                }
+            }
+            /* THE LADDER, AND WHAT IT IS ASKED ON — the correction this diff exists for.
+             *
+             * IT USED TO BE `else if` AGAINST `f->script_i < f->dyn_n`, so every arm below inherited a
+             * precondition written for the arm above them: a flow ran a queued TASK, reached DOMContentLoaded
+             * or `load`, fired a due timer, took a rendering opportunity, seeded an orphan drive or finished
+             * ONLY with its cursor past the last row of its own sequence. That `else` was never an ordering
+             * decision anybody made — the sequence arm hands `body`/`body_n`/`kind` to the compile two
+             * hundred lines below and therefore may not return, and the `else` is what stops the arms below
+             * from consuming the step on the way there. Ten arms inherited a precondition written for one.
+             *
+             * AND THE SEQUENCE IS A SET THE PAGE'S OWN CODE EXTENDS — a lazy chunk, an injected `<script>`, a
+             * `javascript:` URL, a peer's operation — so "the cursor is past the last row" is a condition page
+             * code can hold false for the rest of the session, and every source below was then excluded with
+             * no counter anywhere for anybody to read. §scheduler's razor is what a permanent exclusion is:
+             * "drops, starves, skips, reorders, or forgets ANY flow — it is a CAP, banned".
+             *
+             * WHAT REPLACES IT IS ONE READING RATHER THAN A REORDER: the arms are in the SAME order, each one
+             * keeps its own position argument at its own site, and the only thing that changed is the question
+             * the chain is asked on. `seq_compiles` is `a program of this flow's own sequence STARTS on this
+             * step`, and a step that starts one has done its unit of work — HTML §8.1.7.3 "Processing model"
+             * step 2 runs ONE task per iteration — so the arms below rightly do not also run. HOLDING a row
+             * the flow cannot run is not that, and it is the state the old condition could not tell apart. */
+            if (seq_compiles) {
+                /* NOTHING HERE, AND THE EMPTINESS IS THE FALL-THROUGH MADE EXPLICIT. This arm's work is the
+                   compile ~200 lines below; its body is empty because the only thing it has to do is decline
+                   every arm beneath it and let control reach that compile. It used to be spelled as the
+                   absence of a `return` at the bottom of a two-hundred-line block, which is the same fact and
+                   is invisible to a reader who does not walk the block. There is still exactly ONE compile. */
             }
             else if (flow_job_pending(f) > 0) {
                 /* WHAT IS LEFT ON THE QUEUE HERE IS A TASK — HTML §8.1.7.3 "Processing model" step 2, whose
@@ -8692,16 +8786,31 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    The checkpoint above is the only thing that consumes a microtask and it
                    runs before every program, so a microtask on the queue at this point is one it declined to
                    run, and the only reason it declines is the immediate row that the arm above this one would
-                   have compiled. There is no such row here (the cursor is past the end of the sequence), which
-                   is why this is an assertion and not a second pick rule.
+                   have compiled, which is flow_stack_empty's second half.
+                   THE REASON THERE IS NO SUCH ROW HERE IS NOW A READ AND NOT THE CURSOR. This arm used to be
+                   reachable only with the cursor past the last row, so "no immediate row" followed from
+                   "no row at all"; it is now reachable with a DYN_SCRIPT_SRC row at the cursor, and that is
+                   the ONE other row a flow can stand on without compiling it. A SRC row is queued
+                   DYN_POS_APPEND at both of the two sites that create one — engine_queue_into asserts it, and
+                   the SRC branch above re-asserts flow_stack_empty at the row — so it is never IMMEDIATE, the
+                   checkpoint above did not decline for it, and this stays an assertion rather than becoming a
+                   second pick rule. The two arms ask one question through one function, which is what keeps
+                   them from coming to disagree about when a turn may start.
                  *
-                 * AND THAT `else` IS THE ARM'S WHOLE REACHABILITY, WHICH IS A DEFECT AND NOT A DESIGN. It binds
-                 * to `if (f->script_i < f->dyn_n)` two hundred lines up, so a flow runs a queued TASK only with
-                 * its cursor PAST THE LAST ROW — the same shape the networking task source's arm above the
-                 * sequence was hoisted out of, one rung over. The sequence is a set the page's own programs
-                 * EXTEND (an injected `<script>`, a `javascript:` URL, a lazy chunk), so "the sequence is
-                 * exhausted" is a condition page code can hold false, and a flow's
-                 * timer callbacks and delivered messages are then excluded for as long as it does.
+                 * AND THE ARM'S REACHABILITY IS NO LONGER `f->script_i < f->dyn_n`'S `else`, WHICH IS A
+                 * CORRECTION TO THIS PARAGRAPH AND NOT TO ITS ARGUMENT. It used to bind there, so a flow ran a
+                 * queued TASK only with its cursor PAST THE LAST ROW — the same shape the networking task
+                 * source's arm above the sequence was hoisted out of, one rung over — and the sequence is a
+                 * set the page's own programs EXTEND (an injected `<script>`, a `javascript:` URL, a lazy
+                 * chunk), so "the sequence is exhausted" is a condition page code can hold false and this
+                 * flow's timer callbacks and delivered messages were excluded for as long as it did. The
+                 * chain now binds to `seq_compiles` — `a program STARTS on this step` — so the exclusion
+                 * survives only for the step that actually runs one, which is HTML §8.1.7.3 step 2's one task per
+                 * iteration and not a precondition at all.
+                 * WHAT THAT DOES NOT SETTLE IS THIS ARM'S POSITION, WHICH IS THE PARAGRAPH BELOW AND IS
+                 * UNCHANGED. A page that keeps appending rows the flow CAN run still takes this arm's turn
+                 * every step, because the sequence arm stands above it; that is a preference between two
+                 * carriers and it is the thing one queue per source fixes, not the `else`.
                  *
                  * THE ARGUMENT THAT DECIDED THE REPLY CASE DOES NOT TRANSFER, AND SAYING SO IS THE POINT. There
                  * the two sides were ASYMMETRIC: the answered set grows only when the flow issues requests, and
@@ -8747,20 +8856,24 @@ static int flow_step(JSContext *ctx, Flow *f) {
                  * orderings above with `iframe.src =` and `location.href = "javascript:…"` in place of the two
                  * timers. So this arm's order is STILL not the thing to decide first, and the reason has
                  * changed from "nobody has established the enumeration" to a named, greppable second split.
-                 * WHAT REMAINS OPEN IS THIS ARM'S OWN REACHABILITY, unchanged: the `else` above still binds to
-                 * `f->script_i < f->dyn_n`, so a flow runs a queued TASK only with its cursor past the last
-                 * row, and a page that keeps appending rows still excludes its own timer callbacks and
-                 * delivered messages for as long as it does. What it needs is one queue per source, which
-                 * needs the source on a `jobs` entry as it is now on a row — solver/engine.h's
-                 * engine_queue_javascript_url states what that is and how its absence shows.
-                 * AND THE NAIVE REPAIR IS ALREADY WIRED TO FIRE: the DCHECK below is what catches it. Hoisted
+                 * WHAT REMAINS OPEN IS THIS ARM'S POSITION, AND ONLY THAT. The reachability half of this
+                 * paragraph is discharged above — the chain binds to `seq_compiles`, so a flow parked on an
+                 * external row runs its queued tasks instead of standing still — and what is left is the
+                 * ordering: a page that keeps appending rows the flow CAN run still takes this arm's turn on
+                 * every step, because the sequence arm is above it. That is the same two-carriers-one-source
+                 * defect the paragraphs above name, it needs one queue per source, and that needs the source
+                 * on a `jobs` entry as it is now on a row — solver/engine.h's engine_queue_javascript_url
+                 * states what that is and how its absence shows.
+                 * AND THE NAIVE REPAIR IS STILL WIRED TO FIRE: the DCHECK below is what catches it. Hoisted
                  * above the sequence, this arm becomes reachable with a DYN_POS_IMMEDIATE row at the cursor —
                  * the one row flow_stack_empty holds the checkpoint off for — so the flow arrives here holding
-                 * a microtask and the assert says so. The reorder cannot be made silently. */
+                 * a microtask and the assert says so. The reorder cannot be made silently, and the `seq_compiles`
+                 * change is not that reorder: an IMMEDIATE row sets `seq_compiles`, so it takes the arm above
+                 * this one exactly as it always did. */
                 DCHECK(!flow_job_microtask(f),
                        "a task was about to begin while this flow still held a microtask — the checkpoint runs "
-                       "before every program in the sequence, so reaching the end of the sequence with one "
-                       "outstanding means a program ran in front of the checkpoint it owed");
+                       "before every program in the sequence, so reaching a task with one outstanding means a "
+                       "program ran in front of the checkpoint it owed");
                 g_step_unit = STEP_UNIT_RUN_TASK;
                 flow_run_one_job(ctx, f);
                 return flow_blocked(f) ? FLOW_STEP_OWED : 0;
@@ -8843,9 +8956,25 @@ static int flow_step(JSContext *ctx, Flow *f) {
              * application page (an SPA bootstrap, a router, a lazy-loader, an analytics beacon all hang off
              * `load`), and it is measurable as a page that parses, learns some endpoints and then finishes
              * having run none of the code that was waiting to be told the document was ready.
+             * AND THE IDENTICAL SUBSTITUTION WAS STILL STANDING ONE CONJUNCT OVER, WHICH THIS PARAGRAPH DID
+             * NOT SEE BECAUSE IT WAS ARGUING ABOUT ITS OWN POSITION. Moving the OWED return below this arm
+             * fixed the conjunct the paragraph is about and left UNTOUCHED the one that governed whether this
+             * arm was asked at all: the chain's head was `if (f->script_i < f->dyn_n)`, so this arm — and
+             * every arm beneath it — inherited `the cursor is past the last row of this flow's own sequence`
+             * as a silent precondition. That is quiescence standing in for HTML §13.2.7 "The end" step 8 a second
+             * time, in the same ladder, one conjunct over, and it is the WIDER of the two: a sequence is a
+             * set the page's own code extends, so where an outstanding `fetch()` merely delayed this arm, an
+             * unrun row excluded it for as long as the page kept appending. The chain binds to `seq_compiles`
+             * now, which is `a program STARTS on this step` and is true of no step that reaches this line.
+             * THE READING TO KEEP IS THE METHOD AND NOT THE INCIDENT: this arm's own text enumerated what
+             * holds the flow POSITIVELY, per kind, from the spec — and a condition inherited from an `else`
+             * two hundred lines up appears in no such enumeration, because nobody writing one thinks to ask
+             * what the chain above them is testing. Read the head of a chain before trusting the list of
+             * preconditions written at one of its arms.
              * WHAT STILL HOLDS THE FLOW HERE IS STATED POSITIVELY, per kind, from the spec:
-             *   - A `<script src>` DOES delay it, both the document's own (DOCSCRIPT, which the sequence arm
-             *     far above already holds the flow at) and one a script INJECTED (SCRIPT) — §4.12.1.1
+             *   - A `<script src>` DOES delay it, both the document's own (DOCSCRIPT — and this conjunct is
+             *     now the ONLY thing that holds the flow for it, where the sequence arm far above used to
+             *     return before this line was reached) and one a script INJECTED (SCRIPT) — §4.12.1.1
              *     "Processing model": "Whenever a script element el's delaying the load event is true, the
              *     user agent must delay the load event of el's preparation-time document." The DOCSCRIPT
              *     conjunct is now the standard's flag rather than a proxy for it: step 33 says "Set el's
@@ -8910,16 +9039,34 @@ static int flow_step(JSContext *ctx, Flow *f) {
                thread", which pairs with the @WFQ census's `unrun`); ask that BEFORE reading anything below as
                the holder. Then, dispatched, a flow
                reaches here with: no live frame at all (the `!f->frame` block is skipped otherwise, and a member
-               grinding inside a program never asks); no row left in its own sequence; no queued job; not
+               grinding inside a program never asks); NO PROGRAM OF ITS OWN SEQUENCE IT CAN RUN; no queued job;
+               not
                blocked on a cross-instance read; and no document-lifecycle stage left. That last one TERMINATES and is not a
                periodic source, which is worth knowing because it is grouped with the two clock-driven ones in
                at least one reader's prose: core/dom/document.c's document_lifecycle_step advances a readiness
                0 -> 1 -> 2, one stage per call, DCHECKs at BOTH stages that the readiness moved (its own message
                calls a re-fire "a live-lock the scheduler cannot tell from progress"), and answers 0 once every
-               document of the agent is at 2. The sequence arm is the one that can legitimately stay true for
-               ever, and that is not this rung's to fix: a flow with a program still to run has NOT run out of
-               the work the page arranged, so driving an orphan in front of it would empty the precondition of
-               its meaning.
+               document of the agent is at 2.
+               AND THE SECOND CONJUNCT WAS SPELLED `no row left` AND MEANT `no program it can run`, WHICH IS
+               THE CORRECTION THIS RUNG TOOK FROM THE `seq_compiles` DIFF AND IS A WIDENING OF WHAT IS WRITTEN
+               HERE. The two were one condition while the sequence arm always either ran a row or returned at
+               it, so the available spelling was the cursor; they came apart the moment a flow standing on an
+               external script row stopped returning. What this rung is ABOUT is unchanged and is the sentence
+               below: a flow with a program still to run has NOT run out of the work the page arranged, and
+               driving an orphan in front of it would empty the precondition of its meaning. A flow parked on
+               bytes that have not come back HAS run out of that work — it can run nothing, and it will run
+               nothing until the host answers — so it is inside the precondition rather than an exception to
+               it, and `seq_compiles` is that sentence spelled correctly for the first time.
+               THE PART THAT WAS A REAL WIDENING IS SAID PLAINLY RATHER THAN ABSORBED: this rung is now asked
+               of a flow that HOLDS A ROW, which the text here used to exclude outright. What decided it is
+               this rung's own argument two paragraphs up — the old placement's answer depended on the SHAPE OF
+               THE DOCUMENT, and `no row left` re-creates exactly that, since whether a document ships external
+               scripts or keeps arranging subresource loads is a property of the document and not of the
+               scheduler. Reading it the other way would have left §What-the-tool-produces' headline surface
+               unreachable on every page that loads a bundle, which is nearly all of them.
+               WHAT IS NOT WIDENED IS THE SEQUENCE ARM ITSELF: a flow with a row it CAN run compiles it, this
+               rung is not asked on that step, and a page that keeps appending runnable rows still takes every
+               step. That is the ordering the task arm's residual names and it is not this rung's to fix.
                DRIVING EARLY IS NOT DRIVING WRONGLY, WHICH IS WHAT THE OLD PLACEMENT WAS BUYING. Its objection
                was that "nothing called this function" is a guess until the run is finished — and a run that
                renders is never finished, so the guarantee bought nothing and cost the whole surface. What being
@@ -9035,10 +9182,30 @@ static int flow_step(JSContext *ctx, Flow *f) {
              * residue to carry — and that is a question about attribution, which is what step_unit.h is for.
              * `pending_host_outstanding` is the same predicate the mark's own assert asks two seams later, so
              * the row and the assert cannot disagree about which member is which. */
-            else if (pending_outstanding(f->pending)) {
-                /* every task source is empty; a reply is not — and the two rows are the two answers to
-                   "can the host still be asked", asked of the register this flow is parked on. */
-                g_step_unit = pending_host_outstanding(f->pending)
+            /* AND A FLOW STANDING ON AN EXTERNAL SCRIPT ROW RESTS HERE, WHICH IS WHY `seq_awaits` IS A
+             * DISJUNCT OF THIS ARM AND NOT AN ASSERTION BELOW IT. The sequence arm no longer returns at such
+             * a row, so the two arms beneath this one — a close request, and the exit that declares the
+             * timeline OVER — became reachable by a flow holding a row it has not run. Both claim the run is
+             * FINISHED, and a row whose bytes are still in the air falsifies that outright: the reply is
+             * coming, it REPLACES the row, and the next pass compiles it.
+             * IT IS A CONDITION RATHER THAN A `DCHECK` FOR §Fix-the-ROOT'S REASON. The register makes this
+             * true already — engine_queue_into parks an entry naming the row at the moment the row is created,
+             * and the SRC branch's own dev walk asserts that entry is still there — so a DCHECK here would
+             * hold in dev and the state would be impossible only while that walk is compiled in. In release
+             * the flow would reach the exit, the DCHECK that a flow may not finish holding work reads `jobs`
+             * and not `dyn`, and the row would be DROPPED with the timeline. Making the disjunct part of the
+             * SELECTING predicate is what makes the state impossible in both builds, and it costs one read of
+             * a local the block above already computed.
+             * AND IT IS THE STRONGER STATEMENT OF WHY THIS FLOW RESTS, which is why it also decides the name:
+             * "the cursor is at a row whose bytes have not come back" is a fact about this flow's own
+             * sequence, where the other two rows are facts about its register. */
+            else if (seq_awaits || pending_outstanding(f->pending)) {
+                /* every task source is empty; a row or a reply is not — and the three rows are the three
+                   answers to "what is this flow waiting for", asked of the cursor and then of the register
+                   this flow is parked on. */
+                g_step_unit = seq_awaits
+                            ? STEP_UNIT_AWAIT_FETCH_RECORD
+                            : pending_host_outstanding(f->pending)
                             ? STEP_UNIT_AWAIT_OWED_REPLY
                             : STEP_UNIT_AWAIT_DECLINED;
                 return FLOW_STEP_OWED;
@@ -9162,6 +9329,17 @@ static int flow_step(JSContext *ctx, Flow *f) {
                no monotone reading of any of them). What the row does count is a compile that FAILED and a
                MODULE that evaluated — two events with nothing in common but the block they leave from.
                EACH EXIT NAMES ITSELF NOW, in the same shape as every other arm of this ladder. */
+            /* AND THE ONE ARM THAT MAY REACH THIS LINE SAYS SO, which is what turns the fall-through from a
+               property of the control flow into something an edit can break LOUDLY. Every arm of the ladder
+               above returns, so today the compile is reachable only from the empty `seq_compiles` arm — and
+               that is the kind of invariant a later arm added without a `return` retires in silence, with
+               `body` then read uninitialised and a stale `kind` compiled as a program. It is not a second
+               spelling of the chain's head: the two sides are a LOCAL the block above wrote and the CONTROL
+               PATH that got here, and an arm that falls through makes them disagree. */
+            DCHECK(seq_compiles,
+                   "control reached the compile without the sequence arm having decided a program starts — "
+                   "every other arm of the task-source ladder returns, so an arm that falls through instead "
+                   "is about to compile whatever `body` and `kind` were left holding");
             /* NO REPLAY, asserted at the only place a program can start. A flow compiles each entry of its
                sequence once and thereafter RESUMES the suspended frame; reaching this line again for an index
                it already started means the resume path lost the frame and the flow is re-executing a program —

@@ -4906,11 +4906,14 @@ void flow_wfq_census(WfqCensus *out) {
            the checkpoint's precondition reaches this census without anybody remembering to come here.
            NAMED RESIDUAL — this row is CORRECT for a MICROTASK and NARROWER than the question for a TASK.
            NOT COVERED: a member that satisfies flow_stack_empty and holds a job with JOB_TASK set while its
-           cursor still names a row. flow_step's task arm binds its `else` to `f->script_i < f->dyn_n` (the
-           engine states that at the arm, and states it as an open defect rather than a design), so no pick
-           reaches that job either and this row still calls it ready. NEXT DIFF: the per-source task queue that
-           arm's own residual names — a source on a `jobs` entry as it is now on a row — after which the arm's
-           reachability stops depending on the cursor and the ready/framed line is exact for both kinds.
+           cursor names a row the flow CAN RUN. flow_step's task arm used to bind its `else` to
+           `f->script_i < f->dyn_n`, which made the uncovered population every member whose cursor named a row
+           AT ALL; it binds to `seq_compiles` now — `a program STARTS on this step` — so a member parked on an
+           external script row does reach its jobs and this row is exact for it. What is left is the member
+           whose next row is RUNNABLE: the sequence arm takes every such step, so no pick reaches that job and
+           this row still calls it ready. NEXT DIFF: the per-source task queue that arm's own residual names —
+           a source on a `jobs` entry as it is now on a row — after which the arm's reachability stops
+           depending on the cursor at all and the ready/framed line is exact for both kinds.
            HOW ITS ABSENCE SHOWS: a census publishing `jobsReady` above zero with `jobWGap` at zero, on a run
            whose LIFETIME `_jobsRun` never leaves zero — a backlog standing at the front of the order that the
            order cannot move, which is the pair this row exists to make impossible to say. */

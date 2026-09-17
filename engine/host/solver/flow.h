@@ -894,16 +894,20 @@ typedef struct Flow {
     /* ASYNC-AS-FLOW: this flow's OWN queued microtasks AND tasks, run under its live COW so a reaction runs in
        the timeline that enqueued it. A MICROTASK runs at the checkpoint HTML §8.1.4.4 "Calling scripts" owes
        once the program that queued it has left the stack — which is BEFORE the flow's next program, not after
-       its last one — and a TASK runs when the sequence is exhausted. One array
+       its last one — and a TASK runs on any step that does not START a program of the sequence. One array
        keeps both in a single arrival order — which is what a task source needs among its own tasks — and the
        pick (flow_job_take) applies the checkpoint rule.
        THE FUNCTION THIS NAMED FOR THE TASK RULE WAS flow_checkpoint_due, WHICH IS THE MICROTASK ARM. A reader
        following it landed on the predicate for the sentence one clause above and found nothing about tasks
-       there at all; the task rule is the `else if (flow_job_pending(f) > 0)` arm of flow_step, and it is an
-       `else` on the sequence test, which is where "when the sequence is exhausted" comes from.
-       AND THAT SENTENCE READS AS A DESIGN AND STATES A DEFECT, which is why it now says where to go: a flow's
-       sequence is a set the page's own programs EXTEND, so the condition is one page code can hold false and
-       this queue's tasks are excluded while it does. It is not repairable by reordering those two arms —
+       there at all; the task rule is the `else if (flow_job_pending(f) > 0)` arm of flow_step.
+       THAT RULE USED TO READ `when the sequence is EXHAUSTED`, AND IT WAS AN `else` ON THE SEQUENCE TEST —
+       which read as a design and stated a defect, because a flow's sequence is a set the page's own programs
+       EXTEND, so the condition was one page code could hold false and this queue's tasks were excluded while
+       it did. The arm now binds to `seq_compiles`, which is `a program of the sequence STARTS on this step`,
+       so the exclusion lasts exactly the step that runs one — HTML §8.1.7.3 "Processing model" step 2's one
+       task per iteration — and a flow parked on an external script row runs this queue instead of standing
+       still. What is NOT repaired is the ORDER between the two carriers, and that is not repairable by
+       reordering those two arms —
        §8.1.7.1 "Definitions" requires each task source to be in ONE queue and the TIMER task source is in both
        of a flow's (a Function handler here through JS_EnqueueCallTask, a STRING handler in `dyn` through
        core/timing/timer.c's script sink), so the two queues partition by CARRIER where the spec partitions by
