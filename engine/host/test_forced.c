@@ -1242,6 +1242,25 @@ static const char *HTML =
     "var csp = document.createElement('p'); document.body.appendChild(csp);"
     "fetch('/api/cssua?v=' + (getComputedStyle(csp).display === 'block' &&"
     " getComputedStyle(document.createElement('span')).display === 'inline' ? 'isua' : 'wrong'));"
+    /* AND SO DOES AN UNDECLARED BACKGROUND LONGHAND, which is the same sentence one property family over and
+       was the one place it was not true. Seven of css-backgrounds-3 §2.10 "Backgrounds Shorthand: the
+       background property"'s eight longhands are in NO property registry, so css-cascade-5 §7.1 "Initial
+       Values" had nothing to fall to and `cssom_initial_value` answered NOTHING for them — which
+       core/css/css_computed_value.c's resolved-value entry reads as CSSOM's answer for a property that is not
+       set, the EMPTY STRING. `getComputedStyle(csp).backgroundImage` was `""` where every user agent says
+       `none`, so a page asking the ordinary question `does this element have a background image` took the arm
+       for one that HAS one. `csp` is the element this block already made that no rule names, which is exactly
+       the population the defect was invisible on.
+       THE LAST TWO ARE THE DISCRIMINATING PAIR and are why this row names four properties rather than one:
+       css-backgrounds-3 §2.8 "Positioning Area: the background-origin property" initializes to `padding-box`
+       and css-backgrounds-3 §2.7 "Painting Area: the background-clip property" to `border-box`, so they are
+       the only two of the eight whose initial
+       values differ from each other — an off-by-one in the index these values are read by would answer both
+       with one word and every other assertion here would still pass. */
+    "fetch('/api/cssbginitial?v=' + (getComputedStyle(csp).backgroundImage === 'none' &&"
+    " getComputedStyle(csp).backgroundRepeat === 'repeat' &&"
+    " getComputedStyle(csp).backgroundOrigin === 'padding-box' &&"
+    " getComputedStyle(csp).backgroundClip === 'border-box' ? 'isbginitial' : 'wrong'));"
     /* A USED VALUE THAT IS A JOINT FUNCTION OF TWO ENVIRONMENT FACTS — the shape a box with a border has, and
        the one that used to crash. CSS 2.1 §10.3.3 solves this `width: auto` against the INITIAL CONTAINING
        BLOCK and subtracts a border css-values §6 SNAPPED to a whole number of DEVICE PIXELS, so the number

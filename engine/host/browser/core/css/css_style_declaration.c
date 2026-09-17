@@ -2020,6 +2020,44 @@ char *cssom_initial_value(const char *name)
                            "which is a cascade that stopped before its last layer");
         return out;
     }
+    /* css-backgrounds-3 §2.10 "Backgrounds Shorthand: the background property"'s LONGHANDS, ASKED OF THE
+       COMPONENT THAT OWNS THEM rather than listed in the table above — the same seam `cssd_property_name_of`
+       below already uses for their NAMES, and for the same reason: core/css/css_background_shorthand.c states
+       each `Initial:` line once, beside the serializer that omits against it, so a row here would be one fact
+       with two sources and the copy that drifts is the one no serializer reads.
+       THE TABLE ABOVE USED TO CARRY THE ARGUMENT FOR LEAVING THEM OUT — `an initial value is a fact a property
+       has whether or not anything asks for it, and nothing asks these for one` — and that was a claim about
+       THIS TREE which `cssd_own_init` had already made false: it adds all eight to the engine's own supported
+       set, so §6.6.1 installs `backgroundImage` and the rest as IDL attributes and a PAGE asks. What it got was
+       not a refusal but the EMPTY STRING, because `css_resolved_computed`'s last line reads a NULL here as
+       §6.6.1's answer for a property that is not set — true of a custom property nobody registered, false of a
+       longhand whose own `Initial:` line says `none`. So `getComputedStyle(el).backgroundImage` answered `""`
+       where every user agent answers `none`, and a page branching on that took the arm for an element that HAS
+       a background image. NO IMAGE MACHINERY IS INVOLVED IN FIXING IT: the initial value is a KEYWORD, and the
+       DECLARED `url()` path is untouched — css_background_shorthand.c has validated and serialized those all
+       along. This closes the UNDECLARED half only.
+       `background-color` NEVER REACHES HERE: lexbor types it and the registry is asked above, which is why the
+       assert is the same one the loop above makes. It fires the day lexbor gains a row for one of the other
+       seven, which is exactly when this call would become the second answer to a settled question. */
+    {
+        const char *bg = css_background_shorthand_initial(name);
+
+        if (bg != NULL) {
+            char *out;
+
+            DCHECK(e == NULL,
+                   "a css-backgrounds-3 §2.10 longhand this engine states the initial value of is ALSO in "
+                   "lexbor's property registry — one fact with two answers, and the registry's is the one "
+                   "every other property in CSS reads. The registry is asked FIRST above, so reaching this "
+                   "line means lexbor has the row and no initial value on it: DELETE the value from "
+                   "core/css/css_background_shorthand.c's BG_INITIAL and let the registry answer, after "
+                   "checking that what it now says is the property's own `Initial:` line");
+            out = strdup(bg);
+            CHECK(out != NULL, "cssom: OOM copying an initial value — a dropped one reads as no value at all, "
+                               "which is a cascade that stopped before its last layer");
+            return out;
+        }
+    }
     return NULL;
 }
 
@@ -3078,9 +3116,15 @@ const char *cssom_supported_css_property_named(const char *name)
         if (strcmp(CSSD_INITIAL_UNREGISTERED[i].name, name) == 0)
             return CSSD_INITIAL_UNREGISTERED[i].name;
     /* css-backgrounds-3 §2.10's eight, whose grammars core/css/css_background_shorthand.h owns. They are NOT
-       in the table above — an initial value is a fact a property has whether or not anything asks for it, and
-       nothing asks these for one — so a set built from that table alone would have been short by exactly the
-       eight this engine most obviously implements. */
+       in the table above and are asked of that component instead — so a set built from that table alone would
+       have been short by exactly the eight this engine most obviously implements.
+       THE REASON THIS LINE USED TO GIVE FOR THEIR ABSENCE — `an initial value is a fact a property has
+       whether or not anything asks for it, and nothing asks these for one` — had a second half that was
+       already false when it was written: THIS LOOP is what makes a page ask. It puts all eight in the engine's own
+       supported set, so §6.6.1 installs `backgroundImage` and the rest as IDL attributes, and every one of
+       those reads went to `cssom_initial_value`, got NULL, and came back as the EMPTY STRING. The initial
+       values are stated now — by the owner, read through `css_background_shorthand_initial` — so the set here
+       and the values there come from one place and the sentence has nothing left to be right about. */
     for (i = 0; i < CSS_BACKGROUND_SHORTHAND_N; i++)
         if (strcmp(CSS_BACKGROUND_SHORTHAND_LONGHANDS[i], name) == 0)
             return CSS_BACKGROUND_SHORTHAND_LONGHANDS[i];

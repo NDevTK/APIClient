@@ -61,6 +61,21 @@ char *css_background_shorthand_value(const char *const *values);
    second answer to one question. Asked by the cascade before it takes a longhand declaration verbatim. */
 bool css_background_shorthand_validates_longhand(const char *longhand);
 
+/* The `Initial:` line of one of §2.10's eight longhands — `background-image`'s `none`, `background-repeat`'s
+   `repeat`, and the rest — in the form this component SERIALIZES it, which for `background-size` is `auto
+   auto` rather than the `auto` its own line reads: css-backgrounds-3 §2.9.1 "Serialization of background-size
+   values" says the type's specified and computed values "always serialize as two values, even when the second
+   value is auto".
+   WHY THE CASCADE ASKS THIS FILE. Seven of the eight are in NO property registry, so nothing else in this
+   engine states their initial values and css-cascade-5 §7.1 "Initial Values" had nothing to fall to: an
+   undeclared `background-image` answered NOTHING, which core/css/css_computed_value.c's resolved-value entry
+   turns into the EMPTY STRING — CSSOM's answer for a custom property nobody set, and a real answer to a
+   different question, so a page testing `getComputedStyle(el).backgroundImage !== "none"` took the branch for
+   an element that HAS one. The values live here because the serializer above already omits against them; a
+   copy in the cascade would be the same fact twice.
+   NULL for a name §2.10 does not carry. NOT OWNED — static text belonging to this component. */
+const char *css_background_shorthand_initial(const char *longhand);
+
 /* The SPECIFIED value the declaration `longhand: value` gives `longhand` itself, put through that grammar and
    through each type's own serialization rule (css-values-4 §8.3.2 for `<bg-position>`, css-backgrounds-3
    §2.9.1 for `<bg-size>`). NULL when the value matches no arm — an INVALID declaration, which the cascade

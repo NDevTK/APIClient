@@ -533,6 +533,29 @@ bool css_background_shorthand_validates_longhand(const char *longhand)
     return idx >= 0 && idx != BG_COLOR;
 }
 
+/* THE `Initial:` LINE of one of §2.10's eight, READ OFF THE SAME ARRAY the shorthand serializer omits against.
+   An initial value is a fact about the PROPERTY, stated on its own `Initial:` line, and it is true whether or
+   not anything asks for it — but SEVEN OF THE EIGHT ARE IN NO REGISTRY, so nothing else in this engine holds
+   the fact and css-cascade-5 §7.1 "Initial Values" had nothing to fall to for them. This entry is what lets
+   the cascade ask the component that owns the grammar, which is the same shape core/css/css_style_declaration.c
+   already uses for the NAMES (it asks CSS_BACKGROUND_SHORTHAND_LONGHANDS rather than listing them): a second
+   table of these values somewhere else would be one fact with two sources, and the copy that drifts is always
+   the one no serializer reads.
+   IT ANSWERS FOR ALL EIGHT AND NOT FOR THE SEVEN, which is deliberate and is not the question
+   `css_background_shorthand_validates_longhand` answers: THAT predicate is about who owns the VALUE GRAMMAR,
+   and this is about a line in the spec. `background-color` has an `Initial:` line exactly as the others do,
+   and the fact that lexbor also types it makes the registry the FIRST place a caller asks — not a reason for
+   this component to deny owning §2.2's own text. Splitting one bit across two questions is how the two answers
+   drift apart when a caller appears that wants the other one.
+   NULL for a name §2.10 does not carry. NOT OWNED: the string is this component's own static text. */
+const char *css_background_shorthand_initial(const char *longhand)
+{
+    int idx = bg_longhand_index(longhand);
+
+    DCHECK(longhand != NULL, "a background longhand's initial value was asked for with no property name");
+    return idx >= 0 ? BG_INITIAL[idx] : NULL;
+}
+
 char *css_background_shorthand_longhand_value(const char *longhand, const char *value)
 {
     int idx = bg_longhand_index(longhand);
