@@ -178,7 +178,12 @@ typedef struct {
  * Returns the §13 CryptoKey, or JS_EXCEPTION with the DOMException the algorithm names live in the context:
  * a "DataError" for steps 1, 7 and 8, a "SyntaxError" for step 3, a "NotSupportedError" for step 5's Otherwise.
  *
- * STEP 5's `format is "jwk"` ARM IS BUILT, AND ITS RESIDUAL IS GONE. All nine sub-steps are in hmac.c, and the
+ * STEP 5's `format is "jwk"` ARM IS BUILT, AND ITS RESIDUAL IS GONE. All nine sub-steps are performed — six of
+ * them in core/crypto/jwk.c, which is where they moved when §29.4.4 Import Key's own `jwk` arm was read against
+ * this one and six of its eight sub-steps turned out to be these sentences word for word. THIS PARAGRAPH SAID
+ * "in hmac.c" AND IS REWRITTEN RATHER THAN DELETED: a reader who re-derives the claim from the arm's numbering
+ * will look for the sub-steps in this file and conclude, from a correct grep answering nothing, that they are
+ * absent. What stays here is step 5, which §29.4.4 has no member for, and step 6's per-hash selection. And the
  * three mechanisms the retired clause named landed with them and in its order: core/idl_args.h's
  * IDL_BUFFERSOURCE_OR_DICT for §14.3.9's `(BufferSource or JsonWebKey) keyData` position, the two
  * IdlDictMember tables in core/crypto/subtle_crypto.c, and these steps. The clause was right about all three

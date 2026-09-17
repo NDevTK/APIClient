@@ -19,6 +19,18 @@
  * which. §31.6.4's step 5 has the identical shape and core/crypto/hmac.c states the same rule over it. Every
  * citation here therefore names the arm in the spec's own words.
  *
+ * THE `jwk` ARM HAS NO LENGTH SUB-STEP AND THAT IS THE ONE THING A READER OF THIS ALGORITHM MOST EASILY GETS
+ * WRONG. The `raw` arm's SECOND ITEM is a sub-step whose whole content is the length test — "If the length in
+ * bits of data is not 128, 192 or 256 then throw a DataError" — and the `jwk` arm has nothing of the kind. Its
+ * step 5 is a four-clause dispatch ON the length in bits of data, three of whose clauses check `alg` against
+ * "A128GCM", "A192GCM" and "A256GCM" and whose fourth reads "Otherwise: throw a DataError". So that Otherwise
+ * IS the arm's length validation, and a reading of step 5 as "a three-way `alg` match against the length"
+ * — which is how it was described in this file's own retired next-diff clause — names three of its four
+ * clauses and drops the only one that refuses anything a page can write. The clause was also wrong about the
+ * `use` sub-step, which it called word for word §31.6.4's: this chapter's value is "enc" and §31.6.4's is
+ * "sig", so building to the clause would have refused exactly the JSON Web Key a real AES-GCM import carries.
+ * Both halves were checkable against the fetched document before anything was built, and neither was checked.
+ *
  * STEP 1 RUNS BEFORE STEP 2 AND THE ORDER IS OBSERVABLE. `importKey("raw", <a 17-byte view>, {name:"AES-GCM"},
  * true, ["sign"])` is step 1's SyntaxError and not step 2's `raw` arm's DataError, because "sign" is outside
  * the four usages this algorithm permits and the standard asks that first. Two different exceptions for one
@@ -37,12 +49,14 @@
  * schedule from those bytes at the point §29.4.1 Encrypt needs one. Expanding it here would put a POD C
  * structure in a slot that must fork per flow and park to the cold tier, which is the defect
  * core/crypto/crypto_key.h's [[handle]] paragraph is entirely about. */
+#include <stdlib.h>
 #include <string.h>
 
 #include "check.h"
 #include "quickjs.h"
 #include "core/crypto/aes_gcm_key.h"
 #include "core/crypto/crypto_key.h"
+#include "core/crypto/jwk.h"
 #include "core/idl_slots.h"
 
 /* §29.4.4 step 1's four usages, as the mask §9 Terminology's normalized value already is. The standard's
@@ -67,23 +81,57 @@ static JSValue aes_key_algorithm_new(JSContext *ctx, const char *name, uint32_t 
     JSValue alg = idl_slots_new(ctx);
 
     CHECK(!JS_IsException(alg), "§27.4's AesKeyAlgorithm could not be allocated");
-    /* §27.4's `length` is an `unsigned short`, and step 2's `raw` arm admitted exactly three values before this
-       ran — so a length outside them is this engine's own arithmetic having gone wrong rather than anything a
-       page said. */
+    /* §27.4's `length` is an `unsigned short`, and step 2 admitted exactly three values before this ran — so a
+       length outside them is this engine's own arithmetic having gone wrong rather than anything a page said.
+       THIS USED TO READ "step 2's `raw` arm admitted … its second item is the only writer of `data`", AND THE
+       `jwk` ARM LANDING IS WHAT MADE THAT FALSE rather than anybody disagreeing with it. It is rewritten and
+       not deleted because a reader who re-derives the assertion from the `raw` arm alone will re-add the
+       narrower reason and then be surprised by a jwk import. There are now TWO writers of `data` and the three
+       admitted lengths are a fact about BOTH: the `raw` arm's second item states them as a sub-step of its own,
+       and the `jwk` arm's step 5 states them as the four clauses it dispatches on, whose Otherwise throws. */
     DCHECK(length_bits == 128 || length_bits == 192 || length_bits == 256,
-           "§29.4.4 step 7's length in bits is not one of the three §29.4.4 step 2's `raw` arm admits — its "
-           "second item is the only writer of `data`, so the two have come apart");
+           "§29.4.4 step 7's length in bits is not one of the three step 2 admits — the `raw` arm's second item "
+           "and the `jwk` arm's step 5's Otherwise are the two writers of `data`, and both admit exactly those "
+           "three, so one of them has come apart from this");
     JS_SetPropertyStr(ctx, alg, "name", JS_NewString(ctx, name));
     JS_SetPropertyStr(ctx, alg, "length", JS_NewUint32(ctx, length_bits));
     return alg;
 }
 
+/* §29.4.4 the jwk arm's step 5's per-length `alg` value — 128, 192 and 256 bits against "A128GCM", "A192GCM"
+   and "A256GCM", which is the whole of that sub-step's first three clauses.
+   ITS FOURTH CLAUSE IS "Otherwise: throw a DataError", AND THAT CLAUSE IS THE ONLY LENGTH TEST THE `jwk` ARM
+   HAS. The `raw` arm states its own as a sub-step of its own — "If the length in bits of data is not 128, 192
+   or 256 then throw a DataError" — and the `jwk` arm states none, so every byte of length validation a JSON
+   Web Key import performs is carried by this dispatch's Otherwise. A reader who takes this sub-step for a
+   three-way `alg` match and writes three clauses without a fourth admits a key of ANY length, which reaches
+   step 7 and fires aes_key_algorithm_new's assertion on a value a page supplied. NULL IS THAT FOURTH CLAUSE,
+   answered by the caller because it is a throw rather than a value.
+   THE SELECTOR IS THE BYTE COUNT for the reason the `raw` arm's own comment gives: an ArrayBuffer's length is a
+   `uint32_t`, so eight times one overflows above 512MB, and a 536870912-byte `k` would compute a bit length of
+   0 and be admitted as 128. Sixteen, twenty-four and thirty-two bytes ARE 128, 192 and 256 bits. */
+static const char *aes_gcm_jwk_alg_for(uint32_t byte_len)
+{
+    switch (byte_len) {
+    case 16: return "A128GCM";
+    case 24: return "A192GCM";
+    case 32: return "A256GCM";
+    default: return NULL;
+    }
+}
+
+/* §29.4.4 STEPS 3-9, OVER THE `data` STEP 2 PRODUCED — ONE TAIL FOR BOTH ARMS, which is what step 2 being a
+   dispatch means: its `raw` and `jwk` arms differ in how they obtain `data` and in nothing after that. It is a
+   function of its own so that the jwk arm's decoded key material has exactly ONE owner and exactly one free,
+   rather than a `free` before each of that arm's throws. */
+static JSValue aes_gcm_import_key_data(JSContext *ctx, const uint8_t *bytes, uint32_t byte_len,
+                                       bool extractable, uint32_t usages);
+
 JSValue aes_gcm_import_key(JSContext *ctx, const char *format, JSValueConst key_data, bool extractable,
                            uint32_t usages)
 {
-    uint32_t byte_len = 0, length;
+    uint32_t byte_len = 0;
     const uint8_t *bytes;
-    JSValue algorithm, handle;
 
     DCHECK(format != NULL, "§29.4.4 step 2 was given no format — §14.1's KeyFormat is a required argument of "
                            "§14.3.9 and its conversion admits exactly four strings");
@@ -95,26 +143,42 @@ JSValue aes_gcm_import_key(JSContext *ctx, const char *format, JSValueConst key_
         return JS_ThrowDOMException(ctx, "SyntaxError", "%s",
                                     "an AES-GCM key may only be used to encrypt, to decrypt, to wrap a key or "
                                     "to unwrap one");
-    /* STEP 2's `jwk` ARM, WHICH IS NOT BUILT. It is a crash and not a refusal because the refusal would be a
-       WRONG ANSWER rather than a narrower one: §29.4.4 defines the arm, so a browser RESOLVES this call and
-       anything returned here is an exception a page would never see. §NO STUBS' honest-absence argument does
-       not reach it either — that argument rests on a feature-detect reading false, and the format is an
-       argument rather than a name a bundle can test for.
-       WHAT THE NEXT DIFF BUILDS is the arm's eight sub-steps, over the two helpers §31.6.4's own jwk arm
-       already has: `hmac_jwk_get` and `hmac_jwk_k_bytes` are file statics in core/crypto/hmac.c (grepped at
-       the commit this landed on), and the diff that needs them here is the diff that shares them — the `kty`,
-       `use`, `key_ops` and `ext` sub-steps are word for word §31.6.4's, and only the `alg` test differs, being
-       a three-way match of "A128GCM"/"A192GCM"/"A256GCM" against the length rather than a hash name. */
+    /* STEP 2's `jwk` ARM, ALL EIGHT SUB-STEPS, IN THE STANDARD'S OWN ORDER — AN ORDER THE CALL SEQUENCE
+       CARRIES RATHER THAN A COMMENT ASKING FOR IT. core/crypto/jwk.c holds the six of them §31.6.4's own `jwk`
+       arm writes word for word, measured against the fetched document sentence by sentence rather than assumed
+       from the two arms looking alike; that header states the diff, including which sub-steps are NOT shared.
+       The decoded key material is this function's for exactly as long as the tail needs it, which is the whole
+       reason aes_gcm_import_key_data is a separate function: one owner, one free. */
     if (strcmp(format, "jwk") == 0) {
-        DFAIL("§29.4.4 step 2's `jwk` arm is not built — a JSON Web Key naming AES-GCM reaches here and the "
-              "eight sub-steps that would decode its `k` and check its `kty`, `alg`, `use`, `key_ops` and "
-              "`ext` do not exist, so this engine has no `data` to reach step 3 with. Build them beside "
-              "§31.6.4's, which are the same steps over the same helpers");
-        /* RELEASE: a DEFINED refusal, and one the algorithm itself can end on. A quiet return would hand
-           §14.3.9 step 9 a CryptoKey-shaped nothing that its step 10 would read, which is the state a release
-           arm must never leave behind; this rejects the promise and the page's own catch runs. */
-        return JS_ThrowDOMException(ctx, "NotSupportedError", "%s",
-                                    "this engine cannot yet import an AES-GCM key from a JSON Web Key");
+        uint8_t *data = NULL;
+        const char *want;
+        JSValue r;
+
+        /* THE ARM'S STEPS 1-4 — keyData is the dictionary, `kty` is "oct", JSON Web Algorithms §6.4's
+           requirements, and the decode of `k`. */
+        if (jwk_oct_key_bytes(ctx, key_data, &data, &byte_len) < 0)
+            return JS_EXCEPTION;
+        /* THE ARM'S STEP 5. Its Otherwise clause first, because that is the clause that decides whether any of
+           the other three can apply — and it is this arm's whole length check, so it is performed here and not
+           left to step 7's assertion. */
+        want = aes_gcm_jwk_alg_for(byte_len);
+        if (want == NULL) {
+            free(data);
+            return JS_ThrowDOMException(ctx, "DataError", "%s",
+                                        "an AES-GCM key must be 128, 192 or 256 bits long");
+        }
+        /* THE REST OF STEP 5, then THE ARM'S STEPS 6, 7 AND 8. The `use` value "enc" is the one word §31.6.4's
+           copy of that sentence writes differently — it is "sig" there, because an HMAC key signs and an
+           AES-GCM key encrypts, and a shared constant would be two algorithms' different sentences under one
+           name. */
+        if (jwk_alg_is(ctx, key_data, want) < 0 ||
+            jwk_oct_tail(ctx, key_data, "enc", usages, extractable) < 0) {
+            free(data);
+            return JS_EXCEPTION;
+        }
+        r = aes_gcm_import_key_data(ctx, data, byte_len, extractable, usages);
+        free(data);
+        return r;
     }
     /* STEP 2's `Otherwise`: "throw a NotSupportedError". §14.1's KeyFormat has four values and this is the
        standard's own answer for the two DER ones, so it is a refusal rather than a gap — an AES key is never
@@ -123,7 +187,11 @@ JSValue aes_gcm_import_key(JSContext *ctx, const char *format, JSValueConst key_
         return JS_ThrowDOMException(ctx, "NotSupportedError",
                                     "an AES-GCM key cannot be imported from the '%s' format", format);
     /* STEP 2's `raw` ARM, both items: "Let data be keyData", then "If the length in bits of data is not 128,
-       192 or 256 then throw a DataError." */
+       192 or 256 then throw a DataError." THE SECOND ITEM IS THIS ARM'S OWN, which is why it is stated here
+       and not in the tail: the `jwk` arm has no such sub-step and carries the identical three lengths inside
+       its step 5's dispatch instead, so a shared test would be one sentence standing for two the standard
+       writes separately — and the two are NOT interchangeable, since this one throws on a length the other
+       reaches only after `k` has decoded. */
     bytes = JS_GetBufferBytes(key_data, &byte_len);
     DCHECK(bytes != NULL || byte_len == 0,
            "§14.3.9 step 4's own copy of the key data is detached — nothing but this algorithm holds it, and "
@@ -135,7 +203,15 @@ JSValue aes_gcm_import_key(JSContext *ctx, const char *format, JSValueConst key_
     if (byte_len != 16 && byte_len != 24 && byte_len != 32)
         return JS_ThrowDOMException(ctx, "DataError", "%s",
                                     "an AES-GCM key must be 128, 192 or 256 bits long");
-    length = byte_len * 8u;
+    return aes_gcm_import_key_data(ctx, bytes, byte_len, extractable, usages);
+}
+
+static JSValue aes_gcm_import_key_data(JSContext *ctx, const uint8_t *bytes, uint32_t byte_len,
+                                       bool extractable, uint32_t usages)
+{
+    JSValue algorithm, handle;
+    uint32_t length = byte_len * 8u;
+
     /* STEP 3: "Let key be a new CryptoKey object representing an AES key with value data." §13.3's [[handle]]
        is those bytes, as an ArrayBuffer — core/crypto/crypto_key.h states why it is a JS value and not a
        malloc'd buffer. */

@@ -48,7 +48,13 @@
    conversion. `key_data` is what §14.3.9 step 4's Otherwise arm got a copy of the bytes of. `usages` is §9
    Terminology's normalized value of a usages list, as a CryptoKeyUsage mask.
    It takes NO normalized-parameters argument, and that absence is §29.2's `None` rather than an omission —
-   see the file comment. Returns JS_EXCEPTION with the exception pending, like every algorithm here. */
+   see the file comment. Returns JS_EXCEPTION with the exception pending, like every algorithm here: a
+   "SyntaxError" for step 1, and for step 2 a "DataError" from the `raw` arm's second item or from any of the
+   `jwk` arm's eight sub-steps, or the `Otherwise`'s "NotSupportedError" for the two DER formats.
+   STEP 2's THREE ARMS ARE ALL PERFORMED. The `jwk` arm's six sub-steps that §31.6.4's own `jwk` arm writes word
+   for word are core/crypto/jwk.c, which states the measured diff of the two arms; the two that are this
+   chapter's alone — its step 5's length-to-`alg` dispatch, whose Otherwise is this arm's entire length
+   validation, and its step 6's "enc" — are in aes_gcm_key.c beside the rest of the algorithm. */
 JSValue aes_gcm_import_key(JSContext *ctx, const char *format, JSValueConst key_data, bool extractable,
                            uint32_t usages);
 

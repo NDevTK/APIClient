@@ -27,8 +27,13 @@
  * `deriveKey`, `deriveBits`, `exportKey`, `wrapKey` and `unwrapKey` are absent — the page's own TypeError names
  * each, and engine/idlgen.mjs's audit prints the list. The two of them that HMAC alone could reach are
  * §31.6.3's Generate Key, which needs §10.1.1's random source spent on key material, and §31.6.5's Export Key,
- * whose "raw" arm is small and whose "jwk" arm needs the same JSON Web Key layer §31.6.4's jwk arm does (named
- * as a residual at hmac.h's `hmac_import_key`).
+ * whose "raw" arm is small and whose "jwk" arm stands on the same JSON Web Key layer §31.6.4's jwk arm does.
+ * THAT LAYER IS core/crypto/jwk.c AND THIS SENTENCE USED TO POINT AT A RESIDUAL INSTEAD — "named as a residual
+ * at hmac.h's `hmac_import_key`" — which was true when written, went stale the day that arm landed, and is
+ * kept in its own words because a pointer to a retired residual is the one stale claim nothing mechanical can
+ * see: the retirement note is written at the site that retired it, and nothing links back to a file that cited
+ * it by name. An Export Key jwk arm is a DIFFERENT direction over the same layer — it ENCODES where these
+ * DECODE — so what it inherits is the vocabulary and the base64url alphabet, not these functions.
  *
  * THIS PARAGRAPH USED TO GO ON "Every remaining algorithm behind them (AES, RSA, ECDSA/ECDH, X25519/Ed25519)
  * needs a field or bignum layer this engine does not have and cannot bind to, so they are a different and
@@ -57,14 +62,19 @@
  * THE LANDING ORDER, NUMBERED BY WHAT HAS A CONSUMER AND NOT BY WHAT DEPENDS ON WHAT. (1) §29.4.4 "Import
  * Key"'s "raw" arm with its §18.4.4 row, on the `importKey` that ALREADY EXISTS — it flips no feature detect by
  * construction, since the member is installed either way, and it mints the key every other AES entry point
- * takes. THAT ONE IS BUILT (core/crypto/aes_gcm_key.c) and its "jwk" arm is not: §29.4.4's step 2 holds three
- * sibling lists and only the `raw` one and the `Otherwise` are performed, so a JSON Web Key naming AES-GCM
- * reaches a DFAIL that names the eight sub-steps to build. The crash is where that is recorded, which is why
- * this list does not carry it as a member. (2) §29.4.1 "Encrypt" and §29.4.2 "Decrypt" as ONE landing: they share §29.3's AesGcmParams, the byte
+ * takes. THAT ONE IS BUILT WHOLE (core/crypto/aes_gcm_key.c): §29.4.4's step 2 holds three
+ * sibling lists and ALL THREE are performed. THIS SENTENCE USED TO SAY THE `jwk` ARM WAS NOT, and named the
+ * DFAIL it reached as the record of what to build. The crash and its next-diff clause are both gone, and this
+ * is rewritten rather than deleted because the clause was WRONG in a way worth one sentence: it described
+ * §29.4.4's `alg` sub-step as a three-way match of "A128GCM"/"A192GCM"/"A256GCM" against the length, where
+ * the standard's FOURTH clause is an Otherwise that throws and is the arm's only length test, and it called
+ * the `use` sub-step word for word §31.6.4's, where this chapter's value is "enc" and §31.6.4's is "sig" — so
+ * building to it would have admitted a key of any length AND refused the one `use` a real AES-GCM JSON Web Key
+ * carries. Both halves were checkable against the fetched document in one command, and neither was checked. (2) §29.4.1 "Encrypt" and §29.4.2 "Decrypt" as ONE landing: they share §29.3's AesGcmParams, the byte
  * copy and the whole §7.1/§7.2 walk, so splitting them is churn and not decomposition. (3) §29.4.3 "Generate
  * Key", which needs §10.1.1's stream reached from a SubtleCrypto — the residual below. (4) §29.4.5 "Export
  * Key" and §14.3.10 "The exportKey method", whose "jwk" arm stands on the same JSON Web Key layer §31.6.4's
- * does. A key that crosses IndexedDB additionally needs §13.5 "Serialization and deserialization steps", which
+ * and §29.4.4's do — core/crypto/jwk.c, which now exists, in the DECODING direction only. A key that crosses IndexedDB additionally needs §13.5 "Serialization and deserialization steps", which
  * is a separate subproblem and belongs to core/crypto/crypto_key.c.
  *
  * ADDING A ROW TO ONE OF THOSE REGISTRIES IS SAFE FOR A REASON WORTH NOT UNDOING. Each method's normalization
