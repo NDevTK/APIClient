@@ -84,15 +84,16 @@
  * resolving one needs, and leaves the resolution where the destination is — exactly as the quantization of a
  * colour is left there.
  *
- * A ZERO-WIDTH SIDE IS AN ANSWER AND A ZERO-WIDTH BOX IS NO MARK, AND THOSE ARE NOT THE SAME DECISION. CSS 2.1
- * §8.5.3 "Border style: 'border-top-style', 'border-right-style', 'border-bottom-style', 'border-left-style',
- * and 'border-style'" says of `none` that it is "No border; the computed border width is zero", so a zero
- * width is something the cascade COMPUTED and not something nobody derived. Because the mark is per BOX there
- * is no arm here that omits a side: the zero is stated positively beside its three siblings, and that is one
- * more thing the per-side design could not do — under it a zero side would have to be left out, and a
- * consumer could not tell a side that was omitted from a side nobody asked about. A box whose four widths are
- * ALL zero gets NO MARK AT ALL, by the same rule core/paint/box_paint.c already applies to an alpha of zero:
- * ink that changes no pixel is a mark nothing downstream could distinguish from its absence.
+ * A ZERO-WIDTH SIDE IS AN ANSWER AND A ZERO-WIDTH BOX IS NO MARK, AND THOSE ARE NOT THE SAME DECISION.
+ * CSS 2.1 §8.5.3 "Border style: 'border-top-style', 'border-right-style', 'border-bottom-style',
+ * 'border-left-style', and 'border-style'" says of `none` that it is "No border; the computed border width
+ * is zero", so a zero width is something the cascade COMPUTED and not something nobody derived. Because the
+ * mark is per BOX there is no arm here that omits a side: the zero is stated positively beside its three
+ * siblings, and that is one more thing the per-side design could not do — under it a zero side would have to
+ * be left out, and a consumer could not tell a side that was omitted from a side nobody asked about. A box
+ * whose four widths are ALL zero gets NO MARK AT ALL, by the same rule core/paint/box_paint.c already
+ * applies to an alpha of zero: ink that changes no pixel is a mark nothing downstream could distinguish from
+ * its absence.
  *
  * `none` AND `hidden` ARE BOTH IN THE VOCABULARY THOUGH NEITHER EVER PAINTS, because CSS 2.1 §8.5.3 keeps
  * them apart and says exactly why: `hidden` is "Same as 'none', except in terms of border conflict resolution
@@ -146,14 +147,15 @@
  * element", "border of element" — of which this vocabulary now has the first and the LAST and not the middle
  * one; its step 7.2 sub-list reaches "the text" and the three decoration lines over and under it; and its
  * step 7.1 reaches "the replaced content, atomically", which is a SURFACE rather than a mark.
- * WHAT THE NEXT DIFF BUILDS: the TEXT mark, and it is the one with a contract: core/layout/text_run.h and core/fonts/open_type_metrics.h produced
- * the advances that core/dom/element_view.h reports as geometry, so a text mark carries THOSE advances and a
- * rasterizer that re-measures is comparing two engines rather than painting one. The IMAGE mark is ONE gap and
- * not one per step, because what every image item of every step wants is the same operand: an `<image>` that
- * has become PIXELS. This engine's `<image>` road ends at a validity test — core/css/css_image.h answers
- * whether a component value matches css-images-3 §2 "Image Values: the <image> type" and deliberately keeps
- * the author's own bytes — so nothing anywhere turns a `<url>` into anything a surface could composite, and
- * the diff that lands the image mark is the one that makes such a thing exist.
+ * WHAT THE NEXT DIFF BUILDS: the TEXT mark, and it is the one with a contract: core/layout/text_run.h and
+ * core/fonts/open_type_metrics.h produced the advances that core/dom/element_view.h reports as geometry, so
+ * a text mark carries THOSE advances and a rasterizer that re-measures is comparing two engines rather than
+ * painting one. The IMAGE mark is ONE gap and not one per step, because what every image item of every step
+ * wants is the same operand: an `<image>` that has become PIXELS. This engine's `<image>` road ends at a
+ * validity test — core/css/css_image.h answers whether a component value matches
+ * css-images-3 §2 "Image Values: the <image> type" and deliberately keeps the author's own bytes — so
+ * nothing anywhere turns a `<url>` into anything a surface could composite, and the diff that lands the
+ * image mark is the one that makes such a thing exist.
  * HOW ITS ABSENCE WOULD SHOW: a painted document is flat areas of colour inside plain rules, with no text and
  * no images — every area at the position CSS 2.1 §E.2 puts it and nothing written inside any of them.
  * RETIREMENT: this record loses a clause as each kind lands, and goes when every mark CSS 2.1 §E.2's

@@ -296,9 +296,9 @@ static DisplayBorderStyle bp_border_style(lxb_dom_element_t *el, int side)
 
 /* CSS 2.1 §E.2's "border of element" — the THIRD item of its step 2 and step 4 block arms, and ONE mark for
  * the whole box. core/paint/display_list.h holds the argument for why it is one and not four.
- * THE RECTANGLE IS THE BORDER BOX, the same four numbers the background mark above takes, because CSS 2.1
- * §8.1 "Box dimensions"' border edge is the outer edge of both areas — the background covers "the content,
- * padding and border areas" and the border is drawn inward from that same edge. Taking it from
+ * THE RECTANGLE IS THE BORDER BOX, the same four numbers the background mark above takes, because
+ * CSS 2.1 §8.1 "Box dimensions"' border edge is the outer edge of both areas — the background covers "the
+ * content, padding and border areas" and the border is drawn inward from that same edge. Taking it from
  * `element_view_bounding_box_px` rather than assembling it here is the background mark's own reason: a second
  * derivation of one rectangle is a second answer free to disagree with what `getBoundingClientRect` reports.
  * THE WIDTHS COME FROM core/layout/used_value.h AND NOT FROM THE CASCADE, which is that entry's whole reason
