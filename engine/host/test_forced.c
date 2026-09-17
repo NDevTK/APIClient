@@ -41,6 +41,10 @@
 #include "core/paint/display_list.h"   /* CSS 2.1 §E.2 "Painting order"'s ink, whose ORDER is its whole
                                           statement — the half a fixture can hold to an answer with no
                                           document under it; see display_list_selftest */
+#include "core/paint/box_paint.h"   /* CSS 2.1 §E.2 "Painting order"'s ink for one stacking
+                                      context — the half that DOES need a document, and the one
+                                      document in this fixture that has a realm is `main`'s; see
+                                      box_paint_selftest */
 #include "core/frame/navigator.h"
 #include "core/frame/screen.h"
 #include "core/frame/viewport.h"
@@ -19638,6 +19642,124 @@ static void display_list_selftest(JSContext *ctx)
     printf("@PAINT canvas-mark kinds=%u\n", TF_DL_KINDS);
 }
 
+/* CORE/PAINT/BOX_PAINT.H'S ENTRY, GIVEN ITS FIRST CALLER — CSS 2.1 §E.2 "Painting order"'s walk run over a
+ * document that really has a realm, a navigable and therefore a viewport, and the two numbers that separate
+ * the two things a display list of zero marks can mean.
+ *
+ * WHY THIS IS OVER THE FIXTURE'S OWN ACTIVE DOCUMENT AND NOT OVER ONE THIS FUNCTION PARSES, which is the
+ * question that decides whether such a caller can exist here at all. The painter needs a realm on the
+ * ELEMENT'S document and not on the caller's, at two independent sites: core/dom/element_view.c's
+ * `ev_target_of_element` asserts `document_realm_of(node) != NULL` before it will answer any rectangle, and
+ * core/paint/box_paint.c's canvas region takes its extent through `document_active_realm_of`, which answers
+ * NULL for every document that is not its realm's active one. A scratch parse — the shape
+ * `tree_construction_write_selftest` above uses, a `dom_document_create` with no realm installed over it — has
+ * neither, so a walk over one either stops at CSS 2.1 §E.2's step 1 or aborts at the first box that has ink to
+ * lay. The one document in this fixture that has both is the one `main` installed a realm and a root navigable
+ * over, so that is the one the painter is asked about, and this is why the caller is a fixture row rather than
+ * something the ABI would have to grow an entry for.
+ *
+ * THE OFFER COUNT IS WHAT MAKES A ZERO-MARK ANSWER READABLE, which is core/paint/box_paint.h's own reason for
+ * making it a required out-parameter rather than a convenience: "the walk ran and every box it offered was
+ * transparent, or the walk never reached a box at all" are two states behind one empty list and they take
+ * opposite work. THE SENTINEL IS WHAT HOLDS THE ENTRY TO WRITING IT. `box_paint_stacking_context` sets
+ * `*offers` from a counter that starts at zero and rises by one per visit, so a value planted here that no
+ * walk of any document could produce turns "the number is plausible" into "the write happened" — and those
+ * are exactly the two readings an out-parameter nobody checks has.
+ *
+ * TWO IS A DERIVATION AND NOT AN OBSERVATION OF THIS DOCUMENT. `paint_order_walk` passes `pseudo` false, and
+ * core/paint/paint_order.c's walk then offers CSS 2.1 §E.2's step 1 for an element that is the document's root
+ * — which this one is, asked of the document — and its step 2 whenever `po_takes_step_2` holds, which is
+ * `!po_is_inline_level`. So the floor is a fact about the WALK for any document whose root is not inline-level,
+ * and the one thing that falsifies it is a document declaring `html { display: inline }`: none of this
+ * fixture's four does, and a peer who writes one reads this message rather than a bare number.
+ *
+ * THE LIST IS SEEDED BECAUSE box_paint.h SAYS IT IS APPENDED TO AND NOT REPLACED — "a caller composing several
+ * contexts into one surface keeps the order it composed them in" — and nothing else in this tree holds that
+ * sentence to an answer. THE SEED CARRIES AN ENVIRONMENT FACT so that the check reads in both directions at
+ * once: a list the entry had reset would lose the mark AND report `CSS_ENV_NONE`, and neither of those is
+ * distinguishable from a walk that laid no ink if only the count is read.
+ *
+ * NAMED RESIDUAL — NO MARK IS APPENDED THROUGH THIS CALLER, AND THE REASON IS THE DOCUMENT AND NOT THE INK.
+ * WHAT IS NOT COVERED: `display_list_append` is reached by none of core/paint/box_paint.c's three arms on this
+ * road. Every document this fixture parses is markup carrying no stylesheet and no `style` attribute, so
+ * CSS 2.1 §8.5.3's `Initial:` line makes every `border-*-style` `none` and therefore every used border width
+ * zero, and css-backgrounds-3 §2.2's makes every `background-color` `transparent`; `bp_canvas_background` and
+ * `bp_background_color` each take their own alpha-of-zero return and `bp_border` its all-four-widths-zero one.
+ * The walk is exercised WHOLE and the vocabulary is not — which is a narrower answer than the entry's, not a
+ * wrong one, and is why the row below prints the mark count rather than asserting it.
+ * WHAT THE NEXT DIFF BUILDS: a document this selftest OWNS, with a realm of its own installed over it — the
+ * `JS_NewContext` + `realm_install_intrinsics` + `tf_realm_install` sequence `tf_child_realm` above already
+ * performs — carrying a declared `background-color` and a declared `border` on its root element. That buys two
+ * things this road cannot: the three appends run, and the offer count becomes derivable from a document whose
+ * element set this file writes rather than a floor over one four probe families share.
+ * HOW ITS ABSENCE WOULD SHOW: the `@PAINT stacking-context` row's `marks` field reads 0 on every run of every
+ * document this host parses, while its `offers` field does not.
+ * RETIREMENT: this record goes when a mark laid by `box_paint_stacking_context` is asserted in this file. */
+static void box_paint_selftest(JSContext *ctx, lxb_html_document_t *dom)
+{
+    /* A VALUE THE ENTRY CANNOT PRODUCE — its counter starts at zero and rises by one per visit, so no walk of
+       any document reaches it and a survivor is the write not having happened. */
+    static const unsigned TF_BP_UNWRITTEN = 0xFFFFFFFFu;
+    DisplayList dl;
+    DisplayMark seed;
+    lxb_dom_element_t *root;
+    unsigned offers = TF_BP_UNWRITTEN;
+    bool ok;
+
+    root = lxb_dom_document_element(lxb_dom_interface_document(dom));
+    CHECK(root != NULL,
+          "the fixture's own active document has no root element for CSS 2.1 §E.2 \"Painting order\" to be "
+          "asked about. Every document this host parses is HTML markup and HTML §13.2.6 \"Tree construction\" "
+          "generates an `html` element for markup that names none, so a null here is the parse having built no "
+          "tree rather than a document shape this walk cannot handle");
+
+    display_list_init(&dl);
+    seed.kind = DISPLAY_MARK_FILL_RECT;
+    seed.rect[0] = css_px(7.0);
+    seed.rect[1] = css_px(0.0);
+    seed.rect[2] = css_px_env(CSS_ENV_ICB_WIDTH, ctx, 1280.0);
+    seed.rect[3] = css_px(1.0);
+    seed.color = CSS_COLOR_OPAQUE_BLACK;
+    display_list_append(&dl, &seed);
+
+    ok = box_paint_stacking_context(ctx, root, &dl, &offers);
+
+    CHECK(offers != TF_BP_UNWRITTEN,
+          "core/paint/box_paint.h's entry left its `offers` out-parameter unwritten. It is required rather "
+          "than optional precisely because a list of zero marks means two things a caller must tell apart — "
+          "the walk ran and every box it offered was transparent, or the walk reached no box at all — so an "
+          "entry that returns without writing it hands back an empty list and no way to read it");
+    CHECK(offers >= 2u,
+          "CSS 2.1 §E.2 \"Painting order\"'s walk offered fewer than TWO steps for a document's ROOT element. "
+          "core/paint/paint_order.c offers its step 1 for an element that is the document's root and its step "
+          "2 for one that is not inline-level, and `paint_order_walk` enters with `pseudo` false — so two is a "
+          "floor over the WALK and not a count of this document. The one thing that lowers it is a root whose "
+          "computed `display` is inline-level, which no document this fixture parses declares: if one now "
+          "does, this expectation is the thing to move and the walk is not");
+    CHECK(dl.n >= 1u && dl.v[0].kind == DISPLAY_MARK_FILL_RECT && dl.v[0].rect[0].px == 7.0 &&
+          (display_list_env(&dl) & CSS_ENV_BIT(CSS_ENV_ICB_WIDTH)) != 0,
+          "core/paint/box_paint.h's entry REPLACED the display list it was handed instead of appending to it. "
+          "Its own contract is that `out` \"is appended to rather than replaced, so a caller composing several "
+          "contexts into one surface keeps the order it composed them in\" — and a caller that lost its prefix "
+          "would compose two stacking contexts into a surface holding only the second, with CSS 2.1 §E.2's "
+          "sequence between them gone and nothing downstream able to see that it ever existed");
+    DCHECK(ok,
+           "CSS 2.1 §E.2's walk stopped short over the fixture's own active document. A false answer is the "
+           "painter meeting an operand it could not compute, and in a DEV build every road to one has its own "
+           "crash in front of it: core/css/css_computed_value.h's `css_used_color` owns the two a colour can "
+           "produce, and core/paint/box_paint.c's canvas region answers false only for a document no navigable "
+           "presents — which this one is not, because `main` installed a realm and a root navigable over it "
+           "before this call. So this is reachable in a release build, where those crashes are compiled out "
+           "and a false answer is correct, and unreachable here");
+
+    /* THE WITNESS, ON STDOUT THE BUILD LOG CAPTURES rather than on a console the renderer does not tee. Both
+       numbers are plain C counters this file planted or the entry incremented, so neither can become concolic
+       and silently never be written — which is the one way a witness composed from something the engine
+       derived about a page fails exactly when the engine is working. `marks` excludes the seed. */
+    printf("@PAINT stacking-context ok=%d offers=%u marks=%zu\n", ok ? 1 : 0, offers, dl.n - 1u);
+    display_list_free(&dl);
+}
+
 static void message_source_selftest(void)
 {
     const char *kind = NULL, *enc;
@@ -21014,6 +21136,11 @@ int main(int argc, char **argv) {
        can hold to an answer with no document under it. It needs only a realm, to NAME an environment fact on a
        length; see the function for why the painter beside it is not exercised here. */
     display_list_selftest(ctx);
+    /* AND core/paint/box_paint.h's entry beside it, which is the half that NEEDS a document — a
+       realm on the ELEMENT's own document, a navigable presenting it and therefore a viewport. This
+       host installed all three over `dom` above, which is why the painter has a caller here and had
+       none anywhere; see the function for what its two numbers separate and what they do not reach. */
+    box_paint_selftest(ctx, dom);
     /* AFTER the platform init above, because the two rows it checks are declared by window_message_init. */
     message_source_selftest();   /* §9.3.3's sources, and the unforgeable-origin rule that decides their findings */
     /* AT THE BASELINE, where no flow has narrowed anything — the pins it writes are cleared after each one,
