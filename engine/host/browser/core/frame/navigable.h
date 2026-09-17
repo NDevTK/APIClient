@@ -454,10 +454,11 @@ int navigable_realm_peak(void);
  * corpus this small: flows park in PARTICULAR realms, so holders that were flows would make per-realm counts
  * DIVERGE and GROW — `min == max` forbids the first, a constant across samples forbids the second. It is not
  * the single edge either: it is some thousands. WHERE THEY WERE TAKEN IS NOW MEASURED, WHICH RETIRES THE
- * READING THIS PARAGRAPH USED TO PRESERVE — "all taken at realm CONSTRUCTION and none accumulated by
- * execution", the thing anyone re-derives from `min == max` and the thing no total can refute, since a realm
- * that runs a script accumulates a reference for as long as its bytecode lives and two realms that took the
- * SAME number produce the identity either way. Its stated retirement was a run showing a COMPILE origin at a
+ * READING THIS PARAGRAPH USED TO PRESERVE —
+ * `all taken at realm CONSTRUCTION and none accumulated by execution`, the thing anyone re-derives from
+ * `min == max` and the thing no total can refute, since a realm that runs a script accumulates a reference
+ * for as long as its bytecode lives and two realms that took the SAME number produce the identity either
+ * way. Its stated retirement was a run showing a COMPILE origin at a
  * nonzero count, and realm_reclaim_probe.html beside this header is one: three realms holding the initial
  * about:blank and a fourth that ran one function read `js_create_function_post` as `[0,2,2]` — zero across
  * the plain realms, two on the scripted one — beside `JS_NewCFunction3` at 3868 per realm. So execution DOES
@@ -483,6 +484,37 @@ int navigable_realm_peak(void);
  * JS_DupContext's callers already are. HOW ITS ABSENCE SHOWS: a reader running the probe can state that the
  * collector ran and left the realm standing, and cannot name one holder — every row sums to the realm's own
  * graph and the census reconciles exactly, so there is nothing in the output to point a repair at.
+ * AND THE ELIMINATION ABOVE DOES NOT HOLD, BECAUSE THE CONTROL THAT MADE IT ARMS BEFORE THE RELEASE IT IS
+ * READ AGAINST. It is rewritten rather than deleted because it is what anyone re-derives from the probe's
+ * output, and because its CONCLUSION may yet survive — what is refuted is the EVIDENCE, which is the half a
+ * reader inherits. The probe takes its collector control inside the SAME SYNCHRONOUS SCRIPT as its
+ * `f.remove()` calls, and a removal's document half is a QUEUED TASK: HTML §7.3.1.6 "Navigable destruction"
+ * step 5 ("Destroy a document and its descendants given navigable's active document") is reached through
+ * core/frame/document_lifecycle.c's descend job and then its self job, and at that line neither has run. Every
+ * child's Window is therefore still held by its own navigable's record, exactly as it should be, and the
+ * mark-sweep that WeakRef witnesses CANNOT free a child realm however correct the reclamation is. The removal
+ * it witnesses is step 3's SLOT CLEAR, never HTML §7.5.10 "Destroying documents" step 9's RELEASE.
+ * SO THE COLLECTOR IS NOT ELIMINATED, AND IT IS THE CHEAPER CANDIDATE. A realm is held by a CYCLE — the list
+ * note in navigable.c names it, record->proxy->Window->function objects->realm — so refcounting alone can never
+ * free one and ONLY a mark-sweep can. The probe forces exactly one and forces it BEFORE the release, and the
+ * pressure that forced it leaves its own array live, so js_trigger_gc's bar is raised past anything the destroy
+ * jobs then allocate and no second collection runs before the census. A standing realm count is what that
+ * produces whether or not anything else is wrong. The probe now takes a SECOND control after the cascade has
+ * drained, which is what makes the two readings separable at all.
+ * AND THE TWO DOCUMENTS THAT PRODUCE THIS NUMBER DO NOT HAVE ONE ANSWER, which is why a single conclusion fits
+ * neither. The probe FORKS NOWHERE, so no delta holds anything and the ordering above is the whole of it.
+ * test_forced.c's `realm-reclaim` row runs under SESS_EXPLORE, and there a holder IS nameable: window_proxy.c's
+ * `PROXY_VALS` names `window` as an owned value of the record, so cow_capture_host_record DUPS the child's
+ * Window into the delta of every flow that reaches that proxy while the slot is still set — cow.c states the
+ * contract, "Each entry names a JSValue this capture will DUP and this delta will later FREE". A sibling arm
+ * parked before the removal therefore holds the Window, which is CORRECT (that arm is a timeline in which the
+ * frame still exists, and §NO BOUNDS never terminates it) and is invisible to every row this census prints,
+ * because these rows count references to the REALM. `made == peak` is then the EXPECTED steady state on a
+ * forking document until the frontier drains, and the `realm-reclaim` row reads it as a defect — which is a
+ * question about that row's session rather than about this file.
+ * RETIREMENT: this record goes when a run is quoted whose collection is known to have followed step 9 — the
+ * probe's late control RAN beside its realm counts — so which candidate stands is a measurement and not an
+ * argument.
  * WHO TOOK THEM IS ANSWERED BY navigable_realm_ref_sites BELOW — per ORIGIN, counted where the reference is
  * taken and never inferred from a total, so a repair has something to aim at and an edge REMOVED is
  * distinguishable from an edge never taken. AND THE CONSTANTS BELONG TO RUNS RATHER THAN TO COMMITS — those

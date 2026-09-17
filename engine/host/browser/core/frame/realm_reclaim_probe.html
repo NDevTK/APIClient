@@ -32,7 +32,10 @@
 
   READ WITH THE WORK COUNTERS. `_flows`, `_jobsRun` and `_unitsDone` sit on the same @EMIT line, and a run
   whose `_unitsDone` is near 1 never entered this document at all — a reach column is then a fact about the
-  scheduler's luck. Three consecutive runs on one artifact are byte-identical in every field below.
+  scheduler's luck. Three consecutive runs on one artifact were byte-identical in every field below —
+  measured BEFORE the late control in (5) existed, so it is a statement about a probe that forced its
+  only collection before the destroy cascade. Whether it still holds is one of the things the pair now
+  answers, and a reader who quotes it as a property of this document is quoting a run of a different one.
 -->
 <body>
 <div id="frames"></div>
@@ -89,17 +92,63 @@ const scripted = buildDropFrame(true);
 fetch("/api/realmprobe/plain/" + plain);
 fetch("/api/realmprobe/scripted/" + scripted);
 
-/* (3) THE PRESSURE THAT MAKES THE CONTROL ABOVE ARM. quickjs triggers a collection from js_trigger_gc when the
+/* (3) THE PRESSURE THAT MAKES A CONTROL ARM. quickjs triggers a collection from js_trigger_gc when the
    allocator's live size crosses a threshold it then raises to 1.5x — so the array is RETAINED rather than
    churned: a churn loop is freed by refcount before the bar ever moves, and a probe built that way asks for a
-   collection it never gets. Concrete operands throughout, so nothing forks and the frontier still drains. */
+   collection it never gets. Concrete operands throughout, so nothing forks and the frontier still drains.
+   IT IS CALLED TWICE AND THE SECOND CALL IS THE POINT — see (5). Each call has to cross a bar the PREVIOUS
+   collection raised to 1.5x of whatever stayed live, and the first call's array is most of that, so the second
+   grows it severalfold rather than by one more block of the same size. A pressure that fails to collect renders
+   identically to a collection that declined to free anything, which is the one reading this probe must not
+   produce twice. */
 const retain = [];
-for (let i = 0; i < 30000; i++) retain.push({ i: i, pad: "pad" + i });
-fetch("/api/realmprobe/grew/" + retain.length);
+function pressure(target) {
+  while (retain.length < target) retain.push({ i: retain.length, pad: "pad" + retain.length });
+  return retain.length;
+}
+fetch("/api/realmprobe/grew/" + pressure(30000));
 
-/* (4) THE CONTROL'S ANSWER, LAST, SO IT IS READ AFTER THE PRESSURE. `NO-WEAKREF-probe-unarmed` is a POSITIVE
-   statement that this build could not run the control — never a silence that reads like a negative. */
-fetch("/api/realmprobe/collector/" + (cycle === null ? "NO-WEAKREF-probe-unarmed"
+/* (4) THE EARLY CONTROL'S ANSWER. `NO-WEAKREF-probe-unarmed` is a POSITIVE statement that this build could not
+   run the control — never a silence that reads like a negative.
+   WHAT IT ESTABLISHES IS THAT A MARK-SWEEP RUNS AT ALL, AND THAT IS ALL IT MAY BE READ FOR. It is taken inside
+   the same synchronous script as the `f.remove()` calls above, and a removal's DOCUMENT half is a QUEUED TASK:
+   HTML §7.3.1.6 "Navigable destruction" step 5 ("Destroy a document and its descendants given navigable's
+   active document") is reached through core/frame/document_lifecycle.c's descend job and then its self job,
+   and at this line neither has run. Every child's Window is therefore still held by its own navigable's record,
+   exactly as it should be, and a collection HERE cannot free a child realm however correct the reclamation is.
+   So reading a standing realm count beside this answer as
+   `a mark-sweep declined to free a realm whose frame was removed` is this control read for a proposition it
+   does not address: the removal it witnesses is step 3's SLOT CLEAR and never §7.5.10 step 9's RELEASE. */
+fetch("/api/realmprobe/collector-early/" + (cycle === null ? "NO-WEAKREF-probe-unarmed"
       : cycle.deref() === undefined ? "RAN-cycle-freed" : "DID-NOT-RUN-cycle-intact"));
+
+/* (5) THE CONTROL THAT ARMS ON THE QUESTION THIS PROBE EXISTS FOR — a collection AFTER the destroy cascade.
+   ONE `setTimeout(…, 0)` IS SUFFICIENT AND NOTHING HAS TO BE NESTED, which is a property of this engine and
+   not of the standard. core/timing/timer.c queues no timer task in advance: the driver asks for a due one only
+   "when it has nothing else to run", and everything
+   "already due (a queued task, a pending microtask, a reply that has ARRIVED) is by construction ahead of it".
+   The destroy cascade is two queued task hops (the descend job, then the self job that runs
+   destroy-a-document), so both are ahead of this callback by that rule and a probe that chained N timeouts
+   would be counting hops it does not have to count.
+   THE CYCLE IS MINTED INSIDE THE CALLBACK, so what it witnesses is a mark-sweep that ran AFTER step 9 released
+   the child Windows — the one moment at which a child realm is collectable at all, and the one no earlier
+   reading can speak for. The `_heap` census is composed after this, so the realm counts a reader quotes are
+   taken downstream of a post-release collection rather than upstream of one.
+   WHAT THE PAIR DISCRIMINATES, WHICH NEITHER HALF CAN ALONE: early RAN with late RAN and `childRealms` still
+   equal to `childRealmsMade` says a collection ran after the release and left the realm standing, so something
+   still holds it and navigable.h's named residual is the next thing to build. Early RAN with late
+   DID-NOT-RUN says only that this probe failed to force a second collection, and the realm counts say nothing
+   whatever — which is the state the single control used to report as a finding. */
+setTimeout(function () {
+  let late = null;
+  (function () {
+    const a = {}, b = {};
+    a.b = b; b.a = a;
+    if (typeof WeakRef === "function") late = new WeakRef(a);
+  })();
+  fetch("/api/realmprobe/grew-late/" + pressure(150000));
+  fetch("/api/realmprobe/collector-late/" + (late === null ? "NO-WEAKREF-probe-unarmed"
+        : late.deref() === undefined ? "RAN-cycle-freed" : "DID-NOT-RUN-cycle-intact"));
+}, 0);
 </script>
 </body>
