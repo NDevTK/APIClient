@@ -315,7 +315,17 @@ const wfqLive = (() => {
 })();
 /* ABSENT STAYS ABSENT. An artifact older than a given row omits it, and `|| 0` would turn "this build does
    not publish that row" into "the engine measured zero" — the defaulted-field defect, in the instrument. */
-const wfqRow = (k) => (wfqLive && typeof wfqLive.w[k] === 'number' ? wfqLive.w[k] : null);
+/* WHAT THIS ROW ASKED THE CENSUS FOR, RECORDED BY THE ASK ITSELF AND NEVER BY A LIST BESIDE IT. Every pick
+   below adds its key here, so the set of census rows this file consumes IS the act of consuming them and
+   there is nothing to keep in step; `unaskedRelatives` at the foot reads it against the keys the engine
+   actually published on the objects this row was taken from.
+   IT IS A CENSUS OF THE QUESTION AND NOT OF THE ANSWER, which is why `wfqRow` records before it tests. A row
+   this file asks for that an older artifact does not carry is still ASKED — that is a fact about this file —
+   and recording at the answer would make the set shrink against exactly the artifacts whose gaps it exists
+   to describe (CLAUDE.md's rule that an invariant over a gated operation censuses the ASK, never the
+   outcome, or it re-implements the gate's own legitimate refusals as absences). */
+const taken = new Set();
+const wfqRow = (k) => (taken.add(k), wfqLive && typeof wfqLive.w[k] === 'number' ? wfqLive.w[k] : null);
 /* THE POPULATION `flow_step`'s LADDER CANNOT REACH AT ALL, WHICH THIS FILE HAS NEVER CARRIED AND WHICH NO
    ROW ABOVE CAN BE DERIVED INTO. Running a queued task, host-blocking, the lifecycle events, resuming a
    parked orphan drive, seeding an orphan, a rendering opportunity, a due timer, an idle period, a host-owed
@@ -390,6 +400,9 @@ const frontierPrograms = (() => {
   }
   const pc = c.programCursors;
   if (pc && typeof pc === 'object' && !Array.isArray(pc)) out.programCursors = pc;
+  /* THE KEYS THIS OBJECT ENDED UP WITH ARE WHAT IT TOOK, so the derived partition above registers itself
+     without being named twice. `from` is this file's own index and not a census row, so it is added after. */
+  for (const k of Object.keys(out)) taken.add(k);
   out.from = coldLive.i;
   return out;
 })();
@@ -494,6 +507,7 @@ const row = {
      ABSENT STAYS ABSENT: an artifact predating the histogram omits it, and a `{}` would read as an engine
      that ran no steps. */
   stepUnitRuns: (() => {
+    taken.add('stepUnitRuns');
     if (!counted.length) return null;
     const c = counted[counted.length - 1].cold;
     if (!c || typeof c !== 'object' || Array.isArray(c)) return null;
@@ -501,6 +515,7 @@ const row = {
     return (h && typeof h === 'object' && !Array.isArray(h)) ? h : null;
   })(),
   steps: (() => {
+    taken.add('steps');
     if (!counted.length) return null;
     const c = counted[counted.length - 1].cold;
     if (!c || typeof c !== 'object' || Array.isArray(c)) return null;
@@ -645,6 +660,57 @@ const row = {
      counters came out of. `pass` is echoed beside it so a census file alone says how its rows were grouped. */
   pass, logFile: LOG_NAME,
 };
+/* WHAT THE ENGINE PUBLISHED BESIDE A ROW THIS FILE TOOK, AND THIS FILE DID NOT TAKE. Seven times now this
+   file has been the consumer that never asked for the field written to answer its own ambiguity, and every
+   one of those was repaired AT ITS OWN SITE -- seven corrected predicates and nothing anywhere that makes
+   the eighth loud. CLAUDE.md names the diff to prefer when a fix keeps recurring: the MISSING INVARIANT
+   rather than the rewritten predicate, because one check covers every future spelling of the question.
+   THE POPULATION IS NOT "EVERY ROW THIS FILE DROPS", WHICH WAS MEASURED AND REFUSED. The four censuses
+   result.c composes carry 211 rows and this row takes 17 of them; accusing the other 194 is a finding
+   against 92% of the population, and a verdict red on every run is furniture that buries the next real
+   thing under it. What every one of the
+   seven had instead is a SHAPE: the engine published a row whose name EXTENDS one this file already carried
+   -- a total whose parts, a gauge whose split, a count whose partition -- so the ambiguity and its answer sat
+   on one relayed object under two names and only one was read.
+   BOTH SIDES ARE DERIVED AND NEITHER IS TYPED HERE. The available set is `Object.keys` of the census objects
+   this row was actually taken from -- bridge.js relays `_cold` and `_wfq` WHOLE, so at this line every key
+   the engine published is in hand -- and the taken set is the picks' own record. A hand-kept list of expected
+   names would be the eighth copy of the fact that has now drifted seven times.
+   AND IT IS DECIDED AT RUNTIME BECAUSE NO STATIC SCAN OF THIS FILE CAN DECIDE IT, MEASURED IN BOTH
+   DIRECTIONS. A name-grep over this file reports `finished` and `sold` as read when all three occurrences are
+   PROSE, and reports `outOfProgramsUnrun` as unread when the block above derives it by prefix and spells it
+   nowhere. This tree's own two conventions guarantee both errors -- decisions are recorded in prose at the
+   site, and consumers derive their row set rather than hand-listing it -- so the false positive and the false
+   negative are not bad luck, they are what the conventions produce. engine/fieldgate.mjs is blind here for
+   the second reason and not the first: its WRITE-NO-READER question is existential over consumers, and
+   engine/build.mjs's `censusRowSet` derives all 84 `_cold` rows for the smoke, so every one of these names
+   HAS a reader and always did. The defect was never reachability; it is one named consumer's completeness,
+   which is a universal question about this file and not an existential one about the corpus.
+   IT IS A LIST AND NOT A COLOUR, AND IT DOES NOT STOP THE ROW. A census run that died because a lane added a
+   row to the engine would stop every lane for a documentation-shaped reason. `[]` is an observed empty
+   answer and `null` is no census to ask, which are different facts and neither is the other.
+   ARMED, AND THE CONTROL IS HISTORICAL RATHER THAN INVENTED: run against the carried set as it stood before
+   the `_wfq` split landed (`jobs` taken, the split not) it names `jobsReady jobsFramed jobsOwed`, and against
+   the set as it stood before the out-of-programs partition landed it names all four `outOfPrograms*` rows --
+   the exact rows of two of the seven, one of them CROSS-CENSUS, which is why the available set unions the
+   objects rather than asking each alone. It reads `[]` today, and that zero is worth having only because
+   those two runs made it speak.
+   RETIREMENT: this goes when a row cannot be taken except through a helper that registers it AND the engine
+   states its own total/part relations, at which point the extension test stops being a proxy for them. */
+row.unaskedRelatives = (() => {
+  const seen = [coldLive && coldLive.c, wfqLive && wfqLive.w]
+    .filter(o => o && typeof o === 'object' && !Array.isArray(o));
+  if (!seen.length) return null;
+  const available = new Set();
+  for (const o of seen) for (const k of Object.keys(o)) available.add(k);
+  const out = [];
+  for (const k of available) {
+    if (taken.has(k)) continue;
+    for (const t of taken)
+      if (k !== t && k.startsWith(t) && /^[A-Z]/.test(k.slice(t.length))) { out.push(k + ' extends ' + t); break; }
+  }
+  return out.sort();
+})();
 try { writeFileSync(new URL(LOG_NAME, OUT), j); } catch (e) { row.logWriteErr = String(e.message); }
 console.log('ROW ' + JSON.stringify(row));
 await b.disconnect();
