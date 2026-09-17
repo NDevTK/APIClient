@@ -361,7 +361,7 @@ static void pending_park_request(JSContext *ctx, JSValue e, const FetchRequest *
        THE GRADE IS THE PARK'S OWN AND IS READ RATHER THAN RECOMPUTED. `engine_prov_of_running_path` is what
        the neighbouring recorders call and it is the WRONG answer here twice over: solver/engine.h states in
        its own words that it can never answer `observed`, and `observed`'s first conjunct is HTML §4.12.1.1
-       "Processing model"'s parser-inserted flag — which is exactly what a document's own markup `<script src>`
+       "The script element"'s `parser document` — which is exactly what a document's own markup `<script src>`
        has and what this
        register already composed one line before `pending_push` returned. Asking a second time would be two
        computations of one fact, free to disagree; reading PEND_PROV cannot. WHAT THAT ONE COMPUTATION IS
@@ -530,7 +530,8 @@ void engine_pending_fetch_url(JSContext *ctx, JSValueConst resolve, JSValueConst
                       "above this line: the callers that HAVE a flow are script and enqueued jobs, and the "
                       "caller that does not is the pre-boot baseline tree walk performing a step HTML defines "
                       "over tree construction. Issue it from the boot flow, not from the walk");
-    e = pending_push(&f->pending, FLOW_PENDING_RESOLVE, flow_path_forced(f), flow_path_pinned(f));
+    e = pending_push(&f->pending, FLOW_PENDING_RESOLVE, flow_path_forced(f), flow_path_pinned(f),
+                     /*parser_inserted*/0);   /* a `fetch()` or an XHR — page code composed it */
     pending_set(e, PEND_RESOLVE, JS_DupValue(ctx, resolve));
     pending_set(e, PEND_VALUE, JS_DupValue(ctx, value));
     /* AND WHICH DOCUMENT ASKED — the same sentence the `<script src>` park one entry down already makes, and
@@ -595,7 +596,8 @@ void engine_pending_module_url(JSContext *ctx, JSValueConst resolve, JSValueCons
        request is created with `mode is "cors"` outright — so this is the module arm and never the element's. */
     req.mode = script_request_mode(SCRIPT_TYPE_MODULE, flow_dyn_el(f));
     DCHECK(url != NULL && *url, "a dynamic import parked with no module URL for the host to fetch");
-    e = pending_push(&f->pending, FLOW_PENDING_MODULE, flow_path_forced(f), flow_path_pinned(f));
+    e = pending_push(&f->pending, FLOW_PENDING_MODULE, flow_path_forced(f), flow_path_pinned(f),
+                     /*parser_inserted*/0);   /* a dynamic `import()` — §16.2.1.8 is reached by RUNNING code */
     pending_set(e, PEND_RESOLVE, JS_DupValue(ctx, resolve));
     /* AND THE HALF THE LOAD'S FAILURE IS OWED FROM, which this park did not take and the caller therefore
        freed unused. A load has two outcomes and this is the only park whose failure is a REJECTION rather
@@ -668,7 +670,10 @@ void engine_pending_resource_url(JSContext *ctx, JSValueConst deliver, const Fet
            "a browser algorithm's subresource fetch stated a DESTINATION that is not one Fetch §2.2.5 "
            "\"Requests\" enumerates — run Fetch §2.2.7 \"Miscellaneous\"' translate a potential destination "
            "over the `as` keyword before stating it, as HTML §4.6.8.20's step 3 does");
-    e = pending_push(&f->pending, FLOW_PENDING_RESOURCE, flow_path_forced(f), flow_path_pinned(f));
+    /* A BROWSER ALGORITHM'S SUBRESOURCE, SO NO `script` ELEMENT AND NOTHING FOR HTML §4.12.1.1
+       "Processing model" TO HAVE GIVEN A `parser document` TO. */
+    e = pending_push(&f->pending, FLOW_PENDING_RESOURCE, flow_path_forced(f), flow_path_pinned(f),
+                     /*parser_inserted*/0);
     pending_set(e, PEND_RESOLVE, JS_DupValue(ctx, deliver));
     /* AND WHICH DOCUMENT ASKED — the same sentence the parks above make, and for the same reason:
        `PEND_DOC` defaults to 0, which is a real document id, so a delivery reading an unset field gets a
@@ -698,7 +703,8 @@ void engine_pending_resource_url(JSContext *ctx, JSValueConst deliver, const Fet
    this the element is gone by the time the reply is a program — and HTML §4.12.1.1 "Processing model"'s
    "execute the script element" is a switch on EL whose classic arm sets §3.1.7's `currentScript` to it. It
    crosses as the node's WRAPPER (solver/pending.h's `scriptEl`), because this record is made of JS values. */
-void engine_pending_script_url(JSContext *ctx, const char *url, ScriptType stype, lxb_dom_element_t *el) {
+void engine_pending_script_url(JSContext *ctx, const char *url, ScriptType stype, lxb_dom_element_t *el,
+                               int parser_inserted) {
     Flow *f = flow_running();
     /* §8.1.4.2's fetch, whose decode and whose evaluation entry the TYPE decides — and whose method is Fetch
        §2.2.5 Requests' `GET`.
@@ -734,7 +740,8 @@ void engine_pending_script_url(JSContext *ctx, const char *url, ScriptType stype
        script takes §2.5.1's mode off the element and a `<script type=module src>` is `cors` flatly — see
        script_request_mode for why §2.5.4's note does not answer the classic arm. */
     req.mode = script_request_mode(stype, el);
-    e = pending_push(&f->pending, FLOW_PENDING_SCRIPT, flow_path_forced(f), flow_path_pinned(f));
+    e = pending_push(&f->pending, FLOW_PENDING_SCRIPT, flow_path_forced(f), flow_path_pinned(f),
+                     parser_inserted);
     pending_set_int(e, PEND_SCRIPT_TYPE, (int)stype);
     /* AND WHICH DOCUMENT'S PROGRAM THE REPLY WILL BE. The element was inserted into a tree, and the realm this
        chokepoint was entered with is that tree's document — the reply is compiled there rather than in
@@ -1158,7 +1165,9 @@ uint32_t engine_host_request(JSContext *ctx, const char *op) {
     DCHECK(f != NULL, "a synchronous host request was issued outside a flow — there would be nothing to "
                       "suspend and nothing to resume with the answer");
     DCHECK(op != NULL && *op, "a synchronous host request carried no text for the host to route on");
-    e = pending_push(&f->pending, FLOW_PENDING_HOSTREQ, flow_path_forced(f), flow_path_pinned(f));
+    /* A SYNCHRONOUS CROSS-AGENT READ NAMES A REQUEST ID AND NO MARKUP AT ALL. */
+    e = pending_push(&f->pending, FLOW_PENDING_HOSTREQ, flow_path_forced(f), flow_path_pinned(f),
+                     /*parser_inserted*/0);
     pending_set(e, PEND_OP, JS_NewString(ctx, op));
     id = mint_req();   /* the ASK half of the rate above — counted at the mint, which is the only place it is */
     pending_set_int(e, PEND_REQ, id);
@@ -3407,9 +3416,16 @@ const char *engine_pending_fetches(void) {
                and `pending_park_request` writes this field unconditionally, so a NULL here is a park that
                never took an address — which the `skip` below has already dropped on `!u`. */
             const char *c = JS_IsString(cv) ? JS_ToCStringLen(pending_ctx(), &cl, cv) : NULL;
-            /* HTML §4.12.1's PARSER-INSERTED FLAG, read off the kind the park already carries — see
-               engine.h's tokens for why the engine states it and does not act on it. */
-            const char *ini = pending_get_int(pe, PEND_KIND) == FLOW_PENDING_DOCSCRIPT
+            /* HTML §4.12.1.1's `parser document`, READ OFF THE RECORD THE PARK STAMPED IT ON — see
+               engine.h's tokens for why the engine states it and does not act on it. It used to be derived
+               HERE from the park's KIND, which is a fact about WHICH QUEUE the element took: §4.12.1.1
+               "Processing model" puts a NON-parser-inserted element in the in-order list whenever the async
+               IDL setter has cleared `force async` without adding the attribute, and puts a PARSER-inserted
+               `<script async src>` in the ASAP set, so the kind answered this question wrongly in both
+               directions. The pusher states the flag now (pending.h's `parserIns`) and this reads it, which is
+               also what keeps this token and the provenance beside it from being two derivations of one fact
+               that are free to disagree. */
+            const char *ini = pending_get_int(pe, PEND_PARSER_INS)
                               ? PENDING_INITIATOR_PARSER : PENDING_INITIATOR_SCRIPT;
             /* …AND WHAT THE REQUEST IS EVIDENCE OF, read off the record and never recomputed from the flow.
                The park stamped it (pending.h's PROV field) at the instant the request was built, which is the
@@ -4250,11 +4266,12 @@ static void engine_queue(uint32_t doc, const char *body, size_t body_n, DynKind 
                          const char *url, TaskSource src, DynPos pos);
 /* …and the same entry for a row an ELEMENT put there — see engine_queue_el below. */
 static void engine_queue_el(uint32_t doc, const char *body, size_t body_n, DynKind kind, ScriptType stype,
-                            const char *url, TaskSource src, DynPos pos, lxb_dom_element_t *el);
+                            const char *url, TaskSource src, DynPos pos, lxb_dom_element_t *el,
+                            int parser_inserted);
 /* …and the one a caller reaches when it ALREADY holds the decoded text as a shared body, which is every reply
    that arrives as a program: the delivery below adopts the decode and hands it over without a second copy. */
 static void engine_queue_el_body(uint32_t doc, DynBody *body, DynKind kind, ScriptType stype, const char *url,
-                                 TaskSource src, DynPos pos, lxb_dom_element_t *el);
+                                 TaskSource src, DynPos pos, lxb_dom_element_t *el, int parser_inserted);
 
 /* ONE ANSWERED ENTRY, THEN RETURN — and the loop below is the SEARCH for it, not a drain.
  *
@@ -4533,7 +4550,8 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
                     CHECK(u != NULL, "engine: OOM reading a failed injected script's address off its park");
                     engine_queue_el((uint32_t)pending_get_int(p, PEND_DOC), u, strlen(u), DYN_SCRIPT_FAILED,
                                     (ScriptType)pending_get_int(p, PEND_SCRIPT_TYPE), NULL,
-                                    TASK_SOURCE_NETWORKING, DYN_POS_APPEND, el);
+                                    TASK_SOURCE_NETWORKING, DYN_POS_APPEND, el,
+                                    /*parser_inserted*/0);   /* the fetch already happened and FAILED */
                     JS_FreeCString(ctx, u);
                     JS_FreeValue(ctx, uv);
                     JS_FreeValue(ctx, ev);
@@ -4676,7 +4694,7 @@ static void flow_deliver_one_reply(JSContext *ctx, Flow *f) {
                    occurs in a non-blocking fashion then the processing of the resource once some or all of the
                    resource is available is performed by a task." */
                 engine_queue_el_body(doc, b, DYN_PAGE_SCRIPT, st, u, TASK_SOURCE_NETWORKING, DYN_POS_APPEND,
-                                     lxb_dom_interface_element(en));
+                                     lxb_dom_interface_element(en), /*parser_inserted*/0);   /* the reply IS here */
                 dyn_body_unref(b);
                 JS_FreeValue(ctx, ev);
             }
@@ -6605,7 +6623,7 @@ static long g_prog_queued_cand;
    seeded off that flow builds its copy of the request from the WRITING timeline's attribute, so the script is
    admitted or refused on a value the candidate's own baseline run never had, and the verdict is about a
    document no timeline ever held. */
-static void engine_pending_docscript(Flow *f, int at) {
+static void engine_pending_docscript(Flow *f, int at, int parser_inserted) {
     /* HTML §8.1.4.2 Fetching scripts, "fetch a classic script", creates a potential-CORS request and never sets
        a method, so it is Fetch §2.2.5 Requests' `GET`. STATED, because the seam is keyed on the pair and a
        park that does not say is a park the join cannot list.
@@ -6650,7 +6668,8 @@ static void engine_pending_docscript(Flow *f, int at) {
        script … creates a potential-CORS request". A document's own `<script src>` with no `crossorigin`
        attribute is therefore `no-cors`, which is what makes an integrity policy refuse it. */
     req.mode = script_request_mode(SCRIPT_TYPE_CLASSIC, f->dyn_el[at]);
-    e = pending_push(&f->pending, FLOW_PENDING_DOCSCRIPT, flow_path_forced(f), flow_path_pinned(f));
+    e = pending_push(&f->pending, FLOW_PENDING_DOCSCRIPT, flow_path_forced(f), flow_path_pinned(f),
+                     parser_inserted);
     /* WHICH ROW THIS PARK IS FOR, BY NAME — it is the row's `dyn_id` rather than its position because a
        position is a fact about the row only while the set is fixed (solver/flow.h), and this entry outlives
        both §4.12.1.1's "immediately execute the script element" interposition and §7.5.10's removal. */
@@ -6690,9 +6709,17 @@ static void engine_pending_docscript(Flow *f, int at) {
 /* `body` IS THE SHARED PROGRAM TEXT AND THIS ENTRY TAKES A REFERENCE ON IT — the caller keeps its own and
    releases it. That is what makes the row's cost O(1) at every seed and every fork: the bytes belong to the
    program, not to the timeline holding it (solver/dyn_body.h). */
+/* `parser_inserted` IS WHETHER `el` IS PARSER-INSERTED — HTML §4.12.1.1 "Processing
+   model"'s `parser document` being non-null — carried to the
+   ADDRESS PARK at the foot of this function — it is one of the two facts solver/pending.h's
+   `pending_prov_compose` grades the request on, and the park runs in THIS frame, so it is a parameter rather
+   than a tenth column of the row: a column would be written here and read one line later and never again.
+   IT IS THE CALLER'S TO STATE for `html_script_prepare`'s reason exactly — the party that inserted the element
+   is the only one that can answer, and core/html/html_script.h's slot is UNSTATED for a LOADED document's own
+   markup, which is precisely the population that IS parser-inserted. */
 static void engine_queue_into(Flow *f, uint32_t doc, DynBody *body, DynKind kind, ScriptType stype,
                               const char *url, char *token, TaskSource src, DynPos pos,
-                              lxb_dom_element_t *el) {
+                              lxb_dom_element_t *el, int parser_inserted) {
     int at;
     /* A PROGRAM QUEUED WITH NO FLOW IS A DROPPED PROGRAM, and it used to leave silently. There is no global
        queue to fall back to — the frontier IS the queue — so the caller is the one that has to name the flow
@@ -6897,6 +6924,17 @@ static void engine_queue_into(Flow *f, uint32_t doc, DynBody *body, DynKind kind
     f->dyn_n++;
     /* THE ASK, RAISED WHERE THE ROW EXISTS — see g_prog_queued_cand for why it is here and not at the entry
        that called, and why it is deliberately not comparable as an inequality against the start side. */
+    /* §4.12.1.1's FLAG IS CARRIED FOR THE FETCH A ROW OWES, AND AN ADDRESS ROW IS THE ONLY ROW THAT OWES ONE.
+       That is what makes `0` at every other entry a statement about the ROW rather than a claim about its
+       element: a row whose source text is already here asks nobody for it, so there is no request to grade and
+       nothing reads the flag. Asserted rather than described, so a kind that GROWS a fetch later crashes here
+       instead of grading it `derived` on a flag no caller was ever asked for. */
+    DCHECKF(!parser_inserted || kind == DYN_SCRIPT_SRC,
+            "a row of kind %d states that a parser inserted its element while owing no fetch — HTML "
+            "§4.12.1.1 \"Processing model\"'s `parser document` is "
+            "read only by the ADDRESS park at the foot of this function (solver/pending.h's "
+            "pending_prov_compose), so a caller setting it here has stated a fact nothing will ever read",
+            (int)kind);
     if (kind == DYN_CANDIDATE) g_prog_queued_cand++;
     /* AND §4.12.1.1 "Processing model" STEP 33 IS OWED HERE, WHICH IS THE ONE PLACE IT CAN BE OWED ONCE PER
        ELEMENT. A row holding an ADDRESS is an element whose `src` branch has just been entered, and that
@@ -6907,18 +6945,18 @@ static void engine_queue_into(Flow *f, uint32_t doc, DynBody *body, DynKind kind
        IT IS A ROUTE AND NOT A FALLBACK: the kind decides which one thing happens to this row, there is no
        second implementation to choose between, and a kind that grows an address later reaches this line by
        being that kind rather than by a caller remembering to ask. */
-    if (kind == DYN_SCRIPT_SRC) engine_pending_docscript(f, at);
+    if (kind == DYN_SCRIPT_SRC) engine_pending_docscript(f, at, parser_inserted);
 }
 
 /* THE ROW A CALLER HOLDS ALREADY-DECODED BYTES FOR. `body` is the shared text and this entry does NOT take it
    over: the caller keeps its reference and releases it, exactly as engine_queue_into's does, so a caller that
    queues one program into several places pays for the bytes once. */
 static void engine_queue_el_body(uint32_t doc, DynBody *body, DynKind kind, ScriptType stype, const char *url,
-                                 TaskSource src, DynPos pos, lxb_dom_element_t *el) {
+                                 TaskSource src, DynPos pos, lxb_dom_element_t *el, int parser_inserted) {
     Flow *f = flow_running();   /* the running flow owns the lazy chunk it loads */
     DCHECK(f != NULL, "a program was queued with no flow running — a program is a work item of the ONE "
                       "frontier and there is no member to give it to, so it would be dropped without a trace");
-    engine_queue_into(f, doc, body, kind, stype, url, NULL, src, pos, el);
+    engine_queue_into(f, doc, body, kind, stype, url, NULL, src, pos, el, parser_inserted);
 }
 
 /* …AND THE ROW A CALLER HOLDS AS BYTES IT HAS NOT SHARED — a `javascript:` URL, an @S candidate, a cross-agent
@@ -6931,14 +6969,15 @@ static void engine_queue_el_body(uint32_t doc, DynBody *body, DynKind kind, Scri
    impossible (it emits a U+FFFD instead), so each of them can hold one and each of them was being read to the
    first. */
 static void engine_queue_el(uint32_t doc, const char *body, size_t body_n, DynKind kind, ScriptType stype,
-                            const char *url, TaskSource src, DynPos pos, lxb_dom_element_t *el) {
+                            const char *url, TaskSource src, DynPos pos, lxb_dom_element_t *el,
+                            int parser_inserted) {
     DynBody *b;
 
     DCHECK(body != NULL, "a program was queued with no body — the caller has nothing to run and the queue "
                          "entry would be a slot the compile below dereferences");
     b = dyn_body_new(body, body_n);
     CHECK(b, "engine: OOM dynamic-script body");
-    engine_queue_el_body(doc, b, kind, stype, url, src, pos, el);
+    engine_queue_el_body(doc, b, kind, stype, url, src, pos, el, parser_inserted);
     dyn_body_unref(b);
 }
 
@@ -6950,7 +6989,10 @@ static void engine_queue_el(uint32_t doc, const char *body, size_t body_n, DynKi
    element cannot pass nothing by omission. */
 static void engine_queue(uint32_t doc, const char *body, size_t body_n, DynKind kind, ScriptType stype,
                          const char *url, TaskSource src, DynPos pos) {
-    engine_queue_el(doc, body, body_n, kind, stype, url, src, pos, NULL);
+    /* NO ELEMENT, SO NO PARSER INSERTED ONE — §4.12.1.1 gives the flag to a `script` element and this entry is
+       the one for a row no element put there (a `setTimeout` string, an @S candidate, a lazy chunk). It is a
+       positive statement about the row and not a default the reader fills in. */
+    engine_queue_el(doc, body, body_n, kind, stype, url, src, pos, NULL, /*parser_inserted*/0);
 }
 
 /* A DOCUMENT'S SCRIPT INVENTORY, SEEDED AS THE ROWS OF ONE FLOW'S SEQUENCE — the ONE thing that turns a
@@ -7022,8 +7064,10 @@ static void engine_seed_scripts(Flow *f, uint32_t doc, const RootScript *rows, i
            the tail is FIFO among tasks of that source, which is a different reason for the same position and
            the wrong one. */
         if (rows[i].body) {
+            /* NO FETCH IS OWED — this row's source text is in the table. */
             engine_queue_into(f, doc, rows[i].body, DYN_PAGE_SCRIPT, rows[i].type, rows[i].url,
-                              NULL, TASK_SOURCE_NOT_A_TASK, DYN_POS_APPEND, rows[i].el);
+                              NULL, TASK_SOURCE_NOT_A_TASK, DYN_POS_APPEND, rows[i].el,
+                              /*parser_inserted*/0);
         } else {
             /* AN ADDRESS IS THE ONE BODY WHOSE LENGTH IS ITS `strlen`, and this is where that is stated. It
                came out of script_src_absolute, which serializes a parsed URL record (URL §4.5 "URL
@@ -7035,8 +7079,25 @@ static void engine_seed_scripts(Flow *f, uint32_t doc, const RootScript *rows, i
                that depends on it. */
             DynBody *addr = dyn_body_new(rows[i].url, strlen(rows[i].url));
             CHECK(addr, "engine: OOM seeding an external script's address as its row's body");
+            /* AND WHETHER A PARSER INSERTED THE ELEMENT, FOR THE FETCH IT OWES, WHICH THIS TABLE STATES BY
+               HOLDING AN ELEMENT AT ALL. Every row here came out of `document_exec_scripts`' walk of a PARSED
+               document, so an element in this table was placed by that document's own parser — and the rows
+               with none are the host's SYNTHESIZED list (wpt_runner.c's prologue and epilogue), which is what
+               the `el` column's own contract says a few lines up. The two are the table's two populations and
+               the column is what separates them.
+               NAMED RESIDUAL — CORRECT AND NARROWER. WHAT IS NOT COVERED: a row whose element this table did
+               not get from a parser's walk. No such row exists today — both builders fill `el` from a
+               document's script inventory and the joined one asserts every row has one — so the reading is
+               exact, and it is an INFERENCE FROM THE TABLE'S CONTRACT rather than from the element itself.
+               WHAT THE NEXT DIFF BUILDS: a `parser_ins` column on RootScript, written by the two builders
+               from what the HOST said when it handed the inventory over, so the fact is stated where it is
+               known instead of read off the presence of a neighbour. HOW ITS ABSENCE WOULD SHOW: the day a
+               builder accepts an element for a row no parser produced, that row's program load is graded
+               `observed` — a request only this engine composes reported as one a real load makes, which is
+               the direction CLAUDE.md §@H forbids. */
             engine_queue_into(f, doc, addr, DYN_SCRIPT_SRC, rows[i].type, NULL, NULL,
-                              TASK_SOURCE_NOT_A_TASK, DYN_POS_APPEND, rows[i].el);
+                              TASK_SOURCE_NOT_A_TASK, DYN_POS_APPEND, rows[i].el,
+                              /*parser_inserted*/rows[i].el != NULL);
             dyn_body_unref(addr);
         }
     }
@@ -7154,8 +7215,10 @@ void engine_queue_element_script(uint32_t doc, const char *body, size_t body_n, 
     DCHECK(el != NULL, "a `<script>` element's program was queued with no element — this entry is the one an "
                        "ELEMENT reaches; the element-less entry is engine_queue_fetched_script, so a caller "
                        "here with nothing to pass is a caller at the wrong entry");
+    /* NO FETCH IS OWED, so §4.12.1.1's flag is not carried — this row's source text is already here. See
+       engine_queue_into, which asserts that only an ADDRESS row may carry one. */
     engine_queue_el(doc, body, body_n, DYN_PAGE_SCRIPT, stype, NULL, TASK_SOURCE_NOT_A_TASK,
-                    DYN_POS_APPEND, el);
+                    DYN_POS_APPEND, el, /*parser_inserted*/0);
 }
 
 /* …AND THE ONE SCRIPT SOURCE THAT IS NOT A TASK. HTML §4.12.1.1 "Processing model" ends "prepare the script
@@ -7173,8 +7236,9 @@ void engine_queue_script_immediate(uint32_t doc, const char *body, size_t body_n
     DCHECK(el != NULL, "an inline classic script was queued to run IMMEDIATELY with no element — §4.12.1.1 "
                        "reaches `immediately execute the script element` from `prepare the script element`, "
                        "whose whole subject is EL");
+    /* NO FETCH IS OWED — see engine_queue_element_script above. */
     engine_queue_el(doc, body, body_n, DYN_PAGE_SCRIPT, SCRIPT_TYPE_CLASSIC, NULL, TASK_SOURCE_NOT_A_TASK,
-                    DYN_POS_IMMEDIATE, el);
+                    DYN_POS_IMMEDIATE, el, /*parser_inserted*/0);
 }
 
 /* …AND ITS EXTERNAL SIBLING, which takes the same position with only an ADDRESS — see DYN_SCRIPT_SRC. The
@@ -7183,7 +7247,8 @@ void engine_queue_script_immediate(uint32_t doc, const char *body, size_t body_n
    APPEND, and that is §4.12.1's own answer rather than a default: this entry is the `list of scripts that will
    execute in order as soon as possible`, whose elements hold their places against one another, so a new one
    goes behind the ones already there. */
-void engine_queue_docscript_url(uint32_t doc, const char *url, ScriptType stype, lxb_dom_element_t *el) {
+void engine_queue_docscript_url(uint32_t doc, const char *url, ScriptType stype, lxb_dom_element_t *el,
+                                int parser_inserted) {
     /* THE ADDRESS IS THE ROW'S BODY, NOT ITS ADDRESS COLUMN — the row IS the URL until the reply replaces it
        with the source text, and flow_deliver_one_reply is what MOVES it into the address column at that moment.
        Writing both here would name one script two ways and engine_queue_into asserts against it. */
@@ -7196,7 +7261,7 @@ void engine_queue_docscript_url(uint32_t doc, const char *url, ScriptType stype,
        "C0 controls and all code points greater than U+007E" — which contains U+0000. flow_deliver_one_reply
        asserts the pair again at the read that turns this body back into a C string. */
     engine_queue_el(doc, url, strlen(url), DYN_SCRIPT_SRC, stype, NULL, TASK_SOURCE_NOT_A_TASK,
-                    DYN_POS_APPEND, el);
+                    DYN_POS_APPEND, el, parser_inserted);
 }
 
 /* AN @S CANDIDATE, queued as the program it would be if it fired. It is the same queue because it IS the same
@@ -7316,7 +7381,8 @@ static void flow_perform(JSContext *ctx, Flow *f)
            script element" is not the algorithm that runs it and the peer document's §3.1.7 `currentScript`
            stays null while it does — which is the truth about a document answering a cross-agent read. */
         engine_queue_into(f, doc, prog, DYN_CROSS_AGENT_OP, SCRIPT_TYPE_CLASSIC,
-                          NULL, own, TASK_SOURCE_NOT_A_TASK, DYN_POS_APPEND, NULL);
+                          NULL, own, TASK_SOURCE_NOT_A_TASK, DYN_POS_APPEND, NULL,
+                          /*parser_inserted*/0);   /* a peer's operation, and no element at all */
         dyn_body_unref(prog);
     }
     remote_op_free(op);

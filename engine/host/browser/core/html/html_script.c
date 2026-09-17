@@ -801,7 +801,7 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inse
     if (!JS_IsUndefined(t)) {
         /* AND IT IS A REQUEST RUNNING CODE BUILT, WHICH IS ASSERTED RATHER THAN ASSUMED. `observed` — the one
            grade `engine_prov_of_running_path` cannot answer — is "a real load of this document makes exactly
-           this request", and its first conjunct is §4.12.1's parser-inserted flag, which IS in hand here as a
+           this request", and its first conjunct is §4.12.1.1's `parser document`, which IS in hand here as a
            parameter. It is structurally never the answer on this arm: the taint shadow map holds an entry for
            (el, "src") only where a script ASSIGNED the attribute a concolic value (solver/attr_shadow.h), and
            a parser-inserted element's attributes come out of the tokenizer, never through that write. So the
@@ -862,7 +862,14 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inse
            order as soon as possible` is what `s.async = false` puts an element in, and §4.12.1's own steps for
            it are "if scripts[0] is not el, then abort" — the element holds its place against the others, so it
            takes a slot in the flow's sequence and the flow stops there until the reply fills it. */
-        if (sched == SCRIPT_SCHED_ASAP) engine_pending_script_url(ctx, u, st, el);
+        /* AND §4.12.1.1's `parser document` TRAVELS WITH EITHER DESTINATION, because the request each one
+           parks on is graded on it (solver/pending.h's `pending_prov_compose`) and this frame is the last one
+           that holds it: `parser_inserted` is this function's own parameter, stated by whichever caller
+           inserted the element, and the park runs in a later scheduler step. It is NOT the destination's to
+           infer — an element reaches the ASAP set with an `async` attribute whether a parser inserted it or
+           not, and reaches the ordered list below when the `async` IDL setter cleared `force async` on an
+           element no parser touched. */
+        if (sched == SCRIPT_SCHED_ASAP) engine_pending_script_url(ctx, u, st, el, parser_inserted);
         else {
             /* …AND THE THREE ORDERED DESTINATIONS ARE ONE DESTINATION HERE, WHICH IS A STATEMENT ABOUT THIS
                ENGINE'S ONE SEQUENCE AND NOT A COLLAPSE OF THREE SPEC STEPS INTO ONE. §4.12.1's `list of scripts
@@ -885,7 +892,7 @@ void html_script_prepare(JSContext *ctx, lxb_dom_element_t *el, bool parser_inse
                    "for one — the fifth is `immediately execute the script element`, which the standard "
                    "reaches only for what falls past \"if el's type is `classic` and el has a src attribute\", "
                    "so an element with one cannot be standing there");
-            engine_queue_docscript_url(document_doc(ctx), u, st, el);
+            engine_queue_docscript_url(document_doc(ctx), u, st, el, parser_inserted);
         }
         free(u);
         return;

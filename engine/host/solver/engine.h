@@ -175,7 +175,15 @@ void engine_queue_script_immediate(uint32_t doc, const char *body, size_t body_n
    "Processing model" step 33 fetches when the element is prepared and step 35 only decides where the result
    executes, so an entry queued here is on the wire from this moment while the position it holds is still
    §4.12.1's. solver/engine.c states the whole argument at the park it routes to. */
-void engine_queue_docscript_url(uint32_t doc, const char *url, ScriptType stype, lxb_dom_element_t *el);
+/* `parser_inserted` IS WHETHER `el` IS PARSER-INSERTED — HTML §4.12.1.1 "Processing
+   model"'s `parser document` being non-null — and it is a
+   PARAMETER for `html_script_prepare`'s reason exactly: the party that inserted the element is the only one
+   that can answer. It is carried to the park this entry routes to and is one of the two facts the request's
+   PROVENANCE is composed from (solver/pending.h's `pending_prov_compose`) — it is NOT re-derivable at that
+   park, because core/html/html_script.h's element slot is UNSTATED for a LOADED document's own markup, which
+   is precisely the population that IS parser-inserted. */
+void engine_queue_docscript_url(uint32_t doc, const char *url, ScriptType stype, lxb_dom_element_t *el,
+                                int parser_inserted);
 /* An @S CANDIDATE, queued as the program it would be if it fired. Same queue, one difference: it is ALLOWED not
    to compile, because most breakouts do not fit most sink contexts and a candidate that does not parse simply
    never fires. A page script that does not compile still asserts.
@@ -245,7 +253,12 @@ void engine_queue_javascript_url(uint32_t doc, const char *body, size_t body_n);
 /* `el` travels with the park for the same reason `stype` does, and the park is where it would OTHERWISE BE
    LOST: the flow leaves the insertion steps with the node in hand and comes back to a URL and a reply, so the
    element rides the register (solver/pending.h's `scriptEl`) and the drain puts it on the row. */
-void engine_pending_script_url(JSContext *ctx, const char *url, ScriptType stype, lxb_dom_element_t *el);
+/* `parser_inserted` travels for engine_queue_docscript_url's reason exactly, and this entry is why the flag
+   could never have been the park's KIND: an element reaches THIS door — §4.12.1.1's `set of scripts that will
+   execute as soon as possible` — whenever it has an `async` attribute, which a PARSER-inserted `<script async
+   src>` has, so one kind holds both answers. */
+void engine_pending_script_url(JSContext *ctx, const char *url, ScriptType stype, lxb_dom_element_t *el,
+                               int parser_inserted);
 /* THE DOCUMENT'S LOAD LIFECYCLE, owned by the browser layer and asked by the scheduler. Called once per stage
    per flow when that flow has run everything the document gave it: stage 0 fires DOMContentLoaded, stage 1
    fires load. Returns how many listener tasks it scheduled. Registered by the host that owns a Document; a
@@ -908,7 +921,7 @@ void engine_perform(JSContext *ctx, const char *token, const char *record);
 void engine_unload_document(uint32_t doc);
 
 /* WHO ASKED FOR THE REQUEST, AS A FACT ABOUT THE PARK AND NEVER AS A POLICY. HTML §4.12.1 "The script element"
- * gives every `script` element a PARSER-INSERTED flag and a parser document: a parser-inserted script is named
+ * gives every `script` element a `parser document`: a parser-inserted script is named
  * by the BYTES THE ZONE ITSELF FETCHED; every other park is made by RUNNING CODE.
  * IT IS NOT THE PROVENANCE AND IT NEVER WAS — it is ONE OF THE TWO FACTS the provenance is composed from, and
  * this comment used to call it "the whole of the difference the trusted zone has to be able to see" only
@@ -916,6 +929,11 @@ void engine_unload_document(uint32_t doc);
  * cannot yet draw, because nothing on a flow records whether its path took a forced arm"). A flow records it
  * now (solver/flow.h's `path_forced`), the park composes the two at the moment it is made (pending.h's
  * PROV_*), and PENDING_PROVENANCE_* below is what a request IS. This field says only who asked.
+ * IT IS READ OFF THE RECORD AND NOT DERIVED AT THE JOIN. The park stamps it (pending.h's `parserIns`) from
+ * what the inserting component stated; the join used to recompute it from the park's KIND, which asks WHICH
+ * QUEUE §4.12.1.1 "Processing model" put the element in and answers this question wrongly in both directions —
+ * the in-order list also holds an element whose `async` IDL setter cleared `force async`, and the ASAP set
+ * also holds a parser-inserted `<script async src>`.
  * THE TWO TOKENS ARE THE SAME LENGTH, and that is now a coincidence rather than a load-bearing property: the
  * join used to upgrade a duplicate's initiator by overwriting it in place and asserted the widths to make that
  * sound. It shifts the field instead (engine_pending_fetches' join_set_tokens), because the provenance beside
@@ -974,10 +992,13 @@ void engine_unload_document(uint32_t doc);
  *
  * IT ANSWERS `derived` OR `forced` AND NEVER `observed`, AND THAT IS A FACT ABOUT THE ACT RATHER THAN A
  * NARROWING OF THE VOCABULARY. `observed` is "a REAL LOAD of this document makes exactly this request", and
- * its first conjunct is HTML §4.12.1 "The script element"'s PARSER-INSERTED flag — a fact the PARK register
- * holds because a parser-inserted script's address came out of bytes the trusted zone itself fetched
- * (solver/pending.h's FLOW_PENDING_DOCSCRIPT). Nothing this door serves has that conjunct available: it is
- * asked where code RAN.
+ * its first conjunct is HTML §4.12.1.1 "Processing model"'s `parser document` — a fact the PARK register
+ * holds because the component that INSERTED the element states it at the push and the record carries it
+ * (solver/pending.h's `parserIns`). That register used to read the flag off its own KIND instead, which is
+ * the argument this sentence used to make and which was wrong in both directions; the remedy it named is the
+ * one now landed there, so the plumbing this residual proposes below has a worked instance to copy rather
+ * than only a description. Nothing this door serves has that conjunct available whichever way it is held: it
+ * is asked where code RAN, and no element is in scope at all.
  *   RESIDUAL — CORRECT AND NARROWER, NAMED RATHER THAN CRASHED ON, because the code is right for what it does
  * and there is no case here to abort on. NOT COVERED: a child navigable whose `<iframe src>` came out of the
  * PARSER of bytes the trusted zone itself fetched. §4.12.1's argument reaches it exactly as it reaches a
@@ -1024,7 +1045,7 @@ const char *engine_provenance_token(int prov);
 /* WHAT THE BYTES ARE FOR, WHICH IS A DIFFERENT QUESTION FROM WHO ASKED — Fetch §2.2.5 "Requests"' DESTINATION,
  * stated verbatim off the request record the park carried (core/fetch/fetch.h) and never derived here.
  * THE TWO FIELDS ARE NOT TWO SPELLINGS OF ONE FACT, and reading them as one is what left a live hole. The
- * INITIATOR is HTML §4.12.1.1 "Processing model"'s parser-inserted flag and says whether a REAL LOAD of this
+ * INITIATOR is HTML §4.12.1.1 "Processing model"'s `parser document` and says whether a REAL LOAD of this
  * document makes this request; the DESTINATION says whether the reply may be ingested as CODE. An injected
  * `<script src>`, a dynamic `import()` and a plain `fetch()` all report `script` as initiators — they are all
  * parks made by running code — and the first two are code loads while the third is not, so the initiator can

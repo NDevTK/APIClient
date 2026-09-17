@@ -696,8 +696,19 @@ static void navigable_seed_scripts(JSContext *cctx, lxb_html_document_t *dom, ui
         /* THE SET PARKS AND THE ORDERED PASSES TAKE A SLOT — the whole difference between having a position and
            not needing one. A parked reply becomes a program of this flow whenever it drains, which is the
            arrival order a SET is entitled to; a slot holds the sequence at this script until its reply fills it. */
-        if (pass == SCRIPT_PASS_ASAP) engine_pending_script_url(cctx, abs_url, ds.types[i], ds.els[i]);
-        else                          engine_queue_docscript_url(doc, abs_url, ds.types[i], ds.els[i]);
+        /* AND EVERY ROW OF THIS WALK IS PARSER-INSERTED IN HTML §4.12.1.1 "Processing model"'s SENSE, BY
+           CONSTRUCTION AND NOT BY ASSUMPTION: `ds` is core/loader/document_scripts.h's inventory of THIS
+           DOCUMENT'S OWN MARKUP, so every element in it was placed by the parser that built the tree — which
+           is the same statement
+           `document_scripts.c` already makes by asking `script_block_schedule` for these rows with
+           `parser_inserted` hardcoded true. The request each park owes is graded on it (solver/pending.h's
+           `pending_prov_compose`), and it cannot be read back off the element: this document was parsed before
+           it was given a realm, so `html_script_prepare` never ran over these elements and the slot
+           core/html/html_script.h keeps the flag in is UNSTATED for exactly this population. */
+        if (pass == SCRIPT_PASS_ASAP)
+            engine_pending_script_url(cctx, abs_url, ds.types[i], ds.els[i], /*parser_inserted*/1);
+        else
+            engine_queue_docscript_url(doc, abs_url, ds.types[i], ds.els[i], /*parser_inserted*/1);
         free(abs_url);
     }
     doc_scripts_free(&ds);

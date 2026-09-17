@@ -94,10 +94,18 @@
  * flow that parks a request and takes a contradicted arm afterwards built that request on the path it had
  * THEN; asking the flow when the join runs would file it under a path it reached later.
  *   OBSERVED — a real load of this document makes exactly this request. It is the conjunction of two facts and
- *              neither alone is it: HTML §4.12.1 "The script element"'s parser-inserted flag (this register's
- *              FLOW_PENDING_DOCSCRIPT, whose address came out of bytes the trusted zone itself fetched) AND a
- *              path that has stood on no contradicted arm. A `document.write` on a forced arm produces a
- *              parser-inserted row too, in that flow's own sequence and in no real load of anything.
+ *              neither alone is it: HTML §4.12.1.1 "Processing model"'s `parser document`, STATED BY THE
+ *              PUSHER and carried on `parserIns`, AND a path that has stood on no contradicted arm. A
+ *              `document.write` on a forced arm produces a parser-inserted row too, in that flow's own
+ *              sequence and in no real load of anything.
+ *              THE FLAG USED TO BE READ OFF THE KIND — `FLOW_PENDING_DOCSCRIPT`, "whose address came out of
+ *              bytes the trusted zone itself fetched" — and that is the argument this field retired. A kind
+ *              is chosen for a QUEUE POSITION and the grade asks about ORIGIN, so the two came apart at both
+ *              ends: HTML §4.12.1.1 "Processing model" gives `force async` the initial value true and the
+ *              async IDL setter is the one writer that clears it without adding the attribute, so
+ *              `s.async = false` puts a NON-parser-inserted element in the in-order list and took this kind —
+ *              graded `observed` for an address only the page's own code composed, which §@H forbids — while
+ *              a parser-inserted `<script async src>` takes the ASAP set and was graded `derived`.
  *   DERIVED  — the page's own code computed it from real inputs. No session sent it; it is still a fact about
  *              the app, and it is the surface forced execution exists to find.
  *   FORCED   — the path took an arm the concrete example contradicts, so a value in this request exists only
@@ -112,11 +120,16 @@
 #define PROV_OBSERVED 0
 #define PROV_DERIVED  1
 #define PROV_FORCED   2
-/* THE COMPOSITION, IN ONE PLACE, FROM THE TWO FACTS AND THEIR TWO OWNERS. The KIND is the record's own (only
-   this register knows what a park is), and the forced mark is the FLOW's (only the solver knows what a path
-   stood on); a caller states the half it owns and this states the other. It is not a policy — the engine
-   decides nothing about firing here, it names what the request IS, and the trusted zone decides. */
-int pending_prov_compose(int kind, int path_forced);
+/* THE COMPOSITION, IN ONE PLACE, FROM THE TWO FACTS AND THEIR TWO OWNERS. The parser-inserted mark is the
+   BROWSER's (only the party that inserted the element knows whether a parser did it — core/html/html_script.h
+   states the same thing about its own parameter), and the forced mark is the FLOW's (only the solver knows
+   what a path stood on); a caller states both halves it owns and this states what they mean together. It is
+   not a policy — the engine decides nothing about firing here, it names what the request IS, and the trusted
+   zone decides.
+   `kind` COMPUTES NOTHING AND IS TAKEN FOR THE ASSERTS, exactly as `pending_pinned_compose` below takes it:
+   it is the one coordinate a reader of either abort would otherwise have to reconstruct. It used to be the
+   FIRST conjunct's proxy; see PROV_OBSERVED above for what that cost and why a kind cannot answer this. */
+int pending_prov_compose(int kind, int path_forced, int parser_inserted);
 /* …AND WHETHER THIS PARK'S REPLY BECOMES A PROGRAM, WHICH IS THE ONE QUESTION THE THREE KINDS ABOVE ALREADY
    ANSWER TOGETHER AND WHICH NOTHING COULD ASK. Their own documentation names them as a set — an injected
    `<script src>`, a document's own external script and a dynamic `import()` — and FLOW_PENDING_RESOURCE's
@@ -336,9 +349,15 @@ int pending_pinned_compose(int kind, int path_forced, int path_pinned);
     X(URL,        "url",       PEND_SHARE,  JS_NULL)                                   \
     X(HAVE_VALUE, "haveValue", PEND_SHARE,  JS_FALSE)                                  \
     X(KIND,       "kind",      PEND_SHARE,  JS_NewInt32(pend_ctx(), kind))             \
-    /* what this request is evidence of, composed from the kind and the pusher's path */ \
+    /* WHETHER A PARSER INSERTED THIS PARK'S ELEMENT (HTML §4.12.1.1's `parser document`), STATED BY \
+       provenance below, kept as a field of its own because the composition CONFLATES it: a \
+       parser-inserted park on a forced path is PROV_FORCED, so the word beside it can no longer \
+       say who asked. The join reads this one for its `initiator` (solver/engine.h's \
+       PENDING_INITIATOR_*), which used to re-derive the same flag from the KIND. */ \
+    X(PARSER_INS, "parserIns", PEND_SHARE, JS_NewBool(pend_ctx(), parser_inserted))    \
+    /* what this request is evidence of, composed from the pusher's markup fact and its path */ \
     X(PROV,       "prov",      PEND_SHARE,                                             \
-      JS_NewInt32(pend_ctx(), pending_prov_compose(kind, path_forced)))                \
+      JS_NewInt32(pend_ctx(), pending_prov_compose(kind, path_forced, parser_inserted))) \
     /* …and whether the ADDRESS may rest on a witness this engine chose, which PROV cannot say */ \
     X(PINNED,     "pinned",    PEND_SHARE,                                             \
       JS_NewBool(pend_ctx(), pending_pinned_compose(kind, path_forced, path_pinned)))  \
@@ -654,7 +673,17 @@ int  pending_entry_declined(JSValueConst e);
    two reasons that both matter: this file is below flow.c and must not reach up into it, and the provenance is
    a fact about the path AT THE PUSH — a parameter is what makes "read it now, not later" a thing the compiler
    enforces at every park site instead of a rule each one is asked to remember. */
-JSValue pending_push(JSValue *reg, int kind, int path_forced, int path_pinned);
+/* `parser_inserted` IS WHETHER A PARSER INSERTED THIS PARK'S ELEMENT — HTML §4.12.1.1
+   "Processing model"'s `parser document` being non-null — and it is a
+   PARAMETER for `path_forced`'s second reason exactly: it is a fact only the caller holds. §4.12.1.1 records it
+   on the element ("script elements with non-null parser documents are known as parser-inserted") and
+   core/html/html_script.h reads it back — but that slot is written by `html_script_prepare`, which a LOADED
+   document's markup never reaches (html_script.h's named residual), so it is UNSTATED for precisely the
+   population that IS parser-inserted. The caller is the one party that can answer, exactly as
+   `html_script_prepare`'s own `parser_inserted` parameter is answered by the caller and for the same reason.
+   ZERO IS A POSITIVE STATEMENT — no parser inserted the element this request is for — which is the truth for
+   a `fetch()`, an `import()`, a subresource and a script page code injected — and never a hole. */
+JSValue pending_push(JSValue *reg, int kind, int path_forced, int path_pinned, int parser_inserted);
 
 /* Set a field. `v` is consumed. `pending_set_int` is the same for the numeric ones.
    IT REFUSES ONE WRITE: `PEND_HAVE_VALUE` on a SYNCHRONOUS request. See `pending_answer_sync` below — this

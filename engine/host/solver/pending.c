@@ -498,51 +498,38 @@ static int pend_own_count(JSValueConst e);
    parser-inserted park is a request a real load makes ONLY while the path that produced the row has stood on
    no contradicted arm, because a `document.write` on a forced arm produces a parser-inserted row of that
    flow's own sequence and of nothing else. Taking either fact alone reports the other one's answer. */
-int pending_prov_compose(int kind, int path_forced)
+int pending_prov_compose(int kind, int path_forced, int parser_inserted)
 {
     DCHECK(path_forced == 0 || path_forced == 1,
            "a park stated a forced-path mark that is neither set nor clear — it comes from flow_path_forced, "
            "which asserts the same thing at the other end, so a third value is a caller that computed this "
            "somewhere else");
+    /* IT IS A FACT THIS CODEBASE COMPUTES AND NEVER PAGE INPUT, so it is asserted rather than tolerated:
+       HTML §4.12.1.1's `parser document` is stated by whichever of this engine's own components inserted the
+       element (core/html/html_script.c's tree-construction door, core/dom/element.c's insertion steps, the
+       loader's markup inventory), and no byte a page or a server wrote reaches it. */
+    DCHECK(parser_inserted == 0 || parser_inserted == 1,
+           "a park stated a parser-inserted mark that is neither set nor clear — HTML §4.12.1.1 "
+           "\"Processing model\" makes it a BOOLEAN read off the element's `parser document`, and every "
+           "caller states it from a `bool` of its own, so a third value is a caller that computed this "
+           "somewhere else");
     DCHECK(kind >= FLOW_PENDING_RESOLVE && kind <= FLOW_PENDING_RESOURCE,
-           "a park stated a kind this register does not define — the provenance is composed from it, so an "
-           "unknown kind would be answered by whichever arm of the test below happens to be the else");
+           "a park stated a kind this register does not define — the provenance's asserts name it, so an "
+           "unknown kind is a caller this register has no entry for");
+    /* A PARSER INSERTS `script` ELEMENTS AND NOTHING ELSE THIS REGISTER PARKS ON. §4.12.1.1 gives the flag to
+       the `script` element alone, so the two kinds whose reply is an element's program are the only ones that
+       can carry it set — a `fetch()`, a synchronous cross-agent read, a dynamic `import()` and a browser
+       algorithm's subresource are made by RUNNING CODE by construction. Asserted here rather than left to the
+       call sites, because it is the one thing that could make a caller's `parser_inserted` a lie the grade
+       would then report as `observed`. */
+    DCHECKF(!parser_inserted || kind == FLOW_PENDING_DOCSCRIPT || kind == FLOW_PENDING_SCRIPT,
+            "a park of kind %d states that a parser inserted the element it is for — HTML §4.12.1.1 gives "
+            "the "
+            "`parser document` to `script` elements only, and this register's other kinds are parks no "
+            "element causes, so this request would be graded `observed` on a flag nothing could have set",
+            kind);
     if (path_forced) return PROV_FORCED;
-    /* NAMED RESIDUAL — CORRECT AND NARROWER, because the KIND is a PROXY for HTML §4.12.1.1 "Processing
-       model"'s parser-inserted flag and the two are not the same fact. pending.h states the conjunction
-       correctly and then names this register's DOCSCRIPT kind as the flag; that kind is chosen for a POSITION
-       — an element holding its place against the others — and one element holds a place without being
-       parser-inserted at all, which
-       is §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS with a kind in place of a bit: the bit keeps what the
-       stricter question (which queue) needs, and the looser one (whose markup) takes its answer.
-       WHAT IS NOT COVERED is therefore a PROPERTY and not a list: an element whose SCHEDULE says `in order`
-       and whose ORIGIN is a script. HTML §4.12.1.1 "Processing model" gives `force async` the initial value
-       true and sets it false only from the two parsers and from an added `async` attribute, so the async
-       IDL setter is the one writer that leaves a NON-parser-inserted element with force async false and no
-       `async` attribute — and that element takes the in-order list, which is this kind. The grade then reads
-       `observed` for an address only the page's own code composed, which is the direction CLAUDE.md §@H
-       forbids outright. The same proxy is wrong the other way for a parser-inserted `<script async src>`,
-       which takes the ASAP set and is graded `derived`; that is the under-claiming direction solver/engine.h
-       calls the one a provenance is allowed to be wrong in, and it costs reach rather than truth.
-       WHAT THE NEXT DIFF BUILDS: the parser-inserted flag as a FACT this register is told rather than one it
-       infers — a `pending_push` parameter beside `path_forced`, so the conjunction pending.h already writes
-       in prose is the conjunction the code computes. Five of the six push sites in solver/engine.c answer it
-       statically; the sixth is the document-script park, which reads a queued ROW, so the bit travels with
-       that row from the one caller that holds it (core/html/html_script.c's `prepare` has it as a parameter;
-       the two markup seeds are parser-inserted by construction). solver/engine.h carries the SIBLING of this
-       residual for a child navigable's address and names the same remedy, so one diff closes both.
-       AND THE PROXY HAS THREE READERS, WHICH IS WHY THE REPAIR IS THE FACT AND NOT A CORRECTION AT ANY ONE OF
-       THEM: this composition, the pending line's `initiator` token — which solver/engine.c's join derives from
-       the same kind, in its own words, one field above where it reads this one — and the @H record that reads
-       this composition at the park door. Three spellings of one question, all correct if the fact is stated
-       once and all wrong together while it is inferred.
-       HOW ITS ABSENCE WOULD SHOW: a surface that separates what a REAL LOAD of the document reaches from
-       what only forced execution does — the @H record's `provenance`, and the trusted zone's per-origin
-       firing decision, which reads the pending line's copy of the same word. In a document whose own code
-       creates a script, sets `async` false and gives it a `src`, that address is graded as strongly as the
-       document's own markup while every other script the same code injects is graded `derived`; the two
-       grades disagree about one page's own chunks, and nothing else in the record says why. */
-    return kind == FLOW_PENDING_DOCSCRIPT ? PROV_OBSERVED : PROV_DERIVED;
+    return parser_inserted ? PROV_OBSERVED : PROV_DERIVED;
 }
 
 /* See pending.h. A SWITCH AND NOT A DISJUNCTION, so the list cannot be extended in one place and read in
@@ -596,7 +583,7 @@ int pending_pinned_compose(int kind, int path_forced, int path_pinned)
     return path_pinned;
 }
 
-JSValue pending_push(JSValue *reg, int kind, int path_forced, int path_pinned)
+JSValue pending_push(JSValue *reg, int kind, int path_forced, int path_pinned, int parser_inserted)
 {
     JSValue e;
 
