@@ -1,6 +1,7 @@
 /* THE INK — the mark vocabulary and the ordered sequence. See display_list.h for why the order is the list's
    whole statement, why a rectangle carries the environment facts it is a function of, why a colour is not
    quantized here, and why the canvas is a KIND rather than a rectangle with a flag on it. */
+#include <math.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdlib.h>
@@ -115,6 +116,40 @@ static bool dl_border_styles_are_defined(const DisplayMark *m)
     return true;
 }
 
+/* EVERY NUMBER OF A MARK'S RECTANGLE IS FINITE. All four are arithmetic THIS ENGINE performed and none is a
+   number a document stated, which is the line CLAUDE.md draws for what a DCHECK may stand on: a
+   `DISPLAY_MARK_FILL_RECT`'s and a `DISPLAY_MARK_BORDER`'s come from core/dom/element_view.c's border area —
+   a used extent off core/layout/used_value.h plus a box origin off core/layout/flow_position.h, less the
+   window scroll — and a `DISPLAY_MARK_FILL_CANVAS`'s from core/frame/viewport.h's initial containing block. A
+   page may DECLARE `width: 1e400px`; what reaches here is the used value this engine derived from it, so a
+   NaN or an infinity is a derivation that lost an operand. It is asked of ALL FOUR because a position is as
+   much this engine's arithmetic as an extent is. */
+static bool dl_rect_is_finite(const DisplayMark *m)
+{
+    unsigned i;
+
+    for (i = 0; i < 4; i++)
+        if (!isfinite(m->rect[i].px)) return false;
+    return true;
+}
+
+/* AND THE TWO EXTENTS ARE NON-NEGATIVE — ASKED OF THE EXTENTS ALONE, because the four numbers are TWO KINDS
+   and one rule over all four would be wrong in one direction. `rect[0]` and `rect[1]` are CSSOM VIEW §6
+   "Extensions to the Element Interface"' CLIENT coordinates, which core/dom/element_view.c derives by
+   subtracting the window scroll from a position in the initial containing block's space — so a box scrolled
+   above the viewport reports a NEGATIVE `y`, and a rule over all four would hand any page that calls
+   `scrollTo` an abort switch for this engine. `rect[2]` and `rect[3]` are EXTENTS: the block arm's are
+   `used_value_border_edge_px`, a content box core/layout/used_value.c asserts non-negative plus a
+   non-negative surround; the inline arm's are a `FlowRect`, which core/layout/flow_position.h declares as "a
+   position and the two extents that go with it" over a BORDER AREA; and the canvas kind's are the initial
+   containing block's dimensions. core/dom/element_view.h states the same rule for the six §6 members that are
+   also extents — they "are distances between parallel edges and cannot be negative" — and a border area's two
+   are that sentence on a different code path rather than a second rule. */
+static bool dl_rect_extents_are_non_negative(const DisplayMark *m)
+{
+    return m->rect[2].px >= 0.0 && m->rect[3].px >= 0.0;
+}
+
 void display_list_init(DisplayList *dl)
 {
     DCHECK(dl != NULL, "a display list was initialised through no list");
@@ -171,11 +206,41 @@ void display_list_append(DisplayList *dl, const DisplayMark *mark)
            "value type is a closed list and core/css/css_shorthand.c validates every declaration against it, "
            "dropping the ones that do not match — so a style here that this vocabulary does not define is this "
            "engine's grammar and this engine's vocabulary having come apart, never a keyword a document wrote");
-    /* NOTHING HERE ASSERTS THE GEOMETRY, and that is a deliberate refusal rather than an omission. The one
-       invariant worth having over a rectangle — that an extent is a distance between parallel edges and
-       cannot be negative — is core/dom/element_view.h's, asserted at `ev_length_long` where §6's six extents
-       are produced. Restating it here would be a second copy of one rule, free to drift from the first and
-       reported at the consumer instead of at the producer. */
+    /* THE GEOMETRY, ASSERTED HERE BECAUSE NOTHING UPSTREAM OF THIS DOOR ASSERTS IT. The paragraph that stood
+       here REFUSED these two invariants as "a second copy of one rule", naming core/dom/element_view.h's
+       assert "at `ev_length_long` where §6's six extents are produced" as the first copy. It is REWRITTEN
+       RATHER THAN DELETED because its reasoning is the one a reader re-derives — an invariant belongs at its
+       producer — and only its PREMISE is wrong: there is no first copy on either path. `ev_length_long` has
+       THREE callers and every one is a `long` IDL member, which is exactly the six extents element_view.h
+       names beside it; a MARK'S RECTANGLE REACHES NONE OF THEM. `element_view_bounding_box_px` answers in
+       `CssPx` through `ev_border_area_px`, and core/paint/box_paint.c's `bp_canvas_region` answers out of
+       core/frame/viewport.h's initial containing block — a different member, a different type and a different
+       call. WHETHER THE PREMISE WAS EVER TRUE IS NOT ESTABLISHABLE FROM THIS CHECKOUT, which is a shallow
+       clone; that it is false at `origin/main` is what a reader can check, by reading who calls
+       `ev_length_long`.
+       THEY ARE THIS COMPONENT'S BECAUSE THIS IS THE ONE DOOR. display_list.h states that an append is "the
+       ONLY way ink enters a list", so an invariant asked here covers every mark of every kind and every
+       producer, present and future, where a producer-side one covers the producer somebody remembered — and
+       the canvas kind's rectangle is produced by a function in another component that this one never sees.
+       AND THEY ARE THE FIRST CONSUMER'S PRECONDITION rather than tidiness: a surface that turns this
+       rectangle into scanlines turns `rect[2]` and `rect[3]` into a loop bound and an allocation size, where
+       a NaN is UNDEFINED BEHAVIOUR at the cast to an integer and a negative extent is a byte count that is
+       not one. */
+    DCHECK(dl_rect_is_finite(mark),
+           "a display mark's rectangle carries a coordinate that is not FINITE. Every one of the four is a "
+           "used value this engine derived — core/dom/element_view.c's border area for the two box kinds, "
+           "core/frame/viewport.h's initial containing block for the canvas — so a NaN or an infinity is a "
+           "derivation that lost an operand and never a number a document stated. FIX IT AT THE PRODUCER the "
+           "mark's kind names, not here: this is the door every mark enters by and therefore the place the "
+           "loss is NOTICED, which is not the place it happened");
+    DCHECK(dl_rect_extents_are_non_negative(mark),
+           "a display mark's rectangle carries a NEGATIVE width or height. core/dom/element_view.h states the "
+           "rule for CSSOM VIEW §6 \"Extensions to the Element Interface\"' six `long` extents — they \"are "
+           "distances between parallel edges and cannot be negative\" — and a border area's two are the same "
+           "sentence: a content box core/layout/used_value.c asserts non-negative, plus a surround CSS 2.1 "
+           "§8.4 and css-backgrounds-3 §3.3 both forbid to be negative. This is asked of `rect[2]` and "
+           "`rect[3]` ALONE and never of `rect[0]` or `rect[1]`, which are CLIENT coordinates and are "
+           "legitimately negative for a box scrolled above the viewport");
     if (dl->n == dl->cap) {
         size_t cap = dl->cap ? dl->cap * 2 : 8;
         DisplayMark *v = realloc(dl->v, cap * sizeof *v);
