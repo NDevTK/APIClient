@@ -70,6 +70,7 @@
 #include "core/dom/slot.h"
 #include "core/html/element_internals.h"
 #include "core/html/focus.h"
+#include "core/html/html_canvas_element.h"
 #include "core/html/html_dialog.h"
 #include "core/html/popover.h"
 #include "core/html/media_element.h"
@@ -944,6 +945,12 @@ void html_element_init(JSContext *ctx)
        (a `method=dialog` submission) is its caller. It comes AFTER html_form_declare for no ordering reason of
        its own; §4.11 is simply the next section this file reaches. */
     html_dialog_declare(ctx);
+    /* §4.12.5's `getContext` and the canvas element's own §4.12.5 state — declared here because the member
+       goes on HTMLCanvasElement.prototype, which is what this file owns the table of. It comes after
+       html_dialog_declare for no ordering reason of its own beyond §4.12 being the next section this file
+       reaches; the CONTEXT it creates is declared separately, by core/platform.c's own row, because
+       `CanvasRenderingContext2D` is an interface of its own and not a member of any element. */
+    html_canvas_element_declare(ctx);
     /* §6.12's three members and the state machine behind them, plus CSS Positioned Layout Level 4 §3's top
        layer that its show popover fills — declared here because `showPopover`, `hidePopover` and
        `togglePopover` are HTMLElement members, which is what this file owns the table of, and because the
@@ -1245,6 +1252,15 @@ void html_element_install_protos(JSContext *ctx)
         html_dialog_install(ctx, dp);
         JS_FreeValue(ctx, dp);
     }
+
+    /* §4.12.5's `getContext` goes on HTMLCanvasElement and nowhere else, handed the prototype for the same
+       reason: this file owns the element-interface table, core/html/html_canvas_element.c owns the bitmap and
+       the context-mode table the member dispatches on. */
+    {
+        JSValue cp = html_iface_proto(ctx, "HTMLCanvasElement");
+        html_canvas_install(ctx, cp);
+        JS_FreeValue(ctx, cp);
+    }
 }
 
 /* THE ONE NAME IN THE ELEMENT-INTERFACE TABLE WHOSE INTERFACE OBJECT DOES NOT CONSTRUCT.
@@ -1409,6 +1425,7 @@ void html_element_free(JSRuntime *rt)
     declarative_shadow_free();
     html_form_free(rt);
     html_dialog_free(rt);
+    html_canvas_element_free(rt);
     popover_free(rt);   /* §6.12's slot keys and member ids, and the top layer's two slot keys with them */
     media_element_free(rt);
     html_image_free(rt);

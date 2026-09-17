@@ -6,13 +6,15 @@
  * arithmetic over that list. Nothing here needs a bitmap, a canvas element or a rendering context: the halves
  * of canvas that do are §4.12.5.1.13 "Drawing paths to the canvas" and §4.12.5.1.16 "Pixel manipulation",
  * which are different sections and a different component. That is why this builds as a complete component
- * with no stub in it while no canvas rendering context exists yet — CLAUDE.md §Headless-is-not-valueless.
+ * with no stub in it, which it did while no canvas rendering context existed — CLAUDE.md
+ * §Headless-is-not-valueless. That context exists now (core/canvas/canvas_rendering_context_2d.c) and the
+ * argument is kept rather than deleted because it is the reason this file is a component and not a part of it.
  *
  * IT IS A MIXIN AND THEREFORE A COMPONENT RATHER THAN A FILE INSIDE ITS FIRST CONSUMER. Web IDL §3.7.3
  * "Interface prototype object" gives a mixin no prototype of its own, so the members below are placed on
- * EVERY interface that includes `CanvasPath` — `Path2D`, and §4.12.5.1's CanvasRenderingContext2D and
- * OffscreenCanvasRenderingContext2D when they exist. Writing them inside Path2D would put the shared half of
- * three interfaces behind whichever one landed first.
+ * EVERY interface that includes `CanvasPath` — `Path2D`, §4.12.5.1's CanvasRenderingContext2D, and
+ * OffscreenCanvasRenderingContext2D when it exists. Writing them inside Path2D would put the shared half of
+ * three interfaces behind whichever one landed first, and two of the three have now landed in that order.
  *
  * THE PATH IS A JS ARRAY AND THAT IS THE LOAD-BEARING DECISION. A flow MUTATES a path — `p.lineTo(x, y)` in
  * one arm and not in its sibling — so the list is per-flow state that must fork, park to the cold tier and

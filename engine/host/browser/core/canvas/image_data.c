@@ -39,15 +39,14 @@ static int g_id_ctor = -1;
    in the IDL's own list order — which is what Web IDL §3.2.18 Enumeration types' fork numbers its outcomes by,
    so the order is the declaration and is not a ranking made here. */
 static const char *const IMAGE_DATA_PIXEL_FORMATS[] = { "rgba-unorm8", "rgba-float16", NULL };
-static const char *const IMAGE_DATA_COLOR_SPACES[] = {
+const char *const IMAGE_DATA_COLOR_SPACES[] = {
     "srgb", "srgb-linear", "display-p3", "display-p3-linear", NULL
 };
 
 /* §8.11.1's `dictionary ImageDataSettings`. `colorSpace` has NO default — the algorithm's steps 6/7/8 are a
    three-way chain on whether it EXISTS, and a default here would make the first arm always taken and the
    `defaultColorSpace` parameter unreachable. `pixelFormat` has one and the IDL writes it. */
-#define IMAGE_DATA_SETTINGS_N 2
-static const IdlDictMember IMAGE_DATA_SETTINGS[IMAGE_DATA_SETTINGS_N] = {
+const IdlDictMember IMAGE_DATA_SETTINGS[IMAGE_DATA_SETTINGS_N] = {
     { "colorSpace",  IDL_ENUM, false, IMAGE_DATA_COLOR_SPACES },
     { "pixelFormat", IDL_ENUM, false, IMAGE_DATA_PIXEL_FORMATS, 0, NULL, IDL_DEFAULT_STRING, "rgba-unorm8" },
 };
@@ -468,6 +467,103 @@ void image_data_install_realm(JSContext *ctx)
     JS_FreeValue(ctx, global);
 
     JS_SetClassProto(ctx, g_class, proto);      /* the realm owns it from here */
+}
+
+
+/* ---- the C face: §4.12.5.1.16's two directions, and the mint getImageData returns ------------------------- */
+
+/* See image_data.h for why the refusals are the CALLER's and why nothing here asserts on a page's value. */
+bool image_data_pixels(JSContext *ctx, JSValueConst v, ImageDataPixels *out)
+{
+    ImageDataBox *b = image_data_box(v);
+    JSValue buf;
+    size_t off = 0, len = 0, bpe = 0;
+    uint8_t *base;
+    size_t total;
+
+    DCHECK(out != NULL, "an ImageData's pixels were asked for with nowhere to put them");
+    out->rgba = NULL; out->width = 0; out->height = 0;
+    out->detached = false;
+    out->is_image_data = (b != NULL);
+    if (b == NULL) return false;
+
+    /* A "rgba-float16" ImageData is not a byte run and this accessor has no way to say so in its own type.
+       §8.11.1 admits it and nothing in this engine writes one yet, so the honest answer is the same false the
+       detached arm gives with `detached` clear — the caller's algorithm decides what that means. */
+    if (b->pixel_format != 0) return false;
+
+    /* `JS_GetTypedArrayBuffer` answers the [[ViewedArrayBuffer]] *put pixels from an ImageData onto a bitmap*
+       step 1 names, and it is the one call that can distinguish a detached view from a short one. */
+    buf = JS_GetTypedArrayBuffer(ctx, b->data, &off, &len, &bpe);
+    if (JS_IsException(buf)) {
+        /* The view is detached: IsDetachedBuffer(buffer) is true, which is step 2's "InvalidStateError" at the
+           caller. The exception this raised is not the one the algorithm owes, so it is dropped here rather
+           than propagated — the caller throws the named one. */
+        JS_FreeValue(ctx, JS_GetException(ctx));
+        out->detached = true;
+        return false;
+    }
+    base = JS_GetArrayBuffer(ctx, &total, buf);
+    if (base == NULL) {
+        JS_FreeValue(ctx, JS_GetException(ctx));
+        JS_FreeValue(ctx, buf);
+        out->detached = true;
+        return false;
+    }
+    JS_FreeValue(ctx, buf);
+
+    /* THE LENGTH IS THE ARRAY'S AND THE DIMENSIONS ARE THE RECORD'S, AND THEY CAN DISAGREE — which is a page's
+       doing and not this codebase's, because *initialize an ImageData object* step 1.3 takes "the actual
+       ImageDataArray object passed as data" and a page may hand `new ImageData(arr, 1)` an array it then
+       resizes. So the run this reports is the SHORTER of the two, and a caller that walks `width * height`
+       rows without asking would run off a buffer the page shrank. */
+    total = (size_t)b->width * (size_t)b->height * 4u;
+    if (len < total) return false;
+
+    out->rgba   = base + off;
+    out->width  = b->width;
+    out->height = b->height;
+    return true;
+}
+
+JSValue image_data_new(JSContext *ctx, uint32_t width, uint32_t height, int color_space)
+{
+    JSValue obj;
+    ImageDataBox *b;
+
+    DCHECK(g_class != 0, "an ImageData was minted before §8.11.1 was declared");
+    DCHECK(color_space >= 0 && color_space < 4, "an ImageData was minted in no PredefinedColorSpace");
+
+    obj = image_data_alloc(ctx, JS_UNDEFINED);
+    if (JS_IsException(obj)) return obj;
+    b = JS_GetOpaque(obj, g_class);
+    CHECK(b != NULL, "§8.11.1: a freshly allocated ImageData carries no record");
+
+    /* *initialize an ImageData object* with no source, which is its step 2 — a fresh Uint8ClampedArray of
+       `width * height` PIXELS times four, already transparent black. The settings are JS_UNDEFINED so steps 6
+       to 8 fall to `defaultColorSpace`, which is the context's own colour space at every caller. */
+    if (image_data_initialize(ctx, b, width, height, JS_UNDEFINED, 0, JS_UNDEFINED, color_space) < 0) {
+        JS_FreeValue(ctx, obj);
+        return JS_EXCEPTION;
+    }
+    return obj;
+}
+
+
+int image_data_color_space_index(const char *name)
+{
+    int i;
+
+    if (name == NULL) return -1;
+    for (i = 0; IMAGE_DATA_COLOR_SPACES[i] != NULL; i++)
+        if (strcmp(IMAGE_DATA_COLOR_SPACES[i], name) == 0) return i;
+    return -1;
+}
+
+int image_data_color_space(JSValueConst v)
+{
+    ImageDataBox *b = image_data_box(v);
+    return b ? (int)b->color_space : -1;
 }
 
 void image_data_free(void)

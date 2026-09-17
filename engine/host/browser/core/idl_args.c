@@ -110,7 +110,8 @@ static bool idl_is_integer(IdlArgType t)
 {
     return t == IDL_LONG || t == IDL_UNSIGNED_LONG || t == IDL_UNSIGNED_SHORT ||
            t == IDL_LONG_LONG || t == IDL_UNSIGNED_LONG_LONG || t == IDL_LONG_LONG_CLAMP ||
-           t == IDL_UNSIGNED_LONG_ENFORCE || t == IDL_UNSIGNED_LONG_LONG_ENFORCE;
+           t == IDL_UNSIGNED_LONG_ENFORCE || t == IDL_UNSIGNED_LONG_LONG_ENFORCE ||
+           t == IDL_LONG_ENFORCE;
 }
 
 
@@ -192,6 +193,15 @@ static JSValue idl_num_of(JSContext *ctx, IdlArgType t, double x)
        x > upperBound, then throw a TypeError"; "Return x". Each type carrying the attribute STATES ITS OWN
        BOUNDS here rather than sharing a width parameter, because the whole point of the attribute is that the
        range is part of the TYPE. */
+    /* THE SAME FOUR STEPS AT §3.2.4.5's BOUNDS, which the type states rather than sharing a width. */
+    if (t == IDL_LONG_ENFORCE) {
+        if (!isfinite(x))
+            return JS_ThrowTypeError(ctx, "the provided value is non-finite and its argument enforces a range");
+        x = (x < 0 ? -1.0 : 1.0) * floor(fabs(x));
+        if (x < -2147483648.0 || x > 2147483647.0)
+            return JS_ThrowTypeError(ctx, "the provided value is outside the range of a long");
+        return JS_NewInt64(ctx, (int64_t)x);
+    }
     if (t == IDL_UNSIGNED_LONG_ENFORCE) {
         if (!isfinite(x))
             return JS_ThrowTypeError(ctx, "the provided value is non-finite and its argument enforces a range");
@@ -928,6 +938,7 @@ static JSValue idl_default_of(JSContext *ctx, IdlDictDefault kind, const char *s
     if (kind == IDL_DEFAULT_ZERO) return JS_NewInt32(ctx, 0);
     if (kind == IDL_DEFAULT_ONE) return JS_NewInt32(ctx, 1);
     if (kind == IDL_DEFAULT_FALSE) return JS_NewBool(ctx, 0);
+    if (kind == IDL_DEFAULT_TRUE) return JS_NewBool(ctx, 1);
     DCHECK(kind == IDL_DEFAULT_STRING && str != NULL,
            "a declaration named a default this machine has no value for — the forms are the ones the "
            "platform's IDL writes, and a new one is an arm here rather than a string that means something else");

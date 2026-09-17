@@ -1,7 +1,7 @@
 /* HTML §4.12.5.1.7 "Path2D objects" — the interface a page constructs directly, and the first includer of
  * §4.12.5.1.6's `CanvasPath` mixin this engine builds.
  *
- * IT IS A COMPLETE COMPONENT WITH NO RENDERING CONTEXT ANYWHERE, which is the whole reason it can be built
+ * IT WAS A COMPLETE COMPONENT WITH NO RENDERING CONTEXT ANYWHERE, which was the whole reason it could be built
  * now. §4.12.5.1.7 introduces the interface as "Path2D objects can be used to declare paths that are then
  * later used on objects implementing the CanvasDrawPath interface" — DECLARE here, USE there — and every one
  * of its steps is a list operation over subpaths: the constructor copies subpaths or parses SVG path data,

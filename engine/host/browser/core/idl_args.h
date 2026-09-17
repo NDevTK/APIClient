@@ -60,6 +60,13 @@ typedef enum {
        the difference is the whole of what a page can observe there — `cursor.advance(-1)` is a TypeError, where
        the modulo makes it a request to advance 4294967295 records that would walk the store to its end. */
     IDL_UNSIGNED_LONG_ENFORCE,
+    /* `[EnforceRange] long` — §3.3.6 [EnforceRange] over §3.2.4.5 long, and a separate row from IDL_LONG for
+       the reason IDL_UNSIGNED_LONG_ENFORCE is separate from IDL_UNSIGNED_LONG: the extended attribute IS the
+       conversion, replacing §3.2.4.5's modulo with a refusal. HTML §4.12.5.1.16's `getImageData` and
+       `putImageData` write it for every one of their coordinates, and the difference a page sees is the
+       EXCEPTION: `ctx.getImageData(0, 0, Infinity, 1)` is a TypeError at the conversion, where a plain `long`
+       would carry a 0 into the body and raise §4.12.5.1.16's "IndexSizeError" instead. */
+    IDL_LONG_ENFORCE,
     IDL_UNSIGNED_SHORT,   /* `unsigned short` — 16, unsigned */
     IDL_LONG_LONG,        /* `long long` — 64, signed */
     /* `unsigned long long` — 64, UNSIGNED, and it is a separate type because the sign is observable. File
@@ -1239,6 +1246,13 @@ typedef enum {
        the day the position's type changes and the two stop agreeing. Declared, the conversion PLACES a real
        `false` and a body reading argv[0] is reading the IDL's value rather than inventing it. */
     IDL_DEFAULT_FALSE,
+    /* `= true`. HTML §4.12.5.1.2's `CanvasRenderingContext2DSettings` writes `boolean alpha = true`, and it is
+       a row here rather than an absence the reader fills for the reason IDL_DEFAULT_FALSE is one: ToBoolean of
+       an absent member is FALSE, which is the OPPOSITE of this default, so a member that let the absence stand
+       would answer `getContextAttributes()["alpha"]` false for every `getContext("2d")` called with no
+       options — the majority of them. Declared, §3.2.17 step 4.1.5 places a real `true` and the body reads the
+       IDL's value rather than inventing it. */
+    IDL_DEFAULT_TRUE,
     /* `= 1`. Streams §4.5.1 Interface definition's `ReadableStreamBYOBReaderReadOptions` writes
        `[EnforceRange] unsigned long long min = 1`, and it is a row here for the reason IDL_DEFAULT_ZERO is
        one rather than being folded into it: the two are different VALUES, and this member's whole algorithm

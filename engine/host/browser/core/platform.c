@@ -4,6 +4,7 @@
 
 #include "check.h"
 #include "core/agent_state.h"
+#include "core/canvas/canvas_rendering_context_2d.h"
 #include "core/canvas/image_data.h"
 #include "core/canvas/path_2d.h"
 #include "core/console/console.h"
@@ -249,6 +250,8 @@ static void d_observable(JSContext *c, const PlatformAgent *a) { (void)a; observ
 static void d_dom_rect(JSContext *c, const PlatformAgent *a) { (void)a; dom_rect_init(c); }
 static void d_path_2d(JSContext *c, const PlatformAgent *a) { (void)a; path_2d_init(c); }
 static void d_image_data(JSContext *c, const PlatformAgent *a) { (void)a; image_data_init(c); }
+static void d_canvas_ctx2d(JSContext *c, const PlatformAgent *a)
+{ (void)a; canvas_rendering_context_2d_init(c); }
 static void d_dom_rect_list(JSContext *c, const PlatformAgent *a) { (void)a; dom_rect_list_init(c); }
 static void d_dom_string_list(JSContext *c, const PlatformAgent *a) { (void)a; dom_string_list_init(c); }
 static void d_element(JSContext *c, const PlatformAgent *a) { (void)a; element_init(c); }
@@ -528,6 +531,7 @@ static void r_dom_string_list(JSRuntime *rt) { dom_string_list_free(rt); }
 static void r_dom_rect(JSRuntime *rt) { (void)rt; dom_rect_free(); }
 static void r_path_2d(JSRuntime *rt) { (void)rt; path_2d_free(); }
 static void r_image_data(JSRuntime *rt) { (void)rt; image_data_free(); }
+static void r_canvas_ctx2d(JSRuntime *rt) { canvas_rendering_context_2d_free(rt); }
 /* THE FIVE ROWS THAT HAD NO RELEASE FUNCTION AT ALL, which is the arm the pairing below silently passes: a row
    with an empty release column and a component that declared nothing agree, and they agree whether the
    component holds nothing or holds everything and gives none of it back. All five held. Indexed Database §4.7's
@@ -1184,6 +1188,13 @@ static const PlatformComponent PLATFORM[] = {
        because that is what it is: a bitmap a page builds and reads with no device under it, which is the same
        kind of question a path is. */
     { "image_data",          d_image_data,          NULL,        r_image_data },
+    /* HTML §4.12.5.1 "The 2D rendering context", AFTER `image_data` and not merely beside it: §4.12.5.1.16's
+       `getImageData` mints an ImageData through core/canvas/image_data.h's C face, and that mint reads the
+       class this row's predecessor declares. The `getContext` half is a member on HTMLCanvasElement and is
+       declared with the element interfaces, which is why this row installs a realm intrinsic and no document
+       column — the interface is `[Exposed=Window]` and its name is placed from the realm exactly as Path2D's
+       is. */
+    { "canvas_ctx2d",        d_canvas_ctx2d,        NULL,        r_canvas_ctx2d },
     { "element",             d_element,             NULL,        r_element },
     /* CSSOM §8.1 The CSS.escape() Method's `CSS` NAMESPACE and CSS Conditional Rules 3 §7.5 The CSS namespace,
        and the supports() function's partial namespace on it, AFTER `element` — which is where the whole CSSOM

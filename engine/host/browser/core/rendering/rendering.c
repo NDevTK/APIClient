@@ -5,6 +5,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/canvas/canvas_rendering_context_2d.h"
 #include "core/agent_state.h"
 #include "core/idl_args.h"
 #include "core/realm.h"
@@ -331,11 +332,18 @@ static void steps_11_to_13(JSContext *docctx)
                 "update the rendering step 12 runs the FULLSCREEN STEPS, firing fullscreenchange/"
                 "fullscreenerror and resolving requestFullscreen()'s promise — this build now has fullscreen, "
                 "so step 12 must be written");
-    realm_awaits(docctx, "CanvasRenderingContext2D",
-                "update the rendering step 13 runs the CONTEXT LOST STEPS for each 2D context whose backing "
-                "storage was lost: reset the context, fire `contextlost` CANCELABLE (its return value steers "
-                "the algorithm), and fire `contextrestored` on a successful restore — this build now has a 2D "
-                "context, so step 13 must be written");
+    /* STEP 13 IS WRITTEN — its `realm_awaits` is GONE rather than relaxed, which is this mechanism working for
+       the fifth time in this file. It named `CanvasRenderingContext2D` and said the step "must be written" the
+       day that interface exists; core/canvas/canvas_rendering_context_2d.c is HTML §4.12.5.1, the DCHECK fired
+       at this exact place in the order, and the step it named is now a call.
+       WHAT THE STEP IS, in §8.1.7.3's own words: "For each doc of docs, IF THE USER AGENT DETECTS THAT THE
+       BACKING STORAGE associated with a CanvasRenderingContext2D or an OffscreenCanvasRenderingContext2D,
+       context, has been lost, then it must run the context lost steps for each such context". The condition is
+       a DETECTION THIS AGENT MAKES, and the component that owns the bitmap is what knows whether it has made
+       one — which is why this is a call into that component and not a test written here. See
+       canvas_rendering_context_2d_step_13 for why this agent's answer is that the condition is false, and for
+       what would have to exist for it to be true. */
+    canvas_rendering_context_2d_step_13(docctx);
 }
 
 /* STEP 16 IS WRITTEN — it is UR_BROADCAST, below, and its assertion is GONE rather than relaxed. It named
