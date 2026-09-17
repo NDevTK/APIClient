@@ -50,6 +50,34 @@ static PoBoxGen po_box_generation(lxb_dom_element_t *el)
     return gen;
 }
 
+/* IS THIS ONE OF CSS 2.1 §17.2 "The CSS table model"'s INTERNAL TABLE BOXES — "A 'table-cell' box,
+   'table-row' box, row group box, 'table-column' box, or 'table-column-group' box"?
+   THIS IS WHERE CSS 2.1 §E.2 IS FINER THAN CSS 2.1 §9.9.1 AND WHERE core/paint/stacking_order.h HANDS THE
+   QUESTION OVER. That file puts a cell, a row, a row group, a column and a column group in CSS 2.1 §9.9.1's
+   layer 3 and says why in its own words — the seven layers name no table box at all, so a table-internal box
+   is an in-flow non-inline-level one and "the finer order is §E.2's to state when it exists". This
+   is that statement. CSS 2.1 §E.2's step 4 is stated over "block-level" descendants and CSS 2.1 §9.2.1
+   "Block-level elements and block boxes" closes that list: "The following values of the 'display' property
+   make an element block-level: 'block', 'list-item', and 'table'." A cell is none of them, and what paints its
+   background is the TABLE's own offer — CSS 2.1 §E.2's step 4 table arm, whose "cell backgrounds (color then
+   image)" is one of six levels inside that one offer. Reporting a cell at step 4 as well would offer its
+   background TWICE.
+   A CAPTION IS NOT INTERNAL AND IS REPORTED, which is the same section's own vocabulary rather than a
+   judgement here: CSS 2.1 §17.2's internal-table-box list does not contain it, and CSS 2.1 §17.4 "Tables in
+   the visual formatting model" renders a caption "as normal block boxes inside the table wrapper box", so it
+   is a box CSS 2.1 §E.2's step 4 block arm answers for like any other.
+   THE SUBTREE IS STILL WALKED. A cell's own in-flow block-level descendants are descendants of the same
+   stacking context and CSS 2.1 §E.2's step 4 says "all" of them; only the internal box itself is passed
+   over. */
+static bool po_is_internal_table_box(lxb_dom_element_t *el)
+{
+    char *d = po_display(el);
+    bool internal = table_box_kind_is_internal(table_box_kind(d));
+
+    free(d);
+    return internal;
+}
+
 /* "THE ROOT ELEMENT" — the element whose parent is the Document, which core/paint/stacking_order.c spells the
    same way and for the reason it states there: the two are one sentence, a third spelling would be the one
    that drifts, and this one routes to that file's when either is exported. */
@@ -226,7 +254,10 @@ static void po_collect(JSContext *ctx, lxb_dom_element_t *context_el, PoSet set,
         case PO_SET_IN_FLOW_BLOCK:
             if (forms || positioned || layer == STACKING_LAYER_FLOAT) skip = true;
             else if (layer == STACKING_LAYER_INLINE) skip = po_is_atomic_inline(el);
-            else report = true; /* CSS 2.1 §9.9.1's layer 3 IS "in-flow, non-positioned" and block-level */
+            /* CSS 2.1 §9.9.1's layer 3 is "in-flow, non-positioned" and non-inline-level, which is the
+               COARSER bucket: CSS 2.1 §E.2's step 4 says "block-level", and CSS 2.1 §17.2's internal table
+               boxes are neither that nor a layer of their own. See po_is_internal_table_box. */
+            else report = !po_is_internal_table_box(el);
             break;
         case PO_SET_FLOAT:
             if (forms || positioned) skip = true;
