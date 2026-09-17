@@ -11,7 +11,11 @@
 #include "check.h"
 #include "core/css/css_color.h"
 #include "core/css/css_computed_value.h"
+#include "core/css/css_length.h"
+#include "core/dom/document.h"       /* document_active_realm_of — CSS 2.1 §10.1's initial containing block is
+                                        the ELEMENT's document's, never the running realm's */
 #include "core/dom/element_view.h"
+#include "core/frame/viewport.h"
 #include "core/paint/box_paint.h"
 #include "core/paint/display_list.h"
 #include "core/paint/paint_order.h"
@@ -38,59 +42,79 @@ static bool bp_is_root_element(lxb_dom_element_t *el)
     return lxb_dom_document_element(n->owner_document) == el;
 }
 
-/* CSS 2.1 §14.2 "The background"'s CANVAS PROPAGATION, asked as the one question a painter has: HAS THIS
- * ELEMENT'S BACKGROUND BEEN MOVED OFF IT? §14.2's sentence is a rule about the CANVAS and its last clause is
- * the one that reaches a box — user agents "must instead use the computed value of the background properties
- * from that element's first HTML "BODY" element or XHTML "body" element child when painting backgrounds for
- * the canvas, and must not paint a background for that child element".
+/* CSS 2.1 §14.2 "The background"'s FIRST `body` ELEMENT CHILD of a root, which is the element CSS 2.1 §14.2
+   names: "that element's first" HTML or XHTML `body` element child. A second `body` under one root is
+   therefore not the element the rule reaches. The walk is over ELEMENT children because CSS 2.1 §14.2's own
+   words are element child; a text node between the root and its body is not one. NULL when the root has no
+   such child. */
+static lxb_dom_element_t *bp_first_body_child(lxb_dom_element_t *root)
+{
+    lxb_dom_node_t *child;
+
+    for (child = lxb_dom_interface_node(root)->first_child; child != NULL; child = child->next)
+        if (child->type == LXB_DOM_NODE_TYPE_ELEMENT && lxb_html_tree_node_is(child, LXB_TAG_BODY))
+            return lxb_dom_interface_element(child);
+    return NULL;
+}
+
+/* CSS 2.1 §14.2's CANVAS PROPAGATION AS ONE FACT — WHICH ELEMENT'S BACKGROUND PROPERTIES PAINT THE CANVAS.
+ * Two of CSS 2.1 §E.2 "Painting order"'s steps turn on this and they ask OPPOSITE questions: step 1 asks
+ * WHOSE colour goes on the canvas, and steps 2 and 4 ask whether THIS box's background has been moved off it.
+ * They are ONE FACT and two questions asked of it, so the fact is derived here once and each question is a
+ * predicate over the answer. A second derivation would be a second answer free to disagree with the first,
+ * and two answers disagreeing is a page whose background is painted twice or painted nowhere.
  *
- * BOTH CONJUNCTS ARE READ, AND THE SECOND ONE IS READ THROUGH CSSOM §9 "Resolved Values" RATHER THAN THROUGH
- * THE COMPUTED-VALUE ENTRY. §14.2's condition is a root that is an html element "that has computed values of
- * `transparent` for `background-color` and `none` for `background-image`". `css_computed_value` does not model
- * `background-image` and crashes when asked for it; `css_resolved_value` answers, and what it answers IS the
- * computed value, because §9's own last row is "Any other property: the resolved value is the computed value"
- * and `background-image` is in none of §9's special lists. So the conjunct is asked of the entry that has it.
+ * CSS 2.1 §14.2's SENTENCE AND ITS TWO CONJUNCTS. The rule is that the root element's background becomes the
+ * canvas's and "covers the entire canvas", and that "The root element does not paint this background again".
+ * The condition that moves it names a root that is an HTML or XHTML `html` element "that has computed values
+ * of 'transparent' for 'background-color' and 'none' for 'background-image'", and its consequence is that
+ * user agents "must instead use the computed value of the background properties from that element's first"
+ * HTML or XHTML `body` element child when painting backgrounds for the canvas, "and must not paint a
+ * background for that child element".
+ *
+ * THE SECOND CONJUNCT IS READ THROUGH CSSOM §9 "Resolved Values" RATHER THAN THROUGH THE COMPUTED-VALUE
+ * ENTRY. `css_computed_value` does not model `background-image` and crashes when asked for it;
+ * `css_resolved_value` answers, and what it answers IS the computed value, because CSSOM §9's own last row is
+ * "Any other property: the resolved value is the computed value" and `background-image` is in none of
+ * CSSOM §9's special lists. So the conjunct is asked of the entry that has it.
  *
  * WHAT THE ANSWER RESTS ON IS ONE LAYER DOWN AND IS NOT THIS COMPONENT'S TO ASSERT. `background-image` is in
  * no property registry lexbor carries; what makes the cascade answer at all is that css-backgrounds-3 §2.3's
  * `Initial:` line is reachable through core/css/css_background_shorthand.c, so CSS Cascade §7.1's last
- * defaulting layer has something to fall to. Whether a DECLARED `url()` survives that route to be seen here is
- * a question about the CASCADE, and a painter that held its own crash for it would be asserting on a
+ * defaulting layer has something to fall to. Whether a DECLARED `url()` survives that route to be seen here
+ * is a question about the CASCADE, and a painter that held its own crash for it would be asserting on a
  * neighbouring component's answer rather than on anything it computed — which is the assert CLAUDE.md forbids
  * standing on a page's own bytes, one layer removed. This file asks the question and takes the answer.
  *
- * THE ARMS ARE ASKED IN AN ORDER THE CALLER SET UP. The caller has already established that this element HAS
- * ink to lay — a background colour whose alpha is not zero — because for a transparent box §14.2's whole
- * question is moot: it paints nothing under either answer. */
-static bool bp_background_propagates_to_canvas(JSContext *ctx, lxb_dom_element_t *el)
+ * ANSWERS THE ROOT wherever CSS 2.1 §14.2's condition does not hold, and also where it holds and the root has
+ * no `body` element child at all — CSS 2.1 §14.2 names "that element's first" such child, so with none there
+ * is nothing for the rule to use. NEVER NULL. */
+static lxb_dom_element_t *bp_canvas_background_element(JSContext *ctx, lxb_dom_element_t *root)
 {
-    lxb_dom_node_t *n = lxb_dom_interface_node(el);
-    lxb_dom_element_t *root;
-    lxb_dom_node_t *child;
+    lxb_dom_element_t *body;
     CssColor root_bg;
     JSValue image;
     const char *image_text;
     bool is_none;
 
-    if (!lxb_html_tree_node_is(n, LXB_TAG_BODY)) return false;
-    /* THE ROOT IS THE DOCUMENT'S OWN ANSWER, for `bp_is_root_element`'s reason above. */
-    root = n->owner_document != NULL ? lxb_dom_document_element(n->owner_document) : NULL;
-    if (root == NULL || lxb_dom_interface_node(root) != n->parent) return false;
-    if (!lxb_html_tree_node_is(lxb_dom_interface_node(root), LXB_TAG_HTML)) return false;
-    /* §14.2 names the FIRST such child, so a second `body` under one root is not the element the rule moves
-       the background off. The walk is over ELEMENT children because §14.2's own words are "element ... child";
-       a text node between the root and its body is not one. */
-    for (child = n->parent->first_child; child != NULL; child = child->next)
-        if (child->type == LXB_DOM_NODE_TYPE_ELEMENT && lxb_html_tree_node_is(child, LXB_TAG_BODY)) break;
-    if (child != n) return false;
+    DCHECK(root != NULL, "CSS 2.1 §14.2's canvas background was derived for a document with no root "
+                         "element. CSS 2.1 §E.2's step 1 is offered only FOR a root element, and CSS 2.1 "
+                         "§E.2's steps 2 and 4 reach this through a box whose own document answered one");
+    if (!lxb_html_tree_node_is(lxb_dom_interface_node(root), LXB_TAG_HTML)) return root;
     /* THE FIRST CONJUNCT. A false answer from the derivation is not a third state here: its own crash has
-       already named the absence, and a root whose used colour this engine cannot derive is one whose
-       background it cannot paint either, so the rule that moves it off this box may as well have applied. */
-    if (!css_used_color(root, "background-color", &root_bg)) return true;
+       already named the absence in a dev build, and a root whose used colour this engine cannot derive is one
+       whose background it cannot paint either — so the rule that moves the background onto the canvas may as
+       well have applied. This is the arm this file already took before CSS 2.1 §E.2's step 1 laid any ink, kept
+       deliberately rather than re-decided: it is reachable only in a release build, no gate here can exercise
+       it, and what it now does with the `body`'s colour is strictly more than the nothing it used to do. */
+    if (!css_used_color(root, "background-color", &root_bg)) {
+        body = bp_first_body_child(root);
+        return body != NULL ? body : root;
+    }
     /* CSS Color 4 §6.3 "The transparent keyword" — "transparent specifies a transparent black" — so §14.2's
        first conjunct is an alpha of exactly zero, and the comparison is exact rather than approximate because
        the zero is the PARSE's and not arithmetic's: nothing between the declaration and here multiplies it. */
-    if (root_bg.a != 0.0) return false;
+    if (root_bg.a != 0.0) return root;
     /* THE SECOND CONJUNCT, and the string is released on every arm including the one that cannot read it. */
     image = css_resolved_value(ctx, root, "background-image");
     DCHECK(JS_IsString(image),
@@ -101,7 +125,93 @@ static bool bp_background_propagates_to_canvas(JSContext *ctx, lxb_dom_element_t
     is_none = image_text != NULL && strcmp(image_text, "none") == 0;
     if (image_text != NULL) JS_FreeCString(ctx, image_text);
     JS_FreeValue(ctx, image);
-    return is_none;
+    if (!is_none) return root;
+    body = bp_first_body_child(root);
+    return body != NULL ? body : root;
+}
+
+/* CSS 2.1 §14.2's RULE READ FROM THE BOX'S SIDE — HAS THIS ELEMENT'S BACKGROUND BEEN MOVED OFF IT? It has
+   exactly when CSS 2.1 §14.2's consequence names this element: the canvas takes its background properties,
+   and it is not the root, whose own clause is a different sentence and is performed by the step 2 arm below.
+   THE `body` TEST IN FRONT IS A PRECONDITION AND NOT A SECOND ANSWER. `bp_canvas_background_element` answers
+   either the root or a `body` element and the root is excluded on the line under it, so an element that is
+   not a `body` is one that derivation cannot name — the test decides nothing, and what it buys is keeping a
+   resolved-value query on the root off the path of every ordinary box the walk offers. THE CALLER HAS ALREADY
+   ESTABLISHED THAT THIS ELEMENT HAS INK TO LAY — a background colour whose alpha is not zero — because for a
+   transparent box CSS 2.1 §14.2's whole question is moot: it paints nothing under either answer. */
+static bool bp_background_propagates_to_canvas(JSContext *ctx, lxb_dom_element_t *el)
+{
+    lxb_dom_node_t *n = lxb_dom_interface_node(el);
+    lxb_dom_element_t *root;
+
+    if (!lxb_html_tree_node_is(n, LXB_TAG_BODY)) return false;
+    /* THE ROOT IS THE DOCUMENT'S OWN ANSWER, for `bp_is_root_element`'s reason above. */
+    root = n->owner_document != NULL ? lxb_dom_document_element(n->owner_document) : NULL;
+    if (root == NULL || root == el) return false;
+    return bp_canvas_background_element(ctx, root) == el;
+}
+
+/* CSS 2.1 §2.3.1 "The canvas"'s RENDERED REGION FOR THIS DOCUMENT, in the CLIENT coordinates every rectangle
+ * in a display list is stated in. CSS 2.1 §2.3.1 makes the canvas infinite and leaves the region "established
+ * by the user agent according to the target medium"; CSS 2.1 §10.1 "Definition of "containing block""
+ * establishes it for continuous media by making the initial containing block have "the dimensions of the
+ * viewport" and be "anchored at the canvas origin", and CSS 2.1 §E.2 anchors the viewport there too —
+ * "Initially, the viewport is anchored with its top left corner at the canvas origin".
+ * core/paint/display_list.h holds the argument for why a canvas mark carries this rectangle at all rather
+ * than leaving it to whoever rasterizes.
+ *
+ * THE ORIGIN IS (0, 0) WHATEVER THE SCROLL POSITION, and that is a fact about the coordinates rather than an
+ * approximation: client coordinates are the viewport's own, the fill covers an INFINITE area, and so
+ * whichever part of the canvas the viewport is showing is inside it. Nothing here reads a scroll offset
+ * because there is no question for one to answer.
+ *
+ * THE REALM IS THE DOCUMENT'S AND NOT THE WALK'S. core/frame/viewport.h states why they differ — a child
+ * navigable's viewport is 300 CSS pixels wide where the top-level traversable's is 1280 — so the ICB is asked
+ * per the document the element is in, which is the road core/layout/used_value.c already takes for the same
+ * fact.
+ *
+ * ANSWERS FALSE where that document is presented by no navigable. CSS 2.1 §10.1's ICB "has the dimensions of
+ * the VIEWPORT", and a DOMParser document, an XHR `responseXML` or the document of a destroyed navigable has
+ * none — so no region was ever established, and there is no rectangle to fill rather than a rectangle this
+ * file could pick. That is core/paint/box_paint.h's own contract for an operand this painter cannot compute,
+ * and it is not a second copy of core/layout/used_value.c's crash for the same absence: reaching that crash
+ * requires a BOX, and CSS 2.1 §E.2's step 1 is offered before any box is. */
+static bool bp_canvas_region(lxb_dom_element_t *root, CssPx out[4])
+{
+    lxb_dom_node_t *n = lxb_dom_interface_node(root);
+    JSContext *dctx;
+
+    DCHECK(n->owner_document != NULL, "CSS 2.1 §2.3.1's rendered region was asked for a root element whose "
+                                      "node has no owner document — every node this engine mints belongs to "
+                                      "the document that created it");
+    dctx = document_active_realm_of(lxb_dom_interface_node(n->owner_document));
+    if (dctx == NULL || !viewport_exists(dctx)) return false;
+    out[0] = css_px(0.0);
+    out[1] = css_px(0.0);
+    out[2] = viewport_icb_width(dctx);
+    out[3] = viewport_icb_height(dctx);
+    return true;
+}
+
+/* CSS 2.1 §E.2's STEP 1, FIRST ITEM — "background color of element over the entire canvas", where WHICH
+   element is CSS 2.1 §14.2's answer above and WHAT AREA is CSS 2.1 §2.3.1's. `root` is the element
+   CSS 2.1 §E.2's step 1 was offered for, which core/paint/paint_order.c offers only when it is the
+   document's root.
+   AN ALPHA OF ZERO IS NO INK AND NOT A SMALL AMOUNT OF IT, exactly as it is for a box: a canvas whose colour
+   is `transparent` is CSS 2.1 §E.2's own "The canvas is transparent if contained within another", and a fill
+   that changes no pixel is a mark nothing downstream could distinguish from its absence. */
+static bool bp_canvas_background(BpState *st, lxb_dom_element_t *root)
+{
+    DisplayMark mark;
+    CssColor color;
+
+    if (!css_used_color(bp_canvas_background_element(st->ctx, root), "background-color", &color)) return false;
+    if (color.a == 0.0) return true;
+    if (!bp_canvas_region(root, mark.rect)) return false;
+    mark.kind = DISPLAY_MARK_FILL_CANVAS;
+    mark.color = color;
+    display_list_append(st->out, &mark);
+    return true;
 }
 
 /* CSS 2.1 §E.2's FIRST MARK for a block-level box — its step 2 block arm opens "background color of element
@@ -140,10 +250,12 @@ static bool bp_visit(PaintStep step, lxb_dom_element_t *el, void *user)
                        "offer names an element of the document the walk was started in");
     st->offers++;
     switch (step) {
-    /* THE CANVAS. Counted as an offer and painted nowhere; see box_paint.h's first residual for the extent
-       that is the surface's rather than the document's. */
+    /* CSS 2.1 §E.2's STEP 1 — THE CANVAS. Its FIRST item only; the second is the canvas's background IMAGE
+       and is box_paint.h's first residual, which is the same missing mark kind every other step's image item
+       waits on. CSS 2.1 §E.2 offers this step for the root element, and CSS 2.1 §14.2 decides whether the
+       root's own background properties or its first `body` child's are the ones the canvas takes. */
     case PAINT_STEP_ROOT_BACKGROUND:
-        return true;
+        return bp_canvas_background(st, el);
     /* CSS 2.1 §E.2's STEP 2, BOTH ARMS — and the ROOT CLAUSE, which is the sub-list's and therefore this
        file's. Step 2's block arm reads "background color of element UNLESS IT IS THE ROOT ELEMENT" and its
        table arm's first item carries the same clause; core/paint/paint_order.h offers step 2 for the root like

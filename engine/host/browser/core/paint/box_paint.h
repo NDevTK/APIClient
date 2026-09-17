@@ -24,27 +24,31 @@
  * what it computed itself — that a walk it started offered a step it defines, that a list it built took the
  * mark it appended — and nothing about what any page declared.
  *
- * NAMED RESIDUAL — CSS 2.1 §E.2's STEP 1, WHICH IS THE CANVAS AND HAS NO RECTANGLE.
- * WHAT IS NOT COVERED: `PAINT_STEP_ROOT_BACKGROUND` is counted as an offer and produces no mark, so nothing
- * this component paints reaches the canvas. CSS 2.1 §E.2 step 1 is "background color of element over the
- * entire canvas", and what blocks it is the EXTENT and not the colour: core/paint/display_list.h's one mark
- * kind carries a RECTANGLE, and CSS 2.1 §2.3.1 "The canvas" says "the canvas is infinite for each dimension of
- * the space, but rendering generally occurs within a finite region of the canvas established by the user agent
- * according to the target medium" — so which finite region a canvas fill covers is a fact about the SURFACE
- * being rasterized and not one any document states. CSS 2.1 §14.2 "The background"'s CONDITION is not what
- * blocks it: both of its conjuncts are read in this file already, and the arm below that decides which element
- * may paint its own background is the same rule read from the other side.
- * WHAT THE NEXT DIFF BUILDS: a SECOND mark kind in core/paint/display_list.h — a fill whose extent is the
- * surface's rather than a rectangle's — and step 1's arm here, which asks CSS 2.1 §14.2's condition it already
- * asks and takes the background properties of the root or of its first body child accordingly. Nothing else is
- * missing: the colour of either element is `css_used_color`'s answer today.
- * HOW ITS ABSENCE WOULD SHOW: a document whose background is declared on its root or on its body paints no
- * background AT ALL. The body case is the common one and is the sharper symptom, because CSS 2.1 §14.2 moves
- * that colour off the body's own box as well — "must not paint a background for that child element" — so a
- * page carrying nothing but `body { background: #fff }` comes out with every other box painted and no page
- * background anywhere, rather than with a background that merely stops at the body's edges.
- * RETIREMENT: this record goes when `box_paint_stacking_context` appends a mark for
- * `PAINT_STEP_ROOT_BACKGROUND`.
+ * NAMED RESIDUAL — CSS 2.1 §E.2's STEP 1 IS TWO ITEMS AND THIS PAINTS THE FIRST.
+ * WHAT IS NOT COVERED: the canvas's background IMAGE. CSS 2.1 §E.2's step 1 second item is "background image
+ * of element, over the entire canvas, anchored at the origin that would be used if it was painted for the
+ * root element", and CSS 2.1 §14.2 "The background" states the anchoring again for the propagated case —
+ * "Such backgrounds must also be anchored at the same point as they would be if they were painted only for
+ * the root element".
+ * NEITHER OF THE TWO THINGS THAT USED TO BLOCK STEP 1 BLOCKS THIS: the EXTENT is `bp_canvas_region`'s answer
+ * and the CONDITION is `bp_canvas_background_element`'s, and the colour item uses both today. What blocks it
+ * is the IMAGE MARK, which core/paint/display_list.h has no kind for — and that is ONE gap and not one per
+ * step, because every image item of every step of CSS 2.1 §E.2 wants the same operand and no step has it.
+ * THE ANCHORING IS AN IMAGE CONCERN AND NOT A SECOND EXTENT, which is worth saying because both sentences
+ * quoted above are about it: a `background-position` names the origin a repeating image is laid from, and a
+ * SOLID COLOUR covering an area CSS 2.1 §2.3.1 "The canvas" makes infinite has no origin to be anchored at.
+ * So the colour item needed none of it and the image item needs all of it.
+ * WHAT THE NEXT DIFF BUILDS: not this component's. What must EXIST before an image mark can be appended
+ * anywhere is an `<image>` that has become PIXELS — this engine's `<image>` road ends at a validity test,
+ * core/css/css_image.h answering whether a component value matches css-images-3 §2 "Image Values: the <image>
+ * type" while deliberately keeping the author's own bytes, so nothing turns a `<url>` into anything a surface
+ * could composite. The diff that unblocks every image item at once is the one that makes such a thing exist,
+ * and CSS 2.1 §E.2's step 1 then gains its second item here beside the first.
+ * HOW ITS ABSENCE WOULD SHOW: a page whose background is declared as an image alone paints no page
+ * background, while the same page declaring a colour beside the image paints the colour and none of the image
+ * — so a document comes out with its fallback colour where a browser puts its artwork.
+ * RETIREMENT: this record goes when `box_paint_stacking_context` appends a mark for CSS 2.1 §E.2's step 1
+ * second item.
  *
  * NAMED RESIDUAL — THE STEPS WHOSE MARK KIND DOES NOT EXIST YET.
  * WHAT IS NOT COVERED: `PAINT_STEP_TABLE_BORDERS`, `PAINT_STEP_INLINE_LINE_BOXES`,

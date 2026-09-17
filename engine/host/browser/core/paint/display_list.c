@@ -1,6 +1,7 @@
 /* THE INK — the mark vocabulary and the ordered sequence. See display_list.h for why the order is the list's
-   whole statement, why a rectangle carries the environment facts it is a function of, and why a colour is not
-   quantized here. */
+   whole statement, why a rectangle carries the environment facts it is a function of, why a colour is not
+   quantized here, and why the canvas is a KIND rather than a rectangle with a flag on it. */
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdlib.h>
 
@@ -8,6 +9,29 @@
 #include "core/css/css_color.h"
 #include "core/css/css_length.h"
 #include "core/paint/display_list.h"
+
+/* IS THIS ONE OF THE KINDS THIS COMPONENT DEFINES — A SWITCH AND NOT A RANGE TEST, SO THE COMPILER ASKS THE
+   QUESTION FIRST. `DisplayMarkKind` is a closed vocabulary this engine writes, and a `kind <= LAST` comparison
+   would silently ADMIT the next member somebody adds: the append below would take a mark whose meaning nothing
+   here states, and the first thing that noticed would be a surface drawing the wrong shape. Written as a
+   switch with NO `default:` label, `-Wswitch` names THIS FILE at the moment the enum grows — which is the same
+   mechanism core/paint/box_paint.c relies on over `PaintStep`, and the fix is an ARM here and in every
+   consumer, never a `default:`.
+   IN A RELEASE BUILD THIS IS REFERENCED AND NEVER CALLED, and that is the DCHECK doing what check.h says it
+   does rather than a leftover: the release spelling is `((void)sizeof(cond))`, so the condition is
+   TYPE-CHECKED and not evaluated. `clang -Wall -DAPICLIENT_DEV=0` therefore reports it as not needed and not
+   emitted; a reader meeting that has found the assert compiled out and not a dead predicate, and the answer
+   is neither to drop the helper nor to call it outside the DCHECK — the compile-time question above is the
+   whole point of it, and it is asked at every setting. */
+static bool dl_kind_is_defined(DisplayMarkKind kind)
+{
+    switch (kind) {
+    case DISPLAY_MARK_FILL_RECT:
+    case DISPLAY_MARK_FILL_CANVAS:
+        return true;
+    }
+    return false;
+}
 
 void display_list_init(DisplayList *dl)
 {
@@ -29,11 +53,12 @@ void display_list_append(DisplayList *dl, const DisplayMark *mark)
     DCHECK(dl != NULL, "a mark was appended to no display list");
     DCHECK(mark != NULL, "a display list was appended to with no mark — an append is a COPY of the caller's "
                          "mark, so there is no arm here under which the absence of one is a statement");
-    DCHECK(mark->kind == DISPLAY_MARK_FILL_RECT,
+    DCHECK(dl_kind_is_defined(mark->kind),
            "a display mark carries a kind this component does not define. The enum is a closed VOCABULARY this "
-           "engine writes, so a value outside it is this engine's own uninitialised memory rather than a "
-           "document's; see display_list.h's residual for which kinds CSS 2.1 §E.2 \"Painting order\"'s "
-           "sub-lists still name and which diff builds each");
+           "engine writes and the predicate above is a switch, so a value that fails it is this engine's own "
+           "uninitialised memory rather than a document's — a kind somebody ADDED would have been named at "
+           "compile time by -Wswitch instead. See display_list.h's residual for which kinds CSS 2.1 §E.2 "
+           "\"Painting order\"'s sub-lists still name and which diff builds each");
     /* THE SPACE AND THE ALPHA ARE THIS ENGINE'S OWN AND ARE THEREFORE ASSERTABLE, which is the line
        CLAUDE.md draws and which a colour read out of a page makes worth drawing explicitly. The page states
        the SPECIFIED colour and this engine states the used one: the space is sRGB because the painter ran CSS

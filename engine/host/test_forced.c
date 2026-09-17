@@ -19397,6 +19397,7 @@ static void tree_construction_write_selftest(void)
  * both (which viewport, and which of its dimensions), and a length carrying one without the other could not be
  * turned into a domain". */
 #define TF_DL_MARKS 20u
+#define TF_DL_KINDS 2u
 
 static void display_list_selftest(JSContext *ctx)
 {
@@ -19466,6 +19467,37 @@ static void display_list_selftest(JSContext *ctx)
           "union\", and a list read over a sequence is that rule read over more than two operands — an "
           "intersection or a last-writer-wins would name one world for ink built out of two");
 
+    /* THE CANVAS KIND, AND THE ONE PROPERTY THAT SEPARATES CARRYING ITS EXTENT FROM LEAVING IT OFF. A
+       `DISPLAY_MARK_FILL_CANVAS` covers an area CSS 2.1 §2.3.1 "The canvas" makes INFINITE, so the design a
+       reader reaches for is a mark with no rectangle on it and a rasterizer that supplies its own region — and
+       what that design loses is checkable here and nowhere else: `display_list_env` is the union over every
+       coordinate of every mark, so a canvas mark with no coordinates would contribute NOTHING, and a list whose
+       only ink is a page background would report `CSS_ENV_NONE`. That is a POSITIVE statement that this ink is
+       a function of no picked fact, and it would be false — core/paint/box_paint.c takes the region from CSS
+       2.1 §10.1's initial containing block, which core/frame/viewport.h makes a picked one. The two appends
+       below are therefore the assertion that a canvas mark's extent is UNION-VISIBLE exactly as a box's is. */
+    m.kind = DISPLAY_MARK_FILL_CANVAS;
+    m.rect[0] = css_px(0.0);
+    m.rect[1] = css_px(0.0);
+    m.rect[2] = css_px_env(CSS_ENV_ICB_WIDTH, ctx, 1280.0);
+    m.rect[3] = css_px_env(CSS_ENV_ICB_HEIGHT, ctx, 720.0);
+    m.color = CSS_COLOR_OPAQUE_BLACK;
+    display_list_append(&dl, &m);
+    CHECK(display_list_env(&dl) ==
+          (CSS_ENV_BIT(CSS_ENV_ICB_WIDTH) | CSS_ENV_BIT(CSS_ENV_DEFAULT_FONT_SIZE) |
+           CSS_ENV_BIT(CSS_ENV_ICB_HEIGHT)),
+          "a display list holding a CANVAS mark does not report the fact its rendered region is a function of. "
+          "CSS 2.1 §2.3.1 \"The canvas\" leaves the region \"established by the user agent\" and CSS 2.1 §10.1 "
+          "establishes it for continuous media out of the viewport, so the extent of a page background is "
+          "viewport-derived ink — and a list that reported CSS_ENV_NONE for it would be claiming this ink is "
+          "the same ink under every arm of a fact it moves with");
+    CHECK(dl.n == TF_DL_MARKS + 3 && dl.v[dl.n - 1].kind == DISPLAY_MARK_FILL_CANVAS &&
+          dl.v[0].kind == DISPLAY_MARK_FILL_RECT,
+          "a mark's KIND changed where the list put it. core/paint/display_list.h has no entry that sorts or "
+          "compares two marks, so a canvas mark is APPENDED like every other and lands where its builder put "
+          "it — CSS 2.1 §E.2 \"Painting order\" makes the canvas step 1 because step 1 is offered first, never "
+          "because a consumer moved it to the front");
+
     display_list_free(&dl);
     CHECK(dl.n == 0 && dl.v == NULL && dl.cap == 0,
           "display_list_free left a list that is not empty. It leaves an EMPTY list rather than a freed one so "
@@ -19473,6 +19505,11 @@ static void display_list_selftest(JSContext *ctx)
           "that survived would have the next append write through a pointer that is gone");
     display_list_free(&dl);   /* the second free the contract above promises is reachable */
     printf("@PAINT display-list rows=%u marks=%u\n", 8u, TF_DL_MARKS);
+    /* A SECOND ROW RATHER THAN A FIELD ON THE FIRST, so that any reader keyed on the row above reads exactly
+       what it read before. `kinds` is the number of `DisplayMarkKind` members this selftest appends at least
+       one of, which is every member the vocabulary defines; it is a CONSTANT, and on an artifact built before
+       the canvas kind existed `grep -c '@PAINT canvas-mark'` answers 0, which is this row's own control. */
+    printf("@PAINT canvas-mark kinds=%u\n", TF_DL_KINDS);
 }
 
 static void message_source_selftest(void)
