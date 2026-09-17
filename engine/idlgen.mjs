@@ -2695,6 +2695,80 @@ for (const [n] of memberRows)
     throw new Error(`[idl-audit] the member identifier \`${n}\` is not ASCII, and IDL_MEMBER_EXPOSURE is ` +
                     `sorted here with a JavaScript code-unit comparison and read with strcmp — the two orders ` +
                     `agree only over ASCII, and a bsearch over an array sorted the other way answers wrongly`);
+
+/* ---- WEB IDL §3.8's OWN-PROPERTY BAND, PER [Global] INTERFACE ------------------------------------------- */
+/* WHICH MEMBERS MAY STAND ON A REALM'S GLOBAL OBJECT AT ALL — a DIFFERENT question from IDL_GLOBAL_MEMBERS
+   above, which unions the whole inheritance chain, and the two are emitted twenty lines apart so the
+   difference is worth stating flatly. That union exists so a name REACHABLE from a global is never REMOVED
+   from a realm; this one exists so a name that may only be reached UP THE PROTOTYPE CHAIN is never WRITTEN
+   onto the object. A consumer that read the union for this question accepts every inherited member as an own
+   property, which is the §3.8 violation whose only symptom is a descriptor read.
+   §3.8 `internally create a new object implementing the interface` takes one arm for a global — "If interface
+   is declared with the [Global] extended attribute, then: Define the regular operations of interface on
+   instance, given realm" — and §3.7.7 Operations spells what that arm iterates: "let operations be the list of
+   regular operations that are members of definition". MEMBERS OF DEFINITION, `definition` being the
+   instance's own [[PrimaryInterface]] and not its chain. §2.3 Interface mixins fixes what that set contains —
+   "Each member of M is considered to be a member of each interface I, J, K, … that includes M", and "The host
+   interfaces of mI, mJ, and mK, are I, J, and K respectively" — so a MIXIN member belongs to the INCLUDING
+   interface and an INHERITED one is not a member of the inheriting interface at all. §3.7.3 Interface
+   prototype object is where an inherited member does go: "If interface is not declared with the [Global]
+   extended attribute, then: Define the regular attributes of interface on interfaceProtoObj, given realm".
+   THE CHAIN'S UNFORGEABLES ARE IN THE BAND, AND THEY ARE DERIVED RATHER THAN A SECOND RULE. §3.8 reaches the
+   inherited interfaces in exactly ONE place, the loop standing ABOVE that arm: "let interfaces be the
+   inclusive inherited interfaces of interface … let unforgeables be the value of the [[Unforgeables]] slot of
+   the interface object of ancestor interface in realm … perform DefinePropertyOrThrow(instance, key,
+   descriptor)". So an ancestor's [LegacyUnforgeable] member IS an own property of the global, and nothing
+   else of an ancestor's is. Over THIS corpus that adds nothing to any of the nine rows — every
+   [LegacyUnforgeable] member on a [Global] interface's chain is one `Window` declares itself — and it is
+   COMPUTED rather than asserted precisely because that is a fact about today's corpus and not about the
+   algorithm: the day webref gives WorkerGlobalScope an unforgeable member, this table gains it and the C
+   learns nothing. */
+const unforgeablesOf = (iface) => flatten(iface)
+  .filter((m) => m.name && (m.extAttrs || []).some((e) => e.name === "LegacyUnforgeable"))
+  .map((m) => m.name);
+const globalOwnOf = new Map(globalRows.map(([iface]) =>
+  [iface, [...new Set([...declaredBy(iface), ...unforgeablesOf(iface)])].sort()]));
+/* THE MASKS MUST BE PAIRWISE DISTINCT, because core/idl_args.c reaches a row from the mask a realm STORES —
+   core/realm.c resolves the identifier once at install and keeps the resolved global names, so the identifier
+   is not there to key by. Two rows sharing a mask would make that inverse answer an arbitrary one of them and
+   a realm would be audited against another interface's member band. It is a refusal and not a C-side assert
+   because the corpus is what decides it: today each of the nine carries a bit no other row has. */
+{
+  const seen = new Map();
+  for (const [iface, mask] of globalRows) {
+    const prev = seen.get(mask);
+    if (prev !== undefined)
+      throw new Error(`[idl-audit] the §3.3.8 [Global] interfaces \`${prev}\` and \`${iface}\` implement the ` +
+                      `SAME set of global names, and core/idl_args.c reaches a row from the mask a realm stores ` +
+                      `rather than from the identifier — so one of the two would be audited against the other's ` +
+                      `member band. §3.3.8 keys a realm by its [Global] interface; give the mask a bit that ` +
+                      `tells them apart, or key the realm by the identifier instead`);
+    seen.set(mask, iface);
+  }
+}
+/* THE SAME TWO REFUSALS THE TABLES ABOVE MAKE, FOR THE SAME TWO REASONS, and they have to be made again
+   because this is a third array sorted by a third call. ASCII, because the C reads each row with bsearch and
+   strcmp and a JavaScript code-unit sort agrees with strcmp's order only over ASCII. And CONTAINMENT in
+   IDL_GLOBAL_MEMBERS, because the union above is built over `chainOf` of every [Global] interface and this
+   band is drawn from `declaredBy` plus the chain's unforgeables — both subsets of that walk by construction,
+   so a name here that is not there means one of the two derivations has been filtered differently and the two
+   arrays have stopped being about one population. */
+for (const [iface, own] of globalOwnOf)
+  for (const n of own) {
+    if (!/^[\x20-\x7e]+$/.test(n))
+      throw new Error(`[idl-audit] \`${iface}\`'s member \`${n}\` is not ASCII, and its §3.8 own-property ` +
+                      `band is sorted here with a JavaScript code-unit comparison and read with strcmp — the ` +
+                      `two orders agree only over ASCII, and a bsearch over an array sorted the other way ` +
+                      `answers wrongly`);
+    if (!globalMemberNames.includes(n))
+      throw new Error(`[idl-audit] \`${iface}\` declares \`${n}\` and IDL_GLOBAL_MEMBERS does not carry it — ` +
+                      `that union is taken over \`chainOf\` of every §3.3.8 [Global] interface and this band ` +
+                      `over \`declaredBy\` plus the chain's unforgeables, so this is a subset of it by ` +
+                      `construction. A filter that broke the containment has made the two arrays answer about ` +
+                      `two populations`);
+  }
+const ownArrayName = (iface) => `IDL_GLOBAL_OWN_${iface.replace(/[^A-Za-z0-9]/g, "_").toUpperCase()}`;
+
 const expW = Math.max(...exposureRows.map((r) => r[0].length + 2));
 const memW = memberRows.length ? Math.max(...memberRows.map((r) => r[0].length + 2)) : 0;
 const globW = Math.max(...globalRows.map((r) => r[0].length + 2));
@@ -2748,16 +2822,32 @@ const exposureH =
   "    const char *name;   /* the identifier §3.8 defines on the global */\n" +
   "    unsigned    set;    /* §3.3.7's exposure set of the construct that identifier names */\n" +
   "} IdlExposureRow;\n\n" +
+  "/* `own` IS WEB IDL §3.8's OWN-PROPERTY BAND FOR THIS INTERFACE, and it is NOT the chain-wide union of\n" +
+  "   every [Global] interface's members narrowed down — the two answer opposite questions and a consumer\n" +
+  "   that swaps them is wrong in a direction no descriptor shows. That union takes the whole INHERITANCE\n" +
+  "   CHAIN so that a member REACHABLE from a global is never REMOVED from a realm (see this file's foot for\n" +
+  "   why it is no longer emitted); this row lists what §3.8 actually\n" +
+  "   WRITES ONTO the object — \"Define the regular operations of interface on instance\", whose\n" +
+  "   §3.7.7 definition reads \"let operations be the list of regular operations that are members of\n" +
+  "   definition\", plus the [LegacyUnforgeable] members the loop above that arm copies from the\n" +
+  "   inclusive inherited interfaces. An INHERITED member is on its own interface's prototype object\n" +
+  "   by §3.7.3 and the global reaches it up the chain, so it is absent here on purpose. */\n" +
   "typedef struct IdlGlobalRow {\n" +
   "    const char *iface;  /* a §3.3.8 [Global] interface */\n" +
   "    unsigned    names;  /* the global names its global object implements */\n" +
+  "    const char *const *own;    /* §3.8's own-property band, sorted for bsearch */\n" +
+  "    unsigned           n_own;  /* its extent — a pointer has none, so COUNTOF cannot be used */\n" +
   "} IdlGlobalRow;\n\n" +
   "static const IdlExposureRow IDL_EXPOSURE[] = {\n" +
   exposureRows.map(([n, m]) =>
     `    { ${`"${n}",`.padEnd(expW + 1)} ${maskSpelling(m)} },`).join("\n") + "\n};\n\n" +
+  globalRows.map(([n]) =>
+    `static const char *const ${ownArrayName(n)}[] = {\n` +
+    globalOwnOf.get(n).map((m) => `    "${m}",`).join("\n") + "\n};\n").join("\n") + "\n" +
   "static const IdlGlobalRow IDL_GLOBALS[] = {\n" +
   globalRows.map(([n, m]) =>
-    `    { ${`"${n}",`.padEnd(globW + 1)} ${maskSpelling(m)} },`).join("\n") + "\n};\n\n" +
+    `    { ${`"${n}",`.padEnd(globW + 1)} ${maskSpelling(m)},\n`
+    + `      ${ownArrayName(n)}, COUNTOF(${ownArrayName(n)}) },`).join("\n") + "\n};\n\n" +
   "/* WEB IDL §3.7.6 Attributes' \"If attr is not exposed in realm, then continue.\" and §3.7.7 Operations'\n" +
   "   \"If op is not exposed in realm, then continue.\", as the one fact those two steps need that no\n" +
   "   identifier states: the global names on which a MEMBER of a [Global] interface may stand.\n" +
@@ -2776,28 +2866,29 @@ const exposureH =
   "static const IdlMemberExposureRow IDL_MEMBER_EXPOSURE[] = {\n" +
   memberRows.map(([n, m]) =>
     `    { ${`"${n}",`.padEnd(memW + 1)} ${maskSpelling(m)} },`).join("\n") + "\n};\n\n" +
-  "/* EVERY MEMBER NAME A §3.3.8 [Global] INTERFACE OR ONE IT INHERITS DECLARES — the same union the table\n" +
-  "   above is filtered out of, read for its OTHER fact. IDL_MEMBER_EXPOSURE answers which realms §3.3.7\n" +
-  "   step 1 REMOVES a member from, and by construction it has no row for a member whose exposure set is `*`;\n" +
-  "   so its silence carries two states at once — a member exposed everywhere, and a name that is no [Global]\n" +
-  "   interface's member at all — and the second is a property installed on a global that no browser has.\n" +
-  "   §3.7.6 Attributes and §3.7.7 Operations are what put a member THERE: \"Regular attributes are exposed on\n" +
-  "   the interface prototype object, unless the attribute is unforgeable or if the interface was declared\n" +
-  "   with the [Global] extended attribute, in which case they are exposed on every object that implements\n" +
-  "   the interface\", and the same sentence for operations — so the population is the [Global] interfaces AND\n" +
-  "   their inheritance chains, exactly as the exposure table's is, because a WorkerGlobalScope member is\n" +
-  "   reachable from a DedicatedWorkerGlobalScope global one link up the prototype chain.\n" +
-  "   IT IS NOT A SECOND COPY: both arrays are emitted from one union in one pass, and the generator refuses\n" +
-  "   to emit them if IDL_MEMBER_EXPOSURE is not a subset of this. core/idl_args.c reads it at the ONE place\n" +
-  "   §3.7.6's and §3.7.7's continue-step is asked, which is the one place a member's target is known to be\n" +
-  "   the realm's global. */\n" +
-  "static const char *const IDL_GLOBAL_MEMBERS[] = {\n" +
-  globalMemberNames.map((n) => `    "${n}",`).join("\n") + "\n};\n\n#endif\n";
+  "/* THE CHAIN-WIDE UNION OF EVERY [Global] INTERFACE'S MEMBERS IS *NOT* EMITTED, and the absence is a\n" +
+  "   decision rather than an omission. It stood here as IDL_GLOBAL_MEMBERS and had exactly one C reader:\n" +
+  "   core/idl_args.c's §3.7.6/§3.7.7 continue-step, asking whether a member being installed on a realm's\n" +
+  "   global is a member of ANY [Global] interface or of anything one of them inherits. That question is a\n" +
+  "   strictly weaker form of the one the IDL_GLOBALS row above now answers — §3.8 writes a [Global]\n" +
+  "   interface's OWN members onto the instance and an inherited one goes on its own §3.7.3 prototype — so\n" +
+  "   the union admitted every chain-only name: `setTimeout` is a `Window` member and a `WorkerGlobalScope`\n" +
+  "   one, so it passed in a DedicatedWorkerGlobalScope realm although §3.8 never places it there. With the\n" +
+  "   per-interface band emitted the union had no reader left, and a generated table nobody reads is the\n" +
+  "   wrong-operand table sitting in the header inviting the next reader to reach for it.\n" +
+  "   THE FACT ITSELF IS NOT LOST AND IS STILL LOAD-BEARING IN THE GENERATOR: idlgen.mjs builds that union in\n" +
+  "   one pass and refuses to emit anything unless IDL_MEMBER_EXPOSURE is a subset of it AND every row's\n" +
+  "   `own` band is a subset of it, which is what keeps all three arrays answering about one population. A C\n" +
+  "   consumer that needs \"is this name a member ANYWHERE on a [Global] chain\" — the walk over a finished\n" +
+  "   global in core/realm.c is the one that will — re-emits it here WITH that reader, never before. */\n" +
+  "#endif\n";
 emitGenerated("idl_exposure.h", exposureH,
               `${exposureRows.length} identifiers §3.8 can define on a global, the ${globalRows.length} ` +
               `[Global] interfaces §3.3.7 step 1 measures them against, the ${globalMemberNames.length} ` +
-              `members those interfaces and their chains declare, and the ${memberRows.length} of THOSE ` +
-              `whose exposure set can EXCLUDE a realm`,
+              `members those interfaces and their chains declare, the ${memberRows.length} of THOSE ` +
+              `whose exposure set can EXCLUDE a realm, and the ` +
+              `${[...globalOwnOf.values()].reduce((a, o) => a + o.length, 0)} member placements §3.8 ` +
+              `writes ONTO a global across those ${globalRows.length} interfaces`,
               "idl_args.c answers §3.3.7 step 1 off it at every global property reference and at every member " +
               "installed on a global, so a stale table is a name present in a realm the standard says it is " +
               "absent from, or absent from one it is in.");

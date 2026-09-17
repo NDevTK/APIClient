@@ -2644,11 +2644,13 @@ bool idl_exposed_in_realm(JSContext *ctx, const char *identifier);
  * its property, exactly as an unknown identifier keeps its own" — the RELEASE behaviour is unchanged and that
  * sentence is still true of it, and reading it as the whole answer is what made a real defect invisible: a
  * no-row name is EITHER a member whose §3.3.7 exposure set is `*` OR a name that is no [Global] interface's
- * member at all, and the second is a property on a global that no browser has. browser/idl_exposure.h's
- * IDL_GLOBAL_MEMBERS tells them apart — the same union IDL_MEMBER_EXPOSURE is filtered out of, emitted whole
- * in the same pass, with the containment asserted by the generator so the two cannot come to answer about two
- * populations. The implementation DCHECKs it at the one call that knows the target is the realm's global, and
- * a release build takes the arm this paragraph always described.
+ * member at all, and the second is a property on a global that no browser has. The IDL_GLOBALS row for THIS
+ * REALM's [Global] interface tells them apart, and it is a strictly sharper discriminator than the chain-wide
+ * union that used to stand here: that union asked whether a name is a member of ANY [Global] interface or of
+ * anything one of them inherits, which `setTimeout` satisfies in a WORKER realm although §3.8 never writes it onto a
+ * worker global. The row's `own` band is what §3.8 writes, so it refuses the chain-only names as well as the
+ * names that are no member anywhere. The implementation DCHECKs it at the one call that knows the target is
+ * the realm's global, and a release build takes the arm this paragraph always described.
  *
  * IT IS THE MEMBER NAME AND NOT AN ACCESSOR'S — the "get "/"set " prefix §3.7.6 puts on the FUNCTION OBJECT is
  * not part of the property key and not part of the corpus's identifier, so the string asked here is the one

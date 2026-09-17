@@ -7379,16 +7379,56 @@ static int idl_global_member_name_cmp(const void *key, const void *row)
    host stated), and the identifier is what a reader needs in front of them — so it is read BACK out of the
    same IDL_GLOBALS row the mask came from rather than remembered anywhere. Dev-only, because its only caller
    is a DCHECK's message. */
-static const char *idl_realm_global_interface(JSContext *ctx)
+static const IdlGlobalRow *idl_realm_global_row(JSContext *ctx)
 {
     unsigned names = realm_global_names(ctx);
     size_t i;
 
-    for (i = 0; i < sizeof IDL_GLOBALS / sizeof IDL_GLOBALS[0]; i++)
-        if (IDL_GLOBALS[i].names == names) return IDL_GLOBALS[i].iface;
+    for (i = 0; i < COUNTOF(IDL_GLOBALS); i++)
+        if (IDL_GLOBALS[i].names == names) return &IDL_GLOBALS[i];
+    return NULL;
+}
+
+static const char *idl_realm_global_interface(JSContext *ctx)
+{
+    const IdlGlobalRow *r = idl_realm_global_row(ctx);
+
     /* Unreachable while every mask comes from idl_global_names_of, which returns a row's own `names` — and a
-       message is the wrong place to abort, so this says what it could not name instead of asserting it. */
-    return "a [Global] interface no IDL_GLOBALS row's global names match";
+       message is the wrong place to abort, so this says what it could not name instead of asserting it. The
+       band reader below does assert it, because there the row is not decoration but the operand. */
+    return r ? r->iface : "a [Global] interface no IDL_GLOBALS row's global names match";
+}
+
+/* WEB IDL §3.8's OWN-PROPERTY BAND FOR *THIS* REALM — does the [Global] interface this realm's global object
+   implements DECLARE `name`, or would putting it here be a member only a PROTOTYPE may carry?
+   IT IS NOT A NARROWING OF THE CHAIN-WIDE UNION THAT USED TO BE ASKED HERE, IT IS A DIFFERENT QUESTION. That
+   union — every member of every [Global] interface and of everything one of them inherits — answers what
+   §3.3.7 step 1 needs, which realms a member must be REMOVED from, where removing a name reachable up the
+   prototype chain is the one direction it must never fail in. This asks the opposite: which names §3.8 WRITES
+   ONTO the object. A name reachable up the chain is exactly a name that must NOT be written, so the union was
+   the wrong operand here by the width of every ancestor — and that width is not academic: `setTimeout`,
+   `fetch`, `structuredClone` and `queueMicrotask` are all in it, all declared by `Window` alone, and all
+   reachable in a worker realm only through `WorkerGlobalScope.prototype`. Asked of the union, an install of
+   one of them onto a WORKER global PASSED, which is the §3.8 violation whose only symptom is a descriptor
+   read. browser/idl_exposure.h states at its foot why the union is no longer emitted at all.
+   THE ROW IS THE OPERAND AND THE MASK IS THE KEY, because that is what a realm HAS: core/realm.c resolves the
+   host's identifier once at install and keeps the resolved global names, so the identifier is not there to
+   look up. engine/idlgen.mjs refuses to emit two rows with the same mask, which is what makes that inverse a
+   function rather than a guess — see the paragraph it states the refusal in.
+   BOTH OPERANDS ARE THINGS THIS CODEBASE COMPUTED: the generated band, and the [Global] identifier this
+   realm's own host stated. Nothing a page or a server states reaches either, which is what makes an abort
+   above this sound rather than a switch somebody else holds. */
+static bool idl_realm_global_declares(JSContext *ctx, const char *name)
+{
+    const IdlGlobalRow *r = idl_realm_global_row(ctx);
+
+    DCHECK(r != NULL,
+           "a realm's Web IDL §3.3.8 [Global] global names match no row of browser/idl_exposure.h's "
+           "IDL_GLOBALS — every mask reaches a realm through idl_global_names_of, which returns a row's own "
+           "`names` and CHECKs the identifier it was given, so a mask that names no row is a value this engine "
+           "computed and then lost. §3.8's own-property band is per-interface and there is no interface here "
+           "to read it from");
+    return bsearch(name, r->own, r->n_own, sizeof r->own[0], idl_global_member_name_cmp) != NULL;
 }
 
 /* WEB IDL §3.3.7 [Exposed] STEP 1 OVER §3.7.6's AND §3.7.7's VOCABULARY — see idl_args.h for why this is a
@@ -7452,30 +7492,37 @@ static bool idl_global_member_refused(JSContext *ctx, JSValueConst target, const
        object that implements the interface", and the same sentence for operations. So a name standing on this
        object is a member of THIS REALM'S [Global] interface or it is a property no browser has anywhere.
        IT IS THE ASK AND NOT THE OUTCOME. This runs before the exposure arithmetic below and before any
-       caller's own gate, so a member §3.3.7 step 1 or step 2 correctly REFUSES never reaches it — a refusal
-       needs a row in IDL_MEMBER_EXPOSURE, and IDL_GLOBAL_MEMBERS is the superset that has one for every
-       [Global] member. A census of what LANDED would fire on every Window-only member in a worker realm and
-       on every [SecureContext] member in an insecure one, which is the gate working.
+       caller's own gate, so a member §3.3.7 step 1 or step 2 correctly REFUSES never reaches it — the band is
+       §3.8's own placement list and is asked of the CALL. A census of what LANDED would fire on every
+       Window-only member in a worker realm and on every [SecureContext] member in an insecure one, which is
+       the gate working.
        IT STANDS ONLY ON WHAT THIS CODEBASE COMPUTED: the string one of this engine's own installers passed,
        and the [Global] identifier this realm's host stated. A page's own `globalThis.x = 1` is an ordinary
        [[Set]] that reaches no entry in this file, so nothing a page or a server states can enter it.
        WHAT IT CANNOT SEE: a member-shaped own property placed on the global with a raw JS_SetPropertyStr
        never reaches this call. core/frame/remote_op.c's `__apiclient*` operand bindings and the fixtures' own
        host surfaces are that, deliberately — outside this population rather than exempted from it. */
-    DCHECKF(bsearch(name, IDL_GLOBAL_MEMBERS,
-                    sizeof IDL_GLOBAL_MEMBERS / sizeof IDL_GLOBAL_MEMBERS[0],
-                    sizeof IDL_GLOBAL_MEMBERS[0], idl_global_member_name_cmp) != NULL,
+    DCHECKF(idl_realm_global_declares(ctx, name),
             "%s:%d installs `%s` as a member on the global object of a realm whose Web IDL §3.3.8 [Global] "
-            "interface is `%s`, and `%s` is a member of NO [Global] interface in the platform's IDL and of "
-            "nothing any of them inherits — browser/idl_exposure.h's IDL_GLOBAL_MEMBERS is the corpus's own "
-            "list of those names. §3.7.6 Attributes and §3.7.7 Operations are what put a member on a global at "
-            "all (\"unless the attribute is unforgeable or if the interface was declared with the [Global] "
-            "extended attribute, in which case they are exposed on every object that implements the "
-            "interface\"), so a name outside that list is a property no browser has on any global. Either the "
-            "member belongs on an interface PROTOTYPE and that line was handed the wrong target, or the "
-            "identifier is misspelt, or the corpus has moved and the table is stale "
+            "interface is `%s`, and `%s` is not a member `%s` DECLARES. §3.8 Platform objects implementing "
+            "interfaces takes ONE arm for a global — \"If interface is declared with the [Global] extended "
+            "attribute, then: Define the regular operations of interface on instance, given realm\" — and "
+            "§3.7.7 Operations spells what that iterates: \"let operations be the list of regular operations "
+            "that are members of definition\". MEMBERS OF DEFINITION, `definition` being this global's own "
+            "[[PrimaryInterface]] and not its chain; the inherited interfaces enter that algorithm only in the "
+            "loop above the arm, which copies [LegacyUnforgeable] members and nothing else. So an INHERITED "
+            "member cannot reach a global by this route at all: §3.7.3 Interface prototype object puts it on "
+            "its own interface's prototype (\"If interface is not declared with the [Global] extended "
+            "attribute, then: Define the regular attributes of interface on interfaceProtoObj, given realm\") "
+            "and the global reaches it UP THE PROTOTYPE CHAIN, where a page observes the difference as "
+            "`globalThis.hasOwnProperty(\"%s\")`. browser/idl_exposure.h's IDL_GLOBALS row for `%s` carries "
+            "that band, which is what §3.8 WRITES rather than what a global can REACH. Either this member "
+            "belongs on an interface PROTOTYPE and the line was "
+            "handed the wrong target, or the install belongs to a different realm kind than the one it ran in, "
+            "or the identifier is misspelt, or the corpus has moved and the table is stale "
             "(`node engine/idlgen.mjs --regen`)",
-            at_file, at_line, name, idl_realm_global_interface(ctx), name);
+            at_file, at_line, name, idl_realm_global_interface(ctx), name,
+            idl_realm_global_interface(ctx), name, idl_realm_global_interface(ctx));
     return !idl_member_exposed_in_realm(ctx, name);
 }
 
