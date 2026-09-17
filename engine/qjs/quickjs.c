@@ -12950,8 +12950,16 @@ static JSValueConst JS_GetPrototypePrimitive(JSContext *ctx, JSValueConst val)
    that link for anything. It is load-bearing on the WindowProxy today: that class's shape link is the object
    carrying the surface a CROSS-ORIGIN read is allowed to reach, which §7.2.3.1 answers null for, so routing the
    walks here before those members are own properties of the Window would take a page's own `w.postMessage`
-   away. Closing it is a change to the host's member placement (Web IDL §3.7.3 Interface prototype object makes
-   every member of a [Global] object an OWN property of it), after which these walks ask this function too. */
+   away. Closing it is a change to the host's member placement: Web IDL §3.7.6 Attributes and Web IDL §3.7.7
+   Operations each put a member of an interface DECLARED [Global] on every object that implements THAT
+   interface, and every cross-origin name the host needs own is a Window member. After that placement these
+   walks ask this function too.
+   THIS CITED Web IDL §3.7.3 Interface prototype object FOR A CLAIM ABOUT A [Global] OBJECT'S WHOLE CHAIN —
+   that every member of every interface the object implements is own. It is not: the [Global] condition is
+   read off the interface the member is DECLARED on, so an INHERITED member stays on its own interface
+   prototype object and no host placement makes it own. The host's core/events/event_target.c carries the
+   argument and what refutes it; it matters here because the sentence above would otherwise read as a promise
+   that this link eventually carries nothing a walk needs, and it will always carry the inherited members. */
 JSValue JS_GetPrototype(JSContext *ctx, JSValueConst obj)
 {
     JSValue val;
