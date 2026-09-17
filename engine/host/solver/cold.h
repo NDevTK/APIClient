@@ -77,7 +77,7 @@ typedef struct {
        raises `deepest`", and that premise is FALSE of one arm — which is not an error state and is not rare.
        HTML §4.12.1.1 "Processing model"'s "execute the script element" step 4, "If el's result is null, then
        fire an event named error at el, and return", is this engine's whole algorithm for a row whose external
-       fetch failed: the row keeps its §4.12.1 position, the cursor passes it, and no compile ever sees it. So
+       fetch failed: the row keeps its §4.12.1.1 position, the cursor passes it, and no compile ever sees it. So
        `deepest` is not raised, the derivation's inequality does not hold, and the assert charged a document
        with one 404'd `<script src>` as a broken census. A MIRRORED page is where this is densest, because a
        script whose origin was not mirrored is exactly a script that fails to load. `deepest` still means the
