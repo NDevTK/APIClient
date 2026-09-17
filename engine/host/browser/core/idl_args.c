@@ -1222,6 +1222,21 @@ static bool idl_type_is_entry_typed(IdlArgType t)
    read that finds it is a call whose steps 3-4 never ran rather than a call with no answer. */
 enum { IDL_OVL_UNSEEDED = -1, IDL_OVL_SHORTER = 0, IDL_OVL_LONGER = 1 };
 
+/* THE RECORD, READ THROUGH ONE DOOR. Every consumer of the surviving entry comes through here, and the reason
+   is that IDL_OVL_UNSEEDED is -1 while the question every consumer asks is `== IDL_OVL_LONGER` — so a RAW read
+   of an unseeded record does not fail, it quietly answers SHORTER, which is a real entry and a wrong one. The
+   write that marks the record unanswered is worth nothing while any reader can take that answer without being
+   asked to prove it was seeded: an assert covering one of three readers is not a guard on the record, it is a
+   guard on one call. This is the door, so there is no second spelling of the question to drift. */
+static int idl_ovl_entry(const JSIdlArgsState *s)
+{
+    DCHECK(s->ovl_entry != IDL_OVL_UNSEEDED,
+           "§3.6's surviving overload entry was read before steps 3-4 chose one — the removal is a fact about "
+           "the argument count and is settled once for the whole call, so a read standing above it is a step "
+           "asking which entry survived before anything had been removed");
+    return s->ovl_entry;
+}
+
 /* THE TYPE THE LONGER ENTRY DECLARES AT THAT POSITION — what step 4 leaves standing once the shorter entry is
    gone. It is a total function over the rows above and crashes for anything else, so a split row added without
    a longer-entry type names itself here rather than falling through to the shorter entry's dictionary. */
@@ -1283,7 +1298,7 @@ static int idl_first_optional_of(const IdlMember *m, int entry)
    could pass the ordinal is a caller that could pass the wrong one. */
 static int idl_first_optional(const IdlMember *m, const JSIdlArgsState *s)
 {
-    return idl_first_optional_of(m, s->ovl_entry);
+    return idl_first_optional_of(m, idl_ovl_entry(s));
 }
 
 /* §3.7.7's "the length of the SHORTEST argument list in the entries in S", which is a DIFFERENT question and
@@ -4239,7 +4254,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
            the loop then converts belongs to the entry that survived it. Written as a per-position test of one
            type it could only ever rewrite the split position itself, and the positions AFTER the split went on
            reading the shorter entry's optional index — see idl_overload_split_optional_from. */
-        bool longer_survived = s->ovl_entry == IDL_OVL_LONGER;
+        bool longer_survived = idl_ovl_entry(s) == IDL_OVL_LONGER;
         /* THE TYPE HALF IS ASKED ONLY WHERE THE TWO ENTRIES' TYPE LISTS DIFFER AT THE SPLIT, which is what the
            union type at that position IS. The two facts were one test while the only splits in the platform
            carried both — see idl_overload_length_split_at — and reading them as one would send a split
@@ -4854,7 +4869,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                     s->ovl_entry = (kind == JS_TYPED_ARRAY_UINT8C || kind == JS_TYPED_ARRAY_FLOAT16)
                                  ? IDL_OVL_LONGER : IDL_OVL_SHORTER;
                 }
-                longer_survived = s->ovl_entry == IDL_OVL_LONGER;
+                longer_survived = idl_ovl_entry(s) == IDL_OVL_LONGER;
                 /* §3.6 step 15.3's optionality is the SURVIVING entry's, and the entry has just changed — so
                    the number read before this position is stale for every position behind it. It is re-read
                    rather than recomputed at each use, because one derivation per position is what keeps the
