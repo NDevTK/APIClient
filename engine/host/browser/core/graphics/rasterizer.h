@@ -24,6 +24,10 @@
  * choice is made for that: the segment count is a closed form rather than an adaptive recursion, the
  * accumulation is over the edges IN PATH ORDER (floating-point addition is not associative, so an edge order
  * that depended on a sort would make the bytes depend on the sort), and the two runs of one build agree.
+ * WHERE THAT SENTENCE IS NARROWER THAN IT SOUNDS IS NAMED AT ITS CAUSE rather than here: everything this
+ * file does is a `+`, `-`, `*`, `/` or `sqrt` and IEEE 754 fixes all five, while the FLATTENING one layer
+ * down calls `cos`, `sin` and `hypot`, whose accuracy C leaves to the implementation. See core/graphics/
+ * raster_path.c's second named residual for what that costs and for the observation that would show it.
  *
  * COVERAGE IS ANALYTIC AND NOT SAMPLED, which is the same decision one level down: a supersampled coverage is
  * a function of the sample grid's phase, so two renderings of one shape at two offsets disagree by the

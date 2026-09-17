@@ -481,3 +481,22 @@ void raster_path_flatten(const RasterPath *p, double tolerance_px, RasterEdges *
    with the magnitude of the path's coordinates rather than with the area the path can ink.
    RETIREMENT: this record goes when `raster_path_flatten` is given the device region and a curve outside it
    costs a chord. */
+
+/* NAMED RESIDUAL — AN ARC'S VERTICES ARE A FUNCTION OF THE PLATFORM'S MATH LIBRARY.
+   WHAT IS NOT COVERED: core/graphics/rasterizer.h states the requirement as two renderings of one document
+   agreeing byte for byte, which is what a reftest oracle is made of and which this component meets: every
+   step of the accumulation is a `+`, `-`, `*`, `/` or `sqrt`, and IEEE 754 fixes all five exactly. The
+   FLATTENING is not all five. `rp_ellipse_point` calls `cos` and `sin` and the segment counts call `hypot`,
+   and C leaves the accuracy of <math.h> implementation-defined — so two HOSTS' libraries may answer a last
+   bit apart, which moves a vertex and, through `ceil`, can move the segment COUNT by one and with it the
+   whole polygon. Two renderings on ONE host still agree, so the reftest oracle is intact; what is narrower
+   than the header's sentence is a comparison ACROSS the native host and the wasm one.
+   WHAT THE NEXT DIFF BUILDS: a sine, a cosine and a hypotenuse of stated precision in this component, so an
+   arc's vertices and every segment count are a function of the arithmetic rather than of the platform. The
+   same three entries are what `cp_ellipse_point` in core/canvas/canvas_path.c would take, which is the
+   second reason to build them here rather than to pin a library.
+   HOW ITS ABSENCE WOULD SHOW: a document whose ink is made only of lines and Bezier curves checksums
+   identically under the two hosts, and one containing an ARC may not — so the discriminator is whether a
+   `CANVAS_PATH_OP_ARC` reached the flattening, and never the shape's size, its position or its tolerance.
+   RETIREMENT: this record goes when no vertex and no segment count in this component is a function of a
+   <math.h> call whose accuracy C leaves to the implementation. */
