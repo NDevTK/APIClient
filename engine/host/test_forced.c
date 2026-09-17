@@ -526,6 +526,52 @@ static int fixture_provide(JSContext *ctx) {
    one provider and one door, so reading them together answers which of the two happened; reading either alone
    cannot. */
 
+/* CSS 2.1 §14.2 "The background"'s FIRST SENTENCE, DECLARED BY EVERY DOCUMENT THIS HOST PRESENTS — "the
+   background of the root element becomes the background of the canvas and covers the entire canvas". It is
+   the one thing no document in this fixture stated, and therefore the whole reason CSS 2.1 §E.2 "Painting
+   order"'s step 1 had never laid a mark over a document with a VIEWPORT under it: the walk ran, the region
+   was never asked for, and `bp_canvas_background` took its own alpha-of-zero return every time.
+
+   ONE CONSTANT AND NOT FOUR EDITS, because `box_paint_selftest` runs over WHICHEVER of the four documents
+   this invocation selected — `main` picks one, and that one is the only document in the run with a realm and
+   a navigable over it. A fact asserted there has to hold for all four or the assertion is about whichever
+   document the runner happened to pick, and four independent declarations are four chances to land three.
+
+   APPENDED IN FRONT OF `</body></html>` IN EACH AND NEVER INSERTED, for the reason the three operand-shape
+   statements near the end of `HTML` state: each of these documents is ONE LINE, so a `@WHY` frame's COLUMN is
+   the only coordinate a reader has into it and an insertion re-points every column after it. Appending moves
+   nothing — every script above keeps its own text, its own byte offset and its own internal columns.
+
+   WHICH IS ALSO WHY IT IS A SHEET AND NOT A `style` ATTRIBUTE. CSS 2.1 §14.2 "The background" moves the
+   background properties of the ROOT — or, by its second sentence, of the root's first `body` element child — onto the canvas, and
+   both of those start tags are at the TOP of every one of these documents, so an attribute IS the insertion
+   the rule above forbids. A sheet is the only declaration that reaches the root from the END of the body, and
+   `<style id=nstsheet>` already stands in `HTML`'s body with its rules asserted to apply.
+
+   IT DECLARES THE ROOT AND NOT THE `body` BECAUSE §14.2's FIRST SENTENCE IS THE SUBPROBLEM ITS SECOND IS
+   BUILT ON. The root arm is settled by `bp_canvas_background_element`'s first conjunct — an alpha that is not
+   zero — and asks nothing else; the `body` arm additionally needs `background-image` to resolve to exactly
+   `none`, which is a second component's answer and a second claim. THE COLOUR DIFFERS FROM THE `#0000ff` THE
+   TWO SCRATCH DOCUMENTS BELOW DECLARE so that a mark laid on this road cannot be read as one laid on theirs.
+
+   WHAT IT COSTS THE FAMILIES READING THESE DOCUMENTS, stated rather than assumed, because `HTML` is four of
+   them. `document.styleSheets` gains one member AT THE END, and neither reader of that collection moves:
+   `/api/cssprop` names index 1 and this sheet is last in document order, and the `/api/idxkey` statement
+   reads the length into `_ixL` and builds a NodeList of `_ixL + 2`, so its claim — past the end of the short
+   one is past the end of the long one — is DERIVED from the length and holds for any value of it. What does
+   move is the LENGTH of that statement's elimination chain, by one link per member, which is more forks and
+   not a different answer. `body` gains one element child, which HTML §15.3.1 "Hidden elements"'
+   fourteen-element rule computes `display: none` for — so it generates no box, core/paint/paint_order.c skips
+   it WITH its subtree, and the `offers` floor `box_paint_selftest` asserts does not move. No probe in any of
+   the four counts `body`'s children or selects `style`; every element-count statement in `HTML` is scoped to
+   an element its own script created. `HTML_MIN`, `HTML_COLD` and `HTML_POPOVER` read no collection and count
+   no elements at all, and `HTML_MIN` is the ASan gate, whose own paragraph asks for no added BRANCH — which a
+   declaration is not.
+
+   RETIREMENT: this record goes when the declaration is no longer shared — when each document that needs page
+   ink states its own and no assertion in this file is about "whichever document this run selected". */
+#define TF_CANVAS_INK "<style>html { background-color: #00ff00 }</style>"
+
 /* the "page": a real 2-<script> HTML document. Script 1 reads injected `state` into a config; script 2 (sharing
    globals) branches on it + does a baseline mutation (globalThis.n) first. Exercises: real Lexbor boot,
    cross-script concolic flow (fork on cfg.admin set by script 1), the moat (gated /api/admin), AND per-flow COW
@@ -4184,6 +4230,7 @@ static const char *HTML =
     " catch (_e) { fetch('/api/xkspki?d=' + _e.name); }"
     "})();"
     "</script>"
+    TF_CANVAS_INK
     "</body></html>";
 
 /* MINIMAL ASan fixture (APICLIENT_ASAN_MIN=1) — the memory-sensitive CLONE/COW/verify paths ONLY, with tiny
@@ -4283,6 +4330,7 @@ static const char *HTML_MIN =
     "try { _x.name; _sop += 'LEAKED'; } catch (e) { _sop += e.name; }"
     "fetch('/api/sop?v=' + _sop + ':' + (_x.closed === false ? 'closedok' : 'wrong'));"
     "</script>"
+    TF_CANVAS_INK
     "</body></html>";
 
 /* THE CROSS-SESSION ROUND TRIP'S DOCUMENT — the third, and it exists because neither of the other two can be
@@ -4344,6 +4392,7 @@ static const char *HTML_COLD =
       "if (q) { fetch('/api/cold/orphanA?s=' + s); } else { fetch('/api/cold/orphanB?s=' + s); }"
     "}"
     "</script>"
+    TF_CANVAS_INK
     "</body></html>";
 
 /* THE CLOSE-REQUEST DOCUMENT — the fourth, and it exists because the road from HTML §6.12 "The popover
@@ -4412,6 +4461,7 @@ static const char *HTML_POPOVER =
     "});"
     "pv.showPopover();"
     "</script>"
+    TF_CANVAS_INK
     "</body></html>";
 
 /* HTML §7.2.6 AND CSP §6.1, in C — the browser half's tests are C tests, and this one has no page to run.
@@ -20024,30 +20074,39 @@ static void display_list_selftest(JSContext *ctx)
  * once: a list the entry had reset would lose the mark AND report `CSS_ENV_NONE`, and neither of those is
  * distinguishable from a walk that laid no ink if only the count is read.
  *
- * NAMED RESIDUAL — NO MARK IS APPENDED THROUGH THIS CALLER, AND THE REASON IS THE DOCUMENT AND NOT THE INK.
- * WHAT IS NOT COVERED: `display_list_append` is reached by none of core/paint/box_paint.c's three arms on this
- * road. Every document this fixture parses is markup carrying no stylesheet and no `style` attribute, so
- * CSS 2.1 §8.5.3's `Initial:` line makes every `border-*-style` `none` and therefore every used border width
- * zero, and css-backgrounds-3 §2.2's makes every `background-color` `transparent`; `bp_canvas_background` and
- * `bp_background_color` each take their own alpha-of-zero return and `bp_border` its all-four-widths-zero one.
- * The walk is exercised WHOLE and the vocabulary is not — which is a narrower answer than the entry's, not a
- * wrong one, and is why the row below prints the mark count rather than asserting it.
- * WHAT THE NEXT DIFF BUILDS: nothing on THIS road — the ink needs a `style` attribute and this document is
- * four probe families'. The clause that stood here named `JS_NewContext` + `realm_install_intrinsics` +
- * `tf_realm_install` as the mechanism, and it is REWRITTEN RATHER THAN DELETED because it is the shape a
- * reader re-derives: that sequence makes the new document its realm's ACTIVE one, after which
- * core/dom/element_view.c's `ev_target_of_element` DCHECKs `window_proxy_is(document_window_proxy(dctx))` —
- * and a realm whose tenth argument is not a navigable's WindowProxy ABORTS on the first box with ink. It was
- * three calls where the mark needs four, the fourth being `navigable_root`, which is what mints that proxy.
- * The vocabulary needs neither: ONE `document_new` — core/dom/document.h's "second Document in this realm",
- * which is what DOM §4.5.1's createHTMLDocument returns — has a RECORD, so `document_realm_of` answers, and
- * is nobody's ACTIVE document, so `document_active_realm_of` answers NULL and the second assert is VACUOUS
- * rather than satisfied. `box_paint_scratch_selftest` below is that call, and the FILL_RECT third of this
- * record is retired by it.
- * HOW ITS ABSENCE WOULD SHOW: the `@PAINT stacking-context` row's `marks` field reads 0 on every run of every
- * document this host parses, while its `offers` field does not.
- * RETIREMENT: this record goes when a mark laid by `box_paint_stacking_context` over THIS document — the one
- * `main` gave a realm AND a navigable — is asserted in this file. */
+ * THE CANVAS THIRD OF THIS CALLER'S OLD RESIDUAL IS RETIRED BY `TF_CANVAS_INK`, and what that constant
+ * bought is the thing no other document shape in this file can buy: `bp_canvas_region` takes its rectangle
+ * from core/frame/viewport.h through `document_active_realm_of`, so it answers a REGION for exactly one
+ * document — the one `main` gave a realm AND a navigable — and answers FALSE for every other tree this
+ * fixture holds. The mark below is therefore the only ink in this host whose extent is not CSSOM VIEW §6's
+ * four exact zeros, and the two strict inequalities asserted over it are what say so.
+ * ONE CLAUSE OF THE OLD RECORD WAS WRONG RATHER THAN STALE, AND IS KEPT HERE BECAUSE ITS METHOD IS WHAT
+ * PRODUCES THE NEXT ONE. It said that every document this fixture parses is markup carrying no stylesheet
+ * and no `style` attribute — `HTML` carried FIVE `<style>` elements and a `style` attribute on `#cs1` at the
+ * revision that sentence was written. The CONSEQUENCE it drew was right (no document declared a
+ * `background-*` or a `border-*` in MARKUP, and this selftest runs before any script of theirs has), so the
+ * record read as sound; what was wrong was the far wider fact it stated in order to reach it. A clause that
+ * proves the thing you want by asserting something larger than you checked is the shape to distrust.
+ *
+ * NAMED RESIDUAL — THE TWO ARMS THAT MEASURE A BOX STILL APPEND NOTHING ON THIS ROAD.
+ * WHAT IS NOT COVERED: `bp_background_color`'s append and `bp_border`'s, over a document a navigable
+ * PRESENTS — so core/dom/element_view.h's `element_view_bounding_box_px` has still never been asked for a
+ * rectangle by this painter with `has_box` true, and its `ev_border_area_px` road is unrun here. The mark
+ * below does not reach it and cannot: `bp_canvas_background` takes its rectangle from `bp_canvas_region`,
+ * which asks core/frame/viewport.h and no element at all. THE OLD RECORD IN `box_paint_scratch_selftest`
+ * BELOW SAID OTHERWISE — it had the canvas arm additionally owing `element_view_bounding_box_px`'s PRESENTED
+ * path — and that is a next-diff clause naming a MECHANISM its own arm does not call, refuted by reading
+ * `bp_canvas_background` rather than by anything this diff did.
+ * WHAT THE NEXT DIFF BUILDS: a `DISPLAY_MARK_FILL_RECT` in THIS list whose rectangle is not four zeros —
+ * ink declared on an element of these documents that is neither the root nor the element CSS 2.1 §14.2 "The
+ * background" moves the canvas's background off, and that generates a box, so that `bp_background_color`
+ * reaches `element_view_bounding_box_px` with something to measure. It is a SEPARATE landing and not a
+ * larger version of this one, because that road runs the whole of core/layout through
+ * `used_value_border_edge_px` and core/layout/flow_position.h where this one runs none of it.
+ * HOW ITS ABSENCE WOULD SHOW: every `DISPLAY_MARK_FILL_RECT` this host emits carries four exact zeros in its
+ * rectangle, and no run of it lays a `DISPLAY_MARK_BORDER` anywhere.
+ * RETIREMENT: this record goes when all three of core/paint/box_paint.c's arms have appended a mark this
+ * file asserts, and loses a clause as each of the two does. */
 static void box_paint_selftest(JSContext *ctx, lxb_html_document_t *dom)
 {
     /* A VALUE THE ENTRY CANNOT PRODUCE — its counter starts at zero and rises by one per visit, so no walk of
@@ -20096,6 +20155,56 @@ static void box_paint_selftest(JSContext *ctx, lxb_html_document_t *dom)
           "contexts into one surface keeps the order it composed them in\" — and a caller that lost its prefix "
           "would compose two stacking contexts into a surface holding only the second, with CSS 2.1 §E.2's "
           "sequence between them gone and nothing downstream able to see that it ever existed");
+    /* CSS 2.1 §E.2 "Painting order"'s STEP 1, OVER A CANVAS THAT HAS A RENDERED REGION — which is the one
+       thing this caller has that `box_paint_scratch_selftest`'s two documents structurally cannot.
+       CSS 2.1 §2.3.1 "The canvas" leaves that region "established by the user agent according to the target
+       medium", and CSS 2.1 §10.1 "Definition of "containing block"" establishes it for continuous media by
+       giving the initial containing block "the dimensions of the viewport", anchored at the canvas origin.
+       THAT LAST CITATION STAYS IN THIS COMMENT AND IS NOT REPEATED IN THE CRASH STRINGS BELOW: its title
+       carries inner quotation marks, which a comment takes verbatim and a C string literal does not — and a
+       title escaped one `\` short closes its literal early, which is a citation edit that stops the whole
+       shared tree compiling rather than a citation that is merely wrong. */
+    CHECK(dl.n == 2u && dl.v[1].kind == DISPLAY_MARK_FILL_CANVAS,
+          "CSS 2.1 §E.2 \"Painting order\"'s step 1 laid other than exactly ONE `DISPLAY_MARK_FILL_CANVAS` "
+          "over a document whose ROOT declares a background. TWO OPPOSITE CLAIMS STAND ON THIS ONE COUNT. A "
+          "list of ONE — the seed alone — is `bp_canvas_region` having answered FALSE for a document `main` "
+          "gave a root navigable, which is this engine reporting that the canvas it is presenting on has no "
+          "rendered region. A list of THREE is CSS 2.1 §14.2 \"The background\"'s second sentence broken: "
+          "\"The root element does not paint this background again\" is the whole of what stops "
+          "core/paint/box_paint.c's step 2 arm laying the same colour a second time at the root's border box, "
+          "and that arm is reached for the root on every walk. No other element of any of this fixture's four "
+          "documents declares a background in MARKUP, and this runs before any script of theirs has");
+    CHECK(dl.v[1].rect[0].px == 0.0 && dl.v[1].rect[1].px == 0.0 &&
+          dl.v[1].rect[2].px == viewport_icb_width(ctx).px &&
+          dl.v[1].rect[3].px == viewport_icb_height(ctx).px &&
+          dl.v[1].rect[2].px > 0.0 && dl.v[1].rect[3].px > 0.0,
+          "CSS 2.1 §E.2's step 1 filled a canvas whose extent is not the viewport's. THE TWO HALVES ARE TWO "
+          "CLAIMS AND NEITHER IMPLIES THE OTHER: the equalities say the painter read CSS 2.1 §2.3.1 \"The "
+          "canvas\"'s region off the component that owns it rather than assembling a second answer free to "
+          "disagree with what `innerWidth` reports, and the strict inequalities say the region EXISTS. The "
+          "second is the one no mark this host had ever laid could make — CSSOM VIEW §6's "
+          "get-the-bounding-box answers \"a DOMRect object whose x, y, width and height members are zero\" "
+          "for every element of a document no navigable presents, so four zeros were the only rectangle in "
+          "this engine's ink until this one. A zero HERE is a presented document whose viewport has no size");
+    CHECK(display_list_env(&dl) == (CSS_ENV_BIT(CSS_ENV_ICB_WIDTH) | CSS_ENV_BIT(CSS_ENV_ICB_HEIGHT)),
+          "the ink over the fixture's own active document reports the wrong set of ENVIRONMENT FACTS. "
+          "core/paint/display_list.h makes that set the union over every coordinate of every mark, and this "
+          "list holds exactly two: a seed whose width this file minted from the ICB's, and step 1's fill, "
+          "whose two extents core/frame/viewport.h derives from BOTH of the initial containing block's "
+          "dimensions. The answer that must not appear here is `CSS_ENV_NONE`, which core/paint/display_list.h "
+          "calls the POSITIVE statement that this ink is the same ink under every arm — true of every mark "
+          "this host laid before this one, because a document no navigable presents has no viewport for its "
+          "ink to be a function of, and a LIE about a page background, since it says resizing the window "
+          "repaints nothing");
+    CHECK(dl.v[1].color.space == CSS_COLOR_SPACE_SRGB && dl.v[1].color.a == 1.0 &&
+          dl.v[1].color.c[0] == 0.0 && dl.v[1].color.c[1] == 1.0 && dl.v[1].color.c[2] == 0.0,
+          "CSS 2.1 §E.2's step 1 filled the canvas with a colour other than the one `TF_CANVAS_INK` declares. "
+          "That sheet declares `#00ff00`, which CSS Color 4 §5.2 \"The RGB Hexadecimal Notations: #RRGGBB\" "
+          "makes an opaque sRGB colour whose components are exactly 0, 1 and 0 in that module's [0, 1] "
+          "reference range — all four numbers are exact in binary, so this is an equality and not a "
+          "tolerance. It is ALSO the assertion that the colour came off the ROOT: CSS 2.1 §14.2 \"The "
+          "background\" moves the root's own background properties onto the canvas and nothing else in these "
+          "documents declares one, so another colour here is another element's");
     DCHECK(ok,
            "CSS 2.1 §E.2's walk stopped short over the fixture's own active document. A false answer is the "
            "painter meeting an operand it could not compute, and in a DEV build every road to one has its own "
@@ -20110,6 +20219,17 @@ static void box_paint_selftest(JSContext *ctx, lxb_html_document_t *dom)
        and silently never be written — which is the one way a witness composed from something the engine
        derived about a page fails exactly when the engine is working. `marks` excludes the seed. */
     printf("@PAINT stacking-context ok=%d offers=%u marks=%zu\n", ok ? 1 : 0, offers, dl.n - 1u);
+    /* AND THE EXTENT, AS A SECOND ROW RATHER THAN A FIELD ON THE FIRST, so that any reader keyed on the row
+       above reads exactly what it read before — the same device `@PAINT canvas-mark` uses beside `@PAINT
+       display-list`. WHAT IT PRINTS IS THE RECTANGLE AND NOT THE COUNT, because a count of one is what the
+       row above already carries and a NON-ZERO EXTENT is the only thing that separates ink a viewport
+       determined from CSSOM VIEW §6's four zeros. ON AN ARTIFACT BUILT BEFORE ANY DOCUMENT THIS HOST
+       PRESENTS DECLARED INK THE ROW IS ABSENT ENTIRELY — `grep -c '@PAINT canvas-ink'` answers 0, not a row
+       of zeros — which is this row's own control and is the same one `@PAINT canvas-mark` carries. Both
+       numbers are plain doubles the viewport computed, so neither can become concolic and silently never be
+       written. */
+    printf("@PAINT canvas-ink w=%g h=%g env=%u\n", dl.v[1].rect[2].px, dl.v[1].rect[3].px,
+           (unsigned)display_list_env(&dl));
     display_list_free(&dl);
 }
 
@@ -20179,26 +20299,30 @@ static lxb_html_document_t *bp_scratch_document(JSContext *ctx, const char *html
  * `offers` AS THEY STOOD" — and it is the reachability witness for why the CANVAS mark cannot be laid on this
  * road at all, rather than a claim that it cannot.
  *
- * NAMED RESIDUAL — TWO OF THE THREE ARMS STILL APPEND NOTHING, AND NEITHER IS WAITING ON A MARK KIND.
- * WHAT IS NOT COVERED: `bp_canvas_background`'s append and `bp_border`'s. Each is blocked by a different fact
- * about a document no navigable presents, and both facts are about THIS TREE rather than about CSS 2.1.
- * `bp_canvas_background` needs `bp_canvas_region`, which answers false here — the second document below is
- * that answer, observed rather than asserted. `bp_border` needs a non-zero USED border width, and CSS 2.1
- * §8.5.3's `Initial: none` means one must be DECLARED; a declared one reaches core/css/css_length.c's
+ * NAMED RESIDUAL — ONE OF THE THREE ARMS STILL APPENDS NOTHING, AND IT IS NOT WAITING ON A MARK KIND.
+ * WHAT IS NOT COVERED: `bp_border`'s append. It needs a non-zero USED border width, and
+ * CSS 2.1 §8.5.3 "Border style: 'border-top-style', 'border-right-style', 'border-bottom-style', 'border-left-style', and 'border-style'"'s
+ * `Initial: none` means one must be DECLARED; a declared one reaches core/css/css_length.c's
  * `css_length_snap_line_width`, whose own DFAIL names this document kind in its own words — "a DOMParser
  * document, an XHR `responseXML`, a `<template>`'s contents owner, or the document of a destroyed navigable"
- * — so declaring a border here would trade a missing mark for a dev abort.
- * WHAT THE NEXT DIFF BUILDS: that DFAIL's own instruction, which is the cheaper of the two and needs no new
- * document at all — css-backgrounds-3 §3.3 snaps the COMPUTED value, and the crash says to reach the answer
- * "over core/dom/element_view.h's `element_view_has_box`", after which a `border` declared on the `div` below
- * lays a `DISPLAY_MARK_BORDER`. The CANVAS arm is the other one and wants a NAVIGABLE rather than a realm —
- * `navigable_root` beside the `JS_NewContext` + `realm_install_intrinsics` + `tf_realm_install` sequence,
- * whose WindowProxy is that sequence's tenth argument — and it additionally owes
- * `element_view_bounding_box_px`'s PRESENTED path, which no caller of this painter has ever run.
- * HOW ITS ABSENCE WOULD SHOW: a document declaring a page background paints none of it, and no run of this
- * host emits a `DISPLAY_MARK_BORDER` or a `DISPLAY_MARK_FILL_CANVAS` anywhere.
- * RETIREMENT: this record loses a clause as each of the two arms appends, and goes when all three of
- * core/paint/box_paint.c's arms are asserted in this file. */
+ * — so declaring a border here would trade a missing mark for a dev abort. That is a fact about THIS TREE
+ * rather than about CSS 2.1, and the second document below is the observed half of it.
+ * WHAT THE NEXT DIFF BUILDS: that DFAIL's own instruction — css-backgrounds-3 §3.3 "Line Thickness: the
+ * border-width properties" snaps the COMPUTED value, and the crash says to reach the answer "over
+ * core/dom/element_view.h's `element_view_has_box`" — after which a `border` declared on the `div` below
+ * lays a `DISPLAY_MARK_BORDER` and this record goes.
+ * THE CANVAS CLAUSE THAT STOOD HERE IS DISCHARGED, AND IT WAS WRONG ON ITS MECHANISM AS WELL AS STALE —
+ * WHICH IS THE HALF WORTH KEEPING, because the staleness is ordinary and the error is a method. It said the
+ * canvas arm wanted a NAVIGABLE rather than a realm — `navigable_root` beside the `JS_NewContext` +
+ * `realm_install_intrinsics` + `tf_realm_install` sequence — which was EXACTLY right and is what
+ * `TF_CANVAS_INK` plus `main`'s existing `navigable_root` call now satisfy in `box_paint_selftest` above.
+ * It then said the arm additionally owes `element_view_bounding_box_px`'s PRESENTED path, and
+ * `bp_canvas_background` does not call that function at all: its rectangle comes from `bp_canvas_region`,
+ * which asks core/frame/viewport.h and never an element. The clause named a MECHANISM its own arm does not
+ * use, it was refuted by READING `bp_canvas_background` rather than by any measurement, and a reader who had
+ * obeyed it would have built the geometry road in order to lay a mark that needs none of it.
+ * HOW ITS ABSENCE WOULD SHOW: no run of this host lays a `DISPLAY_MARK_BORDER` anywhere.
+ * RETIREMENT: this record goes when `bp_border` has appended a mark this file asserts. */
 static void box_paint_scratch_selftest(JSContext *ctx)
 {
     /* A VALUE THE ENTRY CANNOT PRODUCE, for `box_paint_selftest`'s reason above: the counter starts at zero
@@ -20248,8 +20372,8 @@ static void box_paint_scratch_selftest(JSContext *ctx)
     CHECK(dl.v[0].color.space == CSS_COLOR_SPACE_SRGB && dl.v[0].color.a == 1.0 &&
           dl.v[0].color.c[0] == 0.0 && dl.v[0].color.c[1] == 0.0 && dl.v[0].color.c[2] == 1.0,
           "CSS 2.1 §E.2's step 4 laid a mark whose colour is not the one this file declared. The document "
-          "above declares `#0000ff`, which CSS Color 4 §5.2 \"The RGB hexadecimal notations\" makes an opaque "
-          "sRGB colour whose components are exactly 0, 0 and 1 in that module's [0, 1] reference range — "
+          "above declares `#0000ff`, which CSS Color 4 §5.2 \"The RGB Hexadecimal Notations: #RRGGBB\" makes an "
+          "OPAQUE sRGB colour whose components are exactly 0, 0 and 1 in that module's [0, 1] reference range — "
           "every one of those four numbers is exact in binary, so this is an equality and not a tolerance. "
           "core/paint/display_list.h requires a mark's colour to have been through CSS Color 4 §11's "
           "conversion to sRGB already, which is the `space` conjunct");
