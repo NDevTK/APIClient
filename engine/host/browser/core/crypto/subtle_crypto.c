@@ -2516,11 +2516,17 @@ static const IdlStepDecl XK_DECL = {
  *
  * THE REGISTRY IS ONE ROW, AND THE ROW IS THE ONE REAL PAGES CALL. §18.5.1 states "there are no algorithms
  * that conforming user agents are required to implement", so a short registry is conformant; which row is here
- * was decided by reading the CALL SITES rather than §14.3's member list. Of this corpus's `crypto.subtle
- * .generateKey` calls, four name AES-GCM (two of them through a constant — `W.ALGORITHM="AES-GCM"` and
- * `ns="AES-GCM"` — which a literal grep does not see), three name ECDSA over P-256 and one names
- * RSASSA-PKCS1-v1_5; ZERO name HMAC. §31.6.3's HMAC row is therefore not the next diff even though HMAC is the
- * algorithm this component is deepest in: it would install an arm no site calls.
+ * was decided by reading the CALL SITES rather than §14.3's member list, and the DERIVATION is here rather
+ * than the figure, because a count over a corpus goes stale the day the corpus moves:
+ *     `grep -rao 'subtle\.generateKey' testing/corpus/mirror | wc -l`
+ * counts OCCURRENCES (`-a` because GNU grep calls some of these files binary and suppresses their matches
+ * entirely, `-o` because `-c` counts LINES and a minified bundle is one line). It answered NINE across six
+ * files when this was written, and the ENUMERATION is what matters rather than the total: four name AES-GCM,
+ * three name ECDSA over P-256, one names RSASSA-PKCS1-v1_5 and one names RSA-OAEP; ZERO name HMAC. Two of the
+ * four AES-GCM ones name it through a CONSTANT — `W.ALGORITHM="AES-GCM"` and `ns="AES-GCM"` — so a grep for
+ * the algorithm string finds two of four and a reader who stops there builds for half the population.
+ * §31.6.3's HMAC row is therefore not the next diff even though HMAC is the algorithm this component is
+ * deepest in: it would install an arm no site calls.
  *
  * WHAT EACH SITE DOES NEXT IS THE OTHER HALF OF THAT READING AND IT IS NOT UNIFORM. One AES-GCM site
  * (helixapp's) goes straight from the key to §14.3.1's encrypt, which is built, and COMPLETES. The other three
