@@ -438,6 +438,14 @@ typedef struct {
        steps 3-4 is the one whose optionality step 15.3 reads and the shorter entry's is the wrong list. */
     int        split_at;
     int        split_longer_optional;
+    /* §3.6's DISTINGUISHING ARGUMENT INDEX — step 8's `d`, and a SECOND number from `split_at` however alike
+       they read. `split_at` is where the SHORTER entry ENDS, which steps 3-4 remove an entry by; this is where
+       the entries' TYPES first differ, which step 12 reads a value at. They coincided for every member declared
+       before one differed at index 0 and ended at index 2, and while they did, every assert over `split_at`
+       was silently an assert about `d` as well. -1 is a member with no value-resolved split, which is nearly
+       all of them: read off the type list at declaration wherever a value-split row names the position, and
+       stated by idl_overload_distinguishing_at where it cannot. */
+    int        distinguishing;
     /* §3.6 STEPS 15.4.1 AND 16.1's DEFAULT VALUES, one entry per position the IDL lists — see
        idl_arg_default. NULL for a
        member declaring none, which is nearly all of them; allocated by the first declaration that names one,
@@ -989,6 +997,18 @@ typedef struct {
        value a SECOND time. A Proxy `get` trap counts that read and an accessor may answer it differently, and
        the second answer could choose the other overload for a call already half-converted. */
     uint8_t    ovl_phase;
+    /* §3.6's SURVIVING OVERLOAD ENTRY, AS ONE FACT ABOUT THIS CALL — what steps 3-4 and step 12 between them
+       settle and what step 15.2 and step 15.3 then read at EVERY position. It is a plain scalar for the reason
+       `missing` beside it is: a deep fork BYTE-COPIES this state and re-takes only what `visit` names, so a
+       scalar is carried across a park and across a fork with no ownership contract of its own.
+       IT IS SEEDED FROM THE ARITY AND REFINED BY THE VALUE, IN THAT ORDER, AND THE ORDER IS THE ALGORITHM'S.
+       Steps 3-4 remove every entry whose type list is not `argcount` long, and only then does step 8 set `d`
+       "If there is MORE THAN ONE entry in S" — so at an arity where the removal left one entry there is no
+       distinguishing index, step 12 never runs, and the entry is known before position 0 is converted. A record
+       written only where step 12 chooses is UNWRITTEN at exactly that arity, which is the shape this field
+       replaced: the arity half used to be a per-position type rewrite tied to `split_at`, and a member whose
+       arity-decided position is 0 while `split_at` is 2 has no rewrite at `split_at` that could say it. */
+    int8_t     ovl_entry;
     /* §4.2.3's tree steps this member's body caused, taken from the DOM layer so the drain is per-machine: the
        drain YIELDS, and a shared list would be appended to by whichever flow ran during the suspension. */
     void     *tree;
@@ -1133,6 +1153,13 @@ static bool idl_type_is_dictionary(IdlArgType t)
               dictionaries; the position's own type is not one, so an omitted `sequence<D>` argument is an
               ABSENT argument exactly as any other sequence is. */
            t == IDL_BUFFERSOURCE_OR_DICT ||
+           /* A POSITION BEHIND §3.6's DISTINGUISHING INDEX CAN RESOLVE TO EITHER ENTRY'S TYPE, and one of
+              ImageData's two is `optional ImageDataSettings settings = {}`. The CONVERSION never sees this row
+              — it collapses to the surviving entry's own type above every test — so the caller this answers for
+              is the DECLARATION, where there is no call and therefore no entry, and where the question is how
+              many dictionaries a member could reach. A row left out here is a dictionary position the ndict
+              bound cannot count, which is the one direction that bound must not be wrong in. */
+           t == IDL_ULONG_OR_DICT_BY_ENTRY ||
            t == IDL_SEQUENCE_OBJECT_OR_DICT;
 }
 
@@ -1150,46 +1177,49 @@ static bool idl_type_is_length_split(IdlArgType t)
    and the half whose surviving entry is a fact about the page's VALUE rather than about the call's arity.
    Both type lists are the same length, so steps 3-4 remove neither at any arity the member can be called at
    and the whole decision is step 12's clause chain at the distinguishing argument index.
-   IT IS A SEPARATE PREDICATE BECAUSE THE CONVERSION LOOP CAN REWRITE A DECLARED TYPE ONLY FROM `argc`.
-   `step4_only_longer` is `idl_split_longer_survived(m, argc) && s->i == m->split_at`, so the one position whose
-   type may be replaced is the split itself and the fact that replaces it is the ARGUMENT COUNT. Where step 12
-   chose the entry instead, that choice is recorded nowhere a later position could read it — which is what the
-   seal refuses below, and which is why the two kinds of split may not share one predicate.
-   THE TWO PREDICATES DO NOT PARTITION WHAT A SPLIT CAN BE, and reading them as if they did is how the residual
-   below was first written wrong. Web IDL §2.5.8 "Overloading" expands each ENTRY into one tuple per arity, so
-   two entries of DIFFERENT length still meet as equal-length tuples at every arity both reach, and step 8 sets
-   a distinguishing argument index there exactly as it does for two entries that end together. Such a member is
-   BOTH kinds at once — steps 3-4 remove the shorter entry only at the arities the longer one alone reaches —
-   and the seal below refuses it under whichever of the two predicates its declared type happens to name.
+   THE TWO PREDICATES DO NOT PARTITION WHAT A SPLIT CAN BE. Web IDL §2.5.8 "Overloading" expands each ENTRY
+   into one tuple per arity, so two entries of DIFFERENT length still meet as equal-length tuples at every arity
+   both reach, and step 8 sets a distinguishing argument index there exactly as it does for two entries that end
+   together. HTML §8.11.1 "The ImageData interface" is such a member — steps 3-4 remove its shorter constructor
+   only at the one arity the longer one alone reaches — so it is BOTH kinds at once and declares BOTH numbers.
+   THE RESIDUAL THAT STOOD HERE IS RETIRED BY THE DIFF THAT REMOVED THIS SENTENCE, and what it asked for is
+   what `JSIdlArgsState::ovl_entry` and IDL_ULONG_OR_DICT_BY_ENTRY are. Its clause said to write the record "at
+   the distinguishing index", and building only that would have left it UNWRITTEN at the arity where steps 3-4
+   leave one entry and step 8 therefore never sets `d` — so the record is seeded from `argc` first and refined
+   at `d` second, which is §3.6's own order. Its second miss is the one this file had no name for: it assumed
+   the distinguishing index IS `split_at`, which was true of every member that existed and is false of the first
+   member the capability was built for.
  *
- * NAMED RESIDUAL — A VALUE-RESOLVED SPLIT WITH A DISAGREEING POSITION BEHIND IT. WHAT IS NOT COVERED: this
- * pool declares ONE `types` list per member, so where step 12 picked the surviving entry from the page's
- * value, a position behind the distinguishing argument index at which the two entries declare DIFFERENT types
- * would be converted with whichever of the two that single list happens to name, and §3.6 step 15.2 reads the
- * type "in the type list of the REMAINING entry". The seal refuses such a declaration outright, INCLUDING one
- * whose two entries agree at every later position, because one list cannot state that they agree.
- * WHAT THE NEXT DIFF BUILDS: a per-CALL record of the entry step 12 chose — written at the distinguishing
- * index, read by every later position of the same call, and carried across a park — plus a declared type at
- * each DISAGREEING position that reads it and collapses to that entry's own type. HOW ITS ABSENCE WOULD SHOW:
- * a member whose declared type names a split the seal refuses aborts when the platform is sealed, before any
- * realm is built and before a page can call one, naming the member rather than converting one of its arguments
- * at the other entry's type.
- * THE CLAUSE THAT STOOD HERE WAS WRONG WHEN IT WAS WRITTEN and its METHOD is what to carry. It gave a member's
- * two entries as `(unsigned long, unsigned long, D)` and `(A, unsigned long, unsigned long)` and called them
- * the same length, which is one entry's TYPE LIST beside the OTHER'S ARITY-3 TUPLE out of §2.5.8's effective
- * overload set. A tuple is what step 4 compares; an ENTRY is what step 15.2 reads, so writing one for the other
- * turns a four-position entry into a three-position one and hides the length-differing half of the very member
- * it was offered as the worked example for. It over-scoped the remedy twice in consequence, and both are
- * checkable rather than matters of taste: a second `IdlArgType *` "from the split onward" is the WHOLE list
- * wherever the distinguishing index is 0, and a per-entry `idl_first_optional` has nothing to choose between
- * wherever the two entries' optional positions begin at the same index. READ A PROPOSED ENTRY'S TYPE LIST OFF
- * THE IDL THE CORPUS RECORDS, never off the arity whichever call site you have in mind happens to use.
- * RETIREMENT: this record goes when the seal can no longer refuse a member for declaring a position behind its
- * distinguishing argument index at which its two entries' types differ. */
+ * NAMED RESIDUAL — A THIRD ENTRY. WHAT IS NOT COVERED: `ovl_entry` holds ONE bit of choice, so a member whose
+ * effective overload set has THREE entries standing at one arity would have the third folded into whichever of
+ * two this record can name, and §3.6 step 12 removes "all other entries" from a set of any size. The platform
+ * declares no such member, and the seal refuses one by refusing a second split rather than by counting entries.
+ * WHAT THE NEXT DIFF BUILDS: `ovl_entry` widened to an entry INDEX over a declared entry list, with the split
+ * rows above naming which index each of their outcomes selects instead of a shorter/longer pair. HOW ITS
+ * ABSENCE WOULD SHOW: a reader would find a member whose IDL declares three constructors or three same-named
+ * operations reaching one arity, and would have nowhere to state the third entry's type list — observable as a
+ * declaration that cannot be written rather than as a call that answers wrongly, which is why the code is
+ * narrower here and not incorrect.
+ * RETIREMENT: this record goes when `ovl_entry` names an entry by index rather than by which of two it is. */
 static bool idl_type_is_value_split(IdlArgType t)
 {
-    return t == IDL_SEQUENCE_OBJECT_OR_DICT;
+    return t == IDL_SEQUENCE_OBJECT_OR_DICT || t == IDL_ULONG_OR_IMAGE_DATA_ARRAY;
 }
+
+/* A POSITION WHOSE TYPE IS THE SURVIVING ENTRY'S — §3.6 step 15.2's "the type at index i in the type list of
+   the REMAINING entry" where the two entries' lists disagree there. It is the other half of a value-resolved
+   split and never a split itself: it asks no question and decides nothing, it READS what the distinguishing
+   index already settled, which is why the seal requires one to stand BEHIND a distinguishing index rather than
+   at one. */
+static bool idl_type_is_entry_typed(IdlArgType t)
+{
+    return t == IDL_ULONG_OR_DICT_BY_ENTRY;
+}
+
+/* §3.6's TWO ENTRIES, AS THE RECORD NAMES THEM. IDL_OVL_UNSEEDED is a state and not a third entry: the
+   conversion seeds the record at stage 1 and asserts it is gone by the time any position reads one, so a read
+   that finds it is a call whose steps 3-4 never ran rather than a call with no answer. */
+enum { IDL_OVL_UNSEEDED = -1, IDL_OVL_SHORTER = 0, IDL_OVL_LONGER = 1 };
 
 /* THE TYPE THE LONGER ENTRY DECLARES AT THAT POSITION — what step 4 leaves standing once the shorter entry is
    gone. It is a total function over the rows above and crashes for anything else, so a split row added without
@@ -1223,9 +1253,13 @@ static bool idl_split_longer_survived(const IdlMember *m, int argc)
    surviving entry decides — however that split was stated, since the removal at steps 3-4 is by argument count
    in both forms. idl_args_seal asserts that such a member declared the longer entry's number, so there is
    nothing to fall back to here. */
-static int idl_first_optional(const IdlMember *m, int argc)
+static int idl_first_optional(const IdlMember *m, int entry)
 {
-    if (!idl_split_longer_survived(m, argc)) return m->first_optional;
+    DCHECK(entry == IDL_OVL_SHORTER || entry == IDL_OVL_LONGER,
+           "§3.6 step 15.3's optionality was asked before the surviving entry was seeded — steps 3-4 settle it "
+           "from the argument count before position 0 is converted, so an unseeded read is a conversion that "
+           "started without them");
+    if (entry != IDL_OVL_LONGER) return m->first_optional;
     DCHECK(m->split_longer_optional >= 0,
            "a §3.6 length-differing overload split reached a conversion without its LONGER entry's optional "
            "index — idl_args_seal asserts every such member declares one, so this member was declared after "
@@ -1283,22 +1317,45 @@ static void idl_seal_check_splits(void)
                    "a member's length-differing §3.6 split was not recorded at the position its type list "
                    "declares it — the position is READ from the types at declaration, so the two disagreeing "
                    "means a second split was declared and one of them decides every arity");
-            /* A SAME-LENGTH SPLIT IS THE MEMBER'S LAST DECLARED POSITION — see idl_type_is_value_split, whose
-               residual names what would have to exist for it not to be. The conversion loop's ONE type rewrite
-               reads `argc`, and this split's surviving entry was chosen from a VALUE, so a position behind one
-               has a type per entry and this pool carries a single list. */
-            DCHECK(!idl_type_is_value_split(m->types[k]) || k == m->nargs - 1,
-                   "a member declared a §3.6 overload split whose two entries are the SAME LENGTH and then "
-                   "declared a position behind it — step 12 chooses the surviving entry from the page's value, "
-                   "so every later position has one type PER ENTRY while this pool declares one list. A member "
-                   "whose entries would agree at every later position is refused here too, because one list "
-                   "cannot state that they agree");
-            DCHECK(!idl_type_is_value_split(m->types[k]) || m->split_at < 0,
-                   "a member declared BOTH a §3.6 same-length overload split and a length-differing one — "
-                   "steps 3-4 remove an entry by ARGUMENT COUNT and step 12 removes one by VALUE, so such a "
-                   "member has two answers to which entry survived and whichever is read first decides every "
-                   "arity");
+            /* A VALUE-RESOLVED SPLIT SITS AT §3.6's DISTINGUISHING ARGUMENT INDEX, WHICH IS THE POSITION
+               THE DECLARATION READ IT AT. The two are one statement made once — the row names the position and
+               both entries' types together — so this asserts they did not come apart rather than checking a
+               second number somebody wrote down. It replaced `k == m->nargs - 1`, which said the same thing
+               only for a member whose split is at its own last position: that was every member that existed,
+               and it is false of the first member with a position BEHIND its distinguishing index. */
+            DCHECK(!idl_type_is_value_split(m->types[k]) || m->distinguishing == k,
+                   "a member's value-resolved §3.6 overload split was not recorded at the position its type "
+                   "list declares it — the position is READ from the types at declaration, so the two "
+                   "disagreeing means a second split was declared and one of them chooses the entry for "
+                   "every call");
+            /* A POSITION WHOSE TYPE IS THE SURVIVING ENTRY'S MUST STAND BEHIND THE INDEX THAT CHOSE IT. §3.6
+               converts strictly left to right (step 11's loop, then step 12 at `d`, then step 15's), so a
+               position at or before `d` is converted before any entry has been chosen — and Web IDL §2.5.8
+               Overloading forbids one before `d` from disagreeing at all: "for each index j, where j is less
+               than the distinguishing argument index …, the types at index j in all of the items' type lists
+               must be the same". A row declared there would be asking the record for an answer the algorithm
+               has not reached, and the answer it got would be the seed rather than the choice. */
+            DCHECK(!idl_type_is_entry_typed(m->types[k]) || m->distinguishing >= 0,
+                   "a member declared a position whose type is §3.6 step 15.2's REMAINING entry's and declared "
+                   "no distinguishing argument index — there is no choice for that position to read, so every "
+                   "call would convert it at whichever entry the arity seed happened to name");
+            DCHECK(!idl_type_is_entry_typed(m->types[k]) || k > m->distinguishing,
+                   "a member declared a position whose type is §3.6 step 15.2's REMAINING entry's at or BEFORE "
+                   "its distinguishing argument index — §3.6 converts left to right, so no entry has been "
+                   "chosen there yet, and §2.5.8 Overloading requires every position before that index to "
+                   "carry the SAME type in both entries, which is a type the list can simply state");
         }
+        /* §2.5.8's OWN BOUND ON WHERE THE TWO NUMBERS MAY SIT RELATIVE TO ONE ANOTHER, and the one assert that
+           keeps them from being read as one again. The entries must agree at every index BELOW `d`, and the
+           shorter entry runs to `split_at` — so `d` is inside the shorter entry's own list and cannot be past
+           its end. It may be well before it, which is the whole of what was not expressible here: a member may
+           differ at index 0 and end at index 2. */
+        DCHECK(m->distinguishing < 0 || m->split_at < 0 || m->distinguishing <= m->split_at,
+               "a member's §3.6 distinguishing argument index lies PAST the position its shorter overload "
+               "entry ends at — that entry has no type there for step 12 to read, so the index names a "
+               "position only one entry declares and there is nothing to distinguish");
+        DCHECK(m->distinguishing < 0 || m->distinguishing < m->nargs,
+               "a member declared a §3.6 distinguishing argument index outside its own declared positions");
     }
 }
 
@@ -4079,6 +4136,17 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
         s->ce_threw = 0;
         s->ce_exc = JS_UNDEFINED;
         s->ace_ctor = JS_UNDEFINED;
+        /* §3.6 STEPS 3-4, RUN ONCE FOR THE WHOLE CALL, BEFORE ANY VALUE IS LOOKED AT. "Initialize argcount to
+           be min(maxarg, n)" and then "Remove from S all entries whose type list is not of length argcount" —
+           a removal by ARGUMENT COUNT, which is a fact about the call and not about a position, so it is
+           settled here and every position below reads the answer. Where it leaves ONE entry, step 8 never sets
+           a distinguishing index and step 12 never runs: the seed IS the answer. Where it leaves both, the
+           split row at `distinguishing` refines it from the page's value and this is the arm a no-policy run
+           keeps.
+           A MEMBER WITH NO SPLIT HAS ONE ENTRY AND READS IDL_OVL_SHORTER, which is its own declaration —
+           `idl_split_longer_survived` is false for a `split_at` of -1, so the seed says "the entry this member
+           declares" rather than naming a second one that does not exist. */
+        s->ovl_entry = idl_split_longer_survived(m, s->hdr.argc) ? IDL_OVL_LONGER : IDL_OVL_SHORTER;
         s->hdr.stage = 1;
     }
 
@@ -4110,7 +4178,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
            the loop then converts belongs to the entry that survived it. Written as a per-position test of one
            type it could only ever rewrite the split position itself, and the positions AFTER the split went on
            reading the shorter entry's optional index — see idl_overload_split_optional_from. */
-        bool longer_survived = idl_split_longer_survived(m, s->hdr.argc);
+        bool longer_survived = s->ovl_entry == IDL_OVL_LONGER;
         /* THE TYPE HALF IS ASKED ONLY WHERE THE TWO ENTRIES' TYPE LISTS DIFFER AT THE SPLIT, which is what the
            union type at that position IS. The two facts were one test while the only splits in the platform
            carried both — see idl_overload_length_split_at — and reading them as one would send a split
@@ -4119,9 +4187,32 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
            that entry was chosen. */
         bool step4_only_longer = longer_survived && s->i == m->split_at &&
                                  idl_type_is_length_split(m->types[m->split_at]);
-        int  first_opt = idl_first_optional(m, s->hdr.argc);
+        int  first_opt = idl_first_optional(m, s->ovl_entry);
 
         if (step4_only_longer) t = idl_split_longer_type(t);
+        /* §3.6 STEP 15.2's "the type at index i in the type list of the REMAINING entry", AT A POSITION WHERE
+           THE TWO ENTRIES DISAGREE. The entry was settled before this position was reached — seeded from the
+           arity at stage 1, refined at `distinguishing` by the row that reads the value — so this collapses and
+           asks nothing. It happens HERE, above every test below, because a type that is still a pair is a type
+           no later guard can read correctly: the optional-undefined branch asks whether the position is a
+           dictionary, the pass-through asks the concolic rule, and both of those are questions about the
+           entry's own type rather than about the pair. */
+        if (idl_type_is_entry_typed(t)) {
+            DCHECK(s->i > m->distinguishing,
+                   "a position whose type is §3.6's surviving entry's was converted at or before the "
+                   "distinguishing argument index — idl_args_seal refuses such a declaration, so this call "
+                   "reached the conversion loop with a member declared after the platform was sealed");
+            switch (t) {
+            case IDL_ULONG_OR_DICT_BY_ENTRY:
+                t = longer_survived ? IDL_UNSIGNED_LONG : IDL_DICT;
+                break;
+            default:
+                DFAIL("a declared type idl_type_is_entry_typed accepts named no per-entry pair here — the "
+                      "predicate and this switch are the two halves of one statement, so a row added to one "
+                      "and not the other has a position whose type the conversion cannot resolve");
+                break;
+            }
+        }
 
         /* §3.6: an optional argument given `undefined` is ABSENT, so nothing is converted and the body sees
            undefined — which is what lets it tell "no base" from the base "undefined". A VARIADIC TAIL is not
@@ -4616,6 +4707,107 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                 if (r > 0) return r;   /* parked ON THE OVERLOAD's read; the resume finds it already chosen */
                 if (r < 0) return JS_STEP_ABRUPT;
             }
+        }
+
+        /* §3.6 STEP 12 AT A DISTINGUISHING INDEX WHOSE TWO TYPES ARE A NUMBER AND A TYPED ARRAY — HTML §8.11.1
+           "The ImageData interface"'s index 0, and the first position in this platform where the entry chosen
+           here is read again at a LATER position. What this writes is `ovl_entry`; what reads it is every
+           position behind, through idl_type_is_entry_typed's collapse and through step 15.3's optionality.
+           IT RUNS ONLY WHERE STEPS 3-4 LEFT BOTH ENTRIES STANDING. Step 8 sets a distinguishing index "If there
+           is more than one entry in S", so at the arity only the longer entry reaches, the seed at stage 1 is
+           already the answer and this position is simply that entry's type — asking the value there would be
+           step 12 running where the algorithm does not have it, and it would fork a world §3.6 never reaches.
+           THE CHAIN HAS TWO CLAUSES THAT CAN NAME AN ENTRY HERE AND NO THIRD, and both are written the same
+           way: a condition ending "there is an entry in S that has one of the following types at position i of
+           its type list", then a LIST of types. The TYPED-ARRAY clause's condition tests that V has a
+           [[TypedArrayName]] internal slot and its list opens with a typed array type whose name equals that
+           slot's value, closing with a union type that has one of them in its flattened member types — so it
+           names the longer entry for a Uint8ClampedArray or a Float16Array, `ImageDataArray`'s two flattened
+           members. Everything else — a Number, a string, a plain Object, null, undefined — reaches the chain's
+           own numeric fallback, whose list names a numeric type and which the shorter entry's `unsigned long`
+           always satisfies. So step 12.20's TypeError is unreachable at this position, and this fork is
+           two-armed where the `…_OR_DICT` rows above are three. */
+        if (t == IDL_ULONG_OR_IMAGE_DATA_ARRAY) {
+            DCHECK(s->i == m->distinguishing,
+                   "§3.6's distinguishing argument index was reached at a position the member does not record "
+                   "as one — the row states the position and idl_args_seal asserts the two agree, so this call "
+                   "is running a member declared after the platform was sealed");
+            if (!idl_split_longer_survived(m, s->hdr.argc)) {
+                /* BOTH ENTRIES STAND, so the value decides. A concolic is asked as a FORK and everything else
+                   is the chain above, run on the value itself. */
+                if (concolic_is(a)) {
+                    JSValue ex = concolic_example(ctx, a);
+                    int arm = 0, real;
+
+                    DCHECK(idl_concolic_rule(t) == IDL_CONCOLIC_FORKS,
+                           "this conversion forked §3.6's surviving overload entry for a type idl_args.h does "
+                           "not declare as one it forks — the SITE and the rule are the two halves of one "
+                           "statement, and a type that loses its FORKS rule while this ask stands would fork "
+                           "an entry the pass-through above had already crossed the value at");
+                    /* `real` is step 12 run on the operand's own EXAMPLE, which this engine can compute because
+                       an example is a value it COMPUTED by running the real operators on real operands. An
+                       example is a primitive and never a typed array, so the numeric fallback is what an
+                       example names and the ImageDataArray world is never the one a run already took — a fact
+                       about examples, and not a reason to drop the arm: both siblings run and neither is
+                       marked forced. */
+                    DCHECK(!JS_IsObject(ex),
+                           "a §3.6 (unsigned long, ImageDataArray) split's unknown carries an OBJECT as its "
+                           "concrete example — an example is the value this engine COMPUTED, so it is a "
+                           "primitive, and step 12 over an object one would name an entry from a value no run "
+                           "ever produced");
+                    real = JS_IsUndefined(ex) ? JS_OUTCOME_REAL_UNSTATED : IDL_OVL_SHORTER;
+                    JS_FreeValue(ctx, ex);
+                    /* `cb_result` is this machine's outstanding answer and step_fork_run takes no `in` to hand
+                       it to, so it is released HERE — the sibling's snapshot is taken at this return and
+                       nothing of the caller's may be live across it. */
+                    JS_FreeValue(ctx, cb_result);
+                    cb_result = JS_UNDEFINED;
+                    r = step_fork_run(ctx, &s->hdr, a, "§3.6 (unsigned long, ImageDataArray) overload entry",
+                                      2, real, &arm);
+                    if (r) return r;
+                    if (arm == IDL_OVL_LONGER) {
+                        /* THE ImageDataArray WORLD, AND WHAT IT COSTS. Web IDL §3.2.26 Buffer source types'
+                           "get a copy of the bytes held by the buffer source" has no answer over an unknown,
+                           because an unknown has no bytes — and HTML §8.11.1's own step 2 for this entry is
+                           "Let length be the buffer source byte length of data", which is the first thing the
+                           algorithm asks for. So there is no arm set to run and the honest statement is that
+                           the conversion has no answer over unknown input here yet.
+                           THE OTHER WORLD DOES NOT DEPEND ON IT, which is why the arm is asked rather than
+                           dropped: outcome 0 is complete, and this crash names the one capability that is
+                           not. */
+                        DFAIL("§3.6 step 12 selected the `ImageDataArray` overload entry for UNKNOWN EXTERNAL "
+                              "INPUT and Web IDL §3.2.26 Buffer source types has no answer over one: an "
+                              "unknown has no bytes, so HTML §8.11.1 The ImageData interface's own \"Let "
+                              "length be the buffer source byte length of data\" has nothing to read. Build "
+                              "§3.2.26 over unknown input AT THIS CONVERSION — what is missing is what a "
+                              "buffer source's LENGTH is when the buffer is unknown. Until it exists this "
+                              "world is the page's TypeError, which is what a release build answers");
+                        JS_ThrowTypeError(ctx, "argument %d: a buffer source cannot yet be built from unknown "
+                                               "external input", s->i + 1);
+                        return JS_STEP_ABRUPT;
+                    }
+                    s->ovl_entry = IDL_OVL_SHORTER;
+                } else {
+                    int kind = JS_GetTypedArrayType(a);
+
+                    s->ovl_entry = (kind == JS_TYPED_ARRAY_UINT8C || kind == JS_TYPED_ARRAY_FLOAT16)
+                                 ? IDL_OVL_LONGER : IDL_OVL_SHORTER;
+                }
+                longer_survived = s->ovl_entry == IDL_OVL_LONGER;
+                /* §3.6 step 15.3's optionality is the SURVIVING entry's, and the entry has just changed — so
+                   the number read before this position is stale for every position behind it. It is re-read
+                   rather than recomputed at each use, because one derivation per position is what keeps the
+                   two from answering differently. */
+                first_opt = idl_first_optional(m, s->ovl_entry);
+            }
+            /* THE LONGER ENTRY'S TYPE IS `ImageDataArray`, AND THE VALUE STANDING HERE HAS ALREADY PASSED
+               ITS BRAND TEST — step 12's typed-array clause is what chose this entry, and it chose it by
+               reading `[[TypedArrayName]]`. So the conversion is §3.2.26's "crosses as itself", which is what
+               IDL_ANY is, and NOT IDL_TYPED_ARRAY: that row states ONE `T` beside the position (idl_typed_array)
+               and `ImageDataArray` is a union of two, so declaring it would be a brand test against whichever
+               of the two the declaration happened to name and would refuse the other. The union's own test ran
+               at step 12 and has no second answer to give. */
+            t = longer_survived ? IDL_ANY : IDL_UNSIGNED_LONG;
         }
 
         if (t == IDL_DICT || t == IDL_DICT_OR_BOOL_FIRST || t == IDL_BOOL_OR_DICT ||
@@ -5738,6 +5930,21 @@ static int idl_method_id_all(JSContext *ctx, const IdlArgType *types, int nargs,
        none can change again. */
     idl_member(idx)->split_at = -1;
     idl_member(idx)->split_longer_optional = -1;
+    /* §3.6's DISTINGUISHING ARGUMENT INDEX, READ OFF THE TYPE LIST ON THE SAME TERMS `split_at` IS — a
+       value-resolved split row states the position and both entries' types at once, so the position is not a
+       second number anybody writes down. A LENGTH-differing split names one too: at the arities both its
+       entries reach they are equal-length tuples that differ at that position, which is exactly what step 8
+       sets `d` to. The two coincide for such a member and do not for one whose types differ earlier, which is
+       why the number is kept even where a `split_at` is also found. */
+    idl_member(idx)->distinguishing = -1;
+    for (k = 0; k < nargs; k++)
+        if (idl_type_is_value_split(types[k]) || idl_type_is_length_split(types[k])) {
+            DCHECK(idl_member(idx)->distinguishing < 0,
+                   "a member declared TWO §3.6 distinguishing argument indices — step 8 sets ONE per arity, so "
+                   "a second is a second answer to which entry survived and every position behind them would "
+                   "be converted at whichever was found first");
+            idl_member(idx)->distinguishing = k;
+        }
     for (k = 0; k < nargs; k++)
         if (idl_type_is_length_split(types[k])) {
             DCHECK(idl_member(idx)->split_at < 0,
@@ -5783,9 +5990,24 @@ static int idl_method_id_all(JSContext *ctx, const IdlArgType *types, int nargs,
         int ndict = 0;
         for (k = 0; k < nargs; k++)
             if (idl_type_is_dictionary(types[k])) ndict++;
-        DCHECK(ndict == 1, "a member declared dictionary members but not exactly one dictionary argument — the "
-                           "conversion cursor is per-member, so a second dictionary would read the first's "
-                           "names");
+        /* THE SUBJECT IS HOW MANY CAN BE LIVE IN **ONE CALL**, NOT HOW MANY THE LIST NAMES. The cursor this
+           protects is per-member and converts one dictionary at a time, and Web IDL converts arguments strictly
+           left to right — so what must not happen is two dictionaries in one conversion, which for a member
+           with ONE entry is two declared positions and is what this counted.
+           A SPLIT MEMBER DECLARES ONE PER ENTRY AND REACHES ONE PER CALL. HTML §8.11.1 "The ImageData
+           interface" names `optional ImageDataSettings settings = {}` at index 2 of its shorter constructor and
+           at index 3 of its longer one; §3.6 steps 3-4 and step 12 leave exactly one entry standing before any
+           position is converted, so index 2 is a dictionary only where index 3 is not reached and index 3 only
+           where index 2 resolved to the other entry's `unsigned long`. Counting declared positions would have
+           refused that member for a collision no call can have — and counting them WITHOUT this paragraph
+           would have let a genuine second dictionary through on a member with no split, which is why the bound
+           is stated per entry rather than simply raised. */
+        DCHECK(ndict >= 1 && ndict <= (idl_member(idx)->distinguishing >= 0 ? 2 : 1),
+               "a member declared dictionary members but not exactly one dictionary argument per overload "
+               "entry — the conversion cursor is per-member and Web IDL converts arguments left to right, so a "
+               "second dictionary REACHABLE IN THE SAME CALL would read the first's names. A member with no "
+               "§3.6 split has one entry and may name one; a member with a distinguishing argument index has "
+               "two and may name one apiece");
         idl_member(idx)->dict_atoms = malloc(sizeof(JSAtom) * (size_t)nmembers);
         CHECK(idl_member(idx)->dict_atoms, "idl: OOM interning a dictionary's member names");
         for (k = 0; k < nmembers; k++) {
@@ -5991,13 +6213,45 @@ void idl_overload_split_optional_from(int longer_first_optional)
            "a member that declares no §3.6 length-differing overload split said where its LONGER entry's "
            "optional arguments begin — a split is either named by the member's own type list or stated with "
            "idl_overload_length_split_at, and a member with neither has no second entry for this to describe");
-    /* THE LONGER ENTRY STARTS PAST THE SPLIT, so its first optional position cannot be at or before it: the
-       shorter entry is the one that ENDS there, and a longer entry whose optional arguments began inside the
-       shared prefix would be the shorter entry with extra positions rather than a second overload. */
-    DCHECK(longer_first_optional > m->split_at && longer_first_optional <= m->nargs,
-           "a longer overload entry's first OPTIONAL argument is not one of the positions past the split that "
-           "the member declares");
+    /* THE BOUND IS §2.5.8's SHARED PREFIX, WHICH ENDS AT `d` AND NOT AT `split_at`. This read
+       `longer_first_optional > m->split_at`, whose stated reason was that a longer entry whose optional
+       arguments began inside the shared prefix would be the shorter entry with extra positions — and the
+       prefix Web IDL §2.5.8 Overloading actually fixes is the one BELOW THE DISTINGUISHING ARGUMENT INDEX:
+       "for each index j, where j is less than the distinguishing argument index …, the types at index j in all
+       of the items' type lists must be the same, and the optionality values at index j in all of the items'
+       optionality lists must be the same". Past `d` the entries are free to differ in both, so a longer entry
+       MAY begin its optional arguments at the same index the shorter one does — HTML §8.11.1 "The ImageData
+       interface" does, both entries first turning optional at index 2 while the shorter one ends there. The old
+       bound was right for every member whose `d` and `split_at` coincide, which was every member that existed.
+       BELOW `first_optional` IS WHAT REMAINS FORBIDDEN, and it is §2.5.8's sentence read on the optionality
+       half: the two lists agree below `d`, and the shorter entry's own first optional is at or after `d`, so a
+       longer entry turning optional EARLIER than the shorter one would be disagreeing inside the prefix. */
+    DCHECK(longer_first_optional >= m->first_optional && longer_first_optional <= m->nargs,
+           "a longer overload entry's first OPTIONAL argument is earlier than the shorter entry's, or past the "
+           "positions the member declares — Web IDL §2.5.8 Overloading makes the two optionality lists agree "
+           "at every index below the distinguishing argument index, so an earlier one disagrees inside the "
+           "prefix the standard fixes");
     m->split_longer_optional = longer_first_optional;
+}
+
+/* §3.6's DISTINGUISHING ARGUMENT INDEX, STATED — see idl_args.h for why it is a second number from `split_at`.
+   It asserts the declaration loop ALREADY found one rather than setting a number beside it, because every
+   split this platform declares names its position in its own type list and a second statement of one fact is
+   free to disagree with the first. The day a member's value split is at a position its types cannot name, this
+   is where that number arrives and the assert below is what has to change with it. */
+void idl_overload_distinguishing_at(int d)
+{
+    IdlMember *m;
+
+    DCHECK(g_n > 0, "a §3.6 distinguishing argument index was declared before any member was");
+    DCHECK(!g_sealed, IDL_LAST_DECL_ONLY);
+    m = idl_member(g_n - 1);
+    DCHECK(d >= 0 && d < m->nargs,
+           "a §3.6 distinguishing argument index was declared outside the positions the member lists");
+    DCHECK(m->distinguishing == d,
+           "a member stated a §3.6 distinguishing argument index its own type list does not name — every split "
+           "row states the position and both entries' types together, so a number stated beside it is a second "
+           "answer to which position chooses the entry");
 }
 
 /* See idl_args.h. Same "names the last declaration" rule as idl_optional_from, and it must be stated AFTER

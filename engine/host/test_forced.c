@@ -2290,6 +2290,50 @@ static const char *HTML =
     " uasc.scrollIntoView(false); var uap1 = document.scrollingElement.scrollTop;"
     " uapos = 'start' + uap0 + '-end' + uap1; }"
     "fetch('/api/scrollpos?v=' + uapos);"
+    /* HTML §8.11.1 "The ImageData interface" — and the FOURTH row is the reason this exists. Web IDL §3.6's
+       distinguishing argument index for its two constructors is position 0, where the shorter entry declares
+       `unsigned long sw` and the longer one `ImageDataArray data`, and the entry chosen THERE decides what
+       position 2 is: `optional ImageDataSettings settings = {}` on the shorter entry and `optional unsigned
+       long sh` on the longer one. That is the first position in this platform whose type is step 15.2's "the
+       type at index i in the type list of the REMAINING entry" rather than a type the declaration states
+       outright.
+       ROWS ONE TO THREE ASSERT THE TWO ENTRIES AND THE SETTINGS DICTIONARY. `a` is the shorter entry
+       allocating transparent black at 4 bytes per pixel; `b` is the longer one taking the page's OWN array
+       ("This step does not set this's data to a copy of data") and deriving the height from the byte length;
+       `c` is the settings dictionary reaching step 6's `colorSpace` arm, which is the member that declares no
+       default precisely so steps 7 and 8 stay reachable.
+       ROW FOUR IS THE ONE THAT SEPARATES THE CORRECT DESIGN FROM THE TEMPTING WRONG ONE, and it is the only
+       row here that a union would answer differently. `new ImageData(u8, 2, {})` selects the LONGER entry at
+       position 0, so position 2 is `unsigned long` and `{}` converts through ToNumber to NaN and then to 0 —
+       whereupon §8.11.1's own step 7 ("If sh was given and its value is not equal to height, then throw an
+       IndexSizeError") throws, because the height derived from sixteen bytes at two pixels per row is 2.
+       Declared as a `(unsigned long or ImageDataSettings)` UNION instead, §3.2.25's step 11 would send the
+       Object down the dictionary arm and the call would SILENTLY SUCCEED with a settings bag. Rows one to
+       three pass under both designs; only this one reads `d` for the standard and `D` for the shortcut. */
+    "var uimg = '';"
+    "try { var ui1 = new ImageData(2, 2);"
+    " uimg += (ui1.width === 2 && ui1.height === 2 && ui1.data.length === 16) ? 'a' : 'A'; }"
+    "catch (e) { uimg += 'E'; }"
+    "try { var ui2 = new ImageData(new Uint8ClampedArray(16), 2);"
+    " uimg += (ui2.width === 2 && ui2.height === 2 && ui2.data.length === 16) ? 'b' : 'B'; }"
+    "catch (e) { uimg += 'F'; }"
+    "try { var ui3 = new ImageData(2, 2, { colorSpace: 'display-p3' });"
+    " uimg += (ui3.colorSpace === 'display-p3' && ui3.data.length === 16) ? 'c' : 'C'; }"
+    "catch (e) { uimg += 'G'; }"
+    "try { new ImageData(new Uint8ClampedArray(16), 2, {}); uimg += 'D'; } catch (e) { uimg += 'd'; }"
+    "fetch('/api/imagedata?v=' + (uimg === 'abcd' ? 'isimagedata' : 'arm' + uimg));"
+    /* AND THE ROUND TRIP, WHICH IS WHAT §NO-STUBS MEANS BY A `data` THAT IS NOT A SHAPE. A byte written
+       through the attribute is a byte a later read gives back, and the array is the page's own object on the
+       longer entry — so the identity is observable as well as the value, and an implementation that handed
+       back a copy would answer `wrote16` here and fail the identity. The payload is CONSTANTS: a witness
+       composed from a value this engine computed can itself become unknown, at which point the request never
+       goes out and its absence reads as the path not being taken. */
+    "var uimr = 'na';"
+    "try { var ui4 = new Uint8ClampedArray(16); var ui5 = new ImageData(ui4, 2);"
+    " ui5.data[0] = 200; ui5.data[15] = 7;"
+    " uimr = (ui5.data === ui4 && ui4[0] === 200 && ui5.data[15] === 7) ? 'roundtrip' : 'lost'; }"
+    "catch (e) { uimr = 'threw'; }"
+    "fetch('/api/imagedataio?v=' + uimr);"
     /* §4.10 FORMS — a submission is a REQUEST the page's own code composes, and submit() DERIVES it without
        sending anything, which is the rule for a state-mutating request. The value a field carries is the
        endpoint's example value, and when it is an ATTACKER SOURCE the finding says so rather than inventing

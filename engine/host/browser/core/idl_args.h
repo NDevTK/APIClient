@@ -756,6 +756,60 @@ typedef enum {
        — the union names File — so it takes the string arm and stringifies, which is the case a hand-written
        body gets wrong by asking `blob_is`. */
     IDL_FORMVALUE_NULLABLE,
+    /* §3.6's DISTINGUISHING ARGUMENT INDEX FOR A SPLIT WHOSE TWO ENTRIES DIFFER *BEFORE* THE SHORTER ONE ENDS
+       — `(unsigned long or ImageDataArray)`, which HTML §8.11.1 "The ImageData interface" declares at index 0
+       of both its constructors:
+
+           constructor(unsigned long sw, unsigned long sh, optional ImageDataSettings settings = {});
+           constructor(ImageDataArray data, unsigned long sw, optional unsigned long sh,
+                       optional ImageDataSettings settings = {});
+
+       IT IS NOT IDL_SEQUENCE_OBJECT_OR_DICT WITH A TYPED-ARRAY ARM, AND THE DIFFERENCE IS THE ONE THIS FILE
+       HAD NO FIELD FOR. Every split declared before this one put its distinguishing index at the position the
+       SHORTER entry ends at, so `split_at` served as both and the two were never told apart. Here they are two
+       positions: Web IDL §2.5.8 Overloading's effective overload set gives the pair entries of length 2, 3 and
+       4, the shorter constructor ends at index 2, and the index the types differ at is 0. §2.5.8 requires
+       agreement only "for each index j, where j is less than the distinguishing argument index" — so a member
+       may differ at index 0 and end at index 2, and every assert written on the two coinciding is an assert
+       about the members that happened to exist. See idl_overload_distinguishing_at, which is the field.
+       THE ARITY DECIDES FIRST AND THE VALUE ONLY WHERE THE ARITY LEFT A CHOICE. §3.6 step 8 sets `d` only "If
+       there is more than one entry in S", so at the arity only the longer entry reaches (4 here) step 12 never
+       runs at all and this position is simply that entry's type. The conversion seeds the surviving entry from
+       `argc` before position 0 is reached and this row refines it — which is why the record is a fact about the
+       CALL and not a rewrite of one position.
+       ITS TWO OUTCOMES ARE ALL §3.6 REACHES HERE, and the reason is the chain's tail rather than a count made
+       here. Every clause of step 12 is a condition ending "there is an entry in S that has one of the following
+       types at position i of its type list" followed by a LIST of types. The typed-array clause's condition
+       tests that V has a [[TypedArrayName]] internal slot and its list opens with a typed array type whose name
+       equals that slot's value, so it names the longer entry for a Uint8ClampedArray or a Float16Array; every
+       other value falls to the chain's own numeric fallback, whose list names a numeric type and which the
+       shorter entry's `unsigned long` always satisfies. Step 12.20's TypeError is therefore UNREACHABLE at this
+       position — which is what separates this row from the two above, whose third world is real and whose forks
+       are three-armed.
+       OUTCOME 0 IS THE SHORTER (NUMERIC) ENTRY, per step_fork_run's rule that outcome 0 is what a run with no
+       forking policy takes: `JS_GetTypedArrayType` of a crossed concolic is not a typed array, so the numeric
+       fallback is the arm every body already reached, and the ImageDataArray world is the one the fork adds. */
+    IDL_ULONG_OR_IMAGE_DATA_ARRAY,
+    /* A POSITION *BEHIND* THE DISTINGUISHING INDEX AT WHICH THE TWO ENTRIES DECLARE DIFFERENT TYPES — §3.6
+       step 15.2's "the type at index i in the type list of the REMAINING entry", which is a question this pool
+       could not ask while it carried one type list per member. HTML §8.11.1's index 2 is the first: the shorter
+       constructor's `optional ImageDataSettings settings = {}` against the longer one's `optional unsigned
+       long sh`.
+       IT READS THE RECORD AND TESTS NOTHING. The entry was settled at the distinguishing index — by the arity
+       where steps 3-4 left one, by the value where step 12 chose — so this position has no question of its own
+       and asking one would be a SECOND answer to it, free to disagree with the first. That is why it is a row
+       here rather than a `(unsigned long or ImageDataSettings)` union: §3.2.25's arm test and §3.6's surviving
+       entry give DIFFERENT observables, and the union's are wrong in both directions. `new ImageData(2, 2, 5)`
+       is a TypeError under §3.6 — the shorter entry survived, §3.2.17 Dictionary types step 1 refuses a 5 —
+       and is a settings-less `sh` of 5 under a union; `new ImageData(u8, 2, {})` is `sh` 0 and then §8.11.1's
+       own "If sh was given and its value is not equal to height" IndexSizeError, and is an all-defaults
+       dictionary under a union. A union is not a weaker statement of this row, it is a different algorithm.
+       IT IS A DICTIONARY TYPE FOR idl_type_is_dictionary AND THAT IS LOAD-BEARING, not bookkeeping: the
+       omitted-optional guard runs BEFORE any split resolves, so a position that can be a dictionary must be in
+       that predicate or `new ImageData(2, 2, undefined)` places §3.6 step 15.4.2's "missing" where §3.2.17
+       gives the all-defaults dictionary. Which is also why a split member's dictionary positions are counted
+       PER ENTRY at declaration — see the ndict check, whose subject is how many can be live in ONE call. */
+    IDL_ULONG_OR_DICT_BY_ENTRY,
 } IdlArgType;
 
 /* WHAT A DECLARED TYPE ASKS OF UNKNOWN EXTERNAL INPUT — ONE statement of it, because it was TWO and they
@@ -832,6 +886,14 @@ static inline IdlConcolicRule idl_concolic_rule(IdlArgType t)
        any rule is asked — the only value the row itself describes is the dictionary at the shorter arity, and a
        dictionary asks the value nothing. See IDL_UNRESTRICTED_DOUBLE_OR_DICT. */
     case IDL_UNRESTRICTED_DOUBLE_OR_DICT:
+    /* A POSITION BEHIND THE DISTINGUISHING INDEX resolves from the RECORD of the entry that survived, which
+       was settled before this position was reached — so the conversion has already rewritten this position to
+       that entry's own type before any rule is asked, and what is left is a number (CROSSES on its own row) or
+       a dictionary (a bag of member READS, each yielding another unknown). It is filed here for exactly
+       IDL_UNRESTRICTED_DOUBLE_OR_DICT's reason and never with the unions above, whose ARM is a test of the
+       value: this row tests nothing, and a FORKS rule here would be a second ask at a site with no second
+       question — which the resolution site and this rule assert against each other. */
+    case IDL_ULONG_OR_DICT_BY_ENTRY:
     /* A RECORD IS FILED WITH THE DICTIONARY ABOVE AND FOR THE SENTENCE ALREADY WRITTEN THERE: it is not a
        value that crosses at all but a bag of READS — §3.2.23's *convert a JavaScript value to record* step 3
        asks [[OwnPropertyKeys]], its step 4.1 asks each key's descriptor and its step 4.2.2 asks `Get(O, key)`
@@ -988,6 +1050,19 @@ static inline IdlConcolicRule idl_concolic_rule(IdlArgType t)
        more (§3.2.20's null) and therefore a different ask — see IDL_ENUM_NULLABLE, which names what its absence
        shows. */
     case IDL_ENUM:
+    /* §3.6's surviving OVERLOAD ENTRY at a distinguishing index whose two types are a NUMBER and a TYPED ARRAY
+       — the same fork the two `…_OR_DICT` rows above ask, at the one position where the entries differ before
+       the shorter one ends. Crossing is not the cure for the reason it is not theirs: the entry decides which
+       CONVERSION runs at every later position of the call, so no single crossed value is on both, and the
+       choice would merely move into whichever `JS_GetTypedArrayType` the resolution reached first — which
+       answers "not a typed array" for a concolic by construction, so the numeric entry was being picked for
+       every unknown by a fact about this engine's value class rather than by the page's value.
+       TWO OUTCOMES AND NOT THREE, which is the row's own paragraph: step 12.20's TypeError is unreachable
+       here because the chain's numeric fallback always names the shorter entry. Both worlds are real and the
+       algorithms behind them observe different things — one reads `sw`/`sh` and allocates transparent black,
+       the other takes the page's own buffer as the bitmap — so neither may be picked for a value nothing is
+       known about. */
+    case IDL_ULONG_OR_IMAGE_DATA_ARRAY:
         return IDL_CONCOLIC_FORKS;
     default:
         return IDL_CONCOLIC_CROSSES;
@@ -1774,6 +1849,27 @@ void idl_overload_split_optional_from(int longer_first_optional);
  * names a split may not also state one here: two answers to "which count removes an entry" is a member whose
  * every arity is resolved by whichever was found first. */
 void idl_overload_length_split_at(int shorter_last_position);
+
+/* DECLARE §3.6's DISTINGUISHING ARGUMENT INDEX — the position step 12 chooses the surviving overload entry at,
+ * which is a DIFFERENT number from `split_at` and was the same one for every member declared before HTML
+ * §8.11.1 "The ImageData interface".
+ *
+ * `split_at` is where the SHORTER entry ENDS, which is what §3.6 steps 3-4 remove an entry by. `d` is where the
+ * entries' types first DIFFER, which is what step 12 reads a value at. Web IDL §2.5.8 Overloading requires the
+ * two to coincide only in one direction — "for each index j, where j is less than the distinguishing argument
+ * index …, the types at index j in all of the items' type lists must be the same" bounds what may differ
+ * BEFORE `d` and says nothing about what lies between `d` and the shorter entry's end. Window's `postMessage`
+ * differs at index 1 and ends at index 1; ImageData differs at index 0 and ends at index 2, and every assert
+ * this file wrote over `split_at` as if it were `d` is an assert about the first shape only.
+ *
+ * IT IS READ OFF THE TYPE LIST WHEREVER THE TYPE LIST CAN SAY IT, exactly as `split_at` is: a value-resolved
+ * split row AT a position states the position and both entries' types at once, so asking for the number again
+ * would be one fact stated twice and free to disagree. This declaration exists for the member whose value split
+ * is at a position its own type list cannot name — and there is none yet, which is why it asserts that the
+ * declaration loop already found one rather than setting a number beside it.
+ * RETIREMENT: this record goes when `d` and `split_at` can no longer be read as one number, which is when no
+ * assert in this file names `split_at` in a sentence about which ENTRY survived. */
+void idl_overload_distinguishing_at(int d);
 
 /* WEB IDL §3.6 Overload resolution algorithm's DEFAULT VALUE AT A POSITIONAL ARGUMENT — the THIRD state at a
    position, beside "the page passed one" and "the argument is absent", and exactly the distinction

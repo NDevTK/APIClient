@@ -4,6 +4,7 @@
 
 #include "check.h"
 #include "core/agent_state.h"
+#include "core/canvas/image_data.h"
 #include "core/canvas/path_2d.h"
 #include "core/console/console.h"
 #include "core/crypto/crypto.h"
@@ -247,6 +248,7 @@ static void d_abort(JSContext *c, const PlatformAgent *a) { (void)a; abort_init(
 static void d_observable(JSContext *c, const PlatformAgent *a) { (void)a; observable_init(c); }
 static void d_dom_rect(JSContext *c, const PlatformAgent *a) { (void)a; dom_rect_init(c); }
 static void d_path_2d(JSContext *c, const PlatformAgent *a) { (void)a; path_2d_init(c); }
+static void d_image_data(JSContext *c, const PlatformAgent *a) { (void)a; image_data_init(c); }
 static void d_dom_rect_list(JSContext *c, const PlatformAgent *a) { (void)a; dom_rect_list_init(c); }
 static void d_dom_string_list(JSContext *c, const PlatformAgent *a) { (void)a; dom_string_list_init(c); }
 static void d_element(JSContext *c, const PlatformAgent *a) { (void)a; element_init(c); }
@@ -525,6 +527,7 @@ static void r_dom_rect_list(JSRuntime *rt) { dom_rect_list_free(rt); }
 static void r_dom_string_list(JSRuntime *rt) { dom_string_list_free(rt); }
 static void r_dom_rect(JSRuntime *rt) { (void)rt; dom_rect_free(); }
 static void r_path_2d(JSRuntime *rt) { (void)rt; path_2d_free(); }
+static void r_image_data(JSRuntime *rt) { (void)rt; image_data_free(); }
 /* THE FIVE ROWS THAT HAD NO RELEASE FUNCTION AT ALL, which is the arm the pairing below silently passes: a row
    with an empty release column and a component that declared nothing agree, and they agree whether the
    component holds nothing or holds everything and gives none of it back. All five held. Indexed Database §4.7's
@@ -1156,6 +1159,14 @@ static const PlatformComponent PLATFORM[] = {
        the geometry rows because that is what it is: a path is coordinates, and the two components answer the
        same kind of question about a page with no device under either of them. */
     { "path_2d",             d_path_2d,             NULL,        r_path_2d },
+    /* HTML §8.11.1 "The ImageData interface", beside Path2D and for the same two reasons that put Path2D here.
+       NO DOCUMENT HALF: §8.11.1 declares `ImageData` `[Exposed=(Window,Worker)]`, so a worker realm owes the
+       name and reaches no platform_document_install, and image_data.c's own realm intrinsic places it.
+       IT DEPENDS ON NOTHING AND SO ITS POSITION IS FREE — browser/idl_inheritance.h records it as
+       IDL_PROTO_OBJECT, so there is no earlier prototype it must be built after. It sits with the canvas rows
+       because that is what it is: a bitmap a page builds and reads with no device under it, which is the same
+       kind of question a path is. */
+    { "image_data",          d_image_data,          NULL,        r_image_data },
     { "element",             d_element,             NULL,        r_element },
     /* CSSOM §8.1 The CSS.escape() Method's `CSS` NAMESPACE and CSS Conditional Rules 3 §7.5 The CSS namespace,
        and the supports() function's partial namespace on it, AFTER `element` — which is where the whole CSSOM
@@ -1430,6 +1441,7 @@ static const struct { const char *name, *component; IdlExposure exposure; } PLAT
     { "DOMRect",               "dom_rect" },
     { "DOMRectList",           "dom_rect_list" },
     { "Path2D",                "path_2d" },
+    { "ImageData",             "image_data" },
     { "IntersectionObserver",  "intersection_observer" },
     { "IntersectionObserverEntry", "intersection_observer" },
     /* RESIZE OBSERVER's three names, all three mapping to the ONE component that declares and installs them.
