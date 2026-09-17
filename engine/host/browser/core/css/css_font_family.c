@@ -458,36 +458,144 @@ static bool ff_name_is_ident_sequence(const char *name)
     return true;
 }
 
+/* ---- CSS Syntax §4.3.1 "Consume a token"'s FIRST STEP, over text that has never been through §4.3.1 ------- */
+
+/* CSS Syntax §4.3.2 "Consume comments", RUN ONCE OVER THE WHOLE VALUE BEFORE ANY PRODUCTION BELOW IS ASKED.
+ *
+ * THIS ENTRY'S INPUT IS PRE-TOKENIZER SOURCE TEXT AT EVERY CALLER, WHICH IS WHY THE STEP IS OWED HERE. §4.3.1
+ * makes "Consume comments" the FIRST step of consuming EVERY token, so every production this file states —
+ * §4.3.5's string, §4.3.12's ident sequence, §4.2's code-point classes — is written over a stream a comment
+ * can no longer be in. The text handed to this entry has been through §3.3 "Preprocessing the input stream"
+ * (core/css/css_code_point.h performs that filter at each read) and through nothing else: a page's own string
+ * where CSSOM parses a value, and a span of a declaration's own source where CSSOM reads one back. Without
+ * this pass the opening SOLIDUS of a comment stops the ident walk, ff_parse_item refuses the item, and a
+ * declaration a browser accepts is dropped WHOLE.
+ *
+ * A COMMENT IS REPLACED BY ONE U+0020 SPACE AND IS NOT DELETED, AND THE DIFFERENCE IS A DIFFERENT FAMILY
+ * RATHER THAN A TIDIER SPELLING. A comment produces no token, but it still ENDS the token in front of it, so
+ * two identifiers written with a comment between them and no space are TWO `<ident-token>`s — and
+ * css-fonts-4 §2.1.1 "Syntax of <font-family-name>" says what two of them are worth: "If a sequence of
+ * identifiers is given as a <font-family-name>, the computed value is the name converted to a string by
+ * joining all the identifiers in the sequence by single spaces." Deleting the comment would run them into ONE
+ * identifier and name a family the page never wrote.
+ *
+ * THE SPACE IS SOUND BECAUSE OF THIS GRAMMAR AND NOT IN GENERAL, WHICH IS WHY THIS PASS IS NOT SHARED AND IS
+ * NOT TAKEN WHERE THE READ PATH'S SPAN IS SLICED. Whitespace in §2.1's value only ever SEPARATES tokens —
+ * ff_skip_ws runs at each item boundary and §2.1.1 joins by single spaces however many code points stood
+ * between — so here a space and a comment separate the same pair. A grammar in which the PRESENCE of a
+ * `<whitespace-token>` is itself significant does not have that property, and a slicer that serves every
+ * property cannot know which of the two it is feeding; the same pass placed there would be answering a
+ * question about a grammar it cannot see.
+ *
+ * IT SKIPS A `<string>` AND AN ESCAPE THROUGH THE WALKS THIS FILE ALREADY HAS, so nothing here holds a second
+ * opinion about where either one ends: an opening SOLIDUS-ASTERISK inside a quoted family name is two
+ * characters of that name, and §4.3.8's valid escape can carry a SOLIDUS that opens nothing. §4.3.5's own walk
+ * is asked WHERE its token ends rather than what it decodes, which is why the name it returns is freed unread.
+ * THE ESCAPE UNIT IS §4.3.8's TWO CODE POINTS AND NOT §4.3.7's WHOLE ESCAPE, deliberately: the code points
+ * §4.3.7 would go on to consume are hex digits and at most one whitespace, and U+002F SOLIDUS is neither, so
+ * no comment can open inside the part this pass does not walk.
+ * OWNED, and never NULL — a value that is nothing but a comment answers the EMPTY STRING, which is a value the
+ * walk below already refuses as `#` over no items rather than one this pass has to judge. */
+static char *ff_strip_comments(const char *value)
+{
+    FfBuf out = { 0 };
+    const char *p = value, *end = value + strlen(value);
+
+    while (p < end) {
+        size_t n = 0, n2 = 0;
+        uint32_t cp = css_cp_at(p, end, &n);
+
+        if (cp == '/' && css_cp_at(p + n, end, &n2) == '*') {
+            p += n + n2;
+            for (;;) {
+                cp = css_cp_at(p, end, &n);
+                /* "up to and including the first U+002A ASTERISK (*) followed by a U+002F SOLIDUS (/), or up
+                   to an EOF code point" — the EOF arm is §4.3.2's own parse error and the comment still stands
+                   as consumed, so an unterminated comment ends the value rather than invalidating it. */
+                if (cp == CSS_CP_EOF) break;
+                if (cp == '*' && css_cp_at(p + n, end, &n2) == '/') { p += n + n2; break; }
+                p += n;
+            }
+            ff_buf_add(&out, " ", 1);
+            continue;
+        }
+        if (cp == '"' || cp == '\'') {
+            const char *begin = p;
+
+            free(ff_consume_string(&p, end));
+            DCHECK(p > begin,
+                   "CSS Syntax §4.3.5 \"Consume a string token\" advanced over NO code points from a quote. "
+                   "Every arm of it consumes at least the opening quote, so a walk that did not move would "
+                   "re-enter this arm at the same byte and never reach the end of the value");
+            ff_buf_add(&out, begin, (size_t)(p - begin));
+            continue;
+        }
+        if (cp == '\\' && ff_valid_escape(p, end)) {
+            css_cp_at(p + n, end, &n2);
+            ff_buf_add(&out, p, n + n2);
+            p += n + n2;
+            continue;
+        }
+        /* THE BYTES AND NOT THE CODE POINT, which is the opposite of what core/css/css_code_point.h demands of
+           a caller that COPIES source text — and it is right here because this pass does not copy text FOR a
+           consumer, it hands the same walk back to itself: what it emits is read by css_cp_at again, so a
+           CRLF re-filtered to one U+000A is the identical answer, while re-encoding it would spell a code
+           point the source does not have. */
+        ff_buf_add(&out, p, n);
+        p += n;
+    }
+    if (!out.s) ff_buf_reserve(&out, 0);
+    return out.s;
+}
+
 char *css_font_family_value(const char *value)
 {
     FfList list = { 0 };
     FfBuf out = { 0 };
-    const char *p, *end;
+    const char *p, *end, *k;
+    char *text;
     size_t i, len;
 
     if (!value) return NULL;
+    /* CSS Syntax §4.3.1 "Consume a token"'s first step, ahead of every question this entry asks — see
+       ff_strip_comments for why it is owed here and why it is owed to the WHOLE value rather than to each
+       token boundary. It precedes the CSS-wide keyword test as well, because a comment is not whitespace: the
+       test below trims whitespace off both ends before comparing, so `inherit` written with a comment after it
+       would otherwise fall past §7.3 into §2.1's own grammar and be refused there as an excluded identifier. */
+    text = ff_strip_comments(value);
     /* CSS Cascade 5 §7.3 "Explicit Defaulting"'s keywords are a value for EVERY property, so they precede
        §2.1's own grammar and are handed on for §7's DEFAULTING step to resolve (core/css/css_computed_value.h
        says where). ASCII-LOWERCASED because a keyword serializes canonically and `css_wide_keyword` matched
-       case-insensitively, so lowercasing the whole value IS that canonical spelling. */
-    if (css_wide_keyword(value)) {
+       case-insensitively, so lowercasing IS that canonical spelling.
+       IT IS LOWERCASED OVER THE TRIMMED SPAN AND NOT OVER THE WHOLE TEXT, because `css_wide_keyword` matched
+       THROUGH the edges rather than in spite of them: it compares after trimming, so the text it accepted may
+       carry whitespace the keyword does not, and lowercasing all of it answers a value CSSOM reads back with
+       those edges still on. §4.2 "Definitions"' whitespace is the set trimmed here, which is the one §2.1's
+       own walk below skips and a strict subset of what the test accepted — so no text this arm admits can
+       reach the copy with an edge the test itself would have kept. */
+    if (css_wide_keyword(text)) {
         char *v;
 
-        len = strlen(value);
+        k = text;
+        end = text + strlen(text);
+        while (ff_is_ws(css_cp_at(k, end, &len))) k += len;
+        while (end > k && ff_is_ws(css_cp_at(end - 1, end, NULL))) end--;
+        len = (size_t)(end - k);
         v = malloc(len + 1);
         CHECK(v != NULL, "cssom: OOM copying a CSS-wide keyword out of a `font-family` declaration");
         for (i = 0; i < len; i++)
-            v[i] = (value[i] >= 'A' && value[i] <= 'Z') ? (char)(value[i] - 'A' + 'a') : value[i];
+            v[i] = (k[i] >= 'A' && k[i] <= 'Z') ? (char)(k[i] - 'A' + 'a') : k[i];
         v[len] = '\0';
+        free(text);
         return v;
     }
 
-    p = value;
-    end = value + strlen(value);
+    p = text;
+    end = text + strlen(text);
     for (;;) {
         uint32_t cp;
 
-        if (!ff_parse_item(&p, end, &list)) { ff_list_free(&list); return NULL; }
+        if (!ff_parse_item(&p, end, &list)) { ff_list_free(&list); free(text); return NULL; }
         ff_skip_ws(&p, end);
         cp = css_cp_at(p, end, NULL);
         if (cp == CSS_CP_EOF) break;
@@ -531,6 +639,7 @@ char *css_font_family_value(const char *value)
         }
     }
     ff_list_free(&list);
+    free(text);
     DCHECK(out.s != NULL,
            "css-fonts-4 §2.1's serializer produced NO TEXT from a non-empty list. Every arm above appends at "
            "least one code point, so an empty answer would be stored as an empty declaration — which CSSOM "
