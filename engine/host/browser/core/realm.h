@@ -22,6 +22,13 @@
 #include <stdbool.h>
 
 #include "quickjs.h"
+/* FOR `IDL_SITE`, WHICH THE TWO PER-REALM-VALUE MACROS BELOW EXPAND AT THEIR CALLER. A macro body is
+   expanded where it is USED, so the convention has to be visible to every caller of this header rather than
+   only to this file — and spelling `__FILE__, __LINE__` here instead would be a second copy of a convention
+   core/idl_args.h owns, which is the same reason core/events/event_target.h includes it.
+   No cycle: idl_args.h names this header only in prose, and neither it nor anything it reaches
+   (quickjs-step.h, core/idl_iter.h, solver/concolic.h, solver/rel_op.h) includes core/realm.h. */
+#include "core/idl_args.h"
 
 typedef void (*RealmIntrinsic)(JSContext *ctx);
 
@@ -250,8 +257,34 @@ void realm_intrinsics_free(void);
  * exactly when the realm is and there is no second lifetime to get wrong. Declared ONCE PER AGENT (from a
  * component's `_init`), set from that component's per-realm install, read wherever the member runs. */
 int     realm_value_declare(JSContext *ctx, const char *what);
-void    realm_value_set(JSContext *ctx, int slot, JSValue v);   /* CONSUMES v */
-JSValue realm_value_get(JSContext *ctx, int slot);              /* OWNED: the caller frees */
+
+/* THE READ AND THE WRITE CARRY THE CALLER'S SITE, which is why each is a MACRO over an `_at` function.
+ *
+ * A DCHECK stamps the file and line it is WRITTEN at, and both entries below assert from ONE line in
+ * realm.c — so `a per-realm value was read in a realm that never ran the install that sets it` named a
+ * remedy with no object: which read, in which component, of which realm's install. CLAUDE.md's rule for
+ * this shape is that the site TRAVELS WITH THE OPERATION, captured at the caller and threaded to the check.
+ *
+ * WHY A MACRO AND NOT A HELPER. __FILE__ and __LINE__ inside a function are that FUNCTION's, so a wrapper
+ * introduced to share the capture would name realm.c again for every caller — the defect it was reaching
+ * for. A function-like macro is expanded AT THE CALL, so the pair is the caller's by construction and NO
+ * CALL SITE HAD TO BE EDITED: every existing call is unchanged text and now carries its own address.
+ *
+ * WHY THE PAIR IS REQUIRED AND NOT DEFAULTED. Both `_at` entries take it, so a caller that reaches one
+ * without a site does not compile, and realm.c refuses a NULL rather than printing "(null)". An optional
+ * site is what lets an unconverted caller masquerade as one with nothing to say. */
+void    realm_value_set_at(JSContext *ctx, int slot, JSValue v, const char *at_file, int at_line);
+JSValue realm_value_get_at(JSContext *ctx, int slot, const char *at_file, int at_line);
+#define realm_value_set(ctx_, slot_, v_) \
+    realm_value_set_at((ctx_), (slot_), (v_), IDL_SITE)   /* CONSUMES v */
+#define realm_value_get(ctx_, slot_) \
+    realm_value_get_at((ctx_), (slot_), IDL_SITE)         /* OWNED: the caller frees */
+/* What a realm.c-INTERNAL forwarder types instead of IDL_SITE; see idl_args.h's IDL_SITE block for the whole
+   argument, including why it is declared with no user today. IDL_SITE inside realm.c would stamp realm.c and
+   read as a read site, which is the lie this mechanism exists to remove. realm.c's three present calls are
+   not forwarders — each is a distinct operation with its own preconditions, naming one slot's read — so each
+   uses IDL_SITE and stamps itself truthfully. */
+#define REALM_VALUE_SITE_INTERNAL  "core/realm.c (an internal path with no caller site to carry)", -1
 
 /* A STEP OF A STANDARD WHOSE PRODUCER IS NOT IN THIS BUILD — the two-sided assertion, and the reason it is a
  * function rather than a comment at each site.

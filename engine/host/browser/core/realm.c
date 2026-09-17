@@ -756,25 +756,56 @@ int realm_value_declare(JSContext *ctx, const char *what)
     return (int)id;
 }
 
-void realm_value_set(JSContext *ctx, int slot, JSValue v)
+/* THE SITE IS THE CALLER'S AND IT IS NOT OPTIONAL — see realm.h's macros, which supply it. A NULL is the one
+   way a site could still be absent once both entries take the pair, and it is refused rather than printed as
+   "(null)": a record whose address reads `(null):0` is a plausible datum in exactly the field this mechanism
+   exists to make load-bearing.
+   IT IS A MACRO AND NOT A HELPER, for the same reason the entries themselves are macros: a shared function
+   would stamp its own line for both entries, so the one assert in this file whose whole subject is a MISSING
+   address would itself name neither the read nor the write. Expanded here it names which. */
+#define REALM_VALUE_SITE_PRESENT(at_file_) \
+    DCHECK((at_file_) != NULL, \
+           "a per-realm value was reached with no call site — realm.h's realm_value_get/realm_value_set " \
+           "macros are what supply the pair at the call, and a realm.c-internal path with no caller to name " \
+           "passes REALM_VALUE_SITE_INTERNAL rather than a null")
+
+void realm_value_set_at(JSContext *ctx, int slot, JSValue v, const char *at_file, int at_line)
 {
     JSValue prev;
 
-    DCHECK(slot > 0, "a per-realm value was set through a slot that was never declared");
+    REALM_VALUE_SITE_PRESENT(at_file);
+    DCHECKF(slot > 0, "%s:%d set a per-realm value through a slot that was never declared — the slot is the "
+                      "class id realm_value_declare returns, so a zero or negative one is a component whose "
+                      "own `_init` never ran or whose static slot was read before that `_init` wrote it",
+            at_file, at_line);
     prev = JS_GetClassProto(ctx, (JSClassID)slot);
-    DCHECK(JS_IsNull(prev), "a per-realm value was set twice in one realm — the first is what everything "
-                            "already built in this realm is holding");
+    DCHECKF(JS_IsNull(prev), "%s:%d set a per-realm value twice in one realm — the first is what everything "
+                             "already built in this realm is holding, so this write would hand later readers "
+                             "a different object than the one earlier readers are already using",
+            at_file, at_line);
     JS_FreeValue(ctx, prev);
     JS_SetClassProto(ctx, (JSClassID)slot, v);
 }
 
-JSValue realm_value_get(JSContext *ctx, int slot)
+JSValue realm_value_get_at(JSContext *ctx, int slot, const char *at_file, int at_line)
 {
     JSValue v;
 
-    DCHECK(slot > 0, "a per-realm value was read through a slot that was never declared");
+    REALM_VALUE_SITE_PRESENT(at_file);
+    DCHECKF(slot > 0, "%s:%d read a per-realm value through a slot that was never declared — the slot is the "
+                      "class id realm_value_declare returns, so a zero or negative one is a component whose "
+                      "own `_init` never ran or whose static slot was read before that `_init` wrote it",
+            at_file, at_line);
     v = JS_GetClassProto(ctx, (JSClassID)slot);
-    DCHECK(!JS_IsNull(v), "a per-realm value was read in a realm that never ran the install that sets it");
+    /* THE ADDRESS IS THE WHOLE OF THE REMEDY HERE. What went wrong is a missing SET, and the set is in some
+       other component's per-realm install — so the reader's own file and line is what says which install to
+       look for, and which realm kind (a worker's, a worklet's, a child navigable's) reached a component that
+       only ever installs into one of them. */
+    DCHECKF(!JS_IsNull(v), "%s:%d read a per-realm value in a realm that never ran the install that sets it — "
+                           "this read's own component is what names the slot, and the install that writes it "
+                           "is declared through realm_declare_intrinsic and run for every realm, so a realm "
+                           "that reached here without it is one whose builder does not run that component",
+            at_file, at_line);
     return v;
 }
 
