@@ -949,6 +949,27 @@ for (const n of idl.declarations) {
   const names = v.length ? v : [n.name];
   globalNamesOf.set(n.name, new Set([...(globalNamesOf.get(n.name) || []), ...names]));
 }
+/* WHICH MEMBERS AN INTERFACE *DECLARES*, as against the ones it reaches through its base. Web IDL calls these
+   its MEMBERS: §2.3 Interface mixins' includes statement says "Each member of M is considered to be a member of
+   each interface I, J, K, … that includes M, as if a copy of each member had been made", and then names the
+   owner — "The host interfaces of mI, mJ, and mK, are I, J, and K respectively" — so a mixin member is a member
+   of the INCLUDING interface and an inherited one is not a member of the inheriting interface at all.
+   ONE DEFINITION, TWO CALLERS, because this file already had the notion and spelled it inline: the per-interface
+   `ownSet` below is this set, and the [Global] attribution above needed it for an interface that is NOT the one
+   being audited. Two spellings of one question is the shape that drifts. */
+const declaredByCache = new Map();
+const declaredBy = (iface) => {
+  if (declaredByCache.has(iface)) return declaredByCache.get(iface);
+  const b = inheritanceOf.get(iface);
+  const inh = b ? new Set(members(b)) : new Set();
+  const out = new Set(members(iface).filter((n) => !inh.has(n)));
+  declaredByCache.set(iface, out);
+  return out;
+};
+/* AN INSTALL WHOSE EVERY CANDIDATE IS A [Global] INTERFACE IS AN INSTALL ON A REALM'S GLOBAL OBJECT — the
+   census below prints it as its own blind spot, and the attribution join needs the same question. It was
+   written out twice; this is the one copy. */
+const isGlobalInstall = (r) => r.candidates.length && r.candidates.every((n) => globalNamesOf.has(n));
 /* WHICH OF THEM THIS ENGINE BUILDS — the [Global] interfaces this audit is auditing. An interface with a row
    is one this engine has a component for, which is exactly the question, and it is the same census every other
    number in this file is drawn from rather than a second opinion beside it. */
@@ -1198,13 +1219,42 @@ for (const [iface, paths] of AUDITED) {
      target could be, so a member is UNPROVEN for this interface only when an install of that NAME landed on a
      candidate set containing this interface or one of its bases. It is neither counted as a gap nor credited
      as installed, and it is its own failing category — the work is to make the site decidable, never to
-     assume it either way. */
+     assume it either way.
+     AND THE CHAIN TEST IS THE WRONG QUESTION FOR AN INSTALL ON A GLOBAL, WHICH IS A §3.8 FACT AND NOT A
+     RUNTIME ONE. A record whose candidates are all [Global] interfaces landed on a realm's global object, and
+     §3.8 Platform objects implementing interfaces' internally create a new object implementing the interface
+     takes exactly one arm for it: "If interface is declared with the [Global] extended attribute, then: Define
+     the regular operations of interface on instance, given realm." The operative words are OF INTERFACE — the
+     instance's own [[PrimaryInterface]] — and the INHERITED interfaces appear in that algorithm only in the
+     loop above it, which copies UNFORGEABLES and nothing else. So a member an interface merely INHERITS can
+     never be put on a global by that arm; §3.7.3 Interface prototype object puts it on the base's prototype
+     instead, under "If interface is not declared with the [Global] extended attribute, then: Define the
+     regular attributes of interface on interfaceProtoObj, given realm", and the global reaches it through the
+     prototype chain.
+     WHAT THE CHAIN TEST DID WITH THAT is charge a decidable question to the undecidable band. Every
+     WindowOrWorkerGlobalScope member is a member of Window (`Window includes WindowOrWorkerGlobalScope`) and,
+     as a SEPARATE member with its own host interface, of WorkerGlobalScope — which is `[Exposed=Worker]` and
+     NOT [Global]. DedicatedWorkerGlobalScope IS [Global] and inherits from WorkerGlobalScope, so a global
+     install of `setTimeout` was read as possibly being ITS member and left its gap unreported: the ABSENT
+     column understated by exactly the inherited mixin, and the blind-spot band held rows nothing about a
+     running realm could ever decide differently.
+     IT IS ALSO WHAT WOULD MASK THE WRONG-TARGET INSTALL. core/workers/worker_global_scope.c's residual (7)
+     names the next diff for these members as "a per-realm install in each of those components", and the
+     tempting spelling of that is the one every Window component already has — onto the global. That install
+     would be a §3.8 violation whose only symptom is a descriptor read; under the chain test it would CLEAR
+     DedicatedWorkerGlobalScope's row while WorkerGlobalScope.prototype stayed empty. Under this one it stays
+     charged on both.
+     THE OTHER CANDIDATES ARE UNTOUCHED, and deliberately: a record unattributed for any other reason is a
+     PROTOTYPE install, where landing on a base's prototype really does make the member reachable on everything
+     that inherits it — which is what the chain test is for and why it stays the question there. */
   const maybeHere = new Map();
-  for (const r of unattributed)
-    if (r.candidates.some((n) => chain.includes(n)) && !maybeHere.has(r.name)) maybeHere.set(r.name, r);
-  const base = inheritanceOf.get(iface);
-  const inherited = base ? new Set(members(base)) : new Set();
-  const ownSet = new Set(spec.filter((n) => !inherited.has(n)));
+  for (const r of unattributed) {
+    const reaches = isGlobalInstall(r)
+      ? r.candidates.some((n) => chain.includes(n) && declaredBy(n).has(r.name))
+      : r.candidates.some((n) => chain.includes(n));
+    if (reaches && !maybeHere.has(r.name)) maybeHere.set(r.name, r);
+  }
+  const ownSet = declaredBy(iface);
   const noop = spec.filter((n) => stubbed.has(n));
   /* A js_noop-STUB IS PRESENT ON THE OBJECT, SO IT IS NOT ABSENT — and it was counted in both, because
      `stubbed` and `installed` are the two halves of ONE split (idl_installed.mjs files each record under
@@ -1701,8 +1751,7 @@ if (nonIface.length)
    The OTHER half stays as it was, and its zero is the armed state: a target this reader could not follow for
    any other reason is a construct to teach it. */
 {
-  const onGlobal = unattributed.filter((r) => r.candidates.length &&
-                                              r.candidates.every((n) => globalNamesOf.has(n)));
+  const onGlobal = unattributed.filter(isGlobalInstall);
   const onGlobalSet = new Set(onGlobal);
   const elsewhere = unattributed.filter((r) => !onGlobalSet.has(r));
   const byFileList = (rs) => {

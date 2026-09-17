@@ -754,6 +754,23 @@ void worker_global_scope_free(JSRuntime *rt)
  *     the auditor, which must attribute a [Global] install by the realm the install site states rather than by
  *     the member's name, and engine/idlgen.mjs is outside this component. HOW IT SHOWS: the UNPROVEN category
  *     in idlgen's verdict, with every row naming a core/frame/window.c line and no row naming this file.
+ *     THE `because` CLAUSE ABOVE WAS ALREADY THE RIGHT DISCRIMINATOR AND THE AUDITOR DID NOT HAVE IT — that
+ *     half is built, and it is recorded here rather than left to read as owed. `both [Global] interfaces
+ *     declare names like name, postMessage and close` is TRUE of the five members this interface's own IDL and
+ *     its AnimationFrameProvider include declare, and FALSE of the ten its WindowOrWorkerGlobalScope include
+ *     brings, whose host interface is WorkerGlobalScope — which is not [Global], so Web IDL §3.8 Platform
+ *     objects implementing interfaces can never put one of them on a global at all: its arm reads "Define the
+ *     regular operations of interface on instance, given realm", OF INTERFACE being the instance's own
+ *     [[PrimaryInterface]], and the inherited interfaces enter that algorithm only in the loop that copies
+ *     UNFORGEABLES. idlgen's attribution join now asks that, so those ten left the blind spot and are charged
+ *     ABSENT on this interface as well as on WorkerGlobalScope.
+ *     WHAT IS STILL OWED IS THE REALM AND ONLY THE REALM, which is the half no source reader can close: for a
+ *     name BOTH [Global] interfaces declare, nothing in the C says which realm the install ran in. That is the
+ *     runtime invariant idlgen's own global-object blind spot names — a per-realm record of the member names
+ *     installed ON THE GLOBAL, asserted where the target object is in hand and read back against the realm's
+ *     own stated [Global] identifier. HOW THE REMAINDER SHOWS: the UNPROVEN rows against this interface are
+ *     now exactly the members it DECLARES, so a row here naming a member it merely inherits is that join
+ *     having been widened back.
  *
  * (6) §3.7.3's IMMUTABLE PROTOTYPE. NOT COVERED: §3.7.3 gives a [Global] interface's prototype object — and
  *     every prototype object in its inheritance chain — "the internal methods ... specific to immutable
