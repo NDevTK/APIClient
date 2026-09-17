@@ -29,7 +29,6 @@ mkdir -p "$ROOT"
 # are measuring against, and the before/after is then one revision compared with itself: both sides identical,
 # every column unchanged, and nothing saying the comparison was empty.
 SHA=$(git -C "$SRC" rev-parse --verify "$REV^{commit}")
-QSHA=$(git -C "$SRC" rev-parse --verify "$SHA:engine/qjs")
 DIR="$ROOT/snap-$LANE-$(echo "$SHA" | cut -c1-8)"
 
 # A LOG IS EVIDENCE AND THE SNAPSHOT IS NOT, so logs are copied out BEFORE anything is deleted — a destroyed
@@ -64,12 +63,24 @@ done
 rm -rf "$DIR"
 git clone --shared -n "$SRC" "$DIR" >/dev/null 2>&1
 git -C "$DIR" checkout --detach "$SHA" >/dev/null 2>&1
-# A SUBMODULE IS TRACKED AND STILL ARRIVES EMPTY — a clone records the gitlink and populates nothing — and the
-# tools GUARD their paths rather than requiring them, so the hole is silent and a resolved-of-total prints as a
-# fraction of a population missing its largest member. Provision it at the commit the SUPERPROJECT records,
-# never at whatever the working checkout happens to hold.
-git clone --shared -n "$SRC/engine/qjs" "$DIR/engine/qjs" >/dev/null 2>&1
-git -C "$DIR/engine/qjs" checkout --detach "$QSHA" >/dev/null 2>&1
+# THE SECOND CLONE THAT USED TO STAND HERE IS RETIRED, AND THE ARGUMENT FOR IT IS KEPT BECAUSE A READER WHO
+# RE-DERIVES IT WILL RE-ADD IT. It said: a submodule is TRACKED and still arrives EMPTY, since a clone records
+# the gitlink and populates nothing, and the tools GUARD their paths rather than requiring them — so the hole
+# is silent and a resolved-of-total prints as a fraction of a population missing its largest member. Every
+# clause of that was true while `engine/qjs` was a submodule. It is a TREE now, so the superproject clone above
+# populates it, and the second clone became a command that could only FAIL — into a directory the first clone
+# had already filled. Under `set -e` that failure killed this script at line 71 with exit 128 and NO OUTPUT AT
+# ALL, which is the shape this file exists to prevent: a gate that produces nothing and says nothing, reported
+# by whoever runs it as a snapshot that "did not work" rather than as a freeze that never happened.
+#
+# THE COUNT GATE BELOW STAYS, and its argument changes rather than going with the clone. It no longer guards
+# against a gitlink populating nothing; it guards against this script's own provisioning being wrong in any
+# future way at all, which is the half that was never specific to submodules. A cheap check whose subject can
+# still be empty is worth keeping after the one cause you knew about is gone.
+#
+# WHAT IS STILL A SUBMODULE IS `engine/qjs/test262`, declared at the ROOT `.gitmodules` with `update = none`,
+# and it DOES arrive empty here — deliberately, since it is a corpus and not a source this build compiles. A
+# gate that needs it provisions it itself and says so; nothing below claims it is present.
 
 mkdir -p "$DIR/engine/.work"
 rm -rf "$DIR/engine/.work/emsdk" "$DIR/engine/.work/obj" "$DIR/engine/.work/wpt"
@@ -97,7 +108,11 @@ fi
 echo "evidence   $ROOT/EVIDENCE-*.log  (per-revision logs kept when a snapshot is reclaimed)"
 echo "snapshot   $DIR"
 echo "revision   $SHA"
-echo "engine/qjs $QSHA  ($QN entries)"
+# ENGINE/QJS NO LONGER HAS A REVISION OF ITS OWN. This line used to print the submodule commit the
+# superproject pinned, and a reader could quote it as a revision. After the subtree merge the only thing
+# `<sha>:engine/qjs` names is a TREE, which is not a revision and must not be printed where one was — so what
+# is printed is the population, which is what the gate above actually checked.
+echo "engine/qjs $QN entries  (subtree of $SHA; no revision of its own)"
 echo "load       $(cat /proc/loadavg)"
 [ $# -eq 0 ] && exit 0
 cd "$DIR"
