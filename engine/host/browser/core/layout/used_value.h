@@ -161,8 +161,16 @@
  * decision css_style_declaration.c made for the cascade itself and for the identical reason — which makes it
  * per-flow by construction, with no capture to write and no entry to unapply. The day a box tree exists for a
  * reason a derivation cannot serve (an inline formatting context's line boxes cannot be re-derived per read
- * without re-running the whole flow's layout), it is per-flow state and it needs solver/dom_cow.h's capture at
- * its accessor, exactly as a browser component's own C record does. */
+ * without re-running the whole flow's layout), it is per-flow state and it needs a capture at its accessor,
+ * exactly as a browser component's own C record does: solver/cow.h's `cow_capture_host_record`, over the
+ * record's owned-value layout. THIS CLAUSE NAMED solver/dom_cow.h AND THAT WAS THE WRONG HEADER, recorded
+ * here rather than quietly corrected because a next-diff clause is read once, by someone who has already
+ * decided to do the work. That header's delta is the DOM TREE and the ATTRIBUTE LIST; it has no host-record
+ * primitive at all, so a reader sent there finds nothing, concludes the pattern does not exist, and builds a
+ * second capture beside the one every component with an owned-value record already shares.
+ * HOW A MISSING CAPTURE WOULD SHOW: a geometry that does not move when the running flow's own tree does —
+ * two flows that mutated one document differently reading one box back. RETIREMENT: this record goes when a
+ * box tree exists and its accessor carries that capture. */
 #ifndef ENGINE_HOST_BROWSER_CORE_LAYOUT_USED_VALUE_H
 #define ENGINE_HOST_BROWSER_CORE_LAYOUT_USED_VALUE_H
 

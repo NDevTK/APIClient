@@ -78,7 +78,8 @@
  * flow's document. Every answer here is DERIVED PER READ from the running flow's own tree and its own cascade,
  * which makes it per-flow by construction with no capture to write. The cost is that a subtree is walked once
  * per question asked of it; the day that is the bottleneck the cache is per-flow state and needs
- * solver/dom_cow.h's capture at its accessor, exactly as a browser component's own C record does.
+ * solver/cow.h's `cow_capture_host_record` at its accessor, exactly as a browser component's own C record
+ * does — used_value.h holds the residual, and why this clause used to name solver/dom_cow.h.
  *
  * A HEIGHT IS A `CssPx` FOR used_value.h's REASON AND THE PROPAGATION IS FREE. Every operand of the walk is
  * already a used value carrying the set of environment facts it derives from — a percentage margin resolves
