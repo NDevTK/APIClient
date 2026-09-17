@@ -1664,7 +1664,27 @@ static JSValue css_resolved_computed(JSContext *ctx, lxb_dom_element_t *el, cons
     }
     v = css_computed_models(name) ? css_computed_value(el, name) : css_cv_specified(el, name);
     /* A property no cascade layer answers at all — a custom property nobody set — is the EMPTY STRING, which
-       is §6.6.1's own answer for one that is not set rather than a default standing in for a value. */
+       is §6.6.1's own answer for one that is not set rather than a default standing in for a value.
+       A SUPPORTED PROPERTY MAY NOT REACH THAT ARM, asserted here rather than left true by agreement between
+       the four places an initial value comes from. The defect it forbids does not arrive as a CRASH, which is
+       why prose recording it was not enough: a registered longhand whose own `Initial:` line states a value
+       answers `""`, and `""` is a value a PAGE READS — so no forcing function fires, and the page diverges
+       from the browser with nothing anywhere to say so. THE GUARD IS THE SUPPORTED-PROPERTY SET because that
+       is the set CSSOM §6.6.1 "The CSSStyleDeclaration Interface" installs a per-property IDL attribute for:
+       a name inside it is one a page can READ and must therefore have a value, while a name outside it — a
+       custom property, or any string a page hands getPropertyValue — is one the empty string is the right
+       answer for.
+       RETIREMENT: this guard goes when `cssom_initial_value` cannot answer NULL for a supported property BY
+       CONSTRUCTION, which is a change to that entry's shape rather than to this line. */
+    DCHECK(v != NULL || cssom_supported_css_property_named(name) == NULL,
+           "a property in CSSOM §2 \"Terminology\"'s supported CSS property set answered NO value at any "
+           "cascade layer AND no initial value, so §6.6.1's answer for a property that is NOT SET is about to "
+           "be given for one that IS. `cssom_initial_value` reads an `Initial:` line from FOUR sources — "
+           "lexbor's registry, the table for properties that registry does not carry, the table that overrides "
+           "an answer it gives, and the background longhands' own component — so a NULL here names a "
+           "supported property none of the four answers for. STATE THE INITIAL VALUE AT THE SOURCE THAT OWNS "
+           "THE PROPERTY and never as a fifth list beside them: the value is the property's own `Initial:` "
+           "line, and a fact with two sources is one whose unread copy drifts");
     out = v ? JS_NewString(ctx, v) : JS_NewStringLen(ctx, "", 0);
     free(v);
     return out;
