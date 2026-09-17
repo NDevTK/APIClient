@@ -50,6 +50,16 @@
 #include "core/crypto/secure_hash.h"
 #include "core/idl_slots.h"
 
+/* THE SAME PROOF FOR FIPS 198-1 §4 Table 1's STATE, which embeds the SecureHash above and adds K0,
+   the inner digest and the two key counters. It parks and resumes exactly as that one does
+   — FIPS 198-1 Table 1 step 2 hashes a key of the PAGE'S size, so a flow rests mid-key — so it owes
+   the same no-pointer invariant, and had the same nothing holding it. secure_hash.c states the
+   argument for the constant. */
+_Static_assert(sizeof(Hmac) == 424,
+               "FIPS 198-1's streaming state is no longer 424 bytes. If a POINTER was added it can no longer "
+               "ride a COW snapshot or a cold-tier resume; if the layout changed deliberately, update this "
+               "number.");
+
 /* §2.3: "ipad  Inner pad; the byte x'36' repeated B times." / "opad  Outer pad; the byte x'5c' repeated B
    times." The REPETITION is B and lives in the loops below; these are the two bytes. */
 #define HMAC_IPAD 0x36u

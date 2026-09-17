@@ -24,6 +24,20 @@
 #include "check.h"
 #include "core/crypto/secure_hash.h"
 
+/* THE RECORD IS POD, AND ITS SIZE IS WHAT PROVES IT. secure_hash.h states that this context "is PLAIN OLD DATA
+   AND HOLDS NO POINTER" because it rides a step state across suspends, forks and cross-session resumes, all of
+   which copy its BYTES — and until this line nothing enforced it, so the invariant held by review of a
+   paragraph rather than by construction. This holds it: every member here is fixed-width, and a POINTER is
+   eight bytes natively and FOUR under emcc's wasm32, so once one is added no single constant can satisfy both
+   of the targets engine/build.mjs already compiles. A deliberate layout change updates this number; a pointer
+   cannot, which is the case worth refusing — a vendored digest context whose first member is a vtable
+   (BearSSL's `br_sha256_context` is exactly that) would otherwise be dropped in here and read correctly for a
+   whole session, failing only on a cold-tier resume that restores the bytes into a different address space. */
+_Static_assert(sizeof(SecureHash) == 208,
+               "FIPS 180-4's streaming context is no longer 208 bytes. If a POINTER was added it can no longer "
+               "ride a COW snapshot or a cold-tier resume — see secure_hash.h's own paragraph on why this "
+               "record holds none. If the layout changed deliberately, update this number.");
+
 /* ---- FIPS 180-4 §4.2.1: SHA-1's four constants, one per twenty-round window --------------------------- */
 static const uint32_t SHA1_K[4] = { 0x5a827999u, 0x6ed9eba1u, 0x8f1bbcdcu, 0xca62c1d6u };
 
