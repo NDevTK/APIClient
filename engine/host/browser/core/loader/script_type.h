@@ -1,4 +1,4 @@
-/* HTML §4.12.1 "prepare the script element" — EL'S TYPE.
+/* HTML §4.12.1.1 "Processing model"'s "prepare the script element" — EL'S TYPE.
  *
  * The script block's type string decides which of four algorithms an element's content is: a classic script, a
  * module script, an import map, or a set of speculation rules. It is a fact about the ELEMENT, computed before
@@ -32,14 +32,14 @@ typedef enum {
 } ScriptType;
 
 /* THE TWO OF THE FOUR THAT EXECUTE JAVASCRIPT. An import map and a set of speculation rules are parsed DATA —
-   §4.12.1's "execute the script element" registers them on the relevant global and evaluates nothing — so they
+   §4.12.1.1's "execute the script element" registers them on the relevant global and evaluates nothing — so they
    are neither programs of the document nor part of its JS identity. */
 static inline int script_type_executes(ScriptType t)
 {
     return t == SCRIPT_TYPE_CLASSIC || t == SCRIPT_TYPE_MODULE;
 }
 
-/* WHEN THE ELEMENT RUNS — the LAST steps of §4.12.1's "prepare the script element", which sort the element into
+/* WHEN THE ELEMENT RUNS — the LAST steps of §4.12.1.1's "prepare the script element", which sort the element into
  * one of the Document's four script queues (or run it on the spot). It is a second fact about the element that
  * only the element knows, and it is beside `type` because the two answer together: the tail branches on `async`,
  * `defer`, `force async`, `parser-inserted` AND on the type.
@@ -52,7 +52,7 @@ static inline int script_type_executes(ScriptType t)
  * that fixes the ordering cannot be built before the classification exists: forcing an `async` script into a
  * document-ordered sequence is a different wrong answer. */
 typedef enum {
-    /* No fetch is owed, so §4.12.1's tail ends at "immediately execute the script element": an inline classic
+    /* No fetch is owed, so §4.12.1.1's tail ends at "immediately execute the script element": an inline classic
        script, at its own parse position. That same tail routes one to the pending parsing-blocking script
        instead when the parser document "has a style sheet that is blocking scripts" — this engine loads no
        style sheets, so nothing of it can be blocking scripts and that arm is unreachable rather than skipped. */
@@ -80,7 +80,7 @@ static inline int script_sched_is_ordered(ScriptSchedule s)
 }
 
 /* HTML §13.2.7 "The end" — THE ORDER A DOCUMENT RUNS ITS SCRIPT QUEUES IN, as a rank over the schedules above.
- * §4.12.1 says which queue an element joins; this says when that queue runs, and the two together are the
+ * §4.12.1.1 says which queue an element joins; this says when that queue runs, and the two together are the
  * document's program order. The three ranks are the standard's own steps and not a preference:
  *   0  PARSE POSITION — an inline classic script ("immediately execute the script element") and the `pending
  *      parsing-blocking script`, which §13.2.6.4.8 'The "text" insertion mode' blocks the tokenizer for.

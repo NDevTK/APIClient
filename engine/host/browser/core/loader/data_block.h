@@ -55,7 +55,7 @@
 
 /* Is `el` a §4.12.1 DATA BLOCK — a `script` element whose type is none of the four algorithms the section
    names? Answered from the element's own `type` attribute through document_scripts.h's script_block_type,
-   which is §4.12.1's type-string steps, so there is one parser of that attribute and not two. */
+   which is HTML §4.12.1.1's type-string steps, so there is one parser of that attribute and not two. */
 int data_block_is(lxb_dom_element_t *el);
 
 /* `text` is `el`'s child text content as one of the doors above computed it, and it is CONSUMED. Returns it

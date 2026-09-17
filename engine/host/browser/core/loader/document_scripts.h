@@ -14,11 +14,11 @@ struct scr_ctx { lxb_dom_element_t **els; int n, cap; };   /* collected <script>
 
 /* Collect `dom`'s <script> elements into `out` (document order); caller frees out->els. Empty on any failure. */
 void dom_collect_scripts(lxb_html_document_t *dom, struct scr_ctx *out);
-/* HTML §4.12.1's TYPE-STRING STEPS: which of the four algorithms this <script>'s content is (script_type.h).
+/* HTML §4.12.1.1's TYPE-STRING STEPS: which of the four algorithms this <script>'s content is (script_type.h).
    The `type` attribute is stripped of leading and trailing ASCII whitespace and matched ASCII
    case-insensitively; an absent or empty one is "text/javascript", i.e. a classic script. */
 ScriptType script_block_type(lxb_dom_element_t *el);
-/* HTML §4.12.1's LAST STEPS: which of the Document's script queues `el` joins — see ScriptSchedule.
+/* HTML §4.12.1.1's LAST STEPS: which of the Document's script queues `el` joins — see ScriptSchedule.
    `force_async` is the element's `force async` boolean and `parser_inserted` is its `parser document` being
    non-null; both are element STATE the DOM cannot be asked for, so the caller states them. A parse product is
    parser-inserted with force async false ("It is set to false by the HTML parser … on script elements they
@@ -54,12 +54,12 @@ unsigned document_bundle_id(lxb_html_document_t *dom);
    analyses. A column three callers must remember to apply is a column two of them will drop (the same drift
    that left script seeding in one host of three), so the run order is the producer's answer and the schedule
    stays for the one question the order does not answer — see script_sched_run_rank and script_sched_is_ordered.
-   `types[i]` is entry i's HTML §4.12.1 type — CLASSIC or MODULE, never a non-executing one — and it is what
+   `types[i]` is entry i's HTML §4.12.1.1 type — CLASSIC or MODULE, never a non-executing one — and it is what
    decides which of §8.1.4.4's two algorithms runs it ("run a classic script", which produces a COMPLETION, vs
    "run a module script", which produces a PROMISE). It is here rather than recomputed at the compile because
    the element is the only thing that knows: by the time the scheduler holds a body, the <script> it came from
    is behind it, and a kind recomputed from the TEXT would be a guess about a fact the DOM already stated.
-   `sched[i]` is entry i's §4.12.1 SCHEDULE (script_type.h), here by the same argument and for the ORDER rather
+   `sched[i]` is entry i's §4.12.1.1 SCHEDULE (script_type.h), here by the same argument and for the ORDER rather
    than the algorithm: a consumer holding only "external" cannot tell a parser-blocking script — which every
    later script in the document waits for — from an `async` one, which nothing waits for. With the rows already
    in run order, what it still decides is whether an entry holds a POSITION at all: a member of the ASAP SET has

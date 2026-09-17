@@ -40,12 +40,12 @@ void dom_collect_scripts(lxb_html_document_t *dom, struct scr_ctx *out) {
     lxb_selectors_destroy(sel, true); lxb_css_selector_list_destroy_memory(list); lxb_css_parser_destroy(p, true);
 }
 
-/* Infra's ASCII whitespace: TAB, LF, FF, CR, SPACE — the set §4.12.1 strips from the type attribute. */
+/* Infra's ASCII whitespace: TAB, LF, FF, CR, SPACE — the set §4.12.1.1 strips from the type attribute. */
 static int scr_ascii_ws(lxb_char_t c) {
     return c == 0x09 || c == 0x0A || c == 0x0C || c == 0x0D || c == 0x20;
 }
 
-/* HTML §4.12.1 "prepare the script element", the type-string steps. THE ANSWER IS THE RETURN VALUE: this was
+/* HTML §4.12.1.1 "Processing model"'s "prepare the script element", the type-string steps. THE ANSWER IS THE RETURN VALUE: this was
    `script_is_exec(el, &is_mod)`, which computed the module bit into an out-parameter that BOTH of its callers
    declared and never read — so a module script became a classic one at the compile and its top-level `await`
    was reported as a SyntaxError. `script_is_importmap` was a second, narrower parser of the same attribute and
@@ -85,7 +85,7 @@ static bool scr_has_attr(lxb_dom_element_t *el, const char *name, size_t len) {
     return lxb_dom_element_has_attribute(el, (const lxb_char_t *)name, len);
 }
 
-/* §4.12.1's LAST STEPS — see ScriptSchedule. The branches are the standard's, in the standard's order; the one
+/* §4.12.1.1's LAST STEPS — see ScriptSchedule. The branches are the standard's, in the standard's order; the one
    thing worth naming is WHICH question the first `if` is: the tail splits on whether the element's result is
    still "uninitialized", which is the same set as "an external classic script, or any module script" — the two
    the algorithm hands to a fetch. Everything else has already been marked as ready, so it reaches
@@ -96,10 +96,10 @@ ScriptSchedule script_block_schedule(lxb_dom_element_t *el, ScriptType ty, bool 
 
     DCHECK(script_type_executes(ty),
            "a script element's schedule was asked for a type that executes nothing — an import map and a set of "
-           "speculation rules are registered rather than run, and §4.12.1's null type runs nothing at all, so "
+           "speculation rules are registered rather than run, and §4.12.1.1's null type runs nothing at all, so "
            "none of them joins any of the Document's script queues");
     DCHECK(!(parser_inserted && force_async),
-           "a parser-inserted script element was said to have `force async` true — §4.12.1 has the HTML and XML "
+           "a parser-inserted script element was said to have `force async` true — §4.12.1.1 has the HTML and XML "
            "parsers set it FALSE on every element they insert, so the two cannot both hold and the caller has "
            "read one of them off something that is not the element");
     if (!external && ty != SCRIPT_TYPE_MODULE) return SCRIPT_SCHED_IMMEDIATE;
@@ -180,9 +180,9 @@ DocScripts document_exec_scripts(lxb_html_document_t *dom) {
         ScriptType ty = script_block_type(el);
         ScriptSchedule sc;
         if (!script_type_executes(ty)) continue;   /* a data block is parsed, never run */
-        /* A PARSE PRODUCT IS PARSER-INSERTED, WITH `force async` FALSE — §4.12.1 states both of the parser, so
+        /* A PARSE PRODUCT IS PARSER-INSERTED, WITH `force async` FALSE — §4.12.1.1 states both of the parser, so
            they are facts about this scan and not defaults it picks. An element a SCRIPT inserted goes through
-           html_script.c's half of §4.12.1 instead, where neither is true. */
+           html_script.c's half of §4.12.1.1 instead, where neither is true. */
         sc = script_block_schedule(el, ty, /*parser_inserted*/true, /*force_async*/false);
         if (script_sched_run_rank(sc) != rank) continue;
         /* …WHICH IS WHY RANK 2 HOLDS ONLY THE SET HERE. The `list of scripts that will execute in order as soon
@@ -190,10 +190,10 @@ DocScripts document_exec_scripts(lxb_html_document_t *dom) {
            so a row of that list means the schedule was read off something a parse did not build. */
         DCHECK(sc != SCRIPT_SCHED_IN_ORDER_ASAP,
                "a parsed document's script inventory holds a member of the `list of scripts that will execute "
-               "in order as soon as possible` — §4.12.1 reaches that list only for an element with a null "
+               "in order as soon as possible` — §4.12.1.1 reaches that list only for an element with a null "
                "parser document, and this scan states the parser inserted every element it walks");
         if (has_src) {
-            /* §4.12.1's src BRANCH is entered on the ATTRIBUTE, and its second step is `src` being the empty
+            /* §4.12.1.1's src BRANCH is entered on the ATTRIBUTE, and its second step is `src` being the empty
                string: "queue an element task … to fire an event named error at el, and return". So the element
                runs NOTHING — not its child text, which is what a value-length test let through
                (`<script src="">alert(1)</script>` ran the alert). The error event is

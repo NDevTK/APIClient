@@ -13,7 +13,7 @@
 
 int data_block_is(lxb_dom_element_t *el)
 {
-    /* THE TAG QUESTION IS ASKED WHERE THE ELEMENT LIVES. §4.12.1 is about `script` elements and its
+    /* THE TAG QUESTION IS ASKED WHERE THE ELEMENT LIVES. §4.12.1 is about `script` elements and HTML §4.12.1.1's
        type-string steps are about nothing else, so script_block_type answers CLASSIC for any element with no
        `type` attribute — an ordinary `<div>` included. Without the brand test in front of it every element
        whose `type` attribute happens to be unmatched (`<input type=whatever>`, `<button type=x>`) would be a

@@ -46,7 +46,7 @@ bool script_fetch_status_ok(int status);
  *         a BOM")
  * `content_type` is the response header list's joined `Content-Type` value, or NULL when the response carried
  * none — which is the "values is null" that makes extract a MIME type answer failure, and step 5.4 then keep
- * `fallback_encoding`. `fallback_encoding` is the algorithm's `encoding` ARGUMENT, which HTML §4.12.1 computes
+ * `fallback_encoding`. `fallback_encoding` is the algorithm's `encoding` ARGUMENT, which HTML §4.12.1.1 computes
  * from the script element's `charset` attribute or, failing that, its node document's encoding.
  * Answers malloc'd, NUL-terminated, WELL-FORMED UTF-8; `*out_n` is its length, which is not strlen when the
  * source decoded a U+0000.
@@ -64,7 +64,7 @@ char *script_fetch_classic_source_text(const char *body_bytes, size_t n, const c
  * (12/12.7.1 stood here: step 12 is "set up the module script request" and step 13 is the fetch.)
  * A DIFFERENT ALGORITHM, not this file's other entry with an argument left out: a module script's source is
  * UTF-8 whatever the response says, so there is no MIME type to extract for an encoding and no label to
- * honour. §4.12.1 says so about the element too — "if el's type is `module`, this encoding will be ignored" —
+ * honour. §4.12.1.1 says so about the element too — "if el's type is `module`, this encoding will be ignored" —
  * and this is the one place in this engine where that sentence is what the code does rather than a note.
  * Same answer shape as the classic entry. */
 char *script_fetch_module_source_text(const char *body_bytes, size_t n, size_t *out_n);

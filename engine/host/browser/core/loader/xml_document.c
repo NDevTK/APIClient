@@ -35,7 +35,7 @@
  * state the SAME action for the SAME reason — a parser reached a `script` element's end tag, so prepare it,
  * parser-inserted — so `html_script_parser_inserted` serves both and there is no second script-running path
  * beside it. Two sections, one body: an XML document's script joins the flow's program sequence through the
- * identical door an HTML document's does, which is what keeps §4.12.1's type steps, its `already started` and
+ * identical door an HTML document's does, which is what keeps HTML §4.12.1.1's type steps, its `already started` and
  * its five destinations from having to be right twice.
  *
  * WHAT REPLACED THE CRASH THAT STOOD HERE, AND WHAT THAT CRASH GOT WRONG. It named two things to build and one
@@ -47,7 +47,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "core/html/html_script.h"   /* §4.12.1's `script` test and the ONE preparation both parsers reach */
+#include "core/html/html_script.h"   /* HTML §4.12.1's `script` test and §4.12.1.1's ONE preparation both parsers reach */
 #include "core/loader/document_load_type.h"
 #include "core/loader/xml_document.h"
 #include "core/mime/mime_type.h"
@@ -162,18 +162,18 @@ void xml_document_load_step(XmlDocumentLoad *load)
            BUILDS: a run-these-before-that ordering the scheduler owns (never a drain here). HOW ITS ABSENCE
            SHOWS: two `script` elements in one XML document where the second observes a promise the first
            settled — the second reads it unsettled, and only there. It is unreachable while the preparation
-           below returns at §4.12.1 step 18 (see it), because then no script of this parse runs to queue one:
+           below returns at HTML §4.12.1.1 step 18 (see it), because then no script of this parse runs to queue one:
            the two become live together, which is why they are one residual and not two. */
         if (load->script_pending != NULL) {
             lxb_dom_node_t *script = load->script_pending;
 
             load->script_pending = NULL;
             /* HTML §13.2.6.4.8 'The "text" insertion mode' AND §14.2 REACH THE SAME BODY, because they state
-               the same action: a parser is at a `script` element's end tag, so §4.12.1 "The script element"'s
+               the same action: a parser is at a `script` element's end tag, so HTML §4.12.1.1 "Processing model"'s
                "prepare the script element" runs with `parser document` non-null. One capability, one
-               implementation — core/html/html_script.h owns which of §4.12.1's five destinations the element
+               implementation — core/html/html_script.h owns which of HTML §4.12.1.1's five destinations the element
                takes, and an XML document's script must not answer that question in a second place.
-               IT RETURNS AT §4.12.1 STEP 18 FOR EVERY LOAD THIS ENGINE PERFORMS TODAY, and that is the
+               IT RETURNS AT HTML §4.12.1.1 STEP 18 FOR EVERY LOAD THIS ENGINE PERFORMS TODAY, and that is the
                standard's own step rather than a gap: "if scripting is disabled for el, then return", which
                §8.1.3.4 "Enabling and disabling scripting" defines over the node document's browsing context —
                and §7.5.1 "Shared document creation infrastructure" creates the Document and parses into it,
@@ -198,7 +198,7 @@ void xml_document_load_step(XmlDocumentLoad *load)
 
                 xml_parse_step(load->parse);
                 /* §14.2 ASKED IN ITS OWN ORDER: the scripting mode is the parser's ("when an XML parser with
-                   XML scripting support enabled…"), the element's kind is §4.12.1's, and the boundary is the
+                   XML scripting support enabled…"), the element's kind is HTML §4.12.1's, and the boundary is the
                    grammar's. This is the only place the first of those three is known — see the head comment
                    on why core/xml/ is not told it. */
                 if (load->scripting != HTML_SCRIPTING_ENABLED) continue;
