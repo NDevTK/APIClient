@@ -29,8 +29,6 @@
 #ifndef ENGINE_HOST_BROWSER_CORE_CANVAS_IMAGE_DATA_H
 #define ENGINE_HOST_BROWSER_CORE_CANVAS_IMAGE_DATA_H
 
-#include <stdbool.h>
-
 #include "quickjs.h"
 
 /* Declared once per AGENT: the class, the constructor and the five attributes. REGISTERS the per-realm install
@@ -43,10 +41,5 @@ void image_data_init(JSContext *ctx);
    intrinsic rather than from a per-document column, which a worker realm never reaches. */
 void image_data_install_realm(JSContext *ctx);
 void image_data_free(void);
-
-/* §8.11.1's brand, for the one caller outside this file that needs it: Web IDL §3.6 step 12's platform-object
-   clause, asked of a value at a declared `ImageData` position. It is a predicate and not a class comparison
-   for core/idl_args.h's stated reason — a component's own test is what "implements the interface" means. */
-bool image_data_is(JSValueConst v);
 
 #endif /* ENGINE_HOST_BROWSER_CORE_CANVAS_IMAGE_DATA_H */

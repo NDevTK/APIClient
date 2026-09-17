@@ -67,11 +67,6 @@ static const IdlArgType IMAGE_DATA_CTOR[4] = {
     IDL_ULONG_OR_IMAGE_DATA_ARRAY, IDL_UNSIGNED_LONG, IDL_ULONG_OR_DICT_BY_ENTRY, IDL_DICT
 };
 
-bool image_data_is(JSValueConst v)
-{
-    return JS_GetOpaque(v, g_class) != NULL;
-}
-
 static ImageDataBox *image_data_box(JSValueConst v)
 {
     ImageDataBox *b = JS_GetOpaque(v, g_class);
