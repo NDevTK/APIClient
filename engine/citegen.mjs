@@ -2843,14 +2843,30 @@ function classifyAnchor(toks) {
   return null;
 }
 
-/* WHICH FILES THIS AUDIT IS FOR, STATED ONCE. The two paragraphs inside `walk` argue each extension into this
- * set; the set itself has a second reader in `--since`, which built its own list as a git pathspec and was
- * therefore free to disagree — and did, for as long as `.js` and `.mjs` were audited by the walk and invisible
- * to the delta. A lane editing the trusted zone got `0 introduced` from a mode that had judged none of it.
- * A REGEXP AND A PATHSPEC ARE TWO ALPHABETS FOR ONE FACT, so the pathspec is DERIVED from this rather than
- * written beside it: add an extension here and both readers gain it in the same edit. */
+/* WHICH FILES THIS AUDIT IS FOR, AND AN EXTENSION IS ONLY HALF OF THAT FACT — WHICH IS WHY THE PATHSPEC THAT
+ * USED TO STAND ON THE LINE BELOW IS GONE. The paragraphs inside `walk` argue each extension into this set,
+ * and `walk` also decides which DIRECTORIES the audit is for: `qjs`, `lexbor`, `out` and `.work` are skipped
+ * there, and `defaultTargets` adds two of the fork's own translation units back BY NAME. A population is an
+ * extension rule AND a directory rule, and `--since` restated only the first, as a git pathspec — so it
+ * agreed about extensions and was free to disagree about directories, which is the half nothing compared.
+ *
+ * AND IT AGREED BY ACCIDENT UNTIL THE ACCIDENT ENDED. While the engine's fork was a submodule, `git diff`
+ * with a name-only listing saw ONE gitlink entry where `defaultTargets` read two files, so the two selectors
+ * were close enough that nothing showed. The subtree merge did not break `defaultTargets`; it broke the
+ * AGREEMENT, and the pathspec then named every upstream translation unit under `engine/qjs` beside `testing`,
+ * `engine/lexbor` and `engine/tests`, none of which any run of this audit has ever read.
+ *
+ * THE DIRECTION IS THE EXPENSIVE ONE. The delta mode exists to answer WHAT DID I INTRODUCE, so a population
+ * WIDER than the audit's charges a lane with findings in upstream and corpus prose, in the one channel whose
+ * whole purpose is that question, with nothing in the output saying the population moved.
+ *
+ * SO THE SECOND READER IS DERIVED RATHER THAN RESTATED, which is what every other consumer of this fact
+ * already does: `forkSources`, `auditedNames` and the attribution scan each build a Set from `defaultTargets`
+ * and not one of them lists a path. A restated rule is a second copy, and the copy that drifts is the one
+ * nobody runs against reality. `AUDITED_EXT` keeps its single reader in `walk`; the delta asks the function
+ * that owns the population. RETIREMENT: this record goes when a second selector can no longer be written —
+ * while `walk` and `defaultTargets` are the only things that decide, a reader can still add one back. */
 const AUDITED_EXT = /\.(c|h|md|js|mjs)$/;
-const AUDITED_GLOBS = ["*.c", "*.h", "*.md", "*.js", "*.mjs"];
 
 function walk(dir, out = []) {
   /* THE CHECKOUT IS SHARED AND EDITED UNDER THIS WALK. An editor's temporary file appears between the readdir
@@ -4751,12 +4767,19 @@ function defaultTargets(notify = () => {}) {
   for (const extra of ["qjs/quickjs.c", "qjs/quickjs.h"]) {
     const p = join(HERE, extra);
     /* AND AN ABSENT ONE IS ANNOUNCED, BECAUSE THIS GUARD SILENTLY DROPPED THE LARGEST BODY OF CITATIONS
-     * THIS GATE HAS. `engine/qjs` is a SUBMODULE, and a submodule is TRACKED BUT NOT POPULATED: a
-     * `git clone --shared` — which is the frozen-snapshot procedure CLAUDE.md prescribes for every
-     * instrument that reads this tree — leaves that directory EMPTY unless the snapshot's author copies it
-     * in. `existsSync` then answers false, the file is skipped, and the run prints a resolved-of-total that
-     * is a fraction of a population missing the file whose own comment above says it carries more
-     * ECMAScript citations than the whole of engine/host.
+     * THIS GATE HAS. THE MECHANISM IS RETIRED AND THE ARGUMENT IS KEPT, because a reader who re-derives it
+     * will re-add it. It said: `engine/qjs` is a SUBMODULE, and a submodule is TRACKED BUT NOT POPULATED, so
+     * the shared clone the frozen-snapshot procedure prescribes leaves that directory EMPTY unless the
+     * snapshot's author copies it in — `existsSync` answers false, the file is skipped, and the run prints a
+     * resolved-of-total that is a fraction of a population missing the file whose own comment above says it
+     * carries more ECMAScript citations than the whole of engine/host. Every clause of that was true while
+     * the fork was a submodule. It is a TREE now, so a plain clone populates it, and `engine/frozen_snapshot.sh`
+     * records the same retirement where it used to run a second clone for the same reason.
+     * THE GUARD STAYS AND ITS ARGUMENT CHANGES RATHER THAN GOING WITH THE MECHANISM: it no longer stands
+     * against a gitlink populating nothing, it stands against this checkout being assembled wrongly in any
+     * future way at all, which is the half that was never specific to submodules. WHAT IS STILL A SUBMODULE
+     * is `engine/qjs/test262`, declared at the root with no automatic update, and it is EMPTY in every
+     * checkout by design — `walk` skips the whole of `qjs`, so nothing here has ever read it or ever will.
      * MEASURED: a lane froze a snapshot exactly as prescribed, audited it, and reported the fork's
      * §27.5.1.3 cluster as "outside the auditor entirely, before and after" — it was outside THAT RUN, and
      * the reason was an empty directory rather than a policy. Nothing in the output said so.
@@ -4766,8 +4789,7 @@ function defaultTargets(notify = () => {}) {
     if (existsSync(p)) out.push(p);
     else notify(`[citegen] NOT READ — ${extra} is absent from this checkout, so every citation it ` +
                      `carries is UNAUDITED and the totals below are a fraction of a population without ` +
-                     `it. engine/qjs is a submodule: a plain clone does not populate it. This is an ` +
-                     `ABSENCE, not a clean result.`);
+                     `it. This is an ABSENCE, not a clean result.`);
   }
   /* AND THE TWO DOCUMENTS THE TREE DEFERS TO. CLAUDE.md states the rule this closes — a `.md` a C file cites
    * by name is CODE, because a claim about this tree travels by reference and nothing mechanical reports
@@ -8519,16 +8541,22 @@ function audit(argv, opts = {}) {
  * introduce. So this prints, and the human decides. */
 function since(ref, argv) {
   const git = (args) => execFileSync("git", args, { cwd: ROOT, encoding: "utf8" }).split("\n").filter(Boolean);
-  const changed = git(["diff", "--name-only", ref, "--", ...AUDITED_GLOBS]);
+  /* THE POPULATION IS `defaultTargets` ITSELF — the argument is over `AUDITED_EXT`. This Set also subsumes
+     the `existsSync` filter that used to stand below it: `defaultTargets` stats every path it returns, so a
+     file deleted from the working tree is missing from the Set for the same reason it is missing from the
+     audit, and the two readers cannot answer differently about it. The git queries below carry no pathspec
+     BECAUSE the Set decides — a pathspec here would be the restatement over again, one alphabet later. */
+  const inScope = new Set(defaultTargets((m) => console.log(m)));
+  const changed = git(["diff", "--name-only", ref]);
   /* AND THE FILE THAT IS NOT IN GIT YET, WHICH THIS MODE REPORTED AS `0 introduced` WHILE READING NONE OF IT.
      `git diff` compares two trees and an UNTRACKED file is in neither, so it is not omitted with a message —
      it is absent from the list, and the delta prints a clean zero for a diff whose whole content is a new
      component. That is the excluded-test shape this file names elsewhere: the total LOOKS complete. It is not
      a `git show` failure and needs no error handling — the `catch` below already reads an absent-at-ref file
      as empty, which is exactly the right answer for one: every finding in a new file is that diff's own. */
-  const untracked = git(["ls-files", "--others", "--exclude-standard", "--", ...AUDITED_GLOBS]);
-  const files = [...new Set([...changed, ...untracked])].map((r) => join(ROOT, r)).filter((p) => existsSync(p));
-  if (!files.length) { console.log(`no audited file (${AUDITED_GLOBS.join(" ")}) differs from ${ref} or stands untracked — nothing for this mode to compare`); return; }
+  const untracked = git(["ls-files", "--others", "--exclude-standard"]);
+  const files = [...new Set([...changed, ...untracked])].map((r) => join(ROOT, r)).filter((p) => inScope.has(p));
+  if (!files.length) { console.log(`no file this audit reads differs from ${ref} or stands untracked — nothing for this mode to compare`); return; }
 
   const baseSrc = new Map();
   for (const p of files) {
