@@ -269,8 +269,22 @@ static int md_init_slots(JSContext *ctx, JSValueConst ev, JSValueConst init)
        IT CANNOT THROW, so there is no exception arm to unwind: the brand and §3.2.20's null rule ran inside
        §3.2.17's member loop, at this member's own place in the read order, before this body was entered. */
     related = event_target_nullable_of_dict(ctx, init, "relatedTarget");
-    JS_SetPropertyStr(ctx, slots, "screenX", JS_NewInt32(ctx, ui_event_dict_i32(ctx, init, "screenX")));
-    JS_SetPropertyStr(ctx, slots, "screenY", JS_NewInt32(ctx, ui_event_dict_i32(ctx, init, "screenY")));
+    JS_SetPropertyStr(ctx, slots, "screenX",
+                      ui_event_dict_num(ctx, init, "screenX", JS_NewInt32(ctx, 0)));
+    JS_SetPropertyStr(ctx, slots, "screenY",
+                      ui_event_dict_num(ctx, init, "screenY", JS_NewInt32(ctx, 0)));
+    /* NAMED RESIDUAL — WHAT IS NOT COVERED: these two alone of this dictionary's numeric members still read
+       through a C scalar, so unknown external input supplied for `clientX` or `clientY` reaches ECMAScript
+       §7.1.4 ToNumber ( arg ) and is refused there (a DFAIL in dev, a TypeError in release) instead of being
+       carried to the slot as its four neighbours now are. That is not an oversight and must not be repaired
+       by changing this line alone: md_page_coord below reads these two slots BACK and sums CSSOM VIEW §10's
+       scroll offset onto them in C, under a two-sided DCHECK whose own text names this exact diff as the day
+       the sum has to stop being C arithmetic. Carry the unknown here and that assert is what fires.
+       WHAT THE NEXT DIFF BUILDS: §10's page-coordinate sum minted through core/frame/viewport.h's one seam so
+       it answers over an unknown, and THEN these two reads move to ui_event_dict_num with the rest.
+       HOW ITS ABSENCE WOULD SHOW: a flow that constructs a MouseEvent from unknown external input dies at a
+       coercion whose message names ToNumber and this file, where the same flow supplying `screenX` instead
+       runs on and forks at whatever predicate reads it back. */
     JS_SetPropertyStr(ctx, slots, "clientX", JS_NewInt32(ctx, ui_event_dict_i32(ctx, init, "clientX")));
     JS_SetPropertyStr(ctx, slots, "clientY", JS_NewInt32(ctx, ui_event_dict_i32(ctx, init, "clientY")));
     /* No dictionary member declares these two: the IDL gives them attributes and no initializer, so what is
@@ -280,11 +294,16 @@ static int md_init_slots(JSContext *ctx, JSValueConst ev, JSValueConst init)
     /* Pointer Lock 2.0 §7's two `double` members over §6's two attributes, whose un-initialized value §6
        states as 0 — which is the dictionary's own default, so there is one number and no second table. */
     JS_SetPropertyStr(ctx, slots, "movementX",
-                      JS_NewFloat64(ctx, ui_event_dict_f64(ctx, init, "movementX")));
+                      ui_event_dict_num(ctx, init, "movementX", JS_NewFloat64(ctx, 0.0)));
     JS_SetPropertyStr(ctx, slots, "movementY",
-                      JS_NewFloat64(ctx, ui_event_dict_f64(ctx, init, "movementY")));
+                      ui_event_dict_num(ctx, init, "movementY", JS_NewFloat64(ctx, 0.0)));
+    /* `button` IS THE OTHER READER'S, and the difference is what each caller DOES with the member rather than
+       anything about its type: md_button_fold performs Web IDL §3.2.4.3 "short"'s signed fold on the number,
+       which is C arithmetic and has no answer over an unknown, where `buttons` is placed and never computed
+       on. See ui_event.h, which states the split once. */
     JS_SetPropertyStr(ctx, slots, "button", JS_NewInt32(ctx, md_button_of(ctx, init)));
-    JS_SetPropertyStr(ctx, slots, "buttons", JS_NewUint32(ctx, ui_event_dict_u32(ctx, init, "buttons")));
+    JS_SetPropertyStr(ctx, slots, "buttons",
+                      ui_event_dict_num(ctx, init, "buttons", JS_NewUint32(ctx, 0)));
     JS_SetProperty(ctx, (JSValue)ev, k, slots);
     JS_FreeAtom(ctx, k);
     /* §2.2's associated relatedTarget, on the EVENT — see the file comment. */
@@ -370,9 +389,13 @@ static bool md_page_coord(JSContext *ctx, JSValueConst this_val, int magic, doub
     JS_FreeValue(ctx, slots);
     /* TWO-SIDED, and it is the seam this member sits on. The sum below runs on the EXAMPLE, in C, which is
        right exactly while the slot holds a number the declaration computed. The day a concolic reaches this
-       slot — the day MouseEventInit's coordinates carry unknown external input across their conversion — the
-       sum must stop being C arithmetic and be minted through core/frame/viewport.h's one seam instead, or the
-       domain is dropped at the `+`. This is where that day is noticed. */
+       slot the sum must stop being C arithmetic and be minted through core/frame/viewport.h's one seam
+       instead, or the domain is dropped at the `+`. This is where that day is noticed.
+       IT IS WHY `clientX`/`clientY` ARE THE TWO MEMBERS md_init_slots STILL READS AS C SCALARS while their
+       neighbours carry the crossing to the slot — this assert is the thing standing under those two, and the
+       residual there names the sum as what the next diff builds. So the assert is not merely a tripwire for
+       some future day: it is the reason a conversion that is otherwise uniform across this dictionary stops
+       two members short, and deleting it would make that stop look arbitrary. */
     DCHECK(JS_IsNumber(v),
            "a MouseEvent's client coordinate slot holds something that is not a number — CSSOM VIEW §10's page "
            "coordinate sums it in C, so a value carrying a domain would be collapsed to its example here");

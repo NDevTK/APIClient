@@ -115,18 +115,18 @@ static JSValue we_slots(JSContext *ctx, JSValueConst ev)
  * `unsigned long`, so an unknown at one of those is rewritten to IDL_ANY by the member loop and PLACED AS
  * ITSELF on the converted record, and the reader below meets it there.
  *
- * NAMED RESIDUAL — WHAT IS NOT COVERED: an unknown external input supplied for `deltaX`, `deltaY`, `deltaZ` or
- * `deltaMode` is read back CONCRETE. ui_event_dict_f64 and ui_event_dict_u32 return a C `double` and a C
- * `uint32_t`, and no C scalar can carry a concolic triple, so the attribute afterwards answers the example
- * rather than the unknown — which is a fact about the shared reader and true identically of MouseEvent's
- * coordinates, PointerEvent's pressure and KeyboardEvent's location, not a narrowing this interface invents.
- * WHAT THE NEXT DIFF BUILDS: a member reader beside those two in core/events/ui_event.h that hands back the
- * member VALUE when it is not a number, adopted by all four interfaces at once — never a second reader here,
- * because two right answers to one question is the shape that drifts.
- * HOW ITS ABSENCE WOULD SHOW: the delta attributes answer a number for every input, so a flow that builds one
- * of these out of unknown external input and then branches on what it reads back takes ONE arm where the
- * source's own domain permits both, and the fork census carries no predicate keyed on that source.
- * RETIREMENT: this residual goes when ui_event.h's numeric member readers return a JSValue. */
+ * THAT CROSSED VALUE IS NOW CARRIED TO THE SLOT, which is what ui_event_dict_num is for and why these four
+ * reads no longer ask for a C scalar. The residual that stood here is RETIRED, and one clause of it was wrong
+ * in a way worth keeping rather than deleting, because the next reader will re-derive it the same way: it
+ * said an unknown supplied for one of these members is `read back CONCRETE` and that the attribute
+ * afterwards `answers the example`. IT NEVER DID. A C scalar reader takes the crossed value to ECMAScript
+ * §7.1.4 ToNumber ( arg ), which is a boundary that owes C a real primitive — quickjs.c's JS_ToNumberHintFree
+ * DFAILS on an unknown in dev and throws a TypeError in release, and these readers DISCARDED the conversion's
+ * return, so the release answer was a swallowed exception and a 0 (or a NaN), never the example. The author
+ * reasoned from the RETURN TYPE (`no C scalar can carry a concolic triple`, which is true) to the BEHAVIOUR
+ * (`so it answers the example`, which the coercion boundary refuses), and a return type says nothing about
+ * what the coercion under it does with a value it cannot represent. The remedy clause was right anyway, which
+ * is the ordinary split: the spec half of a claim is checkable and the mechanism half is a guess. */
 static int we_init_slots(JSContext *ctx, JSValueConst ev, JSValueConst init)
 {
     JSValue slots;
@@ -141,23 +141,24 @@ static int we_init_slots(JSContext *ctx, JSValueConst ev, JSValueConst init)
         if (k != JS_ATOM_NULL) JS_FreeAtom(ctx, k);
         return -1;
     }
-    /* An ABSENT dictionary places no default at all, and for these four that is the same value the default
-       would have placed: §12.1 states the un-initialized value of each delta as 0.0 and of `deltaMode` as 0,
-       and each reader answers 0 for a member that is not on the record. So there is ONE construction path
-       here and no second table of defaults — unlike PointerEvent, whose `width`/`height` un-initialized value
-       is 1 and therefore has to be written twice. */
+    /* An ABSENT dictionary places no default at all, so the un-initialized value each attribute carries is
+       §12.1's own — 0.0 for each delta and 0 for `deltaMode` — and it is written HERE because that is the only
+       place that knows it. It agrees with the dictionary's `= 0.0` / `= 0` on all four, which is §12.1 agreeing
+       with itself and not a fact either reader could derive: PointerEvent's `width` and `height` are the same
+       two requirements DISAGREEING, at 1 rather than 0, which is why ui_event_dict_num takes the value rather
+       than choosing one from the member's declared type. */
     JS_SetPropertyStr(ctx, slots, WE_SLOT[WE_DELTA_X],
-                      JS_NewFloat64(ctx, ui_event_dict_f64(ctx, init, "deltaX")));
+                      ui_event_dict_num(ctx, init, "deltaX", JS_NewFloat64(ctx, 0.0)));
     JS_SetPropertyStr(ctx, slots, WE_SLOT[WE_DELTA_Y],
-                      JS_NewFloat64(ctx, ui_event_dict_f64(ctx, init, "deltaY")));
+                      ui_event_dict_num(ctx, init, "deltaY", JS_NewFloat64(ctx, 0.0)));
     JS_SetPropertyStr(ctx, slots, WE_SLOT[WE_DELTA_Z],
-                      JS_NewFloat64(ctx, ui_event_dict_f64(ctx, init, "deltaZ")));
+                      ui_event_dict_num(ctx, init, "deltaZ", JS_NewFloat64(ctx, 0.0)));
     /* `unsigned long deltaMode` and NOT a `long` — §12.1's three DeltaModeCode constants are 0x00, 0x01 and
        0x02, and the type is what decides that `new WheelEvent('wheel', {deltaMode: -1})` reads back
        4294967295 rather than -1. The conversion is the DECLARATION's (IDL_UNSIGNED_LONG's modulo), so this
        reads the record it built and must not narrow it a second time. */
     JS_SetPropertyStr(ctx, slots, WE_SLOT[WE_DELTA_MODE],
-                      JS_NewUint32(ctx, ui_event_dict_u32(ctx, init, "deltaMode")));
+                      ui_event_dict_num(ctx, init, "deltaMode", JS_NewUint32(ctx, 0)));
     JS_SetPropertyStr(ctx, slots, WE_SLOT[WE_MOMENTUM], JS_NewBool(ctx, idl_dict_bool(ctx, init, "momentum")));
     JS_SetProperty(ctx, (JSValue)ev, k, slots);
     JS_FreeAtom(ctx, k);

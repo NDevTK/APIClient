@@ -271,19 +271,30 @@ static bool pe_dict_has(JSContext *ctx, JSValueConst init, const char *name)
 }
 
 /* A `double` MEMBER READ WITH THE ATTRIBUTE'S OWN UN-INITIALIZED VALUE UNDER IT, and it is a SECOND SPEC FACT
-   rather than a second copy of the dictionary's default. Two of Pointer Events 4 §3.1's attributes have a
+   rather than a second copy of the dictionary's default. Three of Pointer Events 4 §3.1's attributes have a
    non-zero un-initialized value — `width` and `height`, whose prose states "the user agent MUST return a
-   default value of 1" — and every path that builds one of these events is entitled to that value, INCLUDING
-   the ones that never ran Web IDL §3.2.17's member loop: DOM §2.5 "Constructing events"' create an event
-   passes an absent dictionary, and HTML §8.1.8.3 "Event firing" hands this component a record it built itself.
-   The dictionary's `= 1` and the attribute's un-initialized 1 are the same number stated by two different
-   requirements of one standard, so they cannot disagree without §3.1 disagreeing with itself.
+   default value of 1", and `altitudeAngle`, whose π/2 is the pen held upright — and every path that builds one
+   of these events is entitled to that value, INCLUDING the ones that never ran Web IDL §3.2.17 "Dictionary
+   types"'s member loop: DOM §2.5 "Constructing events"' create an event passes an absent dictionary, and HTML
+   §8.1.8.3 "Event firing" hands this component a record it built itself. The dictionary's `= 1` and the
+   attribute's un-initialized 1 are the same number stated by two different requirements of one standard, so
+   they cannot disagree without §3.1 disagreeing with itself.
    IT IS NEEDED HERE AND NOT IN mouse_event.c because every un-initialized value on THAT interface is zero,
    which is what a plain read of an absent member already answers — the difference is §3.1's, not a
-   convention's. */
+   convention's.
+   THE TWO BELOW ARE THE SAME SENTENCE ASKED OF A SCALAR AND OF A VALUE, and which one a member takes is
+   decided by what its CALLER does with it rather than by anything about the member — ui_event.h states that
+   split once. `altitudeAngle` is COMPUTED ON (§3.1.5's conversion is trigonometry over four doubles), so it
+   takes the scalar; `width` and `height` are only PLACED on the slot their attribute reads back, so they take
+   the value and the crossing survives to it. */
 static double pe_dict_f64_or(JSContext *ctx, JSValueConst init, const char *name, double uninitialized)
 {
     return pe_dict_has(ctx, init, name) ? ui_event_dict_f64(ctx, init, name) : uninitialized;
+}
+
+static JSValue pe_dict_num_or(JSContext *ctx, JSValueConst init, const char *name, double uninitialized)
+{
+    return ui_event_dict_num(ctx, init, name, JS_NewFloat64(ctx, uninitialized));
 }
 
 /* `sequence<PointerEvent>` OFF THE CONVERTED DICTIONARY, CLONED — Pointer Events 4 §3.1's "The event constructing
@@ -321,7 +332,24 @@ static JSValue pe_event_list_of(JSContext *ctx, JSValueConst init, const char *n
 
 /* THE ORIENTATION PAIR, Pointer Events 4 §3.1.5's conversion at the one place a page can supply one set and not the
    other. `init` is the CONVERTED dictionary, so every value read here is already a Number of its declared type and
-   nothing below runs the page's code. */
+   nothing below runs the page's code.
+ *
+ * NAMED RESIDUAL — WHAT IS NOT COVERED: these four members are the only numeric ones of this dictionary still
+ * read as C scalars, so unknown external input supplied for `tiltX`, `tiltY`, `altitudeAngle` or
+ * `azimuthAngle` reaches ECMAScript §7.1.4 ToNumber ( arg ) and is refused there — a DFAIL naming the coercing
+ * site in dev, a TypeError in release — where every other numeric member of this dictionary now carries the
+ * crossing to its slot. It is not the shared reader's narrowing and moving these reads to ui_event_dict_num
+ * would not fix it: §3.1.5 is ARITHMETIC (pe_tilt_to_spherical's atan2 over two tan calls, and its inverse), and a
+ * double is what arithmetic in C takes. The refusal is at the coercion only because that is the first thing
+ * downstream of the read; the work is the conversion itself.
+ * WHAT THE NEXT DIFF BUILDS: a §3.1.5 conversion that answers over an unknown operand by DERIVING rather than
+ * computing — solver/concolic.h's concolic_new_derived, whose contract is this exact shape: it takes the
+ * operand list and the REAL operation the caller ran on those operands' own examples (concolic_example), so
+ * the answer carries a concrete tilt while the domain survives to whatever reads the slot back. The four
+ * reads then move to ui_event_dict_num with the rest and this paragraph goes.
+ * HOW ITS ABSENCE WOULD SHOW: a flow that constructs a PointerEvent from unknown external input dies at a
+ * coercion naming ToNumber and this file whenever it supplies a tilt or an angle, and runs on when it supplies
+ * a pressure or a pointer id instead — the two halves of one dictionary answering differently. */
 static void pe_orientation(JSContext *ctx, JSValueConst init, double *tilt_x, double *tilt_y,
                            double *altitude, double *azimuth)
 {
@@ -368,26 +396,24 @@ static int pe_init_slots(JSContext *ctx, JSValueConst ev, JSValueConst init)
     }
     pe_orientation(ctx, init, &tilt_x, &tilt_y, &altitude, &azimuth);
     JS_SetPropertyStr(ctx, slots, PE_SLOT[PE_POINTER_ID],
-                      JS_NewInt32(ctx, ui_event_dict_i32(ctx, init, "pointerId")));
+                      ui_event_dict_num(ctx, init, "pointerId", JS_NewInt32(ctx, 0)));
     /* `double width = 1` / `double height = 1` — Pointer Events 4 §3.1's own "the user agent MUST return a
        default value of 1" for an input with no contact geometry. The 1 is written here as well as in the
        dictionary because it is the ATTRIBUTE's un-initialized value and reaches events the member loop never
-       converted — see pe_dict_f64_or. */
-    JS_SetPropertyStr(ctx, slots, PE_SLOT[PE_WIDTH],
-                      JS_NewFloat64(ctx, pe_dict_f64_or(ctx, init, "width", 1.0)));
-    JS_SetPropertyStr(ctx, slots, PE_SLOT[PE_HEIGHT],
-                      JS_NewFloat64(ctx, pe_dict_f64_or(ctx, init, "height", 1.0)));
+       converted — see pe_dict_num_or. */
+    JS_SetPropertyStr(ctx, slots, PE_SLOT[PE_WIDTH], pe_dict_num_or(ctx, init, "width", 1.0));
+    JS_SetPropertyStr(ctx, slots, PE_SLOT[PE_HEIGHT], pe_dict_num_or(ctx, init, "height", 1.0));
     /* THE TWO `float` MEMBERS, READ BACK AS THE DOUBLES THEY ALREADY ARE. Web IDL §3.2.5 "float"'s rounding
        into single precision is the DECLARATION's — IDL_FLOAT — so what is on the record is already the
        single-precision value and re-rounding here would be a second answer to one conversion. */
     JS_SetPropertyStr(ctx, slots, PE_SLOT[PE_PRESSURE],
-                      JS_NewFloat64(ctx, ui_event_dict_f64(ctx, init, "pressure")));
+                      ui_event_dict_num(ctx, init, "pressure", JS_NewFloat64(ctx, 0.0)));
     JS_SetPropertyStr(ctx, slots, PE_SLOT[PE_TANGENTIAL_PRESSURE],
-                      JS_NewFloat64(ctx, ui_event_dict_f64(ctx, init, "tangentialPressure")));
+                      ui_event_dict_num(ctx, init, "tangentialPressure", JS_NewFloat64(ctx, 0.0)));
     JS_SetPropertyStr(ctx, slots, PE_SLOT[PE_TILT_X], JS_NewInt32(ctx, (int32_t)tilt_x));
     JS_SetPropertyStr(ctx, slots, PE_SLOT[PE_TILT_Y], JS_NewInt32(ctx, (int32_t)tilt_y));
     JS_SetPropertyStr(ctx, slots, PE_SLOT[PE_TWIST],
-                      JS_NewInt32(ctx, ui_event_dict_i32(ctx, init, "twist")));
+                      ui_event_dict_num(ctx, init, "twist", JS_NewInt32(ctx, 0)));
     JS_SetPropertyStr(ctx, slots, PE_SLOT[PE_ALTITUDE_ANGLE], JS_NewFloat64(ctx, altitude));
     JS_SetPropertyStr(ctx, slots, PE_SLOT[PE_AZIMUTH_ANGLE], JS_NewFloat64(ctx, azimuth));
     /* `DOMString pointerType = ""` — Pointer Events 4 §3.1 states the empty string as the value for a device
@@ -402,7 +428,7 @@ static int pe_init_slots(JSContext *ctx, JSValueConst ev, JSValueConst init)
     JS_SetPropertyStr(ctx, slots, PE_SLOT[PE_IS_PRIMARY],
                       JS_NewBool(ctx, idl_dict_bool(ctx, init, "isPrimary")));
     JS_SetPropertyStr(ctx, slots, PE_SLOT[PE_PERSISTENT_DEVICE_ID],
-                      JS_NewInt32(ctx, ui_event_dict_i32(ctx, init, "persistentDeviceId")));
+                      ui_event_dict_num(ctx, init, "persistentDeviceId", JS_NewInt32(ctx, 0)));
     JS_SetPropertyStr(ctx, slots, PE_COALESCED, coalesced);
     JS_SetPropertyStr(ctx, slots, PE_PREDICTED, predicted);
     JS_SetProperty(ctx, (JSValue)ev, k, slots);

@@ -138,15 +138,48 @@ JSValue ui_event_get_modifier_state(JSContext *ctx, JSValueConst ev, JSValueCons
     { "modifierSymbolLock", IDL_BOOLEAN, false, NULL, 2 },                                            \
     { "shiftKey", IDL_BOOLEAN, false, NULL, 2 }
 
-/* A `long` / `unsigned long` member of a dictionary the declaration has ALREADY converted — the read back out
-   of the record it built, which runs none of the page's code because nothing of the page's is on that record.
-   An absent member is the IDL's `= 0` default, which is also every one of these attributes' un-initialized
-   value. Shared by the three interfaces because all three read integer members the same way. */
+/* AN INTEGER OR `double` MEMBER OF A DICTIONARY THE DECLARATION HAS ALREADY CONVERTED, HANDED BACK AS A C
+   SCALAR — the read back out of the record it built, which runs none of the page's code because nothing of the
+   page's is on that record, and which must not narrow the value a second time: the type a member is DECLARED
+   with is what the conversion already ran. An absent member reads as zero.
+   THEY ARE FOR A CALLER THAT DOES ARITHMETIC AND FOR NO OTHER, which is what separates them from
+   ui_event_dict_num below and is a fact about the CALLER rather than about the member — `button` and the four
+   Pointer Events 4 §3.1.5 orientation members are read here, and every member that is only PLACED on a slot
+   is read there. A caller that asks for a scalar is asking ECMAScript §7.1.4 ToNumber ( arg ) a question it
+   refuses over unknown external input, so these three are the readers a crossed member CANNOT survive; the
+   two sites that still read a placed member this way say at their own lines why, and each is a residual with
+   the work it is waiting on named. */
 int32_t  ui_event_dict_i32(JSContext *ctx, JSValueConst init, const char *name);
 uint32_t ui_event_dict_u32(JSContext *ctx, JSValueConst init, const char *name);
-/* A `double` member, read the same way and for the same reason — Pointer Lock 2.0 §7's `movementX`/`movementY`
-   are `double` where §"Interface MouseEvent"'s coordinates are `long`, and the type a member is DECLARED with
-   is what the conversion already ran, so the read back out must not narrow it a second time. */
 double   ui_event_dict_f64(JSContext *ctx, JSValueConst init, const char *name);
+
+/* THE SAME MEMBERS READ TO BE STORED RATHER THAN TO BE COMPUTED WITH, AND IT IS A SECOND QUESTION OVER ONE
+   FACT rather than a second answer to the first. The three readers above hand C a scalar because their
+   callers do ARITHMETIC with one — Web IDL §3.2.4.3 "short"'s signed fold for `button`, and Pointer Events 4
+   §3.1.5's tilt-to-spherical conversion. A caller that only PLACES the member on the slot record its
+   attribute reads back wants no number at all: it wants the VALUE, and asking such a caller's question with a
+   scalar is what DELETES THE FORK.
+   THE CHAIN IS THE CROSSING'S AND ENDS AT A BOUNDARY THAT OWES C A REAL PRIMITIVE. core/idl_args.h's
+   idl_concolic_rule answers IDL_CONCOLIC_CROSSES for every numeric type, so §3.2.17 "Dictionary types"'s member
+   loop rewrites an unknown-valued member to IDL_ANY before any type arm is asked and PLACES IT AS ITSELF —
+   deliberately, so opacity survives the boundary. The scalar readers then take that value to ECMAScript
+   §7.1.4 ToNumber ( arg ), which refuses an unknown BY NAME (quickjs.c's JS_ToNumberHintFree: a DFAIL naming
+   the coercing site in dev, a TypeError in release). Handing the value back instead is what lets
+   `if (ev.deltaY > 0)` reach 13.5.4's own concolic hook and FORK, which is the whole of why the member loop
+   crosses.
+   `uninitialized` IS THE ATTRIBUTE'S OWN SPEC FACT AND IS WRITTEN AT THE CALL, in the representation that
+   attribute has — Pointer Events 4 §3.1's `1` for `width`/`height`, Pointer Events 4 §12.1's `0.0` for the three
+   deltas, the `= 0` every other one of these attributes is un-initialized to. It cannot be derived from the
+   declared type here, because the dictionary's default and the attribute's un-initialized value are two
+   requirements of one standard that only happen to agree on most members. It is TAKEN OVER: returned for an
+   absent member and freed for a present one.
+   IT IS A MACRO OVER AN `_at` ENTRY for the reason core/idl_args.h states at idl_dict_bool: one assert under
+   every numeric member of five interfaces can state the RULE and could not state the ADDRESS, and one member
+   name (`width`, `which`) is declared by more than one dictionary, so only the pair of the name and the SITE
+   says which read refused. */
+JSValue  ui_event_dict_num_at(JSContext *ctx, JSValueConst init, const char *name, JSValue uninitialized,
+                              const char *file, int line);
+#define ui_event_dict_num(ctx, init, name, uninitialized) \
+    ui_event_dict_num_at((ctx), (init), (name), (uninitialized), __FILE__, __LINE__)
 
 #endif

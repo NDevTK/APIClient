@@ -177,6 +177,41 @@ double ui_event_dict_f64(JSContext *ctx, JSValueConst init, const char *name)
     return n;
 }
 
+/* THE READER THE OTHER THREE ARE NOT — see ui_event.h for which question each answers. This one does no
+   conversion at all, and that is its whole content: §3.2.17 "Dictionary types" step 4.1.4.1 already converted
+   every PRESENT member by its declared type (idl_num_of's modulo, §3.2.7 "double"'s finiteness refusal,
+   §3.2.5 "float"'s rounding), so re-reading it as a C scalar and re-boxing it is the identity for every value
+   the conversion produced — and is NOT the identity for the one value it deliberately did not produce.
+   THE ASSERT IS THE OPPOSITE OF idl_dict_bool's AND THAT IS THE POINT. That reader refuses an unknown because
+   §3.2.3 "boolean"'s conversion IS the fork and a crossed boolean has nowhere left to go — its only consumer
+   is control flow, which would answer `true`. A numeric member's consumer is a SLOT, and a slot can hold the
+   unknown, so this reader CARRIES it and asserts only the shape §3.2.17 guarantees: the conversion's Number,
+   or the unknown the member loop crossed as itself. A third shape is a declaration or a builder defect and is
+   what the message splits out, exactly as core/idl_args.h's IDL_DCHECK_MEMBER splits its two. */
+JSValue ui_event_dict_num_at(JSContext *ctx, JSValueConst init, const char *name, JSValue uninitialized,
+                             const char *file, int line)
+{
+    JSValue v = idl_dict_get(ctx, init, name);
+
+    /* An ABSENT member is the attribute's un-initialized value, which the CALLER states — there is no default
+       to read off the record, because §3.2.17 step 4.1.5 places one only for a member whose IDL writes one. */
+    if (JS_IsUndefined(v)) {
+        JS_FreeValue(ctx, v);
+        return uninitialized;
+    }
+    JS_FreeValue(ctx, uninitialized);
+    DCHECKF(JS_IsNumber(v) || concolic_is(v),
+            "the numeric dictionary member `%s` read at %s:%d is neither a Number nor unknown external input. "
+            "Web IDL §3.2.17 Dictionary types step 4.1.4.1 converts a present member BY ITS DECLARED TYPE and "
+            "core/idl_args.h's idl_concolic_rule answers IDL_CONCOLIC_CROSSES for every numeric one, so a "
+            "member that came through that loop is the conversion's own Number or the unknown it crossed as "
+            "itself, and nothing else. Two things put a third shape here and both are defects elsewhere. "
+            "(1) This object never went through §3.2.17 — fix whoever built it. (2) The IdlDictMember list "
+            "this operation registered does not declare `%s` a numeric type — fix the declaration",
+            name, file, line, name);
+    return v;
+}
+
 /* `Window? view = null` — UI Events §3.2.1.2 UIEventInit's member, READ OFF THE CONVERTED DICTIONARY. §3.2.15's
    brand and §3.2.20's null rule are the DECLARATION's: the row in ui_event.h states `I` as
    `window_proxy_is_window`, the same predicate the three legacy initializers' `viewArg` positions state, so a
@@ -301,8 +336,10 @@ static int ui_init_slots(JSContext *ctx, JSValueConst ev, JSValueConst init)
        is now true of `view` too, and the one allocation left that can fail is the modifier record's. */
     source = input_device_capabilities_of_dict(ctx, init, "sourceCapabilities");
     JS_SetPropertyStr(ctx, slots, "view", view);
-    JS_SetPropertyStr(ctx, slots, "detail", JS_NewInt32(ctx, ui_event_dict_i32(ctx, init, "detail")));
-    JS_SetPropertyStr(ctx, slots, "which", JS_NewUint32(ctx, ui_event_dict_u32(ctx, init, "which")));
+    JS_SetPropertyStr(ctx, slots, "detail",
+                      ui_event_dict_num(ctx, init, "detail", JS_NewInt32(ctx, 0)));
+    JS_SetPropertyStr(ctx, slots, "which",
+                      ui_event_dict_num(ctx, init, "which", JS_NewUint32(ctx, 0)));
     JS_SetPropertyStr(ctx, slots, "sourceCapabilities", source);
     JS_SetPropertyStr(ctx, slots, "modifiers", mods);
     JS_SetProperty(ctx, (JSValue)ev, k, slots);

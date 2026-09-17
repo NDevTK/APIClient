@@ -154,11 +154,14 @@ static int ke_init_slots(JSContext *ctx, JSValueConst ev, JSValueConst init)
     }
     JS_SetPropertyStr(ctx, slots, "key", key_v);
     JS_SetPropertyStr(ctx, slots, "code", code_v);
-    JS_SetPropertyStr(ctx, slots, "location", JS_NewUint32(ctx, ui_event_dict_u32(ctx, init, "location")));
+    JS_SetPropertyStr(ctx, slots, "location",
+                      ui_event_dict_num(ctx, init, "location", JS_NewUint32(ctx, 0)));
     JS_SetPropertyStr(ctx, slots, "repeat", JS_NewBool(ctx, idl_dict_bool(ctx, init, "repeat")));
     JS_SetPropertyStr(ctx, slots, "isComposing", JS_NewBool(ctx, idl_dict_bool(ctx, init, "isComposing")));
-    JS_SetPropertyStr(ctx, slots, "charCode", JS_NewUint32(ctx, ui_event_dict_u32(ctx, init, "charCode")));
-    JS_SetPropertyStr(ctx, slots, "keyCode", JS_NewUint32(ctx, ui_event_dict_u32(ctx, init, "keyCode")));
+    JS_SetPropertyStr(ctx, slots, "charCode",
+                      ui_event_dict_num(ctx, init, "charCode", JS_NewUint32(ctx, 0)));
+    JS_SetPropertyStr(ctx, slots, "keyCode",
+                      ui_event_dict_num(ctx, init, "keyCode", JS_NewUint32(ctx, 0)));
     JS_SetProperty(ctx, (JSValue)ev, k, slots);
     JS_FreeAtom(ctx, k);
     return 0;
