@@ -5390,6 +5390,21 @@ void flow_wfq_census(WfqCensus *out) {
            "maximum is taken over the same members this scan walks, so a negative deficit means the pick and "
            "the census are no longer reading one comparator, and every conclusion drawn from this row about "
            "whether queued jobs are outranked or unreachable is a statement about the instrument");
+    /* …AND THE COUNT AND THE GAP ARE ABOUT ONE POPULATION, WHICH IS THE OTHER HALF OF THIS ROW'S CONTRACT AND
+       THE HALF THE SIGN CHECK ABOVE CANNOT SEE. `job_w_gap` is written only under `have_job_holder`, and that
+       flag is raised only inside the ready arm, so a census that counts no rank-waiting job states no
+       distance — which is why solver/result.c's job-row banner tells a reader to take the two together and
+       neither alone. That pairing is true by construction and was recorded only as a sentence.
+       WHAT IT CATCHES IS AN EDIT WITH AN ATTRACTIVE REASON: a maximum widened to take a FRAMED or HOST-OWED
+       holder so the gap is "more informative" raises the flag outside the arm, after which `jobWGap` is a
+       reading over members `jobsReady` does not count and a reader pairing them is comparing two sets.
+       ONE-SIDED ON PURPOSE — a non-zero count with a zero gap is the ordinary reading that the backlog's best
+       claim stands AT the front, which is the row's whole point and must not fire. */
+    DCHECK(out->jobs_ready > 0 || out->job_w_gap == 0.0,
+           "the WFQ census states how far the job backlog stands behind the front of the order while counting "
+           "no job that waits on rank at all — the gap is written only for a holder the ready arm admitted, so "
+           "a distance with no population under it means the two rows have stopped being about one set and "
+           "`jobsReady: 0` no longer makes `jobWGap: 0`");
     /* AND THE REPLY BACKLOG'S IS NON-NEGATIVE BY THE SAME CONSTRUCTION AND ASSERTED FOR THE SAME REASON — a
        ready delivery holder is one of the members flow_best's maximum is taken over, read through the same
        flow_weight in the same scan. The row exists to answer whether a delivery backlog is an ORDERING problem,
@@ -5399,6 +5414,19 @@ void flow_wfq_census(WfqCensus *out) {
            "maximum is taken over the same members this scan walks, so a negative deficit means the pick and "
            "the census are no longer reading one comparator, and every conclusion drawn from this row about "
            "whether undelivered replies are outranked or unreachable is a statement about the instrument");
+    /* …AND THE SAME PAIRING FOR THE REPLY BACKLOG, COVERING ONE MORE FIELD BECAUSE THE BRANCH WRITES THREE.
+       `deliv_w_gap` and the two visit counts at its ends are written in ONE branch guarded by
+       `have_deliv_holder`, which the ready arm alone raises. The zeroing of the three states that consequence
+       in words already — a reader holding one of them set and the others not would be reading a gap about
+       members this scan never found — and asserting it is what makes the sentence checkable: they are written
+       together or not at all, so any of them speaking with `deliv_ready` at zero is that branch having
+       acquired a second writer. */
+    DCHECK(out->deliv_ready > 0 ||
+           (out->deliv_w_gap == 0.0 && out->deliv_w_gap_vis == 0 && out->w_top_vis == 0),
+           "the WFQ census states a reply backlog's distance from the front of the order, or the visit counts "
+           "at its two ends, while counting no reply that waits on rank — all three are written in the one "
+           "branch the ready arm opens, so a reading with no population under it means they have stopped "
+           "being about the set `delivReady` counts");
 
     /* THE FAMILY COUNT IS BRACKETED BY THE POPULATION IT PARTITIONS, asserted because both ends name a real
        break rather than a rounding. Zero families with members standing is the mark not being taken at all —
@@ -5497,6 +5525,19 @@ void flow_wfq_census(WfqCensus *out) {
            "every member it admits is inside `mem_unframed` by construction and the two cannot disagree "
            "unless `mem_unframed` has been re-spelled. If it has, `jobsReady: 0` can no longer be told from "
            "`mem_unframed: 0`, which is the one reading this row was added for");
+    /* …AND THE SAME CONTAINMENT FOR THE REPLY BACKLOG, WHICH HAS NOTHING STANDING UNDER IT IN THE ONE STATE
+       THE ASSERT ABOVE IS SILENT IN. Both ready arms are reached only through flow_stack_empty, whose first
+       line is `if (f->frame) return 0;`, so a member either arm admits is inside `mem_unframed` BY
+       CONSTRUCTION — one question asked at two sites, and only the job site asked it. A frontier holding a
+       deliverable reply and no queued job is an ordinary state (`jobsReady: 0` with `delivReady > 0`), and in
+       it the job assert cannot fire whatever `mem_unframed` has become, so a re-spelling would reach the
+       published rows with nothing anywhere to say that the pair separating `delivReady`'s two zeroes is no
+       longer a pair. */
+    DCHECK(out->deliv_ready == 0 || out->mem_unframed > 0,
+           "this census reports replies waiting on RANK ALONE while reporting that every member holds a "
+           "frame — the ready arm is reached only through flow_stack_empty, whose first line refuses a live "
+           "frame, so every member it admits is inside `mem_unframed` by construction and the two cannot "
+           "disagree unless `mem_unframed` has been re-spelled");
     /* AND THE TWO IDENTITIES THAT DEFINE THE BRANCH ROWS, ASSERTED WHERE BOTH HALVES OF EACH ARE IN ONE HAND.
        They are the only property of a per-bucket number a reader can check without re-deriving the mechanism
        that produced it, and both are exact rather than one-sided because each event has exactly one writer.
