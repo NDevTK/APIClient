@@ -521,7 +521,10 @@ function assertEngineAbiPairing() {
   let stamp = "(no qjs.mjs.build.json beside the glue)";
   try {
     const b = JSON.parse(fs.readFileSync(path.join(EXT_DIR, "lib", "qjs", "qjs.mjs.build.json"), "utf8"));
-    stamp = `built at ${b.at} from a tree then called ${b.head} (qjs ${b.qjsHead})`;
+    /* ONE COMMIT NAMES THE PROGRAM SINCE THE SUBTREE MERGE — `engine/qjs` is tracked content, so there is no
+       second sha to print. A stamp that still carries one was written before that merge and says so. */
+    stamp = `built at ${b.at} from a tree then called ${b.head}` +
+            (typeof b.qjsHead === "string" ? ` (pre-subtree stamp, qjs ${b.qjsHead})` : "");
   } catch (e) { stamp = `(qjs.mjs.build.json unreadable: ${e.message})`; }
   throw new Error(
     `the built engine and the extension that calls it are from different generations — REFUSING TO LAUNCH.\n` +

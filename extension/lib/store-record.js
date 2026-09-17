@@ -251,7 +251,11 @@ const _SR_SCOPES = _srList("a service's required OAuth scopes", "a scope name", 
      grep -ac runwayPerMille extension/lib/qjs/qjs.wasm   # positive control: PRESENT before these three were
      grep -ac NOT_A_REAL_FIELD_CONTROL extension/lib/qjs/qjs.wasm   # negative control: must be 0
    It now answers 1, 1, 1 over a positive control of 1 and a negative control of 0, against an artifact whose
-   sidecar states `dirty: []` and a `qjsPinned` equal to the gitlink — so the names are in the SHIPPED BYTES.
+   sidecar states `dirty: []` and — this being a PRE-SUBTREE artifact — a `qjsPinned` equal to the gitlink, so
+   the names are in the SHIPPED BYTES. That second clause is kept as the evidence it was and is not a check a
+   later reader can repeat: `engine/qjs` was a submodule when this was measured, and a subtree merge has since
+   made it tracked content, so no build writes `qjsPinned` any more and `head` alone names the whole program
+   (engine/gate_revision.mjs, REVISION_FIELDS). The measurement stands; only the field it cites is retired.
    That is a claim about CONTENT and not an inference from source: the artifact measured is BEHIND `origin/main`
    and nothing here says it reflects it.
    THE DEFERRAL'S SPEC HALF WAS RIGHT AND ITS CONSEQUENCE HALF WAS WRONG, WHICH IS THE PART WORTH KEEPING

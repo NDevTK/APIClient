@@ -98,13 +98,19 @@ const BUILT = (() => {
            'with no revision beside it is not a measurement of anything (§Testing)');
   }
   const b = JSON.parse(raw);
-  /* NO DEFAULTS ON THE PRODUCER'S FIELDS. build.mjs writes all three on every build, so an absent `head` is
-     that contract broken — never an artifact that merely happens not to know its own revision, which is what a
-     `|| "unknown"` here would turn it into. */
-  if (typeof b.head !== 'string' || typeof b.qjsHead !== 'string' || !Array.isArray(b.dirty))
-    fail('the artifact\'s build record does not carry the revision build.mjs writes (`head`, `qjsHead`, ' +
-         '`dirty`) — a field defaulted here would turn "this program came from nowhere nameable" into a ' +
-         'plausible revision, which is indistinguishable afterwards from a real one');
+  /* NO DEFAULTS ON THE PRODUCER'S FIELDS. build.mjs writes these on every build, so an absent `head` is that
+     contract broken — never an artifact that merely happens not to know its own revision, which is what a
+     `|| "unknown"` here would turn it into.
+     `qjsHead` WAS REQUIRED HERE AND IS NOT A FIELD ANY BUILD WRITES NOW. It was the `engine/qjs` SUBMODULE's
+     checked-out commit, and the subtree merge made that path ordinary tracked content: `head` names the whole
+     program, and the pair that used to be checked against each other cannot disagree — see
+     engine/gate_revision.mjs's REVISION_FIELDS for the removal and its reason. Demanding it would have
+     REFUSED every artifact built after that change, which is this rule's own defect inverted: a contract kept
+     after the producer's reason for it is gone rejects the correct program rather than the broken one. */
+  if (typeof b.head !== 'string' || !Array.isArray(b.dirty))
+    fail('the artifact\'s build record does not carry the revision build.mjs writes (`head`, `dirty`) — a ' +
+         'field defaulted here would turn "this program came from nowhere nameable" into a plausible ' +
+         'revision, which is indistinguishable afterwards from a real one');
   if (b.dirty.length)
     refuse(`the program under test was linked from an EDITED tree (${b.dirty.length} dirty path(s): ` +
            `${b.dirty.join(' ')}), so it is a program no revision of this tree contains and every verdict this ` +
@@ -113,7 +119,10 @@ const BUILT = (() => {
            'stage after that one is the first real verdict (§Testing)');
   return b;
 })();
-const REV = `host ${BUILT.head.slice(0, 12)} qjs ${BUILT.qjsHead.slice(0, 12)}`;
+/* ONE COMMIT NAMES THE PROGRAM. A stamp written before the subtree merge carries a submodule commit in
+   `qjsHead`; its PRESENCE dates the artifact rather than identifying its engine, so it is said as that. */
+const REV = `host ${BUILT.head.slice(0, 12)}` +
+            (typeof BUILT.qjsHead === 'string' ? ` (pre-subtree stamp, qjs ${BUILT.qjsHead.slice(0, 12)})` : '');
 console.log(`${TAG} the program under test was linked at ${REV} (${BUILT.at})`);
 
 const RENDERER_SCRIPT = (() => {

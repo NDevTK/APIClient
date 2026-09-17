@@ -2985,9 +2985,10 @@ if (g_truncated) {
   console.log(`  ${g_truncated.said}`);
   console.log(`  it reached ${g_truncated.rel} — run ${attempted} of ${runs.length}, so ` +
               `${runs.length - attempted} run(s) were NEVER ATTEMPTED and are absent from every column below`);
-  console.log(`  engine ${REV_AT_START.head}` +
-              (REV_AT_START.qjsHead ? `   qjs ${REV_AT_START.qjsHead}` : "") +
-              `   corpus ${CORPUS_AT_START.head}`);
+  /* THE `qjs` CLAUSE THAT USED TO SIT BETWEEN THESE TWO IS GONE WITH THE FIELD. `engine/qjs` is tracked
+     content since the subtree merge, so the engine has no commit of its own and `head` names the whole
+     program; `corpus` is the WPT checkout, which IS a separate repository and keeps its own. */
+  console.log(`  engine ${REV_AT_START.head}   corpus ${CORPUS_AT_START.head}`);
   console.log(`  wptserve's own log is at ${SERVER_LOG} — its last lines are why it stopped`);
   console.log("  the rows below are the runs that DID happen; nothing here says anything about the rest");
   console.log("  ===============================================================================================");

@@ -174,14 +174,21 @@ const EXT = process.env.HARNESS_EXT_DIR || (process.env.LANE ? process.env.LANE 
 let artifact = { extDir: EXT, extDirFrom: process.env.HARNESS_EXT_DIR ? 'HARNESS_EXT_DIR'
                                         : process.env.LANE ? 'LANE' : 'shared-checkout-default' };
 try { artifact.wasmSha256 = createHash('sha256').update(readFileSync(EXT + '/lib/qjs/qjs.wasm')).digest('hex'); } catch (e) { artifact.wasmErr = String(e.message); }
-/* THE HASH IS THE ONLY FIELD THAT IS TRUE. `head`/`qjsHead` are what the SOURCE TREE was called at build
+/* THE HASH IS THE ONLY FIELD THAT IS TRUE. `head` (and, on a pre-subtree artifact, `qjsHead`) is what the
+   SOURCE TREE was called at build
    time, and the tree is edited continuously by other lanes -- so a build of a dirty tree records a revision
    whose sources do not contain the program that ran. That is not hypothetical: rows have carried a head whose
    quickjs.c lacks the very DFAIL text those same rows printed. They are kept because a wrong name is still a
    hint, and renamed so no reader can mistake them for the revision the number belongs to. */
 try {
   const b = JSON.parse(readFileSync(EXT + '/lib/qjs/qjs.mjs.build.json', 'utf8'));
-  artifact.builtFromHeadClaim = b.head; artifact.builtFromQjsHeadClaim = b.qjsHead; artifact.builtAt = b.at;
+  /* `builtFromQjsHeadClaim` RECORDS AN ERA NOW, NOT AN ENGINE. It was the `engine/qjs` submodule's commit;
+     the subtree merge made that path tracked content, so no build writes the field and `head` above names the
+     whole program. A row that HAS it was produced by a pre-merge artifact — kept because that is real
+     evidence about which artifact answered, and written as `null` rather than left `undefined` so an absent
+     field and an unasked question do not read alike. */
+  artifact.builtFromHeadClaim = b.head; artifact.builtAt = b.at;
+  artifact.builtFromQjsHeadClaim = typeof b.qjsHead === 'string' ? b.qjsHead : null;
   /* THE STAMP ANSWERS A THREE-STATE QUESTION AND THIS ROW RECORDS ALL THREE. `dirty` alone used to carry both
      "asked git, nothing differs" and "could not ask git at all" -- and the second is the state in which the
      stamp knows NOTHING, so folding it into an empty `dirty` published the STRONGEST claim available (built

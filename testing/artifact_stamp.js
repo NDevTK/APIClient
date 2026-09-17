@@ -136,8 +136,14 @@ function artifactStamp(extDir) {
         "copy the builder's .build.json in beside the wasm it belongs to.");
     }
   }
-  return { head: j.head, qjsHead: j.qjsHead, at: j.at, treeAtBuild: stampReading(j),
-           trustedAtRun: trustedZoneAtRun() };
+  /* `qjsHead` IS NOT A FIELD ANY BUILD WRITES NOW, AND ITS PRESENCE IS STILL EVIDENCE. It was the
+     `engine/qjs` SUBMODULE's checked-out commit; the subtree merge made that path tracked content of the
+     superproject, so `head` names the whole program and engine/gate_revision.mjs stopped producing the pair
+     (it could no longer disagree with itself). A stamp that HAS the field was therefore written before that
+     merge, which is a fact about the artifact's era rather than about its engine — so it is forwarded under a
+     name that says which of the two it is, instead of under one a reader would compare against a commit. */
+  return { head: j.head, preSubtreeQjsHead: typeof j.qjsHead === "string" ? j.qjsHead : null,
+           at: j.at, treeAtBuild: stampReading(j), trustedAtRun: trustedZoneAtRun() };
 }
 
 module.exports = { artifactStamp, stampReading, trustedZoneAtRun };

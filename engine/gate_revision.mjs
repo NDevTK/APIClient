@@ -17,11 +17,39 @@
  * it is that the next reader is sent to build what is already built, which is exactly the stale-`DFAIL`
  * failure §Disposition names.
  *
- * THE SUBMODULE IS HALF THE IDENTITY AND IT IS THE HALF THAT MOVED. The engine is a superproject plus
- * `engine/qjs`, and a checkout can hold a submodule at a commit the superproject does not record — which is
- * precisely how the run above came to compile a quickjs.c older than the HEAD that "contained" the fix. So a
- * revision here is a PAIR, and the PINNED commit is reported beside the CHECKED-OUT one so a disagreement is a
- * line rather than a discovery.
+ * THE REVISION USED TO BE A PAIR AND IS ONE COMMIT NOW, AND THE ARGUMENT FOR THE PAIR IS REWRITTEN RATHER
+ * THAN DELETED BECAUSE A READER WHO RE-DERIVES IT WILL RE-ADD IT. It said: the engine is a superproject plus
+ * `engine/qjs`, a checkout can hold a SUBMODULE at a commit the superproject does not record, and that gap is
+ * precisely how the run above came to compile a quickjs.c older than the HEAD that "contained" the fix — so a
+ * revision here is a PAIR, the PINNED commit reported beside the CHECKED-OUT one to make a disagreement a line
+ * rather than a discovery. Every clause of that was true while `engine/qjs` was a submodule.
+ *
+ * A SUBTREE MERGE MADE IT ORDINARY TRACKED CONTENT, so there is no pointer, no second repository, and no gap
+ * for the two shas to disagree ACROSS: whether the engine source on disk is the source this commit records is
+ * now the same question `dirty` already answers for every other path in the cone, and it is answered by the
+ * same `git status`. The PAIR is therefore not a pair that happens to agree — it is one fact, and a check
+ * whose two sides cannot disagree is a NON-check wearing a check's syntax (CLAUDE.md
+ * §AN-ASSERT-WHOSE-TWO-SIDES-CANNOT-DISAGREE), so the branch that compared them is gone rather than left
+ * standing and always-true.
+ *
+ * WHAT DID NOT CHANGE IS THE FAILURE THIS FILE EXISTS FOR, AND WHAT THE MERGE COST WAS MEASURED. Every ask
+ * this file put to `engine/qjs` as a repository — `rev-parse HEAD`, `status --porcelain`, `ls-tree -r HEAD` —
+ * began FAILING the instant the merge landed, because the directory stopped being a repository of its own.
+ * It failed HONESTLY, and only because `ask` establishes the repository before putting the question: without
+ * that guard git would have walked up and answered all three from the superproject, which is the confident
+ * false red its own comment records. What the honest failures cost instead was everything downstream of them:
+ * `unasked` was non-empty on EVERY gate run, so the CLEAN line — the one that says a number is quotable
+ * against a commit — became unreachable for every gate in this project; and the dangling-include audit
+ * returned `unaudited` rather than running, because ONE of its two tree asks was the submodule's. Measured at
+ * de7485b6 before this diff: three alarm blocks on a clean tree, 0 dangling includes reported because the
+ * audit did not run, and a remedy hint telling the reader to clone `<rev>:engine/qjs`, which is a TREE and
+ * cannot be cloned. Measured after: one `ls-tree` over both paths resolves 4842 include lines, 717 of them
+ * THROUGH `engine/qjs`, 0 dangling.
+ *
+ * `engine/qjs/test262` IS STILL A SUBMODULE — re-declared at the ROOT `.gitmodules` with `update = none`,
+ * because git reads `.gitmodules` only from the repository root. It is a CORPUS rather than a source this
+ * program is compiled from, so no cone here names it and no ask here is put to it; `git ls-files` and
+ * `git ls-tree` both stop at its gitlink, which is why the two walks below need no exclusion for it.
  *
  * A DIRTY CONE IS NOT A FOOTNOTE, IT IS THE VERDICT ON THE MEASUREMENT. §Testing's worked example is a build
  * that read `idl_args.h` 33 seconds apart and produced a program no revision of the tree ever contained. This
@@ -40,8 +68,11 @@ import { dirname, join } from "node:path";
 
 const ENGINE = import.meta.dirname;
 const ROOT = dirname(ENGINE);            /* the superproject */
-const QJS = join(ENGINE, "qjs");         /* the submodule */
-const SUBMODULE_PATH = "engine/qjs";     /* how the superproject's tree names it */
+/* `engine/qjs` IS A PATH IN THIS REPOSITORY AND NO LONGER A HANDLE TO ANOTHER ONE. The directory handle that
+   stood beside this is gone with the asks that used it: a question put to that directory is a question put to
+   THIS repository, so it is asked from ROOT with the path as a pathspec, which is what every other cone path
+   has always done. The constant keeps its value and loses its name — nothing here is a submodule any more. */
+const QJS_PATH = "engine/qjs";           /* how this repository's tree names the engine sources */
 
 /* IS THIS DIRECTORY A REPOSITORY OF ITS OWN — asked once per directory per run, because a directory does not
    stop being one under a gate. `--show-toplevel` is the only question that answers it: `--is-inside-work-tree`
@@ -143,8 +174,19 @@ function dirtyIn(cwd, cone) {
  * HEAD is broken, and HEAD is what another agent checks out.
  *
  * Resolution mirrors the build's own `-I` list (`engine/host`, `engine/host/browser`, `engine/qjs`) plus the
- * including file's own directory, because that is what the compiler will do. A path resolving into the
- * submodule is asked of the submodule: the superproject's tree does not list a gitlink's contents.
+ * including file's own directory, because that is what the compiler will do.
+ *
+ * IT USED TO TAKE TWO TREE ASKS AND THE SECOND ONE WAS UNSOUND, WHICH THE MERGE EXPOSED BY BREAKING IT. The
+ * retired sentence read: a path resolving into the submodule is asked of the submodule, because the
+ * superproject's tree does not list a gitlink's contents. That was true and its CONSEQUENCE was not stated —
+ * the submodule could only be asked about its CHECKED-OUT `HEAD`, while this function's own header promises an
+ * answer "over the COMMITTED tree, never the working one". So for the 717 includes that resolve through the
+ * engine, the audit was reading whatever the submodule happened to be checked out at rather than what `<rev>`
+ * records, which is the one thing it exists not to do.
+ * `engine/qjs` is content of this repository now, so ONE `ls-tree` at `<rev>` over BOTH paths answers the whole
+ * question, at the revision asked for, with no second repository to be out of step with. That is not merely
+ * one fewer ask: it is the difference between an audit that promises the committed tree and one that delivers
+ * it. `engine/qjs/test262` is still a gitlink and `ls-tree -r` stops at it, so the corpus needs no exclusion.
  *
  * ONE SHAPE ON EVERY PATH, AND THIS FUNCTION HAD THREE. The two-field split below — `dangling` for what the
  * audit FOUND, `unaudited` for the audit that could not be PUT — was introduced for the manifest ask and never
@@ -163,17 +205,18 @@ function danglingIncludes(rev) {
   const out = ask(ROOT, "grep", "-n", "-e", '^[[:space:]]*#[[:space:]]*include[[:space:]]*"',
                   rev, "--", "engine/host/*.c", "engine/host/*.h");
   if (out.startsWith("<git ")) return auditUnputtable(out);
-  const listed = ask(ROOT, "ls-tree", "-r", "--name-only", rev, "--", "engine/host");
+  /* BOTH PATHS IN ONE ASK, AT THE REVISION. The engine's tree is a PRECONDITION of this answer and not an
+     optional enrichment — 717 of this cone's include lines resolve only through it, measured at de7485b6 — so
+     a failure here leaves by the same door as the manifest's rather than substituting an empty set, which
+     would be the strongest possible negative claim ("the engine provides no header at all") derived from the
+     one state in which nothing is known. That substitution is what produced the 590-include false red above.
+     THE SECOND ASK THAT USED TO STAND HERE WAS PUT TO `engine/qjs` AS A REPOSITORY, and the subtree merge
+     turned every such question into a failure — an honest one, because `ask` establishes the repository first,
+     but a failure all the same, so this whole audit returned `unaudited` on every gate run in the project
+     instead of running. One ask cannot be half-answered. */
+  const listed = ask(ROOT, "ls-tree", "-r", "--name-only", rev, "--", "engine/host", QJS_PATH);
   if (listed.startsWith("<git ")) return auditUnputtable(listed);
   const tracked = new Set(listed.split("\n").filter(Boolean));
-  /* THE SUBMODULE'S TREE IS A PRECONDITION OF THE ANSWER, NOT AN OPTIONAL ENRICHMENT, and treating it as one
-     is what produced the 590-include false red above. This line used to substitute an EMPTY SET for a failed
-     ask, which is the strongest possible negative claim — "the submodule provides no header at all" — derived
-     from the one state in which nothing is known; 590 of this cone's includes resolve only through it. A
-     failed ask is not a finding about the tree, so it leaves by the same door as the manifest's. */
-  const qjsListed = ask(QJS, "ls-tree", "-r", "--name-only", "HEAD");
-  if (qjsListed.startsWith("<git ")) return auditUnputtable(qjsListed);
-  const inQjs = new Set(qjsListed.split("\n").filter(Boolean));
   /* NO `-h`, DELIBERATELY, AND THIS WAS WRONG ONCE. Searching a REVISION rather than the worktree, git grep
      prefixes `<rev>:<path>:<lineno>:`, and `-h` suppresses the path — which is the one field that names the
      OWNER of a bad include. With `-h` this parser matched nothing and the check passed for every tree there
@@ -230,8 +273,10 @@ function danglingIncludes(rev) {
       bad.push(`${owner}:${no} includes "${inc}", and the file sits under no include root this build declares`);
       continue;
     }
-    const has = (c) => tracked.has(c) ||
-                       (c.startsWith("engine/qjs/") && inQjs.has(c.slice("engine/qjs/".length)));
+    /* ONE SET, BECAUSE THERE IS ONE TREE. This used to fall back to a second, submodule-relative set for any
+       candidate under `engine/qjs/`; the paths that set held are in `tracked` now, spelled the way the
+       compiler's `-I` list spells them. */
+    const has = (c) => tracked.has(c);
     /* A .c IS CHECKED AGAINST EVERY SET THAT COMPILES IT, because each of those links really does hand it that
        root list and all of them must succeed. A .h CANNOT BE — which unit includes a header is not a fact a
        grep for `#include` lines has, and requiring every set whose roots merely REACH it is provably wrong: a
@@ -284,7 +329,11 @@ export function stampArtifact(artifact, cone) {
        tree could not be asked has an empty `dirty`, and a later reader comparing only that field would read
        the artifact as built from a clean revision — the strongest claim this file can make, derived from the
        one state in which it knows nothing. */
-    { head: rev.head, branch: rev.branch, qjsHead: rev.qjsHead, qjsPinned: rev.qjsPinned,
+    /* THE STAMP IS THIS RECORD, SO THE RETIRED PAIR LEAVES HERE TOO — see REVISION_FIELDS for why it is
+       removed rather than left holding a tree hash. A stamp written before this diff carries `qjsHead`, and
+       readers treat its PRESENCE as dating the artifact to before the subtree merge rather than as a field to
+       compare; nothing defaults it, because an absent field is a question that cannot be asked wrongly. */
+    { head: rev.head, branch: rev.branch,
       dirty: rev.dirty, unasked: rev.unasked, cone, at: new Date().toISOString() }, null, 1));
   return rev;
 }
@@ -311,7 +360,15 @@ function behindBy(oldSha, newSha) {
   const r = spawnSync("git", ["merge-base", "--is-ancestor", oldSha, newSha], { cwd: ROOT, encoding: "utf8" });
   if (r.error) return { unknown: String(r.error.message || r.error) };
   if (r.status !== 0) return { unrelated: true };
-  return { behind: ask(ROOT, "rev-list", "--count", oldSha + ".." + newSha) };
+  /* `--first-parent`, AND THE SUBTREE MERGE IS WHY. `rev-list --count A..B` counts every commit reachable
+     from B and not from A, and the merge made the whole absorbed quickjs fork reachable — so an artifact
+     three days old began reporting as thousands of commits behind, with nothing saying that nearly all of
+     them are engine history this repository swallowed in one act rather than superproject commits anybody
+     made. MEASURED at 32d133cd against the installed stamp's 0a04ed49: 2356 without the flag and 43 with it,
+     a 55x inflation of the one number a reader uses to decide whether a build is worth rebuilding. Following
+     first parents counts the superproject's own line, which is the line a stamp's `head` is always on because
+     `build.mjs` reads it from ROOT — and `--is-ancestor` above has already established that it IS on it. */
+  return { behind: ask(ROOT, "rev-list", "--count", "--first-parent", oldSha + ".." + newSha) };
 }
 
 /* THE MTIME FALLBACK, kept ONLY for an artifact with no stamp. Unchanged in what it computes and changed in
@@ -323,9 +380,10 @@ function stalerThan(artifact, cone) {
   /* THE SAME CONE THE REVISION IS ABOUT, and it is passed in rather than guessed for the reason the revision's
      own cone is: the two answers must be about ONE set of files, or "clean at HEAD" and "newer than the build"
      are statements about two different programs printed as if they were about one. */
-  const superCone = cone.filter((p) => p !== SUBMODULE_PATH);
-  const asks = [[ROOT, "", superCone]];
-  if (cone.includes(SUBMODULE_PATH)) asks.push([QJS, SUBMODULE_PATH + "/", ["."]]);
+  /* ONE ASK OVER THE WHOLE CONE. It used to be two — the cone minus `engine/qjs` asked of this repository,
+     and `engine/qjs` asked of the submodule with its answers re-prefixed — and the split existed only because
+     `git ls-files` cannot see inside a gitlink. There is no gitlink, so there is no split and no prefix. */
+  const asks = [[ROOT, "", cone]];
   /* THE COUNT IS THE VERDICT AND THE NEWEST FILE IS THE EVIDENCE — the 445 names between them are not a work
      queue, and printing them would be. This is NOT the truncation §Testing forbids: an unreadable corpus file
      is its own diagnosis, so that list IS the work, whereas every entry here has the identical single remedy
@@ -338,10 +396,16 @@ function stalerThan(artifact, cone) {
     const listed = ask(cwd, "ls-files", "--", ...paths);
     if (listed.startsWith("<git ")) { broke = listed; continue; }
     for (const rel of listed.split("\n").filter(Boolean)) {
-      /* THE CORPORA ARE NOT SOURCES. `engine/qjs/test262` is a checkout this gate's program is not built from,
-         and a corpus re-materialized this morning would otherwise report every artifact in the tree as stale —
-         a diagnostic that always says yes is the same as one that never fires. */
-      if (rel.startsWith("test262/")) continue;
+      /* THE CORPUS SKIP THAT STOOD HERE IS RETIRED BY THE WALK RATHER THAN BY A DECISION, AND ITS ARGUMENT IS
+         KEPT BECAUSE IT IS STILL THE REASON THE ANSWER IS RIGHT. It read: the corpora are not sources,
+         `engine/qjs/test262` is a checkout this gate's program is not built from, and a corpus re-materialized
+         this morning would otherwise report every artifact in the tree as stale — a diagnostic that always says
+         yes is the same as one that never fires. All of that holds. What changed is that it can no longer
+         FIRE: the skip matched a submodule-relative `test262/…`, and this walk now asks THIS repository, where
+         `git ls-files` stops at the `engine/qjs/test262` gitlink and lists nothing beneath it (measured at
+         de7485b6: 185 paths under `engine/qjs`, 0 of them under `test262/`). The gitlink entry itself has no
+         extension and the filter below drops it. A check that cannot fire is not a cheap safeguard, it is a
+         reader's belief that a case is handled, so it goes and its reason stays. */
       if (!/\.(c|h|mjs|js|json)$/.test(rel)) continue;
       let m;
       try { m = statSync(join(cwd, rel)).mtimeMs; } catch { continue; }
@@ -370,8 +434,27 @@ function stalerThan(artifact, cone) {
    than the producer. The list is exactly what `revisionLines` and `revisionMoved` read, so a field added to the
    record without being added here is a field nothing states a contract about, and a field the record stops
    carrying crashes HERE with its own name in the message instead of there with none. */
+/* `qjsPinned` AND `qjsHead` ARE GONE FROM THIS CONTRACT, AND THE PAIR IS THE FINDING RATHER THAN A FIELD TO
+   MAINTAIN. They were the submodule's CHECKED-OUT commit and the commit the superproject PINNED, and their
+   entire purpose was the one state where those disagree. Ask what value of the program makes them disagree
+   now: `<sha>:engine/qjs` names a TREE, and the other half could only be answered by a repository at
+   `engine/qjs` that no longer exists — so there is no disagreement to catch, and a check whose two sides
+   cannot disagree is a NON-check that certifies what it never examined.
+   THE FACT THEY CARRIED IS NOT LOST, IT MOVED TO WHERE EVERY OTHER PATH'S VERSION OF IT ALREADY LIVED: "is the
+   engine source on disk the source this commit records" is `dirty` over `engine/qjs`, which the cone names and
+   the one `git status` above answers. Two entries in `cone` remain two DISJOINT populations — measured at
+   de7485b6, `ls-tree -r -- engine/host engine/qjs` gives 1023 paths and 1023 unique, with 0 path under both
+   prefixes — so nothing counts the engine twice.
+   THEY ARE REMOVED RATHER THAN LEFT HOLDING THE TREE SHA, and that choice is the load-bearing one. The stamp
+   this record is written into is what a lane reads to decide which revision a measurement belongs to, and a
+   TREE hash sitting in a field every reader spells as a commit fails `git grep`/`merge-base --is-ancestor` in
+   the direction that reads as "the row did not exist" rather than as "I asked a malformed question" — a
+   coordinate that means the opposite of how it reads, in the one artifact that exists to prevent exactly that.
+   An ABSENT field is a question a reader cannot ask wrongly. Every consumer moved in the same commit, because
+   the retired argument was written down in six places and the one in engine/renderer_host_gate.mjs was a hard
+   `fail()` on the field's absence. */
 const REVISION_FIELDS = {
-  head: "string", branch: "string", qjsPinned: "string?", qjsHead: "string?",
+  head: "string", branch: "string",
   dirty: "array", unasked: "array", dangling: "array", unaudited: "array", cone: "array",
 };
 function checkedRevision(rev) {
@@ -390,23 +473,24 @@ function checkedRevision(rev) {
 }
 
 export function gateRevision(cone, artifact = null) {
-  const superDirty = dirtyIn(ROOT, cone.filter((p) => p !== SUBMODULE_PATH));
-  const wantsQjs = cone.includes(SUBMODULE_PATH);
-  const qjsDirty = wantsQjs ? dirtyIn(QJS, ["."]) : { lines: [], unasked: [] };
-  const inQjs = (l) => l + "   (in " + SUBMODULE_PATH + ")";
+  /* ONE `git status` OVER THE WHOLE CONE, because `engine/qjs` is an ordinary path in it. The filter-and-
+     re-ask that stood here asked this repository about the cone MINUS the engine and the submodule about
+     itself, then re-labelled the second answer — three moving parts to express one question that one pathspec
+     now answers. MEASURED at de7485b6: `git status --porcelain -- engine/qjs` is 0 lines on a clean tree, so
+     folding it in does not manufacture a dirty cone; and a `engine/qjs/test262` gitlink that DOES drift shows
+     up here as one line, which is the honest answer — the corpus differing from what this revision records is
+     a real difference, and only the MTIME walk above had a reason to skip it. */
+  const dirty = dirtyIn(ROOT, cone);
+  const wantsQjs = cone.includes(QJS_PATH);
   const stamp = artifact ? readStamp(artifact) : null;
   return checkedRevision({
     head: ask(ROOT, "rev-parse", "HEAD"),
     branch: ask(ROOT, "rev-parse", "--abbrev-ref", "HEAD"),
-    /* THE COMMIT THE SUPERPROJECT RECORDS versus THE COMMIT THAT IS CHECKED OUT. Two facts, and the whole
-       incident this file was written for is the gap between them. */
-    qjsPinned: wantsQjs ? ask(ROOT, "rev-parse", "HEAD:" + SUBMODULE_PATH) : null,
-    qjsHead: wantsQjs ? ask(QJS, "rev-parse", "HEAD") : null,
-    dirty: [...superDirty.lines, ...qjsDirty.lines.map(inQjs)],
+    dirty: dirty.lines,
     /* THE QUESTION THAT COULD NOT BE PUT, carried beside the answer and never folded into it. A reader must be
        able to tell "this cone differs from its revision" from "this gate does not know whether it does", and
        only the first of those is a statement about the tree. */
-    unasked: [...superDirty.unasked, ...qjsDirty.unasked.map(inQjs)],
+    unasked: dirty.unasked,
     artifact,
     /* THE STAMP IS THE ANSWER AND THE MTIME IS THE FALLBACK — asked in that order, and only ONE of the two is
        ever carried, so a reader cannot mistake which kind of answer arrived. */
@@ -432,22 +516,15 @@ const short = (h) => (h && !h.startsWith("<") ? h.slice(0, 8) : h);
    is exactly where the revision was missing. */
 export function revisionLines(rev) {
   const out = [];
-  out.push(`[rev] engine ${short(rev.head)} (${rev.branch})` +
-           (rev.qjsHead ? `   qjs ${short(rev.qjsHead)}` : ""));
-  /* AN UNANSWERED ASK IS NOT A MISMATCH, and the comparison below cannot tell them apart on its own: `ask`
-     returns its failure as a string, and two strings are unequal whatever they say. Without this branch a
-     snapshot whose submodule is not a repository of its own printed THE SUBMODULE IS NOT THE ONE THIS COMMIT
-     RECORDS — the file's loudest line — with a failure message where a sha belongs. */
-  if (rev.qjsHead && !(answered(rev.qjsHead) && answered(rev.qjsPinned)))
-    out.push(`[rev] THE SUBMODULE'S IDENTITY COULD NOT BE ASKED — ${SUBMODULE_PATH} is in this gate's cone and ` +
-             `one of the two commits that identify it did not answer, so whether the checkout matches what ` +
-             `${short(rev.head)} pins is UNKNOWN. That is not a finding that they differ and not a finding ` +
-             `that they agree. Checked out: ${rev.qjsHead}. Pinned: ${rev.qjsPinned}.`);
-  else if (rev.qjsHead && rev.qjsPinned && rev.qjsHead !== rev.qjsPinned)
-    out.push(`[rev] THE SUBMODULE IS NOT THE ONE THIS COMMIT RECORDS — ${SUBMODULE_PATH} is checked out at ` +
-             `${short(rev.qjsHead)} and ${short(rev.head)} pins ${short(rev.qjsPinned)}. The program measured ` +
-             `below is NOT the program this superproject revision describes, and a fix committed against ` +
-             `either half alone will read as absent in the other.`);
+  /* ONE COMMIT NAMES THE WHOLE PROGRAM NOW. This line used to carry `qjs <sha>` beside the engine's, and the
+     two blocks that stood under it — THE SUBMODULE'S IDENTITY COULD NOT BE ASKED and THE SUBMODULE IS NOT THE
+     ONE THIS COMMIT RECORDS — are retired with the pair they compared. Their argument is kept at
+     REVISION_FIELDS, where the removal is: they were the only readers of a fact that no longer has two sides.
+     The SECOND of them was the loudest line in this file, and it is worth saying what killed it rather than
+     just that it is gone: it fired when the checked-out submodule differed from the pinned one, and the
+     subtree merge means the engine's bytes ARE this commit's bytes — a difference between them is an edit, and
+     an edit is what `dirty` reports two branches down, for `engine/qjs` exactly as for `engine/host`. */
+  out.push(`[rev] engine ${short(rev.head)} (${rev.branch})`);
   /* THE ORDER IS THE POINT: a gate that could not ask has no dirty finding to report, and printing the CLEAN
      line for it would be the original defect inverted — an unasked question answered in the reassuring
      direction instead of the alarming one. Both directions are the same error, so neither branch may run. */
@@ -462,17 +539,21 @@ export function revisionLines(rev) {
        same remedy: a `git archive` export carries no `.git` at all, and a `git clone --shared` snapshot carries
        one for the superproject only until the submodule is cloned too — the second half of the recipe below,
        which is the half that gets skipped. */
-    out.push(`[rev] a snapshot exported with \`git archive\` carries no \`.git\` at all, and a cloned one whose ` +
-             `\`${SUBMODULE_PATH}\` was never cloned carries none for the submodule — either way the arrangement ` +
-             `whose cone is guaranteed clean reports as unknown. Freeze with repositories on BOTH halves — ` +
-             `\`git clone --shared <root> <dir> && git -C <dir> checkout --detach <rev>\`, plus the same for ` +
-             `\`${SUBMODULE_PATH}\` at \`<rev>:${SUBMODULE_PATH}\` — which leaves the gate able to answer this ` +
-             `question about itself.`);
+    /* THE SECOND HALF OF THIS HINT WAS AN INSTRUCTION THAT COULD ONLY FAIL. It used to say to freeze with
+       repositories on BOTH halves and to clone `<rev>:engine/qjs` — which names a TREE, and a tree cannot be
+       cloned. A remedy a reader cannot carry out is worse than none: they run it, git refuses, and the
+       conclusion available is that the tree is broken rather than that the advice is. One clone populates
+       everything this gate compiles now; `engine/frozen_snapshot.sh` is that recipe and is the thing to run. */
+    out.push(`[rev] a snapshot exported with \`git archive\` carries no \`.git\` at all, so the one arrangement ` +
+             `whose cone is guaranteed clean reports as unknown. Freeze with a repository — ` +
+             `\`git clone --shared <root> <dir> && git -C <dir> checkout --detach <rev>\`, which populates ` +
+             `\`${QJS_PATH}\` with everything else because it is tracked content of this repository — or run ` +
+             `\`engine/frozen_snapshot.sh\`, which does that and provisions the toolchain beside it.`);
   } else if (rev.dirty.length) {
     out.push(`[rev] THE COMPILED CONE IS DIRTY — ${rev.dirty.length} path(s) below differ from that revision, ` +
              `so this run measures a tree NO REVISION CONTAINS and the number cannot be quoted against a ` +
              `commit. Run it from a frozen snapshot: \`git clone --shared <root> <dir> && git -C <dir> ` +
-             `checkout --detach <rev>\`, plus the same for \`${SUBMODULE_PATH}\` at \`<rev>:${SUBMODULE_PATH}\`.`);
+             `checkout --detach <rev>\`, or \`engine/frozen_snapshot.sh\`.`);
     for (const l of rev.dirty) out.push(`[rev]   ${l}`);
   } else {
     /* A POSITIVE STATEMENT, not an absence. "Clean" is the finding that makes the head above quotable, and a
@@ -522,9 +603,16 @@ export function revisionLines(rev) {
                `the program this run measured. Rebuild from a frozen snapshot before quoting this number.`);
       for (const l of s.dirty) out.push(`[rev]   built-with ${l}`);
     } else {
-      const eng = behindBy(s.head, rev.head), qjs = behindBy(s.qjsHead, rev.qjsHead);
-      const both = (eng && eng.same) && (!s.qjsHead || (qjs && qjs.same));
-      if (both) {
+      const eng = behindBy(s.head, rev.head);
+      /* A STAMP CARRYING `qjsHead` IS EVIDENCE OF ITS ERA AND IS NAMED RATHER THAN IGNORED. That field was the
+         submodule's checked-out commit; this record stopped producing it when `engine/qjs` stopped being a
+         submodule, so its PRESENCE dates the artifact to before the subtree merge exactly. Silently dropping
+         the read would have been the defaulted-field defect one level up — an old artifact reading as though
+         it simply had nothing to say about the engine, when what it has is a commit from a repository this one
+         has absorbed. `head` still determines that artifact's engine (the superproject commit pinned it), so
+         nothing is unknowable; only the era needs saying. */
+      const preSubtree = typeof s.qjsHead === "string" ? s.qjsHead : null;
+      if (eng && eng.same) {
         out.push(`[rev] the artifact ${rev.artifact} was BUILT FROM THIS REVISION (stamped ${s.at}) — the ` +
                  `program measured and the tree named above are the same thing`);
       } else {
@@ -537,7 +625,11 @@ export function revisionLines(rev) {
              : d.unknown ? `${what} ${short(from)} (${d.unknown})`
              : `${what} ${short(from)}, ${d.behind} commit(s) behind`;
         out.push(`[rev] THE ARTIFACT IS NOT A BUILD OF THIS REVISION — ${rev.artifact} was stamped ${s.at} at ` +
-                 `${say("engine", s.head, eng)}` + (s.qjsHead ? `, ${say("qjs", s.qjsHead, qjs)}` : "") +
+                 `${say("engine", s.head, eng)}` +
+                 (preSubtree ? `. It was stamped BEFORE the subtree merge — it carries a submodule commit ` +
+                               `(${short(preSubtree)}) for \`${QJS_PATH}\`, which this record no longer ` +
+                               `produces because that path is tracked content now; the engine it was built ` +
+                               `from is whatever ${short(s.head)} pinned` : "") +
                  `. This run measured that BUILD, not the revision above; rebuild ` +
                  `(\`node engine/build.mjs\`) or quote the number against the build instead.`);
       }
@@ -572,8 +664,10 @@ export function revisionMoved(before) {
   const now = gateRevision(before.cone);
   if (now.head !== before.head)
     return `the superproject HEAD changed under this run (${short(before.head)} → ${short(now.head)})`;
-  if (now.qjsHead !== before.qjsHead)
-    return `${SUBMODULE_PATH} changed under this run (${short(before.qjsHead)} → ${short(now.qjsHead)})`;
+  /* THE SUBMODULE-MOVED QUESTION THAT STOOD HERE IS ANSWERED BY THE TWO CHECKS AROUND IT NOW. It compared the
+     engine's checked-out commit at both ends of the run; `engine/qjs` is tracked content, so the engine moving
+     under a run is either a new HEAD (above) or an edit to the cone (below), and this would have been a third
+     reading of the same two facts. */
   if (now.dirty.join("\n") !== before.dirty.join("\n"))
     return "the compiled cone was edited under this run — the sources that were linked are not the sources " +
            "on disk now, so `git diff` will not show the program this number is about";

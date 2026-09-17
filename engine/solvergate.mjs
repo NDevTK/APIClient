@@ -1521,8 +1521,13 @@ for (const l of revisionLines(REV_AT_START)) console.log(l);
    between the classification list in this file and the document that program emits is then a fact about
    neither of them. It is not used to soften any other verdict — the run itself is measured either way. */
 const ARTIFACT_IS_THIS_REVISION =
+  /* THE `qjsHead` CONJUNCT THAT STOOD HERE IS REMOVED RATHER THAN LEFT TO PASS. It compared the stamp's
+     submodule commit with this run's; `engine/qjs` is tracked content since the subtree merge, so
+     gate_revision produces neither side and the comparison would have read `undefined === undefined` — TRUE
+     on every artifact, including ones built from another engine entirely. A conjunct that cannot be false is
+     not a weakened check, it is a term that silently widens the AND it sits in. `head` already names the whole
+     program, and `dirty` covers `engine/qjs` like any other cone path. */
   !!REV_AT_START.stamp && REV_AT_START.stamp.head === REV_AT_START.head &&
-  REV_AT_START.stamp.qjsHead === REV_AT_START.qjsHead &&
   !REV_AT_START.dirty.length && !REV_AT_START.unasked.length &&
   !(REV_AT_START.stamp.dirty || []).length && !(REV_AT_START.stamp.unasked || []).length;
 
