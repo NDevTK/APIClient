@@ -174,20 +174,28 @@ function defaultTargets(notify = () => {}) {
   /* THE FORK'S OWN FILES ARE DERIVED, NOT LISTED. engine/qjs is mostly upstream and upstream's citations are
    * not this tree's to answer for — but the fork annotates several of its translation units with this
    * project's citation convention, and a hand-kept list of WHICH ones is the second copy of a fact the files
-   * themselves already state. Upstream writes no section marks at all, so a top-level source in the submodule
+   * themselves already state. Upstream writes no section marks at all, so a top-level source under the fork
    * carrying one is a file this project wrote in. The rule reads the artifact; a list would drift from it, and
    * a list is how the largest body of citations in this tree came to be missed once already. */
   const sub = join(HERE, "qjs");
   let subNames = null;
   try { subNames = readdirSync(sub); } catch { subNames = null; }
   if (!subNames || subNames.length === 0) {
-    /* ABSENT AND ZERO ARE DIFFERENT FACTS, and this is the line that says which. engine/qjs is a SUBMODULE:
-     * a plain clone, and the frozen-snapshot procedure this project prescribes for every instrument that
-     * reads the tree, leave it EMPTY. Nothing else in the output distinguishes "the fork disagrees with
-     * itself nowhere" from "the fork was not read". */
+    /* ABSENT AND ZERO ARE DIFFERENT FACTS, and this is the line that says which. Nothing else in the output
+     * distinguishes a fork that disagrees with itself nowhere from a fork that was not read.
+     * THE MECHANISM IS RETIRED AND THE ARGUMENT IS KEPT, because a reader who re-derives it will re-add it.
+     * It said: engine/qjs is a SUBMODULE, so a plain clone and the frozen-snapshot procedure this project
+     * prescribes for every instrument that reads the tree both leave it EMPTY. That was true while the fork
+     * was a submodule. It is a TREE now, so a clone populates it, and the snapshot script records the same
+     * retirement where it used to run a second clone for the same reason.
+     * THE GUARD STAYS AND ITS ARGUMENT CHANGES RATHER THAN GOING WITH THE MECHANISM: it no longer stands
+     * against a gitlink populating nothing, it stands against this checkout being assembled wrongly in any
+     * future way at all, which is the half that was never specific to submodules. WHAT IS STILL A SUBMODULE
+     * is engine/qjs/test262, the only gitlink left and declared with no automatic update; the loop below
+     * reads only top-level sources, so it has never descended into it. */
     notify(`[citediff] NOT READ — engine/qjs is empty in this checkout, so every citation the fork carries ` +
-           `is OUTSIDE this run and the counts below are a fraction of a population without it. It is a ` +
-           `submodule: a plain clone does not populate it. This is an ABSENCE, not a clean result.`);
+           `is OUTSIDE this run and the counts below are a fraction of a population without it. This is an ` +
+           `ABSENCE, not a clean result.`);
   } else {
     for (const e of subNames.sort()) {
       if (!/\.(c|h)$/.test(e)) continue;
