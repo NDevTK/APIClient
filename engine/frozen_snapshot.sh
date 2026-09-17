@@ -57,6 +57,30 @@ for old in "$ROOT"/snap-*; do
   find "$old" -name '*.log' -type f 2>/dev/null | while read -r f; do
     cp -n "$f" "$ROOT/EVIDENCE-$tag-$(basename "$f")" 2>/dev/null || true
   done
+  # A BUILT ARTIFACT IS EVIDENCE TOO, AND THE RULE ABOVE IS WRITTEN ABOUT LOGS ALONE.
+  # The argument twelve lines up — a log is evidence and the snapshot is not, so it is copied out BEFORE
+  # anything is deleted — generalises to the artifact WORD FOR WORD and the implementation did not: the
+  # `find -name '*.log'` preserves the record of a run and discards the PROGRAM that run was about. That
+  # program is a fact about a revision, it is what every later measurement drives, and it costs a full
+  # compile to reproduce. Measured, and it cost exactly that: a build was taken at one revision, its
+  # artifact left in the snapshot, and the NEXT freeze — by the same agent, minutes later, for the corpus
+  # pass that artifact was built for — reclaimed it. Nothing was live in it, so the liveness gate above was
+  # right to let it go; what was missing is that the gate decides WHETHER to delete and nothing decided
+  # what to CARRY OUT first.
+  # KEYED BY REVISION AND NOT BY LANE, because one revision has one artifact: two lanes freezing the same
+  # SHA preserve the same bytes, and `cp -n` then makes the second a no-op rather than a duplicate. A
+  # lane-keyed name would accumulate one copy per lane for no added evidence, which is the cost this
+  # project is least able to afford — the EVIDENCE logs beside it already run to tens of megabytes each.
+  # THE STAMP TRAVELS WITH IT OR THE BYTES ARE WORTHLESS: an artifact whose revision a reader cannot state
+  # is exactly the unstamped artifact §MEASURE-WHAT-THE-SHIPPED-PATH-WRITES says produces no number at all.
+  if [ -d "$old/extension/lib/qjs" ]; then
+    arev=$(basename "$old" | sed 's/.*-//')
+    if [ ! -d "$ROOT/ARTIFACT-$arev" ]; then
+      mkdir -p "$ROOT/ARTIFACT-$arev"
+      cp -pn "$old/extension/lib/qjs/"* "$ROOT/ARTIFACT-$arev/" 2>/dev/null || true
+      echo "preserved artifact of $arev -> $ROOT/ARTIFACT-$arev ($(du -sh "$ROOT/ARTIFACT-$arev" 2>/dev/null | cut -f1))"
+    fi
+  fi
   rm -rf "$old"
 done
 
