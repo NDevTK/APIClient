@@ -336,6 +336,43 @@ static char *cssd_decl_value(const lxb_css_rule_declaration_t *d)
     return b.s;
 }
 
+/* A declaration's value AS THE PAGE SPELLED IT — the slice of the parsed text between the offsets lexbor
+   recorded for it, rather than the value its registry TYPED. It is what a property whose grammar this engine
+   owns has to be asked about, because lexbor's typed value is downstream of a parse that may have refused the
+   declaration outright (`__UNDEF`, where the value is a raw span) or accepted it under a NARROWER grammar and
+   re-spelled it (where the serialization above is its own answer and not the page's). Both are wrong inputs to
+   a second parse: the first is right only by accident of the arena copy, and the second re-parses text one
+   grammar already normalized, which loses exactly what the two grammars disagree about.
+   THE OFFSETS INDEX THE TOKENIZER'S INPUT BUFFER — the very string handed to `lxb_css_declaration_list_parse`
+   or `lxb_css_stylesheet_parse` — which is the same invariant `cssd_at_prelude` asserts one function along and
+   for the same reason. THAT IS A DCHECK AND NOT A REFUSAL BECAUSE IT IS ABOUT THIS FILE'S OWN PLUMBING AND NOT
+   ABOUT THE PAGE'S BYTES: no declaration a page can write moves an offset outside the text it was parsed from,
+   so a violation is a caller that passed a buffer other than the one it parsed.
+   `!important` IS NOT IN THE SLICE. lexbor closes `value_end` at the whitespace before the `!` and records the
+   important run in offsets of its own, so the span is the value and nothing else.
+   OWNED, NULL for a span the offsets do not describe. */
+static char *cssd_decl_source_value(const lxb_css_rule_declaration_t *d, const char *text, size_t len)
+{
+    size_t begin, end;
+    char *out;
+
+    DCHECK(d != NULL && text != NULL, "a declaration's source value was asked for with no declaration or no "
+                                      "text — the text IS where the offsets point, so there is nothing to "
+                                      "slice without it");
+    begin = d->offset.value_begin;
+    end = d->offset.value_end;
+    DCHECK(begin <= end && end <= len,
+           "a declaration's value offsets fall outside the text that was parsed — they index the tokenizer's "
+           "input buffer, which is the very string handed to the parse that produced this rule, so a caller "
+           "reading a rule against a DIFFERENT buffer is the only way this can be false");
+    if (begin > end || end > len) return NULL;
+    out = malloc(end - begin + 1);
+    CHECK(out != NULL, "cssom: OOM copying a declaration's source value");
+    memcpy(out, text + begin, end - begin);
+    out[end - begin] = '\0';
+    return out;
+}
+
 /* ---- §6.6's DECLARATIONS: the LONGHAND list, and the ONE place a block's is built -------------------------
  *
  * §6.6's declarations are LONGHANDS, AT MOST ONE PER PROPERTY, and both halves are the spec's own words.
@@ -749,11 +786,18 @@ static void cssd_decls_collect_declaration(CssDecls *d, const char *name, const 
  * LATER LEVEL OF CSS defines than the grammar that refused it — and cssd_undef_is_declaration is where it is
  * asked.
  *
+ * `text` AND `len` ARE THE BUFFER THIS RULE WAS PARSED FROM, and they are REQUIRED rather than optional
+ * because a property whose grammar this engine owns is asked about the page's own spelling — which lives at
+ * offsets into that buffer and nowhere else. A caller that lost it would not answer such a declaration
+ * WRONGLY, it would drop it, and a dropped declaration reads back as one the page never wrote; so the absence
+ * is asserted here rather than defaulted past.
+ *
  * ON TRUE, `*pname` and `*pvalue` are OWNED by the caller. `*pvalue` may be NULL: CSS Syntax admits a
  * declaration whose value is empty, which is why §6.6's step 4 is conditional — and a `__UNDEF` can never be
  * that, because the re-judge is asked ABOUT the raw span and there is none to ask about.
  * ON FALSE NEITHER OUT-PARAMETER IS WRITTEN, so a caller cannot free what it never received. */
-static bool cssd_decl_take(const lxb_css_rule_declaration_t *d, char **pname, char **pvalue)
+static bool cssd_decl_take(const lxb_css_rule_declaration_t *d, const char *text, size_t len,
+                           char **pname, char **pvalue)
 {
     char *name, *value;
 
@@ -761,10 +805,62 @@ static bool cssd_decl_take(const lxb_css_rule_declaration_t *d, char **pname, ch
            "CSSOM §6.7.1's parse a CSS value was asked about no declaration, or with nowhere to report the "
            "name and value it produces — this entry answers a rule lexbor already parsed, so an absent one is "
            "a caller that lost it rather than a declaration that never had it");
+    name = cssd_decl_name(d);
+    if (!name) return false;                       /* lexbor has no id for the property either */
+    /* css-fonts-4 §2.1 "Font family: the font-family property", AHEAD OF LEXBOR ON THE READ PATH TOO.
+       `cssom_parse_a_css_value` takes this grammar back from the registry for every WRITE, and this is the
+       same branch for every READ — a `style=""` attribute, a style rule's block, an `@font-face` descriptor
+       body and every `cssText` — because they are not two questions. THE BLOCK'S DECLARATIONS ARE TEXT, which
+       is what makes them one: a write serializes its answer back into that text and the very next read
+       re-parses it, so one grammar for the write and another for the read is not a disagreement a page has to
+       construct — it is one a page reaches by writing a value and reading it back.
+       `"New Century Schoolbook", serif` IS THE WHOLE CASE IN ONE VALUE. The write answers the unquoted
+       `<custom-ident>+` join of css-fonts-4 §2.1.1 "Syntax of <font-family-name>", and lexbor's `font-family`
+       state accepts exactly ONE token per list item — after the first it asks for a comma or the end — so it
+       REFUSES the three idents it is handed back and the declaration is dropped as invalid. The value a page
+       stored through `style.fontFamily` therefore read back as the EMPTY STRING.
+       THE SOURCE SLICE AND NOT `cssd_decl_value` IS WHAT IS ASKED, for the reason that function's own note
+       gives: for a refused declaration lexbor hands back the raw span (which would be right here by accident),
+       and for an accepted one it hands back ITS OWN SERIALIZATION under a narrower grammar, re-spelled by a
+       BYTE test over a Latin-1 map where the one css-fonts-4 §2.1.1 names is a code-point test over
+       CSS Syntax §4.2 "Definitions"' ident set. Re-parsing that is a second parse of a value one grammar has
+       already normalized, and it loses precisely what the two grammars disagree about.
+       THE NAME IS COMPARED CASE-SENSITIVELY AND IT IS CANONICAL HERE, which is a different fact from the one
+       `cssom_parse_a_css_value` states: this name was SERIALIZED OUT OF LEXBOR'S REGISTRY rather than supplied
+       by a page, so `FONT-FAMILY` in the source has already been folded by lexbor's own case-insensitive
+       property lookup and arrives spelled one way.
+       A VALUE OUTSIDE css-fonts-4 §2.1's GRAMMAR IS CSS Syntax's INVALID DECLARATION and is dropped whole,
+       which is the same answer this function gives a `__UNDEF` it cannot re-judge.
+
+       NAMED RESIDUAL — THE DESCRIPTOR GRAMMAR IS NOT THE ONE ASKED, AND THIS SEAM SERVES BOTH.
+         WHAT IS NOT COVERED: css-fonts-4 §4.2 "Font family: the font-family descriptor" gives an `@font-face`
+         descriptor the value `<family-name>` — ONE name, with no `#` and no `<generic-family>` alternative —
+         where the PROPERTY of css-fonts-4 §2.1 is `[ <family-name> | <generic-family> ]#`. A descriptor body
+         reaches this arm under the same property name as a style rule's declaration and is answered under the
+         wider of the two grammars.
+         WHAT THE NEXT DIFF BUILDS: a DESCRIPTOR member of `CssomBlockContext`, which already carries the other
+         three block restrictions of CSSOM §6.6 "CSS Declaration Blocks" and which an `@font-face` body is
+         currently collected under the default of, threaded to this arm so the descriptor grammar of
+         css-fonts-4 §4.2 is asked where the block is a descriptor body.
+         HOW ITS ABSENCE WOULD SHOW: an `@font-face` rule whose `font-family` names several families, or names
+         a generic, serializes every one of them back out of that rule's `cssText` where a browser drops the
+         descriptor whole.
+       THAT IS NOT A WIDENING THIS BRANCH MAKES. Lexbor's registry carries no descriptor grammar either — an
+       `@font-face` body's `font-family` reached the SAME property state of css-fonts-4 §2.1 — so which
+       descriptor values are ACCEPTED is unchanged by routing here and only their SERIALIZATION moves. */
+    if (strcmp(name, "font-family") == 0) {
+        char *raw = cssd_decl_source_value(d, text, len);
+
+        value = raw ? css_font_family_value(raw) : NULL;
+        free(raw);
+        if (!value) { free(name); return false; }
+        *pname = name;
+        *pvalue = value;
+        return true;
+    }
     if (d->type == LXB_CSS_PROPERTY__UNDEF) {
         value = cssd_decl_value(d);
-        name = value ? cssd_decl_name(d) : NULL;   /* NULL when lexbor has no id for the property either */
-        if (name && cssd_undef_is_declaration(name, value)) {
+        if (value && cssd_undef_is_declaration(name, value)) {
             *pname = name;
             *pvalue = value;
             return true;
@@ -773,8 +869,6 @@ static bool cssd_decl_take(const lxb_css_rule_declaration_t *d, char **pname, ch
         free(value);
         return false;
     }
-    name = cssd_decl_name(d);
-    if (!name) return false;
     *pname = name;
     *pvalue = cssd_decl_value(d);   /* the trimmed value — see its note */
     return true;
@@ -784,16 +878,22 @@ static bool cssd_decl_take(const lxb_css_rule_declaration_t *d, char **pname, ch
    longhands and collapsed to one per property. This is the ONE builder — the serialization, `length`, `item`,
    every property read and every write go through it, so no two of them can disagree about what the block
    declares. */
-static void cssd_decls_from_list(const lxb_css_rule_declaration_list_t *list, CssDecls *out)
+static void cssd_decls_from_list(const lxb_css_rule_declaration_list_t *list, const char *text, size_t len,
+                                 CssDecls *out)
 {
     const lxb_css_rule_t *r;
 
+    DCHECK(text != NULL,
+           "a declaration list was collected without the TEXT it was parsed from. A property whose grammar "
+           "this engine owns is asked about the page's own spelling, which lives at offsets into that text "
+           "and nowhere else — so a caller that has lost it would silently drop every such declaration rather "
+           "than answer it wrongly, and the block would read back as if the page had never written one");
     for (r = list ? list->first : NULL; r; r = r->next) {
         const lxb_css_rule_declaration_t *d = lxb_css_rule_declaration(r);
         char *name, *value;
 
         if (r->type != LXB_CSS_RULE_DECLARATION) continue;
-        if (!cssd_decl_take(d, &name, &value)) continue;
+        if (!cssd_decl_take(d, text, len, &name, &value)) continue;
         cssd_decls_collect_declaration(out, name, value, d->important);
         free(name);
         free(value);
@@ -805,9 +905,13 @@ static void cssd_decls_from_list(const lxb_css_rule_declaration_list_t *list, Cs
 static void cssd_decls_from_text(const char *text, size_t len, CssDecls *out)
 {
     lxb_css_memory_t *mem = NULL;
+    lxb_css_rule_declaration_list_t *list;
 
     if (!text || !len) return;
-    cssd_decls_from_list(cssd_parse_block(text, len, &mem), out);
+    /* The list is taken into a local before the collect rather than passed inline, because the collect is also
+       handed the TEXT the offsets on that list index and C fixes no order between two arguments. */
+    list = cssd_parse_block(text, len, &mem);
+    cssd_decls_from_list(list, text, len, out);
     if (mem) lxb_css_memory_destroy(mem, true);
 }
 
@@ -1082,7 +1186,7 @@ static void cssd_author_collect(lxb_dom_element_t *el, const char *name, CssCasc
                    two criteria, so what arrives here is one declaration per property — which is also why one
                    counter can be both css-cascade-5 §6.1's order of appearance and css-cascade-5 §7.3.6's
                    identity of the rule. */
-                cssd_decls_from_list(st->declarations, &rd);
+                cssd_decls_from_list(st->declarations, view.text, strlen(view.text), &rd);
                 at = cssd_decls_index(&rd, name);
                 if (at >= 0 && rd.v[at].value)
                     css_cascade_add(cascade, CSS_ORIGIN_AUTHOR, rd.v[at].important, false, layer,
@@ -1268,12 +1372,12 @@ static char *cssd_serialize_decls(const CssDecls *d)
     return out.s;
 }
 
-static char *cssd_serialize_block(const lxb_css_rule_declaration_list_t *list)
+static char *cssd_serialize_block(const lxb_css_rule_declaration_list_t *list, const char *text, size_t len)
 {
     CssDecls d = { 0 };
     char *out;
 
-    cssd_decls_from_list(list, &d);
+    cssd_decls_from_list(list, text, len, &d);
     out = cssd_serialize_decls(&d);
     cssd_decls_free(&d);
     return out;
@@ -1286,7 +1390,7 @@ static char *cssd_serialize_block(const lxb_css_rule_declaration_list_t *list)
    §6.6 says a declaration block holds one declaration per property, whichever run declared it — so all of them
    are collected before the collapse runs, rather than serialized separately and concatenated. OWNED, NULL for
    a body that declares nothing. */
-static char *cssd_serialize_at_block(const lxb_css_rule_list_t *block)
+static char *cssd_serialize_at_block(const lxb_css_rule_list_t *block, const char *text, size_t len)
 {
     CssDecls d = { 0 };
     const lxb_css_rule_t *r;
@@ -1294,7 +1398,7 @@ static char *cssd_serialize_at_block(const lxb_css_rule_list_t *block)
 
     for (r = block ? block->first : NULL; r; r = r->next)
         if (r->type == LXB_CSS_RULE_DECLARATION_LIST)
-            cssd_decls_from_list(lxb_css_rule_declaration_list(r), &d);
+            cssd_decls_from_list(lxb_css_rule_declaration_list(r), text, len, &d);
     out = cssd_serialize_decls(&d);
     cssd_decls_free(&d);
     return out;
@@ -1407,7 +1511,7 @@ static void cssd_emit_rules(const char *text, size_t len, const lxb_css_rule_lis
             lxb_css_rule_style_t *st = lxb_css_rule_style(r);
 
             lxb_css_selector_serialize_list_chain(st->selector, css_buf_cb, &sel);
-            block = cssd_serialize_block(st->declarations);
+            block = cssd_serialize_block(st->declarations, text, len);
             out.prelude = sel.s ? sel.s : "";
             out.prelude_is_selectors = true;
             out.block = block ? block : "";
@@ -1426,7 +1530,7 @@ static void cssd_emit_rules(const char *text, size_t len, const lxb_css_rule_lis
             lxb_css_rule_bad_style_t *bad = lxb_css_rule_bad_style(r);
 
             prelude = cssd_prelude_span(text, len, bad->prelude_begin, bad->prelude_end);
-            block = cssd_serialize_block(bad->declarations);
+            block = cssd_serialize_block(bad->declarations, text, len);
             out.prelude = prelude;
             out.block = block ? block : "";
             out.has_block = true;
@@ -1464,7 +1568,7 @@ static void cssd_emit_rules(const char *text, size_t len, const lxb_css_rule_lis
                the body's own rather than a table of at-rule names kept in the parser layer. The BUILDER
                decides which of the two a given at-rule is allowed to have; CSS Syntax drops the other. */
             if (kids) {
-                block = cssd_serialize_at_block(kids);
+                block = cssd_serialize_at_block(kids, text, len);
                 out.block = block ? block : "";
             }
             break;
@@ -2349,7 +2453,7 @@ char *cssom_parse_a_css_value(const char *name, const char *value)
         /* §6.7.1's Note — "\"!important\" declarations are not part of the property value space and will
            therefore cause parse a CSS value to return null" — asked of the DECLARATION rather than of the
            text, because that is where lexbor records the flag and it records it for a `__UNDEF` too. */
-        if (!d->important && cssd_decl_take(d, &dname, &dvalue)) {
+        if (!d->important && cssd_decl_take(d, text.s, text.n, &dname, &dvalue)) {
             DCHECK(dname != NULL,
                    "cssd_decl_take answered TRUE with no property name — a declaration this engine holds is "
                    "one whose name §6.6.1's set a CSS declaration compares case-sensitively, so a nameless "
