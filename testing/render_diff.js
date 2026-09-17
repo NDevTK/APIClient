@@ -80,9 +80,14 @@ function check(cond, msg) { if (!cond) fail(msg); }
  * came last.
  *
  * IT RETURNS AN OBJECT RATHER THAN A STRING, DELIBERATELY, AND THE REASON THAT USED TO STAND HERE WAS WRONG IN
- * BOTH ITS HALVES. It said "EVERY number in a rectangle this engine reports is a CONCOLIC whose example is
- * derived from the initial containing block", and that the composed payload "never becomes concrete and the
- * witness silently never fires". The DECISION survives; the reason is replaced by what was measured, because a
+ * BOTH ITS HALVES. It said `EVERY number in a rectangle this engine reports is a CONCOLIC whose example is
+ * derived from the initial containing block`, and that the composed payload `never becomes concrete and the
+ * witness silently never fires`. THE BACKTICKS ARE NOT STYLE: both runs are a SPELLING BEING SHOWN — this
+ * tree's own retired sentence, quoted in order to withdraw it — and quotation marks put them in the citation
+ * audit's quotation channel, where they were judged against the nearest named standard and reported as
+ * sentences that standard does not contain, on every run, for as long as they stood. A finding that is red on
+ * every run becomes furniture, and the one thing it was hiding is that nothing here was wrong.
+ * The DECISION survives; the reason is replaced by what was measured, because a
  * reader who inherits the reason builds the wrong thing — it says every member needs help and names one
  * mechanism, and the truth is that most members need none and there are two mechanisms.
  *   A MEMBER IS CONCOLIC EXACTLY WHEN ITS USED VALUE DEPENDS ON SOMETHING THIS ENGINE MODELS AS UNKNOWN, which
@@ -112,7 +117,8 @@ function check(cond, msg) { if (!cond) fail(msg); }
  *     IT FORKS. `JSON.stringify(ART)` reads `ART.toJSON` — ECMAScript §25.5.4.2 SerializeJSONProperty step
  *   2.a's `GetV(value, "toJSON")` — and `ART` is a record the document published onto its global, so a member
  *   such a record does not hold is unknown INPUT in this engine (solver/absent.h) and step 2.b's
- *   `If IsCallable(toJSON) is true` is a branch on a concolic. The flow forks. `_flows` 2, with a `_forkAt` census naming exactly that site by its operands.
+ *   `If IsCallable(toJSON) is true` is a branch on a concolic. The flow forks: `_flows` 2, with a `_forkAt`
+ *   census naming exactly that site by its operands.
  *   The collector's removed `typeof` guard was this same defect one level down; putting the serialisation in
  *   the page puts it back one level up.
  *     AND ITS EXAMPLE IS EMPTY. `ART.toJSON` has no example — there is no such member to have one — so the
