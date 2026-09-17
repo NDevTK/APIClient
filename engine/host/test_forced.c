@@ -730,6 +730,44 @@ static const char *HTML =
     "var delObj = { k: 'keepVAL' };"   /* a shared BASELINE object; a forked flow will DELETE its k -> must revert per-flow */
     "var rx = { _f: 'base' };"   /* a reactive-framework style object: `flag` is an ACCESSOR backed by _f (Vue does exactly this) */
     "Object.defineProperty(rx, 'flag', { get: function(){ return this._f; }, set: function(v){ this._f = v; }, configurable: true });"
+    /* THE WEAK COLLECTIONS, AND THEY ARE MINTED HERE RATHER THAN BESIDE THE STATEMENT THAT MUTATES THEM —
+       which is the whole of what makes the four rows they feed a claim about ISOLATION rather than one about
+       reachability. §State-isolation SKIPS a collection the running flow created (cow.c's flow-private test,
+       `JS_ObjFlowGen(obj) > d->fork_gen`), so a `new WeakMap()` written one line above its own `if` is
+       captured only where THAT `if` is the fork that splits the flow — and where an earlier branch has
+       already split it, each arm mints its OWN map, both worlds appear for a reason that has nothing to do
+       with the delta, and the row reads 1 with the capture deleted. This <script> is the FIRST in the
+       document to name `state`, so nothing above it can have forked and these are BASELINE by construction:
+       whichever `cfg.admin` does the forking, the two arms SHARE these objects and a leak is observable under
+       either reading of where the fork happens. That is the one property no statement placed beside its own
+       branch can promise, and it is why these four lines are up here and not down there.
+       IT IS ALSO THE SHAPE THE CAPTURE WAS BUILT FOR, AND THAT LINK IS A HYPOTHESIS AND NOT A MEASUREMENT.
+       core-js's internal-state module does `new WeakMap` while the polyfill chunk runs — which is boot, and a
+       boot creation is baseline — then keys it by the object being initialized and throws on a key it did not
+       set. Whether that is what a real bundle's "Object already initialized" throw IS has not been measured
+       here; what is measured here is the isolation, which is the half a fixture can state.
+       THE BASELINE VALUES ARE WHAT THE OVERWRITE AND DELETE ARMS ARE MUTATIONS *OF*. An ADD has no BEFORE, so
+       wmAddA/wmAddP start absent; the overwrite and delete keys must already hold a record or their arms
+       would be ADDs wearing another name, and the three kinds would collapse into one. */
+    "var wmIso = new WeakMap(); var wmAddA = {}, wmAddP = {}, wmOv1 = {}, wmOv2 = {}, wmDel1 = {}, wmDel2 = {};"
+    "wmIso.set(wmOv1, 'wo1B'); wmIso.set(wmOv2, 'wo2B'); wmIso.set(wmDel1, 'wdB'); wmIso.set(wmDel2, 'wdB');"
+    "var wsIso = new WeakSet(); var wsAddA = {}, wsAddP = {}, wsDelA = {}, wsDelP = {};"
+    "wsIso.add(wsDelA); wsIso.add(wsDelP);"
+    /* AND THE POSITIVE WITNESS, WHICH IS WHY IT STANDS HERE AND NOT AFTER THE FORK. Every other row of this
+       family is a two-world claim whose 0 is "never reached" OR "a world was lost"; this one is a SINGLE
+       world emitted by the pre-fork flow, so its 1 says the statement RAN with nothing else folded into it.
+       §AND-THE-SAME-HOLE-SWALLOWS-A-PREDICTION is the reason it exists at all: without it every witness this
+       family has is an ABSENCE — a DCHECK that did not fire and a leak walk that found nothing — and those
+       report the same byte for a correct capture and for a path nobody took.
+       THE FIRST CLAUSE IS WHAT MAKES THE OTHER FOUR ABOUT A *WEAK* COLLECTION AT ALL. A strong Map accepts a
+       primitive key, so `set('notanobject', …)` THROWING is the page-visible statement that this object is on
+       JS_IsWeakCollection's side of the branch and that its records are therefore captured through a
+       JSCowWeakRef cell rather than through a dup of the key. A `new WeakMap` that had quietly become a Map
+       would satisfy all four isolation rows below and assert nothing this family exists to assert. The key is
+       a concrete string, so is_valid_weakref_target decides it and nothing forks. */
+    "var wmWeak = 'wmSTRONG'; try { wmIso.set('notanobject', 1); } catch (e) { wmWeak = 'wmWEAK'; }"
+    "fetch('/api/weakreach?v=' + wmWeak + ((wmIso instanceof WeakMap) ? 'MAP' : 'NOMAP')"
+    " + ((wsIso instanceof WeakSet) ? 'SET' : 'NOSET') + (wmIso.get(wmOv1) === 'wo1B' ? 'BASE' : 'NOBASE'));"
     /* HTML §4.12.1.1 "Processing model", the last step of "prepare the script element": "Otherwise, immediately
        execute the script element el, even if other scripts are already executing." This is the FIRST of the
        document's <script>s, so the program it injects belongs at a slot INSIDE the document's own sequence —
@@ -2908,6 +2946,39 @@ static const char *HTML =
     "var _sad = new Set(); if (cfg.admin) { _sad.add('sadA'); } else { _sad.add('sadP'); } fetch('/api/setaddfork?v=' + [...(_sad)][0]);"   /* SHARED-SET record isolation: _sad is created before the concolic fork; each arm's Set.add must be COW-isolated via the map_add capture (record removed by JS_MapDeleteRecord on unapply) -> EXACTLY 'sadA' and 'sadP', never a contaminated set holding both */
     "function* sef(){ if (cfg.admin) { yield 'seA'; } else { yield 'seP'; } } fetch('/api/setfork?v=' + [...new Set(sef())][0]);"   /* new Set(GEN) consumer fork: the Set consumer (CONT_ITER_CONSUME, SET sink) forks mid-consume; now fork-SAFE via the map_add COW capture -> both seA and seP */
     "var _mm = new Map([['k','base']]); if (cfg.admin) { _mm.set('k','mmA'); } else { _mm.delete('k'); } fetch('/api/mapmutfork?v=' + (_mm.has('k') ? _mm.get('k') : 'gone'));"   /* SHARED-MAP overwrite/delete isolation: _mm is created before the fork; one arm OVERWRITES 'k', the other DELETES it. The map_mutate undo-log capture (unapply restores the old value / re-adds) keeps them per-flow -> EXACTLY 'mmA' and 'gone', never cross-contaminated */
+    /* THE SAME THREE MUTATIONS OVER A *WEAK* COLLECTION — the siblings of the three rows above, over records
+       captured through a JSCowWeakRef cell instead of through a dup of the key. The collections are BASELINE
+       and are minted in the document's FIRST <script>; see the paragraph there for why they may not be minted
+       on this line. ONE BRANCH FEEDS ALL FOUR ROWS, deliberately: a fresh `state.*` source per row would be
+       four more forks over every world this document already carries, and the rows do not need four — they
+       need ONE pair of siblings sharing the baseline collections, which is what this gives them.
+       EACH ARM MUTATES ITS OWN KEY AND READS *BOTH*, AND THAT IS WHAT MAKES THESE ROWS ORDER-INDEPENDENT. An
+       arm that writes a key and reads back only THAT key reads its own write whether or not the write was
+       captured — so a leak is invisible and the row measures reachability, which is `mapmutfork`'s shape one
+       collection kind over. Reading the SIBLING's key instead means whichever arm runs SECOND sees the first
+       arm's mutation the instant the capture is missing, for EITHER ordering, and its world is then lost:
+       `wa11` for the add, `wo1A-wo2P` for the overwrite, `wd00` for the delete, `ws1100` for the WeakSet.
+       Each of those four is a value NEITHER world names, so the row cannot pass on the leak by either route.
+       THOSE FOUR ARE MEASURED AND NOT ASSERTED, and the derivation is the statement itself: lift these string
+       literals out, run the `if`/`else` bodies and the four fetches TWICE over ONE set of collections with no
+       unapply between them — which is exactly what a missing capture leaves — and read what the SECOND call
+       emits. It answers the same four values whichever arm goes first, and running each arm alone over its
+       own collections answers the eight worlds the rows below name. Re-derive it rather than trusting this
+       sentence; it needs no build, because ECMAScript §24.3 "WeakMap Objects" and §24.4 "WeakSet Objects"
+       are the whole of the semantics involved.
+       THE WEAKSET IS NOT A SECOND SPELLING OF THE WEAKMAP ROWS. It is a different class id reaching the same
+       two hooks, so it is the one statement here that asks JS_IsWeakCollection about JS_CLASS_WEAKSET — and a
+       class list that omitted it would send a WeakSet record down the STRONG arm, which dups the key and pins
+       every object the set has ever held for the life of the session. */
+    "if (cfg.admin) { wmIso.set(wmAddA, 1); wmIso.set(wmOv1, 'wo1A'); wmIso.delete(wmDel1);"
+    " wsIso.add(wsAddA); wsIso.delete(wsDelA); }"
+    " else { wmIso.set(wmAddP, 1); wmIso.set(wmOv2, 'wo2P'); wmIso.delete(wmDel2);"
+    " wsIso.add(wsAddP); wsIso.delete(wsDelP); }"
+    "fetch('/api/weakadd?v=wa' + (wmIso.has(wmAddA) ? '1' : '0') + (wmIso.has(wmAddP) ? '1' : '0'));"
+    "fetch('/api/weakover?v=' + wmIso.get(wmOv1) + '-' + wmIso.get(wmOv2));"
+    "fetch('/api/weakdel?v=wd' + (wmIso.has(wmDel1) ? '1' : '0') + (wmIso.has(wmDel2) ? '1' : '0'));"
+    "fetch('/api/weakset?v=ws' + (wsIso.has(wsAddA) ? '1' : '0') + (wsIso.has(wsAddP) ? '1' : '0')"
+    " + (wsIso.has(wsDelA) ? '1' : '0') + (wsIso.has(wsDelP) ? '1' : '0'));"
     "(async function(){ function* afsf(){ if (cfg.admin) { yield 'afsA'; } else { yield 'afsP'; } } var out=[]; for await (var x of afsf()) { out.push(x); } fetch('/api/afsfork?v=' + out[0]); })();"   /* for-await(GEN) consumer fork: the sync gen body branches while driven by the async-from-sync consumer (CONT_ASYNC_FROM_SYNC) on the tramp — clone_deep_flow clones the JSAsyncFromSync state with a FRESH wrapper promise per arm -> both afsA and afsP */
     "function* paf(){ if (cfg.admin) { yield Promise.resolve('pafA'); } else { yield Promise.resolve('pafP'); } } Promise.all(paf()).then(function(a){ fetch('/api/paffork?v=' + a[0]); });"   /* Promise.all(GEN) consumer fork at index==0: the gen branches during the FIRST .next() before any element .then is attached (CONT_PROMISE_ALL) — clone_deep_flow clones the JSPromiseAll aggregate fresh per arm -> both pafA and pafP */
     "function* paf2(){ yield Promise.resolve('p0'); if (cfg.admin) { yield Promise.resolve('pf2A'); } else { yield Promise.resolve('pf2P'); } } Promise.all(paf2()).then(function(a){ fetch('/api/paf2fork?v=' + a[0] + '-' + a[1]); });"   /* Promise.all(GEN) consumer fork at index>0: the gen yields element 0 THEN branches (fork during .next() #2, index==1). The retained pre-fork element wrapper (p0) is RE-ATTACHED to the sibling aggregate -> BOTH arms resolve a[0]=='p0' AND their own a[1] (p0-pf2A and p0-pf2P) */
@@ -10897,6 +10968,79 @@ static int probes_eval(const char *js, Probe *out, int cap) {
     fold_row(&mapmutfork_tt, &mapmutfork_why, param_value_is(js, "/api/mapmutfork", "v", "gone"),
              "the else arm deleted the pre-fork key and still found one — the delete's undo-log entry re-added "
              "the baseline value into the deleting arm's own delta, or the arms shared one Map");
+    /* WEAK-COLLECTION ISOLATION — the claims the three rows above make for a STRONG Map and Set, made over a
+       WeakMap and a WeakSet, whose records are captured through a JSCowWeakRef cell (a BORROWED key and up to
+       two owned values) instead of through a dup of the key. The statement and its baseline collections are
+       in the document; the two paragraphs there carry why the collections are minted in the first <script>
+       and why each arm reads its SIBLING's key.
+       `weak-reach` STANDS FIRST FOR `td-reach`'s REASON, and it is the only row of the five that is not an
+       absence. The other four are two-world claims, and a two-world claim at 0 is "never reached" OR "a world
+       was lost" — which is exactly the pair §AND-THE-SAME-HOLE-SWALLOWS-A-PREDICTION says a run that never
+       entered the code satisfies for free. FORK_ROW separates those two at the row, and this one separates
+       them for the FAMILY: it is emitted by the PRE-FORK flow, so its 1 is a positive statement that the
+       baseline ran, and a family reading 0 across all five is a statement about the schedule and not about
+       the capture. */
+    const char *weakreach_why = NULL; int weakreach_tt = 1;
+    fold_row(&weakreach_tt, &weakreach_why, !!strstr(js, "\"/api/weakreach\""),
+             "NOT REACHED: there is no /api/weakreach record at all, so the <script> that mints the baseline "
+             "weak collections did not run as far as its own fetch. The four rows below are then reporting on "
+             "the SCHEDULE and none of them is evidence about the weak-record capture either way");
+    fold_row(&weakreach_tt, &weakreach_why,
+             param_value_is(js, "/api/weakreach", "v", "wmWEAKMAPSETBASE"),
+             "the baseline <script> RAN and did not answer `wmWEAKMAPSETBASE`. A leading `wmSTRONG` is the "
+             "one that matters most: it says the collection ACCEPTED a string key, so it is not weak, "
+             "JS_IsWeakCollection answers 0 for it, and the four rows below are asserting the STRONG capture "
+             "under weak names. `NOMAP`/`NOSET` is the intrinsic itself missing. `NOBASE` is the overwrite "
+             "and delete baseline never written, which makes those two arms ADDs wearing another name and "
+             "collapses the three mutation kinds into one");
+    /* ADD — cow_capture_map_add's weak arm, whose cell has no BEFORE (its inverse deletes and needs no
+       value). A leak makes whichever arm runs second read `wa11`, which is neither world. */
+    const char *weakadd_why = NULL; int weakadd_tt = 1;
+    FORK_ROW(js, &weakadd_tt, &weakadd_why, "/api/weakadd", "v",
+             "cow_capture_map_add's weak arm, which is what keeps one arm's NEW WeakMap record out of the "
+             "sibling that never set it",
+             "wa10", "wa01");
+    /* OVERWRITE — the one mutation whose cell holds BOTH values, because an overwrite has a before and an
+       after and each is a value the page associated with that key. A leak reads `wo1A-wo2P`. */
+    const char *weakover_why = NULL; int weakover_tt = 1;
+    FORK_ROW(js, &weakover_tt, &weakover_why, "/api/weakover", "v",
+             "cow_capture_map_mutate's weak OVERWRITE arm, whose cell carries the before AND the after so a "
+             "sibling reads the baseline value under the arm that replaced it",
+             "wo1A-wo2B", "wo1B-wo2P");
+    /* DELETE — the arm that must carry JS_MAP_POS_TAIL and no position, a weak collection not being iterable;
+       JS_MapAddRecord asserts a weak restore never arrives carrying anything else. A leak reads `wd00`. */
+    const char *weakdel_why = NULL; int weakdel_tt = 1;
+    FORK_ROW(js, &weakdel_tt, &weakdel_why, "/api/weakdel", "v",
+             "cow_capture_map_mutate's weak DELETE arm, which is what leaves the sibling still finding the "
+             "record this arm removed",
+             "wd01", "wd10");
+    /* THE WEAKSET, WHICH IS THE CLASS ID AND NOT A SECOND SPELLING — the one row that asks
+       JS_IsWeakCollection about JS_CLASS_WEAKSET, over an add and a delete in each arm. */
+    const char *weakset_why = NULL; int weakset_tt = 1;
+    FORK_ROW(js, &weakset_tt, &weakset_why, "/api/weakset", "v",
+             "JS_IsWeakCollection answering for JS_CLASS_WEAKSET, without which a WeakSet record takes the "
+             "STRONG arm and its key is dup'd — pinned for the session rather than isolated",
+             "ws1001", "ws0110");
+    /* NAMED RESIDUAL — THE COLLECTED-KEY ARM.
+       WHAT IS NOT COVERED: every key these five rows use is a `var` of the baseline <script> and stays
+       strongly reachable for the whole run, so cow_map_live is TRUE at every apply and every unapply they
+       produce. The arm where it is FALSE — a weak key collected between the capture and the swap, which makes
+       both the apply and the unapply a no-op, exactly and not lossily, because an unreachable key cannot be
+       looked up — is reached by nothing in this fixture. The code is RIGHT for what it does and NARROWER than
+       the mechanism: a WeakMap entry exists to die with its key, and no entry these rows make ever does.
+       WHAT THE NEXT DIFF BUILDS: a runner-own `gc` on THIS fixture's realm, installed beside `hostRead` and
+       wrapping JS_RunGC the way wpt_runner.c installs its own `gc` for the WPT realm. That function is static
+       to its own file, so this is a SECOND one and not a call to it. It is a residual rather than a TODO
+       because the cost is a design question and not typing: the realm it would go on is the one the SOLVER
+       drives, so the name joins the surface a forced flow explores — and wpt_runner.c's own reason for
+       keeping it off the browser (a page-visible collector is fingerprintable and this engine does not ship
+       one) is a thing to weigh rather than to quote past.
+       HOW ITS ABSENCE WOULD SHOW: it is observable AT THESE ROWS — the four two-world rows answer identically
+       under a correct collected-key arm and under one that never runs, so a 1 from any of them is not
+       evidence about it. The only other instruments that have ever looked at a collected weak key are
+       JS_FreeCowWeakRef's neutralised-cell DCHECK and JS_FreeRuntime's gc_obj_list walk, and both run at
+       TEARDOWN and both report by staying silent, which is the shape this family was added to stop being the
+       whole of the evidence. */
     /* for-await(GEN) consumer fork: the sync gen body branches while driven by the async-from-sync consumer
        (CONT_ASYNC_FROM_SYNC) ⇒ clone_deep_flow cloned the JSAsyncFromSync state with a fresh wrapper promise
        per arm, so each for-await arm delivered its OWN value. */
@@ -13584,6 +13728,16 @@ static int probes_eval(const char *js, Probe *out, int cap) {
         { "setaddfork", setaddfork_tt, "/api/setaddfork", SESS_EXPLORE, setaddfork_why },
         { "setfork", setfork_tt, "/api/setfork", SESS_EXPLORE, setfork_why },
         { "mapmutfork", mapmutfork_tt, "/api/mapmutfork", SESS_EXPLORE, mapmutfork_why },
+        /* THE WEAK SIBLINGS OF THE THREE ROWS ABOVE — one family, so `smokerows`' prefix-before-the-hyphen
+           groups them and a reader sees the five together rather than four claims and a stray. `weak-reach`
+           is FIRST and is the only one that is a positive statement: the other four are two-world claims and
+           cannot tell their own 0 from the family never having run, which is the whole reason this one is
+           emitted by the pre-fork flow. See their computation for the residual on the collected-key arm. */
+        { "weak-reach", weakreach_tt, "/api/weakreach", SESS_EXPLORE, weakreach_why },
+        { "weak-add", weakadd_tt, "/api/weakadd", SESS_EXPLORE, weakadd_why },
+        { "weak-over", weakover_tt, "/api/weakover", SESS_EXPLORE, weakover_why },
+        { "weak-del", weakdel_tt, "/api/weakdel", SESS_EXPLORE, weakdel_why },
+        { "weak-set", weakset_tt, "/api/weakset", SESS_EXPLORE, weakset_why },
         { "afsfork", afsfork_tt, "/api/afsfork", SESS_EXPLORE, afsfork_why },
         { "paffork", paffork_tt, "/api/paffork?", SESS_EXPLORE, paffork_why },
         { "paf2fork", paf2fork_tt, "/api/paf2fork", SESS_EXPLORE, paf2fork_why },
