@@ -85,8 +85,9 @@
 // transform applied to what crosses.
 // urlList is Fetch §2.2.6's RESPONSE URL LIST, and this is the ONLY zone that can
 // report it: the redirect chain exists here and nowhere else. §5.5 defines
-// `response.url` as its LAST item and `response.redirected` as "its size is greater
-// than 1", so an engine that never receives it cannot compute either — which is why
+// `response.url` as its LAST item and says "The redirected getter steps are to
+// return true if this's response's URL list's size is greater than 1; otherwise
+// false", so an engine that never receives it cannot compute either — which is why
 // `redirected` was the literal false. The spec also says "Except for the first and
 // last URL, if any, a response's URL list is not directly exposed to script as that
 // would violate atomic HTTP redirect handling", and first + last is exactly what a
@@ -329,7 +330,7 @@ function _computedType(declared, nosniff, sniff) {
 // `xslt` IS DELIBERATELY NOT IN IT, and the spec's own note is why rather than an
 // oversight: it says algorithms using script-like "should also consider `xslt` as that
 // too can cause script execution", and considering it here yields exclusion — the rule
-// below is "the body must be JAVASCRIPT-TYPED or same-origin", and an XSLT stylesheet
+// below is `the body must be JAVASCRIPT-TYPED or same-origin`, and an XSLT stylesheet
 // is XML, so requiring a JS MIME of one would refuse every correct response. The day
 // this engine loads an XSLT stylesheet it needs its own rule, not this one.
 function _isScriptLike(d) {
@@ -372,8 +373,8 @@ var _DESTINATION_TYPES = ["", "audio", "audioworklet", "document", "embed", "fon
 // states the destination at each park and the engine is attacker-controlled
 // (SECURITY.md §The QuickJS/WASM sandbox); its own join and splitter assert §2.2.5's
 // enumeration with DCHECKs, which are compiled out on the far side of a mojo boundary
-// in the zone this one does not trust. So "the producer refuses to emit a value outside
-// the enumeration" is not a check this zone holds. `bridge.js` already CHECKs the
+// in the zone this one does not trust. So `the producer refuses to emit a value outside
+// the enumeration` is not a check this zone holds. `bridge.js` already CHECKs the
 // INITIATOR and the PROVENANCE of that same line — the two fields nothing decides an
 // ingestion from — and the field the ingestion IS decided from was the one taken on the
 // producer's word. Refusing here closes it for BOTH hosts at once, which is the reason
