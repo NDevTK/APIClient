@@ -398,10 +398,26 @@ ReplacedElement replaced_element_of(lxb_dom_element_t *el)
        height of 150 — and css-images-3 §4.1's DEGENERATE rule then leaves it with no ratio, which `rep_sized`
        derives rather than this arm restating.
        NAMED RESIDUAL — a canvas whose context mode is NOT none is not covered, and this arm is RIGHT rather
-       than unfinished for every canvas this build can produce. THE NEXT DIFF BUILDS §4.12.5's `getContext` and
-       the context-mode state machine in a core/html component of its own, after which the bitmap's dimensions
-       are the context's output bitmap's and this read moves behind them. ITS ABSENCE WOULD SHOW as
-       `canvas.getContext("2d")` throwing a TypeError, which is the honest report of a member that is absent. */
+       than unfinished for every canvas this build can produce. THE NEXT DIFF IS ONE LANDING AND IS NOT
+       `getContext` ALONE, WHICH THIS CLAUSE USED TO SAY AND WHICH §4.12.5's OWN TABLE REFUTES: the rows for
+       the other context ids are CONDITIONAL — "if the user agent supports the WebGL feature in its current
+       configuration", and the same sentence for WebGPU — so an unsupported one falls to the table's
+       unsupported-value row and returns null, and the `"2d"` row carries NO such condition. A conformant
+       `getContext("2d")` on a context-mode-none canvas therefore has no null arm to take: it must run the 2D
+       context creation algorithm, whose step 2 is "Let context be a new CanvasRenderingContext2D object".
+       core/rendering/rendering.c's `realm_awaits` fires on the Web IDL §3.8 property reference for that NAME,
+       so HTML §8.1.7.3 "Processing model"'s update-the-rendering STEP 13 lands with the interface or that
+       probe is a liar — the rule core/fullscreen/fullscreen.h states for step 12 in the same words. Step 13's
+       own condition is that the user agent DETECTS lost backing storage, which this agent never does, so it
+       and `isContextLost()` are answerable here rather than blocked.
+       AND THIS READ DOES NOT MOVE WHEN THAT LANDS, WHICH THE CLAUSE ALSO GOT WRONG. §4.12.5's set bitmap
+       dimensions writes canvas's `width` and `height` content attributes back to match the bitmap, and the
+       creation algorithm sets those dimensions FROM the same two attributes — so under context mode 2d the
+       two are kept equal and `rep_canvas_dimension` stays the natural dimension. What moves this read is
+       `placeholder`: `transferControlToOffscreen` hands the canvas an OffscreenCanvas's bitmap, and setting
+       either attribute then throws an "InvalidStateError" DOMException instead.
+       ITS ABSENCE WOULD SHOW as `canvas.getContext("2d")` throwing a TypeError, which is the honest report of
+       a member that is absent. */
     if (lxb_html_tree_node_is(n, LXB_TAG_CANVAS)) {
         if (rep_scripting_realm(n) == NULL) return rep_not();
         return rep_sized(rep_canvas_dimension(el, "width", 300), rep_canvas_dimension(el, "height", 150));
