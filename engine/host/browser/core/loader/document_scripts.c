@@ -85,11 +85,11 @@ static bool scr_has_attr(lxb_dom_element_t *el, const char *name, size_t len) {
     return lxb_dom_element_has_attribute(el, (const lxb_char_t *)name, len);
 }
 
-/* §4.12.1.1's LAST STEPS — see ScriptSchedule. The branches are the standard's, in the standard's order; the one
+/* HTML §4.12.1.1's LAST STEPS — see ScriptSchedule. The branches are the standard's, in the standard's order; the one
    thing worth naming is WHICH question the first `if` is: the tail splits on whether the element's result is
-   still "uninitialized", which is the same set as "an external classic script, or any module script" — the two
-   the algorithm hands to a fetch. Everything else has already been marked as ready, so it reaches
-   "immediately execute the script element". */
+   still "uninitialized", which is the set step 35 names — "If el's type is `classic` and el has a src
+   attribute, or el's type is `module`" — the two the algorithm hands to a fetch. Everything else has
+   already been marked as ready, so it reaches "immediately execute the script element". */
 ScriptSchedule script_block_schedule(lxb_dom_element_t *el, ScriptType ty, bool parser_inserted,
                                      bool force_async) {
     bool external = scr_has_attr(el, "src", 3);   /* the ATTRIBUTE, not a non-empty value */
