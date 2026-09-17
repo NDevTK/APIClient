@@ -64,11 +64,30 @@
  * (1) the engine's serializable seam — a wire tag beside BC_TAG_TRANSFER_REFERENCE carrying HTML §2.7.3
  * StructuredSerializeInternal step 19's "the identifier of the primary interface of value" and then ONE
  * sub-value emitted by the SAME writer under the SAME `memory`, which is what makes it a sub-serialization
- * and not a second encoding; a host hook pair beside JSTransferWriteHook; and a reader frame that RESERVES its
- * object-reference slot before that sub-value is read and patches it after, which is the order BCR_TA already
- * uses and the only one under which the writer's numbering and the reader's agree. (2) a registry in
- * core/structured_clone.c keyed by that IDENTIFIER and never by a row index, because these bytes outlive the
- * turn. (3) §13.5's ten steps here, as that registry's row.
+ * and not a second encoding; a host hook pair beside JSTransferWriteHook; and a reader that CREATES its
+ * instance, registers it, and only then reads that sub-value. (2) a registry in core/structured_clone.c keyed
+ * by that IDENTIFIER and never by a row index, because these bytes outlive the turn. (3) §13.5's ten steps
+ * here, as that registry's row. core/structured_clone.h holds the derivation of all three from §2.7.3 and
+ * §2.7.6; what follows is only what is specific to THIS interface.
+ *
+ * AND (1) USED TO END `a reader frame that RESERVES its object-reference slot before that sub-value is read
+ * and patches it after, which is the order BCR_TA already uses and the only one under which the writer's
+ * numbering and the reader's agree` — WHICH IS THE WRONG IDIOM, recorded rather than quietly swapped because
+ * it is the one a reader re-derives from the nearest thing in the engine that looks like it. §2.7.6 step 22
+ * CREATES the instance, step 23 sets memory[serialized] to it, and step 24 performs the deserialization steps
+ * — so the object is registered BEFORE any sub-value is read, and §2.7.1 says the steps receive "a
+ * newly-created instance of the platform object type in question, with none of its internal data set up".
+ * BC_TAG_TYPED_ARRAY reserves-and-patches because a typed array cannot exist before its buffer; a
+ * serializable can, and a row is therefore TWO operations, create and fill, rather than one. The clause was
+ * right that the two halves must agree about the numbering and wrong about which order achieves it.
+ *
+ * AND `ONE sub-value` IS THIS ENGINE'S CHOICE AND NOT §13.5's COUNT. §13.5 performs TWO sub-serializations —
+ * step 3's [[algorithm]] and step 4's [[usages]] — beside three plain field copies, so a row that hands the
+ * writer ONE value is handing it a HOLDER that carries all five and lets the walk reach the two nested ones
+ * under the same `memory`. That is a sound design and it is a design; a residual that reads it as a spec fact
+ * would send its next reader to look for a one-sub-value sentence that is not there. What makes it cheap here
+ * is that all five slots are already JS values in the record below — [[handle]] is the ArrayBuffer the mint
+ * was given — so the holder needs no encoding this file does not already hold.
  *
  * AND §13.5 CARRIES FIVE OF §13.3's SEVEN SLOTS, NOT SEVEN. Its serialization steps set [[Type]],
  * [[Extractable]], [[Algorithm]], [[Usages]] and [[Handle]], and its deserialization steps mirror them — five
@@ -80,8 +99,23 @@
  *
  * HOW ITS ABSENCE SHOWS is a `structuredClone(key)` or a `postMessage(key)` throwing a DataCloneError where a
  * browser hands back an equal key, and any page that round-trips a key through an IndexedDB store, which is
- * §5.2 Key Storage's own stated use of this interface. RETIREMENT: this record goes when a registry of
- * serializable interfaces exists and this interface is a row in it.
+ * §5.2 Key Storage's own stated use of this interface.
+ *
+ * AND NOTHING IN THIS TREE CAN SCORE THAT YET, WHICH DECIDES THE ORDER AND WAS NOT PART OF THE CLAUSE ABOVE.
+ * The corpus's oracle for it is WebCryptoAPI/serialization/ — nineteen documents, collected (WebCryptoAPI is
+ * an entry of engine/wpt.mjs's own path list), every one of them a thin vector list over the single META
+ * script serialization.js, which calls crypto.subtle.generateKey and then crypto.subtle.exportKey to compare
+ * the round trip. NEITHER IS INSTALLED: core/crypto/subtle_crypto.c installs digest, sign, verify and
+ * importKey and nothing else, and `git grep -c '"generateKey"' -- '*.c' '*.h'` answers nothing at all against
+ * two for "importKey". So all nineteen fail at their first await, before structuredClone is reached, and the
+ * seam above would move their verdict by ZERO — its absence of a crash would not be a correct value.
+ * SO THE ORDER IS §14.3.6's generateKey, THEN §14.3.10's exportKey, THEN the seam, and the first two are the
+ * larger landing rather than the detour: 60 of this standard's documents name generateKey, against the
+ * nineteen that need the seam and are already blocked twice over. What can score the seam WITHOUT them is a
+ * key made by the importKey that does exist and used by the sign that does exist — import a raw HMAC key,
+ * clone it, sign with both and compare — and no collected document does that, so building one is a diff of
+ * its own and is named here rather than assumed. RETIREMENT: this record goes when a registry of serializable
+ * interfaces exists and this interface is a row in it.
  *
  * §13.2's TWO ENUMS ARE C ENUMS AND THE USAGES ONE IS A BITMASK, which is not a compression of §13.3's
  * "Sequence<KeyUsage>" but a faithful model of it: §9 Terminology defines the "usage intersection" of two

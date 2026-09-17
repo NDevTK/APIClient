@@ -76036,6 +76036,25 @@ static int bcw_step_value(BCWriterState *s, JSValueConst obj)
     case JS_TAG_SYMBOL:
         {
             JSAtomStruct *p = JS_VALUE_GET_PTR(obj);
+            /* HTML §2.7.3 "StructuredSerializeInternal ( value, forStorage [ , memory ] )" step 5, "If value is
+               a Symbol, then throw a \"DataCloneError\" DOMException" — asked HERE because step 5 is a step of
+               the RECURSIVE algorithm, which step 26 re-enters for every nested value. It was asked once, at
+               the top level, by the caller in core/structured_clone.c, whose own comment gave the reason as
+               "the engine's writer has no arm that refuses one"; the arm BELOW is that arm and it ACCEPTED one,
+               so `structuredClone({s: Symbol()})` came back with an `s` where a browser throws. A top-level
+               guard cannot be the answer to a step of a recursive algorithm, and that file HAS no per-value arm
+               to move it into — its only per-value decision is the transfer map's index_of — which is the same
+               gap HTML §2.7.1 "Serializable objects" needs closed and core/structured_clone.h now records.
+               THE DISCRIMINATOR IS THE BYTECODE FLAG AND IT IS NOT INCIDENTAL. §2.7.1 requires a serialized
+               form "independent of any given realm", and a symbol has none: the tag below writes an ATOM, and
+               the reader mints a symbol out of the reading runtime's atom table — a NEW symbol with the same
+               description, which is not the value that went in. That is meaningful only where the producer and
+               the consumer are the one trusted pair the bytecode format is for, which is what JS_READ_OBJ_BYTECODE's
+               own warning already says. So the arm stays for a bytecode write and is refused for every other. */
+            if (!s->allow_bytecode) {
+                JS_ThrowTypeError(s->ctx, "a Symbol has no realm-independent serialization");
+                goto fail;
+            }
             if (p->atom_type != JS_ATOM_TYPE_GLOBAL_SYMBOL && p->atom_type != JS_ATOM_TYPE_SYMBOL) {
                 JS_ThrowTypeError(s->ctx, "unsupported symbol type");
                 goto fail;
@@ -77516,6 +77535,16 @@ static JSValue bcr_read_one(BCReaderState *s)
     case BC_TAG_SYMBOL:
         {
             JSAtom atom;
+            /* THE WRITER'S REFUSAL, ASSERTED FROM THE OTHER SIDE. The arm above no longer emits this tag on a
+               non-bytecode write, so a stream that carries one did not come from this engine's serializer —
+               and core/structured_clone.c's bytes are read back from a LATER turn and, for a routed message,
+               from ANOTHER INSTANCE, which SECURITY.md grades as attacker-controlled. A reader that accepts
+               what no writer produces is a hole, so the two sides are made to agree by construction rather
+               than by the writer being the only producer anybody happens to have. This is a REFUSAL and not a
+               DCHECK: the bytes crossed a boundary, so they are input. */
+            if (!s->allow_bytecode)
+                return JS_ThrowSyntaxError(ctx, "a Symbol is named by a stream that no non-bytecode write "
+                                                "produces");
             if (bc_get_atom(s, &atom))
                 return JS_EXCEPTION;
             if (__JS_AtomIsConst(atom)) {

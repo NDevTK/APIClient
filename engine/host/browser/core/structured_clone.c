@@ -156,14 +156,20 @@ static int sc_serialize(JSContext *ctx, JSValueConst v, StructuredData *out, SCW
     hook.opaque = memory;
     out->buf = NULL;
     out->len = 0;
-    /* §2.7.1 STEP 1: a Symbol is a "DataCloneError" DOMException, and it is checked HERE because the engine's
-       writer has no arm that refuses one — it encodes the symbol and the clone silently succeeded, which is a
-       value the standard says cannot cross a port. A primitive the writer handles correctly needs no such
-       check; this is the one it does not. */
-    if (JS_IsSymbol(v)) {
-        JS_ThrowDOMException(ctx, "DataCloneError", "a Symbol cannot be cloned");
-        return -1;
-    }
+    /* THE SYMBOL CHECK THAT STOOD HERE IS GONE, AND THE REASON IT GAVE WAS FALSE — recorded rather than
+       silently dropped, because a reader who re-derives it will re-add it. It read "a Symbol is a
+       DataCloneError, and it is checked HERE because the engine's writer has no arm that refuses one — it
+       encodes the symbol and the clone silently succeeded". The first half of that was exactly right about
+       the WRITER and wrong about the REMEDY: §2.7.3 step 5 is a step of a RECURSIVE algorithm, which step 26
+       re-enters for every nested value, so a guard on the top-level value answers it for `structuredClone(sym)`
+       and for nothing else — `structuredClone({s: Symbol()})` reached the writer, took its BC_TAG_SYMBOL arm
+       and came back with an `s` a browser refuses. The arm now refuses a Symbol on every write that is not a
+       bytecode write, at every depth, so this check could no longer fire and a second answer to one question
+       is the shape that drifts. What a top-level Symbol gets instead is the SAME "DataCloneError" with the
+       generic message below; a page catches this by `.name`, which is what §2.7 and every test of it assert.
+       THE METHOD IS THE FINDING AND IT IS THE SAME ONE §2.7.1's absence has: this file has NO PER-VALUE ARM.
+       Its only per-value decision is the transfer map's index_of, so every §2.7.3 step that is not about the
+       whole value has to be asked in the writer, and a check written here is a check asked once. */
     /* §2.7.1 StructuredSerialize, then §2.7.2 StructuredDeserialize into THIS realm — which is the whole of
        §2.7.3's structuredClone(), and the whole of what a same-agent port delivery needs.
        JS_WRITE_OBJ_REFERENCE is `memory`: a value reached twice comes back as the SAME object on the other
@@ -171,9 +177,16 @@ static int sc_serialize(JSContext *ctx, JSValueConst v, StructuredData *out, SCW
     out->buf = JS_WriteObject3(ctx, &out->len, v, JS_WRITE_OBJ_REFERENCE, NULL, &hook);
     if (!out->buf) {
         /* THE ENGINE'S REFUSAL IS THE STANDARD'S, RE-REPORTED. The writer throws its own error for a value it
-           cannot encode — a function, a Proxy, a Promise — and every one of those is a value §2.7 refuses with
-           a "DataCloneError" DOMException. A page catches this by `.name`, so reporting the writer's own
-           TypeError instead would be caught by nothing the standard describes. */
+           cannot encode — a function (§2.7.3 step 21), a Proxy (step 23), a Promise (step 22), a Symbol
+           (step 5) and a platform object with no serialization steps (step 20) — and every one of those is a
+           value §2.7 refuses with a "DataCloneError" DOMException. A page catches this by `.name`, so
+           reporting the writer's own TypeError instead would be caught by nothing the standard describes.
+           WHAT THE SUBSTITUTION COSTS IS THE WRITER'S OWN SENTENCE, which named WHICH of those it was, and it
+           is not recoverable from here by reading the exception: `message` is reached through Error.prototype,
+           so a page that puts an accessor there would run its code from an activation with no flow base under
+           it. Naming the refused value therefore needs a channel that is not a property read — which is the
+           same host seam §2.7.1 needs below, since both are the writer telling this file something about ONE
+           value rather than about the whole graph. */
         JS_FreeValue(ctx, JS_GetException(ctx));
         JS_ThrowDOMException(ctx, "DataCloneError", "the value could not be cloned");
         return -1;
