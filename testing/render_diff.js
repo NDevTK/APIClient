@@ -1,6 +1,13 @@
-// render_diff.js — the RENDER DIFFERENTIAL's first artifact: a per-element USED-GEOMETRY dump that real
-// Chrome and this engine can each produce, and a comparator that joins two of them and says where they
-// disagree.
+// render_diff.js — the RENDER DIFFERENTIAL: a per-element USED-GEOMETRY dump that real Chrome and this engine
+// can each produce, a comparator that joins two of them and says where they disagree, and a renderer that
+// DRAWS them side by side for a human.
+//
+// TWO ARTIFACTS, TWO JOBS, AND NEITHER MAY MASQUERADE AS THE OTHER. The comparison SCORES — its output is a
+// number with a denominator and a list of element keys. The drawing READS — its output is something a person
+// looks at. They are built from the SAME rows and the drawing takes its colours from the comparison's own
+// verdicts, so the picture cannot say something the score does not; what they must never become is one
+// artifact, because a divergence count that is really a picture cannot be checked and a picture that is really
+// a score is believed on sight.
 //
 // WHY A GEOMETRY DUMP AND NOT A PICTURE. The goal is to spot differences, and a difference you cannot NAME is
 // not one anybody can fix: a pixel count localises to a rectangle, and a rectangle localises to nothing. This
@@ -268,6 +275,175 @@ function report(r, labelA, labelB) {
   return lines.join("\n");
 }
 
+/* ── the VIEWABLE artifact ─────────────────────────────────────────────────────────────────────────────────
+ *
+ * A picture is a SECOND JOB, not the same job drawn: the comparison above SCORES and this READS. Saying which
+ * is which is the whole discipline, because an image is the most persuasive thing in the room and a rendered
+ * lie is more convincing than a wrong number — a wrong layout draws a wrong picture that looks entirely
+ * plausible, which is the plausible-datum defect arriving as something a human trusts on sight.
+ *
+ * SO THE PICTURE IS A FUNCTION OF THE ARTIFACT, NEVER A SECOND EMITTER IN THE ENGINE. Drawing from the engine's
+ * own geometry would be a SECOND producer of the same fact, free to drift from the one the comparator scores —
+ * the dual-system rot, with the two copies disagreeing where nobody is looking. Rendering from the artifact
+ * buys three things instead: ONE renderer draws both sides, so the two pictures are comparable by construction
+ * exactly as the one collector makes the two artifacts comparable; the engine's whole obligation stays
+ * "produce the artifact" and the image costs it NO further C; and the picture and the score are derived from
+ * the same rows, so they cannot disagree.
+ *
+ * AND A SCREENSHOT IS NOT THE OTHER HALF OF THIS COMPARISON. A Chrome PNG and a box diagram are two KINDS of
+ * artifact, and comparing them is the mistake this whole file is built to avoid — it would also mislead in the
+ * flattering direction, since the diagram looks clean and the photograph looks real. `shot` exists because a
+ * real capture is worth having and is what a person means by "show me the page", and it is labelled a
+ * REFERENCE: it is never an input to `compare` and there is no code path by which it becomes one.
+ *
+ * ABSENCE IS DRAWN AS ABSENCE, AND THE HAZARD IS THE REVERSE OF THE OBVIOUS ONE. CSSOM VIEW §6 "Extensions to
+ * the Element Interface" makes a zero-area rectangle a real ANSWER, so an empty box here is CORRECT and must
+ * stay visible rather than vanishing into the background — it gets a marker. What must never be drawn at all is
+ * a row whose producer stated it had no value: it has no box, drawing one would invent geometry, and omitting
+ * it silently would read as "nothing is here". Those rows go in a LEDGER under the picture, with their key and
+ * the reason, so the count under the drawing and the count in the score are the same count.
+ * RETIREMENT: this paragraph goes when a renderer cannot be written that drops a row — when every row reaches
+ * the output as a mark or as a ledger line by construction rather than because this says so. */
+
+const PANEL_PAD = 24, LEDGER_LINE = 13, LEDGER_HEAD = 34;
+
+function esc(t) {
+  return String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+                  .replace(/"/g, "&quot;");
+}
+
+/* The verdict a row is DRAWN with comes from `compare`, so the picture cannot say something the score does not.
+   A renderer that classified rows itself would be a second comparator — the same second copy the header above
+   refuses for geometry, one layer up. */
+const VERDICT_STYLE = {
+  agree:      { stroke: "#5b6b7a", width: 0.6, fill: "none",              label: "agrees with the other side" },
+  differ:     { stroke: "#d0021b", width: 1.6, fill: "rgba(208,2,27,.10)", label: "DIFFERS — see the ledger" },
+  unanswered: { stroke: "#f5a623", width: 1.2, fill: "none",              label: "producer stated no value" },
+  only:       { stroke: "#0b6cff", width: 1.2, fill: "rgba(11,108,255,.10)", label: "present on this side only" },
+};
+
+/* ONE PANEL: the rows of one artifact, at that artifact's own viewport, each row carrying a verdict. `verdicts`
+   is a Map from key to a VERDICT_STYLE name; a key the map does not hold is drawn as `agree`, which is the
+   right default ONLY because the sole caller builds the map from `compare`'s five columns, which are asserted
+   to cover the key union. There is no other caller, and a second one would have to satisfy that or the drawing
+   would quietly invent a verdict. */
+function svgPanel(art, verdicts, originX, originY) {
+  const out = [];
+  const W = art.viewport.width, H = art.viewport.height;
+  out.push('<g transform="translate(' + originX + ',' + originY + ')">');
+  /* THE PANEL FRAME AND AN ELEMENT BOX ARE BOTH RECTANGLES, so each says which it is. A reader — or a check —
+     counting element boxes out of this document would otherwise count the frame as one, which is a small
+     number wrong in the direction that makes a drawing look like it holds one more element than it does. */
+  out.push('<rect class="frame" x="0" y="0" width="' + W + '" height="' + H + '" fill="#ffffff" ' +
+           'stroke="#222" stroke-width="1"/>');
+  out.push('<text x="0" y="-8" font-family="monospace" font-size="13" fill="#222">' +
+           esc(art.producer) + "  " + W + "x" + H + "  " + esc(art.url) + '</text>');
+  let drawn = 0, zero = 0, held = 0;
+  for (const r of art.rows) {
+    if (r.fields === null) { held++; continue; }   /* a stated absence has no box; the ledger carries it */
+    const st = VERDICT_STYLE[verdicts.get(r.key) || "agree"];
+    const w = r.fields.width, h = r.fields.height;
+    out.push('<rect class="el" x="' + r.fields.x + '" y="' + r.fields.y + '" width="' + Math.max(w, 0) +
+             '" height="' + Math.max(h, 0) + '" fill="' + st.fill + '" stroke="' + st.stroke +
+             '" stroke-width="' + st.width + '"><title>' + esc(r.key) + "  " + w + "x" + h +
+             " @ " + r.fields.x + "," + r.fields.y + '</title></rect>');
+    drawn++;
+    /* A ZERO-AREA BOX IS AN ANSWER AND MUST NOT VANISH. The empty-list arm of CSSOM VIEW §6 "Extensions to
+       the Element Interface" returns exactly this, so it is CORRECT and a reader has to be able to SEE that
+       the engine said it — a rectangle of no area draws no pixels, which reads identically to an element
+       that was never in the list. */
+    if (w === 0 || h === 0) {
+      zero++;
+      out.push('<circle cx="' + r.fields.x + '" cy="' + r.fields.y + '" r="2.5" fill="none" stroke="' +
+               st.stroke + '" stroke-width="1"><title>' + esc(r.key) + " — zero-area box (a real answer: " +
+               'CSSOM VIEW §6 "Extensions to the Element Interface" returns one for an element ' +
+               'with no fragments)</title></circle>');
+    }
+  }
+  out.push("</g>");
+  return { xml: out.join("\n"), drawn, zero, held };
+}
+
+function svgLedger(lines, originX, originY, width) {
+  const out = ['<g transform="translate(' + originX + ',' + originY + ')">'];
+  let y = 0;
+  for (const l of lines) {
+    out.push('<text x="0" y="' + y + '" font-family="monospace" font-size="11" fill="' + (l.fill || "#222") +
+             '">' + esc(l.text) + "</text>");
+    y += LEDGER_LINE;
+  }
+  out.push("</g>");
+  return { xml: out.join("\n"), height: y, width };
+}
+
+/* ONE ARTIFACT, DRAWN. Every row reaches the output: as a rectangle, or as a ledger line saying why it has no
+   rectangle. The two counts are printed, so a reader can add them up against `elementCount` without trusting
+   the drawing. */
+function svgOne(art) {
+  checkArtifact(art, "the artifact being drawn");
+  const W = art.viewport.width, H = art.viewport.height;
+  const panel = svgPanel(art, new Map(), PANEL_PAD, PANEL_PAD + LEDGER_HEAD);
+  const held = art.rows.filter((r) => r.fields === null);
+  const lines = [
+    { text: "drawn " + panel.drawn + " + stated-absent " + panel.held + " = " + art.elementCount +
+            " elements   (" + panel.zero + " of the drawn are zero-area, which is an ANSWER and is ringed)" },
+  ];
+  for (const r of held.slice(0, 40)) {
+    lines.push({ text: "ABSENT  " + r.key + "  " + r.unanswered, fill: "#f5a623" });
+  }
+  if (held.length > 40) lines.push({ text: "… " + (held.length - 40) + " further stated absences",
+                                     fill: "#f5a623" });
+  const led = svgLedger(lines, PANEL_PAD, PANEL_PAD + LEDGER_HEAD + H + 26, W);
+  const totalH = PANEL_PAD * 2 + LEDGER_HEAD + H + 26 + led.height;
+  return svgDoc(W + PANEL_PAD * 2, totalH, panel.xml + "\n" + led.xml);
+}
+
+/* TWO ARTIFACTS, SIDE BY SIDE, COLOURED BY THE SCORE. This is the artifact a person LOOKS at, and it is the
+   same five columns the report prints — so "how many differ" and "which boxes are red" are one number asked
+   twice. It runs `compare`, which means it also inherits the viewport REFUSAL: two layouts are never drawn as
+   if they were one page seen twice. */
+function svgCompare(A, B, tolerance) {
+  const r = compare(A, B, tolerance);
+  const verdicts = new Map();
+  for (const d of r.differ) verdicts.set(d.key, "differ");
+  for (const u of r.unanswered) verdicts.set(u.key, "unanswered");
+  for (const o of r.onlyA) verdicts.set(o.key, "only");
+  for (const o of r.onlyB) verdicts.set(o.key, "only");
+  const W = A.viewport.width, H = A.viewport.height;
+  const gap = 40;
+  const left = svgPanel(A, verdicts, PANEL_PAD, PANEL_PAD + LEDGER_HEAD);
+  const right = svgPanel(B, verdicts, PANEL_PAD + W + gap, PANEL_PAD + LEDGER_HEAD);
+  const lines = [
+    { text: "compared " + (r.agree.length + r.differ.length) + "/" + r.keys +
+            " elements present in either side   viewport " + W + "x" + H + "   tolerance " + r.tolerance + "px" },
+    { text: "agree " + r.agree.length + "   differ " + r.differ.length + "   unanswered " +
+            r.unanswered.length + "   only-in-left " + r.onlyA.length + "   only-in-right " + r.onlyB.length },
+    { text: "" },
+  ];
+  for (const d of r.differ.slice(0, 30)) {
+    lines.push({ text: "DIFFER  " + d.key + "  " +
+                       d.fields.map((f) => f.field + " " + f.a + "→" + f.b + " (" +
+                                    (f.delta > 0 ? "+" : "") + f.delta + ")").join("  "), fill: "#d0021b" });
+  }
+  if (r.differ.length > 30) lines.push({ text: "… " + (r.differ.length - 30) + " further differing elements",
+                                         fill: "#d0021b" });
+  for (const u of r.unanswered.slice(0, 15)) {
+    lines.push({ text: "ABSENT  " + u.key + "  left=" + u.a + "  right=" + u.b, fill: "#f5a623" });
+  }
+  for (const o of r.onlyA.slice(0, 15)) lines.push({ text: "ONLY-LEFT   " + o.key, fill: "#0b6cff" });
+  for (const o of r.onlyB.slice(0, 15)) lines.push({ text: "ONLY-RIGHT  " + o.key, fill: "#0b6cff" });
+  const led = svgLedger(lines, PANEL_PAD, PANEL_PAD + LEDGER_HEAD + H + 26, W * 2 + gap);
+  const totalH = PANEL_PAD * 2 + LEDGER_HEAD + H + 26 + led.height;
+  return { svg: svgDoc(W * 2 + gap + PANEL_PAD * 2, totalH, left.xml + "\n" + right.xml + "\n" + led.xml),
+           result: r };
+}
+
+function svgDoc(w, h, body) {
+  return '<?xml version="1.0" encoding="UTF-8"?>\n' +
+         '<svg xmlns="http://www.w3.org/2000/svg" width="' + w + '" height="' + h + '" viewBox="0 0 ' + w +
+         " " + h + '">\n<rect width="' + w + '" height="' + h + '" fill="#f7f7f8"/>\n' + body + "\n</svg>\n";
+}
+
 /* ── the Chrome side ───────────────────────────────────────────────────────────────────────────────────────
  *
  * `setViewport` overrides the LAYOUT viewport through the debugger, which is the exact pin; sizing the window
@@ -300,6 +476,36 @@ async function collectFromChrome(url, viewport) {
           " and the page reports " + art.viewport.width + "x" + art.viewport.height + ". An artifact " +
           "collected at a size nobody asked for is a measurement of a layout nobody chose");
     return art;
+  } finally { browser.disconnect(); }
+}
+
+/* A REAL CAPTURE OF THE REAL BROWSER — and it is a REFERENCE, not the other half of the comparison. It is what
+   a person means by "show me the page", and it is deliberately unreachable from `compare`: a PNG and a box
+   diagram are two kinds of artifact, and pairing them would be the constraint this file exists to keep. It is
+   pinned to the same viewport as everything else so that it is a photograph OF the layout being scored rather
+   than of some other one. */
+async function shotFromChrome(url, viewport, outPath) {
+  const lock = JSON.parse(fs.readFileSync(LOCK_FILE, "utf8"));
+  const port = lock.port || DEFAULT_PORT;
+  const browser = await puppeteer.connect({
+    browserURL: "http://127.0.0.1:" + port,
+    defaultViewport: null,
+    targetFilter: (t) => t.type() !== "browser",
+    protocolTimeout: 300000,
+  });
+  try {
+    const pages = await browser.pages();
+    const page = pages.filter((p) => !p.url().startsWith("chrome-extension://") &&
+                                     !p.url().startsWith("devtools://")).pop() || pages[0];
+    check(page !== undefined, "no page to capture — run: node testing/harness.js restart");
+    if (url) await page.goto(url, { waitUntil: "load" });
+    await page.setViewport({ width: viewport.width, height: viewport.height });
+    const seen = await page.evaluate("[innerWidth, innerHeight]");
+    check(seen[0] === viewport.width && seen[1] === viewport.height,
+          "the viewport override did not take: asked for " + viewport.width + "x" + viewport.height +
+          " and the page reports " + seen[0] + "x" + seen[1] + ", so this capture is of a layout nobody chose");
+    await page.screenshot({ path: outPath, fullPage: false });
+    return { url: page.url(), viewport: { width: seen[0], height: seen[1] } };
   } finally { browser.disconnect(); }
 }
 
@@ -385,13 +591,47 @@ const CMDS = {
                   positional[0] + " (" + A.producer + ")", positional[1] + " (" + B.producer + ")");
   },
   selfcheck: async (args) => selfcheck(parseArgs(args).flags["--url"] || null),
+  /* THE VIEWABLE HALF. `svg` and `svgdiff` are pure functions of artifacts already on disk — they connect to
+     nothing and need no browser, which is what lets the ENGINE's artifact be drawn by the same renderer the
+     day it exists. `shot` is the only one of the three that touches Chrome, and it produces a REFERENCE. */
+  svg: async (args) => {
+    const { flags, positional } = parseArgs(args);
+    check(positional.length === 2, "usage: render_diff.js svg <artifact.json> <out.svg>");
+    void flags;
+    const art = JSON.parse(fs.readFileSync(positional[0], "utf8"));
+    fs.writeFileSync(positional[1], svgOne(art));
+    return "wrote " + positional[1] + "  " + art.elementCount + " elements from " + art.producer + " @ " +
+           art.viewport.width + "x" + art.viewport.height;
+  },
+  svgdiff: async (args) => {
+    const { flags, positional } = parseArgs(args);
+    check(positional.length === 3, "usage: render_diff.js svgdiff <a.json> <b.json> <out.svg> [--tolerance <px>]");
+    const tol = flags["--tolerance"] === undefined ? 0 : Number(flags["--tolerance"]);
+    const A = JSON.parse(fs.readFileSync(positional[0], "utf8"));
+    const B = JSON.parse(fs.readFileSync(positional[1], "utf8"));
+    const { svg, result } = svgCompare(A, B, tol);
+    fs.writeFileSync(positional[2], svg);
+    return "wrote " + positional[2] + "  (left " + A.producer + ", right " + B.producer + ")\n" +
+           report(result, positional[0] + " (" + A.producer + ")", positional[1] + " (" + B.producer + ")");
+  },
+  shot: async (args) => {
+    const { flags, positional } = parseArgs(args);
+    check(positional.length === 1, "usage: render_diff.js shot <out.png> [--url <u>] [--viewport 1280x720]");
+    const vp = flags["--viewport"] ? parseViewport(flags["--viewport"]) : ENGINE_VIEWPORT;
+    const got = await shotFromChrome(flags["--url"] || null, vp, positional[0]);
+    return "wrote " + positional[0] + "  REFERENCE capture of real Chrome @ " + got.viewport.width + "x" +
+           got.viewport.height + "  url=" + got.url + "\n" +
+           "  this is NOT an input to `compare`: a photograph and a box diagram are two kinds of artifact, " +
+           "and the comparison is between two artifacts of ONE kind.";
+  },
 };
 
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
   const fn = cmd && Object.prototype.hasOwnProperty.call(CMDS, cmd) ? CMDS[cmd] : null;
   if (!fn) {
-    console.error("usage: node testing/render_diff.js <collector | collect | compare | selfcheck> [args\u2026]");
+    console.error("usage: node testing/render_diff.js <collector | collect | compare | selfcheck | " +
+                  "svg | svgdiff | shot> [args\u2026]");
     process.exit(2);
   }
   try { console.log(await fn(rest)); }
@@ -416,6 +656,6 @@ async function main() {
    RETIREMENT: this note goes when nothing in testing/ does work at import, so a reader has no counterexample
    to re-derive the habit from. */
 module.exports = { COLLECTOR, collectorSource, compare, checkArtifactBody, checkArtifact, report,
-                   ENGINE_VIEWPORT };
+                   svgOne, svgCompare, ENGINE_VIEWPORT };
 
 if (require.main === module) main();
