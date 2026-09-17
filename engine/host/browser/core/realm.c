@@ -18,12 +18,33 @@
 
 static RealmIntrinsic *g_list;
 static int g_n, g_cap;
+/* HAS ANY REALM RUN THE LIST YET? The list is CLOSED at the first realm, and this is what says so. It is not
+   under `#if APICLIENT_DEV` because check.h's release DCHECK keeps `(void)sizeof(cond)`, so every identifier a
+   dev-only assertion names must still be DECLARED in a release translation unit — the same asymmetry
+   core/idl_args.c states over its two global-member helpers, and the reason both builds are checked. */
+static bool g_realm_built;
 
 void realm_declare_intrinsic(RealmIntrinsic install)
 {
     int i;
 
     DCHECK(install != NULL, "a component declared a per-realm intrinsic with no install to run");
+    /* AND IT WAS DECLARED BEFORE ANY REALM EXISTED. Every realm runs `g_list` AS OF THE MOMENT IT IS BUILT, so
+       this is the one invariant that decides whether two realms of one agent get the SAME platform surface. */
+    DCHECK(!g_realm_built,
+           "a per-realm intrinsic was declared AFTER a realm in this agent had already been built. Every "
+           "realm runs this list as of the moment IT is built, so a declaration that lands late gives two "
+           "realms of one agent DIFFERENT lists: the earlier realm is missing a construct the later one has, "
+           "and no member answers wrongly anywhere — the construct is simply ABSENT from a realm Web IDL "
+           "§3.3.7 \"[Exposed]\" step 1 says it is exposed in, which is the one direction this file's own "
+           "§3.8 walk reads as a defect in the component rather than in the ORDER. THIS HELD BY CONVENTION "
+           "UNTIL THIS LINE AND NOW HOLDS BY CONSTRUCTION: core/platform.c runs its whole declare column and "
+           "only then calls realm_install_intrinsics, and every realm_declare_intrinsic in "
+           "engine/host/browser sits in a declare-column function — which was a hand reading of a hundred and "
+           "fifty call sites, and a reading cannot cover the site somebody adds next. THE FIX IS NEVER TO "
+           "DECLARE LATER: a component whose per-realm object depends on something built at run time still "
+           "declares HERE with the others and asks its own question INSIDE its install, the way "
+           "core/workers/worker_global_scope.c asks §3.8's exposure step at the head of its own");
     for (i = 0; i < g_n; i++)
         DCHECK(g_list[i] != install,
                "a per-realm intrinsic was declared twice — it would then build its prototype twice in every "
@@ -592,6 +613,9 @@ void realm_install_intrinsics(JSContext *ctx, const char *top_level_creation_url
         CHECK(!JS_IsException(url), "realm: the environment's top-level creation URL could not be allocated");
         realm_value_set(ctx, g_top_level_url_slot, url);
     }
+    /* THE LIST IS CLOSED FROM HERE. Set before the walk rather than after it, because an install that reached
+       realm_declare_intrinsic would be declaring into the very vector this loop is indexing. */
+    g_realm_built = true;
     for (i = 0; i < g_n; i++)
         g_list[i](ctx);
 #if APICLIENT_DEV
@@ -700,6 +724,10 @@ void realm_intrinsics_free(void)
     free(g_list);
     g_list = NULL;
     g_n = g_cap = 0;
+    /* AND THE AGENT MAY BE BROUGHT UP AGAIN. This is the teardown of an agent's whole declaration state, so
+       the closure it recorded goes with the list it was about — a stale `true` here would refuse the next
+       agent's entire declare column. */
+    g_realm_built = false;
     /* The slot's VALUES are the realms' and went with them; what the agent holds is the slot id, which is a
        class id in a runtime that is going away with it. */
     g_top_level_url_slot = 0;
