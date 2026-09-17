@@ -2003,6 +2003,83 @@ char *cssom_initial_value(const char *name)
                            "which is a cascade that stopped before its last layer");
         return out;
     }
+    /* THE INITIAL VALUE NO PARSER CAN CARRY, because the property's own line does not state one:
+       css-fonts-4 §2.1 "Font family: the font-family property" gives `Initial:` as "depends on user agent".
+       THAT IS WHY THE REGISTRY'S POINTER IS NULL HERE, and it is the ONLY one that is — of lexbor's property
+       table exactly one entry has a null initial and it is this property. The derivation rather than the
+       count, because the table moves with the vendored parser. Over
+       engine/lexbor/source/lexbor/css/property/res.h, the null-initial rows are
+           `grep -cE '^\s*NULL\},$'`            -> 1
+       and the entries they are drawn from are
+           `grep -cE '^\s*\{\(lxb_char_t'`     -> 103
+       Both count LINES, over a file that puts each of those on one of its own, so a line count and an
+       occurrence count are the same number here. So the silence is CORRECT and is not an omission to be filed
+       in either table above. CSSD_INITIAL_UNREGISTERED is for a property
+       lexbor does not carry AT ALL and asserts `e == NULL`; CSSD_INITIAL_WRONG is for one whose answer lexbor
+       GIVES and this file disagrees with, and asserts `e->initial != NULL`. This property is registered AND
+       unanswered, which is a third state neither assertion admits — and that is not an accident of the
+       parser, it is the spec declining to state a value that belongs to the user agent.
+
+       ANSWERING NULL IS NOT "NOT SET", AND THE DEFECT IS THE ONE THE BACKGROUND LONGHANDS BELOW ALREADY
+       RECORD. core/css/css_computed_value.c's `css_resolved_computed` reads a NULL from this entry as
+       CSSOM §6.6.1 "The CSSStyleDeclaration Interface"'s answer for a property that is not set — true of a
+       custom property nobody registered, false of a longhand with an `Initial:` line — so
+       `getComputedStyle(el).fontFamily` answered the EMPTY STRING. css-fonts-4 §2.1 gives `Inherited:` as
+       `yes` and core/css/css_defaulting.c carries it, so CSS Cascade 5 §7.2 "Inheritance" had no base case
+       either and the empty answer came from the root down: every element of every page that declares no
+       family, which is almost every element of almost every page. HTML's rendering section does not close the
+       gap — it sets `font-family` on `listing, plaintext, pre, xmp` and on `code, kbd, samp, tt` and on no
+       ancestor of theirs — so the root's family is this line and nothing else.
+
+       THE VALUE IS A GENERIC KEYWORD AND NOT A NAME, BECAUSE THE SHIPPED FACE HAS NO NAME. css-fonts-4 §2.1
+       gives `Computed value:` as "list, each item a string and/or <generic-font-family> keywords", so a
+       generic is a first-class item of that list rather than a stand-in for a real one; and the face this
+       user agent defaults to is a metrics-only sfnt whose 'name' table engine/fontsubset.mjs drops, so there
+       is no family name in core/fonts/default_font_data.c to report and a concrete string here would name a
+       face nothing in this engine can produce or match. WHICH GENERIC IS A FACT ABOUT THAT FACE and is
+       checkable from the generated file rather than chosen: its header names the bytes it copied, which are
+       DejaVu Sans, so the keyword that describes it is `sans-serif`. That is one of css-fonts-4 §2.1.2
+       "Syntax of <generic-font-family>"'s `<generic-font-complete>` arm, which that section's own example
+       calls "a universal generic font, which is guaranteed to match on all systems" — and that guarantee is
+       what makes it the one answer css-fonts-4 §5 "Font Matching Algorithm" cannot fail to resolve once it
+       exists, since that section's terminal arm is this user agent's default font and this keyword names
+       exactly the face that is.
+
+       NAMED RESIDUAL — THE VALUE IS A PICKED ENVIRONMENT FACT AND CROSSES TO THE PAGE AS A BARE STRING.
+       core/frame/viewport.h's test is whether the model PICKED one point out of a range the environment
+       leaves free, and this is such a point by the argument core/css/font_size_functions.h already makes for
+       `medium`: nothing in this engine determines it, the property's own line says it depends on the user
+       agent, and a page reads it back.
+         WHAT IS NOT COVERED: the string carries no domain, so the read is decided rather than forked. Every
+         fact-carrying computed value in this engine is a LENGTH — `viewport_env_derived` takes a `CssPx`, and
+         core/css/css_length.h says that struct's `env`/`realm` pair is written by `css_px_env` and by nothing
+         else — so there is no seam a STRING may cross carrying a fact, and this arm cannot mint what it has
+         no way to hand over.
+         WHAT THE NEXT DIFF BUILDS: a member of core/css/css_length.h's fact vocabulary for this choice, and a
+         seam in core/frame/viewport.h that wraps a STRING against a fact set — the same widening
+         core/css/css_computed_value.c's `border-spacing` arm asks for on the other axis, where one string is
+         a function of two lengths' facts and the seam takes one set.
+         HOW ITS ABSENCE WOULD SHOW: a page that branches on the family it is given takes ONE arm, so that
+         read never appears in the fork census, while a page branching on the reported default font size does
+         appear there — two reads of one family of picked user-agent facts, one forked and one decided. */
+    if (strcmp(name, "font-family") == 0) {
+        char *out;
+
+        DCHECK(e != NULL && e->initial == NULL,
+               "lexbor's property registry has changed its mind about `font-family`'s initial value, which is "
+               "this arm's whole expiry condition and the only thing that can make it wrong. NO ENTRY AT ALL "
+               "means the property has left the registry, so the row belongs in CSSD_INITIAL_UNREGISTERED "
+               "beside the other properties lexbor does not carry, whose assertion is the one it would then "
+               "pass. AN ENTRY CARRYING AN INITIAL VALUE means a vendored parser is now stating a value "
+               "css-fonts-4 §2.1's own `Initial:` line makes the USER AGENT's to state: read what it says, and "
+               "if it is to be overridden rather than adopted the row belongs in CSSD_INITIAL_WRONG, which is "
+               "the table for disagreeing with an answer the registry gives and which records the answer it is "
+               "disagreeing with so the disagreement expires too");
+        out = strdup("sans-serif");
+        CHECK(out != NULL, "cssom: OOM copying an initial value — a dropped one reads as no value at all, "
+                           "which is a cascade that stopped before its last layer");
+        return out;
+    }
     if (e && e->initial) {
         lxb_css_property_serialize(e->initial, e->unique, css_buf_cb, &b);
         return b.s;
