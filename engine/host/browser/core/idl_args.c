@@ -7816,22 +7816,65 @@ static bool idl_global_member_refused(JSContext *ctx, JSValueConst target, const
            "file takes the pair, idl_args.h's IDL_SITE macro is what supplies it at the call, and an "
            "idl_args.c-internal path with no caller to name passes IDL_SITE_INTERNAL rather than a null");
 
+    /* WEB IDL §3.3.7 [Exposed] STEP 1 FIRST, AND §3.8's BAND OF WHAT SURVIVES IT — ONE QUESTION PARTITIONED,
+       not two asked in a row. The continue-step decides whether this realm places the member AT ALL; the band
+       decides WHERE a member it does place goes. Asking the band of a member step 1 has already removed is
+       asking which own property a member that is not here would be, and the band answers no for every one of
+       them, so the abort landed on exactly the population §3.7.6's continue-step exists for.
+       THE ORDER USED TO BE THE OTHER WAY AND THE ARGUMENT IS REWRITTEN RATHER THAN DELETED, because a reader
+       re-derives it. It said: this is the ASK and not the OUTCOME, it runs before the exposure arithmetic and
+       before any caller's own gate, so a member §3.3.7 step 1 or step 2 correctly refuses never reaches it,
+       and a census of what LANDED would fire on every Window-only member in a worker realm. THE CENSUS HALF IS
+       RIGHT AND IS WHY THE BAND IS STILL ASKED OF EVERY CALL that reaches this door, in whichever arm the
+       partition puts it — a refusal asserts the band must NOT declare the name and a placement asserts it
+       must, so no call escapes the question. The rest was wrong about this tree in three ways, each one
+       command from being checked. (i) STEP 1's REFUSAL WAS UNREACHABLE IN DEV: a refused member met the band
+       assert first, so the arm below it ran only in a release build — two builds running different algorithms
+       over one install, which is the divergence no gate here can exercise. (ii) A CALLER'S OWN GATE IS §3.3.7
+       STEP 2 AND IT RUNS BEFORE THIS CALL, not after: `git grep -n "idl_exposed(ctx, exposure)" ` lands on
+       idl_install_accessor_exposed_at, idl_install_method_exposed_at and the [Replaceable] form, and all three
+       return before calling in. (iii) NOTHING IS LOST BY THE MOVE, and the two tables are what make that so:
+       a name in a realm's band is a member that realm's own [Global] interface DECLARES, so step 1 cannot
+       refuse it — which is asserted in the refuse arm rather than believed.
+       WHAT DOES NOT MOVE. A name with no exposure row is EXPOSED, so a misspelt identifier and a member the
+       corpus has dropped both still reach the band assert; a wrong TARGET is refused by the statement at the
+       head of this function; and the RELEASE program is byte-identical, `if (!e) return true; return false;`
+       being the `return !e;` this replaced.
+       IT STANDS ONLY ON WHAT THIS CODEBASE COMPUTED: the string one of this engine's own installers passed,
+       and the [Global] identifier this realm's host stated. A page's own `globalThis.x = 1` is an ordinary
+       [[Set]] that reaches no entry in this file, so nothing a page or a server states can enter either arm.
+       WHAT NEITHER ARM CAN SEE: a member-shaped own property placed on the global with a raw JS_SetPropertyStr
+       never reaches this call. core/frame/remote_op.c's `__apiclient*` operand bindings and the fixtures' own
+       host surfaces are that, deliberately — outside this population rather than exempted from it.
+       RETIREMENT: this record goes when core/realm.c's own-property walk over a FINISHED global asks the
+       member half of this question — it classifies every §3.7.6 attribute and §3.7.7 operation into its
+       no-row branch and asks only the realm-independent IDL_PROTOTYPE_ONLY band of it — because an outcome
+       census over members is then what proves this door exhaustive, and the ordering stops being the only
+       thing standing between a refused member and a global. */
+    if (!idl_member_exposed_in_realm(ctx, name)) {
+        /* AND THE TWO GENERATED TABLES AGREE ABOUT THE REFUSAL, which is what makes the silence sound rather
+           than merely quiet. It is the shape idl_define_legacy_window_alias already uses for §3.8 step 3.1.4
+           one screen down: refuse, and assert that the other table would not have placed it. */
+        DCHECKF(!idl_realm_global_declares(ctx, name),
+                "Web IDL §3.3.7 [Exposed] step 1 refuses `%s` in a realm whose §3.3.8 [Global] interface is "
+                "`%s`, and browser/idl_exposure.h's IDL_GLOBALS band for `%s` DECLARES it — the two generated "
+                "tables disagree about one name. A member in a [Global] interface's own band is a member that "
+                "interface declares, so its exposure set contains a global name of every realm whose global "
+                "object implements it, and step 1 — \"If construct's exposure set is not `*`, and "
+                "realm.[[GlobalObject]] does not implement an interface that is in construct's exposure set, "
+                "then return false\" — cannot answer false for it. So this member is being dropped from a "
+                "realm §3.8 Platform objects implementing interfaces would WRITE it onto, and this line is the "
+                "only thing that says so. Either the exposure row is too narrow or the band names a member the "
+                "interface does not declare: `node engine/idlgen.mjs --regen`",
+                name, idl_realm_global_interface(ctx), idl_realm_global_interface(ctx));
+        return true;
+    }
+
     /* WEB IDL §3.7.6 Attributes AND §3.7.7 Operations PUT A [Global] INTERFACE'S MEMBERS HERE — "Regular
        attributes are exposed on the interface prototype object, unless the attribute is unforgeable or if the
        interface was declared with the [Global] extended attribute, in which case they are exposed on every
        object that implements the interface", and the same sentence for operations. So a name standing on this
-       object is a member of THIS REALM'S [Global] interface or it is a property no browser has anywhere.
-       IT IS THE ASK AND NOT THE OUTCOME. This runs before the exposure arithmetic below and before any
-       caller's own gate, so a member §3.3.7 step 1 or step 2 correctly REFUSES never reaches it — the band is
-       §3.8's own placement list and is asked of the CALL. A census of what LANDED would fire on every
-       Window-only member in a worker realm and on every [SecureContext] member in an insecure one, which is
-       the gate working.
-       IT STANDS ONLY ON WHAT THIS CODEBASE COMPUTED: the string one of this engine's own installers passed,
-       and the [Global] identifier this realm's host stated. A page's own `globalThis.x = 1` is an ordinary
-       [[Set]] that reaches no entry in this file, so nothing a page or a server states can enter it.
-       WHAT IT CANNOT SEE: a member-shaped own property placed on the global with a raw JS_SetPropertyStr
-       never reaches this call. core/frame/remote_op.c's `__apiclient*` operand bindings and the fixtures' own
-       host surfaces are that, deliberately — outside this population rather than exempted from it. */
+       object is a member of THIS REALM'S [Global] interface or it is a property no browser has anywhere. */
     DCHECKF(idl_realm_global_declares(ctx, name),
             "%s:%d installs `%s` as a member on the global object of a realm whose Web IDL §3.3.8 [Global] "
             "interface is `%s`, and `%s` is not a member `%s` DECLARES. §3.8 Platform objects implementing "
@@ -7848,12 +7891,14 @@ static bool idl_global_member_refused(JSContext *ctx, JSValueConst target, const
             "`globalThis.hasOwnProperty(\"%s\")`. browser/idl_exposure.h's IDL_GLOBALS row for `%s` carries "
             "that band, which is what §3.8 WRITES rather than what a global can REACH. Either this member "
             "belongs on an interface PROTOTYPE and the line was "
-            "handed the wrong target, or the install belongs to a different realm kind than the one it ran in, "
-            "or the identifier is misspelt, or the corpus has moved and the table is stale "
+            "handed the wrong target, or the identifier is misspelt, or the corpus has moved and the table is "
+            "stale "
             "(`node engine/idlgen.mjs --regen`)",
             at_file, at_line, name, idl_realm_global_interface(ctx), name,
             idl_realm_global_interface(ctx), name, idl_realm_global_interface(ctx));
-    return !idl_member_exposed_in_realm(ctx, name);
+    /* AND §3.7.6's CONTINUE-STEP DOES NOT FIRE: the member is exposed in this realm and this realm's own
+       [Global] interface declares it, so §3.8 writes it onto the global and the caller builds it. */
+    return false;
 }
 
 bool idl_exposed(JSContext *ctx, IdlExposure exposure)
