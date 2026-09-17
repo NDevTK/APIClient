@@ -60,23 +60,16 @@ uint32_t file_device_count(JSContext *ctx)
     return files;
 }
 
-// THE BLOCK COMMENT BELOW STAYS A BLOCK COMMENT, AND THE THREE `-Wcomment` WARNINGS IT EMITS ARE THE PRICE.
-// The tokens this section names contain `/` followed by `*`, so quoting them inside a block comment opens a
-// nested comment at each one and clang warns. The obvious repair is to convert the block to line comments, and
-// it was tried and MEASURED and is WRONG: `citegen.mjs` reassembles a block comment's ` * ` continuation lines
-// into one quotation and does NOT reassemble `// ` ones, so the conversion drops this file's grouped-quotation
-// population from 3 to 2 — the three-line spec sentence below stops entering the cross-site agreement channel.
-// That is §AN-UN-ANCHORED-CITATION-IS-SHIELDED arriving through a comment style: the quotation is still here,
-// still verbatim, and no longer compared against its siblings, which is worse than the warnings.
-// Isolated: reverting ONLY this block restores the count to 3 with the other block left converted.
-// RETIRES WHEN: citegen reassembles `//` continuation lines, after which this block may be converted and the
-// warnings go with it. The observation that retires it is this file's own grouped count staying at 3 across
-// the conversion — run `node engine/citegen.mjs engine/host/browser/core/file/file_device.c` either side.
-/* ---- §4.10.5.1.17's `accept` TOKENS -------------------------------------------------------------------------
- *
- * "If specified, the attribute must consist of a set of comma-separated tokens, each of which must be an ASCII
- * case-insensitive match for one of the following: the string `audio/*`, the string `video/*`, the string
- * `image/*`, a valid MIME type string with no parameters, a string whose first character is U+002E." */
+// ---- §4.10.5.1.17's `accept` TOKENS, IN LINE COMMENTS BECAUSE THE TOKENS THEMSELVES OPEN A BLOCK ONE -----
+// The tokens quoted below contain `/` followed by `*`, so a BLOCK comment carrying them opens a nested comment
+// at each one and clang emits `-Wcomment`. Line comments are not a style choice here, and converting back
+// re-introduces three warnings on every build. The citation and the sentence it governs stay in ONE paragraph
+// because an empty line comment ENDS a prose unit, so a break here would put the two in different ones and the
+// quotation would be compared against nothing — which is the state this file used to be in for the other
+// reason. §4.10.5.1.17 states the set:
+// "If specified, the attribute must consist of a set of comma-separated tokens, each of which must be an ASCII
+// case-insensitive match for one of the following: the string `audio/*`, the string `video/*`, the string
+// `image/*`, a valid MIME type string with no parameters, a string whose first character is U+002E."
 
 /* ONE TOKEN against one file. */
 static bool accept_token_matches(const char *tok, size_t tlen, const char *name, const char *type)

@@ -3121,10 +3121,66 @@ function spanIdxAt(spans, at) {
  * admitting it would let a unit reach across program text this scan never read. */
 const LITERAL_JOINT = /^["'`\s]*\+?["'`\s]*$/;
 
+/* THE JOINT BETWEEN TWO LINE COMMENTS OF ONE BLOCK — THE SAME RULE AS THE CONSTANT ABOVE, ASKED OF THE OTHER
+ * KIND OF PROSE, WITH THE SAME ONE OWNER. A block comment is ONE span and a run of line comments is N, so a
+ * paragraph a reader sees as one thing arrived at every walk here as one unit when its author wrote it the
+ * first way and as N units when they wrote it the second. A quotation wrapped across three line comments was
+ * therefore cut into three fragments, each below the word floor, and entered no channel at all — the words
+ * stayed verbatim and the audit stopped looking, which is the shielded citation CLAUDE.md names, arriving
+ * through a comment STYLE rather than through a language. The population an instrument cannot see is not a
+ * random sample of the tree: it is enriched for exactly the defects that instrument would have caught.
+ * MEASURED BY ISOLATION AND NOT INFERRED, on the one file that was paying for it. Converting that file's spec
+ * block to line comments dropped its grouped-quotation population from three to two and moved no other number
+ * this tool prints; the join below puts it back at three across the same conversion. That file's own comment
+ * named this as the observation that would retire its decision, and the decision goes with the diff that
+ * built it.
+ *
+ * WHAT A JOINT IS is the constant above's definition read in this alphabet: everything between the end of one
+ * span and the start of the next, which for line comments is the newline, the indent and the marker. ONE
+ * NEWLINE AND NO MORE, a derivation rather than a threshold — a blank line ends a paragraph, which is already
+ * this file's rule for a Markdown file, whose unit IS the paragraph. Horizontal whitespace only on either
+ * side of that newline, so a line of CODE between two comments ends a unit as well.
+ *
+ * AND AN EMPTY LINE COMMENT IS THAT BLANK LINE, WHICH THE FIRST VERSION OF THIS RULE GOT WRONG BY ITS OWN
+ * ARGUMENT. A marker with nothing after it is how a line-comment block spells a paragraph break — a reader
+ * sees the same gap an empty line makes — so reading only the FILE's blank lines admitted a joint straight
+ * across one, and a citation then governed prose several paragraphs below its own sentence. MEASURED RATHER
+ * THAN FEARED: without this clause the widening charged two quotations of a card's own DISPLAYED COPY, ten
+ * lines and one paragraph break beneath a citation that has nothing to do with them, and a control whose
+ * stray backtick sits above such a break went silent. With it, both of those go, that control speaks, and
+ * the file the isolation was measured on still groups its three. What it costs is an AUTHORING rule, and
+ * the one file that pays it says so at its own site: a citation and the sentence it governs belong in one
+ * paragraph.
+ * A BLOCK COMMENT DOES NOT BREAK AT ITS OWN GUTTER-ONLY LINE, AND THAT ASYMMETRY IS A FACT ABOUT THE SCANNER
+ * RATHER THAN A CHOICE: a block is ONE span, so its paragraph break is not a span boundary and this walk has
+ * nothing to find there, while a line comment is one span per line and the break IS one. The kind that can
+ * see the structure uses it, and that is the NARROW direction, which is the one to err in.
+ *
+ * AND THE LEFT COMMENT MUST OWN ITS LINE, WHICH A CONTROL BOUGHT AND NOBODY WOULD HAVE GUESSED. A trailing
+ * comment annotates the statement it sits on; a full-line comment beneath it introduces the next thing; and
+ * the TEXT says nothing whatever about the difference, since both spellings hand this walk the identical
+ * newline-indent-marker joint. Admitting that pair runs two comments about two different things into one
+ * unit, and the price is not abstract: one unmatched backtick in the trailing note flips every citation below
+ * it into a MENTION by the parity rule one channel over, so a real accusation goes silent with nothing
+ * anywhere to say why. A control carrying exactly that shape was accused with this clause and silenced
+ * without it. WHAT THE CLAUSE DECLINES is a TRAILING comment that wraps onto a line of its own, which is a
+ * real shape and is a unit of one here — the direction to err in, because a unit left short costs a
+ * comparison and a unit run on costs an accusation at a site whose author did nothing wrong. */
+const COMMENT_JOINT = /^\n[ \t]*\/\/$/;
+const BLANK_COMMENT = /^[ \t]*$/;
+function commentJoint(src, spans, k) {
+  if (!COMMENT_JOINT.test(src.slice(spans[k][1], spans[k + 1][0]))) return false;
+  if (BLANK_COMMENT.test(src.slice(spans[k][0], spans[k][1])) ||
+      BLANK_COMMENT.test(src.slice(spans[k + 1][0], spans[k + 1][1]))) return false;
+  const nl = src.lastIndexOf("\n", spans[k][0] - 2);
+  return !/[^ \t]/.test(src.slice(nl + 1, spans[k][0] - 2));
+}
+
 /* THE PROSE UNIT A CITATION STANDS IN, AND THE ONE PLACE THIS FILE STATES WHERE A MESSAGE BEGINS AND ENDS.
- * The unit is the span the citation sits in, WIDENED in both directions to the maximal run of adjacent string
- * literals whenever it sits in one — the paragraph above says why a run and not a span, and this is that
- * sentence made executable. Three readers need it and they must not disagree: `governedProse` walks the
+ * The unit is the span the citation sits in, WIDENED in both directions to the maximal run of ADJACENT SPANS
+ * OF ITS OWN KIND — string literals of one message, line comments of one block — the two paragraphs above
+ * saying why a run and not a span for each kind, and this is those sentences made executable. Three readers
+ * need it and they must not disagree: `governedProse` walks the
  * adjacency forward, `precedingProse` walks it backward, and the OK-NEARBY channels ask which citations SHARE
  * a unit. The third reader is the one that got it wrong. It keyed "shares a prose unit with this one" on the
  * SPAN INDEX while the other two walked the run, so a citation in a DIFFERENT LITERAL OF THE SAME `DFAIL` was
@@ -3137,13 +3193,13 @@ function proseUnit(src, spans, at) {
   const i = spanIdxAt(spans, at);
   if (i < 0) return null;
   let lo = i, hi = i;
-  if (spans[i][2] === "s") {
-    while (hi + 1 < spans.length && spans[hi + 1][2] === "s" &&
-           LITERAL_JOINT.test(src.slice(spans[hi][1], spans[hi + 1][0]))) hi++;
-    while (lo > 0 && spans[lo - 1][2] === "s" &&
-           LITERAL_JOINT.test(src.slice(spans[lo - 1][1], spans[lo][0]))) lo--;
-  }
-  return { i, lo, hi, kind: spans[i][2] };
+  const kind = spans[i][2];
+  const joins = (k) => spans[k + 1][2] === kind &&
+    (kind === "s" ? LITERAL_JOINT.test(src.slice(spans[k][1], spans[k + 1][0]))
+                  : commentJoint(src, spans, k));
+  while (hi + 1 < spans.length && joins(hi)) hi++;
+  while (lo > 0 && joins(lo - 1)) lo--;
+  return { i, lo, hi, kind };
 }
 
 /* THE UNIT'S IDENTITY IS ITS FIRST SPAN, and every reader that groups citations by unit keys on this — never
@@ -3162,12 +3218,19 @@ function proseUnitKey(src, spans, at) {
  * program's own characters lie BETWEEN the spans and a walk over spans cannot reach them.
  * JOINED WITH NOTHING, which is the C semantics being preserved rather than a choice: adjacent literals
  * concatenate with no separator, so a word split across two of them is one word, and inserting a space here
- * would split it in every token stream downstream. */
+ * would split it in every token stream downstream.
+ * A COMMENT'S JOINT IS ITS NEWLINE, which is the same sentence read the other way round: a wrapped line is a
+ * LINE BREAK and not a concatenation, so the break goes in and the flatten below turns it and the
+ * continuation's indent into the one space a block comment's gutter already becomes. Both kinds of prose
+ * therefore leave ONE normalizer, and the continuation's MARKER is removed by not being in a span at all —
+ * the sentence above rather than a second rule, and the reason the flatten needed no clause for it. */
 function unitProse(src, spans, u, from, to) {
   let out = "";
   for (let k = u.lo; k <= u.hi; k++) {
     const a = Math.max(spans[k][0], from), b = Math.min(spans[k][1], to);
-    if (b > a) out += src.slice(a, b);
+    if (b <= a) continue;
+    if (out && u.kind === "c") out += "\n";
+    out += src.slice(a, b);
   }
   return u.kind === "s" ? unescapeC(out) : out.replace(/\n\s*\*?\s*/g, " ");
 }
@@ -3892,6 +3955,24 @@ function quotedSrcRuns(src, spans) {
    * `LITERAL_JOINT`'s to say and not this function's — see it at `proseUnit`, which walks the same adjacency
    * for three other readers. This used to spell the rule again here, and the second spelling is what a joint
    * in a language the first one had never met went wrong in. */
+  /* AND THIS WALK STILL SPELLS THE COMMENT JOINT LINE BY LINE, WHICH IS A NAMED RESIDUAL RATHER THAN AN
+   * OVERSIGHT. `proseUnit` now joins a run of line comments and this does not, so for ONE kind of prose the
+   * two walks of this adjacency answer differently about where a unit ends.
+   * NOT COVERED: a section number standing INSIDE a quotation that wraps across line comments. This walk sees
+   *   one line, finds an opener with no partner on it, masks nothing, and the citation scan then ADMITS that
+   *   number — which ends the region the real citation governs at a point inside a quoted run, which is the
+   *   damage the census line for this count already describes in its own words.
+   * WHAT THE NEXT DIFF BUILDS: `commentJoint` asked here too, so both walks take their answer from the one
+   *   constant and a fourth spelling of it cannot exist.
+   * HOW ITS ABSENCE WOULD SHOW: the census counts the numbers this walk places inside a quotation, and that
+   *   is the line that moves when this changes.
+   * MEASURED BEFORE BEING DECLINED, because a widening is priced in what it carries off with it. Built and
+   * run whole-tree against its own baseline, asking the joint here moved that count by three and moved
+   * NOTHING in any finding channel — and the three moved in the ADMITTING direction, out of the masked set
+   * and into the judged population, which is the direction the census line names as harmful. Three unread
+   * reclassifications that buy no verdict are not landed on that evidence. The zero is also what the residual
+   * costs today: either the population where the two walks disagree is empty, or a run that asked the joint
+   * here would have judged something differently and did not. */
   const runs = [];
   for (let i = 0; i < spans.length; i++) {
     const start = spans[i][0];
