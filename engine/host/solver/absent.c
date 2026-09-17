@@ -428,7 +428,7 @@ const char *absent_standard_name(const char *name, AbsentVocab *vocab)
  * WHAT THE NEXT DIFF BUILDS: an `in`-only discriminator on that request — a field on JSOpKeyed naming the
  * operator, which is a struct copied field-by-field by js_op_keyed_clone and so carries an obligation there —
  * plus the base carried to the placement, so the recording can ask "was this `in`, on the global, answered
- * false" and reach absent_unresolved_note. A submodule change, and a larger one than the `typeof` arm was.
+ * false" and reach absent_unresolved_note. An engine/qjs change, and a larger one than the `typeof` arm was.
  * HOW ITS ABSENCE SHOWS: a document whose feature detection is written `"X" in window` raises no row for X
  * and no member of this census moves, while a document writing `typeof X` or `window.X` for the same absent X
  * raises one — so the census answers differently for one question depending on which of three spellings the
@@ -440,14 +440,19 @@ const char *absent_standard_name(const char *name, AbsentVocab *vocab)
  *
  * NAMED RESIDUAL — NOT COVERED: whether a recorded read was the SILENT one. `js_absent_ask` has exactly two
  * callers — derive them rather than taking a line number, which has already gone stale here once:
- *   git grep -n --recurse-submodules 'js_absent_ask(ctx' -- engine/qjs/quickjs.c
- * (the plain `git grep` does not descend into the submodule and answers that the interpreter has no such
- * call). Both hand this file the same base and the same atom: the property-read miss that degrades to
+ *   git grep -n 'js_absent_ask(ctx' -- engine/qjs/quickjs.c
+ * (this prescribed `--recurse-submodules` and said the plain form answers that the interpreter has no
+ * such call. That was true while engine/qjs was a GITLINK and is false now that it is ordinary tracked
+ * content, where both forms answer alike — so the flag is owed to a PATH and never to this one, and the
+ * way to know which is to ask rather than to read it here: `git cat-file -t origin/main:<path>` answers
+ * `commit` for a gitlink and `tree` for content. What rotted was the REPOSITORY BOUNDARY and never the
+ * two callers, which is the half a reader is tempted to doubt.) Both hand this file the same base and
+ * the same atom: the property-read miss that degrades to
  * `undefined`, and the unresolvable Reference that goes on to throw. The `typeof` entry beside them is a
  * THIRD outcome and is separated by its own member, which the other two are not. The outcome differs entirely
  * AFTER this hook returns, so a row of twelve reads cannot be read as twelve silent degradations.
  * WHAT THE NEXT DIFF BUILDS: the ask carrying which of its two callers asked, so the row splits into the arm
- * that degraded and the arm that threw — again a submodule change.
+ * that degraded and the arm that threw — again an engine/qjs change.
  * HOW ITS ABSENCE SHOWS: a page that only ever writes `new EventSource(…)` is FULLY diagnosed by its own
  * ReferenceError in `pageErrors` and still appears here, so a reader cross-references the two surfaces by
  * hand; a name in this census with no matching `pageErrors` entry is the silent case and a name in both is
