@@ -34,26 +34,30 @@
  * already carries rather than being lent as a proxy, and a name that comes home resolves to the ORIGINAL —
  * which is what makes `peer.f(document) ; document === theArgumentItSawBack` true.
  *
- * THE FOUR INTERNAL METHODS A REFERENCE PERFORMS ARE ONE MACHINE. [[Get]], [[Set]], [[Delete]] and [[Call]]
- * differ in which operands they encode and nothing else: the park, the world that travels with the question,
- * the transport and the identity are one mechanism, and four copies of it would be four things to get wrong
- * once each. The peer runs a PROGRAM for every one of them (a C activation has no flow base under it, and an
+ * THE FIVE INTERNAL METHODS A REFERENCE PERFORMS ARE ONE MACHINE. [[Get]], [[Set]], [[Delete]], [[Call]]
+ * and [[HasProperty]] differ in which operands they encode and nothing else: the park, the world that
+ * travels with the question,
+ * the transport and the identity are one mechanism, and five copies of it would be five things to get wrong
+ * once each. THE COUNT IS A ROW COUNT AND NOT A DESIGN CLAIM — what is load-bearing is that adding one is a
+ * row in each of two tables, which is what the machine being shared buys; a reader who finds this number
+ * disagreeing with REF_OP_N should trust REF_OP_N, which is the declaration both of those tables are sized
+ * by. The peer runs a PROGRAM for every one of them (a C activation has no flow base under it, and an
  * IDL accessor or a page's setter is the page's code), and every operand reaches that program through a SLOT
  * rather than being spliced into its text — a property name spliced into a program is a property name read as
  * code.
  *
- * THE ECMASCRIPT POST-CHECKS ARE NOT WRITTEN HERE, AND THAT IS THE POINT. 10.5.8/9/10's invariants run on the
- * TRAP'S RESULT against the proxy's TARGET, and the interpreter's routed keyed entry already performs them for
- * every proxy — so a `set` that reported success against a non-configurable non-writable target property, or a
- * `deleteProperty` that reported a non-configurable property deleted, throws exactly as it does for a page's
- * own handler. That is one implementation and not two. It is also why the target is an EMPTY EXTENSIBLE object
- * (see ref_mint): an empty extensible target constrains nothing, so the peer's answer is never checked against
- * a guess this agent made about a heap it cannot see.
+ * THE ECMASCRIPT POST-CHECKS ARE NOT WRITTEN HERE, AND THAT IS THE POINT. 10.5.7/8/9/10's invariants run on
+ * the TRAP'S RESULT against the proxy's TARGET, and the interpreter's routed keyed entry already performs them
+ * for every proxy — so a `set` that reported success against a non-configurable non-writable target property,
+ * or a `deleteProperty` that reported a non-configurable property deleted, throws exactly as it does for a
+ * page's own handler. That is one implementation and not two. It is also why the target is an EMPTY EXTENSIBLE
+ * object (see ref_mint): an empty extensible target constrains nothing, so the peer's answer is never checked
+ * against a guess this agent made about a heap it cannot see.
  *
  * WHAT IS NOT BUILT YET is written as a crash rather than a silence, and the list is now the OTHER internal
  * methods: [[GetPrototypeOf]] / [[SetPrototypeOf]] / [[IsExtensible]] / [[PreventExtensions]] /
- * [[GetOwnProperty]] / [[DefineOwnProperty]] / [[HasProperty]] / [[OwnPropertyKeys]] / [[Construct]]. Each
- * needs the same two halves the four built ones needed — a peer-side program under the asking flow's world,
+ * [[GetOwnProperty]] / [[DefineOwnProperty]] / [[OwnPropertyKeys]] / [[Construct]]. Each needs the same
+ * two halves the five built ones needed — a peer-side program under the asking flow's world,
  * and an encoding for whatever the operation carries (a descriptor is a RECORD, not a value) — and each aborts
  * naming itself rather than being answered out of the empty target, which would report a cross-agent object as
  * having no properties, no prototype and no keys.
@@ -175,12 +179,15 @@ static JSValue   g_refs = JS_UNDEFINED;   /* "<doc>:<session>:<id>" -> the one r
 
 /* WHICH INTERNAL METHOD a reference is performing — the machine's magic, and the index of its verb on the
    wire. One enumeration, so a verb and the operands that follow it cannot be declared apart. */
-enum { REF_OP_GET, REF_OP_SET, REF_OP_DELETE, REF_OP_APPLY, REF_OP_N };
-static const char *const REF_VERB[REF_OP_N] = { "get", "set", "delete", "apply" };
+enum { REF_OP_GET, REF_OP_SET, REF_OP_DELETE, REF_OP_APPLY, REF_OP_HAS, REF_OP_N };
+static const char *const REF_VERB[REF_OP_N] = { "get", "set", "delete", "apply", "has" };
 /* How many operands each trap is passed — 10.5.8's (target, key, receiver), 10.5.9's (target, key, value,
-   receiver), 10.5.10's (target, key) and 10.5.12's (target, thisArg, argArray). Declared beside the verb
-   because the machine reads operands BY POSITION and a count stated anywhere else is a count that can drift. */
-static const int REF_ARGC[REF_OP_N] = { 3, 4, 2, 3 };
+   receiver), 10.5.10's (target, key), 10.5.12's (target, thisArg, argArray) and 10.5.7's (target, key).
+   Declared beside the verb because the machine reads operands BY POSITION and a count stated anywhere else
+   is a count that can drift.
+   10.5.7's two are the standard's own « target, propertyKey » and are the SAME PAIR 10.5.10 passes, which is
+   why this operation needed no new slot on the wire: its record is `object.delete`'s with another verb. */
+static const int REF_ARGC[REF_OP_N] = { 3, 4, 2, 3, 2 };
 /* WHAT EACH POOL ENTRY IS, for core/agent_state.h's assert — declared HERE, beside the verb and the operand
    count, because it is the third thing that is per-op and a fourth list somewhere else is a fourth list that
    can drift. The reader of the `@WHY` is standing at a teardown that already ran, so the entry is named by the
@@ -190,8 +197,9 @@ static const char *const REF_STEP_WHAT[REF_OP_N] = {
     "the machine performing ECMA-262 10.5.9 [[Set]] ( propertyKey, value, receiver ) across an agent boundary",
     "the machine performing ECMA-262 10.5.10 [[Delete]] ( propertyKey ) across an agent boundary",
     "the machine performing ECMA-262 10.5.12 [[Call]] ( thisArg, argList ) across an agent boundary",
+    "the machine performing ECMA-262 10.5.7 [[HasProperty]] ( propertyKey ) across an agent boundary",
 };
-static int g_ref_stepid[REF_OP_N] = { -1, -1, -1, -1 };
+static int g_ref_stepid[REF_OP_N] = { -1, -1, -1, -1, -1 };
 
 static JSValue ref_mint(JSContext *ctx, uint32_t doc, uint32_t session, uint32_t id,
                         bool callable, bool constructor);
@@ -779,11 +787,11 @@ JSValue remote_completion_decode(JSContext *ctx, const char *text, int *pcomplet
     return remote_object_decode(ctx, text + 1);
 }
 
-/* ---- THE ONE MACHINE THE FOUR BUILT INTERNAL METHODS ARE ------------------------------------------------- */
+/* ---- THE ONE MACHINE THE FIVE BUILT INTERNAL METHODS ARE ------------------------------------------------- */
 
 /* WHERE THIS MACHINE RESTS. A cross-instance operation is ONE operation — the internal method, performed by
    the instance that owns the object — and the wait for that peer is a sub-sequence inside it rather than a step
-   of its own. Each of the four names its OWN algorithm, because a parked flow says which one it is inside. */
+   of its own. Each of the five names its OWN algorithm, because a parked flow says which one it is inside. */
 #define REF_GET_STAGES(X) \
     X(REF_GET_ASK = IDL_STEP_FIRST, \
       "ECMA-262 10.1.8 [[Get]], performed in the instance that owns the object (the flow suspends on the read " \
@@ -800,20 +808,28 @@ JSValue remote_completion_decode(JSContext *ctx, const char *text, int *pcomplet
     X(REF_APPLY_ASK = IDL_STEP_FIRST, \
       "ECMA-262 10.2.1 [[Call]], performed in the instance that owns the function under the ASKING flow's " \
       "world (the flow suspends at the call site and resumes with the peer's completion)")
+#define REF_HAS_STAGES(X) \
+    X(REF_HAS_ASK = IDL_STEP_FIRST, \
+      "ECMA-262 10.1.7 [[HasProperty]], performed in the instance that owns the object under the ASKING " \
+      "flow's world (the flow suspends on the membership test and resumes with the boolean the peer's own " \
+      "program answered)")
 enum { REF_GET_STAGES(JS_STEP_STAGE_ENUM) };
 enum { REF_SET_STAGES(JS_STEP_STAGE_ENUM) };
 enum { REF_DEL_STAGES(JS_STEP_STAGE_ENUM) };
 enum { REF_APPLY_STAGES(JS_STEP_STAGE_ENUM) };
+enum { REF_HAS_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const REF_GET_STEPS[]   = { REF_GET_STAGES(JS_STEP_STAGE_LABEL) NULL };
 static const char *const REF_SET_STEPS[]   = { REF_SET_STAGES(JS_STEP_STAGE_LABEL) NULL };
 static const char *const REF_DEL_STEPS[]   = { REF_DEL_STAGES(JS_STEP_STAGE_LABEL) NULL };
 static const char *const REF_APPLY_STEPS[] = { REF_APPLY_STAGES(JS_STEP_STAGE_LABEL) NULL };
+static const char *const REF_HAS_STEPS[]   = { REF_HAS_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
-/* §7.2.1's read, one agent further out, and its three siblings:
+/* §7.2.1's read, one agent further out, and its four siblings:
      object.get    <doc> <world+ancestry> <id> <key>
      object.set    <doc> <world+ancestry> <id> <key> <value>
      object.delete <doc> <world+ancestry> <id> <key>
      object.apply  <doc> <world+ancestry> <id> <thisArg> <arg>*
+     object.has    <doc> <world+ancestry> <id> <key>
    The world travels for the same reason it travels with a WindowProxy read — the answer is only true in it, and
    for a WRITE it is stronger than that: two arms of a fork writing through one reference are two contradictory
    timelines, and a peer that performed both against one baseline would fabricate a third neither arm was in. Its
@@ -972,14 +988,15 @@ static int ref_op_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, JSVal
         s->req = 0;
         if (r != JS_STEP_DONE) return r;
     }
-    /* 10.5.9 / 10.5.10 ToBoolean the trap's result, so a non-boolean here is not a page's doing — it is the
-       peer having answered a [[Set]] or a [[Delete]] with something that is not the operation's completion.
+    /* 10.5.7 / 10.5.9 / 10.5.10 ToBoolean the trap's result, so a non-boolean here is not a page's doing — it
+       is the peer having answered a [[HasProperty]], a [[Set]] or a [[Delete]] with something that is not the
+       operation's completion.
        It is asked of a NORMAL completion only: a throw completion's value is the thrown value, and 10.5.9's
        boolean does not exist on a path that did not complete. */
-    DCHECK(!(op == REF_OP_SET || op == REF_OP_DELETE) || JS_IsBool(*presult),
-           "a peer answered a cross-agent [[Set]] or [[Delete]] with something that is not a boolean — those "
-           "internal methods complete with the operation's success, and anything else means the peer ran a "
-           "program other than the one the operation names");
+    DCHECK(!(op == REF_OP_SET || op == REF_OP_DELETE || op == REF_OP_HAS) || JS_IsBool(*presult),
+           "a peer answered a cross-agent [[Set]], [[Delete]] or [[HasProperty]] with something that is not a "
+           "boolean — those internal methods complete with the operation's success, and anything else means "
+           "the peer ran a program other than the one the operation names");
     return JS_STEP_DONE;
 }
 
@@ -995,6 +1012,9 @@ static const IdlStepDecl REF_DEL_DECL   = { ref_op_step, sizeof(RefOpState), ref
 static const IdlStepDecl REF_APPLY_DECL = { ref_op_step, sizeof(RefOpState), ref_op_visit, NULL,
                                             "ECMA-262 10.2.1 [[Call]] across an instance boundary",
                                             REF_APPLY_STEPS };
+static const IdlStepDecl REF_HAS_DECL   = { ref_op_step, sizeof(RefOpState), ref_op_visit, NULL,
+                                            "ECMA-262 10.1.7 [[HasProperty]] across an instance boundary",
+                                            REF_HAS_STEPS };
 
 /* ---- AND THE INTERNAL METHODS THAT ARE NOT BUILT --------------------------------------------------------- */
 
@@ -1024,9 +1044,6 @@ static const RefUnbuilt REF_UNBUILT[] = {
     { "defineProperty",
       "a [[DefineOwnProperty]] through a cross-agent reference — the descriptor encoding above, in the other "
       "direction, under the asking flow's world" },
-    { "has",
-      "a [[HasProperty]] through a cross-agent reference — build the peer-side program; `k in remote` is "
-      "answered `false` out of the empty target today, which is a claim about a heap this agent cannot see" },
     { "ownKeys",
       "an [[OwnPropertyKeys]] through a cross-agent reference — build the peer-side program and an encoding "
       "for a LIST of keys; the empty target reports the peer's object as having none, and 10.5.11's invariant "
@@ -1091,6 +1108,7 @@ static JSValue ref_mint(JSContext *ctx, uint32_t doc, uint32_t session, uint32_t
     JS_SetPropertyStr(ctx, handler, "deleteProperty",
                       idl_step_function(ctx, "deleteProperty", g_ref_stepid[REF_OP_DELETE]));
     JS_SetPropertyStr(ctx, handler, "apply", idl_step_function(ctx, "apply", g_ref_stepid[REF_OP_APPLY]));
+    JS_SetPropertyStr(ctx, handler, "has", idl_step_function(ctx, "has", g_ref_stepid[REF_OP_HAS]));
     for (i = 0; i < REF_UNBUILT_N; i++)
         JS_SetPropertyStr(ctx, handler, REF_UNBUILT[i].trap,
                           JS_NewCFunction2(ctx, (JSCFunction *)ref_unbuilt, REF_UNBUILT[i].trap, 2,
@@ -1183,6 +1201,10 @@ void remote_object_init(JSContext *ctx)
     g_ref_stepid[REF_OP_SET]    = idl_method_id_step(ctx, TRAP_ARGS, 4, NULL, 0, &REF_SET_DECL, REF_OP_SET);
     g_ref_stepid[REF_OP_DELETE] = idl_method_id_step(ctx, TRAP_ARGS, 2, NULL, 0, &REF_DEL_DECL, REF_OP_DELETE);
     g_ref_stepid[REF_OP_APPLY]  = idl_method_id_step(ctx, TRAP_ARGS, 3, NULL, 0, &REF_APPLY_DECL, REF_OP_APPLY);
+    /* 10.5.7 calls the trap with « target, propertyKey » — TWO, the same pair 10.5.10 passes, which is why
+       this line reads 2 and not 3. A declaration of 3 would convert an argument the operator site never had
+       and hand the machine an `undefined` in a slot its record does not carry. */
+    g_ref_stepid[REF_OP_HAS]    = idl_method_id_step(ctx, TRAP_ARGS, 2, NULL, 0, &REF_HAS_DECL, REF_OP_HAS);
 
     g_refs = JS_NewObject(ctx);
     CHECK(!JS_IsException(g_refs), "the cross-agent reference table could not be allocated");

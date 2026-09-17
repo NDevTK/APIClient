@@ -15,7 +15,7 @@
 /* WHICH OPERATION A RECORD IS, and everything that is a fact about it, on one row. The verb, how many fields
    it carries and the program that performs it were three lists in the host this was hoisted out of, and the
    field count came back as the wrong one once already. */
-enum { OP_WPGET, OP_GET, OP_SET, OP_DELETE, OP_APPLY, OP_N };
+enum { OP_WPGET, OP_GET, OP_SET, OP_DELETE, OP_APPLY, OP_HAS, OP_N };
 
 /* `need` is the MINIMUM: `object.apply` carries one field per argument and there is no ceiling on how many may
    cross — a bound on the argument count is a bound on which calls this engine can make. */
@@ -42,6 +42,17 @@ static const struct { const char *verb; int need; const char *program; } OPS[OP_
     /* 10.2.1 through %Reflect.apply%, because a call needs its argument list SPREAD and `f.apply` is a property
        of the function that the page may replace. */
     { "object.apply",    5, "__apiclientOp(__apiclientLent, __apiclientThis, __apiclientArgs)" },
+    /* 10.1.7 — pure syntax, like 10.1.8 above it and for the same reason. ECMA-262 13.10.1 Runtime Semantics:
+       Evaluation gives `RelationalExpression : RelationalExpression in ShiftExpression` the steps "If
+       rightValue is not an Object, throw a TypeError exception" and "Return ? HasProperty(rightValue, ?
+       ToPropertyKey(leftValue))", so the operator IS the internal method and nothing the page owns sits
+       between the two — where %Reflect.has% would be a global the page may replace, exactly as `Reflect.set`
+       is for 10.1.9.
+       THE OPERANDS ARE `object.delete`'s, IN THE SAME SLOTS, so this row needs no arm in remote_op_program:
+       the receiver is `__apiclientLent` and the key is `__apiclientKey`, which the keyed branch below installs
+       for every verb that is not OP_APPLY, and only OP_SET adds a third. A verb whose record shape is another
+       verb's is a row here and nothing else, which is what the one-row-per-operation table is for. */
+    { "object.has",      5, "__apiclientKey in __apiclientLent" },
 };
 
 struct RemoteOp { int op; char *text; char **f; int nf; };

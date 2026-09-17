@@ -20,9 +20,10 @@
  *
  * AND THE TWO OPERATIONS THAT NEED AN INTRINSIC TAKE THIS REALM'S. `Reflect` is a global the page may replace,
  * so a peer performing a cross-agent [[Set]] through the page's own function would report a write that never
- * happened and would run the page's code where the spec puts an internal method. Two of the four have a
- * pure-syntax form nothing can intercept — `o[k]` IS 10.1.8 and a SLOPPY-mode `delete o[k]` IS 10.1.10 and
- * yields exactly the boolean 10.5.10 step 8 asks the trap for — and the two that do not (an assignment
+ * happened and would run the page's code where the spec puts an internal method. Three of the five have a
+ * pure-syntax form nothing can intercept — `o[k]` IS 10.1.8, a SLOPPY-mode `delete o[k]` IS 10.1.10 and
+ * yields exactly the boolean 10.5.10 step 8 asks the trap for, and `k in o` IS 10.1.7 by 13.10.1's own step
+ * ("Return ? HasProperty(rightValue, ? ToPropertyKey(leftValue))") — and the two that do not (an assignment
  * expression discards the boolean 10.1.9 completes with; a call needs its argument list spread) reach the
  * operation through %Reflect.set% / %Reflect.apply%, captured PER REALM before that realm's scripts run. Per
  * realm because §3.7 gives every realm its own, and a module static would answer every document's operation
@@ -49,6 +50,7 @@ typedef struct RemoteOp RemoteOp;
      object.set      <doc> <world+ancestry> <generation>:<id> <key> <value>
      object.delete   <doc> <world+ancestry> <generation>:<id> <key>
      object.apply    <doc> <world+ancestry> <generation>:<id> <thisArg> <arg>*
+     object.has      <doc> <world+ancestry> <generation>:<id> <key>
    The object is named by (generation, id) because an id is an index into ONE session's export table
    (remote_object.h): the document name is stable across a park by requirement, so an id alone resolves in
    range in every session of that document and names a different object in each.

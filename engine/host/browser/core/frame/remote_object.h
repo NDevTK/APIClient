@@ -9,7 +9,7 @@
 void remote_object_init(JSContext *ctx);
 /* THE AGENT'S HALF UNDONE — a ROW on core/platform.h's third column, which is why it takes the RUNTIME: the
    two target classes, this session's export table, the imported-reference table, the well-known symbols
-   captured from this agent's own %Symbol% and the four trap machines are all registrations in a JSRuntime,
+   captured from this agent's own %Symbol% and the five trap machines are all registrations in a JSRuntime,
    and not one of them is anything a realm owns. */
 void remote_object_free(JSRuntime *rt);
 
