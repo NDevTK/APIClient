@@ -554,6 +554,25 @@ static char *errs_json_array(ErrsArray which) {
    no ordering problem at all; a gap on the scale of `valMax - valMin` is the reward spread burying the backlog
    where the aging term — FLOW_AGE_QUANTUM per quantum of silence — cannot reach it inside a session. `jobsReady`
    at 0 makes `jobWGap` 0 too, which is why the pair is read together and neither alone.
+   AND THAT SPLIT IS THE COLD TOTAL BY CONSTRUCTION RATHER THAN BY TWO WRITERS AGREEING, WHICH IS WHY IT IS A
+   READER'S CROSS-ROW CHECK ON THIS DOCUMENT AND NOT AN ASSERT. `cold_census` sums `flow_job_pending(f)` over
+   `flow_at(i)`, which IS `g_flows[i]` for `i < g_flows_n`; `flow_wfq_census` walks that identical range of
+   that identical array and partitions the SAME accessor's value with an exhaustive `if / else if / else`,
+   neither loop skipping a member. A sum over a set equals the sum over an exhaustive partition of it, so
+   `jobs == jobsOwed + jobsFramed + jobsReady` is ARITHMETIC within one sample, and the only program state
+   that could break it is the two censuses being taken at two instants, which is the one state that would
+   make asserting it invalid. BOTH ANSWERS THEREFORE REFUSE IT, so a lane proposing this assert is finished
+   before it reads the callers: composition IS synchronous (`result_json` calls the two composers as ADJACENT
+   statements, and `engine_run` puts only `result_heap_json`, a counter read, between them), so the assert
+   cannot fail and is the non-check CLAUDE.md §Offensive-programming names; and were composition NOT
+   synchronous it would fire on a healthy engine. pending.c's own three-walk partition names the test this
+   one fails: it calls its three `independent walks` an edit to any one of which can break the identity, and
+   that is exactly what the two walks here are not. Writing it would also need a SECOND `flow_wfq_census`,
+   which raises `g_scan_runs[FLOW_SCAN_CENSUS]` and re-weighs every member: a full weighing walk spent to
+   corrupt the rows that price this report. `framed == members - memUnframed` is the same shape for the same
+   reason, which `mem_unframed`'s own site already gives.
+   RETIREMENT: this note goes when `cold_census` stops reaching its job total through `flow_job_pending` over
+   `flow_at`, because the pair is a two-writer fact then and the identity becomes assertable.
    AND THAT SPLIT IS WHAT A ZERO JOB COUNT HAS TO BE READ THROUGH, WHICH IS THE ONE READING IT INVITES AND THE
    ONE IT DOES NOT SUPPORT. A run reporting no job run at all looks like the scheduler failing to serve the
    queue — §Every-runtime-job-is-a-scheduler-flow makes every reaction, microtask, timer and delivery a
