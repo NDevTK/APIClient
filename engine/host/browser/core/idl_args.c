@@ -1268,8 +1268,8 @@ static int idl_first_optional_of(const IdlMember *m, int entry)
 {
     DCHECK(entry == IDL_OVL_SHORTER || entry == IDL_OVL_LONGER,
            "§3.6 step 15.3's optionality was asked before the surviving entry was seeded — steps 3-4 settle it "
-           "from the argument count BEFORE step 5 counts what that entry requires, so an unseeded read is a "
-           "conversion that performed step 5 before the removal that decides which entry step 5 is about");
+           "from the argument count BEFORE step 5 asks whether anything survived them, so an unseeded read is "
+           "a conversion that performed step 5 before the removal that produced the set step 5 is about");
     if (entry != IDL_OVL_LONGER) return m->first_optional;
     DCHECK(m->split_longer_optional >= 0,
            "a §3.6 length-differing overload split reached a conversion without its LONGER entry's optional "
@@ -4103,12 +4103,18 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
            A MEMBER WITH NO SPLIT HAS ONE ENTRY AND READS IDL_OVL_SHORTER, which is its own declaration —
            `idl_split_longer_survived` is false for a `split_at` of -1, so the seed says "the entry this member
            declares" rather than naming a second one that does not exist.
-           IT IS HERE, AND NOT WHERE THE STAGE TURNS, BECAUSE STEP 5 IS BELOW IT AND READS IT. The standard
-           numbers the removal 3-4 and the arity check 5, and the arity check's own paragraph says why the
-           order is load-bearing rather than tidy: step 5 counts what THE SURVIVING ENTRY requires, so a step 5
-           performed before the removal is asking a question whose subject does not exist yet. This engine did
-           perform it in that order, and the read below aborted rather than answering — which is the
-           §ORDER-and-NARROW-behavior-ARE-the-spec failure caught by an assert instead of by a wrong number.
+           IT IS HERE, AND NOT WHERE THE STAGE TURNS, BECAUSE STEP 5 IS BELOW IT AND READS IT. Step 5 is "If S
+           is empty, then throw a TypeError", and S is exactly what step 4 has just filtered — so the subject
+           of step 5 is the POST-REMOVAL set, and a step 5 performed first is asking about a set the removal
+           had not yet produced. This engine did perform it in that order, and the read below aborted rather
+           than answering, which is the §ORDER-and-NARROW-behavior-ARE-the-spec failure caught by an assert
+           instead of by a wrong number.
+           THE EMPTINESS TEST AND THE COUNT BELOW IT ARE THE SAME QUESTION, which is the bridge this file
+           rested on and never stated. The effective overload set holds a tuple per ADMISSIBLE ARITY (§2.5.8),
+           so the shortest tuple's length is the count the member requires — no entry being of length argcount,
+           and argcount being below what the surviving entry requires, are ONE fact rather than two, and the
+           check below decides step 5 by the second of them rather than by materialising S and looking. That
+           is why it needs the entry at all, and therefore why it needs the removal to have run.
            Everything else stage 0 does between the two is argument BOOKKEEPING that neither step reads. */
         s->ovl_entry = idl_split_longer_survived(m, s->hdr.argc) ? IDL_OVL_LONGER : IDL_OVL_SHORTER;
         {
