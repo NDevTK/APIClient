@@ -38,6 +38,9 @@
 #include "solver/engine.h"
 #include "solver/cow.h"
 #include "core/loader/document_scripts.h"
+#include "core/paint/display_list.h"   /* CSS 2.1 §E.2 "Painting order"'s ink, whose ORDER is its whole
+                                          statement — the half a fixture can hold to an answer with no
+                                          document under it; see display_list_selftest */
 #include "core/frame/navigator.h"
 #include "core/frame/screen.h"
 #include "core/frame/viewport.h"
@@ -19375,6 +19378,103 @@ static void tree_construction_write_selftest(void)
 }
 /* ---- END tree-construction-write lane -------------------------------------------------------------------- */
 
+/* CORE/PAINT/DISPLAY_LIST.H'S OWN INVARIANTS — the three things a sequence of ink has to be true about itself
+ * before anything painted into one means anything: that the ORDER a builder appended in is the order the list
+ * holds, that the order survives the array GROWING, and that the ENVIRONMENT SET a finished list reports is
+ * the union of the facts its marks' geometry is a function of.
+ *
+ * WHY THIS IS THE HALF A C FIXTURE CAN HOLD TO AN ANSWER AT ALL, and why it is not a test of the painter.
+ * core/paint/box_paint.h's entry needs a DOCUMENT — a parsed tree, a cascade that answers, and a layout that
+ * has produced used values — and no fixture in this file drives one, so what a paint test would measure here
+ * is the absence of that setup rather than the ink. What display_list.h states is stated over VALUES and is
+ * therefore decidable with a realm and nothing else: the list's whole contract is order, and an order is a
+ * claim about what a caller put in against what comes out.
+ * THE GROWTH IS THE POINT OF THE ROW COUNT. The array doubles from eight, so a run of twenty crosses two
+ * reallocations — and a reallocation is exactly where a sequence loses a member or reorders one without
+ * anything downstream being able to tell that list from a document with less in it.
+ * IT TAKES A REALM BECAUSE AN ENVIRONMENT FACT CANNOT BE NAMED WITHOUT ONE: core/css/css_length.h's
+ * `css_px_env` asserts that a fact and a realm travel together, "because the mint at the JS boundary needs
+ * both (which viewport, and which of its dimensions), and a length carrying one without the other could not be
+ * turned into a domain". */
+#define TF_DL_MARKS 20u
+
+static void display_list_selftest(JSContext *ctx)
+{
+    DisplayList dl;
+    DisplayMark m;
+    unsigned i;
+
+    display_list_init(&dl);
+    CHECK(dl.n == 0 && dl.v == NULL,
+          "display_list_init left a list that is not empty — a list that has never been appended to and a "
+          "document with no ink are the same object, and neither is an absence of an answer");
+    CHECK(display_list_env(&dl) == CSS_ENV_NONE,
+          "an EMPTY display list reports environment facts. CSS_ENV_NONE is a positive statement — this ink is "
+          "a function of no picked fact — and a list with no marks in it is a function of nothing by "
+          "construction");
+
+    /* THE ORDER, ACROSS TWO REALLOCATIONS. Every mark is given a distinct x and a distinct red component, so a
+       member that moved is distinguishable from a member that was dropped: a drop shortens the list and a
+       reorder does not. Both are checked because they are different defects with one symptom. */
+    for (i = 0; i < TF_DL_MARKS; i++) {
+        m.kind = DISPLAY_MARK_FILL_RECT;
+        m.rect[0] = css_px((double)i);
+        m.rect[1] = css_px(0.0);
+        m.rect[2] = css_px(1.0);
+        m.rect[3] = css_px(1.0);
+        m.color = CSS_COLOR_OPAQUE_BLACK;
+        m.color.c[0] = (double)i / 255.0;
+        display_list_append(&dl, &m);
+    }
+    CHECK(dl.n == TF_DL_MARKS,
+          "a display list holds a different number of marks than were appended to it — the array doubles from "
+          "eight, so twenty appends cross two reallocations and a dropped mark is ink that is silently absent "
+          "from a sequence whose whole statement is that it is complete");
+    for (i = 0; i < TF_DL_MARKS; i++)
+        CHECK(dl.v[i].rect[0].px == (double)i && dl.v[i].color.c[0] == (double)i / 255.0 &&
+              dl.v[i].kind == DISPLAY_MARK_FILL_RECT,
+              "a display list handed back its marks in an order other than the one they were appended in. "
+              "CSS 2.1 §E.2 \"Painting order\"'s sequence is the list's ONLY statement — core/paint/"
+              "display_list.h has no entry that sorts or compares two marks precisely so that there is one "
+              "answer to the order question — so a list that reorders has no content left");
+
+    /* THE ENVIRONMENT UNION. Every mark so far carries lengths this cascade and this layout determined, so the
+       list is ink with no arm to explore however many marks are in it. */
+    CHECK(display_list_env(&dl) == CSS_ENV_NONE,
+          "a display list of DETERMINED lengths reports an environment fact. Over-reporting the dependence is "
+          "the direction core/css/css_length.h errs in for a single length, and it is still wrong here: what "
+          "it would claim is that this ink would be different ink under an arm nothing in it depends on");
+    m.kind = DISPLAY_MARK_FILL_RECT;
+    m.rect[0] = css_px_env(CSS_ENV_ICB_WIDTH, ctx, 1280.0);
+    m.rect[1] = css_px(0.0);
+    m.rect[2] = css_px(1.0);
+    m.rect[3] = css_px(1.0);
+    m.color = CSS_COLOR_OPAQUE_BLACK;
+    display_list_append(&dl, &m);
+    CHECK(display_list_env(&dl) == CSS_ENV_BIT(CSS_ENV_ICB_WIDTH),
+          "a display list holding ONE viewport-derived coordinate does not report the viewport. A rectangle a "
+          "layout derived from CSS 2.1 §10.1's initial containing block is a function of a PICKED environment "
+          "fact, and a list that dropped it would be ink whose provenance had been lost between the layout "
+          "that derived it and the surface that composites it");
+    m.rect[0] = css_px(0.0);
+    m.rect[3] = css_px_env(CSS_ENV_DEFAULT_FONT_SIZE, ctx, 16.0);
+    display_list_append(&dl, &m);
+    CHECK(display_list_env(&dl) ==
+          (CSS_ENV_BIT(CSS_ENV_ICB_WIDTH) | CSS_ENV_BIT(CSS_ENV_DEFAULT_FONT_SIZE)),
+          "a display list's environment set is not the UNION of its marks'. css_length.h's own rule for a sum "
+          "is that \"the sum of two lengths derived from DIFFERENT facts is a function of BOTH, which is the "
+          "union\", and a list read over a sequence is that rule read over more than two operands — an "
+          "intersection or a last-writer-wins would name one world for ink built out of two");
+
+    display_list_free(&dl);
+    CHECK(dl.n == 0 && dl.v == NULL && dl.cap == 0,
+          "display_list_free left a list that is not empty. It leaves an EMPTY list rather than a freed one so "
+          "that a builder which frees on its own failure path and again at its exit is correct, and a `cap` "
+          "that survived would have the next append write through a pointer that is gone");
+    display_list_free(&dl);   /* the second free the contract above promises is reachable */
+    printf("@PAINT display-list rows=%u marks=%u\n", 8u, TF_DL_MARKS);
+}
+
 static void message_source_selftest(void)
 {
     const char *kind = NULL, *enc;
@@ -20748,6 +20848,10 @@ int main(int argc, char **argv) {
        reach. Here rather than earlier because three of its four families need the DOCUMENT: the realm above
        is what installs `document`, `Response` and §6.12's three members. */
     union_arm_selftest(ctx);
+    /* core/paint/display_list.h's ORDER, its growth and its environment union — the half of the ink a fixture
+       can hold to an answer with no document under it. It needs only a realm, to NAME an environment fact on a
+       length; see the function for why the painter beside it is not exercised here. */
+    display_list_selftest(ctx);
     /* AFTER the platform init above, because the two rows it checks are declared by window_message_init. */
     message_source_selftest();   /* §9.3.3's sources, and the unforgeable-origin rule that decides their findings */
     /* AT THE BASELINE, where no flow has narrowed anything — the pins it writes are cleared after each one,

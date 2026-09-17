@@ -1698,6 +1698,84 @@ static char *css_cv_used_color_value(lxb_dom_element_t *el, const char *name)
     return spec;
 }
 
+/* CSSOM §9 "Resolved Values"' USED COLOUR OF `name` ON `el`, answered as a `CssColor` — the SECOND ENTRY over
+ * one derivation, and it exists for exactly the reason core/dom/element_view.h's `element_view_bounding_box_px`
+ * exists beside `getBoundingClientRect`. That header states the argument and this is the same one a property
+ * over: a caller inside the engine that must COMPUTE with a colour — composite it, compare its alpha against
+ * zero, hand it to a painter — has to do it on the components, in C, and a colour that has already been
+ * serialized has crossed a boundary and would have to be parsed back to be used. So the colour stops here for
+ * an engine-internal caller and is turned into a string only where it becomes a page-visible resolved value.
+ * IT IS THE DERIVATION AND NOT A COPY OF IT. `css_resolved_value`'s CSS_RESOLVED_USED arm calls this and adds
+ * only §16.2's serialization, so there is ONE road from a cascaded declaration to a used colour and the two
+ * answers cannot drift — which is the whole reason the split is made here rather than at the caller that
+ * wanted the components.
+ * ANSWERS FALSE where this engine has no used colour for the property at all, and the two DFAILs below say
+ * which absence it is. In a release build a `false` is what each of those arms already answered by leaving
+ * `css_resolved_value`'s switch, so the release arm of this algorithm is unchanged by the split.
+ * `out` is written only on a true answer. */
+bool css_used_color(lxb_dom_element_t *el, const char *name, CssColor *out)
+{
+    char *spec;
+
+    DCHECK(el != NULL, "CSSOM §9's used colour was asked for on no element — `currentcolor` resolves up the "
+                       "TREE, so an element is not a convenience here but the walk's own base");
+    DCHECK(name != NULL, "CSSOM §9's used colour was asked for with no property name");
+    DCHECK(out != NULL, "CSSOM §9's used colour was derived with nowhere to put it");
+    DCHECK(css_resolved_kind(name) == CSS_RESOLVED_USED,
+           "CSSOM §9's used colour was asked for a property §9 does not put in its unconditional used-value "
+           "list. That list is this file's own table, read from §9's text, so a name outside it is a caller "
+           "asking a question §9 answers somewhere else — `width` resolves to a used value only IF RENDERED, "
+           "`top` only IF POSITIONED, and anything else resolves to its COMPUTED value");
+    DCHECK(strcmp(name, "box-shadow") != 0,
+           "CSSOM §9's used colour was asked for `box-shadow`, which is the one member of §9's used-value list "
+           "that is not a `<color>` — see the DFAIL in `css_resolved_value`'s own arm, which names the "
+           "`<shadow>` grammar that is missing and what builds it");
+    DCHECK(css_shorthand_complete_for(name),
+           "a used COLOR was derived for a property whose SHORTHANDS are not all expanded by "
+           "css_shorthand.c, so the cascade it reads may never have looked at the declaration that set it "
+           "— an `outline: 1px solid red` two lines above an `outlineColor` read is invisible, and the "
+           "answer would be the property's initial value with nothing to say so. TWO of §9's colors are in "
+           "this state and each names one missing shorthand: `outline-color` needs css-ui-4 §3.1 "
+           "\"Outlines Shorthand: the outline property\", and `caret-color` needs its §5.2.4 \"Insertion "
+           "caret shorthand: caret\". NEITHER LONGHAND IS IN LEXBOR'S PROPERTY REGISTRY EITHER, so a row "
+           "alone does not finish them the way §2.10's row finished `background-color`: `css_cv_used_"
+           "color_value` below has no cascaded value to read for a property nothing types, and the "
+           "logical-spelling DFAIL two statements down is the crash that says so. BUILD the shorthand's "
+           "row in css_shorthand.c's table, record the longhand in css_shorthand_complete_for, and give "
+           "the longhand an initial value in css_style_declaration.c's CSSD_INITIAL_UNREGISTERED — the "
+           "three steps the four `border-*-width` longhands already went through");
+    spec = css_cv_used_color_value(el, name);
+    if (spec == NULL) {
+        DFAIL("CSSOM §9's used-value list carries the LOGICAL colour spellings beside the physical ones — "
+              "`border-block-start-color`, `border-inline-end-color` and the other two — and this engine "
+              "has no value for one at all: lexbor's property registry does not carry them, so §6's "
+              "cascade answers nothing and §7.1 has no initial value to fall to. They are not aliases: "
+              "css-logical §2 maps each to a PHYSICAL side through the element's computed `writing-mode` "
+              "and `direction`, which is the same mapping css_property_applies.c and css_length.c's "
+              "`vi`/`vb` arm name. BUILD the logical-to-physical mapping, and each of these becomes the "
+              "physical longhand it resolves to on this element");
+        return false;
+    }
+    if (!css_color_parse(spec, strlen(spec), out)) {
+        DFAIL("a colour-valued property's specified value is not a `<color>` CSS Color 4's grammar accepts. "
+              "The value that reaches here past `currentcolor` and past §7's CSS-wide keywords is either "
+              "css-ui-4's `outline-color: invert` — a real keyword whose used value is a COLOUR INVERSION "
+              "of what is behind the outline, which no serialization can name and which every user agent "
+              "answers as the computed keyword instead — or a `color-mix()`, a `light-dark()` or a "
+              "relative-colour form the parse does not have. BUILD the missing production in "
+              "core/css/css_color.c, and give `invert` §9's computed-value escape, which is the one place "
+              "a used colour has no number");
+        free(spec);
+        return false;
+    }
+    free(spec);
+    /* §11's conversion, which is what makes every consumer's colour sRGB's: a `lab()` or an `oklch()`
+       declaration is a colour in another space until this runs, and both of this entry's readers — §16.2's
+       serialization and core/paint/display_list.h's ink — are stated for sRGB. */
+    css_color_convert(out, CSS_COLOR_SPACE_SRGB);
+    return true;
+}
+
 /* §9's two escapes read "the resolved value of the display property", which is the computed one — `display` is
    in "any other property". */
 static bool resolved_display_generates_a_box(lxb_dom_element_t *el)
@@ -1818,11 +1896,11 @@ JSValue css_resolved_value(JSContext *ctx, lxb_dom_element_t *el, const char *na
         break;
     case CSS_RESOLVED_USED: {
         /* "The resolved value is the used value" — unconditionally, with no `Applies to:` conjunct and no
-           `display` escape, which is why this arm asks neither. The used value of a COLOR is CSS Color 4's:
-           the computed value with `currentcolor` resolved, converted to sRGB by §11 and serialized by §16.2 in
-           the LEGACY comma form, which is what `rgb(255, 0, 0)` is and what a page comparing against
-           getComputedStyle reads. */
-        char *spec;
+           `display` escape, which is why this arm asks neither. The DERIVATION is `css_used_color` above and
+           what is left here is §16.2's LEGACY comma form, which is what `rgb(255, 0, 0)` is and what a page
+           comparing against getComputedStyle reads. The two are separate entries and not two copies: an
+           engine-internal caller needs the components and a page needs the string, and there is one road from
+           the cascade to the colour that both of them take. */
         CssColor color;
         char text[CSS_COLOR_FUNCTION_MAX];
 
@@ -1831,55 +1909,17 @@ JSValue css_resolved_value(JSContext *ctx, lxb_dom_element_t *el, const char *na
                   "is the one member that is not a `<color>`: css-backgrounds-3 §7.2 makes it a comma-separated "
                   "list of shadows, each two to four LENGTHS plus a colour plus an optional `inset`, and the "
                   "used value resolves the colour of each (a shadow with no colour is `currentcolor`) and "
-                  "absolutizes each length. Every piece it needs exists — `css_cv_used_color_value` above "
-                  "resolves the colour and css_length.h absolutizes the lengths — and what does not is the "
-                  "GRAMMAR: `<shadow>#` is a list this file does not parse and lexbor's registry hands back as "
-                  "one serialized string. BUILD the `<shadow>` list as its own component, since css-backgrounds "
+                  "absolutizes each length. Every piece it needs exists — `css_used_color` above resolves the "
+                  "colour and css_length.h absolutizes the lengths — and what does not is the GRAMMAR: "
+                  "`<shadow>#` is a list this file does not parse and lexbor's registry hands back as one "
+                  "serialized string. BUILD the `<shadow>` list as its own component, since css-backgrounds "
                   "§7.2's serialization order (colour, offsets, blur, spread, `inset`) is a rule of its own");
             break;
         }
-        DCHECK(css_shorthand_complete_for(name),
-               "a used COLOR was derived for a property whose SHORTHANDS are not all expanded by "
-               "css_shorthand.c, so the cascade it reads may never have looked at the declaration that set it "
-               "— an `outline: 1px solid red` two lines above an `outlineColor` read is invisible, and the "
-               "answer would be the property's initial value with nothing to say so. TWO of §9's colors are in "
-               "this state and each names one missing shorthand: `outline-color` needs css-ui-4 §3.1 "
-               "\"Outlines Shorthand: the outline property\", and `caret-color` needs its §5.2.4 \"Insertion "
-               "caret shorthand: caret\". NEITHER LONGHAND IS IN LEXBOR'S PROPERTY REGISTRY EITHER, so a row "
-               "alone does not finish them the way §2.10's row finished `background-color`: `css_cv_used_"
-               "color_value` below has no cascaded value to read for a property nothing types, and the "
-               "logical-spelling DFAIL two statements down is the crash that says so. BUILD the shorthand's "
-               "row in css_shorthand.c's table, record the longhand in css_shorthand_complete_for, and give "
-               "the longhand an initial value in css_style_declaration.c's CSSD_INITIAL_UNREGISTERED — the "
-               "three steps the four `border-*-width` longhands already went through");
-        spec = css_cv_used_color_value(el, name);
-        if (spec == NULL) {
-            DFAIL("CSSOM §9's used-value list carries the LOGICAL colour spellings beside the physical ones — "
-                  "`border-block-start-color`, `border-inline-end-color` and the other two — and this engine "
-                  "has no value for one at all: lexbor's property registry does not carry them, so §6's "
-                  "cascade answers nothing and §7.1 has no initial value to fall to. They are not aliases: "
-                  "css-logical §2 maps each to a PHYSICAL side through the element's computed `writing-mode` "
-                  "and `direction`, which is the same mapping css_property_applies.c and css_length.c's "
-                  "`vi`/`vb` arm name. BUILD the logical-to-physical mapping, and each of these becomes the "
-                  "physical longhand it resolves to on this element");
-            break;
-        }
-        if (!css_color_parse(spec, strlen(spec), &color)) {
-            DFAIL("a colour-valued property's specified value is not a `<color>` CSS Color 4's grammar accepts. "
-                  "The value that reaches here past `currentcolor` and past §7's CSS-wide keywords is either "
-                  "css-ui-4's `outline-color: invert` — a real keyword whose used value is a COLOUR INVERSION "
-                  "of what is behind the outline, which no serialization can name and which every user agent "
-                  "answers as the computed keyword instead — or a `color-mix()`, a `light-dark()` or a "
-                  "relative-colour form the parse does not have. BUILD the missing production in "
-                  "core/css/css_color.c, and give `invert` §9's computed-value escape, which is the one place "
-                  "a used colour has no number");
-            free(spec);
-            break;
-        }
-        free(spec);
-        /* §11's conversion, which is what makes the serialization below sRGB's: a `lab()` or an `oklch()`
-           declaration is a colour in another space until this runs, and §16.2's form is stated for sRGB. */
-        css_color_convert(&color, CSS_COLOR_SPACE_SRGB);
+        /* A FALSE ANSWER LEAVES THE SWITCH, which is what each of the arms that moved into `css_used_color`
+           already did: its two DFAILs name the absence in dev, and in release the `break` below is the same
+           `break` this case had. */
+        if (!css_used_color(el, name, &color)) break;
         css_color_serialize_srgb(&color, text);
         return JS_NewString(ctx, text);
     }

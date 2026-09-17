@@ -62,6 +62,7 @@
 
 #include <lexbor/dom/dom.h>
 
+#include "core/css/css_color.h"
 #include "core/css/css_defaulting.h"
 #include "core/css/css_length.h"
 #include "quickjs.h"
@@ -133,6 +134,18 @@ CssResolvedKind css_resolved_kind(const char *name);
    with nothing to say so. `ctx` is the CALLER's realm — the string is created in it — while the realm the ICB
    is answered per is the ELEMENT's document's, which core/layout/used_value.c reads for itself. */
 JSValue css_resolved_value(JSContext *ctx, lxb_dom_element_t *el, const char *name);
+
+/* §9's USED COLOUR of `name` on `el`, as a `CssColor` in sRGB rather than as the string a page reads — the
+   second entry over one derivation, for the reason core/dom/element_view.h gives for `element_view_bounding_
+   box_px` standing beside `getBoundingClientRect`: a caller inside the engine that must COMPUTE with the value
+   has to do it on the components, and a serialized colour has already crossed the boundary a page reads at.
+   core/paint/box_paint.h is the first such caller and §16.2's serialization above is the other, so there is
+   ONE road from a cascaded declaration to a used colour and the two answers cannot drift.
+   `name` must be one §9 puts in its unconditional used-value list and must not be `box-shadow`, which is the
+   one member of that list that is not a `<color>`; both are asserted rather than answered around.
+   ANSWERS FALSE where this engine has no used colour for the property at all — the crash at the site says
+   which absence it is — and writes `out` only on a true answer. */
+bool css_used_color(lxb_dom_element_t *el, const char *name, CssColor *out);
 
 /* css-inline-3 §5.1 "Line Spacing: the line-height property" — THE THIRD SHAPE A COMPUTED VALUE COMES IN, and
  * the reason this property gets an entry of its own rather than a row in either list above. §5.1's
