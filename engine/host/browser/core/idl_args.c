@@ -1217,8 +1217,9 @@ static bool idl_type_is_entry_typed(IdlArgType t)
 }
 
 /* §3.6's TWO ENTRIES, AS THE RECORD NAMES THEM. IDL_OVL_UNSEEDED is a state and not a third entry: the
-   conversion seeds the record at stage 1 and asserts it is gone by the time any position reads one, so a read
-   that finds it is a call whose steps 3-4 never ran rather than a call with no answer. */
+   conversion seeds the record BEFORE §3.6 step 5 — which is the standard's own order, steps 3-4 removing the
+   entries whose requirements step 5 then counts — and asserts it is gone by the time anything reads one, so a
+   read that finds it is a call whose steps 3-4 never ran rather than a call with no answer. */
 enum { IDL_OVL_UNSEEDED = -1, IDL_OVL_SHORTER = 0, IDL_OVL_LONGER = 1 };
 
 /* THE TYPE THE LONGER ENTRY DECLARES AT THAT POSITION — what step 4 leaves standing once the shorter entry is
@@ -1252,19 +1253,46 @@ static bool idl_split_longer_survived(const IdlMember *m, int argc)
    there is one entry and the declaration's own number IS that list; for a member that declares one, the
    surviving entry decides — however that split was stated, since the removal at steps 3-4 is by argument count
    in both forms. idl_args_seal asserts that such a member declared the longer entry's number, so there is
-   nothing to fall back to here. */
-static int idl_first_optional(const IdlMember *m, int entry)
+   nothing to fall back to here.
+   THIS IS THE FACT AND THE TWO FUNCTIONS BELOW ARE THE QUESTIONS ASKED OF IT, which is the
+   §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS split and not a matter of taste — an ENTRY ORDINAL and an ARGUMENT
+   COUNT are both plain `int`, so a caller holding one and passing the other COMPILES SILENTLY. That is measured
+   rather than feared: this function's second parameter was an argument count, the diff that gave the record an
+   entry ordinal changed it to one, and THREE callers went on passing a count with no diagnostic anywhere. The
+   three outcomes were all different and only one of them was loud — at 0 the answer was right by coincidence,
+   at 1 it returned the LONGER entry's optionality list for a call steps 3-4 leave standing on the SHORTER one
+   and nothing said so, and past that it aborted here. So no caller outside this file names an entry at all:
+   the conversion-time question takes the STATE, which is where the record lives, and the declaration-time one
+   takes nothing. A `const JSIdlArgsState *` is the one parameter an argument count cannot be passed to. */
+static int idl_first_optional_of(const IdlMember *m, int entry)
 {
     DCHECK(entry == IDL_OVL_SHORTER || entry == IDL_OVL_LONGER,
            "§3.6 step 15.3's optionality was asked before the surviving entry was seeded — steps 3-4 settle it "
-           "from the argument count before position 0 is converted, so an unseeded read is a conversion that "
-           "started without them");
+           "from the argument count BEFORE step 5 counts what that entry requires, so an unseeded read is a "
+           "conversion that performed step 5 before the removal that decides which entry step 5 is about");
     if (entry != IDL_OVL_LONGER) return m->first_optional;
     DCHECK(m->split_longer_optional >= 0,
            "a §3.6 length-differing overload split reached a conversion without its LONGER entry's optional "
            "index — idl_args_seal asserts every such member declares one, so this member was declared after "
            "the platform was sealed");
     return m->split_longer_optional;
+}
+
+/* THE SURVIVING ENTRY'S OPTIONALITY, FOR A CALL IN PROGRESS. It takes the STATE rather than the ordinal
+   because the record IS the state's and there is no second place the answer could come from — a caller that
+   could pass the ordinal is a caller that could pass the wrong one. */
+static int idl_first_optional(const IdlMember *m, const JSIdlArgsState *s)
+{
+    return idl_first_optional_of(m, s->ovl_entry);
+}
+
+/* §3.7.7's "the length of the SHORTEST argument list in the entries in S", which is a DIFFERENT question and
+   is why it is a different function: it is asked at declaration time, where there is no call and therefore no
+   surviving entry to read. Which of the two entries answers it is the derivation at idl_member_length_of, its
+   only caller, and it is stated there rather than here so that the two cannot drift apart. */
+static int idl_shortest_first_optional(const IdlMember *m)
+{
+    return idl_first_optional_of(m, IDL_OVL_SHORTER);
 }
 
 /* THE TWO-SIDED HALF OF THAT DECLARATION, run once when the platform is sealed. A member that declares a
@@ -1796,13 +1824,19 @@ static int idl_declared_positions(const IdlMember *m)
  * respectively, and the shortest tuple in S is therefore the smaller of the two.
  *
  * THE SPLIT MEMBERS ARE THE CASE WORTH CHECKING, AND THEY COME OUT RIGHT BY THE ALGORITHM RATHER THAN BY LUCK.
- * `idl_split_longer_survived` is `argc > split_at + 1`, which is FALSE at argc 0 — so the SHORTER entry's
- * optionality list is the one read here, and §3.7.7's "shortest argument list in the entries in S" wants
- * exactly that: S holds both entries' tuples, the shorter entry's type list ends at `split_at`, and
- * idl_seal_check_splits asserts `first_optional <= split_at + 1` and that a split member is not variadic — so
+ * `idl_shortest_first_optional` names the SHORTER entry OUTRIGHT, and §3.7.7's "shortest argument list in
+ * the entries in S" is exactly that: S holds both entries' tuples, the shorter entry's type list ends at
+ * `split_at`, and idl_seal_check_splits asserts `first_optional <= split_at + 1` and that a split member is
+ * not variadic — so
  * the shorter entry's own shortest tuple is at most `split_at + 1`, the longer entry's is at least that (its
  * own first optional is declared PAST the split), and the minimum over S is the shorter entry's. `postMessage`
  * is 1 and `scroll` is 0, which is what a browser answers.
+ *
+ * IT USED TO REACH THAT SAME ANSWER THROUGH `idl_split_longer_survived(m, 0)` RATHER THAN BY NAMING THE
+ * ENTRY, and the retired reasoning is rewritten rather than deleted because a reader who re-derives it
+ * writes `0` again — and `0` is now an ENTRY ORDINAL, whose agreement with the old ARGUMENT COUNT is the
+ * coincidence idl_first_optional_of's own comment exists to deny. The paragraph above is what makes the two
+ * agree; nothing about the number does.
  *
  * A PER-CALL-SITE `length` PARAMETER IS WHAT THIS REPLACES. Seven mixin installs reaching ONE declaration
  * disagreed with each other about it — five said 1 and two said 0 for the identical arity — and `new Event()`'s
@@ -1812,7 +1846,7 @@ static int idl_declared_positions(const IdlMember *m)
 static int idl_member_length_of(const IdlMember *m)
 {
     int declared  = idl_declared_positions(m);
-    int first_opt = idl_first_optional(m, 0);
+    int first_opt = idl_shortest_first_optional(m);
 
     DCHECK(first_opt >= 0 && declared >= 0,
            "a member's declaration reached §3.7.7 Operations' length with a negative position count — both "
@@ -3954,6 +3988,20 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
     }
 
     if (s->hdr.stage == 0) {
+        /* THE RECORD SAYS "NOT YET ANSWERED" UNTIL STEPS 3-4 ANSWER IT, and this line is what makes that
+           sentence true rather than merely intended. IDL_OVL_UNSEEDED was declared, described in its own
+           comment as the state an assert would catch, and WRITTEN NOWHERE — so the whole block arrives from
+           one js_mallocz and an unseeded `ovl_entry` read as 0, which IS IDL_OVL_SHORTER. The DCHECK in
+           idl_first_optional_of could not fail on it: it compared the seeded-shorter answer with the
+           never-seeded one and they are the same byte, which is §AN-ASSERT-WHOSE-TWO-SIDES-CANNOT-DISAGREE
+           with a zeroed allocation supplying the agreement.
+           IT IS NOT A HYPOTHETICAL GAP: the diff that added the field read step 15.3's optionality at step 5,
+           ABOVE the seeding, and what made that visible was a caller still passing an argument count — a
+           coincidence of vocabulary, not this assert. Had the vocabulary matched, step 5 would have counted
+           the SHORTER entry's requirements for every call, silently, including the ones steps 3-4 leave
+           standing on the longer one. So the window between here and the seeding is now a window the assert
+           can SEE, and a read added into it fires instead of answering. */
+        s->ovl_entry = IDL_OVL_UNSEEDED;
         /* A RECORD NOBODY OWNS. Every tree mutation happens inside a declared member's body and is drained
            before that member returns, so anything still waiting here was written by something that is not a
            declared member — a raw JS_CFUNC_DEF that mutates the tree. Its insertion steps would never run: an
@@ -4045,6 +4093,24 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
         DCHECK(m->variadic || s->n <= m->nargs,
                "a non-variadic member is converting more positions than its declaration lists — the argument "
                "vector in this state's tail is sized from that same `nargs`, so there is nothing behind them");
+        /* §3.6 STEPS 3-4, RUN ONCE FOR THE WHOLE CALL, BEFORE ANY VALUE IS LOOKED AT. "Initialize argcount to
+           be min(maxarg, n)" and then "Remove from S all entries whose type list is not of length argcount" —
+           a removal by ARGUMENT COUNT, which is a fact about the call and not about a position, so it is
+           settled here and every position below reads the answer. Where it leaves ONE entry, step 8 never sets
+           a distinguishing index and step 12 never runs: the seed IS the answer. Where it leaves both, the
+           split row at `distinguishing` refines it from the page's value and this is the arm a no-policy run
+           keeps.
+           A MEMBER WITH NO SPLIT HAS ONE ENTRY AND READS IDL_OVL_SHORTER, which is its own declaration —
+           `idl_split_longer_survived` is false for a `split_at` of -1, so the seed says "the entry this member
+           declares" rather than naming a second one that does not exist.
+           IT IS HERE, AND NOT WHERE THE STAGE TURNS, BECAUSE STEP 5 IS BELOW IT AND READS IT. The standard
+           numbers the removal 3-4 and the arity check 5, and the arity check's own paragraph says why the
+           order is load-bearing rather than tidy: step 5 counts what THE SURVIVING ENTRY requires, so a step 5
+           performed before the removal is asking a question whose subject does not exist yet. This engine did
+           perform it in that order, and the read below aborted rather than answering — which is the
+           §ORDER-and-NARROW-behavior-ARE-the-spec failure caught by an assert instead of by a wrong number.
+           Everything else stage 0 does between the two is argument BOOKKEEPING that neither step reads. */
+        s->ovl_entry = idl_split_longer_survived(m, s->hdr.argc) ? IDL_OVL_LONGER : IDL_OVL_SHORTER;
         {
             /* §3.6 STEP 5: a call with fewer arguments than the member has REQUIRED ones is a TypeError, and
                it is thrown before any conversion runs. `new File()` built a File out of nothing; `new File([])`
@@ -4060,7 +4126,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                length-differing split is measured against the LONGER entry, whose required positions run past
                the split even where the declaration made position 0 optional for the shorter one. */
             int declared = idl_declared_positions(m);
-            int first_opt = idl_first_optional(m, s->hdr.argc);
+            int first_opt = idl_first_optional(m, s);
             int required = first_opt < declared ? first_opt : declared;
             if (s->hdr.argc < required) {
                 JS_FreeValue(ctx, cb_result);
@@ -4136,17 +4202,6 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
         s->ce_threw = 0;
         s->ce_exc = JS_UNDEFINED;
         s->ace_ctor = JS_UNDEFINED;
-        /* §3.6 STEPS 3-4, RUN ONCE FOR THE WHOLE CALL, BEFORE ANY VALUE IS LOOKED AT. "Initialize argcount to
-           be min(maxarg, n)" and then "Remove from S all entries whose type list is not of length argcount" —
-           a removal by ARGUMENT COUNT, which is a fact about the call and not about a position, so it is
-           settled here and every position below reads the answer. Where it leaves ONE entry, step 8 never sets
-           a distinguishing index and step 12 never runs: the seed IS the answer. Where it leaves both, the
-           split row at `distinguishing` refines it from the page's value and this is the arm a no-policy run
-           keeps.
-           A MEMBER WITH NO SPLIT HAS ONE ENTRY AND READS IDL_OVL_SHORTER, which is its own declaration —
-           `idl_split_longer_survived` is false for a `split_at` of -1, so the seed says "the entry this member
-           declares" rather than naming a second one that does not exist. */
-        s->ovl_entry = idl_split_longer_survived(m, s->hdr.argc) ? IDL_OVL_LONGER : IDL_OVL_SHORTER;
         s->hdr.stage = 1;
     }
 
@@ -4187,7 +4242,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
            that entry was chosen. */
         bool step4_only_longer = longer_survived && s->i == m->split_at &&
                                  idl_type_is_length_split(m->types[m->split_at]);
-        int  first_opt = idl_first_optional(m, s->ovl_entry);
+        int  first_opt = idl_first_optional(m, s);
 
         if (step4_only_longer) t = idl_split_longer_type(t);
         /* §3.6 STEP 15.2's "the type at index i in the type list of the REMAINING entry", AT A POSITION WHERE
@@ -4798,7 +4853,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                    the number read before this position is stale for every position behind it. It is re-read
                    rather than recomputed at each use, because one derivation per position is what keeps the
                    two from answering differently. */
-                first_opt = idl_first_optional(m, s->ovl_entry);
+                first_opt = idl_first_optional(m, s);
             }
             /* THE LONGER ENTRY'S TYPE IS `ImageDataArray`, AND THE VALUE STANDING HERE HAS ALREADY PASSED
                ITS BRAND TEST — step 12's typed-array clause is what chose this entry, and it chose it by
@@ -5630,7 +5685,7 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
        representation for "missing" that is not `undefined`, and every body reading it needs to learn it. */
     {
         const JSValueConst *vec = (JSValueConst *)(argv_vec ? argv_vec : idl_args_vec(s));
-        int fo = idl_first_optional(m, s->hdr.argc), k;
+        int fo = idl_first_optional(m, s), k;
 
         for (k = fo; k < s->n && k < idl_declared_positions(m); k++)
             DCHECK(((s->missing >> k) & 1u) || !JS_IsUndefined(vec[k]),
