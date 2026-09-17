@@ -6,7 +6,7 @@
  * browser/platform_names.h and browser/language_names.h: the three vocabularies that own names on the global
  * object, which is what lets it tell a component this engine OWES from server-injected app state.
  * Derived from: https://tc39.es/ecma402/
- * Corpus edition: Draft ECMA-402 / August 7, 2026
+ * Corpus edition: Draft ECMA-402 / September 15, 2026
  * Members voting for this receiver: 12 */
 #ifndef APICLIENT_I18N_NAMES_H
 #define APICLIENT_I18N_NAMES_H
