@@ -360,7 +360,12 @@ void html_canvas_element_declare(JSContext *ctx)
     g_atom_state = JS_ValueToAtom(ctx, g_state_key);
     CHECK(g_atom_state != JS_ATOM_NULL, "§4.12.5: the canvas element state slot key could not be interned");
 
-    agent_state_id("html_canvas_element", &g_id_get_context, "§4.12.5's getContext declaration");
+    /* `element`, THE ROW THAT RELEASES THIS, and not this file — html_canvas_element_free is reached from
+       html_element_free and thence from element_free, which is the `element` row's release column, and this
+       component has no row of its own. core/html/custom_elements.c declares under the same name from the same
+       release, one line over in element_free. RETIREMENT: as at the declaration in
+       core/canvas/canvas_rendering_context_2d.c. */
+    agent_state_id("element", &g_id_get_context, "§4.12.5's getContext declaration");
 }
 
 void html_canvas_install(JSContext *ctx, JSValueConst canvas_proto)

@@ -602,7 +602,14 @@ void canvas_rendering_context_2d_init(JSContext *ctx)
     g_atom_state = JS_ValueToAtom(ctx, g_state_key);
     CHECK(g_atom_state != JS_ATOM_NULL, "§4.12.5.1: the 2D context state slot key could not be interned");
 
-    agent_state_class("canvas_rendering_context_2d", &g_class,
+    /* THE ROW'S NAME AND NOT THIS FILE'S. core/platform.c's row is `canvas_ctx2d` and its release column is
+       what reaches canvas_rendering_context_2d_free; platform_check_agent_state pairs declaration to row by
+       strcmp, so a name spelled after the FILE names a row that does not exist — the registry walk aborts,
+       and the row that really owns these slots is left reporting "declared no agent state" in the exact words
+       a component that declared nothing would use. RETIREMENT: this note goes when a declaration takes its
+       component name FROM the row rather than from a string written here, which is what would make the two
+       spellings unable to disagree. */
+    agent_state_class("canvas_ctx2d", &g_class,
                       "§4.12.5.1's CanvasRenderingContext2D class, and the declaration latch");
     realm_declare_intrinsic(canvas_rendering_context_2d_install_realm);
 }
