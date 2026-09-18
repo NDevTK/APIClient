@@ -449,6 +449,157 @@ static void dlr_glyph(const DisplayMark *m, double s, RasterSurface *surface,
     raster_path_free(&p);
 }
 
+/* WHAT ONE SPAN OF AN IMAGE MARK NEEDS — the bitmap, where the destination sits in DEVICE pixels, and the
+   surface it lands on. `dx`, `dy`, `dw` and `dh` are the mark's rectangle already multiplied by the one
+   transform in the road, which is display_list_raster.h's rule and is why nothing below multiplies again. */
+typedef struct {
+    const DisplayBitmap *bm;
+    RasterSurface       *surface;
+    double               dx, dy, dw, dh;
+    size_t               spans;
+    size_t               pixels;
+} DlrImagePaint;
+
+/* ONE RUN OF AN IMAGE, COMPOSITED. This is `raster_paint_span`'s job with a PER-PIXEL source instead of one
+ * colour, and it is a second sink rather than a parameter on that one for the reason core/graphics/
+ * raster_surface.h gives about keeping its own counters: a sink that sometimes read a colour and sometimes
+ * sampled a bitmap would be one function answering two questions, and the branch would be asked once per
+ * pixel of every fill in the engine.
+ *
+ * THE COVERAGE IS THE RASTERIZER'S AND THE SAMPLE IS THIS FUNCTION'S, which is the split that keeps an
+ * image's EDGES identical to every other mark's. `raster_fill` computes analytic coverage for the destination
+ * rectangle exactly as it does for a `DISPLAY_MARK_FILL_RECT`, so an image whose edges do not land on pixel
+ * boundaries is antialiased by the same code that antialiases a background — and this sink multiplies that
+ * coverage into the SAMPLE's own alpha rather than deciding either of them.
+ *
+ * SOURCE-OVER ON STRAIGHT ALPHA, which is the operator core/graphics/raster_surface.c states and which
+ * core/image/png_decode.h's output is already in — "non-premultiplied RGBA8" in its own words — so there is no
+ * un-premultiply here and there must not be one: a divide by a zero alpha is how a fully transparent source
+ * pixel becomes a NaN colour.
+ *
+ * NAMED RESIDUAL — THE RESAMPLING IS NEAREST-NEIGHBOUR. WHAT IS NOT COVERED: css-images-3 §5.2 "Determining
+ * How To Scale an Image: the image-rendering property" gives `auto` the latitude that a user agent "may use
+ * any algorithm", so nearest-neighbour is CONFORMANT and this is a quality residual rather than a spec gap —
+ * but that property's `smooth` and `high-quality` values ask for a filter this has none of, and `pixelated`
+ * asks for exactly this one, so the three cannot be told apart today. WHAT THE NEXT DIFF BUILDS: the
+ * `image-rendering` computed value read here, with a bilinear arm for `smooth`/`high-quality` and this
+ * sampler kept as the `pixelated` and `crisp-edges` arm. HOW ITS ABSENCE WOULD SHOW: an image composited into
+ * a rectangle that is not its natural size has hard stair-stepped edges inside it — visible on any document
+ * that gives an `img` a `width` its file does not have — while its OUTER edge stays smooth, because that one
+ * is the rasterizer's coverage and not this sampler's. */
+static void dlr_image_span(void *user, int y, int x, int len, double coverage)
+{
+    DlrImagePaint *p = (DlrImagePaint *)user;
+    const RasterSurface *s;
+    const DisplayBitmap *bm;
+    uint8_t *row;
+    int i;
+
+    DCHECK(p != NULL && p->surface != NULL, "an image span with no surface under it");
+    s = p->surface;
+    bm = p->bm;
+    /* THE SAME TWO ASSERTIONS core/graphics/raster_surface.c MAKES AND FOR THE SAME REASONS, which is this
+       sink discharging that file's contract rather than restating it: the bounds are a `CHECK` because the
+       loop below WRITES through `x` and `y` in release as well as in dev, and the coverage is a `DCHECK`
+       because a coverage out of range is a wrong PIXEL and not a wrong ADDRESS. Neither operand is a
+       document's: both are numbers core/graphics/rasterizer.c computed from a region this codebase
+       allocated. */
+    CHECKF(y >= 0 && y < s->height && x >= 0 && len >= 1 && x <= s->width - len,
+           "an image span outside the surface it is being composited into — row %d, columns %d..%d of a %dx%d "
+           "surface", y, x, x + len - 1, s->width, s->height);
+    DCHECKF(coverage > 0.0 && coverage <= 1.0,
+            "an image span of coverage %g — a run of zero coverage is ink nothing downstream could tell from "
+            "its absence and is not emitted, and a coverage above one is a fold that did not saturate",
+            coverage);
+    if (s->px == NULL) return;
+
+    p->spans++;
+    p->pixels += (size_t)len;
+
+    row = s->px + ((size_t)y * (size_t)s->width + (size_t)x) * 4;
+    for (i = 0; i < len; i++) {
+        uint8_t *q = row + (size_t)i * 4;
+        const uint8_t *src;
+        double as, keep, ad, ao;
+        long sx, sy;
+
+        /* THE SAMPLE IS TAKEN AT THE PIXEL'S CENTRE — the `+ 0.5` — which is what makes this sampler pick the
+           source pixel the destination pixel's MIDDLE lands in rather than the one its LEFT EDGE lands in.
+           WHERE IT MATTERS IS NARROWER THAN IT LOOKS, AND THE NARROW STATEMENT IS THE TRUE ONE: at a 1:1
+           composite and at any INTEGER scale the two spellings agree exactly, because the offset is then
+           smaller than one source pixel's worth of destination and floors to the same index — 2 source pixels
+           into a 2- or 40-wide destination give an identical answer with and without it. It bites at a
+           NON-INTEGER scale, where dropping it biases every sample toward the source's origin: 2 source
+           pixels into a 3-wide destination map to 0,1,1 with the offset and 0,0,1 without, so the second
+           source pixel loses a third of its area to the first. That is a half-destination-pixel shift of the
+           whole image toward the top-left, and it is a real defect rather than a rounding taste — it is also
+           exactly why a probe that only composites at 1:1 and at 20x cannot see it. */
+        sx = (long)(((double)x + (double)i + 0.5 - p->dx) * (double)bm->w / p->dw);
+        sy = (long)(((double)y + 0.5 - p->dy) * (double)bm->h / p->dh);
+        /* A SAMPLE OFF THE EDGE IS CLAMPED AND NOT SKIPPED. The rasterizer hands this sink only pixels the
+           destination rectangle covers, so a coordinate outside the source can only be the last pixel of a
+           row rounding outward by one — clamping keeps the run's colour and skipping would leave a
+           transparent seam along two edges of every scaled image. */
+        if (sx < 0) sx = 0;
+        if (sx >= (long)bm->w) sx = (long)bm->w - 1;
+        if (sy < 0) sy = 0;
+        if (sy >= (long)bm->h) sy = (long)bm->h - 1;
+        src = bm->rgba + ((size_t)sy * (size_t)bm->w + (size_t)sx) * 4;
+
+        as = ((double)src[3] / 255.0) * coverage;
+        if (as <= 0.0) continue;    /* a fully transparent source pixel changes no byte, whatever the coverage */
+        ad = (double)q[3] / 255.0;
+        keep = ad * (1.0 - as);
+        ao = as + keep;
+        if (ao <= 0.0) { q[0] = q[1] = q[2] = q[3] = 0; continue; }
+        q[0] = raster_surface_quantize((((double)src[0] / 255.0) * as + ((double)q[0] / 255.0) * keep) / ao);
+        q[1] = raster_surface_quantize((((double)src[1] / 255.0) * as + ((double)q[1] / 255.0) * keep) / ao);
+        q[2] = raster_surface_quantize((((double)src[2] / 255.0) * as + ((double)q[2] / 255.0) * keep) / ao);
+        q[3] = raster_surface_quantize(ao);
+    }
+}
+
+/* ONE IMAGE — its destination rectangle through the same path road every other rectangle takes, filled by the
+   sampling sink above. The four lengths are multiplied by `s` and nothing else is, which is
+   display_list_raster.h's own rule.
+   A ZERO-AREA DESTINATION LAYS NO INK AND IS NOT AN ERROR: a replaced element whose used width or height is
+   zero is a legitimate box CSS 2.1 §10.3 admits, and `raster_fill` would emit no span for it anyway — the
+   early return is what keeps the division in the sampler above from being asked about a zero extent. */
+static void dlr_image(const DisplayMark *m, const DisplayList *dl, double s, RasterSurface *surface,
+                      DisplayListRasterCount *count)
+{
+    DlrImagePaint paint;
+    RasterPath p;
+    RasterEdges e;
+    size_t nspans;
+
+    paint.bm = display_list_bitmap(dl, m->image.bitmap);
+    paint.surface = surface;
+    paint.dx = m->rect[0].px * s;
+    paint.dy = m->rect[1].px * s;
+    paint.dw = m->rect[2].px * s;
+    paint.dh = m->rect[3].px * s;
+    paint.spans = 0;
+    paint.pixels = 0;
+    if (!(paint.dw > 0.0) || !(paint.dh > 0.0)) return;
+
+    raster_path_init(&p);
+    raster_path_rect(&p, paint.dx, paint.dy, paint.dw, paint.dh);
+    raster_edges_init(&e);
+    raster_path_flatten(&p, RASTER_FLATTEN_TOLERANCE_PX, &e);
+    nspans = raster_fill(&e, RASTER_FILL_NONZERO, surface->width, surface->height, dlr_image_span, &paint);
+    /* TWO COUNTERS HELD TO EACH OTHER, which is `dlr_fill`'s own identity one kind over: a fill that emitted
+       runs nobody received and a fill that emitted none are the same number at the caller, and two counts
+       that must agree are not. A run this sink DROPPED for a transparent source still arrives here, because
+       the drop is per PIXEL and the span was received. */
+    DCHECKF(nspans == paint.spans,
+            "an image fill emitted %zu runs and the sampler received %zu", nspans, paint.spans);
+    raster_edges_free(&e);
+    raster_path_free(&p);
+    count->spans += paint.spans;
+    count->pixels += paint.pixels;
+}
+
 void display_list_raster(const DisplayList *dl, double device_px_per_css_px, RasterSurface *surface,
                          DisplayListRasterCount *count)
 {
@@ -505,6 +656,13 @@ void display_list_raster(const DisplayList *dl, double device_px_per_css_px, Ras
            two beside it are what say how much of the text was drawn. */
         case DISPLAY_MARK_GLYPH:
             dlr_glyph(m, s, surface, count);
+            break;
+        /* THE ONE ARM THAT NEEDS THE LIST AND NOT JUST THE MARK, which is `DisplayImage`'s ownership answer
+           arriving at its consumer: the pixels are the LIST's, so the mark's index is resolved against `dl`
+           here exactly as a glyph's code point is resolved against core/css/font_metrics.h's one face in the
+           arm above. */
+        case DISPLAY_MARK_IMAGE:
+            dlr_image(m, dl, s, surface, count);
             count->marks++;
             break;
         }

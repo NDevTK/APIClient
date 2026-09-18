@@ -172,15 +172,20 @@
  * one; its step 7.2.1 sub-list reaches "the text", which HAS a kind now, and the three decoration lines over
  * and under it, which do not; and its step 7.1 reaches "the replaced content, atomically", which is a SURFACE
  * rather than a mark.
- * WHAT THE NEXT DIFF BUILDS: the IMAGE mark, which is ONE gap and not one per step, because what every image
- * item of every step wants is the same operand: an `<image>` that has become PIXELS. This engine's `<image>`
- * road ends at a validity test — core/css/css_image.h answers whether a component value matches
- * css-images-3 §2 "Image Values: the <image> type" and deliberately keeps the author's own bytes — so
- * nothing anywhere turns a `<url>` into anything a surface could composite, and the diff that lands the
- * image mark is the one that makes such a thing exist.
- * HOW ITS ABSENCE WOULD SHOW: a painted document has its text but no pictures — every background image, every
- * `list-style-image` and every replaced element's content missing, with the area CSS 2.1 §E.2 puts each one
- * in drawn in whatever colour sits under it, and no underline or strikethrough on any text that declares one.
+ * WHAT THE NEXT DIFF BUILDS: the two remaining items' PRODUCERS. The image MARK now exists and so does the
+ * operand it wanted — an `<image>` that has become PIXELS — but only ONE of §E.2's four image items produces
+ * one: step 7.2.1's "For inline-level replaced elements: the replaced content, atomically", whose pixels
+ * arrive because HTML §4.8.4.3.5 "Updating the image data" already fetched them. The other three are a
+ * `background-image`, a `list-style-image` and step 1's root-element background image, and every one of them
+ * is blocked on the SAME missing step rather than on this vocabulary: this engine's `<image>` road ends at a
+ * validity test — core/css/css_image.h answers whether a component value matches css-images-3 §2 "Image
+ * Values: the <image> type" and deliberately keeps the author's own bytes — so a `<url>` in a CSS declaration
+ * is never fetched at all, and the diff that lands those three is the one that gives a computed `<image>` a
+ * fetch. The DECORATION LINES are a second and unrelated gap and want a mark this vocabulary still has no
+ * word for.
+ * HOW ITS ABSENCE WOULD SHOW: a painted document has its text and its `img` elements but no CSS pictures —
+ * every background image and every `list-style-image` missing, with the area CSS 2.1 §E.2 puts each one in
+ * drawn in whatever colour sits under it, and no underline or strikethrough on any text that declares one.
  * RETIREMENT: this record loses a clause as each kind lands, and goes when every mark CSS 2.1 §E.2's
  * sub-lists name has a kind here.
  *
@@ -221,10 +226,14 @@ typedef enum {
     DISPLAY_MARK_BORDER,         /* ONE box's border, all four sides — the rectangle is its BORDER BOX and the
                                     four sides are drawn INWARD from its four edges. See the header's own
                                     paragraph for why this is one mark and not four */
-    DISPLAY_MARK_GLYPH           /* ONE placed character of CSS 2.1 §E.2's step 7.2.1 "the text" — a code
+    DISPLAY_MARK_GLYPH,          /* ONE placed character of CSS 2.1 §E.2's step 7.2.1 "the text" — a code
                                     point, an em and a PEN POSITION. It carries no rectangle at all. See the
                                     header's own paragraph for why this is one mark per CHARACTER and not one
                                     per run */
+    DISPLAY_MARK_IMAGE           /* ONE image, composited into `rect`. CSS 2.1 §E.2 "Painting order" reaches an
+                                    image at four separate items and this is the ONE kind all four want — see
+                                    the header's own paragraph for why the pixels are the LIST's and the mark
+                                    carries an INDEX */
 } DisplayMarkKind;
 
 /* CSS 2.1 §8.5.3 "Border style: 'border-top-style', 'border-right-style', 'border-bottom-style',
@@ -289,6 +298,57 @@ typedef struct {
     CssPx    em;                 /* css-values-4 §6.1.1's em — the used `font-size` this glyph is scaled to */
 } DisplayGlyph;
 
+/* ONE IMAGE'S PIXELS, OWNED BY THE LIST. `rgba` is non-premultiplied 8-bit RGBA in row-major order with no
+   padding between rows, which is what core/image/png_decode.h's `png_decode_rgba` produces and the one
+   spelling this component accepts — a second layout would make every consumer ask which one it had.
+   `w * h * 4` IS `n` AND IS ASSERTED, so a consumer's loop bound and the allocation it walks are one number
+   rather than two that are free to disagree. */
+typedef struct {
+    uint8_t *rgba;
+    uint32_t w, h;
+    size_t   n;
+} DisplayBitmap;
+
+/* WHAT A `DISPLAY_MARK_IMAGE` SAYS BESIDE ITS RECTANGLE — an INDEX into the list's own bitmap array, and
+   nothing else.
+ *
+ * WHY AN INDEX, WHICH IS THE ONE FIELD A READER ARRIVING FROM THE OWNERSHIP PARAGRAPH ABOVE WILL CHALLENGE.
+ * That paragraph says there is no pointer on a mark and nothing here holds a borrowed one, and a bitmap is
+ * not a value — so an image kind has to answer it rather than work around it. The retired text clause above
+ * enumerates the three ways out it considered for a run of glyphs and all three fail here for reasons that
+ * are not arguable: ONE MARK PER PIXEL is the per-character answer taken to its conclusion and is absurd; AN
+ * OWNED POINTER ON THE MARK is the one that clause names and is refused for the same reason it was refused
+ * there, that it changes `display_list_append`'s copy semantics for EVERY kind and makes the per-flow COW
+ * delta capture a graph where it captures an array; and A FIXED-CAPACITY INLINE ARRAY is a bound, which
+ * CLAUDE.md's §NO BOUNDS forbids outright — an image wider than the capacity would be pixels this engine
+ * decided not to draw.
+ * THE FOURTH WAY IS THE GLYPH KIND'S OWN, READ FOR WHAT IT ACTUALLY DOES: a `DISPLAY_MARK_GLYPH` carries a
+ * CODE POINT and the pixels are resolved where their OWNER is, which is core/css/font_metrics.h's one face.
+ * An image has no such owner — a decoded image is a stranger's bytes, per document and per flow, and there is
+ * no "the one face" for it — so this kind names the LIST as the owner instead, and the identity it carries is
+ * an index into what the list owns. Every clause of the ownership paragraph then holds LITERALLY rather than
+ * by analogy: the mark is a value, it holds no pointer, it borrows nothing, a caller may still build one on
+ * its stack and append it, and "freeing the list frees everything the list is" covers the pixels exactly
+ * because the pixels ARE part of what the list is. `display_list_append` is unchanged and still copies a flat
+ * struct, which is the property the retired clause's second option would have destroyed.
+ * THE PRICE IS A COPY AND IT IS STATED RATHER THAN HIDDEN: `display_list_add_bitmap` copies the caller's
+ * pixels, so a list of ink is self-contained and has no lifetime anyone can get wrong at the moment a flow
+ * parks — which is exactly what that paragraph is protecting. A list is built per call and freed by its
+ * builder, so the copy is per paint and is bounded by the image, never accumulated.
+ * NAMED RESIDUAL — THE SAME IMAGE PAINTED TWICE IS DECODED AND COPIED TWICE. WHAT IS NOT COVERED: two marks
+ * naming one resource — a `background-image` repeated over a tiled area, one `src` on two elements, or one
+ * element painted into two worlds — each add their own bitmap, so the list holds N copies of one decoded
+ * image. WHAT THE NEXT DIFF BUILDS: HTML §4.8.4.3.3 "The list of available images" as an agent-wide map, which
+ * core/html/html_image.c's own residual already names for the FETCH half and which is the same key — its
+ * (URL, mode, origin) triple — so the decode and the copy are shared through one entry rather than two
+ * mechanisms. HOW ITS ABSENCE WOULD SHOW: a list's bitmap count rises with the number of image MARKS rather
+ * than with the number of distinct resources, which `display_list_bitmap_count` reports beside
+ * `DisplayListRasterCount`'s marks.
+ * RETIREMENT: this record goes when two marks naming one resource share one bitmap entry. */
+typedef struct {
+    uint32_t bitmap;             /* an index into the list's own bitmap array — see the paragraph above */
+} DisplayImage;
+
 /* ONE MARK. `rect` is x, y, width and height in CSSOM VIEW §6 "Extensions to the Element Interface"'s CLIENT
    COORDINATES, in that order — the same four numbers and the same order `element_view_bounding_box_px`
    answers, because that is where a box's rectangle comes from and two spellings of one rectangle is one
@@ -323,6 +383,7 @@ typedef struct {
     CssColor          color;
     DisplayBorderSide side[4];
     DisplayGlyph      glyph;
+    DisplayImage      image;
 } DisplayMark;
 
 /* A SEQUENCE OF MARKS, in the order CSS 2.1 §E.2 "Painting order" offered them. A zeroed struct is a valid
@@ -330,9 +391,15 @@ typedef struct {
    appended to and a list whose builder found nothing to paint are the same object, which is correct: both are
    a document with no ink and neither is an absence of an answer. */
 typedef struct {
-    DisplayMark *v;
-    size_t       n;
-    size_t       cap;
+    DisplayMark   *v;
+    size_t         n;
+    size_t         cap;
+    /* THE PIXELS EVERY `DISPLAY_MARK_IMAGE` OF THIS LIST NAMES, owned here — see `DisplayImage` for why the
+       owner is the list and not the mark. A zeroed struct is a valid EMPTY list in this half exactly as it is
+       in the other: a list with no image marks holds no bitmaps, which is not an absence of an answer. */
+    DisplayBitmap *img;
+    size_t         img_n;
+    size_t         img_cap;
 } DisplayList;
 
 void display_list_init(DisplayList *dl);
@@ -344,6 +411,26 @@ void display_list_free(DisplayList *dl);
 /* APPENDS A COPY of `mark` to the end — which is the ONLY way ink enters a list, so the sequence a list holds
    is the sequence its builder produced and there is no second road for a mark to arrive out of order. */
 void display_list_append(DisplayList *dl, const DisplayMark *mark);
+
+/* TAKES A COPY of `w` by `h` non-premultiplied RGBA8 pixels into the list and answers the INDEX a
+   `DISPLAY_MARK_IMAGE` names them by. The copy is this component's whole ownership statement and the
+   paragraph at `DisplayImage` is why; `n` is the caller's byte count and is asserted to be `w * h * 4`, so a
+   producer that hands over a buffer of the wrong size is named here rather than by a surface reading past it.
+   A ZERO-AREA BITMAP IS REFUSED rather than stored: css-images-3 §4.1 "Object-Sizing Terminology"' natural dimensions
+   are of an image that HAS them, PNG §11.2.1 "IHDR Image header" makes zero an invalid value in its own words,
+   and a mark over no pixels is ink that cannot be drawn — so a caller with nothing to composite appends no
+   mark at all, which is the positive statement that this element contributed no ink. */
+uint32_t display_list_add_bitmap(DisplayList *dl, const uint8_t *rgba, uint32_t w, uint32_t h, size_t n);
+
+/* THE PIXELS A `DISPLAY_MARK_IMAGE` NAMES. The index is asserted IN RANGE, which is the invariant that makes
+   an index sound where a pointer was refused: a mark naming a bitmap this list does not hold is this engine's
+   two halves of one append having come apart, and it is caught at the read rather than by a surface walking
+   memory the list never owned. */
+const DisplayBitmap *display_list_bitmap(const DisplayList *dl, uint32_t index);
+
+/* HOW MANY BITMAPS THIS LIST OWNS — the denominator `DisplayImage`'s residual is read against, and the one
+   number that tells a list holding N copies of one resource from a list holding N resources. */
+size_t display_list_bitmap_count(const DisplayList *dl);
 
 /* THE UNION OF THE ENVIRONMENT FACTS EVERY MARK'S GEOMETRY IS A FUNCTION OF — the WORLD this ink belongs to,
    read off a finished list. `CSS_ENV_NONE` is a POSITIVE statement and not an absence, exactly as it is on a

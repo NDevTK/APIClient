@@ -74,6 +74,16 @@ void raster_paint_span(void *user, int y, int x, int len, double coverage);
    own indexing error and are asserted. */
 void raster_surface_get(const RasterSurface *s, int x, int y, uint8_t rgba[4]);
 
+/* THE ONE QUANTIZATION — a component in [0, 1] to the byte this surface stores, clamped and rounded half up.
+   IT IS EXPORTED SO THERE IS ONE ANSWER AND NOT TWO. A second compositor — core/paint/display_list_raster.c's
+   image sink is the first — has to turn the same doubles into the same bytes, and a private copy of
+   `floor(v * 255 + 0.5)` beside this one is two right answers to one question, which is the shape that drifts:
+   the day either grows a dither, a gamma step or a different rounding, one compositor would quietly disagree
+   with the other about a colour and nothing would say so.
+   IT IS TOTAL AND A NaN GOES TO ZERO, which the clamp behind it states in its own words — a component is a
+   cascade's number and may legitimately be out of gamut, so this is the answer and an assert is not. */
+uint8_t raster_surface_quantize(double v);
+
 /* HOW MANY BYTES `px` IS, WHICH IS THE ONE THING A CONSUMER OF THE WHOLE BITMAP NEEDS AND THE ONE THING THIS
    COMPONENT DID NOT STATE. A reader of a single pixel is served above and a reader of a HASH below; a reader
    of the RUN had only the three public fields and the arithmetic, so every such reader is a second copy of

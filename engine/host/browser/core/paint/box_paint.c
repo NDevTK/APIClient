@@ -17,8 +17,13 @@
                                         the ELEMENT's document's, never the running realm's */
 #include "core/dom/element_view.h"
 #include "core/frame/viewport.h"
+#include "core/html/html_image.h"    /* html_image_decoded_rgba — CSS 2.1 §E.2 step 7.2.1 item 4's
+                                        third arm, "the replaced content", for the one replaced element that
+                                        fetches its own */
 #include "core/layout/block_flow.h"  /* CSS 2.2 §9.2.1.1's TWO shapes of one inline formatting context */
 #include "core/layout/line_box.h"    /* line_box_glyphs — CSS 2.1 §E.2 step 7.2.1's "the text", placed */
+#include "core/layout/replaced_element.h" /* the `replaced` bit that separates item 4's THIRD arm from
+                                            its second — an inline-block is atomic and is not replaced */
 #include "core/layout/used_value.h"   /* used_value_border_widths_px — CSS 2.1 §8.5's four USED widths, which
                                          the cascade does not hold for a table box under either border model */
 #include "core/paint/box_paint.h"
@@ -378,6 +383,69 @@ static void bp_content_box_origin(lxb_dom_element_t *el, CssPx *x, CssPx *y)
     *y = css_px_add(box[1], css_px_add(width[0], used_value_px(el, "padding-top")));
 }
 
+/* CSS 2.1 §E.2 "Painting order"'s STEP 7.2.1, ITEM 4, THIRD ARM — "For inline-level replaced elements: the
+ * replaced content, atomically".
+ *
+ * WHICH OF THE TWO "replaced content, atomically" ITEMS THIS IS, because §E.2 has two and they are different
+ * steps. The other is STEP 7.1, "If the element is a block-level replaced element, then: the replaced content,
+ * atomically", which core/paint/paint_order.h offers as `PAINT_STEP_REPLACED_CONTENT` and which the switch in
+ * `bp_step_marks` still answers with no ink. THIS one is inside step 7.2.1's own enumeration, reached for a
+ * box on a LINE, and it is the one a default `img` takes: HTML §4.8.1 "Embedded content" makes `img` a
+ * replaced element and the UA sheet leaves it `display: inline`, so it is INLINE-LEVEL and never block-level.
+ * Building the block-level item on top of this one is a `used_value_content_px` and a rectangle away and is
+ * deliberately not done here: it is offered through a different step, it is reached for a different set of
+ * boxes, and a producer written at both at once would have one failure with two possible causes.
+ *
+ * "ATOMICALLY" IS DISCHARGED BY THE MARK BEING ONE MARK. §E.2 gives the replaced content as a single item of
+ * its sub-list and core/paint/paint_order.h's own paragraph reads that as making the box a UNIT; a
+ * `DISPLAY_MARK_IMAGE` is one mark carrying one rectangle and one bitmap, so there is no interior for another
+ * step's ink to land inside and nothing here has to arrange that.
+ *
+ * THE RECTANGLE IS THE CONTENT BOX, and it is composed from the two derivations that already exist rather than
+ * from a third: `bp_content_box_origin` is CSS 2 §8.1 "Box dimensions"' nesting read forward, which this file
+ * already uses for the glyph origin, and `used_value_content_px` is core/layout/used_value.h's one answer for
+ * a content extent — the same one CSS 2.1 §10.4 "Minimum and maximum widths" and §10.3.2's replaced-element
+ * arm feed. An image is composited into that area and NOT into its natural size: css-images-3 §4.1
+ * "Object-Sizing Terminology"' natural dimensions are the SOURCE's, and a `width` attribute or a `width`
+ * declaration is exactly what makes the two differ.
+ *
+ * A REFUSAL LAYS NO MARK AND IS NOT AN ERROR. `html_image_decoded_rgba` answers NULL for an element that has
+ * issued no request, one whose reply has not arrived, one the network refused, one whose state is `broken`
+ * and one whose bytes are in a format this engine has no decoder for — and every one of those is a document's
+ * or a server's doing rather than this engine's, so the answer is ink that is absent and never an abort. That
+ * is the same shape `dlr_glyph` gives an empty outline one kind over: the mark count beside the surface is
+ * what a reader tells the two apart by.
+ *
+ * IT RETURNS TRUE ON A REFUSAL, which is this file's own convention and is worth saying because the opposite
+ * reading is available: a `false` return here means AN OPERAND THIS PAINTER COULD NOT COMPUTE, which stops
+ * the walk and keeps the prefix, and an image nobody fetched is not that — it is a box that contributed no
+ * ink, exactly as a `background-color: transparent` does. */
+static bool bp_inline_replaced_content(BpState *st, lxb_dom_element_t *el)
+{
+    DisplayMark m;
+    uint8_t *rgba;
+    uint32_t w = 0, h = 0;
+
+    st->offers++;
+    rgba = html_image_decoded_rgba(st->ctx, el, &w, &h);
+    if (rgba == NULL) return true;
+
+    memset(&m, 0, sizeof m);
+    m.kind = DISPLAY_MARK_IMAGE;
+    bp_content_box_origin(el, &m.rect[0], &m.rect[1]);
+    m.rect[2] = used_value_content_px(el, false);
+    m.rect[3] = used_value_content_px(el, true);
+    /* THE PIXELS ENTER THE LIST BEFORE THE MARK THAT NAMES THEM, which is the order core/paint/display_list.h
+       forces and the only one that works: `display_list_add_bitmap` ANSWERS the index, so a mark built first
+       would carry a promise about a bitmap that had not arrived, and `display_list_append` asserts against
+       exactly that. The buffer is this caller's to free and the list took a COPY — see display_list.h's
+       `DisplayImage` for why the list owns its pixels rather than borrowing them. */
+    m.image.bitmap = display_list_add_bitmap(st->out, rgba, w, h, (size_t)w * (size_t)h * 4);
+    free(rgba);
+    display_list_append(st->out, &m);
+    return true;
+}
+
 /* ---- CSS 2.1 §E.2's STEP 7.2.1 — THE BOXES IN A LINE BOX, AND THE MARKS EACH OF THEM LAYS ------------------ */
 
 /* ONE CHARACTER, LAID AS A MARK. `origin_x` and `origin_y` are where the box holding this formatting context
@@ -523,6 +591,14 @@ static bool bp_step_7_2_1(BpState *st, lxb_dom_element_t *parent, lxb_dom_node_t
             lxb_dom_element_t *box = lxb_dom_interface_element(child);
 
             if (paint_order_inline_kind(box) == PAINT_INLINE_NON_ATOMIC && !bp_inline_box_marks(st, box))
+                return false;
+            /* ITEM 4's THIRD ARM. `PAINT_INLINE_ATOMIC` is item 4's second AND third arms together —
+               core/paint/paint_order.c answers it for an inline-block and an inline-table as well as for a
+               replaced element — so the `replaced` test is what separates the two, and without it an
+               `inline-block` would be asked for a replaced content it does not have. The second arm is a
+               pseudo-stacking-context and is core/paint/paint_order.h's own residual, not this one's. */
+            if (paint_order_inline_kind(box) == PAINT_INLINE_ATOMIC && replaced_element_of(box).replaced
+                && !bp_inline_replaced_content(st, box))
                 return false;
             if (!bp_step_7_2_1(st, box, child->first_child, NULL, g, n, cursor, origin_x, origin_y))
                 return false;

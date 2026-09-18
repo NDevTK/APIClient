@@ -6937,6 +6937,141 @@ static void png_decode_selftest(void)
     }
 }
 
+/* @IMGMARK — CSS 2.1 §E.2 "Painting order"'s IMAGE mark, from a PNG's bytes to the surface it lands on.
+ * It stands AFTER png_decode_selftest and for the reason that row gives about itself: this row's operand is
+ * that decoder's output, so a decompressor or a chunk walk that were broken would fail at its own row first
+ * and this one would be reporting somebody else's defect.
+ *
+ * WHAT IT PINS THAT NO OTHER ROW CAN. core/paint/display_list.h answers the ownership question an image kind
+ * poses — the pixels are the LIST's and a mark carries an INDEX — and that answer is only worth anything if
+ * the copy actually happens: the decoder is FREED here while the list is still read, so a list that had
+ * borrowed the decoder's buffer reads released memory at the line below rather than in some document a
+ * session later.
+ *
+ * THE FIXTURE IS CONSTANTS AND THE SCALES ARE THE THREE THAT DIFFER. A 1:1 composite and an INTEGER scale
+ * cannot see the half-pixel sample offset — both spellings floor to the same index, which a mutation run
+ * established rather than argued — so the 3-wide destination is here because it is the ONLY shape that does.
+ * Its columns sample source 0,1,1 with the offset and 0,0,1 without. */
+static void display_image_mark_selftest(void)
+{
+    /* 2x2, PNG §6.1 Table 9's colour type 2 at bit depth 8, no interlace: RED GREEN over BLUE WHITE. */
+    static const uint8_t PNG_2x2[] = {
+        0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a,0x00,0x00,0x00,0x0d,
+        0x49,0x48,0x44,0x52,0x00,0x00,0x00,0x02,0x00,0x00,0x00,0x02,
+        0x08,0x02,0x00,0x00,0x00,0xfd,0xd4,0x9a,0x73,0x00,0x00,0x00,
+        0x12,0x49,0x44,0x41,0x54,0x78,0xda,0x63,0xf8,0xcf,0xc0,0xc0,
+        0x00,0xc2,0x0c,0xff,0x81,0x00,0x00,0x1f,0xee,0x05,0xfb,0xf1,
+        0xab,0xba,0x77,0x00,0x00,0x00,0x00,0x49,0x45,0x4e,0x44,0xae,
+        0x42,0x60,0x82
+    };
+    PngDecode d;
+    PngHeader h;
+    DisplayList dl;
+    DisplayMark m;
+    RasterSurface surf;
+    DisplayListRasterCount cnt;
+    const uint8_t *rgba;
+    size_t n = 0;
+    uint32_t idx;
+    uint8_t q[4];
+    int i;
+    /* x, destination width, and the source column the sample must land in. The 3-wide row is the
+       discriminating one; the other two agree under both spellings and are here as the ordinary cases. */
+    static const struct { int dw, x, want; } SAMPLE[] = {
+        { 2, 0, 0 }, { 2, 1, 1 },
+        { 3, 0, 0 }, { 3, 1, 1 }, { 3, 2, 1 },
+        { 4, 0, 0 }, { 4, 1, 0 }, { 4, 2, 1 }, { 4, 3, 1 }
+    };
+
+    png_decode_init(&d, PNG_2x2, sizeof PNG_2x2, 0);
+    CHECK(png_decode_run(&d) == PNG_DONE,
+          "@IMGMARK's committed 2x2 PNG did not decode — this row's fixture is bytes this tree holds, so a "
+          "refusal here is core/image/png_decode.c disagreeing with a datastream it accepted when this row "
+          "was written and never a claim about anybody's server");
+    CHECK(png_decode_header(&d, &h) && h.width == 2 && h.height == 2,
+          "@IMGMARK's fixture PNG does not report the 2x2 its own IHDR states");
+    rgba = png_decode_rgba(&d, &n);
+    CHECKF(rgba != NULL && n == 16, "@IMGMARK's 2x2 decoded to %zu bytes where 2*2*4 is 16", n);
+
+    display_list_init(&dl);
+    CHECK(display_list_bitmap_count(&dl) == 0, "a fresh display list already owns bitmaps");
+    idx = display_list_add_bitmap(&dl, rgba, h.width, h.height, n);
+    CHECK(idx == 0 && display_list_bitmap_count(&dl) == 1,
+          "the first bitmap a list is handed did not become index 0");
+    CHECK(display_list_bitmap(&dl, 0)->rgba != rgba,
+          "a display list KEPT the caller's pixel pointer instead of copying it — display_list.h's "
+          "`DisplayImage` refuses a borrowed lifetime outright, and the free below would make it a "
+          "use-after-free in whatever document next painted an image");
+    png_decode_free(&d);        /* the decoder goes FIRST — the list must still be whole below */
+    CHECK(display_list_bitmap(&dl, 0)->rgba[0] == 0xff && display_list_bitmap(&dl, 0)->n == 16,
+          "a display list's copy of an image did not survive its decoder being freed, which is the one thing "
+          "the copy exists for");
+
+    /* EVERY DESTINATION WIDTH IN ONE LOOP, so the three scales are one statement rather than three. */
+    for (i = 0; i < (int)(sizeof SAMPLE / sizeof SAMPLE[0]); i++) {
+        static const uint8_t WANT[2][3] = { { 0xff, 0x00, 0x00 }, { 0x00, 0xff, 0x00 } };
+        DisplayList one;
+
+        display_list_init(&one);
+        CHECK(display_list_add_bitmap(&one, display_list_bitmap(&dl, 0)->rgba, 2, 2, 16) == 0,
+              "@IMGMARK's per-width list did not issue index 0");
+        memset(&m, 0, sizeof m);
+        m.kind = DISPLAY_MARK_IMAGE;
+        m.rect[2].px = SAMPLE[i].dw;
+        /* THE DESTINATION IS TWO ROWS TALL AND NOT ONE, which is not a detail: a 1-row destination makes the
+           vertical sample `(0 + 0.5) * 2 / 1`, which is 1 and reads the source's SECOND row — so a fixture
+           written a row shorter would compare row 0's colours against row 1's pixels and fail a correct
+           sampler. Two rows put the sample at 0.5, which floors into row 0. */
+        m.rect[3].px = 2;
+        display_list_append(&one, &m);
+        raster_surface_init(&surf, SAMPLE[i].dw, 2);
+        cnt.marks = 0; cnt.spans = 0; cnt.pixels = 0;
+        display_list_raster(&one, 1.0, &surf, &cnt);
+        CHECKF(cnt.marks == 1 && cnt.pixels == (size_t)SAMPLE[i].dw * 2,
+               "@IMGMARK composited %zu pixels into a %dx2 destination", cnt.pixels, SAMPLE[i].dw);
+        raster_surface_get(&surf, SAMPLE[i].x, 0, q);
+        CHECKF(q[0] == WANT[SAMPLE[i].want][0] && q[1] == WANT[SAMPLE[i].want][1]
+               && q[2] == WANT[SAMPLE[i].want][2] && q[3] == 0xff,
+               "@IMGMARK: 2 source pixels into a %d-wide destination put %02x%02x%02x at column %d where "
+               "source column %d says %02x%02x%02x. A whole row shifted toward the origin is the HALF-PIXEL "
+               "SAMPLE OFFSET missing from core/paint/display_list_raster.c's sampler — it is invisible at "
+               "1:1 and at any integer scale, so the 3-wide row above is the one that catches it",
+               SAMPLE[i].dw, q[0], q[1], q[2], SAMPLE[i].x, SAMPLE[i].want,
+               WANT[SAMPLE[i].want][0], WANT[SAMPLE[i].want][1], WANT[SAMPLE[i].want][2]);
+        raster_surface_free(&surf);
+        display_list_free(&one);
+        CHECK(one.img == NULL && one.img_n == 0 && one.v == NULL,
+              "display_list_free left a list holding one of its two arrays — display_list.h's contract is "
+              "that freeing the list frees EVERYTHING the list is, and the pixels are part of that");
+    }
+
+    /* A MARK OUTSIDE ITS RECTANGLE WRITES NOTHING, which is the fill's clipping and not this sampler's — the
+       row is here because an image sink that ignored coverage would pass every colour test above. */
+    {
+        DisplayList off;
+
+        display_list_init(&off);
+        CHECK(display_list_add_bitmap(&off, display_list_bitmap(&dl, 0)->rgba, 2, 2, 16) == 0,
+              "@IMGMARK's clipping list did not issue index 0");
+        memset(&m, 0, sizeof m);
+        m.kind = DISPLAY_MARK_IMAGE;
+        m.rect[0].px = 2; m.rect[1].px = 2; m.rect[2].px = 2; m.rect[3].px = 2;
+        display_list_append(&off, &m);
+        raster_surface_init(&surf, 6, 6);
+        cnt.marks = 0; cnt.spans = 0; cnt.pixels = 0;
+        display_list_raster(&off, 1.0, &surf, &cnt);
+        raster_surface_get(&surf, 0, 0, q);
+        CHECKF(q[3] == 0, "@IMGMARK wrote alpha %u at (0,0) for a mark whose rectangle starts at (2,2)", q[3]);
+        raster_surface_get(&surf, 2, 2, q);
+        CHECK(q[3] == 0xff, "@IMGMARK left the first pixel of its own rectangle untouched");
+        raster_surface_free(&surf);
+        display_list_free(&off);
+    }
+
+    display_list_free(&dl);
+    display_list_free(&dl);     /* display_list.h: a double free is not reachable */
+}
+
 static void html_scripting_flag_selftest(void)
 {
     /* The `</Link>` is not a typo: it is what a React `<Link>` component serializes into a `<noscript>`
@@ -26504,6 +26639,9 @@ int main(int argc, char **argv) {
        above, so a failure here must be reported at this row rather than inside whatever first paints an
        image through it, and a decompressor that were broken would fail at its own row first. */
     png_decode_selftest();
+    /* @IMGMARK — the IMAGE mark that turns that decoder's output into ink, AFTER it and for the reason its
+       own banner gives: this row's operand is png_decode's output. */
+    display_image_mark_selftest();
     html_scripting_flag_selftest();   /* HTML §13.2.4.5's scripting flag, read through §13.2.6.4.7's
                                         `noscript` rule — both arms, because one arm alone passes for a
                                         parser that never reads the flag */

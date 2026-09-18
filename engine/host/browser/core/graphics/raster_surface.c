@@ -50,7 +50,7 @@ static double rs_clamp01(double v)
     return v;
 }
 
-static uint8_t rs_quantize(double v)
+uint8_t raster_surface_quantize(double v)
 {
     double q = floor(rs_clamp01(v) * 255.0 + 0.5);
 
@@ -126,10 +126,10 @@ void raster_paint_span(void *user, int y, int x, int len, double coverage)
             q[0] = q[1] = q[2] = q[3] = 0;
             continue;
         }
-        q[0] = rs_quantize((sr * as + ((double)q[0] / 255.0) * keep) / ao);
-        q[1] = rs_quantize((sg * as + ((double)q[1] / 255.0) * keep) / ao);
-        q[2] = rs_quantize((sb * as + ((double)q[2] / 255.0) * keep) / ao);
-        q[3] = rs_quantize(ao);
+        q[0] = raster_surface_quantize((sr * as + ((double)q[0] / 255.0) * keep) / ao);
+        q[1] = raster_surface_quantize((sg * as + ((double)q[1] / 255.0) * keep) / ao);
+        q[2] = raster_surface_quantize((sb * as + ((double)q[2] / 255.0) * keep) / ao);
+        q[3] = raster_surface_quantize(ao);
     }
 }
 

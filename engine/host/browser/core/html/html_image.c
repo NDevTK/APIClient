@@ -33,7 +33,8 @@
 #include "core/html/image_source_set.h"   /* §4.8.4.3.7-.12: what source this element selects, and from what */
 #include "core/html/cors_settings_attribute.h" /* §4.8.4.3.5 creates a POTENTIAL-CORS request, whose
                                                     credentials mode is HTML §2.5.1's over this attribute */
-#include "core/image/image_header.h"        /* css-images-3 §4.1's natural dimensions, out of the reply's own header */
+#include "core/image/image_header.h"
+#include "core/image/png_decode.h"        /* css-images-3 §4.1's natural dimensions, out of the reply's own header */
 
 /* §4.8.4.3 "Processing model": "An image request's state is one of the following" — and the two composite
    answers the spec gives names to are derived from it rather than stored, because a stored copy of a derived
@@ -336,6 +337,88 @@ bool html_image_natural_dimensions(JSContext *ctx, lxb_dom_element_t *el, double
     return have;
 }
 
+/* See html_image.h: the current request's image data, DECODED. NULL is the ordinary answer for every element
+   that has no pixels, and the header states the four ways that happens.
+ *
+ * EVERY REFUSAL LEAVES BY THE SAME `return NULL`, and that is the point rather than a simplification. The
+ * bytes are a stranger's: the page chose the address and a server chose the body, so a decode that fails is
+ * INPUT and never an invariant — CLAUDE.md's line between what may be asserted and what must be refused. The
+ * caller reports it by laying no mark, which is the same answer it gives for an element that never fetched.
+ * WHAT IS ASSERTED IS WHAT THIS ENGINE COMPUTED: that a decoder answering `PNG_OK` produced a bitmap whose
+ * byte count is its own header's two extents, which is core/image/png_decode.h's contract with itself and
+ * not a claim about the reply.
+ *
+ * THE FORMAT IS ASKED OF THE BYTES AND NOT OF THE REPLY'S TYPE. core/image/png_decode.h refuses anything whose
+ * first eight bytes are not PNG §5.2 "PNG signature"'s, so a body that is a JPEG or a GIF leaves by the same
+ * refusal as a truncated PNG — which is correct today and is narrower than the engine already is one component
+ * over: core/image/image_header.c reads the dimensions of all three, so a GIF's `naturalWidth` answers while
+ * its pixels do not.
+ * NAMED RESIDUAL — THE OTHER TWO FORMATS `image_header.c` ALREADY MEASURES. WHAT IS NOT COVERED: a GIF and a
+ * JPEG reach `completely available`, answer their natural dimensions and fire `load`, and then have no pixels
+ * here — so this entry is narrower than the state its own file publishes. WHAT THE NEXT DIFF BUILDS: a JPEG
+ * decoder beside core/image/png_decode.h, which is the larger of the two and the one a real bundle serves.
+ * HOW ITS ABSENCE WOULD SHOW: a document whose images are JPEGs paints their boxes and no pixels, while the
+ * same document served as PNG paints both — with `naturalWidth` identical in each case, which is what makes
+ * it invisible from the DOM side. */
+uint8_t *html_image_decoded_rgba(JSContext *ctx, lxb_dom_element_t *el, uint32_t *w, uint32_t *h)
+{
+    JSValue wrapper, st = JS_UNDEFINED, buf = JS_UNDEFINED;
+    uint8_t *out = NULL;
+    const uint8_t *bytes;
+    size_t blen = 0, n = 0;
+    PngDecode d;
+    PngHeader hdr;
+
+    DCHECK(g_ready, "an img element's pixels were read before §4.8.3 was declared");
+    DCHECK(el != NULL && w != NULL && h != NULL,
+           "an img element's pixels were asked for with no element, or with nowhere to report one of the two "
+           "extents — they are a PAIR and a caller holding one has a bitmap it cannot walk");
+    DCHECK(img_is_node(lxb_dom_interface_node(el)),
+           "pixels were asked of an element that is not an HTML `img` — every other replaced element states "
+           "its own content, and core/layout/replaced_element.c is where each of those lives");
+    *w = *h = 0;
+    wrapper = element_wrap(ctx, el);
+    if (JS_IsNull(wrapper)) return NULL;
+    /* An element no flow has reached carries no record, so it has no image data — the same complete answer
+       the absent record gives the state and dimension readers above. */
+    if (JS_GetOwnSlot(ctx, &st, wrapper, g_atom_state) <= 0) { JS_FreeValue(ctx, wrapper); return NULL; }
+    /* THE STATE IS ASKED BEFORE THE BYTES, so a request that has been aborted or re-issued cannot paint the
+       body of the one it replaced: §4.8.4.3.5 leaves the record's `bytes` in place when it writes `broken`,
+       because the write and the delivery are two arms of one function, and `completely available` is what
+       says the data on this record is the data of the request the element is currently making. */
+    if (st_int(ctx, st, "state") != HTML_IMAGE_COMPLETELY_AVAILABLE) goto done;
+    buf = JS_GetPropertyStr(ctx, st, "bytes");
+    bytes = JS_GetArrayBuffer(ctx, &blen, buf);
+    if (bytes == NULL || blen == 0) goto done;
+
+    png_decode_init(&d, bytes, blen, 0);
+    if (png_decode_run(&d) == PNG_DONE && png_decode_header(&d, &hdr)) {
+        const uint8_t *rgba = png_decode_rgba(&d, &n);
+
+        if (rgba != NULL) {
+            DCHECKF((size_t)hdr.width * (size_t)hdr.height * 4 == n,
+                    "core/image/png_decode.h answered PNG_DONE for a %ux%u image and handed over %zu bytes "
+                    "where those extents make it %zu — both numbers are that decoder's own, read out of ONE "
+                    "IHDR it has already validated, so a disagreement is this engine's two halves rather "
+                    "than a claim about the reply's bytes",
+                    hdr.width, hdr.height, n, (size_t)hdr.width * (size_t)hdr.height * 4);
+            /* THE BUFFER IS TAKEN RATHER THAN COPIED, which is the one entry png_decode.h offers for exactly
+               this hand-off: the decoder is freed on the next line and a borrowed pointer would die with it,
+               and a copy here would be a third copy of one image on the road to the display list's own. */
+            out = png_decode_take_rgba(&d, &n);
+            *w = hdr.width;
+            *h = hdr.height;
+        }
+    }
+    png_decode_free(&d);
+
+done:
+    JS_FreeValue(ctx, buf);
+    JS_FreeValue(ctx, st);
+    JS_FreeValue(ctx, wrapper);
+    return out;
+}
+
 /* §4.8.4.3 "Processing model": "An img element is said to use srcset or picture if it has a srcset attribute
    specified or if it has a parent that is a picture element." */
 static bool img_uses_srcset_or_picture(lxb_dom_element_t *el)
@@ -572,6 +655,26 @@ static JSValue img_deliver(JSContext *ctx, JSValueConst this_val, int argc, JSVa
     body = fetch_reply_body(ctx, argv[0]);
     bytes = fetch_body_bytes(ctx, body, &blen);
     hdr = image_header_read(bytes, blen);
+    /* THE IMAGE DATA ITSELF, KEPT — AND KEPT HERE BECAUSE `bytes` DIES WITH `body` ON THE NEXT LINE.
+       "image request's image data" is a thing §4.8.4.3 gives every request that has one, and until now this
+       file read the dimensions out of the body and dropped the rest, so the only thing an available request
+       could answer was how big it was. A PAINTER needs the pixels: CSS 2.1 §E.2 "Painting order"'s step 7.2.1
+       asks for "the replaced content, atomically" and core/paint/box_paint.c reaches them through
+       `html_image_decoded_rgba` below.
+       THE PLACEMENT IS THE CONTRACT AND NOT A TIDINESS: core/fetch/fetch.h states that `fetch_body_bytes`
+       answers a pointer INTO THE BODY VALUE'S OWN BUFFER, valid exactly as long as the caller holds that
+       value — read that header's own paragraph for the sentence — so a copy taken after the free below would
+       be a read of released memory. It is guarded by the
+       same `have_dims` the arm below tests rather than written unconditionally, because a reply this engine
+       could not even measure is one §4.8.4.3.5 sends to `broken` — an element in that state has no image data
+       and a buffer hanging off it would be bytes no reader may use.
+       IT IS AN ArrayBuffer ON THE REQUEST'S OWN RECORD AND NOT A MALLOC'd C BUFFER, which is CLAUDE.md's rule
+       that platform data a flow holds is a JS value: this is a property write, so the per-flow COW delta
+       captures it like any other and the bytes fork per flow, park to the cold tier and resume with the flow
+       that learned them. A C allocation hung off the element would be captured by nothing.
+       THE ENCODED BYTES AND NOT THE DECODED ONES, for the reason `html_image_decoded_rgba` states. */
+    if (hdr.have_dims)
+        JS_SetPropertyStr(ctx, st, "bytes", JS_NewArrayBufferCopy(ctx, bytes, blen));
     JS_FreeValue(ctx, body);
 
     if (hdr.have_dims) {

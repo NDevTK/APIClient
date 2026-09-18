@@ -5,6 +5,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "check.h"
 #include "core/css/css_color.h"
@@ -31,6 +32,7 @@ static bool dl_kind_is_defined(DisplayMarkKind kind)
     case DISPLAY_MARK_FILL_CANVAS:
     case DISPLAY_MARK_BORDER:
     case DISPLAY_MARK_GLYPH:
+    case DISPLAY_MARK_IMAGE:
         return true;
     }
     return false;
@@ -59,6 +61,13 @@ static bool dl_colors_are_srgb(const DisplayMark *m)
         for (i = 0; i < 4; i++)
             if (m->side[i].color.space != CSS_COLOR_SPACE_SRGB) return false;
         return true;
+    /* A `DISPLAY_MARK_IMAGE` USES NO COLOUR AT ALL and this arm is the statement of that, not an exemption
+       granted to it. Its ink is the BITMAP's own samples — core/image/png_decode.h produces them already in
+       sRGB, which PNG §11.3.3.5 "sRGB Standard RGB colour space" makes the format's own answer — so a `color`
+       asked of this kind would be a field no builder of it ever writes, which is the reading-unset-memory
+       defect the header's own paragraph on `rect` refuses one field over. */
+    case DISPLAY_MARK_IMAGE:
+        return true;
     }
     return false;
 }
@@ -75,6 +84,10 @@ static bool dl_alphas_are_in_range(const DisplayMark *m)
     case DISPLAY_MARK_BORDER:
         for (i = 0; i < 4; i++)
             if (!(m->side[i].color.a >= 0.0 && m->side[i].color.a <= 1.0)) return false;
+        return true;
+    /* AND NO ALPHA EITHER, for the same reason one function up: an image's transparency is its samples' own
+       fourth channel and is carried in the bitmap rather than on the mark. */
+    case DISPLAY_MARK_IMAGE:
         return true;
     }
     return false;
@@ -153,6 +166,12 @@ static bool dl_kind_has_rect(DisplayMarkKind kind)
     case DISPLAY_MARK_FILL_RECT:
     case DISPLAY_MARK_FILL_CANVAS:
     case DISPLAY_MARK_BORDER:
+    /* AN IMAGE'S RECTANGLE IS THE AREA IT IS COMPOSITED INTO, which for CSS 2.1 §E.2 "Painting order"'s step
+       7.2.1 "For inline-level replaced elements: the replaced content, atomically" is the element's CONTENT
+       BOX — so the two invariants below are asked of it exactly as they are of a fill's. It is the DESTINATION
+       and never the source: the bitmap's own `w` and `h` are its natural dimensions in css-images-3 §4.1's
+       sense, and the two differ whenever a used width scaled the image. */
+    case DISPLAY_MARK_IMAGE:
         return true;
     case DISPLAY_MARK_GLYPH:
         return false;
@@ -204,14 +223,95 @@ void display_list_init(DisplayList *dl)
     DCHECK(dl != NULL, "a display list was initialised through no list");
     dl->v = NULL;
     dl->n = dl->cap = 0;
+    dl->img = NULL;
+    dl->img_n = dl->img_cap = 0;
 }
 
+/* RELEASES BOTH ARRAYS — the marks and the PIXELS THE LIST OWNS. display_list.h's ownership paragraph says
+   "freeing the list frees everything the list is", and `DisplayImage`'s says the pixels are part of what the
+   list is, so a free that released only the mark array would leak one decoded image per image mark and would
+   make that sentence false in the one place it is cashed. Leaves an EMPTY list in both halves rather than a
+   freed one, which is the existing contract and is what makes a double free unreachable here too. */
 void display_list_free(DisplayList *dl)
 {
+    size_t i;
+
     DCHECK(dl != NULL, "a display list was released through no list");
+    for (i = 0; i < dl->img_n; i++) free(dl->img[i].rgba);
+    free(dl->img);
+    dl->img = NULL;
+    dl->img_n = dl->img_cap = 0;
     free(dl->v);
     dl->v = NULL;
     dl->n = dl->cap = 0;
+}
+
+uint32_t display_list_add_bitmap(DisplayList *dl, const uint8_t *rgba, uint32_t w, uint32_t h, size_t n)
+{
+    DisplayBitmap bm;
+
+    DCHECK(dl != NULL, "image pixels were added to no display list");
+    DCHECK(rgba != NULL, "a display list was handed an image with no pixels — an add is a COPY of the "
+                         "caller's buffer, so there is no arm here under which the absence of one is a "
+                         "statement");
+    /* THE EXTENTS AND THE BYTE COUNT ARE ONE FACT AND ARE ASSERTED TO AGREE. A consumer turns `w` and `h`
+       into a loop bound and walks `rgba` with it, so two numbers free to disagree is a read past the end of
+       an allocation — and both are THIS ENGINE's: core/image/png_decode.h answers them together out of one
+       IHDR it has already validated, so a disagreement is this engine's own two halves rather than anything a
+       document stated. A stranger's malformed PNG is REFUSED by that decoder and never reaches here, which is
+       CLAUDE.md's line between what may be asserted and what must be refused. */
+    DCHECK(w > 0 && h > 0,
+           "a display list was handed an image with a zero extent. css-images-3 §4.1 \"Object-Sizing Terminology\"'s "
+           "natural dimensions are of an image that HAS them and PNG §11.2.1 \"IHDR Image header\" says of its "
+           "own two fields that \"Zero is an invalid value\", so a decoder that answered one refused instead — "
+           "and a mark over no pixels is ink that cannot be drawn. A caller with nothing to composite appends "
+           "NO MARK, which is the positive statement that this element contributed no ink");
+    DCHECKF((size_t)w * (size_t)h * 4 == n,
+            "a %ux%u image was handed over as %zu bytes where its own extents make it %zu — the two are one "
+            "fact and a consumer turns the extents into a loop bound over the bytes, so a disagreement is a "
+            "read past the end of the allocation. Both numbers are core/image/png_decode.h's, answered out of "
+            "ONE validated IHDR, so this is this engine's two halves having come apart and never a claim "
+            "about a document's bytes",
+            w, h, n, (size_t)w * (size_t)h * 4);
+    if (dl->img_n == dl->img_cap) {
+        size_t cap = dl->img_cap ? dl->img_cap * 2 : 4;
+        DisplayBitmap *v = realloc(dl->img, cap * sizeof *v);
+
+        CHECK(v != NULL, "paint: OOM growing a display list's bitmap array — a dropped bitmap is an image "
+                         "mark naming pixels the list does not hold, which is the one state "
+                         "`display_list_bitmap` exists to make impossible");
+        dl->img = v;
+        dl->img_cap = cap;
+    }
+    bm.rgba = malloc(n);
+    CHECK(bm.rgba != NULL, "paint: OOM copying an image into a display list — the copy is what makes the list "
+                           "self-contained, so a list that kept the caller's pointer instead would be the "
+                           "borrowed lifetime display_list.h refuses outright");
+    memcpy(bm.rgba, rgba, n);
+    bm.w = w;
+    bm.h = h;
+    bm.n = n;
+    dl->img[dl->img_n] = bm;
+    return (uint32_t)dl->img_n++;
+}
+
+const DisplayBitmap *display_list_bitmap(const DisplayList *dl, uint32_t index)
+{
+    DCHECK(dl != NULL, "an image mark's pixels were asked of no display list");
+    DCHECKF((size_t)index < dl->img_n,
+            "an image mark names bitmap %u of a list that holds %zu. The index is the identity display_list.h "
+            "accepts IN PLACE OF a pointer, and this is the invariant that makes it sound: a mark and the "
+            "pixels it names enter the list through two calls, so an out-of-range index is those two halves "
+            "having come apart — it is caught HERE rather than by a surface walking memory this list never "
+            "owned",
+            index, dl->img_n);
+    return &dl->img[index];
+}
+
+size_t display_list_bitmap_count(const DisplayList *dl)
+{
+    DCHECK(dl != NULL, "the bitmap count of no display list was asked for");
+    return dl->img_n;
 }
 
 void display_list_append(DisplayList *dl, const DisplayMark *mark)
@@ -303,6 +403,17 @@ void display_list_append(DisplayList *dl, const DisplayMark *mark)
            "Range Definition Notation\" makes that restriction the PARSER's — a declaration outside the range "
            "is dropped rather than clamped — so a negative here is this engine's own arithmetic on a value "
            "that was already non-negative, and the glyph it scales would be drawn INSIDE OUT");
+    /* AN IMAGE MARK NAMES PIXELS THIS LIST ALREADY HOLDS. This is the append-side half of the invariant
+       `display_list_bitmap` states at the read, and it is asked HERE because this is the door display_list.h
+       says every mark enters by — a mark whose index is out of range is caught when it is LAID rather than
+       when it is drawn, which is the difference between naming the producer and naming the rasterizer. The
+       order it forces is the right one and is the only order that works: the pixels are added first and the
+       mark that names them second, so an index is never a promise about a bitmap that has not arrived. */
+    DCHECKF(mark->kind != DISPLAY_MARK_IMAGE || (size_t)mark->image.bitmap < dl->img_n,
+            "an image mark names bitmap %u of a list that holds %zu. `display_list_add_bitmap` answers the "
+            "index a mark must carry, so a mark built with one this list has not issued was not built from "
+            "that answer",
+            mark->image.bitmap, dl->img_n);
     if (dl->n == dl->cap) {
         size_t cap = dl->cap ? dl->cap * 2 : 8;
         DisplayMark *v = realloc(dl->v, cap * sizeof *v);
@@ -344,6 +455,13 @@ CssEnvSet display_list_env(const DisplayList *dl)
         switch (dl->v[i].kind) {
         case DISPLAY_MARK_FILL_RECT:
         case DISPLAY_MARK_FILL_CANVAS:
+        /* AN IMAGE JOINS THE FILL KINDS AND NOT THE BORDER KIND, which is a claim about where its lengths are
+           rather than a convenience. Its rectangle is the only length it carries: the bitmap's own extents are
+           a property of the DECODED RESOURCE — css-images-3 §4.1 "Object-Sizing Terminology"' natural dimensions,
+           which PNG §11.2.1 "IHDR Image header" states in the file — so they are a function of no picked fact
+           this engine models and contribute CSS_ENV_NONE, exactly as a colour does. What DOES move is the area
+           it is composited into, and that is `rect`. */
+        case DISPLAY_MARK_IMAGE:
             for (k = 0; k < 4; k++) env |= dl->v[i].rect[k].env;
             break;
         case DISPLAY_MARK_BORDER:

@@ -94,6 +94,7 @@
 #define ENGINE_HOST_BROWSER_CORE_HTML_HTML_IMAGE_H
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #include <lexbor/dom/dom.h>
 
@@ -148,6 +149,26 @@ bool html_image_natural_dimensions(JSContext *ctx, lxb_dom_element_t *el, double
    the legacy factory function, and the step machine that runs a queued element task. Called once per agent
    from core/html/html_element.c's declare, which is the file that owns the element-interface table this
    element is a row of. */
+/* THE PIXELS OF THIS ELEMENT'S CURRENT IMAGE REQUEST, DECODED — non-premultiplied RGBA8, `*w` by `*h`, in a
+   buffer the CALLER OWNS AND MUST `free`. Answers NULL for every element that has none, which is the ordinary
+   answer and not a failure: an element that has issued no request, one whose reply has not arrived, one whose
+   state is `broken`, and one whose bytes are in a format this engine has no decoder for all leave through it.
+ *
+ * A REFUSAL IS A STATE AND NEVER AN ASSERT, which is CLAUDE.md's rule about whose bytes state a value read at
+ * the one seam in this file where a stranger's bytes become pixels. The body came off a network and the page
+ * chose the address, so a truncated PNG, a CRC that does not match, a colour type this engine does not build
+ * and a decompressed length that disagrees with the header are all INPUT — core/image/png_decode.h refuses
+ * each of them by name — and the answer to every one of them is this entry returning NULL, which its caller
+ * reports by laying NO MARK. An assert here would hand any server an abort switch for the painter.
+ *
+ * IT DECODES ON EVERY CALL AND DOES NOT CACHE, which is a decision rather than an omission. The bytes are kept
+ * on the image request's own record so they fork per flow and park with it — CLAUDE.md's rule that platform
+ * data a flow holds is a JS value — and a decoded bitmap cached beside them would be a second, larger copy of
+ * one fact with no one to invalidate it. What makes the repeat affordable is that a paint is not a hot path;
+ * what would make it unnecessary is HTML §4.8.4.3.3 "The list of available images", which this file's own
+ * residual already names for the fetch half and which is where a shared decode belongs. */
+uint8_t *html_image_decoded_rgba(JSContext *ctx, lxb_dom_element_t *el, uint32_t *w, uint32_t *h);
+
 void html_image_declare(JSContext *ctx);
 /* §4.8.3's members that are not reflections, onto THIS REALM's HTMLImageElement.prototype — handed the
    prototype by core/html/html_element.c for the reason §4.12.1's `async` and §4.2.6's `disabled` are: that
