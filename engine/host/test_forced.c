@@ -14,6 +14,8 @@
 #include "core/crypto/hmac.h"
 #include "core/crypto/secure_hash.h"
 #include "core/image/inflate.h"  /* RFC 1951 DEFLATE and RFC 1950's zlib framing — @PNG */
+#include "core/image/png_decode.h" /* PNG §5.3's chunks through PNG §9.2's filters to RGBA — @PNGDEC */
+#include "core/image/image_header.h" /* css-images-3 §4.1's natural dimensions — cross-checked by @PNGDEC */
 #include "core/xml/xml_char.h"   /* XML §2.2/§2.3[3]/§2.11 — the layer every XML production reads through */
 #include "core/xml/xml_ref.h"    /* XML §4.1's [66]/[68] and §4.6's five predefined entities */
 #include "core/xml/xml_name.h"   /* XML §2.3's [5] Name, which §2.6's [17] PITarget is a subtraction from */
@@ -6075,6 +6077,863 @@ static void inflate_selftest(void)
               "would then release a buffer the caller owns");
         inflate_free(&z);   /* must release nothing: the take left the decoder holding nothing */
         free(p);
+    }
+}
+
+
+/* @PNGDEC — core/image/png_decode.h, over PNG datastreams this tree did not encode.
+ *
+ * WHAT THIS ASSERTS AND WHY EACH ROW IS THE ROW IT IS. A decoder is right when the BYTES IT PRODUCES are
+ * right, so every positive row carries the RGBA it must produce and compares all of it — a row that only
+ * checked that a decode succeeded would pass for a decoder that returned the wrong colour for every pixel.
+ * The expected bytes were computed from the SOURCE SAMPLES by the encoder's side of §7.2's packing and
+ * §12.4's equation, never from the PNG, so agreement is two independent readings of the standard meeting.
+ *
+ * THE FOUR POSITIVE VECTORS ARE FOUR DIFFERENT SHAPES OF §6.1 Table 9 AND §11.2.1 Table 12, and each is here
+ * for something no other one reaches. V_TRUECOLOR uses a DIFFERENT filter type on each of its five scanlines,
+ * so all five of §9.2 Table 11's reconstruction functions run in one image — a fixture with one filter type
+ * would pass for a decoder that implemented None and nothing else, because every other type reduces to it on
+ * an image whose neighbours happen to be zero. V_INDEXED is bit depth 4, so it is the row that fails if §7.2's
+ * "the leftmost sample in the high-order bits of a byte" is read from the other end, and its tRNS states
+ * THREE alpha values for SIX palette entries, so it is also the row that fails if §11.3.1.1's "the alpha
+ * value for all remaining palette entries is assumed to be 255" is not implemented. V_GREY16 is bit depth 16,
+ * which is the only depth at which §12.4's equation is a REDUCTION rather than an expansion, and it carries
+ * alpha so the equation is exercised on a channel where §12.4 says zero-fill "shall not be used". V_GREY1 is
+ * bit depth 1 at a width of 11, so its scanlines end mid-byte — §7.2's "some low-order bits of the last byte
+ * of a scanline may go unused" — and it carries a tRNS, which is where §13.12's "transparent pixel detection
+ * shall be done before reducing sample precision" is falsifiable: sample 0 scales to 0 and sample 1 to 255,
+ * so a decoder comparing AFTER the scaling still answers correctly at depth 1 and answers wrongly the moment
+ * anything wider arrives — which is why V_GREY16 and V_GREY1 are both here rather than either alone.
+ *
+ * THE BUDGET SWEEP IS THE ASSERTION THE STEP MACHINE EXISTS FOR. png_decode.h makes this a step machine so a
+ * flow can park inside a decode, and the property that makes that sound is that WHERE it parked cannot be
+ * observable in the answer. Every vector is therefore decoded at every budget from 1 upward and the bytes
+ * compared — the same argument inflate_selftest makes for its own resume points and secure_hash_selftest for
+ * its message blocks, and for the same reason: a decode whose result depended on the granularity would make
+ * an image depend on where the scheduler happened to preempt the walk.
+ *
+ * THE REFUSAL ROWS NAME WHICH REFUSAL, never merely that one happened. A decoder that answered
+ * PNG_REFUSED_SIGNATURE for everything would pass a fixture that only asked whether a bad datastream was
+ * rejected, and would then report every corrupt image as one that is not a PNG. Each row is a VALID vector
+ * with one thing changed, so what it establishes is that the change is what the refusal is about.
+ *
+ * AND THE CORRUPTION SWEEPS ARE WHERE A STRANGER'S BYTES ACTUALLY DRIVE THE DECODER. Three sweeps, because
+ * one is not enough and the reason is measurable: a flip anywhere in a datastream is caught by §5.5's CRC
+ * before any of the code below it runs, so a sweep that does not REPAIR the CRC establishes only that the
+ * CRC works. Measured on the 184-byte vector this file was written against, a plain byte-flip sweep answers
+ * PNG_REFUSED_CRC for 147 of 184 flips and never once reaches the filter, the palette or the expansion. The
+ * second and third sweeps flip a byte and then RECOMPUTE the chunk's CRC — which is what png_crc32 being
+ * exported makes possible from outside the file, and is the same argument inflate.h makes for exporting
+ * Adler-32 — so the corruption survives into the decoder and drives the states a stranger's bytes can put it
+ * in. The third goes further and builds its datastream here, out of a RAW FILTERED SCANLINE ARRAY wrapped in
+ * a §10.1 zlib stream whose deflate block is RFC 1951 §3.2.4's stored form: no compressor is needed for that,
+ * the framing is six bytes and inflate_adler32 supplies the check value, and it is the only way this fixture
+ * can corrupt the FILTERED BYTES THEMSELVES rather than a compressed image of them.
+ * WHAT THOSE SWEEPS ARE FOR IS THE PATHS THEY WALK, and it is measured rather than hoped. Under a sanitizer
+ * they are the rows that speak: with §7.2 and §9.1's decompressed-length check deleted from png_decode.c,
+ * ASan reports a heap-buffer-overflow inside png_sample and nowhere else, on a datastream whose IHDR declares
+ * more scanline than its IDAT decompresses to. Every positive row above decodes a well-formed image and
+ * cannot reach that state at all.
+ */
+/* Room for every datastream this fixture assembles: §5.2's signature, §11.2.1's 25-byte chunk, a PLTE and a
+   tRNS, one IDAT holding a stored block over the longest RAW array below, and §11.2.4's twelve bytes. */
+#define PNG_FX_ZMAX 1024
+#define PNG_FX_MAX  2048
+
+/* WRITE ONE BYTE OF §11.2.1's DATA FIELD AND REPAIR §5.5's CRC, so a row can differ from its neighbour in one
+   field of one chunk. The IHDR chunk's data begins at 8 (signature) + 4 (Length) + 4 (Chunk Type). */
+static void png_fx_poke_ihdr(uint8_t *d, size_t field, uint8_t v)
+{
+    uint32_t crc;
+    d[16 + field] = v;
+    crc = png_crc32(0, d + 12, 4 + 13);
+    d[29] = (uint8_t)(crc >> 24); d[30] = (uint8_t)(crc >> 16);
+    d[31] = (uint8_t)(crc >> 8);  d[32] = (uint8_t)crc;
+}
+
+/* WALK §5.3's CHUNKS AND REWRITE EVERY CRC, which is what lets a sweep corrupt a byte anywhere and still have
+   the corruption reach the decoder rather than stopping at §5.5. A corrupted LENGTH takes the walk out of
+   step, which this stops at rather than guessing about — the decoder then answers a layout or CRC refusal,
+   both of which are declared arms and both of which are the honest answer for bytes nobody can walk. */
+static void png_fx_repair_crcs(uint8_t *d, size_t n)
+{
+    size_t p = 8;
+
+    while (p + 12u <= n) {
+        uint32_t len = ((uint32_t)d[p] << 24) | ((uint32_t)d[p+1] << 16) |
+                       ((uint32_t)d[p+2] << 8) | (uint32_t)d[p+3];
+        uint32_t crc;
+        if (len > n || p + 12u + len > n) return;
+        crc = png_crc32(0, d + p + 4, len + 4u);
+        d[p + 8 + len]      = (uint8_t)(crc >> 24); d[p + 9 + len]  = (uint8_t)(crc >> 16);
+        d[p + 10 + len]     = (uint8_t)(crc >> 8);  d[p + 11 + len] = (uint8_t)crc;
+        p += 12u + len;
+    }
+}
+
+/* EVERY STATUS A CORRUPTED DATASTREAM PRODUCES MUST BE ONE THIS FILE DECLARES. A reader that can leave its
+   own enumeration on a stranger's bytes has a state nothing downstream has an arm for — and PNG_MORE is
+   excluded because png_decode_run loops until it is gone, so seeing one means the loop's own condition and
+   the step's answer disagree. */
+static void png_fx_declared(const char *what, PngStatus st)
+{
+    CHECKF(st == PNG_DONE || st == PNG_REFUSED_SIGNATURE || st == PNG_REFUSED_CHUNK_LAYOUT
+           || st == PNG_REFUSED_CRC || st == PNG_REFUSED_CHUNK_ORDER || st == PNG_REFUSED_UNKNOWN_CRITICAL
+           || st == PNG_REFUSED_IHDR || st == PNG_REFUSED_PALETTE || st == PNG_REFUSED_TRANSPARENCY
+           || st == PNG_REFUSED_FILTER_TYPE || st == PNG_REFUSED_DATASTREAM
+           || st == PNG_REFUSED_IMAGE_LENGTH || st == PNG_REFUSED_INTERLACE || st == PNG_REFUSED_NO_ROOM,
+           "a corrupted PNG datastream (%s) produced status %d, which png_decode.h does not declare",
+           what, (int)st);
+}
+/* BUILD A PNG HERE, OUT OF FILTERED SCANLINES, WITH NO COMPRESSOR. RFC 1951 §3.2.4 "Non-compressed blocks
+   (BTYPE=00)" is five bytes of framing — BFINAL/BTYPE, LEN, and "NLEN: the one's complement of LEN" — and
+   RFC 1950 §2.2 "Data format" wraps it in a CMF/FLG pair and an ADLER32 that inflate_adler32 computes. That
+   is the whole of a §10.1 "Compression method 0" datastream for data that is not compressed, and having it
+   here is what lets the sweep below corrupt §9.1's FILTERED BYTES rather than a compressed image of them.
+   §5.3's chunks and §5.5's CRC come from png_crc32, which is exported for exactly this. */
+static size_t png_fx_chunk(uint8_t *out, const char *type, const uint8_t *data, size_t n)
+{
+    uint32_t crc;
+    out[0] = (uint8_t)(n >> 24); out[1] = (uint8_t)(n >> 16);
+    out[2] = (uint8_t)(n >> 8);  out[3] = (uint8_t)n;
+    memcpy(out + 4, type, 4);
+    if (n != 0) memcpy(out + 8, data, n);
+    crc = png_crc32(0, out + 4, n + 4);
+    out[8 + n]     = (uint8_t)(crc >> 24); out[9 + n]  = (uint8_t)(crc >> 16);
+    out[10 + n]    = (uint8_t)(crc >> 8);  out[11 + n] = (uint8_t)crc;
+    return n + 12u;
+}
+
+static size_t png_fx_build(uint8_t *out, uint32_t w, uint32_t h, uint8_t bd, uint8_t ct,
+                           const uint8_t *plte, size_t plte_n, const uint8_t *trns, size_t trns_n,
+                           const uint8_t *raw, size_t raw_n)
+{
+    static const uint8_t SIG[8] = { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A };
+    uint8_t ihdr[13], z[PNG_FX_ZMAX];
+    uint32_t adler;
+    size_t p = 0, zn = 0;
+
+    memcpy(out, SIG, 8); p = 8;
+    ihdr[0] = (uint8_t)(w >> 24); ihdr[1] = (uint8_t)(w >> 16); ihdr[2] = (uint8_t)(w >> 8); ihdr[3] = (uint8_t)w;
+    ihdr[4] = (uint8_t)(h >> 24); ihdr[5] = (uint8_t)(h >> 16); ihdr[6] = (uint8_t)(h >> 8); ihdr[7] = (uint8_t)h;
+    ihdr[8] = bd; ihdr[9] = ct; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;
+    p += png_fx_chunk(out + p, "IHDR", ihdr, sizeof ihdr);
+    if (plte_n) p += png_fx_chunk(out + p, "PLTE", plte, plte_n);
+    if (trns_n) p += png_fx_chunk(out + p, "tRNS", trns, trns_n);
+
+    /* RFC 1950 §2.2: CMF's low nibble is the compression method (8, deflate) and its high nibble the window
+       size exponent less 8; FLG makes the pair a multiple of 31 and states no preset dictionary. 0x78 0x01
+       is the pair every encoder emits for a stored stream and is what §10.1 requires of a PNG. */
+    z[zn++] = 0x78; z[zn++] = 0x01;
+    z[zn++] = 0x01;                                                   /* BFINAL=1, BTYPE=00 */
+    z[zn++] = (uint8_t)raw_n;        z[zn++] = (uint8_t)(raw_n >> 8); /* LEN, least significant byte first */
+    z[zn++] = (uint8_t)~(uint8_t)raw_n;
+    z[zn++] = (uint8_t)~(uint8_t)(raw_n >> 8);                        /* NLEN, LEN's one's complement */
+    memcpy(z + zn, raw, raw_n); zn += raw_n;
+    adler = inflate_adler32(1, raw, raw_n);
+    z[zn++] = (uint8_t)(adler >> 24); z[zn++] = (uint8_t)(adler >> 16);
+    z[zn++] = (uint8_t)(adler >> 8);  z[zn++] = (uint8_t)adler;
+
+    p += png_fx_chunk(out + p, "IDAT", z, zn);
+    p += png_fx_chunk(out + p, "IEND", NULL, 0);
+    return p;
+}
+
+/* ONE DECODE, ANSWERING THE STATUS AND — WHEN IT SUCCEEDED — THE BYTES. */
+static PngStatus png_fx_decode(const uint8_t *b, size_t n, size_t budget,
+                               const uint8_t **rgba, size_t *rgba_n, PngDecode *keep)
+{
+    PngStatus st;
+    png_decode_init(keep, b, n, budget);
+    st = png_decode_run(keep);
+    *rgba = png_decode_rgba(keep, rgba_n);
+    return st;
+}
+
+static void png_fx_positive(const char *what, const uint8_t *vec, size_t vn,
+                            const uint8_t *want, size_t want_n, uint32_t w, uint32_t h)
+{
+    /* EVERY BUDGET FROM 1 UPWARD, PLUS 0 WHICH png_decode_init READS AS THE DEFAULT. A step machine whose
+       answer moved with its granularity would make an image depend on where the scheduler preempted it. */
+    static const size_t BUDGETS[] = { 1, 2, 3, 5, 7, 13, 64, 1024, 0 };
+    size_t i;
+
+    for (i = 0; i < sizeof BUDGETS / sizeof BUDGETS[0]; i++) {
+        PngDecode d;
+        PngHeader hdr;
+        ImageHeader ih;
+        const uint8_t *got;
+        size_t got_n;
+        PngStatus st = png_fx_decode(vec, vn, BUDGETS[i], &got, &got_n, &d);
+
+        CHECKF(st == PNG_DONE, "a PNG vector (%s) did not decode: status %d at budget %zu",
+               what, (int)st, BUDGETS[i]);
+        CHECKF(png_decode_header(&d, &hdr) && hdr.width == w && hdr.height == h,
+               "a PNG vector (%s) reported §11.2.1 dimensions other than the %ux%u it was encoded at",
+               what, w, h);
+        CHECKF(got_n == want_n && got != NULL,
+               "a PNG vector (%s) produced %zu bitmap bytes where §7.2's scanlines over its own IHDR make it "
+               "%zu — the length is width*height*4 and all three are this file's arithmetic",
+               what, got_n, want_n);
+        CHECKF(memcmp(got, want, want_n) == 0,
+               "a PNG vector (%s) decoded to the wrong PIXELS at budget %zu — the expected bytes were "
+               "computed from the source samples through §7.2's packing and §12.4's equation by the encoder "
+               "that wrote the vector, so this is two readings of the same sections disagreeing", what,
+               BUDGETS[i]);
+
+        /* THE CROSS-CHECK AGAINST core/image/image_header.h, WHICH IS WHAT KEEPS TWO READINGS OF §11.2.1's
+           Width AND Height FROM DRIFTING. That component reaches them at fixed offsets because "The IHDR
+           chunk shall be the first chunk in the PNG datastream"; this one reaches them through §5.3's walk.
+           They are separate for the reasons png_decode.h gives, and the price of being separate is that
+           nothing but an assertion makes them agree. Both answering is the case that matters: either may
+           refuse a datastream the other accepts, and neither may report a DIFFERENT image. */
+        ih = image_header_read(vec, vn);
+        CHECKF(ih.have_dims && ih.width == (double)w && ih.height == (double)h,
+               "core/image/image_header.h and core/image/png_decode.h disagree about the natural dimensions "
+               "of one PNG (%s) — two readings of §11.2.1's Width and Height, one by fixed offset and one "
+               "through §5.3's chunk walk, and a disagreement is one of them being wrong", what);
+
+        png_decode_free(&d);
+    }
+}
+
+static void png_fx_refuse(const char *what, const uint8_t *vec, size_t vn, PngStatus want)
+{
+    PngDecode d;
+    const uint8_t *got;
+    size_t got_n;
+    PngStatus st = png_fx_decode(vec, vn, 0, &got, &got_n, &d);
+
+    CHECKF(st == want, "a PNG datastream (%s) was answered %d where the standard makes it %d — a decoder "
+                       "that reports the wrong refusal reports every corrupt image as the same thing",
+           what, (int)st, (int)want);
+    png_decode_free(&d);
+}
+static void png_decode_selftest(void)
+{
+    /* 9x5 colour type 2 bit depth 8; scanline i uses §9.2 Table 11's filter type i, so one vector
+       exercises all five reconstruction functions. zlib-compressed by an encoder this tree did not
+       write, so the decompression path below it is real rather than a stored block. */
+    static const uint8_t V_TRUECOLOR[] = {
+        0x89,0x50,0x4E,0x47,0x0D,0x0A,0x1A,0x0A,0x00,0x00,0x00,0x0D,0x49,0x48,0x44,0x52,
+        0x00,0x00,0x00,0x09,0x00,0x00,0x00,0x05,0x08,0x02,0x00,0x00,0x00,0x18,0x31,0x51,
+        0x3C,0x00,0x00,0x00,0x97,0x49,0x44,0x41,0x54,0x78,0xDA,0x01,0x8C,0x00,0x73,0xFF,
+        0x00,0x9D,0x4E,0x19,0xDC,0xB4,0xA6,0x50,0xB7,0x38,0xBD,0x3F,0x32,0x6F,0x61,0x17,
+        0xAC,0x5D,0x94,0x78,0xFE,0x8E,0x72,0xFD,0x21,0x50,0x66,0x42,0x01,0x7D,0x51,0x3A,
+        0x44,0x35,0x9C,0xC4,0x98,0xB6,0xF6,0x36,0xF9,0x98,0x01,0x83,0x33,0xC9,0x06,0x0E,
+        0xFF,0x01,0x80,0x1C,0x94,0xC4,0xAC,0xDA,0x02,0xC0,0x8D,0x66,0x25,0x8E,0xA7,0x59,
+        0xCA,0x43,0x98,0x15,0x35,0x58,0xAC,0xCF,0x74,0x9F,0xAD,0xA9,0x15,0x13,0x30,0x85,
+        0x4B,0x4D,0xC1,0xE7,0x03,0xCB,0x70,0x10,0xD9,0xF8,0x30,0xBC,0x97,0xB0,0x99,0x5B,
+        0xCB,0x05,0x48,0x1D,0x07,0xC5,0x9D,0xBC,0xA7,0x53,0x67,0x96,0x7B,0x5A,0x3E,0x94,
+        0x04,0x3B,0xF0,0xC0,0xE5,0xA6,0x23,0x0D,0xD6,0x0C,0x90,0x83,0xAA,0x96,0xF9,0x13,
+        0x8E,0x16,0xCD,0xD2,0xED,0x33,0x88,0x34,0x5B,0x5B,0x24,0xB4,0xAE,0xD1,0x41,0x39,
+        0xDA,0x9E,0x63,0x4F,0x00,0x00,0x00,0x00,0x49,0x45,0x4E,0x44,0xAE,0x42,0x60,0x82
+    };
+    static const uint8_t RGBA_TRUECOLOR[] = {
+        0x9D,0x4E,0x19,0xFF,0xDC,0xB4,0xA6,0xFF,0x50,0xB7,0x38,0xFF,0xBD,0x3F,0x32,0xFF,
+        0x6F,0x61,0x17,0xFF,0xAC,0x5D,0x94,0xFF,0x78,0xFE,0x8E,0xFF,0x72,0xFD,0x21,0xFF,
+        0x50,0x66,0x42,0xFF,0x7D,0x51,0x3A,0xFF,0xC1,0x86,0xD6,0xFF,0x85,0x1E,0x8C,0xFF,
+        0x7B,0x54,0x85,0xFF,0x13,0x55,0x08,0xFF,0x46,0x1E,0x0E,0xFF,0x54,0x1D,0x0F,0xFF,
+        0xD4,0x39,0xA3,0xFF,0x98,0xE5,0x7D,0xFF,0x3D,0xDE,0xA0,0xFF,0xE6,0x14,0x7D,0xFF,
+        0xDE,0xE8,0xCF,0xFF,0x13,0x69,0xBA,0xFF,0x6B,0x01,0xD7,0xFF,0xBA,0xBD,0xBB,0xFF,
+        0xFD,0x32,0x22,0xFF,0x04,0xBE,0xEE,0xFF,0xE5,0xA6,0x64,0xFF,0xE9,0xDF,0x60,0xFF,
+        0xC0,0x71,0x9E,0xFF,0x8B,0x43,0x66,0xFF,0xE8,0xB1,0x5B,0xFF,0xAE,0xA1,0xB6,0xFF,
+        0xBB,0x74,0x55,0xFF,0x98,0xFA,0x8E,0xFF,0xB5,0x72,0x39,0xFF,0x27,0xCA,0xE2,0xFF,
+        0x24,0xCF,0x20,0xFF,0x09,0x17,0x83,0xFF,0x16,0xED,0x72,0xFF,0x1B,0x70,0x10,0xFF,
+        0xB1,0x69,0x6E,0xFF,0x49,0x7F,0x22,0xFF,0x1B,0xE7,0x88,0xFF,0xA3,0xA6,0x94,0xFF,
+        0x82,0xEE,0x96,0xFF
+    };
+    /* 6x3 colour type 3 bit depth 4: §7.2's sub-byte packing, §11.2.2's palette and a §11.3.1.1 tRNS
+       carrying THREE alpha values for SIX entries, so the three it does not reach must read 255. */
+    static const uint8_t V_INDEXED[] = {
+        0x89,0x50,0x4E,0x47,0x0D,0x0A,0x1A,0x0A,0x00,0x00,0x00,0x0D,0x49,0x48,0x44,0x52,
+        0x00,0x00,0x00,0x06,0x00,0x00,0x00,0x03,0x04,0x03,0x00,0x00,0x00,0x42,0x2F,0x63,
+        0xC8,0x00,0x00,0x00,0x12,0x50,0x4C,0x54,0x45,0xA1,0xBD,0x37,0xA8,0xDC,0x8C,0x66,
+        0x36,0x28,0x77,0xE2,0x36,0x83,0x32,0x53,0x8E,0x7D,0xD5,0x04,0xA3,0x89,0x48,0x00,
+        0x00,0x00,0x03,0x74,0x52,0x4E,0x53,0x53,0x7B,0xD7,0x40,0xF0,0xB3,0x7D,0x00,0x00,
+        0x00,0x14,0x49,0x44,0x41,0x54,0x78,0xDA,0x63,0x10,0x70,0x08,0x64,0x54,0x7A,0xC0,
+        0xCC,0xA4,0x1C,0x64,0x03,0x00,0x0D,0xAB,0x02,0x5B,0x91,0x71,0x3C,0x32,0x00,0x00,
+        0x00,0x00,0x49,0x45,0x4E,0x44,0xAE,0x42,0x60,0x82
+    };
+    static const uint8_t RGBA_INDEXED[] = {
+        0xA8,0xDC,0x8C,0x7B,0xA1,0xBD,0x37,0x53,0x83,0x32,0x53,0xFF,0xA1,0xBD,0x37,0x53,
+        0x8E,0x7D,0xD5,0xFF,0xA8,0xDC,0x8C,0x7B,0x66,0x36,0x28,0xD7,0x66,0x36,0x28,0xD7,
+        0xA1,0xBD,0x37,0x53,0x66,0x36,0x28,0xD7,0xA1,0xBD,0x37,0x53,0x8E,0x7D,0xD5,0xFF,
+        0x83,0x32,0x53,0xFF,0x8E,0x7D,0xD5,0xFF,0x8E,0x7D,0xD5,0xFF,0x83,0x32,0x53,0xFF,
+        0x83,0x32,0x53,0xFF,0xA8,0xDC,0x8C,0x7B
+    };
+    /* 4x2 colour type 4 bit depth 16: §7.2's network-byte-order samples and §12.4's equation reducing
+       them to the surface's eight bits, on the alpha channel as well as the grey one. */
+    static const uint8_t V_GREY16[] = {
+        0x89,0x50,0x4E,0x47,0x0D,0x0A,0x1A,0x0A,0x00,0x00,0x00,0x0D,0x49,0x48,0x44,0x52,
+        0x00,0x00,0x00,0x04,0x00,0x00,0x00,0x02,0x10,0x04,0x00,0x00,0x00,0x85,0x31,0x69,
+        0xAB,0x00,0x00,0x00,0x2B,0x49,0x44,0x41,0x54,0x78,0xDA,0x63,0x16,0x14,0xF0,0x35,
+        0xFD,0x7F,0x2F,0xBD,0xA0,0xE8,0xDF,0xAA,0x8B,0x22,0xAB,0x9D,0x38,0x59,0x34,0x1A,
+        0x05,0x4F,0x48,0xC5,0xA8,0x1E,0xB5,0x59,0xEA,0xB1,0x86,0xB5,0x7B,0xEB,0x73,0x00,
+        0xEA,0xC9,0x0E,0x37,0x37,0xC3,0x3C,0x00,0x00,0x00,0x00,0x00,0x49,0x45,0x4E,0x44,
+        0xAE,0x42,0x60,0x82
+    };
+    static const uint8_t RGBA_GREY16[] = {
+        0x11,0x11,0x11,0x4D,0x08,0x08,0x08,0x8D,0x75,0x75,0x75,0xEF,0x4F,0x4F,0x4F,0xB9,
+        0x39,0x39,0x39,0x5F,0x53,0x53,0x53,0xB2,0xB1,0xB1,0xB1,0x39,0x7A,0x7A,0x7A,0xED
+    };
+    /* 11x3 colour type 0 bit depth 1 with a tRNS: the narrowest packing, a width that leaves §7.2's
+       "some low-order bits of the last byte of a scanline may go unused", §9.2's filter distance of 1
+       "when the bit depth is less than 8", and §13.12's rule that the transparency comparison happens
+       at the sample's own precision — sample 0 is transparent and sample 1 is opaque white. */
+    static const uint8_t V_GREY1[] = {
+        0x89,0x50,0x4E,0x47,0x0D,0x0A,0x1A,0x0A,0x00,0x00,0x00,0x0D,0x49,0x48,0x44,0x52,
+        0x00,0x00,0x00,0x0B,0x00,0x00,0x00,0x03,0x01,0x00,0x00,0x00,0x00,0x6D,0x84,0xC8,
+        0xE6,0x00,0x00,0x00,0x02,0x74,0x52,0x4E,0x53,0x00,0x00,0x76,0x93,0xCD,0x38,0x00,
+        0x00,0x00,0x11,0x49,0x44,0x41,0x54,0x78,0xDA,0x63,0xE8,0x4B,0x60,0xDC,0xCF,0xC8,
+        0xB2,0x36,0x04,0x00,0x0C,0x98,0x02,0xB5,0xF5,0x51,0x2D,0x30,0x00,0x00,0x00,0x00,
+        0x49,0x45,0x4E,0x44,0xAE,0x42,0x60,0x82
+    };
+    static const uint8_t RGBA_GREY1[] = {
+        0xFF,0xFF,0xFF,0xFF,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+        0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0x00,0x00,0x00,0x00,
+        0x00,0x00,0x00,0x00,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+        0x00,0x00,0x00,0x00,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+        0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+        0xFF,0xFF,0xFF,0xFF,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0xFF,0xFF,0xFF,0xFF,
+        0xFF,0xFF,0xFF,0xFF,0x00,0x00,0x00,0x00,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+        0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,
+        0x00,0x00,0x00,0x00
+    };
+    /* §9.1's filtered scanlines for a 4x5 colour type 6 bit depth 8 image, filter type i on scanline i,
+       held UNCOMPRESSED so png_fx_build can wrap them and the sweep below can corrupt them. */
+    static const uint8_t RAW_CT6[] = {
+        0x00,0xD4,0x43,0x0E,0xC7,0xC2,0xA4,0x8C,0x5E,0xFC,0x0C,0xF0,0x50,0x4F,0xF3,0x3D,0x0D,0x01,
+        0x40,0x48,0x5C,0xAC,0xFE,0x0F,0x1D,0xCB,0xA6,0xC8,0x13,0x35,0x1E,0x84,0xCA,0x00,0x02,0x76,
+        0x81,0x72,0xF8,0x5F,0xFE,0x37,0x81,0xA5,0xC2,0x9C,0x48,0x81,0xB2,0xFF,0xE4,0x03,0x9B,0x2A,
+        0xC4,0xE1,0xF8,0x6B,0x81,0x5C,0xD0,0x1F,0xE7,0x43,0x68,0x2B,0x74,0x0F,0x04,0x89,0x2C,0x43,
+        0x90,0xAC,0xC2,0x30,0x7D,0x08,0xFC,0xE6,0xD7,0x66,0x94,0x0F,0xA6
+    };
+    static const uint8_t RGBA_CT6[] = {
+        0xD4,0x43,0x0E,0xC7,0xC2,0xA4,0x8C,0x5E,0xFC,0x0C,0xF0,0x50,0x4F,0xF3,0x3D,0x0D,0x40,0x48,
+        0x5C,0xAC,0x3E,0x57,0x79,0x77,0xE4,0x1F,0x8C,0xAC,0x02,0xA3,0x56,0xAC,0xB6,0xC9,0xCE,0xA4,
+        0x9D,0x55,0xB0,0xF8,0x89,0xE1,0x28,0xF4,0x83,0x55,0x55,0x90,0xF6,0x8E,0x2B,0x33,0xC1,0xDC,
+        0xEE,0xF1,0x75,0xFD,0x72,0x35,0xE4,0xD4,0xD7,0x71,0x7F,0xBA,0x6E,0xC3,0x2B,0x9E,0x1E,0x6E,
+        0x33,0xD8,0x04,0x0C,0xDB,0x68,0x81,0xDB
+    };
+    /* 6x2 colour type 3 bit depth 8 over a THREE-entry palette: at 8 bits an index runs to 255 while
+       §11.2.2 admits three, so this is the only shape from which "any out-of-range pixel value found
+       in the image data is an error" is reachable by corrupting a pixel. */
+    static const uint8_t RAW_IDX[] = {
+        0x00,0x02,0x00,0x01,0x02,0x00,0x01,0x01,0x01,0x01,0xFF,0xFF,0x02,0x00
+    };
+    static const uint8_t PLTE_IDX[] = {
+        0xF9,0x6F,0xD8,0xB4,0x7D,0x53,0xD8,0x03,0xC2
+    };
+    static const uint8_t RGBA_IDX[] = {
+        0xD8,0x03,0xC2,0xFF,0xF9,0x6F,0xD8,0xFF,0xB4,0x7D,0x53,0xFF,0xD8,0x03,0xC2,0xFF,0xF9,0x6F,
+        0xD8,0xFF,0xB4,0x7D,0x53,0xFF,0xB4,0x7D,0x53,0xFF,0xD8,0x03,0xC2,0xFF,0xB4,0x7D,0x53,0xFF,
+        0xF9,0x6F,0xD8,0xFF,0xD8,0x03,0xC2,0xFF,0xD8,0x03,0xC2,0xFF
+    };
+
+    /* 4x1 colour type 0 bit depth 16 with a tRNS of 0x1234. THE SECOND PIXEL IS 0x1235, WHICH §12.4's
+       equation SCALES TO THE SAME BYTE AS 0x1234 (both 18) AND IS NOT TRANSPARENT — §13.12's Note:
+       "For 16-bit greyscale or truecolor data … only pixels matching the entire 16-bit values in tRNS
+       chunks are transparent. Decoders have to postpone any sample depth rescaling until after the
+       pixels have been tested for transparency." This is the ONE vector that fails for a decoder
+       comparing after the scaling; at every narrower depth the two comparisons agree. */
+    static const uint8_t V_GREY16T[] = {
+        0x89,0x50,0x4E,0x47,0x0D,0x0A,0x1A,0x0A,0x00,0x00,0x00,0x0D,0x49,0x48,0x44,0x52,0x00,0x00,
+        0x00,0x04,0x00,0x00,0x00,0x01,0x10,0x00,0x00,0x00,0x00,0x8C,0xC7,0x8C,0x52,0x00,0x00,0x00,
+        0x02,0x74,0x52,0x4E,0x53,0x12,0x34,0x2F,0xD3,0x49,0x5E,0x00,0x00,0x00,0x11,0x49,0x44,0x41,
+        0x54,0x78,0xDA,0x63,0x11,0x32,0x61,0x60,0x7C,0x7B,0x8A,0x91,0x11,0x00,0x08,0x43,0x02,0x05,
+        0x97,0x86,0x5C,0xF8,0x00,0x00,0x00,0x00,0x49,0x45,0x4E,0x44,0xAE,0x42,0x60,0x82
+    };
+    static const uint8_t RGBA_GREY16T[] = {
+        0x12,0x12,0x12,0x00,0x12,0x12,0x12,0xFF,0xFF,0xFF,0xFF,0xFF,0x00,0x00,0x00,0xFF
+    };
+    /* A 1x1 truecolor image whose §10.2 datastream decompresses to twenty thousand bytes. §7.2 and
+       §9.1 make that image FOUR bytes, so the datastream contradicts its own header — and the row
+       below is about WHEN that is noticed rather than THAT it is, which is the only property the
+       per-step check has and the reason it is not redundant with the one after the decompression. */
+    static const uint8_t V_BOMB_1x1[] = {
+        0x89,0x50,0x4E,0x47,0x0D,0x0A,0x1A,0x0A,0x00,0x00,0x00,0x0D,0x49,0x48,0x44,0x52,0x00,0x00,
+        0x00,0x01,0x00,0x00,0x00,0x01,0x08,0x02,0x00,0x00,0x00,0x90,0x77,0x53,0xDE,0x00,0x00,0x00,
+        0x2A,0x49,0x44,0x41,0x54,0x78,0xDA,0xED,0xC1,0x31,0x01,0x00,0x00,0x00,0xC2,0xA0,0xF5,0x4F,
+        0x6D,0x0D,0x0F,0xA0,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+        0x00,0x00,0x00,0x00,0x00,0x78,0x30,0x4E,0x20,0x00,0x01,0x83,0xC8,0x2E,0x12,0x00,0x00,0x00,
+        0x00,0x49,0x45,0x4E,0x44,0xAE,0x42,0x60,0x82
+    };
+
+
+    /* §5.5's OWN ARITHMETIC, ON A PUBLISHED VALUE THIS FILE DID NOT PRODUCE. The CRC-32 of the nine ASCII
+       bytes "123456789" is 0xCBF43926 — the check value every catalogue of this polynomial states — and it is
+       here because a checksum with exactly one caller inside one file is a checksum nothing can test. The
+       SPLIT call is the second half of the claim: §5.5's pre- and post-conditioning are both inside
+       png_crc32, which is what makes a chunk summable a budgeted slice at a time, and a table built from the
+       UNREVERSED polynomial still answers 0 for an empty run while answering this vector wrongly. */
+    {
+        static const char NINE[] = "123456789";
+        uint32_t whole = png_crc32(0, (const uint8_t *)NINE, 9);
+        uint32_t split = png_crc32(png_crc32(0, (const uint8_t *)NINE, 4), (const uint8_t *)NINE + 4, 5);
+
+        CHECKF(whole == 0xCBF43926u, "§5.5's CRC over \"123456789\" came out 0x%08X where the published check "
+                                     "value for that polynomial is 0xCBF43926", (unsigned)whole);
+        CHECKF(split == whole, "§5.5's CRC summed in two calls disagreed with the same bytes summed in one "
+                               "(0x%08X against 0x%08X) — the chunk walk sums a chunk a budgeted slice at a "
+                               "time, so a CRC that is not composable makes every large chunk refuse",
+               (unsigned)split, (unsigned)whole);
+        CHECK(png_crc32(0, NULL, 0) == 0u,
+              "§5.5's CRC over nothing is not the identity — a zero-length chunk is explicitly legal (\"Zero "
+              "is a valid length\") and its CRC is the one every encoder writes for it");
+    }
+
+    /* THE FOUR POSITIVE VECTORS, EACH AT NINE GRANULARITIES. */
+    png_fx_positive("truecolor 8-bit, filters 0..4", V_TRUECOLOR, sizeof V_TRUECOLOR,
+                    RGBA_TRUECOLOR, sizeof RGBA_TRUECOLOR, 9, 5);
+    png_fx_positive("indexed 4-bit, partial tRNS", V_INDEXED, sizeof V_INDEXED,
+                    RGBA_INDEXED, sizeof RGBA_INDEXED, 6, 3);
+    png_fx_positive("greyscale+alpha 16-bit", V_GREY16, sizeof V_GREY16,
+                    RGBA_GREY16, sizeof RGBA_GREY16, 4, 2);
+    png_fx_positive("greyscale 1-bit with tRNS", V_GREY1, sizeof V_GREY1,
+                    RGBA_GREY1, sizeof RGBA_GREY1, 11, 3);
+    png_fx_positive("greyscale 16-bit with tRNS", V_GREY16T, sizeof V_GREY16T,
+                    RGBA_GREY16T, sizeof RGBA_GREY16T, 4, 1);
+
+    /* THE BUILDER AGREES WITH THE ENCODER THAT WROTE THE VECTORS ABOVE, which is what makes every row below
+       it evidence about the decoder rather than about png_fx_build. A stored §3.2.4 block carrying the same
+       filtered scanlines must decode to the same pixels a compressed one would. */
+    {
+        uint8_t built[PNG_FX_MAX];
+        size_t  n = png_fx_build(built, 4, 5, 8, 6, NULL, 0, NULL, 0, RAW_CT6, sizeof RAW_CT6);
+        png_fx_positive("truecolor+alpha via a stored deflate block", built, n,
+                        RGBA_CT6, sizeof RGBA_CT6, 4, 5);
+        n = png_fx_build(built, 6, 2, 8, 3, PLTE_IDX, sizeof PLTE_IDX, NULL, 0, RAW_IDX, sizeof RAW_IDX);
+        png_fx_positive("indexed 8-bit via a stored deflate block", built, n,
+                        RGBA_IDX, sizeof RGBA_IDX, 6, 2);
+    }
+
+    /* ── THE REFUSALS ───────────────────────────────────────────────────────────────────────────────────
+       Each is the truecolor vector with ONE thing changed, so the row establishes that the change is what the
+       refusal is about rather than that the decoder rejects things. */
+    {
+        uint8_t v[sizeof V_TRUECOLOR];
+
+        /* §5.2: "The first eight bytes of a PNG datastream always contain the following hexadecimal values".
+           §13.1: "Decoders should verify that all eight bytes of the PNG signature are correct." */
+        memcpy(v, V_TRUECOLOR, sizeof v); v[3] ^= 0x01u;
+        png_fx_refuse("§5.2's signature, one bit changed", v, sizeof v, PNG_REFUSED_SIGNATURE);
+        png_fx_refuse("a body shorter than §5.2's signature", V_TRUECOLOR, 5, PNG_REFUSED_SIGNATURE);
+        png_fx_refuse("an empty body", V_TRUECOLOR, 0, PNG_REFUSED_SIGNATURE);
+
+        /* §5.5, and §13.1's "A CRC should be checked before processing the chunk data." */
+        memcpy(v, V_TRUECOLOR, sizeof v); v[29] ^= 0xFFu;
+        png_fx_refuse("§5.5's CRC over IHDR, disagreeing", v, sizeof v, PNG_REFUSED_CRC);
+
+        /* §5.3: "its value shall not exceed 2^31-1 bytes", and a chunk running past the body. */
+        memcpy(v, V_TRUECOLOR, sizeof v); v[8] = 0x80u;
+        png_fx_refuse("§5.3's Length over 2^31-1", v, sizeof v, PNG_REFUSED_CHUNK_LAYOUT);
+        png_fx_refuse("a datastream cut off inside a chunk", V_TRUECOLOR, sizeof V_TRUECOLOR - 9,
+                      PNG_REFUSED_CHUNK_LAYOUT);
+    }
+
+    /* §11.2.1's FIELDS AND §5.6's ORDER, built here so each row differs in exactly one number. */
+    {
+        uint8_t built[PNG_FX_MAX];
+        size_t  n;
+        struct { uint32_t w, h; uint8_t bd, ct; const char *what; PngStatus want; } BAD[] = {
+            { 0, 5, 8, 6, "§11.2.1's Width of zero, which that section calls \"an invalid value\"", PNG_REFUSED_IHDR },
+            { 4, 0, 8, 6, "§11.2.1's Height of zero", PNG_REFUSED_IHDR },
+            { 4, 5, 3, 6, "a bit depth §11.2.1 does not list at all", PNG_REFUSED_IHDR },
+            { 4, 5, 4, 6, "§11.2.1 Table 12: colour type 6 admits only 8 and 16", PNG_REFUSED_IHDR },
+            { 4, 5, 16, 3, "§11.2.1 Table 12: colour type 3 admits only 1, 2, 4 and 8", PNG_REFUSED_IHDR },
+            { 4, 5, 8, 5, "a colour type §6.1 Table 9 does not list", PNG_REFUSED_IHDR },
+            { 4, 5, 8, 1, "colour type 1, which is 'palette used' with no 'truecolor used' — not a Table 9 row",
+              PNG_REFUSED_IHDR },
+            { 0x80000000u, 5, 8, 6, "a Width outside §7.1's 0 to 2^31-1 range for a PNG four-byte unsigned integer",
+              PNG_REFUSED_IHDR },
+            { 0x7FFFFFFFu, 0x7FFFFFFFu, 16, 6,
+              "dimensions §11.2.1 permits and no address space has — a REFUSAL and never a CHECK, because "
+              "the size was chosen by whoever wrote the thirteen bytes", PNG_REFUSED_NO_ROOM }
+        };
+        size_t i;
+
+        for (i = 0; i < sizeof BAD / sizeof BAD[0]; i++) {
+            n = png_fx_build(built, BAD[i].w, BAD[i].h, BAD[i].bd, BAD[i].ct, NULL, 0, NULL, 0,
+                             RAW_CT6, sizeof RAW_CT6);
+            png_fx_refuse(BAD[i].what, built, n, BAD[i].want);
+        }
+
+        /* §10.1 "Compression method 0", §9.1's filter method and §8.1's interlace method, each reached by
+           writing the one IHDR byte png_fx_build always writes as zero. §13.2: "Unexpected values in fields
+           of known chunks (for example, an unexpected compression method in the IHDR chunk) shall be checked
+           for and treated as errors." */
+        n = png_fx_build(built, 4, 5, 8, 6, NULL, 0, NULL, 0, RAW_CT6, sizeof RAW_CT6);
+        png_fx_poke_ihdr(built, 10, 1);
+        png_fx_refuse("§10.1: a compression method other than 0", built, n, PNG_REFUSED_IHDR);
+        png_fx_poke_ihdr(built, 10, 0); png_fx_poke_ihdr(built, 11, 1);
+        png_fx_refuse("§9.1: a filter method other than 0", built, n, PNG_REFUSED_IHDR);
+        png_fx_poke_ihdr(built, 11, 0); png_fx_poke_ihdr(built, 12, 2);
+        png_fx_refuse("§8.1: an interlace method neither 0 nor 1", built, n, PNG_REFUSED_IHDR);
+        png_fx_poke_ihdr(built, 12, 1);
+        png_fx_refuse("§8.1's method 1, Adam7 — the one refusal about THIS ENGINE rather than about the bytes; "
+                      "see png_decode.h's named residual", built, n, PNG_REFUSED_INTERLACE);
+    }
+
+    /* §9.2's FILTER TYPE AND §11.2.2's PALETTE INDEX, reached by corrupting the FILTERED bytes and rebuilding,
+       which is the only way to put a value there that survives §5.5 and RFC 1950 §2.2's ADLER32. */
+    {
+        uint8_t built[PNG_FX_MAX], raw[sizeof RAW_CT6], rawi[sizeof RAW_IDX];
+        size_t n;
+
+        memcpy(raw, RAW_CT6, sizeof raw);
+        raw[0] = 5u;   /* §9.2: "Filter method 0 specifies exactly this set of five filter types" — 0 to 4 */
+        n = png_fx_build(built, 4, 5, 8, 6, NULL, 0, NULL, 0, raw, sizeof raw);
+        png_fx_refuse("§9.2 Table 11 defines five filter types and a scanline named a sixth", built, n,
+                      PNG_REFUSED_FILTER_TYPE);
+
+        memcpy(rawi, RAW_IDX, sizeof rawi);
+        rawi[1] = 200u;   /* §11.2.2: three entries, so index 200 is "out-of-range … an error" */
+        n = png_fx_build(built, 6, 2, 8, 3, PLTE_IDX, sizeof PLTE_IDX, NULL, 0, rawi, sizeof rawi);
+        png_fx_refuse("§11.2.2's \"any out-of-range pixel value found in the image data is an error\"", built,
+                      n, PNG_REFUSED_PALETTE);
+    }
+
+    /* §7.2 AND §9.1's EXACT LENGTH, IN BOTH DIRECTIONS. This is the check inflate.h names as belonging to this
+       component — "Where the format's own OWNER states an expected length … that is a SPEC check belonging to
+       the component that reads IHDR" — and it is what keeps the intermediate bounded by the image the header
+       declared rather than by how much a stranger felt like compressing. */
+    {
+        uint8_t built[PNG_FX_MAX], raw[sizeof RAW_CT6 + 8];
+        size_t n;
+
+        memcpy(raw, RAW_CT6, sizeof RAW_CT6);
+        n = png_fx_build(built, 4, 5, 8, 6, NULL, 0, NULL, 0, raw, sizeof RAW_CT6 - 4u);
+        png_fx_refuse("a datastream decompressing to FEWER bytes than §7.2's scanlines over its own IHDR",
+                      built, n, PNG_REFUSED_IMAGE_LENGTH);
+        memset(raw + sizeof RAW_CT6, 0, 8);
+        n = png_fx_build(built, 4, 5, 8, 6, NULL, 0, NULL, 0, raw, sizeof RAW_CT6 + 8u);
+        png_fx_refuse("a datastream decompressing to MORE bytes than its own IHDR declares", built, n,
+                      PNG_REFUSED_IMAGE_LENGTH);
+    }
+
+    /* §5.6's ORDER AND §13.1's THREE CLASSES OF CHUNK, assembled directly because each row is about which
+       chunks are present and in what order rather than about any chunk's content. */
+    {
+        uint8_t d[PNG_FX_MAX];
+        uint8_t ihdr[13];
+        size_t  p;
+        static const uint8_t SIG[8] = { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A };
+        static const uint8_t PAL3[9] = { 1,2,3, 4,5,6, 7,8,9 };
+
+        memset(ihdr, 0, sizeof ihdr);
+        ihdr[3] = 4; ihdr[7] = 5; ihdr[8] = 8; ihdr[9] = 6;
+
+        /* §11.2.1: "The IHDR chunk shall be the first chunk in the PNG datastream." */
+        memcpy(d, SIG, 8); p = 8;
+        p += png_fx_chunk(d + p, "gAMA", PAL3, 4);
+        p += png_fx_chunk(d + p, "IHDR", ihdr, 13);
+        p += png_fx_chunk(d + p, "IEND", NULL, 0);
+        png_fx_refuse("§11.2.1: a chunk before IHDR", d, p, PNG_REFUSED_CHUNK_ORDER);
+
+        /* §5.6 Table 7: IHDR's "Multiple allowed: No". */
+        memcpy(d, SIG, 8); p = 8;
+        p += png_fx_chunk(d + p, "IHDR", ihdr, 13);
+        p += png_fx_chunk(d + p, "IHDR", ihdr, 13);
+        p += png_fx_chunk(d + p, "IEND", NULL, 0);
+        png_fx_refuse("§5.6 Table 7: a second IHDR", d, p, PNG_REFUSED_CHUNK_ORDER);
+
+        /* §5.6 Table 7 makes IDAT the chunk the image is carried in, so a datastream reaching IEND with none
+           is missing a chunk rather than describing an empty image. */
+        memcpy(d, SIG, 8); p = 8;
+        p += png_fx_chunk(d + p, "IHDR", ihdr, 13);
+        p += png_fx_chunk(d + p, "IEND", NULL, 0);
+        png_fx_refuse("§5.6 Table 7: no IDAT anywhere", d, p, PNG_REFUSED_CHUNK_ORDER);
+
+        /* §13.2: "An unknown chunk type is not to be treated as an error unless it is a critical chunk", and
+           §13.1's classification: "unknown critical chunks (bit 5 of the first byte of the chunk type is 0)".
+           THE TWO ROWS ARE THE SAME FOUR LETTERS IN TWO CASES, which is the whole of what that bit means. */
+        memcpy(d, SIG, 8); p = 8;
+        p += png_fx_chunk(d + p, "IHDR", ihdr, 13);
+        p += png_fx_chunk(d + p, "ZzZz", PAL3, 9);
+        p += png_fx_chunk(d + p, "IEND", NULL, 0);
+        png_fx_refuse("§13.1's unknown CRITICAL chunk", d, p, PNG_REFUSED_UNKNOWN_CRITICAL);
+
+        /* §13.2: "The chunk type can be checked for plausibility by seeing whether all four bytes are in the
+           range codes 41-5A and 61-7A (hexadecimal)" — outside it, the walk is out of step with the
+           datastream rather than meeting an extension. */
+        memcpy(d, SIG, 8); p = 8;
+        p += png_fx_chunk(d + p, "IHDR", ihdr, 13);
+        p += png_fx_chunk(d + p, "\x01\x02\x03\x04", NULL, 0);
+        p += png_fx_chunk(d + p, "IEND", NULL, 0);
+        png_fx_refuse("§13.2: a chunk type outside the ISO 646 letter range", d, p, PNG_REFUSED_CHUNK_LAYOUT);
+
+        /* §11.2.4: "The chunk's data field is empty", and §13.2's known-length rule over it. */
+        memcpy(d, SIG, 8); p = 8;
+        p += png_fx_chunk(d + p, "IHDR", ihdr, 13);
+        p += png_fx_chunk(d + p, "IEND", PAL3, 1);
+        png_fx_refuse("§11.2.4: an IEND with a data field", d, p, PNG_REFUSED_CHUNK_LAYOUT);
+
+        /* §11.2.2: "This chunk shall appear for color type 3", which §13.1 names as a syntax error in as many
+           words: "the absence of a PLTE chunk before the first IDAT chunk in an indexed image". */
+        ihdr[8] = 8; ihdr[9] = 3; ihdr[3] = 6; ihdr[7] = 2;
+        memcpy(d, SIG, 8); p = 8;
+        p += png_fx_chunk(d + p, "IHDR", ihdr, 13);
+        p += png_fx_chunk(d + p, "IDAT", PAL3, 4);
+        p += png_fx_chunk(d + p, "IEND", NULL, 0);
+        png_fx_refuse("§11.2.2: colour type 3 with no PLTE", d, p, PNG_REFUSED_PALETTE);
+
+        /* §11.2.2: "A chunk length not divisible by 3 is an error." */
+        memcpy(d, SIG, 8); p = 8;
+        p += png_fx_chunk(d + p, "IHDR", ihdr, 13);
+        p += png_fx_chunk(d + p, "PLTE", PAL3, 4);
+        p += png_fx_chunk(d + p, "IEND", NULL, 0);
+        png_fx_refuse("§11.2.2: a PLTE length not divisible by three", d, p, PNG_REFUSED_PALETTE);
+
+        /* §11.2.2: "The number of palette entries shall not exceed the range that can be represented in the
+           image bit depth (for example, 2^4 = 16 for a bit depth of 4)." */
+        ihdr[8] = 1;
+        memcpy(d, SIG, 8); p = 8;
+        p += png_fx_chunk(d + p, "IHDR", ihdr, 13);
+        p += png_fx_chunk(d + p, "PLTE", PAL3, 9);
+        p += png_fx_chunk(d + p, "IEND", NULL, 0);
+        png_fx_refuse("§11.2.2: three palette entries at a bit depth that indexes two", d, p,
+                      PNG_REFUSED_PALETTE);
+
+        /* §11.2.2: "it shall not appear for color types 0 and 4." */
+        ihdr[8] = 8; ihdr[9] = 0;
+        memcpy(d, SIG, 8); p = 8;
+        p += png_fx_chunk(d + p, "IHDR", ihdr, 13);
+        p += png_fx_chunk(d + p, "PLTE", PAL3, 9);
+        p += png_fx_chunk(d + p, "IEND", NULL, 0);
+        png_fx_refuse("§11.2.2: a PLTE for a greyscale image", d, p, PNG_REFUSED_PALETTE);
+
+        /* §11.3.1.1: "A tRNS chunk shall not appear for color types 4 and 6", and its per-colour-type
+           lengths — "two bytes per sample … regardless of the image bit depth". */
+        ihdr[9] = 4;
+        memcpy(d, SIG, 8); p = 8;
+        p += png_fx_chunk(d + p, "IHDR", ihdr, 13);
+        p += png_fx_chunk(d + p, "tRNS", PAL3, 2);
+        p += png_fx_chunk(d + p, "IEND", NULL, 0);
+        png_fx_refuse("§11.3.1.1: a tRNS for colour type 4", d, p, PNG_REFUSED_TRANSPARENCY);
+
+        ihdr[9] = 2;
+        memcpy(d, SIG, 8); p = 8;
+        p += png_fx_chunk(d + p, "IHDR", ihdr, 13);
+        p += png_fx_chunk(d + p, "tRNS", PAL3, 4);
+        p += png_fx_chunk(d + p, "IEND", NULL, 0);
+        png_fx_refuse("§11.3.1.1: a tRNS of four bytes where colour type 2 states six", d, p,
+                      PNG_REFUSED_TRANSPARENCY);
+
+        ihdr[9] = 0;
+        memcpy(d, SIG, 8); p = 8;
+        p += png_fx_chunk(d + p, "IHDR", ihdr, 13);
+        p += png_fx_chunk(d + p, "tRNS", PAL3, 1);
+        p += png_fx_chunk(d + p, "IEND", NULL, 0);
+        png_fx_refuse("§11.3.1.1: a tRNS of one byte where colour type 0 states two", d, p,
+                      PNG_REFUSED_TRANSPARENCY);
+
+        /* §5.6 Table 7: tRNS is "After PLTE; before IDAT", and §11.3.1.1 makes its length for colour type 3
+           depend on the palette that must therefore already have been read. */
+        ihdr[9] = 3;
+        memcpy(d, SIG, 8); p = 8;
+        p += png_fx_chunk(d + p, "IHDR", ihdr, 13);
+        p += png_fx_chunk(d + p, "tRNS", PAL3, 1);
+        p += png_fx_chunk(d + p, "PLTE", PAL3, 9);
+        p += png_fx_chunk(d + p, "IEND", NULL, 0);
+        png_fx_refuse("§5.6 Table 7: a tRNS before the PLTE it indexes", d, p, PNG_REFUSED_CHUNK_ORDER);
+
+        /* §11.3.1.1: "The tRNS chunk shall not contain more alpha values than there are palette entries". */
+        memcpy(d, SIG, 8); p = 8;
+        p += png_fx_chunk(d + p, "IHDR", ihdr, 13);
+        p += png_fx_chunk(d + p, "PLTE", PAL3, 9);
+        p += png_fx_chunk(d + p, "tRNS", PAL3, 5);
+        p += png_fx_chunk(d + p, "IEND", NULL, 0);
+        png_fx_refuse("§11.3.1.1: five alpha values over a three-entry palette", d, p,
+                      PNG_REFUSED_TRANSPARENCY);
+    }
+
+    /* §10.2's DATASTREAM, AND WHICH OF inflate.h's REFUSALS PRODUCED THE ANSWER. png_decode_datastream_status
+       exists so the nine ways a zlib stream can be malformed do not flatten into one, and a row that only
+       asked for PNG_REFUSED_DATASTREAM would pass for a decoder that lost the distinction. */
+    {
+        uint8_t d[PNG_FX_MAX], ihdr[13];
+        size_t p;
+        static const uint8_t SIG[8] = { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A };
+        struct { const uint8_t *z; size_t n; InflateStatus want; const char *what; } Z[] = {
+            { (const uint8_t *)"", 0, INFLATE_REFUSED_TRUNCATED, "an IDAT with no bytes at all" },
+            { (const uint8_t *)"\x78\x9C\xFF\xFF", 4, INFLATE_REFUSED_BLOCK_TYPE,
+              "RFC 1951 §3.2.3's BTYPE 11, which that section names \"reserved (error)\"" },
+            { (const uint8_t *)"\x00\x00\x03\x00", 4, INFLATE_REFUSED_WRAPPER,
+              "RFC 1950 §2.2's CMF/FLG pair, which §10.1 requires to state deflate" }
+        };
+        size_t i;
+
+        memset(ihdr, 0, sizeof ihdr);
+        ihdr[3] = 4; ihdr[7] = 5; ihdr[8] = 8; ihdr[9] = 6;
+        for (i = 0; i < sizeof Z / sizeof Z[0]; i++) {
+            PngDecode dec;
+            const uint8_t *rgba;
+            size_t rgba_n;
+            PngStatus st;
+
+            memcpy(d, SIG, 8); p = 8;
+            p += png_fx_chunk(d + p, "IHDR", ihdr, 13);
+            p += png_fx_chunk(d + p, "IDAT", Z[i].z, Z[i].n);
+            p += png_fx_chunk(d + p, "IEND", NULL, 0);
+            st = png_fx_decode(d, p, 0, &rgba, &rgba_n, &dec);
+            CHECKF(st == PNG_REFUSED_DATASTREAM,
+                   "a PNG whose §10.2 datastream is malformed (%s) was answered %d rather than a datastream "
+                   "refusal", Z[i].what, (int)st);
+            CHECKF(png_decode_datastream_status(&dec) == Z[i].want,
+                   "a PNG whose §10.2 datastream is malformed (%s) reported inflate status %d where "
+                   "inflate.h makes it %d — a decoder that loses which refusal it was reports every corrupt "
+                   "image as the same thing", Z[i].what, (int)png_decode_datastream_status(&dec),
+                   (int)Z[i].want);
+            png_decode_free(&dec);
+        }
+    }
+
+    /* ── THREE CORRUPTION SWEEPS, EACH REACHING SOMEWHERE THE OTHERS CANNOT ──────────────────────────────
+       Each asserts a SET rather than an arm, because which refusal a given flipped bit produces is a fact
+       about that bit and pinning it would be asserting the vector rather than the decoder — and each asserts
+       that the arms SUM to the number of flips, which is what makes the set a real claim rather than a
+       tautology a decoder could satisfy by never answering at all. */
+    {
+        size_t i, seen;
+
+        /* SWEEP ONE — A FLIP AND NOTHING ELSE. Almost every one of these is caught at §5.5 before a byte of
+           the chunk's meaning is read, which is the point: it establishes that the CRC stands where §13.1
+           says it should, and it is why the next two sweeps exist. */
+        seen = 0;
+        for (i = 0; i < sizeof V_TRUECOLOR; i++) {
+            uint8_t v[sizeof V_TRUECOLOR];
+            PngDecode dec;
+            const uint8_t *rgba;
+            size_t rgba_n;
+            PngStatus st;
+
+            memcpy(v, V_TRUECOLOR, sizeof v);
+            v[i] = (uint8_t)(v[i] ^ 0x5Au);
+            st = png_fx_decode(v, sizeof v, 0, &rgba, &rgba_n, &dec);
+            png_fx_declared("a flipped byte with §5.5's CRC left stale", st);
+            png_decode_free(&dec);
+            seen++;
+        }
+        CHECKF(seen == sizeof V_TRUECOLOR, "the plain corruption sweep answered for %zu of %zu flips", seen,
+               sizeof V_TRUECOLOR);
+
+        /* SWEEP TWO — A FLIP IN §9.1's FILTERED BYTES, REBUILT. Every CRC and RFC 1950 §2.2's ADLER32 are
+           computed AFTER the corruption, so the flipped byte survives into the decoder and drives the filter,
+           the palette and the expansion — the states a stranger's bytes can actually put this file in, and
+           the ones the length check is what keeps inside an allocation. */
+        for (i = 0; i < sizeof RAW_CT6; i++) {
+            uint8_t raw[sizeof RAW_CT6], built[PNG_FX_MAX];
+            PngDecode dec;
+            const uint8_t *rgba;
+            size_t rgba_n, n;
+
+            memcpy(raw, RAW_CT6, sizeof raw);
+            raw[i] = (uint8_t)(raw[i] ^ 0x5Au);
+            n = png_fx_build(built, 4, 5, 8, 6, NULL, 0, NULL, 0, raw, sizeof raw);
+            png_fx_declared("a flipped filtered byte, every checksum repaired", 
+                            png_fx_decode(built, n, 0, &rgba, &rgba_n, &dec));
+            png_decode_free(&dec);
+        }
+        for (i = 0; i < sizeof RAW_IDX; i++) {
+            uint8_t raw[sizeof RAW_IDX], built[PNG_FX_MAX];
+            PngDecode dec;
+            const uint8_t *rgba;
+            size_t rgba_n, n;
+
+            memcpy(raw, RAW_IDX, sizeof raw);
+            raw[i] = (uint8_t)(raw[i] ^ 0x5Au);
+            n = png_fx_build(built, 6, 2, 8, 3, PLTE_IDX, sizeof PLTE_IDX, NULL, 0, raw, sizeof raw);
+            png_fx_declared("a flipped filtered byte of an indexed image",
+                            png_fx_decode(built, n, 0, &rgba, &rgba_n, &dec));
+            png_decode_free(&dec);
+        }
+
+        /* SWEEP THREE — A FLIP ANYWHERE, WITH EVERY CHUNK'S CRC REPAIRED AFTERWARDS. This is the sweep that
+           reaches §11.2.1's THIRTEEN FIELD BYTES and §10.1's zlib framing with a datastream that is otherwise
+           well formed — the row that would have to answer NO_ROOM, IMAGE_LENGTH or IHDR for a header a
+           stranger wrote to say something the rest of the file does not support. */
+        {
+            uint8_t base[PNG_FX_MAX];
+            size_t  n = png_fx_build(base, 4, 5, 8, 6, NULL, 0, NULL, 0, RAW_CT6, sizeof RAW_CT6);
+
+            for (i = 0; i < n; i++) {
+                uint8_t v[PNG_FX_MAX];
+                PngDecode dec;
+                const uint8_t *rgba;
+                size_t rgba_n;
+
+                memcpy(v, base, n);
+                v[i] = (uint8_t)(v[i] ^ 0x5Au);
+                png_fx_repair_crcs(v, n);
+                png_fx_declared("a flipped byte with every §5.5 CRC repaired",
+                                png_fx_decode(v, n, 0, &rgba, &rgba_n, &dec));
+                png_decode_free(&dec);
+            }
+        }
+    }
+
+    /* WHEN THE DECOMPRESSION STOPS, WHICH IS THE ONE PROPERTY THE PER-STEP LENGTH CHECK HAS AND THE ONLY
+       ONE NO STATUS CAN SHOW. §7.2 and §9.1 fix the decompressed length from §11.2.1's fields, so a decode
+       may stop the moment it has produced more than the header accounts for — and both stopping there and
+       stopping at the end answer PNG_REFUSED_IMAGE_LENGTH, so a fixture asking only for the status passes
+       for a decoder that decompresses a stranger's whole bomb before noticing. What separates them is COUNTED
+       STEPS, and the assertion needs no constant: the SAME datastream under a header declaring ONE pixel must
+       be stopped SOONER than under a header declaring a hundred, because the number of bytes the header
+       accounts for is the only thing that differs. A decoder without the per-step check decompresses all
+       twenty thousand bytes either way and answers in exactly the same number of steps.
+       MEASURED at a budget of four bytes: with the check the two counts are 25 and 99; with it deleted
+       they are 5024 and 5024 — equal, which is what this row reads. */
+    {
+        uint8_t wide[sizeof V_BOMB_1x1];
+        size_t  narrow_steps = 0, wide_steps = 0;
+        PngDecode d;
+        PngStatus st;
+
+        png_decode_init(&d, V_BOMB_1x1, sizeof V_BOMB_1x1, 4);
+        do { st = png_decode_step(&d); narrow_steps++; } while (st == PNG_MORE);
+        CHECKF(st == PNG_REFUSED_IMAGE_LENGTH,
+               "a datastream decompressing past what its own §11.2.1 accounts for was answered %d", (int)st);
+        png_decode_free(&d);
+
+        memcpy(wide, V_BOMB_1x1, sizeof wide);
+        png_fx_poke_ihdr(wide, 3, 100);   /* §11.2.1's Width, low byte: one pixel becomes a hundred */
+        png_decode_init(&d, wide, sizeof wide, 4);
+        do { st = png_decode_step(&d); wide_steps++; } while (st == PNG_MORE);
+        CHECKF(st == PNG_REFUSED_IMAGE_LENGTH,
+               "the same datastream under a hundred-pixel header was answered %d", (int)st);
+        png_decode_free(&d);
+
+        CHECKF(narrow_steps < wide_steps,
+               "one §10.2 datastream took %zu steps to refuse under a header declaring ONE pixel and %zu "
+               "under a header declaring a hundred — equal counts mean the decompression is not being "
+               "stopped by §7.2 and §9.1's length at all, so the intermediate a stranger's bytes can ask "
+               "for is bounded by nothing", narrow_steps, wide_steps);
+    }
+
+    /* A TAKEN BITMAP IS THE CALLER'S, and a freed decoder must not release it a second time. This is the one
+       ownership statement png_decode.h makes that no decode above exercises, and a double free is not a thing
+       a later fixture would report at this component. */
+    {
+        PngDecode d;
+        const uint8_t *rgba;
+        size_t rgba_n, taken_n = 12345;
+        uint8_t *taken;
+
+        CHECK(png_fx_decode(V_TRUECOLOR, sizeof V_TRUECOLOR, 0, &rgba, &rgba_n, &d) == PNG_DONE,
+              "the truecolor vector stopped decoding at the ownership row");
+        taken = png_decode_take_rgba(&d, &taken_n);
+        CHECKF(taken != NULL && taken_n == sizeof RGBA_TRUECOLOR,
+               "png_decode_take_rgba handed over %zu bytes where the decode had produced %zu", taken_n,
+               sizeof RGBA_TRUECOLOR);
+        CHECK(memcmp(taken, RGBA_TRUECOLOR, sizeof RGBA_TRUECOLOR) == 0,
+              "png_decode_take_rgba handed over bytes that are not the ones the decode produced");
+        rgba = png_decode_rgba(&d, &rgba_n);
+        CHECK(rgba == NULL && rgba_n == 0,
+              "a decoder that has had its bitmap taken still claims to hold it — the next png_decode_free "
+              "would then release a buffer the caller owns");
+        png_decode_free(&d);   /* must release nothing of the taken buffer */
+        free(taken);
     }
 }
 
@@ -25620,6 +26479,11 @@ int main(int argc, char **argv) {
        PRIMITIVE with no caller in this engine yet, so its failure must be reported at its own row rather
        than inside whatever first decodes an image through it. It stands on nothing any row above computes. */
     inflate_selftest();
+    /* @PNGDEC — the PNG specification's chunk walk, filters and sample expansion, AFTER inflate_selftest and
+       for the reason that row gives about itself: this is a primitive whose only decompressor is the one
+       above, so a failure here must be reported at this row rather than inside whatever first paints an
+       image through it, and a decompressor that were broken would fail at its own row first. */
+    png_decode_selftest();
     html_scripting_flag_selftest();   /* HTML §13.2.4.5's scripting flag, read through §13.2.6.4.7's
                                         `noscript` rule — both arms, because one arm alone passes for a
                                         parser that never reads the flag */
