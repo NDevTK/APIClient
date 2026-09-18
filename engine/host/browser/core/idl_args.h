@@ -795,7 +795,20 @@ typedef enum {
        are three-armed.
        OUTCOME 0 IS THE SHORTER (NUMERIC) ENTRY, per step_fork_run's rule that outcome 0 is what a run with no
        forking policy takes: `JS_GetTypedArrayType` of a crossed concolic is not a typed array, so the numeric
-       fallback is the arm every body already reached, and the ImageDataArray world is the one the fork adds. */
+       fallback is the arm every body already reached, and the ImageDataArray world is the one the fork adds.
+       AND `UNREACHABLE AT THIS POSITION` IS A CLAIM ABOUT STEP 12 AND WAS READ AS ONE ABOUT THE POSITION,
+       which is the whole of what went wrong here. The clause above is true: where both entries stand, the
+       chain names one of them for every value and never falls through. It is silent about the ARITY path —
+       step 8 sets a distinguishing index only where more than one entry survives steps 3-4, so at the top
+       arity the longer entry stands alone, step 12 never runs, and the value has been tested by NOTHING. The
+       conversion then owes §3.2.25 Union types' own typed-array clause and all five steps of §3.2.26 Buffer
+       source types, and it is the position that throws rather than step 12: `new ImageData({}, 1, 2, {})`
+       crossed a plain Object and aborted the engine at the constructor's own position-0 assert.
+       SO THIS ROW CONVERTS AND DOES NOT MERELY CHOOSE, and the two §3.3 buffer attributes are part of what it
+       converts to — `ImageDataArray` declares neither, so both of §3.2.26's refusals stand at it and a
+       resizable-backed view is kept out of the record that HTML §8.11.1 The ImageData interface sizes once
+       from its byte length. The flags are not declared with idl_typed_array because that row states one `T`
+       and this union has two; they are the pair every position declaring neither attribute has. */
     IDL_ULONG_OR_IMAGE_DATA_ARRAY,
     /* A POSITION *BEHIND* THE DISTINGUISHING INDEX AT WHICH THE TWO ENTRIES DECLARE DIFFERENT TYPES — §3.6
        step 15.2's "the type at index i in the type list of the REMAINING entry", which is a question this pool

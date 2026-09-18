@@ -887,9 +887,14 @@ static JSValue js_ctx2d_put_image_data(JSContext *ctx, JSValueConst this_val, in
     (void)magic;
     if (JS_IsException(st)) return JS_EXCEPTION;
     /* Step 1 and 2 — the [[ViewedArrayBuffer]], and "If IsDetachedBuffer(buffer) is true, then throw an
-       "InvalidStateError" DOMException". `image_data_pixels` reports both failures separately because they are
-       two different exceptions: a receiver that is not an ImageData is the DECLARATION's TypeError and never
-       reaches here, so a false with `is_image_data` set is the detached arm. */
+       "InvalidStateError" DOMException". THE THREE REFUSALS ARE ASKED IN THE ORDER THEIR ALGORITHMS RUN, and
+       the first of them is this member's and not the declaration's: position 0 is declared `any`, because
+       *put pixels from an ImageData onto a bitmap* is reached by both overloads and by OffscreenCanvas, so
+       what stands here is whatever the page passed and the brand test is the one below. The retired reasoning
+       said the opposite and is rewritten rather than deleted because it reads as obvious: `a receiver that is
+       not an ImageData is the DECLARATION's TypeError and never reaches here, so a false with is_image_data
+       set is the detached arm`. Its second half was wrong too — a false with `is_image_data` set is EITHER the
+       detached arm or the float16 one, which is why the two are asked in sequence rather than assumed. */
     if (!image_data_pixels(ctx, argv[0], &src)) {
         JS_FreeValue(ctx, st);
         if (!src.is_image_data)

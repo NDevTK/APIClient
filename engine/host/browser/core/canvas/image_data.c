@@ -538,13 +538,25 @@ bool image_data_pixels(JSContext *ctx, JSValueConst v, ImageDataPixels *out)
     }
     JS_FreeValue(ctx, buf);
 
-    /* THE LENGTH IS THE ARRAY'S AND THE DIMENSIONS ARE THE RECORD'S, AND THEY CAN DISAGREE — which is a page's
-       doing and not this codebase's, because *initialize an ImageData object* step 1.3 takes "the actual
-       ImageDataArray object passed as data" and a page may hand `new ImageData(arr, 1)` an array it then
-       resizes. So the run this reports is the SHORTER of the two, and a caller that walks `width * height`
-       rows without asking would run off a buffer the page shrank. */
+    /* THE LENGTH IS THE ARRAY'S, THE DIMENSIONS ARE THE RECORD'S, AND THEY CANNOT DISAGREE. The retired
+       reasoning is rewritten rather than deleted because a reader re-derives it from *initialize an ImageData
+       object* step 1.3 alone, which really does adopt the page's own array: `THEY CAN DISAGREE — which is a
+       page's doing and not this codebase's ... a page may hand new ImageData(arr, 1) an array it then resizes`.
+       A page may not, and the reason is one algorithm earlier. Web IDL §3.2.26 "Buffer source types" refuses
+       a view over a RESIZABLE or a SHARED buffer at every position declaring neither §3.3.1 "[AllowResizable]"
+       nor §3.3.2 "[AllowShared]", and `ImageDataArray` declares neither — so the only way its byte length
+       can change is by DETACHING, which is the arm above. The equality itself is arithmetic this file
+       performed: the constructor derived `height` from the view's own byte length, and image_data_new
+       allocated exactly four bytes a pixel.
+       IT IS A `CHECK` RATHER THAN A `DCHECK` BECAUSE THE POINTER IS LOAD-BEARING IN RELEASE — both callers
+       memcpy `width * height * 4` bytes through it, so a dev-only guard trades a loud abort for a heap overrun
+       in the build that ships. core/idl_args.c's IDL_ULONG_OR_IMAGE_DATA_ARRAY row is where the state is made
+       unreachable; this is what makes that true by construction rather than by convention. */
     total = (size_t)b->width * (size_t)b->height * 4u;
-    if (len < total) return false;
+    CHECK(len >= total,
+          "§8.11.1: an ImageData's array is shorter than its own width and height — Web IDL §3.2.26 "
+          "\"Buffer source types\" refuses a resizable or shared buffer at an `ImageDataArray`, so the only "
+          "byte length that may change is a detached one and that is answered one arm above this");
 
     out->rgba   = base + off;
     out->width  = b->width;

@@ -65,7 +65,17 @@ void image_data_free(void);
  * Web IDL §3.7.6's TypeError, a detached buffer is putImageData's "InvalidStateError", and a "rgba-float16"
  * array is not a byte buffer at all — so a refusal spelled here would be one algorithm's answer given to all
  * of them. The DCHECK-free contract is deliberate for the same reason image_data.h's own paragraph gives: an
- * ImageData is PAGE-SUPPLIED INPUT, and every one of these states is a page's to reach. */
+ * ImageData is PAGE-SUPPLIED INPUT, and every one of these states is a page's to reach.
+ *
+ * THREE IS THE WHOLE LIST AND TWO FLAGS PARTITION IT EXACTLY, which is why no refusal-reason field belongs
+ * here: `is_image_data` false is the first, `detached` true is the second, and both flags clear is the third.
+ * A FOURTH state was reachable and had no bit — an array SHORTER than `4 * width * height` — and it shared the
+ * third's spelling, so putImageData refused a page's shrunk buffer under a crash naming float16. It is not a
+ * missing enumerator. It is a state HTML §4.12.5.1.16 "Pixel manipulation" has no step for, because Web IDL
+ * §3.2.26 "Buffer source types" refuses a resizable or shared buffer at a position declaring neither §3.3.1
+ * "[AllowResizable]" nor §3.3.2 "[AllowShared]" — which `ImageDataArray` does not — so the conversion keeps it
+ * out and the accessor asserts rather than reporting it. core/idl_args.c's IDL_ULONG_OR_IMAGE_DATA_ARRAY row
+ * is where that refusal is made; a fourth bit here would have been the symptom recorded instead. */
 typedef struct {
     uint8_t *rgba;      /* 4 * width * height bytes, or NULL when `ok` is false */
     uint32_t width;

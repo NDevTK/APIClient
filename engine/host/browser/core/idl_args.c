@@ -2718,8 +2718,8 @@ static int idl_level_run(JSContext *ctx, JSStepHdr *hdr, IdlDictWalk *walk, IdlC
            of the caller's may be live across it. It is already JS_UNDEFINED on every path that reaches the
            ask (a concolic source is an Object, so the read above consumed it), and the release is the
            invariant rather than the current arithmetic.
-           IT IS ITS OWN PHASE BECAUSE THE ASK MUST HAPPEN ONCE PER MEMBER. `mphase` 3 is "the read is behind
-           us and step 4.1.4 has not been asked": a member whose conversion later PARKS (a ToString, a
+           IT IS ITS OWN PHASE BECAUSE THE ASK MUST HAPPEN ONCE PER MEMBER. `mphase` 3 is `the read is behind
+           us and step 4.1.4 has not been asked`: a member whose conversion later PARKS (a ToString, a
            sequence's pull, a pushed level) re-enters this loop carrying the answer to THAT request in `in`,
            and an ask standing in front of it would free the answer the parked conversion is waiting for — the
            same hazard the §3.2.25 arm guards with `started`, one level in. */
@@ -4457,8 +4457,8 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
         /* §3.2.25 over `(object or DOMString)`, read in the union algorithm's own ORDER — which is the whole
            of the difference between this and IDL_STRING_OR_DICT. The union names no nullable and no dictionary
            type, so `null` never reaches an object arm: it falls past every Object clause to the string one and
-           becomes the four characters "null". Reading it as "an object is the object, everything else is a
-           string" agrees on every ordinary case and is the same sentence; it is written as one clause because
+           becomes the four characters "null". Reading it as `an object is the object, everything else is a
+           string` agrees on every ordinary case and is the same sentence; it is written as one clause because
            that is what §3.2.25 leaves once the arms are named. */
         if (t == IDL_STRING_UNLESS_OBJECT)
             t = JS_IsObject(a) ? IDL_ANY : IDL_DOMSTRING;
@@ -4852,28 +4852,12 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                     r = step_fork_run(ctx, &s->hdr, a, "§3.6 (unsigned long, ImageDataArray) overload entry",
                                       2, real, &arm);
                     if (r) return r;
-                    if (arm == IDL_OVL_LONGER) {
-                        /* THE ImageDataArray WORLD, AND WHAT IT COSTS. Web IDL §3.2.26 Buffer source types'
-                           "get a copy of the bytes held by the buffer source" has no answer over an unknown,
-                           because an unknown has no bytes — and HTML §8.11.1's own step 2 for this entry is
-                           "Let length be the buffer source byte length of data", which is the first thing the
-                           algorithm asks for. So there is no arm set to run and the honest statement is that
-                           the conversion has no answer over unknown input here yet.
-                           THE OTHER WORLD DOES NOT DEPEND ON IT, which is why the arm is asked rather than
-                           dropped: outcome 0 is complete, and this crash names the one capability that is
-                           not. */
-                        DFAIL("§3.6 step 12 selected the `ImageDataArray` overload entry for UNKNOWN EXTERNAL "
-                              "INPUT and Web IDL §3.2.26 Buffer source types has no answer over one: an "
-                              "unknown has no bytes, so HTML §8.11.1 The ImageData interface's own \"Let "
-                              "length be the buffer source byte length of data\" has nothing to read. Build "
-                              "§3.2.26 over unknown input AT THIS CONVERSION — what is missing is what a "
-                              "buffer source's LENGTH is when the buffer is unknown. Until it exists this "
-                              "world is the page's TypeError, which is what a release build answers");
-                        JS_ThrowTypeError(ctx, "argument %d: a buffer source cannot yet be built from unknown "
-                                               "external input", s->i + 1);
-                        return JS_STEP_ABRUPT;
-                    }
-                    s->ovl_entry = IDL_OVL_SHORTER;
+                    /* THE ARM IS RECORDED HERE AND CONVERTED BELOW, which is the one place this row states
+                       Web IDL §3.2.26 Buffer source types. The ImageDataArray world's cost — that §3.2.26 has
+                       no answer over an unknown — is owed identically by the ARITY path, where steps 3-4 leave
+                       the longer entry standing and step 12 never runs at all, so a copy of it here would be
+                       the second right answer to one question and would leave that path with none. */
+                    s->ovl_entry = (arm == IDL_OVL_LONGER) ? IDL_OVL_LONGER : IDL_OVL_SHORTER;
                 } else {
                     int kind = JS_GetTypedArrayType(a);
 
@@ -4887,13 +4871,70 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                    two from answering differently. */
                 first_opt = idl_first_optional(m, s);
             }
-            /* THE LONGER ENTRY'S TYPE IS `ImageDataArray`, AND THE VALUE STANDING HERE HAS ALREADY PASSED
-               ITS BRAND TEST — step 12's typed-array clause is what chose this entry, and it chose it by
-               reading `[[TypedArrayName]]`. So the conversion is §3.2.26's "crosses as itself", which is what
-               IDL_ANY is, and NOT IDL_TYPED_ARRAY: that row states ONE `T` beside the position (idl_typed_array)
-               and `ImageDataArray` is a union of two, so declaring it would be a brand test against whichever
-               of the two the declaration happened to name and would refuse the other. The union's own test ran
-               at step 12 and has no second answer to give. */
+            /* THE LONGER ENTRY'S TYPE IS `ImageDataArray`, AND CONVERTING TO IT IS THIS BLOCK — not a
+               crossing. The retired reasoning is rewritten rather than deleted because it is what a reader
+               re-derives from step 12 alone: `the value standing here has already passed its brand test, so
+               the conversion is §3.2.26's crosses-as-itself, which is what IDL_ANY is`. Both of its halves are
+               wrong, in the two directions this position can be reached from.
+               STEP 12 IS NOT ALWAYS THE THING THAT CHOSE THIS ENTRY. §3.6 step 8 sets a distinguishing index
+               only "If there is more than one entry in S", so at the member's top arity steps 3-4 leave the
+               longer entry alone and NOTHING has looked at the value — there is no brand test to have passed.
+               `new ImageData({}, 1, 2, {})` reached this line with a plain Object and crossed it, and the
+               constructor's own position-0 assert, whose whole subject is that the conversion placed the
+               surviving entry's type, aborted the engine on a page's argument.
+               AND WEB IDL §3.2.26 "Buffer source types" IS NOT A BRAND TEST FOLLOWED BY A RETURN. Its
+               typed-array algorithm is FIVE steps: let T be the IDL type, the [[TypedArrayName]] test, the
+               §3.3.2 "[AllowShared]" refusal, the §3.3.1 "[AllowResizable]" refusal, and only then the
+               reference. Step 12 performs the second of those and no other — its clause reads the slot to pick
+               an ENTRY — and §3.2.25 "Union types"' own typed-array clause says what happens next in as many
+               words: "then return the result of converting V to that type", which is §3.2.26 with all five.
+               WHAT THE TWO MISSING REFUSALS COST IS A PAGE-HELD ABORT SWITCH AND NOT PEDANTRY, which is the
+               argument idl_buffer_source_refuse makes at length and which this position was outside. A
+               length-tracking Uint8ClampedArray over a RESIZABLE buffer crossed here, and HTML §8.11.1 "The
+               ImageData interface"'s own step 2 read its byte length ONCE, at construction, to derive a width
+               and a height the record then keeps — so `ab.resize()` afterwards left an ImageData naming more
+               bytes than its array has. §4.12.5.1.16 "Pixel manipulation"'s *put pixels from an ImageData onto
+               a bitmap* has no step for that state: its only refusal is IsDetachedBuffer, and the accessor
+               that met it had no way to say which refusal it was making.
+               IT IS NOT IDL_TYPED_ARRAY, AND THAT HALF OF THE RETIRED PARAGRAPH WAS RIGHT: that row states ONE
+               `T` beside the position and `ImageDataArray` is a union of two, so declaring it would refuse
+               whichever member the declaration did not name. What the union has instead is its own two-member
+               test, written once, and the two refusals — which need no `T` at all, because BOTH members are
+               declared with neither extended attribute and the pair is therefore false and false for either. */
+            if (longer_survived) {
+                int ida_kind;
+
+                if (concolic_is(a)) {
+                    DFAIL("§3.6 selected the `ImageDataArray` overload entry for UNKNOWN EXTERNAL "
+                          "INPUT and Web IDL §3.2.26 Buffer source types has no answer over one: an "
+                          "unknown has no bytes, so HTML §8.11.1 The ImageData interface's own \"Let "
+                          "length be the buffer source byte length of data\" has nothing to read. Build "
+                          "§3.2.26 over unknown input AT THIS CONVERSION — what is missing is what a "
+                          "buffer source's LENGTH is when the buffer is unknown. Until it exists this "
+                          "world is the page's TypeError, which is what a release build answers");
+                    JS_ThrowTypeError(ctx, "argument %d: a buffer source cannot yet be built from unknown "
+                                           "external input", s->i + 1);
+                    return JS_STEP_ABRUPT;
+                }
+                /* §3.2.25 "Union types"' typed-array clause over `ImageDataArray`'s two flattened members,
+                   and §3.2.26 step 2's [[TypedArrayName]] test for whichever it names — ONE test, because
+                   the union's clause and the member conversion's brand step ask the same question of the same
+                   slot. Anything else falls off the end of §3.2.25's chain, whose last step is a TypeError.
+                   THE STEP-12 PATH CANNOT FAIL THIS and the ARITY PATH CAN, which is why it is asked of both
+                   rather than of the one that needs it: a test written only where it fires is a test whose
+                   absence elsewhere is invisible. */
+                ida_kind = JS_GetTypedArrayType(a);
+                if (ida_kind != JS_TYPED_ARRAY_UINT8C && ida_kind != JS_TYPED_ARRAY_FLOAT16) {
+                    JS_ThrowTypeError(ctx, "argument %d: Web IDL §3.2.25 \"Union types\" has no arm for this "
+                                           "value at an `ImageDataArray`, whose flattened member types are "
+                                           "Uint8ClampedArray and Float16Array", s->i + 1);
+                    return JS_STEP_ABRUPT;
+                }
+                /* §3.2.26 "Buffer source types"' steps 3 and 4, which are the POSITION's to state and which
+                   `ImageDataArray` declares neither of — idl_buffer_source_refuse quotes both in full. */
+                if (idl_buffer_source_refuse(ctx, a, "ImageDataArray", false, false))
+                    return JS_STEP_ABRUPT;
+            }
             t = longer_survived ? IDL_ANY : IDL_UNSIGNED_LONG;
         }
 
@@ -4959,8 +5000,8 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
                no-policy run answers exactly as it did and the boolean world is the one the fork ADDS.
                IT IS ASKED ONLY ON THE ENTRY THAT STARTS THE WALK, and the reason is NOT that a second ask
                would fork twice — step_fork_run is idempotent, and its own contract says a park and a
-               cross-session resume both "land back on the ask, which re-derives the same arm from the flow's
-               decision vector". It is that the ask RELEASES this machine's outstanding request answer first
+               cross-session resume both `land back on the ask, which re-derives the same arm from the flow's
+               decision vector`. It is that the ask RELEASES this machine's outstanding request answer first
                (it takes no `in` to hand it to, and the sibling's snapshot is taken at its return, so nothing of
                the caller's may be live across it). Asked on a RESUME, that release destroys the very answer the
                parked member read is waiting for, and the member would come back holding `undefined` where the
