@@ -74,6 +74,13 @@
  * release undoes this — "document_agent_free reaches selection_free" — and no spelling scheme can check a
  * claim of that shape. What checks it is agent_state_check_released below, at the one instant it is decidable:
  * a name that is merely SPELLED right and belongs to a release that does not reach this slot fires there.
+ * THAT LAST SENTENCE IS TRUE OF A ROW THAT HAND-RESETS AND FALSE OF ONE THAT CALLS agent_state_undo, and it is
+ * kept rather than cut because the reasoning behind it is what a reader re-derives. It fires because the
+ * wrongly-named row's release leaves those slots set. A row that ends in agent_state_undo resets every slot
+ * carrying its name — which is what that entry is FOR — so the misattributed slots are put back by a release
+ * that never reached them and the walk passes. Thirteen rows call it today and the paragraph at that entry
+ * argues every row eventually should, so this is the direction that gets quieter as the file's own advice is
+ * taken. See the residual there.
  *
  * AND WHAT THIS COSTS: A FINALIZER AND A gc_mark RUN AFTER THE RELEASE COLUMN, SO NEITHER MAY READ A SLOT
  * DECLARED HERE. This is the obligation the zeroing above creates, and it is stated here because here is where
@@ -111,16 +118,54 @@
    sub-component is the row that reaches it and never its own file's name. `what` is what the slot IS — it is
    the second half of the assert a forgotten release fires, so it names the state and not the variable, and
    for a sub-component it names its own STANDARD too, since it is read out of a report headed by the row. */
-void agent_state_id(const char *component, const int *slot, const char *what);        /* pre-init: -1 */
-void agent_state_flag(const char *component, const int *slot, const char *what);      /* pre-init: 0 */
-void agent_state_class(const char *component, const JSClassID *slot, const char *what);/* pre-init: 0 */
-void agent_state_atom(const char *component, const JSAtom *slot, const char *what);   /* pre-init: JS_ATOM_NULL */
-void agent_state_value(const char *component, const JSValue *slot, const char *what); /* pre-init: JS_UNDEFINED */
+/* AND THE DECLARING SITE TRAVELS WITH THE DECLARATION, WHICH IS WHY EACH OF THESE IS A MACRO OVER AN `_at`
+ * FUNCTION RATHER THAN A FUNCTION. Every assert this registry can fire — the duplicate below, the pre-init
+ * check at the release, and core/platform.c's walk over declarations that name no row — is written at ONE
+ * line, and a DCHECK stamps the file and line it is WRITTEN at. There are 611 declaring call sites reaching
+ * those lines, so the crash named a COMPONENT and a STATE and no address; CLAUDE.md's rule for exactly this
+ * shape and exactly this scale is that the site is part of the assert rather than decoration on it.
+ *
+ * WHAT IT COSTS TO READ ONE WITHOUT IT, MEASURED RATHER THAN ARGUED. Three aborts in one session came out of
+ * that walk. For `canvas_rendering_context_2d` the name happened to be the file's, so the address was
+ * recoverable by reading it; for `html_canvas_element` the repair was to name SOMEBODY ELSE'S row, so the
+ * name was about to stop being the file's and the report would have named neither the file to edit nor the
+ * row to pick. The two states that walk separates take opposite repairs, and choosing between them is a
+ * question about the DECLARING FILE — is this a component core/platform.c owes a row, or a sub-component
+ * whose owner releases it — which is the one fact a message built from `component` and `what` cannot carry.
+ *
+ * WHY A MACRO AND NOT A HELPER, and why no call site changed. __FILE__ and __LINE__ inside a function are
+ * THAT function's, so a forwarding hop would stamp this file for all 611 of them, which is the defect rather
+ * than the cure. A function-like macro is expanded AT THE CALL, so the pair is the caller's by construction
+ * and the existing calls are unchanged text — including the ones in components this lane may not edit,
+ * which is what makes the address affordable at all. This is core/idl_args.h's IDL_SITE convention, routed
+ * to rather than re-derived; the one difference is that there are no callers here that spell the pair
+ * themselves, so there is no `_INTERNAL` sentinel to declare and no forwarder that could want one.
+ *
+ * THE PAIR IS REQUIRED AND NOT DEFAULTED: every `_at` entry takes both, so a caller reaching one without a
+ * site does not compile, and the file pointer is DCHECKed rather than tolerated. A defaulted address is what
+ * lets a caller with nothing to say look like one that was never converted. */
+void agent_state_id_at(const char *component, const int *slot, const char *what,
+                       const char *file, int line);                                   /* pre-init: -1 */
+void agent_state_flag_at(const char *component, const int *slot, const char *what,
+                         const char *file, int line);                                 /* pre-init: 0 */
+void agent_state_class_at(const char *component, const JSClassID *slot, const char *what,
+                          const char *file, int line);                                /* pre-init: 0 */
+void agent_state_atom_at(const char *component, const JSAtom *slot, const char *what,
+                         const char *file, int line);                                 /* pre-init: JS_ATOM_NULL */
+void agent_state_value_at(const char *component, const JSValue *slot, const char *what,
+                          const char *file, int line);                                /* pre-init: JS_UNDEFINED */
 /* A POINTER SLOT — a recorded JSRuntime, a malloc'd buffer, a hook this component installed into another. The
    address crosses as `const void *` and the check compares the BYTES of a null pointer, because reading a
    `JSRuntime *` object through a `void *` lvalue is the strict-aliasing violation CLAUDE.md's §C-stack rule
    was written about; memcmp reads unsigned chars and is legal for every object there is. */
-void agent_state_ptr(const char *component, const void *slot, const char *what);
+void agent_state_ptr_at(const char *component, const void *slot, const char *what,
+                        const char *file, int line);
+#define agent_state_id(component, slot, what)    agent_state_id_at((component), (slot), (what), __FILE__, __LINE__)
+#define agent_state_flag(component, slot, what)  agent_state_flag_at((component), (slot), (what), __FILE__, __LINE__)
+#define agent_state_class(component, slot, what) agent_state_class_at((component), (slot), (what), __FILE__, __LINE__)
+#define agent_state_atom(component, slot, what)  agent_state_atom_at((component), (slot), (what), __FILE__, __LINE__)
+#define agent_state_value(component, slot, what) agent_state_value_at((component), (slot), (what), __FILE__, __LINE__)
+#define agent_state_ptr(component, slot, what)   agent_state_ptr_at((component), (slot), (what), __FILE__, __LINE__)
 
 /* How many slots this component declared — core/platform.c's row check, and nothing else. IT CANNOT ANSWER
    THE THIRD DIRECTION: a caller can only ask it about a name the caller already has, so 0 is returned both
@@ -130,10 +175,16 @@ int  agent_state_count(const char *component);
 
 /* THE REGISTRY, READ THE OTHER WAY: the `i`th declaration in declaration order, false past the end. This is
    the ONLY way to ask "is every declaration's component a real one?", because that question is asked of the
-   REGISTRY and not of any list a caller holds. The two strings are the ones the declaration was made with, so
-   the assert that fires can name the exact line by its `what` rather than by an index into a table nobody
-   can see. */
-bool agent_state_slot(int i, const char **component, const char **what);
+   REGISTRY and not of any list a caller holds. The three strings and the line are the ones the declaration was
+   made with.
+   THIS USED TO HAND BACK TWO STRINGS AND SAID THE ASSERT COULD THEREBY "name the exact line by its `what`
+   rather than by an index into a table nobody can see". The second half of that is still right and the first
+   was never true: `what` names the STATE, so it identifies the declaration only to a reader who already knows
+   which file to open, and the walk this feeds is the one whose whole job is to say that the file is wrong
+   about its row. The site is carried now, so the sentence is kept as the reason an index would have been
+   worse rather than as a claim that a description is an address. */
+bool agent_state_slot(int i, const char **component, const char **what,
+                      const char **file, int *line);
 
 /* EVERY DECLARED SLOT IS BACK AT ITS PRE-INIT VALUE. Run once, at the end of the release column. */
 void agent_state_check_released(void);
@@ -166,12 +217,27 @@ void agent_state_check_released(void);
  * IT IS THE LAST LINE, AND THE ORDER IS PART OF THE CONTRACT. A release that hands another component's claim
  * back, or asserts a claimant has already handed it back (§2.9's tree walk, §9.4.2's handler-set hook), is
  * asking about a slot this would null; called first, it would answer those DCHECKs itself. Free, assert, then
- * undo.
+ * undo. */
+/* AND A NAMED RESIDUAL, BECAUSE THIS ENTRY NARROWS agent_state_check_released AND THE PARAGRAPH ABOVE STATES
+ * ITS REACH AT ROW GRANULARITY. "One line per component is what leaves that check something to say" is exactly
+ * right for a ROW and does not hold for a SUB-COMPONENT: a sub-component declares under its OWNER'S name, so
+ * the owner's one call resets the sub-component's handles whether or not the owner's release reached the
+ * sub-component's `_free`. NOT COVERED: an owner whose cascade drops one member — the member's values are
+ * never freed and its handles are put back anyway, so the release check that exists to find exactly that is
+ * answered by this line instead of by the release. WHAT THE NEXT DIFF BUILDS: a per-DECLARING-FILE undo, so
+ * the unit that resets is the unit that frees; the file is on every declaration already (agent_state_slot
+ * hands it back), and what has to be decided first is what a component whose `_init` and `_free` are split
+ * across files owes, which the registry cannot answer today. HOW ITS ABSENCE WOULD SHOW: a teardown that is
+ * silent here while JS_FreeRuntime's gc_obj_list walk reports a survivor, or — for an atom or a malloc'd
+ * block, which neither of that runtime's censuses can see — silent everywhere.
  *
  * A COMPONENT NAME THAT DECLARED NOTHING IS AN ABORT and not a no-op, because the name is written twice — once
  * here and once at each declaration — and a silent no-op is the shape where the two spellings differ and the
- * release stops being the inverse of anything. */
-void agent_state_undo(const char *component);
+ * release stops being the inverse of anything. THE CALLING SITE IS CARRIED for the reason the declaring
+ * entries carry theirs: this abort's remedy is "one of these two spellings is wrong", which names no file
+ * unless the release's own address is in the message. */
+void agent_state_undo_at(const char *component, const char *file, int line);
+#define agent_state_undo(component) agent_state_undo_at((component), __FILE__, __LINE__)
 
 /* The registry is the AGENT's, like everything on it. */
 void agent_state_reset(void);

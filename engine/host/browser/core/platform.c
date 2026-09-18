@@ -1684,22 +1684,34 @@ static void platform_check_table(void)
 static void platform_check_agent_state(void)
 {
 #if APICLIENT_DEV
-    const char *component, *what;
-    int i;
+    const char *component, *what, *file;
+    int i, line;
 
-    for (i = 0; agent_state_slot(i, &component, &what); i++) {
+    /* AND THE DECLARING SITE IS PART OF THIS ABORT RATHER THAN DECORATION ON IT. This DFAILF is written at ONE
+       line and 611 declarations can reach it, so what it stamps is this file for every one of them; the two
+       repairs it names are chosen by reading the DECLARING file, which the message could not carry until that
+       file travelled with the declaration (core/agent_state.h's macros capture it at the call).
+       IT IS NOT THE COMPONENT NAME UNDER ANOTHER SPELLING, which is the reason the address is worth a field:
+       for the repair this fires on most, the name is about to STOP being the file's. Measured in one session
+       — `canvas_rendering_context_2d` was a file naming itself where its row is `canvas_ctx2d`, so the name
+       led to the file by luck; `html_canvas_element` was a SUB-COMPONENT whose correct declaration names
+       `element`, so neither the name it wrote nor the name it owed is the file to edit. */
+    for (i = 0; agent_state_slot(i, &component, &what, &file, &line); i++) {
         if (platform_has_row(component)) continue;
-        DFAILF("`%s` declared %d slot(s) of agent state and THIS LIST HAS NO ROW OF THAT NAME; the first is "
-               "%s. Nothing about those slots is checked less carefully — the question is never ASKED. The "
-               "row pairing below can only ask \"does anybody RELEASE this?\" about a name a row carries, so "
-               "for these it is not run at all, and the row that really owns them is left reporting "
-               "\"declared no agent state\" in the exact words a component that declared nothing would use. "
-               "A SUB-COMPONENT NAMES THE ROW THAT RELEASES IT, NEVER ITS OWN FILE: core/dom/selection.c "
-               "declares under `document` and core/crypto/subtle_crypto.c under `crypto`, because that is "
-               "whose release column their release is reached from. So this is one of two repairs, and they "
-               "are not alike — either the owning row is misspelled at the declaration, or this component is "
-               "declared and released by nobody and owes a row here (core/agent_state.h)",
-               component, agent_state_count(component), what);
+        DFAILF("%s:%d declared %d slot(s) of agent state under `%s` and THIS LIST HAS NO ROW OF THAT NAME; the "
+               "first is %s. Nothing about those slots is checked less carefully — the question is never "
+               "ASKED. The row pairing below can only ask \"does anybody RELEASE this?\" about a name a row "
+               "carries, so for these it is not run at all, and the row that really owns them is left "
+               "reporting \"declared no agent state\" in the exact words a component that declared nothing "
+               "would use. A SUB-COMPONENT NAMES THE ROW THAT RELEASES IT, NEVER ITS OWN FILE: "
+               "core/dom/selection.c declares under `document` and core/crypto/subtle_crypto.c under `crypto`, "
+               "because that is whose release column their release is reached from. So this is one of two "
+               "repairs, and they are not alike — either the owning row is misspelled at the line named "
+               "above, or this component is declared and released by nobody and owes a row here "
+               "(core/agent_state.h). THE ADDRESS IS THIS DECLARATION'S AND THE COUNT IS THE NAME'S: a "
+               "component may declare from several files, so a repair that edits only the line above is "
+               "finished when this walk stops firing and not before",
+               file, line, agent_state_count(component), component, what);
     }
     for (i = 0; i < PLATFORM_N; i++) {
         int n = agent_state_count(PLATFORM[i].name);
