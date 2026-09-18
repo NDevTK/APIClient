@@ -106,6 +106,22 @@ QJS_EXPORT void qjs_emit_partial(void);
 QJS_EXPORT const uint8_t *qjs_paint(void);
 QJS_EXPORT unsigned qjs_paint_bytes(void);
 
+/* AND THE FACTS THAT MAKE THOSE BYTES AN IMAGE RATHER THAN A BAG OF PIXELS. `qjs_paint_width` and
+   `qjs_paint_height` are the SHAPE, which the extent does not determine — `4 * w * h` has many factorisations,
+   so a host holding only the pointer and the length cannot write the picture into any container, every one of
+   which states its dimensions in its own header. `qjs_paint_offers`, `qjs_paint_marks` and
+   `qjs_paint_complete` are core/paint/document_paint.h's `DocumentPaintCount` made readable, and that header
+   is the whole argument for them: "a surface with no ink on it means the walk reached no box, or reached
+   boxes that painted nothing, or was STOPPED — and a caller handed only the bitmap cannot separate them".
+   `complete` FALSE is a PARTIAL picture, which is the one of the three a host must never publish as a whole
+   one. Each asserts that a render happened, for `qjs_paint_bytes`' own reason: zero is already an answer.
+   THE BODIES AND THE REST OF THE CONTRACT ARE IN main.c, including why `spans` and `pixels` have no entry. */
+QJS_EXPORT unsigned qjs_paint_width(void);
+QJS_EXPORT unsigned qjs_paint_height(void);
+QJS_EXPORT unsigned qjs_paint_offers(void);
+QJS_EXPORT unsigned qjs_paint_marks(void);
+QJS_EXPORT int qjs_paint_complete(void);
+
 /* THE INSTRUMENT SEAM — a program a DRIVER wants evaluated in the analysed document's realm, and the dumped
    completion values coming back, one per live timeline. Its contract is at its body in main.c and its whole
    design at solver/engine.h's engine_request_dump; what is worth knowing from a declaration is that the two

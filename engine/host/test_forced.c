@@ -9109,8 +9109,11 @@ static const char *arg_val(int argc, char **argv, const char *flag) {
     for (i = 1; i < argc; i++)
         if (argv[i] && !strcmp(argv[i], flag)) {
             DCHECK(i + 1 < argc && argv[i + 1] != NULL,
-                   "a fixture flag that names a file was given without one — the cold tier's store is this "
-                   "host's IndexedDB and a run that invents its path writes a residue nothing will read back");
+                   "a flag that names a path was given without one. This helper serves every such flag and "
+                   "names none of them, which is the repair rather than the message: it used to name the "
+                   "cold tier alone, so the second caller read as an unrelated failure of the first. What is "
+                   "refused is the same for all of them — a path a run INVENTS is a file nothing will read "
+                   "back and a file nobody asked for, and neither says so");
             return argv[i + 1];
         }
     return NULL;
@@ -23467,6 +23470,12 @@ static void box_paint_inline_box_selftest(JSContext *ctx)
  * an abort reachable from it is an abort switch a document holds over this engine. The production ABI entries
  * `qjs_paint` and `qjs_paint_bytes` stand over exactly this walk; the diff that gives them a method to be
  * called through is the diff that arms the switch, which is why this lands first.
+ * THE SWITCH IS NOW ARMED, AND BY A CALLER RATHER THAN BY A METHOD — which is this sentence's own clause
+ * corrected rather than deleted, because a reader re-deriving it from the mojom road will re-write it. This
+ * file's `--abi` arm calls `qjs_paint` directly under `--paint-dir` (see `abi_paint`), so the walk below runs
+ * over a REAL page's root the moment that flag is given, with no renderer binding anywhere in the picture. A
+ * `method` was the sufficient condition somebody had in mind and never the necessary one: what arms an abort
+ * switch is a CALLER, and the ABI and this host are ONE PROGRAM.
  *
  * EVERY NUMBER IS A PLAIN C VALUE THIS FILE OR THE ENTRY COMPUTED. The two markups are string literals here,
  * the extent is `display_list_raster_region_size` over `viewport_canvas_region` — the same second route
@@ -24482,6 +24491,193 @@ static void abi_report_declines(void)
     fflush(stderr);
 }
 
+/* ─── AN IMAGE OF THE DOCUMENT THIS ARM DROVE, ON DISK ──────────────────────────────────────────────────────
+ * WHAT THIS IS FOR: the engine renders a real page and nothing anywhere presented the result. `qjs_paint` and
+ * the four entries beside it answer a byte run and its shape; this is the one caller that turns that into a
+ * FILE, and the reason it is HERE rather than in main.c is a boundary and not a convenience. main.c is the
+ * ABI, which in the extension runs inside a sandboxed frame with no filesystem at all — it opens no file on
+ * any path and must not gain a path-taking entry, because an entry the shipped deployment cannot implement is
+ * a capability granted to the untrusted zone alone. This file is the HOST, it already writes the cold tier's
+ * store (`tf_park_store`), and SECURITY.md's boundary here is the NETWORK rather than the disk: "the child
+ * opens no socket" is the invariant the zone owns, and the zone NAMES this directory on the child's argv
+ * rather than the child picking one out of the ambient environment.
+ *
+ * THE FORMAT IS NETPBM'S PAM (`P7`) RATHER THAN PPM (`P6`), AND THE DIFFERENCE IS THE ALPHA CHANNEL — which
+ * is REAL INFORMATION here and not a detail. core/graphics/raster_surface.h holds NON-PREMULTIPLIED RGBA, and
+ * argues that choice out of HTML §4.12.5.7 "Premultiplied alpha and the 2D rendering context". A `P6` has
+ * three planes, so writing one would mean COMPOSITING the image over some background first, and WHICH
+ * background is a CHOICE nothing in this engine has made: a fully transparent pixel and an opaque white one
+ * would become the same three bytes, which is the absent-and-zero pair with a picture in it. PAM's own
+ * `RGB_ALPHA` tuple type is defined over exactly the model this surface holds — the non-opacity planes are
+ * the FOREGROUND colour, the opacity plane says what fraction of the pixel's light comes from it, and the
+ * rest comes from a background that specification calls `the (unspecified) background color`. So the ground a
+ * person previews this over is named in the command they run and nothing is baked into the artifact.
+ * THE DOCUMENT IS `https://netpbm.sourceforge.net/doc/pam.html` AND IT IS NOT A WEB STANDARD, so no corpus in
+ * this tree can check a word of what this paragraph says about it. That is why what is quoted from it is kept
+ * to single backticked runs a reader can find with one search, and why the URL is stated: the claim is
+ * verifiable by fetching, and nothing here pretends an instrument verified it.
+ *
+ * AND THE RASTER IS THE SURFACE'S OWN BYTES WITH NO TRANSFORM AT ALL, which is why this is a CONTAINER and
+ * not a codec (§Bind-before-build puts hand-rolling one of those last, and this hand-rolls nothing). PAM's
+ * raster is every row top to bottom, every tuple left to right, every sample `in pure binary format` with no
+ * delimiter anywhere, one byte per sample while `MAXVAL` is 255; core/graphics/raster_surface.h's run is
+ * "four bytes per pixel, R G B A, row-major". Those are the same bytes in the same order, so the write below
+ * is the header and then one `fwrite`.
+ *
+ * A ZERO-AREA IMAGE IS NOT WRITTEN, AND THAT IS THE FORMAT'S RULE RATHER THAN A POLICY TAKEN HERE: PAM states
+ * that height, width, depth and maxval `are at least 1`, so a document CSS 2.1 §2.3.1 "The canvas" establishes
+ * no rendered region for has no spelling in this container. It is REPORTED instead — that state is an ANSWER
+ * (core/paint/document_paint.h's own false arm) and a file that did not appear says nothing, which is the one
+ * reading a reader must not be left to make.
+ *
+ * NAMED RESIDUAL — WHAT IS NOT COVERED: the header states WHICH DOCUMENT this is an image of and does not
+ * state WHICH ENGINE REVISION drew it. The native link writes no build stamp — `engine/build.mjs` writes a
+ * `.build.json` sidecar beside the wasm glue and beside nothing else — so this host has no revision to state,
+ * and composing one from the CHECKOUT's `HEAD` would be a stamp about a binary nobody verified was built from
+ * it, which is the false-stamp defect rather than a missing field.
+ * WHAT THE NEXT DIFF BUILDS: the native link writing that same sidecar beside `qjs-native-*`, and one more
+ * `#` line here reading it. HOW ITS ABSENCE WOULD SHOW: two images of one document produced by two builds are
+ * byte-comparable and neither carries the revision that drew it, so a reader holding a pair cannot say which
+ * engine is which without being told out of band. */
+static void abi_paint(const char *dir, const char *doc_id, const char *url)
+{
+    const uint8_t *px;
+    unsigned       n, w, h, offers, marks;
+    int            complete, named, headed, closed;
+    char           name[256];
+    char           path[1024];
+    size_t         i, put;
+    FILE          *f;
+
+    DCHECK(dir != NULL && doc_id != NULL && url != NULL,
+           "an image was asked for with no directory to write it to, no document to name it after, or no "
+           "address to record in it");
+    /* THE TWO VALUES THAT REACH THE HEADER CAME OFF ONE LINE OF THIS CHANNEL, SO NEITHER CAN CARRY A NEWLINE
+       — and that is asserted rather than argued, because a newline inside a `#` comment would END the comment
+       and whatever followed it would be read as a header line. The property holds by construction today; the
+       assert is what keeps it holding the day this arm is fed by something other than a line reader. */
+    DCHECK(strchr(doc_id, '\n') == NULL && strchr(url, '\n') == NULL,
+           "the document's name or its address carries a newline. Both reach this PAM header as `#` comment "
+           "lines, which a newline TERMINATES — so the rest of the value would be read as header syntax and "
+           "the file would describe an image with the wrong dimensions or no ENDHDR at all");
+
+    /* THE RENDER, AND THE FIVE READINGS OF IT. `qjs_paint` PERFORMS it and every entry below states a fact
+       about what it just produced, so the order is the ABI's own and not a preference. */
+    px = qjs_paint();
+    n = qjs_paint_bytes();
+    w = qjs_paint_width();
+    h = qjs_paint_height();
+    offers = qjs_paint_offers();
+    marks = qjs_paint_marks();
+    complete = qjs_paint_complete();
+
+    /* THE SHAPE AND THE EXTENT ARE ONE FACT, ASSERTED HERE BECAUSE THIS IS THE FIRST CALLER THAT READS BOTH.
+       core/paint/document_paint.c already holds its own surface to this equality; what is checked here is
+       that the extent and the shape are readings of ONE image rather than of two renders — which is exactly
+       what they would be if a `qjs_paint` ran between two of these calls.
+       IT IS A `CHECK` AND NOT A `DCHECK` BECAUSE THE PRODUCT OF THE FAILURE IS AN ARTIFACT SOMEBODY LOOKS AT.
+       Every operand is this engine's own — no page can reach any of them, so this is not a page holding an
+       abort switch — and the release arm of a compiled-out version would write a header stating dimensions
+       the raster does not fill, which is a file that is WRONG rather than a file that is missing. That is the
+       integrity case check.h names, and the reader who would have to notice is a person looking at a picture. */
+    CHECKF((size_t)n == (size_t)w * (size_t)h * 4u,
+           "this host read an image of %u x %u pixels and an extent of %u bytes, which are not the same "
+           "picture — RGBA8 is four bytes per pixel, so these are two renders read as one and the raster "
+           "written from them would be a prefix or an overrun of whichever is real", w, h, n);
+    DCHECK((n == 0u) == (px == NULL),
+           "the ABI answered an image whose pointer and whose extent disagree about whether there is a "
+           "picture. core/graphics/raster_surface.h makes an absent run and an extent of zero ONE fact and "
+           "asserts it from both ends, so a disagreement here is that pair having come apart across the ABI");
+
+    if (n == 0u) {
+        /* CSS 2.1 §2.3.1 "The canvas": a document no navigable presents establishes no rendered region, and
+           core/paint/document_paint.h answers FALSE for exactly that. It is a STATE and not a failure, so it
+           is reported rather than crashed on — and it is reported rather than left silent because an absent
+           file and a run that was never asked to paint look identical on disk. */
+        fprintf(stderr, "[abi paint] %s — no image: CSS 2.1 §2.3.1 \"The canvas\" establishes no rendered "
+                        "region for this document, so there is nowhere for a picture to be. Nothing written.\n",
+                url);
+        fflush(stderr);
+        return;
+    }
+
+    /* THE FILE IS NAMED BY THE DOCUMENT — the name the ZONE gave this instance, which is what its routing
+       already keys on, rather than its address, which is not a path. Anything outside a portable file-name
+       set becomes `_`, because this composes a PATH out of a value another party stated and a `/` or a `..`
+       in it would place the file somewhere the zone did not name. Two documents whose names map to one file
+       OVERWRITE, which is why the line below states the path it actually wrote rather than the name it was
+       given. */
+    for (i = 0; i + 1u < sizeof name && doc_id[i] != '\0'; i++) {
+        char c = doc_id[i];
+        name[i] = ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                   (c >= '0' && c <= '9') || c == '.' || c == '-' || c == '_') ? c : '_';
+    }
+    name[i] = '\0';
+    CHECK(i > 0u, "this instance was provisioned under an EMPTY document name, so the image of it has nothing "
+                  "to be called — the record's name field is refused as empty where it is read, so an empty "
+                  "one here is that check and this line no longer reading the same value");
+
+    /* COMPOSED AT THE CALL, WHICH IS WHERE THE COMPILER CAN SEE BOTH THE DESTINATION'S SIZE AND THE FORMAT —
+       `-Wformat-truncation` needs both in scope, so hoisting this into a helper would delete the diagnostic
+       without changing a line of behaviour. The RETURN is what says whether it fitted: `snprintf` truncates
+       silently and answers the length it WANTED, so a path longer than the buffer would otherwise be written
+       to under a name that is a prefix of the one asked for. */
+    named = snprintf(path, sizeof path, "%s/%s.pam", dir, name);
+    CHECKF(named > 0 && (size_t)named < sizeof path,
+           "the path for this document's image does not fit this host's buffer (%d bytes wanted, %zu "
+           "available) — a truncated path names a DIFFERENT file, and two documents whose paths truncate to "
+           "one would overwrite each other's image while both reported success",
+           named, sizeof path);
+
+    f = fopen(path, "wb");
+    CHECKF(f != NULL, "this host could not open %s to write the image of %s — the render already happened, so "
+                      "the only copy of that picture is about to go with the instance", path, url);
+
+    /* netpbm's PAM header, in that format's own spelling: `P7`, then header lines in any order, then
+       `ENDHDR`, then the raster with no delimiter of any kind. `DEPTH 4` and `TUPLTYPE RGB_ALPHA` are what
+       make the fourth plane the OPACITY plane; `MAXVAL 255` is what makes each sample one byte, which is what
+       makes the raster below this engine's own bytes rather than a conversion of them.
+       THE `#` LINES ARE THE HONESTY, AND THEY ARE DERIVED RATHER THAN ASSERTED. What the walk OFFERED, what
+       it LAID and whether it FINISHED are core/paint/document_paint.h's three, and they are written into the
+       artifact instead of being printed somewhere a copy of the file would lose: a picture that arrives at a
+       reader without them is one they will read as the page, and `complete` false means it is a FRAGMENT of
+       the page. A count of what this engine does NOT paint is deliberately not written — it would be a claim
+       about the tree that goes stale the day a kind is added, where a count of what it DID paint cannot. */
+    headed = fprintf(f,
+                     "P7\n"
+                     "# rendered by APIClient's engine from %s\n"
+                     "# CSS 2.1 §E.2 \"Painting order\" offered %u step(s) and laid %u mark(s)\n"
+                     "# the walk %s\n"
+                     "WIDTH %u\n"
+                     "HEIGHT %u\n"
+                     "DEPTH 4\n"
+                     "MAXVAL 255\n"
+                     "TUPLTYPE RGB_ALPHA\n"
+                     "ENDHDR\n",
+                     url, offers, marks,
+                     complete ? "FINISHED: nothing was left unpainted that this engine paints"
+                              : "STOPPED: this picture is PARTIAL — the painter met an operand it could not "
+                                "compute and every mark it had already laid is in the image",
+                     w, h);
+    CHECKF(headed > 0, "this host could not write the PAM header for %s — a raster with no header in front of "
+                       "it is not an image in any format and nothing will read it", path);
+    put = fwrite(px, 1, (size_t)n, f);
+    closed = fclose(f);
+    CHECKF(put == (size_t)n && closed == 0,
+           "this host wrote %zu of the image's %u bytes to %s — a truncated raster is worse than none, "
+           "because the header in front of it states dimensions the bytes do not fill and every reader will "
+           "either refuse the file or paint whatever followed it",
+           put, n, path);
+
+    /* ON STDERR AND WITHOUT AN `@` PREFIX, WHICH IS THE CHANNEL CHOICE AND NOT A FORMATTING ONE. Stdout is
+       this arm's RECORD stream to the trusted zone, whose reader THROWS on a record it does not route — and
+       it is right to: an unrouted record is a fact nothing reads. This line's reader is a PERSON, so it goes
+       where `[abi]`'s own reports go and wears no marker that would claim to be part of a protocol. */
+    fprintf(stderr, "[abi paint] %s -> %s (%u x %u, %u bytes RGBA; %u offer(s), %u mark(s), walk %s)\n",
+            url, path, w, h, n, offers, marks, complete ? "complete" : "STOPPED — PARTIAL PICTURE");
+    fflush(stderr);
+}
+
 /* THE ARM ITSELF. One document in, one result out.
    THE RECORD IS `document` and then, in `qjs_init`'s own parameter order, every fact that entry takes:
    `<address><TAB><name><TAB><headers b64><TAB><document b64><TAB><top-level creation URL><TAB>
@@ -24506,8 +24702,15 @@ static void abi_report_declines(void)
    traversable's answers are now written by the ZONE (which is what knows this document is one) rather than
    assumed by the reader. `abi_take` refuses an ABSENT field, so a zone that stopped writing one is a record
    that stops rather than a peer seated on ten silent defaults. */
-static int abi_main(void)
+static int abi_main(int argc, char **argv)
 {
+    /* WHERE AN IMAGE OF THIS DOCUMENT GOES, OR NULL FOR A RUN THAT IS NOT ASKED FOR ONE — stated by
+       the party that SPAWNED this process rather than picked up from its environment, which is
+       SECURITY.md's shape (the trusted zone provisions the untrusted one) applied to the one
+       capability this arm has that the extension's engine does not. NULL is a positive state and not
+       a default: a run given no directory renders nothing, which costs a page-sized surface and a
+       walk it was not asked to make. */
+    const char *paint_dir = arg_val(argc, argv, "--paint-dir");
     char *rec, *p;
     const char *verb, *url, *doc_id, *top_level_url, *csp_self, *coep, *coep_ep;
     const char *coep_ro, *coep_ro_ep, *parent, *container_policy, *ancestor_origins;
@@ -24735,6 +24938,15 @@ static int abi_main(void)
        already read, rather than a marker invented here that no shipped path emits. */
     printf("@RESULT %s\n", qjs_result());
     fflush(stdout);
+    /* AND AN IMAGE OF WHAT THAT DOCUMENT LOOKS LIKE, AFTER THE RESULT AND BEFORE THE TEARDOWN. The ORDER is
+       load-bearing at both ends. AFTER, because `qjs_paint` PERFORMS a render — it walks CSS 2.1 §E.2
+       "Painting order" over a real page's boxes, which is a road no fixture reaches and therefore the road
+       most likely to abort at a capability this engine has not built. A crash there with the finding set
+       already on the wire costs a picture; the same crash before it would cost every endpoint and every
+       verified sink this session produced. BEFORE, because the teardown destroys the document and the realm
+       holding the viewport whose region sizes the image, so this is the last moment there is anything to
+       render. */
+    if (paint_dir != NULL) abi_paint(paint_dir, doc_id, url);
     qjs_teardown();
     /* AFTER THE TEARDOWN, because the entry KEEPS these bytes: the parser's input byte stream reads THROUGH
        this pointer rather than copying it, which is why the extension's own placement marks that one parameter
@@ -24759,7 +24971,7 @@ int main(int argc, char **argv) {
        root a second one under the name "fixture". Two agents in one process is not a smaller version of one;
        it is the state SECURITY.md's one-instance-per-cluster rule exists to prevent, with the frontier's own
        registry initialised twice. So this is a return, not a branch. */
-    if (arg_has(argc, argv, "--abi")) return abi_main();
+    if (arg_has(argc, argv, "--abi")) return abi_main(argc, argv);
     trusted_types_selftest();
     policy_container_selftest();
     /* BEFORE the CSP element matching, because that check's hash arm is this primitive: a failure here would

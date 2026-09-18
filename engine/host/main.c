@@ -149,6 +149,17 @@ static char                *g_result;
 static RasterSurface        g_paint;
 static int                  g_painted;
 
+/* WHAT THAT RENDER DID, HELD BESIDE THE IMAGE BECAUSE THE IMAGE CANNOT STATE IT. core/paint/document_paint.h
+ * spends three paragraphs on exactly this and its own DCHECK says it in one line: "a surface with no ink on
+ * it means the walk reached no box, or every box painted nothing, or the walk was stopped — three things a
+ * caller must tell apart and a bitmap cannot". Until this register existed the count was a LOCAL of `qjs_paint`
+ * below: it was asserted over and then discarded, so every one of those three arrived at a host as the same
+ * run of transparent bytes, and the third is the one that matters most — `complete` false is a PARTIAL
+ * picture, and a host that writes one out without knowing publishes a fragment of a page as the page.
+ * IT IS NOT A SECOND ANSWER TO ANYTHING THE SURFACE ALREADY GIVES. The SHAPE of the image is read off
+ * `g_paint` itself, which is the only party that holds it; what is here is the provenance of the INK. */
+static DocumentPaintCount   g_paint_count;
+
 /* THE DOCUMENTS THAT JOINED THIS AGENT AFTER IT WAS ROOTED — `qjs_join`'s realms and trees, held because THIS
  * host is what gives them back. It is not a registry and does not answer any question about the agent: the
  * world registry names documents, `navigable.c` owns the §7.4 child realms, and these two arrays exist for the
@@ -1415,12 +1426,25 @@ QJS_EXPORT const char *qjs_result(void)
    `raster_surface_bytes` is two-sided about the pair — an absent run and an extent of zero are one fact — so
    a host reads the two entries together and needs no third to tell it whether there is a picture. WHICH of
    the two reasons produced it (no rendered region at all, or a region of no size) is a fact about the
-   VIEWPORT rather than about the image, and the zone that provisioned this document is where that is known;
-   `count` separates them HERE, which is why it is asserted rather than discarded. */
+   VIEWPORT rather than about the image, and this paragraph used to end with a clause that is now retired:
+   `the zone that provisioned this document is where that is known`.
+   THAT CLAUSE IS CORRECT ABOUT THE SPEC AND FALSE ABOUT THIS TREE, which
+   is the stale-`DFAIL` shape arriving in a comment: it reads as authoritative and sends the next reader to
+   ask a party that has never been told. It is rewritten rather than deleted because a reader re-deriving it
+   from the standard — where a viewport IS the embedder's to choose — will write it again.
+   THE STRUCTURAL FACT IS IN THE DECLARATION ABOVE AND NEEDS NO MEASUREMENT: `qjs_init` takes the facts a
+   document ARRIVAL carries, and a viewport is not one of them, so no provisioning party ever states one and
+   none can be read back. The derivation for the zones themselves is a grep rather than a figure — ask
+   `extension/mojom.js` and `engine/trusted.mjs` for `width`, `height`, `viewport` or `devicePixelRatio` —
+   because a count here would go stale the day one of them gains a viewport, and in the direction that argues
+   for building what already exists.
+   WHERE IT IS KNOWN IS HERE. core/frame/viewport.h answers CSS 2.1 §2.3.1 "The canvas"'s region out of the
+   REALM this document is presented in, which is state no party outside this process holds — which is why
+   `count` is asserted rather than discarded, and why the shape is an ENTRY below rather than a number a host
+   could have been holding all along. */
 QJS_EXPORT const uint8_t *qjs_paint(void)
 {
-    DocumentPaintCount count;
-    bool               region;
+    bool region;
 
     DCHECK(g_ctx != NULL && g_dom != NULL,
            "an image was asked of an instance that was never initialised — there is no document to render and "
@@ -1429,14 +1453,15 @@ QJS_EXPORT const uint8_t *qjs_paint(void)
        reason. A zero-area surface frees nothing, so this is also correct on the first call, where the register
        is the zeroed static every arm below leaves valid. */
     raster_surface_free(&g_paint);
-    region = document_paint(g_ctx, g_dom, &g_paint, &count);
+    region = document_paint(g_ctx, g_dom, &g_paint, &g_paint_count);
     g_painted = 1;
-    DCHECKF(region || (count.offers == 0u && count.marks == 0u && !count.complete),
+    DCHECKF(region || (g_paint_count.offers == 0u && g_paint_count.marks == 0u &&
+                       !g_paint_count.complete),
             "core/paint/document_paint.h answered that CSS 2.1 §2.3.1 \"The canvas\" establishes no rendered "
             "region for this document and then reported a walk over it — %u offer(s), %zu mark(s), complete=%d. "
             "The false arm is stated to return before the walk, so a count with anything in it is that entry "
             "having painted a document it had already said has nowhere to be painted",
-            count.offers, count.marks, count.complete ? 1 : 0);
+            g_paint_count.offers, g_paint_count.marks, g_paint_count.complete ? 1 : 0);
     return g_paint.px;
 }
 
@@ -1470,6 +1495,110 @@ QJS_EXPORT unsigned qjs_paint_bytes(void)
            "a rendered image is %zu bytes, which this ABI states lengths too narrow to carry — a host would "
            "copy a prefix of the picture and believe it had the whole of it", n);
     return (unsigned)n;
+}
+
+/* THE SHAPE OF THAT RUN — the two numbers the extent beside it does not determine and no consumer can recover.
+   core/graphics/raster_surface.h argues the extent into existence because "a byte run of pixels has no
+   spelling as a C string and its extent can be carried only as a number beside it"; this is that argument one
+   axis further on, and it is arithmetic rather than a style preference. An extent of `4 * width * height` has
+   many factorisations — 3686400 bytes is 1280 x 720 and is equally 720 x 1280 and 960 x 960 — so a host that
+   holds the pointer and the length holds a BAG OF PIXELS and not an image. Every container an image can be
+   written into states its dimensions in its own header, so a host with no way to ask for them cannot write one
+   at all, which is what `engine/host/test_forced.c`'s `--paint-dir` arm is the first caller to need.
+   THEY ARE TWO ENTRIES AND NOT ONE PACKED ANSWER, which is this ABI's own rule at the pair above: "A pointer
+   and a count are answers of two different KINDS, and two of those taken from one call are free to be read
+   into the variable named for the other — separate entries make that mistake a different CALL instead." A
+   width and a height are answers of one kind on two AXES, which is the same mistake with a transposed image
+   instead of a wrong-sized one, and the same remedy answers it.
+   THEY ARE THE SURFACE'S OWN AND NOT THE REGION'S. core/paint/document_paint.h sizes `out` from
+   CSS 2.1 §2.3.1 "The canvas"'s region through core/paint/display_list_raster.h's device-pixel rounding, so
+   re-deriving
+   them here from a viewport would be the second read of that question that same header refuses by name. What
+   is read is the surface the painter actually initialised.
+   ZERO IS AN ANSWER: a document CSS 2.1 §2.3.1 establishes no rendered region for holds a zero-area surface,
+   which is the same state `qjs_paint_bytes` answers zero for and the same state a NULL from `qjs_paint` names.
+   The three agree because they are three readings of one surface. */
+QJS_EXPORT unsigned qjs_paint_width(void)
+{
+    DCHECK(g_painted,
+           "the width of an image was asked before one was rendered — `qjs_paint` produces and this states "
+           "part of the shape of what it produced, so a host that asks this first is reading a register no "
+           "render has written, whose zero is indistinguishable from a document with no picture");
+    DCHECKF(g_paint.width >= 0,
+            "the rendered surface reports a width of %d. core/graphics/raster_surface.h's extent is "
+            "two-sided against its own allocation, so a negative dimension is that allocation having been "
+            "made from a number no region produced", g_paint.width);
+    return (unsigned)g_paint.width;
+}
+
+QJS_EXPORT unsigned qjs_paint_height(void)
+{
+    DCHECK(g_painted,
+           "the height of an image was asked before one was rendered — the pair is ordered exactly as "
+           "`qjs_paint_bytes` states, and a register no render has written answers zero for a picture that "
+           "was never attempted");
+    DCHECKF(g_paint.height >= 0,
+            "the rendered surface reports a height of %d — see the width's own assert for why a negative "
+            "dimension is this engine's allocation and never a region any medium established", g_paint.height);
+    return (unsigned)g_paint.height;
+}
+
+/* WHY THE INK IS THERE, WHICH IS THE PART A BITMAP CANNOT BE ASKED. These three are core/paint/
+   document_paint.h's `DocumentPaintCount` made readable, and that header is the argument for all three at
+   once: a surface with no ink on it means the walk reached no box, or reached boxes that painted nothing, or
+   was STOPPED, and "a caller handed only the bitmap cannot separate them". Until these existed this ABI handed
+   a caller only the bitmap — the defect the component it calls names in its own DCHECK.
+   WHAT EACH ONE SEPARATES, IN THAT HEADER'S OWN WORDS.
+     · `offers` is core/paint/box_paint.h's — the steps CSS 2.1 §E.2 "Painting order"'s walk OFFERED. ZERO is
+       a walk that never happened, which is the arm a root generating no box takes; "core/paint/paint_order.c
+       offers CSS 2.1 §E.2's step 1 for every root it walks, so a walk that happened reports at least one".
+     · `marks` is what was laid. Zero OFFERS with zero marks is an empty document; NON-ZERO offers with zero
+       marks is a walk that ran and every box of which painted nothing, and those are different findings.
+     · `complete` is THE WALK'S OWN ANSWER AND NOT THIS ENTRY'S RETURN. False is "a painter that met an
+       operand it could not compute and stopped, which leaves a PARTIAL picture — every mark it had already
+       laid is in the image". A host that writes such an image out without asking publishes a fragment of a
+       page as the page, which is the plausible-wrong-datum defect with a PERSON as the consumer.
+   `spans` AND `pixels` ARE DELIBERATELY NOT HERE, and that is a decision rather than an omission.
+   core/paint/display_list_raster.h's two are the RASTERIZER's work counters: `pixels` in particular "is
+   counted once per mark that covers it, so a document whose marks overlap reports more pixels than the
+   surface holds". An entry answering it would be read as an area — the image's own extent already is one —
+   and a number that reads as the thing beside it is the confusion separate entries exist to prevent. The
+   fixture reads both directly, where their arithmetic is the subject. */
+QJS_EXPORT unsigned qjs_paint_offers(void)
+{
+    DCHECK(g_painted,
+           "what CSS 2.1 §E.2 \"Painting order\"'s walk offered was asked before any walk ran — the register "
+           "is written by `qjs_paint` and its zero is that section's answer for a root that generates no box, "
+           "so an unwritten one reports a document as empty that was never looked at");
+    return g_paint_count.offers;
+}
+
+QJS_EXPORT unsigned qjs_paint_marks(void)
+{
+    DCHECK(g_painted,
+           "how much ink the last render laid was asked before one was rendered — zero is a real answer for a "
+           "document every box of which painted nothing, so a register no render has written reports that "
+           "finding for a page nobody painted");
+    /* THIS ENGINE'S OWN ARITHMETIC, WHICH IS WHY IT IS A `DCHECK` AND NOT THE `CHECK` THE EXTENT CARRIES. A
+       mark is a `DisplayMark` in an allocated list, so `UINT_MAX` of them is tens of gigabytes and the
+       allocation behind them is an always-fatal `CHECK` long before this cast could narrow anything — the
+       failure this guards is therefore a count that went wrong rather than a page that drew too much, and
+       that is a should-never-happen. The extent's own narrowing is a `CHECK` because ITS failure is a host
+       reading past a buffer, which is a different kind of wrong. */
+    DCHECKF(g_paint_count.marks <= (size_t)UINT_MAX,
+            "the last render laid %zu marks, which this ABI states counts too narrow to carry — the list "
+            "holding that many would have failed its own allocation first, so this is a count that lost its "
+            "derivation rather than a document that drew this much", g_paint_count.marks);
+    return (unsigned)g_paint_count.marks;
+}
+
+QJS_EXPORT int qjs_paint_complete(void)
+{
+    DCHECK(g_painted,
+           "whether the last render finished was asked before one was rendered — FALSE is the answer for a "
+           "painter that STOPPED, so an unwritten register reports a partial picture for a document that has "
+           "no picture at all");
+    return g_paint_count.complete ? 1 : 0;
 }
 
 QJS_EXPORT void qjs_teardown(void)

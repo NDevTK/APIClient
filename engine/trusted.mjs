@@ -101,7 +101,7 @@
 import { spawn } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, mkdirSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
 
 const ENGINE = dirname(fileURLToPath(import.meta.url));
@@ -321,7 +321,26 @@ async function main() {
      was written. */
   ZONE.safeFetchEgressStated({});
   const positional = [];
+  let paintDir = null;
   for (let i = 2; i < process.argv.length; i++) {
+    /* WHERE EACH INSTANCE WRITES AN IMAGE OF ITS OWN DOCUMENT. It is forwarded to every child rather than
+       resolved per document HERE, because the thing that knows which document an instance holds is that
+       instance: `test_forced.c`'s `--paint-dir` arm names the file after the document id this zone gave it,
+       so one sentence from a person covers a session that provisions any number of them. The DIRECTORY is
+       this zone's to name and not the child's to pick — SECURITY.md's shape is that the trusted zone
+       provisions the untrusted one, and a path arriving on argv is stated where a path read out of the
+       environment would be ambient. */
+    if (process.argv[i] === '--paint') {
+      const d = process.argv[++i];
+      if (d === undefined) {
+        console.error('[trusted] `--paint` was given no directory. The flag says WHERE an image of each ' +
+                      'document this session drives is written, and one that names nowhere would have this ' +
+                      'zone invent a path — a file nobody asked for, in a place nobody named.');
+        process.exit(2);
+      }
+      paintDir = d;
+      continue;
+    }
     if (process.argv[i] !== '--explore') { positional.push(process.argv[i]); continue; }
     const v = process.argv[++i];
     if (v === undefined) {
@@ -343,8 +362,16 @@ async function main() {
   const target = positional[0];
   const bin = positional[1] || join(ENGINE, 'host', 'out', 'qjs-native-none');
 
+  /* CREATED BY THE ZONE, BEFORE ANY CHILD EXISTS. The child `fopen`s a file inside it and says so if it
+     cannot; making the DIRECTORY is this process's because this process is the one that named it, and a
+     child that created directories would be the untrusted party choosing where this session's output lands.
+     `recursive` also makes an existing directory a state rather than a failure, which is what a second run
+     into the same place is. */
+  if (paintDir !== null) mkdirSync(paintDir, { recursive: true });
+
   if (!target) {
-    console.error('usage: node engine/trusted.mjs <url> [path-to-native-binary] [--explore <origin>]...');
+    console.error('usage: node engine/trusted.mjs <url> [path-to-native-binary] ' +
+                  '[--explore <origin>]... [--paint <dir>]');
     process.exit(2);
   }
   if (!existsSync(bin)) {
@@ -522,7 +549,8 @@ async function main() {
                       'reference into its document — the flag decides whether its timelines may finish, so ' +
                       'an unstated one is a peer that either drains before it is asked anything or waits ' +
                       'for a question nobody can ask, and neither is visible from here');
-    const child = spawn(bin, ['--abi'], { stdio: ['pipe', 'pipe', 'inherit'] });
+    const child = spawn(bin, paintDir === null ? ['--abi'] : ['--abi', '--paint-dir', paintDir],
+                        { stdio: ['pipe', 'pipe', 'inherit'] });
     const e = {
       docId, docUrl: url, origin, child, docReach,
       /* THE INSTANCE'S OWN NAME IN THIS ZONE'S NAMESPACE. A document NAME is stable by requirement (the
