@@ -8722,7 +8722,7 @@ static void cow_capture_buffer_lifetime(JSContext *ctx, JSValueConst abuf)
  * defines on it is captured. Four lines of page script, and it aborted a real bundle on every run.
  *
  * MEASURED HERE RATHER THAN ASSUMED AWAY, because both alternative spellings are wrong: subtracting a constant
- * "the capture may have taken one" widens the ledger to admit the very +1 it exists to catch, and hoisting the
+ * `the capture may have taken one` widens the ledger to admit the very +1 it exists to catch, and hoisting the
  * capture out of the measured window would run it TWICE in release to satisfy a dev-only check. The window is
  * ARMED by the ledger with the one atom it is watching and reads only that atom, so a capture of a
  * NEIGHBOURING key during the same define credits nothing.
@@ -80127,9 +80127,11 @@ static int js_prop_walk_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
        pw_args[0] from the target slot.
        IT IS OBSERVABLE AND NOT MERELY WASTED WORK: the self-pass [[Get]]s every own enumerable key of the
        target and DEFINES it back as a data property, so `{get a(){…}, ...src}` CALLED the literal's getter and
-       replaced the accessor with a data property of its result — ECMAScript §13.2.5.6 Runtime Semantics:
-       PropertyDefinitionEvaluation runs the spread as CopyDataProperties(obj, fromValue, excludedNames), which
-       reads `fromValue` and never obj. It also captured every one of those keys into the running flow's COW
+       replaced the accessor with a data property of its result.
+       ECMAScript §13.2.5.6 "Runtime Semantics: PropertyDefinitionEvaluation" runs the spread arm as
+       CopyDataProperties(obj, fromValue, excludedNames), which reads `fromValue` and never obj — the TITLE IS
+       QUOTED so the number and the title are one claim a checker can contradict, which an unquoted title
+       beside a number is not. It also captured every one of those keys into the running flow's COW
        delta, which is a per-spread cost in the size of the TARGET that nothing asked for. */
     int target_is_arg0 = (assign || defprops || mode == PROPWALK_SPREAD);
     int r;
