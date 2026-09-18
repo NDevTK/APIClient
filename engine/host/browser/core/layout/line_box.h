@@ -379,10 +379,24 @@ typedef struct {
  * it" — puts this box's line boxes inside one of the ANONYMOUS BLOCK BOXES that forcing generates, one per
  * maximal run of inline-level children, and that box is not the container: filling the container's whole child
  * list would flow this box's items together with every other run's, which is a different partition on line
- * boxes that do not exist. So this entry asks core/layout/block_flow.h which of those boxes holds the child it
- * descended through, and fills THAT run. The runs and their positions come from block_flow.h's own §9.4.1 stack
- * rather than being delimited a second time here, because a run's boundaries and its box's position are two
- * halves of one derivation and two copies could disagree about where a margin collapsed.
+ * boxes that do not exist. So this entry asks core/layout/block_flow.h which of those boxes hold the child it
+ * descended through, and fills EACH of them. The runs and their positions come from block_flow.h's own §9.4.1
+ * stack rather than being delimited a second time here, because a run's boundaries and its box's position are
+ * two halves of one derivation and two copies could disagree about where a margin collapsed.
+ *
+ * IT IS "WHICH BOXES" AND NOT "WHICH BOX", AND §9.2.1.1's SECOND SENTENCE IS THE WHOLE REASON. "When an inline
+ * box contains an in-flow block-level box, the inline box (and its inline ancestors within the same line box)
+ * is broken around the block-level box …, splitting the inline box into two boxes (even if either side is
+ * empty), one on each side of the block-level box(es). The line boxes before the break and after the break are
+ * enclosed in anonymous block boxes." So a box the section BREAKS has a fragment on several of those anonymous
+ * block boxes at once, and the thing that identifies one of them is the FRAGMENT rather than the child this
+ * walk descended through — which is exactly the shape §6 reports in, "one for each box fragment". An entry
+ * that named ONE box would have to pick between them. For every element the section does not break there is
+ * one box and this is the walk it always was.
+ * WHAT A CALLER GAINS IS COUNT AND NOT KIND: the fragments still arrive in content order, still in one frame,
+ * and still describe border areas. A `<span>` around a `display: block` child now reports the two the section
+ * says it generates — "even if either side is empty" — where it used to report a crash naming the addressing
+ * this entry did not have.
  *
  * `*establishing` IS STILL THE CONTAINER AND THE FRAME IS STILL ITS CONTENT BOX, in both shapes, which is what
  * makes the paragraph above invisible to every caller. §9.2.1.1 gives the anonymous box no element and no
