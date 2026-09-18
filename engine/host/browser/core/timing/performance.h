@@ -90,10 +90,16 @@
  *   THAT IS MEASURED AND NOT ARGUED, and the derivation is one command: grep the frozen mirror corpus for
  *   the identifier and READ EACH HIT rather than counting them. The shapes that reach this name there are a
  *   ternary on a MINIFIED GLOBAL ALIAS (`var a=this||self`, so the read is an ordinary property miss on the
- *   global — browser/platform_names.h leaves it alone and OrdinaryGet answers `undefined`, which picks the
- *   page's own fallback arm) and an `instanceof` nested inside a `typeof` guard on `getEntriesByType` AND
+ *   global) and an `instanceof` nested inside a `typeof` guard on `getEntriesByType` AND
  *   `getEntriesByName`. This build answers that conjunction false at its FIRST term, so the `instanceof`
  *   is unreachable and the bare identifier throws NOTHING today.
+ *   THE ALIAS COSTS THE ENGINE NOTHING AND COSTS A STATIC READER EVERYTHING, WHICH IS WHY THE SHAPES HAVE
+ *   TO BE READ RATHER THAN MATCHED. solver/absent.h declares its hook on the BASE THE READ MISSED ON —
+ *   "the global object, or a published record" — so `a.X`, `window.X` and `self.X` are ONE case to it and
+ *   browser/platform_names.h's suppression leaves all three alone at OrdinaryGet's `undefined`. A reader
+ *   keyed on the SPELLING sees only the last two, so it reports a guarded site as unguarded and ranks
+ *   this name as one whose every use throws. The engine is right about it and a grep over the source is
+ *   not: CLAUDE.md's rule that a sweep over text is a floor wearing a total's clothes, met at a guard.
  *   INSTALL THE INTERFACE OBJECT ALONE AND THE TERNARY FLIPS TRUE, whose arm's next call is
  *   `performance.getEntriesByType("navigation")` — which this file's NONE OF THE ABSENT MEMBERS IS SHAPED
  *   paragraph states is a TypeError. A fallback branch that works today is abandoned for one that cannot
