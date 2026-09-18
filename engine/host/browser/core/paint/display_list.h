@@ -127,6 +127,30 @@
  * §14.2 states; that is a question about a DOCUMENT and it is answered where documents are read, which is
  * core/paint/box_paint.h. This component is handed a colour and never asks where it came from.
  *
+ * THE TEXT IS A FOURTH KIND AND IT IS ONE MARK PER CHARACTER, NEVER ONE PER RUN — WHICH IS THE OPPOSITE OF
+ * THE CHOICE THE BORDER PARAGRAPH ABOVE MAKES, AND THE TWO ARE DECIDED BY ONE RULE RATHER THAN BY TASTE. That
+ * paragraph refuses four marks for one border because CSS 2.1 §E.2 "Painting order" lists ONE item and states
+ * NO ORDER over the four sides, so four marks would BE an order the standard does not give. A run of text is
+ * the other case of the same rule: §E.2's step 7.2.1 reaches "the text" inside a sub-list that is explicitly
+ * ordered — "in tree order" over the element's inline-level children and its runs of text — and the order
+ * WITHIN a run is the one core/layout/text_run.h's [UAX14] pass and css-text-3 §4.1.2's trimming already
+ * computed and core/layout/line_box.h already states as a position per character. So splitting a run invents
+ * nothing: the sequence is read off a derivation this engine performed, where splitting a border would have to
+ * invent one. The precedent is about not inventing ORDER and never about cardinality.
+ * AND IT IS WHAT KEEPS THE PARAGRAPH BELOW TRUE. A run's advances are VARIABLE-LENGTH — one per character —
+ * so a per-run mark could only carry them behind a POINTER, and the next paragraph's rule is that there is no
+ * pointer on a mark and nothing here holds a borrowed one. The two could not both hold. A per-character mark
+ * carries the ADVANCES AS POSITIONS, which discharges the same contract more strongly than a list of widths
+ * would: a consumer handed a pen position per character has no pen to advance and therefore nothing it could
+ * re-measure with, so "a rasterizer that re-measures is comparing two engines rather than painting one" is
+ * not merely required of it but unreachable by it.
+ * WHAT WOULD REFUTE THIS is a paint operation defined over a RUN rather than over a character — a filter, a
+ * shadow, or one of the three decoration lines §E.2's step 7.2.1 lists over and under the text, whose geometry
+ * spans the run and which a per-character mark cannot state. This vocabulary has none of them and neither does
+ * anything upstream of it. WHEN ONE ARRIVES THE ANSWER IS A SECOND KIND carrying that run-level geometry
+ * beside these marks, and never a pointer on this one: §E.2 lists each decoration line as its own item of the
+ * same sub-list, so a second kind is what the standard's own enumeration already says they are.
+ *
  * A MARK IS A VALUE AND THE LIST OWNS ITS ARRAY — there is no pointer on a mark and nothing here holds a
  * borrowed one, so a caller may build a mark on its stack and append it, and freeing the list frees everything
  * the list is. That is not a convenience: core/layout/used_value.h's rule and paint_order.h's are that NOTHING
@@ -140,30 +164,50 @@
  * is that it is complete and in order, and nothing downstream could tell that list from a shorter document.
  *
  * NAMED RESIDUAL — THE KINDS CSS 2.1 §E.2's SUB-LISTS NAME AND THIS VOCABULARY STILL HAS NO WORD FOR.
- * WHAT IS NOT COVERED: every remaining item is an IMAGE, a TEXT run or a SURFACE. CSS 2.1 §E.2's step 1 is
- * TWO items and only the first has a kind here, the second being "background image of element, over the
+ * WHAT IS NOT COVERED: every remaining item is an IMAGE, a DECORATION LINE or a SURFACE. CSS 2.1 §E.2's step
+ * 1 is TWO items and only the first has a kind here, the second being "background image of element, over the
  * entire canvas, anchored at the origin that would be used if it was painted for the root element"; its step
  * 2 block arm is three marks in a fixed sequence — "background color of element", "background image of
- * element", "border of element" — of which this vocabulary now has the first and the LAST and not the middle
- * one; its step 7.2 sub-list reaches "the text" and the three decoration lines over and under it; and its
- * step 7.1 reaches "the replaced content, atomically", which is a SURFACE rather than a mark.
- * WHAT THE NEXT DIFF BUILDS: the TEXT mark, and it is the one with a contract: core/layout/text_run.h and
- * core/fonts/open_type_metrics.h produced the advances that core/dom/element_view.h reports as geometry, so
- * a text mark carries THOSE advances and a rasterizer that re-measures is comparing two engines rather than
- * painting one. The IMAGE mark is ONE gap and not one per step, because what every image item of every step
- * wants is the same operand: an `<image>` that has become PIXELS. This engine's `<image>` road ends at a
- * validity test — core/css/css_image.h answers whether a component value matches
+ * element", "border of element" — of which this vocabulary has the first and the LAST and not the middle
+ * one; its step 7.2.1 sub-list reaches "the text", which HAS a kind now, and the three decoration lines over
+ * and under it, which do not; and its step 7.1 reaches "the replaced content, atomically", which is a SURFACE
+ * rather than a mark.
+ * WHAT THE NEXT DIFF BUILDS: the IMAGE mark, which is ONE gap and not one per step, because what every image
+ * item of every step wants is the same operand: an `<image>` that has become PIXELS. This engine's `<image>`
+ * road ends at a validity test — core/css/css_image.h answers whether a component value matches
  * css-images-3 §2 "Image Values: the <image> type" and deliberately keeps the author's own bytes — so
  * nothing anywhere turns a `<url>` into anything a surface could composite, and the diff that lands the
  * image mark is the one that makes such a thing exist.
- * HOW ITS ABSENCE WOULD SHOW: a painted document is flat areas of colour inside plain rules, with no text and
- * no images — every area at the position CSS 2.1 §E.2 puts it and nothing written inside any of them.
+ * HOW ITS ABSENCE WOULD SHOW: a painted document has its text but no pictures — every background image, every
+ * `list-style-image` and every replaced element's content missing, with the area CSS 2.1 §E.2 puts each one
+ * in drawn in whatever colour sits under it, and no underline or strikethrough on any text that declares one.
  * RETIREMENT: this record loses a clause as each kind lands, and goes when every mark CSS 2.1 §E.2's
- * sub-lists name has a kind here. */
+ * sub-lists name has a kind here.
+ *
+ * RETIRED CLAUSE — THE TEXT MARK, KEPT BECAUSE ITS NEXT-DIFF HALF NAMED A MECHANISM THIS HEADER'S OWN
+ * OWNERSHIP RULE FORBIDS, AND A READER WHO RE-DERIVES IT WILL REACH FOR THE SAME ONE. It read, in one run:
+ * `WHAT THE NEXT DIFF BUILDS: the TEXT mark, and it is the one with a contract: core/layout/text_run.h and core/fonts/open_type_metrics.h produced the advances that core/dom/element_view.h reports as geometry, so a text mark carries THOSE advances and a rasterizer that re-measures is comparing two engines rather than painting one.`
+ * Its SPEC half is exact and is why the kind exists at all. Its MECHANISM half is not buildable as written and
+ * was never buildable: a run's advances are ONE PER CHARACTER and therefore VARIABLE-LENGTH, so "a text mark
+ * carries THOSE advances" can only mean a mark holding a pointer to an array — and this header's own
+ * paragraph three above the type says there is no pointer on a mark and nothing here holds a borrowed one. The
+ * two sentences were in one file, several paragraphs apart, and could not both hold. THE CLAUSE WAS FALSE AT
+ * BIRTH RATHER THAN STALE: the ownership rule predates it and is unchanged, so nothing about the tree moving
+ * made it wrong. What it teaches is the check it skipped — a clause naming a MECHANISM is read against the
+ * invariants of the component it is written in, and a per-run mark was refused by an invariant on the same
+ * page. The three ways out were `one mark per glyph, fixed size, no pointer`, `one mark per run with an owned
+ * pointer, changing display_list_append's copy semantics and display_list_free` and `a fixed-capacity inline
+ * array`. The THIRD is a bound and CLAUDE.md's §NO BOUNDS forbids it outright — a run longer than the capacity
+ * would be text this engine decided not to draw. The SECOND is the one the clause named, and it rewrites this
+ * component's ownership contract for every kind rather than adding one: a mark that owned an allocation would
+ * make the per-flow COW delta capture a GRAPH where it captures an array, which is what
+ * core/paint/paint_order.h's rule about nothing being stored is protecting. The FIRST is what landed, and the
+ * paragraph above states the argument for it in its own right rather than by elimination. */
 #ifndef ENGINE_HOST_BROWSER_CORE_PAINT_DISPLAY_LIST_H
 #define ENGINE_HOST_BROWSER_CORE_PAINT_DISPLAY_LIST_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 #include "core/css/css_color.h"
 #include "core/css/css_length.h"
@@ -174,9 +218,13 @@ typedef enum {
     DISPLAY_MARK_FILL_RECT = 0,  /* one rectangle, filled with one sRGB colour */
     DISPLAY_MARK_FILL_CANVAS,    /* the CANVAS, filled with one sRGB colour — the rectangle is the finite
                                     region this user agent established for it, never the extent of the fill */
-    DISPLAY_MARK_BORDER          /* ONE box's border, all four sides — the rectangle is its BORDER BOX and the
+    DISPLAY_MARK_BORDER,         /* ONE box's border, all four sides — the rectangle is its BORDER BOX and the
                                     four sides are drawn INWARD from its four edges. See the header's own
                                     paragraph for why this is one mark and not four */
+    DISPLAY_MARK_GLYPH           /* ONE placed character of CSS 2.1 §E.2's step 7.2.1 "the text" — a code
+                                    point, an em and a PEN POSITION. It carries no rectangle at all. See the
+                                    header's own paragraph for why this is one mark per CHARACTER and not one
+                                    per run */
 } DisplayMarkKind;
 
 /* CSS 2.1 §8.5.3 "Border style: 'border-top-style', 'border-right-style', 'border-bottom-style',
@@ -218,6 +266,29 @@ typedef struct {
     CssColor           color;
 } DisplayBorderSide;
 
+/* ONE PLACED CHARACTER — the three things a consumer needs to draw it and no fourth. `origin` is the PEN
+   POSITION in the same CLIENT COORDINATES every rectangle here is stated in, and `origin_y` is the BASELINE
+   rather than a top edge, which is the field a reader is most likely to take for the other thing: CSS 2.2
+   §10.8's step 3 makes a line box "the distance between the uppermost box top and the lowermost box bottom"
+   and its baseline the line's own maximum `A'` below that top, so the baseline is the one coordinate every
+   box on the line hangs from and core/layout/line_box.h reports exactly it.
+   `em` IS THE USED `font-size` AND IS A `CssPx` FOR THE HEADER'S OWN REASON — css-values-4 §6.1.1
+   "Font-relative Lengths: the em, rem, ex, rex, cap, rcap, ch, rch, ic, ric, lh, rlh units" defines the `em`
+   as the element's computed `font-size`, which css-fonts-4 §2.5's percentage and its keywords make a function
+   of the ROOT element's and therefore of whatever picked facts that one is a function of. A `double` here
+   would drop that between the cascade that derived it and `display_list_env`, exactly as it would on a
+   rectangle, and the union reads all three of these lengths.
+   THERE IS NO GLYPH ID AND NO FACE. css-fonts-4 §5.2 "Matching font styles"' first available font is
+   core/css/font_metrics.h's ONE face and the 'cmap' that selects a glyph for a code point is that file's, so
+   a mark carrying an id would be a second holder of the selection this engine answers from one place — and a
+   mark that named a face would be holding a pointer, which the header forbids outright. What rides is what
+   the DOCUMENT said, and which glyph it draws is answered where the face is. */
+typedef struct {
+    uint32_t cp;                 /* the code point, as css-text-3 §4.1.1's Phase I left it */
+    CssPx    origin_x, origin_y; /* the PEN POSITION; `origin_y` is the BASELINE */
+    CssPx    em;                 /* css-values-4 §6.1.1's em — the used `font-size` this glyph is scaled to */
+} DisplayGlyph;
+
 /* ONE MARK. `rect` is x, y, width and height in CSSOM VIEW §6 "Extensions to the Element Interface"'s CLIENT
    COORDINATES, in that order — the same four numbers and the same order `element_view_bounding_box_px`
    answers, because that is where a box's rectangle comes from and two spellings of one rectangle is one
@@ -232,9 +303,17 @@ typedef struct {
    `side` IS INDEXED top, right, bottom, left, which is the order every four-side rule in CSS states and the
    order CSS 2.1 §8.5.1 defines its own shorthand over; it is also the order
    `used_value_border_widths_px` writes, so the index cannot come apart from the derivation by a rotation.
-   WHICH FIELDS A MARK USES IS ITS KIND'S, exactly as what `rect` MEANS is: `color` is the two FILL kinds' and
-   `side` is the border kind's, and `display_list_append` asserts over a SWITCH so that each kind is held to
-   the fields it actually uses. A field a kind does not use is therefore one no consumer of that kind may
+   A `DISPLAY_MARK_GLYPH` USES NO `rect` AT ALL, which is the one kind for which that is true and is not an
+   omission. Its ink extent is a property of the FACE's own contours — core/css/font_metrics.h answers the
+   shape and this component may not — and CSS 2.1 §E.2's step 7.2.1 asks for "the text" rather than for a box
+   around it, so a rectangle here would be a second answer to a question the face already owns. The two rect
+   invariants below are therefore asked over a SWITCH like every other field's, and not of every mark.
+   WHICH FIELDS A MARK USES IS ITS KIND'S, exactly as what `rect` MEANS is: `color` is the two FILL kinds' AND
+   THE GLYPH KIND'S — CSS 2.1 §14.1 "Foreground color: the 'color' property" gives it as "the foreground
+   color of an element's text content" — `side` is the border kind's, `rect` is every kind's but the
+   glyph's, and `glyph` is the
+   glyph kind's alone; `display_list_append` asserts over a SWITCH so that each kind is held to the fields it
+   actually uses. A field a kind does not use is therefore one no consumer of that kind may
    read — which is why this is a struct rather than a union: a union would make reading the wrong member
    undefined where a plain field leaves it merely unasserted and unread, and `-Wswitch` over the kind is what
    names every consumer the day a third set of fields arrives. */
@@ -243,6 +322,7 @@ typedef struct {
     CssPx             rect[4];
     CssColor          color;
     DisplayBorderSide side[4];
+    DisplayGlyph      glyph;
 } DisplayMark;
 
 /* A SEQUENCE OF MARKS, in the order CSS 2.1 §E.2 "Painting order" offered them. A zeroed struct is a valid

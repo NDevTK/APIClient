@@ -1330,6 +1330,91 @@ static CssPx lb_align_offset(lxb_dom_element_t *style, const TextRunMeasure *m, 
     return to_left ? css_px(0.0) : slack;
 }
 
+/* ---- CSS 2.1 §E.2's "the text" — THE PLACED CHARACTERS OF ONE FORMATTING CONTEXT ---------------------------
+   See line_box.h for the frame the two coordinates are in, for why a baseline rather than a top edge, and for
+   why the advances ride as POSITIONS. This is the THIRD reduction over `lb_fill`'s one pass and it is written
+   beside the other two rather than in the painter for the reason that walk's own banner gives: a second
+   collection of one formatting context is a second chance to disagree about where this run may break. */
+
+/* THE ARRAY GROWS BY DOUBLING AND ITS FAILURE IS A `CHECK`, which is CLAUDE.md's rule for an allocation and is
+   also the right one on the merits: a dropped character is a word this document renders without, and nothing
+   downstream could tell that run from one the cascade collapsed away. */
+static LineBoxGlyph *lb_glyphs_room(LineBoxGlyph *v, size_t n, size_t *cap)
+{
+    LineBoxGlyph *grown;
+
+    if (n < *cap) return v;
+    *cap = *cap ? *cap * 2 : 16;
+    grown = realloc(v, *cap * sizeof *grown);
+    CHECK(grown != NULL, "out of memory placing CSS 2.1 §E.2 \"Painting order\"'s step 7.2.1 text. There is "
+                         "one entry per character css-text-3 §4.1.1's Phase I left on the line boxes of one "
+                         "inline formatting context, so a failure here is the physical floor");
+    return grown;
+}
+
+size_t line_box_glyphs(lxb_dom_element_t *style, BlockFlowRun run, LineBoxGlyph **out)
+{
+    TextRunMeasure m;
+    TextRunLine *lines = NULL;
+    LineBoxGlyph *v = NULL;
+    CssPx top = css_px(0.0);
+    size_t n, i, j, ng = 0, cap = 0;
+
+    DCHECK(style != NULL && out != NULL,
+           "CSS 2.1 §E.2 \"Painting order\"'s step 7.2.1 text was asked for with no element whose properties "
+           "the establishing box has, or with nowhere to report the characters");
+    n = lb_fill(&m, style, run, &lines);
+    for (i = 0; i < n; i++) {
+        bool exists = false;
+        LbExtent e = lb_line_extent(style, &m, lines[i], &exists);
+        CssPx height = exists ? css_px_add(e.above, e.below) : css_px(0.0);
+        /* §10.8's step 3 measures the line box from its uppermost box top and `e.above` is the maximum `A''`
+           across it, so the line's baseline sits exactly that far below its top edge — the SAME coordinate
+           `line_box_inline_fragments` hangs its fragments from and `lb_reduce` reports as §10.8.1's, read at a
+           third point of the same stack rather than derived again. */
+        CssPx baseline = css_px_add(top, e.above);
+        CssPx align = css_px(0.0);
+        bool have_align = false;
+
+        for (j = lines[i].from; j < lines[i].to; j++) {
+            /* THE THREE OTHER KINDS ARE REFUSED BY THE ACCESSOR AND NOT BY A SECOND CLASSIFICATION HERE.
+               `text_run_measure_item_cp` asserts the CHARACTER kind and its message names what a forced
+               break's U+000A and an atomic inline's U+FFFC are for, so this test is the one every walk over a
+               line's items already makes for CSS 2.2 §9.4.2's zero-height rule and never a second reading of
+               what is on the line. */
+            if (!text_run_measure_item_is_text(&m, j)) continue;
+            /* css-text-4 §7.3's DISTRIBUTION, READ ONCE PER LINE AND ONLY WHERE THERE IS A CHARACTER TO PLACE
+               — which is a crash surface and not a saving, exactly as core/layout/scrolling_area.c's origin
+               read is: `lb_align_offset` asks the establishing box for a computed `direction` and a computed
+               `text-align`, and a formatting context whose every line collapsed away has nothing for either
+               answer to be about. */
+            if (!have_align) {
+                align = lb_align_offset(style, &m, lines[i], i, n);
+                have_align = true;
+            }
+            v = lb_glyphs_room(v, ng, &cap);
+            v[ng].cp = text_run_measure_item_cp(&m, j);
+            v[ng].style = text_run_measure_item_style(&m, j);
+            /* THE ONE SUM, TAKEN WHERE `TextRunLine.size` IS TAKEN. text_run.h's own banner: "Two sums of one
+               line is the one way this component could hand a caller a fragment whose left edge and width
+               describe different text" — so the offset is that entry's answer at this item's bound and never
+               an advance accumulated here. */
+            v[ng].origin_x = css_px_add(align, text_run_measure_line_offset(&m, lines[i], j));
+            v[ng].baseline_y = baseline;
+            ng++;
+        }
+        /* §9.4.2: "line boxes are stacked with NO VERTICAL SEPARATION (except as specified elsewhere) and they
+           never overlap", and a line the section says must be treated as zero-height advances the stack by
+           nothing — which is why the extent is read for every line and not only for the ones that place a
+           character. */
+        top = css_px_add(top, height);
+    }
+    free(lines);
+    text_run_measure_release(&m);
+    *out = v;
+    return ng;
+}
+
 /* ---- CSSOM VIEW §6's BOX FRAGMENTS OF ONE INLINE BOX -------------------------------------------------------
    See line_box.h for the frame the four numbers are in, for why the block axis is the LINE BOX's, and for why
    this entry finds the formatting context itself where the two above are handed a run. */

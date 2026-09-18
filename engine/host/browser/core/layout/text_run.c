@@ -974,6 +974,22 @@ bool text_run_measure_item_is_atomic(const TextRunMeasure *m, size_t i)
     return m->items[i].kind == TEXT_RUN_ITEM_ATOMIC;
 }
 
+uint32_t text_run_measure_item_cp(const TextRunMeasure *m, size_t i)
+{
+    tr_require_answers(m);
+    DCHECK(i < m->count, "an item of a collected run was read past its end");
+    DCHECK(m->items[i].kind == TEXT_RUN_ITEM_CHAR,
+           "the CODE POINT of a collected item that is not a CHARACTER was read. Two other kinds carry one and "
+           "neither is a character the document contains: a forced break's is the U+000A css-text-3 §4 names "
+           "as HTML's newline, which `text_run_measure_add_forced_break` supplies from HTML §15.3.4 \"Phrasing "
+           "content\"'s declaration for [UAX14] and for nothing else, and an atomic inline's is the U+FFFC "
+           "whose [UAX14] class CB is how css-text-3 §5.5 \"Line Breaking Details\"' \"soft wrap opportunity "
+           "before and after\" is expressed. Handing either to a painter draws a glyph for a code point no "
+           "author wrote — ask `text_run_measure_item_is_text` first, which is what every walk over a line's "
+           "items already asks for CSS 2.2 §9.4.2's zero-height rule");
+    return m->items[i].cp;
+}
+
 bool text_run_measure_splits(const TextRunMeasure *m)
 {
     tr_require_answers(m);

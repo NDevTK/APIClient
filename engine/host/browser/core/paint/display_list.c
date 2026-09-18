@@ -30,6 +30,7 @@ static bool dl_kind_is_defined(DisplayMarkKind kind)
     case DISPLAY_MARK_FILL_RECT:
     case DISPLAY_MARK_FILL_CANVAS:
     case DISPLAY_MARK_BORDER:
+    case DISPLAY_MARK_GLYPH:
         return true;
     }
     return false;
@@ -48,6 +49,11 @@ static bool dl_colors_are_srgb(const DisplayMark *m)
     switch (m->kind) {
     case DISPLAY_MARK_FILL_RECT:
     case DISPLAY_MARK_FILL_CANVAS:
+    /* CSS 2.1 §14.1 "Foreground color: the 'color' property" gives `color` as "the foreground color of an
+       element's text content", so a glyph's
+       one colour is this field exactly as a fill's is — one sRGB colour the painter already ran CSS Color 4
+       §11 "Converting Colors" on. */
+    case DISPLAY_MARK_GLYPH:
         return m->color.space == CSS_COLOR_SPACE_SRGB;
     case DISPLAY_MARK_BORDER:
         for (i = 0; i < 4; i++)
@@ -64,6 +70,7 @@ static bool dl_alphas_are_in_range(const DisplayMark *m)
     switch (m->kind) {
     case DISPLAY_MARK_FILL_RECT:
     case DISPLAY_MARK_FILL_CANVAS:
+    case DISPLAY_MARK_GLYPH:
         return m->color.a >= 0.0 && m->color.a <= 1.0;
     case DISPLAY_MARK_BORDER:
         for (i = 0; i < 4; i++)
@@ -131,6 +138,48 @@ static bool dl_rect_is_finite(const DisplayMark *m)
     for (i = 0; i < 4; i++)
         if (!isfinite(m->rect[i].px)) return false;
     return true;
+}
+
+/* DOES THIS KIND USE `rect` AT ALL — a SWITCH for `dl_kind_is_defined`'s reason, and the gate the two
+   rectangle invariants are asked behind. `DISPLAY_MARK_GLYPH` is the one kind that carries no rectangle:
+   display_list.h states that its ink extent is a property of the FACE's own contours and that CSS 2.1 §E.2
+   "Painting order"'s step 7.2.1 asks for "the text" rather than for a box around it. Asking the two
+   invariants of it anyway would read four `CssPx` no builder of that kind ever wrote, which is the shape
+   `display_list_env`'s own switch already refuses one field over, and a NaN found in them would name a
+   producer that does not exist. */
+static bool dl_kind_has_rect(DisplayMarkKind kind)
+{
+    switch (kind) {
+    case DISPLAY_MARK_FILL_RECT:
+    case DISPLAY_MARK_FILL_CANVAS:
+    case DISPLAY_MARK_BORDER:
+        return true;
+    case DISPLAY_MARK_GLYPH:
+        return false;
+    }
+    return false;
+}
+
+/* A GLYPH'S THREE LENGTHS ARE FINITE. All three are arithmetic THIS ENGINE performed: the two coordinates are
+   core/layout/line_box.h's per-character position — a sum of css-values-4 §6.1.1 advance measures and
+   css-text-4 §7.3's alignment offset, plus a box origin — and the em is the computed `font-size` css-fonts-4
+   §2.5's `Computed value:` line makes an absolute length. A page may DECLARE `font-size: 1e400px`; what
+   reaches here is the computed value this engine derived from it, so a NaN or an infinity is a derivation
+   that lost an operand. */
+static bool dl_glyph_is_finite(const DisplayMark *m)
+{
+    return isfinite(m->glyph.origin_x.px) && isfinite(m->glyph.origin_y.px) && isfinite(m->glyph.em.px);
+}
+
+/* AND THE EM IS NON-NEGATIVE — ASKED OF THE EM ALONE, for `dl_rect_extents_are_non_negative`' reason one kind
+   over: the two coordinates are CLIENT coordinates and are legitimately negative for text scrolled above the
+   viewport, while an em is a LENGTH css-fonts-4 §2.5 gives the `Value:` line
+   `<absolute-size> | <relative-size> | <length-percentage [0,∞]> | math` — a range restriction css-values-4
+   §5.1 "Range Restrictions and Range Definition Notation" makes the parser enforce — so a negative one is
+   arithmetic and never a declaration. */
+static bool dl_glyph_em_is_non_negative(const DisplayMark *m)
+{
+    return m->glyph.em.px >= 0.0;
 }
 
 /* AND THE TWO EXTENTS ARE NON-NEGATIVE — ASKED OF THE EXTENTS ALONE, because the four numbers are TWO KINDS
@@ -226,14 +275,14 @@ void display_list_append(DisplayList *dl, const DisplayMark *mark)
        rectangle into scanlines turns `rect[2]` and `rect[3]` into a loop bound and an allocation size, where
        a NaN is UNDEFINED BEHAVIOUR at the cast to an integer and a negative extent is a byte count that is
        not one. */
-    DCHECK(dl_rect_is_finite(mark),
+    DCHECK(!dl_kind_has_rect(mark->kind) || dl_rect_is_finite(mark),
            "a display mark's rectangle carries a coordinate that is not FINITE. Every one of the four is a "
            "used value this engine derived — core/dom/element_view.c's border area for the two box kinds, "
            "core/frame/viewport.h's initial containing block for the canvas — so a NaN or an infinity is a "
            "derivation that lost an operand and never a number a document stated. FIX IT AT THE PRODUCER the "
            "mark's kind names, not here: this is the door every mark enters by and therefore the place the "
            "loss is NOTICED, which is not the place it happened");
-    DCHECK(dl_rect_extents_are_non_negative(mark),
+    DCHECK(!dl_kind_has_rect(mark->kind) || dl_rect_extents_are_non_negative(mark),
            "a display mark's rectangle carries a NEGATIVE width or height. core/dom/element_view.h states the "
            "rule for CSSOM VIEW §6 \"Extensions to the Element Interface\"' six `long` extents — they \"are "
            "distances between parallel edges and cannot be negative\" — and a border area's two are the same "
@@ -241,6 +290,19 @@ void display_list_append(DisplayList *dl, const DisplayMark *mark)
            "§8.4 and css-backgrounds-3 §3.3 both forbid to be negative. This is asked of `rect[2]` and "
            "`rect[3]` ALONE and never of `rect[0]` or `rect[1]`, which are CLIENT coordinates and are "
            "legitimately negative for a box scrolled above the viewport");
+    DCHECK(mark->kind != DISPLAY_MARK_GLYPH || dl_glyph_is_finite(mark),
+           "a glyph mark carries a PEN POSITION or an EM that is not FINITE. All three are arithmetic this "
+           "engine performed — core/layout/line_box.h's per-character position over CSS 2.2 §9.4.2's fill, "
+           "and the computed `font-size` css-fonts-4 §2.5's `Computed value:` line makes an absolute length "
+           "— so a NaN or an infinity is a derivation that lost an operand and never a number a document "
+           "stated. FIX IT AT THE PRODUCER: this is the door every mark enters by and therefore the place the "
+           "loss is NOTICED, which is not the place it happened");
+    DCHECK(mark->kind != DISPLAY_MARK_GLYPH || dl_glyph_em_is_non_negative(mark),
+           "a glyph mark carries a NEGATIVE em. css-fonts-4 §2.5 \"Font size: the font-size property\" gives "
+           "the property a `<length-percentage [0,∞]>` arm, and css-values-4 §5.1 \"Range Restrictions and "
+           "Range Definition Notation\" makes that restriction the PARSER's — a declaration outside the range "
+           "is dropped rather than clamped — so a negative here is this engine's own arithmetic on a value "
+           "that was already non-negative, and the glyph it scales would be drawn INSIDE OUT");
     if (dl->n == dl->cap) {
         size_t cap = dl->cap ? dl->cap * 2 : 8;
         DisplayMark *v = realloc(dl->v, cap * sizeof *v);
@@ -269,7 +331,6 @@ CssEnvSet display_list_env(const DisplayList *dl)
        picked facts — so a list of ink whose geometry is determined is a list with no arm to explore however
        many colours are in it. */
     for (i = 0; i < dl->n; i++) {
-        for (k = 0; k < 4; k++) env |= dl->v[i].rect[k].env;
         /* AND THE LENGTHS A KIND CARRIES BESIDE ITS RECTANGLE, asked over a SWITCH so that the union cannot
            silently stop covering a mark. A border's four USED WIDTHS are such lengths and they are not
            determined in general: core/layout/used_value.h states that a `border: 1px solid` "arrives carrying
@@ -283,9 +344,24 @@ CssEnvSet display_list_env(const DisplayList *dl)
         switch (dl->v[i].kind) {
         case DISPLAY_MARK_FILL_RECT:
         case DISPLAY_MARK_FILL_CANVAS:
+            for (k = 0; k < 4; k++) env |= dl->v[i].rect[k].env;
             break;
         case DISPLAY_MARK_BORDER:
+            for (k = 0; k < 4; k++) env |= dl->v[i].rect[k].env;
             for (k = 0; k < 4; k++) env |= dl->v[i].side[k].width.env;
+            break;
+        /* THE GLYPH KIND READS `glyph` AND NEVER `rect`, which is what makes the rectangle loop a member of
+           this switch rather than a line above it. That kind carries no rectangle at all, so a union taken
+           over `rect` for it would read four `CssPx` no builder wrote — and all THREE of the lengths it does
+           carry move under a picked fact: the two coordinates are a sum of css-values-4 §6.1.1 advance
+           measures over a line whose BREAKS are a function of CSS 2.1 §10.1's initial containing block, and
+           the em is a computed `font-size` css-fonts-4 §2.5 lets a percentage make a function of the root
+           element's. So a union that skipped them would report CSS_ENV_NONE for a page of text — the POSITIVE
+           statement that this ink is the same ink under every arm, made about ink that re-wraps. */
+        case DISPLAY_MARK_GLYPH:
+            env |= dl->v[i].glyph.origin_x.env;
+            env |= dl->v[i].glyph.origin_y.env;
+            env |= dl->v[i].glyph.em.env;
             break;
         }
     }

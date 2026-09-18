@@ -50,13 +50,15 @@
  * RETIREMENT: this record goes when `box_paint_stacking_context` appends a mark for CSS 2.1 §E.2's step 1
  * second item.
  *
- * NAMED RESIDUAL — THE FOUR STEPS THAT STILL APPEND NOTHING, AND THE ONE OF THEM THAT IS NO LONGER WAITING ON
- * A MARK KIND.
- * WHAT IS NOT COVERED: `PAINT_STEP_TABLE_BORDERS`, `PAINT_STEP_INLINE_LINE_BOXES`,
- * `PAINT_STEP_REPLACED_CONTENT` and `PAINT_STEP_LINE_BOXES` are each counted as an offer and append nothing.
- * Three of them want a VOCABULARY — CSS 2.1 §E.2's steps 6, 7.1 and 7.2 reach "the replaced content,
- * atomically" and a line-box sub-list ending in "the text", which are a SURFACE and a TEXT mark that
- * core/paint/display_list.h has no kind for. `PAINT_STEP_TABLE_BORDERS` wants neither: the BORDER mark exists
+ * NAMED RESIDUAL — THE THREE STEPS THAT STILL APPEND NOTHING, AND THE THREE DIFFERENT THINGS THEY WANT.
+ * WHAT IS NOT COVERED: `PAINT_STEP_TABLE_BORDERS`, `PAINT_STEP_INLINE_LINE_BOXES` and
+ * `PAINT_STEP_REPLACED_CONTENT` are each counted as an offer and append nothing, and no two of them are
+ * waiting on the same thing. `PAINT_STEP_REPLACED_CONTENT` wants a VOCABULARY — CSS 2.1 §E.2's step 7.1 is
+ * "the replaced content, atomically", which core/paint/paint_order.h calls a SURFACE rather than a mark and
+ * core/paint/display_list.h has no kind for. `PAINT_STEP_INLINE_LINE_BOXES` wants an ENUMERATION and not a
+ * mark: step 6's sub-list is the same step 7.2.1 `PAINT_STEP_LINE_BOXES` now lays, reached for a box that is
+ * ON those lines rather than for the box that establishes them, and what is missing is
+ * core/paint/paint_order.h's residual (c). `PAINT_STEP_TABLE_BORDERS` wants neither: the BORDER mark exists
  * and this file lays it for CSS 2.1 §E.2's step 2 and step 4 BLOCK arms. What that item wants is an
  * ENUMERATION — its text is "all table borders (in tree order for separated borders)" and paint_order.h offers
  * it ONCE carrying the table element, so the boxes whose borders it covers are not named and painting the
@@ -72,15 +74,24 @@
  * the diff that paints it owes the collapsed style beside the collapsed width.
  * WHAT THE NEXT DIFF BUILDS: item 7's separated-model enumeration, which is paint_order.h's own residual — a
  * tree-order walk of the table's subtree gated on `border-collapse` being `separate`, after which this file's
- * arm for that step calls `bp_border` per offered box and needs nothing new here. The TEXT mark is next and
- * carries core/layout/text_run.h's OWN advances: the geometry core/dom/element_view.h reports was measured
- * with core/fonts/open_type_metrics.h, so a rasterizer that measures text for itself composites one engine's
- * ink onto another engine's layout.
+ * arm for that step calls `bp_border` per offered box and needs nothing new here.
  * HOW ITS ABSENCE WOULD SHOW: a document's block boxes come out with their borders and a TABLE comes out with
  * none of them — no rule between its cells, none round the table — while every background level the table has
- * is painted; and no document has any text or any image inside any of its areas.
- * RETIREMENT: this record loses a clause as each of the four steps gains ink, and goes when every step
+ * is painted; text inside a `<span>` that is itself a stacking context is missing while the same text in an
+ * ordinary paragraph is drawn; and every replaced element is an empty area.
+ * RETIREMENT: this record loses a clause as each of the three steps gains ink, and goes when every step
  * paint_order.h offers appends at least one mark or a surface.
+ *
+ * RETIRED CLAUSE — THE TEXT MARK, KEPT BECAUSE ITS NEXT-DIFF HALF NAMED A MECHANISM THE COMPONENT IT POINTED
+ * AT FORBIDS. It read, in one run:
+ * `The TEXT mark is next and carries core/layout/text_run.h's OWN advances: the geometry core/dom/element_view.h reports was measured with core/fonts/open_type_metrics.h, so a rasterizer that measures text for itself composites one engine's ink onto another engine's layout.`
+ * Its SPEC half is exact and is the contract the glyph kind was built to. Its MECHANISM half — a mark that
+ * CARRIES the advances — was not buildable: a run's advances are one per character and therefore
+ * VARIABLE-LENGTH, so such a mark holds a pointer, and core/paint/display_list.h states that there is no
+ * pointer on a mark and nothing there holds a borrowed one. What landed is ONE MARK PER CHARACTER carrying its
+ * PEN POSITION, which discharges the same contract more strongly: a consumer handed a position per character
+ * has no pen to advance and therefore nothing it could re-measure with. The full argument, and the two other
+ * designs that were refused, are recorded at core/paint/display_list.h's own retired clause.
  *
  * NAMED RESIDUAL — CSS 2.1 §17.5.1's FOUR INTERMEDIATE TABLE LAYERS, WHICH ARE A GEOMETRY AND NOT A MARK.
  * WHAT IS NOT COVERED: `PAINT_STEP_COLUMN_GROUP_BACKGROUND`, `PAINT_STEP_COLUMN_BACKGROUND`,

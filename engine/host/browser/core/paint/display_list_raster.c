@@ -7,6 +7,7 @@
 #include "check.h"
 #include "core/css/css_color.h"
 #include "core/css/css_length.h"
+#include "core/css/font_metrics.h"   /* the ONE face every advance in every layout was measured against */
 #include "core/graphics/raster_path.h"
 #include "core/graphics/raster_surface.h"
 #include "core/graphics/rasterizer.h"
@@ -386,6 +387,59 @@ static void dlr_border(const DisplayMark *m, double s, RasterSurface *surface,
     for (i = 0; i < 4; i++) dlr_border_side(&m->side[i], q[i], surface, count);
 }
 
+/* ONE PLACED CHARACTER — a code point to a glyph to an outline to the same `dlr_fill` every other kind goes
+ * through. The three lengths are multiplied by `s` and nothing else is: display_list_raster.h's own rule is
+ * that this file applies the ONE transform in the road, and core/css/font_metrics.h states the other side of
+ * the same seam — its `em_px` is "how many of the destination's own pixels one em is", so "the ratio arrives
+ * multiplied in, or it does not arrive".
+ *
+ * THE THREE OUTCOMES ARE NOT COLLAPSED AND ONLY ONE OF THEM DRAWS, which is core/fonts/glyph_outline.h's
+ * split read at the one place it decides something.
+ *   `GLYPH_OUTLINE_OK` FILLS, AND IT IS ALSO WHAT AN EMPTY GLYPH ANSWERS — that outcome is "appended —
+ *   possibly nothing, for a glyph that has no outline" in its own header's words, which is a U+0020 in every
+ *   face that has one. So a space reaches the fill with an empty path and lays no span, and that is the same
+ *   answer as a glyph nobody could draw rather than a different one: the path is what says how much ink there
+ *   is, and `count->spans` beside it is what a reader distinguishes them by.
+ *   `GLYPH_OUTLINE_COMPOSITE` IS A CAPABILITY THIS ENGINE HAS NOT BUILT and aborts naming it, which is
+ *   CLAUDE.md's category (2) rather than a broken invariant: the glyph is VALID and the decoder for it is
+ *   missing. It is reachable from a document's own text, which is the same forcing function a page's throw on
+ *   an absent global is — and it is not reachable from ordinary Latin text at all, because the shipped face
+ *   makes every printable ASCII character a SIMPLE glyph.
+ *   `GLYPH_OUTLINE_MALFORMED` IS A `DCHECK` AND THE DIFFERENCE IS WHOSE BYTES SAID SO. core/css/font_metrics.c
+ *   reads one face and it is this engine's own committed `DEFAULT_FONT_SFNT`, whose whole read is already a
+ *   `CHECK` there; a page's own `@font-face` bytes do not reach it, which that file says in its own words. So
+ *   a malformed outline here is a claim about bytes this repository ships and is an invariant, where the same
+ *   outcome over a document's font would be input and could only ever be a refusal. */
+static void dlr_glyph(const DisplayMark *m, double s, RasterSurface *surface,
+                      DisplayListRasterCount *count)
+{
+    RasterPath p;
+    const char *reject = NULL;
+    GlyphOutlineResult r;
+
+    raster_path_init(&p);
+    r = font_metrics_glyph_outline(m->glyph.cp, m->glyph.em.px * s,
+                                   m->glyph.origin_x.px * s, m->glyph.origin_y.px * s, &p, &reject);
+    if (r == GLYPH_OUTLINE_COMPOSITE)
+        DFAILF("U+%04X selected a COMPOSITE glyph and this engine has no decoder for one. "
+               "core/fonts/glyph_outline.h answers that outcome rather than crashing because a composite "
+               "glyph is a VALID glyph a good font is entitled to carry — every accented Latin letter of the "
+               "shipped face is one — so what is missing is the decoder and not a repair here. BUILD IT in "
+               "core/fonts/glyph_outline.c beside the simple arm, over OpenType 'glyf' — Glyph Data's "
+               "composite description: each component names a glyph index and a placement, and the recursion "
+               "terminates because a component's own description is read by the same entry",
+               (unsigned)m->glyph.cp);
+    DCHECKF(r != GLYPH_OUTLINE_MALFORMED,
+            "U+%04X's outline in the SHIPPED face broke a rule: %s. core/css/font_metrics.c holds exactly one "
+            "face and it is this repository's own `DEFAULT_FONT_SFNT`, whose table directory read is already "
+            "an always-fatal CHECK there — a page's own `@font-face` bytes do not reach it — so this is a "
+            "claim about bytes this tree committed and never about a document's. Re-run "
+            "engine/fontsubset.mjs rather than editing the bytes",
+            (unsigned)m->glyph.cp, reject == NULL ? "(no reason given)" : reject);
+    if (r == GLYPH_OUTLINE_OK) dlr_fill(&p, &m->color, surface, count);
+    raster_path_free(&p);
+}
+
 void display_list_raster(const DisplayList *dl, double device_px_per_css_px, RasterSurface *surface,
                          DisplayListRasterCount *count)
 {
@@ -434,6 +488,14 @@ void display_list_raster(const DisplayList *dl, double device_px_per_css_px, Ras
            what say how much of it was drawn. */
         case DISPLAY_MARK_BORDER:
             dlr_border(m, s, surface, count);
+            count->marks++;
+            break;
+        /* THE GLYPH KIND, WHICH IS ONE FILL AND ONE MARK — and which is counted even where it lays nothing,
+           for the reason the border arm above states: `marks` counts marks this rasterizer had an arm for and
+           PROCESSED, so a U+0020 is a mark here that contributes to neither `spans` nor `pixels`, and those
+           two beside it are what say how much of the text was drawn. */
+        case DISPLAY_MARK_GLYPH:
+            dlr_glyph(m, s, surface, count);
             count->marks++;
             break;
         }

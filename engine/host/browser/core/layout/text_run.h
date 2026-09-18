@@ -441,6 +441,30 @@ bool text_run_measure_item_is_forced_break(const TextRunMeasure *m, size_t i);
    height for both. */
 bool text_run_measure_item_is_atomic(const TextRunMeasure *m, size_t i);
 
+/* ITEM `i`'s CODE POINT, FOR THE CHARACTER KIND AND FOR NEITHER OF THE OTHER TWO THAT HAVE ONE — the scalar
+   value css-values-4 §6.1.1 "Font-relative Lengths…" measured an advance for, handed on to whoever draws it.
+   A PAINTER IS THE THIRD CONSUMER AND THIS IS ITS QUESTION. The paragraph on `text_run_measure_item_style`
+   says the raw item is deliberately not exposed because every other field belongs to exactly one kind and a
+   walk that lost track of which kind it was standing on would measure an edge as a U+0000 — which is an
+   argument for an ACCESSOR THAT ASSERTS and never for a fixed number of them. CSS 2.1 §E.2 "Painting order"'s
+   step 7.2.1 reaches "the text", and the text is these code points at the positions
+   `text_run_measure_line_offset` puts them; a painter that re-derived them from the DOM would be walking the
+   tree a second time and would have to redo css-text-3 §4.1.1's Phase I to know which characters survived.
+   IT REFUSES THE OTHER TWO KINDS THAT CARRY A `cp`, WHICH IS THE WHOLE OF WHY IT IS NOT `text_run_item_cp`.
+   The field's own banner names all three — a character, a forced break's U+000A and an atomic inline's U+FFFC
+   — and says what the last two are FOR: the U+000A is "supplied by HTML §15.3.4's declaration rather than by
+   the document" and `text_run_measure_add_forced_break` states in its own words that it "exists to be given to
+   [UAX14] and to nothing else", while the U+FFFC is how css-text-3 §5.5 "Line Breaking Details"' own sentence
+   is expressed — "there is a soft wrap opportunity before and after each replaced element or other atomic
+   inline". Neither is a character the document contains, so a painter handed one would draw a
+   glyph for a code point no author wrote — a `br` would render as the first available font's .notdef and an
+   `<img>` as an object-replacement box. Refusing them here is the same rule the three predicates above are:
+   the kind is asked, and the answer is the kind's.
+   A CHARACTER THE FACE DOES NOT COVER IS STILL THIS ITEM'S CODE POINT. Which glyph it selects is
+   core/css/font_metrics.h's question and is answered .notdef there; this entry answers what the document
+   said, which is the operand that question takes. */
+uint32_t text_run_measure_item_cp(const TextRunMeasure *m, size_t i);
+
 /* css-sizing-3 §2.1's MAX-CONTENT and MIN-CONTENT INLINE SIZES, in CSS pixels — the two answers, read through
    entries rather than off the struct so that the one relation between them is asserted where it is read. */
 CssPx text_run_measure_max_content(const TextRunMeasure *m);

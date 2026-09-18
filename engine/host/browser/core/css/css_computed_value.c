@@ -286,11 +286,17 @@ static CssLength css_cv_px(CssPx px)
 /* ---- css-values-4 §6.1.1's `em` and `rem`, ANSWERED FROM THE TREE ------------------------------------------ */
 
 /* THE ELEMENT'S OWN COMPUTED `font-size`, which css-fonts-4 §2.5's `Computed value:` line makes an absolute
-   length and nothing else. Three arms multiply by it — §6.1.1's `lh`, css-inline-3 §5.1's percentage at
-   computed-value time and §9's number at used-value time — and all three mean THIS element's, never its
-   parent's, because the walk that redirects to a parent is decided from the PROPERTY by the two predicates
-   below and never from the element. */
-static CssPx css_cv_font_size_px(lxb_dom_element_t *el)
+   length and nothing else. Three arms inside this file multiply by it — §6.1.1's `lh`, css-inline-3 §5.1's
+   percentage at computed-value time and §9's number at used-value time — and all three mean THIS element's,
+   never its parent's, because the walk that redirects to a parent is decided from the PROPERTY by the two
+   predicates below and never from the element.
+   IT WAS A STATIC AND IS NOW AN ENTRY, AND THE DERIVATION IS UNCHANGED — the same read, the same assert, the
+   same one line. What changed is that a FOURTH consumer arrived from outside this file: css-values-4 §6.1.1
+   defines the `em` as this number, and core/paint/display_list.h's glyph mark carries an em because the face
+   must be told what one is worth in the destination's pixels. A painter that read `font-size` for itself
+   would be a second spelling of the assert below, free to answer for an element whose computed value is not
+   an absolute length — which is exactly the shape the three entries beneath this one exist to prevent. */
+CssPx css_font_size_px(lxb_dom_element_t *el)
 {
     CssLength len = css_computed_length(el, "font-size");
 
@@ -452,7 +458,7 @@ static bool css_cv_metric_is_root(CssFontMetric which)
 CssPx css_used_line_height_px(lxb_dom_element_t *el)
 {
     CssLineHeight v = css_computed_line_height(el);
-    CssPx size = css_cv_font_size_px(el);
+    CssPx size = css_font_size_px(el);
 
     if (v.kind == CSS_LINE_HEIGHT_LENGTH) return v.px;
     if (v.kind == CSS_LINE_HEIGHT_NUMBER) return css_px_scale(size, v.number);
@@ -468,7 +474,7 @@ CssPx css_used_line_height_px(lxb_dom_element_t *el)
    THEY ARE ONE CALL EACH AND NOT A PAIR OF FACTS THE CALLER UNIONS, which is the same argument
    core/css/font_metrics.h makes about the ratio one level down. §10.8.1's metric is a joint function of the
    FACE (this user agent's picked ascent and descent) and of the ELEMENT (its computed font size, resolved in
-   its own document's realm), and both of those are answered here — `css_cv_font_size_px` walks §7.2's
+   its own document's realm), and both of those are answered here — `css_font_size_px` walks §7.2's
    inheritance for the size and `css_cv_realm` names the document the picked fact is keyed under. A layout
    component handed those two separately would have to remember to multiply, and could take the size from one
    element and the realm from another with nothing to say so; taking the product here makes that impossible
@@ -478,12 +484,12 @@ CssPx css_used_line_height_px(lxb_dom_element_t *el)
    to resolve one, which is the cycle back into this file's own font-size derivation. */
 CssPx css_font_ascent_px(lxb_dom_element_t *el)
 {
-    return font_metrics_ascent_px(css_cv_realm(el), css_cv_font_size_px(el));
+    return font_metrics_ascent_px(css_cv_realm(el), css_font_size_px(el));
 }
 
 CssPx css_font_descent_px(lxb_dom_element_t *el)
 {
-    return font_metrics_descent_px(css_cv_realm(el), css_cv_font_size_px(el));
+    return font_metrics_descent_px(css_cv_realm(el), css_font_size_px(el));
 }
 
 /* css-values-4 §6.1.1's ADVANCE MEASURE OF ONE GLYPH ON ONE ELEMENT, in CSS pixels — the third product this
@@ -508,7 +514,7 @@ CssPx css_font_advance_measure_px(lxb_dom_element_t *el, uint32_t codepoint)
     DCHECK(el != NULL, "css-values-4 §6.1.1's advance measure was asked for with no element. The section states "
                        "it over \"the element on which it is used\" — both the glyph's orientation and the size "
                        "it is measured at come from one, so there is no elementless form of this question");
-    return css_px_scale(css_cv_font_size_px(el),
+    return css_px_scale(css_font_size_px(el),
                         font_metrics_advance_measure_em(codepoint, css_cv_advance_direction(el, codepoint)));
 }
 
@@ -1236,7 +1242,7 @@ CssLineHeight css_computed_line_height(lxb_dom_element_t *el)
            "keyword. The two are one question asked twice — `css_length_is_length_percentage` and "
            "`css_length_parse` walk the same productions — so a value that passes the first and is not a "
            "length, a percentage or a calculation to the second means they have come apart");
-    out.px = css_length_resolve_pct(len, css_cv_font_size_px(el));
+    out.px = css_length_resolve_pct(len, css_font_size_px(el));
     return out;
 }
 
@@ -1966,7 +1972,7 @@ JSValue css_resolved_value(JSContext *ctx, lxb_dom_element_t *el, const char *na
                "a computed `line-height` is none of the three shapes css-inline-3 §5.1's `Computed value:` "
                "line admits — the entry that derives it answers exactly those, so this is that enumeration "
                "and this switch having come apart");
-        return css_resolved_px(ctx, css_px_scale(css_cv_font_size_px(el), v.number));
+        return css_resolved_px(ctx, css_px_scale(css_font_size_px(el), v.number));
     }
     case CSS_RESOLVED_TRANSFORM: {
         /* css-transforms-1 §3.2 "Resolved value of transform": "When the computed value is a <transform-list>,

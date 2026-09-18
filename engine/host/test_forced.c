@@ -21230,8 +21230,166 @@ static void display_list_raster_selftest(void)
     display_list_free(&rect_list);
 }
 
+/* ONE GLYPH MARK appended to a list — the four numbers that kind carries and the colour, so that no case
+   below writes a `DisplayMark` field by hand and none can differ from another in a field nobody meant to
+   vary. `rect` and `side` are deliberately NOT written: core/paint/display_list.h states that a field a kind
+   does not use is one no consumer of that kind may read, and a helper that filled them would hide a consumer
+   that read one. */
+static void tf_glyph_append(DisplayList *dl, uint32_t cp, double em, double x, double y, CssColor color)
+{
+    DisplayMark m;
+
+    m.kind = DISPLAY_MARK_GLYPH;
+    m.glyph.cp = cp;
+    m.glyph.em = css_px(em);
+    m.glyph.origin_x = css_px(x);
+    m.glyph.origin_y = css_px(y);
+    m.color = color;
+    display_list_append(dl, &m);
+}
+
+/* core/paint/display_list.h's GLYPH KIND, ALL THE WAY TO PIXELS — a code point, an em and a pen position
+ * turned into ink by core/paint/display_list_raster.c's arm over core/css/font_metrics.h's one face. It needs
+ * no realm, no document and no viewport, which is what makes every number below something a run can FAIL
+ * rather than something a header merely states.
+ *
+ * WHY THIS SHAPE. THE WHOLE POINT IS THAT A MARK AND ITS INK ARE DIFFERENT FACTS. Two spellings of one kind
+ * must produce the same `marks` and different `spans` — a `DISPLAY_MARK_GLYPH` is counted where the
+ * rasterizer HAD AN ARM FOR IT, which is display_list_raster.c's own rule one kind over ("a border whose sides
+ * are all zero-width … is counted here and contributes nothing to `spans` and `pixels`"), so a character with
+ * no outline is one mark and no ink and a reader who could not tell that from a dropped mark would not know
+ * whether the text arrived.
+ *
+ * EVERY CODE POINT BELOW WAS MEASURED AGAINST THE COMMITTED BYTES rather than chosen for how it reads, which
+ * is what stops a control passing by luck. The shipped face was decoded outside this program and its 'cmap'
+ * format 4 subtable covers 5370 code points, of which 3071 are SIMPLE outlines, 2238 are COMPOSITE and 61 are
+ * EMPTY. Over PRINTABLE ASCII the split is 94 SIMPLE, exactly ONE empty and NO composites, and the one empty
+ * is U+0020 — so the ink-free control below is the only character in that range that could serve as one, and
+ * a face swap that gave the space an outline would fail it rather than silently weaken it. U+4E2D is in no
+ * subtable at all, which is what makes it the .notdef control.
+ *
+ * WHAT IS NOT ASSERTED IS ANY PIXEL COUNT'S VALUE. Those are functions of a face this file did not choose and
+ * of core/graphics/raster_path.h's flattening tolerance, so fixing one would be a change detector; they are
+ * PRINTED so that a reader comparing two artifacts can see which of them moved. What IS asserted is arithmetic
+ * over them that holds for any face with ink at both sizes. */
+static void glyph_mark_selftest(void)
+{
+    static const int W = 64, H = 64;
+    DisplayList one;
+    DisplayListRasterCount big, small, scaled, moved, blank, notdef;
+    CssColor black = tf_dlr_srgb(0.0, 0.0, 0.0, 1.0);
+    uint64_t sum_big, sum_scaled, sum_moved;
+
+    /* 1. A SIMPLE OUTLINE LAYS INK INSIDE ITS SURFACE. U+0048 is glyph 43 of the shipped face and carries one
+       contour — MEASURED — so this is the road from a code point through the 'cmap' and the outline table to a
+       span, end to end. Neither bound is a face fact: a letter placed inside its surface draws SOME ink and
+       does not cover the whole of it, which is true of every glyph of every face. */
+    display_list_init(&one);
+    tf_glyph_append(&one, 0x48u, 48.0, 10.0, 52.0, black);
+    sum_big = tf_dlr_raster(&one, 1.0, W, H, &big);
+    display_list_free(&one);
+    CHECKF(big.marks == 1 && big.spans > 0 && big.pixels > 0 && big.pixels < (size_t)(W * H),
+           "U+0048 at 48 pixels per em, with its baseline at row 52 of a 64x64 surface, was composited as "
+           "%zu marks over %zu runs and %zu pixels. One mark is the arm having run; a zero pixel count is the "
+           "road from a code point to a pixel broken somewhere along it; and a full surface is a fill whose "
+           "winding never closed", big.marks, big.spans, big.pixels);
+
+    /* 2. A MARK THAT LAYS NO INK IS STILL A MARK. U+0020 is glyph 3 and its 'loca' entries are EQUAL —
+       MEASURED — so core/fonts/glyph_outline.h answers `GLYPH_OUTLINE_OK` having appended nothing, which its
+       own header calls "possibly nothing, for a glyph that has no outline". THE TWO READINGS THIS SEPARATES
+       ARE THE POINT: a space that raised no `marks` would be indistinguishable from a character the painter
+       never laid, and a space that raised `pixels` would be a glyph drawn for a code point whose face says it
+       draws nothing. */
+    display_list_init(&one);
+    tf_glyph_append(&one, 0x20u, 48.0, 10.0, 52.0, black);
+    (void)tf_dlr_raster(&one, 1.0, W, H, &blank);
+    display_list_free(&one);
+    CHECKF(blank.marks == 1 && blank.spans == 0 && blank.pixels == 0,
+           "U+0020 was composited as %zu marks over %zu runs and %zu pixels, where ONE mark and NO ink is the "
+           "whole of what a space is. A zero mark count is the rasterizer having no arm for the kind — which "
+           "is a dropped character and not an empty one — and any ink at all is an outline for a glyph this "
+           "face gives none, which would mean the 'loca' entries were read as a range where they are equal",
+           blank.marks, blank.spans, blank.pixels);
+
+    /* 3. THE DEVICE SCALE IS ONE TRANSFORM AND IT REACHES ALL THREE LENGTHS. core/paint/display_list_raster.h
+       states that the ONE transform in this road is applied here with `device_px_per_css_px` as its operand,
+       and core/css/font_metrics.h states the other side of the same seam — its `em_px` is "how many of the
+       destination's own pixels one em is", so "the ratio arrives multiplied in, or it does not arrive". The
+       two spellings below therefore name the IDENTICAL device geometry by two routes, and the assertion is
+       that the bytes agree. IT FAILS IN EVERY DIRECTION THAT MATTERS: drop the scale from the em and the
+       glyph is half the size; drop it from either coordinate and the glyph moves; apply it twice anywhere and
+       both. No pair of counts separates those — the CHECKSUM does, which is why it is read here and asserted
+       nowhere else in this function. */
+    display_list_init(&one);
+    tf_glyph_append(&one, 0x48u, 24.0, 5.0, 26.0, black);
+    sum_scaled = tf_dlr_raster(&one, 2.0, W, H, &scaled);
+    display_list_free(&one);
+    CHECKF(sum_scaled == sum_big && scaled.pixels == big.pixels && scaled.spans == big.spans,
+           "one glyph at em 24 and origin (5, 26) rasterized at 2 device pixels per CSS pixel is not the same "
+           "bytes as the same glyph at em 48 and origin (10, 52) at 1 — %zu runs over %zu pixels against %zu "
+           "over %zu. Both name the identical device geometry, so a difference is the scale reaching some of "
+           "the three lengths and not the others, or reaching one of them twice",
+           scaled.spans, scaled.pixels, big.spans, big.pixels);
+
+    /* 4. THE EM SCALES THE GLYPH, which is the one thing a mark carrying only a code point and a position
+       could not say. Monotone rather than a ratio: coverage at an edge pixel is analytic
+       (core/graphics/rasterizer.h) so the area does not scale exactly with the square of the em, and a
+       fixture asserting that it did would be holding this engine to arithmetic it deliberately does not do. */
+    display_list_init(&one);
+    tf_glyph_append(&one, 0x48u, 24.0, 10.0, 52.0, black);
+    (void)tf_dlr_raster(&one, 1.0, W, H, &small);
+    display_list_free(&one);
+    CHECKF(small.pixels > 0 && small.pixels < big.pixels,
+           "the same glyph covered %zu pixels at em 24 and %zu at em 48. A smaller em draws a smaller glyph "
+           "and draws something, so an equal count is the em having been dropped between the mark and the "
+           "face and a zero is the smaller one having missed the surface",
+           small.pixels, big.pixels);
+
+    /* 5. THE PEN POSITION MOVES THE INK AND CHANGES NOTHING ELSE. The shift is a WHOLE NUMBER of device
+       pixels, so the fractional coverage at every edge is identical and the count is preserved exactly —
+       which is what lets the two halves of this assertion be read as one fact rather than as a tolerance. */
+    display_list_init(&one);
+    tf_glyph_append(&one, 0x48u, 48.0, 26.0, 52.0, black);
+    sum_moved = tf_dlr_raster(&one, 1.0, W, H, &moved);
+    display_list_free(&one);
+    CHECKF(moved.pixels == big.pixels && moved.spans == big.spans && sum_moved != sum_big,
+           "one glyph moved 16 whole device pixels along its baseline covered %zu pixels where it covered "
+           "%zu, or landed on the same bytes. An integer translation inside the surface preserves every "
+           "edge's coverage exactly, so a different count is ink leaving the surface and an EQUAL checksum is "
+           "the origin never having reached the face",
+           moved.pixels, big.pixels);
+
+    /* 6. A CODE POINT THE FACE DOES NOT COVER DRAWS .notdef, AND THAT IS AN ANSWER RATHER THAN AN ERROR.
+       core/css/font_metrics.h says so in its own words — OpenType makes glyph 0 the special glyph that
+       represents a missing character and css-fonts-4 §5.2 "Matching font styles" has the user agent draw it,
+       so "the shape this answers for an uncovered character is the shape that really gets drawn, which is the
+       one a reader of the page sees". U+4E2D is in NO subtable of this face — MEASURED — and glyph 0 carries
+       two contours, so the assertion is that ink arrives. A ZERO HERE IS THE DEFECT THIS ROW EXISTS FOR: it
+       would mean an uncovered character silently draws nothing, and a page in a script this face lacks would
+       render blank rather than visibly missing. */
+    display_list_init(&one);
+    tf_glyph_append(&one, 0x4E2Du, 48.0, 10.0, 52.0, black);
+    (void)tf_dlr_raster(&one, 1.0, W, H, &notdef);
+    display_list_free(&one);
+    CHECKF(notdef.marks == 1 && notdef.pixels > 0,
+           "U+4E2D, which this face's character map does not cover, was composited as %zu marks over %zu "
+           "pixels. OpenType's glyph 0 is the one drawn for a missing character and this face gives it two "
+           "contours, so a zero is a 'cmap' miss being turned into no ink at all rather than into .notdef",
+           notdef.marks, notdef.pixels);
+
+    /* THE ROW. `Hpixels`, `Hspans`, `smallpixels` and `notdefpixels` are facts about the face
+       engine/fontsubset.mjs was pointed at and about a flattening tolerance this file did not choose, and
+       NONE of them is asserted to a constant above — they move the day either changes, and a fixture holding
+       them to a number would fail on a correct change. They are printed so that a reader comparing two
+       artifacts can see WHICH of them moved. `blankpixels` is the one that is zero on purpose. */
+    printf("@GLYPHMARK Hspans=%zu Hpixels=%zu smallpixels=%zu movedpixels=%zu blankmarks=%zu blankpixels=%zu "
+           "notdefpixels=%zu scaleagrees=%d moveshifts=%d\n",
+           big.spans, big.pixels, small.pixels, moved.pixels, blank.marks, blank.pixels, notdef.pixels,
+           sum_scaled == sum_big ? 1 : 0, sum_moved != sum_big ? 1 : 0);
+}
+
 #define TF_DL_MARKS 20u
-#define TF_DL_KINDS 3u
+#define TF_DL_KINDS 4u
 
 static void display_list_selftest(JSContext *ctx)
 {
@@ -21368,8 +21526,47 @@ static void display_list_selftest(JSContext *ctx)
           "rotation here would put one side's width and style on another side's edge, which is ink in a place "
           "no cascade asked for and never a crash");
 
-    CHECK(dl.n == TF_DL_MARKS + 4 && dl.v[dl.n - 1].kind == DISPLAY_MARK_BORDER &&
-          dl.v[dl.n - 2].kind == DISPLAY_MARK_FILL_CANVAS && dl.v[0].kind == DISPLAY_MARK_FILL_RECT,
+    /* THE GLYPH KIND, AND THE ONE PROPERTY THAT SEPARATES IT FROM EVERY OTHER MARK IN THIS LIST. A
+       `DISPLAY_MARK_GLYPH` carries NO RECTANGLE — core/paint/display_list.h's rule is that its ink extent is
+       a property of the FACE's own contours and that CSS 2.1 §E.2 "Painting order"'s step 7.2.1 asks for "the
+       text" rather than for a box around it — so the union over a list holding one must read the THREE
+       lengths it does carry and must NOT read the four it does not. The assertion below is TWO-SIDED and that
+       is the whole of its value: `rect` is deliberately filled here with a fact NEITHER glyph length carries,
+       so the answer is wrong if the glyph's lengths are skipped (which reports a page of text as ink with no
+       arm to explore) AND wrong if the rectangle is still unioned (which names a world out of four `CssPx` no
+       builder of this kind ever writes). No other spelling separates the two: give `rect` the same fact as
+       the glyph and either defect passes.
+       WRITING A FIELD THIS KIND DOES NOT USE IS THE POINT AND NOT AN OVERSIGHT. display_list.h says "a field
+       a kind does not use is therefore one no consumer of that kind may read", and the only way a fixture can
+       hold a consumer to that is to put something READABLE there and prove it was not read. */
+    m.kind = DISPLAY_MARK_GLYPH;
+    m.glyph.cp = 0x48u;                                        /* U+0048 LATIN CAPITAL LETTER H */
+    m.glyph.origin_x = css_px_env(CSS_ENV_ICB_WIDTH, ctx, 12.0);
+    m.glyph.origin_y = css_px(56.0);
+    m.glyph.em = css_px_env(CSS_ENV_DEFAULT_FONT_SIZE, ctx, 16.0);
+    m.rect[0] = css_px_env(CSS_ENV_FONT_ASCENT, ctx, 1.0);     /* a fact NEITHER glyph length carries */
+    m.rect[1] = css_px_env(CSS_ENV_FONT_ASCENT, ctx, 1.0);
+    m.rect[2] = css_px_env(CSS_ENV_FONT_ASCENT, ctx, 1.0);
+    m.rect[3] = css_px_env(CSS_ENV_FONT_ASCENT, ctx, 1.0);
+    m.color = CSS_COLOR_OPAQUE_BLACK;
+    display_list_append(&dl, &m);
+    CHECK(display_list_env(&dl) ==
+          (CSS_ENV_BIT(CSS_ENV_ICB_WIDTH) | CSS_ENV_BIT(CSS_ENV_DEFAULT_FONT_SIZE) |
+           CSS_ENV_BIT(CSS_ENV_ICB_HEIGHT) | CSS_ENV_BIT(CSS_ENV_DEVICE_PIXEL_RATIO)),
+          "a display list holding a GLYPH mark reports the wrong environment set, and the two directions are "
+          "different defects. A MISSING `CSS_ENV_DEFAULT_FONT_SIZE` or `CSS_ENV_ICB_WIDTH` is the union having "
+          "skipped the three lengths a glyph DOES carry — css-values-4 §6.1.1 makes the em a computed "
+          "`font-size`, which css-fonts-4 §2.5 lets a percentage make a function of the root element's, and "
+          "the pen position is a sum of advance measures over a line whose BREAKS are a function of CSS 2.1 "
+          "§10.1's initial containing block — so a list of text would report as ink that is the same ink "
+          "under every arm while being ink that re-wraps. A PRESENT `CSS_ENV_FONT_ASCENT` is the opposite "
+          "defect and is worse: the union read `rect`, which this kind does not use and no builder of it "
+          "writes, so the set would be assembled out of whatever four `CssPx` happened to be in the caller's "
+          "storage");
+
+    CHECK(dl.n == TF_DL_MARKS + 5 && dl.v[dl.n - 1].kind == DISPLAY_MARK_GLYPH &&
+          dl.v[dl.n - 1].glyph.cp == 0x48u && dl.v[dl.n - 2].kind == DISPLAY_MARK_BORDER &&
+          dl.v[dl.n - 3].kind == DISPLAY_MARK_FILL_CANVAS && dl.v[0].kind == DISPLAY_MARK_FILL_RECT,
           "a mark's KIND changed where the list put it. core/paint/display_list.h has no entry that sorts or "
           "compares two marks, so a canvas mark is APPENDED like every other and lands where its builder put "
           "it — CSS 2.1 §E.2 \"Painting order\" makes the canvas step 1 because step 1 is offered first, never "
@@ -23541,6 +23738,12 @@ int main(int argc, char **argv) {
        handed. It needs no realm either: the lists it rasterizes are ones this file states, which is what
        lets it separate the two FILL kinds by arithmetic rather than by a document. */
     display_list_raster_selftest();
+    /* AND core/paint/display_list.h's GLYPH KIND all the way to pixels, immediately after the fill it goes
+       through and before the list fixture that appends one without drawing it. `face_outline_selftest` above
+       is its reachability control: that row reaches the SAME face by the same entry, so an artifact where
+       @FACE is present and @GLYPHMARK is absent is this function not having run rather than this face not
+       having answered. */
+    glyph_mark_selftest();
     display_list_selftest(ctx);
     /* AND core/paint/box_paint.h's entry beside it, which is the half that NEEDS a document — a
        realm on the ELEMENT's own document, a navigable presenting it and therefore a viewport. This

@@ -71,6 +71,7 @@
 #define ENGINE_HOST_BROWSER_CORE_LAYOUT_LINE_BOX_H
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #include <lexbor/dom/dom.h>
 
@@ -181,6 +182,64 @@ CssPx line_box_content_height(lxb_dom_element_t *style, BlockFlowRun run,
  * the fitting-line answer above harmless, stated once for the degenerate case too. */
 void line_box_content_span(lxb_dom_element_t *style, BlockFlowRun run,
                            bool vertical, CssPx *lo, CssPx *hi);
+
+/* ONE PLACED CHARACTER of this formatting context's line boxes — the code point, the inline box it is in, and
+ * the PEN POSITION CSS 2.1 §E.2 "Painting order"'s step 7.2.1 draws it from. The two coordinates are OFFSETS
+ * FROM THE ESTABLISHING BOX'S CONTENT BOX ORIGIN, exactly as `line_box_content_span`'s two are and in the
+ * same frame core/layout/block_flow.h's `BlockFlowAnonBox` reports its own origin in, so a caller composes
+ * one addition and never a second derivation.
+ *
+ * `baseline_y` IS A BASELINE AND NOT A TOP EDGE, which is the field a reader is most likely to take for the
+ * other thing. CSS 2.2 §10.8's step 3 makes a line box "the distance between the uppermost box top and the
+ * lowermost box bottom", so its baseline sits the line's own maximum `A'` below its top — and that is the one
+ * coordinate every box on the line hangs from, which is why `line_box_inline_fragments` derives its
+ * fragments' block axis from the identical number and why this entry reports it rather than a rectangle. A
+ * glyph has no rectangle here to report: its ink extent is a property of the FACE's own contours, which
+ * core/css/font_metrics.h answers and this component must not, and CSS 2.1 §E.2 asks for "the text" rather
+ * than for a box around it.
+ *
+ * ONE ENTRY PER CHARACTER, AND THE ADVANCES ARE CARRIED AS POSITIONS RATHER THAN AS A LIST OF WIDTHS. That is
+ * the stronger half of the contract core/paint/display_list.h's residual states — "a text mark carries THOSE
+ * advances and a rasterizer that re-measures is comparing two engines rather than painting one" — because a
+ * consumer handed a per-character ORIGIN has no pen to advance and therefore nothing it could re-measure
+ * with. Every one of these coordinates is `text_run_measure_line_offset` over the SAME fill this walk ran,
+ * which is that component's third answer over its one pass and is the entry its own banner says exists so
+ * that "a position derived from a prefix that re-trimmed would not add up to the size derived from the
+ * whole". A second sum of one line here is the one way this component could hand a painter a run whose
+ * characters and whose width describe different text.
+ *
+ * IT IS THE CHARACTERS AND NOTHING ELSE ON THE LINE. css-text-3 §4.1.1's Phase I has already collapsed and
+ * removed what the line does not hold, and the three other item kinds are refused rather than placed: an
+ * inline box EDGE draws nothing at all, a FORCED BREAK's U+000A is a code point HTML §15.3.4 "Phrasing
+ * content"'s declaration supplies for [UAX14] and the document does not contain, and an ATOMIC inline's
+ * U+FFFC is how css-text-3 §5.5 "Line Breaking Details"' two soft wrap opportunities are expressed — CSS 2.1
+ * §E.2 reaches an atomic inline through its own item ("the replaced content, atomically" and the
+ * inline-block arm's pseudo-context), never as text. `text_run_measure_item_cp` is what refuses the last two,
+ * so the refusal is one rule stated where the kinds are and not a second classification here.
+ *
+ * A LINE §9.4.2 SAYS "must be treated as ZERO-HEIGHT" CONTRIBUTES NO CHARACTER AND IS NOT A SPECIAL CASE.
+ * That rule's own first conjunct is "line boxes that contain no text", so such a line holds no item this
+ * entry emits for, and the stack still advances past it by the zero height it has — which is why the loop
+ * asks the line's extent whether or not it places anything on it.
+ *
+ * ANSWERS THE COUNT and stores a newly allocated array of that many at `*out`, WHICH THE CALLER OWNS AND MUST
+ * FREE; a count of zero stores NULL, which is core/layout/block_flow.h's own spelling for the same shape. A
+ * ZERO IS A POSITIVE ANSWER — a formatting context whose content is an empty inline box, or one whose text
+ * css-text-3 §4.1.1 collapsed away entirely, has no character to place and is not an absence of a
+ * measurement.
+ *
+ * THE ARGUMENTS ARE `line_box_content_height`'s TWO AND MEAN EXACTLY WHAT THEY MEAN THERE: §9.2.1.1's
+ * anonymous block box has no element, so `style` is whose computed properties the box has and `run` is which
+ * of that container's runs this context is. A caller reaching every context under an element asks
+ * core/layout/block_flow.h for both shapes, exactly as CSSOM VIEW §2 "Terminology"'s scrolling area does. */
+typedef struct {
+    uint32_t cp;                /* the code point that draws — always a css-text-3 §4.1.1 Phase I character */
+    lxb_dom_element_t *style;   /* the inline box it is in, whose `font-size` and `color` it has */
+    CssPx origin_x;             /* the pen position, from the content box's LEFT edge */
+    CssPx baseline_y;           /* its BASELINE, from the content box's TOP edge */
+} LineBoxGlyph;
+
+size_t line_box_glyphs(lxb_dom_element_t *style, BlockFlowRun run, LineBoxGlyph **out);
 
 /* ONE BOX FRAGMENT of an inline box — CSSOM VIEW §6 "Extensions to the Element Interface"'s getClientRects()
  * step 3's "one for each box fragment", which for an inline box is one per LINE BOX it spans. The four numbers

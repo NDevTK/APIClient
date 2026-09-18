@@ -204,6 +204,19 @@ CssPx css_used_line_height_px(lxb_dom_element_t *el);
 CssPx css_font_ascent_px(lxb_dom_element_t *el);
 CssPx css_font_descent_px(lxb_dom_element_t *el);
 
+/* `el`'s OWN COMPUTED `font-size`, in CSS pixels — css-fonts-4 §2.5 "Font size: the font-size property"'s
+   `Computed value:` line, which is "an absolute length" and nothing else, so this is a read and an assert
+   rather than a resolution.
+   IT IS THE OPERAND THE THREE ENTRIES ABOVE AND `css_font_advance_measure_px` BELOW ARE ALL PRODUCTS OF, and
+   it is exported because css-values-4 §6.1.1 "Font-relative Lengths…" defines the `em` AS this number — "equal
+   to the computed value of the font-size property of the element on which it is used" — and a consumer that
+   needs the em rather than a product of it has no other way to ask. core/paint/display_list.h's glyph mark is
+   that consumer: core/css/font_metrics.h's outline entry takes "how many of the destination's own pixels one
+   em is", so the em rides the mark and the rasterizer multiplies the device pixel ratio into it.
+   IT IS NOT A USED VALUE AND THERE IS NO SECOND ONE. css-fonts-4 gives the property no `Used value:` line, so
+   the computed value IS what every consumer reads, and core/layout/used_value.h correctly has no row for it. */
+CssPx css_font_size_px(lxb_dom_element_t *el);
+
 /* css-values-4 §6.1.1 "Font-relative Lengths…"'s ADVANCE MEASURE of one Unicode scalar value on `el` — "its
    advance width or height, whichever is in the inline axis of the element" — at that element's own computed
    `font-size`, in CSS pixels. It is the third product formed out of the same two operands as the two entries
