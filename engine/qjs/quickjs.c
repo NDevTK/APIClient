@@ -3738,18 +3738,31 @@ static int js_enqueue_platform_call(JSContext *ctx, JSJobFunc *job_func, int arg
  * `a flow is executing over a runtime that holds BASELINE callbacks and no scheduler owns the queues … they
  * would be dropped`, justified by `the hook is being asked from inside a running flow and that is the one
  * thing it needs`. BOTH HALVES ARE FALSE OF THIS TREE. A FLOW IS NOT A SCHEDULER: JS_FlowNew/JS_FlowResume
- * are a public API and three hosts drive flows with no queue owner ON PURPOSE — run-test262.c, which has no
- * solver at all, and test_forced.c's baseline selftests, which run before their agent exists. AND THEY ARE
+ * are a public API, and the hosts that drive flows with no queue owner do it ON PURPOSE — run-test262.c,
+ * which has no solver at all, and test_forced.c's baseline selftests, which run before their agent exists.
+ * THE LIST IS THE CLAIM AND NO NUMBER STANDS BESIDE IT. The commit that landed this paragraph wrote
+ * `three hosts` over a list of TWO — a count contradicting its own enumeration, in one sentence, with both
+ * halves in front of its author. The third would have been wpt_runner.c, and it is not one: it calls
+ * engine_sched_begin, so it owns its queues. DERIVE the set rather than remembering it — `git grep -l
+ * JS_FlowNew` less every file that reaches `engine_sched_begin` — and where a number is wanted, it is that
+ * command's answer and not this sentence's.
+ * RETIREMENT: this record goes when no sentence here carries a count of hosts at all. AND THEY ARE
  * NOT DROPPED: the line below leaves them where they are, and whether one was ever adopted is decidable in
  * exactly ONE place. Three sites already said which place, and the assert disagreed with all of them —
  * JS_IsJobPending (`the invariant that the callback is not LOST is asserted where it is decidable, at
  * JS_FreeRuntime`), the field (`An entry still here when the runtime is freed IS a dropped work item, and
  * that is where it crashes`) and quickjs.h (`It is never dropped`). This call site can only ever answer
  * `not yet`, which is a fact about ORDER and never about correctness.
- * MEASURED: a baseline probe queued HTML §6.12 "The popover attribute"'s toggle task through
- * JS_EnqueueCallTask, the next baseline probe to drive a flow aborted here, and the session that adopts it
- * was still hundreds of lines away. Both targets of one revision aborted with the identical message, so it
- * was never a thread-storage effect either.
+ * MEASURED: a baseline probe queued a platform callback through JS_EnqueueCallTask, the next baseline probe
+ * to drive a flow aborted here, and the session that would have adopted the entry was still hundreds of
+ * lines away. Four observations, two revisions, two targets, byte-identical message — so it is reached on
+ * every run of every host and was never a thread-storage effect of the hook's storage class either.
+ * WHICH PRODUCER IS NOT ESTABLISHED AND IS DELIBERATELY NOT NAMED HERE. The fixture opens several baseline
+ * doors into this list between its agent and its first probe, and none of them print, so no log separates
+ * them; HTML §6.12 "The popover attribute"'s queue a popover toggle event task is one the fixture certainly
+ * opens, and an IndexedDB request event and a §7.4 navigation are others. The assert was wrong about EVERY
+ * one of them, which is why the repair did not need the answer — and naming one on the strength of that
+ * would be a mechanism inferred where a list was measured.
  * RETIREMENT: this record goes when no host here can drive a flow without owning the queues — that is, when
  * JS_FlowResume is unreachable from a host that installs no enqueue hook. */
 static void js_adopt_baseline_calls(JSRuntime *rt)
