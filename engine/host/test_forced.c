@@ -26338,17 +26338,37 @@ static int abi_main(int argc, char **argv)
     /* AND AN IMAGE OF EVERY WORLD, ASKED THE INSTANT THERE ARE WORLDS TO ASK ABOUT — @PERWORLD. It goes here
        and not before `qjs_begin` because the frontier is SEEDED by that call: asked earlier there is no member
        to mark, which the entry says outright rather than tolerating. Asked here it names the boot flow, and
-       every fork the run then takes is a member this ask did not name — deliberately, since an ask newborns
-       inherited would never finish (solver/engine.h states the whole of it).
-       WHAT A HOST THAT WANTS THE LATER ARMS DOES IS ASK AGAIN, and this driver does not, which is a NAMED
-       RESIDUAL rather than an omission: WHAT IS NOT COVERED is every world forked after this line, so the
-       `if (__FLAGS.admin)` sibling is photographed only where the fork happens before the boot flow's first
-       discharge. WHAT THE NEXT DIFF BUILDS is a second `qjs_request_paint()` in the loop below, gated on the
-       host having drained every image it was already owed — which needs a way to ask how many marks are
-       outstanding, since re-asking blind would re-mark members whose picture this run already holds and the
-       directory would fill with re-renders of one timeline. HOW ITS ABSENCE WOULD SHOW: a directory whose
-       world lines are all `<doc>_<session>_0`-shaped heads with no deeper serial among them, on a run whose
-       `@RESULT` reports forks. */
+       every fork the run then takes is a member this ask did not name.
+       THE RESIDUAL THAT STOOD HERE HAD THREE CLAUSES AND A MEASUREMENT ANSWERED ALL THREE AGAINST IT, RECORDED
+       AT THE SITE BECAUSE IT HAD ALREADY BEEN DISPATCHED AS A BRIEF — @SHOTWHEN. Its NOT-COVERED clause said
+       the `if (__FLAGS.admin)` sibling is photographed where a fork PRECEDES the boot flow's first discharge,
+       and that window is EMPTY rather than narrow: a mark is discharged at the member's next PICK, before it
+       has executed an instruction, so the boot flow's discharge is the first iteration of the first slice and
+       nothing can come before it. The one asked picture of any run is the document as PARSED.
+       Its NEXT-DIFF clause said to ask again in the loop below, gated on the host having drained what it was
+       already owed, and that gate cannot hold: the round the host would ask on IS a discharge, so nothing is
+       outstanding, the gate opens, the incumbent is re-marked, and the next slice yields before stepping it —
+       the member never steps and the document never runs. A re-ask is a LIVELOCK for as long as the discharge
+       stands before the work. Its ABSENCE-SHOWS clause said a directory of serial-0 heads with no deeper
+       serial on a forking run, and that reads the WRONG CHANNEL: this driver renders on EVERY round, so deeper
+       serials appear there from quantum boundaries the ask does not govern, on a run whose ask is exactly as
+       narrow as its own first clause says.
+       WHAT IS NOT COVERED is a picture of a world at a moment that world has DONE something. An opportunity is
+       a RETURN TO THIS LOOP and returns are governed by the QUANTUM, so a document that completes inside one
+       slice gets exactly two — the discharge, which precedes every instruction, and the final paint, which
+       follows the switch-out of the last member (solver/engine.c's engine_session_close) — and both hold the
+       parsed document, while every world the run forked is photographed by nothing.
+       WHAT THE NEXT DIFF BUILDS is a SECOND discharge in the scheduler at the member's LAST moment — the
+       post-step arm where it finishes or parks, with its COW and DOM deltas still applied — and the mark
+       INHERITED by a fork. Neither half works alone, which is why they are one diff: inheritance under today's
+       discharge photographs a newborn before its arm has run, and an end-of-life discharge reaches only the
+       members alive at the ask. Together they need no cap and none is allowed — a member ends once, so the ask
+       costs exactly one image per world and nothing decides that any world will not be photographed.
+       HOW ITS ABSENCE WOULD SHOW: two worlds of one document whose pixel payloads are byte-identical while the
+       run reports forks — read with `cmp` past each file's own header, and corroborated by the mark counts the
+       `[abi paint]` lines carry, which are what the paint walk LAID rather than a value this engine can make
+       unknown. RETIREMENT: this record goes when a world's image is taken at a moment that world reached
+       rather than at one the quantum did. */
     if (paint_dir != NULL) qjs_request_paint();
 
     for (;;) {
