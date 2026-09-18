@@ -8976,8 +8976,15 @@ static void idb_upgrade_abort_selftest(JSContext *ctx, JSValueConst conn, JSValu
 {
     JSValue tx, made, kept_handle, made_handle, found;
 
-    /* §5.1 step 9 ("set connection's version to version") and §5.7 step 8 ("set db's version to version"),
-       which is the state every upgrade is in by the time its transaction can abort. */
+    /* Indexed Database §5.1 "Opening a database connection" step 9 ("set connection's version to version")
+       and §5.7 step 8 ("set db's version to version"), which is the state every upgrade is in by the time its
+       transaction can abort.
+       THE STANDARD IS NAMED HERE AND WAS NOT, AND THE REASON IS THIS DIFF RATHER THAN THIS SITE. A bare
+       `§5.1` in this file is resolved by the FILE's dominant vote, which Fetch's `Headers` block carries at
+       32 citations — so `engine/citegen.mjs` reported these words as Fetch §5.1's and was right to. The
+       paint-text block this diff adds moved that vote, which RETIRED the finding without touching the site:
+       a count that improves in a direction nobody worked in is the instrument being moved and not a repair,
+       so the citation is anchored here and the retirement is made real. */
     idb_connection_set_version(ctx, conn, 3);
     tx = idb_selftest_tx(ctx, conn, JS_UNDEFINED, IDB_TX_VERSIONCHANGE);
     idb_database_set_version(ctx, tx, db, 3);
@@ -22128,6 +22135,395 @@ static void display_list_selftest(JSContext *ctx)
     printf("@PAINT canvas-mark kinds=%u\n", TF_DL_KINDS);
 }
 
+/* ---- CSS 2.1 §E.2 "Painting order"'s STEP 7.2.1, WITH A GLYPH COUNT AND A SET OF PEN POSITIONS THIS FILE
+ * DERIVES ----------------------------------------------------------------------------------------------------
+ *
+ * core/layout/line_box.h's `line_box_glyphs` and core/paint/box_paint.c's `bp_content_box_origin` landed with
+ * no caller that had ever run either of them. This is that caller.
+ *
+ * WHY IT MUTATES THE FIXTURE'S OWN ACTIVE DOCUMENT AND DOES NOT WRITE A SECOND ONE, which is the design
+ * `box_paint_scratch_selftest` uses one function below and which CANNOT reach a line box at all.
+ * CSS 2.2 §10.8.1 "Leading and half-leading"'s `A` and `D` are read by core/css/css_computed_value.c
+ * through `css_cv_realm`, which is `document_active_realm_of` and NOT `document_realm_of` — and a
+ * `document_new` Document is its realm's SECOND Document, never its active one.
+ * `font_metrics_ascent_px` and `css_default_font_size` each DFAIL for a NULL realm and name that
+ * population in their own words ("a DOMParser document, an XHR `responseXML`, a `<template>`'s contents
+ * owner"), each with a next diff stated at its own site. So the only document in this process whose text
+ * can be MEASURED is the one `main` installed a realm and a root navigable over, and a paragraph written
+ * into it is the only caller this component can have until that next diff lands.
+ *
+ * THE PARAGRAPH IS TAKEN OUT AGAIN, through solver/dom_cow.h's removal chokepoint, so every selftest after
+ * this one is handed the tree it was handed before. Both writes run at BASELINE with capture off, so neither
+ * pushes a delta entry; what going through the chokepoint buys is that DOM §4.2.3 "Mutation algorithms"'
+ * insertion and removing steps run, which is how a tree is written in this engine and not a detail.
+ *
+ * EVERY NUMBER ASSERTED IS A DIFFERENCE AND NEVER A COORDINATE, and that is what makes it derivable without a
+ * second implementation of the thing under test. Where this paragraph's content box SITS is whatever
+ * CSS 2.2 §9.4.1's stack put it at, and reading that back off `element_view_bounding_box_px` here would
+ * be this file re-deriving `bp_content_box_origin`'s own composition and then agreeing with itself. So
+ * the four passes below differ in ONE declaration each and what is asserted is what MOVED:
+ *   A  `white-space: nowrap`, `line-height: 40px`, no padding — the glyph COUNT, the code points, and the pen
+ *      advances along one line box.
+ *   B  A plus `padding-left: 12px; padding-top: 5px` — every pen moves by EXACTLY (12, 5). That is CSS 2 §8.1
+ *      "Box dimensions"' nesting and nothing else, because a `width: auto` block box's BORDER box does not
+ *      move when its padding grows; a composition that dropped either term moves by (0, 0).
+ *   C  A with `line-height: 60px` — every baseline moves by EXACTLY 10, which is CSS 2.2 §10.8.1's
+ *      half-leading `(L - AD)/2` over `L` grown by 20. It is also the assertion that `baseline_y` IS A
+ *      BASELINE and not a top edge, which line_box.h names as the field a reader is most likely to take
+ *      for the other thing: the first line's TOP is the content box's own top in both passes and does not
+ *      move at all.
+ *   D  `width: 100px` with the inherited `white-space: normal` — TWO line boxes, which is the only shape that
+ *      runs `line_box_glyphs`' own stack (`top = top + height`) more than once, and the only one that sends
+ *      `lb_fill` to `used_value_content_px` for an available width.
+ *
+ * WHY A AND B AND C DECLARE `nowrap`, WHICH IS NOT A CONVENIENCE. css-text-3 §3 "White Space and Wrapping:
+ * the white-space property" says of it "Like normal, this value collapses white space, but like pre, it does
+ * not allow wrapping" — so §4.1.1's collapsing is unchanged and `text_run_measure_splits` is FALSE, which is
+ * what tells `lb_fill` it has no available width to derive. Those three passes therefore exercise the whole
+ * of §4.1.1 and §4.1.2 with CSS 2.1 §10.3's constraint equation never asked anything, and D is the pass that
+ * asks it — so an abort in §10 lands on ONE of the four and names which.
+ *
+ * THE COUNT IS DERIVED FROM css-text-3 §4.1.1 "Phase I: Collapsing and Transformation" AND NOT PREDICTED FROM
+ * THE SOURCE LENGTH. `"  Hi  Bo  "` is TEN characters. §4.1.1's own first bullet admits them — "if white-space
+ * is set to normal, nowrap, or pre-line, white space characters are considered collapsible and are processed
+ * by performing the following steps" — and then: its step 1 removes collapsible spaces around a SEGMENT BREAK
+ * and this text has none; its step 2 transforms collapsible segment breaks and there are none; its step 3
+ * converts collapsible TABS and there are none; and its step 4 is the one that fires, three times — "any
+ * collapsible space immediately following another collapsible space (even one outside the boundary of the
+ * inline containing that space, provided both spaces are within the same inline formatting context) is
+ * collapsed to have zero advance width". Each of the three DOUBLE spaces therefore leaves one space with an
+ * advance and one with none, so SEVEN characters carry an advance and this engine records each run as ONE
+ * U+0020 item — which is the same ink, because U+0020 is the one EMPTY glyph in printable ASCII in the face
+ * core/fonts/default_font_data.c ships. SEVEN is therefore the mark count, and the two readings are stated
+ * apart rather than blurred: the standard leaves ten characters of which three are zero-advance, and the
+ * count below is of what `line_box_glyphs` emits.
+ * css-text-3 §4.1.2 "Phase II: Trimming and Positioning" DOES NOT CHANGE IT, which is the half a reader is
+ * most likely to expect it to. Its "a sequence of collapsible spaces at the beginning of a line is removed"
+ * and its end-of-line twin are applied by core/layout/text_run.c as a ZERO CONTRIBUTION to the offset sum
+ * and not as a removal from the item collection — so the leading space is still a mark and sits at the pen the
+ * first LETTER sits at, which is the pass-A assertion `x[0] == x[1]` and is what makes Phase II observable at
+ * all from out here.
+ *
+ * WHY THE TAIL OF THE LIST IS THIS PARAGRAPH'S. CSS 2.1 §E.2's step 7 is stated "first for the element, then
+ * for all its in-flow, non-positioned, block-level descendants in TREE ORDER", and the paragraph is appended
+ * as the body's LAST child — so its content step is the last one offered and its marks are the last appended.
+ * The base paint below is what makes that checkable rather than assumed: it is the same document with no
+ * paragraph in it, so the marks this file must account for are exactly the ones past that count.
+ *
+ * NAMED RESIDUAL — THE ABSOLUTE PEN POSITION IS NOT ASSERTED, ONLY ITS FOUR DIFFERENCES.
+ * WHAT IS NOT COVERED: the term `bp_content_box_origin` takes from `element_view_bounding_box_px` — the
+ * paragraph's BORDER box corner in CSSOM VIEW §6 "Extensions to the Element Interface"' client coordinates —
+ * is common to both sides of every difference below and therefore cancels, so a composition that added a
+ * constant to it, or read the wrong box, passes every assertion here.
+ * WHAT THE NEXT DIFF BUILDS: a second route to that corner in this fixture — CSSOM VIEW §6's
+ * `getBoundingClientRect` over the same paragraph, read through the DOM member rather than through
+ * core/dom/element_view.h directly, so the two roads are independent rather than one function asserted
+ * against itself.
+ * HOW ITS ABSENCE WOULD SHOW: every pen coordinate this host prints or asserts is a difference between two
+ * paints, and no run of it states where on the page a glyph is.
+ * RETIREMENT: this record goes when one assertion here names an absolute client coordinate. */
+
+/* THE FACE'S OWN ADVANCE MEASURES, IN DESIGN UNITS, for the five characters the paragraphs are made of.
+   MEASURED by decoding core/fonts/default_font_data.c's table directory, its 'cmap' format 4 subtable, its
+   'loca' and its 'hmtx' OUTSIDE this program — never read back off `css_font_advance_measure_px`, which is
+   on the road under test. 'head'.unitsPerEm is 2048 and every paragraph declares `font-size: 32px`, so one
+   design unit is exactly 1/64 CSS pixel and every partial sum below is an exact dyadic rational, which is why
+   every comparison is an equality and not a tolerance. The same decode answers the split css-fonts-4 §5.2
+   "Matching font styles"' first available font has over printable ASCII — 94 SIMPLE outlines, ONE empty
+   (U+0020) and NO composites — which is why this text is ASCII and why nothing here reaches
+   core/fonts/glyph_outline.h's composite arm. */
+enum { TF_PT_UPEM = 2048, TF_PT_EM_PX = 32,
+       TF_PT_ADV_SP = 651, TF_PT_ADV_H = 1540, TF_PT_ADV_I = 569, TF_PT_ADV_B = 1405, TF_PT_ADV_O = 1253 };
+#define TF_PT_PX(u) ((double)(u) * (double)TF_PT_EM_PX / (double)TF_PT_UPEM)
+
+/* The declarations the four passes differ in, and the one they share. `#ff00ff` is a THIRD colour — neither
+   `TF_CANVAS_INK`'s `#00ff00` nor the two scratch documents' `#0000ff` — so a mark laid on this road cannot
+   be read as one laid on either of theirs. */
+#define TF_PT_BASE  "font-size:32px;color:#ff00ff;"
+static const char TF_PT_STYLE_A[] = TF_PT_BASE "white-space:nowrap;line-height:40px";
+static const char TF_PT_STYLE_B[] = TF_PT_BASE "white-space:nowrap;line-height:40px;"
+                                               "padding-left:12px;padding-top:5px";
+static const char TF_PT_STYLE_C[] = TF_PT_BASE "white-space:nowrap;line-height:60px";
+static const char TF_PT_STYLE_D[] = TF_PT_BASE "line-height:40px;width:100px";
+static const char TF_PT_TEXT_ONE[] = "  Hi  Bo  ";
+static const char TF_PT_TEXT_TWO[] = "Hi Bo Hi";
+
+static size_t tf_pt_glyphs(const DisplayList *dl)
+{
+    size_t i, n = 0;
+
+    for (i = 0; i < dl->n; i++)
+        if (dl->v[i].kind == DISPLAY_MARK_GLYPH) n++;
+    return n;
+}
+
+/* ONE PAINT of the fixture's own active document, with `<p style=STYLE>TEXT</p>` appended to its body and
+   removed again. A NULL `style` is the BASE paint — the same document with no paragraph in it, which is what
+   makes "the tail of the list is the paragraph's" a checked statement rather than an assumption. */
+static bool tf_pt_paint(JSContext *ctx, lxb_html_document_t *dom, const char *style, const char *text,
+                        DisplayList *out, unsigned *offers)
+{
+    lxb_dom_document_t *d = lxb_dom_interface_document(dom);
+    lxb_dom_element_t *root = lxb_dom_document_element(d);
+    lxb_dom_element_t *body = lxb_dom_interface_element(lxb_html_document_body_element(dom));
+    lxb_dom_element_t *p = NULL;
+    bool ok;
+
+    CHECK(root != NULL && body != NULL,
+          "the fixture's own active document has no root element or no `body` for CSS 2.1 §E.2 \"Painting "
+          "order\"'s step 7.2.1 to be asked about. Every document this host parses is HTML markup, and "
+          "HTML §13.2.6 \"Tree construction\" generates both elements for markup that names neither — so a "
+          "null here is the parse having built no tree rather than a document shape this walk cannot "
+          "handle");
+    if (style != NULL) {
+        lxb_dom_text_t *t;
+
+        /* THE HTML NAMESPACE, NAMED — the same reason `js_append_child` above states: the vendor entry
+           decides it from `lxb_dom_document_t::type`, which nothing in this engine writes. */
+        p = document_create_element_html(d, "p", 1);
+        lxb_dom_element_set_attribute(p, (const lxb_char_t *)"style", 5,
+                                      (const lxb_char_t *)style, strlen(style));
+        dom_cow_append_child(lxb_dom_interface_node(body), lxb_dom_interface_node(p));
+        t = lxb_dom_document_create_text_node(d, (const lxb_char_t *)text, strlen(text));
+        CHECK(t != NULL, "the Text node this file wrote for CSS 2.1 §E.2's step 7.2.1 was not created — its "
+                         "bytes are a C string literal in this file, so a failure here is an allocation and "
+                         "not a document");
+        dom_cow_append_child(lxb_dom_interface_node(p), lxb_dom_interface_node(t));
+    }
+    display_list_init(out);
+    ok = box_paint_stacking_context(ctx, root, out, offers);
+    /* OUT AGAIN BEFORE ANYTHING IS ASSERTED, so a failing expectation below leaves the tree exactly as the
+       selftests after this one expect to find it — and so the removal is not a step an early return can
+       skip. The detached subtree is the document's own arena memory and is released with it. */
+    if (p != NULL) dom_cow_remove_child(lxb_dom_interface_node(p));
+    return ok;
+}
+
+/* ONE PASS's marks, held to the code points, the em, the colour and the PEN ADVANCES css-text-3 §4.1.1 left
+   for them. `unit` is each glyph's distance from its own line box's start edge in the face's design units and
+   `line` is which line box it is on; both are this file's derivation and neither is read back off the engine. */
+static void tf_pt_run(const DisplayList *dl, size_t base, size_t n, const uint32_t *cp,
+                      const int *unit, const unsigned char *line, const char *pass)
+{
+    size_t i, first[2];
+    unsigned char seen = 0;
+
+    CHECKF(dl->n == base + n,
+           "CSS 2.1 §E.2 \"Painting order\"'s step 7.2.1 laid %zu marks over pass %s where the SAME document "
+           "with no paragraph in it laid %zu. This file derives %zu of them, in the banner above, out of "
+           "css-text-3 §4.1.1 \"Phase I: Collapsing and Transformation\"'s four steps; the difference between "
+           "the two lists is the whole of what this paragraph added, and step 7's own \"in tree order\" over "
+           "a paragraph appended LAST is what puts those marks at the end",
+           dl->n, pass, base, n);
+    first[0] = first[1] = base;
+    for (i = 0; i < n; i++) {
+        const DisplayMark *m = &dl->v[base + i];
+
+        CHECKF(m->kind == DISPLAY_MARK_GLYPH,
+               "mark %zu of pass %s is not a `DISPLAY_MARK_GLYPH`. Everything this paragraph added is step "
+               "7.2.1's text: it declares no background and no border, so css-backgrounds-3 §2.2 \"Base "
+               "Color: the background-color property\"'s `Initial: transparent` gives its box nothing for "
+               "CSS 2.1 §E.2's step 4 to lay", base + i, pass);
+        CHECKF(m->glyph.cp == cp[i],
+               "glyph %zu of pass %s draws U+%04X where css-text-3 §4.1.1's Phase I leaves U+%04X. The whole "
+               "sequence is this file's own derivation over its own text — a run of collapsible spaces leaves "
+               "ONE U+0020 and every other character is itself",
+               i, pass, (unsigned)m->glyph.cp, (unsigned)cp[i]);
+        CHECKF(m->glyph.em.px == (double)TF_PT_EM_PX,
+               "glyph %zu of pass %s carries an em of %g where this paragraph declares `font-size: 32px`. "
+               "css-values-4 §6.1.1 defines the `em` AS the element's computed `font-size`, and core/paint/"
+               "box_paint.c reads it off the character's OWN inline box — which for text directly in the "
+               "paragraph is the paragraph", i, pass, m->glyph.em.px);
+        CHECKF(m->color.space == CSS_COLOR_SPACE_SRGB && m->color.a == 1.0 && m->color.c[0] == 1.0 &&
+                   m->color.c[1] == 0.0 && m->color.c[2] == 1.0,
+               "glyph %zu of pass %s is not the `#ff00ff` this paragraph declares. CSS Color 4 §5.2 \"The RGB "
+               "Hexadecimal Notations: #RRGGBB\" makes it an opaque sRGB colour whose components are exactly "
+               "1, 0 and 1 in that module's [0, 1] reference range, so this is an equality and not a "
+               "tolerance — and it is ALSO the assertion that CSS 2.1 §14.1 \"Foreground color: the 'color' "
+               "property\"' value came off this element rather than off the box that establishes the context",
+               i, pass);
+        CHECKF(line[i] < 2, "pass %s names line box %u, and this file writes none past the second",
+               pass, (unsigned)line[i]);
+        if ((seen & (unsigned char)(1u << line[i])) == 0) {
+            first[line[i]] = base + i;
+            seen = (unsigned char)(seen | (1u << line[i]));
+        }
+        CHECKF(m->glyph.origin_x.px - dl->v[first[line[i]]].glyph.origin_x.px == TF_PT_PX(unit[i]),
+               "glyph %zu of pass %s stands %g CSS pixels along its line box where the face this engine ships "
+               "advances %g. Every term is an 'hmtx' advanceWidth over an unitsPerEm of 2048 at a declared "
+               "`font-size` of 32px, so each is an exact multiple of 1/64 pixel and the sum of them is exact "
+               "too — this is a derivation over the face's own numbers and not a measurement taken from the "
+               "entry under test. A LEADING COLLAPSIBLE SPACE CONTRIBUTES NOTHING, which is css-text-3 §4.1.2 "
+               "\"Phase II: Trimming and Positioning\"'s \"a sequence of collapsible spaces at the beginning "
+               "of a line is removed\" applied as a zero term rather than as a dropped item",
+               i, pass, m->glyph.origin_x.px - dl->v[first[line[i]]].glyph.origin_x.px, TF_PT_PX(unit[i]));
+        CHECKF(m->glyph.origin_y.px == dl->v[first[line[i]]].glyph.origin_y.px,
+               "glyph %zu of pass %s sits on a different baseline from the first glyph of its own line box. "
+               "CSS 2.2 §10.8.1 \"Leading and half-leading\" gives one line box ONE baseline — every inline "
+               "box on it hangs from the same `A'` below the line's top — so two answers here is "
+               "core/layout/line_box.c reading the line's extent once per glyph instead of once per line",
+               i, pass);
+    }
+}
+
+static void box_paint_text_selftest(JSContext *ctx, lxb_html_document_t *dom)
+{
+    /* css-text-3 §4.1.1's Phase I over `"  Hi  Bo  "` — see the banner for the step-by-step. */
+    static const uint32_t CP_ONE[] = { 0x20, 'H', 'i', 0x20, 'B', 'o', 0x20 };
+    static const int UNIT_ONE[] = {
+        0,                                                                              /* trimmed leading */
+        0,
+        TF_PT_ADV_H,
+        TF_PT_ADV_H + TF_PT_ADV_I,
+        TF_PT_ADV_H + TF_PT_ADV_I + TF_PT_ADV_SP,
+        TF_PT_ADV_H + TF_PT_ADV_I + TF_PT_ADV_SP + TF_PT_ADV_B,
+        TF_PT_ADV_H + TF_PT_ADV_I + TF_PT_ADV_SP + TF_PT_ADV_B + TF_PT_ADV_O
+    };
+    static const unsigned char LINE_ONE[] = { 0, 0, 0, 0, 0, 0, 0 };
+    /* AND `"Hi Bo Hi"` AT A CONTENT WIDTH OF 100px, WHICH IS A DERIVATION OVER CSS 2.2 §9.4.2 "Inline
+       formatting contexts"' distribution AND NOT A GUESS. Its three soft wrap opportunities are [UAX14] LB18's
+       `SP ÷` after each space and LB3's mandatory action at the end of text; the widest prefix that fits is
+       `"Hi Bo "`, whose css-text-3 §4.1.2-trimmed size is (1540 + 569 + 651 + 1405 + 1253)/64 = 84.65625 CSS pixels
+       against the whole run's 127.78125 — so the greedy fill closes the first line at the boundary AFTER the
+       second space and the second line holds `"Hi"`. The trailing space of line ONE is still a mark and still
+       sits at that line's far edge, which is Phase II's end-of-line removal read as a zero term again. */
+    static const uint32_t CP_TWO[] = { 'H', 'i', 0x20, 'B', 'o', 0x20, 'H', 'i' };
+    static const int UNIT_TWO[] = {
+        0,
+        TF_PT_ADV_H,
+        TF_PT_ADV_H + TF_PT_ADV_I,
+        TF_PT_ADV_H + TF_PT_ADV_I + TF_PT_ADV_SP,
+        TF_PT_ADV_H + TF_PT_ADV_I + TF_PT_ADV_SP + TF_PT_ADV_B,
+        TF_PT_ADV_H + TF_PT_ADV_I + TF_PT_ADV_SP + TF_PT_ADV_B + TF_PT_ADV_O,
+        0,
+        TF_PT_ADV_H
+    };
+    static const unsigned char LINE_TWO[] = { 0, 0, 0, 0, 0, 0, 1, 1 };
+    DisplayList dlbase, dla, dlb, dlc, dld;
+    unsigned obase = 0, oa = 0, ob = 0, oc = 0, od = 0, dlines = 1;
+    size_t nbase, i;
+    bool ok;
+
+    ok  = tf_pt_paint(ctx, dom, NULL, NULL, &dlbase, &obase);
+    ok &= tf_pt_paint(ctx, dom, TF_PT_STYLE_A, TF_PT_TEXT_ONE, &dla, &oa);
+    ok &= tf_pt_paint(ctx, dom, TF_PT_STYLE_B, TF_PT_TEXT_ONE, &dlb, &ob);
+    ok &= tf_pt_paint(ctx, dom, TF_PT_STYLE_C, TF_PT_TEXT_ONE, &dlc, &oc);
+    ok &= tf_pt_paint(ctx, dom, TF_PT_STYLE_D, TF_PT_TEXT_TWO, &dld, &od);
+    nbase = dlbase.n;
+
+    /* THE BASE PAINT IS A REAL PAINT OF A PRESENTED DOCUMENT, which is what the rest of this function is
+       measured against: CSS 2.1 §E.2's step 1 laid the canvas `TF_CANVAS_INK` declares, and this list holds
+       no seed, so its FIRST mark is the document's own first ink rather than anything this file planted. */
+    CHECK(nbase >= 1 && dlbase.v[0].kind == DISPLAY_MARK_FILL_CANVAS,
+          "the base paint of the fixture's own active document did not begin with CSS 2.1 §E.2 \"Painting "
+          "order\"'s step 1. Every document this host presents declares a root `background-color` through "
+          "`TF_CANVAS_INK`, and step 1 is the first offer the walk makes — so a list whose first mark is "
+          "something else is the walk not having started at the root, and every count below would be a "
+          "difference between two lists of a different document");
+    DCHECK(ok,
+           "CSS 2.1 §E.2's walk stopped short over the fixture's own active document with a paragraph in it. "
+           "A false answer is the painter meeting an operand it could not compute, and in a DEV build every "
+           "road to one has its own crash in front of it — core/css/css_computed_value.h's `css_used_color` "
+           "owns the two a colour can produce and this paragraph declares a `#RRGGBB` — so this is reachable "
+           "in a release build and unreachable here");
+    /* ONE IN-FLOW BLOCK-LEVEL BOX MORE IS EXACTLY TWO OFFERS MORE, which is core/paint/paint_order.c read
+       forward: CSS 2.1 §E.2's step 4 offers one background arm per in-flow non-positioned block-level
+       descendant and its step 7 offers one content arm for the same set, collected once and read twice. A
+       different number is this paragraph having generated no box at all (zero) or the walk having descended
+       into it as something other than one box. */
+    CHECKF(oa == obase + 2u && ob == obase + 2u && oc == obase + 2u && od == obase + 2u,
+           "appending ONE `p` to the body moved CSS 2.1 §E.2 \"Painting order\"'s offer count from %u to %u, "
+           "%u, %u and %u where each should be %u. core/paint/paint_order.c offers step 4 for each in-flow, "
+           "non-positioned, block-level descendant and step 7's content for that same set — one each — and "
+           "HTML §15.3.3 \"Flow content\" makes a `p` block-level, so two is a derivation and not a floor",
+           obase, oa, ob, oc, od, obase + 2u);
+
+    tf_pt_run(&dla, nbase, 7, CP_ONE, UNIT_ONE, LINE_ONE, "A");
+    tf_pt_run(&dlb, nbase, 7, CP_ONE, UNIT_ONE, LINE_ONE, "B");
+    tf_pt_run(&dlc, nbase, 7, CP_ONE, UNIT_ONE, LINE_ONE, "C");
+    tf_pt_run(&dld, nbase, 8, CP_TWO, UNIT_TWO, LINE_TWO, "D");
+
+    /* CSS 2 §8.1 "Box dimensions"' NESTING, AS THE ONLY THING THAT MOVED. Pass B differs from pass A in a
+       `padding-left` and a `padding-top` and in nothing else, and a `width: auto` block box's BORDER box does
+       not move when its padding grows — CSS 2.1 §10.3.3's constraint equation leaves the whole of the
+       containing block's width to it either way — so the pen's whole displacement is the padding.
+       BOTH AXES, BECAUSE `bp_content_box_origin` COMPOSES THEM SEPARATELY and a reader who dropped one term
+       would keep the other: §8.1 nests the content box inside the padding box inside the border box, and the
+       entry adds the leading border and the leading padding on EACH axis out of two different reads. */
+    for (i = 0; i < 7; i++) {
+        CHECKF(dlb.v[nbase + i].glyph.origin_x.px - dla.v[nbase + i].glyph.origin_x.px == 12.0,
+               "glyph %zu moved %g CSS pixels along the inline axis when the paragraph gained `padding-left: "
+               "12px`. CSS 2 §8.1 \"Box dimensions\" puts the content box inside the padding box, so the pen "
+               "of CSS 2.1 §E.2's step 7.2.1 is the border box's corner moved inward by the leading border "
+               "and the leading padding — a zero here is `bp_content_box_origin` handing back a BORDER box "
+               "corner, and any other number is a third term nobody declared",
+               i, dlb.v[nbase + i].glyph.origin_x.px - dla.v[nbase + i].glyph.origin_x.px);
+        CHECKF(dlb.v[nbase + i].glyph.origin_y.px - dla.v[nbase + i].glyph.origin_y.px == 5.0,
+               "glyph %zu moved %g CSS pixels down the block axis when the paragraph gained `padding-top: "
+               "5px`. It is the same §8.1 nesting one axis over, read out of `padding-top` and the leading "
+               "border width rather than out of `padding-left` — a composition that added the inline term "
+               "twice passes the assertion above and fails this one",
+               i, dlb.v[nbase + i].glyph.origin_y.px - dla.v[nbase + i].glyph.origin_y.px);
+    }
+
+    /* CSS 2.2 §10.8.1 "Leading and half-leading"'s HALF-LEADING, AS THE ONLY THING THAT MOVED — and the
+       assertion that `origin_y` IS A BASELINE. §10.8.1 makes the box's height exactly `line-height` and splits
+       it as `A + L/2` above and `D + L/2` below with `L = 'line-height' - AD`, so growing the declared
+       `line-height` by 20 moves the baseline down by exactly HALF of that and moves the line box's TOP, which
+       is the content box's own top on the first line, by nothing at all. */
+    for (i = 0; i < 7; i++) {
+        CHECKF(dlc.v[nbase + i].glyph.origin_y.px - dla.v[nbase + i].glyph.origin_y.px == 10.0,
+               "glyph %zu moved %g CSS pixels down the block axis when the paragraph's declared `line-height` "
+               "grew from 40px to 60px. CSS 2.2 §10.8.1 \"Leading and half-leading\" puts the baseline `A + "
+               "L/2` below the line box's top with `L = 'line-height' - AD`, so a 20px taller line moves it by "
+               "TEN — a ZERO is `origin_y` being the line box's TOP EDGE rather than its baseline, which is "
+               "the one thing core/layout/line_box.h says a reader is most likely to take it for, and TWENTY "
+               "is the whole leading having been put on one side",
+               i, dlc.v[nbase + i].glyph.origin_y.px - dla.v[nbase + i].glyph.origin_y.px);
+        CHECKF(dlc.v[nbase + i].glyph.origin_x.px == dla.v[nbase + i].glyph.origin_x.px,
+               "glyph %zu moved along the INLINE axis when only the paragraph's `line-height` changed. "
+               "css-inline-3 §5.1 \"Line Spacing: the line-height property\" states a block-axis length and "
+               "core/layout/text_run.c's sum reads none of it, so a movement here is the two axes sharing a "
+               "term", i);
+    }
+
+    /* AND CSS 2.2 §9.4.2's SECOND LINE BOX — the one shape that runs `line_box_glyphs`' own stack more than
+       once. §9.4.2 stacks line boxes with "no vertical separation (except as specified elsewhere)", so the
+       second baseline is exactly one used `line-height` below the first. */
+    CHECKF(dld.v[nbase + 6].glyph.origin_y.px - dld.v[nbase].glyph.origin_y.px == 40.0,
+           "the second line box's baseline sits %g CSS pixels below the first where the paragraph declares "
+           "`line-height: 40px`. CSS 2.2 §9.4.2 \"Inline formatting contexts\" stacks line boxes with \"no "
+           "vertical separation (except as specified elsewhere)\" and CSS 2.2 §10.8.1 makes each one exactly "
+           "its own `line-height` tall with the baseline at the same offset inside it — so a ZERO is the "
+           "stack in core/layout/line_box.c never advancing and putting both lines on one baseline",
+           dld.v[nbase + 6].glyph.origin_y.px - dld.v[nbase].glyph.origin_y.px);
+    for (i = 1; i < 8; i++)
+        if (dld.v[nbase + i].glyph.origin_y.px != dld.v[nbase + i - 1].glyph.origin_y.px) dlines++;
+    CHECKF(dlines == 2u,
+           "CSS 2.2 §9.4.2's distribution put `\"Hi Bo Hi\"` on %u line boxes at a content width of 100 CSS "
+           "pixels, where the widest prefix that fits is `\"Hi Bo \"` at 84.65625 and the whole run is "
+           "127.78125. ONE is the available width never having been derived — core/layout/line_box.c asks "
+           "`used_value_content_px` only when `text_run_measure_splits` is true — and THREE is a break taken "
+           "at an opportunity the greedy fill had no need of", dlines);
+
+    /* THE WITNESS, ON THE STDOUT THE BUILD LOG CAPTURES. Every field is a plain C counter this file derived
+       from list lengths it walked, so none of them can become concolic and silently never be written. `base`
+       is DOCUMENT-DEPENDENT and is printed rather than asserted: `HTML` carries an `<h1>` with text and the
+       other three documents carry none, so it is also this row's own reachability statement — a run that
+       reports `base` at all is one in which the painter walked this document with no paragraph in it. ON AN
+       ARTIFACT BUILT BEFORE THIS FUNCTION EXISTED THE ROW IS ABSENT ENTIRELY: `grep -c '@PAINTTEXT'` answers
+       0 rather than a row of zeros, which is the same control every `@PAINT` row below carries. */
+    printf("@PAINTTEXT ok=%d base=%zu baseglyphs=%zu a=%zu b=%zu c=%zu d=%zu dlines=%u offers=%u\n",
+           ok ? 1 : 0, nbase, tf_pt_glyphs(&dlbase), dla.n - nbase, dlb.n - nbase, dlc.n - nbase,
+           dld.n - nbase, dlines, oa - obase);
+
+    display_list_free(&dlbase);
+    display_list_free(&dla);
+    display_list_free(&dlb);
+    display_list_free(&dlc);
+    display_list_free(&dld);
+}
+
 /* CORE/PAINT/BOX_PAINT.H'S ENTRY, GIVEN ITS FIRST CALLER — CSS 2.1 §E.2 "Painting order"'s walk run over a
  * document that really has a realm, a navigable and therefore a viewport, and the two numbers that separate
  * the two things a display list of zero marks can mean.
@@ -24281,6 +24677,13 @@ int main(int argc, char **argv) {
        realm on the ELEMENT's own document, a navigable presenting it and therefore a viewport. This
        host installed all three over `dom` above, which is why the painter has a caller here and had
        none anywhere; see the function for what its two numbers separate and what they do not reach. */
+    /* AND THE HALF NEITHER `box_paint_selftest` BELOW NOR EITHER SCRATCH DOCUMENT CAN REACH —
+       CSS 2.1 §E.2's step 7.2.1 "the text", over a paragraph this file WRITES into that same document and
+       takes out again. BEFORE the caller below because it restores the tree it borrowed, so every count
+       that function derives is about the document it was derived over; see this one for why a line box
+       cannot be measured on a document that is no realm's ACTIVE one, and for the four passes'
+       derivations. */
+    box_paint_text_selftest(ctx, dom);
     box_paint_selftest(ctx, dom);
     /* AND THE SAME ENTRY OVER TWO DOCUMENTS THIS FILE WRITES — the half that reaches
        `display_list_append`. It needs a RECORD on the element's document and no navigable at all; see the
