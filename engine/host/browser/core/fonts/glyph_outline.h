@@ -7,7 +7,11 @@
  * nothing here rasterizes. That is no longer true: core/graphics/rasterizer.h fills a path and
  * core/paint/display_list_raster.h already drives it from a display list, so the engine paints boxes, borders
  * and the canvas and cannot paint TEXT. This component is the half of that gap that is DECODING; the half
- * that is DATA is named as a residual at the foot of this file.
+ * that is DATA was a residual at the foot of this file and is RETIRED: the shipped face now carries the two
+ * tables, which core/fonts/default_font_data.h records at the place the record stood. THE POINTER IS
+ * REWRITTEN RATHER THAN CUT because a reader who finds none here and reads the paragraph above it will
+ * conclude the data half is still open — a retired record's last falsehood is the sentence somewhere else
+ * that still points at it.
  *
  * WHAT IT PRODUCES IS A `RasterPath` AND NOT A SECOND PATH REPRESENTATION. core/graphics/raster_path.h says
  * of its own stream that the segment vocabulary is core/canvas/canvas_path.h's and is not restated, because
@@ -75,9 +79,17 @@
 /* THE OUTLINE TABLES OF ONE FACE, AS `glyph_outlines_read` PROVED THEM. Both spans are BORROWED and must
    outlive this struct, exactly as a face's bytes are borrowed by `OpenTypeMetrics`.
    THE TWO TABLES ARE TAKEN AS SPANS RATHER THAN FOUND IN AN sfnt, and that is deliberate rather than
-   unfinished: locating them is the table directory's job, this engine's shipped face carries neither of them
-   yet, and a component that both FOUND and DECODED them could not be exercised on bytes a fixture states.
-   The residual at the foot of this header names what closes that and who may close it. */
+   unfinished: locating them is the table directory's job, and a component that both FOUND and DECODED them
+   could not be exercised on bytes a fixture states.
+   THIS CLAUSE ALSO READ `this engine's shipped face carries neither of them yet` AND IS REWRITTEN RATHER THAN
+   CUT, because a reader who re-derives the span argument from the state of the face will write it again: the
+   face carries BOTH now, and the argument for spans never rested on that — it rests on the split between
+   finding and decoding, which is what makes the sentence survive the fact going the other way.
+   WHAT CLOSES IT IS NOT A RESIDUAL HERE AND USED TO BE. The pair is LOCATED by
+   core/fonts/open_type_metrics.h, which records where the two tables are and reads the offset format out of
+   the face's own header table, and core/css/font_metrics.h joins that to this decoder for the ONE face this
+   user agent has. So the caller that hands these spans over is a component and no longer a gap — and this
+   entry still takes them as spans, for the reason above, so that a fixture can state bytes of its own. */
 typedef struct {
     const unsigned char *glyf;      /* the outline table */
     size_t               glyf_len;

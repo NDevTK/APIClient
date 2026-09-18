@@ -365,7 +365,7 @@ bool open_type_metrics_read(OpenTypeMetrics *m, const unsigned char *sfnt, size_
     uint16_t num_tables, i;
     uint32_t prev_tag = 0;
     bool first_tag = true;
-    OtTable head, maxp, hhea, hmtx, cmap, vhea, vmtx, os2;
+    OtTable head, maxp, hhea, hmtx, cmap, vhea, vmtx, os2, glyf, loca;
 
     DCHECK(m != NULL && sfnt != NULL,
            "a face was read out of a NULL pointer. The bytes are BORROWED by OpenTypeMetrics and must outlive "
@@ -437,6 +437,8 @@ bool open_type_metrics_read(OpenTypeMetrics *m, const unsigned char *sfnt, size_
     vhea = ot_find(m, num_tables, OT_TAG('v', 'h', 'e', 'a'));
     vmtx = ot_find(m, num_tables, OT_TAG('v', 'm', 't', 'x'));
     os2 = ot_find(m, num_tables, OT_TAG('O', 'S', '/', '2'));
+    glyf = ot_find(m, num_tables, OT_TAG('g', 'l', 'y', 'f'));
+    loca = ot_find(m, num_tables, OT_TAG('l', 'o', 'c', 'a'));
     m->has_os2 = os2.found;
 
     if (!head.found || !maxp.found || !hhea.found || !hmtx.found || !cmap.found)
@@ -555,6 +557,46 @@ bool open_type_metrics_read(OpenTypeMetrics *m, const unsigned char *sfnt, size_
                          "topSideBearing[numGlyphs - numOfLongVerMetrics] of two");
         m->vmtx = vmtx.off;
         m->has_vertical = true;
+    }
+
+    /* 'glyf' — Glyph Data and 'loca' — Index to Location. LOCATED and not decoded: what is recorded is where
+       the bytes are, and core/fonts/glyph_outline.h is what reads them. See the struct's own paragraph for
+       why the split falls there.
+       BOTH OR NEITHER, which is the same shape 'vhea'/'vmtx' has above and rests on OpenType's own definition
+       of an offset array rather than on a preference: 'loca' stores offsets "to the locations of glyph
+       descriptions in the 'glyf' table, relative to the beginning of that table", so a face with one of them
+       is a face whose offsets have no table to be relative to, or a table nothing indexes. NEITHER is the
+       ordinary state of a CFF face and is a capability rather than a fault — which is why this sets a flag
+       where the five required tables above REJECT. */
+    if (glyf.found != loca.found)
+        OT_REJECT(m, "the face has exactly one of 'glyf' — Glyph Data and 'loca' — Index to Location. "
+                     "OpenType 'loca' defines its entries as offsets \"to the locations of glyph descriptions "
+                     "in the 'glyf' table, relative to the beginning of that table\", so neither table means "
+                     "anything without the other: an offset array alone indexes nothing, and outlines alone "
+                     "have no index. A face with NEITHER is a different thing entirely and is accepted — that "
+                     "is what a CFF face looks like, and it has no TrueType outlines to find");
+    if (glyf.found) {
+        /* 'head' — Font Header Table's indexToLocFormat, at offset 50: the table's field list puts it between
+           `fontDirectionHint` and `glyphDataFormat`, both int16, after the 46-byte prefix already validated
+           above by the 54-byte length check. OpenType states the two values outright — "0 for short offsets
+           (Offset16), 1 for long (Offset32)" — and describes no third, so a face carrying one is a face whose
+           offset array has a stride nobody has defined. It is read as a uint16 because that is the bit
+           pattern in the file; a negative int16 therefore lands far outside the pair and is refused here
+           rather than becoming a stride by a cast. */
+        uint16_t index_to_loc = ot_u16(m, head.off + 50);
+        if (index_to_loc > 1)
+            OT_REJECT(m, "the 'head' — Font Header Table's indexToLocFormat is neither of the two values "
+                         "OpenType defines for it — \"0 for short offsets (Offset16), 1 for long "
+                         "(Offset32)\". It is the STRIDE of the whole offset array, so a third value is an "
+                         "array whose entries this engine could only guess the width of — and guessing yields "
+                         "a different, self-consistent-looking array out of the same bytes rather than a "
+                         "failure");
+        m->has_outlines = true;
+        m->glyf = glyf.off;
+        m->glyf_len = glyf.len;
+        m->loca = loca.off;
+        m->loca_len = loca.len;
+        m->long_loca = index_to_loc == 1;
     }
 
     if (!ot_cmap_select(m, cmap.off, cmap.len)) return false;
@@ -724,4 +766,29 @@ uint16_t open_type_metrics_advance_height(const OpenTypeMetrics *m, uint16_t gly
               "impossible or impractical to determine\" the measure, and core/css/font_metrics.c reads "
               "`has_vertical` to take that branch before asking");
     return ot_advance(m, m->vmtx, m->num_of_long_ver_metrics, glyph_id);
+}
+
+bool open_type_metrics_outline_tables(const OpenTypeMetrics *m,
+                                      const unsigned char **glyf, size_t *glyf_len,
+                                      const unsigned char **loca, size_t *loca_len)
+{
+    OT_READY(m);
+    DCHECK(glyf != NULL && glyf_len != NULL && loca != NULL && loca_len != NULL,
+           "a face's outline tables were asked for with nowhere to put one of the four. The pair is two "
+           "spans and a span is a pointer AND a length, so an entry that wrote three of them would hand its "
+           "one caller a table whose extent came from wherever its variable had been left");
+    if (!m->has_outlines) return false;
+    /* THE ADDITION IS BOUNDED BY THE DIRECTORY WALK AND NOT BY THIS LINE. `open_type_metrics_read` refuses
+       any TableRecord whose offset and length run past the end of the file, which is the check every other
+       offset in this component stands on — so this is that proof spent rather than a new claim. */
+    DCHECK(m->glyf <= m->len && m->glyf_len <= m->len - m->glyf &&
+           m->loca <= m->len && m->loca_len <= m->len - m->loca,
+           "a face's recorded outline table spans run past the end of the face. Every TableRecord is bounded "
+           "against the file's extent during the directory walk, so a span in hand that is not is a struct "
+           "written after the read rather than by it");
+    *glyf = m->sfnt + m->glyf;
+    *glyf_len = m->glyf_len;
+    *loca = m->sfnt + m->loca;
+    *loca_len = m->loca_len;
+    return true;
 }

@@ -11,10 +11,15 @@
  * face, for every element, in every document.
  *
  * AND THAT FACE CARRIES THE TABLES A MEASUREMENT NEEDS AND NO OTHERS, WHICH IS WHAT SPLITS THIS FILE IN THREE.
- * core/fonts/default_font_data.c is a metrics-only sfnt — 'head', 'maxp', 'hhea', 'hmtx', 'cmap' — and every
+ * core/fonts/default_font_data.c carries 'head', 'maxp', 'hhea', 'hmtx' and 'cmap' and no 'OS/2', and every
  * metric below falls into exactly one of three cases, decided by which table it lives in and by which sentence
  * of which spec answers when that table is absent. This is checkable in one command rather than taken on
  * trust: engine/fontsubset.mjs lists the tables the subset keeps, and 'OS/2' is not among them.
+ * THIS SENTENCE CALLED THE FACE `a metrics-only sfnt` AND IS REWRITTEN RATHER THAN DELETED, because a reader
+ * who re-derives that phrase from the three cases below will write it again. It was true of the face and is
+ * not: the subset now keeps 'glyf' and 'loca' as well, which is what the outline entry at the foot of this
+ * header reads. The THREE CASES are untouched by that — none of them is an outline — so what went stale is
+ * the adjective and not the argument, and the argument is why the adjective was never load-bearing.
  *   AN ADVANCE MEASURE is 'hmtx', which the face carries, so it is MEASURED — for every Unicode scalar value,
  *     .notdef included.
  *   CSS 2.1 §10.8.1's `A` and `D` are 'OS/2'.sTypoAscender/sTypoDescender by that section's own note, which
@@ -145,6 +150,7 @@
 #include <stdint.h>
 
 #include "core/css/css_length.h"
+#include "core/fonts/glyph_outline.h"   /* the SHAPE half of the same face — see the outline entry below */
 #include "quickjs.h"
 
 /* §6.1.1's ASSUMED X-HEIGHT, as a MULTIPLE OF THE EM — the form the section states it in, and the form that
@@ -236,5 +242,53 @@ CssPx font_metrics_normal_line_height_px(JSContext *realm, CssPx font_size);
    subtracted one from the other would be re-deriving a picked number through arithmetic instead of reading
    the face. core/layout/line_box.h is that caller. */
 CssPx font_metrics_descent_px(JSContext *realm, CssPx font_size);
+
+/* THE OUTLINE OF ONE SCALAR VALUE'S GLYPH IN THE FIRST AVAILABLE FONT, PLACED AND SCALED — appended to `out`,
+ * in the destination's own pixels, with `origin` the PEN POSITION and its y the BASELINE.
+ *
+ * IT IS THE SHAPE HALF OF THE ADVANCE ENTRY ABOVE AND GOES THROUGH THE SAME FACE AND THE SAME 'cmap'. One
+ * asks how far a character moves the pen and the other asks what it draws, and both are questions about the
+ * ONE face this user agent has — so a second holder of that face would be css-fonts-4 §5.2 "Matching font
+ * styles"'s first-available-font answered from two places, free to disagree about which glyph a character
+ * selects. That is the whole reason this entry is HERE rather than in core/fonts/: `g_default_face` is this
+ * file's, `font_metrics_face` is static, and a caller reaching a glyph by any other road would be reading a
+ * different face than every advance in every layout was measured against.
+ *
+ * `em_px` IS HOW MANY OF THE DESTINATION'S OWN PIXELS ONE EM IS, AND THE UNIT IS THE CALLER'S TO FIX. Every
+ * other entry here is stated in CSS pixels because CSS asks its questions there; core/fonts/glyph_outline.h
+ * states as an invariant that its coordinates are DEVICE pixels, so a caller rasterizing at
+ * `devicePixelRatio` hands the used `font-size` multiplied by it and hands an origin in the same unit. This
+ * entry does not read a viewport and cannot: core/paint/display_list.h's own rule is that a component which
+ * asked a realm for an environment fact would read whichever world it happened to be standing in, when two
+ * arms of one fork have two viewports. So the ratio arrives multiplied in, or it does not arrive.
+ * THE DIVISOR IS THE FACE'S `unitsPerEm` AND IS APPLIED HERE for the reason the advance entry gives one line
+ * up: it is what the em is worth in design units, it is the same divisor every metric above uses, and a
+ * caller that had to apply it would need the face this entry exists to keep private.
+ *
+ * THE THREE OUTCOMES ARE core/fonts/glyph_outline.h's AND ARE NOT COLLAPSED, because a composite glyph is a
+ * VALID glyph that decoder does not build yet and a malformed one is a file that lied — merging them would
+ * report every accented letter of a good font as a broken font. A FOURTH state is not an outcome and is a
+ * refusal: a face carrying no 'glyf'/'loca' pair at all has no TrueType outline for any glyph, which is the
+ * ordinary shape of a CFF face, and that is why this entry crashes rather than answering MALFORMED — a face
+ * with CFF outlines has broken no rule, and the work its absence names is a CFF decoder beside
+ * core/fonts/glyph_outline.h rather than a repair to anything here.
+ * A CODE POINT THE FACE DOES NOT COVER IS .notdef AND IS NOT AN ERROR, exactly as it is for the advance:
+ * OpenType's own character-map chapter makes glyph 0 the special glyph that represents a missing character,
+ * and css-fonts-4 §5.2 has the user agent draw it. So the shape this answers for an uncovered character is
+ * the shape that really gets drawn, which is the one a reader of the page sees.
+ * THE OpenType SENTENCE IS PARAPHRASED AND NOT QUOTED ON PURPOSE. OpenType is not a standard this tree's
+ * citation audit indexes, so a quoted run of it takes the nearest PRECEDING numbered citation as its anchor —
+ * which here is a CSS one — and is then compared against a document it does not come from. The quotation is
+ * exact at core/fonts/open_type_metrics.h, where the surrounding citations are OpenType's own. */
+GlyphOutlineResult font_metrics_glyph_outline(uint32_t codepoint, double em_px,
+                                              double origin_x, double origin_y,
+                                              RasterPath *out, const char **reject);
+
+/* DOES THE FIRST AVAILABLE FONT CARRY TRUETYPE OUTLINES AT ALL — the one question the entry above crashes on
+   rather than answering, exposed so that a caller can ask it before asking for a shape. It is the same shape
+   `open_type_metrics_covers` has beside the advance measure and exists for the same reason: the entry above
+   answers what a glyph LOOKS LIKE and this answers whether the face can be asked, and a caller that could not
+   tell them apart would read a CFF face as a broken one. */
+bool font_metrics_has_outlines(void);
 
 #endif

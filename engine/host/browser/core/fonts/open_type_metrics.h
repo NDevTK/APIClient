@@ -96,6 +96,32 @@ typedef struct {
     bool     has_vertical;
     uint16_t num_of_long_ver_metrics;  /* 'vhea'.numOfLongVerMetrics, 1..num_glyphs */
     size_t   vmtx;
+
+    /* THE TWO OUTLINE TABLES, LOCATED AND NEVER DECODED HERE. This component answers what a face MEASURES,
+       and a glyph's shape is core/fonts/glyph_outline.h's — so what is recorded is WHERE the bytes are and
+       nothing about what they say. The split is the same one 'hmtx' and 'cmap' already take: the directory
+       walk that bounds every other table bounds these two as well, and the reader that understands them
+       validates its own claims once and then treats its slice as an extent.
+       IT IS A SECOND DECODER'S OPERANDS AND NOT THIS ONE'S, which is why no entry here reads a glyph. A
+       component that both FOUND and DECODED them could not be exercised on bytes a fixture states, which is
+       core/fonts/glyph_outline.h's own stated reason for taking the pair as spans.
+       'glyf' AND 'loca' ARE OPTIONAL AND ARE OPTIONAL TOGETHER, exactly as 'vhea'/'vmtx' are, and for a
+       reason OpenType states twice. A face with CFF outlines carries neither — OpenType "Organization of an
+       OpenType Font" makes the sfntVersion of such a face 'OTTO' — so their absence is a CAPABILITY this
+       face does not have and never a broken file. One without the other is broken, because OpenType 'loca' —
+       Index to Location defines its entries as offsets "to the locations of glyph descriptions in the 'glyf'
+       table, relative to the beginning of that table", which is not a quantity either table has alone. */
+    bool     has_outlines;
+    size_t   glyf;                 /* 'glyf' — Glyph Data's offset and recorded length; valid exactly while */
+    size_t   glyf_len;             /*   `has_outlines`, and zero otherwise */
+    size_t   loca;                 /* 'loca' — Index to Location's, the same way */
+    size_t   loca_len;
+    /* 'head' — Font Header Table's indexToLocFormat, which OpenType gives as "0 for short offsets (Offset16),
+       1 for long (Offset32)". It is read here rather than by the decoder because it lives in 'head' and this
+       is the component that has one; getting it wrong does not fail loudly but reads a DIFFERENT,
+       self-consistent-looking offset array out of the same bytes, which is why core/fonts/glyph_outline.h
+       walks the whole array against it. Zero when `has_outlines` is false. */
+    bool     long_loca;
 } OpenTypeMetrics;
 
 /* READ a face out of `sfnt[0..len)`, validating every claim the bytes make. Returns false with `m->reject` set
@@ -132,5 +158,18 @@ uint16_t open_type_metrics_advance_width(const OpenTypeMetrics *m, uint16_t glyp
    for a face with `has_vertical`; asking a face without one crashes, naming css-writing-modes-4 §5.1.1's
    synthesis as the thing to build. */
 uint16_t open_type_metrics_advance_height(const OpenTypeMetrics *m, uint16_t glyph_id);
+
+/* THE SPANS OF THE TWO OUTLINE TABLES, for the one consumer that decodes them. Answers `has_outlines`, and
+   writes all four out-parameters ONLY when it answers true — a face with CFF outlines or with no outlines at
+   all leaves them untouched, so a caller that ignores the result reads whatever it initialised rather than a
+   plausible span of the wrong table.
+   IT ANSWERS SPANS AND NOT THE OFFSETS THE STRUCT HOLDS, which is the whole of why it exists: a caller adding
+   `m->glyf` to `m->sfnt` itself would be doing this component's bounds arithmetic outside the component that
+   validated it, and the pair of pointers is what core/fonts/glyph_outline.h's own reader takes.
+   THE FOUR ARE IN THE ORDER `glyph_outlines_read` TAKES THEM, so the one call this entry exists for cannot
+   transpose a table with its length or the outline table with the offset array. */
+bool open_type_metrics_outline_tables(const OpenTypeMetrics *m,
+                                      const unsigned char **glyf, size_t *glyf_len,
+                                      const unsigned char **loca, size_t *loca_len);
 
 #endif
