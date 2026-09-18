@@ -195,9 +195,35 @@ static int image_data_initialize(JSContext *ctx, ImageDataBox *b, uint32_t pixel
         JS_FreeValue(ctx, b->data);
         b->data = JS_DupValue(ctx, source);                                    /* step 1.3 */
     } else {                                                                    /* step 2 */
-        JSValue len = JS_NewInt64(ctx, (int64_t)rows * (int64_t)pixels_per_row);
-        JSValue arr = JS_NewTypedArray(ctx, 1, (JSValueConst *)&len,
-                                       pixel_format == 1 ? JS_TYPED_ARRAY_FLOAT16 : JS_TYPED_ARRAY_UINT8C);
+        /* Steps 2.1 and 2.2 of HTML §8.11.1 "The ImageData interface" — "The storage ArrayBuffer must have a
+           length of 4 × rows × pixelsPerRow bytes." for "rgba-unorm8", and eight times that for
+           "rgba-float16". THE ELEMENT COUNT IS ONE EXPRESSION FOR BOTH, because the bytes per PIXEL and the
+           bytes per ELEMENT double together: a one-byte Uint8ClampedArray of four times the pixels and a
+           two-byte Float16Array of eight times the bytes are the same number of elements, so a per-format
+           constant would be two spellings of one number.
+           THE FACTOR OF FOUR WAS MISSING AND NOTHING AT THIS SITE COULD SAY SO. A quarter-length `data` is an
+           ordinary typed array, so a page's stores past its end are silently dropped rather than thrown, and
+           the shortfall surfaced one algorithm away — at the pixel accessor below, which asks for four bytes a
+           pixel and refuses what it is handed. An allocation that is WRONG rather than ABSENT has no forcing
+           function of its own, which is why the assert that caught it belongs where it stands. */
+        uint64_t pixels = (uint64_t)rows * (uint64_t)pixels_per_row;
+        JSValue len, arr;
+
+        /* THE REFUSAL IS SPELLED OVER `pixels` AND NOT OVER THE ELEMENT COUNT, because two 32-bit dimensions
+           multiply exactly in 64 bits and four times that need not: the multiply that would express an
+           over-large request is the one that cannot be performed. `new ImageData(4294967295, 4294967295)` is a
+           page's own line, so this is a THROW and never an assert — an assert here hands any page an abort
+           switch. core/graphics/raster_surface.c asks the identical question of a surface and answers it with
+           a CHECK, which is right there and would be wrong here: ITS dimensions are this codebase's own
+           conversion. Past this line and below the engine's own array-length ceiling the same RangeError comes
+           back from the length coercion, so there is ONE refusal across the whole range. */
+        if (pixels > (uint64_t)INT64_MAX / 4u)
+            return JS_ThrowRangeError(ctx, "an ImageData of %u by %u pixels needs more storage than an "
+                                           "ArrayBuffer can name", pixels_per_row, rows), -1;
+
+        len = JS_NewInt64(ctx, (int64_t)(pixels * 4u));
+        arr = JS_NewTypedArray(ctx, 1, (JSValueConst *)&len,
+                               pixel_format == 1 ? JS_TYPED_ARRAY_FLOAT16 : JS_TYPED_ARRAY_UINT8C);
 
         /* §A-PER-REALM-FACT: `JS_NewTypedArray` reaches `ctx->class_proto[…]`, which is a member of the
            JSContext — so a child navigable's `new ImageData(…)` gets THAT realm's Uint8ClampedArray, and the
