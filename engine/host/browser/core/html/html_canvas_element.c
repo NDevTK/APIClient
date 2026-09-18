@@ -384,4 +384,8 @@ void html_canvas_element_free(JSRuntime *rt)
     JS_FreeValueRT(rt, g_state_key);
     g_state_key = JS_UNDEFINED;
     g_id_get_context = -1;
+    /* AND THE CASCADE REACHED THIS FILE — element_free reaches html_element_free reaches this, and its
+       last line may put the entry above back only because this says so. The two slots above it are
+       this file's own and are not declared to core/agent_state.h at all. */
+    agent_state_reached("element");
 }

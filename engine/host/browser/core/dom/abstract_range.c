@@ -434,4 +434,8 @@ void abstract_range_free(JSRuntime *rt)
        answering NULL for every live range while element_free still had a dozen releases and node_free's
        wrapper walk to run — a guaranteed false `@WHY` for any range still live at teardown, which range.c's
        own comment says is every document.createRange() and every Selection's range. */
+    /* AND THE CASCADE REACHED THIS FILE, which is the other half of the paragraph above: the reset is at
+       element_free's last line BECAUSE it may not be here, and this is what lets that line put these six
+       back without having to know that range_free ran. See core/agent_state.h's agent_state_reached. */
+    agent_state_reached("element");
 }

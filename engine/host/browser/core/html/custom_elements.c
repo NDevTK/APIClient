@@ -4048,4 +4048,8 @@ void custom_elements_free(JSRuntime *rt)
     g_atom_ctor = g_atom_proto = g_atom_observed = g_atom_observed_src = JS_ATOM_NULL;
     g_atom_callbacks = JS_ATOM_NULL;
     g_ready = 0;
+    /* AND THE CASCADE REACHED THIS FILE, for §4.13.4's active-constructor map, which is this file's one
+       declaration under `element`. Below the early return above by construction: a component whose init
+       never ran declared nothing, so there is nothing for element_free's last line to put back. */
+    agent_state_reached("element");
 }

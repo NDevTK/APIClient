@@ -2039,4 +2039,7 @@ void focus_free(void)
        `g_ready` IS NOT AMONG THEM and stays: it is this component's own declaration latch and is not declared
        to core/agent_state.h, so nothing else would put it back. */
     g_ready = 0;
+    /* AND THE CASCADE REACHED THIS FILE — what entitles document_agent_free's last line to put the nine
+       back. `g_ready` above is not among them and is this file's own latch. */
+    agent_state_reached("document");
 }

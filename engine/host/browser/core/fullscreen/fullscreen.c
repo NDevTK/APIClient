@@ -250,6 +250,10 @@ void fullscreen_free(JSRuntime *rt)
     g_flag_atom = JS_ATOM_NULL;
     JS_FreeValueRT(rt, g_flag_key);
     g_flag_key = JS_UNDEFINED;
+    /* AND THE CASCADE REACHED THIS FILE. The two resets above are the nulls that guard the frees, not the
+       undo — `document`'s undo still puts these slots back at the row's last line, and this is what says it
+       may. See core/agent_state.h's agent_state_reached. */
+    agent_state_reached("document");
 }
 
 void fullscreen_install_document_members(JSContext *ctx, JSValueConst document_proto)

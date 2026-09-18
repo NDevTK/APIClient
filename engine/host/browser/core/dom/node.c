@@ -5761,4 +5761,7 @@ void node_free(JSRuntime *rt)
     /* The prototypes are the REALMS' — each is released with its context. What the AGENT holds is the table of
        CLASS IDS, which is not a reference to anything. */
     g_protos_ready = 0;
+    /* AND THE CASCADE REACHED THIS FILE — what entitles element_free's last line to put back the three
+       hook-list lengths and the rest of this file's ten. See core/agent_state.h's agent_state_reached. */
+    agent_state_reached("element");
 }

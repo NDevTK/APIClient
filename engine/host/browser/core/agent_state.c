@@ -25,6 +25,15 @@ typedef struct {
        `what` do, so this row owns none of the three and frees none of them. */
     const char *file;
     int         line;
+    /* HAS THE RELEASE THAT GIVES THIS SLOT BACK RUN? Written by agent_state_reached, read by
+       agent_state_undo, and false until somebody says otherwise — see agent_state.h. It is a fact about the
+       declaring FILE rather than about this row, so every slot declared in one file carries the same answer;
+       it is held per slot because the registry has no other index and a second one keyed on the file would be
+       a table whose only reader is this bit.
+       WRITTEN IN BOTH BUILDS, READ IN ONE. Gating the field would give this struct and agent_state_reached two
+       shapes for the sake of one byte and a teardown-time loop, and a check that exists in only some builds is
+       the shape quickjs.c's leak censuses were repaired away from. */
+    bool        reached;
 } AgentSlot;
 
 /* GROWN, NOT CAPPED. A fixed table would be a bound on how much state one browser may hold, and the number it
@@ -77,6 +86,9 @@ static void slot_declare(const char *component, const void *slot, const char *wh
     g_slots[g_n].kind = kind;
     g_slots[g_n].file = file;
     g_slots[g_n].line = line;
+    /* NOT `calloc`-CLEAN: the row above is `realloc`'d, so a slot's bytes are whatever the last agent left
+       there. The one field whose pre-init value is not written by the caller is written here. */
+    g_slots[g_n].reached = false;
     g_n++;
 }
 
@@ -171,6 +183,48 @@ static void slot_set_pre_init(const AgentSlot *s)
             s->component, s->what, s->file, s->line);
 }
 
+/* THE DECLARING FILE'S RELEASE RAN — see agent_state.h for why the undo may not put a slot back without it.
+   IT WRITES NO SLOT, and that is the property the whole design rests on: it can therefore be made in the
+   MIDDLE of an owner's cascade, where a sub-component's release actually runs, while the reset stays at the
+   row's last line where the ordering contract puts it. */
+void agent_state_reached_at(const char *component, const char *file, int line)
+{
+    int i, under = 0, mine = 0;
+
+    DCHECK(file != NULL && *file && line > 0,
+           "a release said the cascade had reached it with no site — core/agent_state.h's macro spells "
+           "__FILE__ at the call, and the file IS the claim here rather than decoration on it");
+    DCHECKF(component != NULL && *component,
+            "a release said the cascade had reached it without naming the row, at %s:%d", file, line);
+    for (i = 0; i < g_n; i++) {
+        if (strcmp(g_slots[i].component, component) != 0) continue;
+        under++;
+        /* BY CONTENT AND NOT BY POINTER. Both strings are `__FILE__` in one translation unit, so they are the
+           same text; whether a compiler merges two identical literals is not a thing this may depend on. */
+        if (strcmp(g_slots[i].file, file) != 0) continue;
+        g_slots[i].reached = true;
+        mine++;
+    }
+    /* TWO REFUSALS AND NOT ONE, BECAUSE THEY ARE TWO REPAIRS. A row name nothing declares is the misspelling
+       agent_state_undo refuses in the same words; a row that exists and has nothing from THIS file is a
+       release claiming a row it contributes no state to, which is the other spelling being wrong or the call
+       standing in a file that never declared. One message for both would be the three-states-behind-one-answer
+       shape this registry was written against. */
+    DCHECKF(under > 0,
+            "the release in %s said `%s`'s cascade had reached it, at line %d, and this registry holds no "
+            "declaration under that name at all. The row is spelled once at each agent_state_* call and once "
+            "at each release that claims it, and it is core/platform.c's ROW name rather than the file's — "
+            "for a sub-component, the row whose release reaches it. Either this spelling is wrong or the "
+            "declarations' is",
+            file, component, line);
+    DCHECKF(mine > 0,
+            "the release at %s:%d said `%s`'s cascade had reached it, and `%s` is a real row that this file "
+            "declares no agent state under. This entry says THE SLOTS THIS FILE DECLARED have been given "
+            "back, so a file with none to give back has nothing to say here: either the row named is a "
+            "neighbour's, or this call is in the wrong file",
+            file, line, component, component);
+}
+
 void agent_state_undo_at(const char *component, const char *file, int line)
 {
     int i, n = 0;
@@ -182,6 +236,22 @@ void agent_state_undo_at(const char *component, const char *file, int line)
             "a component undid its agent state without naming itself, at %s:%d", file, line);
     for (i = 0; i < g_n; i++) {
         if (strcmp(g_slots[i].component, component) != 0) continue;
+        /* BEFORE THE RESET AND NOT AFTER IT, because the reset is what destroys the evidence: once the slot
+           is back at its pre-init value, a release that never reached it and a release that did are the same
+           bytes, which is exactly the state agent_state_check_released is left unable to tell apart.
+           THE EXEMPTION IS THIS FILE'S OWN DECLARATIONS, and calling the undo IS this file's claim about
+           them — so a row whose undo stands in a file that declares nothing under it has an empty exemption
+           and every declaring file must have spoken, which is the stricter reading arriving for free. */
+        DCHECKF(g_slots[i].reached || strcmp(g_slots[i].file, file) == 0,
+                "`%s`'s release at %s:%d is putting back %s, which was declared at %s:%d, and that file has "
+                "not said the cascade reached it. A row is declared from SEVERAL FILES and this one call "
+                "resets every slot carrying the row's name, so putting this one back would report a release "
+                "that never ran as one that did — silently for a pointer, which reaches no census anybody "
+                "asserts over. Either the cascade in %s dropped the release that gives %s back, or that "
+                "release does not end in agent_state_reached(\"%s\"); the declaring file above says which "
+                "in one read",
+                component, file, line, g_slots[i].what, g_slots[i].file, g_slots[i].line,
+                file, g_slots[i].what, component);
         slot_set_pre_init(&g_slots[i]);
         n++;
     }

@@ -251,4 +251,9 @@ void document_current_script_free(void)
        last line puts it back from the registry that already holds its address and kind, and the assignment
        that stood here was this file's one agent_state_id call written a second time (core/agent_state.h's
        agent_state_undo). The assert above stays, because it is what says this agent ever declared it. */
+    /* AND THAT THE CASCADE REACHED THIS FILE, which is what entitles that last line to put this file's slot
+       back: `document` is declared from several files and the undo resets them all, so without this claim a
+       document_agent_free that dropped this release would put the slot back anyway and the release check
+       would pass. See core/agent_state.h's agent_state_reached. */
+    agent_state_reached("document");
 }

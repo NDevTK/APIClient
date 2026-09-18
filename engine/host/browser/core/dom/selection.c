@@ -999,4 +999,7 @@ void selection_free(void)
        back to -1. Nothing between this line and document_agent_free's last reads any of them: the release
        frees nothing, so no null here guards a free, and §5.3's abstract_range_of, which this file's
        sel_bounds reaches, is `element`'s state and is released by a row that runs AFTER this one. */
+    /* AND THE CASCADE REACHED THIS FILE — the claim that entitles document_agent_free's last line to put
+       this file's six slots back. See core/agent_state.h's agent_state_reached. */
+    agent_state_reached("document");
 }

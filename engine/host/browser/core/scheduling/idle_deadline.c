@@ -263,4 +263,7 @@ void idle_deadline_free(JSRuntime *rt)
     JS_FreeAtomRT(rt, g_atom_state);
     JS_FreeAtomRT(rt, g_atom_deadline);
     JS_FreeAtomRT(rt, g_atom_timeout);
+    /* AND THE CASCADE REACHED THIS FILE. None of the seven slots above is reset here — idle_callback_free's
+       last line is what puts them back, and this is what entitles it to. */
+    agent_state_reached("idle_callback");
 }

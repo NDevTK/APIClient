@@ -74,13 +74,16 @@
  * release undoes this — "document_agent_free reaches selection_free" — and no spelling scheme can check a
  * claim of that shape. What checks it is agent_state_check_released below, at the one instant it is decidable:
  * a name that is merely SPELLED right and belongs to a release that does not reach this slot fires there.
- * THAT LAST SENTENCE IS TRUE OF A ROW THAT HAND-RESETS AND FALSE OF ONE THAT CALLS agent_state_undo, and it is
- * kept rather than cut because the reasoning behind it is what a reader re-derives. It fires because the
- * wrongly-named row's release leaves those slots set. A row that ends in agent_state_undo resets every slot
- * carrying its name — which is what that entry is FOR — so the misattributed slots are put back by a release
- * that never reached them and the walk passes. Thirteen rows call it today and the paragraph at that entry
- * argues every row eventually should, so this is the direction that gets quieter as the file's own advice is
- * taken. See the residual there.
+ * THAT LAST SENTENCE WAS NARROWED ONCE AND THE NARROWING IS CLOSED RATHER THAN RESTATED, and the retired
+ * reasoning is kept because a reader who re-derives the undo's reach re-derives the hole with it. It read
+ * `the misattributed slots are put back by a release that never reached them and the walk passes` — true of
+ * a row that ends in agent_state_undo and not of one that hand-resets, because the undo's unit is the ROW and
+ * a row is declared from SEVERAL FILES whose releases the cascade reaches as a TREE. The REACH was never the
+ * defect; what was missing was a PRECONDITION on it. agent_state_reached below is how a declaring file says
+ * the cascade reached it, and the undo now ABORTS rather than put back a slot declared in a file that has not
+ * said so. The sentence therefore holds for both kinds of row, by two mechanisms — a hand-resetting row
+ * leaves the slot SET for the walk to find, a row ending in the undo REFUSES to clear it — so the direction
+ * no longer gets quieter as this file's own advice about the undo is taken.
  *
  * AND WHAT THIS COSTS: A FINALIZER AND A gc_mark RUN AFTER THE RELEASE COLUMN, SO NEITHER MAY READ A SLOT
  * DECLARED HERE. This is the obligation the zeroing above creates, and it is stated here because here is where
@@ -218,26 +221,80 @@ void agent_state_check_released(void);
  * back, or asserts a claimant has already handed it back (§2.9's tree walk, §9.4.2's handler-set hook), is
  * asking about a slot this would null; called first, it would answer those DCHECKs itself. Free, assert, then
  * undo. */
-/* AND A NAMED RESIDUAL, BECAUSE THIS ENTRY NARROWS agent_state_check_released AND THE PARAGRAPH ABOVE STATES
- * ITS REACH AT ROW GRANULARITY. "One line per component is what leaves that check something to say" is exactly
- * right for a ROW and does not hold for a SUB-COMPONENT: a sub-component declares under its OWNER'S name, so
- * the owner's one call resets the sub-component's handles whether or not the owner's release reached the
- * sub-component's `_free`. NOT COVERED: an owner whose cascade drops one member — the member's values are
- * never freed and its handles are put back anyway, so the release check that exists to find exactly that is
- * answered by this line instead of by the release. WHAT THE NEXT DIFF BUILDS: a per-DECLARING-FILE undo, so
- * the unit that resets is the unit that frees; the file is on every declaration already (agent_state_slot
- * hands it back), and what has to be decided first is what a component whose `_init` and `_free` are split
- * across files owes, which the registry cannot answer today. HOW ITS ABSENCE WOULD SHOW: a teardown that is
- * silent here while JS_FreeRuntime's gc_obj_list walk reports a survivor, or — for an atom or a malloc'd
- * block, which neither of that runtime's censuses can see — silent everywhere.
+/* THE NAMED RESIDUAL THAT STOOD HERE IS RETIRED — ITS GAP IS BUILT, AS agent_state_reached's PRECONDITION ON
+ * THIS ENTRY. Its NOT-COVERED clause was exact and names what this entry now refuses: `an owner whose cascade
+ * drops one member` — the member's values never freed and its handles put back anyway, so the release check
+ * that exists to find exactly that was answered by THIS line instead of by the release.
+ * ITS OTHER TWO CLAUSES WERE WRONG AND ARE RECORDED RATHER THAN DELETED, because a next-diff clause is read
+ * ONCE, by somebody who has already decided to build it, so a wrong one is not caught — it is executed.
+ *   - WHAT THE NEXT DIFF BUILDS said `a per-DECLARING-FILE undo, so the unit that resets is the unit that
+ *     frees`. The unit that resets MAY NOT be the unit that frees, and this tree has already paid to learn
+ *     that: a sub-component's release runs in the MIDDLE of its owner's cascade, so resetting there moves
+ *     every one of its handles EARLIER. The whole bounds-class walk of DOM §5.3 "Interface AbstractRange" is
+ *     declared as agent state in core/dom/abstract_range.c, and abstract_range_of hands each of its ids to
+ *     JS_GetOpaque on every getter, so zeroing them from abstract_range_free — reached from range_free, with
+ *     a dozen more releases and node_free's wrapper walk still to run — answers NULL for every live range,
+ *     which range_pre_remove of DOM §5.5 "Interface Range" DCHECKs against. That file and core/dom/range.c
+ *     each record that abort in their own words as the reason the reset MOVED here.
+ *     Building the clause would have re-introduced it. The tell it carried is the one to copy: it named a
+ *     MECHANISM, and a mechanism is the half of a residual that is a guess about this tree.
+ *   - HOW ITS ABSENCE WOULD SHOW said an atom is `silent everywhere` because neither of JS_FreeRuntime's
+ *     censuses sees one. An atom is the SUBJECT of the second: engine/qjs/quickjs.c's `[atomleak]` walk is
+ *     UNCONDITIONAL, feeds the same leak flag as the object walk, and carries a DCHECK naming the survivor —
+ *     which the first paragraph of THIS file already says, so the residual disagreed with its own header.
+ *     What is genuinely silent is the POINTER: a malloc'd block reaches no census with an assert over it, and
+ *     a ptr slot holding a HOOK this component installed into another leaves a DANGLING CALLBACK rather than
+ *     memory, which nothing anywhere reports. SLOT_ID, SLOT_FLAG and SLOT_CLASS hold no reference at all, so
+ *     what a dropped release loses there is whatever ELSE it did, and that is silent too.
+ * RETIREMENT: this record goes when a residual in this tree cannot state a mechanism without the command that
+ * greps its callers beside it, because the clause above is wrong in exactly the way that check would show.
  *
  * A COMPONENT NAME THAT DECLARED NOTHING IS AN ABORT and not a no-op, because the name is written twice — once
  * here and once at each declaration — and a silent no-op is the shape where the two spellings differ and the
  * release stops being the inverse of anything. THE CALLING SITE IS CARRIED for the reason the declaring
- * entries carry theirs: this abort's remedy is "one of these two spellings is wrong", which names no file
- * unless the release's own address is in the message. */
+ * entries carry theirs: this abort's remedy is `one of these two spellings is wrong`, which names no file
+ * unless the release's own address is in the message. THE BACKTICKS ARE NOT STYLE: that run is a SPELLING
+ * BEING SHOWN and not a quotation of anything, so in double quotes it enters the citation auditor's quotation
+ * channel and is judged against whatever standard is named NEAREST ABOVE it — which is a property of the
+ * prose above, not of this line. It was reported as diverging from DOM the first time a citation was written
+ * into the paragraph overhead. */
 void agent_state_undo_at(const char *component, const char *file, int line);
 #define agent_state_undo(component) agent_state_undo_at((component), __FILE__, __LINE__)
+
+/* THE DECLARING FILE'S RELEASE RAN — THE ONE FACT THE UNDO ABOVE CANNOT KNOW AND MAY NOT PUT A SLOT BACK
+ * WITHOUT. A row is declared from SEVERAL FILES, because a sub-component names the row whose release reaches
+ * it rather than its own file (the top of this header says why), and the cascade that reaches those files is
+ * a TREE and not a list: `element`'s reaches range_free, which reaches abstract_range_free. The undo runs
+ * ONCE, at the row's last line, and resets every slot carrying the row's name — so an owner that drops one
+ * member has that member's handles put back by a release that never reached it, and the release check finds
+ * them already reset. It is the one direction that walk is structurally blind to, and only for a row that
+ * ends in the undo.
+ *
+ * SO EACH DECLARING FILE SAYS SO ITSELF, AS THE LAST LINE OF ITS OWN `_free`, and the undo REFUSES a slot
+ * declared in a file that has not. This is a CLAIM and not a reset — it writes no slot, which is the whole
+ * reason it can be made in the middle of a cascade. Nothing moves: the reset stays at the row's last line,
+ * where agent_state_undo's own ordering contract requires it and where this tree has already established
+ * that it must be.
+ *
+ * THE UNDO'S OWN FILE IS EXEMPT, AND THAT IS NOT A SPECIAL CASE BUT THE SAME RULE: the call to the undo IS
+ * that file's claim, made in the same breath as the reset it is a claim about. A row whose undo lives in a
+ * file that declares nothing under it has an EMPTY exemption, so every declaring file must have spoken —
+ * which is the stricter reading and needs no second check to produce.
+ *
+ * IT IS OWED ONLY WHERE THE UNDO IS, AND THAT IS WHY IT IS NOT AN OBLIGATION ON EVERY DECLARATION. A row that
+ * hand-resets already leaves a dropped member's slots SET for agent_state_check_released to find — the claim
+ * at the top of this file, and true for those rows — so there is no wrong reset there to refuse. The
+ * population is one line in each file that declares under a row whose release ends in the undo and is not
+ * that file; `agent_state_slot` hands back the declaring file of every slot, so it is derivable and is not a
+ * list anybody keeps.
+ *
+ * THE COMPONENT IS NAMED HERE FOR THE REASON THE UNDO NAMES IT, AND NOT TO SELECT ANYTHING: the row is
+ * spelled once at each declaration and once at each release that claims it, and a sub-component claiming the
+ * WRONG row is the state those two spellings exist to separate. The pair selects, so a file that comes to
+ * declare under two rows is handled without anybody noticing; what the name buys is that a release naming a
+ * row it declares nothing under cannot pass silently. */
+void agent_state_reached_at(const char *component, const char *file, int line);
+#define agent_state_reached(component) agent_state_reached_at((component), __FILE__, __LINE__)
 
 /* The registry is the AGENT's, like everything on it. */
 void agent_state_reset(void);

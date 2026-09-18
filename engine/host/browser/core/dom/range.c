@@ -2082,4 +2082,8 @@ void range_free(JSRuntime *rt)
        must be 1, so it is not declared to core/agent_state.h at all and range_live_drop's last finalizer is
        what winds it back — see the comment above that function. */
     abstract_range_free(rt);
+    /* AND THE CASCADE REACHED THIS FILE. Last, after the delegation above, for the same reason the undo is
+       last in a row's release: this says what has finished, so it is said when it has. See
+       core/agent_state.h's agent_state_reached. */
+    agent_state_reached("element");
 }
