@@ -288,9 +288,11 @@ int canvas_path_rect(JSContext *ctx, JSValueConst path, double x, double y, doub
 /* §4.12.5.1.6's "determine the point on an ellipse steps, given ellipse, and angle". The construction — the
    eccentric circle, the chord perpendicular to the major axis, the crossing point — is the standard parametric
    point (radiusX·cos θ, radiusY·sin θ) in the ellipse's own frame, which is then rotated by `rotation` and
-   translated to the centre. */
-static void cp_ellipse_point(double x, double y, double rx, double ry, double rot, double angle,
-                             double *px, double *py)
+   translated to the centre.
+   IT IS THE ONE ENTRY OF THIS COMPONENT THAT IS NOT `static` AND TAKES NO `JSContext *` — see canvas_path.h
+   for why the flattener one layer down calls this rather than holding a second copy of the same four lines. */
+void canvas_path_ellipse_point(double x, double y, double rx, double ry, double rot, double angle,
+                               double *px, double *py)
 {
     double ct = cos(angle), st = sin(angle), cr = cos(rot), sr = sin(rot);
 
@@ -322,9 +324,9 @@ int canvas_path_ellipse(JSContext *ctx, JSValueConst path, double x, double y, d
        given this ellipse and startAngle." */
     whole = (!counterclockwise && end_angle - start_angle >= 2 * M_PI) ||
             (counterclockwise && start_angle - end_angle >= 2 * M_PI);
-    cp_ellipse_point(x, y, radius_x, radius_y, rotation, start_angle, &sx, &sy);
+    canvas_path_ellipse_point(x, y, radius_x, radius_y, rotation, start_angle, &sx, &sy);
     if (whole) { ex = sx; ey = sy; }
-    else cp_ellipse_point(x, y, radius_x, radius_y, rotation, end_angle, &ex, &ey);
+    else canvas_path_ellipse_point(x, y, radius_x, radius_y, rotation, end_angle, &ex, &ey);
 
     /* Step 3 — "If canvasPath's path has any subpaths, then add a straight line from the last point in the
        subpath to the start point of the arc." With no subpath there is none to extend, and step 4's "Add the

@@ -133,4 +133,19 @@ bool canvas_path_is_empty(JSContext *ctx, JSValueConst path);
    is asserted rather than defaulted. */
 double canvas_path_header(JSContext *ctx, JSValueConst path, int slot);
 
+/* §4.12.5.1.6's "determine the point on an ellipse steps, given ellipse, and angle".
+   IT IS THE ONE DECLARATION HERE THAT TAKES NO `JSContext *`, AND THAT IS WHAT IT IS FOR. The construction is
+   arithmetic over eight doubles with no path, no realm and no allocation in it, so the layer that FLATTENS an
+   arc into device pixels can call it — core/graphics/raster_path.h, whose own header says every coordinate in
+   it is a device pixel and which is exercisable with no `JSContext` at all.
+   IT IS EXPORTED BECAUSE TWO COPIES OF ONE FORMULA WERE A CLAIM NEITHER FILE COULD ASSERT. The builder above
+   evaluates this at the START ANGLE to place the LINE §4.12.5.1.6's step 3 puts in front of every arc, and the
+   flattener chains from the point that LINE already stands at rather than re-evaluating it — so the two
+   evaluations were never compared, and an assert over them would have had two sides that cannot disagree
+   (CLAUDE.md §AN-ASSERT-WHOSE-TWO-SIDES-CANNOT-DISAGREE). One copy makes the question moot instead of
+   answering it: the arc cannot start anywhere but where the line ends, by construction rather than by
+   agreement. */
+void canvas_path_ellipse_point(double x, double y, double rx, double ry, double rot, double angle,
+                               double *px, double *py);
+
 #endif /* ENGINE_HOST_BROWSER_CORE_CANVAS_CANVAS_PATH_H */

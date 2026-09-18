@@ -127,23 +127,14 @@ void raster_path_bezier_curve_to(RasterPath *p, double c1x, double c1y, double c
     p->cur_x = x; p->cur_y = y;
 }
 
-/* HTML §4.12.5.1.6 "Building paths"' "determine the point on an ellipse steps, given ellipse, and angle"
-   — the parametric point
-   (radiusX·cos θ, radiusY·sin θ) in the ellipse's own frame, rotated by `rotation` and translated to the
-   centre. It is the same construction core/canvas/canvas_path.c performs, which is what makes the LINE that
-   §4.12.5.1.6's step 3 puts in front of every ARC stand exactly where this reads the arc as starting.
-   THAT SENTENCE IS A CLAIM ABOUT TWO COPIES OF ONE FORMULA AND THIS FILE CANNOT ASSERT IT, because the
-   flattener never evaluates the start angle at all: it chains from the current point the stream already
-   stands at, so the two copies are never compared and an assert over them would have two sides that cannot
-   disagree. FOR THE CANVAS LANE — exporting `cp_ellipse_point` makes it one copy and the question moot. */
-static void rp_ellipse_point(double x, double y, double rx, double ry, double rot, double angle,
-                             double *px, double *py)
-{
-    double ct = cos(angle), st = sin(angle), cr = cos(rot), sr = sin(rot);
-
-    *px = x + rx * ct * cr - ry * st * sr;
-    *py = y + rx * ct * sr + ry * st * cr;
-}
+/* HTML §4.12.5.1.6 "Building paths"' "determine the point on an ellipse steps, given ellipse, and angle" is
+   core/canvas/canvas_path.h's `canvas_path_ellipse_point` and is CALLED rather than repeated here. This file
+   held a second copy of the same four lines, and its own note said why that copy could not be checked: the
+   builder evaluates the start angle to place the LINE §4.12.5.1.6's step 3 puts in front of every ARC, the
+   flattener chains from the point that LINE already stands at rather than re-evaluating it, so the two were
+   never compared and an assert over them would have had two sides that cannot disagree. One copy settles it by
+   construction — the arc cannot start anywhere but where the line ends — which is CLAUDE.md §Fix-the-ROOT's
+   own test applied to a duplicated formula rather than to a state. */
 
 void raster_path_ellipse(RasterPath *p, double cx, double cy, double radius_x, double radius_y,
                          double rotation, double start_angle, double end_angle, bool counterclockwise)
@@ -164,9 +155,9 @@ void raster_path_ellipse(RasterPath *p, double cx, double cy, double radius_x, d
        numbers. */
     whole = (!counterclockwise && end_angle - start_angle >= 2 * M_PI) ||
             (counterclockwise && start_angle - end_angle >= 2 * M_PI);
-    rp_ellipse_point(cx, cy, radius_x, radius_y, rotation, start_angle, &sx, &sy);
+    canvas_path_ellipse_point(cx, cy, radius_x, radius_y, rotation, start_angle, &sx, &sy);
     if (whole) { ex = sx; ey = sy; }
-    else rp_ellipse_point(cx, cy, radius_x, radius_y, rotation, end_angle, &ex, &ey);
+    else canvas_path_ellipse_point(cx, cy, radius_x, radius_y, rotation, end_angle, &ex, &ey);
 
     /* Step 3 — "If canvasPath's path has any subpaths, then add a straight line from the last point in the
        subpath to the start point of the arc." */
@@ -352,8 +343,8 @@ static void rp_flatten_cubic(RpFlatten *f, double c1x, double c1y, double c2x, d
    cover an angle greater than 2π radians" — which is the angular difference reduced into [0, 2π).
    THE FIRST POINT IS NOT EVALUATED. §4.12.5.1.6's step 3 puts a MOVE or a LINE at the start point in front of
    every ARC, so the chain already stands there; chaining from it rather than from a freshly evaluated
-   `rp_ellipse_point(start_angle)` is what makes the subpath a closed chain with no gap in it whatever the two
-   evaluations round to. */
+   `canvas_path_ellipse_point(start_angle)` is what makes the subpath a closed chain with no gap in it whatever
+   the two evaluations round to. */
 static void rp_flatten_arc(RpFlatten *f, const double *a, double tol)
 {
     double cx = a[0], cy = a[1], rx = a[2], ry = a[3], rot = a[4];
@@ -388,7 +379,7 @@ static void rp_flatten_arc(RpFlatten *f, const double *a, double tol)
     for (i = 1; i <= n; i++) {
         double px, py;
 
-        rp_ellipse_point(cx, cy, rx, ry, rot, sa + sweep * ((double)i / (double)n), &px, &py);
+        canvas_path_ellipse_point(cx, cy, rx, ry, rot, sa + sweep * ((double)i / (double)n), &px, &py);
         rp_emit(f, px, py);
     }
 }
@@ -486,15 +477,16 @@ void raster_path_flatten(const RasterPath *p, double tolerance_px, RasterEdges *
    WHAT IS NOT COVERED: core/graphics/rasterizer.h states the requirement as two renderings of one document
    agreeing byte for byte, which is what a reftest oracle is made of and which this component meets: every
    step of the accumulation is a `+`, `-`, `*`, `/` or `sqrt`, and IEEE 754 fixes all five exactly. The
-   FLATTENING is not all five. `rp_ellipse_point` calls `cos` and `sin` and the segment counts call `hypot`,
-   and C leaves the accuracy of <math.h> implementation-defined — so two HOSTS' libraries may answer a last
-   bit apart, which moves a vertex and, through `ceil`, can move the segment COUNT by one and with it the
-   whole polygon. Two renderings on ONE host still agree, so the reftest oracle is intact; what is narrower
+   FLATTENING is not all five. `canvas_path_ellipse_point` calls `cos` and `sin`, the segment counts call
+   `hypot`, and C leaves the accuracy of <math.h> implementation-defined — so two HOSTS' libraries may answer
+   a last bit apart, which moves a vertex and, through `ceil`, can move the segment COUNT by one and with it
+   the whole polygon. Two renderings on ONE host still agree, so the reftest oracle is intact; what is narrower
    than the header's sentence is a comparison ACROSS the native host and the wasm one.
-   WHAT THE NEXT DIFF BUILDS: a sine, a cosine and a hypotenuse of stated precision in this component, so an
-   arc's vertices and every segment count are a function of the arithmetic rather than of the platform. The
-   same three entries are what `cp_ellipse_point` in core/canvas/canvas_path.c would take, which is the
-   second reason to build them here rather than to pin a library.
+   WHAT THE NEXT DIFF BUILDS: a sine, a cosine and a hypotenuse of stated precision, so an arc's vertices and
+   every segment count are a function of the arithmetic rather than of the platform. There is now ONE ellipse
+   point construction rather than two, so the three entries have one call site to serve in
+   core/canvas/canvas_path.c and one here — which settles WHERE they belong (reachable from both, and with no
+   `JSContext`) and is the second reason to build them rather than to pin a library.
    HOW ITS ABSENCE WOULD SHOW: a document whose ink is made only of lines and Bezier curves checksums
    identically under the two hosts, and one containing an ARC may not — so the discriminator is whether a
    `CANVAS_PATH_OP_ARC` reached the flattening, and never the shape's size, its position or its tolerance.
