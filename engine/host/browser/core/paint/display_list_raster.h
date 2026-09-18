@@ -49,8 +49,13 @@
  * identically. It is named rather than picked because it is that section's `CanvasFillRule` default.
  * AND THE ARC RESIDUAL core/graphics/raster_path.c CARRIES DOES NOT REACH THIS ROAD. That record narrows the
  * byte-for-byte agreement of two HOSTS to paths with no `CANVAS_PATH_OP_ARC` in them, because a vertex off
- * `cos` and `sin` is a function of the platform's math library; every mark this component draws is a
- * `raster_path_rect`, which is MOVE, three LINEs and a CLOSE and reaches neither call.
+ * `cos` and `sin` is a function of the platform's math library. Every shape this component draws is MOVE,
+ * three LINEs and a CLOSE — `raster_path_rect`'s own spelling for the two fill kinds, and the same four
+ * vertices stated directly for each of a border's mitred wedges — and `raster_path_flatten` takes those three
+ * opcodes to `rp_emit` alone, where the `cos`, `sin`, `hypot` and `sqrt` calls sit in `rp_flatten_arc`,
+ * `rp_quad_segments` and `rp_bezier_segments`. That is why a BORDER SIDE IS A QUADRILATERAL RATHER THAN AN
+ * OUTLINE, and why the first `<border-style>` that needs a curve — css-backgrounds-3 §3.2 "Line Patterns: the
+ * border-style properties"' `dotted`, "A series of round dots" — is the first that does not land here.
  *
  * THE SCALE IS AN OPERAND FOR core/graphics/raster_path.h's OWN REASON. That header says "EVERY COORDINATE
  * HERE IS A DEVICE PIXEL AND NOTHING HERE APPLIES A MATRIX ... There is exactly one transform in the road and
@@ -68,26 +73,78 @@
  * ABSENCE from a ZERO is the shape CLAUDE.md names by hand. So the entry crashes rather than accepting
  * nowhere to put it.
  *
- * NAMED RESIDUAL — `DISPLAY_MARK_BORDER` CRASHES AND IS NOT DRAWN AS FOUR RECTANGLES.
- * WHAT IS NOT COVERED: a box's border, which core/paint/box_paint.c lays for CSS 2.1 §E.2's step 2 and step
- * 4 block arms whenever a box has a non-zero used border width. TWO separate things are missing and drawing
- * either without the other puts WRONG ink on a page rather than narrow ink. The first is the CORNER: four
- * side rectangles OVERLAP where two sides meet, so a box with two colours would come out with one of them
- * painted over the other in a square whose winner is whichever loop ran last — and css-backgrounds-3 §4.4
- * "Color and Style Transitions" constrains that region without settling it, saying "However it is not
- * defined what these transitions look like or what function maps from this ratio to a point on the curve".
- * The second is the STYLE: CSS 2.1 §8.5.3's `<border-style>` has TEN values and eight of them draw something
- * other than a filled band, so filling every non-`none` side solid paints a `dotted` rule as a `solid` one.
- * WHAT THE NEXT DIFF BUILDS: the four sides as MITRED QUADRILATERALS — each side a trapezoid from its own
- * outer edge to the inner edge, meeting its neighbours on the diagonal through the padding-edge corner,
- * which partitions the border area with no overlap and no gap and is a conforming transition under
- * css-backgrounds-3 §4.4 — laid through `raster_path_move_to`/`raster_path_line_to`, which is why this
- * component needs no new geometry for it; plus `solid` and `double` from CSS 2.1 §8.5.3's own descriptions
- * and one arm per remaining style. `none` and `hidden` draw nothing and are the arm that exists already.
- * HOW ITS ABSENCE WOULD SHOW: a dev build aborts at the first document that declares a border on any box,
- * naming this entry; a release build paints that document's backgrounds and leaves every rule between and
- * around its boxes unpainted, so a page comes out as flat areas of colour with no lines anywhere.
- * RETIREMENT: this record goes when `DISPLAY_MARK_BORDER` has an arm here that a fixture holds to an area. */
+ * A BORDER'S FOUR SIDES ARE MITRED WEDGES AND THE CORNER IS WHY. Four side RECTANGLES overlap in a square at
+ * every corner, so a box with two border colours comes out with one painted over the other in a square whose
+ * winner is whichever loop ran last — WRONG ink rather than narrow ink, and the reason the rect-only shortcut
+ * could not draw a border at all. A wedge runs from a side's own outer edge to the padding edge and meets its
+ * two neighbours on the DIAGONAL through the padding-edge corner, which partitions the border area with no
+ * overlap and no gap. THE STANDARD LEAVES THE SHAPE AND SAYS SO: css-backgrounds-3 §3.2 "Line Patterns: the
+ * border-style properties" ends "Note: This specification does not define how borders of different styles
+ * should be joined in the corner", which is the note that reaches a corner with NO RADIUS and is therefore
+ * this component's; css-backgrounds-3 §4.4 "Color and Style Transitions" sits inside §4 "Rounded Corners" and
+ * constrains the region for a corner that has radii, then leaves the shape in the same terms — "However it is
+ * not defined what these transitions look like or what function maps from this ratio to a point on the
+ * curve". At a zero radius §4.4's "smallest rectangle that contains both border radii as well as the center
+ * of the inner curve" IS the square between the border-box corner and the padding-edge corner, and the
+ * diagonal lies inside it, so the mitre satisfies §4.4's MUST as well. THE PARTITION IS ASSERTED rather than
+ * argued: the four wedges' shoelace areas are held to `w*h - (w-l-r)*(h-t-b)`, a number written out of the
+ * EXTENTS and sharing no term with the vertices, and four rectangles fail it by exactly (l+r)(t+b).
+ *
+ * NAMED RESIDUAL — NINE OF CSS 2.1 §8.5.3's TEN `<border-style>` VALUES ARE NOT DRAWN.
+ * WHAT IS NOT COVERED: every value that is neither `solid` nor a value whose used width is zero.
+ * CSS 2.1 §8.5.3 "Border style: 'border-top-style', 'border-right-style', 'border-bottom-style', 'border-left-style',
+ * and 'border-style'" makes exactly ONE of its ten a single filled band — `solid`, "The border is a single
+ * line segment" — and `none` and `hidden` compute to a used width of zero, so what this component draws is
+ * the whole of what it can draw without picking a second thing no section states. The property that separates
+ * the seven, rather than a list of them: each needs an operand the standards explicitly leave to the UA —
+ * `double` a line THICKNESS ("The thickness of the lines is not specified, but the sum of the lines and the
+ * space must equal border-width", css-backgrounds-3 §3.2), `dotted` and `dashed` a RHYTHM ("There is no
+ * control over the spacing of the dots and dashes, nor over the length of the dashes", §3.2), and `groove`,
+ * `ridge`, `inset` and `outset` a derived COLOUR ("UAs may choose their own algorithm to calculate the actual
+ * colors used", CSS 2.1 §8.5.3). The mitre above is a pick too and is a different kind of pick: without SOME partition
+ * of the corner no border can be drawn at all, so it is forced by the problem, where each of these is a
+ * second choice for a side that would otherwise already be drawable.
+ * WHAT THE NEXT DIFF BUILDS: `double`, because it is the only one of the seven whose missing operand is a
+ * single number and whose shape this road already has. A sub-wedge entry beside `dlr_border_wedges` takes a
+ * fraction pair [a, b] and answers the quadrilateral whose two edges are a wedge's outer and inner edges
+ * linearly interpolated at a and at b — the full side being [0, 1] — and the `double` arm calls it at
+ * [0, 1/3] and [2/3, 1], with the third named as this user agent's pick beside §3.2's parenthesis. The
+ * partition assert generalises with it: a sub-wedge [a, b] of a trapezoid whose parallel sides are A and B at
+ * a height H has area H*((b-a)*A + (b*b-a*a)*(B-A)/2), which sums over [0, 1] to the wedge's own.
+ * HOW ITS ABSENCE WOULD SHOW: a dev build aborts at the first box declaring one of the seven, naming that
+ * value; a release build draws that SIDE's band nothing and its siblings normally, so a box comes out with
+ * some of its four rules present and the rest missing while every background around it is painted — which is
+ * the observation, and which side of which box exhibits it is a fact about a document rather than about this
+ * component.
+ * RETIREMENT: this record loses a clause as each value lands and goes when all ten are drawn.
+ *
+ * NAMED RESIDUAL — NO FIXTURE IN THIS TREE RASTERIZES A BORDER MARK.
+ * WHAT IS NOT COVERED: this entry's border arm has no caller that a run of this host reaches.
+ * `display_list_raster` is called from `display_list_raster_selftest` and from `box_paint_selftest` in
+ * engine/host/test_forced.c and from nowhere else in the program, and neither rasterizes a list holding a
+ * `DISPLAY_MARK_BORDER`: the first builds only fill marks, and the second's own record states that no
+ * document this host parses declares a border, so `bp_border` appends nothing. The arm is therefore held by
+ * its own asserts — the partition, the two derivations of one box, and the two-counter identity — and by no
+ * observation of a pixel.
+ * WHAT THE NEXT DIFF BUILDS: rows in `display_list_raster_selftest` beside the two fill kinds', over a mark
+ * this file states rather than one a document produced, and asserting the same kind of DERIVABLE quantity
+ * those rows assert. THE QUANTITY IS `pixels` AND IT IS NOT THE AREA, which is the trap in writing them: the
+ * arm's own assert holds the four wedges to an AREA, and `pixels` counts what each fill HANDED the surface,
+ * which core/graphics/rasterizer.h makes every pixel of NONZERO coverage — so a mitre's diagonal, which
+ * crosses pixels rather than running along their edges, is handed more pixels than it covers area, and a
+ * fixture that asserted the area would fail on a correct arm. Worked, for a 16x8 border box at the surface's
+ * own origin with all four used widths 2 and all four styles `solid`: the AREA is 16*8 - 12*4 = 80 and the
+ * PIXELS are 88. The top wedge is (0,0) (16,0) (14,2) (2,2), whose row y=0 is handed columns 0 through 15 and
+ * whose row y=1 is handed 1 through 14 — 30 — and the bottom is its mirror; the left wedge is (0,8) (0,0)
+ * (2,2) (2,6), handed 1, 2, 2, 2, 2, 2, 2, 1 down its eight rows — 14 — and the right is its mirror.
+ * 30+30+14+14. FOUR RECTANGLES ARE 96 — two full rows of 16 twice and two full columns of 8 twice — so that
+ * is the number that separates this arm from the shortcut it replaced, and `spans` is NOT: both are one run
+ * per row of each side, 2+2+8+8 = 20, at either geometry. A second mark with the four sides in four colours
+ * and a read of the pixel at each side's own midpoint is what holds the index to top, right, bottom, left.
+ * HOW ITS ABSENCE WOULD SHOW: `grep -c '@PAINT'` over a run's output answers the same number before and after
+ * any change to the border arm, and no row anywhere reports a span or a pixel that a border laid.
+ * RETIREMENT: this record goes when a fixture this host runs rasterizes a border mark and holds it to a
+ * derived area. */
 #ifndef ENGINE_HOST_BROWSER_CORE_PAINT_DISPLAY_LIST_RASTER_H
 #define ENGINE_HOST_BROWSER_CORE_PAINT_DISPLAY_LIST_RASTER_H
 

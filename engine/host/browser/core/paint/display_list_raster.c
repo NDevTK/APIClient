@@ -2,7 +2,6 @@
    a list, why a canvas mark's own rectangle is read by nothing here, why a rectangle goes through the path
    road rather than through a scanline loop of this file's own, and what the border mark is waiting on. */
 #include <math.h>
-#include <stdbool.h>
 #include <stddef.h>
 
 #include "check.h"
@@ -45,54 +44,346 @@ void display_list_raster_region_size(const CssPx region[4], double device_px_per
     *height = (int)h;
 }
 
-/* ONE MARK'S AREA IN DEVICE PIXELS, or false when the kind lays no area. The rectangle a `DISPLAY_MARK_FILL_
-   CANVAS` carries is NOT READ, which is display_list_raster.h's own paragraph and core/paint/display_list.h's
-   rule: CSS 2.1 §2.3.1 "The canvas" makes the area infinite, so its intersection with a finite surface is the
-   whole of that surface whatever region this user agent established. */
-static bool dlr_fill_area(const DisplayMark *m, double s, const RasterSurface *surface, double out[4])
+/* ONE FILL — a path this file has already built, a colour, and the two counters. It is an entry rather than
+   inline code because a border mark lays UP TO FOUR of them where a fill mark lays one, and the flatten, the
+   sink and the two-counter identity are the same three statements at every one. Two spellings of them would
+   be two answers to one question, which is the argument core/graphics/rasterizer.h makes about its own fill
+   rules and the same reason this component has no scanline loop.
+   A PATH AND AN EDGE LIST PER FILL, FRESH. `raster_path_flatten` APPENDS to its output, so a shared edge list
+   would fill each shape with every shape before it. */
+static void dlr_fill(const RasterPath *p, const CssColor *color, RasterSurface *surface,
+                     DisplayListRasterCount *count)
 {
-    switch (m->kind) {
-    case DISPLAY_MARK_FILL_RECT:
-        out[0] = m->rect[0].px * s;
-        out[1] = m->rect[1].px * s;
-        out[2] = m->rect[2].px * s;
-        out[3] = m->rect[3].px * s;
-        return true;
-    case DISPLAY_MARK_FILL_CANVAS:
-        out[0] = 0.0;
-        out[1] = 0.0;
-        out[2] = (double)surface->width;
-        out[3] = (double)surface->height;
-        return true;
-    case DISPLAY_MARK_BORDER:
-        DFAIL("a `DISPLAY_MARK_BORDER` reached the rasterizer, which has no arm for it — see "
-              "core/paint/display_list_raster.h's residual. FOUR SIDE RECTANGLES ARE NOT THE THING TO BUILD: "
-              "two adjacent sides OVERLAP where they meet, so a box with two border colours would come out "
-              "with one painted over the other in a square whose winner is whichever loop ran last. What the "
-              "next diff lays is four MITRED QUADRILATERALS through `raster_path_move_to` and "
-              "`raster_path_line_to` — each side a trapezoid from its own outer edge to the inner edge, "
-              "meeting its neighbours on the diagonal through the padding-edge corner — which partitions the "
-              "border area with no overlap and no gap, and which css-backgrounds-3 §4.4 \"Color and Style "
-              "Transitions\" admits, that section constraining the region without settling the shape: "
-              "\"However it is not defined what these transitions look like or what function maps from this "
-              "ratio to a point on the curve\". AND THE STYLE IS THE OTHER HALF: CSS 2.1 §8.5.3's "
-              "`<border-style>` has ten values and eight of them draw something other than a filled band, so "
-              "an arm that filled every non-`none` side solid would paint a `dotted` rule as a `solid` one, "
-              "which is WRONG ink rather than narrow ink");
-        /* THE RELEASE ARM, AND IT DRAWS NOTHING. A kind this file has no area for is one whose ink it
-           cannot place, so the two answers available are no ink and a guess, and only one of them can put
-           the WRONG thing on a page. It LEAVES THE SURFACE COHERENT, which is the question CLAUDE.md makes
-           a release arm answer: a bitmap short one mark is a picture with a piece missing, and every later
-           mark composites onto it exactly as it would have. */
-        return false;
+    RasterEdges e;
+    RasterPaint paint;
+    size_t nspans;
+
+    /* THE COLOUR IS READ WITHOUT ASKING THE CASCADE ANYTHING. core/paint/display_list.h's append asserts that
+       every mark's colour has already been through CSS Color 4 §11 "Converting Colors" into sRGB — and it
+       asks that over a SWITCH, so a border mark's FOUR side colours are each held to it and its unused
+       `color` field is not; the CLAMP and the 8-bit quantization are core/graphics/raster_surface.h's, which
+       that same header says. */
+    DCHECKF(color->space == CSS_COLOR_SPACE_SRGB,
+            "a mark's colour reached the rasterizer in colour space %d rather than in sRGB, which "
+            "core/paint/display_list.c asserts at the one door ink enters a list by", (int)color->space);
+    raster_edges_init(&e);
+    raster_path_flatten(p, RASTER_FLATTEN_TOLERANCE_PX, &e);
+    raster_paint_init(&paint, surface, color->c[0], color->c[1], color->c[2], color->a);
+    /* THE REGION HANDED TO THE FILL IS THE SURFACE'S OWN, which is what makes core/graphics/raster_surface.c's
+       bounds `CHECK` on every span an identity rather than a hope: the fill discards what falls outside the
+       region it was given, so a region larger than the surface would be a run composited past the end of the
+       allocation. */
+    nspans = raster_fill(&e, RASTER_FILL_NONZERO, surface->width, surface->height,
+                         raster_paint_span, &paint);
+    /* TWO COUNTERS IN TWO COMPONENTS, HELD TO EACH OTHER. core/graphics/raster_surface.h states why the sink
+       keeps its own: "a fill that emitted runs nobody received and a fill that emitted none are the same
+       number at the caller, and two counts that must agree are not". Both are this codebase's own arithmetic,
+       so a disagreement is a run that was reported to nobody. */
+    DCHECKF(nspans == paint.spans,
+            "a fill emitted %zu runs and the surface received %zu", nspans, paint.spans);
+    raster_edges_free(&e);
+    count->spans += paint.spans;
+    count->pixels += paint.pixels;
+}
+
+/* ONE AXIS-ALIGNED RECTANGLE, through the path road for display_list_raster.h's own reason: a rectangle whose
+   edges do not land on pixel boundaries has FRACTIONAL COVERAGE at every edge pixel, and a coverage written
+   here would be a second answer to the question core/graphics/rasterizer.c already answers analytically. */
+static void dlr_fill_rect(double x, double y, double w, double h, const CssColor *color,
+                          RasterSurface *surface, DisplayListRasterCount *count)
+{
+    RasterPath p;
+
+    raster_path_init(&p);
+    raster_path_rect(&p, x, y, w, h);
+    dlr_fill(&p, color, surface, count);
+    raster_path_free(&p);
+}
+
+/* ONE CONVEX QUADRILATERAL, its four vertices in order — MOVE, three LINEs and a CLOSE, which is exactly
+   `raster_path_rect`'s own spelling one shape over and reaches neither `cos`, `sin` nor `hypot`.
+   THAT IS NOT AN INCIDENTAL PROPERTY AND IS THE REASON A SIDE IS A QUADRILATERAL RATHER THAN AN OUTLINE.
+   core/graphics/raster_path.c's residual narrows the byte-for-byte agreement of two HOSTS to paths with no
+   `CANVAS_PATH_OP_ARC` in them, because a vertex off `cos` and `sin` is a function of the platform's math
+   library; those calls sit in `rp_flatten_arc`, `rp_quad_segments` and `rp_bezier_segments` and a MOVE, a
+   LINE and a CLOSE reach `rp_emit` alone. So a border drawn this way keeps core/graphics/rasterizer.h's
+   cross-host checksum oracle intact, and the first style that needs a curve is the first that does not. */
+static void dlr_quad(RasterPath *p, const double q[4][2])
+{
+    raster_path_move_to(p, q[0][0], q[0][1]);
+    raster_path_line_to(p, q[1][0], q[1][1]);
+    raster_path_line_to(p, q[2][0], q[2][1]);
+    raster_path_line_to(p, q[3][0], q[3][1]);
+    raster_path_close_path(p);
+}
+
+/* THE SHOELACE AREA OF ONE QUADRILATERAL, unsigned. This exists for the assert in `dlr_border` and for
+   nothing else: it reads the VERTICES that are about to be handed to the path, so the number it answers is a
+   function of the coordinates the fill will actually see rather than of the extents they were built from. */
+static double dlr_quad_area(const double q[4][2])
+{
+    double twice = 0.0;
+    int k;
+
+    for (k = 0; k < 4; k++) {
+        const double *a = q[k], *b = q[(k + 1) & 3];
+        twice += a[0] * b[1] - b[0] * a[1];
     }
-    /* A KIND OUTSIDE THE VOCABULARY, WHICH THE DOOR ALREADY REFUSED. core/paint/display_list.c asserts
-       `dl_kind_is_defined` on every append and display_list.h states that an append is "the ONLY way ink
-       enters a list", so this is unreachable and a crash here would be a second answer to a question that
-       component already owns. THERE IS NO `default:` ABOVE ON PURPOSE: `-Wswitch` is what names this site
-       the day a fourth kind lands, which display_list.h names as the mechanism, and a `default:` would take
-       that away. */
-    return false;
+    return fabs(twice) * 0.5;
+}
+
+/* WHAT THE FOUR WEDGES COVER, LESS CSS 2.1 §8.1 "Box dimensions"' BORDER AREA — positive when something is
+   covered twice and negative when something is covered by nothing.
+   IT IS CALLED FROM THE DCHECK IN `dlr_border` AND FROM NOWHERE ELSE, which is core/paint/display_list.c's
+   own idiom for a predicate an assert owns and is why the four shoelaces cost a release build nothing: a
+   `DCHECKF`'s condition is `((void)sizeof(cond))` there and its message arguments go through
+   `APICLIENT_FMT_UNUSED`, which is a `sizeof` too, so neither is evaluated. `clang -Wall -DAPICLIENT_DEV=0`
+   therefore reports this as not needed and not emitted; a reader meeting that has found the assert compiled
+   out and not a dead predicate, and the answer is neither to drop it nor to call it outside the DCHECK. */
+static double dlr_wedge_surplus(const double q[4][4][2], double w, double h,
+                                double t, double r, double b, double l)
+{
+    double wedges = 0.0;
+    int i;
+
+    for (i = 0; i < 4; i++) wedges += dlr_quad_area(q[i]);
+    return wedges - (w * h - (w - l - r) * (h - t - b));
+}
+
+/* THE FOUR MITRED WEDGES OF ONE BORDER MARK, in device pixels, indexed top, right, bottom, left — which is
+ * core/paint/display_list.h's own order for `side` and `used_value_border_widths_px`' order for the widths it
+ * came from, so the index cannot come apart from the derivation by a rotation.
+ *
+ * EACH SIDE IS A TRAPEZOID AND NOT A RECTANGLE, WHICH IS THE WHOLE OF WHAT THIS GEOMETRY DECIDES. Four side
+ * RECTANGLES overlap in a square at every corner, so a box with two border colours would come out with one
+ * painted over the other in a square whose winner is whichever loop ran last — WRONG ink rather than narrow
+ * ink. A wedge runs from a side's own outer edge to the padding edge and meets its two neighbours on the
+ * DIAGONAL through the padding-edge corner, which partitions the border area with no overlap and no gap.
+ *
+ * THE MITRE IS A CONFORMING CHOICE AND THE STANDARD SAYS SO IN AS MANY WORDS. css-backgrounds-3 §3.2 "Line
+ * Patterns: the border-style properties" ends with "Note: This specification does not define how borders of
+ * different styles should be joined in the corner", which is the note that governs a SQUARE corner and is
+ * therefore this component's; css-backgrounds-3 §4.4 "Color and Style Transitions" is one level down inside
+ * §4 "Rounded Corners" and constrains the region for a corner that has radii — "Color and style transitions
+ * must be contained within the segment of the border that intersects the smallest rectangle that contains
+ * both border radii as well as the center of the inner curve (which may be a point representing the corner
+ * of the padding edge, if the border radii are smaller than the border width)" — and then leaves the shape:
+ * "However it is not defined what these transitions look like or what function maps from this ratio to a
+ * point on the curve". At a zero radius that smallest rectangle IS the corner square between the border-box
+ * corner and the padding-edge corner, and the diagonal lies inside it, so the mitre satisfies §4.4's MUST as
+ * well. §3.2's note is cited first because it is the one that reaches a corner with no radius at all.
+ *
+ * THE PICK IS LOAD-BEARING FOR THE COMPONENT AND NOT FOR ONE STYLE, which is what separates it from the
+ * splits `dlr_border_side` refuses below: without SOME partition of the corner there is no way to draw any
+ * border at all, so this choice is forced by the problem, where a `double` line's thickness is a second
+ * choice a side that is already drawable would need. */
+typedef struct { double x0, y0, x1, y1, xi0, yi0, xi1, yi1; } DlrBorderEdges;
+
+static void dlr_border_wedges(const DlrBorderEdges *b, double q[4][4][2])
+{
+    /* top */
+    q[0][0][0] = b->x0;  q[0][0][1] = b->y0;
+    q[0][1][0] = b->x1;  q[0][1][1] = b->y0;
+    q[0][2][0] = b->xi1; q[0][2][1] = b->yi0;
+    q[0][3][0] = b->xi0; q[0][3][1] = b->yi0;
+    /* right */
+    q[1][0][0] = b->x1;  q[1][0][1] = b->y0;
+    q[1][1][0] = b->x1;  q[1][1][1] = b->y1;
+    q[1][2][0] = b->xi1; q[1][2][1] = b->yi1;
+    q[1][3][0] = b->xi1; q[1][3][1] = b->yi0;
+    /* bottom */
+    q[2][0][0] = b->x1;  q[2][0][1] = b->y1;
+    q[2][1][0] = b->x0;  q[2][1][1] = b->y1;
+    q[2][2][0] = b->xi0; q[2][2][1] = b->yi1;
+    q[2][3][0] = b->xi1; q[2][3][1] = b->yi1;
+    /* left */
+    q[3][0][0] = b->x0;  q[3][0][1] = b->y1;
+    q[3][1][0] = b->x0;  q[3][1][1] = b->y0;
+    q[3][2][0] = b->xi0; q[3][2][1] = b->yi0;
+    q[3][3][0] = b->xi0; q[3][3][1] = b->yi1;
+}
+
+/* ONE SIDE'S INK, WHICH IS ITS STYLE'S QUESTION AND NOT ITS WIDTH'S. CSS 2.1 §8.5.3 "Border style:
+ * 'border-top-style', 'border-right-style', 'border-bottom-style', 'border-left-style', and 'border-style'"
+ * and css-backgrounds-3 §3.2 "Line Patterns: the border-style properties" define the same ten values, and
+ * exactly ONE of them is a single filled band: CSS 2.1 §8.5.3's `solid`, "The border is a single line segment", which
+ * §3.2 renders as "A single line segment". Every other value that paints draws something else, so an arm that
+ * filled every non-`none` side solid would paint a `dotted` rule as a `solid` one.
+ *
+ * A ZERO-WIDTH SIDE RETURNS BEFORE THE STYLE IS READ, and that is the algorithm's own precondition rather
+ * than a selector: a band of zero extent covers no pixel whatever is drawn in it, which is the same rule
+ * core/paint/box_paint.c applies to a box whose four used widths are all zero. It is also what keeps the
+ * refusals below from crashing on ink nobody asked for — a `border-style: dotted; border-width: 0` computes
+ * to a used width of zero, which core/layout/used_value.c states at its own site ("0 for a `none`/`hidden`
+ * style, 1/3/5px for the three keywords, the absolutized length otherwise").
+ *
+ * A TRANSPARENT SIDE IS STILL FILLED, deliberately and for core/paint/box_paint.c's own stated reason: an
+ * alpha of zero does not settle whether a side paints, so this component composites it and lets the count
+ * report the work. There is no alpha test here, which is what keeps `pixels` a function of the GEOMETRY and
+ * not of the colour. */
+static void dlr_border_side(const DisplayBorderSide *side, const double q[4][2], RasterSurface *surface,
+                            DisplayListRasterCount *count)
+{
+    RasterPath p;
+
+    if (side->width.px == 0.0) return;
+    switch (side->style) {
+    /* CSS 2.1 §8.5.3's `none` — "No border; the computed border width is zero" — and its `hidden`, "Same as
+       'none', except in terms of border conflict resolution for table elements". Both paint nothing and the
+       early return above has already taken them, since both compute to a used width of zero; they are named
+       here so that the day one of them stops doing so this arm says what it draws. */
+    case DISPLAY_BORDER_STYLE_NONE:
+    case DISPLAY_BORDER_STYLE_HIDDEN:
+        return;
+    /* THE ONE STYLE THIS COMPONENT DRAWS. */
+    case DISPLAY_BORDER_STYLE_SOLID:
+        raster_path_init(&p);
+        dlr_quad(&p, q);
+        dlr_fill(&p, &side->color, surface, count);
+        raster_path_free(&p);
+        return;
+    case DISPLAY_BORDER_STYLE_DOUBLE:
+        DFAIL("a `double` border side reached the rasterizer, which draws only CSS 2.1 §8.5.3's `solid` — see "
+              "core/paint/display_list_raster.h's residual. THE GEOMETRY IS THIS COMPONENT'S AND THE SPLIT IS "
+              "NOT: CSS 2.1 §8.5.3 gives `double` as \"The border is two solid lines. The sum of the two lines and "
+              "the space between them equals the value of 'border-width'\", and css-backgrounds-3 §3.2 "
+              "\"Line Patterns: the border-style properties\" says the rest outright in its own parenthesis — "
+              "\"(The thickness of the lines is not specified, but the sum of the lines and the space must "
+              "equal border-width.)\". So a `double` side needs a RATIO no section states, where the mitre "
+              "above is forced by the problem rather than picked per style. WHAT THE NEXT DIFF BUILDS: a "
+              "sub-wedge entry beside `dlr_border_wedges` taking a fraction pair [a, b] and answering the "
+              "quadrilateral whose two edges are the wedge's outer and inner edges linearly interpolated at a "
+              "and at b — the full side being [0, 1] — and two calls of it at [0, 1/3] and [2/3, 1] with the "
+              "third named as this user agent's pick beside those two citations");
+        return;
+    case DISPLAY_BORDER_STYLE_DOTTED:
+        DFAIL("a `dotted` border side reached the rasterizer, which draws only CSS 2.1 §8.5.3's `solid` — see "
+              "core/paint/display_list_raster.h's residual. IT IS THE ONE STYLE WHOSE GEOMETRY IS NOT THIS "
+              "ROAD'S: css-backgrounds-3 §3.2 \"Line Patterns: the border-style properties\" gives it as \"A "
+              "series of round dots\", and a ROUND dot is `raster_path_ellipse`, whose vertices come off "
+              "`cos` and `sin` — so it is the first ink here whose bytes are a function of the platform's "
+              "math library, which is exactly the population core/graphics/raster_path.c's residual narrows "
+              "its two-host agreement away from. WHAT THE NEXT DIFF BUILDS: that residual's answer first, and "
+              "only then the dots; and a RHYTHM, which §3.2 leaves open in its own note — \"There is no "
+              "control over the spacing of the dots and dashes, nor over the length of the dashes. "
+              "Implementations are encouraged to choose a spacing that makes the corners symmetrical\"");
+        return;
+    case DISPLAY_BORDER_STYLE_DASHED:
+        DFAIL("a `dashed` border side reached the rasterizer, which draws only CSS 2.1 §8.5.3's `solid` — see "
+              "core/paint/display_list_raster.h's residual. THE SHAPE IS ALREADY THIS ROAD'S AND THE RHYTHM "
+              "IS THE GAP: css-backgrounds-3 §3.2 \"Line Patterns: the border-style properties\" gives it as "
+              "\"A series of square-ended dashes\", which is quadrilaterals and needs no curve, and then says "
+              "in its own note that \"There is no control over the spacing of the dots and dashes, nor over "
+              "the length of the dashes. Implementations are encouraged to choose a spacing that makes the "
+              "corners symmetrical\". WHAT THE NEXT DIFF BUILDS: a dash length and gap picked from the side's "
+              "used width and stated as this user agent's, distributed along the wedge's OUTER edge so that "
+              "§3.2's symmetry note is satisfiable, with each dash clipped to its own wedge — a dash that "
+              "crossed the mitre diagonal would paint into a neighbour's side, which is the overlap the "
+              "wedges exist to remove");
+        return;
+    /* CSS 2.1 §8.5.3's FOUR 3-D STYLES, which differ from each other in appearance and from everything above
+       in one way that matters here: their colour is DERIVED rather than declared. CSS 2.1 §8.5.3 says "The color of
+       borders drawn for values of 'groove', 'ridge', 'inset', and 'outset' depends on the element's border
+       color properties, but UAs may choose their own algorithm to calculate the actual colors used", and
+       css-backgrounds-3 §3.2 names the usual one — "(This is typically achieved by creating a "shadow" from
+       two colors that are slightly lighter and darker than the specified border-color.)". */
+    case DISPLAY_BORDER_STYLE_GROOVE:
+    case DISPLAY_BORDER_STYLE_RIDGE:
+    case DISPLAY_BORDER_STYLE_INSET:
+    case DISPLAY_BORDER_STYLE_OUTSET:
+        DFAIL("a `groove`, `ridge`, `inset` or `outset` border side reached the rasterizer, which draws only "
+              "CSS 2.1 §8.5.3's `solid` — see core/paint/display_list_raster.h's residual. THE MISSING THING "
+              "IS A COLOUR AND NOT A SHAPE: core/css/css_color.h has `css_color_parse`, `css_color_convert`, "
+              "`css_color_quantize_8bit` and `css_color_serialize_html` and no entry that LIGHTENS or DARKENS "
+              "a colour at all, so there is nothing here to compute the two tones css-backgrounds-3 §3.2 "
+              "describes — \"(This is typically achieved by creating a \\\"shadow\\\" from two colors that "
+              "are slightly lighter and darker than the specified border-color.)\" — and CSS 2.1 §8.5.3 "
+              "leaves the algorithm to the UA. WHAT THE NEXT DIFF BUILDS: that derivation in "
+              "core/css/css_color.h, over a colour space CSS Color 4 names rather than by scaling sRGB "
+              "components, which is the same rule this road already obeys about conversion; the SHAPE is then "
+              "two half-width sub-wedges for `groove` and `ridge` and one whole wedge for `inset` and "
+              "`outset`, which is the `double` entry above and not a second one");
+        return;
+    }
+    /* A STYLE OUTSIDE THE VOCABULARY, WHICH THE DOOR ALREADY REFUSED. core/paint/display_list.c asserts
+       `dl_border_style_is_defined` over every side of every border mark it appends, so this is unreachable
+       and a crash here would be a second answer to a question that component already owns. THERE IS NO
+       `default:` ABOVE ON PURPOSE: `-Wswitch` is what names this site the day an eleventh `<border-style>`
+       value lands, and a `default:` would take that away. */
+}
+
+/* ONE BORDER MARK — CSS 2.1 §E.2 "Painting order"'s "border of element", all four sides, in the order
+ * core/paint/display_list.h indexes them. */
+static void dlr_border(const DisplayMark *m, double s, RasterSurface *surface,
+                       DisplayListRasterCount *count)
+{
+    DlrBorderEdges b;
+    double q[4][4][2];
+    double w, h, t, r, bw, l;
+    int i;
+
+    /* EVERY OPERAND BELOW IS THIS ENGINE'S OWN ARITHMETIC, which is the line CLAUDE.md draws for what a
+       DCHECK may stand on: the rectangle is core/dom/element_view.c's `element_view_bounding_box_px` and the
+       four widths are core/layout/used_value.c's `used_value_border_widths_px`, neither of which is a number
+       a document declared. core/paint/display_list.c already asserts the widths non-negative at the append;
+       what it does not ask, and what only a consumer that has both in one hand can, is whether the two
+       DERIVATIONS AGREE. */
+    DCHECKF(isfinite(m->rect[2].px) && m->rect[2].px >= 0.0 &&
+            isfinite(m->rect[3].px) && m->rect[3].px >= 0.0,
+            "a border mark's box is %g x %g CSS pixels — CSS 2.1 §8.1 \"Box dimensions\"' border edge is the "
+            "outer edge of an AREA, so a negative or non-finite extent is core/dom/element_view.c's rectangle "
+            "having lost an operand rather than a box any layout produced",
+            m->rect[2].px, m->rect[3].px);
+    w = m->rect[2].px * s;
+    h = m->rect[3].px * s;
+    t = m->side[0].width.px * s;
+    r = m->side[1].width.px * s;
+    bw = m->side[2].width.px * s;
+    l = m->side[3].width.px * s;
+    /* THE TWO DERIVATIONS HELD TO EACH OTHER. CSS 2.1 §8.1 makes the border box the content box plus padding
+       plus border on each axis and every one of those terms is non-negative, so the two widths on an axis
+       cannot exceed the box — a border edge that did would put the padding edge INSIDE OUT, and the four
+       wedges below would then be a bow tie whose nonzero winding paints a shape no cascade asked for rather
+       than crashing. */
+    DCHECKF(l + r <= w && t + bw <= h,
+            "a border box of %g x %g device pixels carries used widths of %g/%g/%g/%g (top/right/bottom/left) "
+            "— CSS 2.1 §8.1 \"Box dimensions\" makes the border box the content box plus padding plus border "
+            "on each axis and all three are non-negative, so the two widths on an axis cannot exceed it. "
+            "core/dom/element_view.c's rectangle and core/layout/used_value.c's widths are two derivations of "
+            "ONE box and this is where they meet",
+            w, h, t, r, bw, l);
+    b.x0 = m->rect[0].px * s;
+    b.y0 = m->rect[1].px * s;
+    b.x1 = b.x0 + w;
+    b.y1 = b.y0 + h;
+    b.xi0 = b.x0 + l;
+    b.yi0 = b.y0 + t;
+    b.xi1 = b.x1 - r;
+    b.yi1 = b.y1 - bw;
+    dlr_border_wedges(&b, q);
+
+    /* THE PARTITION, ASSERTED AGAINST A NUMBER THE WEDGES DID NOT PRODUCE. The four shoelace areas are read
+       off the VERTICES about to be handed to the path; the right-hand side is the border area written as the
+       difference of two products of EXTENTS, which shares no term with them. The two agree exactly in real
+       arithmetic — the top and bottom wedges sum to (t+b)(2w-l-r)/2 and the left and right to (l+r)(2h-t-b)/2,
+       whose total is wt+wb+hl+hr-(l+r)(t+b), which is w*h-(w-l-r)*(h-t-b).
+       IT IS NOT A CHECK THAT CANNOT FAIL, AND THE DEFECT IT CATCHES IS THE ONE THIS ARM EXISTS TO AVOID: four
+       side RECTANGLES sum to w(t+b)+h(l+r), which exceeds the border area by exactly (l+r)(t+b) — the four
+       corner squares, counted twice — so the rectangle mistake shows up here as a surplus with a name rather
+       than as ink whose winner is whichever loop ran last.
+       THE TOLERANCE IS FLOATING-POINT AND NOT A MARGIN OF DESIGN. A shoelace over coordinates of magnitude
+       `w` accumulates about `w*h * DBL_EPSILON` of representation error across its forty terms; a geometric
+       surplus is (l+r)(t+b), which is at least the square of the smallest border width a display can carry
+       and is many orders above it. */
+    DCHECKF(fabs(dlr_wedge_surplus((const double (*)[4][2])q, w, h, t, r, bw, l)) <= 1e-9 * (w * h + 1.0),
+            "the four mitred wedges of a border miss CSS 2.1 §8.1 \"Box dimensions\"' border area of %g device "
+            "pixels by %g — the wedges PARTITION that area with no overlap and no gap, so a SURPLUS is the "
+            "corners being covered twice (four side rectangles overlap by exactly (l+r)(t+b), which is %g "
+            "here) and a SHORTFALL is a corner nothing covers",
+            w * h - (w - l - r) * (h - t - bw),
+            dlr_wedge_surplus((const double (*)[4][2])q, w, h, t, r, bw, l), (l + r) * (t + bw));
+
+    for (i = 0; i < 4; i++) dlr_border_side(&m->side[i], q[i], surface, count);
 }
 
 void display_list_raster(const DisplayList *dl, double device_px_per_css_px, RasterSurface *surface,
@@ -118,46 +409,39 @@ void display_list_raster(const DisplayList *dl, double device_px_per_css_px, Ras
 
     for (i = 0; i < dl->n; i++) {
         const DisplayMark *m = &dl->v[i];
-        RasterPath p;
-        RasterEdges e;
-        RasterPaint paint;
-        double a[4];
-        size_t nspans;
+        double s = device_px_per_css_px;
 
-        if (!dlr_fill_area(m, device_px_per_css_px, surface, a)) continue;
-        /* THE COLOUR IS READ WITHOUT ASKING THE CASCADE ANYTHING. core/paint/display_list.h's append asserts
-           that every mark's colour has already been through CSS Color 4 §11 "Converting Colors" into sRGB,
-           expressly so that no consumer of a list asks a question the painter already answered; the CLAMP
-           and the 8-bit quantization are core/graphics/raster_surface.h's, which that same header says. */
-        DCHECKF(m->color.space == CSS_COLOR_SPACE_SRGB,
-                "a fill mark's colour reached the rasterizer in colour space %d rather than in sRGB, which "
-                "core/paint/display_list.c asserts at the one door ink enters a list by",
-                (int)m->color.space);
-        /* A PATH AND AN EDGE LIST PER MARK, FRESH. `raster_path_flatten` APPENDS to its output, so a shared
-           edge list would fill each mark with every mark before it — and a shared path would need a reset
-           entry core/graphics/raster_path.h does not have and that is not this component's to add. */
-        raster_path_init(&p);
-        raster_path_rect(&p, a[0], a[1], a[2], a[3]);
-        raster_edges_init(&e);
-        raster_path_flatten(&p, RASTER_FLATTEN_TOLERANCE_PX, &e);
-        raster_paint_init(&paint, surface, m->color.c[0], m->color.c[1], m->color.c[2], m->color.a);
-        /* THE REGION HANDED TO THE FILL IS THE SURFACE'S OWN, which is what makes core/graphics/
-           raster_surface.c's bounds `CHECK` on every span an identity rather than a hope: the fill discards
-           what falls outside the region it was given, so a region larger than the surface would be a run
-           composited past the end of the allocation. */
-        nspans = raster_fill(&e, RASTER_FILL_NONZERO, surface->width, surface->height,
-                             raster_paint_span, &paint);
-        /* TWO COUNTERS IN TWO COMPONENTS, HELD TO EACH OTHER. core/graphics/raster_surface.h states why the
-           sink keeps its own: "a fill that emitted runs nobody received and a fill that emitted none are the
-           same number at the caller, and two counts that must agree are not". Both are this codebase's own
-           arithmetic, so a disagreement is a run that was reported to nobody. */
-        DCHECKF(nspans == paint.spans,
-                "a fill emitted %zu runs and the surface received %zu", nspans, paint.spans);
-        raster_edges_free(&e);
-        raster_path_free(&p);
-
-        count->marks++;
-        count->spans += paint.spans;
-        count->pixels += paint.pixels;
+        switch (m->kind) {
+        /* THE RECTANGLE KIND, WHOSE RECTANGLE IS ITS AREA. */
+        case DISPLAY_MARK_FILL_RECT:
+            dlr_fill_rect(m->rect[0].px * s, m->rect[1].px * s, m->rect[2].px * s, m->rect[3].px * s,
+                          &m->color, surface, count);
+            count->marks++;
+            break;
+        /* THE CANVAS KIND, WHOSE RECTANGLE IS NOT READ AT ALL — display_list_raster.h's own paragraph and
+           core/paint/display_list.h's rule: CSS 2.1 §2.3.1 "The canvas" makes the area infinite, so its
+           intersection with a finite surface is the whole of that surface whatever region this user agent
+           established. */
+        case DISPLAY_MARK_FILL_CANVAS:
+            dlr_fill_rect(0.0, 0.0, (double)surface->width, (double)surface->height,
+                          &m->color, surface, count);
+            count->marks++;
+            break;
+        /* THE BORDER KIND, WHICH IS UP TO FOUR FILLS AND ONE MARK. `marks` counts marks this rasterizer had
+           an arm for and PROCESSED, which is what the two kinds above already mean by it; a border whose
+           sides are all zero-width, or whose styles this component still refuses in a release build, is
+           counted here and contributes nothing to `spans` and `pixels`, so the two numbers beside it are
+           what say how much of it was drawn. */
+        case DISPLAY_MARK_BORDER:
+            dlr_border(m, s, surface, count);
+            count->marks++;
+            break;
+        }
+        /* A KIND OUTSIDE THE VOCABULARY, WHICH THE DOOR ALREADY REFUSED. core/paint/display_list.c asserts
+           `dl_kind_is_defined` on every append and display_list.h states that an append is "the ONLY way ink
+           enters a list", so a fourth kind is unreachable here and a crash would be a second answer to a
+           question that component already owns. THERE IS NO `default:` ABOVE ON PURPOSE: `-Wswitch` is what
+           names this site the day one lands, which display_list.h names as the mechanism, and a `default:`
+           would take that away. */
     }
 }
