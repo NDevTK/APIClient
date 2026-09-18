@@ -648,8 +648,16 @@ IntrinsicInlineSizes intrinsic_outer_contribution(lxb_dom_element_t *el, Intrins
    THE KEYWORD IS STILL ASSERTED, and the assertion is the one this file has always made: §3.2's level-3
    additions (`stretch`, `min-content`, `max-content`, `fit-content`, `calc-size()`) are values this engine
    records no computed-value rule for, so one arriving here is a value the cascade produced and no section of
-   it defines — core/layout/used_value.c asserts the same thing about the same grammar. */
-static bool is_declared_sizing_px(lxb_dom_element_t *ch, const char *name, const char *initial, CssPx *out)
+   it defines — core/layout/used_value.c asserts the same thing about the same grammar.
+   IT IS EXPORTED BECAUSE §5.2 IS NOT ITS ONLY CONSUMER: css-flexbox-1 §9.9.3 "Flex Item Intrinsic Size
+   Contributions" reads the same three properties of a FLEX ITEM for the same reason — a flex item's
+   percentage main size resolves against its flex container's inner main size, which is the number
+   core/layout/flex_intrinsic_size.h is being run to produce, so §5.2.1's cyclic case is the same case there.
+   WHAT IS NOT SHARED IS THE COMPOSITION, and that is the whole reason this is the per-property half and not
+   `is_declared_inline_sizes`: §5.2 makes a declared size REPLACE the measurement and §9.9.3 takes the LARGER
+   of the two. Handing a flex item the composed entry would report one section's answer under the other's
+   name. */
+bool intrinsic_declared_sizing_px(lxb_dom_element_t *ch, const char *name, const char *initial, CssPx *out)
 {
     CssLength len = css_computed_length(ch, name);
     CssPx declared, surround;
@@ -731,11 +739,11 @@ static IntrinsicInlineSizes is_declared_inline_sizes(lxb_dom_element_t *ch, Intr
     IntrinsicInlineSizes out = measured;
     CssPx v;
 
-    if (is_declared_sizing_px(ch, "width", "auto", &v)) {
+    if (intrinsic_declared_sizing_px(ch, "width", "auto", &v)) {
         out.min_content = v;
         out.max_content = v;
     }
-    if (is_declared_sizing_px(ch, "max-width", "none", &v)) {
+    if (intrinsic_declared_sizing_px(ch, "max-width", "none", &v)) {
         out.min_content = css_px_min(out.min_content, v);
         out.max_content = css_px_min(out.max_content, v);
     }
@@ -746,7 +754,7 @@ static IntrinsicInlineSizes is_declared_inline_sizes(lxb_dom_element_t *ch, Intr
        `is_contribution`'s own recorded reasoning true: a negative MARGIN on this child is added after this
        returns and can still drive the outer pair below zero, so the non-negativity that function declines to
        assert is still not assertable. */
-    if (!is_declared_sizing_px(ch, "min-width", "auto", &v)) v = css_px(0.0);
+    if (!intrinsic_declared_sizing_px(ch, "min-width", "auto", &v)) v = css_px(0.0);
     out.min_content = css_px_max(out.min_content, v);
     out.max_content = css_px_max(out.max_content, v);
     return out;

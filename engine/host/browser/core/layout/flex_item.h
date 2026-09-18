@@ -103,5 +103,23 @@ FlexItemChildKind flex_item_child_kind(lxb_dom_element_t *container, lxb_dom_nod
    items turns a maximum into a sum and reports a container wider than it is. */
 lxb_dom_node_t *flex_item_text_sequence_end(lxb_dom_element_t *container, lxb_dom_node_t *first);
 
+/* §4.4 "Collapsed Items"' COLLAPSED FLEX ITEM — true where `item`'s computed `visibility` is `collapse`.
+   §4.4's first sentence is the whole definition: "Specifying visibility: collapse on a flex item causes it to
+   become a collapsed flex item", and css-display-3 §4 "Invisibility: the visibility property" is where the
+   keyword is declared, in terms that name this section back — "collapse indicates that the box is collapsed,
+   which can cause it to take up less space than otherwise in a formatting-context-specific way; see …
+   collapsed flex items in flex layout".
+   IT IS ASKED BY ONE OF §9.9's TWO SECTIONS AND MUST NOT BE ASKED BY THE OTHER, which is why the question is
+   an entry here rather than a line at the walk that wants it. §9.9.1.2 and §9.9.1.3 both state their operand
+   as the "non-collapsed" flex items; §9.9.2 "Flex Container Intrinsic Cross Sizes" states neither of its as
+   that, because §4.4 gives a collapsed item a CROSS-axis effect the main axis does not have — "the collapsed
+   flex item is removed from rendering entirely, but leaves behind a strut that keeps the flex line's
+   cross-size stable". A reader who finds the cross walk not calling this has found that sentence and not an
+   omission.
+   AN ANONYMOUS ITEM IS NEVER ONE and cannot reach this entry: §4 makes that box unstyleable, so its
+   `visibility` is the initial `visible`, and asking the CONTAINER — the only element in reach — would answer
+   about the wrong box. That is why this takes an ELEMENT and not a node. */
+bool flex_item_is_collapsed(lxb_dom_element_t *item);
+
 
 #endif

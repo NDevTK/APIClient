@@ -121,6 +121,25 @@ typedef struct {
    classification core/layout/block_flow.c owns. */
 IntrinsicInlineSizes intrinsic_inline_sizes(lxb_dom_element_t *el);
 
+/* ONE OF `el`'s THREE INLINE SIZING PROPERTIES as a CONTENT-box width in CSS pixels, for an INTRINSIC pass —
+   true when the property states a size the caller must apply, false when it states none. `name` is `width`,
+   `min-width` or `max-width` and `initial` is that property's initial value (`auto`, `auto`, `none`), which is
+   the only keyword the assertion inside admits.
+   IT ANSWERS TWO SECTIONS AND COMPOSES NEITHER, and that is the point of exporting this half rather than the
+   pair: css-sizing-3 §5.2 "Intrinsic Contributions" makes a declared size REPLACE the box's measured one,
+   while css-flexbox-1 §9.9.3 "Flex Item Intrinsic Size Contributions" takes "the larger of its outer
+   min-content size and outer preferred size", a MAXIMUM. One entry, two compositions, and a caller that took
+   the wrong one would report one section's answer under the other's name.
+   THE FALSE ARM IS A REAL ANSWER AND NOT A REFUSAL: css-sizing-3 §3.2 gives each initial keyword no size, and
+   §5.2.1 "Intrinsic Contributions of Percentage-Sized Boxes" substitutes a CYCLIC percentage away — which a
+   percentage reaching an intrinsic pass always is, because it resolves against the very size that pass is
+   producing. A caller that wants §3.2's used 0 for a `min-width: auto` supplies it itself; this entry does not,
+   because css-flexbox-1 §4.5 "Automatic Minimum Size of Flex Items" is what overrides that zero for a flex
+   item and only the caller knows whether its box is one.
+   css-sizing-3 §3.3 "Box Edges for Sizing: the box-sizing property"' conversion is applied here, over the
+   INTRINSIC surround, so the result is a content-box width whichever `box-sizing` the box computed. */
+bool intrinsic_declared_sizing_px(lxb_dom_element_t *el, const char *name, const char *initial, CssPx *out);
+
 /* CSS 2.2 §9.4.2 "Inline formatting contexts"' CONTEXT OVER ONE RUN of `el`'s CONTENT — core/layout/
    block_flow.h's `BlockFlowRun`, the range between two of §9.2.1.1's block-level boxes — as CONTENT-box inline
    sizes in CSS pixels. The run's boxes are styled by `el`, which is what an ANONYMOUS box around them inherits
