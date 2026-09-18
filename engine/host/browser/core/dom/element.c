@@ -1055,14 +1055,24 @@ static JSValue js_el_attr_op(JSContext *ctx, JSValueConst this_val, int argc, JS
 {
     lxb_dom_element_t *el = element_of_value(this_val);
     const char *name;
-    size_t vl = 0;
     bool present;
     JSValue r;
 
     if (!el || argc < 1) return magic == 0 ? JS_UNDEFINED : JS_FALSE;
     name = concolic_name_cstr(ctx, argv[0]);   /* the declaration passes UNKNOWN input through as itself, so an unknown name denotes its SHAPE */
     if (!name) return JS_EXCEPTION;
-    present = lxb_dom_element_get_attribute(el, (const lxb_char_t *)name, strlen(name), &vl) != NULL;
+    /* DOM §4.9 "Interface Element"'s hasAttribute steps end "Return true if this has an attribute whose qualified name
+       is qualifiedName; otherwise false" — a PRESENCE question, which `lxb_dom_element_has_attribute` answers
+       and a non-NULL `get_attribute` does not. The two lexbor entries share ONE key lookup
+       (`lxb_dom_element_attr_by_name`, with the same HTML-namespace local-name folding), so the swap changes
+       nothing but whether the answer depends on the attribute having a VALUE.
+       Lexbor's tree construction sets a value only when the token carried one, so `<input disabled>` has the
+       attribute and NO value, and `get_attribute` answers NULL for it exactly as it does for an attribute that
+       is absent: `hasAttribute("disabled")` was FALSE for the spelling every page writes, and
+       toggleAttribute's no-force arm — `!present` — therefore SET an attribute it was asked to flip off.
+       core/layout/replaced_element.c states the same split for §4.8.3's `alt` and keeps a separate helper for
+       the EMPTINESS question; this call wants only the first of the two. */
+    present = lxb_dom_element_has_attribute(el, (const lxb_char_t *)name, strlen(name));
     switch (magic) {
     case 0:
         dom_cow_remove_attribute(el, name);   /* the taint goes with the value */

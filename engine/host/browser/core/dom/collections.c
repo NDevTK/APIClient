@@ -235,12 +235,15 @@ static bool coll_takes(int kind, const CollQuery *qy, const lxb_dom_node_t *c)
     }
     if (kind == COLL_LINKS) {
         /* §3.1.7 `document.links` is `a` AND `area` elements THAT HAVE AN href — the attribute is half the
-           definition, so an anchor used as a scroll target is not a link. */
-        size_t qn = 0, vl = 0;
+           definition, so an anchor used as a scroll target is not a link.
+           HAVING IT IS `has_attribute` AND NOT A NON-NULL VALUE: lexbor's tree construction sets a value only
+           where the token carried one, so `<a href>` has the attribute with NO value and `get_attribute`
+           answers NULL for it exactly as for an absent one — the element would have been dropped from the
+           collection. core/layout/replaced_element.c writes out the same split for §4.8.3's `alt`. */
+        size_t qn = 0;
         const lxb_char_t *q = lxb_dom_element_qualified_name((lxb_dom_element_t *)c, &qn);
         if (!q || !((qn == 1 && q[0] == 'a') || (qn == 4 && memcmp(q, "area", 4) == 0))) return false;
-        return lxb_dom_element_get_attribute((lxb_dom_element_t *)c,
-                                             (const lxb_char_t *)"href", 4, &vl) != NULL;
+        return lxb_dom_element_has_attribute((lxb_dom_element_t *)c, (const lxb_char_t *)"href", 4);
     }
     return true;
 }

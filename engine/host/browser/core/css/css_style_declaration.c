@@ -1853,14 +1853,30 @@ static bool cssd_attr_is_ascii_ci(const lxb_char_t *v, size_t vlen, const char *
     return true;
 }
 
+/* AN ATTRIBUTE SELECTOR'S `[attr]` IS A PRESENCE TEST, AND A PRESENCE TEST IS `lxb_dom_element_has_attribute`
+   — NEVER a non-NULL answer from `lxb_dom_element_get_attribute`. The two are not two spellings of one
+   question: lexbor's HTML tree construction sets an attribute's value only when the token carried one
+   (`html/tree.c`'s `if (token_attr->value_begin != NULL)`), so a VALUELESS attribute — which is how every
+   boolean content attribute is actually written — leaves `attr->value` NULL, and `lxb_dom_attr_value` answers
+   NULL for that exactly as it answers NULL for an attribute that is not there. `<div hidden>` therefore did
+   not match `[hidden]` while `<div hidden="">` did, one rule, two spellings, opposite boxes.
+   THE REASON WAS ALREADY WRITTEN DOWN IN THIS TREE and the defect recurred anyway, which is the part worth
+   keeping: core/layout/replaced_element.c draws this same split for §4.8.3's `alt` — "Attribute PRESENCE and
+   attribute EMPTINESS are two questions … Lexbor's `get_attribute` answers NULL for both, which is why
+   presence goes through `has_attribute`" — and it keeps a SECOND helper for the emptiness question rather
+   than letting one predicate answer both. The wrong spelling is shorter and reads as if it means what you
+   want, which is the whole of why it comes back; where a rule needs the VALUE as well (the `i`-flagged
+   `[hidden=until-found i]` below), the presence is asked first and the value is read second. */
 static const char *cssd_ua_hidden(lxb_dom_element_t *el, const lxb_char_t *tag, size_t taglen)
 {
     size_t vlen = 0;
-    const lxb_char_t *v = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"hidden", 6, &vlen);
+    const lxb_char_t *v;
 
-    if (!v) return NULL;
+    if (!lxb_dom_element_has_attribute(el, (const lxb_char_t *)"hidden", 6)) return NULL;
+    v = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"hidden", 6, &vlen);
     if (taglen == 5 && memcmp(tag, "embed", 5) == 0) return "inline";
-    /* `until-found` sets content-visibility, and the box stays */
+    /* `until-found` sets content-visibility, and the box stays. `v` is NULL for a valueless `hidden`, which
+       `cssd_attr_is_ascii_ci` answers FALSE for — a bare `hidden` is not `hidden="until-found"`. */
     if (cssd_attr_is_ascii_ci(v, vlen, "until-found")) return NULL;
     return "none";
 }
@@ -1905,10 +1921,12 @@ static const char *cssd_ua_display_conditional(lxb_dom_element_t *el, const lxb_
        gives, written down so that it stays right when a third rule joins them. */
     hidden = cssd_ua_hidden(el, tag, taglen);
     if (hidden) return hidden;
-    if (taglen == 6 && memcmp(tag, "dialog", 6) == 0) {
-        v = lxb_dom_element_get_attribute(el, (const lxb_char_t *)"open", 4, &vlen);
-        if (v == NULL) return "none";
-    }
+    /* `dialog:not([open])` is a PRESENCE test and takes `has_attribute` for the reason `cssd_ua_hidden` states:
+       `<dialog open>` is the spelling every page writes and it carries no value, so asking `get_attribute` for
+       it answered NULL and gave an OPEN dialog `display: none`. */
+    if (taglen == 6 && memcmp(tag, "dialog", 6) == 0 &&
+        !lxb_dom_element_has_attribute(el, (const lxb_char_t *)"open", 4))
+        return "none";
     return NULL;
 }
 
