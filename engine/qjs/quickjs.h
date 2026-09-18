@@ -2708,6 +2708,20 @@ JS_EXTERN JSValue *JS_FlowNewCall(JSContext *ctx, JSValueConst func, JSValueCons
    and a position in a script sequence cannot say: a program the running call queues moves the cursor back
    inside the sequence while the call frame is still live. */
 JS_EXTERN int      JS_FlowIsCall(const JSValue *flow);
+/* IS THIS HANDLE A PROGRAM FLOW (JS_FlowNew's)? — AND IT IS NOT `!JS_FlowIsCall`, WHICH IS THE WHOLE REASON IT
+   EXISTS. There are THREE kinds of base, not two: a PROGRAM this host compiled (JS_FlowNew), a CALL this host
+   built (JS_FlowNewCall), and an ACTIVATION THIS HOST NEVER CREATED — the clone JS_FlowClone takes at a
+   concolic branch inside a body the scheduler drives directly, which is a module body or any async function
+   entered from C. That third kind answers FALSE to both of these questions, and it must: it completes by
+   SETTLING A PROMISE rather than by handing a value back (JS_FlowResume's FLOW_BASE_ASYNC_CALL arm), its row
+   was left the instant HTML §8.1.4.4 "Calling scripts"' run a module script Evaluate returned, and nothing it
+   does advances a script sequence.
+   A HOST THAT ASKED `!JS_FlowIsCall` WAS ASKING "IS THIS A PROGRAM" AND GETTING "IS THIS NOT A CALL", and the
+   two answers differ for exactly that third kind — so an arm forked inside a module body read as the program of
+   a row its parent had already left, left that row a SECOND time, and where its cursor was not already at the
+   end SKIPPED the next row in silence. Ask the question you mean; both are one read of the same field, so they
+   cannot come apart. */
+JS_EXTERN int      JS_FlowIsProgram(const JSValue *flow);
 /* ONE ORPHAN — the next function object on this runtime's heap whose BODY no call frame has ever begun, handed
    over with the callee's own declared formal parameter count. See JS_OrphanTakeOne in quickjs.c for what an
    orphan is, why the heap is where they are enumerated from, why taking one is not a seen-set, and why this

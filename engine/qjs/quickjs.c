@@ -110494,6 +110494,22 @@ int JS_FlowIsCall(const JSValue *flow)
     return s->base_kind == FLOW_BASE_STEP_ROOT;
 }
 
+/* …AND ITS COMPANION, WHICH IS NOT ITS COMPLEMENT — see quickjs.h. `base_kind` is THREE-valued and the pair
+   above was the only question asked of it, so every host that wanted "is this base a program" spelled it
+   `!JS_FlowIsCall` and got FLOW_BASE_ASYNC_CALL with it. That third kind is a base the host never created:
+   JS_FlowClone of a module body or of any async activation the scheduler drives directly, which is precisely
+   the population the kind was ADDED for (see js_async_function_call's write of it — "a fork inside one of
+   those clones a base whose completion has to settle `as`'s promise"). A clone of one is not a program of any
+   host's sequence and never was; it simply had no way to say so.
+   TWO PREDICATES OVER ONE FACT, which is what stops this becoming two bits that can disagree (CLAUDE.md
+   §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS). Both read `base_kind`; neither is derived from the other. */
+int JS_FlowIsProgram(const JSValue *flow)
+{
+    const JSAsyncFunctionState *s = (const JSAsyncFunctionState *)flow;
+    DCHECK(flow != NULL, "JS_FlowIsProgram was asked about no flow at all");
+    return s->base_kind == FLOW_BASE_BYTECODE;
+}
+
 JSValue *JS_FlowNewCall(JSContext *ctx, JSValueConst func, JSValueConst this_val, int argc,
                         JSValueConst *argv, bool take_result)
 {

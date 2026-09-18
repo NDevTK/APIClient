@@ -5533,43 +5533,40 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
     void *dec, *pins;
 
     DCHECK(parent != NULL && g_fork_dec != NULL, "engine_fork_finalize: fork without a running flow / prepared state");
-    /* AND THE ARM'S FRAME IS A PROGRAM ONLY IF THE PARENT'S WAS, WHICH IS THE ONE FACT THE CLONE CANNOT CARRY.
-       Every caller of this hook snapshots `g_flow_base_gen` — the RUNNING flow's own base activation, asserted
-       at each of them — so the clone is whatever that flow was executing, while `sib->frame` is the slot that
-       means "the program of the row at this flow's cursor": engine_queue_into reads it as exactly that
-       (`at = f->frame ? f->script_i + 1 : f->script_i`, over flow.h's "`frame` is exactly inside a program")
-       and so does flow_step's completion tail. A flow whose base is a MODULE body or a JOB continuation holds
-       NO frame — flow_step's module arm LEAVES the row the instant HTML §8.1.4.4 "Calling scripts"'s run a
-       module script Evaluate returns, and a job runs only under `!f->frame` — so a branch taken inside one
-       hands its arm an activation that is not a row's program, in the slot that says it is.
-       THE ORPHAN DRIVE IS NOT THIS, WHICH IS WHY THE CLAIM IS MADE HERE AND NOT IN THE ASSEMBLY: that caller
-       passes a FRESH CALL frame over a frameless parent deliberately, and `JS_FlowIsCall` tells the completion
-       tail so. A clone of the parent's own non-program activation answers FALSE to that question, which is
-       exactly what makes it indistinguishable from a program there.
-       THE LOUD HALF IS THE SMALLER ONE. Measured on two mirrored production bundles, the arm left its row a
-       second time at `script_i=1 dyn_n=1 last_compiled=0` and at `script_i=3 dyn_n=3 last_compiled=2`, and
-       ENGINE_LEAVE_ROW aborted because the cursor was already at the end. Where the flow still has rows AHEAD
-       the identical arm leaves a row it never ran and nothing says so: the row is not compiled, and
-       flow_programs_unstarted_for_document does not count it either — the loss engine_queue_into's own
-       `at >= script_i` DCHECKF describes and cannot see from where it stands. The interposition base is the
-       third consumer and is silently wrong the same way, reading `script_i + 1` for an arm between programs.
-       WHAT MUST EXIST AFTERWARD is a home on the arm for a cloned activation that is NOT a row's program. The
-       answer forks below already keep a job's continuation on `Flow::parked` and let flow_step's
-       JS_ResumeParkedFlow arm re-enter it, which is how the PARENT's own module body is resumed; what a branch
-       fork has is a single cloned base rather than a parked SET, so the primitive that turns one into the
-       other is the part that does not exist yet.
-       RETIREMENT: this record goes when a branch fork's clone reaches the arm through a slot whose name states
-       what the activation is, so `frame` cannot be read as a row's program by any consumer. */
-    DCHECKF(parent->frame != NULL,
-            "a branch inside an activation that is NOT a program of this flow's sequence forked an arm - the "
-            "clone is the running flow's own base, so the arm's `frame` slot claims \"the program of the row "
-            "at the cursor\" about a MODULE body or a JOB continuation whose row this flow has already left. "
-            "cursor=%d last_compiled=%d rows=%d: the arm leaves that row a SECOND time at flow_step's "
-            "completion tail, and where the cursor is not already at the end it skips the next row in "
-            "silence. Give the clone the home Flow::parked gives a job's continuation at the answer forks "
-            "below, and re-enter it through flow_step's JS_ResumeParkedFlow arm as the parent's own module "
-            "body is re-entered",
-            parent->script_i, parent->last_compiled, parent->dyn_n);
+    /* A FORK OVER A FRAMELESS PARENT IS THE ORDINARY SHAPE AND THE ABORT THAT STOOD HERE IS GONE WITH THE
+       DEFECT IT NAMED. It read `parent->frame != NULL`, and its spec half was exactly right: a flow whose base
+       is a MODULE body or a JOB continuation holds NO frame — flow_step's module arm leaves the row the instant
+       HTML §8.1.4.4 "Calling scripts"' run a module script Evaluate returns, and a job runs only under
+       `!f->frame` — so the clone this hook is handed is an activation that is not a row's program. Three
+       consumers then read it as one. That was the defect, it is fixed at the consumers, and the state is
+       legitimate: an assert whose own message concedes the case beneath it is sound is guarding an
+       EXPECTATION rather than an error (CLAUDE.md §AND-AN-ASSERT-WHOSE-OWN-MESSAGE-CONCEDES).
+       ITS NEXT-DIFF CLAUSE WAS WRONG ABOUT THE MECHANISM AND IS RECORDED HERE BECAUSE THAT IS THE FINDING.
+       It said, and the run is shown rather than claimed: `Give the clone the home Flow::parked gives a job's
+       continuation at the answer forks below, and re-enter it through flow_step's JS_ResumeParkedFlow arm`.
+       Both halves fail, and each is refuted by a sentence already in the tree:
+         - THE ARM'S HOME IS `frame` AND ALWAYS WAS. JS_FlowResume carries a FLOW_BASE_ASYNC_CALL arm written
+           for exactly this population — "a flow whose base is a module body (or any async function entered
+           from C) is the sibling of a fork inside one; the scheduler drives it here" — and js_async_function_
+           call's write of that kind says why the kind exists at all: "a fork inside one of those clones a base
+           whose completion has to settle `as`'s promise". flow_step's own JS_FLOW_DETACHED arm is unreachable
+           by any other route. The home was built before the crash was.
+         - RE-ENTERING IT THROUGH THE PUMP IS FORBIDDEN, by the same arm, in the same breath: "Suspension is
+           reported to the SCHEDULER (return 1) rather than parked in the async pump's slot: the scheduler owns
+           this flow, and two drivers for one state is how a flow gets resumed twice." And it is unbuildable as
+           stated: `JS_ResumeParkedFlow` asserts all five fields of a park record, `JS_CloneParkedFlows` writes
+           an arm's record from the SOURCE's `park_clone_fn`, and a parent branching inside a RUNNING body has
+           no park record to copy — which flow_clone_state_alloc states from the other end, "a fork of a
+           RUNNING body reaches its own suspend point and parks then, on its own record".
+       WHAT WAS ACTUALLY MISSING WAS THE QUESTION, not the home: `base_kind` is THREE-valued and the only
+       predicate over it was `JS_FlowIsCall`, so every consumer that meant `is this base a row's program` spelt
+       it `!JS_FlowIsCall` and admitted the third kind. See JS_FlowIsProgram.
+       MEASURED under gdb against a frozen native artifact of the revision that landed the abort, driving the
+       tldraw mirror: the abort reproduces, and at it `gen_state->base_kind` is 2 — FLOW_BASE_ASYNC_CALL — read
+       twice, once typed and once as the raw byte at the field's offset, with `gen_state == g_flow_base_gen`
+       true. The frame beneath the fork is js_execute_async_module, so the clone is a MODULE BODY and not a job
+       continuation: `JS_FlowIsCall` answers FALSE for it and `JS_FlowIsProgram` answers FALSE too, which is
+       the whole of the repair. */
     /* AN UNMADE DELIVERY IS INHERITED RATHER THAN REFUSED, and the assert that refused it is gone with the
        SLOT it was about — the same correction, and for the same reason, as the unstarted operation two
        paragraphs down. It claimed no flow could be at a branch still holding a record ("a delivery is made
@@ -6916,12 +6913,28 @@ static void engine_queue_into(Flow *f, uint32_t doc, DynBody *body, DynKind kind
                "a program was queued to run IMMEDIATELY into a flow that is not the running one — "
                "`immediately` names the slot after the program that caused it, and the causing program is in "
                "the running flow, so this row would interpose into a stranger's sequence at its cursor");
-        /* THE CURSOR ITSELF WHEN THERE IS NO PROGRAM, THE SLOT AFTER IT WHEN THERE IS. `frame` is exactly
-           "inside a program" (flow.h) — flow_step runs a job only under `!f->frame` — so a script element a
-           page inserts from a `.then` reaction is at the cursor, where the sequence has nothing yet, and one
+        /* THE CURSOR ITSELF WHEN THERE IS NO PROGRAM, THE SLOT AFTER IT WHEN THERE IS. A script element a page
+           inserts from a `.then` reaction is at the cursor, where the sequence has nothing yet, and one
            inserted from a running <script> is at the slot after it. One expression, both cases, and neither is
-           the tail. */
-        at = f->frame ? f->script_i + 1 : f->script_i;
+           the tail.
+           AND A LIVE FRAME IS NOT THE SAME FACT AS A LIVE PROGRAM, which is what this line used to spell it as
+           (`f->frame ? …`, over flow.h's "`frame` is exactly inside a program"). `frame` holds THREE kinds of
+           base and only one of them is a row of this sequence — see JS_FlowIsProgram. The other two are a CALL
+           (a driven orphan's, a §8.1.4.4 step 8 report's, a §6.10.1 task's) and a CLONE OF AN ACTIVATION THE
+           HOST NEVER CREATED (an arm forked at a concolic branch inside a module body). Neither is a program,
+           so for both the correct slot is the CURSOR — which is what the frameless parent of that arm computes,
+           so this is also what makes the two byte-identical (§scheduler's razor: an arm that queued at a
+           different slot than the timeline it continues is a reorder).
+           THE OLD SPELLING WAS RELEASE-FATAL AND NOT MERELY WRONG. Both non-program kinds are reached with the
+           cursor AT the end of the sequence — an orphan drive is assembled at `script_i == dyn_n` because
+           running out of rows is WHY the orphan arm was reached, and the measured module-body forks stood at
+           `script_i=1 dyn_n=1` and `script_i=3 dyn_n=3` — so `script_i + 1` is `dyn_n + 1` and the `CHECK`
+           below fires in dev AND in release on an ordinary page: a driven function or a module body that
+           inserts an inline classic <script> (engine_queue_script_immediate). §4.12.1.1 "Processing model"'s
+           "immediately execute the script element" is the commonest thing an SSR hydration shim does.
+           `f->frame &&` STAYS, and it is not redundant: JS_FlowIsProgram reads a base and there is none to
+           read when the slot is empty. */
+        at = (f->frame && JS_FlowIsProgram((JSValue *)f->frame)) ? f->script_i + 1 : f->script_i;
         /* …AND BEHIND WHAT HAS ALREADY BEEN INTERPOSED AT THAT SAME SLOT. The expression above is the slot for
            a first interposition and the wrong slot for a second: both compute it identically, so the second
            shifts the first down and the two run in the REVERSE of the order they were prepared in. HTML §4.12.1.1
@@ -10020,6 +10033,41 @@ static int flow_step(JSContext *ctx, Flow *f) {
            was scoped to the block below, so the one consumer that is BELOW the block — the cursor advance at
            the tail — could not ask it and advanced for a call as if a call were a row. See that site. */
         int is_call = JS_FlowIsCall((JSValue *)f->frame);
+        /* …AND WHETHER IT IS A PROGRAM, WHICH IS A DIFFERENT QUESTION AND NOT THE NEGATION OF THAT ONE. The
+           four consumers below that mean "this completion finished the row at the cursor" all asked `!is_call`,
+           and a base has THREE kinds: `!is_call` answers TRUE for the third — a CLONE OF AN ACTIVATION THIS
+           HOST NEVER CREATED, taken by JS_FlowClone at a concolic branch inside a MODULE BODY, whose row
+           flow_step's own module arm LEFT the instant HTML §8.1.4.4 "Calling scripts"' run a module script
+           Evaluate returned. So an arm of a module body read as that row's program: it left the row a SECOND
+           time, which ENGINE_LEAVE_ROW aborts on where the cursor is already at the end (measured, on a
+           mirrored production bundle) and which SKIPS THE NEXT ROW IN SILENCE where it is not, because a row
+           behind the cursor is never compiled and flow_programs_unstarted_for_document does not count it
+           either. See JS_FlowIsProgram; both are one read of `base_kind`, so they cannot come apart.
+           THE ARM'S HOME IS THIS SLOT AND ALWAYS WAS — that is what the third kind was ADDED for. JS_FlowResume
+           has a FLOW_BASE_ASYNC_CALL arm whose own text says "a flow whose base is a module body … is the
+           sibling of a fork inside one; the scheduler drives it here", and it refuses the alternative in the
+           same breath: "two drivers for one state is how a flow gets resumed twice". What was missing was never
+           a home, it was the question. */
+        int is_program = JS_FlowIsProgram((JSValue *)f->frame);
+        /* AND THE FRAME AND THE CURSOR PAIR AGREE ABOUT IT, WHICH IS THE ONE THING EITHER OF THEM CAN BE
+           CHECKED AGAINST. flow.c's flow_programs_unstarted_for_document already declares the cursor side:
+           "between two programs the cursor stands one past the last started row and DURING one it stands ON
+           it" — so `last_compiled == script_i` IS "this flow is inside a program of its sequence", derived from
+           two fields the compile site maintains and this slot does not. `f->reporting` is the one call frame
+           that IS the row's remaining work (§8.1.4.4 step 8's report is inside step 8, so the row is still the
+           reporting flow's), which is why it sits on the frame side of the equality rather than beside it.
+           TWO-SIDED, so neither side can drift: a frame kind that stops matching the cursor pair fires here
+           rather than at whichever of the four consumers below happened to be reached first. */
+        DCHECKF((is_program || f->reporting) == (f->last_compiled == f->script_i),
+                "this flow's FRAME and its CURSOR disagree about whether it is inside a program of its own "
+                "sequence: the frame says %s and the pair says %s (script_i=%d last_compiled=%d "
+                "is_program=%d is_call=%d reporting=%d). flow.c's flow_programs_unstarted_for_document states "
+                "the contract — between two programs the cursor stands one past the last started row and "
+                "during one it stands ON it — and the compile site is the only writer of `last_compiled`, so "
+                "one of the two was moved by something that is not a program starting or a row being left",
+                (is_program || f->reporting) ? "inside one" : "between programs",
+                (f->last_compiled == f->script_i) ? "inside one" : "between programs",
+                f->script_i, f->last_compiled, is_program, is_call, f->reporting);
         {
             /* A <script>'s completion value is not observable to the page (only an eval API surfaces one), so it is
                taken and released here — never DISCARDED by the engine, which would hide a live value from the host. */
@@ -10250,11 +10298,18 @@ static int flow_step(JSContext *ctx, Flow *f) {
                    leave; left standing, the flag would make the NEXT program's completion read as a report.
                    AND THE CURSOR MOVES ONLY FOR A FRAME THAT IS THIS ROW'S WORK — the same predicate the
                    restore below and the tail both use, expanded here rather than shared, for the reason the
-                   tail gives. A detaching base is a MODULE body's continuation, so `is_call` is false here
-                   today and this reads as an unconditional advance; it is written as the predicate anyway
-                   because the day a CALL detaches, an unconditional advance is the tail's defect reproduced at
-                   a site nobody would think to look at. */
-                if (f->reporting || !is_call) {
+                   tail gives. It was written as `!is_call` and THAT WAS AN UNCONDITIONAL ADVANCE, which the
+                   sentence standing here said in as many words and then filed as harmless: a detaching base is
+                   a MODULE body's continuation, it said, so `is_call` is false here today. Both halves of that
+                   are true and the conclusion was the wrong way round — a detaching base is reached only through
+                   JS_FlowResume's FLOW_BASE_ASYNC_CALL arm, which is only ever a CLONE of a module body taken
+                   at a concolic branch, and flow_step's own module arm LEFT that row before the fork existed.
+                   So the advance was this row being left a SECOND time, at the one exit where the cursor's own
+                   `script_i < dyn_n` check is the only thing that could ever have said so.
+                   IT STAYS A PREDICATE AND THE PREDICATE IS NOW THE RIGHT ONE: with `is_program` no state this
+                   arm can be reached in advances, which is correct rather than dead — the day a PROGRAM or a
+                   report detaches, its row is finished here and the advance is owed. */
+                if (f->reporting || is_program) {
                     ENGINE_LEAVE_ROW(f);
                 }
                 /* AND A MODELLED CLOSE REQUEST CANNOT REACH THIS EXIT AT ALL. A detaching base is a
@@ -10297,8 +10352,16 @@ static int flow_step(JSContext *ctx, Flow *f) {
                g_completed.
                A DRIVEN ORPHAN'S CALL IS A FOURTH, and the first one that is not a program at all: its frame
                holds no row of the sequence, so its cursor is one PAST the last program and counting it would
-               report this document as having run a program it does not have. */
-            if (!is_call && f->script_i > g_completed) g_completed = f->script_i;
+               report this document as having run a program it does not have.
+               AND AN ARM OF A MODULE BODY IS A FIFTH, which `!is_call` admitted: its base is a CLONE OF AN
+               ACTIVATION THIS HOST NEVER CREATED, its completion SETTLES THE MODULE'S EVALUATION PROMISE
+               rather than finishing a row, and the row it stands past was left by flow_step's module arm
+               before the arm existed. Counting it would say this document has RUN TO COMPLETION a program
+               whose promise is the only thing that just settled — which is the first of the three exclusions
+               above ("a module has evaluated to a PROMISE rather than a value") arriving through a fork
+               instead of through the module arm, and reaching the one number engine.h argues is the answer to
+               "has anything this document loads AFTER program i ever been compiled". */
+            if (is_program && f->script_i > g_completed) g_completed = f->script_i;
             /* …AND THE STEP IS RE-NAMED HERE, AT THE ONLY LINE THAT KNOWS THE RESUME'S OUTCOME. The assignment
                one screen up runs BEFORE JS_FlowResume, so it can say which of §8.1.4.4 "Calling scripts"'s two
                entries this step took and cannot say what became of the frame — and the frame is the fact the
@@ -10349,12 +10412,19 @@ static int flow_step(JSContext *ctx, Flow *f) {
                finished step 3, and the restore travels to the report frame's own completion.
                A PARKED PROGRAM NEVER GETS HERE, which is the whole design: a mid-frame yield returned above
                with the frame still live, and the slot went with the flow's delta.
-               `is_call` IS THE GUARD BECAUSE THE CURSOR IS NOT ONE. A driven orphan's call frame sits past the
-               end of the sequence — where flow_dyn_el answers NULL — but a row the running call QUEUED moves
-               the cursor back inside it, so without this the completion of a CALL would restore a row whose
-               program has not started. `f->reporting` is what tells the ONE call frame that IS this row's
-               remaining work from the one that is somebody else's — see flow.h. */
-            if (!report && (f->reporting || !is_call) && flow_dyn_el(f))
+               THE FRAME'S KIND IS THE GUARD BECAUSE THE CURSOR IS NOT ONE. A driven orphan's call frame sits
+               past the end of the sequence — where flow_dyn_el answers NULL — but a row the running call
+               QUEUED moves the cursor back inside it, so without this the completion of a CALL would restore a
+               row whose program has not started. `f->reporting` is what tells the ONE call frame that IS this
+               row's remaining work from the one that is somebody else's — see flow.h.
+               ASKED AS `is_program` AND NOT AS `!is_call`, which admitted a third kind neither sentence above
+               is about: an arm forked inside a MODULE BODY. §4.12.1.1 "Processing model"'s module arm has no
+               set/restore bracket at all — the compile site asserts currentScript is NULL there, on the
+               standard's own "Assert: document's currentScript attribute is null" — so there is nothing for
+               such an arm to restore, and where its cursor had moved back inside the sequence it would have
+               restored a row whose program has not started, which is the identical defect the orphan sentence
+               above describes. */
+            if (!report && (f->reporting || is_program) && flow_dyn_el(f))
                 document_current_script_restore(doc_realm(flow_dyn_doc(f)), flow_dyn_el(f), JS_NULL);
         }
         JS_FlowFree(ctx, (JSValue *)f->frame);
@@ -10393,8 +10463,24 @@ static int flow_step(JSContext *ctx, Flow *f) {
            and a `<script>` it appends both land, so the operation is what CRASHED and never what was unique.
            THE PREDICATE IS THE RESTORE'S, VERBATIM, and read BEFORE `f->reporting` is cleared: `f->reporting`
            is what tells the ONE call frame that IS this row's remaining work (§8.1.4.4 step 8's report) from
-           the one that is somebody else's. */
-        if (f->reporting || !is_call) {
+           the one that is somebody else's.
+           AND THE FOURTH KIND OF FRAME IS WHY IT IS `is_program` AND NOT `!is_call` — THIS IS THE LINE THE
+           MEASURED ABORT FIRED AT. A concolic branch inside a MODULE BODY forks an arm whose base is a clone
+           of that body (FLOW_BASE_ASYNC_CALL), and flow_step's module arm had already left the row when
+           §8.1.4.4's run a module script Evaluate returned. `!is_call` is TRUE for such a base, so the arm's
+           completion left that row a SECOND time — and the paragraph above is the whole description of what
+           that costs, with `dyn_n` in place of the orphan's cursor. MEASURED on the `tldraw` mirror, 3 runs of
+           3, reaching the fork at `cursor=2 last_compiled=1 rows=2`: the cursor is AT the end, because a
+           `type=module` entry is typically a document's LAST script, so ENGINE_LEAVE_ROW's own
+           `script_i < dyn_n` is what fires. Where it is not — a branch inside a module body of a document with
+           rows still ahead — the identical arm SKIPS the next row in silence, which is the dropped work the
+           orphan paragraph measured and which no census can see.
+           AND WHICH SITES REPRODUCE IT IS A FACT ABOUT AN ARTIFACT AND NOT ABOUT THIS DEFECT, which is worth
+           one line because the obvious reading of a site list is that the list is the population: on the
+           artifact this was measured against, `telegram` and `gitpod` both terminate UPSTREAM in layout
+           (core/layout/used_value.c) and never reach a fork at all, so a run of either says nothing either
+           way. A terminal event is not comparable across artifacts; the assert IDENTITY is. */
+        if (f->reporting || is_program) {
             ENGINE_LEAVE_ROW(f);
         }
         f->reporting = 0;

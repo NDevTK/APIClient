@@ -591,7 +591,15 @@ typedef struct Flow {
        it — which is the honest answer and not a lost field. A parked unit carried forward would report a
        resumed frontier under the arms of the session that parked it. */
     StepUnit step_unit;
-    void *frame;           /* the current script's live preemptible frame (JS_FlowNew handle), NULL between scripts */
+    /* THIS FLOW'S LIVE PREEMPTIBLE BASE, NULL WHEN IT HAS NONE — and that is ALL this slot says. It read "the
+     * current script's live preemptible frame (JS_FlowNew handle), NULL between scripts", which is one of the
+     * three kinds it holds: a PROGRAM of the row at `script_i` (JS_FlowNew), a CALL this host built
+     * (JS_FlowNewCall — a driven orphan's, §8.1.4.4 step 8's report, §6.10.1's task), and a CLONE OF AN
+     * ACTIVATION THIS HOST NEVER CREATED (JS_FlowClone at a concolic branch inside a module body, which
+     * flow_step's module arm had already left the row of). The kind is a fact about the BASE and is asked of
+     * it — JS_FlowIsProgram / JS_FlowIsCall, two predicates over the one `base_kind` field — never inferred
+     * from this slot being occupied, which is what `!JS_FlowIsCall` and `f->frame ?` both did. */
+    void *frame;
     /* IS THAT FRAME THE ROW'S PROGRAM, OR THE REPORT THE ROW'S PROGRAM OWES?
      *
      * HTML §8.1.4.4 "Calling scripts", run a classic script step 8's third bullet reports an abrupt completion
@@ -771,14 +779,22 @@ typedef struct Flow {
      * `body.appendChild(s1); body.appendChild(s2)` are the same two lines of that defect.
      *
      * THE WITNESS IS THE BASE SLOT, NOT THE CURSOR, AND THAT IS WHAT MAKES THE PAIR SELF-VALIDATING. The base
-     * is `script_i + 1` inside a program and `script_i` between programs (`frame` is exactly "inside a
-     * program"), so the two programs that can stand at one cursor — the row itself, and a job running before
-     * it — have DIFFERENT bases, and a stale pair can only be reused by a program whose interpositions really
-     * do belong behind the ones already there. There is therefore no invalidation site to remember, which
-     * matters because the cursor is advanced from more than one place.
+     * is `script_i + 1` inside a program and `script_i` between programs, so the two programs that can stand
+     * at one cursor — the row itself, and a job running before it — have DIFFERENT bases, and a stale pair can
+     * only be reused by a program whose interpositions really do belong behind the ones already there. There
+     * is therefore no invalidation site to remember, which matters because the cursor is advanced from more
+     * than one place.
+     * "INSIDE A PROGRAM" IS A QUESTION ABOUT THE FRAME'S KIND AND NOT ABOUT THE SLOT BEING OCCUPIED, which is
+     * what this sentence used to say (`frame` is exactly "inside a program") and what engine_queue_into used
+     * to spell as `f->frame ? …`. `frame` holds THREE kinds of base and only one of them is a row of this
+     * sequence — see JS_FlowIsProgram. A CALL (a driven orphan's, a §8.1.4.4 step 8 report's, a §6.10.1
+     * task's) and a CLONE OF AN ACTIVATION THE HOST NEVER CREATED (an arm forked at a concolic branch inside a
+     * module body) are both "between programs" for this pair's purposes, and both are reached with the cursor
+     * AT the end of the sequence, where `script_i + 1` is past the queue and engine_queue_into's own `CHECK`
+     * fires in release.
      *
-     * NO PER-ROW COLUMN WOULD DO, which is the shape this was nearly built as. "Which rows did the RUNNING
-     * program interpose" cannot be read off `dyn_pos`: a row an ANCESTOR interposed carries DYN_POS_IMMEDIATE
+     * NO PER-ROW COLUMN WOULD DO, which is the shape this was nearly built as. `Which rows did the RUNNING
+     * program interpose` cannot be read off `dyn_pos`: a row an ANCESTOR interposed carries DYN_POS_IMMEDIATE
      * too and sits in the same run, so a scan that skipped every immediate row would put a grandchild's
      * program behind its parent's sibling — the same reversal one level up.
      *
