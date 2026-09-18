@@ -268,23 +268,39 @@
              m.name + " does not answer with the working set as its last reply field — every ABI call answers " +
              "(a void entry still acknowledges, so a WASM abort inside it reaches the caller as a rejection) " +
              "and every answer carries HEAPU8.length, because a call is the only thing that can grow it");
+      /* AND THE REPLY'S OWN DERIVATION, RESOLVED HERE AND ASKED BEFORE THE SHAPE CHECKS BELOW. This is the
+         same sentence as the parameter loop three lines up and it is asked in the same place for the same
+         reason: a reply type this transport describes no C return for crashes at the BOOT of the frame that
+         would have had to read one, naming the TYPE. It is asked FIRST because the checks beneath it are
+         about the SHAPE of the reply — how many fields, and whether the binding names one — and an
+         undescribed type used to be refused by the field COUNT, whose message sends its reader to edit the
+         mojom's reply list rather than to build the placement that is actually missing.
+         `null` HERE IS A VOID METHOD AND NOTHING ELSE. The last field is the working set, so a reply whose
+         FIRST field is that field carries no value at all; every other first field is a value, and what C
+         return answers it is `mojo.js`'s to derive rather than this file's to spell. */
+      var retOf = m.reply[0].name === "workingSetBytes" ? null
+                                                        : self.mojo.abiReturn(m.reply[0]).ccall;
       DCHECK(e.out === null ? m.reply.length === 1
                             : (m.reply.length === 2 && m.reply[0].name === e.out),
              m.name + "'s reply fields do not match its binding — the entry's return is the reply's FIRST " +
              "field and the working set is its last, so a reply this frame builds by name would leave a hole");
-      /* AND THE TYPE THAT RETURN IS READ WITH, against the type the wire declares for the field it becomes.
-         The reply's shape was checked above and its TYPE was not, so a `ret` naming the wrong ccall spelling
-         read the C return through the wrong conversion and the value still arrived — a number where a pointer
-         was, or a decoded string where an integer was — which the validator on the far side then refuses as
-         the PEER being broken. `int32` and `double` are both `number` because the wasm signature is what
-         decides i32 or f64; `string` is emscripten's own read of a NUL-terminated pointer. */
-      DCHECK(e.ret === null ||
-             e.ret === ((m.reply[0].type === "int32" || m.reply[0].type === "double") ? "number"
-                        : m.reply[0].type === "string" ? "string" : null),
+      /* AND THE TYPE THAT RETURN IS READ WITH, held against what the declared type DERIVES rather than
+         against a spelling repeated here. A `ret` naming the wrong ccall spelling reads the C return through
+         the wrong conversion and the value still arrives — a number where a pointer was, or a decoded string
+         where an integer was — which the validator on the far side then refuses as the PEER being broken.
+         THE MAPPING USED TO BE A TERNARY ON THIS LINE and that is what `retOf` above replaces: it was a second
+         copy of `mojo.js`'s own type vocabulary, in the file whose ABI-table paragraph says the FIRST such
+         copy was deleted because a hand-maintained one "cannot be made safe by a sentence". Its fall-through
+         answered `null` for any type it did not know, and `null` is the VOID answer — so an undescribed type
+         was silently classified as a method that returns nothing. */
+      DCHECK(e.ret === retOf,
              m.name + "'s binding reads its C return as `" + e.ret + "` while the mojom declares that reply " +
-             "field `" + (m.reply.length ? m.reply[0].type : "(none)") + "` — the ccall type is how the entry's " +
-             "answer is converted out of linear memory, so a mismatch is this frame reading the return through " +
-             "a conversion the wire does not describe and then posting the result as though it did");
+             "field `" + m.reply[0].type + "`, whose return is `" + (retOf === null ? "(none)" : retOf) +
+             "` — the ccall type is how the entry's answer is converted out of linear memory, so a mismatch " +
+             "is this frame reading the return through a conversion the wire does not describe and then " +
+             "posting the result as though it did. It is TWO-SIDED now rather than a disjunct that any `ret` " +
+             "of null satisfied: a void method answers null and a value-carrying one answers what the " +
+             "declared type derives, and neither may hold the other's");
       bound++;
       impl[m.js] = function () { return callAbi(m, e, Array.prototype.slice.call(arguments)); };
     });

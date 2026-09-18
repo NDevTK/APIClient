@@ -186,6 +186,63 @@
     throw new TypeError("no wasm ABI placement for the declared type `" + (d && d.type) + "`");
   }
 
+  /* ── AND THE OTHER DIRECTION OF THAT QUESTION: HOW A DECLARED REPLY FIELD BECOMES A C RETURN. `abiPlacement`
+     above answers it for a parameter — one declared type, one form, N operands — and the reply side was still
+     answered BY HAND, as a ternary inline in `renderer.html`'s bind-time check:
+     `(type === "int32" || type === "double") ? "number" : type === "string" ? "string" : null`. That is a
+     second copy of a derivation over the same type vocabulary, in the one file whose own paragraph says the
+     first copy was deleted because "a hand-maintained second copy of a parameter list cannot be made safe by
+     a sentence".
+     ITS FALL-THROUGH IS THE DEFECT AND IT IS NOT HYPOTHETICAL, WHICH IS WHY THIS IS A DERIVATION AND NOT A
+     TIDY-UP. A reply type nobody has described fell to `: null`, and `null` is already taken: it is what a
+     VOID entry answers. So an undescribed type did not crash — it was silently classified as "this method
+     returns nothing", and the refusal then arrived from the field-COUNT check standing above it, whose
+     message talks about a reply leaving a hole. A reader meeting that crash goes and edits the mojom's reply list,
+     which is the wrong repair for a type that has no placement. The crash must name the TYPE, because the
+     type is what is missing.
+     WHAT `ccall` IS. Emscripten's return spelling, which is how the entry's answer is converted out of linear
+     memory — `int32` and `double` are both `number` because the WASM SIGNATURE is what decides i32 or f64,
+     and `string` is emscripten's own read of a NUL-terminated pointer. A wrong one reads the return through a
+     conversion the wire does not describe and posts the result as though it did.
+     THERE IS NO `array<uint8>` ARM, AND ITS ABSENCE IS THE FORCING FUNCTION RATHER THAN AN OMISSION. A byte
+     reply is not one entry with a different spelling: linear memory has no length, so it is a POINTER and an
+     EXTENT from two entries, exactly as a byte PARAMETER is two operands — and WHICH second entry states the
+     extent is a symbol in a wasm module, which is the one fact a mojom cannot carry and which would have to
+     arrive as a column of `renderer.html`'s binding table beside `fn`. Building that arm with no method
+     declaring the type would be half a placement whose other half does not exist. */
+  function abiReturn(d) {
+    DCHECK(!!d && typeof d.name === "string" && typeof d.type === "string",
+           "a reply field's C return was derived from something that is not a mojom declaration — the " +
+           "declaration is the only statement of what crosses, and a caller that supplies its own is the " +
+           "hand-written ternary this replaces");
+    /* ONE FIELD, AND IT HAS ITS READER. `abiPlacement` above answers a RECORD because its caller reads four
+       different things off it; this answers the one fact a reply has, under a name, so the caller's
+       `.ccall` says what kind of answer it is taking. A `form` or an `entries` beside it would be a field
+       written here and read nowhere, which is the shape a byte arm will legitimately need and this one will
+       not — and a field with no reader is a measurement nobody sees. */
+    if (d.type === "string")
+      return { ccall: "string" };
+    if (d.type === "int32" || d.type === "double")
+      return { ccall: "number" };
+    DFAIL("the reply field `" + (d && d.name) + "` is declared `" + (d && d.type) + "` and this bindings " +
+          "layer derives no C return for that type — a return is how a `qjs_*` entry's answer becomes the " +
+          "declared value, and there is no spelling to guess: a type whose answer does not fit in ONE C " +
+          "return (a byte sequence, whose extent linear memory does not carry) needs a SECOND entry stating " +
+          "it and a binding column naming that entry, and a type that does fit needs its emscripten " +
+          "conversion named here. Build it here, where every reader of this interface's replies asks. AND IF " +
+          "THE BYTES ARE AN IMAGE, ITS EXTENT IN BYTES IS NOT ITS EXTENT IN PIXELS: an RGBA8 run is " +
+          "`4 * width * height` and that product does not factor, so a consumer handed the run and its byte " +
+          "length cannot say which rectangle it is — `new ImageData(data, sw)` takes the WIDTH as a required " +
+          "argument, and the trusted zone holds no viewport to supply one from (it states none at `Init` and " +
+          "the engine reads its own, per world, which two arms of one fork may disagree about). A reply that " +
+          "carries a picture carries its DIMENSIONS beside it, from entries that state them, or it carries a " +
+          "run nobody can read");
+    /* RELEASE PATH UNDER THE ASSERT, AND IT REFUSES rather than answering. `null` is what a VOID entry
+       returns, so answering it here would classify an undescribed type as a method that carries no value —
+       which is the silent fall-through this derivation exists to end. */
+    throw new TypeError("no wasm ABI return for the declared reply type `" + (d && d.type) + "`");
+  }
+
   /* ── AND THE WHOLE PARAMETER LIST PLACED IN ONE WALK, KEYED BY THE DECLARATION'S OWN NAMES. `abiPlacement`
      above answers for ONE parameter; this is the loop over all of them, and the loop is where the going-short
      happened. It is the same shape `placeParams` below is for the MOJO transport and it exists for the
@@ -952,6 +1009,10 @@
        a `qjs_*` entry reads it from here: the renderer that performs the call, and the Node drivers that count
        operands against what the built glue declares it accepts. */
     abiPlacement: abiPlacement,
+    /* AND THE REPLY DIRECTION OF THE SAME DERIVATION — see `abiReturn` above. It is exported beside the
+       placement because the two are one question asked of one type vocabulary in two directions, and the
+       reply half was the one still answered by a ternary at its only caller. */
+    abiReturn: abiReturn,
     /* AND THE WALK OVER A WHOLE DECLARED PARAMETER LIST — see `abiOperands` above. `abiPlacement` answers for
        one parameter and a caller could still hold its own array of values in declaration order; this is what
        replaces that array, so the raw-ccall drivers place by the same names the transport's own `placeParams`
