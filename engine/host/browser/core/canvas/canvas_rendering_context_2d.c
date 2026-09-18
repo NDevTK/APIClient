@@ -34,12 +34,21 @@ const char *const CANVAS_COLOR_TYPES[] = { "unorm8", "float16", NULL };
 /* §4.12.5.1's `dictionary CanvasRenderingContext2DSettings`, with every default the IDL writes. `alpha` is the
    one that is TRUE by default, which is why core/idl_args.h grew IDL_DEFAULT_TRUE with this member: an absent
    `alpha` converts to FALSE under ToBoolean, the opposite of the declared value, and every
-   `getContext("2d")` with no options would have reported an opaque bitmap. */
+   `getContext("2d")` with no options would have reported an opaque bitmap.
+   THE ROWS ARE NOT IN THE ORDER §4.12.5.1 PRINTS THEM, and that is the point rather than a transcription
+   slip: the IDL prints `alpha, desynchronized, colorSpace, colorType, willReadFrequently` and Web IDL
+   §3.2.17 "Dictionary types" READS them in another — step 4's inner loop is "For each dictionary member
+   member declared on dictionary, in lexicographical order", which puts `colorSpace` and `colorType` ahead of
+   `desynchronized`. The order is observable: a page writes `getContext("2d", { get colorSpace() { throw x },
+   get desynchronized() { … } })` and counts which getters ran. This dictionary inherits nothing — the
+   harvested IDL declares it with no `:` — so every row is level 0 and §3.2.17 step 3's least-to-most-derived
+   list is the single-element one, which is why lexicographic order is the WHOLE rule here and swapping rows
+   is the right repair rather than a level correction. Do not re-sort these to match the printed IDL. */
 const IdlDictMember CTX2D_SETTINGS[CTX2D_SETTINGS_N] = {
     { "alpha",              IDL_BOOLEAN, false, NULL, 0, NULL, IDL_DEFAULT_TRUE },
-    { "desynchronized",     IDL_BOOLEAN, false, NULL, 0, NULL, IDL_DEFAULT_FALSE },
     { "colorSpace",         IDL_ENUM,    false, IMAGE_DATA_COLOR_SPACES, 0, NULL, IDL_DEFAULT_STRING, "srgb" },
     { "colorType",          IDL_ENUM,    false, CANVAS_COLOR_TYPES,      0, NULL, IDL_DEFAULT_STRING, "unorm8" },
+    { "desynchronized",     IDL_BOOLEAN, false, NULL, 0, NULL, IDL_DEFAULT_FALSE },
     { "willReadFrequently", IDL_BOOLEAN, false, NULL, 0, NULL, IDL_DEFAULT_FALSE },
 };
 
