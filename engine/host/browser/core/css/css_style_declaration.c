@@ -2054,11 +2054,19 @@ static const char *cssd_ua_heading_font_size(lxb_dom_element_t *el, const lxb_ch
     }
     level += offset;
     if (level > 9) level = 9;
-    DCHECK(level >= 1 && level <= 9,
-           "HTML §4.3.11.1 (Heading levels & offsets)'s computed heading level came out outside 1..9, which its own steps "
-           "admit nothing outside of — the six local names give 1 to 6, the offset is non-negative, and the "
-           "last step is \"If level is greater than 9, then return 9\". A value here is an offset that went "
-           "negative or a level that was not seeded from one of the six");
+    /* THE CAP AND THE TABLE ARE TWO SEPARATE NINES AND THIS IS WHERE THEY ARE HELD TOGETHER. The line above is
+       HTML §4.3.11.1 Heading levels & offsets' own last step, "If level is greater than 9, then return 9", written
+       as a literal; the row set is HTML §15.3.6 Sections and headings' and carries its own length. A row added or
+       dropped without the other moving is a read past the end of this table, which is a state an edit can
+       reach and the only one it can — an assert over the LEVEL alone could not fail here, because the seed is
+       one of six and the cap is directly above it. The emptiness half is the same invariant
+       `cssd_ua_table_check` asserts of every row of the type table: an empty string is a value the cascade
+       would carry, not an absent declaration. */
+    DCHECK(level - 1 < sizeof(HEADING_FONT_SIZE) / sizeof(HEADING_FONT_SIZE[0]) &&
+               HEADING_FONT_SIZE[level - 1] != NULL && HEADING_FONT_SIZE[level - 1][0] != '\0',
+           "HTML §15.3.6 (Sections and headings)'s font-size row set and HTML §4.3.11.1 (Heading levels & offsets)'s "
+           "level range have come apart — a computed heading level selected past the last row transcribed "
+           "here, or selected one with no value in it");
     return HEADING_FONT_SIZE[level - 1];
 }
 
