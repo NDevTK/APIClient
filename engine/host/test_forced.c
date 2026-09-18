@@ -20194,7 +20194,10 @@ static void display_list_raster_selftest(void)
     CssPx region[4];
     uint8_t px[4];
     uint64_t sum_a, sum_b;
-    int dw, dh;
+    int dw, dh, k;
+    DisplayList border, border0;
+    DisplayMark bm;
+    CssColor side_color[4];
 
     /* 1. THE RECTANGLE KIND, whose rectangle IS its area. */
     display_list_init(&rect_list);
@@ -20304,6 +20307,176 @@ static void display_list_raster_selftest(void)
            "100x50 is the truncation that drops a partly covered column and a partly covered row, and the "
            "ink that lands in them is CSS 2.1 §E.2's step 1 fill, which reaches every pixel of the region",
            dw, dh);
+
+    /* 7. THE BORDER KIND, AND THE HALF OF ITS GEOMETRY NO ASSERT IN core/paint/display_list_raster.c CAN
+       STATE. That file holds the four mitred wedges' SHOELACE AREAS to CSS 2.1 §8.1 "Box dimensions"' border
+       area written out of the EXTENTS — which is a claim about the vertices it is ABOUT TO HAND a path, and
+       says nothing whatever about whether any program ever hands them to one. Until this block nothing in
+       this host RASTERIZED a `DISPLAY_MARK_BORDER`: `display_list_selftest` below APPENDS one and never draws
+       it, and `bp_border`'s road to one is the named residual at `box_paint_scratch_selftest`.
+
+       A 16x8 BOX, ALL FOUR USED WIDTHS 2, AT SCALE 1, ON A 16x8 SURFACE. The padding edge is (2, 2) to
+       (14, 6); each wedge runs from its own outer edge to that rectangle and meets its two neighbours on the
+       DIAGONAL through the padding-edge corner.
+
+       `pixels` IS NOT AN AREA, AND THAT IS THE WHOLE OF WHY THE NUMBER IS 88. core/graphics/raster_surface.h
+       says "`spans` and `pixels` count what this sink was HANDED", and what it is handed is every run of
+       NONZERO coverage together with its length — so a HALF-covered pixel counts as one whole pixel, and a
+       pixel the mitre diagonal SPLITS between two sides is handed over twice. Three geometries, three
+       numbers, and only one of them is what this component draws:
+         88  THE MITRED WEDGES' PIXEL TOUCHES, which is this one. Per side (top, right, bottom, left) 30, 14,
+             30, 14: the top wedge covers all 16 columns of row 0 and columns 1..14 of row 1, the left wedge
+             covers rows 0..7 of column 0 and rows 1..6 of column 1, and the other two are those mirrored.
+             Equivalently and out of different terms — the 80 DISTINCT pixels of the border area plus the 8 a
+             diagonal splits, two at each corner, being the outer corner pixel and the inner one.
+         96  FOUR OVERLAPPING SIDE RECTANGLES: 2 rows of 16 twice and 8 rows of 2 twice. That is the shortcut
+             whose corner square is painted twice and goes to whichever loop ran last, which is WRONG ink
+             rather than narrow ink and is the mistake the wedges exist to remove.
+         80  THE SHOELACE AREA, w*h - (w-l-r)*(h-t-b) = 128 - 48. It counts a half-covered pixel as 0.5, so it
+             is not a number this sink could ever report; it is the quantity that file's own DCHECK holds, and
+             a fixture asserting it here would be a second copy of an assertion that already exists.
+
+       AND `spans` SEPARATES THE TWO GEOMETRIES MORE LOUDLY THAN `pixels` DOES, NOT LESS.
+       core/graphics/rasterizer.h defines a span as "ONE RUN OF ONE COVERAGE IN ONE ROW", so a run breaks
+       wherever the coverage CHANGES and not only where it falls to zero — the diagonal leaves one HALF-covered
+       pixel at each end of every row it crosses, and each of those is a run of its own. The top wedge is 3
+       runs in each of its 2 rows and the left wedge is 1, 2, 1, 1, 1, 1, 2, 1 down its 8, so 6 + 10 + 6 + 10
+       is 32, against four rectangles' 2 + 8 + 2 + 8 = 20. 20 IS THE RECTANGLE FIGURE ALONE AND NOT A NUMBER
+       THE TWO GEOMETRIES SHARE — core/paint/display_list_raster.c's landing message records it as shared and
+       as therefore unable to separate them, and that is the one coordinate of that commit this block refutes.
+       Both figures were derived by hand and again by transliterating core/graphics/rasterizer.c's
+       `raster_mean_below` and its prefix-sum loop; the transliteration reproduces the 4/16, 8/128 and 8/64
+       this function already asserts above, which is what arms it.
+
+       THE FOUR SIDE COLOURS ARE DISTINCT AND THE COUNTS DO NOT MOVE WITH THEM, so ONE list answers both this
+       count and the corner pixel below: core/paint/display_list_raster.c has no alpha test in its fill,
+       "which is what keeps `pixels` a function of the GEOMETRY" rather than of the colour. */
+    display_list_init(&border);
+    bm.kind = DISPLAY_MARK_BORDER;
+    bm.rect[0] = css_px(0.0); bm.rect[1] = css_px(0.0);
+    bm.rect[2] = css_px(16.0); bm.rect[3] = css_px(8.0);
+    /* A border mark's own `color` is a field its kind does not read — core/paint/display_list.c asserts the
+       sRGB space and the alpha range over a SWITCH, and the border arm walks `side` — so this is set to keep
+       the struct wholly initialised and is asserted by nothing. */
+    bm.color = CSS_COLOR_OPAQUE_BLACK;
+    side_color[0] = tf_dlr_srgb(1.0, 0.0, 0.0, 1.0);    /* top    */
+    side_color[1] = tf_dlr_srgb(0.0, 1.0, 0.0, 1.0);    /* right  */
+    side_color[2] = tf_dlr_srgb(1.0, 1.0, 1.0, 1.0);    /* bottom */
+    side_color[3] = tf_dlr_srgb(0.0, 0.0, 1.0, 1.0);    /* left   */
+    for (k = 0; k < 4; k++) {
+        bm.side[k].width = css_px(2.0);
+        bm.side[k].style = DISPLAY_BORDER_STYLE_SOLID;
+        bm.side[k].color = side_color[k];
+    }
+    display_list_append(&border, &bm);
+    (void)tf_dlr_raster(&border, 1.0, W, H, &count);
+    CHECKF(count.marks == 1 && count.spans == 32 && count.pixels == 88,
+           "a 16x8 `DISPLAY_MARK_BORDER` with all four used widths 2 composited %zu marks over %zu runs and "
+           "%zu pixels of a 16x8 surface. EACH WRONG NUMBER NAMES ITS OWN GEOMETRY: 96 pixels is four "
+           "overlapping side RECTANGLES, whose corner square is painted twice and goes to whichever loop ran "
+           "last; 80 is the border AREA, which is the quantity core/paint/display_list_raster.c's own "
+           "partition DCHECK holds and is a count of nothing, since a half-covered pixel contributes 0.5 to "
+           "it and a whole one to this sink; and 20 runs is those same four rectangles, one per row per side. "
+           "A `marks` of 0 is the kind reaching no arm at all",
+           count.marks, count.spans, count.pixels);
+
+    /* AND THE CORNER, WHICH IS THE DEFECT ITSELF AND NOT A COUNT OF IT. Four side rectangles overlap in a
+       square at every corner, so — core/paint/display_list_raster.c's own words — a box with two border
+       colours "would come out with one painted over the other in a square whose winner is whichever loop ran
+       last", which is a statement about a COLOUR that no total of runs or pixels can make. The pixel at
+       (0, 0) is covered by the TOP wedge and the LEFT wedge and by neither of the other two, each at exactly
+       half coverage, so under source-over it carries ink from BOTH and is not opaque; under four rectangles
+       the left rectangle is laid LAST and opaque over the whole corner square, so that same pixel is pure
+       left-side blue at an alpha of 255.
+       THE TWO MID-EDGE PIXELS ARE THE ARMED CONTROL AND ARE READ IN THE SAME INVOCATION: they are fully
+       covered by one wedge each and are IDENTICAL under both geometries, so they say that the top side and
+       the left side each drew, each in its own colour, without saying anything about the corner. A corner
+       check that passed because nothing was drawn at all is exactly what they exclude.
+       THE BYTES ARE A PREDICATE AND NOT AN EQUALITY, deliberately. The corner's composited alpha is
+       0.5 + (128/255)*0.5, and 255 times that is 191.5 EXACTLY — a quantization boundary, which
+       core/graphics/raster_surface.c's `floor(v * 255 + 0.5)` resolves upward to 192 only while the
+       expression is evaluated in the order it is written. A contraction of `as + ad * (1 - as)` into one
+       fused multiply-add is free to land a half-ulp the other side of it and answer 191, and neither byte
+       would be a defect. What IS a defect is a corner carrying ONE side's ink, and `> 0` against 85 and
+       `< 255` against 192 are that claim with 85 and 63 levels of margin. The row below prints the byte so a
+       reader comparing two artifacts can see it rather than having it fixed here. */
+    tf_dlr_pixel(&border, 1.0, W, H, 8, 0, px);
+    CHECKF(px[0] == 255 && px[1] == 0 && px[2] == 0 && px[3] == 255,
+           "the pixel at (8, 0) is (%u, %u, %u, %u) where the TOP side is opaque red and covers it outright. "
+           "This is the control for the corner below and not a claim about the mitre: it reads the same under "
+           "every partition of the corner, so a failure here is the top side not having been drawn at all",
+           px[0], px[1], px[2], px[3]);
+    tf_dlr_pixel(&border, 1.0, W, H, 0, 4, px);
+    CHECKF(px[0] == 0 && px[1] == 0 && px[2] == 255 && px[3] == 255,
+           "the pixel at (0, 4) is (%u, %u, %u, %u) where the LEFT side is opaque blue and covers it "
+           "outright — the other half of the corner's control, and equally geometry-independent",
+           px[0], px[1], px[2], px[3]);
+    tf_dlr_pixel(&border, 1.0, W, H, 0, 0, px);
+    CHECKF(px[0] > 0 && px[2] > 0 && px[3] < 255,
+           "the pixel at (0, 0) is (%u, %u, %u, %u). THE MITRE DIAGONAL SPLITS IT between the TOP side's red "
+           "and the LEFT side's blue at half coverage each, so it carries ink from both and is not opaque — "
+           "about (85, 0, 170, 192). A pure (0, 0, 255, 255) is the four-rectangle corner square with the "
+           "last loop's colour over the first's, which is CSS 2.1 §8.5 \"Border properties\"' four declared "
+           "colours answered with one; a red of 0 with a blue of 255 says the same thing however the alpha "
+           "came out. The two pixels above have already said both sides drew",
+           px[0], px[1], px[2], px[3]);
+
+    /* THE ROW. `corner` is the only field of it that is not also asserted above, and it is the one a reader
+       comparing two artifacts needs: its alpha sits exactly on a quantization boundary, so it is a byte to
+       SEE rather than a byte to fix. The counts are printed beside it so that a build log can be scored for
+       the mitre without this file being opened. `count` still holds the SCALE-1 rasterization at this point,
+       because `tf_dlr_pixel` counts into a local of its own — so the three numbers printed are the ones
+       MEASURED and never three literals retyped beside the assertion that fixed them, which is the way a row
+       and the check above it come to disagree. This row's own control is that an artifact built before this
+       block answers 0 for it. */
+    printf("@PAINT border box=16x8 w=2 marks=%zu spans=%zu pixels=%zu corner=%u,%u,%u,%u\n",
+           count.marks, count.spans, count.pixels, px[0], px[1], px[2], px[3]);
+
+    /* AND THE SCALE, WHICH THE PARTITION DCHECK IS STRUCTURALLY BLIND TO. core/paint/display_list_raster.c
+       multiplies the rectangle AND the four widths by the scale, and its shoelace assert is taken over the
+       wedges those scaled operands build — so a scale read onto the rectangle and DROPPED on the widths
+       leaves that assert satisfied by construction and every other assert in the file silent. The same 16x8
+       mark at 2 device pixels per CSS pixel is a 32x16 device box with four widths of 4, on a 32x16 surface:
+       68 runs and 336 pixels, being per side 12, 22, 12, 22 and 116, 52, 116, 52. 336 is again 320 distinct
+       pixels plus the 16 a diagonal splits, four at each corner. THE TWO WAYS OF GETTING IT WRONG ARE
+       DIFFERENT NUMBERS AND ARE NAMED IN THE MESSAGE: widths left unscaled is a 32x16 box with widths 2, at
+       48 and 184, and a rectangle left unscaled is a 16x8 box with widths 4 drawn on a 32x16 surface, at 52
+       and 144. Neither is 88, so a scale dropped on BOTH is not what this separates — section 3 above
+       already holds that for the rectangle kind. */
+    (void)tf_dlr_raster(&border, 2.0, 32, 16, &count);
+    CHECKF(count.marks == 1 && count.spans == 68 && count.pixels == 336,
+           "the same border mark at 2 device pixels per CSS pixel composited %zu marks over %zu runs and %zu "
+           "pixels of a 32x16 surface, where a 32x16 device box with four used widths of 4 is 68 and 336. "
+           "48 runs and 184 pixels is the scale applied to the RECTANGLE and dropped on the four WIDTHS — "
+           "which core/paint/display_list_raster.c's partition DCHECK cannot see, because it is taken over "
+           "the wedges the unscaled widths built and is satisfied by them; 52 and 144 is the mirror of that, "
+           "a scale dropped on the rectangle and applied to the widths",
+           count.marks, count.spans, count.pixels);
+
+    /* AND A BORDER THAT DRAWS NOTHING IS STILL A MARK, which is the line core/paint/display_list_raster.c
+       draws between having an ARM for a kind and having drawn it: "`marks` counts marks this rasterizer had
+       an arm for and PROCESSED", and a side of zero used width returns before its style is read.
+       CSS 2.1 §8.5.3 "Border style: 'border-top-style', 'border-right-style', 'border-bottom-style', 'border-left-style', and 'border-style'"
+       gives `none` as "No border; the computed border width is zero", so this is the REACHABLE shape of that
+       value and never a state invented for the test. A `marks` of 0 here would say the kind was skipped, and
+       a nonzero `pixels` would say a band of zero extent had been filled; the two together are what make the
+       three numbers beside a border mark a statement about how much of it was drawn rather than about
+       whether it was seen at all. */
+    display_list_init(&border0);
+    for (k = 0; k < 4; k++) {
+        bm.side[k].width = css_px(0.0);
+        bm.side[k].style = DISPLAY_BORDER_STYLE_NONE;
+    }
+    display_list_append(&border0, &bm);
+    (void)tf_dlr_raster(&border0, 1.0, W, H, &count);
+    CHECKF(count.marks == 1 && count.spans == 0 && count.pixels == 0,
+           "a border mark whose four used widths are all zero composited %zu marks over %zu runs and %zu "
+           "pixels. ONE MARK AND NO INK IS THE WHOLE CLAIM: a `marks` of 0 is a kind the rasterizer declined "
+           "rather than processed, and any ink at all is a band of zero extent having been filled",
+           count.marks, count.spans, count.pixels);
+
+    display_list_free(&border0);
+    display_list_free(&border);
 
     display_list_free(&both);
     display_list_free(&canvas_list);
