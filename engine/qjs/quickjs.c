@@ -17292,34 +17292,72 @@ int JS_DefinePropertyValue(JSContext *ctx, JSValueConst this_obj,
  * that moves the very number the ledger is about.
  * THE WINDOW IS SAVED AND RESTORED rather than merely armed, because the ledger is a mechanism the next
  * key-holding builtin inherits and none of them may silently zero an outer one's account. */
-static int js_define_prop_borrowed_key(JSContext *ctx, JSValueConst this_obj,
-                                       JSAtom prop, JSValue val, int flags)
+/* @ATOMLEAK THE ABORT CARRIES ITS OWN OPERANDS AND ITS CALLER'S SITE, because without them it names an
+ * action with no object. TWO of this function's three callers are the SAME function — js_prop_walk_step's
+ * DESCS arm and its SPREAD arm — so a backtrace prints one line for both, and the message carried no key,
+ * no magnitude and no ledger value. MEASURED: attributing one fire on a real page took four gdb-instrumented
+ * drives to recover exactly the four numbers below. The file/line pair is captured AT THE CALLER through the
+ * macro, which is the spelling this file already uses for JS_ValueToAtomInternal.
+ *
+ * AND THE REMEDY THIS MESSAGE USED TO NAME IS RETIRED, BECAUSE THE LEDGER IS STRUCTURALLY BLIND TO IT. It
+ * ended "a JS_DupAtom in the argument list of a define that borrows its key", and `rc0` is read INSIDE this
+ * call — after the caller's argument list has already been evaluated — so such a dup is ALREADY IN rc0 and
+ * contributes EXACTLY ZERO to the measured delta. The three sites that had that defect were repaired by
+ * reading them; this check could not have reported any of them. What the delta measures is what THIS CALL
+ * took, so the remedy is to name which owner inside the define kept a reference.
+ *
+ * RESIDUAL — THE LEDGER MODELS TWO OWNERS AND A REAL PAGE FIRED IT WITH A THIRD. Not covered: the budget is
+ * `the new shape property` + `what the capture took`, and a drive of a mirrored Next.js site fired it on an
+ * object SPREAD with the capture crediting ZERO on a key the target did not already hold — an ADD, where the
+ * shape takes exactly one — so an owner this budget does not model took the excess. The next diff ATTRIBUTES
+ * it: a dev-only per-owner account over the armed atom, credited separately by add_shape_property, by
+ * js_clone_shape and by the value store, so the abort names the taker rather than only the total. Its absence
+ * shows as an abort that prints a key and two numbers and no owner, which cannot separate a caller defect
+ * from a legitimate owner the budget forgot. RETIREMENT: this record goes when the message names the owner
+ * that took the excess. */
+static int js_define_prop_borrowed_key_at(JSContext *ctx, JSValueConst this_obj,
+                                          JSAtom prop, JSValue val, int flags,
+                                          const char *file, int line)
 {
     int ret;
 #if APICLIENT_DEV
     JSAtom outer_atom = g_key_ledger_atom;
-    int outer_refs = g_key_ledger_refs, rc0;
+    int outer_refs = g_key_ledger_refs, rc0, rc1;
     g_key_ledger_atom = prop;
     g_key_ledger_refs = 0;
     rc0 = js_atom_refcount(ctx->rt, prop);
+#else
+    (void)file;
+    (void)line;
 #endif
     ret = JS_DefinePropertyValueConst(ctx, this_obj, prop, val, flags);
 #if APICLIENT_DEV
     /* the ledger, spelled as a guarded DFAIL rather than a DCHECK because a DCHECK's condition is still
        TYPE-CHECKED in a release build (`(void)sizeof(cond)`), and every term of this one is dev-only. */
-    if (ret >= 0 && js_atom_refcount(ctx->rt, prop) > rc0 + 1 + g_key_ledger_refs)
-        DFAIL("a define under a BORROWED key raised its atom's refcount by more than the one reference the new "
-              "property owns and the one the time-travel capture took, so the caller handed over a reference "
-              "this call never takes back — a JS_DupAtom in the argument list of a define that borrows its key. "
-              "That reference is leaked for the lifetime of the runtime and would otherwise surface only as an "
-              "`[atomleak]` line at JS_FreeRuntime, with the run already over and every frame that could name "
-              "this site gone");
+    rc1 = js_atom_refcount(ctx->rt, prop);
+    if (ret >= 0 && rc1 > rc0 + 1 + g_key_ledger_refs) {
+        char abuf[ATOM_GET_STR_BUF_SIZE], why[1024];
+        snprintf(why, sizeof(why),
+                 "a define under a BORROWED key raised its atom's refcount by more than the one reference the "
+                 "new property owns and the one the time-travel capture took: key `%s` (id %d) went %d -> %d "
+                 "across the define while the capture credited %d, from %s:%d. The excess is a reference THIS "
+                 "CALL took and nobody gives back — read this function's own comment before hunting a caller, "
+                 "because a JS_DupAtom in the argument list is already inside the %d and cannot be what fired "
+                 "this. It is leaked for the lifetime of the runtime and would otherwise surface only as an "
+                 "`[atomleak]` line at JS_FreeRuntime, with the run already over and every frame that could "
+                 "name this site gone",
+                 JS_AtomGetStrRT(ctx->rt, abuf, sizeof(abuf), prop), (int)prop, rc0, rc1,
+                 g_key_ledger_refs, file, line, rc0);
+        DFAIL(why);
+    }
     g_key_ledger_atom = outer_atom;
     g_key_ledger_refs = outer_refs;
 #endif
     JS_FreeValue(ctx, val);
     return ret;
 }
+#define js_define_prop_borrowed_key(ctx, this_obj, prop, val, flags) \
+    js_define_prop_borrowed_key_at((ctx), (this_obj), (prop), (val), (flags), __FILE__, __LINE__)
 
 int JS_DefinePropertyValueValue(JSContext *ctx, JSValueConst this_obj,
                                 JSValue prop, JSValue val, int flags)
