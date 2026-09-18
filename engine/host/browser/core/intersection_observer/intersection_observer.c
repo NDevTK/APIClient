@@ -1384,23 +1384,108 @@ static void js_io_ctor_visit(JSContext *ctx, void *st, JSStepVisit *v) { (void)c
 enum { IO_CTOR_STAGES(JS_STEP_STAGE_ENUM) };
 static const char *const IO_CTOR_STEPS[] = { IO_CTOR_STAGES(JS_STEP_STAGE_LABEL) NULL };
 
-/* One margin option, parsed into a fresh 8-number Array or a SyntaxError. */
+/* One margin option, parsed into a fresh 8-number Array or a SyntaxError.
+
+   AN UNKNOWN MARGIN IS PARSED FROM ITS OWN COMPUTED BYTES, WHICH IS NOT THE COERCION THE MEMBER ASSERT FORBIDS
+   AND IS NOT A SECOND ANSWER TO ONE QUESTION. §2.4 declares both margins `DOMString`, so core/idl_args.h's
+   `idl_concolic_rule` answers IDL_CONCOLIC_CROSSES and §3.2.17 Dictionary types' member loop hands this body
+   the unknown AS ITSELF — correctly, since a DOMString has no arm for a fork to be over and opacity has to
+   survive ToString. What arrives is therefore the solver's own value, and it carries the concrete bytes this
+   flow computed: `n.rootMargin = `-${header.clientHeight}px 0px 0px 0px`` is a real page's real line, and
+   core/dom/element_view.c mints §6's `long` as THE EXAMPLE a viewport-derived length carries, which the
+   interpreter's own `+` then propagates by running the real concatenation on the real operands.
+   SO THE PARSE RUNS ON THOSE BYTES, exactly as core/css/css_style_declaration.c's `setProperty` step 5 already
+   parses an unknown declaration value's own computed bytes and for the same stated reason. Running the real
+   algorithm on the concrete is what every operator in this engine does; a coercion would be asking ToString
+   for a PLACEHOLDER, which invents bytes no run computed and de-taints.
+
+   THE CRASH THAT SENT THE LAST READER HERE NAMED THE SECOND DIFF AS THE FIRST, and that is recorded here
+   because core/idl_args.h's IDL_DCHECK_MEMBER will go on saying it to every later reader of all of its sites.
+   Its remedy clause reads "the member is owed a FORK at its own stage (a step machine stage asking
+   step_fork_run for the arm), never a coercion here". `step_fork_run` EXISTS and its contract is what the
+   clause says, so this is not a stale coordinate — the clause is wrong about the ORDER and about the CASE.
+   It is right for a member carrying NO example, which is the arm below and is where this body crashes; it
+   cannot be built first for a member that HAS one, because the fork's success arm has nothing to place until
+   something has parsed those bytes, and the assert cannot tell the two cases apart at all — it fires on
+   `concolic_is` alone, so one remedy is handed to two populations that take opposite work.
+   RETIREMENT: this record goes when that assert asks whether the value carries an example and names the two
+   remedies apart, which needs a JSContext at its twenty call sites and is therefore its own diff.
+   NOTHING BELOW IS A QUOTATION AND THAT IS DELIBERATE: this standard has no committed text corpus, so
+   engine/citegen.mjs files every citation of it as FOREIGN and no channel here compares a quotation of it —
+   an unjudgeable quotation is shielded rather than checked, so what stands is the number and the title, which
+   one fetch settles. RETIREMENT: this note goes when engine/specindex carries an intersection-observer row.
+
+   NAMED RESIDUAL — WHAT IS NOT COVERED. The eight numbers are placed as plain Numbers, so the member's own
+   DOMAIN does not survive the parse: `io_root_bounds` reads them back through `io_num_at` and builds each
+   offset with `css_px(v)`, whose CssEnvSet is CSS_ENV_NONE — which core/css/css_length.h defines as the
+   POSITIVE statement that the length is one THIS CASCADE AND THIS LAYOUT DETERMINED OUT OF THE AUTHOR'S OWN
+   DECLARATIONS and therefore has no arm to explore. For a margin derived from an unknown that statement is
+   false, and false in the direction that reports a single point where there is a domain.
+   WHAT THE NEXT DIFF BUILDS: the list's members carrying that domain rather than dropping it. `CssPx` already
+   holds the `env`/`realm` pair to receive one, so this is a JOIN from the JS unknown onto a CssEnvSet and not
+   a new type; what stands in the way is `io_num_at`'s `JS_IsNumber` assert, which is correct today about an
+   engine-built §3.1 list and is what a domain-carrying member would have to be declared past, and
+   `io_serialize_margin`'s two `css_length_serialize_*` calls, which take a bare double.
+   HOW ITS ABSENCE WOULD SHOW: a flow that reads `observer.rootMargin` back, or that reaches §3.2.7's compute
+   the intersection through a root this margin dilated, takes ONE arm of a length whose own unknown admits
+   more than one — and no record anywhere states that a length was reported as a single point, because
+   CSS_ENV_NONE is indistinguishable from an author-determined one by construction. */
 static JSValue io_ctor_margin(JSContext *ctx, JSValueConst options, const char *name)
 {
-    JSValue v = JS_GetPropertyStr(ctx, (JSValue)options, name), arr;
+    JSValue v = JS_GetPropertyStr(ctx, (JSValue)options, name), arr, bytes = JS_UNDEFINED;
     double parsed[IO_MARGIN_LEN];
     const char *s;
     size_t len;
     uint32_t i;
     bool ok;
 
-    IDL_DCHECK_MEMBER(JS_IsString(v), v, name,
-                      "`DOMString` with a `= \"0px\"` default by Intersection Observer §2.4 The "
-                      "IntersectionObserverInit dictionary");
-    s = JS_ToCStringLen(ctx, &len, v);
+    if (concolic_is(v)) {
+        bytes = concolic_example(ctx, v);
+        if (JS_IsUndefined(bytes)) {
+            const char *shape = concolic_shape_c(v);
+
+            JS_FreeValue(ctx, bytes);
+            JS_FreeValue(ctx, v);
+            DFAILF("INTERSECTION OBSERVER §3.2.1 initialize a new IntersectionObserver step 3 was asked "
+                   "to parse the `%s` member, and it is UNKNOWN EXTERNAL INPUT WITH NO EXAMPLE (`%s`) — so "
+                   "there are no bytes to tokenize and no way to decide which completion the parse reaches. "
+                   "BOTH ARE FEASIBLE and neither may be picked: the observer is constructed with some "
+                   "dilation, or step 3 throws its SyntaxError (which is THAT step's throw — *parse a "
+                   "margin* step 5.3 merely returns failure, which is why the two are cited apart). THIS is "
+                   "the case core/idl_args.h's IDL_DCHECK_MEMBER remedy clause is right about, and the only "
+                   "one: the OUTCOME FORK at this member's own seam. BUILD it by giving this machine the "
+                   "state struct it does not have — `js_io_ctor_step` takes `void *st` and ignores it — "
+                   "holding the member where the sibling's snapshot carries it, and asking "
+                   "quickjs-step.h's `step_fork_run` over the two completions with outcome 0 the parse that "
+                   "SUCCEEDS, since outcome 0 is the arm a run with no forking policy takes. An unknown that "
+                   "HAS an example does not reach here and must not: it parses its own computed bytes below, "
+                   "which is this body's landed arm and the reason that clause is not the whole answer",
+                   name, shape ? shape : "{}");
+            /* RELEASE TAKES §3.2.1 STEP 3's OWN SyntaxError, which is a DEFINED completion of this
+               algorithm and one of the two the fork above would explore — never a success this caller cannot
+               test for. A refusal that THROWS ends the algorithm; a quiet return would hand
+               `js_io_ctor_step` a margin it never built, and that is the release arm whose two components
+               compose into a state neither contemplated. */
+            return JS_ThrowSyntaxError(ctx, "IntersectionObserver: %s is unknown external input with no "
+                                            "computed bytes to parse", name);
+        }
+        /* THE EXAMPLE IS A PRIMITIVE, so §7.1.19 ToString over it below runs none of the page's code — which
+           it would for an Object, from a C activation with no flow base under it. This is the same guard
+           core/css/css_style_declaration.c states at its own example read, and for the same one reason. */
+        DCHECK(!JS_IsObject(bytes),
+               "an IntersectionObserver margin's unknown carries an OBJECT as its concrete example — an "
+               "example is a value this engine COMPUTED, so it is a primitive");
+    } else {
+        IDL_DCHECK_MEMBER(JS_IsString(v), v, name,
+                          "`DOMString` with a `= \"0px\"` default by Intersection Observer §2.4 The "
+                          "IntersectionObserverInit dictionary");
+    }
+    /* The crossing is handled above, so what this reads is either the member itself or the bytes it computed. */
+    s = JS_ToCStringLen(ctx, &len, JS_IsUndefined(bytes) ? v : bytes);
     CHECK(s != NULL, "a margin option's string could not be read");
     ok = io_parse_margin(s, len, parsed);
     JS_FreeCString(ctx, s);
+    JS_FreeValue(ctx, bytes);
     JS_FreeValue(ctx, v);
     if (!ok)
         return JS_ThrowSyntaxError(ctx, "IntersectionObserver: %s is not a valid margin", name);
