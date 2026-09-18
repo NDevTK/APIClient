@@ -13,6 +13,7 @@
 #include "core/crypto/aes_gcm.h"
 #include "core/crypto/hmac.h"
 #include "core/crypto/secure_hash.h"
+#include "core/image/inflate.h"  /* RFC 1951 DEFLATE and RFC 1950's zlib framing — @PNG */
 #include "core/xml/xml_char.h"   /* XML §2.2/§2.3[3]/§2.11 — the layer every XML production reads through */
 #include "core/xml/xml_ref.h"    /* XML §4.1's [66]/[68] and §4.6's five predefined entities */
 #include "core/xml/xml_name.h"   /* XML §2.3's [5] Name, which §2.6's [17] PITarget is a subtraction from */
@@ -5775,6 +5776,306 @@ static lxb_dom_node_t *scripting_find_noscript(lxb_dom_node_t *n)
             return hit;
     }
     return NULL;
+}
+
+/* @PNG — RFC 1951 AND RFC 1950, CHECKED AGAINST STREAMS THIS ENGINE DID NOT PRODUCE.
+ *
+ * A DECOMPRESSOR THAT AGREES WITH ITSELF PROVES NOTHING, which is secure_hash_selftest's reason one directory
+ * over and is the same reason here: this component has no encoder, so the only oracle available is a stream
+ * some other implementation emitted. Every `IN_*` below is the output of zlib's own compressor over the plain
+ * bytes stated beside it, transcribed as bytes — so the rows check this port against the format as another
+ * program writes it rather than against this port's own idea of it.
+ *
+ * THE THREE BLOCK TYPES ARE CHOSEN AND NOT COLLECTED. RFC 1951 §3.2.3 defines exactly three that decode —
+ * BTYPE 00, 01 and 10 — and a fixture covering two of them would pass for a decoder that cannot read the
+ * third at all, which is the whole of what the dynamic case costs to build. `IN_STORED` is a level-0 stream
+ * and is BTYPE 00; `IN_FIXED` is BTYPE 01; `IN_DYNAMIC` is BTYPE 10, which is why its plaintext is prose
+ * rather than a repeat — a short repetitive input compresses to fixed codes and would have tested §3.2.6
+ * twice under two names.
+ *
+ * `IN_OVERLAP` IS THE ONE ROW THAT CANNOT BE PASSED BY A BLOCK MOVE. §3.2.3: "the referenced string may
+ * overlap the current position; for example, if the last 2 bytes decoded have values X and Y, a string
+ * reference with <length = 5, distance = 2> adds X,Y,X,Y,X" — so a copy implemented as a `memcpy` reads the
+ * source as it stood BEFORE the copy and answers this row wrongly while answering every non-overlapping row
+ * correctly. `IN_MULTI` is the other structural row: it is several blocks, so it exercises §3.2.3's
+ * "while not last block" and the note that "a duplicated string reference may refer to a string in a previous
+ * block".
+ *
+ * AND THE BUDGET SWEEP IS THE ASSERTION THIS FIXTURE EXISTS FOR. inflate.h makes the decoder a step machine
+ * so a flow can park inside a decode, and the property that makes that sound is that WHERE it parked cannot
+ * be observable in the answer. Every vector is therefore decoded at every budget from 1 upward and the bytes
+ * compared, which is every state the resume points can be left in — the same argument secure_hash_selftest
+ * makes by taking every split of its 56-byte vector, and for the same reason: a decode whose result depended
+ * on the granularity would make an image depend on where the scheduler happened to preempt the walk.
+ *
+ * THE REFUSAL ROWS NAME WHICH REFUSAL, never merely that one happened. A decoder that answered
+ * INFLATE_REFUSED_TRUNCATED for everything would pass a fixture that only asked whether a bad stream was
+ * rejected, and would then report every corrupt image as a cut-off one. Each row is a VALID vector with one
+ * byte changed, so what it establishes is that the change is what the refusal is about.
+ */
+static void inflate_selftest(void)
+{
+    static const uint8_t IN_STORED[] = {
+        0x01,0x12,0x00,0xED,0xFF,0x48,0x45,0x4C,0x4C,0x4F,0x20,0x53,0x54,0x4F,0x52,0x45,0x44,0x20,0x42,0x4C,0x4F,0x43,0x4B
+    };
+    static const uint8_t IN_FIXED[] = {
+        0x4B,0x4C,0xC4,0x0E,0x00
+    };
+    static const uint8_t IN_EMPTY[] = {
+        0x03,0x00
+    };
+    static const uint8_t IN_OVERLAP[] = {
+        0x8B,0x88,0x8C,0x40,0x81,0x00
+    };
+    static const uint8_t IN_ZLIB[] = {
+        0x78,0xDA,0xCB,0x48,0xCD,0xC9,0xC9,0xD7,0x51,0x28,0xCF,0x2F,0xCA,0x49,0x01,0x00,0x1D,0x54,0x04,0x89
+    };
+    static const uint8_t IN_DYNAMIC[] = {
+        0x25,0xCC,0xD1,0x09,0x03,0x31,0x0C,0x04,0xD1,0x56,0xB6,0x80,0x23,0x95,0xA4,0x09,0xC5,0x12,0xC7,0x82,0x65,0xFB,0x2C,0xA9,0xFF,0x18,0xEE,0x7B,0x78,0xF3,0x9D,0xDB,0x1C,0x5C,0x51,0x0E,0x9D,0x7D,0x6E,0x04,0x13,0xE2,0x96,0x17,0xDA,0x1C,0x61,0x2D,0x2D,0x6B,0x43,0x94,0x8B,0xD1,0x38,0x6E,0x58,0xE7,0x89,0x61,0x7A,0x00,0x8C,0x15,0x3E,0x15,0x69,0xBE,0x0E,0xE6,0x68,0x54,0x6A,0x8D,0x44,0x25,0xBA,0xFC,0xCE,0x1E,0x96,0xEF,0xDA,0xE0,0x72,0x0F,0x81,0x74,0x3E,0x25,0x9F,0x3F
+    };
+    static const uint8_t IN_MULTI[] = {
+        0x0A,0x72,0x0D,0x70,0x75,0x0C,0x51,0xF0,0x75,0x55,0x08,0x82,0xB3,0x00,0x00,0x00,0x00,0xFF,0xFF,0xC3,0xC6,0x72,0x74,0x77,0xF4,0xF4,0x03,0x00
+    };
+    static const char OUT_STORED[]  = "HELLO STORED BLOCK";
+    static const char OUT_FIXED[]   = "aaaaaaaaaaaaaaaaaaaaaaaa";
+    static const char OUT_OVERLAP[] = "XYXYXYXYXYXYXYXY";
+    static const char OUT_ZLIB[]    = "hello, world";
+    static const char OUT_DYNAMIC[] =
+        "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod "
+        "tempor incididunt ut labore et dolore magna aliqua.";
+    static const char OUT_MULTI[]   = "REPEAT ME REPEAT ME REPEAT ME REPEAT ME AGAIN";
+
+    static const struct {
+        const char     *name;
+        const uint8_t  *in;
+        size_t          in_len;
+        InflateWrapping wrapping;
+        const char     *out;
+        size_t          out_len;
+    } KAT[] = {
+        { "BTYPE=00 stored",  IN_STORED,  sizeof IN_STORED,  INFLATE_RAW,
+          OUT_STORED,  sizeof OUT_STORED  - 1 },
+        { "BTYPE=01 fixed",   IN_FIXED,   sizeof IN_FIXED,   INFLATE_RAW,
+          OUT_FIXED,   sizeof OUT_FIXED   - 1 },
+        { "BTYPE=01 empty",   IN_EMPTY,   sizeof IN_EMPTY,   INFLATE_RAW, "", 0 },
+        { "overlapping match", IN_OVERLAP, sizeof IN_OVERLAP, INFLATE_RAW,
+          OUT_OVERLAP, sizeof OUT_OVERLAP - 1 },
+        { "BTYPE=10 dynamic", IN_DYNAMIC, sizeof IN_DYNAMIC, INFLATE_RAW,
+          OUT_DYNAMIC, sizeof OUT_DYNAMIC - 1 },
+        { "several blocks",   IN_MULTI,   sizeof IN_MULTI,   INFLATE_RAW,
+          OUT_MULTI,   sizeof OUT_MULTI   - 1 },
+        { "RFC 1950 wrapper", IN_ZLIB,    sizeof IN_ZLIB,    INFLATE_ZLIB,
+          OUT_ZLIB,    sizeof OUT_ZLIB    - 1 },
+    };
+    size_t k;
+
+    /* RFC 1950 §2.2's ADLER32 against published known answers, BEFORE the decodes, because the wrapper row
+       below checks the trailer THROUGH this function: a failure here would otherwise be reported as a zlib
+       stream being corrupt. `zlib.adler32` of each string is the oracle and this engine wrote none of them. */
+    {
+        static const struct { const char *s; uint32_t a; } ADLER[] = {
+            { "",           0x00000001u },   /* §2.2: "s1 is initialized to 1, s2 to zero" */
+            { "a",          0x00620062u },
+            { "abc",        0x024D0127u },
+            { "Wikipedia",  0x11E60398u },
+            { "123456789",  0x091E01DEu },
+        };
+        size_t i;
+        for (i = 0; i < sizeof ADLER / sizeof ADLER[0]; i++) {
+            uint32_t got = inflate_adler32(1, (const uint8_t *)ADLER[i].s, strlen(ADLER[i].s));
+            CHECK(got == ADLER[i].a,
+                  "RFC 1950 §2.2's Adler-32 answered a published known answer wrongly — every zlib stream "
+                  "this engine ever accepts or rejects turns on this arithmetic");
+        }
+        /* THE SPLIT MUST NOT CHANGE THE ANSWER, which is what lets inflate.c fold the checksum in byte by
+           byte as it produces output instead of walking the finished buffer: the running form IS a split at
+           every position, so a fold that disagreed with a whole-buffer call would reject valid streams. */
+        {
+            static const char S[] = "123456789";
+            size_t cut;
+            for (cut = 0; cut <= sizeof S - 1; cut++) {
+                uint32_t a = inflate_adler32(1, (const uint8_t *)S, cut);
+                a = inflate_adler32(a, (const uint8_t *)S + cut, (sizeof S - 1) - cut);
+                CHECK(a == 0x091E01DEu,
+                      "Adler-32 accumulated across two calls disagreed with the same bytes in one — the "
+                      "running checksum inflate.c keeps would then depend on where a step happened to rest");
+            }
+        }
+    }
+
+    for (k = 0; k < sizeof KAT / sizeof KAT[0]; k++) {
+        /* THE BUDGETS ARE 1..40 AND THEN THE DEFAULT. One is the finest rest this machine offers — every
+           single output byte a separate step — so it visits every resume point the state machine has,
+           including inside a stored copy and inside an overlapping match. Forty is past the longest match
+           RFC 1951 §3.2.5 defines divided by nothing in particular; what it buys over one is the boundaries
+           that fall part-way through a match rather than at its start. The default is the shipped path. */
+        size_t budgets[42];
+        size_t nb = 0, b;
+
+        for (b = 1; b <= 40; b++) budgets[nb++] = b;
+        budgets[nb++] = 0;   /* inflate_init reads 0 as INFLATE_DEFAULT_BUDGET */
+
+        for (b = 0; b < nb; b++) {
+            Inflate z;
+            InflateStatus st;
+
+            inflate_init(&z, KAT[k].in, KAT[k].in_len, KAT[k].wrapping, budgets[b]);
+            st = inflate_run(&z);
+            CHECK(st == INFLATE_DONE,
+                  "a DEFLATE stream another implementation produced was REFUSED by this port — the port is "
+                  "wrong, and every image this engine ever decodes is with it");
+            CHECK(inflate_length(&z) == KAT[k].out_len,
+                  "a decode produced a different number of bytes from the plaintext its stream was made "
+                  "from — a length that disagrees with the encoder is a decoder that has lost or invented "
+                  "data, and nothing downstream can tell which");
+            CHECK(memcmp(inflate_bytes(&z), KAT[k].out, KAT[k].out_len) == 0,
+                  "a decode produced the right NUMBER of bytes and the wrong bytes — which is the shape an "
+                  "overlapping match copied as a block move takes, and the shape a mis-built Huffman "
+                  "alphabet takes");
+            inflate_free(&z);
+        }
+    }
+
+    /* EVERY REFUSAL ARM, EACH FROM A VALID VECTOR WITH ONE THING CHANGED. A row here establishes that the
+       change is what the refusal is about; a row asserting only that SOMETHING was refused would pass for a
+       decoder that refuses every stream, which is the failure this file could most easily ship. */
+    {
+        uint8_t bad[sizeof IN_DYNAMIC];
+        Inflate z;
+        InflateStatus st;
+        size_t i;
+
+        /* §3.2.3's BTYPE 11, which that section names "reserved (error)". The stored vector's first byte is
+           BFINAL=1 BTYPE=00; setting both BTYPE bits makes it the reserved value. */
+        {
+            uint8_t t[sizeof IN_STORED];
+            memcpy(t, IN_STORED, sizeof t);
+            t[0] = (uint8_t)(t[0] | 0x06u);
+            inflate_init(&z, t, sizeof t, INFLATE_RAW, 0);
+            st = inflate_run(&z);
+            CHECK(st == INFLATE_REFUSED_BLOCK_TYPE,
+                  "RFC 1951 §3.2.3's reserved BTYPE 11 was not refused as a reserved block type — a reader "
+                  "that answers something else for it reports the wrong thing about every stream that has "
+                  "one, and a reader that answers nothing walks into a block it cannot parse");
+            inflate_free(&z);
+        }
+
+        /* §3.2.4: "NLEN is the one's complement of LEN". Breaking NLEN alone leaves LEN and the data intact,
+           so a decoder that never checks the complement would decode this row PERFECTLY. */
+        {
+            uint8_t t[sizeof IN_STORED];
+            memcpy(t, IN_STORED, sizeof t);
+            t[3] = (uint8_t)(t[3] ^ 0xFFu);
+            inflate_init(&z, t, sizeof t, INFLATE_RAW, 0);
+            st = inflate_run(&z);
+            CHECK(st == INFLATE_REFUSED_STORED_LENGTH,
+                  "a stored block whose NLEN is not LEN's one's complement was accepted or refused for the "
+                  "wrong reason — that complement is the only integrity RFC 1951 §3.2.4 states");
+            inflate_free(&z);
+        }
+
+        /* A STREAM CUT SHORT. Every prefix of a valid stream is truncated, and the row takes several rather
+           than one because a decoder can be truncation-safe in its symbol loop and not in its block header,
+           or the other way about. The empty prefix is included: zero bytes is a complete and ordinary
+           truncated stream, not a hole. */
+        for (i = 0; i < sizeof IN_DYNAMIC; i++) {
+            inflate_init(&z, IN_DYNAMIC, i, INFLATE_RAW, 0);
+            st = inflate_run(&z);
+            CHECK(st == INFLATE_REFUSED_TRUNCATED,
+                  "a PREFIX of a valid DEFLATE stream was not refused as truncated — the answers a reader "
+                  "can give instead are to invent the rest of the data or to read past the buffer, and the "
+                  "bytes are a stranger's");
+            inflate_free(&z);
+        }
+
+        /* RFC 1950 §2.2's CMF/FLG. "CM = 8 denotes the "deflate" compression method"; the FCHECK rule makes
+           CMF*256+FLG a multiple of 31, so ANY single-bit change to either byte breaks it. Both are checked
+           because a reader that only tests CM accepts a header whose FLG says a preset dictionary follows,
+           and then decodes the dictionary identifier as compressed data. */
+        {
+            uint8_t t[sizeof IN_ZLIB];
+            memcpy(t, IN_ZLIB, sizeof t);
+            t[0] = 0x79u;   /* CM becomes 9, and the multiple-of-31 rule breaks with it */
+            inflate_init(&z, t, sizeof t, INFLATE_ZLIB, 0);
+            st = inflate_run(&z);
+            CHECK(st == INFLATE_REFUSED_WRAPPER,
+                  "a zlib header stating a compression method that is not deflate was not refused — RFC 1950 "
+                  "§2.2 defines the data after it only for CM = 8");
+            inflate_free(&z);
+
+            memcpy(t, IN_ZLIB, sizeof t);
+            t[1] = (uint8_t)(t[1] | 0x20u);   /* FDICT */
+            inflate_init(&z, t, sizeof t, INFLATE_ZLIB, 0);
+            st = inflate_run(&z);
+            CHECK(st == INFLATE_REFUSED_WRAPPER,
+                  "a zlib header declaring a preset dictionary was not refused — its first bytes were never "
+                  "transmitted, so nothing here can decode it and PNG §10.1 forbids one outright");
+            inflate_free(&z);
+        }
+
+        /* RFC 1950 §2.2's ADLER32. The four trailing bytes are the checksum "of the uncompressed data", so
+           changing one leaves a stream that DECODES perfectly and whose trailer disagrees — which is the
+           only row that can tell a decoder that keeps the checksum from one that ignores it. */
+        {
+            uint8_t t[sizeof IN_ZLIB];
+            memcpy(t, IN_ZLIB, sizeof t);
+            t[sizeof t - 1] = (uint8_t)(t[sizeof t - 1] ^ 0x01u);
+            inflate_init(&z, t, sizeof t, INFLATE_ZLIB, 0);
+            st = inflate_run(&z);
+            CHECK(st == INFLATE_REFUSED_CHECKSUM,
+                  "a zlib stream whose ADLER32 disagrees with what it decoded to was accepted — the "
+                  "checksum is the only thing standing between a corrupted body and an image built from it");
+            inflate_free(&z);
+        }
+
+        /* EVERY BYTE OF A DYNAMIC BLOCK CORRUPTED IN TURN. This row asserts a SET rather than one arm on
+           purpose — which refusal a given flipped bit produces is a fact about that bit, and pinning it
+           would be asserting the vector rather than the decoder — and the set is a real claim rather than
+           the whole enumeration: a RAW decode may never report INFLATE_REFUSED_WRAPPER or
+           INFLATE_REFUSED_CHECKSUM, because neither framing was read, so a decoder that let a §3.2 refusal
+           reach for a §2.2 one would fail here.
+           WHAT THIS ROW IS ACTUALLY FOR IS THE PATHS IT WALKS, and that is measured rather than hoped. Under
+           a sanitizer it is the row that speaks: with RFC 1951 §3.2.3's "a distance cannot refer past the
+           beginning of the output stream" deleted from inflate.c, ASan reports a heap-buffer-overflow INSIDE
+           THIS LOOP and nowhere else in this fixture — every other row here decodes well-formed streams and
+           cannot reach a bad distance at all. A corrupted stream is the only thing that drives a decoder
+           into the states a stranger's bytes can put it in, which is the whole population this component
+           exists to be safe against. */
+        for (i = 0; i < sizeof IN_DYNAMIC; i++) {
+            memcpy(bad, IN_DYNAMIC, sizeof bad);
+            bad[i] = (uint8_t)(bad[i] ^ 0x5Au);
+            inflate_init(&z, bad, sizeof bad, INFLATE_RAW, 0);
+            st = inflate_run(&z);
+            CHECK(st == INFLATE_DONE || st == INFLATE_REFUSED_TRUNCATED
+                  || st == INFLATE_REFUSED_BLOCK_TYPE || st == INFLATE_REFUSED_STORED_LENGTH
+                  || st == INFLATE_REFUSED_CODE_LENGTHS || st == INFLATE_REFUSED_SYMBOL
+                  || st == INFLATE_REFUSED_DISTANCE || st == INFLATE_REFUSED_NO_ROOM,
+                  "a corrupted DEFLATE stream produced a status this file does not declare — a reader that "
+                  "can leave its own enumeration on a stranger's bytes has a state nothing downstream has "
+                  "an arm for");
+            inflate_free(&z);
+        }
+    }
+
+    /* A TAKEN BUFFER IS THE CALLER'S, and a freed decoder must not release it a second time. This is the one
+       ownership statement inflate.h makes that no decode above exercises, and a double free is not a thing a
+       later fixture would report at this component. */
+    {
+        Inflate z;
+        uint8_t *p;
+        size_t n = 12345;
+
+        inflate_init(&z, IN_FIXED, sizeof IN_FIXED, INFLATE_RAW, 0);
+        CHECK(inflate_run(&z) == INFLATE_DONE, "the fixed-code vector stopped decoding at the ownership row");
+        p = inflate_take(&z, &n);
+        CHECK(p != NULL && n == sizeof OUT_FIXED - 1,
+              "inflate_take did not hand over the bytes the decode had produced");
+        CHECK(inflate_length(&z) == 0 && inflate_bytes(&z) == NULL,
+              "a decoder that has had its output taken still claims to hold it — the next inflate_free "
+              "would then release a buffer the caller owns");
+        inflate_free(&z);   /* must release nothing: the take left the decoder holding nothing */
+        free(p);
+    }
 }
 
 static void html_scripting_flag_selftest(void)
@@ -25232,6 +25533,10 @@ int main(int argc, char **argv) {
        primitive's row must be reported at the primitive rather than at the §14 method that will
        later call it. */
     aes_gcm_selftest();
+    /* @PNG — RFC 1951 and RFC 1950, AFTER the crypto primitives and for exactly their reason: this is a
+       PRIMITIVE with no caller in this engine yet, so its failure must be reported at its own row rather
+       than inside whatever first decodes an image through it. It stands on nothing any row above computes. */
+    inflate_selftest();
     html_scripting_flag_selftest();   /* HTML §13.2.4.5's scripting flag, read through §13.2.6.4.7's
                                         `noscript` rule — both arms, because one arm alone passes for a
                                         parser that never reads the flag */
