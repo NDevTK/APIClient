@@ -578,21 +578,36 @@ static void img_queue_fire(JSContext *ctx, JSValueConst el, const char *name)
 
 /* ---- §4.8.4.3.5's processResponse ------------------------------------------------------------------------- */
 
-/* THE REPLY, AND WHY THERE IS ONLY ONE ARM OF THE SWITCH.
+/* THE REPLY, AND WHICH OF §4.8.4.3.5's THREE ARMS IT TAKES.
  *
  * §4.8.4.3.5 ends "Fetch request. Return from this algorithm, and run the remaining steps as part of the
  * fetch's processResponse for the response response", and those remaining steps are a three-way jump: a
  * `multipart/x-mixed-replace` resource, a resource whose "type and data corresponds to a supported image
- * format", and "Otherwise". THIS USER AGENT SUPPORTS NO IMAGE FORMAT — it has no decoder — so every reply,
- * including a byte-perfect PNG, lands in the third arm, whose steps are stated in full: "the user agent must
- * set image request's state to broken, abort the image request for the current request and the pending
- * request, upgrade the pending request to the current request if image request is the pending request, and
- * then … queue an element task on the DOM manipulation task source given the img element to fire an event
- * named error at the img element."
- * That is not a stub standing in for the other two arms and it is not a shrug: it is the arm the standard
- * itself names for a resource this agent cannot decode, and it is the same answer a real browser gives for a
- * corrupt image. What is missing is the DECODER, and the two arms it would unlock are unreachable until one
- * exists — which is why they are asserted rather than written blind.
+ * format", and "Otherwise". TWO OF THE THREE ARE REACHED HERE — the supported-format one whenever
+ * core/image/image_header.h can read the reply's natural dimensions, and the "Otherwise" one when it cannot.
+ *
+ * THIS PARAGRAPH SAID THE OPPOSITE UNTIL NOW AND IS REWRITTEN RATHER THAN DELETED, because the sentence it
+ * carried is the one a reader re-derives from the shape of the function. It read: `THIS USER AGENT SUPPORTS
+ * NO IMAGE FORMAT — it has no decoder — so every reply, including a byte-perfect PNG, lands in the third arm`
+ * and `What is missing is the DECODER, and the two arms it would unlock are unreachable until one exists`.
+ * Every clause was true when written and each went false at a different moment: the supported-format arm
+ * became reachable when this file gained `image_header_read`, and the DECODER arrived with
+ * core/image/png_decode.h. It is the UNDER-CLAIM shape CLAUDE.md rates worst — a claim that a capability is
+ * ABSENT is read by exactly one population, the people deciding whether to BUILD it, so a stale one argues
+ * for building what is already here and nothing about acting on it reveals the error.
+ * THE THIRD ARM IS STILL THE ONE A REPLY THIS ENGINE CANNOT MEASURE TAKES, and its steps are stated in full:
+ * "the user agent must set image request's state to broken, abort the image request for the current request
+ * and the pending request, upgrade the pending request to the current request if image request is the pending
+ * request, and then … queue an element task on the DOM manipulation task source given the img element to fire
+ * an event named error at the img element." That is not a stub standing in for the other arms and it is not a
+ * shrug: it is the arm the standard itself names for a resource this agent cannot decode, and it is the same
+ * answer a real browser gives for a corrupt image. THE FIRST ARM IS STILL UNREACHABLE and is named at the
+ * jump below rather than here — a `multipart/x-mixed-replace` resource is a body part STREAM and this seam is
+ * handed one whole body.
+ * WHAT THE DIMENSIONS AND THE PIXELS ARE IS TWO QUESTIONS, and only the first decides this switch. A GIF and
+ * a JPEG take the supported-format arm because image_header.c measures all three formats, while
+ * `html_image_decoded_rgba` has pixels for a PNG alone — so an element can be `completely available` with a
+ * natural width and no ink, which that entry carries as its own named residual.
  *
  * IT RUNS NONE OF THE PAGE'S CODE, which is why it is a data closure and not a step machine: it writes this
  * element's own image request and ENQUEUES the task above. The page's `onerror` runs when the scheduler
