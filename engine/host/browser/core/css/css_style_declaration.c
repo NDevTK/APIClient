@@ -96,6 +96,7 @@
 #include "core/dom/document.h"
 #include "core/dom/element.h"
 #include "core/dom/selector_match.h"
+#include "core/html/integer_microsyntax.h"   /* §4.3.11.1's `headingoffset` runs §2.3.4.2's rules for parsing non-negative integers */
 #include "core/css/css_cascade.h"
 #include "core/css/css_computed_value.h"
 #include "core/css/css_defaulting.h"
@@ -1680,9 +1681,29 @@ unsigned cssom_parse_rules(const char *text, size_t len, CssomRuleFn cb, void *u
  * SELECTOR is not a tag: HTML §15.5.5's `details > summary:first-of-type { display: list-item }` gives the FIRST
  * summary of a details a marker, which the row below reads as plain `block` — the two are both block-level
  * block containers and differ in the marker box alone, so the deviation is in the marker and not in the box
- * type, and closing it needs a structural selector this layer does not evaluate. `:heading(n)`'s font sizes and
- * margins, HTML §15.3.3's margins and HTML §15.3.7's list-style rules are the same absence stated once above.
- *
+ * type, and closing it needs a structural selector this layer does not evaluate. HTML §15.3.7's list-style rules
+ * are the same absence stated once above.
+ *   `:heading(n)`'S FONT SIZES USED TO BE ON THAT LIST AND ARE NOT AN ABSENCE ANY MORE — `cssd_ua_heading_font_size`
+ *   below answers them, because the level that pseudo-class selects on is HTML §4.3.11.1 "Heading levels & offsets"'s
+ *   algorithm over the element alone rather than a selector anything has to match. The clause is rewritten and
+ *   not deleted so that a reader who re-derives a-pseudo-class-needs-a-matcher from the `summary` case above
+ *   does not conclude the same of a level: the two are different in kind, and which one a rule is decides
+ *   whether it is buildable here.
+ *   THE MARGINS OF HTML §15.3.3 Flow content AND HTML §15.3.6 Sections and headings ARE STILL ABSENT AND THE REASON
+ *   IS NOT THE SELECTOR — their selectors are ordinary tags (`blockquote, figure, listing, p, plaintext, pre,
+ *   xmp { margin-block: 1em }`, `blockquote, figure { margin-inline: 40px }`) and §15.3.6's is the level this
+ *   file now computes. It is the PROPERTY: the rendering section states every one of its margins and paddings
+ *   LOGICALLY, and core/layout/used_value.c carries the ten PHYSICAL box-model lengths and DFAILs by name on a
+ *   logical spelling ("§9's own used-if-rendered list also names the LOGICAL spellings … which need
+ *   css-writing-modes §6's mapping to a physical property before §10 can be asked anything"). A row spelling
+ *   `margin-block-start` is therefore a declaration the cascade would carry and NO layout read would ever ask
+ *   for — the write-with-no-reader shape — and a row spelling `margin-top` instead would be this file deciding
+ *   a writing mode on core/layout's behalf, one component away from the mapping that owns the question. The
+ *   next diff is css-writing-modes §6's logical-to-physical mapping at `used_value_px`, after which these rows
+ *   are transcribed in the section's own spelling. ITS ABSENCE SHOWS as a rendered document whose block-level
+ *   boxes all touch: every band of ink is separated from the next by the line box alone, with no gap anywhere a
+ *   margin is stated. */
+/*
  * AND HTML §15.3.4 Phrasing content's `ruby { display: ruby }` / `rt { display: ruby-text }` ARE DELIBERATELY
  * ABSENT, which is the one place adding a row would make this engine WORSE rather than more complete, and the
  * test is the one this
@@ -1828,6 +1849,19 @@ static const struct { const char *tag; const char *prop; const char *value; } UA
        the parser took as TEXT because scripting is enabled is exactly the element an author rule must not be
        able to make visible. */
     { "noscript", "display", "none" },
+    /* HTML §15.3.4 Phrasing content's THREE `font-size` RULES, which that section states as
+         big { font-size: larger; }
+         small { font-size: smaller; }
+         sub, sup { line-height: normal; font-size: smaller; }
+       and which are TYPE selectors, so unlike §15.3.6's they are rows. Each value is css-fonts-4 §2.5 (Font size:
+       the font-size property)'s `<relative-size>`, whose arm core/css/css_computed_value.c already carries —
+       `css_relative_size_px` off the PARENT's computed size, which is what makes `smaller` inside `smaller`
+       compound the way a browser's does. The `line-height` half of the third rule is not here; the reason is
+       with the six heading rules below, beside the other declarations of §15.3.4 this table does not carry.
+       WITHOUT THESE THREE `<big>`, `<small>`, `<sub>` AND `<sup>` WERE LAID AND PAINTED AT BODY SIZE, which is
+       the same defect as the headings' and is visible in the same picture. */
+    { "big", "font-size", "larger" },   { "small", "font-size", "smaller" },
+    { "sub", "font-size", "smaller" },  { "sup", "font-size", "smaller" },
 };
 
 /* HTML §15.3.1's `hidden` RULES, which are ATTRIBUTE selectors and therefore outrank every type selector in the
@@ -1930,6 +1964,104 @@ static const char *cssd_ua_display_conditional(lxb_dom_element_t *el, const lxb_
     return NULL;
 }
 
+/* HTML §15.3.6 Sections and headings' SIX FONT-SIZE RULES, whose selector is `:heading(n)` — a pseudo-class and
+ * therefore not a row of the type-name table, and NOT a selector this layer has to evaluate either, because
+ * the LEVEL it selects on is an algorithm over the element alone. That is the same reason `[hidden]` and
+ * `dialog:not([open])` are functions above rather than rows: what a `{tag, prop}` key cannot express and a
+ * matcher is not needed for is a question asked of one element, which is exactly what these are.
+ *
+ * WHY THESE SIX AND NOT THE REST OF §15.3.6 AND §15.3.4, which is the whole of the judgement here and is the
+ * test this file's own lead-in states — "The question to ask of a rendering-section declaration is therefore
+ * not whether it is missing but whether anything READS the property, and where something does, the row is owed
+ * rather than excused". `font-size` is read all the way to the rasterizer: core/css/css_computed_value.c's
+ * `css_font_size_px` is what css-values-4 §6.1.1's advance measure scales a glyph's width by
+ * (core/layout/text_run.c), what core/layout/line_box.c's used line height is derived from, and what
+ * core/paint/box_paint.c writes into a glyph mark's `em` for core/paint/display_list_raster.c to size the
+ * outline with. So a missing `font-size` row is not an absent declaration, it is every heading on every page
+ * laid out and PAINTED at body size — which is what this engine did.
+ *   §15.3.6's `:heading { font-weight: bold }` and §15.3.4's `b, strong { font-weight: bolder }`,
+ *   `cite, dfn, em, i, var { font-style: italic }` and `code, kbd, samp, tt { font-family: monospace }` are
+ *   DELIBERATELY ABSENT by that same test and not by oversight: `font-weight`, `font-style` and `font-family`
+ *   are carried by the cascade and read by NOTHING — no layout entry, no paint entry, no computed-value entry
+ *   names any of the three — so a row for one is a declaration with no reader, which is the write-with-no-reader
+ *   shape and not a smaller transcription. They land in the diff that gives core/css/font_metrics.h a second
+ *   face to select, because that is the consumer whose absence makes them inert.
+ *   §15.3.4's `sub, sup { line-height: normal }` IS read (core/layout/line_box.c takes
+ *   `css_used_line_height_px`) and is left for the next diff rather than excused: `normal` is that property's
+ *   own initial value, so the row's whole effect is to STOP an inherited non-normal line height reaching a
+ *   `<sub>`, which is a second property with a second value arm to verify and not a rider on this one.
+ *   §15.3.3's and §15.3.7's MARGINS are a different absence with a different reason, stated at the table.
+ *
+ * HTML §4.3.11.1 Heading levels & offsets IS THE LEVEL, and it is not the digit in the tag name: "Increment
+ * level by the result of getting an element's computed heading offset given element", where the offset is an
+ * inclusive-ancestor walk accumulating `headingoffset` and stopping at `headingreset`. Selectors 5 §8 Heading
+ * Structures says the same thing from the other side — "the heading level might be different from an element's
+ * type selector. Thus, a selector h1:heading(3) matches any h1 tag which has an exposed heading level of 3" —
+ * so a `{"h1", "font-size", "2.00em"}` ROW WOULD BE WRONG rather than narrow, answering `2.00em` for an `<h1>`
+ * inside `<article headingoffset="1">` where the spec's own example says the level is 2. Selectors 5 has no
+ * committed corpus here, so that citation is counted and never checked — see the census the audit prints.
+ * THE WALK IS `css_parent_element` AND NOT A RAW PARENT because §4.3.11.1's own step is "If inclusiveAncestor's
+ * parent is a shadow root, then set inclusiveAncestor to that shadow root's host and continue", which is
+ * exactly what that entry does, and its next step — "Set inclusiveAncestor to inclusiveAncestor's parent
+ * element" — is the NULL that entry answers for a Document parent. */
+static const char *cssd_ua_heading_font_size(lxb_dom_element_t *el, const lxb_char_t *tag, size_t taglen)
+{
+    /* §15.3.6, transcribed in the spec's own spelling. The index is the LEVEL minus one, so the table is a
+       total function over §4.3.11.1's whole range: levels 1-5 are that section's five single-level rules and
+       6-9 are its `:heading(6, 7, 8, 9)` rule, which exists precisely because an offset can push a level past
+       the six tag names. LEVEL 4's `1.00em` IS THE IDENTITY of the inherited value and is transcribed anyway:
+       it is a rule of the section, and a hole where a rule is would have to be re-derived by the next reader
+       from the fact that `1em` and inheritance agree — a fact about this property, not about this table. */
+    static const char *const HEADING_FONT_SIZE[9] = {
+        "2.00em", "1.50em", "1.17em", "1.00em", "0.83em", "0.67em", "0.67em", "0.67em", "0.67em"
+    };
+    unsigned level, offset = 0;
+    lxb_dom_element_t *anc;
+
+    /* §4.3.11.1's first six steps, verbatim: "If element's local name is h1, then set level to 1" and so on to
+       h6, then "Assert: level is not 0". An element the six do not name has NO heading level, which is also
+       what makes Selectors 5 §8's non-functional `:heading` exactly these six elements. */
+    if (taglen != 2 || tag[0] != 'h' || tag[1] < '1' || tag[1] > '6') return NULL;
+    level = (unsigned)(tag[1] - '1') + 1u;
+    /* §4.3.11.1's GET AN ELEMENT'S COMPUTED HEADING OFFSET. The accumulator SATURATES at 9 rather than being
+       carried wide, which is not a cap on the walk: §4.3.11.1's next step is "If level is greater than 9, then
+       return 9", and level is at least 1, so every offset at or above 9 names the same row. Saturating is what
+       makes the addition total over an attribute whose value the rules put no upper bound on — the authoring
+       requirement of "between 0 and 8, inclusive" is a conformance rule for authors and not a parse limit. */
+    for (anc = el; anc != NULL; anc = css_parent_element(anc)) {
+        size_t vlen = 0;
+        const lxb_char_t *v;
+        HtmlInteger num;
+
+        /* "If inclusiveAncestor is an HTML element and has a headingoffset attribute" — the namespace test is
+           the algorithm's own and is honoured, which is a different question from the `@namespace` on the UA
+           RULES that this layer does not honour (see the table's lead-in). */
+        if (lxb_dom_interface_node(anc)->ns != LXB_NS_HTML) continue;
+        /* The VALUE is what is wanted here and not the presence, so this is `get_attribute` deliberately. A
+           bare `<article headingoffset>` has the attribute with no value, whose DOM value is the empty string,
+           and HTML §2.3.4.2 Non-negative integers' rules return an ERROR for that — so HTML §4.3.11.1's next step,
+           "If the result of parsing the value is not an error, then set nextOffset to that value", leaves
+           nextOffset at 0, which is the arm a NULL takes here. The two routes reach one answer; a NULL handed
+           to the parser would not. */
+        v = lxb_dom_element_get_attribute(anc, (const lxb_char_t *)"headingoffset", 13, &vlen);
+        if (v != NULL && html_parse_non_negative_integer((const char *)v, vlen, &num)) {
+            if (num.overflow || num.value >= 9 || offset + (unsigned)num.value >= 9) offset = 9;
+            else offset += (unsigned)num.value;
+        }
+        /* "If inclusiveAncestor is an HTML element and has a headingreset attribute, then return offset" — a
+           boolean attribute, so PRESENCE and not a non-NULL value, for the reason `cssd_ua_hidden` states. */
+        if (lxb_dom_element_has_attribute(anc, (const lxb_char_t *)"headingreset", 12)) break;
+    }
+    level += offset;
+    if (level > 9) level = 9;
+    DCHECK(level >= 1 && level <= 9,
+           "HTML §4.3.11.1 (Heading levels & offsets)'s computed heading level came out outside 1..9, which its own steps "
+           "admit nothing outside of — the six local names give 1 to 6, the offset is non-negative, and the "
+           "last step is \"If level is greater than 9, then return 9\". A value here is an offset that went "
+           "negative or a level that was not seeded from one of the six");
+    return HEADING_FONT_SIZE[level - 1];
+}
+
 /* THE UA DECLARATION for `name` on `el`, and its css-cascade-5 §6.3 IMPORTANCE. `*important` is written on EVERY path,
    including the ones that answer nothing, because the caller passes it straight into the cascade and a flag it
    did not write would carry whatever the last resolution left there — the failure mode being an ordinary
@@ -1955,6 +2087,19 @@ static const char *cssd_ua_value(lxb_dom_element_t *el, const char *name, bool *
                "an attribute-conditional UA rule reported IMPORTANCE and no value — the flag is written only "
                "beside the declaration it belongs to, so one without the other is a rule that set it and then "
                "fell through");
+    }
+    /* HTML §15.3.6's `:heading(n)` font sizes, asked ahead of the table for the same reason the `display`
+       conditionals are: a pseudo-class rule and a type rule are both in the UA origin, so where both could
+       match one element the order they are asked in IS the cascade between them. They cannot both match today
+       — no `hN` carries a `font-size` row — and the order is the one css-cascade-5 §6.1's Specificity criterion
+       gives (`:heading(n)` is a class, (0,1,0); `big` is a type, (0,0,1)), written down so it stays right when
+       a type rule for one of the six arrives. NORMAL importance: §15.3.6 writes no `!important`, and the flag
+       is left as the `false` set above rather than re-written, which is the same contract the `display` arm
+       asserts one branch up. */
+    if (strcmp(name, "font-size") == 0) {
+        const char *fs = cssd_ua_heading_font_size(el, tag, n);
+
+        if (fs) return fs;
     }
     for (i = 0; i < sizeof(UA_DEFAULT) / sizeof(UA_DEFAULT[0]); i++)
         if (strlen(UA_DEFAULT[i].tag) == n && memcmp(UA_DEFAULT[i].tag, tag, n) == 0 &&
