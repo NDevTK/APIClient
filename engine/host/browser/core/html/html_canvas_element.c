@@ -153,16 +153,42 @@ bool canvas_bitmap_get(JSContext *ctx, JSValueConst canvas, CanvasBitmap *out)
     return ok;
 }
 
-/* §4.12.5's "set bitmap dimensions to width and height", STEPS 2 TO 5 — step 1 is *reset the rendering context
-   to its default state*, which belongs to the context and calls this. Splitting the algorithm at that line is
-   the standard's own seam rather than a convenience: step 1 is defined over a RENDERING CONTEXT and steps 2-5
-   over the ELEMENT, and this file has no context to reset. */
+/* HTML §4.12.5.1 "The 2D rendering context"'s "set bitmap dimensions to width and height", STEPS 2 TO 5 —
+   step 1 is *reset the rendering context to its default state*, which belongs to the context and calls this.
+   Splitting the algorithm at that line is the standard's own seam rather than a convenience: step 1 is defined
+   over a RENDERING CONTEXT and steps 2-5 over the ELEMENT, and this file has no context to reset.
+   THE NUMBER WAS §4.12.5 AT FOUR SITES AND §4.12.5 REFERENCES THIS ALGORITHM RATHER THAN DEFINING IT, which
+   is the mis-aimed citation no quotation check can see: "The canvas element" is a real section with a real
+   title whose own *2D context creation algorithm* step 5 SAYS `Set bitmap dimensions to the numeric values of
+   target's width and height content attributes`, and the steps themselves are one subsection down. Verified by
+   fetching both headings rather than by reading either number. */
 int canvas_bitmap_set_dimensions(JSContext *ctx, JSValueConst canvas, uint32_t width, uint32_t height)
 {
     JSValue st, arr, len;
-    int64_t bytes = (int64_t)width * (int64_t)height * 4;
+    /* THE PRODUCT IS FORMED IN A WIDTH THAT CANNOT OVERFLOW AND ITS FOURTH FACTOR IS REFUSED BEFORE IT IS
+       APPLIED — which is core/canvas/image_data.c's spelling of the identical question, ROUTED TO rather than
+       answered a second way. `int64_t bytes = (int64_t)width * (int64_t)height * 4;` stood here and was
+       SIGNED OVERFLOW for inputs a page reaches: core/dom/element.c's §2.6.1 reflection caps an `unsigned
+       long` content attribute at 2147483647, and four times 2147483647 squared is about 1.84e19 against an
+       INT64_MAX of 9.22e18 — so `<canvas width="2147483647" height="2147483647">` and `getContext("2d")` was
+       undefined behaviour rather than a wrong number, which this project has already measured a compiler
+       turning into a two-byte self-jump.
+       TWO uint32 DIMENSIONS MULTIPLY EXACTLY IN 64 BITS AND FOUR TIMES THAT NEED NOT, so the multiply that
+       would express an over-large request is the one that cannot be performed. §4.12.5.1's own step 2 is
+       "Resize the output bitmap to the new width and height" and states NO failure arm, so this invents none:
+       it routes into the SAME `-1` the array allocation below already returns, which the creation algorithm's
+       caller already turns into the page's exception. Past this line and below the engine's own array-length
+       ceiling the same RangeError comes back from the length coercion, so there is ONE refusal across the
+       whole range — the sentence image_data.c writes about its own copy of this arithmetic. */
+    uint64_t pixels = (uint64_t)width * (uint64_t)height;
+    int64_t bytes;
 
-    DCHECK(canvas_element_is(canvas), "§4.12.5's set bitmap dimensions was given something that is not a canvas");
+    DCHECK(canvas_element_is(canvas),
+           "§4.12.5.1's set bitmap dimensions was given something that is not a canvas");
+    if (pixels > (uint64_t)INT64_MAX / 4u)
+        return JS_ThrowRangeError(ctx, "a canvas of %u by %u pixels needs more storage than an ArrayBuffer "
+                                       "can name", width, height), -1;
+    bytes = (int64_t)(pixels * 4u);
     st = canvas_state(ctx, canvas);
 
     /* Step 2 — "Resize the output bitmap to the new width and height." A fresh array rather than a resize of
@@ -204,7 +230,7 @@ int canvas_bitmap_set_dimensions(JSContext *ctx, JSValueConst canvas, uint32_t w
 }
 
 
-/* §4.12.5's *set bitmap dimensions* with the creation algorithm's own step 5 argument — "the numeric values of
+/* §4.12.5.1's *set bitmap dimensions* with the creation algorithm's own step 5 argument — "the numeric values of
    target's width and height content attributes". It is HERE and not at the context because §4.12.5's two
    defaults (300 and 150) are this file's, and a second reader of those attributes would be a second answer to
    the element's own dimensions — which core/html/html_element.c's R_CANVAS reflection row already gives once. */

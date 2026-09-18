@@ -84,7 +84,7 @@ typedef struct {
    is a STATE rather than a failure. Never throws. */
 bool canvas_bitmap_get(JSContext *ctx, JSValueConst canvas, CanvasBitmap *out);
 
-/* §4.12.5's "set bitmap dimensions to width and height", steps 2 to 5 — step 1 is *reset the rendering context
+/* §4.12.5.1's "set bitmap dimensions to width and height", steps 2 to 5 — step 1 is *reset the rendering context
    to its default state*, which the CONTEXT owns and calls this from, so that the one algorithm is not split
    across two files in an order neither of them states. Allocates `width * height * 4` zero bytes (transparent
    black) and writes the two content attributes back to match. Returns -1 with an exception pending. */
