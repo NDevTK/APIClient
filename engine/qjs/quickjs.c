@@ -17482,7 +17482,16 @@ static int js_define_prop_borrowed_key_at(JSContext *ctx, JSValueConst this_obj,
         tagged += g_key_ledger_by[i];
     rest = (rc1 - rc0) - tagged;
     if (ret >= 0 && rc1 > rc0 + 1 + g_key_ledger_by[KEY_OWNER_CAPTURE]) {
-        char abuf[ATOM_GET_STR_BUF_SIZE], why[1024];
+        /* @ATOMOWNER THE BUDGET IS ADDED TO RATHER THAN CARVED OUT OF, so no message that fitted before this
+           partition fits differently now. The worst case is arithmetic and is stated so the next person to
+           lengthen this text can re-derive it: 780 bytes of format literal (the em dash is three of them),
+           less 2 per specifier, plus a 63-byte atom name, 96 bytes of owner names, six signed counts and two
+           more numbers, plus __FILE__ — which is NOT `quickjs.c` but whatever absolute path the build handed
+           the compiler, and under a frozen snapshot that is a lane-and-revision directory. At 1024 that
+           overflowed by ~100 bytes and snprintf would have TRUNCATED IN SILENCE, taking the tail — which is
+           the half that stops the next reader hunting the remedy this abort no longer names. The essential
+           facts are composed FIRST for the same reason: a truncation must cost prose and never a number. */
+        char abuf[ATOM_GET_STR_BUF_SIZE], why[2048];
         snprintf(why, sizeof(why),
                  "a define under a BORROWED key raised its atom's refcount by more than the one reference the "
                  "new property owns and the one the time-travel capture took: key `%s` (id %d) went %d -> %d "
