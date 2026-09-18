@@ -131,38 +131,6 @@ static IntrinsicInlineSizes fis_item_cross_contribution(lxb_dom_element_t *conta
     }
 }
 
-/* ONE FLEXIBILITY FACTOR of `item` — css-flexbox-1 §7.2.1 "The flex-grow property"' and §7.2.2 "The
-   flex-shrink property"' `<number [0,∞]>`. Their `Computed value:` lines are "specified number" and "specified
-   value", so what the cascade holds is the number itself and this only has to read it back; lexbor validated
-   the grammar before the declaration reached the cascade, which is why a parse failure is a should-never-happen
-   rather than an input error.
-   ONLY ITS SIGN IS EVER USED and the entry still returns the number, because §9.9.3's two conditions are
-   stated of the item and not of the factor — "if the item is not growable", "if the item is not shrinkable" —
-   and a predicate named for one of them at this level would be the same fact answering two questions. §7.2.1's
-   own sentence is what makes zero the dividing value: the factor "sets the flex grow factor to the provided
-   number", and §9.7 "Resolving Flexible Lengths" gives a zero factor no share of the free space at all. */
-static double fis_flex_factor(lxb_dom_element_t *item, const char *name)
-{
-    char *v = css_computed_value(item, name);
-    char *end;
-    double n;
-
-    DCHECKF(v != NULL,
-            "the cascade produced no computed `%s` — css-flexbox-1 §7.2.1 \"The flex-grow property\" and §7.2.2 "
-            "\"The flex-shrink property\" give the two an `Initial:` of `0` and `1`, so the cascade's last "
-            "layer always answers",
-            name);
-    n = strtod(v, &end);
-    DCHECKF(end != v && *end == '\0',
-            "`%s` computed to `%s`, which is not the `<number [0,∞]>` css-flexbox-1 §7.2.1 \"The flex-grow "
-            "property\" and §7.2.2 \"The flex-shrink property\" declare. lexbor validates the `Value:` line "
-            "before the cascade sees it, so a value of another shape is a declaration that should have been "
-            "dropped",
-            name, v);
-    free(v);
-    return n;
-}
-
 /* css-flexbox-1 §9.2 "Line Length Determination"'s FLEX BASE SIZE of `item`, in the container's MAIN axis —
    which for every caller here is the INLINE axis, by §5.1's mapping. `measured` is the item's own §5.1 pair.
    TWO OF §9.2's FIVE ARMS ARE REACHABLE AND THE ROUTING IS §7.1's, NOT §7.2.3's. §7.1 "The flex Shorthand"
@@ -287,11 +255,11 @@ static IntrinsicInlineSizes fis_item_main_contribution(lxb_dom_element_t *contai
     }
     /* STEPS TWO AND THREE. */
     base = fis_flex_base_size(item, measured);
-    if (fis_flex_factor(item, "flex-grow") <= 0.0) {
+    if (flex_item_flexibility_factor(item, "flex-grow") <= 0.0) {
         out.min_content = css_px_min(out.min_content, base);
         out.max_content = css_px_min(out.max_content, base);
     }
-    if (fis_flex_factor(item, "flex-shrink") <= 0.0) {
+    if (flex_item_flexibility_factor(item, "flex-shrink") <= 0.0) {
         out.min_content = css_px_max(out.min_content, base);
         out.max_content = css_px_max(out.max_content, base);
     }

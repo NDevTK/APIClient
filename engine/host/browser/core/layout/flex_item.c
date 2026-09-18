@@ -273,3 +273,31 @@ bool flex_item_is_collapsed(lxb_dom_element_t *item)
     free(v);
     return collapsed;
 }
+
+/* css-flexbox-1 §7.2.1 "The flex-grow property"' and §7.2.2 "The flex-shrink property"' factor — see
+   flex_item.h for why the two consumers make this §4's question rather than either section's. lexbor validated
+   the `Value:` line before the declaration reached the cascade, which is why a parse failure here is a
+   should-never-happen rather than an input error. */
+double flex_item_flexibility_factor(lxb_dom_element_t *item, const char *name)
+{
+    char *v;
+    char *end;
+    double n;
+
+    DCHECK(item != NULL, "css-flexbox-1 §7.2's flexibility factor was asked for with no element");
+    v = css_computed_value(item, name);
+    DCHECKF(v != NULL,
+            "the cascade produced no computed `%s` — css-flexbox-1 §7.2.1 \"The flex-grow property\" and §7.2.2 "
+            "\"The flex-shrink property\" give the two an `Initial:` of `0` and `1`, so the cascade's last "
+            "layer always answers",
+            name);
+    n = strtod(v, &end);
+    DCHECKF(end != v && *end == '\0',
+            "`%s` computed to `%s`, which is not the `<number [0,∞]>` css-flexbox-1 §7.2.1 \"The flex-grow "
+            "property\" and §7.2.2 \"The flex-shrink property\" declare. lexbor validates the `Value:` line "
+            "before the cascade sees it, so a value of another shape is a declaration that should have been "
+            "dropped",
+            name, v);
+    free(v);
+    return n;
+}

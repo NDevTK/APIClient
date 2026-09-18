@@ -46,9 +46,15 @@
 /* css-flexbox-1 §3 "Flex Containers: the flex and inline-flex display values"' TWO SPELLINGS, decided from a
    computed `display` and from nothing else — the same shape as core/layout/block_flow.h's block-container
    test and asked for the same reason: a consumer has a `display` in hand and needs to know which module owns
-   the box before it can ask this component anything. §3's own sentence gives both and says what differs — "a
-   flex container establishes a new flex formatting context for its contents ... A flex container is not a
-   block container" — so the pair is the OUTER display type and the inner one is the same for both. */
+   the box before it can ask this component anything. §3's own sentences give both and say what differs — "A
+   flex container establishes a new flex formatting context for its contents" and "Flex containers are not
+   block containers" — so the pair is the OUTER display type and the inner one is the same for both.
+   THE SECOND HALF USED TO READ "A flex container is not a block container", WHICH IS IN NO EDITION OF THIS
+   STANDARD, and it is written out rather than silently corrected because the CLAIM it made was true and only
+   its transcription was not: measured with a positive control ("flex formatting context", 4 occurrences) and
+   a negative one, the singular spelling occurs ZERO times in the Editor's Draft AND zero times in the /TR
+   snapshot, while §3's own plural sentence occurs in both. A quotation that is right about the fact and wrong
+   about the words is the one shape no reader re-checks, because the sentence beneath it is correct. */
 bool flex_item_display_is_flex_container(const char *display);
 
 /* §5.1's MAIN AXIS, named by WHICH OF THE TWO WRITING-MODE AXES it is rather than by the keyword that chose
@@ -120,6 +126,21 @@ lxb_dom_node_t *flex_item_text_sequence_end(lxb_dom_element_t *container, lxb_do
    `visibility` is the initial `visible`, and asking the CONTAINER — the only element in reach — would answer
    about the wrong box. That is why this takes an ELEMENT and not a node. */
 bool flex_item_is_collapsed(lxb_dom_element_t *item);
+
+/* css-flexbox-1 §7.2.1 "The flex-grow property"' AND §7.2.2 "The flex-shrink property"' FLEXIBILITY FACTOR of
+   `item`. `name` is `flex-grow` or `flex-shrink`, and the answer is the `<number [0,∞]>` both `Value:` lines
+   declare: their `Computed value:` lines are "specified number" and "specified value", so what the cascade
+   holds is the number itself and this only reads it back.
+   IT IS §4's QUESTION RATHER THAN ONE SECTION'S BECAUSE TWO ALGORITHMS ASK IT AND NEITHER OWNS IT.
+   css-flexbox-1 §9.9.3 "Flex Item Intrinsic Size Contributions" reads only its SIGN, through two conditions
+   stated of the ITEM and not of the factor — "if the item is not growable", "if the item is not shrinkable" —
+   while §9.7 "Resolving Flexible Lengths" reads the NUMBER, both as the divisor of its distribution ratio and
+   as the sum its less-than-one arm tests. A predicate named for one of those at this level would be one fact
+   answering two questions, and a second reader of the same declaration would be the copy that drifts.
+   ZERO IS THE DIVIDING VALUE AND IT IS §7.2.1's OWN: the property "sets the flex grow factor to the provided
+   number", and §9.7 gives a zero factor no share of the free space at all — its step 2 freezes such an item
+   outright. */
+double flex_item_flexibility_factor(lxb_dom_element_t *item, const char *name);
 
 
 #endif
