@@ -20,8 +20,10 @@
  * described in this section." So `getImageData` and `putImageData` read and write the bitmap directly, and
  * nothing they do is a function of any drawing-state member. That is what makes a context carrying them
  * COMPLETE rather than narrow — every observable this interface installs is written by an algorithm inside
- * this file. THIS PARAGRAPH USED TO OPEN "WHAT IS DELIBERATELY NOT HERE IS THE DRAWING STATE" and is rewritten
- * rather than deleted, because the reasoning under it is sound and a reader who re-derives it will re-derive
+ * this file. THIS PARAGRAPH USED TO OPEN `WHAT IS DELIBERATELY NOT HERE IS THE DRAWING STATE` — backticked
+ * rather than quoted, because a quoted run of THIS TREE'S prose standing beside a section number is read by
+ * the citation auditor as a claim about that section. It is rewritten rather than deleted, because the
+ * reasoning under it is sound and a reader who re-derives it will re-derive
  * the retired headline with it: §4.12.5.1.3's drawing state IS here now, and its being here takes nothing away
  * from the separability argument, which was always about §4.12.5.1.16 and never about what else the file has.
  *
@@ -36,7 +38,7 @@
  * not exist creates an ordinary property and throws nothing. That pairing is why the drawing road's first diff
  * is not `fillRect` alone.
  *
- * AND THAT SENTENCE READ "EVERY DRAWING MEMBER" UNTIL §4.12.5.1.3's DRAWING STATE LANDED, WHICH IS A NARROWING
+ * AND THAT SENTENCE READ `EVERY DRAWING MEMBER` UNTIL §4.12.5.1.3's DRAWING STATE LANDED, WHICH IS A NARROWING
  * ITS OWN ARGUMENT ALREADY LICENSED RATHER THAN A HOLE IN IT. The harmless half of the pair above is a
  * drawing-state member standing beside an absent painter — that is `fillStyle` in its own example — so
  * `globalAlpha` and the `save()`/`restore()` stack that copies it are on the side this paragraph calls

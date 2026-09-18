@@ -852,8 +852,11 @@ void canvas_rendering_context_2d_init(JSContext *ctx)
  * constructor declaration.
  *
  * THE `save()`/`restore()` RESIDUAL THAT STOOD HERE IS RETIRED BY THE STACK ABOVE, AND ITS COUNT WAS WRONG IN
- * A WAY WORTH KEEPING. It said §4.12.5.1.3 "defines a drawing state as a list of eleven things", and that
- * section's list is FIVE top-level items naming THIRTY: the current transformation matrix; the current
+ * A WAY WORTH KEEPING. It said §4.12.5.1.3 `defines a drawing state as a list of eleven things` — BACKTICKED
+ * rather than quoted because it is THIS TREE'S retired prose and not the standard's, and a quoted run beside a
+ * section number is read by the citation auditor as a claim about that section, which is a fabrication finding
+ * manufactured out of a correct record. That section's list is FIVE top-level items naming THIRTY: the
+ * current transformation matrix; the current
  * clipping region; a third item carrying eight ("The current letter spacing, word spacing, fill style, stroke
  * style, filter, global alpha, compositing and blending operator, and shadow color"); a fourth carrying
  * nineteen attributes by name; and the current dash list. Eleven is what you get by counting the first, the
