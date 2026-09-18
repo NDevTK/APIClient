@@ -37,23 +37,39 @@
  * surface that already holds pixels: `raster_surface_init` overwrites `px` without freeing it, so the caller
  * frees before it asks again, exactly as it would before any other initialisation.
  *
- * NAMED RESIDUAL — A ROOT ELEMENT THAT GENERATES NO BOX REACHES AN ABORT RATHER THAN AN EMPTY IMAGE.
- * WHAT IS NOT COVERED: a document whose root element's computed `display` is one of css-display-3 §2.5 "Box
- * Generation: the none and contents keywords"' two keywords. CSS 2.1 §9.2 "Controlling box generation" is
- * where the box stops existing, and core/paint/stacking_order.c's stacking-context test asserts its operand
- * generates one — "CSS 2.1 §9.9 is stated over BOXES throughout" — so the walk this entry performs aborts at
- * that precondition instead of answering. It is UNREACHABLE from any caller in this tree today: the only
- * documents that reach this entry are ones engine/host/test_forced.c writes, and the production ABI entries
- * over it have no method on `content.mojom.Renderer` to be called through, so no page's markup can select the
- * arm. The diff that gives them one is the diff that must build the predicate first.
- * WHAT THE NEXT DIFF BUILDS: core/paint/stacking_order.h gains an entry answering whether an element
- * generates a box at all — the `so_generates_box` static in that file, made public and read HERE before the
- * walk — and a root that generates none takes the region's own surface with CSS 2.1 §E.2's step 1 laying
- * nothing on it, which is an empty image and not an absent one.
- * HOW ITS ABSENCE WOULD SHOW: a dev build aborts inside the stacking-context test rather than in this file,
- * under a message about an element that generates no box, on a document whose root carries one of those two
- * keywords; a release build reaches the same walk with the assert compiled out.
- * WHO MAY RETIRE IT: any lane, because both halves are C in this tree and neither needs an artifact. */
+ * A ROOT THAT GENERATES NO BOX IS AN EMPTY IMAGE AND NOT AN ABSENT ONE, AND THE KEYWORD THAT REACHES IT IS
+ * ONE RATHER THAN css-display-3 §2.5 "Box Generation: the none and contents keywords"' TWO. A root whose
+ * computed `display` is `none` generates nothing for CSS 2.1 §E.2 "Painting order" to walk — css-display-3
+ * §2.5 states it of the whole subtree, "The element and its descendants generate no boxes or text sequences"
+ * — and core/paint/stacking_order.h's stacking-context test is stated over a BOX and crashes rather than
+ * answering for one that does not exist. THAT CRASH IS CORRECT AND ITS OWN MESSAGE SAYS WHOSE QUESTION THIS
+ * IS: `The caller's own walk is what knows the difference`. This entry is that caller, it asks BEFORE the
+ * walk, and the region's own surface with nothing laid on it is the answer.
+ * THE OTHER KEYWORD CANNOT REACH A ROOT AT ALL, which is css-display-3 §2.8 "The Root Element's Principal
+ * Box" and is ASSERTED here rather than assumed: css-display-3 §2.8 says "Additionally, a display of contents
+ * computes to block on the root element", and core/css/css_computed_value.c performs exactly that — so a
+ * `contents` arriving here is this engine's own computed value disagreeing with the section it implements
+ * and is never anything a page declared. `none` survives the same blockification because css-display-3 §2.7
+ * "Automatic Box Type Transformations" says it does: "This has no effect on display types that generate no
+ * box at all, such as none or contents".
+ *
+ * THE RESIDUAL THAT STOOD HERE IS RETIRED, AND IT WAS WRONG IN BOTH CLAUSES A READER ACTS ON — WHICH IS THE
+ * PART WORTH KEEPING, because a residual is read once, by somebody who has already decided to build it.
+ * ITS NOT-COVERED CLAUSE ENUMERATED INPUTS rather than a property — `one of css-display-3 §2.5's two
+ * keywords` — and one of the two is already answered by a step that runs EARLIER than the step the residual
+ * was about, so a reader building to the list would have written an arm that cannot run and would have read
+ * the `contents` case as unhandled when css-display-3 §2.8 handles it. The check that catches this is one
+ * question asked of each named input: WHICH STEP FIRST SEES IT.
+ * ITS NEXT-DIFF CLAUSE NAMED THE WRONG COMPONENT AND THE WRONG SHAPE. It said to make `so_generates_box` an
+ * entry of core/paint/stacking_order.h, which proposes a css-display-3 §2.5 predicate as a public entry of a
+ * CSS 2.1 §9.9 header; and the tree ALREADY answers box generation publicly, in core/dom/element_view.h,
+ * whose `element_view_has_box` is HTML's `being rendered` and therefore folds PRESENTATION into the same bit
+ * — connectedness, an owner document, a viewport. THOSE TWO FACTS ROUTE TO OPPOSITE ARMS HERE: a document
+ * with no rendered region answers FALSE and a document with no root box answers TRUE with an empty image, so
+ * one bit for both is the shape this entry's own bool/count split exists to avoid. Neither predicate is read
+ * here. What is read is the ROOT's own computed `display`, which css-display-3 §2.8 reduces to one keyword.
+ * RETIREMENT: this record goes when a public entry answers css-display-3 §2.5's box generation WITHOUT also
+ * answering whether the document is presented, and this file routes to it. */
 #ifndef ENGINE_HOST_BROWSER_CORE_PAINT_DOCUMENT_PAINT_H
 #define ENGINE_HOST_BROWSER_CORE_PAINT_DOCUMENT_PAINT_H
 
@@ -72,7 +88,9 @@
    covers it, so a document whose marks overlap reports more pixels than the surface holds.
    `complete` IS THE WALK'S OWN ANSWER AND IS NOT THIS ENTRY'S RETURN. False is a painter that met an operand
    it could not compute and stopped, which leaves a PARTIAL picture — every mark it had already laid is in the
-   image — so a caller that treats it as a failure discards a rendering that is correct as far as it goes. */
+   image — so a caller that treats it as a failure discards a rendering that is correct as far as it goes.
+   It is TRUE for a root that generates no box, whose picture is whole and empty; `offers` is the field that
+   separates that from a walk, because a walk over a root always offers at least one step. */
 typedef struct {
     unsigned offers;
     size_t   marks;
@@ -86,7 +104,12 @@ typedef struct {
    core/frame/viewport.h decides and nothing here re-derives — and then `out` is a zero-area surface and every
    field of `count` is zero. `out` is INITIALISED by this entry on every arm and is the caller's to free on
    every arm; `count` is required for core/paint/display_list_raster.h's own reason and is written even when
-   nothing is drawn. */
+   nothing is drawn.
+   A ROOT THAT GENERATES NO BOX ANSWERS TRUE WITH AN EMPTY IMAGE — `out` is the region's own device size,
+   every number in `count` is zero and `complete` is TRUE, because nothing was left unpainted rather than a
+   painter having stopped. `offers` of ZERO is what tells that state from a walk that ran:
+   core/paint/paint_order.c offers CSS 2.1 §E.2 "Painting order"'s step 1 for every root it walks, so a walk
+   that happened reports at least one. */
 bool document_paint(JSContext *ctx, lxb_html_document_t *dom, RasterSurface *out, DocumentPaintCount *count);
 
 #endif /* ENGINE_HOST_BROWSER_CORE_PAINT_DOCUMENT_PAINT_H */

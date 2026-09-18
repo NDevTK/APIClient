@@ -1,11 +1,14 @@
 /* See core/paint/document_paint.h for why this is a component and not a line at each caller. */
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include <lexbor/dom/dom.h>
 #include <lexbor/html/html.h>
 
 #include "check.h"
+#include "core/css/css_computed_value.h"
 #include "core/css/css_length.h"
 #include "core/frame/viewport.h"
 #include "core/graphics/raster_surface.h"
@@ -22,6 +25,8 @@ bool document_paint(JSContext *ctx, lxb_html_document_t *dom, RasterSurface *out
     DisplayListRasterCount rc;
     CssPx                  region[4];
     double                 dpr;
+    char                  *display;
+    bool                   boxless;
     int                    w = 0, h = 0;
 
     DCHECK(ctx != NULL, "a document was asked what it looks like with no realm to ask it in — CSS 2.1 §2.3.1 "
@@ -72,23 +77,61 @@ bool document_paint(JSContext *ctx, lxb_html_document_t *dom, RasterSurface *out
     display_list_raster_region_size(region, dpr, &w, &h);
     raster_surface_init(out, w, h);
 
-    display_list_init(&dl);
-    /* CSS 2.1 §E.2 "Painting order" over the ROOT's stacking context. CSS 2.1 §9.9.1 "Specifying the stack level: the
-       'z-index' property"'s first sentence makes the root element form the root stacking context, which is box_paint's precondition satisfied by the operand
-       rather than by a test here — and the case that precondition does NOT admit is this file's own named
-       residual. */
-    count->complete = box_paint_stacking_context(ctx, root, &dl, &count->offers);
+    /* DOES THE ROOT GENERATE A BOX AT ALL — css-display-3 §2.5 "Box Generation: the none and contents
+       keywords", asked HERE because core/paint/stacking_order.h's stacking-context test is stated over a BOX
+       and crashes for an element that generates none, naming this caller as the one that knows the
+       difference. A page's own markup selects that arm, so it may never reach an assert.
+       IT IS ONE KEYWORD AND NOT §2.5's TWO, and that is css-display-3 §2.8 "The Root Element's Principal Box"
+       rather than an abbreviation of the question: "Additionally, a display of contents computes to block on
+       the root element". core/css/css_computed_value.c performs that rule, so the DCHECK below asserts THIS
+       ENGINE'S OWN computed value and never the document's — a `contents` here is the file that implements
+       css-display-3 §2.8 disagreeing with this one. `none` survives the same blockification because
+       css-display-3 §2.7 "Automatic Box Type Transformations" says it does: "This has no effect on display
+       types that generate no box at all, such as none or contents". */
+    display = css_computed_value(root, "display");
+    DCHECK(display != NULL,
+           "the cascade produced no computed `display` for the root element — the property is in lexbor's "
+           "registry with an initial value, so css-cascade-5 §7 \"Defaulting\"'s last layer cannot come back "
+           "empty and an absence is this engine's pipeline rather than the document's");
+    DCHECKF(strcmp(display, "contents") != 0,
+            "the root element's computed `display` is `%s`, and css-display-3 §2.8 \"The Root Element's "
+            "Principal Box\" says \"Additionally, a display of contents computes to block on the root "
+            "element\" — which core/css/css_computed_value.c performs. So this is not a document that "
+            "declared something unusual: it is the computed value disagreeing with the section that computes "
+            "it, and the fix is in that file rather than a second arm here",
+            display);
+    boxless = strcmp(display, "none") == 0;
+    free(display);
 
-    /* AND THE INK, COMPOSITED, WHETHER OR NOT THE WALK FINISHED. box_paint's contract is that a stopped walk
-       leaves every mark it already appended, so the image of a document with one unpaintable box is the
-       picture minus that box — CSS 2.1 §E.2's step 1 "background color of element over the entire canvas"
-       included, because it is laid first. Rasterizing only a COMPLETE walk would throw that away and report
-       the same empty surface for a document that painted nothing and one that painted all but its last box. */
-    display_list_raster(&dl, dpr, out, &rc);
-    count->marks = rc.marks;
-    count->spans = rc.spans;
-    count->pixels = rc.pixels;
-    display_list_free(&dl);
+    if (boxless) {
+        /* css-display-3 §2.5's `none`: "The element and its descendants generate no boxes or text sequences".
+           There is nothing for CSS 2.1 §E.2 "Painting order" to walk, and the REGION is untouched by that —
+           it is a fact about the viewport — so the answer is the surface already sized above with no mark on
+           it. `complete` is TRUE because nothing was left unpainted: false is stated for a painter that met an
+           operand it could not compute and STOPPED, and this walk was never owed. `offers` staying zero is
+           what tells a reader the two apart, because core/paint/paint_order.c offers CSS 2.1 §E.2's step 1 for
+           every root it walks and a walk that happened therefore reports at least one. */
+        count->complete = true;
+    } else {
+        display_list_init(&dl);
+        /* CSS 2.1 §E.2 "Painting order" over the ROOT's stacking context. CSS 2.1 §9.9.1 "Specifying the stack
+           level: the 'z-index' property"'s first sentence makes the root element form the root stacking
+           context, which is box_paint's precondition satisfied by the operand rather than by a test here —
+           and the one case that precondition does not admit is the arm above. */
+        count->complete = box_paint_stacking_context(ctx, root, &dl, &count->offers);
+
+        /* AND THE INK, COMPOSITED, WHETHER OR NOT THE WALK FINISHED. box_paint's contract is that a stopped
+           walk leaves every mark it already appended, so the image of a document with one unpaintable box is
+           the picture minus that box — CSS 2.1 §E.2's step 1 "background color of element over the entire
+           canvas" included, because it is laid first. Rasterizing only a COMPLETE walk would throw that away
+           and report the same empty surface for a document that painted nothing and one that painted all but
+           its last box. */
+        display_list_raster(&dl, dpr, out, &rc);
+        count->marks = rc.marks;
+        count->spans = rc.spans;
+        count->pixels = rc.pixels;
+        display_list_free(&dl);
+    }
 
     /* THE EXTENT AND THE IMAGE ARE ONE FACT, ASSERTED FROM BOTH ENDS. core/graphics/raster_surface.h already
        holds a surface to `(bytes == 0) == (px == NULL)`; what is asserted here is the half above it — that a

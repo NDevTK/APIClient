@@ -63,6 +63,7 @@
 #include "core/dom/observable.h"
 #include "core/html/unhandled_rejection.h"
 #include "core/css/css_at_rule_prelude.h"
+#include "core/css/css_computed_value.h"   /* css-display-3 §2.8's root rule, asserted where a page could otherwise abort the engine */
 #include "core/css/css_property_syntax.h"
 #include "core/css/css_math.h"   /* css-values-4 §10's grammar, §10.9's type algebra and §10.10.1's reduction */
 #include "core/css/css_numeric_value.h"   /* CSS Typed OM 1 §4.3.2's create-a-type, and §5.4.1's ratio */
@@ -21670,6 +21671,181 @@ static void box_paint_scratch_selftest(JSContext *ctx)
     display_list_free(&dl);
 }
 
+/* A ROOT ELEMENT THAT GENERATES NO BOX — core/paint/document_paint.h's own arm, and the ONE keyword that can
+ * reach it.
+ *
+ * WHY THIS IS TWO DOCUMENTS AND NOT ONE. css-display-3 §2.5 "Box Generation: the none and contents keywords"
+ * has two values and the ROOT admits only one of them, because css-display-3 §2.8 "The Root Element's
+ * Principal Box" says "Additionally, a display of contents computes to block on the root element". So the
+ * pair below differs by ONE KEYWORD and in nothing else, and the entry answers them differently for a reason
+ * no other fact explains: the `none` root takes the boxless arm and the `contents` root takes the ORDINARY
+ * walk, because by the time the paint sees it its computed value is `block`.
+ *
+ * EACH ARM IS ITS OWN CONTROL AND THEY FIRE IN DIFFERENT FILES. Without core/paint/document_paint.c's arm the
+ * `none` document aborts inside core/paint/stacking_order.c's stacking-context test, under a message about an
+ * element that generates no box. Without core/css/css_computed_value.c's css-display-3 §2.8 rule the
+ * `contents` document aborts at core/paint/document_paint.c's own DCHECK naming that section — and in a
+ * RELEASE build, where both are compiled out, the `display` CHECK below is what still separates them, which is
+ * why the computed value is read here rather than left to the dev-only assert one file over.
+ *
+ * WHY A PAGE'S MARKUP DECIDING THIS IS THE WHOLE POINT. `display` on the root is a page's own declaration, so
+ * an abort reachable from it is an abort switch a document holds over this engine. The production ABI entries
+ * `qjs_paint` and `qjs_paint_bytes` stand over exactly this walk; the diff that gives them a method to be
+ * called through is the diff that arms the switch, which is why this lands first.
+ *
+ * EVERY NUMBER IS A PLAIN C VALUE THIS FILE OR THE ENTRY COMPUTED. The two markups are string literals here,
+ * the extent is `display_list_raster_region_size` over `viewport_canvas_region` — the same second route
+ * `box_paint_selftest` takes — and the counts are `unsigned` and `size_t` fields. None of them crosses to JS,
+ * so none can become concolic and silently fail to be written, which is what a row of this kind must be made
+ * of to mean anything. */
+static void document_paint_boxless_root_selftest(JSContext *ctx)
+{
+    /* A VALUE THE ENTRY CANNOT PRODUCE — `box_paint_selftest`'s own sentinel and for its reason: the entry
+       writes every field of the count before any arm can return, so a survivor is the write not having
+       happened and is not a walk that offered nothing. */
+    static const unsigned TF_DP_UNWRITTEN = 0xFFFFFFFFu;
+    /* TWO MARKUPS THAT DIFFER IN ONE KEYWORD AND IN NOTHING ELSE — css-display-3 §2.5's two values, each on
+       the ROOT. THE BACKGROUND IS ON BOTH AND IS NOT DECORATION: core/paint/box_paint.c's canvas arm returns
+       early for an alpha of zero, so a root with no declared colour would leave CSS 2.1 §E.2 "Painting
+       order"'s step 1 SUCCEEDING and the walk running on through every later step — a number this block would
+       then have to re-derive from paint_order.c's offer set rather than from an assertion the tree already
+       makes. With the colour declared, the `contents` document takes the SAME path `box_paint_scratch_selftest`
+       already holds to ONE offer and a stopped walk, so the only thing the pair below measures is the
+       keyword. */
+    static const char NONE[] = "<!DOCTYPE html><html style=\"display:none;background-color:#0000ff\">"
+                               "<head></head><body></body></html>";
+    static const char CONTENTS[] = "<!DOCTYPE html><html style=\"display:contents;background-color:#0000ff\">"
+                                   "<head></head><body></body></html>";
+    RasterSurface        none_surf, contents_surf;
+    DocumentPaintCount   none_count, contents_count;
+    lxb_html_document_t *dom;
+    lxb_dom_element_t   *root;
+    CssPx                region[4];
+    char                *display;
+    double               dpr;
+    size_t               opaque = 0;
+    uint64_t             none_sum, contents_sum;
+    int                  dw = 0, dh = 0, x, y;
+    uint8_t              px[4];
+    bool                 drew;
+
+    /* THE EXTENT, BY THE SECOND ROUTE. Both documents are painted through the realm this host presents, so
+       the image they owe is the region's own device size whatever their root says — an empty picture of the
+       page is still a picture OF the page. */
+    CHECK(viewport_canvas_region(ctx, region),
+          "core/frame/viewport.h establishes no rendered region for this host's own realm, which `main` gave a "
+          "root navigable — so the two documents below could not be painted at all and this block would be "
+          "asserting about the wrong arm of core/paint/document_paint.h's return");
+    dpr = viewport_device_pixel_ratio(ctx);
+    display_list_raster_region_size(region, dpr, &dw, &dh);
+
+    /* ---- css-display-3 §2.5's `none` on the root: the BOXLESS arm ---- */
+    dom = bp_scratch_document(ctx, NONE);
+    root = lxb_dom_document_element(lxb_dom_interface_document(dom));
+    CHECK(root != NULL, "the markup this file wrote for css-display-3 §2.5's `none` parsed into a document "
+                        "with no root element — HTML §13.2.6 \"Tree construction\" generates an `html` element "
+                        "for markup that names none, and this markup names one");
+    display = css_computed_value(root, "display");
+    CHECK(display != NULL && strcmp(display, "none") == 0,
+          "the root element this file declared `display:none` on has some other computed value. css-display-3 "
+          "§2.7 \"Automatic Box Type Transformations\" is what keeps it: \"This has no effect on display types "
+          "that generate no box at all, such as none or contents\", so css-display-3 §2.8's blockification of "
+          "the root leaves this one exactly as the attribute wrote it. A different value here means the "
+          "boxless arm below is being exercised by nothing");
+    free(display);
+
+    none_count.offers = TF_DP_UNWRITTEN;
+    drew = document_paint(ctx, dom, &none_surf, &none_count);
+    CHECK(none_count.offers != TF_DP_UNWRITTEN,
+          "core/paint/document_paint.h's entry returned without writing its count for a document whose root "
+          "generates no box. Every field is written before any arm can return, so the sentinel surviving is a "
+          "return that skipped that line rather than a walk that offered nothing");
+    CHECK(drew,
+          "core/paint/document_paint.h's entry answered that CSS 2.1 §2.3.1 \"The canvas\" establishes no "
+          "rendered region for a document whose ROOT generates no box. A boxless root removes the BOX and not "
+          "the REGION — the region is a fact about the viewport, which the CHECK at the top of this function "
+          "read as established — so the false arm here would be the entry answering the box question with the "
+          "region's own bit, which is the two-facts-one-bit shape its header exists to refuse");
+    CHECKF(none_surf.width == dw && none_surf.height == dh,
+           "the entry rendered a %dx%d image for a boxless root where the region this block sized by hand is "
+           "%dx%d. An empty picture of a page is still a picture OF that page, so its extent is the region's "
+           "and a zero-area surface here would be the ABSENT image the false arm already means",
+           none_surf.width, none_surf.height, dw, dh);
+    CHECKF(none_count.offers == 0u && none_count.marks == 0u && none_count.spans == 0u &&
+               none_count.pixels == 0u && none_count.complete,
+           "a boxless root reported offers=%u marks=%zu spans=%zu pixels=%zu complete=%d, where css-display-3 "
+           "§2.5's `none` leaves CSS 2.1 §E.2 \"Painting order\" nothing to walk. ZERO OFFERS is the part that "
+           "carries the fact: core/paint/paint_order.c offers its step 1 for every root it walks, so a walk "
+           "that happened reports at least one and this is the only state with a region and no offer. AND "
+           "`complete` IS TRUE because nothing was left unpainted — false is stated for a painter that met an "
+           "operand it could not compute and STOPPED, so reporting it here would tell a caller its picture is "
+           "a fragment of one that does not exist",
+           none_count.offers, none_count.marks, none_count.spans, none_count.pixels,
+           none_count.complete ? 1 : 0);
+    for (y = 0; y < none_surf.height; y++)
+        for (x = 0; x < none_surf.width; x++) {
+            raster_surface_get(&none_surf, x, y, px);
+            if (px[3] != 0) opaque++;
+        }
+    CHECKF(opaque == 0,
+           "%zu of a boxless root's %zu pixels carry ink. core/graphics/raster_surface.h initialises a surface "
+           "to four zero bytes per pixel and the arm above appends no mark at all, so every alpha is zero by "
+           "construction — a non-zero one is ink laid for a box css-display-3 §2.5 says does not exist",
+           opaque, (size_t)dw * (size_t)dh);
+    none_sum = raster_surface_checksum(&none_surf);
+    raster_surface_free(&none_surf);
+
+    /* ---- css-display-3 §2.5's `contents` on the root: css-display-3 §2.8's arm, and the ORDINARY walk ---- */
+    dom = bp_scratch_document(ctx, CONTENTS);
+    root = lxb_dom_document_element(lxb_dom_interface_document(dom));
+    CHECK(root != NULL, "the markup this file wrote for css-display-3 §2.5's `contents` parsed into a document "
+                        "with no root element");
+    display = css_computed_value(root, "display");
+    CHECK(display != NULL && strcmp(display, "block") == 0,
+          "the root element this file declared `display:contents` on does not compute to `block`. "
+          "css-display-3 §2.8 \"The Root Element's Principal Box\" says \"Additionally, a display of contents "
+          "computes to block on the root element\", so this is THE assertion that a root can never carry that "
+          "keyword — and it is a CHECK rather than a DCHECK because in a release build it is the only thing "
+          "standing between a page's `display:contents` root and a walk core/paint/stacking_order.c states "
+          "over boxes that would not exist");
+    free(display);
+
+    contents_count.offers = TF_DP_UNWRITTEN;
+    drew = document_paint(ctx, dom, &contents_surf, &contents_count);
+    CHECK(drew && contents_count.offers != TF_DP_UNWRITTEN,
+          "core/paint/document_paint.h's entry refused a document whose root css-display-3 §2.8 blockifies, or "
+          "left its count unwritten. This root's computed `display` is `block`, which is an ordinary box");
+    CHECKF(contents_count.offers == 1u && !contents_count.complete && contents_count.marks == 0u,
+           "a `display:contents` root reported offers=%u marks=%zu complete=%d where ONE offer and a stopped "
+           "walk is the derivation this tree already asserts for this exact shape. css-display-3 §2.8 made "
+           "this root a `block`, so CSS 2.1 §E.2 \"Painting order\"'s walk RUNS and offers its step 1; "
+           "core/paint/box_paint.c counts the visit before running it, finds the canvas colour OPAQUE (which "
+           "is why this markup declares one — a transparent canvas returns early and the walk carries on), "
+           "and then asks core/frame/viewport.h for the region of THIS document, which no navigable presents "
+           "— so the step declines and the walk stops with nothing laid, exactly as `@PAINT scratch-canvas` "
+           "above holds. ZERO OFFERS here would be the boxless arm swallowing a document that HAS a box, "
+           "which is this pair's whole point",
+           contents_count.offers, contents_count.marks, contents_count.complete ? 1 : 0);
+    contents_sum = raster_surface_checksum(&contents_surf);
+    raster_surface_free(&contents_surf);
+
+    CHECKF(none_sum == contents_sum,
+           "the two documents rendered different bytes (%llu against %llu) where neither laid a single mark. "
+           "THE IMAGES ARE ONE FACT AND THE COUNTS ARE ANOTHER: both surfaces are the region's device size and "
+           "both are untouched, so a difference in the PIXELS would mean one of the two arms drew something — "
+           "which is exactly what the offer counts above say neither did",
+           (unsigned long long)none_sum, (unsigned long long)contents_sum);
+
+    /* THE ROW. Two documents, one keyword apart, and the two numbers that separate them — which is what a
+       reader compares across two artifacts. ON AN ARTIFACT BUILT BEFORE THIS ARM EXISTED THE ROW IS ABSENT
+       ENTIRELY, because the `none` document aborts before the printf: `grep -c '@PAINT boxless-root'` answers
+       0 rather than a row of zeros, which is this row's own control. */
+    printf("@PAINT boxless-root w=%d h=%d none_offers=%u none_complete=%d contents_offers=%u "
+           "contents_complete=%d opaque=%zu\n",
+           dw, dh, none_count.offers, none_count.complete ? 1 : 0, contents_count.offers,
+           contents_count.complete ? 1 : 0, opaque);
+}
+
 static void message_source_selftest(void)
 {
     const char *kind = NULL, *enc;
@@ -23083,6 +23259,11 @@ int main(int argc, char **argv) {
        function for why that is one `document_new` rather than the three-call realm sequence, and for which
        two of core/paint/box_paint.c's three arms still append nothing and what each is waiting on. */
     box_paint_scratch_selftest(ctx);
+    /* AND THE ARM NEITHER OF THE TWO ABOVE CAN REACH — a ROOT that generates no box, which is
+       core/paint/document_paint.h's own and is the one state a page's own `display` declaration selects.
+       After them because it uses the same scratch-document helper and the same realm; see the function for
+       why it is two documents one keyword apart and what each of the two aborts it arms would say. */
+    document_paint_boxless_root_selftest(ctx);
     /* AFTER the platform init above, because the two rows it checks are declared by window_message_init. */
     message_source_selftest();   /* §9.3.3's sources, and the unforgeable-origin rule that decides their findings */
     /* AT THE BASELINE, where no flow has narrowed anything — the pins it writes are cleared after each one,
