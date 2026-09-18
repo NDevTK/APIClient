@@ -14,24 +14,37 @@
  * 13's absence through the Web IDL §3.8 property reference for THIS NAME, so the interface object and the step
  * land together or that probe is a liar — the rule core/fullscreen/fullscreen.h states for step 12.
  *
- * WHAT IS DELIBERATELY NOT HERE IS THE DRAWING STATE, AND §4.12.5.1.16 IS THE STANDARD SAYING SO. Its own last
- * paragraph is "The current path, transformation matrix, shadow attributes, global alpha, the clipping region,
- * and current compositing and blending operator must not affect the methods described in this section." So the
- * pixel-manipulation road is separable from the drawing road BY THE SPECIFICATION and not by a preference
- * here: `getImageData` and `putImageData` read and write the bitmap directly, and nothing they do is a
- * function of any drawing-state member. That is what makes a context carrying them COMPLETE rather than
- * narrow — every observable this interface installs is written by an algorithm inside this file.
+ * THE PIXEL-MANIPULATION ROAD IS SEPARABLE FROM THE DRAWING ROAD BY THE SPECIFICATION, AND §4.12.5.1.16 IS THE
+ * STANDARD SAYING SO. Its own last paragraph is "The current path, transformation matrix, shadow attributes,
+ * global alpha, the clipping region, and current compositing and blending operator must not affect the methods
+ * described in this section." So `getImageData` and `putImageData` read and write the bitmap directly, and
+ * nothing they do is a function of any drawing-state member. That is what makes a context carrying them
+ * COMPLETE rather than narrow — every observable this interface installs is written by an algorithm inside
+ * this file. THIS PARAGRAPH USED TO OPEN "WHAT IS DELIBERATELY NOT HERE IS THE DRAWING STATE" and is rewritten
+ * rather than deleted, because the reasoning under it is sound and a reader who re-derives it will re-derive
+ * the retired headline with it: §4.12.5.1.3's drawing state IS here now, and its being here takes nothing away
+ * from the separability argument, which was always about §4.12.5.1.16 and never about what else the file has.
  *
  * AND THE ORDER IS FORCED BY WHAT A SILENT WRONG PIXEL WOULD COST. §A-FIELD-A-CONSUMER-DEFAULTS applies to a
  * bitmap exactly as it does to a field: a context that ACCEPTS a drawing call and reads back transparent black
  * manufactures a plausible datum, and the corpus is full of read-back capability probes that would believe it.
- * Every drawing member is therefore ABSENT rather than present-and-inert — a page's `ctx.fillRect(…)` raises
- * Web IDL's TypeError for a missing member, which is an honest report and is §NO-STUBS' forcing function. The
- * one shape that is forbidden is the pair, and it is the pair this file does not contain: `fillStyle` present
- * beside an absent `fillRect` is harmless, and `fillRect` present beside an absent `fillStyle` would paint
- * BLACK where the page asked for a colour, because an assignment to a member that does not exist creates an
- * ordinary property and throws nothing. That pairing is why the drawing road's first diff is not `fillRect`
- * alone. */
+ * Every member that PAINTS is therefore ABSENT rather than present-and-inert — a page's `ctx.fillRect(…)`
+ * raises Web IDL's TypeError for a missing member, which is an honest report and is §NO-STUBS' forcing
+ * function. The one shape that is forbidden is the pair, and it is the pair this file does not contain:
+ * `fillStyle` present beside an absent `fillRect` is harmless, and `fillRect` present beside an absent
+ * `fillStyle` would paint BLACK where the page asked for a colour, because an assignment to a member that does
+ * not exist creates an ordinary property and throws nothing. That pairing is why the drawing road's first diff
+ * is not `fillRect` alone.
+ *
+ * AND THAT SENTENCE READ "EVERY DRAWING MEMBER" UNTIL §4.12.5.1.3's DRAWING STATE LANDED, WHICH IS A NARROWING
+ * ITS OWN ARGUMENT ALREADY LICENSED RATHER THAN A HOLE IN IT. The harmless half of the pair above is a
+ * drawing-state member standing beside an absent painter — that is `fillStyle` in its own example — so
+ * `globalAlpha` and the `save()`/`restore()` stack that copies it are on the side this paragraph calls
+ * harmless, and nothing they do can make a bitmap answer a pixel a page did not ask for. What the paragraph
+ * forbids is a PAINTER without the state it reads, which is unchanged and is still why `fillRect` is not
+ * next. The retired wording is kept here because a reader who re-derives the pairing rule will re-derive the
+ * over-wide sentence with it, and would then read a landed member as a violation of the rule that permitted
+ * it. */
 #ifndef ENGINE_HOST_BROWSER_CORE_CANVAS_CANVAS_RENDERING_CONTEXT_2D_H
 #define ENGINE_HOST_BROWSER_CORE_CANVAS_CANVAS_RENDERING_CONTEXT_2D_H
 

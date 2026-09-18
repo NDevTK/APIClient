@@ -20,6 +20,7 @@
 /* Declared once per AGENT. */
 static JSClassID g_class;
 static int g_id_attrs = -1, g_id_lost = -1, g_id_reset = -1,
+           g_id_save = -1, g_id_restore = -1, g_id_set_alpha = -1,
            g_id_get_image_data = -1, g_id_put_image_data = -1;
 static JSValue g_state_key = JS_UNDEFINED;
 static JSAtom  g_atom_state = JS_ATOM_NULL;
@@ -104,6 +105,110 @@ static bool ctx2d_bool(JSContext *ctx, JSValueConst st, const char *name)
     return out;
 }
 
+/* ---- §4.12.5.1.3 "The canvas state" — THE DRAWING STATE AND ITS STACK ------------------------------------- */
+
+/* THE DRAWING STATE IS ITS OWN RECORD, AND THAT IS WHAT MAKES `save()` TOTAL RATHER THAN A LIST SOMEBODY
+ * MAINTAINS. §4.12.5.1.3 is "The save() method steps are to push a copy of the current drawing state onto the
+ * drawing state stack", so the copy is over a SET that grows from the one member below to the thirty that
+ * section's own five bullets name. A field-by-field copy would put an obligation on `save()` at every one of
+ * those landings — the add-a-field-to-a-clone shape §Offensive-programming makes a DCHECK for — and its
+ * failure is SILENT in the direction that matters: a member left out of the copy is one `restore()` does not
+ * restore, which is a WRONG VALUE a page reads back rather than an absent member it gets a TypeError for.
+ *
+ * SO THE PARTITION IS STRUCTURAL: a field IS drawing state exactly when it lives in THIS record, and is not
+ * when it lives on the context's state record beside it. §4.12.5.1.3's two exclusions then hold BY
+ * CONSTRUCTION rather than by anyone remembering them — "The rendering context's bitmaps are not part of the
+ * drawing state, as they depend on whether and how the rendering context is bound to a canvas element", and
+ * the current default path, which *reset the rendering context to its default state* empties in its own step
+ * 2 and never mentions again in its steps 3 and 4. Both live on `st`, not here. So do §4.12.5.1.2's five
+ * settings, which are that section's and appear in none of §4.12.5.1.3's bullets. */
+
+/* Every member of §4.12.5.1.3's drawing state at the initial value its own section states, in ONE place —
+   which is what *reset the rendering context to its default state* step 4, "Reset everything that drawing
+   state consists of to their initial values", reaches, and what the creation algorithm reaches. Two spellings
+   of one initial value is the shape that drifts. */
+static JSValue ctx2d_drawing_new(JSContext *ctx)
+{
+    JSValue d = idl_slots_new(ctx);
+
+    if (JS_IsException(d)) return d;
+    /* §4.12.5.1.17 "Compositing": the global alpha "value ranges from 0.0 (fully transparent) to 1.0 (no
+       additional transparency). It must initially have the value 1.0". */
+    JS_SetPropertyStr(ctx, d, "globalAlpha", JS_NewFloat64(ctx, 1.0));
+    return d;
+}
+
+/* The running drawing state. The creation algorithm defines it before it returns and *reset* only ever
+   replaces it, so an absent record is this codebase's own logic being wrong — a CHECK for ctx2d_state's
+   reason, since the release arm would otherwise hand every reader below an `undefined` to read fields off. */
+static JSValue ctx2d_drawing(JSContext *ctx, JSValueConst st)
+{
+    JSValue d = JS_GetPropertyStr(ctx, st, "drawing");
+
+    CHECK(JS_IsObject(d), "§4.12.5.1.3: a CanvasRenderingContext2D carries no drawing state");
+    return d;
+}
+
+static uint32_t ctx2d_stack_len(JSContext *ctx, JSValueConst stack)
+{
+    JSValue lv = JS_GetPropertyStr(ctx, stack, "length");
+    uint32_t n = 0;
+
+    if (JS_ToUint32(ctx, &n, lv) < 0) n = 0;
+    JS_FreeValue(ctx, lv);
+    return n;
+}
+
+/* The context's stack of drawing states — "Objects that implement the CanvasState interface maintain a stack
+   of drawing states". It belongs to the OBJECT and not to a state: no drawing state contains the stack, which
+   is why this hangs off `st` and is absent from ctx2d_drawing_new above. */
+static JSValue ctx2d_stack(JSContext *ctx, JSValueConst st)
+{
+    JSValue stack = JS_GetPropertyStr(ctx, st, "stack");
+
+    CHECK(JS_IsArray(stack), "§4.12.5.1.3: a CanvasRenderingContext2D carries no drawing state stack");
+    return stack;
+}
+
+/* §4.12.5.1.3's "a copy of the current drawing state", over WHATEVER that record holds — so a member added to
+   ctx2d_drawing_new above is copied here with no edit to this function, which is the whole reason the state
+   is a record rather than a set of fields on `st`.
+   A SHALLOW COPY IS A DEEP ONE ONLY WHILE EVERY MEMBER IS A PRIMITIVE, AND THAT IS ASSERTED RATHER THAN
+   ASSUMED. §4.12.5.1.3's bullets name a current dash list, a current transformation matrix and a current
+   clipping region, and the day the first of those lands as an object this copy would ALIAS it: `save()`, a
+   mutation, `restore()`, and the restored state carries the mutation that was supposed to be undone. The
+   DCHECK fires at that landing and names what to build, which is the forcing function rather than a comment
+   asking the next author to remember. Its two sides can disagree — it holds today and fails on the first
+   object-valued member — so it is a check and not a restatement. */
+static JSValue ctx2d_drawing_copy(JSContext *ctx, JSValueConst src)
+{
+    JSPropertyEnum *tab = NULL;
+    uint32_t n = 0, i;
+    JSValue dst = idl_slots_new(ctx);
+
+    if (JS_IsException(dst)) return dst;
+    /* The record has a NULL prototype and only this component ever writes it, so there is no page code and no
+       exotic behaviour for the enumeration to reach — a failure here is allocation and nothing else. */
+    CHECK(JS_GetOwnPropertyNames(ctx, &tab, &n, src, JS_GPN_STRING_MASK) == 0,
+          "§4.12.5.1.3: a 2D context's drawing state could not be enumerated to be copied");
+    for (i = 0; i < n; i++) {
+        JSValue v = JS_GetProperty(ctx, src, tab[i].atom);
+
+        CHECK(!JS_IsException(v), "§4.12.5.1.3: a member of a 2D context's drawing state could not be read "
+                                  "back — the record is engine-built data properties with a null prototype");
+        DCHECK(!JS_IsObject(v),
+               "§4.12.5.1.3's drawing state gained a member that is an OBJECT, and `save()` copies this record "
+               "exactly one property deep — the copy would ALIAS it, so a mutation made after a save() would "
+               "be visible through the restore() that exists to undo it. Build the per-member copy that member "
+               "needs before putting one here: the current dash list is a sequence<unrestricted double> and "
+               "the current transformation matrix is six numbers, so each is a copy of its elements");
+        CHECK(JS_DefinePropertyValue(ctx, dst, tab[i].atom, v, JS_PROP_C_W_E) >= 0,
+              "§4.12.5.1.3: a member of a 2D context's drawing state could not be written to its copy");
+    }
+    JS_FreePropertyEnum(ctx, tab, n);
+    return dst;
+}
+
 /* §4.12.5.1.3's *reset the rendering context to its default state*, in its own four steps. It is a FUNCTION
    with two callers and not an inlined body, because the creation algorithm reaches it through *set bitmap
    dimensions* step 1 and `reset()` reaches it directly — two spellings of one algorithm is the shape that
@@ -111,7 +216,7 @@ static bool ctx2d_bool(JSContext *ctx, JSValueConst st, const char *name)
 static void ctx2d_reset_to_default(JSContext *ctx, JSValueConst st)
 {
     JSValue canvas = JS_GetPropertyStr(ctx, st, "canvas");
-    JSValue path;
+    JSValue path, stack, drawing;
 
     /* Step 1 — "Clear canvas's bitmap to transparent black." The `alpha` arm is §4.12.5.1.2's: a context whose
        alpha is false has a bitmap that "starts off as opaque black instead of transparent black", and its
@@ -131,15 +236,24 @@ static void ctx2d_reset_to_default(JSContext *ctx, JSValueConst st)
     CHECK(!JS_IsException(path), "§4.12.5.1.3: OOM emptying a 2D context's current default path");
     JS_SetPropertyStr(ctx, st, "path", path);
 
-    /* Steps 3 and 4 — "Clear the context's drawing state stack" and "Reset everything that drawing state
-       consists of to their initial values". §4.12.5.1.3 lists what a drawing state consists of and this build
-       installs NO member of that list: no transformation matrix, no clipping region, no fill or stroke style,
-       no line styles, no font. So both steps are TOTAL over what exists rather than elided — there is no stack
-       to clear because `save()` is absent, and nothing to reset because every member that would put something
-       in a drawing state is absent with it. The day the first one lands, its initial value lands on this line.
+    /* Step 3 — "Clear the context's drawing state stack." */
+    stack = ctx2d_stack(ctx, st);
+    CHECK(JS_SetPropertyStr(ctx, stack, "length", JS_NewUint32(ctx, 0)) >= 0,
+          "§4.12.5.1.3 step 3: a 2D context's drawing state stack could not be cleared");
+    JS_FreeValue(ctx, stack);
+
+    /* Step 4 — "Reset everything that drawing state consists of to their initial values." It is a fresh record
+       from the ONE function that states those initial values, so this step is TOTAL over the drawing state by
+       construction and stays total as members are added to it — never a list of assignments here that a later
+       member could be left out of.
        THE BITMAP IS NOT AMONG THEM and that is §4.12.5.1.3's own sentence: "The rendering context's bitmaps
        are not part of the drawing state, as they depend on whether and how the rendering context is bound to a
-       canvas element" — which is why step 1 above is a separate act and not part of steps 3 and 4. */
+       canvas element" — which is why step 1 above is a separate act and not part of steps 3 and 4. Nor is the
+       current default path, which step 2 empties and these two never mention. */
+    drawing = ctx2d_drawing_new(ctx);
+    CHECK(!JS_IsException(drawing), "§4.12.5.1.3 step 4: OOM resetting a 2D context's drawing state");
+    JS_SetPropertyStr(ctx, st, "drawing", drawing);
+
     JS_FreeValue(ctx, canvas);
 }
 
@@ -187,7 +301,7 @@ static bool ctx2d_dict_bool(JSContext *ctx, JSValueConst settings, const char *n
    result. */
 static JSValue ctx2d_create_from_settings(JSContext *ctx, JSValueConst target, JSValueConst settings)
 {
-    JSValue proto, self, st, path;
+    JSValue proto, self, st, path, drawing, stack;
     uint32_t w, h;
 
     DCHECK(g_class != 0, "a 2D context was minted before §4.12.5.1 was declared");
@@ -236,6 +350,17 @@ static JSValue ctx2d_create_from_settings(JSContext *ctx, JSValueConst target, J
     path = canvas_path_new(ctx);
     if (JS_IsException(path)) { JS_FreeValue(ctx, st); JS_FreeValue(ctx, self); return JS_EXCEPTION; }
     JS_SetPropertyStr(ctx, st, "path", path);
+
+    /* §4.12.5.1.3's drawing state and the stack of them, BEFORE step 5 below — *set bitmap dimensions* step 1
+       is *reset the rendering context to its default state*, whose steps 3 and 4 clear that stack and rebuild
+       that record, so both have to exist for the reset to be operating on the object rather than on nothing.
+       This is the same ordering argument step 6 above is hoisted for. */
+    drawing = ctx2d_drawing_new(ctx);
+    if (JS_IsException(drawing)) { JS_FreeValue(ctx, st); JS_FreeValue(ctx, self); return JS_EXCEPTION; }
+    JS_SetPropertyStr(ctx, st, "drawing", drawing);
+    stack = JS_NewArray(ctx);
+    if (JS_IsException(stack)) { JS_FreeValue(ctx, st); JS_FreeValue(ctx, self); return JS_EXCEPTION; }
+    JS_SetPropertyStr(ctx, st, "stack", stack);
 
     JS_DefinePropertyValue(ctx, self, g_atom_state, st, JS_PROP_CONFIGURABLE | JS_PROP_WRITABLE);
 
@@ -287,18 +412,117 @@ JSValue canvas_rendering_context_2d_create(JSContext *ctx, JSValueConst target, 
 
 /* ---- §4.12.5.1's members ------------------------------------------------------------------------------------ */
 
-enum { M_CANVAS = 0, M_ATTRS, M_LOST };
+enum { M_CANVAS = 0, M_ATTRS, M_LOST, M_GLOBAL_ALPHA };
 
 static JSValue js_ctx2d_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
-    JSValue st, out;
+    JSValue st, d, out;
 
-    DCHECK(magic == M_CANVAS, "a 2D context accessor dispatched on a magic its own member list does not hold");
-    st = ctx2d_state_of(ctx, this_val, "canvas");
+    switch (magic) {
+    case M_CANVAS:
+        st = ctx2d_state_of(ctx, this_val, "canvas");
+        if (JS_IsException(st)) return JS_EXCEPTION;
+        out = JS_GetPropertyStr(ctx, st, "canvas");   /* the back-reference step 3 initialized */
+        JS_FreeValue(ctx, st);
+        return out;
+    case M_GLOBAL_ALPHA:
+        /* §4.12.5.1.17: "The globalAlpha getter steps are to return this's global alpha." */
+        st = ctx2d_state_of(ctx, this_val, "globalAlpha");
+        if (JS_IsException(st)) return JS_EXCEPTION;
+        d = ctx2d_drawing(ctx, st);
+        out = JS_GetPropertyStr(ctx, d, "globalAlpha");
+        JS_FreeValue(ctx, d);
+        JS_FreeValue(ctx, st);
+        return out;
+    default:
+        /* The magic is a value THIS file enumerates and every install below passes one of the two above, so
+           this arm is unreachable by construction — a guard, and not a member left to build. */
+        DFAIL("a 2D context accessor dispatched on a magic its own member list does not hold");
+        return JS_UNDEFINED;
+    }
+}
+
+/* §4.12.5.1.17: "The globalAlpha setter steps are: If the given value is either infinite, NaN, or not in the
+ * range 0.0 to 1.0, then return. Otherwise, set this's global alpha to the given value."
+ *
+ * THE DECLARED TYPE IS `unrestricted double` AND THAT IS WHY THIS BODY NAMES NaN AND THE INFINITIES AT ALL.
+ * Web IDL §3.2.8 "unrestricted double" lets them through as VALUES of the type, so the refusal is this
+ * member's own step rather than the conversion's; declaring `double` instead would make `ctx.globalAlpha =
+ * NaN` a TypeError where the standard, and every browser, ignores it silently. And IGNORING is not clamping —
+ * the attribute keeps whatever it already held, which is the value a page reads back on the next line. */
+static JSValue js_ctx2d_set_global_alpha(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
+{
+    JSValue st = ctx2d_state_of(ctx, this_val, "globalAlpha");
+    JSValue d;
+    double a;
+
+    (void)magic;
     if (JS_IsException(st)) return JS_EXCEPTION;
-    out = JS_GetPropertyStr(ctx, st, "canvas");   /* the back-reference step 3 initialized */
+    /* The declared type already ran ToNumber at the argument boundary, so this reads the CONVERTED value and
+       is never itself a conversion that could run a page's valueOf from inside this body. */
+    if (JS_ToFloat64(ctx, &a, val) < 0) { JS_FreeValue(ctx, st); return JS_EXCEPTION; }
+    /* ONE PREDICATE FOR ALL THREE REFUSALS, and it is the comparison rather than a chain of tests: every
+       comparison with NaN is false, both infinities fall outside the interval, and so does every finite value
+       the step excludes. Spelling them separately would be three chances to disagree about one range. */
+    if (a >= 0.0 && a <= 1.0) {
+        d = ctx2d_drawing(ctx, st);
+        JS_SetPropertyStr(ctx, d, "globalAlpha", JS_NewFloat64(ctx, a));
+        JS_FreeValue(ctx, d);
+    }
     JS_FreeValue(ctx, st);
-    return out;
+    return JS_UNDEFINED;
+}
+
+/* §4.12.5.1.3: "The save() method steps are to push a copy of the current drawing state onto the drawing
+   state stack." */
+static JSValue js_ctx2d_save(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    JSValue st = ctx2d_state_of(ctx, this_val, "save");
+    JSValue d, copy, stack;
+
+    (void)argc; (void)argv; (void)magic;
+    if (JS_IsException(st)) return JS_EXCEPTION;
+    d = ctx2d_drawing(ctx, st);
+    copy = ctx2d_drawing_copy(ctx, d);
+    JS_FreeValue(ctx, d);
+    if (JS_IsException(copy)) { JS_FreeValue(ctx, st); return JS_EXCEPTION; }
+    stack = ctx2d_stack(ctx, st);
+    JS_SetPropertyUint32(ctx, stack, ctx2d_stack_len(ctx, stack), copy);
+    JS_FreeValue(ctx, stack);
+    JS_FreeValue(ctx, st);
+    return JS_UNDEFINED;
+}
+
+/* §4.12.5.1.3: "The restore() method steps are to pop the top entry in the drawing state stack, and reset the
+ * drawing state it describes. If there is no saved state, then the method must do nothing."
+ *
+ * THE EMPTY-STACK ARM RETURNS AND DOES NOT THROW, which is that sentence's own second half rather than a
+ * softened error: a page whose `restore()` calls outnumber its `save()` calls is running the behaviour every
+ * browser gives it, so an abort here would be this engine inventing a failure the standard rules out. */
+static JSValue js_ctx2d_restore(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic)
+{
+    JSValue st = ctx2d_state_of(ctx, this_val, "restore");
+    JSValue stack, top;
+    uint32_t n;
+
+    (void)argc; (void)argv; (void)magic;
+    if (JS_IsException(st)) return JS_EXCEPTION;
+    stack = ctx2d_stack(ctx, st);
+    n = ctx2d_stack_len(ctx, stack);
+    if (n > 0) {
+        top = JS_GetPropertyUint32(ctx, stack, n - 1);
+        CHECK(JS_IsObject(top), "§4.12.5.1.3: a 2D context's drawing state stack holds an entry that is not a "
+                                "drawing state — `save()` is the only thing that pushes one");
+        /* The popped entry BECOMES the drawing state. It is a copy `save()` made and the stack is its only
+           other name, so there is no second copy owed here and nothing left aliasing it after the truncation
+           below — which is why this is an assignment and not another ctx2d_drawing_copy. */
+        JS_SetPropertyStr(ctx, st, "drawing", top);
+        CHECK(JS_SetPropertyStr(ctx, stack, "length", JS_NewUint32(ctx, n - 1)) >= 0,
+              "§4.12.5.1.3: a 2D context's drawing state stack could not be popped");
+    }
+    JS_FreeValue(ctx, stack);
+    JS_FreeValue(ctx, st);
+    return JS_UNDEFINED;
 }
 
 /* §4.12.5.1.2's "The getContextAttributes() method steps are to return «[ "alpha" → this's alpha,
@@ -590,6 +814,11 @@ void canvas_rendering_context_2d_init(JSContext *ctx)
     g_id_attrs = idl_method_id(ctx, NULL, 0, js_ctx2d_get_context_attributes, 0);
     g_id_lost  = idl_method_id(ctx, NULL, 0, js_ctx2d_is_context_lost, 0);
     g_id_reset = idl_method_id(ctx, NULL, 0, js_ctx2d_reset, 0);
+    g_id_save    = idl_method_id(ctx, NULL, 0, js_ctx2d_save, 0);
+    g_id_restore = idl_method_id(ctx, NULL, 0, js_ctx2d_restore, 0);
+    /* `attribute unrestricted double globalAlpha` — the type is §3.2.8's and not §3.2.7's, so NaN and the
+       infinities reach the body, which is what lets it perform §4.12.5.1.17's own ignore. */
+    g_id_set_alpha = idl_setter_id(ctx, IDL_UNRESTRICTED_DOUBLE, false, js_ctx2d_set_global_alpha, 0);
 
     g_id_get_image_data = idl_method_id_dict(ctx, GET_IMAGE_DATA, 5, IMAGE_DATA_SETTINGS,
                                              IMAGE_DATA_SETTINGS_N, js_ctx2d_get_image_data, 0);
@@ -622,13 +851,25 @@ void canvas_rendering_context_2d_init(JSContext *ctx)
  * mints one is the 2D context creation algorithm — which is why `canvas_rendering_context_2d_create` is not a
  * constructor declaration.
  *
- * NAMED RESIDUAL — `save()`, `restore()`. WHAT IS NOT COVERED: `CanvasState`'s stack members are not placed, so
- * a page that calls them gets Web IDL's TypeError for an absent member. WHAT THE NEXT DIFF BUILDS: them TOGETHER
- * WITH the first member of a drawing state, because §4.12.5.1.3 defines a drawing state as a list of eleven
- * things and this build installs NONE of them — a `save()` over an empty state is correct at every value of the
- * program and observable at none, which is the untested-code-wearing-a-finished-argument shape
- * core/canvas/canvas_path.h names for `addPath`'s matrix parameter. HOW ITS ABSENCE WOULD SHOW: a document that
- * brackets its drawing in save/restore — which is most of them — ends its flow at the opening call.
+ * THE `save()`/`restore()` RESIDUAL THAT STOOD HERE IS RETIRED BY THE STACK ABOVE, AND ITS COUNT WAS WRONG IN
+ * A WAY WORTH KEEPING. It said §4.12.5.1.3 "defines a drawing state as a list of eleven things", and that
+ * section's list is FIVE top-level items naming THIRTY: the current transformation matrix; the current
+ * clipping region; a third item carrying eight ("The current letter spacing, word spacing, fill style, stroke
+ * style, filter, global alpha, compositing and blending operator, and shadow color"); a fourth carrying
+ * nineteen attributes by name; and the current dash list. Eleven is what you get by counting the first, the
+ * second, the third's eight and the fifth and SKIPPING the fourth item entirely — a count that disagrees with
+ * its own list, which is the one error in a residual that needs no tree and no fetch to catch, because both
+ * halves are in the sentence. Its CONCLUSION was right and only its arithmetic was wrong, which is the shape
+ * that survives review longest: a reader checks the verdict, finds it holds, and inherits the method. So the
+ * durable form of that clause is the LIST and not a number, and the population question it was really about is
+ * a command rather than a claim — the member-list audit's ABSENT column for this interface, read against
+ * §4.12.5.1.3's five items, is what says how much of a drawing state exists on any given day.
+ *
+ * WHAT WAS TRUE AND IS WHY THE STACK COULD NOT LAND ALONE: a `save()` over an EMPTY drawing state is correct at
+ * every value of the program and observable at none, which is `js_noop` as an interface member and is banned by
+ * name. It lands here because `globalAlpha` lands with it, so the copy has something to copy and
+ * `save(); ctx.globalAlpha = 0.25; restore(); ctx.globalAlpha` answers 1 — an observable the stack alone could
+ * not have produced.
  *
  * NAMED RESIDUAL — `createImageData`. WHAT IS NOT COVERED: neither entry of §4.12.5.1.16's
  * `createImageData(sw, sh, settings)` / `createImageData(imageData)` is placed. WHAT THE NEXT DIFF BUILDS: an
@@ -641,8 +882,20 @@ void canvas_rendering_context_2d_init(JSContext *ctx)
  * ABSENCE WOULD SHOW: a document that mints a scratch buffer from the context rather than from
  * `new ImageData(w, h)` ends its flow at the call.
  *
+ * NAMED RESIDUAL — `globalCompositeOperation`, WHICH IS `globalAlpha`'s OWN MIXIN AND IS THE MEMBER A READER
+ * WILL ASK ABOUT FIRST. WHAT IS NOT COVERED: `CanvasCompositing` declares two attributes and only one is
+ * placed, so a page that assigns the other creates an ordinary property on the context and reads its own value
+ * back, where a browser would have refused an unknown one. WHAT THE NEXT DIFF BUILDS: the value lists its
+ * setter tests against — §4.12.5.1.17's step is "If the given value is not identical to any of the values that
+ * the `<blend-mode>` or the `<composite-mode>` properties are defined to take, then return" — which are
+ * COMPOSITING AND BLENDING's enumerations and not HTML's, so this member is blocked on a table from another
+ * standard rather than on anything in this file, and that is the whole reason it is not in the diff that
+ * landed `globalAlpha` beside it. Its initial value is this section's own "source-over". HOW ITS ABSENCE WOULD
+ * SHOW: read the member back after assigning a value no compositing mode names — this build answers that
+ * value, a browser answers the one it held.
+ *
  * NAMED RESIDUAL — EVERY DRAWING MEMBER. WHAT IS NOT COVERED: `CanvasTransform`, `CanvasFillStrokeStyles`,
- * `CanvasRect`, `CanvasDrawPath`, `CanvasPath`'s ten builders, `CanvasText`, `CanvasDrawImage`,
+ * `CanvasRect`, `CanvasDrawPath`, `CanvasPath`'s ten builders, `CanvasText`, `CanvasDrawImage`, the rest of
  * `CanvasCompositing` and the rest of the seventeen mixins are not placed. WHAT THE NEXT DIFF BUILDS: the FILL
  * road as one landing — the drawing state's transformation matrix with `CanvasTransform`'s setters, `fillStyle`
  * with a CSS colour, the ten path builders applying the CTM as they copy (core/graphics/raster_path.h's own
@@ -669,8 +922,12 @@ void canvas_rendering_context_2d_install_realm(JSContext *ctx)
        gives a mixin no prototype of its own, so flattening them onto the includer is the standard's shape. */
     idl_install_accessor(ctx, proto, "canvas", js_ctx2d_get, M_CANVAS, -1);         /* the interface itself */
     idl_install_method(ctx, proto, "getContextAttributes", g_id_attrs);             /* CanvasSettings */
+    idl_install_method(ctx, proto, "save", g_id_save);                              /* CanvasState */
+    idl_install_method(ctx, proto, "restore", g_id_restore);                        /* CanvasState */
     idl_install_method(ctx, proto, "reset", g_id_reset);                            /* CanvasState */
     idl_install_method(ctx, proto, "isContextLost", g_id_lost);                     /* CanvasState */
+    idl_install_accessor(ctx, proto, "globalAlpha", js_ctx2d_get, M_GLOBAL_ALPHA,
+                         g_id_set_alpha);                                           /* CanvasCompositing */
     idl_install_method(ctx, proto, "getImageData", g_id_get_image_data);            /* CanvasImageData */
     idl_install_method(ctx, proto, "putImageData", g_id_put_image_data);            /* CanvasImageData */
 
@@ -696,5 +953,6 @@ void canvas_rendering_context_2d_free(JSRuntime *rt)
     g_state_key = JS_UNDEFINED;
     g_class = 0;
     g_id_attrs = g_id_lost = g_id_reset = -1;
+    g_id_save = g_id_restore = g_id_set_alpha = -1;
     g_id_get_image_data = g_id_put_image_data = -1;
 }
