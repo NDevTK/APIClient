@@ -142,13 +142,46 @@ void raster_surface_get(const RasterSurface *s, int x, int y, uint8_t rgba[4])
     memcpy(rgba, s->px + ((size_t)y * (size_t)s->width + (size_t)x) * 4, 4);
 }
 
+size_t raster_surface_bytes(const RasterSurface *s)
+{
+    size_t n = 0;
+
+    /* THE DIMENSIONS ARE THIS CODEBASE'S OWN, on `raster_surface_init`'s argument above: HTML's `width` and
+       `height` content attributes are `unsigned long`, so a negative here is a conversion that went wrong
+       rather than a number a page wrote. */
+    DCHECKF(s->width >= 0 && s->height >= 0,
+            "a %dx%d surface was asked for its byte extent — a negative dimension is this codebase's own "
+            "conversion and never a page's number", s->width, s->height);
+    if (s->width > 0 && s->height > 0) {
+        /* A DCHECK AND NOT A CHECK, WHICH IS THE WHOLE DIFFERENCE BETWEEN THIS LINE AND `raster_surface_init`'s.
+           There the product is a page's dimensions arriving for the first time and the refusal is always
+           fatal; here the surface already EXISTS, so init has refused every un-representable one and this
+           asserts that this codebase's own logic held. The zero-area arm above is what keeps the divisor
+           non-zero. */
+        DCHECKF((size_t)s->width <= SIZE_MAX / 4 / (size_t)s->height,
+                "a %dx%d surface holds more bytes than an address can name, which raster_surface_init refuses "
+                "outright — so this operand was not allocated by it", s->width, s->height);
+        n = (size_t)s->width * (size_t)s->height * 4;
+    }
+    /* THE TWO-SIDED HALF, and it is the reason this entry is not one multiply. The struct's own declaration
+       says a zero-area surface holds NULL rather than an empty allocation; asserted from BOTH ends, an extent
+       of zero and an absent `px` stop being two facts that may drift, and every reader of the run below may
+       take this bound without a NULL test of its own. */
+    DCHECKF((n == 0) == (s->px == NULL),
+            "a %dx%d surface reports %zu byte(s) of pixels and %s — the extent and the allocation are one "
+            "fact, so a bound this entry hands a reader would be a run over memory that is not there",
+            s->width, s->height, n, s->px == NULL ? "holds none" : "holds an allocation");
+    return n;
+}
+
 uint64_t raster_surface_checksum(const RasterSurface *s)
 {
     uint64_t h = UINT64_C(14695981039346656037);   /* FNV-1a 64-bit offset basis */
-    size_t n, i;
+    /* THE BOUND IS ASKED FOR AND NOT DERIVED, and the `s->px == NULL` return that opened this function is
+       DELETED rather than kept in front of it: the extent's own assert makes a zero bound and an absent
+       allocation the same state, so a loop that does not run is the whole of what the test was buying. */
+    size_t n = raster_surface_bytes(s), i;
 
-    if (s->px == NULL) return h;
-    n = (size_t)s->width * (size_t)s->height * 4;
     for (i = 0; i < n; i++) {
         h ^= (uint64_t)s->px[i];
         h *= UINT64_C(1099511628211);              /* FNV-1a 64-bit prime */

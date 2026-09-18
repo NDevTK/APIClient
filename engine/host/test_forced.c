@@ -20110,6 +20110,130 @@ static void raster_selftest(void)
            RASTER_FLATTEN_TOLERANCE_PX, edges, c.spans, c.pixels, c.area, (unsigned long long)sum_a);
 }
 
+/* ------------------------------------------------------------------------------------------------------- *
+ * core/graphics/raster_surface.h's BYTE EXTENT, and the one observation that says what the production ABI
+ * cannot carry. Everything above this line is about COVERAGE and about a CHECKSUM; this is about the RUN of
+ * bytes itself, which is what a rendered preview of a document is made of and what no host has ever been
+ * handed.
+ *
+ * IT IS A SEPARATE FUNCTION FROM `raster_selftest` DELIBERATELY, on this file's own convention that a
+ * statement about a different question gets a caller of its own: the fill's rows are about a rasterizer and
+ * these are about an interface decision, so a lane widening either does not have to read the other.
+ *
+ * WHAT MAKES EVERY NUMBER BELOW DERIVABLE IS THAT NOTHING IS PAINTED. A fresh surface is transparent black,
+ * which core/graphics/raster_surface.h fixes as all four components zero, so a surface this function never
+ * fills holds `4 * width * height` bytes of which EVERY ONE is 0x00 — a fact about the initial bitmap and
+ * not about anything the rasterizer computed. That is also exactly why it is the right operand for the
+ * transport claim: the first byte is already the byte a NUL-terminated reader stops at.
+ * ------------------------------------------------------------------------------------------------------- */
+static void raster_bytes_selftest(void)
+{
+    RasterSurface s;
+    RasterSurface zero_w, zero_h;
+    RasterPath p;
+    RasterEdges e;
+    RasterPaint paint;
+    size_t n, i, nul_run, painted_nuls;
+    uint64_t sum_before, sum_after;
+
+    /* 1. THE EXTENT IS THE AREA IN PIXELS TIMES FOUR, and the point of asserting it here is that this file
+       derives the number from the two dimensions it PASSED IN while the component derives it from the two it
+       STORED. A single statement of the arithmetic cannot be held to itself; two roads to it can. */
+    raster_surface_init(&s, 7, 5);
+    n = raster_surface_bytes(&s);
+    CHECKF(n == (size_t)7 * (size_t)5 * 4,
+           "a 7x5 surface reports %zu byte(s) of pixels where four bytes per pixel over its own area is 140. "
+           "The dimensions were handed to raster_surface_init by this line, so a disagreement is the "
+           "component and this file reading one allocation two ways",
+           n);
+
+    /* 2. AND IT AGREES WITH THE ONE-PIXEL READER, which is the other accessor this component already had.
+       `raster_surface_get` indexes `(y * width + x) * 4` and is bounds-asserted, so walking every coordinate
+       it admits reaches each byte exactly once — and the count of those bytes is the extent or the two
+       accessors disagree about how large the same bitmap is. THE TWO ROADS ARE THE ASSERTION: nothing here
+       re-derives the product a third time. */
+    CHECKF(n == (size_t)s.width * (size_t)s.height * 4,
+           "the extent (%zu) and the coordinate space raster_surface_get admits (%d x %d) describe different "
+           "bitmaps — the per-pixel reader would then be addressable outside the run a bulk reader is given, "
+           "which is the shape a transport turns into a read past the end",
+           n, s.width, s.height);
+
+    /* 3. A ZERO-AREA SURFACE IS ZERO BYTES AND NO ALLOCATION, ASKED FROM BOTH SIDES. Either dimension may be
+       zero and HTML admits both, so the two are exercised separately rather than one standing in for the
+       pair — a component that special-cased only a zero WIDTH would pass a test that only offered one. */
+    raster_surface_init(&zero_w, 0, 5);
+    raster_surface_init(&zero_h, 7, 0);
+    CHECKF(raster_surface_bytes(&zero_w) == 0 && zero_w.px == NULL &&
+           raster_surface_bytes(&zero_h) == 0 && zero_h.px == NULL,
+           "a zero-area surface reports %zu and %zu byte(s) of pixels. The struct's own declaration makes an "
+           "empty bitmap hold NULL rather than an empty allocation, so an extent and an allocation that "
+           "disagree here are two names for one state drifting apart",
+           raster_surface_bytes(&zero_w), raster_surface_bytes(&zero_h));
+    raster_surface_free(&zero_w);
+    raster_surface_free(&zero_h);
+
+    /* 4. THE TRANSPORT OBSERVATION, WHICH IS THE ONE THIS BLOCK EXISTS FOR AND IS NOT ABOUT THE RASTERIZER.
+       A fresh surface is transparent black, so every one of its bytes is 0x00 and the run a NUL-terminated
+       reader would accept is EMPTY. This is not a statement about a bug in some other file: it is the
+       measurement that says an interface returning a `const char *` cannot carry this value at all, and it
+       is derivable from the initial bitmap rather than from anything composited. */
+    nul_run = 0;
+    while (nul_run < n && s.px[nul_run] != 0) nul_run++;
+    CHECKF(nul_run == 0 && n == 140,
+           "a transparent-black 7x5 surface offers %zu byte(s) before its first 0x00, of %zu it holds. Zero "
+           "of 140 is the whole claim: the pixels of an unpainted bitmap are 0x00 by construction, so a "
+           "reader that recovers a length by scanning to a terminator is handed NOTHING for a bitmap that "
+           "exists — which is why an extent has to travel as a number beside the bytes",
+           nul_run, n);
+
+    /* 5. AND IT IS NOT AN ARTIFACT OF THE BITMAP BEING EMPTY, which is the objection the row above invites.
+       An opaque fill over part of the surface leaves the UNCOVERED pixels transparent black and puts a 0x00
+       in the green and blue channel of every covered one, so the interior byte count is unchanged and the
+       run before the first terminator is still short of the whole. A painted document carries MORE zero
+       bytes than a blank one, not fewer. */
+    raster_path_init(&p);
+    raster_path_rect(&p, 2.0, 1.0, 3.0, 3.0);
+    raster_edges_init(&e);
+    raster_path_flatten(&p, RASTER_FLATTEN_TOLERANCE_PX, &e);
+    sum_before = raster_surface_checksum(&s);
+    raster_paint_init(&paint, &s, 1.0, 0.0, 0.0, 1.0);   /* opaque red: green and blue quantize to 0 */
+    raster_fill(&e, RASTER_FILL_NONZERO, s.width, s.height, raster_paint_span, &paint);
+    sum_after = raster_surface_checksum(&s);
+    raster_edges_free(&e);
+    raster_path_free(&p);
+    CHECKF(sum_before != sum_after,
+           "compositing an opaque red rectangle over a transparent-black surface left its bytes unchanged "
+           "(%llu twice) — every number below is about a bitmap that was painted, so a checksum that did not "
+           "move means this block is measuring the initial allocation and reporting it as ink",
+           (unsigned long long)sum_after);
+    painted_nuls = 0;
+    for (i = 0; i < n; i++) if (s.px[i] == 0) painted_nuls++;
+    CHECKF(painted_nuls >= 2 * (size_t)3 * (size_t)3 && painted_nuls < n,
+           "%zu of a painted surface's %zu bytes are 0x00. The rectangle covers nine pixels and opaque red "
+           "quantizes to (255, 0, 0, 255), so its green and blue channels alone are eighteen of them and the "
+           "opaque alpha of every covered pixel is not — a count at either extreme is a fill that reached no "
+           "pixel or a colour whose components are all zero",
+           painted_nuls, n);
+
+    /* 6. THE EXTENT IS UNMOVED BY THE PAINT, which is the property that lets a transport state a length once
+       for a surface rather than re-asking after every mark. It is an allocation's size and not a watermark. */
+    CHECKF(raster_surface_bytes(&s) == n,
+           "a surface's byte extent moved from %zu to %zu across a composite. The run is the allocation and "
+           "compositing does not resize it, so an extent that tracks the ink is a length a reader would have "
+           "to re-ask for between two marks",
+           n, raster_surface_bytes(&s));
+
+    /* THE ROW. `nul` is the observation in item 4 restated as something a reader can compare across two
+       artifacts; `zeros` is item 5's. NEITHER IS A NUMBER THIS FILE PINS ELSEWHERE — what is asserted is
+       above, and the row exists so that a change to the quantization, to the initial bitmap or to the fill
+       is visible as a MOVE rather than as a verdict. ON AN ARTIFACT BUILT BEFORE THIS BLOCK EXISTED THE ROW
+       IS ABSENT ENTIRELY — a grep for `@RASTER bytes` answers 0 rather than a row of zeros, which is this
+       row's own control and is the same one `@RASTER circle` above carries. */
+    printf("@RASTER bytes w=%d h=%d extent=%zu nul=%zu zeros=%zu sum=%llu\n",
+           s.width, s.height, n, nul_run, painted_nuls, (unsigned long long)sum_after);
+    raster_surface_free(&s);
+}
+
 /* AN sRGB COLOUR THIS FILE STATES, which is what core/paint/display_list.c's append asserts every mark
    carries: CSS Color 4 §11 "Converting Colors" is the PAINTER's to run and a list is downstream of it. */
 static CssColor tf_dlr_srgb(double r, double g, double b, double a)
@@ -22520,6 +22644,11 @@ int main(int argc, char **argv) {
        than earlier only so that its `@RASTER` row sits beside `@PAINT`'s, which is the ink it will one day
        be handed. */
     raster_selftest();
+    /* AND THE BYTE RUN ITS SURFACES ARE MADE OF, which is a different question from the fill's and has a
+       different consumer: core/graphics/raster_surface.h's extent is what any transport of a rendered
+       document needs and what the production ABI has no entry to carry. It needs no realm for the same
+       reason the fill does not. */
+    raster_bytes_selftest();
     /* AND THE JOIN, immediately after the fill it is built on and before the painter whose ink it will be
        handed. It needs no realm either: the lists it rasterizes are ones this file states, which is what
        lets it separate the two FILL kinds by arithmetic rather than by a document. */
