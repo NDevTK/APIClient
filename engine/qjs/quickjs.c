@@ -28170,6 +28170,37 @@ typedef struct JSAsyncSettle {
     int cfirst, cargc, forof;        /* its operand shape and for-of offset */
     uint8_t is_tail;
 } JSAsyncSettle;
+/* EVERYTHING THIS RECORD OWNS, IN ONE PLACE — the list js_async_settle_clone mirrors. A function rather than
+   two lines at each exit because there are three that RELEASE it (a callback frame that threw, Await's
+   plumbing failing, and a flow destroyed under it) and a field added to the struct would otherwise have to be
+   remembered at every one. The settled label is NOT a caller and must not become one: it hands the promise ON,
+   so the reference leaves the record rather than being freed.
+   THE REQUESTER IS DELIBERATELY NOT HERE, and that is the one thing to read before adding it: its disposal
+   differs by caller — the interpreter's unwind ABANDONS it, because there is still a program to finish, and a
+   destroyed flow RELEASES it, because there is not — so a helper that chose either would make the other
+   unspellable. */
+static void js_async_settle_end(JSContext *ctx, JSAsyncSettle *ass)
+{
+    JS_FreeValue(ctx, ass->promise);
+}
+/* THE SAME LIST IN THE OTHER DIRECTION. Field-by-field rather than a struct copy, for js_array_len_clone's
+   reason: a field added to the struct and not to this list reads back as what js_mallocz wrote, instead of
+   silently handing the sibling a second name for the original's reference.
+   `cont`/`cont_kind` are left naming the ORIGINAL's requester and are overwritten with the sibling's own by
+   tramp_cont_relink_outer a moment later — the discipline every link-bearing clone in this file follows with
+   its `outer`. */
+static JSAsyncSettle *js_async_settle_clone(JSContext *ctx, const JSAsyncSettle *s)
+{
+    JSAsyncSettle *n = js_mallocz(ctx, sizeof(*n));
+
+    if (unlikely(!n))
+        return NULL;
+    n->promise = js_dup(s->promise);
+    n->cont = s->cont; n->cont_kind = s->cont_kind;
+    n->cfirst = s->cfirst; n->cargc = s->cargc; n->forof = s->forof;
+    n->is_tail = s->is_tail;
+    return n;
+}
 #define CONT_PROMISE_CAP   38  /* cont_state = JSPromiseCap: NewPromiseCapability's Construct(C, «executor»). The
                                   SUBCLASS CONSTRUCTOR is user code and js_new_promise_capability ran it with
                                   JS_CallConstructor from C, so `Promise.try.call(Sub, fn)` had that constructor's
@@ -37362,7 +37393,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                         JSAsyncSettle *ass0 = souter0;
                         h->outer = NULL; h->outer_kind = CONT_NONE;
                         tramp_step_abrupt_free(ctx, stt);
-                        JS_FreeValue(ctx, ass0->promise);
+                        js_async_settle_end(ctx, ass0);
                         if (ass0->cont_kind != CONT_NONE)
                             js_create_requester_abandon(ctx, ass0->cont, ass0->cont_kind);
                         js_free_rt(rt, ass0);
@@ -43215,6 +43246,18 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 JSValue aprom = atf->async_promise;
                 uint8_t aitail = atf->is_tail;
                 void *acs = atf->cont_state; uint8_t ack = atf->cont_kind;
+                /* THE PAIR IS ONE FACT, ASSERTED WHERE IT IS COPIED OUT OF THE FRAME. Everything below carries
+                   these two into a JSAsyncSettle, and the fork walk then reads them back as a chain link — so
+                   a NONE kind standing over a non-NULL state would hand that walk a pointer nothing can name
+                   the type of. It is not hypothetical arithmetic: tramp_frame_new does not zero, so a frame's
+                   cont_state reads as whatever the recycled block held until a push writes the PAIR, and this
+                   is the one line that turns "every push writes both" from a convention into something that
+                   fires at the push that stopped. Asked here rather than in cont_outer_get because the reader
+                   would name the fork, and the defect would be in whoever built the frame. */
+                DCHECK(ack != CONT_NONE || acs == NULL,
+                       "an async frame records a continuation KIND of none over a non-NULL continuation STATE — "
+                       "a tramp push wrote one half of the pair, and the settle is about to carry that pointer "
+                       "into a record the fork walk dereferences by kind");
                 int acf = atf->call_first, acp = atf->call_argc, afof = atf->forof_off;
                 JSAsyncPost asf;
                 int post;
@@ -50161,7 +50204,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                can still be reached, so the requester is abandoned and the throw propagates — the same shape the
                Promise.try settle's throw has. */
             JSAsyncSettle *ass = xcs;
-            JS_FreeValue(ctx, ass->promise);
+            js_async_settle_end(ctx, ass);
             if (ass->cont_kind != CONT_NONE) js_create_requester_abandon(ctx, ass->cont, ass->cont_kind);
             js_free_rt(rt, ass);
             xcs = NULL;
@@ -51789,6 +51832,27 @@ static void *cont_outer_get(void *st, uint8_t kind, uint8_t *out_kind)
     case CONT_ITER_CONSUME:
         *out_kind = ((struct JSIterConsume *)st)->outer_kind;
         return ((struct JSIterConsume *)st)->outer;
+    case CONT_ASYNC_SETTLE: case CONT_ASYNC_AWAIT:
+        /* BOTH ROLES OF ONE RECORD, for CONT_TOPRIM/CONT_TOPRIM_GET's reason and with one difference that has
+           to be stated rather than asserted: 40 is the async call's own outcome waiting under the capability's
+           RESOLVING FUNCTION, 74 is the same outcome waiting under §27.10.5.3 Await ( arg )'s machine, and
+           NOTHING IN THIS RECORD TELLS THEM APART — both preparations write an identical field set. What
+           differs is which MACHINE holds the link, which is a fact about that JSStepHdr and not about this
+           record, so there is no TOPRIM_ROLE_AGREES to write here: an assert whose two sides cannot disagree
+           is not a check.
+           THE LINK IS SPELLED `cont`, NOT `outer`, and what waits on it is exactly who the settled label
+           delivers the promise to. The spelling is why an `outer`-shaped reading of this record finds no
+           requester, and it is NOT why the kind was invisible: the free walk's published derivation looks for
+           `cont_kind|outer_kind = CONT_…` and finds BOTH of these, so its vocabulary was right all along.
+           WHAT NO TEXT SEARCH CAN ANSWER IS THE ROLE, which is the fact worth carrying. 40's only literal
+           assignment is to `tramp_cont_kind` at a call site, which reads as a FRAME role and nothing else —
+           and the step-machine request path writes the new machine's `outer_kind` from that same AMBIENT
+           variable, so the moment the callee turns out to be a step machine (a native resolving function is
+           one, and so is Await's) the identical kind is standing as a LINK with no assignment anywhere
+           saying so. Every kind a call site puts in `tramp_cont_kind` is therefore a candidate for this walk,
+           whatever its declaration says it is. */
+        *out_kind = ((JSAsyncSettle *)st)->cont_kind;
+        return ((JSAsyncSettle *)st)->cont;
     case CONT_PROMISE_ALL:
         /* JSPromiseAll HAS no requester field: a combinator is reached from an opcode and settles a capability,
            so nothing waits on the record. Stated rather than defaulted — if one is ever added it belongs here,
@@ -51839,6 +51903,8 @@ static void cont_outer_set(void *st, uint8_t kind, void *outer, uint8_t outer_ki
         ((struct JSConstruct *)st)->outer = outer; ((struct JSConstruct *)st)->outer_kind = outer_kind; return;
     case CONT_ITER_CONSUME:
         ((struct JSIterConsume *)st)->outer = outer; ((struct JSIterConsume *)st)->outer_kind = outer_kind; return;
+    case CONT_ASYNC_SETTLE: case CONT_ASYNC_AWAIT:
+        ((JSAsyncSettle *)st)->cont = outer; ((JSAsyncSettle *)st)->cont_kind = outer_kind; return;
     default: break;
     }
     DFAIL("cont_outer_set: a kind cont_outer_get answered with a link has no way to write one back — the two "
@@ -51867,6 +51933,15 @@ static void *tramp_cont_clone_one(JSContext *ctx, void *st, uint8_t kind)
         TOPRIM_ROLE_AGREES(st, kind);
         return js_toprim_clone(ctx, (const struct JSToPrim *)st);
     }
+    if (kind == CONT_ASYNC_SETTLE || kind == CONT_ASYNC_AWAIT)
+        /* AN ASYNC CALL'S OWN OUTCOME, waiting under whichever machine its completion still owes — the
+           capability's resolving function (40) or Await's (74). A NATIVE promise's resolving function IS a
+           step machine the moment its `Get(resolution,"then")` has to be a request, and Await is one always,
+           so this is what a fork inside `async function f(){ … await g() … }` lands on: it is the ordinary
+           shape of every bundle that awaits, not a subclass-only path.
+           BOTH KINDS, ONE CLONE, for the reason the arm above gives for 21/62: the record and its release are
+           identical and only the machine above it differs. */
+        return js_async_settle_clone(ctx, (const JSAsyncSettle *)st);
     if (kind == CONT_ARRAY_LEN)
         return js_array_len_clone(ctx, (const JSArrayLen *)st);
     if (kind == CONT_OP_KEYED)
@@ -52432,6 +52507,24 @@ static JSValue *clone_deep_flow(JSContext *ctx, JSAsyncFunctionState *s) {
                    Constructs a page-defined Promise subclass, and the body of that constructor is this frame).
                    It is left naming the ORIGINAL and BOUND by tramp_cont_relink_outer below. */
                 ct->cont_state = ncs;
+            } else if (otf->cont_kind == CONT_ASYNC_SETTLE) {
+                /* A CONCOLIC BRANCH INSIDE THE CAPABILITY'S RESOLVING FUNCTION. An async body that completed on
+                   this chain settles its promise by CALLING that function, and a subclass supplies its own — so
+                   the body is ordinary page code and forks where any other callee does. The record carries
+                   everything the placement still owes (the promise, who asked for it, in what operand shape)
+                   because the async frame has already popped, which is exactly why the sibling must not share
+                   it: the first arm to reach the settled label frees what the second still has to place.
+                   ONLY 40 HAS A FRAME ROLE. 74 is written as a machine's requester and never as a frame's
+                   cont_kind, so it has no arm here and the walk below is where it is answered — which is the
+                   whole reason a kind can be absent from every walk at once and read as covered from any one.
+                   THE FIELD LIST LIVES AT js_async_settle_clone, beside the release it mirrors, because this is
+                   not its only caller. */
+                JSAsyncSettle *oass = (JSAsyncSettle *)otf->cont_state;
+                JSAsyncSettle *nass = js_async_settle_clone(ctx, oass);
+
+                if (!nass) { js_free(ctx, oa); js_free(ctx, ca); return NULL; }
+                ct->cont_state = nass;
+                CLONE_ARG_BUF_NOT_IN_RECORD(ct, oass);
             } else if (otf->cont_kind == CONT_TOPRIM) {
                 /* A CONCOLIC BRANCH INSIDE A COERCION METHOD. §7.1.1 ToPrimitive ( input [ , preferredType ] )
                    drives `@@toPrimitive` / `valueOf` / `toString` on this chain (see CONT_TOPRIM), so a
@@ -52923,6 +53016,21 @@ static void tramp_cont_free(JSContext *ctx, void *st, uint8_t kind)
         JS_FreeValue(ctx, cs->super_ref);
         js_free_rt(rt, cs);
         tramp_cont_free(ctx, co, ck);
+        return;
+    }
+    if (kind == CONT_ASYNC_SETTLE || kind == CONT_ASYNC_AWAIT) {
+        /* AN ASYNC CALL'S OUTCOME RELEASED WITH NOBODY TO ANSWER TO — a cold-tier tail dropped, a flow
+           destroyed under a throw. The promise can never be settled, so whoever asked for it can never be
+           answered either and goes with it, which is what every other arm here does with its requester. This
+           is the one place the requester is RELEASED rather than abandoned, and js_async_settle_end says why
+           the choice is the caller's. Both links read BEFORE the free, because the free is what makes the
+           record unreadable. */
+        JSAsyncSettle *ass = (JSAsyncSettle *)st;
+        void *ao = ass->cont;
+        uint8_t ak = ass->cont_kind;
+        js_async_settle_end(ctx, ass);
+        js_free_rt(rt, ass);
+        tramp_cont_free(ctx, ao, ak);
         return;
     }
     {
