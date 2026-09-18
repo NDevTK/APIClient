@@ -5533,6 +5533,43 @@ static void engine_fork_finalize(JSContext *ctx, JSValue *clone) {
     void *dec, *pins;
 
     DCHECK(parent != NULL && g_fork_dec != NULL, "engine_fork_finalize: fork without a running flow / prepared state");
+    /* AND THE ARM'S FRAME IS A PROGRAM ONLY IF THE PARENT'S WAS, WHICH IS THE ONE FACT THE CLONE CANNOT CARRY.
+       Every caller of this hook snapshots `g_flow_base_gen` — the RUNNING flow's own base activation, asserted
+       at each of them — so the clone is whatever that flow was executing, while `sib->frame` is the slot that
+       means "the program of the row at this flow's cursor": engine_queue_into reads it as exactly that
+       (`at = f->frame ? f->script_i + 1 : f->script_i`, over flow.h's "`frame` is exactly inside a program")
+       and so does flow_step's completion tail. A flow whose base is a MODULE body or a JOB continuation holds
+       NO frame — flow_step's module arm LEAVES the row the instant HTML §8.1.4.4 "Calling scripts"'s run a
+       module script Evaluate returns, and a job runs only under `!f->frame` — so a branch taken inside one
+       hands its arm an activation that is not a row's program, in the slot that says it is.
+       THE ORPHAN DRIVE IS NOT THIS, WHICH IS WHY THE CLAIM IS MADE HERE AND NOT IN THE ASSEMBLY: that caller
+       passes a FRESH CALL frame over a frameless parent deliberately, and `JS_FlowIsCall` tells the completion
+       tail so. A clone of the parent's own non-program activation answers FALSE to that question, which is
+       exactly what makes it indistinguishable from a program there.
+       THE LOUD HALF IS THE SMALLER ONE. Measured on two mirrored production bundles, the arm left its row a
+       second time at `script_i=1 dyn_n=1 last_compiled=0` and at `script_i=3 dyn_n=3 last_compiled=2`, and
+       ENGINE_LEAVE_ROW aborted because the cursor was already at the end. Where the flow still has rows AHEAD
+       the identical arm leaves a row it never ran and nothing says so: the row is not compiled, and
+       flow_programs_unstarted_for_document does not count it either — the loss engine_queue_into's own
+       `at >= script_i` DCHECKF describes and cannot see from where it stands. The interposition base is the
+       third consumer and is silently wrong the same way, reading `script_i + 1` for an arm between programs.
+       WHAT MUST EXIST AFTERWARD is a home on the arm for a cloned activation that is NOT a row's program. The
+       answer forks below already keep a job's continuation on `Flow::parked` and let flow_step's
+       JS_ResumeParkedFlow arm re-enter it, which is how the PARENT's own module body is resumed; what a branch
+       fork has is a single cloned base rather than a parked SET, so the primitive that turns one into the
+       other is the part that does not exist yet.
+       RETIREMENT: this record goes when a branch fork's clone reaches the arm through a slot whose name states
+       what the activation is, so `frame` cannot be read as a row's program by any consumer. */
+    DCHECKF(parent->frame != NULL,
+            "a branch inside an activation that is NOT a program of this flow's sequence forked an arm - the "
+            "clone is the running flow's own base, so the arm's `frame` slot claims \"the program of the row "
+            "at the cursor\" about a MODULE body or a JOB continuation whose row this flow has already left. "
+            "cursor=%d last_compiled=%d rows=%d: the arm leaves that row a SECOND time at flow_step's "
+            "completion tail, and where the cursor is not already at the end it skips the next row in "
+            "silence. Give the clone the home Flow::parked gives a job's continuation at the answer forks "
+            "below, and re-enter it through flow_step's JS_ResumeParkedFlow arm as the parent's own module "
+            "body is re-entered",
+            parent->script_i, parent->last_compiled, parent->dyn_n);
     /* AN UNMADE DELIVERY IS INHERITED RATHER THAN REFUSED, and the assert that refused it is gone with the
        SLOT it was about — the same correction, and for the same reason, as the unstarted operation two
        paragraphs down. It claimed no flow could be at a branch still holding a record ("a delivery is made
