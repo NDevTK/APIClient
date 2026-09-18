@@ -553,6 +553,26 @@ typedef struct Flow {
        frontier that has reached tens of thousands of members — see flow_clear_host_owed. */
     unsigned owed_gen;
 
+    /* DOES THIS MEMBER OWE THE HOST AN IMAGE OF ITS OWN WORLD? @PERWORLD. A forced multi-path solver gives one
+       document as many APPEARANCES as it has flows — §Boot's `if (__FLAGS.admin)` sibling holds a DOM and a
+       heap its primary never had — and the ONLY moment those pixels exist is while that member is switched in
+       with its COW and DOM deltas applied. A host cannot reach that moment by asking: it gets the thread at a
+       slice boundary and renders whichever timeline the scheduler happened to leave standing, which is the
+       reach main.c's `qjs_paint` residual calls "by luck". This bit is the ask that removes the luck.
+       A PLAIN FLAG AND NOT A GENERATION STAMP, WHICH IS THE OPPOSITE CHOICE FROM `owed_gen` ABOVE AND IS MADE
+       ON THE OPPOSITE FACT. A generation makes "clear every mark" one increment, and its cost is that a
+       member born AFTER the stamp moved reads as marked for free. That is exactly right for host-owed, where
+       a fresh flow must read RUNNABLE and the stamp only ever ages OUT of a mark; it is exactly wrong here,
+       where the population is "the members alive when the host asked". A newborn arm reading marked would
+       make an ask over a forking frontier an ask that never finishes — every fork would owe an image, and
+       §NO BOUNDS forbids capping the answer once it is owed. `reclaim_calloc` zeroes a new Flow, so a fork
+       inherits NO ask and the ask names exactly the set `engine_request_paint` walked.
+       IT DECIDES NOTHING ABOUT THE ORDER. The scheduler does not promote a member that owes an image; it
+       hands the thread back at the moment its own pick has already put that member in front, which is why
+       this can never forge a ranking record the WFQ did not make (engine.c's flow_switch_in writes exactly
+       such a record, which is why nothing outside the pick may perform that switch). */
+    int   paint_owed;
+
     /* HAS THIS FLOW A RECORDED PATH TO STAND ON? 0 = fresh: decide_enter gives it an empty vector and every
        branch it meets is a new decision. 1 = it resumes from the blobs below — which is the snapshot-forked
        sibling (a live frame plus its chain), and equally the flow the COLD TIER rebuilt from a recipe (no
@@ -2600,6 +2620,19 @@ void  flow_clear_host_owed(Flow *f);
    that delivers that reply fills a slot every other flow parked on the same script index was waiting for. It is
    the only unblocking that happens inside a slice, which is why it is the only clear that is not per flow. */
 void  flow_clear_host_owed_all(void);
+
+/* THE IMAGE THIS MEMBER OWES THE HOST — @PERWORLD, and the whole of what it means is on `paint_owed` above.
+ * The set is written by engine_request_paint over the members alive at the ask; each mark is discharged by the
+ * scheduler HANDING THE THREAD BACK with that member switched in, which is the one moment its pixels exist.
+ *
+ * IT IS NOT A HOST-OWED MARK AND MUST NOT BE FOLDED INTO ONE, which is the near-miss this pair invites. A
+ * host-owed mark says the member CANNOT PROGRESS and takes it OUT of the pick; this says the member has
+ * something the host wants to see FIRST and changes the pick not at all. Folding them would put every member
+ * of an asked frontier out of the pick at once, which is the STALL, and the host would be handed a frontier
+ * reporting that it owes replies it does not owe. */
+void  flow_set_paint_owed(Flow *f);
+void  flow_clear_paint_owed(Flow *f);
+int   flow_paint_owed(const Flow *f);
 
 /* A counter bumped on every frontier membership change (add/remove). The value-yield recomputes its rival
    only when this changes (or the running flow switches), never per-opcode. */

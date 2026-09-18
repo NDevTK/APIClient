@@ -1497,25 +1497,48 @@ static char *paint_world_name(void)
    current when the call arrives, and a host that wants one arm's picture rather than another's is asking a
    question §State-isolation's COW delta answers and this entry does not.
 
-   NAMED RESIDUAL — WHAT IS NOT COVERED. That paragraph says what this entry is; this says what a caller
-   therefore cannot ask for, because the sentence above has been read as a note about a register when it is a
-   statement about REACH. A host calls this BETWEEN two steps, so the only worlds it can ever render are the
-   ones the scheduler happened to leave switched in at a yield — and it cannot be asked for a NAMED one, nor
-   for all of them. The end of a run is the sharp case and it is not an edge: a session that answers DONE has
-   already closed, `engine_session_close` switches its last flow out, and the frontier it drained holds no
-   member to be standing in — so `paint_world_name` below reads `flow_running()` as NULL and answers the word
-   `baseline`, correctly. An `if (__FLAGS.admin)` sibling's appearance — the picture this engine exists to be
-   able to take and a browser cannot — is reachable through this entry only by luck.
+   THE REACH THAT USED TO BE A RESIDUAL HERE IS BUILT, AND IT IS `qjs_request_paint` BELOW — @PERWORLD. The
+   residual said, correctly, that a host reaches this engine only BETWEEN two steps, so the only worlds this
+   entry could render were the ones the scheduler happened to leave switched in at a yield; that it could be
+   asked for neither a NAMED world nor all of them; and that an `if (__FLAGS.admin)` sibling's appearance —
+   the picture this engine exists to be able to take and a browser cannot — was reachable through it only by
+   luck. Every clause of that was true and the last one is what has changed: a host now MARKS the timelines it
+   wants, and the scheduler hands the thread back with each marked member standing, so the world this entry
+   renders is one somebody asked for. WHAT IS STILL EXACTLY AS DESCRIBED is everything above the residual: this
+   is an output register and not a per-flow one, it renders whichever world is CURRENT, and it can still be
+   asked for no world by name. The ask changed which world is current; it did not make this entry selective.
+   The end-of-run case is unchanged and is not an edge: a session that answers DONE has already closed,
+   `engine_session_close` switches its last flow out, and the frontier it drained holds no member to be
+   standing in — so `paint_world_name` below reads `flow_running()` as NULL and answers the word `baseline`,
+   correctly, which is now the LAST image of a run rather than its only one.
 
-   WHAT THE NEXT DIFF BUILDS. An ASK recorded per live flow and discharged by the SCHEDULER with that flow
-   switched in, which is the only party that may perform that switch: a host-installed hook of
-   `engine_set_park_hook`'s shape (solver/engine.h declares the setter, this file registers, the scheduler
-   calls it) but at the OPPOSITE moment — the park's hook is called with NO flow switched in and this one must
-   be called with one. That moment already exists and is already proven: it is where `flow_emit_dump` is
-   reached, on the completion arm of a step, with `cow_apply` and `dom_apply` done. `paint_world_name` needs no
-   change there — it reads the running flow and is right for both arms today.
+   AND THE NEXT-DIFF CLAUSE NAMED THE WRONG MECHANISM, RECORDED HERE BECAUSE THIS IS WHERE IT WAS WRITTEN AND
+   BECAUSE IT WAS DISPATCHED AS A BRIEF BEFORE ANYBODY RE-DERIVED IT. In its own wording, with no quotation
+   marks around it because a run of prose in this tree's voice is not a spec quotation and the citation
+   auditor's channel cannot tell the two apart: an ASK recorded per live flow and discharged by the SCHEDULER
+   with that flow switched in, which is the only party that may perform that switch — a host-installed HOOK of
+   `engine_set_park_hook`'s shape, called at the OPPOSITE moment, that moment being where `flow_emit_dump` is
+   reached on the completion arm of a step. The ASK half was right and is what landed. The HOOK half was wrong twice over. A hook would have the SCHEDULER call into this file to render,
+   which puts a painter behind a solver seam and leaves an image sitting in `g_paint` that the engine then has
+   to arrange for somebody to drain before the next one overwrites it — a register problem the clause went on
+   to spend a paragraph on and which does not exist at all once the host does its own rendering. And the moment
+   it named is the completion arm of a STEP, which is reached only by a member that COMPLETES A PROGRAM, so a
+   member that yields on its quantum mid-script would never discharge its mark. What is actually needed is a
+   YIELD: the scheduler returns the thread at a moment its own pick has already put the marked member in front,
+   and the host calls this entry exactly as it always could. Nothing crosses the seam but the turn.
+   THE CLAUSE'S OWN STANDING REASON SURVIVES AND IS WHY THE YIELD IS CORRECT: the scheduler is the only party
+   that may perform the switch, because `flow_switch_in` writes the record of what a member was ranked on when
+   it took the thread (the record preempt_hook's assertion reads), so a switch performed for a picture would
+   forge a ranking for a pick the WFQ never made. The yield performs no switch — it is taken where the pick
+   already stands.
 
-   AND THE REGISTER HOLDS ONE IMAGE, NOT N, WHICH IS A DECISION AND NOT A DETAIL. The obvious shape — an
+   AND THE REGISTER HOLDS ONE IMAGE, NOT N, WHICH IS A DECISION AND NOT A DETAIL — AND THE ASK MADE IT FREE
+   RATHER THAN OVERTURNING IT. The paragraph below is unchanged because its arithmetic is unchanged; what has
+   changed is that there is no longer anything for a second image to be held FOR. The solver renders nothing
+   and holds nothing, so `at most one image may be un-drained` is true by construction: each mark costs one
+   return to the host, and the host that asked is the party that renders and the party that writes. A reader
+   arriving from the register argument and expecting a queue will not find one, and that is the answer rather
+   than an omission. The obvious shape — an
    indexed register the host walks after the run — is the per-flow materialization CLAUDE.md's
    capability-materialized-per-flow rule forbids, and the arithmetic is the argument rather than the taste:
    `document_paint` sizes its surface from `viewport_canvas_region` times the device pixel ratio, so ONE image
@@ -1527,10 +1550,13 @@ static char *paint_world_name(void)
    and returns to the host, which drains it before the next flow renders; nothing is decided not to be
    painted, which is what CLAUDE.md's no-bounds rule asks of a per-world render, and nothing is held.
 
-   HOW ITS ABSENCE WOULD SHOW. Every image a run produces after its frontier drains names the SAME world, and
-   that name is the single word `baseline` — so a directory of them is N reads of one timeline however many
-   flows the run explored, and `qjs_paint_world` says so on every one. Observe it on the `#` world line of any
-   file `abi_paint` writes, which is where that word already reaches a reader.
+   HOW THE ASK'S ABSENCE WOULD SHOW, WHICH IS THE ONE CLAUSE OF THE RETIRED RESIDUAL THAT IS STILL AN
+   INSTRUMENT RATHER THAN A HISTORY: every image a run produces names the SAME world, and that name is the
+   single word `baseline` — so a directory of them is N reads of one timeline however many flows the run
+   explored, and `qjs_paint_world` says so on every one. Observe it on the `#` world line of the files
+   `abi_paint` writes, which is where that word already reaches a reader, and on their NAMES, which now carry
+   the world the picture is of. A directory holding one file is the ask not having been made or not having
+   been discharged; a directory holding one file per world is it working.
 
    THE PAIR IS ORDERED, AND `qjs_paint_bytes` ENFORCES THE ORDER RATHER THAN DOCUMENTING IT. This entry is
    the one that produces, so it is the one that must run first; the flag it sets is what makes a length asked
@@ -2353,6 +2379,41 @@ QJS_EXPORT void qjs_request_dump(const char *program)
            "zero converts to the EMPTY STRING, so a caller that composed nothing arrives here looking exactly "
            "like one that asked for an empty program, and every live flow would be handed a row to compile");
     engine_request_dump(program);
+}
+
+/* AN IMAGE OF EVERY LIVE TIMELINE, ASKED — @PERWORLD. solver/engine.h states the whole contract at
+   engine_request_paint; what belongs here is what is true of this ENTRY.
+   IT PRODUCES NO IMAGE AND ANSWERS NOTHING, WHICH IS THE OPPOSITE OF `qjs_paint` ONE SCREEN UP AND IS THE
+   POINT. `qjs_paint` PERFORMS a render and hands back the world the engine is standing in; this entry changes
+   WHICH world that will be. It marks every member of the frontier as owing the host a picture, and the
+   scheduler discharges a mark by returning the thread with that member switched in — so the pictures are taken
+   by the ordinary `qjs_paint` calls the host was already free to make, one per return, in whatever order the
+   WFQ reaches those members.
+   WHAT IT BUYS IS REACH AND NOTHING ELSE, and `qjs_paint`'s own residual is where that gap is stated: a host
+   reaches this engine only BETWEEN two steps, so the only worlds it could render were the ones the scheduler
+   happened to leave standing, and a run whose frontier drained renders the word `baseline` however many flows
+   it explored. The `if (__FLAGS.admin)` sibling — the picture this engine exists to be able to take and a
+   browser cannot — was reachable through that entry only by luck. It is reachable by ASKING now.
+   ASKING IS NOT RENDERING FOR THE SAME REASON ASKING IS NOT RUNNING ABOVE, and the constraint is the same one:
+   this entry is called between two steps, where the slice is closed and the flow stamp is down. A member's
+   pixels exist only while its COW and DOM deltas are applied, which is a state only the scheduler can put the
+   heap and the DOM into, so an entry that rendered here would render whatever happened to be applied — which
+   is precisely the luck this ask exists to remove.
+   IT DOES NOT CHOOSE A FLOW AND MUST NOT. Choosing one would mean switching it in from here, and
+   solver/engine.c's flow_switch_in writes the record of what a member was ranked on when it took the thread —
+   the record preempt_hook's own assertion reads — so a switch performed for a picture would forge a ranking
+   for a pick the WFQ never made, and the second scheduler §THERE-IS-NO-GRIND forbids would be standing beside
+   the first. The ask rides the ONE order: a marked member is photographed when that order reaches it.
+   A PRODUCTION HOST MAY CALL THIS, WHICH IS WHERE IT PARTS COMPANY WITH `qjs_request_dump` ABOVE. That entry
+   evaluates the trusted zone's own program in the analysed document's realm and therefore WRITES there; this
+   one adds no work to any timeline and evaluates nothing — a picture is of the state a member is already in.
+   What it costs is one extra return to the host per member alive at the ask, which is the host's own time. */
+QJS_EXPORT void qjs_request_paint(void)
+{
+    DCHECK(g_begun, "an image of every world was asked of an engine whose frontier was never seeded — there is "
+                    "no timeline to be switched in, so every picture the host went on to take would be of the "
+                    "baseline, which is the one reach this ask exists to widen");
+    engine_request_paint();
 }
 
 /* …AND THE ANSWERS, DRAINED. One record per timeline that ran the program, `<world><TAB><json>`, newline

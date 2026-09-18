@@ -275,6 +275,36 @@ void engine_request_dump(const char *program);
  * nobody holds into the ancestry of every later vector and onto the death register `qjs_world_gone` drains.
  * The whole argument is at flow_emit_dump. */
 const char *engine_take_dumps(void);
+/* AN IMAGE OF EVERY LIVE TIMELINE, ASKED HERE AND TAKEN BY THE HOST ITSELF — @PERWORLD.
+ *   THE ASK IS NOT THE RENDER, AND THE SPLIT IS §Architecture'S RATHER THAN A CONVENIENCE. The solver holds no
+ * painter and must not grow one: a document's ink is core/paint/document_paint.h's and the register that keeps
+ * it is the host's (main.c's `g_paint`). So this entry does not produce a picture and does not call anybody who
+ * does. What it does is mark every member of the frontier as owing one, and the SCHEDULER discharges a mark by
+ * RETURNING THE THREAD with that member switched in — at which point the host's own `qjs_paint` renders the
+ * world it is standing in, exactly as it renders today. Nothing about the painter changes; what changes is
+ * WHICH world the host is handed.
+ *   IT IS THE ANSWER TO A REACH PROBLEM AND NOT A RENDERING ONE. main.c's `qjs_paint` already names the gap in
+ * its own residual: a host reaches this engine only between two steps, so the only worlds it can render are the
+ * ones the scheduler happened to leave standing at a yield, and the `if (__FLAGS.admin)` sibling — the picture
+ * this engine exists to be able to take and a browser cannot — is reachable "only by luck". A yield DOES leave
+ * a member switched in with its COW and DOM deltas applied (engine_sched_slice holds it in a static across the
+ * return, and asserts it is still a member when it picks it back up); what no host could do was say WHICH.
+ *   NOTHING IS PROMOTED, REORDERED OR SWITCHED IN BY THIS. The mark is not in flow_weight, not in the eligible
+ * set and not in the pick's filter: a marked member is picked exactly when it would have been picked anyway,
+ * and the yield is taken at the moment the WFQ has ALREADY put it in front. That is the whole reason the ask
+ * lives here rather than in a host entry that chooses a flow and switches it in — flow_switch_in writes the
+ * record of what a member was ranked on when it took the thread (the record preempt_hook's assertion reads), so
+ * a switch performed for a picture would forge a ranking for a pick the WFQ never made.
+ *   THE MEMBERS ALIVE AT THE ASK, AND NO FORK AFTER IT. A newborn arm owes nothing (flow.h's `paint_owed` says
+ * why: an ask that newborns inherited would never finish on a forking frontier, and §NO BOUNDS forbids capping
+ * an answer once it is owed). A host that wants the arms a run has since grown asks again.
+ *   AT MOST ONE IMAGE IS EVER UN-DRAINED, WHICH IS WHAT KEEPS THIS OUT OF §NO BOUNDS. The scheduler renders
+ * nothing and holds nothing, so there is no register to overwrite and no world that can be silently not
+ * painted: each mark costs exactly one return to the host, and the host that asked is the party that renders.
+ *   A MARK A MEMBER NEVER GETS TO DISCHARGE IS THE SAME FACT AS A MEMBER THAT NEVER RUNS AGAIN. A flow parked
+ * on a reply the zone refused is not offered the thread, so it is not offered the picture either; that is the
+ * frontier's own answer about that member and not a loss this entry may paper over. */
+void engine_request_paint(void);
 /* Park the running flow on a <script src> WITH NO POSITION TO HOLD: the host fetches it, and the reply becomes
    this flow's next program rather than a promise's value. Two kinds of element are that — one a page INJECTED,
    and a member of HTML §4.12.1.1's `set of scripts that will execute as soon as possible`, which is a SET (§13.2.7

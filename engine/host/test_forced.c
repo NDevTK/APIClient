@@ -25076,9 +25076,9 @@ static void abi_paint(const char *dir, const char *doc_id, const char *url)
     const char    *world;
     unsigned       n, w, h, offers, marks;
     int            complete, named, headed, closed;
-    char           name[256];
+    char           name[512];
     char           path[1024];
-    size_t         i, put;
+    size_t         i, j, wn, put;
     FILE          *f;
 
     DCHECK(dir != NULL && doc_id != NULL && url != NULL,
@@ -25163,6 +25163,41 @@ static void abi_paint(const char *dir, const char *doc_id, const char *url)
     CHECK(i > 0u, "this instance was provisioned under an EMPTY document name, so the image of it has nothing "
                   "to be called — the record's name field is refused as empty where it is read, so an empty "
                   "one here is that check and this line no longer reading the same value");
+
+    /* …AND BY THE WORLD, WHICH IS WHAT MAKES A DIRECTORY OF THESE A PICTURE OF A SOLVER — @PERWORLD. The
+       document says WHICH PAGE and the world says WHOSE, and until this line only the first was in the path:
+       one file per document, overwritten by every later render, so a run that photographed its admin sibling
+       and then its primary kept the primary and nothing said the other had ever existed. That is the §NO
+       BOUNDS drop arriving through a FILE NAME rather than through the search — a world explored, rendered,
+       and then decided not to be kept.
+       THE SAME SANITISER AND FOR THE SAME REASON: `world_name`'s spelling is `<document>:<session>:<serial>`,
+       and a `:` is outside the portable file-name set this composes a PATH out of. The baseline arm is the
+       single word `baseline`, which passes through untouched — so a run's final image is `<doc>.baseline.pam`
+       and its per-timeline ones are `<doc>.<doc>_<session>_<serial>.pam`. The document appears twice in the
+       second and that redundancy is deliberate: the world's own name carries a document string the WORLD
+       REGISTRY composed, and the prefix carries the one the ZONE stated, and nothing in this process proves
+       those are the same value — so dropping either would be this file asserting an equality it cannot check.
+       A TRUNCATED WORLD IS A DIFFERENT WORLD, so it is refused rather than written. The path's own CHECK below
+       cannot catch it: a name truncated HERE still fits `path`, so two timelines whose names share a prefix
+       would overwrite each other's image while both reported success — which is exactly the failure the path
+       check exists to prevent, one buffer earlier. */
+    wn = i;
+    CHECKF(wn + 1u < sizeof name,
+           "this document's name fills the image's whole name buffer (%zu of %zu bytes), so there is no room "
+           "left to say WHICH WORLD the picture is of — and a file that cannot name its timeline is one a "
+           "reader holding two of them cannot tell apart", wn, sizeof name);
+    name[wn++] = '.';
+    for (j = 0; wn + 1u < sizeof name && world[j] != '\0'; j++, wn++) {
+        char c = world[j];
+        name[wn] = ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                    (c >= '0' && c <= '9') || c == '.' || c == '-' || c == '_') ? c : '_';
+    }
+    name[wn] = '\0';
+    CHECKF(world[j] == '\0',
+           "the name of the world this image was rendered in does not fit this host's buffer (%zu bytes "
+           "available for it) — a truncated world name is a DIFFERENT world, so two timelines sharing a "
+           "prefix would overwrite each other's picture and each would report that it had written one",
+           sizeof name);
 
     /* COMPOSED AT THE CALL, WHICH IS WHERE THE COMPILER CAN SEE BOTH THE DESTINATION'S SIZE AND THE FORMAT —
        `-Wformat-truncation` needs both in scope, so hoisting this into a helper would delete the diagnostic
@@ -25441,6 +25476,22 @@ static int abi_main(int argc, char **argv)
        inventing one. */
     qjs_begin("");
 
+    /* AND AN IMAGE OF EVERY WORLD, ASKED THE INSTANT THERE ARE WORLDS TO ASK ABOUT — @PERWORLD. It goes here
+       and not before `qjs_begin` because the frontier is SEEDED by that call: asked earlier there is no member
+       to mark, which the entry says outright rather than tolerating. Asked here it names the boot flow, and
+       every fork the run then takes is a member this ask did not name — deliberately, since an ask newborns
+       inherited would never finish (solver/engine.h states the whole of it).
+       WHAT A HOST THAT WANTS THE LATER ARMS DOES IS ASK AGAIN, and this driver does not, which is a NAMED
+       RESIDUAL rather than an omission: WHAT IS NOT COVERED is every world forked after this line, so the
+       `if (__FLAGS.admin)` sibling is photographed only where the fork happens before the boot flow's first
+       discharge. WHAT THE NEXT DIFF BUILDS is a second `qjs_request_paint()` in the loop below, gated on the
+       host having drained every image it was already owed — which needs a way to ask how many marks are
+       outstanding, since re-asking blind would re-mark members whose picture this run already holds and the
+       directory would fill with re-renders of one timeline. HOW ITS ABSENCE WOULD SHOW: a directory whose
+       world lines are all `<doc>_<session>_0`-shaped heads with no deeper serial among them, on a run whose
+       `@RESULT` reports forks. */
+    if (paint_dir != NULL) qjs_request_paint();
+
     for (;;) {
         int step = qjs_step();
 
@@ -25448,6 +25499,30 @@ static int abi_main(int argc, char **argv)
            last step produced is exactly the one a drain placed before the terminator would lose. */
         abi_notices();
         if (step == ENGINE_STEP_DONE) break;
+        /* AND THE IMAGE THIS ROUND WAS HANDED THE THREAD FOR — @PERWORLD. A yield leaves the member the
+           scheduler was holding SWITCHED IN, with its COW and DOM deltas applied (solver/engine.c holds it in
+           a static across this return and asserts it is still a member when it picks it back up), so this is
+           the one moment that timeline's pixels exist. `qjs_paint` renders whatever world is standing; what
+           `qjs_request_paint` bought above is that the standing world is one somebody asked for rather than
+           one the schedule happened to leave.
+           IT RENDERS ON EVERY ROUND AND NOT ONLY ON THE ASKED ONES, WHICH IS A DECISION. This driver cannot
+           tell an asked round from an ordinary quantum yield — the ABI answers one code for both, and a second
+           code would be a fact about the scheduler's reason leaking into a host that has no use for it — so it
+           photographs every boundary and lets the FILE NAME do the deduplicating: a round standing in a world
+           already written overwrites that world's own file with a newer picture of the same timeline, which is
+           the honest artifact rather than a lost one. Nothing is decided not to be painted.
+           IT IS AN OBSERVER RUNNING AT THE FREQUENCY OF WHAT IT OBSERVES AND THE PRICE IS STATED HERE: one
+           walk of CSS 2.1 §E.2 "Painting order" over every box of a real page, per slice boundary, on the
+           thread the engine is aging its members in. It is paid ONLY under `--paint-dir`; a run without the
+           flag reaches none of this.
+           A CRASH HERE COSTS THE FINDING SET, AND THAT TRADE IS THE OPPOSITE OF THE ONE THE FINAL PAINT BELOW
+           TAKES. That one is placed after `@RESULT` precisely so a painter aborting at a capability this
+           engine has not built costs a picture rather than every endpoint and every verified sink; this one
+           stands before the result and cannot be. What it buys is the direction §Offensive-programming asks
+           for — the abort arrives at the FIRST boundary rather than at the last, naming the same unbuilt
+           capability hours earlier — and the findings are recoverable by re-running without the flag, which is
+           what makes the trade payable at all. */
+        if (paint_dir != NULL) abi_paint(paint_dir, doc_id, url);
         /* THE BILL GOES OUT ON EVERY ROUND AND IS READ BACK ON NONE OF THEM — see abi_announce for why the
            announcement and the payment are separate halves and why the channel is half-duplex between them. */
         abi_announce();
@@ -25488,8 +25563,16 @@ static int abi_main(int argc, char **argv)
        already read, rather than a marker invented here that no shipped path emits. */
     printf("@RESULT %s\n", qjs_result());
     fflush(stdout);
-    /* AND AN IMAGE OF WHAT THAT DOCUMENT LOOKS LIKE, AFTER THE RESULT AND BEFORE THE TEARDOWN. The ORDER is
-       load-bearing at both ends. AFTER, because `qjs_paint` PERFORMS a render — it walks CSS 2.1 §E.2
+    /* AND THE LAST IMAGE OF THAT DOCUMENT, AFTER THE RESULT AND BEFORE THE TEARDOWN. This sentence used to
+       begin "AND AN IMAGE OF WHAT THAT DOCUMENT LOOKS LIKE" and is rewritten rather than deleted, because
+       everything it says about the ORDER is still exactly right and a reader re-deriving it will write it
+       again — what has stopped being true is the article. This is no longer THE image: the loop above takes
+       one at every slice boundary, each of a world the scheduler was standing in (@PERWORLD), and this is the
+       one taken where the frontier has drained. `paint_world_name` therefore reads `flow_running()` as NULL
+       here and answers the single word `baseline`, correctly and by construction rather than by luck — which
+       is what makes this the picture of the document as no flow has written it, and the one every other file
+       in the directory is worth comparing against.
+       The ORDER is load-bearing at both ends. AFTER, because `qjs_paint` PERFORMS a render — it walks CSS 2.1 §E.2
        "Painting order" over a real page's boxes, which is a road no fixture reaches and therefore the road
        most likely to abort at a capability this engine has not built. A crash there with the finding set
        already on the wire costs a picture; the same crash before it would cost every endpoint and every

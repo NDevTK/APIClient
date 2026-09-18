@@ -7420,6 +7420,38 @@ void engine_request_dump(const char *program) {
     dyn_body_unref(b);   /* every row took its own reference; this entry's copy is spent */
 }
 
+/* AN IMAGE OF EVERY LIVE TIMELINE — @PERWORLD; the whole contract is at engine.h and the mark itself is at
+   flow.h's `paint_owed`.
+   NOTHING RUNS INSIDE THIS CALL, and here that sentence is stronger than it is at engine_request_dump above:
+   that entry at least compiles a program, and this one writes N bits. The render happens in the HOST, on the
+   host's own time, after a return this mark causes — so the solver neither paints nor holds a picture, which
+   is the layering §Architecture states and the reason this seam is a mark rather than a hook.
+   THE WALK IS `engine_request_dump`'S AND FOR ITS REASON: the DOM is per-flow, so one question has N true
+   answers and a channel with one slot would silently pick one. What is NOT copied from that entry is its
+   `flow_clear_host_owed` — and that omission is the decision, not an oversight. There the clear is PART of the
+   ask, because a queued row is new work the flow did not have and a member parked on a reply would otherwise
+   never run the program. Here the ask adds no work at all: a member's picture is of the state it is ALREADY
+   in, so clearing a host-owed mark would re-admit to the pick a member that still cannot progress, and the
+   scheduler would step it, get FLOW_STEP_OWED back, and re-mark it — which is the re-admission
+   engine_sched_slice deleted from the top of every slice after it measured 1.76 million COW swaps with not one
+   flow finishing. A member waiting on the host is photographed when the host answers it.
+   AN ASK OVER A DRAINED FRONTIER IS A QUESTION NOBODY IS LEFT TO ANSWER, and it is a DCHECK for
+   engine_request_dump's reason exactly: the host would read an empty directory as a document that produced no
+   worlds rather than as a question that arrived after every timeline had finished. */
+void engine_request_paint(void) {
+    int n, i;
+
+    DCHECK(g_sess_live, "an image of every world was asked of an instance with no live session — there is no "
+                        "scheduler to hand the thread back with a member standing, so no mark could ever be "
+                        "discharged and the host would wait for pictures nobody is going to take");
+    n = flow_count();
+    DCHECK(n > 0,
+           "an image of every world was asked of a document whose every timeline had already finished — there "
+           "is no member left to be switched in, so the only world a host can render from here is the "
+           "baseline, which is the very reach main.c's qjs_paint residual says this ask exists to widen");
+    for (i = 0; i < n; i++) flow_set_paint_owed(flow_at(i));
+}
+
 /* THE OPERATION BECOMES THIS FLOW'S NEXT PROGRAM. Not a call: a peer answers by RUNNING a program, and every one
    of these is the page's own code — an IDL getter, a page's setter, a page's function — which a C activation
    has no flow base under. Queued with the flow switched in, so the operands the program reads are written into
@@ -11520,6 +11552,35 @@ static int engine_sched_slice(void) {
                host's WFQ reads it for exactly that. Cumulative across steps: the host wants the document's
                total, not the last slice's. */
             g_switches++;
+        }
+        /* THE IMAGE THIS MEMBER OWES THE HOST, TAKEN BEFORE IT STEPS — @PERWORLD, asked for by
+           engine_request_paint and discharged HERE because this is the one line in the engine where a member
+           is switched in, its COW and DOM deltas are applied, `flow_running()` names it, and it has not yet
+           executed an instruction. Everything above this point is the scheduler's own turn (the seeding, the
+           pick, the swap, solve_flow_begin) — the same boundary ENGINE_NO_STRAY is declared at just below —
+           so the world the host is about to render is this member's and nothing of this step is in it yet.
+           IT IS A YIELD AND NOT A HOOK, which is the whole of why the solver grows no painter. The host that
+           asked is the party that renders: it gets the thread back with this member standing and calls its own
+           `qjs_paint`, which is the entry that already performs a render and already names the world it
+           rendered (main.c's paint_world_name reads flow_running()). Nothing crosses this seam but the turn.
+           AT MOST ONE IMAGE IS UN-DRAINED BY CONSTRUCTION, because there is no image on this side of the seam
+           at all. The mark is cleared on the line the thread is handed over, so the member is stepped normally
+           at the next slice and no member can be handed over twice for one ask — which is what makes the ask
+           terminate on a frontier that keeps forking: a fork inherits no mark, so the extra returns this ask
+           costs are exactly the members alive when it was made.
+           IT CHANGES NO RANK AND TRUNCATES NOTHING. The pick has already chosen this member under the one WFQ
+           order; this line does not promote it, does not reorder the frontier and does not decide that any
+           work will not happen — §scheduler's razor is satisfied in its own terms, since the frontier the next
+           slice resumes on is byte-identical and `cur` is carried in the same static every other yield uses.
+           THE HOST'S RENDER BURNS THIS THREAD, AND THAT IS THE EXISTING MISATTRIBUTION RATHER THAN A NEW ONE.
+           A slice already returns to a host that routes records, provides replies and answers requests on this
+           same thread, and the next slice's `quantum_thread_us()` reading already carries all of it into the
+           aging charge of whichever member is stepped next. A page render is a LARGER instance of that, not a
+           different one — and it is paid only by a host that asked for pictures. */
+        if (flow_paint_owed(cur)) {
+            flow_clear_paint_owed(cur);
+            g_sess_cur = cur;
+            return ENGINE_STEP_YIELD;
         }
         {
             /* AGING IS CHARGED IN THREAD TIME, not in steps, and the difference is what a step MEANS.

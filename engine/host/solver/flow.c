@@ -4082,6 +4082,41 @@ void flow_clear_host_owed_all(void) {
     frontier_rank_changed();
 }
 
+/* THE IMAGE A MEMBER OWES THE HOST — @PERWORLD; see flow.h for what the mark means and why it is a flag where
+ * the host-owed mark above is a generation.
+ *
+ * NEITHER SETTER NOR CLEARER RAISES `frontier_rank_changed`, AND THAT IS THE LOAD-BEARING DIFFERENCE FROM THE
+ * PAIR DIRECTLY ABOVE. Those two raise it because a host-owed mark is a term of the ranking: it takes a member
+ * out of the ELIGIBLE SET, so the WFQ's answer — "the best eligible flow" — changes when one is laid down or
+ * lifted, and the two consumers that cache on that generation were measurably wrong in opposite directions
+ * until it was raised. This mark is not in the eligible set, not in flow_weight and not in flow_pick's filter:
+ * a member that owes an image is picked exactly when it would have been picked without one. Raising the
+ * generation here would tell the preempt hook and the value-yield assertion that the ranking moved when
+ * nothing about it did, which is a claim about the frontier that is not true. */
+void flow_set_paint_owed(Flow *f) {
+    DCHECK(f != NULL, "an image was asked of no flow at all — engine_request_paint walks the frontier's own "
+                      "members, so a NULL here is that walk having read past its end");
+    f->paint_owed = 1;
+}
+
+void flow_clear_paint_owed(Flow *f) {
+    DCHECK(f != NULL, "an image ask was discharged against no flow at all");
+    /* A DISCHARGE THAT WAS NEVER ASKED FOR IS A SCHEDULER HANDING THE HOST A TURN NOBODY BOUGHT. The one caller
+       is the slice, which clears the mark it has just tested, so an unmarked flow reaching here is that test
+       and this clear having come apart — and the cost is a YIELD per pick for the rest of the session, which
+       from outside is a scheduler that stopped stepping. */
+    DCHECK(f->paint_owed,
+           "an image ask was discharged on a member that owed none — the slice tests the mark and clears the "
+           "one it tested, so this is a discharge reached by a route that never took the ask, and every later "
+           "pick of this member hands the thread back for a picture no host asked for");
+    f->paint_owed = 0;
+}
+
+int flow_paint_owed(const Flow *f) {
+    DCHECK(f != NULL, "whether a member owes the host an image was asked of no member");
+    return f->paint_owed;
+}
+
 /* THE ONE ORDER, ASKED THROUGH ONE SCAN. Four questions are put to the ranking — who should be running, who
    the running flow is defending against, what this document's best weight is for the host's Level-1 order, and
    which member the pager gives up first — and they are a SEED, FILTERS and a DIRECTION over ONE comparator,
