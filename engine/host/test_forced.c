@@ -19095,12 +19095,17 @@ static void css_numeric_type_selftest(void)
  * but it IS a member of the frontier this fixture's document is then run over, which is the same accounting
  * `--popover`'s own rows are an arithmetic over. */
 
-/* Run one §3.2.25 probe and answer with WHAT THE CONVERSION DID, as a string this file can compare.
+/* RUN ONE PROBE BODY IN THIS REALM AND ANSWER WITH WHAT IT DID, as a string this file can compare.
    A THROW IS AN ANSWER AND NOT A LOST ROW: an arm test that sends a value to the wrong arm fails either by
    CONVERTING it — a different value reaches the body — or by REFUSING it, which is §3.2.17 Dictionary types'
    step 1 TypeError over a value that is not undefined, null or an Object. A probe that could only see the
-   first would report the second as an abort with no row name on it, and the two are the SAME defect. */
-static char *tf_union_answer(JSContext *ctx, const char *body)
+   first would report the second as an abort with no row name on it, and the two are the SAME defect.
+   IT IS NOT THE §3.2.25 FAMILY'S OWN RUNNER ANY MORE, and the generalisation is one parameter rather than a
+   second copy: `name` is the FLOW's name and the name every diagnostic below reports, so a second family
+   asking the same question — run this source as a flow, hand back its answer or the name of what it threw —
+   ROUTES here instead of writing a second right answer to it. Two runners is the shape that drifts, and the
+   drift would be in the one place a failure is read from. */
+static char *tf_flow_answer(JSContext *ctx, const char *name, const char *body)
 {
     char src[2048];
     JSValue *flow;
@@ -19111,22 +19116,22 @@ static char *tf_union_answer(JSContext *ctx, const char *body)
 
     n = snprintf(src, sizeof src,
                  "(function(){ try { %s } catch (e) { return 'throws ' + e.name; } })()", body);
-    CHECK(n > 0 && (size_t)n < sizeof src, "a §3.2.25 union probe's source did not fit its buffer");
-    flow = JS_FlowNew(ctx, src, strlen(src), "union-arm", 0);
-    CHECK(flow != NULL, "a §3.2.25 union probe could not create a flow");
+    CHECKF(n > 0 && (size_t)n < sizeof src, "a `%s` probe's source did not fit its buffer", name);
+    flow = JS_FlowNew(ctx, src, strlen(src), name, 0);
+    CHECKF(flow != NULL, "a `%s` probe could not create a flow", name);
     for (;;) {
         r = JS_FlowResume(ctx, flow, &res);
-        CHECK(r != JS_FLOW_DETACHED,
-              "a §3.2.25 union probe's flow detached — no probe holds a top-level await");
+        CHECKF(r != JS_FLOW_DETACHED,
+               "a `%s` probe's flow detached — no probe holds a top-level await", name);
         if (r == 0) break;
     }
-    CHECK(!JS_IsException(res),
-          "a §3.2.25 union probe threw PAST its own catch — the throw did not come out of the conversion the "
-          "row is about, so the row cannot be read either way");
+    CHECKF(!JS_IsException(res),
+           "a `%s` probe threw PAST its own catch — the throw did not come out of the algorithm the row is "
+           "about, so the row cannot be read either way", name);
     s = JS_ToCString(ctx, res);
-    CHECK(s != NULL, "a §3.2.25 union probe's answer would not stringify");
+    CHECKF(s != NULL, "a `%s` probe's answer would not stringify", name);
     out = strdup(s);
-    CHECK(out != NULL, "a §3.2.25 union probe: OOM copying its answer");
+    CHECKF(out != NULL, "a `%s` probe: OOM copying its answer", name);
     JS_FreeCString(ctx, s);
     JS_FreeValue(ctx, res);
     JS_FlowFree(ctx, flow);
@@ -19151,7 +19156,7 @@ static void tf_union_row(JSContext *ctx, const char *type, const char *tmpl, con
            "format, so a second conversion specifier reads an argument that was never pushed");
     n = snprintf(body, sizeof body, tmpl, value);
     CHECK(n > 0 && (size_t)n < sizeof body, "a §3.2.25 union row's body did not fit its buffer");
-    got = tf_union_answer(ctx, body);
+    got = tf_flow_answer(ctx, "union-arm", body);
     CHECKF(!strcmp(got, want),
            "Web IDL §3.2.25 Union types over `%s`: the value `%s` answered \"%s\" where the step that decides "
            "it answers \"%s\" — %s", type, value, got, want, why);
@@ -19323,7 +19328,7 @@ static void union_arm_selftest(JSContext *ctx)
        'T'/'F' are step 8's two answers; '?' is anything else, which is the shape a §6.12 step that returned
        early would leave and which a `? 'T' : 'F'` coding would have folded into 'F'. */
     {
-        char *got = tf_union_answer(ctx,
+        char *got = tf_flow_answer(ctx, "union-arm",
             "var el = document.createElement('div');"
             "el.setAttribute('popover', 'auto');"
             "document.body.appendChild(el);"
@@ -19357,6 +19362,241 @@ static void union_arm_selftest(JSContext *ctx)
                "before step 8", got);
         free(got);
     }
+}
+
+/* ─── HTML §4.12.5.1.16 "Pixel manipulation" — THE ROUND TRIP, OVER SIXTEEN BYTES THIS FILE WROTE ─────────────
+ *
+ * §4.12.5's `getContext` and §4.12.5.1's context install six members and no drawing member at all, so the ONE
+ * observable the pixel road adds is a byte written through `putImageData` and read back through
+ * `getImageData`. That round trip needs a realm and a document and nothing else — no viewport, no navigable,
+ * no rasterizer — which is why it is a C selftest here rather than a statement in the shared documents.
+ *
+ * WHAT IT COSTS THE FIXTURE, ENUMERATED RATHER THAN ASSERTED. It adds NO element to `HTML`, `HTML_MIN`,
+ * `HTML_COLD` or `HTML_POPOVER`, so `document.styleSheets`' length, every derived index over the element
+ * lists and every elimination chain are byte-identical across this commit; it adds NO probe row, so `asked`
+ * does not move and answered/asked stays comparable across it. Its canvas is created DETACHED and never
+ * appended, so no selector, no walk and no paint reaches it. It queues NO task — `getContext`, `putImageData`,
+ * `getImageData` and `reset` enqueue nothing — so unlike the §6.12 family above it leaves NO member on the
+ * frontier the fixture's document is then explored over. Its heap is one 4x4 bitmap (64 bytes), one 2x2
+ * bitmap (16) and three 2x2 ImageData (16 each).
+ *
+ * IT RUNS BEFORE THE SCHEDULER, WHICH IS THE WHOLE REASON IT IS HERE AND NOT IN A DOCUMENT. The smoke spends
+ * its entire CPU budget before its document's statements run out, so a statement's position in the body
+ * decides whether it is ever answered; a selftest at the head of main is answered on every run that links.
+ *
+ * EVERY CHARACTER OF EVERY EXPECTED ANSWER IS DERIVED FROM THE STANDARD AND FROM BYTES THIS FILE WROTE, and
+ * NO CHECKSUM VALUE IS ASSERTED ANYWHERE. The source ImageData is sixteen literal bytes; the bitmap is four
+ * by four; so the sixty-four bytes of every dump below are known before the engine runs, and a reader can
+ * re-derive each field with the section's own steps and no build. The two roads' fields, in order:
+ *
+ *   PIXEL ROAD (a 4x4 canvas, `alpha` defaulting true). `s` is R G / B W and `t` is four (255,255,255,0).
+ *    1 `1111`                — §4.12.5's `"2d"` table cell is "Return the same object as was returned the last
+ *                              time the method was invoked with this same first argument", so the context
+ *                              IDENTITY is observable; then the `canvas` back-reference, `isContextLost()`
+ *                              being a computed false, and the default `alpha` being true.
+ *    2 `..../..../..../....` — the creation algorithm's step 5 *set bitmap dimensions*, whose own step 1 is
+ *                              *reset the rendering context to its default state* — HTML §4.12.5.1.3's own
+ *                              step 1, "Clear canvas's bitmap to
+ *                              transparent black."
+ *    3 `RG../BW../..../....` — the THREE-ARGUMENT `putImageData(s, 0, 0)`, which §4.12.5.1.16 defines as *put
+ *                              pixels from an ImageData onto a bitmap* "given imageData, this's output
+ *                              bitmap, dx, dy, 0, 0, imageData's width, and imageData's height". It also says
+ *                              the write went THROUGH the `data` view: `s`'s bytes were assigned into
+ *                              `s.data`, so a `data` accessor that answered a copy would leave this all dots.
+ *    4 `.../.RG/.BW`         — `getImageData(-1, -1, 3, 3)`, which is step 6's second half: "Set the pixels
+ *                              values of imageData for areas of the source rectangle that are outside of the
+ *                              output bitmap to transparent black." THE REFUTATION IS A CLAMP: an
+ *                              implementation that narrowed the source rectangle to its in-bounds part would
+ *                              answer `RG./BW./...`, moving the destination offset with it, which is the one
+ *                              thing the step may not do.
+ *    5 `..../..../..../....` — HTML §4.12.5.1.3's `reset()`. IT IS NOT VACUOUS because field 3 left four coloured
+ *                              pixels standing: a `reset()` that did nothing answers field 3 here.
+ *    6 `..../..../..W./....` — THE DIRTY SUB-RECTANGLE, `putImageData(s, 1, 1, 1, 1, 1, 1)`, and the one
+ *                              assertion a shorter round trip cannot make. HTML §4.12.5.1.16's step 10 is "For all integer values
+ *                              of x and y where dirtyX <= x < dirtyX + dirtyWidth and dirtyY <= y < dirtyY +
+ *                              dirtyHeight, set the pixel with coordinate (dx + x, dy + y) in bitmap to the
+ *                              color of the pixel at coordinate (x, y) in the imageData data structure's
+ *                              bitmap" — so the dirty rectangle is read in the SOURCE's coordinates and the
+ *                              destination is `dx` plus that same `x`. Three wrong readings are three
+ *                              different answers: ignoring the dirty rectangle gives `..../.RG./.BW./....`;
+ *                              treating it as a DESTINATION offset — source (0,0) to (dx+dirtyX, dy+dirtyY) —
+ *                              gives `..../..../..R./....`; taking its EXTENT but not its ORIGIN gives
+ *                              `..../.R../..../....`.
+ *    7 `.G../.W../..../....` — `putImageData(s, 0, 0, 2, 0, -1, 2)`, the COMPOSITION of steps 3 and 5.
+ *                              HTML §4.12.5.1.16's step 3 is "If dirtyWidth is negative, then let dirtyX be dirtyX + dirtyWidth, and let
+ *                              dirtyWidth be equal to the absolute magnitude of dirtyWidth", so dirtyX
+ *                              becomes 1 and dirtyWidth 1, and the source column read is 1 — G over W. An
+ *                              engine missing step 3 reaches HTML §4.12.5.1.16's step 9 — "either dirtyWidth or
+ *                              dirtyHeight are negative or zero, then return" — and writes NOTHING; one that took the absolute
+ *                              magnitude WITHOUT moving dirtyX has dirtyX 2 and dirtyWidth 1, which step 7
+ *                              clamps to 0 and step 9 then returns on — also nothing. Both wrong readings
+ *                              answer `..../..../..../....`, which is why this field is a negative width and
+ *                              not a negative x.
+ *    8 `.G../.W../..../....` — step 9 itself, `putImageData(s, 0, 0, -5, 0, 3, 2)`, AND THERE IS NO `reset()`
+ *                              BEFORE IT: "return without affecting any bitmaps" is observable as field 7
+ *                              SURVIVING, where a cleared bitmap would be indistinguishable from a write that
+ *                              never happened. HTML §4.12.5.1.16's step 5 is "If dirtyX is negative, then let dirtyWidth be
+ *                              dirtyWidth + dirtyX, and let dirtyX be 0", so dirtyWidth becomes -2 and step 9
+ *                              returns. An engine that clamped dirtyX to zero without subtracting from
+ *                              dirtyWidth writes the whole source and answers `RG../BW../..../....`.
+ *    9 `ww../ww../..../....` — `t` on an `alpha` TRUE context. Every byte arrives unchanged, INCLUDING the
+ *                              zero alpha, which is what makes the opaque road's field 3 below a statement
+ *                              about `alpha` rather than about `putImageData`.
+ *   10 `I`                   — HTML §4.12.5.1.16's getImageData step 1, "If either the sw or sh arguments are
+ *                              zero, then throw an
+ *                              "IndexSizeError" DOMException", read off the thrown object's `name`.
+ *   11 `RG/BW`               — `getImageData(2, 2, -2, -2)`. A negative side is not an error: HTML §4.12.5.1.16's
+ *                              getImageData step 5 names the
+ *                              four corners (sx, sy), (sx+sw, sy), (sx+sw, sy+sh), (sx, sy+sh), which for a
+ *                              negative side is the same rectangle extending the other way — so this reads
+ *                              (0,0) to (1,1) and answers the source that was just put there. An engine that
+ *                              threw, or that read from (2,2), answers `../..`.
+ *
+ *   OPAQUE ROAD (a 2x2 canvas, `alpha` false). §4.12.5.1.2's arm, which no default context can reach.
+ *    1 `111111`              — the five members of `getContextAttributes()`'s returned dictionary in
+ *                              §4.12.5.1.2's own order, each at its declared default but `alpha`; then that
+ *                              two calls answer two DIFFERENT objects, which is a dictionary being returned by
+ *                              value and is why a page that writes to one does not see its write in the next.
+ *    2 `KK/KK`               — HTML §4.12.5.1.2: "the bitmap of such a context starts off as opaque black
+ *                              instead of
+ *                              transparent black". The pixel road's field 2 is the same moment on the other
+ *                              arm, so the pair is what says this is read from `alpha` and not a constant.
+ *    3 `WW/WW`               — the same `t` as the pixel road's field 9, whose alpha is ZERO in every pixel.
+ *                              HTML §4.12.5.1.2: "the putImageData() method effectively ignores every fourth byte in its
+ *                              input". Three readings, three answers — forcing gives `WW/WW`, not forcing
+ *                              gives `ww/ww`, and a `putImageData` that did nothing leaves `KK/KK`.
+ *    4 `KK/KK`               — `reset()` on this arm clears to OPAQUE black, which is HTML §4.12.5.1.3 step 1
+ *                              reading the same `alpha`.
+ *    5 `../..`               — `getImageData(4, 4, 2, 2)`, wholly outside a 2x2 bitmap. HTML §4.12.5.1.16's
+ *                              getImageData step 6's transparent
+ *                              black is a property of the returned IMAGE DATA and not of the bitmap, so an
+ *                              engine that filled a fresh ImageData from the context's `alpha` answers
+ *                              `KK/KK` here and passes every other field of this road.
+ *
+ * WHAT THESE ROWS DO NOT REACH, so a reader does not take them for more than they are: no drawing member
+ * exists to exercise, `createImageData` is a named residual at the component and is deliberately not called
+ * here, and nothing below asks for a `colorSpace` or a `colorType` other than the two defaults — a
+ * `display-p3` round trip has no conversion to make in this build and would assert the identity.
+ *
+ * THE ROWS' OWN CONTROL IS THEIR ABSENCE: against an artifact built before the pixel road landed,
+ * `grep -c '@CANVAS2D'` answers 0 rather than a row of wrong characters, which is the same control
+ * `@PAINT canvas-mark` carries beside it. Neither row prints a constant of this file dressed as a
+ * measurement: `pixel-road` and `opaque-road` are LABELS and `answer=` is the whole of the observation. */
+
+/* ONE PIXEL AS ONE CHARACTER AND ONE IMAGEDATA AS ONE STRING, with `/` between its rows so that a wrong ROW
+   STRIDE is visible as a wrong shape rather than as a permuted blur. The alphabet is closed and `?` is in it,
+   so a colour outside it is an answer this file can print rather than a row that silently reads as something
+   else. Written ONCE and concatenated into both roads: two copies of the observable is the pair that drifts,
+   and a road whose dump differs from its neighbour's is measuring something else. */
+#define TF_CANVAS_DUMP_JS \
+    "var p=function(d,i){var r=d[i*4],g=d[i*4+1],b=d[i*4+2],a=d[i*4+3];" \
+    "if(a===0)return (r|g|b)===0?'.':(r===255&&g===255&&b===255?'w':'?');" \
+    "if(a!==255)return '?';" \
+    "if((r|g|b)===0)return 'K';" \
+    "if(r===255&&g===0&&b===0)return 'R';" \
+    "if(r===0&&g===255&&b===0)return 'G';" \
+    "if(r===0&&g===0&&b===255)return 'B';" \
+    "if(r===255&&g===255&&b===255)return 'W';" \
+    "return '?';};" \
+    "var D=function(m){var o='',d=m.data,y,z;" \
+    "for(y=0;y<m.height;y++){if(y)o+='/';" \
+    "for(z=0;z<m.width;z++)o+=p(d,y*m.width+z);}return o;};" \
+    "var M=function(n){var m=new ImageData(2,2),d=m.data,i;" \
+    "for(i=0;i<16;i++)d[i]=n[i];return m;};"
+
+/* The two sources, written out byte for byte rather than computed: `S` is R G / B W in row-major order, and
+   `T` is four pixels of (255,255,255,0) — opaque-white bytes carrying a ZERO alpha, which is the one shape
+   that separates §4.12.5.1.2's alpha-false arm from a `putImageData` that simply copied. */
+#define TF_CANVAS_S_JS "var s=M([255,0,0,255,0,255,0,255,0,0,255,255,255,255,255,255]);"
+#define TF_CANVAS_T_JS "var t=M([255,255,255,0,255,255,255,0,255,255,255,0,255,255,255,0]);"
+
+static void canvas_pixel_selftest(JSContext *ctx)
+{
+    static const char WANT_PIXEL[] =
+        "1111|..../..../..../....|RG../BW../..../....|.../.RG/.BW|..../..../..../....|"
+        "..../..../..W./....|.G../.W../..../....|.G../.W../..../....|ww../ww../..../....|I|RG/BW";
+    static const char WANT_OPAQUE[] = "111111|KK/KK|WW/WW|KK/KK|../..";
+    char *got;
+
+    got = tf_flow_answer(ctx, "canvas-pixel",
+        TF_CANVAS_DUMP_JS
+        "var c=document.createElement('canvas');"
+        /* THE BITMAP IS SIZED FROM THE CONTENT ATTRIBUTES AT CONTEXT CREATION — the creation algorithm's
+           step 5 is "Set bitmap dimensions to the numeric values of target's width and height content
+           attributes" — so the write must precede `getContext`. `setAttribute` rather than the reflected IDL
+           attribute, because what this row is about is the pixel road and not the reflection: a reflected
+           setter that stopped writing the attribute would be a different row's failure. */
+        "c.setAttribute('width','4');c.setAttribute('height','4');"
+        "var x=c.getContext('2d');"
+        TF_CANVAS_S_JS
+        TF_CANVAS_T_JS
+        "var g='';"
+        "g+=(x===c.getContext('2d')?'1':'0');"
+        "g+=(x.canvas===c?'1':'0');"
+        "g+=(x.isContextLost()===false?'1':'0');"
+        "g+=(x.getContextAttributes().alpha===true?'1':'0');"
+        "g+='|'+D(x.getImageData(0,0,4,4));"
+        "x.putImageData(s,0,0);"
+        "g+='|'+D(x.getImageData(0,0,4,4));"
+        "g+='|'+D(x.getImageData(-1,-1,3,3));"
+        "x.reset();"
+        "g+='|'+D(x.getImageData(0,0,4,4));"
+        "x.putImageData(s,1,1,1,1,1,1);"
+        "g+='|'+D(x.getImageData(0,0,4,4));"
+        "x.reset();x.putImageData(s,0,0,2,0,-1,2);"
+        "g+='|'+D(x.getImageData(0,0,4,4));"
+        "x.putImageData(s,0,0,-5,0,3,2);"
+        "g+='|'+D(x.getImageData(0,0,4,4));"
+        "x.reset();x.putImageData(t,0,0);"
+        "g+='|'+D(x.getImageData(0,0,4,4));"
+        "try{x.getImageData(0,0,0,4);g+='|?';}"
+        "catch(e){g+='|'+(e.name==='IndexSizeError'?'I':'!'+e.name);}"
+        "x.reset();x.putImageData(s,0,0);"
+        "g+='|'+D(x.getImageData(2,2,-2,-2));"
+        "return g;");
+    CHECKF(!strcmp(got, WANT_PIXEL),
+           "HTML §4.12.5.1.16 \"Pixel manipulation\" over a 4x4 canvas answered\n  %s\nwhere its own steps "
+           "answer\n  %s\nRead it by FIELD — the eleven are separated by `|` and each is derived at this "
+           "function's banner, which also names what each wrong answer means. A field of the right SHAPE with "
+           "wrong characters is a pixel road; a field of the wrong LENGTH is a row stride or a rectangle "
+           "size; `?` is a colour outside the alphabet and `!` is a throw whose name follows it. Field 6 is "
+           "the dirty sub-rectangle and is the only one no shorter round trip can make: `..../.RG./.BW./....` "
+           "there is a dirty rectangle ignored, `..../..../..R./....` is one read as a DESTINATION offset, "
+           "and `..../.R../..../....` is its extent taken without its origin", got, WANT_PIXEL);
+    printf("@CANVAS2D pixel-road answer=%s\n", got);
+    free(got);
+
+    got = tf_flow_answer(ctx, "canvas-opaque",
+        TF_CANVAS_DUMP_JS
+        "var c=document.createElement('canvas');"
+        "c.setAttribute('width','2');c.setAttribute('height','2');"
+        "var y=c.getContext('2d',{alpha:false});"
+        TF_CANVAS_T_JS
+        "var a=y.getContextAttributes(),g='';"
+        "g+=(a.alpha===false?'1':'0');"
+        "g+=(a.desynchronized===false?'1':'0');"
+        "g+=(a.colorSpace==='srgb'?'1':'0');"
+        "g+=(a.colorType==='unorm8'?'1':'0');"
+        "g+=(a.willReadFrequently===false?'1':'0');"
+        "g+=(y.getContextAttributes()!==a?'1':'0');"
+        "g+='|'+D(y.getImageData(0,0,2,2));"
+        "y.putImageData(t,0,0);"
+        "g+='|'+D(y.getImageData(0,0,2,2));"
+        "y.reset();"
+        "g+='|'+D(y.getImageData(0,0,2,2));"
+        "g+='|'+D(y.getImageData(4,4,2,2));"
+        "return g;");
+    CHECKF(!strcmp(got, WANT_OPAQUE),
+           "HTML §4.12.5.1.2 \"The canvas settings\"' alpha-false arm over a 2x2 canvas answered\n  %s\nwhere "
+           "§4.12.5.1.2 and §4.12.5.1.16 answer\n  %s\nThe five fields are derived at this function's banner. "
+           "A `0` in field 1 names the member at that position, in §4.12.5.1.2's own order — alpha, "
+           "desynchronized, colorSpace, colorType, willReadFrequently — and the SIXTH is that two calls "
+           "answered the SAME object, which a dictionary returned by value never may. `../..` in field 2 or 4 "
+           "is a clear that did not read `alpha`; `ww/ww` in field 3 is the fourth byte of the input NOT "
+           "being ignored; `KK/KK` in field 5 is a fresh ImageData filled from the context's `alpha` rather "
+           "than with transparent black", got, WANT_OPAQUE);
+    printf("@CANVAS2D opaque-road answer=%s\n", got);
+    free(got);
 }
 
 /* FILE API §6.3 Packaging data — the one part of the FileReader that is a PURE FUNCTION of four values, and
@@ -22091,6 +22331,14 @@ int main(int argc, char **argv) {
        reach. Here rather than earlier because three of its four families need the DOCUMENT: the realm above
        is what installs `document`, `Response` and §6.12's three members. */
     union_arm_selftest(ctx);
+    /* HTML §4.12.5.1.16's ROUND TRIP, immediately after the union arms and for the same two reasons: it needs
+       a REALM and the DOCUMENT, which the block above establishes, and it must stand BEFORE the time-travel
+       hooks below so its canvas and its bitmap belong to the pre-boot baseline rather than to whichever flow
+       happens to run first — the position idb_store_selftest states in its own words. It is NOT grouped with
+       the `@RASTER`/`@PAINT` rows beneath it, which would suggest a dependency that does not exist: nothing
+       on the pixel road reaches core/graphics at all, `putImageData` being a copy the standard defines rather
+       than a fill. See the function for what its two rows cost the fixture, which is nothing it can measure. */
+    canvas_pixel_selftest(ctx);
     /* core/paint/display_list.h's ORDER, its growth and its environment union — the half of the ink a fixture
        can hold to an answer with no document under it. It needs only a realm, to NAME an environment fact on a
        length; see the function for why the painter beside it is not exercised here. */
