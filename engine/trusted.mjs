@@ -560,6 +560,12 @@ async function main() {
       tag: `${docId}/s${++serial}`,
       say: (rec) => child.stdin.write(rec + '\n'),
       ready: [], answered: new Map(), stalled: false, live: true, result: null, quantum: null,
+      /* THE KEYS THE NEXT WRITE TO THIS CHILD PAYS OFF — see `track` for why a fetch key is released by the
+         WRITE and not by the work. It is a list beside `ready` rather than a field on each record because only
+         `workFetch` composes a record that answers a REQUEST key, and it composes all four of them through one
+         door (`settle`); every other producer here answers a RECORD key or nothing, and `flush` drains both
+         lists whole in the same step, so the two cannot come apart. */
+      releaseOnWrite: [],
       /* BOTH HALVES OF HOW A CHILD ENDED, BECAUSE ONE OF THEM IS THE ONLY WAY AN ABORT IS VISIBLE FROM HERE.
          Node's `close` carries `(code, signal)` and a process killed by a signal has code `null`; taking the
          first argument alone therefore reported a `SIGABRT` — which is what every DCHECK in the engine ends
@@ -596,16 +602,46 @@ async function main() {
     return e;
   }
 
-  /* ONE ANSWER PER REQUEST, EVER — keyed on what the request IS, and per INSTANCE because two instances
-     legitimately park on the same address. A pending entry stays on the register until it is filled and the
-     child re-states the whole bill whenever it changes, so without this a re-announced request would be
-     fetched again and `qjs_provide` would be called twice for one park, which is engine_provide's
-     answered-twice abort. It is not a bound: nothing is dropped, and a request this zone never answers keeps
-     being reported until the frontier stalls on it. */
+  /* ONE ANSWER PER OWED REQUEST — keyed on what the request IS, and per INSTANCE because two instances
+     legitimately park on the same address. Membership means AN ANSWER IS OWED AND HAS NOT BEEN WRITTEN, which
+     is what makes a re-announcement while the work is in flight cost nothing; a key is released by the write
+     that pays it (`flush`), never by the work completing, because the child re-announces the moment it is let
+     go and an early release would have this zone fetch the same address twice for one park.
+     THIS USED TO READ `ONE ANSWER PER REQUEST, EVER` AND IT IS REWRITTEN RATHER THAN DELETED, because the
+     reasoning under it is what a reader re-derives: it said "a pending entry stays on the register until it is
+     filled and the child re-states the whole bill whenever it changes, so without this a re-announced request
+     would be fetched again and `qjs_provide` would be called twice for one park, which is engine_provide's
+     answered-twice abort". Every clause of that is true of ONE PARK and the conclusion does not follow,
+     because a re-announced PAIR is not a re-announced PARK. solver/engine.c's join skips an entry that
+     carries a value or a refusal (`skip = (!u || PEND_HAVE_VALUE || declined)`), so a pair on the bill names a
+     record that is outstanding NOW; solver/pending_index.h holds EVERY unanswered record for a pair (a fork
+     SHARES records and refs the index — solver/pending.c's `pending_index_ref`), so `engine_provide` fills all
+     of them and none survives its own answer. A pair therefore returns to the bill only as a FRESH park, which
+     solver/engine.c names in its own words at the join ("several flows park on the same request — a candidate
+     re-fire re-runs the exploring flow's fetches"), and engine_provide's answered-twice `DFAILF` is about "a
+     host answering one it was shown ONCE, twice" — never about one it was shown twice.
+     THE COST OF THE RETIRED READING WAS THE SESSION. A permanent memo answers the first announcement and is
+     SILENT on every later one, so the frontier keeps parks this zone will not work while the zone's own queue
+     is empty — and `flush`'s all-stalled arm then tells every child that nothing more is coming, which is the
+     one thing that ends a live session. MEASURED on a mirrored real site: 91 pairs announced and answered, 85
+     of them re-announced as fresh parks one round later, none worked, and the child aborted at
+     test_forced.c's `abi_stalled` with 24 script loads still on its register. extension/bridge.js — the
+     SHIPPED pump — holds no such memo and answers every line of every bill, which is the behaviour the engine
+     is built for; this host was the one that differed. */
   const track = (e, key, work) => {
     busy++;
     e.answered.set(key, work.then((v) => v, raise).then(() => { busy--; retryHeld(); flush(); }));
   };
+
+  /* WHICH KEYS NAME A REQUEST AND WHICH NAME A RECORD, STATED ONCE — the two have different lifetimes and the
+     difference is the whole of the correction above. A `req:<id>` names ONE record (the id is the rendezvous
+     inside that instance, minted per request), so it can never be re-announced after it is answered; a
+     `<method><TAB><url>` names a REQUEST that any number of records may park on, so it can. They are told
+     apart by a TAB rather than by a convention that could drift: RFC 9110 §5.6.2 "Tokens" excludes it from a
+     method and URL Standard §4.4 "URL parsing" removes every ASCII tab from an address, so a fetch key always
+     holds exactly one and a request key can hold none. */
+  const fetchKey = (method, url) => `${method}\t${url}`;
+  const isFetchKey = (key) => key.includes('\t');
 
   /* A DOCUMENT LOAD, WHICH IS A DIFFERENT DECISION FROM A FETCH AND IS MADE HERE FOR BOTH OF ITS CALLERS —
      §7.4.5's load for a navigable this instance holds, and the load that roots a PEER. Both are HTML §7.4.5
@@ -707,6 +743,14 @@ async function main() {
 
   const workFetch = async (e, method, destination, initiator, provenance, pinned, credentials, url) => {
     const abs = new URL(url, e.docUrl).href;
+    /* EVERY ANSWER THIS FUNCTION HAS LEAVES THROUGH ONE DOOR, AND THE DOOR IS WHAT RELEASES THE KEY. Pushing
+       the record and remembering the key are ONE act here rather than two statements a later arm could take
+       half of: this function has four exits — a method refusal, the two shapes of a firing refusal, and the
+       reply — and an arm that queued a record without naming its key would leave that pair permanently owed,
+       which is exactly the state the `track` banner above records as having cost a session. The release itself
+       happens at the WRITE (`flush` drains this list beside `ready`), because the pair is still owed while its
+       answer is only queued. */
+    const settle = (rec) => { e.ready.push(rec); e.releaseOnWrite.push(fetchKey(method, url)); };
     /* THE PRODUCER'S VOCABULARY, CHECKED BEFORE IT IS ACTED ON. solver/engine.h declares exactly two initiator
        tokens and exactly three provenance tokens, and an unknown one would be routed by whichever arm of the
        tests below happened to be written as the else — which is the defaulted-field defect landing on a
@@ -754,7 +798,7 @@ async function main() {
          the only way a wait can be spent badly: not at all. The flow keeps its park AND gets the arm that runs
          its failure path, which is the whole of what §Solver-half's both-arms means for an outcome nobody
          observed. */
-      e.ready.push(declineRequest(method, url,
+      settle(declineRequest(method, url,
                           `${method} ${abs} — ${methodRefusal.reason}. The chokepoint is GET-only by ` +
                            'ABSENCE (SECURITY.md §Network), so this address can only be DERIVED and reported, ' +
                            'never issued; answering it with a GET\'s body would be a wrong answer rather than ' +
@@ -814,7 +858,7 @@ async function main() {
       const refusal = ZONE.safeFetchFiringRefusal({ url: abs, destination, provenance, pinned,
                                                     docReach: e.docReach, credentialed: false, headers: null });
       if (!refusal) {
-        e.ready.push(declineRequest(method, url,
+        settle(declineRequest(method, url,
                             `${method} ${abs} — ${raw.refusal.reason}. The chokepoint DECLINED to make this ` +
                              'request: no browser refuses it, so there is nothing to hand the flow back and a ' +
                              'network error would tell it the server was unreachable. The flow stays PARKED, ' +
@@ -822,7 +866,7 @@ async function main() {
                              'is not a gap in the report but IS the report'));
         return;
       }
-      e.ready.push(declineRequest(method, url,
+      settle(declineRequest(method, url,
                             `${method} ${abs} — ${raw.refusal.reason}. This origin's egress policy refuses ` +
                             `it on \`${refusal}\`, which names the SIGNAL and the VALUE that held it: pass ` +
                            '`--explore <origin>` to permit every value of every signal at that host, ' +
@@ -834,8 +878,8 @@ async function main() {
       return;
     }
     const rec = replyRecord(raw, `the ${provenance} ${destination || 'data'} load ${abs}`);
-    e.ready.push(['provide', method, url, b64(rec ? JSON.stringify(rec.meta) : 'null'),
-                  rec ? b64(rec.bytes) : ABSENT].join('\t'));
+    settle(['provide', method, url, b64(rec ? JSON.stringify(rec.meta) : 'null'),
+            rec ? b64(rec.bytes) : ABSENT].join('\t'));
   };
 
   /* ── WRITING, WHICH IS THE ONE THING THIS ZONE DOES ON ITS OWN CLOCK ──────────────────────────────────────
@@ -858,6 +902,11 @@ async function main() {
     for (const i of instances) {
       if (!i.live || !i.stalled || !i.ready.length) continue;
       for (const rec of i.ready.splice(0, i.ready.length)) i.say(rec);
+      /* AND THE PAIRS THIS WRITE PAID ARE OWED NO LONGER. The child re-announces its whole bill the moment it
+         is let go, so this is the first instant at which a fresh park on one of these addresses is a request
+         this zone has not answered — see `track`. It is drained WHOLE, exactly as `ready` is and in the same
+         step, because every key on it accompanies a record that has just gone out. */
+      for (const key of i.releaseOnWrite.splice(0, i.releaseOnWrite.length)) i.answered.delete(key);
       i.say('go');
       i.stalled = false;
       moved = true;
@@ -865,6 +914,30 @@ async function main() {
     if (moved || busy) return;
     const live = instances.filter((i) => i.live);
     if (!live.length || !live.every((i) => i.stalled)) return;
+    /* NOTHING IN FLIGHT, NOTHING QUEUED — AND SO NOTHING MAY STILL BE OWED, WHICH IS THE ONE THING THIS ARM
+       ASSERTS BEFORE IT SPEAKS. The sentence below tells every child that what it is parked on is something
+       this zone WILL NOT SUPPLY, and that is a statement about POLICY. It is only true if this zone answered
+       every pair it was shown; a fetch key still in `answered` here says the opposite — an answer is owed,
+       nothing is in flight to produce it and nothing is queued to deliver it, so the refusal about to go out
+       is this zone's own accounting reported as a decision. THE TWO TAKE OPPOSITE WORK and the child cannot
+       tell them apart: `test_forced.c`'s `abi_stalled` prints this zone's words because the party that refused
+       is the party that knows why, so a wrong one is read as a policy working and the frontier's parks are
+       filed as requests somebody declined.
+       IT IS SCOPED TO FETCH KEYS AND NOT TO THE WHOLE MAP, because a `req:<id>` may legitimately stand here:
+       `askOperation` records one with an already-resolved promise and no `busy` of its own, so a cross-agent
+       read waiting on a peer that is itself stalled is a real state of a live multi-instance session and is
+       not this defect. */
+    for (const i of live) {
+      const owed = [...i.answered.keys()].filter(isFetchKey);
+      if (owed.length)
+        throw new Error(`instance [${i.tag}] is about to be told that nothing more is coming for it while ` +
+                        `this zone still owes ${owed.length} fetch answer(s) it has neither produced nor ` +
+                        'queued — an answer is owed, nothing is in flight and nothing is ready, so this ' +
+                        'zone\'s own accounting is what is holding that frontier rather than any policy it ' +
+                        'applied. A key is released by the write that pays it (`flush`), so one standing ' +
+                        'here is a record that was answered and never written, or a pair whose answer was ' +
+                        `written without releasing it: ${owed.slice(0, 8).join(', ')}`);
+    }
     for (const i of live) {
       i.say(decline(
         'every instance of this session is stalled at once, every queue is empty and this zone has no work ' +
@@ -1192,7 +1265,11 @@ async function main() {
                         'the pending line verbatim and this zone splits it where the engine joined it, so a ' +
                         'short record is the two grammars having parted');
       const [, method, destination, initiator, provenance, pinned, credentials, url] = f;
-      const key = `${method}\t${url}`;
+      const key = fetchKey(method, url);
+      /* AN ANSWER IS ALREADY OWED FOR THIS PAIR — it is in flight, or it is queued for the next write. Either
+         way this announcement names the SAME outstanding record, because the child has not been let go since
+         the answer was composed, so working it a second time would fetch one address twice for one park. Once
+         the write goes out the key is released and the next announcement is a FRESH park (see `track`). */
       if (e.answered.has(key)) return;
       track(e, key, workFetch(e, method, destination, initiator, provenance, pinned, credentials, url));
     } else if (f[0] === 'request') {
