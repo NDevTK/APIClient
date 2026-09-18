@@ -22590,10 +22590,17 @@ static void box_paint_text_selftest(JSContext *ctx, lxb_html_document_t *dom)
  * reaches `element_view_bounding_box_px` with something to measure. It is a SEPARATE landing and not a
  * larger version of this one, because that road runs the whole of core/layout through
  * `used_value_border_edge_px` and core/layout/flow_position.h where this one runs none of it.
- * HOW ITS ABSENCE WOULD SHOW: every `DISPLAY_MARK_FILL_RECT` this host emits carries four exact zeros in its
- * rectangle, and no run of it lays a `DISPLAY_MARK_BORDER` anywhere.
- * RETIREMENT: this record goes when all three of core/paint/box_paint.c's arms have appended a mark this
- * file asserts, and loses a clause as each of the two does. */
+ * HOW ITS ABSENCE WOULD SHOW: every `DISPLAY_MARK_FILL_RECT` THE PAINTER emits carries four exact zeros in
+ * its rectangle, and no run of it lays a `DISPLAY_MARK_BORDER` anywhere. The qualifier is load-bearing and
+ * was missing: the SEED below is a `DISPLAY_MARK_FILL_RECT` this file plants with a non-zero origin, so the
+ * unqualified form was refuted by the very function it stands over.
+ * RETIREMENT: this record goes when all FOUR of core/paint/box_paint.c's arms have appended a mark this file
+ * asserts, and loses a clause as each of the two named above does. IT WAS WRITTEN AS THREE AND THE COUNT WAS
+ * MADE STALE BY A LANDING RATHER THAN BY ANYTHING WRONG WITH IT: `bp_context_text` is a fourth arm and CSS
+ * 2.1 §E.2 "Painting order"'s step 7.2.1 is what it lays, and the shape assertion below now asserts its
+ * marks — so the text arm is discharged and the two this record names are what is left. A COUNT OF ARMS IN A
+ * RETIREMENT CONDITION IS THE SAME DEFECT THE ASSERTIONS BELOW WERE REPAIRED FOR, one level up: it is a fact
+ * about how many arms the painter HAS, which a peer moves without reading this record at all. */
 static void box_paint_selftest(JSContext *ctx, lxb_html_document_t *dom)
 {
     /* A VALUE THE ENTRY CANNOT PRODUCE — its counter starts at zero and rises by one per visit, so no walk of
@@ -22603,6 +22610,13 @@ static void box_paint_selftest(JSContext *ctx, lxb_html_document_t *dom)
     DisplayMark seed;
     lxb_dom_element_t *root;
     unsigned offers = TF_BP_UNWRITTEN;
+    /* THE SHAPE OF THE TAIL, COUNTED RATHER THAN ASSUMED — see the CHECK below for why this block states the
+       list's SHAPE and no longer its LENGTH. `bp_strays` is the number this file is entitled to assert about;
+       `bp_glyphs` is DOCUMENT-DEPENDENT and is printed and never asserted, for the reason `@PAINTTEXT`'s own
+       `base` field states one function up. `bp_canvas_env` is the union over step 1's own four coordinates,
+       which is the claim the whole-list union used to carry and can no longer. */
+    size_t bp_i, bp_glyphs = 0, bp_strays = 0;
+    CssEnvSet bp_canvas_env = CSS_ENV_NONE;
     bool ok;
 
     root = lxb_dom_document_element(lxb_dom_interface_document(dom));
@@ -22651,16 +22665,42 @@ static void box_paint_selftest(JSContext *ctx, lxb_html_document_t *dom)
        carries inner quotation marks, which a comment takes verbatim and a C string literal does not — and a
        title escaped one `\` short closes its literal early, which is a citation edit that stops the whole
        shared tree compiling rather than a citation that is merely wrong. */
-    CHECK(dl.n == 2u && dl.v[1].kind == DISPLAY_MARK_FILL_CANVAS,
-          "CSS 2.1 §E.2 \"Painting order\"'s step 1 laid other than exactly ONE `DISPLAY_MARK_FILL_CANVAS` "
-          "over a document whose ROOT declares a background. TWO OPPOSITE CLAIMS STAND ON THIS ONE COUNT. A "
-          "list of ONE — the seed alone — is `bp_canvas_region` having answered FALSE for a document `main` "
-          "gave a root navigable, which is this engine reporting that the canvas it is presenting on has no "
-          "rendered region. A list of THREE is CSS 2.1 §14.2 \"The background\"'s second sentence broken: "
-          "\"The root element does not paint this background again\" is the whole of what stops "
-          "core/paint/box_paint.c's step 2 arm laying the same colour a second time at the root's border box, "
-          "and that arm is reached for the root on every walk. No other element of any of this fixture's four "
-          "documents declares a background in MARKUP, and this runs before any script of theirs has");
+    /* THE TAIL'S SHAPE. Index 0 is the seed and index 1 is step 1's fill; everything after them is CSS 2.1
+       §E.2's step 7.2.1 "the text", whose marks this walk lays one per character. A mark of any OTHER kind
+       there is what the assertion below is about, and counting it is what lets that assertion name the
+       offender instead of a length. */
+    for (bp_i = 2; bp_i < dl.n; bp_i++) {
+        if (dl.v[bp_i].kind == DISPLAY_MARK_GLYPH) bp_glyphs++;
+        else bp_strays++;
+    }
+    /* THE SHAPE OF THE LIST AND NOT ITS LENGTH, WHICH IS THE ONE THING THIS BLOCK IS ENTITLED TO ASSERT.
+       `TF_CANVAS_INK`'s own record two thousand lines up states the rule this violates: `box_paint_selftest`
+       runs over WHICHEVER of the four documents `main` selected, so "a fact asserted there has to hold for
+       all four or the assertion is about whichever document the runner happened to pick". A COUNT of marks is
+       a fact about page CONTENT — `HTML` carries an `<h1>` with text in it and the other three carry none — so
+       a length asserted here was a claim about painting ORDER resting on a claim about one document's body,
+       and it read as sound for exactly as long as no document had any text. THE SHAPE HOLDS FOR ALL FOUR: a
+       document with no text makes the loop above vacuous and a document with text adds only glyphs. */
+    CHECKF(dl.n >= 2u && dl.v[1].kind == DISPLAY_MARK_FILL_CANVAS && bp_strays == 0u,
+           "CSS 2.1 §E.2 \"Painting order\" laid a list of %zu whose index 1 is not step 1's single "
+           "`DISPLAY_MARK_FILL_CANVAS`, or whose tail holds %zu mark(s) that are not step 7.2.1's text "
+           "beside %zu that are. THREE OPPOSITE CLAIMS STAND ON THIS ONE SHAPE. A list of ONE — the seed "
+           "alone — is `bp_canvas_region` having answered FALSE for a document `main` gave a root navigable, "
+           "which is this engine reporting that the canvas it is presenting on has no rendered region. A "
+           "NON-CANVAS mark at index 1 is step 1 having been offered after something else, which is the "
+           "ORDER of CSS 2.1 §E.2's own list broken at its first item. A STRAY of any kind after index 1 is "
+           "the double-paint: CSS 2.1 §14.2 \"The background\" says \"The root element does not paint this "
+           "background again\" and CSS 2.1 §E.2's step 2 says the same thing in its own words, \"background "
+           "color of element unless it is the root element\" — and that arm is reached for the root on every "
+           "walk, so what stops it is those two sentences and nothing else. It lays a "
+           "`DISPLAY_MARK_FILL_RECT`, which is a stray here. No other element of any of this fixture's four "
+           "documents declares a background in MARKUP, and this runs before any script of theirs has. THE "
+           "OTHER WAY TO REACH A STRAY IS A DIFF AND NOT A DEFECT: an arm that lays an inline box's own "
+           "background or border inside step 7.2.1 appends a `DISPLAY_MARK_FILL_RECT` or a "
+           "`DISPLAY_MARK_BORDER` there legitimately, and THIS EXPECTATION IS THEN THE THING TO MOVE — to "
+           "the ORDER those marks must stand in relative to the text, which is what §E.2's step 7.2.1 "
+           "states and what a bare count never did",
+           dl.n, bp_strays, bp_glyphs);
     CHECK(dl.v[1].rect[0].px == 0.0 && dl.v[1].rect[1].px == 0.0 &&
           dl.v[1].rect[2].px == viewport_icb_width(ctx).px &&
           dl.v[1].rect[3].px == viewport_icb_height(ctx).px &&
@@ -22673,16 +22713,29 @@ static void box_paint_selftest(JSContext *ctx, lxb_html_document_t *dom)
           "get-the-bounding-box answers \"a DOMRect object whose x, y, width and height members are zero\" "
           "for every element of a document no navigable presents, so four zeros were the only rectangle in "
           "this engine's ink until this one. A zero HERE is a presented document whose viewport has no size");
-    CHECK(display_list_env(&dl) == (CSS_ENV_BIT(CSS_ENV_ICB_WIDTH) | CSS_ENV_BIT(CSS_ENV_ICB_HEIGHT)),
-          "the ink over the fixture's own active document reports the wrong set of ENVIRONMENT FACTS. "
-          "core/paint/display_list.h makes that set the union over every coordinate of every mark, and this "
-          "list holds exactly two: a seed whose width this file minted from the ICB's, and step 1's fill, "
-          "whose two extents core/frame/viewport.h derives from BOTH of the initial containing block's "
-          "dimensions. The answer that must not appear here is `CSS_ENV_NONE`, which core/paint/display_list.h "
-          "calls the POSITIVE statement that this ink is the same ink under every arm — true of every mark "
-          "this host laid before this one, because a document no navigable presents has no viewport for its "
-          "ink to be a function of, and a LIE about a page background, since it says resizing the window "
-          "repaints nothing");
+    /* STEP 1'S OWN FACTS, ASKED OF STEP 1'S OWN MARK AND NOT OF THE LIST — which is the same move the CHECK
+       above makes and for the same reason. core/paint/display_list.h makes a list's set the UNION over every
+       coordinate of every mark, so a whole-list equality is a claim about every mark the document happened to
+       generate: step 7.2.1's glyphs read `glyph.origin_x`, `glyph.origin_y` and `glyph.em` instead of a
+       rectangle, and core/paint/display_list.c states at that arm that all three move under a picked fact —
+       the coordinates because a line's BREAKS are a function of CSS 2.1 §10.1's initial containing block, and
+       the em because css-fonts-4 §2.5 lets a percentage make a computed `font-size` a function of the root
+       element's. So a document with text unions in facts the seed and the canvas never carried, and it is
+       RIGHT to: the whole-list equality was a count of the document's own ink wearing an environment claim.
+       WHAT IS ASSERTED INSTEAD IS STRICTLY MORE PRECISE THAN WHAT IT REPLACES rather than weaker: the old
+       form pinned the UNION and this pins step 1's four coordinates, which is the half of that union this
+       block derives. The seed's own fact is unchanged and is asserted above, where `dl.v[0]` is. */
+    for (bp_i = 0; bp_i < 4; bp_i++) bp_canvas_env |= dl.v[1].rect[bp_i].env;
+    CHECKF(bp_canvas_env == (CSS_ENV_BIT(CSS_ENV_ICB_WIDTH) | CSS_ENV_BIT(CSS_ENV_ICB_HEIGHT)),
+           "CSS 2.1 §E.2 \"Painting order\"'s step 1 laid a fill whose four coordinates report the "
+           "ENVIRONMENT FACT SET %u. Its two extents come from core/frame/viewport.h and are therefore a "
+           "function of BOTH of the initial containing block's dimensions, and its origin is the canvas "
+           "origin, which is neither — so the union is exactly those two. The answer that must not appear "
+           "here is `CSS_ENV_NONE`, which core/paint/display_list.h calls the POSITIVE statement that this "
+           "ink is the same ink under every arm — true of every mark this host laid before this one, because "
+           "a document no navigable presents has no viewport for its ink to be a function of, and a LIE "
+           "about a page background, since it says resizing the window repaints nothing",
+           (unsigned)bp_canvas_env);
     CHECK(dl.v[1].color.space == CSS_COLOR_SPACE_SRGB && dl.v[1].color.a == 1.0 &&
           dl.v[1].color.c[0] == 0.0 && dl.v[1].color.c[1] == 1.0 && dl.v[1].color.c[2] == 0.0,
           "CSS 2.1 §E.2's step 1 filled the canvas with a colour other than the one `TF_CANVAS_INK` declares. "
@@ -22714,9 +22767,30 @@ static void box_paint_selftest(JSContext *ctx, lxb_html_document_t *dom)
        PRESENTS DECLARED INK THE ROW IS ABSENT ENTIRELY — `grep -c '@PAINT canvas-ink'` answers 0, not a row
        of zeros — which is this row's own control and is the same one `@PAINT canvas-mark` carries. Both
        numbers are plain doubles the viewport computed, so neither can become concolic and silently never be
-       written. */
+       written.
+       `env` IS THE WHOLE LIST'S UNION AND IS THEREFORE DOCUMENT-DEPENDENT, which the assertion above is not:
+       core/paint/display_list.h makes a list's set the union over every mark, so a document with text unions
+       in the facts step 7.2.1's glyphs carry and this field reads higher for it than for a document with
+       none. It keeps that meaning rather than being narrowed to the canvas mark's own set, because narrowing
+       it would change what a reader already keyed on this row reads — which is the same rule that made the
+       extent a second row rather than a field on the first. The ASSERTED fact is the canvas mark's four
+       coordinates and it is stated above; this field is a diagnostic beside it. */
     printf("@PAINT canvas-ink w=%g h=%g env=%u\n", dl.v[1].rect[2].px, dl.v[1].rect[3].px,
            (unsigned)display_list_env(&dl));
+    /* AND THE TAIL'S SHAPE, AS A THIRD ROW — the number the assertion above deliberately does NOT assert.
+       `glyphs` is DOCUMENT-DEPENDENT for the reason `@PAINTTEXT`'s `base` field is: of the four documents
+       `main` selects between, `HTML` carries an `<h1>` with text and the other three carry none, so a count
+       is a claim about which one this invocation picked and a SHAPE is a claim about CSS 2.1 §E.2 "Painting
+       order". Printing it is how the count a reader may still want survives its assertion being withdrawn —
+       a comparison across two artifacts of one document, which is what a row is for, rather than an
+       expectation that is wrong for three documents out of four. `strays` is the asserted number and is
+       printed beside it so that a reader sees the zero the CHECK stands on rather than inferring it from the
+       absence of a crash. ON AN ARTIFACT BUILT BEFORE CSS 2.1 §E.2's step 7.2.1 LAID A MARK THE ROW IS
+       ABSENT ENTIRELY — `grep -c '@PAINT tail'` answers 0, not a row of zeros — which is this row's own
+       control and is the same one every `@PAINT` row here carries. Both numbers are plain `size_t` counters
+       this function derived by walking a list it holds, so neither can become concolic and silently never be
+       written. */
+    printf("@PAINT tail n=%zu glyphs=%zu strays=%zu\n", dl.n, bp_glyphs, bp_strays);
 
     /* AND THE PIXELS — this document's own ink composited onto a bitmap the size of the region CSS 2.1
        §2.3.1 "The canvas" establishes for it. Everything above is about the LIST; this is the first
@@ -22728,13 +22802,16 @@ static void box_paint_selftest(JSContext *ctx, lxb_html_document_t *dom)
        bitmap is (0, 255, 0, 255) and the count of them is the surface's own area — a number this file
        derives from the document and from nothing the rasterizer computed. */
     {
-        DisplayList one;
+        DisplayList one, pre;
         RasterSurface surf;
         DisplayListRasterCount rc;
         CssPx region[4];
         uint8_t px[4];
-        uint64_t sum_one, sum_all;
-        size_t green = 0;
+        uint64_t sum_one, sum_pre, sum_all;
+        /* `green_all` IS THE WHOLE LIST'S COUNT AND IS NOT DERIVED FROM THE DOCUMENT — it is the other ROUTE's
+           number, and what it is compared against is `document_paint`'s. `green` below still IS derived, over
+           the canvas mark alone, which is the one surface whose every pixel this file can name. */
+        size_t green = 0, green_all = 0;
         double dpr = viewport_device_pixel_ratio(ctx);
         int dw = 0, dh = 0, x, y;
 
@@ -22791,23 +22868,56 @@ static void box_paint_selftest(JSContext *ctx, lxb_html_document_t *dom)
         sum_one = raster_surface_checksum(&surf);
         raster_surface_free(&surf);
 
-        /* AND THE WHOLE LIST, SEED AND ALL, WHICH MUST COME TO THE SAME BYTES. The canvas mark is laid LAST
-           and is OPAQUE, so source-over leaves nothing of whatever preceded it — which is a statement about
-           the compositing arithmetic and about the order together, and is independent of what the seed
-           above happens to be. */
+        /* AND THE SEED AND THE CANVAS TOGETHER, WHICH MUST COME TO THE CANVAS'S OWN BYTES — the PREFIX of the
+           list up to and including step 1's fill, which is the whole of the population this claim was ever
+           about. The canvas mark is the LAST mark of that prefix and is OPAQUE, so source-over leaves nothing
+           of whatever preceded it: a statement about the compositing arithmetic and about the order together,
+           independent of what the seed above happens to be.
+           IT IS A PREFIX AND NOT THE WHOLE LIST BECAUSE STEP 1 IS NOT THE LAST MARK OF A DOCUMENT WITH TEXT.
+           CSS 2.1 §E.2 "Painting order" lays step 1 first and step 7.2.1's text at item SEVEN, so a glyph is
+           composited OVER the canvas and survives into the image by design — asserting the whole list against
+           the canvas alone was asserting that this document has nothing on it, which is a fact about page
+           CONTENT and not about compositing, and it held only while every document this fixture parsed was
+           empty. The prefix carries the order claim for all four documents. */
+        display_list_init(&pre);
+        display_list_append(&pre, &dl.v[0]);
+        display_list_append(&pre, &dl.v[1]);
+        raster_surface_init(&surf, dw, dh);
+        display_list_raster(&pre, dpr, &surf, &rc);
+        sum_pre = raster_surface_checksum(&surf);
+        raster_surface_free(&surf);
+        display_list_free(&pre);
+        CHECKF(rc.marks == 2u,
+               "%zu of the seed-and-canvas prefix's TWO marks were composited. Both are FILL kinds and "
+               "core/paint/display_list_raster.c has an arm for each, so a shortfall here is that component "
+               "having stopped counting a kind it still draws", rc.marks);
+        CHECKF(sum_one == sum_pre,
+               "the seed-and-canvas prefix and the canvas mark alone rendered different bytes (%llu against "
+               "%llu). An opaque fill laid last covers every pixel of the surface, so the seed this file "
+               "planted before CSS 2.1 §E.2's walk cannot survive into the image — and if it did, the ORDER "
+               "between the list and the bitmap is what is wrong rather than the seed",
+               (unsigned long long)sum_one, (unsigned long long)sum_pre);
+
+        /* AND THE WHOLE LIST, WHICH IS THIS BLOCK'S OWN ROUTE TO THE IMAGE `document_paint` ASSEMBLES BELOW.
+           Its checksum is not compared against anything derived — a checksum of a multi-megabyte bitmap is
+           not a number anybody derived — and its green count is not either: both exist to be held against the
+           ENTRY's, which is the only comparison that can see a difference the counts above cannot express. */
         raster_surface_init(&surf, dw, dh);
         display_list_raster(&dl, dpr, &surf, &rc);
+        for (y = 0; y < dh; y++)
+            for (x = 0; x < dw; x++) {
+                raster_surface_get(&surf, x, y, px);
+                if (px[0] == 0 && px[1] == 255 && px[2] == 0 && px[3] == 255) green_all++;
+            }
         sum_all = raster_surface_checksum(&surf);
         raster_surface_free(&surf);
         CHECKF(rc.marks == dl.n,
-               "%zu of the list's %zu marks were composited — every kind in this list is a FILL and neither "
-               "has an arm that declines", rc.marks, dl.n);
-        CHECKF(sum_one == sum_all,
-               "the whole list and its canvas mark alone rendered different bytes (%llu against %llu). An "
-               "opaque fill laid last covers every pixel of the surface, so the seed this file planted "
-               "before CSS 2.1 §E.2's walk cannot survive into the image — and if it did, the ORDER between "
-               "the list and the bitmap is what is wrong rather than the seed",
-               (unsigned long long)sum_one, (unsigned long long)sum_all);
+               "%zu of the list's %zu marks were composited. core/paint/display_list_raster.c carries an arm "
+               "for every kind core/paint/display_list.h declares and counts the mark in each of them — the "
+               "glyph arm says so in its own words, that a U+0020 \"is a mark here that contributes to "
+               "neither `spans` nor `pixels`\" — so a shortfall is a kind that reached the list through "
+               "`display_list_append` and has no arm, which `-Wswitch` names at that file before it can "
+               "happen", rc.marks, dl.n);
 
         /* THE ROW. `green` is the assertion above restated as something a reader can compare across two
            artifacts, and `sum` is the reftest oracle core/graphics/raster_surface.h names — neither this
@@ -22867,31 +22977,55 @@ static void box_paint_selftest(JSContext *ctx, lxb_html_document_t *dom)
                   "painter meeting an operand it could not compute, and the two calls are over one document "
                   "and one realm — so this is the entry handing the walk a different root or a different "
                   "context rather than anything about the document");
-            CHECKF(dc.offers == offers && dc.marks == 1u,
+            /* THE ENTRY'S OWN INK AGAINST THIS BLOCK'S, AS A DIFFERENCE AND NOT A LITERAL. `dl` is this
+               block's walk with ONE seed under it and `dc.marks` is the entry's walk with none — the entry
+               starts an empty list, walks the same root in the same realm and rasterizes the whole of it, so
+               `dl.n - 1` is the number and no count of the document's own text appears in the arithmetic. A
+               LITERAL here was a fact about page CONTENT: it read ONE while every document this fixture
+               parsed had nothing on it but its root's background, and `HTML`'s `<h1>` made it four higher
+               without any component changing its answer. */
+            CHECKF(dc.offers == offers && dc.marks == dl.n - 1u,
                    "the entry's walk offered %u step(s) and composited %zu mark(s) where this block's offered "
-                   "%u and laid ONE. The mark count is a count of the DOCUMENT'S OWN INK with no seed under "
-                   "it — the CHECK above holds this list to `dl.n == 2`, a seed this file planted plus CSS 2.1 "
-                   "§E.2's step 1 — so a different number here is the entry composing a list this block did "
-                   "not", dc.offers, dc.marks, offers);
+                   "%u and laid %zu beside the seed. The mark count is a count of the DOCUMENT'S OWN INK with "
+                   "no seed under it, and the two walks are over one root in one realm — so a different "
+                   "number here is the entry composing a list this block did not",
+                   dc.offers, dc.marks, offers, dl.n - 1u);
             for (ay = 0; ay < ds.height; ay++)
                 for (ax = 0; ax < ds.width; ax++) {
                     raster_surface_get(&ds, ax, ay, apx);
                     if (apx[0] == 0 && apx[1] == 255 && apx[2] == 0 && apx[3] == 255) dgreen++;
                 }
-            CHECKF(dgreen == (size_t)dw * (size_t)dh,
-                   "%zu of the entry's %zu pixels are the opaque `#00ff00` `TF_CANVAS_INK` declares, where "
-                   "the hand-assembled rendering of the same ink has all of them. CSS 2.1 §E.2's step 1 is "
-                   "\"background color of element over the entire canvas\" and CSS 2.1 §2.3.1 makes that "
-                   "canvas infinite, so the fill reaches every pixel whatever its own rectangle says — a "
-                   "shortfall is the canvas EXTENSION not having happened on this road",
-                   dgreen, (size_t)dw * (size_t)dh);
+            /* THE TWO ROUTES' GREEN, HELD TO EACH OTHER RATHER THAN TO THE SURFACE'S AREA. The ABSOLUTE
+               claim — that every pixel is `TF_CANVAS_INK`'s `#00ff00` — belongs to the CANVAS MARK ALONE and
+               is asserted where that surface is, above; it is derivable there because the mark's kind makes
+               it cover the whole surface and its colour is a constant this file wrote. It is FALSE of a
+               rendered DOCUMENT the moment that document has text on it, because CSS 2.1 §E.2 "Painting
+               order"'s step 7.2.1 lays glyphs over the canvas in CSS 2.1 §14.1 "Foreground color: the 'color'
+               property"'s colour, which is not the background's — so the absolute form asserted that this
+               page is blank, which is a fact about CONTENT and held only while every document here was.
+               WHAT THE COMPARISON STILL BUYS BESIDE THE CHECKSUM BELOW is one independent read of the same
+               two images: a checksum agreeing while the pixel populations differ is a collision, and this is
+               the one number that would see it. */
+            CHECKF(dgreen == green_all,
+                   "%zu of the entry's %zu pixels are the opaque `#00ff00` `TF_CANVAS_INK` declares where "
+                   "this block's own rendering of the same document has %zu. The two are ROUTES to one image "
+                   "— this block reads the region, the ratio, the root and the list separately and the entry "
+                   "reads them itself — so a disagreement is the component that exists to make that assembly "
+                   "once having made a different one",
+                   dgreen, (size_t)dw * (size_t)dh, green_all);
             sum_doc = raster_surface_checksum(&ds);
-            CHECKF(sum_doc == sum_one,
+            /* AND THE BYTES, AGAINST THE WHOLE LIST AND NOT AGAINST THE CANVAS MARK ALONE — which is the
+               STRONGER claim and not merely the one that survives text. `sum_one` is one mark's image and
+               `sum_all` is this block's whole walk with the seed under it, so an equality with the entry's
+               image says BOTH that the two routes agree AND that the seed this file planted did not survive
+               into either — the second being a statement the canvas-alone comparison could not make at all,
+               because the surface it names has no seed in it to survive. */
+            CHECKF(sum_doc == sum_all,
                    "the entry and this block rendered DIFFERENT BYTES for one document (%llu against %llu). "
                    "Every assertion above compares a number; this compares the image, which is the reftest "
                    "oracle core/graphics/raster_surface.h names and the only one that can see a difference "
                    "neither the extent nor the colour count nor the mark count expresses",
-                   (unsigned long long)sum_doc, (unsigned long long)sum_one);
+                   (unsigned long long)sum_doc, (unsigned long long)sum_all);
             /* THE ROW, ON THE STDOUT THE BUILD LOG CAPTURES. Its own control is its ABSENCE: an artifact
                built before this entry existed answers 0 to `grep -c '@PAINT document'` rather than a row of
                zeros, which is the same control every other `@PAINT` row here carries. */
