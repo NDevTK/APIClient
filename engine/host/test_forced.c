@@ -20308,7 +20308,14 @@ static void raster_bytes_selftest(void)
        above, and the row exists so that a change to the quantization, to the initial bitmap or to the fill
        is visible as a MOVE rather than as a verdict. ON AN ARTIFACT BUILT BEFORE THIS BLOCK EXISTED THE ROW
        IS ABSENT ENTIRELY — a grep for `@RASTER bytes` answers 0 rather than a row of zeros, which is this
-       row's own control and is the same one `@RASTER circle` above carries. */
+       row's own control and is the same one `@RASTER circle` above carries.
+       EVERY FIELD IS A CONSTANT OR DERIVED FROM ONE, WHICH IS WHAT MAKES THE ROW ABLE TO SPEAK AT ALL. The
+       dimensions are literals this function writes and the rest are computed from them, so no field is
+       viewport- or page-derived and none can become unknown — a witness whose payload an engine can make
+       concolic is one that is never emitted, and its silence then reads as the arm not having run. It is
+       also, until an artifact carrying this component is installed, the ONLY instrument in this tree that
+       can say anything about the entry above: a binary built before core/graphics existed answers a zero
+       that means NOT COMPILED IN, which no driver can tell from an engine that read nothing. */
     printf("@RASTER bytes w=%d h=%d extent=%zu nul=%zu zeros=%zu sum=%llu\n",
            s.width, s.height, n, nul_run, painted_nuls, (unsigned long long)sum_after);
     raster_surface_free(&s);

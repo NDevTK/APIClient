@@ -105,10 +105,27 @@ void raster_surface_get(const RasterSurface *s, int x, int y, uint8_t rgba[4]);
    HOW ITS ABSENCE WOULD SHOW: a consumer outside this component that wants a rendered document's pixels can
    ask this codebase for their EXTENT and for no byte of them, so nothing anywhere renders an image of a
    document; the observation is that no host artifact and no popup surface presents one on any run.
-   WHO MAY RETIRE IT: the next diff is a cross-boundary landing whose engine half is live only after the
-   renderer artifact is BUILT AND INSTALLED, and in this project only the COORDINATOR builds. A lane may write
-   that diff and may not make it live, so this residual is a REQUEST to that actor and not work anybody is
-   merely waiting on. */
+   WHO MAY RETIRE IT, AND IT IS TWO ACTS RATHER THAN ONE. The next diff is a cross-boundary landing whose
+   engine half is live only once the renderer artifact has been BUILT and then INSTALLED, and in this project
+   the COORDINATOR is the actor for BOTH. They are separate acts and the gap between them is not small: an
+   artifact can be built and never installed, so the installed one legitimately trails the tree by a hundred
+   commits or more while every check in front of it passes. A lane may write that diff and may make neither
+   act happen, so this residual is a REQUEST addressed to that actor and never work somebody is waiting on.
+
+   AND A STAMP IS NOT EVIDENCE THAT THIS COMPONENT IS IN THE BINARY, WHICH IS THE DEFECT SHAPE THIS ROAD IS
+   MOST EXPOSED TO. An artifact's stamp can name a revision, report a clean cone and be an ancestor of the
+   tip — every artifact check this project prescribes passing — at a revision where this whole directory has
+   NO FILES AT ALL, because the component is younger than the artifact. A driver that then asks the shipped
+   binary about a surface reads a zero that means NOT COMPILED IN and is indistinguishable from the engine
+   having answered nothing. So the observation that settles it is over the artifact's own FILE LIST at its
+   stamp and never over the stamp, and a lane that cannot make that observation may not quote the binary about
+   anything here.
+
+   WHICH IS WHY THE FIXTURE ROW IS THE INSTRUMENT AND NOT SCAFFOLDING. Until an install lands, the only thing
+   in this tree that can speak about this entry is `test_forced.c`'s own row, and its payload is CONSTANTS
+   ONLY by construction: the dimensions are literals this file writes and every other number is derived from
+   them, so nothing in it is viewport- or page-derived and nothing in it can become unknown and silently fail
+   to be written. Its control is its own ABSENCE against an older artifact. */
 size_t raster_surface_bytes(const RasterSurface *s);
 
 /* A CHECKSUM OF THE WHOLE BITMAP, which is the one number a reftest oracle is actually made of: two documents
