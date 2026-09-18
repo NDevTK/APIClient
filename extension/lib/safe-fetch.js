@@ -1051,9 +1051,8 @@ function _signalVector(facts) {
    THE SECOND ARM IS A READING OF THAT SENTENCE'S OWN JUSTIFYING CLAUSE AND IT IS NAMED AS ONE, because the
    DEFINITION ("program loads only") and the PURPOSE ("a request the person's own browser would have made")
    disagree on exactly one population and this file has to answer for it. An OBSERVED request is
-   solver/engine.h's "a real load of this document makes exactly this request" — the page's own parked
-   `fetch()` or XHR, the document the browser actually navigated to — so it satisfies the PURPOSE clause
-   verbatim while not being a program load. CLAUDE.md's own rule for that disagreement is
+   solver/engine.h's "a real load of this document makes exactly this request", so it satisfies the PURPOSE
+   clause verbatim while not being a program load. CLAUDE.md's own rule for that disagreement is
    §WHERE-A-RULE'S-DEFINITION-AND-ITS-STATED-PURPOSE-DISAGREE: the purpose is the half that was checked
    against reality, because a purpose is written while looking at the hazard and a definition afterwards, to
    be tidy.
@@ -1104,8 +1103,57 @@ var _DEFAULT_ARMS = [
      the only requests that behave differently are the ones the old arm was permitting without being asked. */
   { when: [{ signal: "provenance", value: "observed" }, { signal: "doc-reach", value: "observed" }],
     why: "the page made exactly this request, in a document this browser actually navigated to — so " +
-         "relaying it is this browser being a browser; refusing it would leave the engine unable to answer " +
-         "the document's own fetch" }
+         "relaying it is this browser being a browser" }
+  /* AND NO THIRD ARM FOR A DOCUMENT'S OWN `<img>`, WHICH IS A DECISION AND NOT AN OMISSION — THE ARM THAT
+     WOULD CARRY ONE IS THE ONE DIRECTLY ABOVE, AND WHAT HOLDS IT IS A FACT THE ENGINE STATES RATHER THAN A
+     PERMISSION THIS FILE WITHHOLDS. The question arrives here and is answered here, so the next reader does
+     not re-derive it: a markup `<img src>` satisfies the PURPOSE clause on every word — the person's own
+     browser makes that request, the bytes are served identically to every visitor, nothing about this person
+     is revealed — and it is refused, which reads as a line this file drew. It is not. The arm above already
+     names exactly that request; it does not fire because the request arrives graded `derived`.
+     THE TWO WIDENINGS THAT LOOK LIKE THE FIX ARE EACH WRONG, AND FOR DIFFERENT REASONS, WHICH IS WHY BOTH
+     ARE NAMED. (1) A DESTINATION-KEYED ARM IS UNSOUND AT EVERY ENGINE STATE, because the destination signal
+     cannot separate the page loading itself from a code-composed data request: `<img src=…>` in markup,
+     `new Image().src = …` and `document.createElement("img").src = …` all arrive with the same value of
+     every signal this file reads, and the second and third are exactly what a per-origin opt-in exists to
+     gate — an image address is a first-class exfiltration channel, `new Image().src = "/api/users/" + id`.
+     Spelled `{signal:"destination", value:"image"}` it does not even survive `_signalRegistryCheck`, because
+     this signal's value space is ["program","value"] — and THAT REFUSAL POINTS AT THE DANGEROUS SPELLING:
+     `{signal:"destination", value:"value"}` passes every assert in this file and permits every data request
+     at every origin, which is the whole opt-in deleted by one arm. (2) A CONJUNCTION ARM
+     `{destination:"image"} ∧ {provenance:"observed"}` is SOUND AND INERT: no request this engine composes
+     for an image can be graded `observed`, so it would sit in the list reading as a permission and match
+     nothing for ever — `safeFetchWidenable`'s own recorded failure shape, one field over.
+     THE ENGINE-SIDE CLAIM IS A CLAIM ABOUT ANOTHER FILE AND TRAVELS WITH ITS DERIVATION RATHER THAN AS A
+     SENTENCE, because that is the half a reader must check before acting on any of this:
+       git grep -n "parser_inserted" engine/host/solver/pending.c engine/host/solver/engine.c
+     `pending_prov_compose` answers `PROV_OBSERVED` only for a park whose `parser_inserted` is set, and its
+     own DCHECK confines that flag to the two `<script>` kinds, citing HTML §4.12.1.1 "Processing model",
+     which gives a `parser document` to `script` elements and to nothing else. An `<img>` and a `<link>` park
+     through `engine_pending_resource_url`, which passes the flag as a literal 0. So the grade is not wrong
+     about §4.12.1.1; it is NARROWER than the definition `observed` states for itself, which is CLAUDE.md
+     §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS with the one bit answering "is §4.12.1.1's parser document
+     non-null" (read by `script_block_schedule` for scheduling, and script-only by the standard) and "does a
+     real load of this document make exactly this request" (read here). They agreed while `<script src>` was
+     the only markup subresource that parked, and `<link>` and `<img>` parking made them come apart.
+     WHAT THAT ALSO RETIRES, REWRITTEN RATHER THAN DELETED BECAUSE A READER WILL RE-DERIVE IT: this arm's
+     `why` used to end "refusing it would leave the engine unable to answer the document's own fetch", and
+     the comment above the list named an OBSERVED request as "the page's own parked `fetch()` or XHR". The
+     arm cannot reach either. The `fetch()`/XHR park passes the same literal 0 — its own comment reads "a
+     `fetch()` or an XHR — page code composed it" — so `observed` is unreachable for that kind BY THE DCHECK
+     above, not by accident, and the sentence was describing the population the engine most deliberately
+     excludes. Measured on one document with a `<script src>`, a `<link rel=preload>` of each kind, an
+     `<img src>`, a `fetch()` and two JS-composed images, reading the run's own `fetchCallSites`: the ONLY
+     row graded `observed` was the markup `<script src>`.
+     AND THE CONSEQUENCE FOR THIS LIST IS THAT THIS ARM IS SUBSUMED BY THE ONE ABOVE IT TODAY, which is said
+     here so that nobody deletes it as dead: `observed` implies one of the two `<script>` kinds, both of
+     which stamp `PENDING_DESTINATION_SCRIPT`, which `_isScriptLike` answers true for, which is the first
+     arm. It permits nothing the first arm does not — and it is the arm that becomes load-bearing the instant
+     the engine can state a true grade for a markup subresource, which is the next diff and is not this
+     file's. Deleting it would have to be undone by that diff.
+     RETIREMENT: this record goes when a request for a subresource the parser put in the document's own
+     markup reaches this file graded `observed`, at which point the arm above fires it, the second paragraph
+     is about a widening nobody needs and the fourth is about a sentence no longer in the file. */
 ];
 var _EXPLORED = Object.create(null);
 /* HAS A HOST SPOKEN YET. Two questions, two fields — never one value answering both, because the
