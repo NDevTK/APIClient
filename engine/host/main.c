@@ -1497,6 +1497,41 @@ static char *paint_world_name(void)
    current when the call arrives, and a host that wants one arm's picture rather than another's is asking a
    question §State-isolation's COW delta answers and this entry does not.
 
+   NAMED RESIDUAL — WHAT IS NOT COVERED. That paragraph says what this entry is; this says what a caller
+   therefore cannot ask for, because the sentence above has been read as a note about a register when it is a
+   statement about REACH. A host calls this BETWEEN two steps, so the only worlds it can ever render are the
+   ones the scheduler happened to leave switched in at a yield — and it cannot be asked for a NAMED one, nor
+   for all of them. The end of a run is the sharp case and it is not an edge: a session that answers DONE has
+   already closed, `engine_session_close` switches its last flow out, and the frontier it drained holds no
+   member to be standing in — so `paint_world_name` below reads `flow_running()` as NULL and answers the word
+   `baseline`, correctly. An `if (__FLAGS.admin)` sibling's appearance — the picture this engine exists to be
+   able to take and a browser cannot — is reachable through this entry only by luck.
+
+   WHAT THE NEXT DIFF BUILDS. An ASK recorded per live flow and discharged by the SCHEDULER with that flow
+   switched in, which is the only party that may perform that switch: a host-installed hook of
+   `engine_set_park_hook`'s shape (solver/engine.h declares the setter, this file registers, the scheduler
+   calls it) but at the OPPOSITE moment — the park's hook is called with NO flow switched in and this one must
+   be called with one. That moment already exists and is already proven: it is where `flow_emit_dump` is
+   reached, on the completion arm of a step, with `cow_apply` and `dom_apply` done. `paint_world_name` needs no
+   change there — it reads the running flow and is right for both arms today.
+
+   AND THE REGISTER HOLDS ONE IMAGE, NOT N, WHICH IS A DECISION AND NOT A DETAIL. The obvious shape — an
+   indexed register the host walks after the run — is the per-flow materialization CLAUDE.md's
+   capability-materialized-per-flow rule forbids, and the arithmetic is the argument rather than the taste:
+   `document_paint` sizes its surface from `viewport_canvas_region` times the device pixel ratio, so ONE image
+   is `4 * w * h` bytes over a top-level content area whose width is the one `core/frame/viewport.c` states,
+   and a real page's frontier is members in the thousands. The derivation, for whoever prices it rather than
+   believing this: `4 *
+   qjs_paint_width() * qjs_paint_height()` against the frontier's member count on the same document — both are
+   already published, so it is a reading and not an experiment. So the scheduler renders into THIS register
+   and returns to the host, which drains it before the next flow renders; nothing is decided not to be
+   painted, which is what CLAUDE.md's no-bounds rule asks of a per-world render, and nothing is held.
+
+   HOW ITS ABSENCE WOULD SHOW. Every image a run produces after its frontier drains names the SAME world, and
+   that name is the single word `baseline` — so a directory of them is N reads of one timeline however many
+   flows the run explored, and `qjs_paint_world` says so on every one. Observe it on the `#` world line of any
+   file `abi_paint` writes, which is where that word already reaches a reader.
+
    THE PAIR IS ORDERED, AND `qjs_paint_bytes` ENFORCES THE ORDER RATHER THAN DOCUMENTING IT. This entry is
    the one that produces, so it is the one that must run first; the flag it sets is what makes a length asked
    before any render an ABORT instead of a zero that reads exactly like the length of an empty image.
