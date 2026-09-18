@@ -62,6 +62,19 @@
  *     timing entry is the one every page has), so the first §2.1 reader installed answers about a timeline
  *     rather than about marks. §4.2 step 7.5's `buffered` flag and §5.3 step 3.3.7's dropped-entries count
  *     read that same map and are named as residuals at core/timing/performance_observer.h.
+ *   AND THAT CLAUSE UNDERSTATES ITS OWN COST BY TWO STANDARDS, WHICH IS A FACT ABOUT THE ENTRY TYPE IT NAMES
+ *     AND NOT ABOUT THIS BUFFER. Navigation Timing §5 "Creating a navigation timing entry" step 3 hands the
+ *     new entry to Resource Timing §4 "Creating a resource timing entry"'s setup-the-resource-timing-entry,
+ *     whose operand list is led by a FETCH TIMING INFO. So §5 is unreachable without PerformanceResourceTiming,
+ *     which this build does not declare, AND without that struct: `git grep -iI 'timing.info' -- engine/host`
+ *     answers only comment prose recording its absence and not one declaration. §5 steps 4 and 5 want a
+ *     document load timing info and a previous document unload timing, which core/dom/document.c and
+ *     core/frame/document_lifecycle.c each separately record this user agent as not carrying.
+ *     THE CLAUSE IS NOT WITHDRAWN — §5 is still the right companion, and it is the one every page has. What
+ *     is wrong is its PRICE: a lane dispatched at it meets two whole standards at step 3 rather than before
+ *     starting, so the clause states what must exist afterward and now also what stands between.
+ *     RETIREMENT: this goes when a fetch timing info is a struct this tree carries, because the cost it
+ *     states is then not a cost.
  *   HOW ITS ABSENCE WOULD SHOW: `performance.mark('a')` returns a real PerformanceMark and
  *     `performance.getEntriesByName('a')` is a TypeError naming the absent operation — which is the forcing
  *     function, and is what a page that stores marks and reads them back trips over.

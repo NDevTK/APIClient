@@ -80,6 +80,29 @@
  *   for load timing info to be written onto. Installing them would mean CHOOSING numbers, which is the rule
  *   core/timing/performance_entry.h already states at PERFORMANCE TIMELINE §3's `id`.
  *
+ *   AND THE MODERN `PerformanceNavigationTiming` IS REFUSED FOR A DIFFERENT REASON THAN ITS TWO OBSOLETE
+ *   SIBLINGS ABOVE, WHICH IS AN ORDER RATHER THAN A NUMBER. §8.1 and §8.2 hold their own attributes and are
+ *   refused because the moments they return would have to be CHOSEN. Navigation Timing §3.3 "The
+ *   PerformanceNavigationTiming interface" holds no attribute a page reads without an object first: every
+ *   observable is written by §5 "Creating a navigation timing entry", and a page reaches the object only
+ *   through a PERFORMANCE TIMELINE §2.1 reader. So what is refused here is the INTERFACE OBJECT, and the
+ *   reason is that installing it FIRST is a regression rather than a partial build.
+ *   THAT IS MEASURED AND NOT ARGUED, and the derivation is one command: grep the frozen mirror corpus for
+ *   the identifier and READ EACH HIT rather than counting them. The shapes that reach this name there are a
+ *   ternary on a MINIFIED GLOBAL ALIAS (`var a=this||self`, so the read is an ordinary property miss on the
+ *   global — browser/platform_names.h leaves it alone and OrdinaryGet answers `undefined`, which picks the
+ *   page's own fallback arm) and an `instanceof` nested inside a `typeof` guard on `getEntriesByType` AND
+ *   `getEntriesByName`. This build answers that conjunction false at its FIRST term, so the `instanceof`
+ *   is unreachable and the bare identifier throws NOTHING today.
+ *   INSTALL THE INTERFACE OBJECT ALONE AND THE TERNARY FLIPS TRUE, whose arm's next call is
+ *   `performance.getEntriesByType("navigation")` — which this file's NONE OF THE ABSENT MEMBERS IS SHAPED
+ *   paragraph states is a TypeError. A fallback branch that works today is abandoned for one that cannot
+ *   complete, which is CLAUDE.md's §NO-STUBS hazard with a corpus instance under it. It puts this interface
+ *   LAST in its own landing and never first: the buffer, then a §2.1 reader, then §5's entry, then the object
+ *   a page can name. A guard on a sibling capability is why the ORDER cannot be read off the name alone.
+ *   RETIREMENT: this goes when a §2.1 reader is installed, because the ordering is then a fact about the
+ *   tree rather than a claim about a diff nobody has made.
+ *
  *   RESOURCE TIMING §3.4 "Extensions to the Performance Interface"'s clearResourceTimings,
  *   setResourceTimingBufferSize and onresourcetimingbufferfull — also not the timeline's buffer. §3.4 gives the
  *   global its OWN state, a resource timing buffer size limit and a current size and a buffer-full event
