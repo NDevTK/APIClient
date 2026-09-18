@@ -400,11 +400,17 @@ static void dlr_border(const DisplayMark *m, double s, RasterSurface *surface,
  *   face that has one. So a space reaches the fill with an empty path and lays no span, and that is the same
  *   answer as a glyph nobody could draw rather than a different one: the path is what says how much ink there
  *   is, and `count->spans` beside it is what a reader distinguishes them by.
- *   `GLYPH_OUTLINE_COMPOSITE` IS A CAPABILITY THIS ENGINE HAS NOT BUILT and aborts naming it, which is
+ *   `GLYPH_OUTLINE_UNSUPPORTED` IS A CAPABILITY THIS ENGINE HAS NOT BUILT and aborts naming it, which is
  *   CLAUDE.md's category (2) rather than a broken invariant: the glyph is VALID and the decoder for it is
  *   missing. It is reachable from a document's own text, which is the same forcing function a page's throw on
- *   an absent global is — and it is not reachable from ordinary Latin text at all, because the shipped face
- *   makes every printable ASCII character a SIMPLE glyph.
+ *   an absent global is.
+ *   THIS ARM USED TO NAME THE COMPOSITE GLYPH AND IS RE-AIMED RATHER THAN DELETED, because the reasoning is
+ *   the outcome's and was never that one construct's. A composite is DECODED now — core/fonts/
+ *   glyph_outline.h walks the component graph the standard describes — so what is left in the third outcome
+ *   is the component placed by POINT ALIGNMENT rather than by an offset vector, which that header carries as
+ *   a named residual with the next diff spelled out. The crash message below names THAT, because a crash
+ *   that went on naming the composite would send its next reader to build what is already here, which is the
+ *   one failure mode CLAUDE.md gives this mechanism.
  *   `GLYPH_OUTLINE_MALFORMED` IS A `DCHECK` AND THE DIFFERENCE IS WHOSE BYTES SAID SO. core/css/font_metrics.c
  *   reads one face and it is this engine's own committed `DEFAULT_FONT_SFNT`, whose whole read is already a
  *   `CHECK` there; a page's own `@font-face` bytes do not reach it, which that file says in its own words. So
@@ -420,14 +426,17 @@ static void dlr_glyph(const DisplayMark *m, double s, RasterSurface *surface,
     raster_path_init(&p);
     r = font_metrics_glyph_outline(m->glyph.cp, m->glyph.em.px * s,
                                    m->glyph.origin_x.px * s, m->glyph.origin_y.px * s, &p, &reject);
-    if (r == GLYPH_OUTLINE_COMPOSITE)
-        DFAILF("U+%04X selected a COMPOSITE glyph and this engine has no decoder for one. "
-               "core/fonts/glyph_outline.h answers that outcome rather than crashing because a composite "
-               "glyph is a VALID glyph a good font is entitled to carry — every accented Latin letter of the "
-               "shipped face is one — so what is missing is the decoder and not a repair here. BUILD IT in "
-               "core/fonts/glyph_outline.c beside the simple arm, over OpenType 'glyf' — Glyph Data's "
-               "composite description: each component names a glyph index and a placement, and the recursion "
-               "terminates because a component's own description is read by the same entry",
+    if (r == GLYPH_OUTLINE_UNSUPPORTED)
+        DFAILF("U+%04X selected a glyph built in a way this engine has no decoder for. core/fonts/"
+               "glyph_outline.h answers that outcome rather than crashing because such a glyph is a VALID "
+               "glyph a good font is entitled to carry, so what is missing is the decoder and not a repair "
+               "here. EXACTLY ONE construct is in that outcome today and the header's residual names it: a "
+               "COMPONENT PLACED BY POINT ALIGNMENT, which OpenType 'glyf' — Glyph Data's \"Composite glyph "
+               "description\" reaches when a component's ARGS_ARE_XY_VALUES flag is CLEAR and its two "
+               "arguments are a point number in the parent and a point number in the child instead of an "
+               "offset vector. BUILD THE POINT LIST it needs: the parent's accumulated points in design "
+               "units, renumbered as each child is incorporated, which the decoder does not retain today "
+               "because it writes segments as it walks",
                (unsigned)m->glyph.cp);
     DCHECKF(r != GLYPH_OUTLINE_MALFORMED,
             "U+%04X's outline in the SHIPPED face broke a rule: %s. core/css/font_metrics.c holds exactly one "

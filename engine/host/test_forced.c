@@ -19979,9 +19979,10 @@ static uint64_t tf_raster_paint_checksum(const RasterPath *p, RasterFillRule rul
 
 /* WHY THE FACE HERE IS HAND-BUILT AND NOT THE ONE THE ENGINE SHIPS. core/fonts/default_font_data.c is a
  * GENERATED artifact, so the only thing a run of it could ever establish is what THAT BUILD'S generator last
- * emitted — and the subset it emits today carries no outline tables at all, because the whole engine had
- * nothing that rasterized when it was written. A fixture that waited for the face would therefore be a reader
- * with no data, which is the shape CLAUDE.md calls untested code wearing a completed subproblem.
+ * emitted. THIS CLAUSE ALSO READ `and the subset it emits today carries no outline tables at all` AND IS
+ * REWRITTEN RATHER THAN CUT: the shipped face carries both of them now — the `@FACE` row directly below is
+ * built out of exactly those tables — and the argument for hand-built bytes never rested on the face being
+ * empty, which is what makes the sentence survive the fact going the other way.
  *
  * SO THE BYTES BELOW ARE CONSTANTS, AND THAT IS A BETTER TEST THAN A REAL FACE RATHER THAN A SUBSTITUTE FOR
  * ONE. A real face proves a decoder agrees with whatever a foundry happened to emit; these bytes are chosen so
@@ -20095,7 +20096,7 @@ static void tf_go_expect_stream(const RasterPath *p, const double *want, size_t 
 static void glyph_outline_selftest(void)
 {
     GlyphOutlines shortf, longf, bad;
-    RasterPath unit, again, placed, empty;
+    RasterPath unit, again, placed, empty, resolved;
     unsigned char mangled[sizeof TF_GO_LOCA_SHORT];
     const char *why = NULL;
     GlyphOutlineResult r;
@@ -20157,21 +20158,29 @@ static void glyph_outline_selftest(void)
                         sizeof TF_GO_EXPECT_PLACED / sizeof *TF_GO_EXPECT_PLACED,
                         "the glyph placed at a pen position");
 
-    /* THE THREE OUTCOMES THAT ARE NOT AN OUTLINE, AND THEY ARE THREE AND NOT TWO. A glyph with no outline and
-       a glyph made of other glyphs are both PERFECTLY VALID and take opposite work from a file that lied; a
-       decoder that merged any two of them would report every space, or every accented letter, as a broken
-       font. */
+    /* A GLYPH WITH NO OUTLINE IS AN ANSWER AND NOT AN ERROR, which a face says for the space character and
+       for every format control it covers. */
     raster_path_init(&empty);
     r = glyph_outline_append(&shortf, 1, 0.0, 0.0, 1.0, &empty, &why);
     CHECKF(r == GLYPH_OUTLINE_OK && empty.n == 0 && why == NULL,
            "a glyph with no outline answered %d with %zu values appended — a face says so for the space "
            "character and for every format control it covers, so this is the common case and not an error",
            (int)r, empty.n);
-    r = glyph_outline_append(&shortf, 2, 0.0, 0.0, 1.0, &empty, &why);
-    CHECKF(r == GLYPH_OUTLINE_COMPOSITE && empty.n == 0,
-           "a composite glyph answered %d rather than naming itself a composite. It is a valid glyph this "
-           "decoder does not build yet, and a caller that could not tell it from a malformed one would read "
-           "a good font as a broken one", (int)r);
+
+    /* AND THE COMPOSITE IN THIS TABLE IS NOW DECODED, WHICH IS THE ASSERTION AND NOT A RELAXATION. Glyph 2's
+       one component names glyph 0 with an offset vector of (0, 0) and no transform, so a composite that
+       resolves correctly is INDISTINGUISHABLE from glyph 0 — and that is exactly what makes it a control
+       rather than a smoke test: the expected stream was already written down above for a different reason,
+       so no number here was chosen to make this pass. These bytes answered `GLYPH_OUTLINE_COMPOSITE` before
+       the component walk existed. */
+    raster_path_init(&resolved);
+    r = glyph_outline_append(&shortf, 2, 0.0, 0.0, 1.0, &resolved, &why);
+    CHECKF(r == GLYPH_OUTLINE_OK,
+           "the composite glyph answered %d (%s) rather than resolving to the outline of the glyph its one "
+           "component names", (int)r, why ? why : "no reason given");
+    tf_go_expect_stream(&resolved, TF_GO_EXPECT_UNIT, sizeof TF_GO_EXPECT_UNIT / sizeof *TF_GO_EXPECT_UNIT,
+                        "a composite whose one component is glyph 0 at no offset");
+
     r = glyph_outline_append(&shortf, 3, 0.0, 0.0, 1.0, &empty, &why);
     CHECKF(r == GLYPH_OUTLINE_MALFORMED && why != NULL,
            "a glyph claiming four points and carrying two flag bytes answered %d with reason \"%s\". The "
@@ -20204,14 +20213,402 @@ static void glyph_outline_selftest(void)
 
     for (i = 0, ops = 0; i < unit.n; ops++)
         i += (size_t)canvas_path_op_width((CanvasPathOp)(int)unit.v[i]);
-    printf("@GLYF glyphs=%d outlined=1 empty=1 composite=1 malformed=1 points=9 contours=2 "
+    printf("@GLYF glyphs=%d outlined=1 empty=1 composite=1 resolved=%zu malformed=1 points=9 contours=2 "
            "ops=%zu values=%zu subpaths=%zu refused=%d\n",
-           TF_GO_GLYPHS, ops, unit.n, unit.nsub, refused);
+           TF_GO_GLYPHS, resolved.n, ops, unit.n, unit.nsub, refused);
 
     raster_path_free(&unit);
     raster_path_free(&again);
     raster_path_free(&placed);
     raster_path_free(&empty);
+    raster_path_free(&resolved);
+}
+
+
+/* ---- core/fonts/glyph_outline.h — A COMPOSITE GLYPH, OUT OF BYTES THIS FILE STATES ------------------- */
+
+/* WHY THIS TABLE EXISTS BESIDE `TF_GO_GLYF` AND IS NOT MORE GLYPHS IN IT. That table's every assertion is an
+ * EXACT stream, and its short and long offset arrays exist to prove one outline table reads the same through
+ * both — adding eighteen glyphs to it would make every one of those numbers move for a reason that has
+ * nothing to do with what they assert. This table asserts a different thing entirely and almost none of it
+ * is a constant: a composite glyph places OTHER glyphs, so nearly every row below is a RELATION between a
+ * composite's stream and the stream of the simple glyph it is made of — which is an assertion no expected
+ * array can be wrong about, because both sides are produced by the run.
+ *
+ * AND THE SHIPPED FACE CANNOT STAND IN FOR IT, WHICH IS MEASURED AND NOT ASSUMED. Decoding every one of the
+ * 6253 glyphs of core/fonts/default_font_data.c finds composites four deep and 13940 component records, and
+ * NOT ONE of them sets any of the three scale flags, none is placed by point alignment, none names a glyph
+ * index out of range and none forms a cycle. So the transform half of OpenType 'glyf' — Glyph Data's
+ * "Composite glyph description" — the F2DOT14 conversion, the matrix convention, the composition order, and
+ * the flag that decides whether a component's offset is scaled — is reachable from NO character of the one
+ * face this engine ships, and a fixture that used it would be a control armed by nothing.
+ *
+ * THE OFFSET ARRAY IS THE 32-BIT FORM ONLY. Which form an offset is stored in is a question `@GLYF` already
+ * answers over one outline table through two arrays, and answering it twice would be a second copy of a
+ * settled fact rather than a second question.
+ *
+ * EVERY SCALE BELOW IS A POWER OF TWO OR ONE AND A HALF and every coordinate is a small integer, so each
+ * F2DOT14 is exact in binary floating point and every relation is an `==` rather than a tolerance. */
+
+#define TF_GC_GLYPHS 18
+
+static const unsigned char TF_GC_GLYF[] = {
+    /* 0 — SIMPLE, offset 0, 20 bytes. One contour of three on-curve points: (0,0) (100,0) (0,100). Every
+       composite below that draws anything draws this triangle or the smaller one after it, so a composite's
+       stream can be compared against a stream this same run produced. */
+    0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x64, 0x00, 0x64,   /* numberOfContours 1, bbox 0 0 100 100 */
+    0x00, 0x02, 0x00, 0x00,                                       /* endPt 2 (three points), instrLen 0 */
+    0x31, 0x33, 0x27,                                             /* flags: on-curve, then the delta forms */
+    0x64, 0x64,                                                   /* x: +100 then -100, both one byte */
+    0x64,                                                         /* y: +100, one byte */
+    /* 1 — SIMPLE, offset 20, 20 bytes. The same triangle at a tenth the size: (0,0) (10,0) (0,10). A SECOND
+       simple glyph is what makes a two-component composite's halves distinguishable from each other. */
+    0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0a, 0x00, 0x0a,
+    0x00, 0x02, 0x00, 0x00,
+    0x31, 0x33, 0x27,
+    0x0a, 0x0a,
+    0x0a,
+    /* 2 — COMPOSITE, offset 40, 16 bytes. ONE component: ARGS_ARE_XY_VALUES, glyph 0, byte arguments (0, 0),
+       no transform, no MORE_COMPONENTS. The identity case, whose stream must be glyph 0's exactly. */
+    0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,   /* numberOfContours -1, bbox unread */
+    0x00, 0x02, 0x00, 0x00, 0x00, 0x00,
+    /* 3 — COMPOSITE, offset 56, 16 bytes. Glyph 0 at byte arguments (-5, +7), which are int8 BECAUSE
+       ARGS_ARE_XY_VALUES is set and ARG_1_AND_2_ARE_WORDS is not: "If this is set, the arguments are signed
+       xy values; otherwise, they are unsigned point numbers". 0xfb read unsigned is 251 and read signed is
+       -5, so a decoder that took the byte form as unsigned lands this component 256 units to the right. */
+    0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x02, 0x00, 0x00, 0xfb, 0x07,
+    /* 4 — COMPOSITE, offset 72, 24 bytes. TWO components, which is what exercises MORE_COMPONENTS and the
+       cursor that has to survive one record to find the next: glyph 0 with WORD arguments (300, -400), then
+       glyph 1 with byte arguments (0, 0). The first record's arguments do not fit in a byte, so the two
+       records are different LENGTHS and a decoder that stepped a fixed stride would find the second one
+       inside the first one's coordinates. */
+    0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x23, 0x00, 0x00, 0x01, 0x2c, 0xfe, 0x70,               /* WORDS|XY|MORE, glyph 0, (300, -400) */
+    0x00, 0x02, 0x00, 0x01, 0x00, 0x00,                           /* XY, glyph 1, (0, 0) */
+    /* 5 — COMPOSITE, offset 96, 18 bytes. Glyph 1 under WE_HAVE_A_SCALE of 0x2000 = 0.5, at byte arguments
+       (100, 0), with NEITHER offset flag — so OpenType's stated default applies and the offset is NOT
+       scaled. */
+    0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x0a, 0x00, 0x01, 0x64, 0x00, 0x20, 0x00,
+    /* 6 — COMPOSITE, offset 114, 18 bytes. BYTE FOR BYTE GLYPH 5 WITH ONE BIT SET: SCALED_COMPONENT_OFFSET
+       (0x0800) in the high half of the flags. "If the SCALED_COMPONENT_OFFSET flag is set, then the x and y
+       offset values are deemed to be in the component glyph's coordinate system, and the scale
+       transformation is applied to both values", so this one's 100 becomes 50 and glyph 5's does not — and
+       the pair is the whole control for the flag, since nothing else about them differs. */
+    0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x08, 0x0a, 0x00, 0x01, 0x64, 0x00, 0x20, 0x00,
+    /* 7 — COMPOSITE, offset 132, 20 bytes. WE_HAVE_AN_X_AND_Y_SCALE with xscale 0.5 and yscale 1.5 — two
+       DIFFERENT values, so a decoder that read one F2DOT14 and used it for both axes is caught here and not
+       by glyph 5, where the two are equal by definition. */
+    0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x42, 0x00, 0x01, 0x00, 0x00, 0x20, 0x00, 0x60, 0x00,
+    /* 8 — COMPOSITE, offset 152, 24 bytes. WE_HAVE_A_TWO_BY_TWO with (xscale, scale01, scale10, yscale) =
+       (0, 1, -1, 0) in storage order, which is a quarter turn. THIS IS THE CONVENTION CONTROL: the standard
+       says "x' = xscale * x + scale10 * y" and "y' = scale01 * x + yscale * y", so the THIRD stored value
+       reaches x' and the SECOND reaches y'. Under the correct reading glyph 1's (10, 0) lands at (0, 10) in
+       design units; under the transposed one it lands at (0, -10), which is the same rotation the other way
+       and is exactly the defect no size or position check would notice. */
+    0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x82, 0x00, 0x01, 0x00, 0x00,
+    0x00, 0x00, 0x40, 0x00, 0xc0, 0x00, 0x00, 0x00,               /* 0.0, 1.0, -1.0, 0.0 */
+    /* 9 — COMPOSITE, offset 176, 18 bytes. A component that is ITSELF A COMPOSITE — glyph 3 — at word
+       arguments (1000, 0). "Composite glyphs may be nested within other composite glyphs", and this is the
+       shape the shipped face really has: it nests four deep. */
+    0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x03, 0x00, 0x03, 0x03, 0xe8, 0x00, 0x00,
+    /* 10 — COMPOSITE, offset 194, 16 bytes. A component naming glyph 10 — ITSELF. "This graph must be
+       acyclic, with every path through the graph leading to a simple glyph as a leaf node", and a walk that
+       did not check would not return. */
+    0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x02, 0x00, 0x0a, 0x00, 0x00,
+    /* 11 — COMPOSITE, offset 210, 16 bytes. A component naming glyph 99, which this face does not have. The
+       index is the FACE'S claim and is proved by nothing, so it may not reach the always-fatal bound inside
+       the length accessor. */
+    0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x02, 0x00, 0x63, 0x00, 0x00,
+    /* 12 — COMPOSITE, offset 226, 16 bytes. ARGS_ARE_XY_VALUES CLEAR, so the two arguments are POINT NUMBERS
+       and the component is placed by aligning a point of the parent with one of the child. That is the named
+       residual at `glyph_outline_append` and the ONE member of the third outcome. */
+    0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x01, 0x01,
+    /* 13 — COMPOSITE, offset 242, 18 bytes. WE_HAVE_A_SCALE and WE_HAVE_AN_X_AND_Y_SCALE both set. "no more
+       than one of these may be set", and the two name two and four appended values, so the record does not
+       say where the next one begins. */
+    0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x4a, 0x00, 0x01, 0x00, 0x00, 0x20, 0x00,
+    /* 14 — COMPOSITE, offset 260, 16 bytes. ONE record with MORE_COMPONENTS SET and nothing after it. The
+       component list is a do-while over that bit, so a description whose last record promises another and
+       then ends is one whose own terminator was never written. It is also the glyph that proves the header's
+       "ON ANYTHING BUT OK, `out` MAY ALREADY HAVE BEEN APPENDED TO": the first component draws before the
+       second one is discovered to be missing. */
+    0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x22, 0x00, 0x00, 0x00, 0x00,
+    /* 15 — COMPOSITE, offset 276, 24 bytes. The quarter turn of glyph 8, applied to glyph 16 — which is
+       itself a NON-UNIFORM scale of glyph 1. Rotation and non-uniform scale do not commute, so this pair is
+       the control for the ORDER `go_compose` multiplies in, which no face this engine ships can reach. */
+    0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x82, 0x00, 0x10, 0x00, 0x00,
+    0x00, 0x00, 0x40, 0x00, 0xc0, 0x00, 0x00, 0x00,
+    /* 16 — COMPOSITE, offset 300, 20 bytes. Glyph 1 with xscale 0.5 and yscale 1.0. */
+    0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x42, 0x00, 0x01, 0x00, 0x00, 0x20, 0x00, 0x40, 0x00,
+    /* 17 — COMPOSITE, offset 320, 18 bytes. Glyph 5 with BOTH offset flags set, which the standard calls
+       invalid and then says what to do about: "If a font has both flags set, this is invalid; the rasterizer
+       should use its default behavior for this case". So this is NOT a refusal — it must equal glyph 5. */
+    0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x18, 0x0a, 0x00, 0x01, 0x64, 0x00, 0x20, 0x00
+};
+
+/* NINETEEN ENTRIES FOR EIGHTEEN GLYPHS — the array has one more than the face has, which is what gives the
+   last glyph its length. */
+static const unsigned char TF_GC_LOCA[] = {
+    0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x14,  0x00, 0x00, 0x00, 0x28,  0x00, 0x00, 0x00, 0x38,
+    0x00, 0x00, 0x00, 0x48,  0x00, 0x00, 0x00, 0x60,  0x00, 0x00, 0x00, 0x72,  0x00, 0x00, 0x00, 0x84,
+    0x00, 0x00, 0x00, 0x98,  0x00, 0x00, 0x00, 0xb0,  0x00, 0x00, 0x00, 0xc2,  0x00, 0x00, 0x00, 0xd2,
+    0x00, 0x00, 0x00, 0xe2,  0x00, 0x00, 0x00, 0xf2,  0x00, 0x00, 0x01, 0x04,  0x00, 0x00, 0x01, 0x14,
+    0x00, 0x00, 0x01, 0x2c,  0x00, 0x00, 0x01, 0x40,  0x00, 0x00, 0x01, 0x52
+};
+
+/* DECODE ONE GLYPH OF THAT TABLE AT THE ORIGIN AND AT UNIT SCALE, which is what makes every relation below
+   EXACT: the placement is then `x` and `-y` over integers small enough to be represented in a double without
+   loss, so a shifted or scaled component is compared by `==` and not by a neighbourhood. */
+static GlyphOutlineResult tf_gc(const GlyphOutlines *g, uint16_t id, RasterPath *out, const char **why)
+{
+    raster_path_init(out);
+    return glyph_outline_append(g, id, 0.0, 0.0, 1.0, out, why);
+}
+
+/* EVERY VALUE OF `b` IS `a`'s WITH (dx, dy) ADDED, opcodes included. The op stream is a flat run of doubles
+   whose first value is the opcode and whose pairs are coordinates, so this walks it by the opcode's own
+   declared width rather than assuming any op's arity. */
+static void tf_gc_shifted(const double *a, size_t an, const double *b, size_t bn,
+                          double dx, double dy, const char *what)
+{
+    size_t i;
+
+    CHECKF(an == bn, "%s produced %zu values where the glyph it is made of produced %zu. A component is the "
+                     "SAME outline placed elsewhere, so the two streams have the same shape and differ only "
+                     "in where they are", what, bn, an);
+    for (i = 0; i < an; ) {
+        int w = canvas_path_op_width((CanvasPathOp)(int)a[i]), k;
+
+        CHECKF(b[i] == a[i], "%s disagrees about an OPCODE at value %zu", what, i);
+        for (k = 1; k < w; k++)
+            CHECKF(b[i + k] == a[i + k] + ((k % 2) ? dx : dy),
+                   "%s has %.17g at value %zu where the component's own outline has %.17g and the record "
+                   "offsets it by (%g, %g). An x that moved by the y term, or a coordinate that did not move "
+                   "at all, is the offset vector applied to the wrong slot of the stream",
+                   what, b[i + k], i + k, a[i + k], dx, dy);
+        i += (size_t)w;
+    }
+}
+
+static void tf_gc_same(const double *a, size_t an, const double *b, size_t bn, const char *what)
+{
+    CHECKF(an == bn && (an == 0 || memcmp(a, b, an * sizeof *a) == 0),
+           "%s — %zu values against %zu", what, bn, an);
+}
+
+static void glyph_composite_selftest(void)
+{
+    GlyphOutlines g;
+    RasterPath base, small, ident, moved, two, unscaled, scaled, both, xy, turned, nested, stacked, inner,
+               refusedp;
+    const char *why = NULL;
+    GlyphOutlineResult r;
+    size_t i, refused = 0;
+
+    CHECK(glyph_outlines_read(&g, TF_GC_GLYF, sizeof TF_GC_GLYF, TF_GC_LOCA, sizeof TF_GC_LOCA,
+                              TF_GC_GLYPHS, true),
+          "this file's own composite table was refused. These bytes are this file's, so a refusal is a rule "
+          "the decoder applies that the fixture does not meet and not a hostile face");
+
+    /* THE TWO LEAVES FIRST, because every relation below is against one of them. */
+    CHECK(tf_gc(&g, 0, &base, &why) == GLYPH_OUTLINE_OK && base.n > 0,
+          "the fixture's own large triangle, which is a SIMPLE glyph and reaches none of the component walk, "
+          "did not decode — so nothing below it is worth reading");
+    CHECK(tf_gc(&g, 1, &small, &why) == GLYPH_OUTLINE_OK && small.n > 0,
+          "the fixture's own small triangle did not decode");
+
+    /* A COMPONENT AT NO OFFSET UNDER NO TRANSFORM IS THE GLYPH ITSELF. */
+    CHECK(tf_gc(&g, 2, &ident, &why) == GLYPH_OUTLINE_OK, "a composite of one untransformed component");
+    tf_gc_same(base.v, base.n, ident.v, ident.n,
+               "a composite whose one component names glyph 0 at (0, 0) did not reproduce glyph 0's own "
+               "stream. There is nothing between them but the component walk, so a difference is that walk "
+               "and not the outline");
+
+    /* AND AT AN OFFSET IT IS THE GLYPH MOVED, with the y term NEGATED on the way to device rows. The
+       arguments here are int8 and one of them is negative, which is the byte form's sign. */
+    CHECK(tf_gc(&g, 3, &moved, &why) == GLYPH_OUTLINE_OK, "a composite at a byte-argument offset");
+    tf_gc_shifted(base.v, base.n, moved.v, moved.n, -5.0, -7.0,
+                  "a component placed at the signed byte offset (-5, +7)");
+
+    /* TWO COMPONENTS ARE TWO OUTLINES IN ONE PATH, IN THE ORDER THE RECORDS GIVE THEM. "The sequence is
+       processed in the order given", so the first half of this stream is glyph 0 moved and the second is
+       glyph 1 where it stands — and the halves have different lengths in the FACE, which is what catches a
+       cursor that stepped a fixed stride between records. */
+    CHECK(tf_gc(&g, 4, &two, &why) == GLYPH_OUTLINE_OK, "a composite of two components");
+    CHECKF(two.n == base.n + small.n,
+           "a two-component composite produced %zu values where its two components produce %zu and %zu. A "
+           "component contributes its whole outline and nothing else, so the total is the sum",
+           two.n, base.n, small.n);
+    tf_gc_shifted(base.v, base.n, two.v, base.n, 300.0, 400.0,
+                  "the FIRST component of a two-component composite, at the word offset (300, -400)");
+    tf_gc_same(small.v, small.n, two.v + base.n, two.n - base.n,
+               "the SECOND component of a two-component composite, which the record places at (0, 0) and "
+               "which must therefore be its own outline untouched");
+
+    /* WHETHER A SCALE REACHES THE OFFSET IS ONE BIT, AND THE TWO GLYPHS DIFFER IN NOTHING ELSE. Glyph 5 and
+       glyph 6 are byte-identical apart from SCALED_COMPONENT_OFFSET, so the difference between their streams
+       is that flag and nothing else: the offset is 100 design units and the scale is a half, so the scaled
+       reading puts the component 50 units left of the unscaled one and the y terms do not move at all. */
+    CHECK(tf_gc(&g, 5, &unscaled, &why) == GLYPH_OUTLINE_OK, "a scaled component with an unscaled offset");
+    CHECK(tf_gc(&g, 6, &scaled, &why) == GLYPH_OUTLINE_OK, "a scaled component with a scaled offset");
+    tf_gc_shifted(scaled.v, scaled.n, unscaled.v, unscaled.n, 50.0, 0.0,
+                  "the UNSCALED_COMPONENT_OFFSET default against SCALED_COMPONENT_OFFSET over one offset of "
+                  "100 design units at a scale of one half");
+
+    /* AND A FACE SETTING BOTH FLAGS IS NOT REFUSED — the standard names that case invalid and then says to
+       use the default behaviour, so this must be the unscaled one to the bit. */
+    CHECK(tf_gc(&g, 17, &both, &why) == GLYPH_OUTLINE_OK, "a component with both offset flags");
+    tf_gc_same(unscaled.v, unscaled.n, both.v, both.n,
+               "a component setting SCALED_COMPONENT_OFFSET and UNSCALED_COMPONENT_OFFSET together did not "
+               "take the default behaviour. OpenType calls that combination invalid and then says in its own "
+               "words that the rasterizer \"should use its default behavior for this case\", so refusing it "
+               "or scaling the offset would both be this decoder being stricter than the document");
+
+    /* THE TWO AXES SCALE INDEPENDENTLY. */
+    CHECK(tf_gc(&g, 7, &xy, &why) == GLYPH_OUTLINE_OK, "a component with an x and y scale");
+    CHECKF(xy.n == small.n, "an x-and-y-scaled component produced a different number of values from the "
+                            "glyph it scales — a scale multiplies coordinates and decides no segment");
+    for (i = 0; i < small.n; ) {
+        int w = canvas_path_op_width((CanvasPathOp)(int)small.v[i]), k;
+
+        for (k = 1; k < w; k++)
+            CHECKF(xy.v[i + k] == small.v[i + k] * ((k % 2) ? 0.5 : 1.5),
+                   "an x-and-y-scaled component has %.17g at value %zu where its glyph has %.17g and the "
+                   "record names xscale 0.5 and yscale 1.5. Both are exact in binary floating point, so this "
+                   "is one F2DOT14 having been used for both axes or the two having been read in the wrong "
+                   "order", xy.v[i + k], i + k, small.v[i + k]);
+        i += (size_t)w;
+    }
+
+    /* THE 2x2's OFF-DIAGONAL TERMS CROSS, AND THIS IS WHERE THAT IS ASSERTED. The record is a quarter turn,
+       so a design-unit point (x, y) becomes (-y, x) — which in DEVICE rows, where y is negated, makes the
+       turned glyph's x equal the plain glyph's y and its y the NEGATIVE of the plain glyph's x. A decoder
+       that swapped scale01 and scale10 turns the other way and every one of those signs flips. */
+    CHECK(tf_gc(&g, 8, &turned, &why) == GLYPH_OUTLINE_OK, "a component under a two-by-two transform");
+    CHECKF(turned.n == small.n, "a rotated component produced a different number of values from its glyph");
+    for (i = 0; i < small.n; ) {
+        int w = canvas_path_op_width((CanvasPathOp)(int)small.v[i]), k;
+
+        CHECKF(turned.v[i] == small.v[i], "a rotated component disagrees about an OPCODE at value %zu", i);
+        for (k = 1; k < w; k += 2)
+            CHECKF(turned.v[i + k] == small.v[i + k + 1] && turned.v[i + k + 1] == -small.v[i + k],
+                   "a quarter turn put (%.17g, %.17g) where the point (%.17g, %.17g) under OpenType's own "
+                   "\"x' = xscale * x + scale10 * y\" and \"y' = scale01 * x + yscale * y\" belongs at "
+                   "(%.17g, %.17g). The stored order is xscale, scale01, scale10, yscale — the THIRD value "
+                   "reaches x' and the SECOND reaches y' — so a transposed pair is this same rotation the "
+                   "other way round, which leaves the glyph the right size in the right place",
+                   turned.v[i + k], turned.v[i + k + 1], small.v[i + k], small.v[i + k + 1],
+                   small.v[i + k + 1], -small.v[i + k]);
+        i += (size_t)w;
+    }
+
+    /* NESTING. Glyph 9's component is glyph 3, which is itself a composite placing glyph 0 at (-5, +7), so
+       the leaf lands at (1000 - 5, 0 + 7) and the translations have COMPOSED rather than the inner one
+       having been lost or the outer one applied twice. */
+    CHECK(tf_gc(&g, 9, &nested, &why) == GLYPH_OUTLINE_OK, "a composite whose component is a composite");
+    tf_gc_shifted(base.v, base.n, nested.v, nested.n, 995.0, -7.0,
+                  "a nested composite — glyph 0 at (-5, +7) inside a component placed at (1000, 0)");
+
+    /* AND THE ORDER THE TWO TRANSFORMS MULTIPLY IN, WHICH TRANSLATION ALONE CANNOT SEE. Glyph 15 turns glyph
+       16, and glyph 16 scales glyph 1 by (0.5, 1.0); a quarter turn and a non-uniform scale do not commute,
+       so composing the other way round gives a different, equally plausible shape. */
+    CHECK(tf_gc(&g, 16, &inner, &why) == GLYPH_OUTLINE_OK, "the inner non-uniform scale");
+    CHECK(tf_gc(&g, 15, &stacked, &why) == GLYPH_OUTLINE_OK, "a turn applied to a non-uniform scale");
+    CHECKF(stacked.n == inner.n, "a nested transform produced a different number of values from its child");
+    for (i = 0; i < inner.n; ) {
+        int w = canvas_path_op_width((CanvasPathOp)(int)inner.v[i]), k;
+
+        for (k = 1; k < w; k += 2)
+            CHECKF(stacked.v[i + k] == inner.v[i + k + 1] && stacked.v[i + k + 1] == -inner.v[i + k],
+                   "a quarter turn OVER a non-uniform scale put (%.17g, %.17g) where turning the already "
+                   "scaled point (%.17g, %.17g) belongs. The parent's matrix multiplies the child's and not "
+                   "the other way round, and the two orders differ here BECAUSE the scale is non-uniform — "
+                   "which is why no face whose components only translate could ever catch this",
+                   stacked.v[i + k], stacked.v[i + k + 1], inner.v[i + k], inner.v[i + k + 1]);
+        i += (size_t)w;
+    }
+
+    /* THE REFUSALS AND THE ONE OUTCOME THAT IS NEITHER. Each is a claim the BYTES make and is therefore an
+       `if` with a named reason, never an assert — a composite glyph's every field is the face's. */
+    r = tf_gc(&g, 10, &refusedp, &why);
+    refused += (r == GLYPH_OUTLINE_MALFORMED && why != NULL);
+    CHECKF(r == GLYPH_OUTLINE_MALFORMED,
+           "a composite naming ITSELF as a component answered %d rather than being refused. OpenType makes "
+           "the component graph ACYCLIC, and a walk that does not check one does not return — so this is the "
+           "assertion that the check exists and not that the answer is tidy", (int)r);
+    raster_path_free(&refusedp);
+
+    r = tf_gc(&g, 11, &refusedp, &why);
+    refused += (r == GLYPH_OUTLINE_MALFORMED && why != NULL);
+    CHECKF(r == GLYPH_OUTLINE_MALFORMED,
+           "a component naming a glyph index this face does not have answered %d. That index is the FACE's "
+           "claim and no character map proved it, so it may not reach the always-fatal bound inside the "
+           "length accessor — which would hand a page's own font an abort switch for the release build",
+           (int)r);
+    raster_path_free(&refusedp);
+
+    r = tf_gc(&g, 13, &refusedp, &why);
+    refused += (r == GLYPH_OUTLINE_MALFORMED && why != NULL);
+    CHECKF(r == GLYPH_OUTLINE_MALFORMED,
+           "a component setting two of the three mutually exclusive scale flags answered %d", (int)r);
+    raster_path_free(&refusedp);
+
+    r = tf_gc(&g, 14, &refusedp, &why);
+    refused += (r == GLYPH_OUTLINE_MALFORMED && why != NULL);
+    CHECKF(r == GLYPH_OUTLINE_MALFORMED && refusedp.n == base.n,
+           "a component list whose last record promises another and then ends answered %d with %zu values. "
+           "The refusal is the assertion, and so is the COUNT: the first component drew before the second "
+           "was discovered to be missing, which is core/fonts/glyph_outline.h's own statement that on "
+           "anything but OK the path may already have been appended to", (int)r, refusedp.n);
+    raster_path_free(&refusedp);
+
+    /* AND THE ONE THAT IS A CAPABILITY AND NOT A BROKEN FILE. */
+    r = tf_gc(&g, 12, &refusedp, &why);
+    CHECKF(r == GLYPH_OUTLINE_UNSUPPORTED && why == NULL && refusedp.n == 0,
+           "a component placed by POINT ALIGNMENT answered %d with reason \"%s\". It is a VALID glyph built "
+           "in a way this decoder does not have — the named residual at `glyph_outline_append` — and a "
+           "caller that could not tell it from a face that lied would read a good font as a broken one, "
+           "which is the whole reason that outcome is not a bool",
+           (int)r, why ? why : "none");
+    raster_path_free(&refusedp);
+
+    CHECKF(refused == 4,
+           "%zu of four composite descriptions this file deliberately broke were accepted with a named "
+           "reason. Each is a different rule of OpenType 'glyf' — Glyph Data's \"Composite glyph "
+           "description\": a cycle in the component graph, a component index this face does not have, two of "
+           "three mutually exclusive scale flags, and a component list with no terminator", refused);
+
+    printf("@GCOMP glyphs=%d values=%zu twovalues=%zu nestedvalues=%zu turnedvalues=%zu refused=%zu "
+           "unsupported=1\n",
+           TF_GC_GLYPHS, ident.n, two.n, nested.n, turned.n, refused);
+
+    raster_path_free(&base);
+    raster_path_free(&small);
+    raster_path_free(&ident);
+    raster_path_free(&moved);
+    raster_path_free(&two);
+    raster_path_free(&unscaled);
+    raster_path_free(&scaled);
+    raster_path_free(&both);
+    raster_path_free(&xy);
+    raster_path_free(&turned);
+    raster_path_free(&nested);
+    raster_path_free(&stacked);
+    raster_path_free(&inner);
 }
 
 /* ------------------------------------------------------------------------------------------------------- *
@@ -20248,6 +20645,8 @@ static void face_outline_selftest(void)
     GlyphOutlineResult r;
     unsigned char *copy;
     size_t head_rec = 0, loca_rec = 0, edges = 0, spans = 0;
+    size_t covered = 0, inked = 0, eacute_values = 0;
+    double eacute_shift = 0.0;
     int refused = 0;
     uint16_t aglyph;
 
@@ -20385,6 +20784,136 @@ static void face_outline_selftest(void)
            "glyph with no outline one whose two offsets are equal and names the space as the case, so this "
            "is the ordinary shape of a real face", (int)r, spc.n);
 
+
+    /* U+00E9 LATIN SMALL LETTER E WITH ACUTE — A REAL COMPOSITE OF THIS FACE, ASSERTED AGAINST ITS OWN
+       COMPONENTS AND AGAINST NO NUMBER ANYBODY WROTE DOWN. An accented Latin letter is the ordinary reason a
+       real face carries composites at all, and the whole of what a composite decode has to get right is
+       visible in one relation: its outline is the BASE LETTER'S outline followed by the ACCENT'S outline
+       moved sideways. Both halves are reachable by code point — U+0065 and U+00B4 — so this row needs no
+       second parser of the component records and states nothing about which glyph IDs the generator's face
+       happened to assign.
+       THE OFFSET IS NOT WRITTEN DOWN EITHER, WHICH IS WHAT KEEPS THIS A RELATION AND NOT A CONSTANT. What is
+       asserted is that the tail is a SINGLE TRANSLATION of the accent: every y identical and every x
+       differing by ONE value, whatever that value is. A decoder that applied the offset to the wrong axis,
+       to only some points, or once per contour fails that without anyone having to know where this
+       particular foundry puts an acute.
+       THE SCALE IS ONE AND THE ORIGIN IS ZERO, WHICH IS WHAT MAKES IT AN `==`. At unit scale every emitted
+       coordinate is the design-unit integer itself, so the comparison needs no tolerance — at any other
+       scale `(x + N) * s` and `x * s + N * s` are two different doubles and this would be asserting a
+       rounding rule instead of an offset. */
+    {
+        RasterPath acc, letter, accent;
+        double shift = 0.0;
+        bool first_pair = true;
+        size_t j;
+
+        raster_path_init(&acc);
+        r = glyph_outline_append(&g, open_type_metrics_glyph_id(&face, 0xE9u), 0.0, 0.0, 1.0, &acc, &why);
+        CHECKF(r == GLYPH_OUTLINE_OK,
+               "U+00E9 LATIN SMALL LETTER E WITH ACUTE answered %d (%s) in the shipped face. It is a "
+               "COMPOSITE there, which is what every accented Latin letter of a real face is — and before "
+               "this engine walked a component graph, this character and every other one like it answered "
+               "the third outcome and aborted the rasterizer at its display list",
+               (int)r, why ? why : "no reason given");
+        raster_path_init(&letter);
+        CHECK(glyph_outline_append(&g, open_type_metrics_glyph_id(&face, 0x65u), 0.0, 0.0, 1.0,
+                                   &letter, &why) == GLYPH_OUTLINE_OK,
+              "U+0065 LATIN SMALL LETTER E did not decode in the shipped face");
+        raster_path_init(&accent);
+        CHECK(glyph_outline_append(&g, open_type_metrics_glyph_id(&face, 0xB4u), 0.0, 0.0, 1.0,
+                                   &accent, &why) == GLYPH_OUTLINE_OK,
+              "U+00B4 ACUTE ACCENT did not decode in the shipped face");
+
+        CHECKF(acc.n == letter.n + accent.n,
+               "U+00E9's outline is %zu values where U+0065's is %zu and U+00B4's is %zu. A composite "
+               "incorporates each component's WHOLE outline and adds nothing of its own, so the total is "
+               "the sum — a shortfall is a component dropped and a surplus is one incorporated twice. THE "
+               "PREMISE IS A PROPERTY OF THE LETTER rather than of this artifact: an e-acute is an e and an "
+               "acute, and a face that builds it out of anything else is one this relation says nothing "
+               "about", acc.n, letter.n, accent.n);
+        tf_gc_same(letter.v, letter.n, acc.v, letter.n,
+                   "U+00E9's leading values against U+0065's own outline. The face places the base letter "
+                   "at the composite's own origin, so the letter must appear inside the accented one exactly "
+                   "as it decodes alone — anything else is a transform applied where the record names none");
+        for (j = 0; j < accent.n; ) {
+            int w = canvas_path_op_width((CanvasPathOp)(int)accent.v[j]), k;
+
+            CHECKF(acc.v[letter.n + j] == accent.v[j],
+                   "U+00E9 and U+00B4 disagree about an OPCODE at value %zu of the accent", j);
+            for (k = 1; k < w; k += 2) {
+                double dx = acc.v[letter.n + j + k] - accent.v[j + k];
+
+                if (first_pair) { shift = dx; first_pair = false; }
+                CHECKF(dx == shift,
+                       "U+00E9 moves one point of its accent by %.17g and another by %.17g. A component's "
+                       "offset vector is ONE translation added to every control point of that component, so "
+                       "two different shifts inside one component is the offset having been re-derived per "
+                       "contour, per point, or accumulated", dx, shift);
+                CHECKF(acc.v[letter.n + j + k + 1] == accent.v[j + k + 1],
+                       "U+00E9 moves its accent VERTICALLY by %.17g against U+00B4's own outline. The face's "
+                       "own record for this component states a y of zero, so a vertical shift is the two "
+                       "arguments having been read in the wrong order or the x term having reached the y "
+                       "slot", acc.v[letter.n + j + k + 1] - accent.v[j + k + 1]);
+            }
+            j += (size_t)w;
+        }
+        CHECKF(shift != 0.0,
+               "U+00E9's accent sits at exactly U+00B4's own x. The two are different glyphs in a face's "
+               "design grid and a composite exists to MOVE one onto the other, so a shift of zero is the "
+               "offset vector never having been added at all — which every other assertion here would pass "
+               "with, because the accent's own outline is what it is compared against");
+        eacute_shift = shift;
+        eacute_values = acc.n;
+        raster_path_free(&acc);
+        raster_path_free(&letter);
+        raster_path_free(&accent);
+    }
+
+    /* AND EVERY CHARACTER THIS FACE CAN DRAW, WHICH IS WHAT SPEAKS FOR THE 2444 COMPOSITES THIS ROW DOES NOT
+       NAME. A malformed outline in THIS face is a claim about bytes this repository commits and never about
+       a document's — core/css/font_metrics.c holds exactly one face and it is the generated
+       `DEFAULT_FONT_SFNT`, whose whole read is already an always-fatal CHECK there — so a refusal here is an
+       invariant and that is why it may be asserted at all. What the sweep is asserted on is the two outcomes
+       that are NOT an outline; the counts beside it are facts about the artifact and are PRINTED, because
+       which characters a generator's face covers and how many of them a foundry chose to build out of
+       components both move the day engine/fontsubset.mjs is pointed at another one.
+       IT IS A SWEEP OVER CODE POINTS AND NOT OVER GLYPH IDS, which is the population that matters: a glyph
+       no character map reaches is one no document can ask for, and the road this engine actually walks
+       begins at a scalar value. */
+    for (i = 0; i < 0x110000u; i++) {
+        uint16_t id;
+        RasterPath one;
+
+        /* A SURROGATE IS NOT A SCALAR VALUE, and the character-map entry asserts as much rather than
+           answering zero for one: a lone surrogate is a caller that split a string between the two halves of
+           a pair, which is that entry's own invariant and not a face's missing mapping. So the sweep walks
+           SCALAR VALUES and the gap is the standard's, not a range chosen to make anything pass. */
+        if (i >= 0xD800u && i <= 0xDFFFu) continue;
+        id = open_type_metrics_glyph_id(&face, (uint32_t)i);
+        if (id == 0) continue;
+        covered++;
+        raster_path_init(&one);
+        r = glyph_outline_append(&g, id, 0.0, 0.0, 1.0, &one, &why);
+        CHECKF(r != GLYPH_OUTLINE_MALFORMED,
+               "U+%04X selects glyph %u of the SHIPPED face and its outline broke a rule: %s. That face is "
+               "generated by engine/fontsubset.mjs out of a release pinned by sha256, so a malformed glyph "
+               "in it is a claim about what this repository committed — re-run the generator rather than "
+               "relaxing the rule", (unsigned)i, (unsigned)id, why ? why : "no reason given");
+        CHECKF(r != GLYPH_OUTLINE_UNSUPPORTED,
+               "U+%04X selects glyph %u of the SHIPPED face and it is built in a way this decoder does not "
+               "have. Exactly one construct is in that outcome — a component placed by POINT ALIGNMENT, "
+               "which core/fonts/glyph_outline.h carries as a named residual — so this is that residual "
+               "having become reachable from the one face this user agent draws every document with, and "
+               "BUILDING IT is the answer rather than anything here", (unsigned)i, (unsigned)id);
+        if (one.n > 0) inked++;
+        raster_path_free(&one);
+    }
+    CHECKF(covered > 0 && inked > 0 && inked < covered,
+           "the shipped face covers %zu code points of which %zu decode to some ink. A face that covers "
+           "nothing is a character map that was never read; a face where EVERY covered character draws is "
+           "one with no blank glyph in it, and the space this row already decoded above is one — so both "
+           "ends of that are the sweep having measured something other than what it walked", covered, inked);
+
     /* THE PRIVATE FACE AND THIS ONE ARE ONE FACE, WHICH IS THE WHOLE POINT OF THE ENTRY BEING WHERE IT IS.
        core/css/font_metrics.c holds `g_default_face` and `font_metrics_face` is static, so every advance in
        every layout is measured against a face nothing outside that file can reach; this compares the shape it
@@ -20488,9 +21017,11 @@ static void face_outline_selftest(void)
        artifacts can see WHICH of them moved. `longloca` is 'head' — Font Header Table's indexToLocFormat and
        is the one field this landing added a read of. */
     printf("@FACE outlines=%d upem=%u glyphs=%u longloca=%d glyfbytes=%zu outlinebytes=%zu "
-           "Aglyph=%u Aops=%zu Avalues=%zu Asubpaths=%zu edges=%zu spans=%zu pixels=%zu refused=%d\n",
+           "Aglyph=%u Aops=%zu Avalues=%zu Asubpaths=%zu edges=%zu spans=%zu pixels=%zu "
+           "covered=%zu inked=%zu eacutevalues=%zu eacuteshift=%g refused=%d\n",
            face.has_outlines ? 1 : 0, face.units_per_em, face.num_glyphs, face.long_loca ? 1 : 0,
-           glyf_len, total, aglyph, ops, a64.n, a64.nsub, edges, c.spans, c.pixels, refused);
+           glyf_len, total, aglyph, ops, a64.n, a64.nsub, edges, c.spans, c.pixels,
+           covered, inked, eacute_values, eacute_shift, refused);
 
     raster_path_free(&a64);
     raster_path_free(&a32);
@@ -23727,6 +24258,7 @@ int main(int argc, char **argv) {
        what lets it assert an exact segment stream; see the function for why that is the stronger
        test and not a substitute for a real one. */
     glyph_outline_selftest();
+    glyph_composite_selftest();
     face_outline_selftest();
     raster_selftest();
     /* AND THE BYTE RUN ITS SURFACES ARE MADE OF, which is a different question from the fill's and has a

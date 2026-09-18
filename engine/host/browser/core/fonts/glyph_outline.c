@@ -27,6 +27,38 @@
    a second copy of one fact free to disagree with the first. */
 #define GO_GLYPH_HEADER 10
 
+/* THE FLAG BITS OF A COMPONENT, NAMED AS OpenType 'glyf' — Glyph Data's Component Glyph flags table names
+   them, and only the ones this decoder CONSULTS are spelled — which is the same line the simple arm above
+   draws, so that a name here is evidence a byte is read and not decoration.
+   THE FOUR THAT ARE READ BY NOBODY, AND WHY EACH IS A DECISION RATHER THAN AN OMISSION:
+     ROUND_XY_TO_GRID (bit 2) grid-fits the offset vector — "the x and y values rounded to the nearest pixel
+       grid line". This engine GRID-FITS NOTHING: the simple arm skips a glyph's instructions for exactly
+       that reason, and honouring the one rounding while ignoring every hint that decides where a grid line
+       should fall would be a fragment of hinting rather than a smaller amount of it. The shipped face sets
+       this bit on essentially every component it has, so consulting it is not a rare path being skipped.
+     USE_MY_METRICS (bit 9) forces "the aw and lsb (and rsb) for the composite to be equal to those from this
+       component glyph" — which is an ADVANCE and not an outline. This component answers no advances at all;
+       'hmtx' does, through core/fonts/open_type_metrics.h, and a bit consulted here could only ever produce
+       a second answer to a question another file owns.
+     OVERLAP_COMPOUND (bit 10) is the composite's OVERLAP_SIMPLE and is not consulted for its reason: the
+       fill this feeds resolves overlap by its own winding rule.
+     WE_HAVE_INSTRUCTIONS (bit 8) says a length and a byte run follow the LAST component. Nothing here reads
+       past the last component, so there is nothing to skip — and refusing a glyph over bytes this decoder
+       never touches would reject faces for a table it does not use.
+   BITS 4, 13, 14 AND 15 ARE RESERVED and, like the simple arm's reserved bit, change how no byte is read. */
+#define GO_ARG_1_AND_2_ARE_WORDS     0x0001
+#define GO_ARGS_ARE_XY_VALUES        0x0002
+#define GO_WE_HAVE_A_SCALE           0x0008
+#define GO_MORE_COMPONENTS           0x0020
+#define GO_WE_HAVE_AN_X_AND_Y_SCALE  0x0040
+#define GO_WE_HAVE_A_TWO_BY_TWO      0x0080
+#define GO_SCALED_COMPONENT_OFFSET   0x0800
+#define GO_UNSCALED_COMPONENT_OFFSET 0x1000
+
+/* THE SMALLEST COMPONENT RECORD — a uint16 flags and a uint16 glyphIndex, which every one of them begins
+   with before its arguments. */
+#define GO_COMPONENT_HEADER 4
+
 /* ---- readers over a span whose extent the caller has already proved ---------------------------------- */
 
 static uint16_t go_u16(const unsigned char *p)
@@ -154,69 +186,101 @@ typedef struct {
     uint8_t flag;
 } GoPoint;
 
+/* THE AFFINE A COMPONENT IS INCORPORATED UNDER, IN THE FACE'S OWN UNITS AND NEVER IN DEVICE PIXELS.
+   OpenType 'glyf' — Glyph Data's "Composite glyph description" writes the matrix out in full and it is
+   copied here letter for letter, because the OFF-DIAGONAL TERMS CROSS:
+       "x' = xscale * x + scale10 * y"
+       "y' = scale01 * x + yscale * y"
+   The value stored THIRD (`scale10`) multiplies y on the way to x', and the one stored SECOND (`scale01`)
+   multiplies x on the way to y'. A decoder that fills a matrix in storage order and then multiplies the
+   obvious way TRANSPOSES every rotation in the face — which leaves every glyph the right size, in the right
+   place, and turning the wrong way, and is the single place in this description a recollection is most
+   confidently wrong.
+   THE TOP-LEVEL GLYPH IS DECODED UNDER THE IDENTITY, which is why this is a value and not a special case:
+   there is ONE contour emitter and a simple glyph is the composite path's leaf with nothing composed onto
+   it. Under the identity the two multiply-adds below are `x` and `y` EXACTLY in IEEE 754 — 1.0*v is v and
+   0.0*v is a signed zero that adds away — so a face with no composite in it produces the byte-identical
+   stream it produced before there was a transform here at all. */
+typedef struct {
+    double a, b, c, d;   /* (a, b, c, d) = (xscale, scale01, scale10, yscale) */
+    double dx, dy;       /* the translation, already expressed in the PARENT's design units */
+} GoXform;
+
+static const GoXform GO_IDENTITY = { 1.0, 0.0, 0.0, 1.0, 0.0, 0.0 };
+
+/* COMPOSE THE CHILD'S OWN PLACEMENT WITH ITS PARENT'S — `p` after `c`, so a point of the child's design
+   space lands where the whole nesting chain puts it. A chain therefore carries ONE matrix per frame rather
+   than a list to replay, which is what makes the depth-first walk below hold no geometry.
+   THE ORDER IS NOT A DETAIL AND IS INVISIBLE ON THE SHIPPED FACE. Composition commutes when every component
+   only translates, and MEASURED over all 6253 glyphs of this engine's own face, not one component sets any
+   of the three scale flags — so a decoder that composed the other way round would agree with this one on
+   every character this user agent can currently draw and disagree on the first face that scales a
+   component, which is exactly the shape a fixture has to state bytes of its own to catch. */
+static GoXform go_compose(const GoXform *p, const GoXform *c)
+{
+    GoXform r;
+
+    r.a = p->a * c->a + p->c * c->b;
+    r.b = p->b * c->a + p->d * c->b;
+    r.c = p->a * c->c + p->c * c->d;
+    r.d = p->b * c->c + p->d * c->d;
+    r.dx = p->a * c->dx + p->c * c->dy + p->dx;
+    r.dy = p->b * c->dx + p->d * c->dy + p->dy;
+    return r;
+}
+
+/* ONE F2DOT14, WHOSE BINARY POINT IS THE ONE THING TO READ RATHER THAN ASSUME. OpenType's data-type chapter
+   defines it as a "16-bit signed fixed number with the low 14 bits of fraction (2.14)" and then gives the
+   table that settles the sign: 0xFFFF is -0.000061, which is the ordinary two's-complement value over 16384
+   and NOT the "integer -1 plus a fraction of 16383/16384" a reader can talk themselves into. So the whole
+   conversion is one signed divide, and the representable range is [-2, 2). */
+static double go_f2dot14(const unsigned char *p)
+{
+    return (double)go_i16(p) / 16384.0;
+}
+
 static uint16_t go_end_pt(const unsigned char *d, int c)
 {
     return go_u16(d + GO_GLYPH_HEADER + 2u * (size_t)c);
 }
 
-/* A POINT IN DEVICE PIXELS. Three facts in two lines, and the subtraction is the one a reader should check:
+/* A POINT IN DEVICE PIXELS. Four facts in three lines, and the subtraction is the one a reader should check:
    font design units increase UPWARD from the baseline and this engine's device rows increase DOWNWARD, so a
-   decoder that added here would produce every glyph mirrored about its own baseline. */
-static void go_device(const GoPoint *p, double ox, double oy, double sc, double *x, double *y)
+   decoder that added here would produce every glyph mirrored about its own baseline. The component transform
+   is resolved FIRST and in the face's own units, because a composite places its children in the design grid
+   and the device placement is applied once to the result. */
+static void go_device(const GoPoint *p, const GoXform *xf, double ox, double oy, double sc,
+                      double *x, double *y)
 {
-    *x = ox + (double)p->x * sc;
-    *y = oy - (double)p->y * sc;
+    double fx = xf->a * (double)p->x + xf->c * (double)p->y + xf->dx;
+    double fy = xf->b * (double)p->x + xf->d * (double)p->y + xf->dy;
+
+    *x = ox + fx * sc;
+    *y = oy - fy * sc;
 }
 
 #define GO_MALFORMED(why) do { if (reject) *reject = (why); free(pt); return GLYPH_OUTLINE_MALFORMED; } while (0)
 
-GlyphOutlineResult glyph_outline_append(const GlyphOutlines *g, uint16_t glyph_id,
-                                        double origin_x, double origin_y, double scale,
-                                        RasterPath *out, const char **reject)
+/* ONE SIMPLE GLYPH'S CONTOURS, APPENDED UNDER `xf`. The caller has already selected the slice and decided
+   that this description is a simple one, so this answers OK or MALFORMED and never the third outcome. */
+static GlyphOutlineResult go_simple(const GlyphOutlines *g, size_t off, size_t n, const GoXform *xf,
+                                    double origin_x, double origin_y, double scale,
+                                    RasterPath *out, const char **reject)
 {
-    const unsigned char *d;
+    const unsigned char *d = g->glyf + off;
     GoPoint *pt = NULL;
-    size_t off, n, cur;
+    size_t cur;
     uint32_t npts, i, first, last, c_pts, i0, count, k;
     int nc, c;
     int64_t acc;
     size_t subpaths_before;
 
-    if (reject) *reject = NULL;
-    GO_READY(g);
-    DCHECK(out != NULL, "a glyph outline was decoded into no path");
-    /* THE PLACEMENT IS THIS CODEBASE'S OWN ARITHMETIC AND NOT A CLAIM THE FACE MAKES, which is what makes an
-       assert on it correct rather than an abort switch handed to whoever supplied the font: `scale` is a used
-       font-size divided by a unitsPerEm the face reader has already bounded, and the origin is a pen position
-       this engine computed. It is asserted HERE because the path builders below drop a non-finite coordinate
-       SILENTLY by their own contract — so without this the failure would be a glyph missing some of its
-       segments, which looks like a decoding bug and is a caller's number. */
-    DCHECK(isfinite(origin_x) && isfinite(origin_y) && isfinite(scale),
-           "a glyph was placed at a coordinate or a scale that is not a finite number");
-
-    off = (size_t)go_loca(g, glyph_id);                          /* bounds-checked by the length accessor */
-    n = glyph_outline_length(g, glyph_id);
-    DCHECK(off <= g->glyf_len && n <= g->glyf_len - off,
-           "a glyph's own slice of the outline table lies outside it, though glyph_outlines_read walked the "
-           "whole offset array to prove that it does not. That is this file's extent bookkeeping, not the "
-           "face's bytes");
-
-    /* NO OUTLINE IS NOT AN ERROR AND IS NOT RARE. The standard says of a glyph with no outline that its
-       entry and the next are equal, and names the space character as one; a face says so for every format
-       control it covers too. The answer is an empty append and an OK, never a refusal that would make a
-       caller treat a word space as a broken font. */
-    if (n == 0)
-        return GLYPH_OUTLINE_OK;
-
-    d = g->glyf + off;
-    if (n < GO_GLYPH_HEADER)
-        GO_MALFORMED("a glyph description shorter than the ten-byte header every one of them begins with");
-
-    /* THE SIGN OF THE CONTOUR COUNT IS THE WHOLE DISPATCH: the standard says a value greater than or equal to
-       zero is a simple glyph and a negative one is a composite. */
+    DCHECK(n >= GO_GLYPH_HEADER,
+           "a simple glyph was emitted from a description shorter than the ten-byte header, which the caller "
+           "that selected this slice has already refused");
     nc = go_i16(d);
-    if (nc < 0)
-        return GLYPH_OUTLINE_COMPOSITE;
+    DCHECK(nc >= 0, "go_simple was handed a description whose numberOfContours is negative, which is the "
+                    "sign the caller dispatches on — so this is the dispatch and not the face");
     if (nc == 0)
         return GLYPH_OUTLINE_OK;   /* "If a glyph has zero contours, no additional glyph data ... is required" */
 
@@ -347,18 +411,18 @@ GlyphOutlineResult glyph_outline_append(const GlyphOutlines *g, uint16_t glyph_i
            points". Getting this wrong does not crash: it rotates the contour's segments by one and closes it
            with a straight line where a curve belongs, which reads as a font that renders slightly wrong. */
         if (pt[first].flag & GO_ON_CURVE_POINT) {
-            go_device(&pt[first], origin_x, origin_y, scale, &sx, &sy);
+            go_device(&pt[first], xf, origin_x, origin_y, scale, &sx, &sy);
             i0 = first + 1u;
             count = c_pts - 1u;
         } else if (pt[last].flag & GO_ON_CURVE_POINT) {
-            go_device(&pt[last], origin_x, origin_y, scale, &sx, &sy);
+            go_device(&pt[last], xf, origin_x, origin_y, scale, &sx, &sy);
             i0 = first;
             count = c_pts - 1u;
         } else {
             double ax, ay, bx, by;
 
-            go_device(&pt[last], origin_x, origin_y, scale, &ax, &ay);
-            go_device(&pt[first], origin_x, origin_y, scale, &bx, &by);
+            go_device(&pt[last], xf, origin_x, origin_y, scale, &ax, &ay);
+            go_device(&pt[first], xf, origin_x, origin_y, scale, &bx, &by);
             sx = (ax + bx) * 0.5;
             sy = (ay + by) * 0.5;
             i0 = first;
@@ -371,7 +435,7 @@ GlyphOutlineResult glyph_outline_append(const GlyphOutlines *g, uint16_t glyph_i
             uint32_t idx = first + (((i0 - first) + k) % c_pts);
             double px, py;
 
-            go_device(&pt[idx], origin_x, origin_y, scale, &px, &py);
+            go_device(&pt[idx], xf, origin_x, origin_y, scale, &px, &py);
             if (pt[idx].flag & GO_ON_CURVE_POINT) {
                 if (have_ctrl) {
                     raster_path_quadratic_curve_to(out, cx, cy, px, py);
@@ -411,3 +475,275 @@ GlyphOutlineResult glyph_outline_append(const GlyphOutlines *g, uint16_t glyph_i
 }
 
 #undef GO_MALFORMED
+
+/* ---- a composite glyph's components ------------------------------------------------------------------ */
+
+/* ONE GLYPH WHOSE COMPONENT LIST IS PART WAY WALKED. The cursor and the end are absolute offsets into the
+   outline table rather than into the glyph, so that a frame needs no pointer into a slice its own parent
+   also holds. */
+typedef struct {
+    uint16_t glyph;   /* whose list this is — the ANCESTRY, which is what the acyclicity rule is checked over */
+    size_t   cur;     /* the next component record */
+    size_t   end;     /* one past this description's last byte */
+    bool     more;    /* the last record read said MORE_COMPONENTS, so the list is not finished */
+    GoXform  xf;      /* from THIS glyph's design units to the top-level glyph's */
+} GoFrame;
+
+#define GO_COMP_MALFORMED(why) \
+    do { if (reject) *reject = (why); free(stk); return GLYPH_OUTLINE_MALFORMED; } while (0)
+
+/* THE WHOLE OF ONE GLYPH, SIMPLE OR NOT. A composite "describes an outline indirectly by referencing other
+ * glyphs", and the standard says the graph they form "must be acyclic, with every path through the graph
+ * leading to a simple glyph as a leaf node" — so this walks that graph depth first and emits at the leaves.
+ *
+ * THE WALK HOLDS ITS OWN STACK ON THE HEAP AND DOES NOT RECURSE IN C, which is a decision about whose bytes
+ * choose the depth. This engine's trampolined heap stack is the JS interpreter's and reaches nothing here:
+ * a browser component called from core/paint/display_list_raster.c is ordinary C, so C recursion here would
+ * be C stack frames whose COUNT a page's own `@font-face` bytes name. The standard is explicit that there is
+ * no ceiling to lean on — "There is no minimum nesting depth that must be supported", and a face's
+ * maxComponentDepth is that face's own claim about itself — so the depth is whatever the bytes say, and a
+ * C stack overflow driven by them is a trap with no name on it rather than a refusal anybody can read.
+ * ON THE HEAP THE SAME BYTES BUY AN ALLOCATION, and an allocation that cannot be served is this file's
+ * existing always-fatal CHECK, which is the honest floor and the same one the point array already stands on.
+ *
+ * NO DEPTH CAP IS IMPOSED AND NONE IS NEEDED, which is CLAUDE.md's §NO BOUNDS rather than an oversight. What
+ * terminates the walk is the standard's OWN acyclicity requirement, checked as a claim the bytes make: a
+ * component naming a glyph already on the ancestry path is a face that broke that rule, and refusing it is
+ * a refusal and not a truncation. Depth is then bounded by the face's own glyph count, because no glyph can
+ * appear twice on one path — and that bound is derived from the check rather than imposed beside it.
+ *
+ * EVERY CLAIM A COMPONENT MAKES IS AN `if`. A component's glyph index comes out of the FACE and not out of a
+ * character-map lookup, which is the whole reason it may not simply be handed to `glyph_outline_length`:
+ * that accessor's bound is an always-fatal CHECK whose own message says every glyph ID reaching it has
+ * already been proved by a 'cmap' walk against this face. A composite's index has not, so it is bounded
+ * HERE, by an `if` that yields a named refusal — otherwise a page's own font would hold an abort switch for
+ * the release build, which is exactly what §WHOSE-BYTES-STATE-THE-VALUE forbids. */
+static GlyphOutlineResult go_expand(const GlyphOutlines *g, uint16_t glyph_id,
+                                    double origin_x, double origin_y, double scale,
+                                    RasterPath *out, const char **reject)
+{
+    GoFrame *stk = NULL;
+    size_t depth = 0, cap = 0;
+    uint16_t child = glyph_id;        /* the glyph resolved on the next turn of the loop */
+    GoXform childxf = GO_IDENTITY;
+    bool pending = true;
+
+    for (;;) {
+        if (pending) {
+            size_t off, n;
+
+            pending = false;
+            /* THE INDEX IS ALREADY BOUNDED: the top-level one by the accessor's own CHECK, and a component's
+               by the `if` below before it is ever named here. */
+            off = (size_t)go_loca(g, child);
+            n = glyph_outline_length(g, child);
+            DCHECK(off <= g->glyf_len && n <= g->glyf_len - off,
+                   "a glyph's own slice of the outline table lies outside it, though glyph_outlines_read "
+                   "walked the whole offset array to prove that it does not. That is this file's extent "
+                   "bookkeeping, not the face's bytes");
+
+            /* NO OUTLINE IS NOT AN ERROR AND IS NOT RARE. The standard says of a glyph with no outline that
+               its entry and the next are equal, and names the space character as one; a face says so for
+               every format control it covers too, and a COMPONENT may legitimately be one. The answer is an
+               empty append, never a refusal that would make a caller treat a word space as a broken font. */
+            if (n == 0) {
+                /* nothing to emit for this glyph */
+            } else if (n < GO_GLYPH_HEADER) {
+                GO_COMP_MALFORMED("a glyph description shorter than the ten-byte header every one of them "
+                                  "begins with");
+            } else if (go_i16(g->glyf + off) >= 0) {
+                /* THE SIGN OF THE CONTOUR COUNT IS THE WHOLE DISPATCH: the standard says a value greater
+                   than or equal to zero is a simple glyph and a negative one is a composite. A simple glyph
+                   is this graph's LEAF and is where every contour in the face is actually emitted. */
+                GlyphOutlineResult r = go_simple(g, off, n, &childxf, origin_x, origin_y, scale, out, reject);
+
+                if (r != GLYPH_OUTLINE_OK) {
+                    free(stk);
+                    return r;
+                }
+            } else {
+                size_t k;
+
+                /* "This graph must be acyclic, with every path through the graph leading to a simple glyph
+                   as a leaf node." The ancestry IS the stack, so the rule is one scan of it — and a face
+                   that breaks it would otherwise be a walk with no end, driven by a stranger's bytes. */
+                for (k = 0; k < depth; k++) {
+                    if (stk[k].glyph == child)
+                        GO_COMP_MALFORMED("a composite glyph whose components lead back to a glyph already "
+                                          "being expanded. OpenType requires the component graph to be "
+                                          "ACYCLIC with every path ending at a simple glyph, so a cycle is a "
+                                          "face that named an outline which does not exist at any depth");
+                }
+                if (depth == cap) {
+                    size_t ncap = cap ? cap * 2u : 8u;
+                    GoFrame *ns = realloc(stk, ncap * sizeof *ns);
+
+                    CHECK(ns != NULL, "out of memory expanding a composite glyph's components");
+                    stk = ns;
+                    cap = ncap;
+                }
+                stk[depth].glyph = child;
+                stk[depth].cur = off + GO_GLYPH_HEADER;
+                stk[depth].end = off + n;
+                stk[depth].more = true;   /* the record list is a do-while: there is always a first one */
+                stk[depth].xf = childxf;
+                depth++;
+            }
+            continue;
+        }
+
+        if (depth == 0)
+            break;
+
+        {
+            GoFrame *f = &stk[depth - 1];
+            const unsigned char *r;
+            uint16_t flags, cgid;
+            size_t argw, tw;
+            int arms;
+            int32_t a1, a2;
+            GoXform local = GO_IDENTITY;
+
+            if (!f->more) {
+                depth--;
+                continue;
+            }
+            DCHECK(f->cur <= f->end, "a component cursor walked past the description that bounds it, which "
+                                     "is this file's own bookkeeping and never the face's bytes");
+
+            if (f->end - f->cur < GO_COMPONENT_HEADER)
+                GO_COMP_MALFORMED("a composite glyph description that ends inside a component's flags and "
+                                  "glyph index. The component list is a do-while over MORE_COMPONENTS, so a "
+                                  "description whose last record sets that bit and then stops is one whose "
+                                  "own terminator was never written");
+            r = g->glyf + f->cur;
+            flags = go_u16(r);
+            cgid = go_u16(r + 2);
+            f->cur += GO_COMPONENT_HEADER;
+            f->more = (flags & GO_MORE_COMPONENTS) != 0;
+
+            /* THE ARGUMENT WIDTH IS BIT 0 AND THEIR MEANING IS BIT 1, and the two are independent: "If this
+               is set, the arguments are 16-bit (uint16 or int16); otherwise, they are bytes (uint8 or
+               int8)" for the first, and "If this is set, the arguments are signed xy values; otherwise, they
+               are unsigned point numbers" for the second. The width is decided before the meaning because
+               the record has to be STEPPED OVER either way. */
+            argw = (flags & GO_ARG_1_AND_2_ARE_WORDS) ? 4u : 2u;
+            if (f->end - f->cur < argw)
+                GO_COMP_MALFORMED("a composite glyph description that ends inside a component's placement "
+                                  "arguments");
+            if (flags & GO_ARG_1_AND_2_ARE_WORDS) {
+                a1 = go_i16(r + GO_COMPONENT_HEADER);
+                a2 = go_i16(r + GO_COMPONENT_HEADER + 2);
+            } else {
+                a1 = (int32_t)(int8_t)r[GO_COMPONENT_HEADER];
+                a2 = (int32_t)(int8_t)r[GO_COMPONENT_HEADER + 1];
+            }
+            f->cur += argw;
+
+            /* THE THREE SCALE FLAGS ARE MUTUALLY EXCLUSIVE — "no more than one of these may be set" — and a
+               record setting two names two different transform widths for one run of bytes, so there is no
+               reading of it under which the rest of the list is even located. */
+            arms = ((flags & GO_WE_HAVE_A_SCALE) != 0) + ((flags & GO_WE_HAVE_AN_X_AND_Y_SCALE) != 0) +
+                   ((flags & GO_WE_HAVE_A_TWO_BY_TWO) != 0);
+            if (arms > 1)
+                GO_COMP_MALFORMED("a component setting more than one of WE_HAVE_A_SCALE, "
+                                  "WE_HAVE_AN_X_AND_Y_SCALE and WE_HAVE_A_TWO_BY_TWO. OpenType makes the "
+                                  "three MUTUALLY EXCLUSIVE and each names a different number of F2DOT14 "
+                                  "values, so a record setting two does not say where the next one begins");
+            tw = (flags & GO_WE_HAVE_A_SCALE) ? 2u
+               : (flags & GO_WE_HAVE_AN_X_AND_Y_SCALE) ? 4u
+               : (flags & GO_WE_HAVE_A_TWO_BY_TWO) ? 8u : 0u;
+            if (f->end - f->cur < tw)
+                GO_COMP_MALFORMED("a composite glyph description that ends inside a component's transform");
+            {
+                const unsigned char *t = g->glyf + f->cur;
+
+                if (flags & GO_WE_HAVE_A_SCALE) {
+                    /* "the transformation is even further constrained by xscale and yscale both being set to
+                       the single appended value, scale" */
+                    local.a = local.d = go_f2dot14(t);
+                } else if (flags & GO_WE_HAVE_AN_X_AND_Y_SCALE) {
+                    /* "the appended xscale and yscale values are used as above, but the transformation is
+                       constrained by scale01 and scale10 both being set to zero" */
+                    local.a = go_f2dot14(t);
+                    local.d = go_f2dot14(t + 2);
+                } else if (flags & GO_WE_HAVE_A_TWO_BY_TWO) {
+                    /* "in order, xscale, scale01, scale10, and yscale" — the storage order, which is NOT the
+                       order they appear in the two equations. */
+                    local.a = go_f2dot14(t);
+                    local.b = go_f2dot14(t + 2);
+                    local.c = go_f2dot14(t + 4);
+                    local.d = go_f2dot14(t + 6);
+                }
+            }
+            f->cur += tw;
+
+            /* THE COMPONENT'S GLYPH INDEX IS THE FACE'S CLAIM AND NOT THIS ENGINE'S, so it is bounded by an
+               `if` here rather than by the always-fatal CHECK inside the length accessor. */
+            if (cgid >= g->num_glyphs)
+                GO_COMP_MALFORMED("a component naming a glyph index at or above 'maxp' — Maximum Profile's "
+                                  "numGlyphs. A component's index is stated by the FACE and proved by "
+                                  "nothing, unlike a glyph ID that came out of a character-map walk, so a "
+                                  "face whose composite references a glyph it does not have names an outline "
+                                  "that was never in the file");
+
+            /* THE OTHER PLACEMENT IS A DIFFERENT ALGORITHM AND IS A NAMED RESIDUAL, NOT A REFUSAL. */
+            if (!(flags & GO_ARGS_ARE_XY_VALUES)) {
+                if (reject) *reject = NULL;
+                free(stk);
+                return GLYPH_OUTLINE_UNSUPPORTED;
+            }
+
+            /* WHETHER THE OFFSET IS TRANSFORMED IS A FLAG AND IS THE CLASSIC PLACE A COMPONENT LANDS SUBTLY
+               WRONG. "If the SCALED_COMPONENT_OFFSET flag is set, then the x and y offset values are deemed
+               to be in the component glyph's coordinate system, and the scale transformation is applied to
+               both values. If the UNSCALED_COMPONENT_OFFSET flag is set, then the x and y offset values are
+               deemed to be in the current glyph's coordinate system, and the scale transformation is not
+               applied to either value. If neither flag is set, then the rasterizer may apply a default
+               behavior. On Microsoft and Apple platforms, the default behavior is the same as when the
+               UNSCALED_COMPONENT_OFFSET flag is set; this behavior is recommended for all rasterizer
+               implementations."
+               SO THE DEFAULT IS THE UNSCALED ONE AND `local.dx`/`local.dy` ARE ALREADY IN THE PARENT'S
+               UNITS, which is what lets `go_compose` treat every local transform alike.
+               AND A FACE SETTING BOTH IS NOT REFUSED, because the standard says what to do with it in its
+               own words — "If a font has both flags set, this is invalid; the rasterizer should use its
+               default behavior for this case" — so a refusal here would be this file being stricter than the
+               document it implements. */
+            local.dx = (double)a1;
+            local.dy = (double)a2;
+            if ((flags & GO_SCALED_COMPONENT_OFFSET) && !(flags & GO_UNSCALED_COMPONENT_OFFSET)) {
+                local.dx = local.a * (double)a1 + local.c * (double)a2;
+                local.dy = local.b * (double)a1 + local.d * (double)a2;
+            }
+
+            child = cgid;
+            childxf = go_compose(&f->xf, &local);
+            pending = true;
+        }
+    }
+
+    free(stk);
+    if (reject) *reject = NULL;
+    return GLYPH_OUTLINE_OK;
+}
+
+#undef GO_COMP_MALFORMED
+
+GlyphOutlineResult glyph_outline_append(const GlyphOutlines *g, uint16_t glyph_id,
+                                        double origin_x, double origin_y, double scale,
+                                        RasterPath *out, const char **reject)
+{
+    if (reject) *reject = NULL;
+    GO_READY(g);
+    DCHECK(out != NULL, "a glyph outline was decoded into no path");
+    /* THE PLACEMENT IS THIS CODEBASE'S OWN ARITHMETIC AND NOT A CLAIM THE FACE MAKES, which is what makes an
+       assert on it correct rather than an abort switch handed to whoever supplied the font: `scale` is a used
+       font-size divided by a unitsPerEm the face reader has already bounded, and the origin is a pen position
+       this engine computed. It is asserted HERE because the path builders below drop a non-finite coordinate
+       SILENTLY by their own contract — so without this the failure would be a glyph missing some of its
+       segments, which looks like a decoding bug and is a caller's number. */
+    DCHECK(isfinite(origin_x) && isfinite(origin_y) && isfinite(scale),
+           "a glyph was placed at a coordinate or a scale that is not a finite number");
+
+    return go_expand(g, glyph_id, origin_x, origin_y, scale, out, reject);
+}

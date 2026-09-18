@@ -53,6 +53,11 @@
  *     yields this component's declared absence — a MALFORMED result with a `reject` string naming the rule
  *     the bytes broke, so no caller has to infer a reason from a bare false and no caller is handed a
  *     PLAUSIBLE outline built out of bytes that were never a glyph.
+ *   A CLAIM A COMPONENT RECORD MAKES is the same `if` and is the place it is easiest to get wrong, because a
+ *     component's GLYPH INDEX looks like every other glyph ID in this engine and is not one: every other one
+ *     comes out of a character-map walk that has already proved the bound, and this one is simply stated by
+ *     the face. Handing it to the always-fatal bound below would put an abort switch for the RELEASE build
+ *     inside a page's own font file.
  *   AN INVARIANT THIS COMPONENT ESTABLISHED is a DCHECK — the point total it derived, the cursor it advanced,
  *     the op stream it wrote. Those assert that this file's own logic is correct, which is what a dev-only
  *     abort is for.
@@ -110,12 +115,19 @@ typedef struct {
 } GlyphOutlines;
 
 /* WHAT HAPPENED TO ONE GLYPH. THREE STATES AND NOT A BOOL, because two of them take opposite work and a
-   caller that could not tell them apart would be reading one answer for two questions: a composite is a
-   PERFECTLY VALID glyph this component does not build yet, and a malformed one is a file that lied. Merging
-   them would report every accented letter of a good font as a broken font. */
+   caller that could not tell them apart would be reading one answer for two questions: a VALID glyph this
+   component does not build yet is a capability to add, and a malformed one is a file that lied. Merging them
+   would report a good font as a broken font.
+   THE MIDDLE OUTCOME USED TO BE SPELLED `GLYPH_OUTLINE_COMPOSITE` AND IS RENAMED RATHER THAN RETIRED. A
+   composite glyph is now DECODED — it is the ordinary shape of every accented letter and the decoder walks
+   its components — so a name that said "composite" would name a case that answers OK, and the member beside
+   it would read as the only one left. What the outcome was always FOR is the category and not that one
+   member: a glyph the face is entitled to carry and this decoder cannot yet build. Exactly one construct is
+   in it today and the residual at `glyph_outline_append` names it, which is the same thing this enum's third
+   state has always meant and is now called. */
 typedef enum {
     GLYPH_OUTLINE_OK = 0,      /* appended — possibly nothing, for a glyph that has no outline */
-    GLYPH_OUTLINE_COMPOSITE,   /* a valid glyph made of other glyphs; see the residual below */
+    GLYPH_OUTLINE_UNSUPPORTED, /* a valid glyph built in a way this decoder does not have; see the residual */
     GLYPH_OUTLINE_MALFORMED    /* the bytes broke a rule, which `reject` names */
 } GlyphOutlineResult;
 
@@ -135,6 +147,27 @@ bool glyph_outlines_read(GlyphOutlines *g, const unsigned char *glyf, size_t gly
 size_t glyph_outline_length(const GlyphOutlines *g, uint16_t glyph_id);
 
 /* APPEND one glyph's contours to `out`, placed by (`origin_x`, `origin_y`) and `scale`.
+   A COMPOSITE GLYPH IS ONE OF THEM AND NOT A SECOND ENTRY. OpenType 'glyf' — Glyph Data's "Composite glyph
+   description" makes a composite "a directed graph" whose every path ends at a simple glyph, so this walks
+   that graph and emits at its leaves — which is why one call answers for a letter, an accent, and the letter
+   made of both. The walk holds its own stack on the heap and never recurses in C, because the DEPTH of that
+   graph is stated by the face and the standard puts no ceiling on it ("There is no minimum nesting depth
+   that must be supported"); what ENDS the walk is the standard's own requirement that the graph be acyclic,
+   refused here as a claim the bytes make.
+   NAMED RESIDUAL — A COMPONENT PLACED BY POINT ALIGNMENT. WHAT IS NOT COVERED: a component record whose
+   ARGS_ARE_XY_VALUES flag is CLEAR, which OpenType says makes "argument1 a point number in the parent glyph
+   (from contours incoporated and re-numbered from previous component glyphs)" and argument2 "a point number
+   (prior to re-numbering) from the child component glyph", the child then being positioned "by aligning the
+   two points". That is a different algorithm and not a missing branch of this one: it needs the parent's
+   ACCUMULATED POINT LIST in design units, renumbered as each child is incorporated, where this decoder keeps
+   no points at all between components and emits device-pixel segments as it goes; and the standard adds that
+   "Phantom points from the parent or the child may be referenced", which are derived from 'hmtx' and are not
+   in the outline tables this component is given. WHAT THE NEXT DIFF BUILDS: the retained per-composite point
+   array with the spec's renumbering, so that argument1 indexes it — which means the leaf emitter stops
+   writing to the path directly and writes points a second pass turns into segments. HOW ITS ABSENCE WOULD
+   SHOW: a caller sees `GLYPH_OUTLINE_UNSUPPORTED` for a glyph whose description this decoder read far enough
+   to know it is a composite, with `reject` NULL, and the path holds whatever components preceded the
+   point-matched one.
    `origin` is the pen position in device pixels and its y is the BASELINE; `scale` is device pixels per font
    design unit, which is a used font-size divided by the face's unitsPerEm. The placement is this codebase's
    own arithmetic over a length CSS has already refused a non-finite value for, so a non-finite one is a
