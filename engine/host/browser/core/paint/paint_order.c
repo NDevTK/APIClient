@@ -126,29 +126,23 @@ static bool po_is_inline_level(lxb_dom_element_t *el)
     return stacking_layer_of(el) == STACKING_LAYER_INLINE;
 }
 
-/* IS THIS AN ATOMIC INLINE-LEVEL BOX — one whose interior CSS 2.1 §E.2 reaches through its own sub-walk rather than
-   through the enclosing context's. CSS 2.1 §E.2's step 7.2.1.4 names the three populations and treats two of them the
-   same way: its "For inline-block and inline-table elements" list says "treat the element as if it created a
-   new stacking context, but any positioned descendants and descendants which actually create a new stacking
-   context should be considered part of the parent stacking context, not this new one", and its "For
-   inline-level replaced elements" list says "the replaced content, atomically". A non-replaced `display:
-   inline` box is the third and is NOT atomic — CSS 2.1 §E.2's step 7.2.1.4 walks straight through it to "all the
-   element's in-flow, non-positioned, inline-level children that are in this line box".
-   WHY THE REPLACED TEST IS ASKED OF THE ELEMENT AND NOT OF ITS `display`: CSS 2.1 §3.1's replaced element is
-   decided by HTML §15.4's list and not by any property (core/layout/replaced_element.h), so an `img` whose
-   computed `display` is the initial `inline` is inline-level AND atomic, and a list of `display` values could
-   not say so. */
-static bool po_is_atomic_inline(lxb_dom_element_t *el)
+/* CSS 2.1 §E.2 STEP 7.2.1's ITEM 4 CLASSIFICATION — see core/paint/paint_order.h for which three lists that
+   item holds, why they are one question rather than three predicates, and why the replaced test is asked of
+   the ELEMENT rather than of its `display`. What is here is only the derivation.
+   A NON-REPLACED `display: inline` BOX IS THE ONE §E.2 WALKS THROUGH: its item 4 reaches "all the element's
+   in-flow, non-positioned, inline-level children that are in this line box, and all runs of text inside the
+   element that is on this line box, in tree order", which is a walk into the box and not a mark for it. */
+PaintInlineKind paint_order_inline_kind(lxb_dom_element_t *el)
 {
     char *d;
     bool atomic;
 
-    if (!po_is_inline_level(el)) return false;
-    if (replaced_element_of(el).replaced) return true;
+    if (!po_is_inline_level(el)) return PAINT_INLINE_NONE;
+    if (replaced_element_of(el).replaced) return PAINT_INLINE_ATOMIC;
     d = po_display(el);
     atomic = strcmp(d, "inline") != 0;
     free(d);
-    return atomic;
+    return atomic ? PAINT_INLINE_ATOMIC : PAINT_INLINE_NON_ATOMIC;
 }
 
 /* ---- the member lists CSS 2.1 §E.2's steps are stated over ---------------------------------------------------- */
@@ -264,7 +258,7 @@ static void po_collect(JSContext *ctx, lxb_dom_element_t *context_el, PoSet set,
             break;
         case PO_SET_IN_FLOW_BLOCK:
             if (forms || positioned || layer == STACKING_LAYER_FLOAT) skip = true;
-            else if (layer == STACKING_LAYER_INLINE) skip = po_is_atomic_inline(el);
+            else if (layer == STACKING_LAYER_INLINE) skip = paint_order_inline_kind(el) == PAINT_INLINE_ATOMIC;
             /* CSS 2.1 §9.9.1's layer 3 is "in-flow, non-positioned" and non-inline-level, which is the
                COARSER bucket: CSS 2.1 §E.2's step 4 says "block-level", and CSS 2.1 §17.2's internal table
                boxes are neither that nor a layer of their own. See po_is_internal_table_box. */
@@ -273,7 +267,7 @@ static void po_collect(JSContext *ctx, lxb_dom_element_t *context_el, PoSet set,
         case PO_SET_FLOAT:
             if (forms || positioned) skip = true;
             else if (layer == STACKING_LAYER_FLOAT) { report = true; skip = true; }
-            else if (layer == STACKING_LAYER_INLINE) skip = po_is_atomic_inline(el);
+            else if (layer == STACKING_LAYER_INLINE) skip = paint_order_inline_kind(el) == PAINT_INLINE_ATOMIC;
             break;
         }
         if (report) po_push(out, el);

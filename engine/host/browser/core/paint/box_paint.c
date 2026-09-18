@@ -222,7 +222,7 @@ static bool bp_canvas_background(BpState *st, lxb_dom_element_t *root)
    CSSOM VIEW §6 "Extensions to the Element Interface"'s client coordinates, which is why the mark takes it
    whole rather than assembling four edges here: a second derivation of one rectangle is a second answer free
    to disagree with what `getBoundingClientRect` reports about the same box. */
-static bool bp_background_color(BpState *st, lxb_dom_element_t *el)
+static bool bp_background_color_at(BpState *st, lxb_dom_element_t *el, const CssPx rect[4])
 {
     DisplayMark mark;
     CssColor color;
@@ -234,10 +234,22 @@ static bool bp_background_color(BpState *st, lxb_dom_element_t *el)
     if (color.a == 0.0) return true;
     if (bp_background_propagates_to_canvas(st->ctx, el)) return true;
     mark.kind = DISPLAY_MARK_FILL_RECT;
-    element_view_bounding_box_px(el, mark.rect);
+    memcpy(mark.rect, rect, sizeof mark.rect);
     mark.color = color;
     display_list_append(st->out, &mark);
     return true;
+}
+
+/* THE SAME MARK AT THE BOX'S OWN BORDER BOX, which is every block-level caller's rectangle. It is a second
+   ENTRY and emphatically not a second MARK: an inline box is laid at a FRAGMENT rectangle instead (see
+   `bp_inline_box_marks`), and CSS 2.1 §E.2's step 7.2.1 item 1 and its step 2 and step 4 item 1 are one item
+   under three steps, so one function builds the mark and the callers differ only in where it goes. */
+static bool bp_background_color(BpState *st, lxb_dom_element_t *el)
+{
+    CssPx rect[4];
+
+    element_view_bounding_box_px(el, rect);
+    return bp_background_color_at(st, el, rect);
 }
 
 /* CSS 2.1 §8.5.3 "Border style: 'border-top-style', 'border-right-style', 'border-bottom-style',
@@ -311,7 +323,7 @@ static DisplayBorderStyle bp_border_style(lxb_dom_element_t *el, int side)
  * color properties, but UAs may choose their own algorithm to calculate the actual colors used". So an alpha
  * of zero on a border side does not settle whether that side paints, and dropping ink on it here would be this
  * component answering a question CSS 2.1 leaves to whoever rasterizes. */
-static bool bp_border(BpState *st, lxb_dom_element_t *el)
+static bool bp_border_at(BpState *st, lxb_dom_element_t *el, const CssPx rect[4])
 {
     static const char *const COLORS[4] = {
         "border-top-color", "border-right-color", "border-bottom-color", "border-left-color",
@@ -334,50 +346,19 @@ static bool bp_border(BpState *st, lxb_dom_element_t *el)
         if (!css_used_color(el, COLORS[i], &mark.side[i].color)) return false;
     }
     mark.kind = DISPLAY_MARK_BORDER;
-    element_view_bounding_box_px(el, mark.rect);
+    memcpy(mark.rect, rect, sizeof mark.rect);
     display_list_append(st->out, &mark);
     return true;
 }
 
-/* ---- CSS 2.1 §E.2's STEP 7.2.1 "the text" ------------------------------------------------------------------ */
-
-/* ONE FORMATTING CONTEXT'S CHARACTERS, LAID AS MARKS. `origin_x` and `origin_y` are where the box holding this
-   context has its CONTENT BOX ORIGIN in CSSOM VIEW §6 "Extensions to the Element Interface"' CLIENT
-   COORDINATES, and core/layout/line_box.h reports each character as an offset from exactly that corner — so
-   the composition is one addition per axis and never a second derivation.
-   THE COLOUR AND THE EM ARE READ PER CHARACTER AND FROM THE CHARACTER'S OWN ELEMENT, not from the box that
-   establishes the context. CSS 2.1 §14.1 "Foreground color: the 'color' property" makes `color` "the
-   foreground color of an element's text content" and it is an INHERITED property, so
-   `<p>plain <b style="color:red">red</b></p>` is one formatting
-   context whose characters have two colours; css-values-4 §6.1.1's em is the same shape one property over.
-   `LineBoxGlyph.style` is the inline box each character is in for precisely this reason — text_run.h carries
-   it because "both of the properties this measurement reads are per-element and the run crosses elements" —
-   so reading either off the establishing box would paint a `<b>` in its parent's colour and at its parent's
-   size. */
-static bool bp_context_text(BpState *st, lxb_dom_element_t *style, BlockFlowRun run,
-                            CssPx origin_x, CssPx origin_y)
+/* THE SAME MARK AT THE BOX'S OWN BORDER BOX — `bp_background_color`'s split, one item over and for the same
+   reason: CSS 2.1 §E.2's step 7.2.1 item 3 and its step 2 and step 4 item 3 are one item under three steps. */
+static bool bp_border(BpState *st, lxb_dom_element_t *el)
 {
-    LineBoxGlyph *g = NULL;
-    size_t n = line_box_glyphs(style, run, &g), i;
-    bool ok = true;
+    CssPx rect[4];
 
-    for (i = 0; i < n && ok; i++) {
-        DisplayMark mark;
-
-        mark.kind = DISPLAY_MARK_GLYPH;
-        mark.glyph.cp = g[i].cp;
-        mark.glyph.origin_x = css_px_add(origin_x, g[i].origin_x);
-        mark.glyph.origin_y = css_px_add(origin_y, g[i].baseline_y);
-        mark.glyph.em = css_font_size_px(g[i].style);
-        /* CSSOM §9 puts `color` in its unconditional used-value list, so this is a question that entry
-           answers rather than one it crashes on; a FALSE is this engine having no used colour for the
-           property at all, and its own crash at the site says which absence that is. It is the same read
-           `bp_border` makes for each of CSS 2.1 §8.5's four, one property over. */
-        if (!css_used_color(g[i].style, "color", &mark.color)) { ok = false; break; }
-        display_list_append(st->out, &mark);
-    }
-    free(g);
-    return ok;
+    element_view_bounding_box_px(el, rect);
+    return bp_border_at(st, el, rect);
 }
 
 /* CSS 2 §8.1 "Box dimensions"' CONTENT BOX ORIGIN of `el`, in CLIENT COORDINATES — the border box corner
@@ -397,8 +378,189 @@ static void bp_content_box_origin(lxb_dom_element_t *el, CssPx *x, CssPx *y)
     *y = css_px_add(box[1], css_px_add(width[0], used_value_px(el, "padding-top")));
 }
 
+/* ---- CSS 2.1 §E.2's STEP 7.2.1 — THE BOXES IN A LINE BOX, AND THE MARKS EACH OF THEM LAYS ------------------ */
+
+/* ONE CHARACTER, LAID AS A MARK. `origin_x` and `origin_y` are where the box holding this formatting context
+   has its CONTENT BOX ORIGIN in CSSOM VIEW §6 "Extensions to the Element Interface"' CLIENT COORDINATES, and
+   core/layout/line_box.h reports each character as an offset from exactly that corner — so the composition is
+   one addition per axis and never a second derivation.
+   THE COLOUR AND THE EM ARE READ FROM THE CHARACTER'S OWN ELEMENT, not from the box that establishes the
+   context. CSS 2.1 §14.1 "Foreground color: the 'color' property" makes `color` "the foreground color of an
+   element's text content" and it is an INHERITED property, so `<p>plain <b style="color:red">red</b></p>` is
+   one formatting context whose characters have two colours; css-values-4 §6.1.1's em is the same shape one
+   property over. `LineBoxGlyph.style` is the inline box each character is in for precisely this reason. */
+static bool bp_glyph(BpState *st, const LineBoxGlyph *g, CssPx origin_x, CssPx origin_y)
+{
+    DisplayMark mark;
+
+    mark.kind = DISPLAY_MARK_GLYPH;
+    mark.glyph.cp = g->cp;
+    mark.glyph.origin_x = css_px_add(origin_x, g->origin_x);
+    mark.glyph.origin_y = css_px_add(origin_y, g->baseline_y);
+    mark.glyph.em = css_font_size_px(g->style);
+    /* CSSOM §9 puts `color` in its unconditional used-value list, so this is a question that entry answers
+       rather than one it crashes on; a FALSE is this engine having no used colour for the property at all, and
+       its own crash at the site says which absence that is. It is the same read `bp_border` makes for each of
+       CSS 2.1 §8.5's four, one property over. */
+    if (!css_used_color(g->style, "color", &mark.color)) return false;
+    display_list_append(st->out, &mark);
+    return true;
+}
+
+/* CSS 2.1 §E.2's STEP 7.2.1 ITEMS 1 AND 3 FOR ONE INLINE BOX — "background color of element" and "border of
+ * element", laid ONCE PER FRAGMENT.
+ *
+ * ONE MARK PER FRAGMENT AND NOT ONE PER BOX, WHICH IS THE WHOLE DIFFERENCE FROM EVERY OTHER CALLER OF THESE
+ * TWO MARKS. CSS 2.2 §9.4.2 "Inline formatting contexts" SPLITS an inline box across the line boxes it spans,
+ * and CSS 2.1 §E.2 says so in its own note — "Some of the boxes may have been generated by line splitting or
+ * the Unicode bidirectional algorithm". `element_view_bounding_box_px` answers CSSOM VIEW §6's
+ * get-the-bounding-box, which is the UNION of those fragments, so painting a two-line `<span>`'s background
+ * there would fill the rectangle spanning BOTH lines INCLUDING the gap between them and including whatever
+ * sits to the left of the second line's start. That is ink in a place CSS 2.1 §14.2 "The background" does not
+ * put it — WRONG rather than narrow, which is the one thing a painter may not be — so the rectangle comes from
+ * §6's `getClientRects()` instead, whose step 3 is "one for each box fragment" and which
+ * core/layout/line_box.h answers as `LineBoxFragment` in that section's own words.
+ *
+ * THE FRAME IS THE ESTABLISHING CONTAINER'S CONTENT BOX AND IS ASKED FOR HERE RATHER THAN PASSED IN, and that
+ * is a correctness requirement and not a convenience. `LineBoxFragment` is measured from the content box origin
+ * of the block container `line_box_inline_fragments` reports, and that entry states it "ADDS that origin to the
+ * coordinates it measures inside the box" for CSS 2.2 §9.2.1.1's anonymous block boxes — so a fragment is
+ * already in the CONTAINER's frame, while a glyph is in the ANONYMOUS BOX's and its caller adds that box's own
+ * offset. The two frames differ by exactly that offset, so taking the glyph caller's origin here would move
+ * every fragment of a MIXED container by one anonymous box's position.
+ *
+ * THE GEOMETRY IS ASKED FOR ONLY WHERE THERE IS A MARK TO PUT IN IT, which is the same rule
+ * core/layout/scrolling_area.c states for its origin read: `line_box_inline_fragments` ABORTS for the writing
+ * modes and box types it does not place, so asking it about a box that lays no ink would raise a crash at an
+ * element this walk has nothing to draw for. */
+static bool bp_inline_box_marks(BpState *st, lxb_dom_element_t *el)
+{
+    lxb_dom_element_t *establishing = NULL;
+    LineBoxFragment *frag = NULL;
+    CssColor color;
+    CssPx width[4], ox, oy;
+    size_t n, i;
+    int side;
+    bool ink = false, ok = true;
+
+    if (!css_used_color(el, "background-color", &color)) return false;
+    if (color.a != 0.0) ink = true;
+    used_value_border_widths_px(el, width);
+    for (side = 0; side < 4; side++)
+        if (width[side].px != 0.0) ink = true;
+    if (!ink) return true;
+
+    n = line_box_inline_fragments(el, &establishing, &frag);
+    DCHECK(establishing != NULL,
+           "core/layout/line_box.h reported an inline box's fragments with no block container to measure them "
+           "from — its own contract is that `*establishing` receives that container in both of CSS 2.2 "
+           "§9.2.1.1's shapes, so a NULL here is that entry and this caller disagreeing about the frame");
+    bp_content_box_origin(establishing, &ox, &oy);
+    for (i = 0; i < n && ok; i++) {
+        CssPx rect[4];
+
+        rect[0] = css_px_add(ox, frag[i].inline_start);
+        rect[1] = css_px_add(oy, frag[i].block_start);
+        rect[2] = css_px_sub(frag[i].inline_end, frag[i].inline_start);
+        rect[3] = css_px_sub(frag[i].block_end, frag[i].block_start);
+        ok = bp_background_color_at(st, el, rect) && bp_border_at(st, el, rect);
+    }
+    free(frag);
+    return ok;
+}
+
+/* CSS 2.1 §E.2's STEP 7.2.1, OVER THE BOXES THAT ARE CHILDREN OF `parent` IN THIS FORMATTING CONTEXT — "For
+ * each box that is a child of that element, in that line box, in tree order:" and, for an inline box, its own
+ * item 4 recursion, which §E.2 spells "Otherwise, jump to 7.2.1 for that element."
+ *
+ * `from` AND `to` ARE THE HALF-OPEN SIBLING RANGE THIS CONTEXT COVERS, which is `BlockFlowRun` read as
+ * core/layout/block_flow.h defines it and is why the top-level call cannot simply walk every child. §9.2.1.1
+ * puts a MIXED container's inline content in one anonymous block box PER MAXIMAL RUN, so a container's child
+ * list holds the boxes of SEVERAL contexts; a walk that took the whole list would lay every inline box's
+ * background once per run. The recursion passes `first_child` and NULL because an inline box's children are all
+ * in the one run its own box is in.
+ *
+ * THE GLYPH CURSOR IS THE SECOND HALF OF THE ENUMERATION AND IS WHY THIS IS ONE WALK AND NOT TWO. §E.2's item 4
+ * interleaves BOXES with RUNS OF TEXT — "all the element's in-flow, non-positioned, inline-level children that
+ * are in this line box, AND ALL RUNS OF TEXT INSIDE THE ELEMENT that is on this line box, in tree order" — so a
+ * nested box's background goes down BETWEEN two of its parent's runs of text, and a walk that laid the boxes
+ * and the text in two passes could not place it. `line_box_glyphs` reports the context's characters in CONTENT
+ * order, which IS Appendix E §E.1's tree order over the same nodes, so ONE monotone cursor over that array
+ * interleaves correctly with this tree walk and no character is measured a second time —
+ * core/layout/text_run.h's own rule that "two sums of one line hand a caller a fragment whose left edge and
+ * width describe different text".
+ *
+ * A TEXT NODE IS §9.2.2.1's ANONYMOUS INLINE BOX AND LAYS ONLY ITEM 4. CSS 2.2 §9.2.2.1 "Anonymous inline
+ * boxes" makes "any text that is directly contained inside a block container element ... an anonymous inline
+ * element", so such a box IS one of the boxes item 7.2.1 enumerates — and CSS 2.2 §9.2.1.1 gives it "the
+ * properties of anonymous boxes are inherited from the enclosing non-anonymous box … Non-inherited properties
+ * have their initial value", of which `background-color` and `border-style` are two. Its items 1 and 3 are
+ * therefore derivably no ink, which is why the walk lays its text and asks for no geometry: an anonymous box
+ * has no element for `element_view_bounding_box_px` to be asked about.
+ *
+ * EVERY ELEMENT CHILD IS DESCENDED INTO AND ONLY A NON-ATOMIC INLINE BOX GETS MARKS, which is two rules and
+ * not one loose one. The MARKS are item 7.2.1's and are stated over the boxes item 4 names — "in-flow,
+ * non-positioned, inline-level" — so `paint_order_inline_kind` decides them. The DESCENT is about the glyph
+ * cursor: a character whose box this walk stepped over would leave the cursor standing on it, and every later
+ * character of the context would be laid at the wrong point in the sequence. Descending into a box that lays
+ * no marks therefore keeps the CHARACTERS where they were while adding ink for the boxes §E.2 gives ink to,
+ * and a box that contributes no character (an atomic inline reaches the line as one U+FFFC item, which
+ * `line_box_glyphs` does not emit) consumes nothing and costs nothing. */
+static bool bp_step_7_2_1(BpState *st, lxb_dom_element_t *parent, lxb_dom_node_t *from, lxb_dom_node_t *to,
+                          const LineBoxGlyph *g, size_t n, size_t *cursor, CssPx origin_x, CssPx origin_y)
+{
+    lxb_dom_node_t *child;
+
+    for (child = from; child != to && child != NULL; child = child->next) {
+        if (child->type == LXB_DOM_NODE_TYPE_TEXT) {
+            while (*cursor < n && g[*cursor].style == parent) {
+                if (!bp_glyph(st, &g[*cursor], origin_x, origin_y)) return false;
+                (*cursor)++;
+            }
+            continue;
+        }
+        if (child->type == LXB_DOM_NODE_TYPE_ELEMENT) {
+            lxb_dom_element_t *box = lxb_dom_interface_element(child);
+
+            if (paint_order_inline_kind(box) == PAINT_INLINE_NON_ATOMIC && !bp_inline_box_marks(st, box))
+                return false;
+            if (!bp_step_7_2_1(st, box, child->first_child, NULL, g, n, cursor, origin_x, origin_y))
+                return false;
+        }
+    }
+    return true;
+}
+
+/* ONE FORMATTING CONTEXT, PAINTED AS CSS 2.1 §E.2's STEP 7.2.1. `origin_x` and `origin_y` are the CONTENT BOX
+   ORIGIN of the box holding this context, in CLIENT COORDINATES.
+   THE CURSOR IS ASSERTED TO REACH THE END, which is this engine's own two-sided invariant and not a statement
+   about any document: `line_box_glyphs` and this tree walk are two readings of ONE formatting context that
+   this codebase computed, so a character the fill placed and the walk never reached is those two components
+   disagreeing about which nodes the context holds. It is checked only on a TRUE return, because a painter that
+   stopped at an operand it could not compute is meant to keep its prefix. */
+static bool bp_context_step_7_2_1(BpState *st, lxb_dom_element_t *style, BlockFlowRun run,
+                                  CssPx origin_x, CssPx origin_y)
+{
+    LineBoxGlyph *g = NULL;
+    size_t n = line_box_glyphs(style, run, &g), cursor = 0;
+    lxb_dom_node_t *from = run.after != NULL ? run.after->next
+                                             : lxb_dom_interface_node(style)->first_child;
+    bool ok = bp_step_7_2_1(st, style, from, run.end, g, n, &cursor, origin_x, origin_y);
+
+    DCHECKF(!ok || cursor == n,
+            "CSS 2.1 §E.2 \"Painting order\"'s step 7.2.1 walked one inline formatting context's boxes in tree "
+            "order and laid %zu of the %zu characters core/layout/line_box.h placed on its lines. Both numbers "
+            "are this engine's own readings of ONE context — the fill's items and this walk's child lists — so "
+            "a character the walk never reached is a node `line_box_glyphs` collected and "
+            "`BlockFlowRun`'s sibling range does not cover",
+            cursor, n);
+    free(g);
+    return ok;
+}
+
+
 /* CSS 2.1 §E.2's STEP 7.2 OVER ONE BLOCK-LEVEL BOX — every inline formatting context inside it, in tree
- * order, with each context's characters laid at the position CSS 2.2 §9.4.1's stack put its box.
+ * order, with each context's step 7.2.1 performed at the position CSS 2.2 §9.4.1's stack put its box.
  *
  * IT IS TWO SHAPES BECAUSE CSS 2.2 §9.2.1 GIVES ONE CONTEXT TWO, which core/layout/block_flow.h states and
  * core/layout/scrolling_area.c already walks exactly this way — a container CSS 2.2 §9.4.2 "Inline formatting
@@ -413,21 +575,84 @@ static void bp_content_box_origin(lxb_dom_element_t *el, CssPx *x, CssPx *y)
  * enumeration REPORTS it, and a consumer that dropped a reported field would be reading one of two numbers and
  * trusting the other, which is core/layout/line_box.c's own words about the same pair.
  *
- * NAMED RESIDUAL — §E.2's STEP 7.2.1 IS AN ENUMERATION AND THIS ARM LAYS ONLY THE LAST ITEM OF IT.
- * WHAT IS NOT COVERED: the sub-list is "background color of element", "background image of element", "border
- * of element" and then, for an inline element, its children and its runs of text — so an inline box's own
- * background and border go down BEFORE the text on that line, and this arm lays the text with no arm for
- * either. It is NARROWER and not WRONG today, and the reason is checkable rather than a hope: an inline box's
- * background and border are painted NOWHERE in this engine, because §E.2's step 4 walks "block-level"
- * descendants and an inline box is not one, so there is no competing ink inside any line box for the text to
- * be laid over or under. THE DAY THAT CHANGES, THE ORDER BREAKS BEFORE THE MARKS DO.
- * WHAT THE NEXT DIFF BUILDS: core/paint/paint_order.h's own residual (b) — that component sequences step
- * 7.2.1, offering each box in a line box in tree order instead of offering the block once, at which point
- * this arm becomes one offer per box and the three items ahead of the text are three arms beside this one.
- * HOW ITS ABSENCE WOULD SHOW: a `<span>` with a background colour and text after it on one line, where the
- * span's background is laid over the earlier text instead of under the span's own. Nothing shows while no
- * inline background is painted at all, which is why this is a residual and not a defect.
- * RETIREMENT: this record goes when `paint_order_walk` offers the boxes inside a line box. */
+ * RETIRED CLAUSE — THIS ARM'S OWN NEXT-DIFF HALF SENT ITS READER TO THE WRONG COMPONENT, AND IT IS KEPT
+ * BECAUSE THE REASONING THAT PRODUCED IT IS THE REASONING A READER RE-DERIVES. It read, in one run:
+ * `core/paint/paint_order.h's own residual (b) — that component sequences step 7.2.1, offering each box in a line box in tree order instead of offering the block once, at which point this arm becomes one offer per box and the three items ahead of the text are three arms beside this one.`
+ * Its SPEC half is exact and is what landed: §E.2's step 7.2.1 IS an enumeration over the boxes in a line box
+ * in tree order, and the items ahead of the text are the three this file now lays two of. Its MECHANISM half —
+ * that `paint_order_walk` performs it — is not buildable, on THREE independent grounds, each checkable without
+ * running anything.
+ * FIRST, `PaintOrderVisit` NAMES AN ELEMENT AND THIS ENUMERATION'S MEMBERS ARE NOT ALL ELEMENTS. Appendix E
+ * §E.1 "Definitions" says outright that in §E.2 "'element' refers to actual elements, pseudo-elements, and
+ * ANONYMOUS BOXES", and CSS 2.2 §9.2.2.1 "Anonymous inline boxes" makes every run of text directly inside a
+ * block container one of them. So the boxes step 7.2.1 enumerates for `<p>A <span>B</span></p>` are an
+ * anonymous inline box and the `span`, and offering the first is a call that component's visitor has no
+ * argument for — which is the shape paint_order.h's own third residual already records for an anonymous TABLE
+ * box. Replacing the block's single offer with one per box, as the clause says, would therefore have made
+ * every run of text directly inside a block unreachable.
+ * SECOND, THE ENUMERATION INTERLEAVES BOXES WITH RUNS OF TEXT, AND A RUN OF TEXT IS NOT A BOX EITHER. §E.2's
+ * item 4 is stated over "all the element's in-flow, non-positioned, inline-level children that are in this line
+ * box, AND ALL RUNS OF TEXT INSIDE THE ELEMENT that is on this line box, in tree order", so a nested box's
+ * background goes down BETWEEN two of its parent's runs — and one element has as many runs as it has text
+ * children, which a `(step, element)` pair cannot tell apart. An order component that offered only the boxes
+ * would hand this file a sequence with no place to put the text.
+ * THIRD, "FOR EACH LINE BOX" IS LINE-BREAKING GEOMETRY, WHICH paint_order.h's OWN OPERAND CRITERION EXCLUDES:
+ * that header's argument for why it can be complete while no ink exists is that "every operand of the first is
+ * a computed `display`, `position`, `float` and `z-index` plus tree order and NOTHING ELSE", with "colour,
+ * geometry, font, table grid and image decoding appear only inside the sub-lists". Which fragment landed on
+ * which line is geometry by that sentence's own classification.
+ * WHAT LANDED is the enumeration HERE, in `bp_step_7_2_1`, walking the child lists §9.2.1.1's run delimits and
+ * carrying ONE monotone cursor over `line_box_glyphs`' characters so the boxes and the runs of text interleave
+ * in one pass. `paint_order_walk` still offers the block once, and what it gained is the CLASSIFICATION
+ * `paint_order_inline_kind` — which is a question about a computed `display` and a `position`, so it is that
+ * component's by the same criterion that keeps the enumeration out of it.
+ *
+ * NAMED RESIDUAL — STEP 7.2.1's ITEM 2 IS THE BACKGROUND IMAGE, WHICH NO STEP OF §E.2 CAN LAY.
+ * WHAT IS NOT COVERED: `bp_inline_box_marks` lays items 1 and 3 — "background color of element" and "border of
+ * element" — and not item 2, "background image of element". It is the same ONE gap box_paint.h's first
+ * residual names for the canvas: no mark kind in core/paint/display_list.h holds an image, and nothing in this
+ * engine turns a `<url>` into pixels, so every image item of every step of §E.2 waits on one diff and this item
+ * is not a step-7.2.1 absence at all.
+ * WHAT THE NEXT DIFF BUILDS: not this component's — see box_paint.h's first residual, which names the `<image>`
+ * road that ends at core/css/css_image.h's validity test.
+ * HOW ITS ABSENCE WOULD BE OBSERVED: a `<span>` whose background is declared as an image alone paints no
+ * background, while the same span declaring a colour beside the image paints the colour and none of the image.
+ * RETIREMENT: this record goes when `bp_inline_box_marks` appends a mark for §E.2's step 7.2.1 item 2.
+ *
+ * NAMED RESIDUAL — A BOX §E.2 REACHES BY ANOTHER STEP STILL HAS ITS CHARACTERS LAID HERE.
+ * WHAT IS NOT COVERED: `bp_step_7_2_1` descends into EVERY element child to keep the glyph cursor in step, and
+ * lays marks only where `paint_order_inline_kind` answers `PAINT_INLINE_NON_ATOMIC`. A POSITIONED inline box is
+ * therefore walked THROUGH — its characters are laid at this block's step 7.2 offer — while §E.2 puts them in
+ * its step 8 or step 9, inside that box's own pseudo-context or stacking context. That is not a change this
+ * diff made: `line_box_glyphs` reports one formatting context's characters whoever owns them, and laying them
+ * here is what this file did before the enumeration existed. What the enumeration adds is that such a box gets
+ * NO background and NO border here, which is the half §E.2 would otherwise have put at the wrong stack level.
+ * WHAT THE NEXT DIFF BUILDS: the characters' removal from this context, which is core/layout/line_box.h's
+ * question and not this file's — a positioned box is out of flow, so whether its items belong to the run at all
+ * is `lb_fill`'s partition to state, and until it states one there is nothing here to route.
+ * HOW ITS ABSENCE WOULD BE OBSERVED: `<p>a <span style="position:relative; z-index:1">b</span></p>` over a
+ * later positioned box paints "b" UNDER it, where a browser puts "b" on top — the text is drawn, at the
+ * enclosing block's stack level rather than at its own.
+ * RETIREMENT: this record goes when the characters of a box §E.2 reaches by another step are not in the
+ * establishing context's glyph list.
+ *
+ * NAMED RESIDUAL — AN INLINE BOX THAT PLACES NO CHARACTER BETWEEN TWO RUNS OF ONE PARENT IS LAID LATE.
+ * WHAT IS NOT COVERED: a text child's characters are consumed while `LineBoxGlyph.style` is that text node's
+ * parent, which is the only delimiter `line_box_glyphs` reports — it carries the element a character's box
+ * has and not the text node the character came from. Two runs of one parent separated by an inline box that
+ * places NO character are therefore consumed together, at the FIRST of the two, so that box's background and
+ * border go down after BOTH runs instead of between them. A box that places a character delimits the two runs
+ * by itself and is exact; this is the empty case alone — `<p>A <span style="background:yellow"><img></span>
+ * B</p>`, where the span's only content reaches the line as css-text-3 §5.5's U+FFFC and `line_box_glyphs`
+ * emits no character for it.
+ * WHAT THE NEXT DIFF BUILDS: a delimiter on the character `line_box_glyphs` reports — the text NODE beside the
+ * element whose properties the box has — which is one field on `LineBoxGlyph` and is core/layout/text_run.h's
+ * to carry, since `tr_append` already asserts that a character's `style` is its text node's parent and
+ * therefore holds both halves at the point it appends.
+ * HOW ITS ABSENCE WOULD BE OBSERVED: the span's background is painted OVER the parent's later text where the
+ * two overlap, which needs a negative margin to be visible at all — both runs are on the same line and the
+ * span sits between them, so their rectangles are disjoint without one.
+ * RETIREMENT: this record goes when a run of text is delimited by its own node rather than by its parent. */
 static bool bp_line_boxes(BpState *st, lxb_dom_element_t *el)
 {
     BlockFlowAnonBox *v;
@@ -445,7 +670,7 @@ static bool bp_line_boxes(BpState *st, lxb_dom_element_t *el)
         whole.after = NULL;
         whole.end = NULL;
         bp_content_box_origin(el, &x, &y);
-        return bp_context_text(st, el, whole, x, y);
+        return bp_context_step_7_2_1(st, el, whole, x, y);
     }
     n = block_flow_anonymous_boxes(el, &v);
     /* THE CONTAINER'S OWN CONTENT ORIGIN IS ASKED FOR ONLY WHERE THERE IS A BOX TO MEASURE FROM IT, which is
@@ -456,7 +681,7 @@ static bool bp_line_boxes(BpState *st, lxb_dom_element_t *el)
     if (n == 0) { free(v); return true; }
     bp_content_box_origin(el, &x, &y);
     for (i = 0; i < n && ok; i++)
-        ok = bp_context_text(st, el, v[i].run, css_px_add(x, v[i].content_x), css_px_add(y, v[i].content_y));
+        ok = bp_context_step_7_2_1(st, el, v[i].run, css_px_add(x, v[i].content_x), css_px_add(y, v[i].content_y));
     free(v);
     return ok;
 }
@@ -529,15 +754,15 @@ static bool bp_visit(PaintStep step, lxb_dom_element_t *el, void *user)
     /* STILL NO MARK, AND THE TWO REMAINING CONTENT STEPS ARE NOT THE SAME ABSENCE. `PAINT_STEP_REPLACED_CONTENT`
        is CSS 2.1 §E.2's step 7.1 "the replaced content, atomically", which core/paint/paint_order.h calls a
        SURFACE rather than a mark and which this vocabulary has no word for. `PAINT_STEP_INLINE_LINE_BOXES` is
-       step 6 — the line boxes an INLINE stacking context is in — and its sub-list is the same step 7.2.1 the
-       arm below lays, reached for a box that is on those lines rather than for the box that establishes them;
-       what it waits on is paint_order.h's residual (c), which is the enumeration and not the mark. */
+       step 6 — the line boxes an INLINE stacking context is in — and its sub-list is the same step 7.2.1
+       `bp_step_7_2_1` performs below; what it waits on is the ENTRY into that walk for a box that is ON a line
+       rather than one that establishes the lines. See box_paint.h's residual for the triple it needs. */
     case PAINT_STEP_INLINE_LINE_BOXES:
     case PAINT_STEP_REPLACED_CONTENT:
         return true;
-    /* CSS 2.1 §E.2's STEP 7.2 — "Otherwise, for each line box of that element", whose sub-list reaches "the
-       text". See `bp_line_boxes` for the two shapes of one formatting context and for the residual that names
-       the three items of step 7.2.1 this arm does not lay. */
+    /* CSS 2.1 §E.2's STEP 7.2 — "Otherwise, for each line box of that element", whose sub-list is step 7.2.1's
+       enumeration over the boxes in each of those line boxes. See `bp_line_boxes` for the two shapes of one
+       formatting context and `bp_step_7_2_1` for the enumeration and for why it is performed here. */
     case PAINT_STEP_LINE_BOXES:
         return bp_line_boxes(st, el);
     case PAINT_STEP_OUTLINES:

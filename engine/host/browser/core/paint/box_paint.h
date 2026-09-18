@@ -55,10 +55,13 @@
  * `PAINT_STEP_REPLACED_CONTENT` are each counted as an offer and append nothing, and no two of them are
  * waiting on the same thing. `PAINT_STEP_REPLACED_CONTENT` wants a VOCABULARY — CSS 2.1 §E.2's step 7.1 is
  * "the replaced content, atomically", which core/paint/paint_order.h calls a SURFACE rather than a mark and
- * core/paint/display_list.h has no kind for. `PAINT_STEP_INLINE_LINE_BOXES` wants an ENUMERATION and not a
- * mark: step 6's sub-list is the same step 7.2.1 `PAINT_STEP_LINE_BOXES` now lays, reached for a box that is
- * ON those lines rather than for the box that establishes them, and what is missing is
- * core/paint/paint_order.h's residual (c). `PAINT_STEP_TABLE_BORDERS` wants neither: the BORDER mark exists
+ * core/paint/display_list.h has no kind for. `PAINT_STEP_INLINE_LINE_BOXES` wants neither a mark nor an
+ * enumeration any more, and THIS SENTENCE USED TO SAY IT WANTED THE ENUMERATION core/paint/paint_order.h's
+ * residual (c) NAMES: step 6's sub-list is the same step 7.2.1 `bp_step_7_2_1` now performs, so the sequence
+ * exists and the gap moved. What it wants is an ENTRY INTO that walk for a box that is ON a line rather than
+ * one that establishes the lines — the establishing container, the `BlockFlowRun` this box's items are in and
+ * that container's content box origin, which is the triple `bp_line_boxes` derives for a block and which
+ * core/layout/line_box.h's `line_box_inline_fragments` already finds for an inline box in its own first step. `PAINT_STEP_TABLE_BORDERS` wants neither: the BORDER mark exists
  * and this file lays it for CSS 2.1 §E.2's step 2 and step 4 BLOCK arms. What that item wants is an
  * ENUMERATION — its text is "all table borders (in tree order for separated borders)" and paint_order.h offers
  * it ONCE carrying the table element, so the boxes whose borders it covers are not named and painting the

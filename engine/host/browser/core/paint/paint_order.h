@@ -24,9 +24,19 @@
  *
  * THE SUB-LISTS SPLIT INTO TWO KINDS AND ONLY ONE OF THEM IS ORDER. CSS 2.1 §E.2's step 2 block arm is three marks in
  * a fixed sequence — background colour, background image, border — which is a MARK VOCABULARY and belongs to
- * whatever lays ink. CSS 2.1 §E.2's step 2 TABLE arm and its step 7.2 are ENUMERATIONS, and an enumeration is order
- * and is therefore this component's. The TABLE arm is sequenced here; step 7.2's line boxes are a named
- * residual at the foot of this header, with what builds them.
+ * whatever lays ink. CSS 2.1 §E.2's step 2 TABLE arm is an ENUMERATION, and an enumeration is order and is
+ * therefore this component's; it is sequenced here.
+ * AND STEP 7.2's LINE BOXES ARE AN ENUMERATION THAT IS NOT THIS COMPONENT'S, WHICH IS THE ONE PLACE THE RULE
+ * ABOVE DOES NOT DECIDE AND THIS FILE USED TO SAY IT DID. The sentence that stood here called step 7.2 an
+ * enumeration "and therefore this component's", with a residual naming what would build it, and that was
+ * refuted when it was built: core/paint/box_paint.c holds the argument in full at `bp_step_7_2_1`, and its
+ * three grounds are that step 7.2.1's members include Appendix E §E.1's ANONYMOUS BOXES, which this file's
+ * visitor has no argument for; that its item 4 interleaves those boxes with RUNS OF TEXT, of which one element
+ * has as many as it has text children and a `(step, element)` pair can name none; and that "for each line box"
+ * is LINE-BREAKING GEOMETRY, which the operand criterion two paragraphs above excludes by name. What this
+ * component owes step 7.2.1 is therefore not the sequence but the CLASSIFICATION `paint_order_inline_kind`,
+ * which is a question about a computed `display` and a `position` and so is this component's by that same
+ * criterion.
  *
  * THE TABLE ARM IS SEVEN ITEMS OF WHICH SIX ARE BACKGROUNDS, and both numbers are written down because one
  * sentence carrying a count and the list it counts is where the two drift. CSS 2.1 §E.2 lists "table backgrounds
@@ -189,20 +199,53 @@ typedef bool (*PaintOrderVisit)(PaintStep step, lxb_dom_element_t *el, void *use
    difference between the two kinds. It terminates because every recursion descends. */
 bool paint_order_walk(JSContext *ctx, lxb_dom_element_t *context_el, PaintOrderVisit visit, void *user);
 
-/* NAMED RESIDUAL — CSS 2.1 §E.2's LINE-BOX ENUMERATIONS, WHICH ARE ORDER AND ARE THEREFORE THIS COMPONENT'S.
-   WHAT IS NOT COVERED: two enumerations inside CSS 2.1 §E.2's steps, each offered to the visitor as a single box and
-   neither sequenced here. (b) Step 7.2's line boxes and the boxes inside each of them, which is where every
-   run of text in a document is placed and which carries its own recursion ("Otherwise, jump to 7.2.1 for that
-   element"). (c) Step 6, which is (b) reached from an inline element that forms a stacking context. A visitor
-   handed one of these offers must sequence it itself, and nothing here states that sequence for it. The
-   lettering is (b) and (c) because (a), the TABLE arm, has landed and its clause is retired below.
-   WHAT THE NEXT DIFF BUILDS: (b), over core/layout/line_box.h's fragments.
-   HOW ITS ABSENCE WOULD SHOW: two boxes whose marks interleave in CSS 2.1 §E.2 are offered as two whole boxes, so a
-   consumer that paints each offer completely before the next lays a line's text under a background belonging
-   to a box later in tree order. It is observable as ink from one box covering ink from another with no
-   `z-index` between them.
-   RETIREMENT: this record loses a clause as each remaining enumeration lands here, and goes when
-   `paint_order_walk` offers no box whose CSS 2.1 §E.2 sub-list is an enumeration it has not sequenced.
+/* WHICH OF CSS 2.1 §E.2 STEP 7.2.1's ITEM 4 LISTS A BOX TAKES — that item is the words "For inline elements:"
+   followed by THREE sibling lists, "For inline elements:", "For inline-block and inline-table elements:" and
+   "For inline-level replaced elements:", and this answers which of the three a box is in.
+   IT IS ONE QUESTION AND NOT THREE PREDICATES, because the three lists PARTITION the boxes on a line: a
+   consumer that asked three separate questions would be free to place a box in none of them or in two, and
+   §E.2 treats the second and third the same way while treating the first oppositely — its "For inline
+   elements:" list walks straight THROUGH the box to its children and its runs of text, while the other two
+   make the box a UNIT ("treat the element as if it created a new stacking context" and "the replaced content,
+   atomically").
+   `PAINT_INLINE_NONE` IS NOT A REFUSAL AND IS THE COMMONEST ANSWER: step 7.2.1's item 4 is stated over the
+   element's "in-flow, non-positioned, inline-level children", so a float, a positioned box and a block-level
+   box are each reached by a DIFFERENT step of §E.2 — 5, 8 or 9, and 4 — and are outside this classification
+   rather than unclassifiable by it.
+   WHY THE REPLACED TEST IS ASKED OF THE ELEMENT AND NOT OF ITS `display`: CSS 2.1 §3.1 "Replaced element"'s
+   replaced element is decided by HTML §15.4 "Replaced elements"' list and not by any property
+   (core/layout/replaced_element.h), so an `img` whose computed `display` is the initial `inline` is
+   inline-level AND atomic, and a list of `display` values could not say so.
+   IT IS EXPORTED BECAUSE TWO COMPONENTS ASK IT AND A SECOND SPELLING WOULD BE THE COPY THAT DRIFTS: this
+   file's own step 4 and step 5 member lists need it to decide whether to descend, and core/paint/box_paint.c
+   needs it to perform step 7.2.1 — see that file for why the ENUMERATION is there and not here. */
+typedef enum {
+    PAINT_INLINE_NONE,        /* not an in-flow, non-positioned, inline-level box at all */
+    PAINT_INLINE_NON_ATOMIC,  /* the "For inline elements:" list — the walk goes THROUGH this box */
+    PAINT_INLINE_ATOMIC       /* the other two lists — a unit whose interior is its own sub-walk */
+} PaintInlineKind;
+
+PaintInlineKind paint_order_inline_kind(lxb_dom_element_t *el);
+
+/* RETIRED RESIDUAL (b) AND (c) — CSS 2.1 §E.2's LINE-BOX ENUMERATIONS, WHICH THIS FILE CLAIMED AND WHICH ARE
+   NOT ITS OWN. It read, in one run:
+   `WHAT IS NOT COVERED: two enumerations inside CSS 2.1 §E.2's steps, each offered to the visitor as a single box and neither sequenced here. (b) Step 7.2's line boxes and the boxes inside each of them, which is where every run of text in a document is placed and which carries its own recursion ("Otherwise, jump to 7.2.1 for that element"). (c) Step 6, which is (b) reached from an inline element that forms a stacking context. WHAT THE NEXT DIFF BUILDS: (b), over core/layout/line_box.h's fragments.`
+   ITS SPEC HALF WAS EXACT AND IS WHAT LANDED — step 7.2.1 is an enumeration over the boxes in a line box in
+   tree order, it does carry that recursion, and core/layout/line_box.h's fragments are what it is built over.
+   ITS MECHANISM HALF NAMED THE WRONG COMPONENT, on three grounds recorded at core/paint/box_paint.c's
+   `bp_step_7_2_1`: §E.1's "element" includes ANONYMOUS BOXES, item 4 interleaves boxes with RUNS OF TEXT, and
+   "for each line box" is geometry. The enumeration landed THERE, `paint_order_walk` still offers the block
+   once, and what this file gained is `paint_order_inline_kind`.
+   WHAT IS STILL NOT COVERED IS (c) ALONE, AND IT IS NO LONGER AN ENUMERATION THIS FILE OWES. Step 6 —
+   "If the element is an inline element that generates a stacking context, then: For each line box that the
+   element is in: Jump to 7.2.1 for the box(es) of the element in that line box (in tree order)" — is offered as
+   `PAINT_STEP_INLINE_LINE_BOXES` and appends nothing. The sequence it needs now EXISTS, in box_paint.c; what is
+   missing is the entry into it for a box that is ON a line rather than one that establishes the lines, which is
+   that file's residual and not this one's.
+   HOW THE ABSENCE OF (c) SHOWS: text inside a `<span>` that is itself a stacking context is missing, while the
+   same text in an ordinary paragraph is drawn.
+   RETIREMENT: this record goes when `box_paint_stacking_context` appends a mark for
+   `PAINT_STEP_INLINE_LINE_BOXES`.
 
    RETIRED CLAUSE (a), KEPT BECAUSE ITS NEXT-DIFF HALF WAS WRONG AND A READER WHO RE-DERIVES IT WILL BE WRONG
    THE SAME WAY. It called the table arm a routing of an existing walk rather than a new one, over
