@@ -205,6 +205,34 @@ WorldId world_mint_child(WorldId parent);
    on. */
 int world_serialize(WorldId w, char *dst, size_t cap);
 
+/* JUST THE HEAD OF THAT NAME — `doc:session:serial`, ONE field, no ancestry — for a reader that has to say
+   WHICH TIMELINE something is of and is not asking a peer to materialize anything. Heap; the caller frees.
+ *
+ * IT IS NOT `world_serialize` WITH A SHORTER ANSWER, AND THE DIFFERENCE IS A SIDE EFFECT RATHER THAN A LENGTH.
+ * Serializing a world MARKS IT AS HAVING CROSSED (`sent`), which is the filter the paragraph above describes:
+ * "ONLY ANCESTORS THAT HAVE THEMSELVES CROSSED ARE NAMED". A caller that merely NAMES a world — a picture's
+ * header, a census row, a log line — has sent nothing to anybody, and marking it sent puts it in the ancestry
+ * of every vector minted below it from then on. That is the unfiltered chain the paragraph above says grows
+ * with the number of BRANCHES rather than with the fork depth, and its failure is `world_vector_write`'s own
+ * `CHECK` on any page whose boot flow forks freely. So the entries are split by WHAT THEY ARE FOR: one names
+ * a world to a PEER and records that it did, the other names it to a READER and records nothing.
+ *
+ * IT IS THE SAME GRAMMAR AND NOT A SECOND ONE, which is the property that makes this an entry rather than a
+ * `snprintf` at each caller. `world_serialize`'s own comment is that "two spellings of it would be two peers
+ * materializing different segments for the same flow", and the head is one FIELD of that spelling — so this
+ * and the vector writer share the one function that writes a field, exactly as `world_vector_alloc` and
+ * `world_serialize` already share the one that writes a vector. A caller composing `"%s:%u:%u"` out of
+ * `world_doc_name` is the second grammar, and it is the mistake `core/html/html_iframe.c` made one level up.
+ *
+ * ALLOCATED RATHER THAN WRITTEN INTO A CALLER'S ARRAY, for `world_vec_fork_point`'s reason and in its words: a
+ * document NAME nests one component per navigable depth, so any constant a caller could pass is a cap on the
+ * frame tree, and the field writer CRASHES on a truncation rather than returning a shorter name.
+ *
+ * `w` MUST NAME A WORLD. WORLD_NONE is refused at `world_doc_name`'s own assert — a zero handle names no
+ * document — so a caller whose world may be absent answers that state in its own words before it gets here,
+ * rather than asking this for a name of nothing. */
+char *world_name(WorldId w);
+
 /* READ that wire form back: the world into `*out` and its ancestry (nearest first) into `*ancestry`, returning
    how many ancestors were read. The inverse of world_serialize and deliberately its neighbour — a grammar
    with two readers is two grammars, and the writers of the second one are the hosts, where nothing can check it

@@ -122,6 +122,23 @@ QJS_EXPORT unsigned qjs_paint_offers(void);
 QJS_EXPORT unsigned qjs_paint_marks(void);
 QJS_EXPORT int qjs_paint_complete(void);
 
+/* …AND WHICH WORLD THE PICTURE IS OF, WHICH IS THE ONE FACT THAT MAKES AN IMAGE OF THIS ENGINE DIFFERENT FROM
+   AN IMAGE OF A BROWSER. Everything above states what the ink IS; this states whose TIMELINE it was laid in.
+   A document under this engine has as many appearances as it has flows — a forced sibling that took the other
+   arm of `if (__FLAGS.admin)` holds a DOM and a heap its primary never had — so `qjs_paint`'s bytes are an
+   answer to what this page looks like only once somebody has said WHOSE page. Without it two renders of
+   two worlds are two files, and a reader holding them cannot say they are two worlds rather than two reads of
+   one; that is the same unattributable-artifact defect `qjs_paint_bytes` closes one axis over, a render
+   rather than a length.
+   IT IS NEVER EMPTY AND IT NEVER ANSWERS `NULL`. The BASELINE — the document as no flow has written it — is a
+   real world to paint and is what every run that ends with its frontier drained is standing in, so it is
+   stated in a word rather than left as an absence a reader fills in. THE BODY IN main.c IS WHERE THAT WORD IS
+   AND WHY A NAME AND A BASELINE CANNOT BE CONFUSED.
+   It asserts that a render happened for the same reason its five neighbours do, and it answers about the
+   render `qjs_paint` LAST PERFORMED rather than about this instance now: the world the engine is standing in
+   moves with every `qjs_step`, so a live read would name a timeline that is not the one in the picture. */
+QJS_EXPORT const char *qjs_paint_world(void);
+
 /* THE INSTRUMENT SEAM — a program a DRIVER wants evaluated in the analysed document's realm, and the dumped
    completion values coming back, one per live timeline. Its contract is at its body in main.c and its whole
    design at solver/engine.h's engine_request_dump; what is worth knowing from a declaration is that the two

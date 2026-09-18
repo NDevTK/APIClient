@@ -24748,8 +24748,20 @@ static void abi_report_declines(void)
  * (core/paint/document_paint.h's own false arm) and a file that did not appear says nothing, which is the one
  * reading a reader must not be left to make.
  *
- * NAMED RESIDUAL — WHAT IS NOT COVERED: the header states WHICH DOCUMENT this is an image of and does not
- * state WHICH ENGINE REVISION drew it. The native link writes no build stamp — `engine/build.mjs` writes a
+ * AND IT STATES WHICH WORLD, WHICH IS THE `#` LINE THAT MAKES THIS AN IMAGE OF A SOLVER RATHER THAN OF A
+ * BROWSER. A document under forced multi-path execution has as many appearances as it has flows — §Boot's
+ * `if(__FLAGS.admin)` forks a sibling whose DOM and whose heap the primary never held — so `qjs_paint`'s bytes
+ * answer what this page looks like only once somebody has said WHOSE page, and `qjs_paint_world` is that
+ * answer. It is a `#` line for the same reason the three below it are: a fact printed beside the file is a fact
+ * the next copy of the file loses, and the whole point of this one is that a reader holding TWO images can say
+ * they are two worlds rather than two reads of one.
+ * THE VALUE IS `world_name`'s `<document>:<session>:<serial>` OR THE SINGLE WORD `baseline`, and the two are
+ * told apart by a colon rather than by length — main.c's own `paint_world_name` is where that word is and why
+ * a run whose frontier drained is legitimately standing on it.
+ *
+ * NAMED RESIDUAL — WHAT IS NOT COVERED: the header states WHICH DOCUMENT and WHICH WORLD this is an image of
+ * and does not state WHICH ENGINE REVISION drew it. The native link writes no build stamp —
+ * `engine/build.mjs` writes a
  * `.build.json` sidecar beside the wasm glue and beside nothing else — so this host has no revision to state,
  * and composing one from the CHECKOUT's `HEAD` would be a stamp about a binary nobody verified was built from
  * it, which is the false-stamp defect rather than a missing field.
@@ -24760,6 +24772,7 @@ static void abi_report_declines(void)
 static void abi_paint(const char *dir, const char *doc_id, const char *url)
 {
     const uint8_t *px;
+    const char    *world;
     unsigned       n, w, h, offers, marks;
     int            complete, named, headed, closed;
     char           name[256];
@@ -24779,7 +24792,7 @@ static void abi_paint(const char *dir, const char *doc_id, const char *url)
            "lines, which a newline TERMINATES — so the rest of the value would be read as header syntax and "
            "the file would describe an image with the wrong dimensions or no ENDHDR at all");
 
-    /* THE RENDER, AND THE FIVE READINGS OF IT. `qjs_paint` PERFORMS it and every entry below states a fact
+    /* THE RENDER, AND THE SIX READINGS OF IT. `qjs_paint` PERFORMS it and every entry below states a fact
        about what it just produced, so the order is the ABI's own and not a preference. */
     px = qjs_paint();
     n = qjs_paint_bytes();
@@ -24788,6 +24801,21 @@ static void abi_paint(const char *dir, const char *doc_id, const char *url)
     offers = qjs_paint_offers();
     marks = qjs_paint_marks();
     complete = qjs_paint_complete();
+    /* AND THE SIXTH, WHICH IS THE ONE THAT MAKES THIS AN IMAGE OF THIS ENGINE RATHER THAN OF A BROWSER. The
+       five above say what the ink is; this says whose TIMELINE it was laid in, and a document under a forced
+       multi-path solver has as many appearances as it has flows. It is read with the rest because it is a
+       fact about the SAME render — `qjs_paint` writes the register on the line that paints. */
+    world = qjs_paint_world();
+    /* THE SAME NEWLINE RULE AS THE TWO VALUES ABOVE, AND IT IS NOT COVERED BY THEIR ASSERT. A world's name is
+       `<document>:<session>:<serial>` and the DOCUMENT half is a name the ZONE gave this instance — so the
+       value reaching this `#` comment carries a string this process did not compose, exactly as `doc_id` and
+       `url` do, and a newline in it would END the comment and leave the rest to be read as header syntax. It
+       is a separate assert rather than a clause on theirs because it guards a different arrival: those two
+       come off one line of the record channel, and this comes back across the ABI. */
+    CHECK(strchr(world, '\n') == NULL,
+          "the world an image was rendered in carries a newline. It reaches this PAM header as a `#` comment "
+          "line, which a newline TERMINATES — so the rest of the name would be read as header syntax and the "
+          "file would describe an image with the wrong dimensions or no ENDHDR at all");
 
     /* THE SHAPE AND THE EXTENT ARE ONE FACT, ASSERTED HERE BECAUSE THIS IS THE FIRST CALLER THAT READS BOTH.
        core/paint/document_paint.c already holds its own surface to this equality; what is checked here is
@@ -24864,6 +24892,7 @@ static void abi_paint(const char *dir, const char *doc_id, const char *url)
     headed = fprintf(f,
                      "P7\n"
                      "# rendered by APIClient's engine from %s\n"
+                     "# world %s\n"
                      "# CSS 2.1 §E.2 \"Painting order\" offered %u step(s) and laid %u mark(s)\n"
                      "# the walk %s\n"
                      "WIDTH %u\n"
@@ -24872,7 +24901,7 @@ static void abi_paint(const char *dir, const char *doc_id, const char *url)
                      "MAXVAL 255\n"
                      "TUPLTYPE RGB_ALPHA\n"
                      "ENDHDR\n",
-                     url, offers, marks,
+                     url, world, offers, marks,
                      complete ? "FINISHED: nothing was left unpainted that this engine paints"
                               : "STOPPED: this picture is PARTIAL — the painter met an operand it could not "
                                 "compute and every mark it had already laid is in the image",
@@ -24891,8 +24920,10 @@ static void abi_paint(const char *dir, const char *doc_id, const char *url)
        this arm's RECORD stream to the trusted zone, whose reader THROWS on a record it does not route — and
        it is right to: an unrouted record is a fact nothing reads. This line's reader is a PERSON, so it goes
        where `[abi]`'s own reports go and wears no marker that would claim to be part of a protocol. */
-    fprintf(stderr, "[abi paint] %s -> %s (%u x %u, %u bytes RGBA; %u offer(s), %u mark(s), walk %s)\n",
-            url, path, w, h, n, offers, marks, complete ? "complete" : "STOPPED — PARTIAL PICTURE");
+    fprintf(stderr, "[abi paint] %s -> %s (world %s; %u x %u, %u bytes RGBA; %u offer(s), %u mark(s), "
+                    "walk %s)\n",
+            url, path, world, w, h, n, offers, marks,
+            complete ? "complete" : "STOPPED — PARTIAL PICTURE");
     fflush(stderr);
 }
 

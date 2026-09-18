@@ -160,6 +160,32 @@ static int                  g_painted;
  * `g_paint` itself, which is the only party that holds it; what is here is the provenance of the INK. */
 static DocumentPaintCount   g_paint_count;
 
+/* …AND WHOSE TIMELINE THAT RENDER WAS TAKEN IN, WHICH IS THE ONE THING NEITHER THE BITMAP NOR THE COUNT CAN
+ * BE ASKED. The count above separates three reasons a surface can be blank; this separates the WORLDS a
+ * surface can be an image OF, and under this engine a document has as many as it has flows: §Boot's
+ * `if(__FLAGS.admin)` FORKS a sibling boot flow whose DOM and whose heap the primary never held, so the same
+ * page has an admin appearance and a logged-out one at the same instant. `qjs_paint` renders whichever of
+ * those the heap is standing in, and until this register existed it said nothing about which — so two images
+ * of two worlds were two files, and a reader holding them could not tell them from two reads of one.
+ *
+ * IT IS CAPTURED AT THE RENDER AND NOT READ LIVE, WHICH IS THE SAME RULE `g_paint_count` IS HELD UNDER AND
+ * HAS A SHARPER REASON HERE. The world the engine is standing in MOVES: `qjs_step` switches flows, and the
+ * scheduler's own contract is that a yield leaves the flow it was holding switched in. So a host that painted,
+ * stepped, and then asked would be told the name of a timeline that is not the one in the bytes it is
+ * holding — a fact about NOW answering a question about an ARTIFACT, which is exactly the gauge-read-as-a-
+ * history shape. What is written here is a fact about the image, and it is written on the line that makes it.
+ *
+ * IT IS THIS FILE'S ALLOCATION AND IT IS FREED ON THE SAME TERMS AS THE IMAGE — released before a new render
+ * and at teardown, because the trusted zone reads a `const char *` across a boundary no pointer comes back
+ * across. `solver/world.h`'s `world_name` is what composes it, and it is that entry rather than
+ * `world_serialize` for a reason stated in full there: serializing a world MARKS IT AS HAVING CROSSED to a
+ * peer, and a picture crosses to nobody.
+ *
+ * `g_painted` GOVERNS IT LIKE EVERY OTHER PAINT REGISTER. A NULL here means no render has been asked for,
+ * which is what the flag already says and says once; it is NEVER the baseline, which is a world with a name
+ * of its own below. */
+static char                *g_paint_world;
+
 /* THE DOCUMENTS THAT JOINED THIS AGENT AFTER IT WAS ROOTED — `qjs_join`'s realms and trees, held because THIS
  * host is what gives them back. It is not a registry and does not answer any question about the agent: the
  * world registry names documents, `navigable.c` owns the §7.4 child realms, and these two arrays exist for the
@@ -1400,6 +1426,65 @@ QJS_EXPORT const char *qjs_result(void)
     return g_result;
 }
 
+/* WHOSE WORLD THE HEAP IS STANDING IN RIGHT NOW — the one question a picture of this engine has to answer
+ * about itself, composed at the instant the render is taken and by nothing else.
+ *
+ * `flow_running()` IS THE ANSWER AND IT IS NOT "WHICH FLOW IS EXECUTING", which is the reading that makes it
+ * look like the wrong register to ask. solver/engine.c has exactly THREE writers of that stamp and every one
+ * of them is paired with the delta operation on the adjacent line: `flow_switch_in` runs `cow_apply` and then
+ * sets it, `flow_switch_out` runs `cow_unapply` and then clears it, `flow_finish` does the same. The DOM twin
+ * travels in the same pair (`dom_apply`/`dom_unapply`), and those two structures are the WHOLE of what a paint
+ * reads — core/paint/document_paint.c takes the Lexbor tree and the viewport out of the realm, and the walk
+ * under it enters no interpreter at all. So this register names precisely the timeline the next
+ * `document_paint` will see, by construction rather than by coincidence.
+ *
+ * AND IT IS THE ONE MARK DELIBERATELY LEFT UP ACROSS THIS ABI'S OWN BOUNDARY, which is what makes it askable
+ * HERE at all. `qjs_step` puts three marks down on every exit and asserts each — the cooperative slice, the
+ * flow generation, the capture route — and `g_running` is not among them BY DESIGN:
+ * core/loader/document_load.c states the reason in its own words, that a yielded flow's COW delta is still
+ * APPLIED to the heap and "putting the stamp down would be a claim about that heap which is not true". A
+ * host between two steps is therefore standing in a real world, and the register that says which is the only
+ * one that has not been cleared for tidiness. (The corollary, recorded because the opposite mistake has been
+ * made here before: this may NOT be cross-checked against `cow_current()`. That one IS taken down between
+ * slices, so an assert that the two agree would be false exactly when the engine is working.)
+ *
+ * NULL IS THE BASELINE AND THE BASELINE IS A WORLD, NOT AN ABSENCE. A session that drains its frontier closes
+ * it, and `engine_session_close` switches its last flow out — so a run that finishes is standing on the
+ * document as no flow has written it, which is a perfectly good thing to have a picture of and is what most
+ * `--paint-dir` images have always been. Answering "" or NULL for it would make a REAL state read as a
+ * missing field, and a consumer would fill it; so it is stated in a word. The word carries NO COLON, which is
+ * not a style choice: solver/world.h's grammar is `doc:session:serial` and `world_parse` refuses a field
+ * without a serial by name, so a reader that mistakes this for a name crashes instead of interning a document
+ * called `baseline`.
+ * WHAT IT DOES NOT ANSWER IS WHY. "The frontier drained" and "no flow has run yet" are both this, and they
+ * are a question about the SESSION rather than about the image — the host holds the step code that separates
+ * them and this entry would be guessing at it. One question, one word.
+ *
+ * ALLOCATED ON BOTH ARMS, because an ownership that differs by arm is one a caller has to remember, and the
+ * free is at `qjs_paint`'s own line and at the teardown. */
+static char *paint_world_name(void)
+{
+    Flow *f = flow_running();
+    char *s;
+
+    if (f == NULL) {
+        s = strdup("baseline");
+        CHECK(s != NULL, "the world an image was rendered in could not be named — a picture that cannot say "
+                         "which timeline it is of is one nothing downstream can attribute, and under this "
+                         "engine one document has as many appearances as it has flows");
+        return s;
+    }
+    /* THE STAMP NAMES A MEMBER OF THE FRONTIER, which is the two-sided half of the argument above. The three
+       writers pair the stamp with the delta, and this is the other end: a flow that has LEFT the frontier had
+       its world's death announced (solver/world.h's world_flow_gone), so a name taken from a departed flow
+       would be a name every peer has been told is gone. flow_release runs strictly after flow_finish's
+       `flow_set_running(NULL)`, so this cannot fire without one of those three sites having come apart. */
+    DCHECK(flow_is_member(f),
+           "the running-flow stamp names a flow the frontier no longer holds — the image about to be rendered "
+           "would be attributed to a timeline whose death has already been announced to every peer");
+    return world_name(f->world);
+}
+
 /* AN IMAGE OF THIS INSTANCE'S DOCUMENT — CSS 2.1 §E.2 "Painting order"'s ink composited onto a surface the
    size CSS 2.1 §2.3.1 "The canvas" establishes for it, answered as the address of the non-premultiplied
    RGBA8 run core/graphics/raster_surface.h states the layout of: four bytes per pixel, R G B A, row-major.
@@ -1453,6 +1538,10 @@ QJS_EXPORT const uint8_t *qjs_paint(void)
        reason. A zero-area surface frees nothing, so this is also correct on the first call, where the register
        is the zeroed static every arm below leaves valid. */
     raster_surface_free(&g_paint);
+    /* …AND THE PREVIOUS IMAGE'S WORLD WITH IT, because the two are one artifact and a register that outlived
+       its pixels would name the timeline of a picture nobody is holding any more. */
+    free(g_paint_world);
+    g_paint_world = paint_world_name();
     region = document_paint(g_ctx, g_dom, &g_paint, &g_paint_count);
     g_painted = 1;
     DCHECKF(region || (g_paint_count.offers == 0u && g_paint_count.marks == 0u &&
@@ -1599,6 +1688,31 @@ QJS_EXPORT int qjs_paint_complete(void)
            "painter that STOPPED, so an unwritten register reports a partial picture for a document that has "
            "no picture at all");
     return g_paint_count.complete ? 1 : 0;
+}
+
+/* WHICH WORLD THAT PICTURE IS OF — solver/world.h's `doc:session:serial` for a flow's timeline, or the single
+   word `baseline` for the document as no flow has written it. The whole argument is at `paint_world_name`
+   above: which register answers it, why that register is the one mark `qjs_step` leaves standing, and why
+   the baseline is a world stated in a word rather than an absence a consumer fills in.
+   IT ASSERTS THAT A RENDER HAPPENED FOR ITS FIVE NEIGHBOURS' REASON AND ONE OF ITS OWN. `g_painted` is what
+   separates "nobody has looked" from every real answer, and here the real answers include a state with no
+   flow in it — so an unwritten register would be a NULL that reads exactly like the baseline arm to a
+   consumer testing for absence, which is the pair this flag exists to keep apart.
+   IT IS THE ANSWER FOR THE RENDER `qjs_paint` LAST PERFORMED, never for this instance now. The two differ the
+   moment a host steps: §scheduler's yield leaves the flow it was holding switched in and the next pick may
+   switch in another, so a live read would name a timeline that is not in the bytes the host is holding. The
+   register is written on the line that renders, which is what makes this a fact about the image. */
+QJS_EXPORT const char *qjs_paint_world(void)
+{
+    DCHECK(g_painted,
+           "the world an image was rendered in was asked before one was rendered — the pair is ordered exactly "
+           "as `qjs_paint_bytes` states, and an unwritten register answers NULL, which a consumer reads as the "
+           "field being absent rather than as this engine never having been asked to paint");
+    DCHECK(g_paint_world != NULL,
+           "a render has happened and left no world beside it — `qjs_paint` writes both registers on adjacent "
+           "lines, so a picture with no timeline on it is that pair having come apart and an image nothing "
+           "downstream can attribute");
+    return g_paint_world;
 }
 
 QJS_EXPORT void qjs_teardown(void)
@@ -1832,6 +1946,11 @@ QJS_EXPORT void qjs_teardown(void)
        every JS object the paint read to compose them. `g_painted` goes with it: a resumed session that
        painted nothing must not answer a length out of a register the previous one filled. */
     raster_surface_free(&g_paint);
+    /* …AND THE NAME OF THE WORLD IT WAS TAKEN IN, which is the same allocation on the same terms: this file's,
+       invisible to the gc walk, and released with the pixels it describes rather than after them, because a
+       name that outlived its image would be the only thing left of a picture nobody can read. */
+    free(g_paint_world);
+    g_paint_world = NULL;
     g_painted = 0;
     g_begun = 0;
     g_done = 0;

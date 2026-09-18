@@ -563,6 +563,24 @@ int world_serialize(WorldId w, char *dst, size_t cap)
     return world_vector_write(w, anc, n_anc, dst, cap);
 }
 
+/* See world.h. THE ANCESTRY WALK IS NOT REACHED AND THAT IS THE ENTIRE ENTRY: `world_ancestry` is where a
+   world is marked `sent`, so naming a head through it would tell this registry that a world had crossed to a
+   peer because somebody printed it. The sizing is `world_vector_alloc`'s own arithmetic with the ancestry
+   term dropped — the document NAME, two colons, two full-width uint32 decimals and the NUL — and
+   `world_name_write`'s CHECK is what proves it, so the constant is two-sided against the writer rather than
+   asserted about. */
+char *world_name(WorldId w)
+{
+    size_t cap = strlen(world_doc_name(w.doc)) + 23;
+    char  *s   = malloc(cap);
+
+    CHECK(s != NULL, "world registry: OOM naming a world — the name is how a reader says WHICH timeline an "
+                     "artifact is of, and an artifact that cannot say so is one nothing downstream can "
+                     "attribute");
+    world_name_write(w, s, cap);
+    return s;
+}
+
 /* THE INVERSE, AND IT LIVES HERE BECAUSE A FORMAT WITH TWO READERS HAS TWO FORMATS. Every host that received a
    world vector used to take it apart by hand — strchr for the comma, strrchr for the colon, strtoul for the
    serial — which is the serializer's grammar restated somewhere it cannot be checked against the writer. The
