@@ -61,7 +61,12 @@ const char *concolic_src_c(JSValueConst v);           /* INJECTION IDENTITY: whi
  * exactly the false-PoC generator the delivery declaration was introduced to end (see the declaration below),
  * re-created for every `location.hash.slice(1)` in the world.
  *
- * INHERITED UNCHANGED THROUGH EVERY DERIVATION, including the two that mint a new `src`. NULL exactly when
+ * NEVER CHANGED AND NEVER INVENTED BY A DERIVATION, including the two that mint a new `src` — what a
+ * derivation over SEVERAL operands does instead is UNION theirs, because bytes that arrived through two
+ * components entered through two, and a root that named one of them would state that source's percent-encode
+ * set and address component as the whole constraint on the pair. So a root may name a SET; root_member is the
+ * walk, derived_root_join is the one speller, and a single-operand derivation composes to that operand's own
+ * root byte for byte, which is why every currently-correct value is unmoved. NULL exactly when
  * `concolic_src_c` is NULL (concolic_alloc asserts the two are present together), and NULL means these bytes
  * entered through nothing this engine minted as a source — a positive statement, never a hole to fill. */
 const char *concolic_root_c(JSValueConst v);
@@ -428,8 +433,13 @@ int         concolic_source_declared_by(const char *component, const char *src);
    members joined (concolic_source_wrap_joint), and matching the joined string against the rows found nothing
    and answered that same silence — the defaulted-field defect standing exactly where a wrong answer becomes a
    wrong PoC. They now walk the members: a joint whose only DECLARING member is one source answers that
-   member's declaration, which is the ordinary case because most joints in this engine are over environment
-   facts that declare nothing. A root with TWO declaring members has no single honest answer — each carries its
+   member's declaration, which is the ordinary case: joints over ENVIRONMENT facts declare nothing at all, and a
+   joint over attacker sources usually reaches one declaring member because its other operand is server-injected
+   page state, which no component transforms or carries.
+   AND DERIVATIONS MINT THEM NOW, not only concolic_source_wrap_joint's callers — every `a + b`, every arithmetic
+   over two unknowns and every spec algorithm over an operand list composes its root this way, so this walk is
+   reached by the whole solver rather than by three browser components.
+   A root with TWO declaring members has no single honest answer — each carries its
    own percent-encode set and its own address component — so it CRASHES rather than presenting one source's
    constraint as the whole of one; the mechanism to build is one candidate per declaring member, each with its
    own envelope, and the one that fires is the one emitted. */
@@ -659,10 +669,17 @@ JSValue     concolic_builtin_hook(JSContext *ctx, JSValueConst v, const char *op
  * `op` NAMES THE SPEC ALGORITHM, not the C operator, for concolic_new_rel's reason: the name IS half the key,
  * so two different operations over one operand list must not compose to one identity.
  *
- * `src` AND `root` COME FROM THE FIRST UNKNOWN OPERAND, which is the rule concolic_arith_hook already applies to
- * the interpreter's own `x + y` (it reads both from `a` when `a` is unknown and from `b` otherwise). Matching it
- * is the point: a component performing an addition and a page performing the same addition must state the same
- * provenance, or one @H record splits into two that do not compare.
+ * `src` COMES FROM THE FIRST UNKNOWN OPERAND, which is the rule concolic_arith_hook already applies to the
+ * interpreter's own `x + y`. Matching it is the point: a component performing an addition and a page performing
+ * the same addition must state the same provenance, or one @H record splits into two that do not compare.
+ *
+ * `root` IS THE SET OF THE UNKNOWN OPERANDS' ROOTS (derived_root_join), AND THIS SENTENCE USED TO SAY IT CAME
+ * FROM THE FIRST ONE TOO. The two are different facts and the first-operand rule was right about only one of
+ * them: `src` is where an @S candidate is INJECTED and a candidate is injected at ONE source read, while `root`
+ * is where the bytes ENTERED and a value assembled from two sources entered through both. All three derivation
+ * sites answer the root question one way, for the same reason the `src` rule gives — a component and a page
+ * performing one addition must state one provenance. A derivation over ONE unknown composes to that operand's
+ * root byte for byte, so nothing that was right has moved.
  *
  * The operands are BORROWED; `example` is CONSUMED and is the REAL operation run by the CALLER on the operands'
  * own examples (concolic_example) — never predicted here, and JS_UNDEFINED where any operand has none, because

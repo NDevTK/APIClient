@@ -1087,17 +1087,25 @@ static int declared_byte_refused(const SolveDelivered *d, const char *enc) {
     return 0;
 }
 
-/* THE SEARCH LEARNS HOW THE ATTACKER'S BYTES ARRIVE — once, from the value that arrived. A source reaching a
-   sink twice reaches it by the same route both times: the root is inherited unchanged through every derivation,
-   so two values with the same injection identity cannot have entered by two. Asserted rather than overwritten,
-   because if it ever were two the report would state whichever detection ran last. */
+/* THE SEARCH LEARNS HOW THE ATTACKER'S BYTES ARRIVE — once, from the value that arrived.
+   THIS USED TO REST ON A ROOT BEING INHERITED UNCHANGED THROUGH EVERY DERIVATION, so that two values with one
+   injection identity could not have entered by two routes, AND THAT PREMISE IS NOW FALSE. A derivation over
+   several operands UNIONS their roots (solver/concolic.h's derived_root_join) while taking `src` from the
+   first, so `x` and `x + location.search` carry ONE injection identity and TWO roots — the second having
+   genuinely entered through two components.
+   SO THE ASSERT STOPS BEING A RESTATEMENT OF A STRUCTURAL FACT AND BECOMES THE REFUSAL THIS SEARCH OWES: one
+   envelope states one percent-encode set and one address component, so a search handed two roots has no honest
+   single answer and may not pick one. It stays, and what retires it is the mechanism the two other refusals
+   over this same gap name (root_declared_row's and concolic_deliver's) — one candidate seeded per declaring
+   member, each carrying its own envelope, and the one that FIRES emitted. */
 static void cand_learn_root(Cand *e, const char *root) {
     DCHECK(e && root, "a sink search was told how its bytes arrive by nothing, or was told nothing");
     if (!e->root) { e->root = strdup(root); CHECK(e->root, "solve: OOM recording a sink's delivery root"); }
     else DCHECK(!strcmp(e->root, root),
            "one sink search has been handed two different delivery ROOTS for one injection identity — the root "
-           "is inherited unchanged through every derivation, so two values spelling the same source cannot have "
-           "entered the program by two different components, and the envelope would report whichever detection "
+           "is a SET a derivation UNIONS rather than replaces, so one injection identity CAN name a value that "
+           "entered through two components — and one envelope states one percent-encode set and one address "
+           "component, so the report would carry whichever detection "
            "ran last");
     /* …AND THE DELIVERY TABLE TAKES THE HALF OF ITS ANSWER THAT NO RUN CAN GIVE IT, HERE, because this is the
        one moment the root becomes known and BOTH of the search's doors pass through it — detection
@@ -2374,10 +2382,12 @@ void solve_html_sink(JSContext *ctx, JSValueConst arg) {
    sink found by code that only loaded after the first drain needs. */
 /* THE ROOT OF THE SEARCH A LIVE CANDIDATE BELONGS TO — the park's read half, asked by cold.c at the moment it
    writes that candidate's recipe.
-   IT IS A FACT ABOUT THE SEARCH AND NOT ABOUT THE FLOW, which is why the flow does not carry one. A root is
-   inherited unchanged through every derivation (see cand_learn_root), so the N candidates of one sink have
-   one root between them and holding a copy on each Flow would be N owned strings that exist only to be
-   asserted equal — plus a dup obligation at every clone, park and free site, which is exactly the shape
+   IT IS A FACT ABOUT THE SEARCH AND NOT ABOUT THE FLOW, which is why the flow does not carry one. The N
+   candidates of one sink have ONE root between them BECAUSE cand_learn_root REFUSES a second — which used to be
+   a structural fact and is now that assert's job, since a derivation unions its operands' roots and one
+   injection identity can reach a sink carrying one root or two. Holding a copy on each Flow would be N owned
+   strings that exist only to be asserted equal — plus a dup obligation at every clone, park and free site,
+   which is exactly the shape
    §Architecture warns produces a field somebody forgets. The park DOCUMENT still writes one copy per record,
    and that is not the same duplication: a record is rebuilt on its own, by a session that has nothing else,
    so it has to be whole.

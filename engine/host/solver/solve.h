@@ -135,9 +135,10 @@ void solve_flow_end(struct Flow *f);
 
 /* THE DELIVERY ROOT OF THE SEARCH A LIVE CANDIDATE BELONGS TO — the PARK's half of what the call below is the
    RESUME's half of, asked at the moment cold.c writes that candidate's recipe.
-   THE ROOT IS A FACT ABOUT THE SEARCH AND NOT ABOUT THE FLOW, which is why a candidate does not carry one: it
-   is inherited unchanged through every derivation, so one sink's N candidates have one root between them and a
-   copy on each Flow would be N owned strings whose only content is that they are equal — plus a dup obligation
+   THE ROOT IS A FACT ABOUT THE SEARCH AND NOT ABOUT THE FLOW, which is why a candidate does not carry one: one
+   sink's N candidates have ONE root between them because cand_learn_root refuses a second (a derivation UNIONS
+   its operands' roots, so one injection identity can arrive with one root or with two), and a copy on each Flow
+   would be N owned strings whose only content is that they are equal — plus a dup obligation
    at every clone, park and free site. The park DOCUMENT still writes one per record, and that is a different
    thing: a record is rebuilt alone, by a session that has nothing else, so it has to be whole.
    Aborts rather than answering for a candidate whose search this session does not hold, or for a search that

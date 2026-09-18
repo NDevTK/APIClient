@@ -1840,44 +1840,45 @@ static int url_example_parse(JSContext *ctx, JSValueConst v, int argc, JSValueCo
     return r;
 }
 
-/* WHICH OPERAND A §6.1 ANSWER IS UNKNOWN BECAUSE OF, asked ONCE for the constructor and both statics because
- * they run one algorithm over one pair of operands and a second copy of this question is a second answer.
- * Returns the operand the result must be derived from, or JS_UNINITIALIZED when the page determined both —
- * which is the concrete path and needs no derivation at all.
+/* WHETHER A §6.1 ANSWER IS UNKNOWN AT ALL, asked ONCE for the constructor and both statics because they run
+ * one algorithm over one pair of operands and a second copy of this question is a second answer.
  *
- * THE BASE IS AN OPERAND AND WAS NOT BEING TREATED AS ONE. Only `url` was tested for unknown input; an unknown
- * BASE fell through to the coercion below it, which owes C real bytes and can only abort — so `new URL(path,
- * cfg.apiBase)` over server-injected state took the whole document down at the ToString rather than answering.
- * The base decides the result exactly as the address does (§4.4 resolves the input against it), so an answer
- * derived from it keeps the source's identity and a later branch still forks and a later sink still solves.
+ * THIS USED TO ANSWER *WHICH* OPERAND, AND THAT IS THE QUESTION THAT HAD NO HONEST ANSWER. The base decides the
+ * result exactly as the address does (§4.4 resolves the input against it), so `new URL(path, cfg.apiBase)` over
+ * server-injected state is an unknown derived from BOTH — and a picker has to name one, which states one
+ * source's percent-encode set and one source's delivery mechanism as the whole constraint on bytes that came
+ * from two. It crashed rather than picking, and the crash was right about the representation and wrong about
+ * where to stand: it refused at the MINT, where a two-source value is perfectly legitimate, for the benefit of
+ * a consumer three components downstream that cannot state ONE delivery for it. A value that never reaches an
+ * @S sink never needs that statement at all, and the two real bundles this took down at boot were both a CHUNK
+ * LOADER — `new URL(chunk + ".js", base)` — which has no sink behind it.
  *
- * BOTH UNKNOWN IS THE ONE THIS ENGINE CANNOT NAME YET, AND IT CRASHES RATHER THAN PICKING ONE. The result is a
- * function of two sources, and a value carries ONE provenance and ONE delivery root — so answering with either
- * operand's would state one source's percent-encode set and one source's delivery mechanism as the whole
- * constraint on a value that carries bytes from two. §@S is explicit that a shape stating one of its two facts
- * is a WRONG report rather than a partial one, and the wrongness here is the kind that reproduces: the envelope
- * would tell a researcher to deliver through the component the payload did not ride.
- * WHAT TO BUILD is a provenance that names the SET — the joint identity the solver already mints for a value
- * several facts determine — extended so that each MEMBER keeps its own delivery declaration, so the search
- * seeds one candidate per member and the one that fires is emitted with its own envelope. §@S's own rule for
- * this is that a wrong solve simply never fires and is discarded, so trying both is completeness rather than
- * guesswork. Until that exists there is no honest single answer here. */
-static JSValueConst url_unknown_operand(int argc, JSValueConst *argv)
+ * THE REFUSAL WAS ALSO WIDER THAN ITS OWN MESSAGE, which is the half worth keeping. Its text said the result
+ * was `a function of two attacker SOURCES` and its predicate tested `concolic_is` on each operand, and those
+ * are two different populations: two operands derived from ONE source hold ONE root between them and have one
+ * honest answer. A diagnostic naming a MECHANISM above a predicate testing PRESENCE is the shape CLAUDE.md
+ * names at §AND-OPENING-IT-IS-NOT-ENOUGH, and here it cost the ordinary case as well as the hard one.
+ *
+ * SO THE ANSWER IS THE OPERAND LIST AND NOT AN OPERAND. solver/concolic.h's `concolic_new_derived` is the one
+ * derivation speller over an ORDERED operand list: it composes the identity and the display shape from all of
+ * them, and its delivery root is the SET of the roots they entered through (derived_root_join), which composes
+ * to a single member for the ordinary case and is then byte-identical to what a picker would have returned.
+ * Nothing here picks any more, so there is nothing here to refuse. Where the two operands really did enter
+ * through two DECLARING components, the refusal is made by the three sites that need the single answer and
+ * already crash asking for it — root_declared_row's, concolic_deliver's and solve.c's cand_learn_root — each
+ * naming the same mechanism to build: one candidate seeded per declaring member, each with its own envelope,
+ * and the one that fires emitted. */
+static int url_any_unknown(int argc, JSValueConst *argv)
 {
-    int ua = argc > 0 && concolic_is(argv[0]);
-    int ub = argc > 1 && concolic_is(argv[1]);
-
-    if (ua && ub)
-        DFAIL("§6.1's URL parse was given an unknown ADDRESS and an unknown BASE, so its result is a function "
-              "of two attacker sources — and a concolic carries one provenance and one delivery root, so "
-              "whichever this answered with would state that source's percent-encode set and delivery "
-              "mechanism as the whole constraint on bytes that came from both. Build the SET-valued provenance "
-              "(the joint identity, with each member keeping its own delivery declaration) and seed one "
-              "candidate per member");
-    if (ua) return argv[0];
-    if (ub) return argv[1];
-    return JS_UNINITIALIZED;
+    return (argc > 0 && concolic_is(argv[0])) || (argc > 1 && concolic_is(argv[1]));
 }
+
+/* THE OPERANDS §6.1's ALGORITHM HAS, which is what a derivation over it is composed from. `constructor(USVString
+   url, optional USVString base)` and `static URL? parse(USVString url, optional USVString base)` each declare
+   TWO, so a call that supplied more carries arguments this algorithm never reads and a shape naming them would
+   render an expression the page's URL parse did not perform. It is the DECLARATION's number and not a cap: a
+   third operand is not work deferred, it is an argument §6.1 has no step for. */
+static int url_operand_count(int argc) { return argc > 1 ? 2 : 1; }
 
 /* §6.1 URL class's static `parse` and `canParse` — the constructor's parse without the throw. */
 enum { URL_STATIC_PARSE = 0, URL_STATIC_CANPARSE };
@@ -1889,7 +1890,6 @@ static JSValue js_url_static(JSContext *ctx, JSValueConst this_val, int argc, JS
     UrlRecord base, rec;
     bool have_base = false, okp;
     JSValue r;
-    JSValueConst unk = url_unknown_operand(argc, argv);
 
     (void)this_val;
     /* §6.1 declares `url` REQUIRED, so the args machine has already thrown for a call that did not supply it
@@ -1906,9 +1906,10 @@ static JSValue js_url_static(JSContext *ctx, JSValueConst this_val, int argc, JS
        and a later sink still solves for the original source. The parser underneath owes C real bytes and can
        only abort on a concolic — and `if (URL.canParse(x))` is how a real bundle spells a validity gate, so
        aborting there ends the document at the exact branch the solver exists to fork.
-       WHICH OPERAND the answer is derived from is url_unknown_operand's question and not this function's: the
-       base decides the result the same way the address does, and asking it here would be a second answer. */
-    if (!JS_IsUninitialized(unk)) {
+       THE ANSWER IS DERIVED FROM THE WHOLE OPERAND LIST and not from one of them: the base decides the result
+       the same way the address does, so both are operands of the derivation, and which of them carried the
+       attacker's bytes is the DELIVERY ROOT's question rather than this function's. */
+    if (url_any_unknown(argc, argv)) {
         UrlRecord ex_rec;
         int got = url_example_parse(ctx, argv[0], argc, argv, &ex_rec);
         JSValue real = JS_UNDEFINED;
@@ -1931,8 +1932,8 @@ static JSValue js_url_static(JSContext *ctx, JSValueConst this_val, int argc, JS
             real = JS_NULL;   /* §6.1: parse returns null for an address that does not parse */
         }
         if (got == 1) url_record_free(&ex_rec);
-        return concolic_builtin_hook(ctx, unk,
-                                     magic == URL_STATIC_CANPARSE ? "URL.canParse" : "URL.parse", real);
+        return concolic_new_derived(ctx, magic == URL_STATIC_CANPARSE ? "URL.canParse" : "URL.parse",
+                                    argv, url_operand_count(argc), real);
     }
     in = JS_ToCStringLen(ctx, &in_len, argv[0]);
     if (!in) return JS_EXCEPTION;
@@ -2003,16 +2004,14 @@ static int js_url_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
        constructor answers instead with an unknown derived from the source. Reading `.href`/`.pathname` off the
        result then yields further unknowns tied to the same source, which is what a later branch forks on and a
        later sink solves for.
-       WHICH OPERAND, AND THE FACT THAT THE BASE IS ONE, are url_unknown_operand's — the same question the two
-       statics ask, asked once. `new URL(rel, base)` resolves the input AGAINST the base (§4.4), so an unknown
-       base decides the result exactly as an unknown address does, and this arm used to test only the address:
-       an unknown base fell through to the coercion below and took the document down at the ToString.
+       THAT THE BASE IS AN OPERAND is url_any_unknown's — the same question the two statics ask, asked once.
+       `new URL(rel, base)` resolves the input AGAINST the base (§4.4), so an unknown base decides the result
+       exactly as an unknown address does, and this arm used to test only the address: an unknown base fell
+       through to the coercion below and took the document down at the ToString.
        The example is the real parse over the operands' own concretes, through the SAME helper §6.1's statics
        use — one algorithm, one answer, and no second copy of it to drift. */
     {
-        JSValueConst unk = url_unknown_operand(argc, argv);
-
-        if (!JS_IsUninitialized(unk)) {
+        if (url_any_unknown(argc, argv)) {
             UrlRecord ex_rec;
             JSValue real = JS_UNDEFINED;
             if (url_example_parse(ctx, argv[0], argc, argv, &ex_rec) == 1) {
@@ -2020,7 +2019,7 @@ static int js_url_ctor_step(JSContext *ctx, JSStepHdr *hdr, void *st, int argc, 
                 url_record_free(&ex_rec);
                 if (JS_IsException(real)) { JS_FreeValue(ctx, JS_GetException(ctx)); real = JS_UNDEFINED; }
             }
-            *presult = concolic_builtin_hook(ctx, unk, "URL", real);
+            *presult = concolic_new_derived(ctx, "URL", argv, url_operand_count(argc), real);
             return 0;
         }
     }
