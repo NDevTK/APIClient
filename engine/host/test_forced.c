@@ -52,6 +52,9 @@
                                       context — the half that DOES need a document, and the one
                                       document in this fixture that has a realm is `main`'s; see
                                       box_paint_selftest */
+#include "core/paint/document_paint.h"   /* and the two halves JOINED: a DOCUMENT to an image, which is
+                                           the assembly neither of the two above will make — see
+                                           box_paint_selftest's `@PAINT document` row */
 #include "core/frame/navigator.h"
 #include "core/frame/screen.h"
 #include "core/frame/viewport.h"
@@ -21397,6 +21400,90 @@ static void box_paint_selftest(JSContext *ctx, lxb_html_document_t *dom)
            answers 0 rather than a row of zeros, which is this row's own control. */
         printf("@PAINT raster w=%d h=%d dpr=%g marks=%zu spans=%zu pixels=%zu green=%zu sum=%llu\n",
                dw, dh, dpr, rc.marks, rc.spans, rc.pixels, green, (unsigned long long)sum_one);
+
+        /* AND THE WHOLE ROAD AS ONE CALL — core/paint/document_paint.h's entry over the same document,
+           against the assembly this file just performed by hand. THE TWO ARE INDEPENDENT ROUTES TO ONE IMAGE
+           and that is the whole of what this block buys: everything above reads the region, the ratio, the
+           root and the list SEPARATELY, and the entry reads them itself, so a disagreement is the component
+           that exists to make that assembly once having made a different one. It is also the only thing in
+           this tree that can speak about that entry at all — the production ABI bodies over it (`qjs_paint`,
+           `qjs_paint_bytes`) hold main.c's own document and this fixture's arm never roots one, so a row here
+           is what stands in for them until a host calls them.
+           EVERY NUMBER IS DERIVED FROM CONSTANTS THIS FILE WROTE. The extent is four bytes per pixel of the
+           region's device size, which the CHECKs above already hold to the ICB; the colour is `TF_CANVAS_INK`'s
+           `#00ff00` quantized by core/graphics/raster_surface.h's own `floor(v * 255 + 0.5)`; and the checksum
+           is compared against another rendering rather than against a literal, because a checksum of a
+           multi-megabyte bitmap is not a number anybody derived. Nothing here is viewport- or page-derived in
+           the sense that matters — every one is a plain C value this file or the entry computed, so none can
+           become concolic and silently fail to be written. */
+        {
+            RasterSurface      ds;
+            DocumentPaintCount dc;
+            size_t             dgreen = 0;
+            uint64_t           sum_doc;
+            int                ax, ay;
+            uint8_t            apx[4];
+            bool               drew;
+
+            drew = document_paint(ctx, dom, &ds, &dc);
+            CHECK(drew,
+                  "core/paint/document_paint.h's entry answered that CSS 2.1 §2.3.1 \"The canvas\" "
+                  "establishes no rendered region for the fixture's own active document — which the CHECK "
+                  "above took the same answer from `viewport_canvas_region` and got TRUE for. Two routes to "
+                  "one component disagreeing about whether this document is presented at all is the entry "
+                  "asking a different question, not a document that changed between two lines");
+            CHECKF(ds.width == dw && ds.height == dh,
+                   "the entry rendered a %dx%d device surface where the region this block sized by hand is "
+                   "%dx%d. Both go through `display_list_raster_region_size` over "
+                   "`viewport_canvas_region`, so a disagreement is the entry sizing its image off something "
+                   "else — and an image whose extent is not the region's is a picture of a different page "
+                   "than the one whose ink is on it", ds.width, ds.height, dw, dh);
+            CHECKF(raster_surface_bytes(&ds) == (size_t)dw * (size_t)dh * 4u,
+                   "the entry's %dx%d image holds %zu bytes where four per pixel is %zu. THIS IS THE NUMBER A "
+                   "TRANSPORT CARRIES and the reason core/graphics/raster_surface.h states the extent at all: "
+                   "non-premultiplied RGBA contains 0x00 by construction, so a consumer that recovered a "
+                   "length any other way would end at the first transparent pixel",
+                   ds.width, ds.height, raster_surface_bytes(&ds), (size_t)dw * (size_t)dh * 4u);
+            CHECK(dc.complete,
+                  "CSS 2.1 §E.2 \"Painting order\"'s walk over this document STOPPED inside the entry, having "
+                  "run to the end when this block performed it four lines up. A false `complete` is the "
+                  "painter meeting an operand it could not compute, and the two calls are over one document "
+                  "and one realm — so this is the entry handing the walk a different root or a different "
+                  "context rather than anything about the document");
+            CHECKF(dc.offers == offers && dc.marks == 1u,
+                   "the entry's walk offered %u step(s) and composited %zu mark(s) where this block's offered "
+                   "%u and laid ONE. The mark count is a count of the DOCUMENT'S OWN INK with no seed under "
+                   "it — the CHECK above holds this list to `dl.n == 2`, a seed this file planted plus CSS 2.1 "
+                   "§E.2's step 1 — so a different number here is the entry composing a list this block did "
+                   "not", dc.offers, dc.marks, offers);
+            for (ay = 0; ay < ds.height; ay++)
+                for (ax = 0; ax < ds.width; ax++) {
+                    raster_surface_get(&ds, ax, ay, apx);
+                    if (apx[0] == 0 && apx[1] == 255 && apx[2] == 0 && apx[3] == 255) dgreen++;
+                }
+            CHECKF(dgreen == (size_t)dw * (size_t)dh,
+                   "%zu of the entry's %zu pixels are the opaque `#00ff00` `TF_CANVAS_INK` declares, where "
+                   "the hand-assembled rendering of the same ink has all of them. CSS 2.1 §E.2's step 1 is "
+                   "\"background color of element over the entire canvas\" and CSS 2.1 §2.3.1 makes that "
+                   "canvas infinite, so the fill reaches every pixel whatever its own rectangle says — a "
+                   "shortfall is the canvas EXTENSION not having happened on this road",
+                   dgreen, (size_t)dw * (size_t)dh);
+            sum_doc = raster_surface_checksum(&ds);
+            CHECKF(sum_doc == sum_one,
+                   "the entry and this block rendered DIFFERENT BYTES for one document (%llu against %llu). "
+                   "Every assertion above compares a number; this compares the image, which is the reftest "
+                   "oracle core/graphics/raster_surface.h names and the only one that can see a difference "
+                   "neither the extent nor the colour count nor the mark count expresses",
+                   (unsigned long long)sum_doc, (unsigned long long)sum_one);
+            /* THE ROW, ON THE STDOUT THE BUILD LOG CAPTURES. Its own control is its ABSENCE: an artifact
+               built before this entry existed answers 0 to `grep -c '@PAINT document'` rather than a row of
+               zeros, which is the same control every other `@PAINT` row here carries. */
+            printf("@PAINT document w=%d h=%d bytes=%zu offers=%u marks=%zu spans=%zu pixels=%zu green=%zu "
+                   "complete=%d sum=%llu\n",
+                   ds.width, ds.height, raster_surface_bytes(&ds), dc.offers, dc.marks, dc.spans, dc.pixels,
+                   dgreen, dc.complete ? 1 : 0, (unsigned long long)sum_doc);
+            raster_surface_free(&ds);
+        }
         display_list_free(&one);
     }
     display_list_free(&dl);

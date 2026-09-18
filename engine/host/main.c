@@ -14,6 +14,7 @@
  * they are honestly ABSENT rather than stubbed: a page reading a global this engine does not provide throws its
  * own TypeError, which is the forcing function that names the edge to build. A stub answering undefined would
  * let a flow run past the missing capability and report a surface it never actually reached. */
+#include <limits.h>   /* UINT_MAX — the pixel run's extent is narrowed to this ABI's own length type */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -81,6 +82,7 @@
 #include "browser/core/frame/visual_viewport.h"
 #include "browser/core/frame/window.h"
 #include "browser/core/rendering/rendering.h"
+#include "browser/core/paint/document_paint.h"   /* CSS 2.1 §E.2's ink on CSS 2.1 §2.3.1's region */
 #include "browser/core/timing/timer.h"
 #include "browser/core/loader/document_scripts.h"
 #include "browser/core/dom/node_interface.h"   /* the ONE place a Document is made — see that header */
@@ -129,6 +131,23 @@ static int                  g_referenced;
  * does, with a buffer the ANSWERING side owns and the host may read until it asks again, which is the only
  * arrangement that survives a boundary no pointer comes back across. */
 static char                *g_result;
+
+/* THE IMAGE THIS INSTANCE LAST RENDERED, HELD FOR `g_result`'s REASON AND NOT FOR A CACHE'S. A paint is bytes
+ * rather than a C string, so the host cannot even recover its extent from the address — every byte value
+ * occurs in non-premultiplied RGBA and core/graphics/raster_surface.h says so ("a byte run of pixels has no
+ * spelling as a C string and its extent can be carried only as a number beside it") — which is why the run
+ * and its length are two entries and why the buffer that holds them is the ANSWERING side's.
+ * IT IS THIS FILE'S TO FREE AND THE HOST NEVER FREES IT. The trusted zone reads it across a boundary no
+ * pointer comes back across, so the previous image is released before a new one is rendered and the last one
+ * goes at teardown, exactly as the result document above does. A host that kept the address across a second
+ * `qjs_paint` would be reading whatever the next render allocated.
+ * `g_painted` IS NOT `g_paint.px != NULL`, AND THAT IS THE WHOLE REASON IT EXISTS. A zero-area image — a
+ * document CSS 2.1 §2.3.1 "The canvas" establishes no rendered region for — holds NULL pixels and zero bytes,
+ * which is a real ANSWER; an instance nobody has asked to paint holds the same two values and has answered
+ * nothing. Those are the absent-and-zero pair CLAUDE.md names by hand, and the flag is what keeps
+ * `qjs_paint_bytes` from reporting the second as the first. */
+static RasterSurface        g_paint;
+static int                  g_painted;
 
 /* THE DOCUMENTS THAT JOINED THIS AGENT AFTER IT WAS ROOTED — `qjs_join`'s realms and trees, held because THIS
  * host is what gives them back. It is not a registry and does not answer any question about the agent: the
@@ -1370,6 +1389,89 @@ QJS_EXPORT const char *qjs_result(void)
     return g_result;
 }
 
+/* AN IMAGE OF THIS INSTANCE'S DOCUMENT — CSS 2.1 §E.2 "Painting order"'s ink composited onto a surface the
+   size CSS 2.1 §2.3.1 "The canvas" establishes for it, answered as the address of the non-premultiplied
+   RGBA8 run core/graphics/raster_surface.h states the layout of: four bytes per pixel, R G B A, row-major.
+   The assembly is core/paint/document_paint.h's and none of it is composed here — a second read of the
+   viewport at this entry would be a second answer to the question the painter already asked.
+
+   IT PERFORMS THE RENDER; IT IS NOT A READ OF ONE. A host asking twice renders twice and gets two images,
+   which is the only honest answer for a document whose flows keep running between the two calls. What it is
+   NOT is per-flow: this is an output register like `g_result` above, so the image is of whichever world is
+   current when the call arrives, and a host that wants one arm's picture rather than another's is asking a
+   question §State-isolation's COW delta answers and this entry does not.
+
+   THE PAIR IS ORDERED, AND `qjs_paint_bytes` ENFORCES THE ORDER RATHER THAN DOCUMENTING IT. This entry is
+   the one that produces, so it is the one that must run first; the flag it sets is what makes a length asked
+   before any render an ABORT instead of a zero that reads exactly like the length of an empty image.
+
+   THE ADDRESS IS VALID UNTIL THE NEXT `qjs_paint` OR `qjs_teardown`, WHICHEVER COMES FIRST, AND THE HOST
+   NEVER FREES IT. A pointer does not come back across this boundary, so the obligation is discharged here or
+   by nobody — the previous image is released on the line below before a new one is rendered. A host that held
+   the address across a second call would be reading whatever the second render allocated, and one that freed
+   it would free this file's allocation out from under the next reader.
+
+   NULL IS AN ANSWER AND IT IS NOT AN ERROR. It is what a document with no image looks like, and
+   `raster_surface_bytes` is two-sided about the pair — an absent run and an extent of zero are one fact — so
+   a host reads the two entries together and needs no third to tell it whether there is a picture. WHICH of
+   the two reasons produced it (no rendered region at all, or a region of no size) is a fact about the
+   VIEWPORT rather than about the image, and the zone that provisioned this document is where that is known;
+   `count` separates them HERE, which is why it is asserted rather than discarded. */
+QJS_EXPORT const uint8_t *qjs_paint(void)
+{
+    DocumentPaintCount count;
+    bool               region;
+
+    DCHECK(g_ctx != NULL && g_dom != NULL,
+           "an image was asked of an instance that was never initialised — there is no document to render and "
+           "no realm holding the viewport whose region would size it");
+    /* THE PREVIOUS IMAGE, RELEASED BEFORE A NEW ONE IS ASKED FOR — `qjs_result`'s own line and for its own
+       reason. A zero-area surface frees nothing, so this is also correct on the first call, where the register
+       is the zeroed static every arm below leaves valid. */
+    raster_surface_free(&g_paint);
+    region = document_paint(g_ctx, g_dom, &g_paint, &count);
+    g_painted = 1;
+    DCHECKF(region || (count.offers == 0u && count.marks == 0u && !count.complete),
+            "core/paint/document_paint.h answered that CSS 2.1 §2.3.1 \"The canvas\" establishes no rendered "
+            "region for this document and then reported a walk over it — %u offer(s), %zu mark(s), complete=%d. "
+            "The false arm is stated to return before the walk, so a count with anything in it is that entry "
+            "having painted a document it had already said has nowhere to be painted",
+            count.offers, count.marks, count.complete ? 1 : 0);
+    return g_paint.px;
+}
+
+/* HOW LONG THE RUN `qjs_paint` LAST ANSWERED IS, which is the half no consumer can recover for itself.
+   core/graphics/raster_surface.h states the whole argument and it is the reason these are two entries:
+   "Non-premultiplied RGBA8 contains 0x00 by construction — every fully transparent pixel is four of them, and
+   every black channel is one — so a byte run of pixels has no spelling as a C string and its extent can be
+   carried only as a number beside it. A consumer that recovers a length with `strlen` ends at the first
+   transparent pixel."
+   IT ASSERTS THAT A PAINT HAPPENED, BECAUSE ZERO IS ALREADY TAKEN. An instance nobody asked to render and one
+   whose document has no image both hold a zero-area surface, so a length answered before any `qjs_paint`
+   would report "there is no picture" for "nobody has looked" — the absent-and-zero pair, at the one entry
+   whose whole job is to state an extent. */
+QJS_EXPORT unsigned qjs_paint_bytes(void)
+{
+    size_t n;
+
+    DCHECK(g_painted,
+           "the extent of an image was asked before one was rendered. The pair is ordered — `qjs_paint` "
+           "produces and this states how much it produced — and a host that asks this first is reading a "
+           "register no render has written, whose zero is indistinguishable from a document with no picture");
+    n = raster_surface_bytes(&g_paint);
+    /* THE ONE NARROWING, AND IT IS A `CHECK` BECAUSE THE FAILURE IS A READ PAST THE BUFFER. This ABI states
+       every length as an `unsigned` (`html_len`, `body_len`), so an extent that does not fit would be
+       TRUNCATED and the host would copy a prefix while believing it had the image — or, with a truncation
+       that wraps to something larger than the allocation, read past it. It CANNOT FAIL where `size_t` is 32
+       bits, which is the wasm host: there `raster_surface_init`'s own overflow refusal is the binding
+       constraint and this is arithmetic that has already been decided. It is kept for the host where `size_t`
+       is 64 bits, which is every native driver of these same bodies. */
+    CHECKF(n <= (size_t)UINT_MAX,
+           "a rendered image is %zu bytes, which this ABI states lengths too narrow to carry — a host would "
+           "copy a prefix of the picture and believe it had the whole of it", n);
+    return (unsigned)n;
+}
+
 QJS_EXPORT void qjs_teardown(void)
 {
     DCHECK(g_dom != NULL, "qjs_teardown ran on an instance that was never initialised");
@@ -1595,6 +1697,13 @@ QJS_EXPORT void qjs_teardown(void)
        teardown precisely because the document is built out of the realm this entry frees. */
     free(g_result);
     g_result = NULL;
+    /* AND THE LAST IMAGE, WHOSE BYTES ARE THIS FILE'S FOR THE SAME REASON AND ON THE SAME TERMS. It is not in
+       the runtime's heap, so `JS_FreeRuntime`'s gc_obj_list walk cannot see it and only this line can; and it
+       is released AFTER the realm above rather than with it, because a surface is raw bytes that outlive
+       every JS object the paint read to compose them. `g_painted` goes with it: a resumed session that
+       painted nothing must not answer a length out of a register the previous one filled. */
+    raster_surface_free(&g_paint);
+    g_painted = 0;
     g_begun = 0;
     g_done = 0;
 }

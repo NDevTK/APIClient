@@ -28,6 +28,8 @@
 #ifndef APICLIENT_QJS_ABI_H
 #define APICLIENT_QJS_ABI_H
 
+#include <stdint.h>   /* the pixel run below is BYTES, and a byte has a spelling this header must name */
+
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
 #define QJS_EXPORT EMSCRIPTEN_KEEPALIVE
@@ -94,6 +96,15 @@ QJS_EXPORT double qjs_top_weight(void);
 QJS_EXPORT void qjs_set_yield_floor(double floor);
 QJS_EXPORT void qjs_request_park(void);
 QJS_EXPORT void qjs_emit_partial(void);
+
+/* AN IMAGE OF THE DOCUMENT — the ONLY pair of entries in this ABI that carries BYTES outward, and two
+   entries rather than one because linear memory has no length. `qjs_paint` PERFORMS the render and answers
+   where the run starts; `qjs_paint_bytes` answers how long the run `qjs_paint` last produced is. A pointer
+   and a count are answers of two different KINDS, and two of those taken from one call are free to be read
+   into the variable named for the other — separate entries make that mistake a different CALL instead. The
+   ownership, the lifetime and the order they must be asked in are at their bodies in main.c. */
+QJS_EXPORT const uint8_t *qjs_paint(void);
+QJS_EXPORT unsigned qjs_paint_bytes(void);
 
 /* THE INSTRUMENT SEAM — a program a DRIVER wants evaluated in the analysed document's realm, and the dumped
    completion values coming back, one per live timeline. Its contract is at its body in main.c and its whole

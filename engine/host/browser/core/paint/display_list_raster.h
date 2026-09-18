@@ -21,7 +21,7 @@
  * than theoretical: a document whose root background is transparent lays no `DISPLAY_MARK_FILL_CANVAS`, and
  * its rendered region is the same one every other document on this medium has. So the region is CSS 2.1
  * §2.3.1 "The canvas"'s, it is answered by the ONE derivation that already answers it —
- * `box_paint_canvas_region` — and it arrives here as a SURFACE the caller has already sized. There is
+ * `viewport_canvas_region` — and it arrives here as a SURFACE the caller has already sized. There is
  * deliberately no entry here that reads a viewport.
  *
  * THE CANVAS KIND'S RECTANGLE IS READ BY NOTHING BELOW, AND THAT IS THE DESIGN. CSS 2.1 §2.3.1 says "The
