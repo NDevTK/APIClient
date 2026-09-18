@@ -7516,9 +7516,26 @@ static void flow_perform(JSContext *ctx, Flow *f)
    THE WORLD IS NOT A DIAGNOSTIC. This document's state IS its flows, so the program ran in every one of them
    and the host receives N answers to one question; with the timelines unnamed they are N interchangeable
    claims about one document, which is the defect flow_answer_perform records having measured one layer over
-   (one page's `w.closed` answered `true` and then `false` out of two contradictory timelines). The name is
-   world_serialize's — the ONE spelling of a world on the wire — so a driver can compare it, keep it beside the
-   artifact it belongs to, and refuse a second delivery of the same one.
+   (one page's `w.closed` answered `true` and then `false` out of two contradictory timelines).
+   THE NAME IS `world_name`'S AND NOT `world_serialize`'S, AND THIS LINE USED TO SAY THE OPPOSITE — rewritten
+   rather than deleted, because a reader who re-derives it from "the ONE spelling of a world on the wire" will
+   write it again. That sentence is true of a record crossing to a PEER and this record crosses to a DRIVER,
+   and solver/world.h splits the two entries on exactly that: "one names a world to a PEER and records that it
+   did, the other names it to a READER and records nothing." What `world_serialize` RECORDS is the side effect
+   — it reaches `world_ancestry`, which sets `sent`, and solver/world.c says what `sent` means where it clears
+   it: "a peer MAY hold a segment keyed by this name". A world called `sent` because somebody PRINTED it is
+   wrong in two directions
+   at once and neither is visible here: it joins the ancestry of every vector minted below it (world.h's own
+   filter keeps only ancestors that have crossed, and that filter is what stops a name growing with the number
+   of BRANCHES rather than with the fork depth — `world_vector_write`'s `CHECK` on any page whose boot flow
+   forks freely), and it is announced as DEAD to peers that never held it, since `world_flow_gone` and
+   `world_session_gone` push exactly the `sent` worlds onto the register `qjs_world_gone` drains.
+   NOTHING DOWNSTREAM WANTED THE VECTOR. The ancestry exists so a peer can MATERIALIZE a segment by forking the
+   nearest ancestor it holds; a driver materializes nothing — testing/render_engine.mjs splits this record on
+   its FIRST tab and uses the field as an opaque Map key — so the fields it was being handed were ones it could
+   only scan past, bought at the price of both effects above.
+   IT IS STILL THE HEAD OF THAT SAME GRAMMAR AND NOT A SECOND ONE: `world_name` and `world_serialize` share the
+   one field writer, so a driver holding this name and a peer holding that vector are naming one timeline.
    THE JSON CARRIES NO TAB AND NO NEWLINE BY CONSTRUCTION (value_dump.h says why, and json_buf.c's escaping
    loop is what makes it true), so it is the record's last field and needs no encoding step. It is asserted
    anyway, because a record separator inside a field is the one corruption a reader's field COUNT still passes:
@@ -7529,11 +7546,10 @@ static void flow_perform(JSContext *ctx, Flow *f)
    platform that is not the one that produced it. */
 static void flow_emit_dump(JSContext *ctx, Flow *f, JSValueConst cv)
 {
-    char world[1024];
+    char *world = world_name(f->world);   /* @WORLDSHOT: a READER's name, and see the banner for why not the vector */
     char *json;
     size_t wn, jn;
 
-    world_serialize(f->world, world, sizeof world);
     json = value_dump_json(doc_realm(flow_dyn_doc(f)), cv);
     CHECK(json != NULL, "engine: a host instrument's completion value could not be dumped — value_dump_json "
                         "aborts rather than answering nothing, so a null here is that contract broken");
@@ -7562,6 +7578,7 @@ static void flow_emit_dump(JSContext *ctx, Flow *f, JSValueConst cv)
     g_dumps[g_dumps_n++] = '\n';
     g_dumps[g_dumps_n] = 0;
     free(json);
+    free(world);   /* world_name allocates; see solver/world.h */
 }
 
 static void flow_answer_perform(JSContext *ctx, Flow *f, JSValueConst cv)

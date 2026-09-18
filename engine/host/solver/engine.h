@@ -266,8 +266,14 @@ void engine_queue_javascript_url(uint32_t doc, const char *body, size_t body_n);
  * page for findings has no reason to add a program to it. */
 void engine_request_dump(const char *program);
 /* The dumps recorded since the last call, newline-joined and DRAINED by the call; "" when there are none.
- * Each record is `<world><TAB><json>` — the world in world_serialize's own spelling, and the JSON one LINE by
- * construction (value_dump.h). A record per timeline that ran the program, in the order they completed. */
+ * Each record is `<world><TAB><json>` — the world in `world_name`'s spelling (`doc:session:serial`, the HEAD
+ * of solver/world.h's grammar and no ancestry), and the JSON one LINE by construction (value_dump.h). A record
+ * per timeline that ran the program, in the order they completed.
+ * THIS LINE USED TO SAY `world_serialize`'s SPELLING and is rewritten rather than deleted, because the reason
+ * for the vector is a real one and will be re-derived: an ancestry is what lets a PEER materialize a segment,
+ * and a driver materializes nothing. Serializing also MARKS the world as having crossed, which puts a world
+ * nobody holds into the ancestry of every later vector and onto the death register `qjs_world_gone` drains.
+ * The whole argument is at flow_emit_dump. */
 const char *engine_take_dumps(void);
 /* Park the running flow on a <script src> WITH NO POSITION TO HOLD: the host fetches it, and the reply becomes
    this flow's next program rather than a promise's value. Two kinds of element are that — one a page INJECTED,
