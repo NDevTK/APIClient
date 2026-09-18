@@ -19,10 +19,23 @@ const PROBE_BATCH_SIZE = 300;
    `Object.prototype` with a FUNCTION, which `if (ERROR_TYPE_MAP[typeStr])` reads as a hit. Measured in a real
    Chrome DOM on a target's own reply: `Invalid value at 'evil' (constructor), 1` produced a field record
    whose `type` was the `Object` CONSTRUCTOR, which `checkStoreRecord` admits (`fields` is asked to be an
-   object, not walked) and which then rides `globalStore.probeResults` into lib/serialize.js's projection —
-   where `chrome.runtime.sendMessage`'s structured clone throws DataCloneError on a function, so one probe
-   answer stopped every popup open and every IndexedDB save for that profile. A `Map` has no inherited keys,
-   so the table answers only for the sixteen names it states. */
+   object, not walked) and which then rides `globalStore.probeResults` into lib/serialize.js's projection and
+   into the IndexedDB save, so one probe answer stopped every popup open and every IndexedDB save for that
+   profile. A `Map` has no inherited keys, so the table answers only for the sixteen names it states.
+   THE MECHANISM RECORDED HERE WAS HALF WRONG AND IS CORRECTED RATHER THAN DROPPED, BECAUSE WHAT A READER
+   INHERITS FROM AN INCIDENT IS ITS METHOD. The clause said
+   `where chrome.runtime.sendMessage's structured clone throws DataCloneError on a function`, which named ONE
+   mechanism for both halves. Measured in real Chrome, offscreen document to popup, with a control value that
+   arrived intact beside it: `{type: Object}` through `chrome.runtime.sendMessage` DOES NOT THROW — the wire
+   is JSON-like, the function-valued key is SILENTLY DROPPED, and the object arrives as `{}`. In the same
+   document `structuredClone({type: Object})` DOES throw DataCloneError, so the IndexedDB half of the incident
+   is the half that had a throw in it; what stopped the popup opening was not established by that measurement
+   and is not claimed here. THE CORRECTION MAKES THE HAZARD WORSE, WHICH IS WHY IT IS WORTH THE PARAGRAPH: a
+   throw is loud and a silent drop is the plausible-datum defect — the popup would have rendered a field
+   record whose `type` had simply vanished, with nothing anywhere to say so. extension/content.js's
+   chunked-transport header carries the whole measured table and the command that re-derives it.
+   RETIREMENT: this record goes when nothing in this zone calls `chrome.runtime.sendMessage` structured
+   clone. */
 const ERROR_TYPE_MAP = new Map(Object.entries({
   TYPE_STRING: "string",
   TYPE_BOOL: "bool",

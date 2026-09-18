@@ -228,21 +228,48 @@
   }, true);
 
   // ─── Chunked-message transport ─────────────────────────────────────────
-  // chrome.runtime.sendMessage's structured-clone limit is 64 MiB per
-  // call. Large raw materials (full server-rendered HTML on a heavy
-  // SPA, multi-MB script bodies, large response bodies) need split-
-  // and-reassemble — callers still hand the WHOLE payload as one
-  // logical unit; this transport slices it into ≤16 MiB chunks under
-  // a stream id, background.js's chunk-reassembly layer merges them
-  // back before dispatching to the type-specific handler. No truncation,
-  // no caps, no heuristics.
+  /* THIS WIRE IS JSON-LIKE AND NOT STRUCTURED CLONE, WHICH IS THE WHOLE REASON EVERY PAYLOAD THAT CROSSES IT
+     IS A STRING. The sentence that opened this block named the cap as
+     `chrome.runtime.sendMessage's structured-clone limit`, and that wording is rewritten rather than deleted
+     because it is what a reader re-derives: the call LOOKS like `postMessage`, so the natural assumption is
+     that it keeps whatever structured clone keeps — and on that assumption somebody hands it a typed array.
+     MEASURED in real Chrome, offscreen document to popup, on BOTH shapes of the API (a `sendResponse` reply
+     and a broadcast), each row carrying a string and a plain Array beside it as a control that arrived intact:
+       Uint8Array   -> a plain Object keyed "0","1",…, values EXACT (0, 128 and 255 all survive)
+       ArrayBuffer  -> {} — the bytes are GONE
+       Map, Set, RegExp -> {}     Date -> a STRING     NaN and both infinities -> null     minus zero -> 0
+       a function   -> its KEY IS DROPPED, siblings intact, and NO throw
+       a cycle      -> the call REJECTS, "Could not serialize message."
+     Real structured clone does none of that: in that same document `structuredClone` answers a Map for a Map
+     and a Uint8Array for a Uint8Array, and THROWS DataCloneError on a function. Two mechanisms, and this file
+     is talking to the other one. A CALLER WITH BYTES ENCODES THEM — `uint8ToBase64` below is this zone's
+     answer and is why it exists; base64 costs 1.33x where the numeric-key object form costs 13x.
+     THE 64 MiB CAP NAMED BELOW IS NOT PART OF THAT MEASUREMENT and stands exactly as this file stated it: a
+     4,096,000-byte typed array did arrive, which is consistent with the figure and establishes nothing about
+     it. Re-derive the table with `node testing/harness.js offscreen`/`popup` against a listener that replies
+     with each value; describe the arrival IN THE PAGE and return primitives, because the harness serializes
+     its own result too and would otherwise be measuring itself.
+     RETIREMENT: this record goes when nothing in this zone calls `chrome.runtime.sendMessage` structured
+     clone. */
+  // Large raw materials (full server-rendered HTML on a heavy SPA, multi-MB
+  // script bodies, large response bodies) need split-and-reassemble — callers
+  // still hand the WHOLE payload as one logical unit; this transport slices it
+  // into ≤16 MiB chunks under a stream id, background.js's chunk-reassembly
+  // layer merges them back before dispatching to the type-specific handler.
+  // No truncation, no caps, no heuristics.
   var _streamSeq = 0;
   function _sendChunked(msg, payloadKey) {
     var payload = msg[payloadKey];
+    /* THE NON-STRING ARM IS A REFUSAL, NOT A FALLBACK AND NOT A MISSING ASSERT. `body` is whatever a
+       `__uasr_resp` CustomEvent carried, and any script in this document can dispatch one — so the value is a
+       STRANGER'S, and CLAUDE.md's rule for a stranger's bytes is a refusal rather than a `DCHECK`, which would
+       hand the page an abort switch on this content script. Chunking is defined over a string's length; a
+       payload that is not one goes whole, which is also the right answer for the `body: null` a WebSocket OPEN
+       frame legitimately carries (extension/intercept.js writes it). */
     if (typeof payload !== "string") { chrome.runtime.sendMessage(msg); return; }
     // 16 MiB per chunk leaves head-room for envelope fields + UTF-16
     // string-length-vs-byte-size overhead (the 64 MiB cap is bytes
-    // post-clone, JS strings are length-counted in code units).
+    // post-serialization, JS strings are length-counted in code units).
     var CHUNK = 16 * 1024 * 1024;
     if (payload.length <= CHUNK) { chrome.runtime.sendMessage(msg); return; }
     var streamId = "s_" + (++_streamSeq) + "_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8);
