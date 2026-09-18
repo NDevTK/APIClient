@@ -19473,10 +19473,12 @@ static void union_arm_selftest(JSContext *ctx)
  *                              engine that filled a fresh ImageData from the context's `alpha` answers
  *                              `KK/KK` here and passes every other field of this road.
  *
- * WHAT THESE ROWS DO NOT REACH, so a reader does not take them for more than they are: no drawing member
- * exists to exercise, `createImageData` is a named residual at the component and is deliberately not called
- * here, and nothing below asks for a `colorSpace` or a `colorType` other than the two defaults — a
- * `display-p3` round trip has no conversion to make in this build and would assert the identity.
+ * WHAT THESE TWO ROADS DO NOT REACH, so a reader does not take them for more than they are: no PAINTER
+ * exists to exercise — the drawing state that does is the third road below — `createImageData` is a named
+ * residual at the component and is deliberately not called here, and neither road asks for a `colorSpace` or
+ * a `colorType` other than the two defaults, a `display-p3` bitmap having no conversion to make in this build
+ * and an identity to assert. (The third road DOES name `display-p3`, and it is a `<color>`'s space rather
+ * than a bitmap's — a different question that §4.12.5.1.10's serialization answers with no conversion at all.)
  *
  * THE ROWS' OWN CONTROL IS THEIR ABSENCE: against an artifact built before the pixel road landed,
  * `grep -c '@CANVAS2D'` answers 0 rather than a row of wrong characters, which is the same control
@@ -19516,6 +19518,9 @@ static void canvas_pixel_selftest(JSContext *ctx)
         "1111|..../..../..../....|RG../BW../..../....|.../.RG/.BW|..../..../..../....|"
         "..../..../..W./....|.G../.W../..../....|.G../.W../..../....|ww../ww../..../....|I|RG/BW";
     static const char WANT_OPAQUE[] = "111111|KK/KK|WW/WW|KK/KK|../..";
+    static const char WANT_FILL_STYLE[] =
+        "#000000|string|#ff0000|#ff00ff|rgba(255, 0, 255, 0.93)|rgba(255, 0, 255, 0.93)|"
+        "rgba(255, 0, 255, 0.93)|#0000ff|rgba(255, 0, 255, 0.93)|color(display-p3 1 0 0)|#000000";
     char *got;
 
     got = tf_flow_answer(ctx, "canvas-pixel",
@@ -19596,6 +19601,81 @@ static void canvas_pixel_selftest(JSContext *ctx)
            "being ignored; `KK/KK` in field 5 is a fresh ImageData filled from the context's `alpha` rather "
            "than with transparent black", got, WANT_OPAQUE);
     printf("@CANVAS2D opaque-road answer=%s\n", got);
+    free(got);
+
+    /* FILL-STYLE ROAD (a 2x2 canvas, default settings). HTML §4.12.5.1.10 "Fill and stroke styles" is
+     * OBSERVABLE WITH NO PAINTER, and that is the whole reason this road exists beside two pixel roads: its
+     * getter steps are "If this's fill style is a CSS color, then return the serialization of that color with
+     * HTML-compatible serialization requested", so the member's answer is a ROUND TRIP through a parse and a
+     * serialization and neither of them touches a bitmap. Every field below is a string comparison and not one
+     * pixel is read.
+     *
+     *  1 `#000000`                 — §4.12.5.1.10: "Initially, both must be the result of parsing the string
+     *                               "#000000"." A `rgb(0, 0, 0)` here is CSS Color 4 §16.2.1's hex form not
+     *                               being chosen, and an empty field is the member answering `undefined`,
+     *                               which is what an install that forgot its getter looks like.
+     *  2 `string`                  — the declared union's other two arms are unreachable in this build, so
+     *                               every value a page can assign comes back a string. The day a
+     *                               `CanvasGradient` exists this field is the first to move.
+     *  3 `#ff0000`                 — CSS Color 4 §6.1's named-colour table, reached through the parse this
+     *                               member routes to rather than through any table of this component's.
+     *  4 `#ff00ff`                 — §4.12.5.1.10's OWN WORKED EXAMPLE, quoted at CSS Color 4 §16.2.1: a fill
+     *                               style set to `rgb(255, 0, 255)` reads back `#ff00ff`. An `rgb(255, 0,
+     *                               255)` here is §16.2.1's third condition failing — the components are not
+     *                               held as 8-bit integers — which is the one condition an implementation
+     *                               chooses rather than reads.
+     *  5 `rgba(255, 0, 255, 0.93)` — §16.2.1's second worked example, the alpha-not-1 arm. `#ff00ff` here is
+     *                               an alpha that was dropped rather than serialized; `rgba(255, 0, 255,
+     *                               0.929412)` is §16.1.1's legacy two-decimal alpha not being used.
+     *  6 the same                  — §4.12.5.1.10's "Invalid values are ignored": the setter's step "If
+     *                               parsedValue is failure, then return" leaves the attribute holding what it
+     *                               had. `#000000` here is a failure treated as a reset.
+     *  7 the same                  — the declared `DOMString` arm converting a Number, whose `42` is not a
+     *                               colour. A throw here is the union being declared as something that
+     *                               refuses a non-string.
+     *  8 `#0000ff`                 — §4.12.5.1.3's drawing state after a `save()`, which must still be
+     *                               writable.
+     *  9 the same as 7             — `restore()` carrying a colour back. THIS IS THE FIELD NO SHORTER ROUND
+     *                               TRIP MAKES: the copy `save()` takes is one property deep and the fill
+     *                               style is six numbers on that record, so `#0000ff` here is a stack that
+     *                               popped nothing and `#000000` is a restore that rebuilt the state instead
+     *                               of restoring it.
+     * 10 `color(display-p3 1 0 0)` — a colour whose space is not sRGB takes §16.2.1's "otherwise" arm — "for
+     *                               other color spaces, the relevant serialization of the color value" — which
+     *                               is §16.5's `color()` form. An `rgb(255, 0, 0)` here is a colour converted
+     *                               to sRGB somewhere it should not have been, and it is also what says the
+     *                               8-bit quantization is NOT applied outside sRGB.
+     * 11 `#000000`                 — `reset()` reaching *reset the rendering context to its default state*
+     *                               step 4, over a drawing state that now has two members rather than one.
+     *
+     * WHAT THIS ROAD DOES NOT REACH: no painter exists, so nothing here says a fill style reaches a pixel —
+     * see the component's own residual for the six attributes a `fillRect` would have to read. `currentcolor`
+     * and the system colours are deliberately not asked for: they are a named residual at the component
+     * (the parse takes no context element), and a row here would pin an answer that residual exists to move. */
+    got = tf_flow_answer(ctx, "canvas-fill-style",
+        "var c=document.createElement('canvas');"
+        "c.setAttribute('width','2');c.setAttribute('height','2');"
+        "var x=c.getContext('2d');"
+        "var g=''+x.fillStyle;"
+        "g+='|'+(typeof x.fillStyle);"
+        "x.fillStyle='red';g+='|'+x.fillStyle;"
+        "x.fillStyle='rgb(255, 0, 255)';g+='|'+x.fillStyle;"
+        "x.fillStyle='#ff00ffed';g+='|'+x.fillStyle;"
+        "x.fillStyle='nosuchcolour';g+='|'+x.fillStyle;"
+        "x.fillStyle=42;g+='|'+x.fillStyle;"
+        "x.save();x.fillStyle='#0000ff';g+='|'+x.fillStyle;"
+        "x.restore();g+='|'+x.fillStyle;"
+        "x.fillStyle='color(display-p3 1 0 0)';g+='|'+x.fillStyle;"
+        "x.reset();g+='|'+x.fillStyle;"
+        "return g;");
+    CHECKF(!strcmp(got, WANT_FILL_STYLE),
+           "HTML §4.12.5.1.10 \"Fill and stroke styles\" over a 2x2 canvas answered\n  %s\nwhere its own steps "
+           "and CSS Color 4 §16.2 \"Serializing sRGB values\" answer\n  %s\nRead it by FIELD — the eleven are "
+           "separated by `|` and each is derived at this function's banner, which also names what each wrong "
+           "answer means. Fields 5, 6, 7 and 9 are one value repeated, so a field that differs from its "
+           "neighbours there names which step moved it: 6 is the invalid-value arm, 7 is the DOMString "
+           "conversion and 9 is `restore()`", got, WANT_FILL_STYLE);
+    printf("@CANVAS2D fill-style answer=%s\n", got);
     free(got);
 }
 

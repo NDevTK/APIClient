@@ -43,10 +43,20 @@
  * drawing-state member standing beside an absent painter — that is `fillStyle` in its own example — so
  * `globalAlpha` and the `save()`/`restore()` stack that copies it are on the side this paragraph calls
  * harmless, and nothing they do can make a bitmap answer a pixel a page did not ask for. What the paragraph
- * forbids is a PAINTER without the state it reads, which is unchanged and is still why `fillRect` is not
- * next. The retired wording is kept here because a reader who re-derives the pairing rule will re-derive the
- * over-wide sentence with it, and would then read a landed member as a violation of the rule that permitted
- * it. */
+ * forbids is a PAINTER without the state it reads, which is unchanged. The retired wording is kept here
+ * because a reader who re-derives the pairing rule will re-derive the over-wide sentence with it, and would
+ * then read a landed member as a violation of the rule that permitted it.
+ *
+ * AND THAT PARAGRAPH ENDED `is still why fillRect is not next`, WHICH READ AS A CLAIM THAT THE PAINTER
+ * FOLLOWS ITS STATE AND IS THE ONE HALF OF IT THAT WAS WRONG. §4.12.5.1.10's fill style has landed and
+ * `fillRect` is further away rather than nearer, because the pairing rule's own mechanism reaches FIVE more
+ * members the sentence never counted: an absent METHOD is loud, so the transformation matrix and the clipping
+ * region may be assumed at their initial values, while an absent ATTRIBUTE is silent — and §4.12.5.1.11 with
+ * §4.12.5.1.22's drawing model make `globalCompositeOperation`, `filter` and the four shadow attributes
+ * inputs to a filled rectangle. `clearRect` escapes all six by that section's own exception and is blocked one
+ * layer down instead, on a second span sink core/graphics/raster_surface.h says is a second landing. The
+ * ordered decomposition is a named residual at canvas_rendering_context_2d.c's install, beside the clause it
+ * corrects. */
 #ifndef ENGINE_HOST_BROWSER_CORE_CANVAS_CANVAS_RENDERING_CONTEXT_2D_H
 #define ENGINE_HOST_BROWSER_CORE_CANVAS_CANVAS_RENDERING_CONTEXT_2D_H
 

@@ -1,6 +1,12 @@
 /* HTML §4.12.5.1 "The 2D rendering context" — see canvas_rendering_context_2d.h for why the member, the
  * creation algorithm, the bitmap and update-the-rendering step 13 are ONE landing, and for why §4.12.5.1.16
- * "Pixel manipulation" is the road that lands with them while every drawing member stays absent. */
+ * "Pixel manipulation" is the road that landed with them.
+ * THIS SENTENCE ONCE ENDED `while every drawing member stays absent` and is rewritten rather than deleted,
+ * because that clause is what a reader re-derives from the header's pairing rule and it has been false since
+ * §4.12.5.1.3's drawing state landed. What the pairing rule forbids is a PAINTER without the state it reads,
+ * so a drawing-STATE member is on the side it calls harmless: `globalAlpha` and `fillStyle` are here and
+ * every member that PAINTS is not. The residual at the install below says which six attributes a `fillRect`
+ * would have to bring with it and why they are not one diff. */
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -12,6 +18,7 @@
 #include "core/canvas/canvas_path.h"
 #include "core/canvas/canvas_rendering_context_2d.h"
 #include "core/canvas/image_data.h"
+#include "core/css/css_color.h"
 #include "core/html/html_canvas_element.h"
 #include "core/idl_args.h"
 #include "core/idl_slots.h"
@@ -21,6 +28,7 @@
 static JSClassID g_class;
 static int g_id_attrs = -1, g_id_lost = -1, g_id_reset = -1,
            g_id_save = -1, g_id_restore = -1, g_id_set_alpha = -1,
+           g_id_set_fill_style = -1,
            g_id_get_image_data = -1, g_id_put_image_data = -1;
 static JSValue g_state_key = JS_UNDEFINED;
 static JSAtom  g_atom_state = JS_ATOM_NULL;
@@ -105,6 +113,17 @@ static bool ctx2d_bool(JSContext *ctx, JSValueConst st, const char *name)
     return out;
 }
 
+static double ctx2d_double(JSContext *ctx, JSValueConst st, const char *name)
+{
+    JSValue v = JS_GetPropertyStr(ctx, st, name);
+    double out = 0.0;
+
+    DCHECK(JS_IsNumber(v), "a 2D context state field this component alone writes is not a Number");
+    JS_ToFloat64(ctx, &out, v);
+    JS_FreeValue(ctx, v);
+    return out;
+}
+
 /* ---- §4.12.5.1.3 "The canvas state" — THE DRAWING STATE AND ITS STACK ------------------------------------- */
 
 /* THE DRAWING STATE IS ITS OWN RECORD, AND THAT IS WHAT MAKES `save()` TOTAL RATHER THAN A LIST SOMEBODY
@@ -123,18 +142,130 @@ static bool ctx2d_bool(JSContext *ctx, JSValueConst st, const char *name)
  * 2 and never mentions again in its steps 3 and 4. Both live on `st`, not here. So do §4.12.5.1.2's five
  * settings, which are that section's and appear in none of §4.12.5.1.3's bullets. */
 
+/* ---- a drawing-state COLOUR ----------------------------------------------------------------------------- */
+
+/* A DRAWING-STATE COLOUR IS SIX PRIMITIVE FIELDS AND NOT ONE OBJECT, AND THE REASON IS `ctx2d_drawing_copy`'s
+ * OWN ASSERT rather than a preference expressed here. That copy is one property deep and DCHECKs that no
+ * member is an object, because `save()` would otherwise ALIAS one; a `CssColor` is a colour space, three
+ * components, an alpha and §4.4's missing-component bitmap, so writing those six as six numbers is the colour
+ * ITSELF stored primitively rather than a packing chosen to slip past a check. Nothing here weakens that
+ * assert and nothing stores a colour as something it happens to accept: a JS string would pass the same
+ * predicate and would be LOSSY, since the alpha a serialization writes is rounded to CSS Color 4 §16.1.1's two
+ * decimals and a re-parse of `rgba(0, 0, 0, 0.33)` is not the 0.333 the page set.
+ *
+ * SO `save()` AND `restore()` CARRY A COLOUR WITH NO EDIT TO EITHER, which is the whole reason the drawing
+ * state is a record, and §4.12.5.1.3's "a copy of the current drawing state" stays total over it.
+ *
+ * THE FIELD NAMES ARE A TABLE BECAUSE THERE WILL BE THREE OF THEM. §4.12.5.1.10 declares a stroke style
+ * beside the fill style and §4.12.5.1.19 a shadow color, and all three are the same six fields under three
+ * prefixes — so the names are data and no site composes one, which is also why nothing here reaches for a
+ * `snprintf` whose truncation the compiler cannot see across a helper boundary. */
+typedef struct {
+    const char *space, *r, *g, *b, *alpha, *missing;
+} Ctx2dColorFields;
+
+/* §4.12.5.1.10's FILL STYLE. */
+static const Ctx2dColorFields CTX2D_FILL_STYLE = {
+    "fillStyleSpace", "fillStyleR", "fillStyleG", "fillStyleB", "fillStyleAlpha", "fillStyleMissing"
+};
+
+/* THE ONE DOOR A DRAWING-STATE COLOUR ENTERS BY, AND THE 8-BIT QUANTIZATION IS WHAT MAKES IT ONE.
+ * CSS Color 4 §16.2.1 "HTML-compatible serialization of sRGB values" states FOUR conditions and the third is
+ * about this engine's own representation rather than about the colour: "the RGB component values are
+ * internally represented as integers between 0 and 255, inclusive (i.e., 8-bit unsigned integer)". This
+ * canvas's output bitmap is eight bits per component, so eight bits is the honest representation of a fill
+ * style and not a precision thrown away — and it is what makes §4.12.5.1.10's own worked example come out:
+ * `context.fillStyle = "rgb(255, 0, 255)"` reads back `#ff00ff`, which an implementation storing more
+ * precision would answer `rgb(255, 0, 255)` to. Quantizing HERE rather than at each getter is what makes that
+ * third condition true BY CONSTRUCTION, which is why `css_color_serialize_html`'s own DCHECK over it is an
+ * identity rather than a hope.
+ * ONLY AN sRGB COLOUR IS QUANTIZED, because §16.2.1's first condition is the colour space and
+ * `css_color_quantize_8bit` asserts sRGB for HTML §4.10.5.1.14's reason: the 0-to-255 grid IS the sRGB
+ * eight-bit one, so a `color(display-p3 …)` fill style keeps every digit the page wrote and serializes
+ * through §16.5's form. */
+static void ctx2d_color_store(JSContext *ctx, JSValueConst d, const Ctx2dColorFields *f, CssColor *c)
+{
+    if (c->space == CSS_COLOR_SPACE_SRGB) css_color_quantize_8bit(c);
+    JS_SetPropertyStr(ctx, d, f->space,   JS_NewInt32(ctx, (int)c->space));
+    JS_SetPropertyStr(ctx, d, f->r,       JS_NewFloat64(ctx, c->c[0]));
+    JS_SetPropertyStr(ctx, d, f->g,       JS_NewFloat64(ctx, c->c[1]));
+    JS_SetPropertyStr(ctx, d, f->b,       JS_NewFloat64(ctx, c->c[2]));
+    JS_SetPropertyStr(ctx, d, f->alpha,   JS_NewFloat64(ctx, c->a));
+    JS_SetPropertyStr(ctx, d, f->missing, JS_NewInt32(ctx, (int)c->missing));
+}
+
+/* The six back. Every one was written by `ctx2d_color_store` and by nothing else, so the space index is this
+   codebase's own arithmetic and is asserted; the components and the alpha are a PAGE'S numbers that a parse
+   produced and are not. */
+static void ctx2d_color_load(JSContext *ctx, JSValueConst d, const Ctx2dColorFields *f, CssColor *out)
+{
+    int space = ctx2d_int(ctx, d, f->space);
+
+    DCHECKF(space >= 0 && space < (int)CSS_COLOR_SPACE__COUNT,
+            "a drawing-state colour carries the colour space index %d, and `ctx2d_color_store` is the only "
+            "thing that writes one", space);
+    out->space   = (CssColorSpace)space;
+    out->c[0]    = ctx2d_double(ctx, d, f->r);
+    out->c[1]    = ctx2d_double(ctx, d, f->g);
+    out->c[2]    = ctx2d_double(ctx, d, f->b);
+    out->a       = ctx2d_double(ctx, d, f->alpha);
+    out->missing = (unsigned)ctx2d_int(ctx, d, f->missing);
+}
+
+/* CSS Color 4 §16.2.1's own choice between the three forms, which §4.12.5.1.10's getter asks for by name:
+ * "return the serialization of that color with HTML-compatible serialization requested".
+ *
+ * §16.2.1's four conditions are the colour space, an alpha of 1, the 8-bit representation `ctx2d_color_store`
+ * guarantees, and the request — and its "otherwise" clause names the other two forms in one sentence:
+ * "otherwise, for sRGB, the CSS serialization of sRGB values is used, and, for other color spaces, the
+ * relevant serialization of the color value". A MISSING COMPONENT takes the colour out of the hex form
+ * whatever its alpha, because CSS Color 4 §16.2 "Serializing sRGB values" says "during serialization, any
+ * missing values are converted to 0 if the chosen serialization form … cannot represent the none keyword.
+ * When at least one component is missing and the value can be serialized in a form which supports none, the
+ * form is chosen as described in §16.2.2" — and §16.2.2's own branch for that is what
+ * `css_color_serialize_srgb` performs, so the test here is only what keeps a missing component out of the
+ * form that would silently zero it. */
+static JSValue ctx2d_color_serialize(JSContext *ctx, const CssColor *c)
+{
+    char buf[CSS_COLOR_FUNCTION_MAX];
+    char hex[8];
+    size_t len;
+
+    if (c->space == CSS_COLOR_SPACE_SRGB && c->missing == 0u && c->a == 1.0) {
+        css_color_serialize_html(c, hex);
+        return JS_NewString(ctx, hex);
+    }
+    /* The write and the read are two STATEMENTS rather than one call, because C leaves the order in which a
+       call's arguments are evaluated unspecified and a reader should not have to decide whether `buf` is
+       filled before it is handed over. */
+    len = c->space == CSS_COLOR_SPACE_SRGB ? css_color_serialize_srgb(c, buf)
+                                           : css_color_serialize_function(c, buf);
+    return JS_NewStringLen(ctx, buf, len);
+}
+
 /* Every member of §4.12.5.1.3's drawing state at the initial value its own section states, in ONE place —
    which is what *reset the rendering context to its default state* step 4, "Reset everything that drawing
    state consists of to their initial values", reaches, and what the creation algorithm reaches. Two spellings
    of one initial value is the shape that drifts. */
 static JSValue ctx2d_drawing_new(JSContext *ctx)
 {
+    /* §4.12.5.1.10 "Fill and stroke styles": "Initially, both must be the result of parsing the string
+       "#000000"." It is PARSED rather than written out as the colour that string denotes, because that
+       sentence is an algorithm's answer and a constant beside it would be a second spelling of one value —
+       and a colour is six numbers, which is six chances for the two to disagree. */
+    static const char INITIAL_STYLE[] = "#000000";
     JSValue d = idl_slots_new(ctx);
+    CssColor black;
 
     if (JS_IsException(d)) return d;
     /* §4.12.5.1.17 "Compositing": the global alpha "value ranges from 0.0 (fully transparent) to 1.0 (no
        additional transparency). It must initially have the value 1.0". */
     JS_SetPropertyStr(ctx, d, "globalAlpha", JS_NewFloat64(ctx, 1.0));
+    /* A six-character hex colour is CSS Color 4 §5's own `<hex-color>` and this string is a literal of this
+       file, so a refusal is this codebase's own logic being wrong rather than anything a page did. */
+    CHECK(css_color_parse(INITIAL_STYLE, sizeof INITIAL_STYLE - 1, &black),
+          "§4.12.5.1.10: the initial fill style's own string did not parse as a CSS color");
+    ctx2d_color_store(ctx, d, &CTX2D_FILL_STYLE, &black);
     return d;
 }
 
@@ -412,11 +543,12 @@ JSValue canvas_rendering_context_2d_create(JSContext *ctx, JSValueConst target, 
 
 /* ---- §4.12.5.1's members ------------------------------------------------------------------------------------ */
 
-enum { M_CANVAS = 0, M_ATTRS, M_LOST, M_GLOBAL_ALPHA };
+enum { M_CANVAS = 0, M_ATTRS, M_LOST, M_GLOBAL_ALPHA, M_FILL_STYLE };
 
 static JSValue js_ctx2d_get(JSContext *ctx, JSValueConst this_val, int magic)
 {
     JSValue st, d, out;
+    CssColor fill;
 
     switch (magic) {
     case M_CANVAS:
@@ -434,8 +566,22 @@ static JSValue js_ctx2d_get(JSContext *ctx, JSValueConst this_val, int magic)
         JS_FreeValue(ctx, d);
         JS_FreeValue(ctx, st);
         return out;
+    case M_FILL_STYLE:
+        /* §4.12.5.1.10's own two steps: "If this's fill style is a CSS color, then return the serialization
+           of that color with HTML-compatible serialization requested" and "Return this's fill style". The
+           SECOND step is the CanvasGradient and CanvasPattern arm — the fill style returned as the object it
+           is — and nothing in this build can put an object there, which is the residual at the install below
+           rather than a branch here that no value reaches. */
+        st = ctx2d_state_of(ctx, this_val, "fillStyle");
+        if (JS_IsException(st)) return JS_EXCEPTION;
+        d = ctx2d_drawing(ctx, st);
+        ctx2d_color_load(ctx, d, &CTX2D_FILL_STYLE, &fill);
+        out = ctx2d_color_serialize(ctx, &fill);
+        JS_FreeValue(ctx, d);
+        JS_FreeValue(ctx, st);
+        return out;
     default:
-        /* The magic is a value THIS file enumerates and every install below passes one of the two above, so
+        /* The magic is a value THIS file enumerates and every install below passes one of the three above, so
            this arm is unreachable by construction — a guard, and not a member left to build. */
         DFAIL("a 2D context accessor dispatched on a magic its own member list does not hold");
         return JS_UNDEFINED;
@@ -471,6 +617,56 @@ static JSValue js_ctx2d_set_global_alpha(JSContext *ctx, JSValueConst this_val, 
     }
     JS_FreeValue(ctx, st);
     return JS_UNDEFINED;
+}
+
+/* §4.12.5.1.10's fillStyle SETTER STEPS, whose first step is the whole of what this build can reach:
+ *   "If the given value is a string:
+ *      Let context be this's canvas attribute's value, if that is an element; otherwise null.
+ *      Let parsedValue be the result of parsing the given value with context if non-null.
+ *      If parsedValue is failure, then return.
+ *      Set this's fill style to parsedValue.
+ *      Return."
+ *
+ * THE UNION IS DECLARED AS ITS DOMSTRING ARM AND THAT IS COMPLETE OVER WHAT A PAGE CAN PRODUCE, not a
+ * narrowing chosen here. The IDL is `attribute (DOMString or CanvasGradient or CanvasPattern) fillStyle`, and
+ * Web IDL §3.2.25 "Union types" sends an object to an interface member of the union only when that object
+ * IMPLEMENTS the interface — so the other two arms are reachable only through `createLinearGradient`,
+ * `createRadialGradient`, `createConicGradient` and `createPattern`, none of which this build installs and
+ * none of which any other member mints. Every value a page can hand this member therefore takes the string
+ * arm, which is what §3.2.25 would do anyway, and the declaration says so rather than a test in this body
+ * discovering it. See the residual at the install below for what changes the day a gradient exists.
+ *
+ * AN INVALID VALUE IS IGNORED AND THAT IS STEP 1.3 RATHER THAN A SOFTENED ERROR — "If parsedValue is failure,
+ * then return" — so `ctx.fillStyle = "not a color"` leaves the attribute holding whatever it already had,
+ * which is the value the page reads back on the next line and is what §4.12.5.1.10's own prose calls
+ * "Invalid values are ignored". A DCHECK over the parse would hand any page an abort switch: the string is
+ * the PAGE'S bytes and a refusal is this algorithm's own arm, not an invariant of this codebase. */
+static JSValue js_ctx2d_set_fill_style(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
+{
+    JSValue st = ctx2d_state_of(ctx, this_val, "fillStyle");
+    JSValue d;
+    CssColor parsed;
+    const char *text;
+    size_t len;
+
+    (void)magic;
+    if (JS_IsException(st)) return JS_EXCEPTION;
+    /* The declared type already ran Web IDL §3.2.10's ToString at the argument boundary, so this reads the
+       CONVERTED value and is never itself a conversion that could run a page's toString from inside this
+       body — the same split `globalAlpha`'s setter names one member over. */
+    text = JS_ToCStringLen(ctx, &len, val);
+    if (text == NULL) { JS_FreeValue(ctx, st); return JS_EXCEPTION; }
+    /* Step 1.2's CONTEXT ELEMENT is not passed, and the narrowing is named at the install below rather than
+       hidden here: core/css/css_color.h's parse takes no element, so `currentcolor` and the system colours
+       resolve against the initial values of the properties instead of against this canvas. */
+    if (css_color_parse(text, len, &parsed)) {
+        d = ctx2d_drawing(ctx, st);
+        ctx2d_color_store(ctx, d, &CTX2D_FILL_STYLE, &parsed);     /* step 1.4 */
+        JS_FreeValue(ctx, d);
+    }
+    JS_FreeCString(ctx, text);
+    JS_FreeValue(ctx, st);
+    return JS_UNDEFINED;                                           /* steps 1.3 and 1.5 */
 }
 
 /* §4.12.5.1.3: "The save() method steps are to push a copy of the current drawing state onto the drawing
@@ -819,6 +1015,10 @@ void canvas_rendering_context_2d_init(JSContext *ctx)
     /* `attribute unrestricted double globalAlpha` — the type is §3.2.8's and not §3.2.7's, so NaN and the
        infinities reach the body, which is what lets it perform §4.12.5.1.17's own ignore. */
     g_id_set_alpha = idl_setter_id(ctx, IDL_UNRESTRICTED_DOUBLE, false, js_ctx2d_set_global_alpha, 0);
+    /* `attribute (DOMString or CanvasGradient or CanvasPattern) fillStyle` — declared as the arm every
+       value a page can produce takes; see the setter for why the other two are unreachable rather than
+       dropped, and the install below for the residual that retires this line. */
+    g_id_set_fill_style = idl_setter_id(ctx, IDL_DOMSTRING, false, js_ctx2d_set_fill_style, 0);
 
     g_id_get_image_data = idl_method_id_dict(ctx, GET_IMAGE_DATA, 5, IMAGE_DATA_SETTINGS,
                                              IMAGE_DATA_SETTINGS_N, js_ctx2d_get_image_data, 0);
@@ -897,17 +1097,82 @@ void canvas_rendering_context_2d_init(JSContext *ctx)
  * SHOW: read the member back after assigning a value no compositing mode names — this build answers that
  * value, a browser answers the one it held.
  *
- * NAMED RESIDUAL — EVERY DRAWING MEMBER. WHAT IS NOT COVERED: `CanvasTransform`, `CanvasFillStrokeStyles`,
- * `CanvasRect`, `CanvasDrawPath`, `CanvasPath`'s ten builders, `CanvasText`, `CanvasDrawImage`, the rest of
- * `CanvasCompositing` and the rest of the seventeen mixins are not placed. WHAT THE NEXT DIFF BUILDS: the FILL
- * road as one landing — the drawing state's transformation matrix with `CanvasTransform`'s setters, `fillStyle`
- * with a CSS colour, the ten path builders applying the CTM as they copy (core/graphics/raster_path.h's own
- * "FOR THE CANVAS LANE" note: the copy and the transform are one walk and an ARC is transformed by its
- * PARAMETERS), `clearRect`/`fillRect` and `fill` over core/graphics/rasterizer.h's `raster_fill`. `stroke` and
- * `strokeRect` are NOT in that diff and are not merely deferred: §4.12.5.1.13's *trace a path* — the dash-list
- * state machine and its `Convert` step's caps and joins — has no component in core/graphics at all, so they are
- * blocked on a stroker the way `drawImage` is blocked on a decoder. HOW ITS ABSENCE WOULD SHOW: a document
- * reaches its first drawing call and its flow ends there, having already obtained a context and sized a bitmap. */
+ * NAMED RESIDUAL — `fillStyle`'s NON-STRING ARMS. WHAT IS NOT COVERED: the setter's second and third steps
+ * ("If the given value is a CanvasPattern object that is marked as not origin-clean, then set this's
+ * origin-clean flag to false" and "Set this's fill style to the given value") and the getter's second step
+ * ("Return this's fill style"), which are the CanvasGradient and CanvasPattern arms of the declared union.
+ * WHAT THE NEXT DIFF BUILDS: `CanvasGradient`, which is the smaller of the two — §4.12.5.1.10 gives it three
+ * mints, an `addColorStop` with two named exceptions, and a colour table this file already parses into — and
+ * with it the union position stops being `IDL_DOMSTRING`. It is ALSO what makes `ctx2d_drawing_copy`'s
+ * object-member DCHECK fire for the first time from this component, and correctly: §4.12.5.1.10 says
+ * "changes made to the object after the assignment do affect subsequent stroking or filling of shapes", so a
+ * gradient fill style must be ALIASED by `save()` where a colour must be copied — which is the per-member
+ * copy that DCHECK's own message names, and is why the fill style is six numbers today rather than a record
+ * with a copy protocol built for one member. HOW ITS ABSENCE WOULD SHOW: read `typeof ctx.fillStyle` after
+ * assigning anything a page can construct — this build answers "string" for every one of them.
+ *
+ * NAMED RESIDUAL — STEP 1.2's CONTEXT ELEMENT. WHAT IS NOT COVERED: "Let parsedValue be the result of parsing
+ * the given value with context if non-null", where context is this canvas element. core/css/css_color.h's
+ * parse takes no element and says why — no caller had one — so `currentcolor` resolves to the `color`
+ * property's initial value and each `<system-color>` to this agent's theme, rather than to what the cascade
+ * computed on THIS canvas. WHAT THE NEXT DIFF BUILDS: an element parameter on that parse, which is one
+ * argument at one entry and has two callers to satisfy at once. HOW ITS ABSENCE WOULD SHOW: assign
+ * `currentcolor` to a canvas whose computed `color` is not the initial one and read the member back — this
+ * build answers the initial colour's serialization where a browser answers the element's.
+ *
+ * NAMED RESIDUAL — THE LAB FAMILY'S OWN SERIALIZATION. WHAT IS NOT COVERED: §4.12.5.1.10's round trip for a
+ * colour written in `lab()`, `lch()`, `oklab()` or `oklch()`. core/css/css_color.h converts all four to sRGB
+ * AT THE PARSE and names the day a caller would need otherwise; this member is that caller, and CSS Color 4
+ * §16.2.1 states the case in its own worked example — a fill style set to `lab(29% 39 20)` reads back as
+ * `lab(29 39 20)`. WHAT THE NEXT DIFF BUILDS: the four spaces joining `CssColorSpace`, with §11's conversion
+ * moved from the parse to the point of use, which is core/css/css_color.h's own stated condition and not this
+ * file's to decide. HOW ITS ABSENCE WOULD SHOW: assign a colour in any of the four and read the member back —
+ * this build answers an `rgb()` or `rgba()` serialization where the standard's own example answers the
+ * function the page wrote.
+ *
+ * NAMED RESIDUAL — THE RECT PAINTERS, AND THE CLAUSE THAT STOOD HERE NAMED A SCOPE THAT IS NOT COHERENT. The
+ * retired clause said the next diff was `the FILL road as one landing` — the transformation matrix with
+ * CanvasTransform's setters, `fillStyle` with a CSS colour, the ten path builders, `clearRect`/`fillRect` and
+ * `fill` — and it is recorded here rather than deleted, because it is the scope a reader re-derives from
+ * §4.12.5.1.11 and the header's pairing rule, and it is SHORT. It was wrong about `fillRect` and about
+ * `clearRect` for two DIFFERENT reasons, and both were found by tracing what the algorithm READS rather than
+ * what it calls.
+ *
+ * `fillRect` READS SIX ATTRIBUTES THIS BUILD DOES NOT HAVE, AND AN ABSENT ATTRIBUTE IS SILENT WHERE AN ABSENT
+ * METHOD IS LOUD. That split is the whole of the derivation and it is mechanical: a page calling an absent
+ * METHOD gets Web IDL's TypeError and its flow ends there, which is the header's own forcing function, while
+ * a page ASSIGNING an absent attribute creates an ordinary property on the context, reads its own value back
+ * and gets no error at all — which is exactly the mechanism the header's pairing rule names for `fillStyle`.
+ * HTML §4.12.5.1.11 "Drawing rectangles to the bitmap" says a shape is "subject to the clipping region, and,
+ * with the exception of clearRect(), also shadow effects, global alpha, and the current compositing and
+ * blending operator", and §4.12.5.1.22's drawing model adds the filter between them. Of those inputs the CURRENT TRANSFORMATION MATRIX and the
+ * CLIPPING REGION are reachable only through methods (`CanvasTransform`'s six, and `clip()`), so their
+ * absence is loud and their spec-initial values — the identity matrix and the whole bitmap — are what a
+ * painter may assume; `globalAlpha` is present and would be read. The other six are ATTRIBUTES:
+ * `globalCompositeOperation`, `filter`, `shadowColor`, `shadowBlur`, `shadowOffsetX` and `shadowOffsetY`.
+ * A `fillRect` landing beside them paints source-over with no shadow and no filter for a page that asked for
+ * `destination-out`, a drop shadow or a blur, silently — the forbidden pair, six times.
+ *
+ * `clearRect` ESCAPES ALL SIX AND IS BLOCKED ONE LAYER DOWN INSTEAD. It is the exception in §4.12.5.1.11's own
+ * sentence, its steps never enter §4.12.5.1.22's drawing model, and it therefore reads nothing but the CTM and
+ * the clipping region — both loud. What stops it is core/graphics/raster_surface.h: clearing a rectangle whose
+ * edges do not land on pixel boundaries is a coverage-weighted REMOVAL of alpha, which is a second span sink
+ * beside `raster_paint_span`, and that header says of its own source-over that it is `the only operator this component has; a second operator is a second landing`.
+ *
+ * WHAT THE NEXT DIFF BUILDS, IN LANDING ORDER RATHER THAN DEPENDENCY ORDER, each member named with the call
+ * that will consume it: (1) §4.12.5.1.19's four shadow attributes, which are this file's own shape — three
+ * `unrestricted double`s with the same ignore-if-not-finite arm `globalAlpha` already performs, and a
+ * `shadowColor` that is `ctx2d_color_store` and `ctx2d_color_serialize` under a second `Ctx2dColorFields`
+ * row, consumed by nothing until (4) and landable alone because a drawing-state member beside an absent
+ * painter is the harmless half of the pairing rule; (2) §4.12.5.1.17's `globalCompositeOperation`, blocked on
+ * the `<blend-mode>` and `<composite-mode>` value lists, which are Compositing and Blending Level 1's and
+ * which this tree indexes no copy of; (3) §4.12.5.1.20's `filter`, blocked on a `<filter-value-list>` parser,
+ * of which this tree has none — and a partial one is WORSE than the absence, because an absent member lets a
+ * page read its own string back where a setter that refused what it cannot parse answers "none"; (4) the
+ * painters, which is the first landing that may install a member of `CanvasRect`, with the second span sink
+ * clearRect needs and with a crash by name for every composite operator, shadow and filter value the
+ * rasterizer cannot yet perform. HOW ITS ABSENCE WOULD SHOW: a document reaches its first drawing call and
+ * its flow ends there, having already obtained a context, sized a bitmap and set a fill style. */
 void canvas_rendering_context_2d_install_realm(JSContext *ctx)
 {
     JSValue proto, prev, global;
@@ -931,6 +1196,8 @@ void canvas_rendering_context_2d_install_realm(JSContext *ctx)
     idl_install_method(ctx, proto, "isContextLost", g_id_lost);                     /* CanvasState */
     idl_install_accessor(ctx, proto, "globalAlpha", js_ctx2d_get, M_GLOBAL_ALPHA,
                          g_id_set_alpha);                                           /* CanvasCompositing */
+    idl_install_accessor(ctx, proto, "fillStyle", js_ctx2d_get, M_FILL_STYLE,
+                         g_id_set_fill_style);                                      /* CanvasFillStrokeStyles */
     idl_install_method(ctx, proto, "getImageData", g_id_get_image_data);            /* CanvasImageData */
     idl_install_method(ctx, proto, "putImageData", g_id_put_image_data);            /* CanvasImageData */
 
@@ -956,6 +1223,6 @@ void canvas_rendering_context_2d_free(JSRuntime *rt)
     g_state_key = JS_UNDEFINED;
     g_class = 0;
     g_id_attrs = g_id_lost = g_id_reset = -1;
-    g_id_save = g_id_restore = g_id_set_alpha = -1;
+    g_id_save = g_id_restore = g_id_set_alpha = g_id_set_fill_style = -1;
     g_id_get_image_data = g_id_put_image_data = -1;
 }
