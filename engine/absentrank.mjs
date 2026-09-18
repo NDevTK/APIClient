@@ -305,7 +305,7 @@ const CHANNELS = {
   "globalThis.X":  /\bglobalThis\.([A-Za-z_$][\w$]*)/g,
   "instanceof X":  /\binstanceof\s+([A-Za-z_$][\w$]*)/g,
   "typeof X":      /\btypeof\s+([A-Za-z_$][\w$]*)/g,
-  'global["X"]':   /\b(?:window|self|globalThis)\[\s*["']([A-Za-z_$][\w$]*)["']\s*\]/g,
+  'global["X"]':   /\b(?:window|self|globalThis)\[\s*["'\x60]([A-Za-z_$][\w$]*)["'\x60]\s*\]/g,
   /* THE OTHER WAY A BUNDLE ASKS THE SAME QUESTION, AND THE ONE THIS FILE COULD NOT SEE. `"X" in window` is
      ECMAScript §13.10.1 "Runtime Semantics: Evaluation"'s `RelationalExpression : RelationalExpression in
      ShiftExpression`, ending at "Return ? HasProperty(rightValue, ? ToPropertyKey(leftValue))" — §7.3.11
@@ -313,8 +313,30 @@ const CHANNELS = {
      GUARD channel by this file's own test, and its absence here was not a smaller list A but a SHORTER one:
      `rankA` filters on `hits.has(n)`, so a platform global this corpus names ONLY this way had no hit in any
      channel and was dropped from the ranking outright — not demoted to `shadowed`, which at least prints, but
-     gone. A name absent from an instrument's output cannot be read sceptically. */
-  '"X" in global': /["']([A-Za-z_$][\w$]*)["']\s*in\s+(?:window|self|globalThis)\b/g,
+     gone. A name absent from an instrument's output cannot be read sceptically.
+     AND ITS STRING-DELIMITER CLASS OMITTED THE BACKTICK, WHICH IS A WHOLE MINIFIER'S OUTPUT RATHER THAN AN
+     EDGE CASE. A template literal carrying no substitution is a string, so a name delimited by `\x60` and
+     tested with the same `in` this paragraph already cites is the same HasProperty, and several bundles here
+     are emitted with EVERY string spelled that way. The class read `["']`, so the channel reported nothing
+     for those files -- a zero that is a property of the pattern and not of the corpus, which is the reading
+     the arming below exists to forbid and which the arming did NOT catch, because the positive control was
+     spelled with a double quote too. A control shares the blind spot of the pattern whenever it is written
+     in the same breath. Its price is measured rather than argued, and what is handed over is the DERIVATION
+     rather than the figure, because the corpus moves and a count of it rots. This file already prints the
+     channel's own occurrence and identifier totals, so the price of the widening is the difference between
+     two runs of the instrument with the backtick present and absent in this one class:
+       node engine/absentrank.mjs | grep 'in global'
+     When this was measured it read +33 occurrences over +10 distinct identifiers, and all 33 were opened:
+     they are ordinary feature detection -- a UI library's event-constructor probes, a touch probe, a file
+     picker probe -- and not one is prose. Requiring the two delimiters to AGREE gives the identical total, so
+     the loose class costs nothing here; it is also the spelling engine/nsguardrank.mjs was already using,
+     which is why this is a ROUTE to the sibling's answer rather than a second correct one of its own. The
+     same class is given to `global["X"]`, where it is measured to add NOTHING today and is still owed: one
+     channel spelling a question two ways is the shape that drifts, and the sibling that was right is the
+     evidence that a reader writes `["']` by reflex.
+     RETIREMENT: this paragraph goes when both instruments take their string-delimiter class from one shared
+     definition, so the two cannot disagree about it again. */
+  '"X" in global': /["'\x60]([A-Za-z_$][\w$]*)["'\x60]\s*in\s+(?:window|self|globalThis)\b/g,
   "X.member":      /(?:^|[^\w$.])([A-Z][\w$]*)\s*\.\s*[A-Za-z_$][\w$]*/g,
   "f(a,X)":        /[\w$)\]]\s*\(\s*[A-Za-z_$][\w$]*\s*,\s*([A-Za-z_$][\w$]*)\s*\)/g,
 };
@@ -341,14 +363,24 @@ const ARM = {
   "globalThis.X":  ['globalThis.AbsentRankPos',       'xglobalThis.AbsentRankNeg'],
   "instanceof X":  ['x instanceof AbsentRankPos',     'x.instanceofAbsentRankNeg'],
   "typeof X":      ['typeof AbsentRankPos',           'mytypeof AbsentRankNeg'],
-  'global["X"]':   ['window["AbsentRankPos"]',        'notwindow["AbsentRankNeg"]'],
+  /* TWO POSITIVES, BECAUSE THE CLASS ADMITS TWO SPELLINGS AND A CONTROL THAT EXERCISES ONE OF THEM ARMS
+     ONE OF THEM. That is exactly how the backtick went unseen: the pattern had a control, the control
+     passed, and it was written in the same breath and with the same delimiter as the pattern it tested. */
+  'global["X"]':   [['window["AbsentRankPos"]', 'window[`AbsentRankPos`]'],
+                                                       'notwindow["AbsentRankNeg"]'],
   /* THE NEGATIVES ARE THE TWO WAYS THIS FORM IS REALLY WRITTEN WITHOUT BEING THIS FORM: the same words inside
      ONE string, which is how prose and error text carry them, and the same operator against a receiver that
      is not a global, which is what every `"k" in options` in a bundle is. A control that has never rejected
      the thing it exists to reject is not a control. */
-  '"X" in global': ['"AbsentRankPos" in window',       ['"AbsentRankNeg in window"',
+  '"X" in global': [['"AbsentRankPos" in window', '`AbsentRankPos` in window'],
+                                                       ['"AbsentRankNeg in window"',
                                                         '"AbsentRankNeg" in opts',
-                                                        '"AbsentRankNeg" in windowish']],
+                                                        '"AbsentRankNeg" in windowish',
+                                                        /* A TEMPLATE WITH A SUBSTITUTION IS NOT A STATIC KEY,
+                                                           and admitting the backtick is what makes that a
+                                                           question at all. It is the one near miss the wider
+                                                           class introduces, so it is the one it must reject. */
+                                                        '`${AbsentRankNeg}` in window']],
   "X.member":      ['AbsentRankPos.someMember',       'q.AbsentRankNeg.someMember'],
   /* THE NEGATIVES HERE ARE THE SHAPES THAT WERE MEASURED TO BREAK THE BROAD FORM, never invented near
      misses: a comma word list with no call receiver, the same list as a bundle actually writes it, and a
@@ -360,7 +392,8 @@ const ARM = {
 for (const [k, re] of Object.entries(CHANNELS)) {
   const [pos, neg] = ARM[k] || die(`channel ${k} has no positive/negative control — add one before reading it.`);
   const got = (s) => [...s.matchAll(new RegExp(re.source, "g"))].map((m) => m[1]);
-  if (!got(pos).includes("AbsentRankPos")) die(`channel ${k} did not match its own form in ${JSON.stringify(pos)} — its 0 would mean nothing.`);
+  for (const good of Array.isArray(pos) ? pos : [pos])
+    if (!got(good).includes("AbsentRankPos")) die(`channel ${k} did not match its own form in ${JSON.stringify(good)} — its 0 would mean nothing.`);
   for (const bad of Array.isArray(neg) ? neg : [neg])
     if (got(bad).includes("AbsentRankNeg")) die(`channel ${k} matched its near miss ${JSON.stringify(bad)} — it is counting something else.`);
 }
@@ -461,10 +494,72 @@ const shape = (n) => [...(hits.get(n) || new Map()).keys()].map((k) => [k, freeO
    do not separate them, so the channels are split by which they are evidence of: a GUARD channel reads the
    name in a position where absence is `undefined`, and a USE channel reads it in a position where absence
    THROWS (`new X(`, `X.member`, `x instanceof X` — every one of those evaluates X as a binding).
-   The class is stated over the WHOLE corpus rather than per site, which is what makes it sound in the
-   direction it is read: a name with NO guard hit anywhere cannot have a guarded use, so THROWS is a claim the
-   text supports outright. `mixed` is the honest middle — some use and some guard exist and only reading the
-   site says which covers which — and it is not promoted above THROWS on the strength of a bigger number. */
+   The class is stated over the WHOLE corpus rather than per site. `mixed` is the honest middle — some use
+   and some guard exist and only reading the site says which covers which — and it is not promoted above
+   THROWS on the strength of a bigger number.
+
+   THE SENTENCE THAT USED TO FOLLOW `per site` READ "which is what makes it sound in the direction it is
+   read: a name with NO guard hit anywhere cannot have a guarded use, so THROWS is a claim the text supports
+   outright", AND IT IS REWRITTEN RATHER THAN DELETED BECAUSE IT IS THE INFERENCE A READER RE-DERIVES. It is
+   false, and it is the sentence that made this band dispatchable without opening anything. Its premise
+   quantifies over CHANNEL HITS and its conclusion over GUARDED USES, and those are not the same set: a
+   channel hit is a SPELLING this file can see, while a use is kept from throwing by anything at all in the
+   program — so the step holds only if every non-throwing shape has a channel. Three shapes measured over
+   this corpus have none, and each was found by OPENING the sites behind a THROWS row, which is the only
+   instrument that has ever separated them:
+     - A NON-THROWING READ SPELLED ON A GLOBAL ALIAS. A file is free to bind the global object to a local
+       name, and a member read on that name is then an ordinary property miss answering undefined — the same
+       read, on the same object, that `window.X` is, which is why the engine does not distinguish them
+       either: solver/absent.h hooks on "the base the read missed on". Every channel here reads the LEFT of
+       a dot or an operator, so such a read is INVISIBLE rather than merely unguarded.
+     - A USE INSIDE A BRANCH THAT A SIBLING CAPABILITY'S ABSENCE MAKES DEAD, which the residual below names.
+     - A USE INSIDE SOURCE CARRIED AS DATA, which the STRING LITERAL residual below names, and whose
+       HOW-ITS-ABSENCE-WOULD-SHOW clause is written for precisely this symptom.
+   WHAT THE BAND MEANS IS THEREFORE NARROWER, AND IS STILL WORTH SORTING FIRST: no channel here saw a
+   non-throwing read of this name ANYWHERE in the corpus. That is a reason to OPEN a row's sites, never a
+   statement that those sites throw — and it is cheap to act on, because a row's whole count IS its number of
+   sites, so a row standing at one occurrence is one site and reading it costs less than building an
+   interface. What the band is good for is unchanged by any of this; what it does not support is dispatching
+   from the row.
+   RETIREMENT: this paragraph goes when a THROWS row's own sites are tested for these shapes by the
+   instrument rather than by its reader, at which point the band states a per-site fact and the sentence it
+   replaced becomes true of it.
+
+   NAMED RESIDUAL — A USE THAT A SIBLING CAPABILITY'S ABSENCE MAKES UNREACHABLE IS COUNTED AS A USE. WHAT IS
+   NOT COVERED: a conjunction that tests one member and then evaluates another name behind it — the test
+   names a DIFFERENT identifier from the one it protects, so when the tested member is also missing here the
+   protected name is never reached and cannot throw. WHY NO CHANNEL CAN REACH IT, which is the part that
+   keeps this from being an unbuilt widening: every channel above is keyed on the name being ranked, and the
+   evidence lives at an identifier that name does not appear in, so no pattern over this name exists to be
+   made wider — a reader who proposes one has mis-read which identifier the guard tests. WHAT THE NEXT DIFF
+   BUILDS: a REACHABILITY question rather than a channel — for a use occurrence, whether the expression that
+   dominates it tests a name this tree also reaches on no global — which needs the code/not-code mask the
+   STRING LITERAL residual names to land first, because its operand is a span of CODE and this file has only
+   ever had a span of TEXT. HOW ITS ABSENCE WOULD SHOW: a row in the THROWS band whose use occurrences all
+   sit to the right of a short-circuiting operator whose left operand tests a member of an interface this
+   tree does not install.
+   RETIREMENT: when that question is asked at the occurrence rather than left to whoever opens the row.
+
+   THE GLOBAL-ALIAS WIDENING WAS BUILT AND MEASURED AND DECLINED, and the measurement is the part worth
+   keeping, because the shape is genuinely real and the channel for it is not. A file that binds an
+   identifier to the global object by an idiom admitting nothing else — `this||self`, a bare `globalThis`,
+   `window` or `self`, or the `typeof globalThis` ternary chain — makes a member read on that identifier
+   exactly the non-throwing read the paragraph above describes, and finding those bindings per file is one
+   pass over the corpus. What defeats it is not the binding, which is unambiguous, but the IDENTIFIER: the
+   aliases a minified bundle binds are its ordinary one-letter locals, and the same file rebinds those in
+   every inner scope, so a per-file alias set attributes an inner scope's parameter to the global. MEASURED,
+   by crossing the per-file alias sets against every read of a list-A name and then OPENING every site it
+   produced: it moved THREE rows out of the THROWS band and only ONE of the three is right — the other two
+   are a package object and an enum initializer whose parameter shares the alias's letter, and BOTH are rows
+   the STRING LITERAL residual already covers, so the widening would have reached the right verdict by the
+   wrong argument on them. A GUARD widening can only ever DEMOTE, so its errors land in the silencing
+   direction, where an under-claim is not found by acting on it; a trade of one true demotion against two
+   false ones is refused for the same reason the call-anchored channel above refused its broad form. WHAT
+   WOULD MAKE IT SOUND is not a tighter binding idiom — the idioms were exact — but knowing whether the
+   alias is REBOUND between its binding and the read, which is a SCOPE question and not a spelling one, and
+   is the same mask the two residuals above already name, arrived at from a third direction.
+   RETIREMENT: when a scope-aware reader exists, at which point the alias set is per-binding rather than
+   per-file and this measurement is RE-RUN rather than remembered. */
 const GUARD_CH = new Set(["typeof X", "window.X", "self.X", "globalThis.X", 'global["X"]', '"X" in global']);
 const USE_CH = new Set(["new X(", "X.member", "instanceof X", "f(a,X)"]);
 /* THE SENTENCE BELOW — "every channel is in exactly one of the two sets, so `u + g` IS the free total" — was
