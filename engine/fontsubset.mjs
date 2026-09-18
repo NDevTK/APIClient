@@ -50,17 +50,42 @@
  *     it. The face that would exercise it from a page is DejaVuSansMono (numberOfHMetrics 4, numGlyphs 3377),
  *     which is disqualified by the paragraph above.
  *
- * WHAT IS DROPPED AND WHY DROPPING IT IS SOUND FOR THE QUESTIONS ASKED. The engine asks a face exactly three
- * questions: what is `unitsPerEm`, which glyph does this scalar value map to, and what is that glyph's advance.
- * OpenType answers those from 'head', 'cmap', and 'hhea'+'hmtx'+'maxp', and from NOTHING ELSE — so the tables
- * kept are those five (plus 'vhea'/'vmtx' where a face has them; DejaVu Sans does not, which is why a vertical
- * advance is a NAMED unbuilt capability in core/fonts/open_type_metrics.c rather than a silent fallback to the
- * horizontal number). What goes is 'glyf'/'loca' (outlines — nothing here rasterizes), 'CFF '/'MATH'/'cvt '/
- * 'fpgm'/'prep'/'gasp' (rasterization), 'GSUB'/'GPOS'/'GDEF'/'kern' (SHAPING — a real absence and not a
- * cosmetic one: a shaping engine would need them, and until one exists the advance of a run is the sum of its
- * glyphs' advances), 'OS/2' (sTypoAscender/sTypoDescender, which CSS 2.1 §10.8.1's note recommends for `A` and
- * `D` — core/css/font_metrics.c still PICKS those two numbers, and the day it reads them off a face this list
- * grows a table), 'name'/'post'/'FFTM' (identification).
+ * WHAT IS DROPPED AND WHY DROPPING IT IS SOUND FOR THE QUESTIONS ASKED. The engine asks a face FOUR questions:
+ * what is `unitsPerEm`, which glyph does this scalar value map to, what is that glyph's advance, and what
+ * SHAPE is it. OpenType answers the first three from 'head', 'cmap', and 'hhea'+'hmtx'+'maxp' and from nothing
+ * else, and the fourth from 'glyf'+'loca' — so the tables kept are those seven (plus 'vhea'/'vmtx' where a
+ * face has them; DejaVu Sans does not, which is why a vertical advance is a NAMED unbuilt capability in
+ * core/fonts/open_type_metrics.c rather than a silent fallback to the horizontal number).
+ *
+ * THE FOURTH QUESTION IS NEW AND THE REASON THAT USED TO KEEP THE OUTLINE TABLES OUT IS RETIRED — REWRITTEN
+ * HERE RATHER THAN DELETED, BECAUSE A READER WHO RE-DERIVES IT WILL DROP THEM AGAIN. This list used to send
+ * 'glyf' and 'loca' the way of the rasterization tables, with the parenthesis `outlines — nothing here
+ * rasterizes`, and core/fonts/default_font_data.h agreed with it in its own words. Both were true when they
+ * were written. Something here rasterizes now: core/graphics/rasterizer.h fills a path,
+ * core/paint/display_list_raster.h drives it from a display list, and core/fonts/glyph_outline.h turns one
+ * glyph description into the segments that fill takes — so a face shipped without them is one every document
+ * can measure and none can draw. The rule that replaces the retired sentence is not about rasterizing at all:
+ * A TABLE IS KEPT WHEN THE ENGINE ASKS A QUESTION ONLY THAT TABLE ANSWERS, and the list grows when the
+ * engine learns to ask, never when a table looks useful.
+ *
+ * SO WHAT STILL GOES IS 'CFF '/'MATH'/'cvt '/'fpgm'/'prep'/'gasp' — the first because outlines that are not
+ * TrueType are a form the sfntVersion pin above refuses outright, and the rest because they are HINTING:
+ * instructions that grid-fit a rasterized result at a particular size, which this engine does not do and
+ * which core/fonts/glyph_outline.c reads past by name. And 'GSUB'/'GPOS'/'GDEF'/'kern' (SHAPING — a real absence and not a cosmetic one: a shaping engine
+ * would need them, and until one exists the advance of a run is the sum of its glyphs' advances), 'OS/2'
+ * (sTypoAscender/sTypoDescender, which CSS 2.1 §10.8.1's note recommends for `A` and `D` —
+ * core/css/font_metrics.c still PICKS those two numbers, and the day it reads them off a face this list grows
+ * a table), 'name'/'post'/'FFTM' (identification).
+ *
+ * WHAT THIS EDIT COSTS IS NOT STATED HERE, IT IS DERIVED. A size written into a comment is a number nobody
+ * can re-run; the generator PRINTS the kept tables and their lengths on every run and the generated file's own
+ * header carries them, so the cost of this decision is read off the artifact rather than taken on trust.
+ * WHAT IT MAY NOT DO IS SHRINK THE GLYPH SET TO PAY FOR ITSELF. Every kept table here is copied BYTE FOR BYTE,
+ * which is the whole justification for calling the result the same face; dropping glyphs would mean
+ * renumbering glyph IDs and REWRITING 'cmap', 'hmtx', 'loca' and 'glyf', at which point the output is this
+ * script's encoding of a face rather than the face, and every measurement the engine takes off it is this
+ * script's arithmetic. If the size is unaffordable the answer is a different FACE or a different delivery,
+ * never a mutilated one.
  * The kept tables are copied BYTE FOR BYTE out of the input. That is the whole justification for calling the
  * result the same face: for every question the engine asks, it is not a re-encoding of DejaVu Sans's answer, it
  * IS DejaVu Sans's bytes. The only bytes this script AUTHORS are the table directory (whose offsets necessarily
@@ -84,8 +109,13 @@ const SOURCE_SHA256 = "7da195a74c55bef988d0d48f9508bd5d849425c1770dba5d7bfc6ce9e
 /* THE TABLES THE ENGINE READS. 'vhea'/'vmtx' are kept WHEN PRESENT and are not required: OpenType makes them
    optional, and css-writing-modes-4 §5.1.1 "Vertical Typesetting and Font Features" says the UA "must
    synthesize vertical font metrics for fonts that lack them" while defining no heuristic for doing so — so
-   their absence is a capability to build, stated at the lookup, not a hole to paper over here. */
-const REQUIRED = ["cmap", "head", "hhea", "hmtx", "maxp"];
+   their absence is a capability to build, stated at the lookup, not a hole to paper over here.
+   'glyf' AND 'loca' ARE REQUIRED AND NOT OPTIONAL, which is a statement about this generator's input rather
+   than about faces in general: the sfntVersion pin above accepts only the TrueType-outline form, and a face
+   of that form with no outline table is not a face with outlines somewhere else, it is a broken one. A face
+   whose outlines are CFF would have to be pinned separately and would need a second decoder, so refusing it
+   here is the honest arm and not a narrowing. */
+const REQUIRED = ["cmap", "glyf", "head", "hhea", "hmtx", "loca", "maxp"];
 const OPTIONAL = ["vhea", "vmtx"];
 
 const input = process.argv[2];

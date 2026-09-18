@@ -44,6 +44,7 @@
 #include "core/graphics/raster_path.h"     /* the geometry a fill takes, and its flattening into edges */
 #include "core/graphics/rasterizer.h"      /* HTML §4.12.5.1's two fill rules over one crossing count */
 #include "core/graphics/raster_surface.h"  /* and §4.12.5.1.22's bitmap, which is where the two end up */
+#include "core/fonts/glyph_outline.h"   /* a face's own glyph outlines, decoded into that same stream */
 #include "core/paint/display_list_raster.h"  /* and the JOIN: ink becoming pixels, whose EXTENT is an
                                                operand rather than a field on a list — see
                                                display_list_raster_selftest */
@@ -19963,6 +19964,245 @@ static uint64_t tf_raster_paint_checksum(const RasterPath *p, RasterFillRule rul
     return sum;
 }
 
+/* ---- core/fonts/glyph_outline.h — A GLYPH'S OUTLINE, OUT OF BYTES THIS FILE STATES -------------------- */
+
+/* WHY THE FACE HERE IS HAND-BUILT AND NOT THE ONE THE ENGINE SHIPS. core/fonts/default_font_data.c is a
+ * GENERATED artifact, so the only thing a run of it could ever establish is what THAT BUILD'S generator last
+ * emitted — and the subset it emits today carries no outline tables at all, because the whole engine had
+ * nothing that rasterized when it was written. A fixture that waited for the face would therefore be a reader
+ * with no data, which is the shape CLAUDE.md calls untested code wearing a completed subproblem.
+ *
+ * SO THE BYTES BELOW ARE CONSTANTS, AND THAT IS A BETTER TEST THAN A REAL FACE RATHER THAN A SUBSTITUTE FOR
+ * ONE. A real face proves a decoder agrees with whatever a foundry happened to emit; these bytes are chosen so
+ * that every branch of the decode is REACHED and every number is derivable by hand before the run:
+ *   - a two-contour glyph, so the contour loop runs more than once and the second contour's first point is
+ *     one the end-point array has to locate rather than assume;
+ *   - all three x/y delta encodings, in both directions: a one-byte short with its sign bit set and clear, a
+ *     16-bit signed delta, and the same-as-previous form that stores no byte at all;
+ *   - a REPEAT run, so the flag array is shorter than the point total and the walk that expands it is the
+ *     only thing that can find where the coordinates begin;
+ *   - and a CONSECUTIVE OFF-CURVE PAIR, which is the one rule in this format that invents a point the face
+ *     never stored. Its midpoint is the QUAD end point at index 21 below, and if the rule were absent the
+ *     stream would carry ONE curve there instead of two — so that number IS the witness that it fired.
+ * Every coordinate is an integer and every scale below is a power of two, so the expected values are exact in
+ * binary floating point and the comparison is `==` rather than a tolerance. */
+
+#define TF_GO_GLYPHS 4
+
+static const unsigned char TF_GO_GLYF[] = {
+    /* GLYPH 0 — offset 0, 38 bytes. Points, in the face's own units:
+       contour 0  p0(0,0) p1(100,0) p2(100,100) p3(100,200) p4(0,200)   — all ON-curve
+       contour 1  p5(200,0) p6(260,0)off p7(260,60)off p8(200,60)       — an OFF-CURVE PAIR */
+    0x00, 0x02,                                        /* numberOfContours = 2 -> a simple glyph */
+    0x00, 0x00, 0x00, 0x00, 0x01, 0x04, 0x00, 0xc8,    /* xMin yMin xMax yMax = 0 0 260 200, read by nobody */
+    0x00, 0x04, 0x00, 0x08,                            /* end points 4 and 8, so the glyph has NINE points */
+    0x00, 0x00,                                        /* instructionLength = 0 */
+    /* flags. p2 and p3 share one byte through the repeat bit, so NINE bytes carry NINE logical flags and the
+       coordinate arrays begin nowhere a reader could compute without walking this. */
+    0x31, 0x33, 0x19, 0x01, 0x21, 0x17, 0x32, 0x34, 0x23,
+    /* xCoordinates: +100 short, -100 as a 16-bit delta, +200 short, +60 short, -60 short */
+    0x64, 0xff, 0x9c, 0xc8, 0x3c, 0x3c,
+    /* yCoordinates: +100 and +100 as 16-bit deltas, -200 short, +60 short */
+    0x00, 0x64, 0x00, 0x64, 0xc8, 0x3c,
+    0x00,                                              /* one pad byte, so both offsets below are EVEN */
+    /* GLYPH 1 — no bytes at all. Its entry and the next are equal, which is how a face says a glyph has no
+       outline; the space character is one in every real face. */
+    /* GLYPH 2 — offset 38, 16 bytes. A COMPOSITE: numberOfContours is negative. */
+    0xff, 0xff,
+    0x00, 0x00, 0x00, 0x00, 0x01, 0x04, 0x00, 0xc8,
+    0x00, 0x02, 0x00, 0x00, 0x00, 0x00,
+    /* GLYPH 3 — offset 54, 16 bytes. MALFORMED: it claims four points and carries two flag bytes. */
+    0x00, 0x01,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x64, 0x00, 0x64,
+    0x00, 0x03, 0x00, 0x00,
+    0x31, 0x00
+};
+
+/* THE SAME FIVE OFFSETS IN BOTH FORMS — 0, 38, 38, 54, 70 — which is what makes the two readable against ONE
+   outline table and the streams comparable. The short form stores each one HALVED, which is why every glyph
+   above is padded to an even length. */
+static const unsigned char TF_GO_LOCA_SHORT[] = {
+    0x00, 0x00, 0x00, 0x13, 0x00, 0x13, 0x00, 0x1b, 0x00, 0x23
+};
+static const unsigned char TF_GO_LOCA_LONG[] = {
+    0x00, 0x00, 0x00, 0x00,  0x00, 0x00, 0x00, 0x26,  0x00, 0x00, 0x00, 0x26,
+    0x00, 0x00, 0x00, 0x36,  0x00, 0x00, 0x00, 0x46
+};
+
+/* THE STREAM GLYPH 0 IS, at the pen origin with one device pixel to the font unit. Two things in it are the
+   whole point of the comparison. The y values are NEGATED, because a face's units go up from the baseline and
+   this engine's rows go down — a decoder that added would put every glyph above its own baseline and look
+   like a font bug. And the pair of QUADs in the second contour is two curves where the face stored two
+   control points and no join: the (260, -30) between them is the point the format omits. */
+static const double TF_GO_EXPECT_UNIT[] = {
+    CANVAS_PATH_OP_MOVE,  0,    0,
+    CANVAS_PATH_OP_LINE,  100,  0,
+    CANVAS_PATH_OP_LINE,  100, -100,
+    CANVAS_PATH_OP_LINE,  100, -200,
+    CANVAS_PATH_OP_LINE,  0,   -200,
+    CANVAS_PATH_OP_CLOSE,
+    CANVAS_PATH_OP_MOVE,  0,    0,
+    CANVAS_PATH_OP_MOVE,  200,  0,
+    CANVAS_PATH_OP_QUAD,  260,  0,   260, -30,
+    CANVAS_PATH_OP_QUAD,  260, -60,  200, -60,
+    CANVAS_PATH_OP_CLOSE,
+    CANVAS_PATH_OP_MOVE,  200,  0
+};
+
+/* AND THE SAME GLYPH PLACED — pen at (10, 200) with half a device pixel to the font unit. Every value is the
+   one above multiplied and offset, which is the assertion that the placement is an affine of the outline and
+   not a second decode: x scales and adds, y scales and SUBTRACTS from the baseline. */
+static const double TF_GO_EXPECT_PLACED[] = {
+    CANVAS_PATH_OP_MOVE,  10,  200,
+    CANVAS_PATH_OP_LINE,  60,  200,
+    CANVAS_PATH_OP_LINE,  60,  150,
+    CANVAS_PATH_OP_LINE,  60,  100,
+    CANVAS_PATH_OP_LINE,  10,  100,
+    CANVAS_PATH_OP_CLOSE,
+    CANVAS_PATH_OP_MOVE,  10,  200,
+    CANVAS_PATH_OP_MOVE,  110, 200,
+    CANVAS_PATH_OP_QUAD,  140, 200, 140, 185,
+    CANVAS_PATH_OP_QUAD,  140, 170, 110, 170,
+    CANVAS_PATH_OP_CLOSE,
+    CANVAS_PATH_OP_MOVE,  110, 200
+};
+
+static void tf_go_expect_stream(const RasterPath *p, const double *want, size_t n, const char *what)
+{
+    size_t i;
+
+    CHECKF(p->n == n, "%s produced a segment stream of %zu values where the glyph's own points make %zu — a "
+                      "length that differs at all is an op emitted, dropped or given the wrong arity, and no "
+                      "coordinate below is worth reading until it agrees", what, p->n, n);
+    for (i = 0; i < n; i++)
+        CHECKF(p->v[i] == want[i],
+               "%s differs from the glyph's own geometry at value %zu: %g where the outline says %g. Every "
+               "coordinate here is an integer or a half, so this is an exact comparison and not a tolerance",
+               what, i, p->v[i], want[i]);
+}
+
+static void glyph_outline_selftest(void)
+{
+    GlyphOutlines shortf, longf, bad;
+    RasterPath unit, again, placed, empty;
+    unsigned char mangled[sizeof TF_GO_LOCA_SHORT];
+    const char *why = NULL;
+    GlyphOutlineResult r;
+    int refused = 0;
+    size_t i, ops;
+    static const size_t LEN[TF_GO_GLYPHS] = { 38, 0, 16, 16 };
+
+    CHECK(glyph_outlines_read(&shortf, TF_GO_GLYF, sizeof TF_GO_GLYF,
+                              TF_GO_LOCA_SHORT, sizeof TF_GO_LOCA_SHORT, TF_GO_GLYPHS, false),
+          "the fixture's own outline tables were refused in their 16-bit offset form. These bytes are this "
+          "file's, so a refusal here is a rule the decoder applies that the fixture does not meet and not a "
+          "hostile face");
+    CHECK(glyph_outlines_read(&longf, TF_GO_GLYF, sizeof TF_GO_GLYF,
+                              TF_GO_LOCA_LONG, sizeof TF_GO_LOCA_LONG, TF_GO_GLYPHS, true),
+          "the fixture's own outline tables were refused in their 32-bit offset form");
+
+    /* THE LENGTHS FIRST, because every later assertion is about bytes these numbers select. A length of zero
+       is a glyph with no outline and is not an error. */
+    for (i = 0; i < TF_GO_GLYPHS; i++) {
+        CHECKF(glyph_outline_length(&shortf, (uint16_t)i) == LEN[i],
+               "glyph %zu is %zu bytes through the 16-bit offset array where the fixture laid out %zu — a "
+               "length is the difference of two consecutive entries, so a wrong one is a decoder reading the "
+               "array at the wrong stride or without the doubling the short form stores",
+               i, glyph_outline_length(&shortf, (uint16_t)i), LEN[i]);
+        CHECKF(glyph_outline_length(&longf, (uint16_t)i) == LEN[i],
+               "glyph %zu is %zu bytes through the 32-bit offset array where the fixture laid out %zu",
+               i, glyph_outline_length(&longf, (uint16_t)i), LEN[i]);
+    }
+
+    /* THE OUTLINE, EXACTLY. */
+    raster_path_init(&unit);
+    r = glyph_outline_append(&shortf, 0, 0.0, 0.0, 1.0, &unit, &why);
+    CHECKF(r == GLYPH_OUTLINE_OK, "the fixture's two-contour glyph decoded to %d (%s) rather than to an "
+                                  "outline — these are this file's own bytes and every rule they break is a "
+                                  "rule this file wrote", (int)r, why ? why : "no reason given");
+    tf_go_expect_stream(&unit, TF_GO_EXPECT_UNIT, sizeof TF_GO_EXPECT_UNIT / sizeof *TF_GO_EXPECT_UNIT,
+                        "the glyph at the origin");
+    CHECK(unit.nsub == 4,
+          "the glyph's two contours did not leave four subpaths behind. A contour opens one and its close "
+          "appends the close opcode and opens another at the same first point, which is what a rendering "
+          "context's own close does — so two contours is four and any other number is a contour this "
+          "decoder failed to begin or failed to end");
+
+    /* AND THE OFFSET FORM IS A STORAGE DETAIL AND NOT A GEOMETRY ONE — one outline table, two offset arrays,
+       one stream. */
+    raster_path_init(&again);
+    r = glyph_outline_append(&longf, 0, 0.0, 0.0, 1.0, &again, &why);
+    CHECK(r == GLYPH_OUTLINE_OK, "the same glyph through the 32-bit offset array did not decode");
+    CHECK(again.n == unit.n && memcmp(again.v, unit.v, unit.n * sizeof *unit.v) == 0,
+          "one outline table read through two offset formats produced two different shapes. The formats "
+          "differ in how an offset is STORED and in nothing else, so a difference here is the stride or the "
+          "doubling and the face is the same face either way");
+
+    /* AND THE PLACEMENT IS AN AFFINE OF IT. */
+    raster_path_init(&placed);
+    r = glyph_outline_append(&shortf, 0, 10.0, 200.0, 0.5, &placed, &why);
+    CHECK(r == GLYPH_OUTLINE_OK, "the same glyph did not decode when placed at a pen position");
+    tf_go_expect_stream(&placed, TF_GO_EXPECT_PLACED,
+                        sizeof TF_GO_EXPECT_PLACED / sizeof *TF_GO_EXPECT_PLACED,
+                        "the glyph placed at a pen position");
+
+    /* THE THREE OUTCOMES THAT ARE NOT AN OUTLINE, AND THEY ARE THREE AND NOT TWO. A glyph with no outline and
+       a glyph made of other glyphs are both PERFECTLY VALID and take opposite work from a file that lied; a
+       decoder that merged any two of them would report every space, or every accented letter, as a broken
+       font. */
+    raster_path_init(&empty);
+    r = glyph_outline_append(&shortf, 1, 0.0, 0.0, 1.0, &empty, &why);
+    CHECKF(r == GLYPH_OUTLINE_OK && empty.n == 0 && why == NULL,
+           "a glyph with no outline answered %d with %zu values appended — a face says so for the space "
+           "character and for every format control it covers, so this is the common case and not an error",
+           (int)r, empty.n);
+    r = glyph_outline_append(&shortf, 2, 0.0, 0.0, 1.0, &empty, &why);
+    CHECKF(r == GLYPH_OUTLINE_COMPOSITE && empty.n == 0,
+           "a composite glyph answered %d rather than naming itself a composite. It is a valid glyph this "
+           "decoder does not build yet, and a caller that could not tell it from a malformed one would read "
+           "a good font as a broken one", (int)r);
+    r = glyph_outline_append(&shortf, 3, 0.0, 0.0, 1.0, &empty, &why);
+    CHECKF(r == GLYPH_OUTLINE_MALFORMED && why != NULL,
+           "a glyph claiming four points and carrying two flag bytes answered %d with reason \"%s\". The "
+           "flag array states its own length nowhere, so the point total is the only thing that ends the "
+           "walk and a decoder that ran off the end would read coordinates out of whatever followed",
+           (int)r, why ? why : "none");
+
+    /* AND THE REFUSALS THE TABLE READ OWES, each of which is a claim the BYTES make and therefore an `if` and
+       never an assert. The last two are the offset format read the wrong way round in both directions, which
+       is the one mistake that cannot fail loudly on its own: it yields a different, self-consistent-looking
+       array out of the same bytes, and what catches it is that the whole array is walked. */
+    refused += !glyph_outlines_read(&bad, TF_GO_GLYF, sizeof TF_GO_GLYF,
+                                    TF_GO_LOCA_SHORT, sizeof TF_GO_LOCA_SHORT - 1, TF_GO_GLYPHS, false);
+    memcpy(mangled, TF_GO_LOCA_SHORT, sizeof mangled);
+    mangled[6] = 0x00;
+    mangled[7] = 0x01;      /* entry 3 now names a smaller offset than entry 2 */
+    refused += !glyph_outlines_read(&bad, TF_GO_GLYF, sizeof TF_GO_GLYF,
+                                    mangled, sizeof mangled, TF_GO_GLYPHS, false);
+    refused += !glyph_outlines_read(&bad, TF_GO_GLYF, sizeof TF_GO_GLYF - 1,
+                                    TF_GO_LOCA_SHORT, sizeof TF_GO_LOCA_SHORT, TF_GO_GLYPHS, false);
+    refused += !glyph_outlines_read(&bad, TF_GO_GLYF, sizeof TF_GO_GLYF,
+                                    TF_GO_LOCA_LONG, sizeof TF_GO_LOCA_LONG, TF_GO_GLYPHS, false);
+    refused += !glyph_outlines_read(&bad, TF_GO_GLYF, sizeof TF_GO_GLYF,
+                                    TF_GO_LOCA_SHORT, sizeof TF_GO_LOCA_SHORT, TF_GO_GLYPHS, true);
+    CHECKF(refused == 5,
+           "%d of five outline table pairs this file deliberately broke were accepted. Each is a different "
+           "rule — an array too short for its own glyph count, entries that do not ascend, a last entry past "
+           "the end of the outline table, and the offset format read the wrong way round in each direction — "
+           "and an accepted one is a face whose offsets this decoder would then treat as an extent", refused);
+
+    for (i = 0, ops = 0; i < unit.n; ops++)
+        i += (size_t)canvas_path_op_width((CanvasPathOp)(int)unit.v[i]);
+    printf("@GLYF glyphs=%d outlined=1 empty=1 composite=1 malformed=1 points=9 contours=2 "
+           "ops=%zu values=%zu subpaths=%zu refused=%d\n",
+           TF_GO_GLYPHS, ops, unit.n, unit.nsub, refused);
+
+    raster_path_free(&unit);
+    raster_path_free(&again);
+    raster_path_free(&placed);
+    raster_path_free(&empty);
+}
+
 static void raster_selftest(void)
 {
     RasterPath p, q;
@@ -22730,6 +22970,11 @@ int main(int argc, char **argv) {
        the assertion its interface decision is actually being made rather than described. It is here rather
        than earlier only so that its `@RASTER` row sits beside `@PAINT`'s, which is the ink it will one day
        be handed. */
+    /* core/fonts/glyph_outline.h's DECODER, ahead of the fill it feeds and taking no realm either.
+       Its face is bytes this file STATES rather than the generated one the engine ships, which is
+       what lets it assert an exact segment stream; see the function for why that is the stronger
+       test and not a substitute for a real one. */
+    glyph_outline_selftest();
     raster_selftest();
     /* AND THE BYTE RUN ITS SURFACES ARE MADE OF, which is a different question from the fill's and has a
        different consumer: core/graphics/raster_surface.h's extent is what any transport of a rendered
