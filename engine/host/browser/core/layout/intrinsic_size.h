@@ -53,12 +53,20 @@
  * exist. `block_flow_anonymous_boxes` is deliberately NOT what it asks — that entry PLACES, and a placement
  * needs the container's used width, which for the only two boxes that ask for an intrinsic size is a
  * shrink-to-fit over this very entry.
- * WHAT IT DOES NOT DO IS APPLY A CHILD'S OWN DECLARED INLINE SIZE. §5.2's contribution is the size of a
- * hypothetical float CONTAINING the child, so a child with `width: 500px` contributes 500px and not what its
- * text measures; css-sizing-3 §5.2.1 substitutes a cyclic PERCENTAGE away (to `auto` / `none`, which is what
- * this walk already computes) and leaves a LENGTH standing. That case crashes rather than answering, because
- * the measured number would be a WRONG width for a real document rather than a narrower one — CSS 2.1 §10.4's
- * clamp and css-sizing-3 §3.3's `box-sizing` conversion are what the term still needs.
+ * IT APPLIES A CHILD'S OWN DECLARED INLINE SIZE, AND THE SENTENCE THAT STOOD HERE SAID IT DID NOT. That
+ * sentence is rewritten rather than deleted because the reason it gave is still the reason the term exists:
+ * §5.2's contribution is the size of a hypothetical float CONTAINING the child, so a child with `width: 500px`
+ * contributes 500px and not what its text measures, and reporting the measured number would be a WRONG width
+ * for a real document rather than a narrower one. What it named as still missing — CSS 2.1 §10.4 "Minimum and
+ * maximum widths: 'min-width' and 'max-width'"'s clamp and css-sizing-3 §3.3 "Box Edges for Sizing: the
+ * box-sizing property"'s conversion — is the whole of what `is_declared_inline_sizes` now is. The one thing
+ * that has NOT changed is which values leave the measurement standing: §5.2.1 substitutes a cyclic PERCENTAGE
+ * away, and the §5.1 pair this walk computes is what a substituted `auto` / `none` means.
+ * §5.1 AND §5.2 ARE TWO QUESTIONS AND THIS COMPONENT ANSWERS BOTH, WHICH IS WHY THE TERM IS NOT INSIDE
+ * `intrinsic_inline_sizes`: §5.1 defines a box's own intrinsic sizes "given an auto preferred size in that
+ * axis and no minimum or maximum size in that axis", so the three properties are REMOVED from it by
+ * definition, and §5.2's contribution is where they are applied. A caller asking this component for a BOX's
+ * intrinsic size gets §5.1's answer; the child walk inside it asks for §5.2's.
  *
  * NOTHING IS STORED, for core/layout/used_value.h's reason: a layout is per-flow state, so a cached intrinsic
  * size is shared state solver/dom_cow.h does not swap and a stale one is another flow's document. */

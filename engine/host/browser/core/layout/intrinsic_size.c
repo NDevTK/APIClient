@@ -99,6 +99,51 @@ static CssPx is_edge_border_px(lxb_dom_element_t *el, const char *name)
     return len.px;
 }
 
+/* css-sizing-3 §3.3 "Box Edges for Sizing: the box-sizing property"' SURROUND AT ONE SIDE — the padding
+   and the border width, at §5.2.1's ZERO basis, WITHOUT the margin. It is split out of the edge below rather
+   than written a second time beside it because two sections read the identical pair for two different reasons
+   and a second derivation is a second answer that can drift from this one: §2.2's OUTER size ADDS the margin
+   to it, and §3.3's `border-box` arm SUBTRACTS it from a declared length. §3.3 names these two terms and not
+   the margin because its own sentence is that the padding and border are "laid out and drawn inside the used
+   width and height" while the margins are not — "the padding and border of the box, but not its margins".
+   THE SUBTRACTION ITSELF IS CITED AND NOT QUOTED, and that is core/layout/table_column_width.c's decision at
+   the same sentence rather than a style: it records that the two Editor's Draft editions of §3.3 word the
+   flooring differently — one as a clause of the subtraction sentence, one as a sentence of its own — so a
+   one-line quotation is a quotation of ONE edition. Do not "restore" one here. */
+static CssPx is_intrinsic_pad_border_px(lxb_dom_element_t *el, bool trailing)
+{
+    const char *const *side = IS_EDGE[trailing ? 1 : 0];
+    CssLength padding = css_computed_length(el, side[IS_EDGE_PADDING]);
+    CssPx pad;
+
+    /* §8.4's <padding-width> has no `auto` and no keyword at all, so the split is two-way rather than three. */
+    if (padding.kind == CSS_LENGTH_ABSOLUTE) {
+        pad = padding.px;
+    } else {
+        DCHECKF(padding.kind == CSS_LENGTH_PERCENTAGE || padding.kind == CSS_LENGTH_CALCULATED,
+                "`%s` computed to a keyword. CSS 2.1 §8.4 \"Padding properties\"' <padding-width> grammar is a "
+                "length or a percentage and nothing else",
+                side[IS_EDGE_PADDING]);
+        pad = css_length_resolve_pct(padding, css_px(0.0));
+    }
+    /* THE FLOOR IS THE PROPERTY'S RANGE AND IT IS REACHED ONLY THROUGH A MATH FUNCTION. CSS 2.1 §8.4 says
+       outright that "Unlike margin properties, values for padding values cannot be negative", and §5.1's range
+       restriction drops a negative LITERAL — but css-values-4 §9.1 "Numeric Functions" exempts a math function
+       from that check and moves it to the result: "numeric functions returning out-of-range values never cause
+       a declaration to become invalid", and instead "the value of a numeric function is clamped to the range
+       allowed in the context it is used at computed value time if possible, and at used value time otherwise".
+       §5.2.1's ZERO BASIS is precisely what makes `calc(50% - 10px)` land out of range HERE and in range at a
+       real width, so this clamp belongs at this resolution and could not have run at the cascade. IT IS OVER
+       BOTH ARMS AND NOT OVER THE RESOLUTION ALONE: a math function whose Sum kept no percentage term
+       (`calc(10px - 20px)`) is an ABSOLUTE computed value that §9.1 exempted from §5.1's parse-time check just
+       the same, so the arm that never sees a basis is out of range for the same reason and by the same
+       sentence. `css_px_max` and not an `if`, so the clamped-away operand's environment facts stay in the
+       domain — core/layout/used_value.c's own padding arm states that reason in full, splits its two arms the
+       same way, and clamps their one result exactly here. A MARGIN IS NOT CLAMPED, which is §8.3's "negative
+       values for margin properties are allowed". */
+    return css_px_add(css_px_max(pad, css_px(0.0)), is_edge_border_px(el, side[IS_EDGE_BORDER]));
+}
+
 /* QUESTION ONE — css-sizing-3 §5.2.1's INTRINSIC CONTRIBUTION at one side, where a percentage is CYCLIC and
    resolves against ZERO. It is `static` on purpose and that is the structural half of this split: it has no
    caller outside this file, and being unreachable from anywhere else is what stops it being asked at a
@@ -107,8 +152,7 @@ static CssPx is_intrinsic_edge_px(lxb_dom_element_t *el, bool trailing)
 {
     const char *const *side = IS_EDGE[trailing ? 1 : 0];
     CssLength margin = css_computed_length(el, side[IS_EDGE_MARGIN]);
-    CssLength padding = css_computed_length(el, side[IS_EDGE_PADDING]);
-    CssPx sum, pad;
+    CssPx sum;
 
     /* §2.2's own sentence, which CSS 2.1 §10.3.1 "Inline, non-replaced elements" states again for the used
        value ("A computed value of 'auto' for 'margin-left' or 'margin-right' becomes a used value of '0'"). It
@@ -143,33 +187,7 @@ static CssPx is_intrinsic_edge_px(lxb_dom_element_t *el, bool trailing)
            two terms in one step. */
         sum = css_length_resolve_pct(margin, css_px(0.0));
     }
-    /* §8.4's <padding-width> has no `auto` and no keyword at all, so the split is two-way rather than three. */
-    if (padding.kind == CSS_LENGTH_ABSOLUTE) {
-        pad = padding.px;
-    } else {
-        DCHECKF(padding.kind == CSS_LENGTH_PERCENTAGE || padding.kind == CSS_LENGTH_CALCULATED,
-                "`%s` computed to a keyword. CSS 2.1 §8.4 \"Padding properties\"' <padding-width> grammar is a "
-                "length or a percentage and nothing else",
-                side[IS_EDGE_PADDING]);
-        pad = css_length_resolve_pct(padding, css_px(0.0));
-    }
-    /* THE FLOOR IS THE PROPERTY'S RANGE AND IT IS REACHED ONLY THROUGH A MATH FUNCTION. CSS 2.1 §8.4 says
-       outright that "Unlike margin properties, values for padding values cannot be negative", and §5.1's range
-       restriction drops a negative LITERAL — but css-values-4 §9.1 "Numeric Functions" exempts a math function
-       from that check and moves it to the result: "numeric functions returning out-of-range values never cause
-       a declaration to become invalid", and instead "the value of a numeric function is clamped to the range
-       allowed in the context it is used at computed value time if possible, and at used value time otherwise".
-       §5.2.1's ZERO BASIS is precisely what makes `calc(50% - 10px)` land out of range HERE and in range at a
-       real width, so this clamp belongs at this resolution and could not have run at the cascade. IT IS OVER
-       BOTH ARMS AND NOT OVER THE RESOLUTION ALONE: a math function whose Sum kept no percentage term
-       (`calc(10px - 20px)`) is an ABSOLUTE computed value that §9.1 exempted from §5.1's parse-time check just
-       the same, so the arm that never sees a basis is out of range for the same reason and by the same
-       sentence. `css_px_max` and not an `if`, so the clamped-away operand's environment facts stay in the
-       domain — core/layout/used_value.c's own padding arm states that reason in full, splits its two arms the
-       same way, and clamps their one result exactly here. A MARGIN IS NOT CLAMPED, which is §8.3's "negative
-       values for margin properties are allowed". */
-    sum = css_px_add(sum, css_px_max(pad, css_px(0.0)));
-    return css_px_add(sum, is_edge_border_px(el, side[IS_EDGE_BORDER]));
+    return css_px_add(sum, is_intrinsic_pad_border_px(el, trailing));
 }
 
 /* QUESTION TWO — §5.2.1's "Otherwise, the percentage is resolved against the containing block's size", which is
@@ -601,54 +619,137 @@ IntrinsicInlineSizes intrinsic_outer_contribution(lxb_dom_element_t *el, Intrins
     return is_contribution(inner, css_px_add(is_intrinsic_edge_px(el, false), is_intrinsic_edge_px(el, true)));
 }
 
-/* css-sizing-3 §5.2.1 "Intrinsic Contributions of Percentage-Sized Boxes"' NON-REPLACED arm, for the two
-   properties that would otherwise decide a stacked child's inline size instead of its content: "if the box is
-   non-replaced, then the entire value of any max size property or preferred size property (width, max-width,
-   height, max-height) specified as an expression containing a percentage … that is cyclic is treated, for the
-   purpose of calculating the box's intrinsic size contributions only, as that property's initial value".
-   SO A PERCENTAGE IS NOT A REFUSAL AND A LENGTH IS. Every box this walk reaches has the box being measured as
-   its containing block, so a percentage here is cyclic BY CONSTRUCTION (the same derivation
-   `is_intrinsic_edge_px` states in full) and §5.2.1 substitutes `auto` / `none` — which is the contribution
-   this walk already
-   computes, so the substitution is the code doing nothing rather than an arm to write. A LENGTH is not cyclic
-   and not substituted: it is a real declared inline size this walk does not yet apply, and applying it is
-   §10.4's clamp plus css-sizing-3 §3.3's `box-sizing` conversion, neither of which is here. */
-static void is_require_intrinsic_inline_size(lxb_dom_element_t *ch, const char *name, const char *initial)
+/* ONE DECLARED SIZING VALUE of `ch` in the INLINE axis, as a CONTENT-box width, for css-sizing-3 §5.2
+   "Intrinsic Contributions" — true when the property states a size this walk must apply, false when it states
+   none. THE FALSE ARM IS TWO DIFFERENT SECTIONS AGREEING ON ONE ANSWER and they are kept apart because they
+   are stated of different properties:
+     - THE KEYWORD, which for each of the three is its own initial value and which css-sizing-3 §3.2 "Sizing
+       Values: the <length-percentage [0,∞]>, auto | none, stretch, min-content, max-content, and fit-content
+       values" gives no size at all — `auto` on a preferred size "specifies an automatic size", `none` on a max
+       size is "no limit on the size of the box", and `auto` on a min size "resolves to a used value of 0 for
+       backwards-compatibility" whose "resolved value of this keyword is zero for boxes of all CSS2 display
+       types (block and inline boxes, inline blocks, and all table display types)". The first two leave the
+       measured pair exactly where the walk put it; the THIRD is a real floor and is applied at the caller,
+       where the zero is one `css_px_max` rather than a second arm here. §3.2's own "unless otherwise defined
+       by the relevant layout module" is what css-flexbox-1 §4.5 "Automatic Minimum Size of Flex Items"
+       overrides, and no child this walk reaches is a flex item: §9.4.1's stack is what put it here.
+     - A PERCENTAGE OR A CALCULATION CARRYING ONE, which is CYCLIC by construction — the containing block of a
+       child measured by this walk is the box whose inline size this walk is being run to produce — and which
+       §5.2.1 "Intrinsic Contributions of Percentage-Sized Boxes" resolves for BOTH by two rules that are not
+       the same rule. For `width` and `max-width` it substitutes the whole value: "the entire value of any max
+       size property or preferred size property (width, max-width, height, max-height) specified as an
+       expression containing a percentage … that is cyclic is treated, for the purpose of calculating the box's
+       intrinsic size contributions only, as that property's initial value". For `min-width` the substitution is
+       not stated at all and a different sentence is: "For the min size properties, as well as for margins and
+       paddings (and gutters), a cyclic percentage is resolved against zero for determining intrinsic size
+       contributions." Both land on the same answer — this property states no size for the walk to apply —
+       which is why one `return false` serves them — but writing it as one RULE would be wrong about
+       `min-width`, whose initial value is `auto` and whose §5.2.1 answer is a NUMBER.
+   THE KEYWORD IS STILL ASSERTED, and the assertion is the one this file has always made: §3.2's level-3
+   additions (`stretch`, `min-content`, `max-content`, `fit-content`, `calc-size()`) are values this engine
+   records no computed-value rule for, so one arriving here is a value the cascade produced and no section of
+   it defines — core/layout/used_value.c asserts the same thing about the same grammar. */
+static bool is_declared_sizing_px(lxb_dom_element_t *ch, const char *name, const char *initial, CssPx *out)
 {
     CssLength len = css_computed_length(ch, name);
-    char nbuf[160];
+    CssPx declared, surround;
+    char *box_sizing;
+    bool border_box;
 
     if (len.kind == CSS_LENGTH_KEYWORD) {
         DCHECKF(strcmp(len.keyword, initial) == 0,
                 "`%s` computed to the keyword `%s` rather than to its initial value `%s`. CSS 2.1 §10.2 "
                 "\"Content width: the 'width' property\" and §10.4 \"Minimum and maximum widths: 'min-width' "
-                "and 'max-width'\" admit no other keyword, and css-sizing-3 §3.2 \"Sizing Values: the "
-                "<length-percentage [0,∞]>, auto | none, stretch, min-content, max-content, and "
-                "fit-content values\"'s level-3 additions are ones this engine records no computed-value "
-                "rule for — "
-                "core/layout/used_value.c asserts the same thing about the same grammar. So this is a value "
-                "the cascade produced and no section of it defines",
+                "and 'max-width'\" admit no other keyword, and css-sizing-3 §3.2's level-3 additions are ones "
+                "this engine records no computed-value rule for — core/layout/used_value.c asserts the same "
+                "thing about the same grammar. So this is a value the cascade produced and no section of it "
+                "defines",
                 name, len.keyword, initial);
-        return;
+        return false;
     }
-    /* §5.2.1's substitution, which is this walk's ordinary answer. */
-    if (len.kind == CSS_LENGTH_PERCENTAGE || len.kind == CSS_LENGTH_CALCULATED) return;
-    DFAILF("css-sizing-3 §5.2 \"Intrinsic Contributions\" is a maximum over this box's children's OUTER sizes, "
-           "and this child declares its own inline size: `%s` is an absolute LENGTH, which css-sizing-3 §5.2.1 "
-           "\"Intrinsic Contributions of Percentage-Sized Boxes\" does NOT substitute away — its substitution "
-           "is for a value \"specified as an expression containing a percentage\", and a length is not cyclic "
-           "and not one. So this child's contribution is its DECLARED size and not the intrinsic one measured "
-           "below, and taking the measured one would report a `<div style=\"width:500px\">x</div>` inside a "
-           "float as one glyph wide — a WRONG width for a real document rather than a narrower one, which is "
-           "why it crashes here instead of being named as a residual. WHAT TO BUILD IS THE TERM AND NOT THE "
-           "LIST: the enumeration below is complete. It is two steps and neither is in this file. CSS 2.1 "
-           "§10.4 \"Minimum and maximum widths: 'min-width' and 'max-width'\" clamps the declared `width` "
-           "between `min-width` and `max-width` — over the SAME §5.2.1 substitutions, so a percentage `%s` "
-           "reaching that step is already `auto`/`none`/zero. css-sizing-3 §3.3 \"Box Edges for Sizing: the "
-           "box-sizing property\" then says which box the declared number IS, and this component's own header "
-           "records that it never asks that question of ITSELF because its caller applies §3.3 to the RESULT — "
-           "for a CHILD this walk IS the caller, so the conversion belongs at this term. %s",
-           name, name, box_subject(ch, nbuf, sizeof nbuf));
+    if (len.kind != CSS_LENGTH_ABSOLUTE) {
+        DCHECKF(len.kind == CSS_LENGTH_PERCENTAGE || len.kind == CSS_LENGTH_CALCULATED,
+                "`%s` computed to none of the shapes css-sizing-3 §3.2 \"Sizing Values: the "
+                "<length-percentage [0,∞]>, auto | none, stretch, min-content, max-content, and fit-content "
+                "values\" admits",
+                name);
+        return false;
+    }
+    /* css-sizing-3 §3.3 "Box Edges for Sizing: the box-sizing property"' CONVERSION. Under `border-box` the
+       declared length is the BORDER box's, so the content box is that length less this box's two paddings and
+       two border widths, floored at zero because an inner size cannot be negative. IT IS CITED AND NOT QUOTED
+       for the reason core/layout/table_column_width.c records at the same sentence: the two Editor's Draft
+       editions word the flooring differently, so a one-line quotation is a quotation of ONE edition.
+       THE SURROUND IS THE INTRINSIC ONE AND NOT THE USED ONE, which is this file's own split and not a
+       shortcut: a percentage padding here resolves against the number this walk is producing, and §5.2.1
+       resolves exactly that against ZERO. `used_value.h`'s surround answers the other question — the one a
+       line box asks, where the containing block's width is already determined — and reaching for it here
+       would make the conversion self-referential. */
+    declared = len.px;
+    box_sizing = css_computed_value(ch, "box-sizing");
+    DCHECK(box_sizing != NULL,
+           "the cascade produced no computed `box-sizing` — css-sizing-3 §3.3 \"Box Edges for Sizing: the "
+           "box-sizing property\" gives it an initial value of `content-box`, so the cascade's last layer "
+           "always answers");
+    border_box = strcmp(box_sizing, "border-box") == 0;
+    free(box_sizing);
+    if (border_box) {
+        surround = css_px_add(is_intrinsic_pad_border_px(ch, false), is_intrinsic_pad_border_px(ch, true));
+        declared = css_px_max(css_px_sub(declared, surround), css_px(0.0));
+    }
+    *out = declared;
+    return true;
+}
+
+/* css-sizing-3 §5.2 "Intrinsic Contributions"' CONTRIBUTION OF A CHILD THAT DECLARES ITS OWN INLINE SIZE, as
+   CONTENT-box widths. core/layout/intrinsic_size.h used to say this walk did NOT do it; that sentence is
+   rewritten there rather than deleted, because the reason it gave for refusing is exactly the reason this
+   exists and a reader who re-derives it would re-introduce the refusal.
+   §5.2 STATES THE CONTRIBUTION AS A HYPOTHETICAL FLOAT AND THAT IS WHY A DECLARATION REPLACES THE MEASUREMENT
+   RATHER THAN BEING MAXED WITH IT: "a box's min-content contribution/max-content contribution in each axis is
+   the size of the content box of a hypothetical auto-sized float that contains only that box". A float
+   containing one `width: 500px` box is 500px wide whether that box's text measures ten pixels or a thousand —
+   the box overflows the float in the second case and does not widen it — so `<div style="width:500px">x</div>`
+   inside a float contributes 500px and not one glyph. THE MEASURED PAIR IS §5.1's SIZE AND IS A DIFFERENT
+   QUESTION, which is why it is an operand here and not the answer: §5.1 "Intrinsic Sizes" defines both sizes
+   of a box as the size it would have "given an auto preferred size in that axis and no minimum or maximum size
+   in that axis", so §5.1 is stated with these three properties REMOVED and §5.2 is where they are applied.
+   BOTH HALVES TAKE THE SAME DECLARATION, and that is the section rather than a saving: a declared `width` is
+   one number, so the float is that wide under a zero-sized containing block and under an infinite one alike,
+   and the pair collapses. Only the MEASURED pair can differ between them.
+   THE ORDER IS §10.4's AND IT IS NOT COMMUTATIVE. CSS 2.1 §10.4 "Minimum and maximum widths: 'min-width' and
+   'max-width'" runs the tentative width against `max-width` FIRST and then against `min-width`, so a box with
+   `min-width: 300px; max-width: 100px` is 300px and not 100px — the minimum wins, which is what taking the
+   maximum LAST expresses. §10.4's own mechanism is a second pass rather than a clamp on the number, and that
+   difference is invisible HERE for a reason worth stating: its substitution re-solves whichever MARGIN was
+   `auto`, and css-sizing-3 §2.2 "Intrinsic Size Contributions" has already fixed every margin on this path —
+   "for this purpose, auto margins are treated as zero" — so no term the second pass would re-solve is still
+   unknown, and the clamp and the pass agree. core/layout/used_value.c runs the real second pass, where a
+   `margin: 0 auto` box's centring depends on it. */
+static IntrinsicInlineSizes is_declared_inline_sizes(lxb_dom_element_t *ch, IntrinsicInlineSizes measured)
+{
+    IntrinsicInlineSizes out = measured;
+    CssPx v;
+
+    if (is_declared_sizing_px(ch, "width", "auto", &v)) {
+        out.min_content = v;
+        out.max_content = v;
+    }
+    if (is_declared_sizing_px(ch, "max-width", "none", &v)) {
+        out.min_content = css_px_min(out.min_content, v);
+        out.max_content = css_px_min(out.max_content, v);
+    }
+    /* §3.2's `auto` MINIMUM IS A NUMBER AND NOT AN ABSENCE, so the floor runs on both arms of the call above:
+       the keyword resolves to a used 0 for every display type this walk reaches, and §5.2.1 resolves a cyclic
+       percentage min size against zero — one value, reached two ways, and the only reason this is not written
+       as a third `if`. THE FLOOR IS ON THE CONTENT BOX AND NOT ON THE CONTRIBUTION, which is what keeps
+       `is_contribution`'s own recorded reasoning true: a negative MARGIN on this child is added after this
+       returns and can still drive the outer pair below zero, so the non-negativity that function declines to
+       assert is still not assertable. */
+    if (!is_declared_sizing_px(ch, "min-width", "auto", &v)) v = css_px(0.0);
+    out.min_content = css_px_max(out.min_content, v);
+    out.max_content = css_px_max(out.max_content, v);
+    return out;
 }
 
 /* CSS 2.2 §9.4.1 "Block formatting contexts"' CONTEXT, whose intrinsic inline sizes are a MAXIMUM AND NOT A
@@ -716,12 +817,11 @@ static IntrinsicInlineSizes is_block_context(lxb_dom_element_t *el)
         {
             lxb_dom_element_t *ch = lxb_dom_interface_element(brk);
 
-            /* THE CHILD'S OWN DECLARATIONS FIRST, because a `width` this walk cannot apply makes the number
-               below the wrong operand rather than an imprecise one. */
-            is_require_intrinsic_inline_size(ch, "width", "auto");
-            is_require_intrinsic_inline_size(ch, "max-width", "none");
-            is_require_intrinsic_inline_size(ch, "min-width", "auto");
-            one = intrinsic_outer_contribution(ch, intrinsic_inline_sizes(ch));
+            /* §5.2's CONTRIBUTION IS TWO STEPS AND THE ORDER IS THE SECTION'S: §5.1's measurement of the
+               child's own content, then the child's own `width`/`min-width`/`max-width` over it, then §2.2's
+               OUTER size. A declaration applied after the outer step would be clamping a MARGIN BOX by a
+               property CSS 2.1 §10.2 states of the content box. */
+            one = intrinsic_outer_contribution(ch, is_declared_inline_sizes(ch, intrinsic_inline_sizes(ch)));
         }
         out.min_content = css_px_max(out.min_content, one.min_content);
         out.max_content = css_px_max(out.max_content, one.max_content);
