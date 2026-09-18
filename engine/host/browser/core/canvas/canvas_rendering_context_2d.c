@@ -1159,6 +1159,37 @@ void canvas_rendering_context_2d_init(JSContext *ctx)
  * edges do not land on pixel boundaries is a coverage-weighted REMOVAL of alpha, which is a second span sink
  * beside `raster_paint_span`, and that header says of its own source-over that it is `the only operator this component has; a second operator is a second landing`.
  *
+ * AND THAT CLAUSE NAMED ONE BLOCKER WHERE THERE ARE TWO, WHICH A PEER REFUTED WITHIN THE HOUR AND IS RECORDED
+ * HERE RATHER THAN QUIETLY WIDENED, because the half it missed is the half no reader of THIS file would think
+ * to check. The span sink is real and is not the first thing in the way: THERE IS NO BRIDGE FROM THIS ROAD'S
+ * PIXELS TO THE RASTERIZER'S AT ALL. `RasterSurface` occurs in exactly three places outside its own component
+ * and its fixture — core/paint/display_list_raster.c, and ONE COMMENT in core/html/html_canvas_element.h —
+ * and no member here has ever touched one: `getImageData` and `putImageData` reach a `CanvasBitmap` through
+ * `canvas_bitmap_get` and copy bytes themselves. So a painter has no existing primitive to route to, which is
+ * a different and earlier problem than which operators that primitive has.
+ *
+ * THE DECISION IS THAT THE PAINTER ROUTES TO THE RASTERIZER AND THE BRIDGE IS BUILT, AND IT IS RECORDED
+ * BECAUSE THE OTHER ANSWER IS THE ONE AN ABSENT BRIDGE ARGUES FOR. Writing a rectangle into a `CanvasBitmap`
+ * with a loop here would be a SECOND RASTERIZER: §4.12.5.1.11 says "The current transformation matrix must be
+ * applied to the following four coordinates, which form the path that must then be closed to get the specified
+ * rectangle", so a rect painter is a PATH FILL in the standard's own words rather than a span of bytes, and
+ * core/paint/display_list_raster.c already refuses the shortcut for the same reason one component over — a
+ * rectangle whose edges do not land on pixel boundaries has fractional coverage at every edge pixel, and a
+ * coverage written at the call site is a second answer to the question core/graphics/rasterizer.c answers
+ * analytically. Two right answers to one question is the shape that drifts, and here they would drift in
+ * PIXELS, where the disagreement is a wrong byte a page reads back through `getImageData`.
+ *
+ * WHAT THE BRIDGE IS, AND WHY IT IS AN ENTRY RATHER THAN A CONVERSION: core/html/html_canvas_element.h already
+ * states that the two representations agree — "the bitmap, an ImageData and a `RasterSurface` are one layout
+ * and a copy between any two of them is a copy" — so nothing has to be converted and no bytes have to be
+ * copied. What is missing is a named entry that presents a canvas bitmap AS a `RasterSurface` for the length
+ * of one call, and the reason it may not simply be a struct literal written at each painter is the same reason
+ * that header gives for the bitmap itself: the pixels are a JS typed array, so a surface over them is a SECOND
+ * NAME for bytes that file says must have exactly one, and the view is valid only where no allocation can move
+ * or free the array beneath it. That is an invariant to ASSERT at one entry, not a rule to remember at each
+ * painter — and `raster_surface_bytes` is what makes the assert two-sided, since a view's extent and the
+ * bitmap's own `4 * width * height` are then one number rather than two that may drift.
+ *
  * WHAT THE NEXT DIFF BUILDS, IN LANDING ORDER RATHER THAN DEPENDENCY ORDER, each member named with the call
  * that will consume it: (1) §4.12.5.1.19's four shadow attributes, which are this file's own shape — three
  * `unrestricted double`s with the same ignore-if-not-finite arm `globalAlpha` already performs, and a
@@ -1169,9 +1200,12 @@ void canvas_rendering_context_2d_init(JSContext *ctx)
  * which this tree indexes no copy of; (3) §4.12.5.1.20's `filter`, blocked on a `<filter-value-list>` parser,
  * of which this tree has none — and a partial one is WORSE than the absence, because an absent member lets a
  * page read its own string back where a setter that refused what it cannot parse answers "none"; (4) the
- * painters, which is the first landing that may install a member of `CanvasRect`, with the second span sink
- * clearRect needs and with a crash by name for every composite operator, shadow and filter value the
- * rasterizer cannot yet perform. HOW ITS ABSENCE WOULD SHOW: a document reaches its first drawing call and
+ * bitmap-as-surface entry above, with the assert that the view's extent and the bitmap's own agree, consumed
+ * by nothing until (5) and landable alone only if something exercises it — which is what makes it the one
+ * member of this list that may have to land WITH its consumer rather than before it; (5) the painters, which
+ * is the first landing that may install a member of `CanvasRect`, with the second span sink clearRect needs
+ * and with a crash by name for every composite operator, shadow and filter value the rasterizer cannot yet
+ * perform. HOW ITS ABSENCE WOULD SHOW: a document reaches its first drawing call and
  * its flow ends there, having already obtained a context, sized a bitmap and set a fill style. */
 void canvas_rendering_context_2d_install_realm(JSContext *ctx)
 {
