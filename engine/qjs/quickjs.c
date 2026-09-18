@@ -470,9 +470,9 @@ struct JSRuntime {
        this engine picks — it is what the event loop IS — so it lives in the queue rather than in each pump. */
     struct list_head job_list;  /* the MICROTASK queue; list of JSJobEntry.link */
     struct list_head task_list; /* the TASK queues, in the one order a task source's tasks are picked */
-    /* THE WORK THE BASELINE QUEUED, WAITING FOR THE FIRST FLOW TO OWN IT — the two queues above answer "what
-       does the event loop run next", and this one answers a question that exists before there is an event loop
-       at all.
+    /* THE WORK THE BASELINE QUEUED, WAITING FOR THE FIRST FLOW WHOSE HOST OWNS THE QUEUES — the two queues
+       above answer "what does the event loop run next", and this one answers a question that exists before
+       there is an event loop at all.
        A DOCUMENT IS CREATED BEFORE ITS AGENT HAS A FRONTIER. HTML §4.8.5's insertion steps run for every
        <iframe> in a document's INITIAL MARKUP, so installing the document queues §7.4 step 14's navigation —
        and in this engine the document is installed by qjs_init while the frontier is seeded by qjs_begin, so
@@ -3732,21 +3732,36 @@ static int js_enqueue_platform_call(JSContext *ctx, JSJobFunc *job_func, int arg
  * not arrive as a microtask and §8.1.7.3's await-a-stable-state microtask does not arrive as a task. That flag
  * is the whole of what the queue kind means here — there is nothing left to assert about it, because BOTH
  * kinds can be ownerless (js_enqueue_platform_call names the counterexample that proves the second). An entry
- * the hook DECLINES stays on the list — declining is not dropping, and the next flow to execute asks again —
- * but it is a should-never-happen at this call site, because the hook is being asked from inside a running
- * flow and that is the one thing it needs. */
+ * the hook DECLINES stays on the list — declining is not dropping, and the next flow to execute asks again.
+ *
+ * A RUNTIME HOLDING NO HOOK AT ALL IS THE SAME ANSWER, AND THIS USED TO ABORT ON IT. The retired assert read
+ * `a flow is executing over a runtime that holds BASELINE callbacks and no scheduler owns the queues … they
+ * would be dropped`, justified by `the hook is being asked from inside a running flow and that is the one
+ * thing it needs`. BOTH HALVES ARE FALSE OF THIS TREE. A FLOW IS NOT A SCHEDULER: JS_FlowNew/JS_FlowResume
+ * are a public API and three hosts drive flows with no queue owner ON PURPOSE — run-test262.c, which has no
+ * solver at all, and test_forced.c's baseline selftests, which run before their agent exists. AND THEY ARE
+ * NOT DROPPED: the line below leaves them where they are, and whether one was ever adopted is decidable in
+ * exactly ONE place. Three sites already said which place, and the assert disagreed with all of them —
+ * JS_IsJobPending (`the invariant that the callback is not LOST is asserted where it is decidable, at
+ * JS_FreeRuntime`), the field (`An entry still here when the runtime is freed IS a dropped work item, and
+ * that is where it crashes`) and quickjs.h (`It is never dropped`). This call site can only ever answer
+ * `not yet`, which is a fact about ORDER and never about correctness.
+ * MEASURED: a baseline probe queued HTML §6.12 "The popover attribute"'s toggle task through
+ * JS_EnqueueCallTask, the next baseline probe to drive a flow aborted here, and the session that adopts it
+ * was still hundreds of lines away. Both targets of one revision aborted with the identical message, so it
+ * was never a thread-storage effect either.
+ * RETIREMENT: this record goes when no host here can drive a flow without owning the queues — that is, when
+ * JS_FlowResume is unreachable from a host that installs no enqueue hook. */
 static void js_adopt_baseline_calls(JSRuntime *rt)
 {
     struct list_head *el, *el1;
 
     if (likely(list_empty(&rt->baseline_call_list)))
         return;
-    DCHECK(g_job_enqueue_hook != NULL,
-           "a flow is executing over a runtime that holds BASELINE callbacks and no scheduler owns the queues "
-           "— the flow machinery and the job-enqueue hook are one host's, so a host driving flows without "
-           "installing the hook has no frontier for these to become members of, and they would be dropped");
-    /* RELEASE PATH UNDER THE ASSERT: leave them where they are rather than hand them to nothing. They are not
-       lost — the next flow to execute asks again — and there is no other owner to offer them to. */
+    /* NO OWNER YET: leave them where they are rather than hand them to nothing. Not a fallback by §C-stack's
+       test — delete the thing it selects against and the question is still owed, because an adoption with
+       nowhere to put the entries has to do something. They are not lost, the next flow asks again, and a
+       runtime torn down still holding one is what JS_FreeRuntime crashes on. */
     if (!g_job_enqueue_hook)
         return;
     list_for_each_safe(el, el1, &rt->baseline_call_list) {
@@ -4169,9 +4184,13 @@ void JS_FreeRuntime(JSRuntime *rt)
        so: the list is not JS_IsJobPending's, so no host asks about it. There are TWO adoption points and
        between them they cover a flow that runs a program (JS_FlowResume) and a flow that never compiles one
        (JS_ResumeParkedFlow, pumped once per step) — the scriptless `<iframe src>` document that used to reach
-       this line is adopted at the second. So what survives to here now is a runtime torn down without a single
-       flow having been STEPPED at all, which is a host that seeded no frontier over a document that queued
-       work: the callback is dropped, and the only thing that can report it is this. */
+       this line is adopted at the second.
+       WHAT SURVIVES TO HERE IS A RUNTIME NO OWNER EVER RAN A FLOW OVER — which is NOT the narrower sentence
+       that stood here, `a runtime torn down without a single flow having been STEPPED at all`. That one was
+       true only while js_adopt_baseline_calls aborted on a hook-less adoption, and it went false with that
+       assert: a host may step any number of flows owning no queues (run-test262.c, test_forced.c's baseline
+       selftests), and each asks there and is told `not yet`. So the adoption point reports nothing and this
+       is the invariant: the callback is dropped, and the only thing that can say so is this. */
     DCHECK(list_empty(&rt->baseline_call_list),
            "the runtime was freed still holding callbacks the BASELINE queued — nothing adopted them, so the "
            "work they name (an initial-markup <iframe src>'s navigation, a platform task queued while the "

@@ -1785,7 +1785,7 @@ typedef uint64_t JSTaskHandle;
    PARALLEL is to await a stable state, the user agent must QUEUE A MICROTASK". §4.8.11.5 step 4 is such an
    await and §4.8.11.2 invokes it IMMEDIATELY for a `<video src>` in a document's initial markup, so the user
    agent queues that microtask while it is still creating the Document. Such a callback is BASELINE work and
-   waits on the runtime for the first flow to adopt it, like the task below. */
+   waits on the runtime for the first flow whose host OWNS the queues to adopt it, like the task below. */
 JS_EXTERN JSTaskHandle JS_EnqueueCallJob(JSContext *ctx, JSValueConst func, int argc, JSValueConst *argv);
 /* THE SAME, ON A TASK SOURCE rather than the microtask queue — HTML 8.1.7's other half. A platform edge that
    the spec words as "queue a task" (8.7 "Timers"'s timer task source, a queued event fire, a delivered reply) uses this
@@ -1794,9 +1794,11 @@ JS_EXTERN JSTaskHandle JS_EnqueueCallJob(JSContext *ctx, JSValueConst func, int 
    IT MAY ALSO BE CALLED BEFORE THERE IS A FRONTIER: the user agent queues a task whenever it likes, including
    while it is CREATING a Document — HTML §4.8.5's insertion steps for an `<iframe src>` in a page's initial
    markup queue §7.4 step 14's navigation, and in this engine that happens at qjs_init, before the scheduler is
-   seeded. Such a task is BASELINE work and waits on the runtime for the FIRST FLOW to adopt it
-   (`baseline_call_list` in quickjs.c). It is never dropped, and no embedder pump ever runs it — the callback
-   belongs to a flow's timeline.
+   seeded. Such a task is BASELINE work and waits on the runtime for the first flow WHOSE HOST OWNS THE
+   QUEUES (JS_SetJobEnqueueHook) to adopt it (`baseline_call_list` in quickjs.c). A flow driven by a host that
+   installs no hook asks and is told `not yet` — that is ORDER and not loss, which is why the adoption point
+   reports nothing and JS_FreeRuntime aborts on a runtime freed still holding one. It is never dropped
+   silently, and no embedder pump ever runs it — the callback belongs to a flow's timeline.
    ANSWERS THE TASK'S HANDLE, which is what a §4.11.4-shaped task tracker stores: the caller keeps it, and hands
    it to JS_RemoveQueuedTask when the next transition must take this task back off the queue. */
 JS_EXTERN JSTaskHandle JS_EnqueueCallTask(JSContext *ctx, JSValueConst func, int argc, JSValueConst *argv);
