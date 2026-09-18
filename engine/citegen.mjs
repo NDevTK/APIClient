@@ -2293,6 +2293,24 @@ const OTHER_SPECS = [
   /* `uievents` MOVED TO ITS OWN ROW, with `ui events`, for the reason the webcrypto note above gives: the
      rule that lists a name here is the rule that takes it off once the standard is indexed. */
   "svg", "mathml", "wasm", "console", "performance",
+  /* `png` IS HERE BECAUSE ITS NUMBERS COLLIDE, WHICH IS THE ARM OF CLAUDE.md's MISSING-ROW RULE THAT
+     ACCUSES RATHER THAN THE ONE THAT GOES QUIET. This tree writes `PNG §5.2`, `PNG §7.1` and
+     `PNG §11.2.1` — bare numbers that several INDEXED standards also have — so a file whose vote is
+     carried by one of those resolves them to it, and the other channels then judge a PNG citation against a
+     document it never named. MEASURED with an armed control before this line was written: a probe carrying
+     six Fetch citations and `PNG §11.2.1 "IHDR Image header"` reported `fetch=7(1)` and listed the PNG
+     row among the judged; with this entry present it reports `fetch=6(0)` and `standards seen but not
+     indexed: png=1`, with the SAME three real accusations on both sides — which is the control speaking
+     rather than the subject going quiet.
+     AND IT TAKES NO RESOLUTION AWAY, which is the price a refusal here is always owed: two whole-corpus runs
+     in ONE frozen tree at 45af864f, back to back, differing only in this line, gave 952 finding(s) and 44237
+     resolved citations on BOTH sides, the unindexed census moving by exactly one standard.
+     `image_header.c` is silent today only because no indexed standard dominates its vote — which is luck
+     and not protection, and is the state this row ends.
+     IT IS A FOREIGN ROW AND NOT AN INDEX, and that is the honest state rather than a gap left open: the PNG
+     specification is fetchable, indexing it is a real repair, and it is a DIFFERENT diff that this row does
+     not pretend to have made. A row here buys SILENCE; an index would buy ANSWERS. */
+  "png",
   "workers", "websockets", "rfc", "unicode", "utf", "clipboard",
   "notifications", "geolocation", "geometry", "fullscreen", "pointerevents", "webaudio", "webrtc",
   "beacon", "referrer", "cors", "cookies",
