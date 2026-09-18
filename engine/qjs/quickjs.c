@@ -80114,6 +80114,24 @@ static int js_prop_walk_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
     int assign = (mode == PROPWALK_ASSIGN);
     /* both descriptor sinks: the walk is identical, only the target differs. */
     int defprops = (mode == PROPWALK_DEFPROPS || mode == PROPWALK_OBJCREATE);
+    /* @ATOMOWNER WHERE THE SOURCES START, AS ONE FACT RATHER THAN TWO EXPRESSIONS. A sink whose argv[0] is the
+       TARGET (or, for Object.create, the PROTOTYPE) has its sources at 1; values/entries/keys/descs take
+       argv[0] itself. Both ends of the source range read this ONE predicate, because they were two independent
+       spellings of it and they DISAGREED: src_end already counted a SPREAD's range as ending at 2 — the same
+       bound defprops uses for its single source at index 1 — while the start condition omitted SPREAD and left
+       it at 0, so `{...src}` opened [0,2) and walked its own target as a source before the real one.
+       THREE STATEMENTS IN THIS FILE SAID IT HAS ONE SOURCE and the code gave it two: PROPWALK_SPREAD's own
+       define ("argv is [target, source, excludeList]"), src_i's field comment ("the others have one source"),
+       and src_end's own comment ("a spread takes the one the opcode handed it"). OP_copy_data_properties
+       settles which argument is which — its handler is commented `target source excludeList` and fills
+       pw_args[0] from the target slot.
+       IT IS OBSERVABLE AND NOT MERELY WASTED WORK: the self-pass [[Get]]s every own enumerable key of the
+       target and DEFINES it back as a data property, so `{get a(){…}, ...src}` CALLED the literal's getter and
+       replaced the accessor with a data property of its result — ECMAScript §13.2.5.6 Runtime Semantics:
+       PropertyDefinitionEvaluation runs the spread as CopyDataProperties(obj, fromValue, excludedNames), which
+       reads `fromValue` and never obj. It also captured every one of those keys into the running flow's COW
+       delta, which is a per-spread cost in the size of the TARGET that nothing asked for. */
+    int target_is_arg0 = (assign || defprops || mode == PROPWALK_SPREAD);
     int r;
 
     if (s->hdr.stage == PW_ENTRY) {
@@ -80125,7 +80143,7 @@ static int js_prop_walk_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
         s->dl = NULL; s->dk = NULL; s->nd = 0; s->di = 0;
         s->cb[0] = JS_UNDEFINED; s->cb[1] = JS_UNDEFINED;
         js_desc_cursor_init(&s->dcur);
-        s->src_i = (mode == PROPWALK_ASSIGN || defprops) ? 1 : 0;
+        s->src_i = target_is_arg0 ? 1 : 0;
         if (mode == PROPWALK_DEFPROPS && JS_VALUE_GET_TAG(step_arg(&s->hdr, 0)) != JS_TAG_OBJECT) {
             /* 20.1.2.3 step 1, before Properties is even coerced. */
             JS_ThrowTypeError(ctx, "Object.defineProperties called on non-object");
@@ -80154,7 +80172,7 @@ static int js_prop_walk_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
             /* How many sources this sink has: assign takes every argument after the target, a spread takes the one
                the opcode handed it, values/entries take argv[0] — and for those two an EXTRA argument is not a
                second source, so the bound is a mode fact, not argc. */
-            int src_end = assign ? s->hdr.argc : (mode == PROPWALK_SPREAD || defprops) ? 2 : 1;
+            int src_end = assign ? s->hdr.argc : target_is_arg0 ? 2 : 1;
             if (s->src_i >= src_end) {
                 if (defprops) { s->hdr.stage = PW_DEFINE; goto defprops_apply; }
                 JS_FreeValue(ctx, cb_result); return 0;
@@ -80165,6 +80183,18 @@ static int js_prop_walk_step(JSContext *ctx, void *st, JSValue cb_result, JSValu
                 JS_FreeValue(ctx, cb_result); return 0;
             }
             src = step_arg(&s->hdr, s->src_i);
+            /* @ATOMOWNER a spread's target is a FRESH object the opcode just built and the page cannot name it,
+               so it can never be the source — which makes this a statement about this engine's own logic and
+               not about the page's. ECMAScript §7.3.25 "CopyDataProperties ( target, source, excludedItems )"
+               says so itself: "The target passed in here is always a newly created object which is not
+               directly accessible in case of an error being thrown." It is the assert that makes the source
+               range's start impossible to get wrong again, rather than a comment saying it must not be. */
+            DCHECK(mode != PROPWALK_SPREAD || JS_VALUE_GET_TAG(src) != JS_TAG_OBJECT ||
+                   JS_VALUE_GET_PTR(src) != JS_VALUE_GET_PTR(s->result),
+                   "a spread opened its own TARGET as a source — ECMAScript §13.2.5.6's CopyDataProperties "
+                   "call reads the "
+                   "source only, so self-copying CALLS a getter the object literal defined and replaces the "
+                   "accessor with a data property of its result");
             /* a nullish source contributes nothing to assign (step 3.a) or to a spread (`{...null}` is empty), but
                values/entries THROW on it — their step 1 is ToObject of the argument itself. A non-object source is
                BOXED, which is how `{..."ab"}` yields {0:"a",1:"b"}. */
