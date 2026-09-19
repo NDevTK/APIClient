@@ -222,7 +222,16 @@ static bool display_is_flex_or_grid_container(const char *d)
            css_cv_is(d, "grid") || css_cv_is(d, "inline-grid");
 }
 
-static char *computed_display(lxb_dom_element_t *el, char *spec)
+/* §2.7's and §2.8's computed `display` over a SPECIFIED one, with the two blockifiers the OUT-OF-FLOW
+   properties supply taken as an argument rather than read here. It is one function and two callers because
+   CSS 2.1 §10.3.7 "Absolutely positioned, non-replaced elements" needs the SAME rule with exactly those two
+   turned off: its static position is stated over "a hypothetical box that would have been the first box of
+   the element if its specified `position` value had been `static` and its specified `float` had been `none`",
+   and its own Note says what that costs — "note that due to the rules in section 9.7, this hypothetical
+   calculation might require also assuming a different computed value for `display`". A second copy of §2.7's
+   map for the hypothetical box would be one blockification rule with two implementations, free to disagree
+   about `inline-table` or about a keyword one of them gained. */
+static char *display_blockified_if(lxb_dom_element_t *el, char *spec, bool out_of_flow)
 {
     const lxb_dom_node_t *n = lxb_dom_interface_node(el);
     bool root = css_is_root_element(n), blockify;
@@ -234,24 +243,38 @@ static char *computed_display(lxb_dom_element_t *el, char *spec)
     if (strcmp(spec, "none") == 0 || strcmp(spec, "contents") == 0) return spec;
     /* §2.8's root rule, and the three computed-value fixups §2.7 lists that the TREE decides: "Absolute
        positioning or floating an element blockifies the box's display type" and "A parent with a grid or flex
-       display value blockifies the box's display type". */
-    blockify = root;
-    if (!blockify) {
-        char *f = css_computed_value(el, "float");
-        blockify = f != NULL && strcmp(f, "none") != 0;
-        free(f);
-    }
-    if (!blockify) {
-        char *p = css_computed_value(el, "position");
-        blockify = css_cv_is(p, "absolute") || css_cv_is(p, "fixed");
-        free(p);
-    }
+       display value blockifies the box's display type". The first two are the caller's `out_of_flow`; the
+       third is a fact about the PARENT and survives the hypothetical, because §10.3.7 hypothesises only this
+       element's own `position` and `float`. */
+    blockify = root || out_of_flow;
     if (!blockify) {
         char *pd = css_box_parent_display(n);
         blockify = display_is_flex_or_grid_container(pd);
         free(pd);
     }
     return blockify ? blockified(spec) : spec;
+}
+
+static char *computed_display(lxb_dom_element_t *el, char *spec)
+{
+    bool out_of_flow;
+    char *f = css_computed_value(el, "float");
+
+    out_of_flow = f != NULL && strcmp(f, "none") != 0;
+    free(f);
+    if (!out_of_flow) {
+        char *p = css_computed_value(el, "position");
+
+        out_of_flow = css_cv_is(p, "absolute") || css_cv_is(p, "fixed");
+        free(p);
+    }
+    return display_blockified_if(el, spec, out_of_flow);
+}
+
+char *css_hypothetical_static_display(lxb_dom_element_t *el)
+{
+    DCHECK(el != NULL, "CSS 2.1 §10.3.7's hypothetical `display` was asked for with no element");
+    return display_blockified_if(el, css_cv_specified(el, "display"), false);
 }
 
 /* ---- the BOX-MODEL LENGTHS' computed value ---------------------------------------------------------------- */
@@ -784,14 +807,26 @@ static CssLength computed_border_width(lxb_dom_element_t *el, const char *name, 
     return len;
 }
 
-/* The ten physical box-model lengths plus the four sizing limits — one list, because every one of them takes
-   the same computed-value rule above and because used_value.c reads the limits to decide §10.4's clamp. */
+/* The ten physical box-model lengths, the four sizing limits and the four INSETS — one list, because every
+   one of them takes the same computed-value rule above: CSS 2.1 §9.3.2 "Box offsets: `top`, `right`,
+   `bottom`, `left`" gives all four of the last group `Computed value: for `length` the absolute value;
+   otherwise for `percentage` the percentage as specified; otherwise `auto``, which is that rule word for word.
+   THE SECOND REASON THE COMMENT HERE USED TO GIVE IS ABOUT THE LIMITS ALONE and is kept because it is the one
+   that decides membership for THEM: core/layout/used_value.c reads `min-*`/`max-*` to run CSS 2.1 §10.4's and
+   §10.7's clamp. The insets are not read by that clamp and are not box-model lengths either; what puts them
+   here is only the shared `Computed value:` line, and a reader who takes the clamp as the criterion would
+   leave them out — which is what `css_computed_length` aborting for `left` was.
+   THEY DO NOT BECOME A `used_value_px` GROUP BY BEING HERE, and the two questions must not be conflated:
+   §9.3.2's computed value is a cascade fact, while an inset's USED value is CSS 2.1 §9.4.3's pair for a
+   relatively positioned box and §10.3.7's / §10.6.4's constraint equation for an absolutely positioned one —
+   neither of which is a per-property read. `used_value_abs_offset_px` is the entry for the second. */
 static bool css_models_length(const char *name)
 {
     static const char *const LENGTHS[] = {
         "margin-top", "margin-right", "margin-bottom", "margin-left",
         "padding-top", "padding-right", "padding-bottom", "padding-left",
         "width", "height", "min-width", "max-width", "min-height", "max-height",
+        "top", "right", "bottom", "left",
     };
     unsigned i;
 

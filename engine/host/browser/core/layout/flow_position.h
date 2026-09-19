@@ -89,8 +89,15 @@
  * empty `<tbody>` is, a column and a column group need a mapping from an ELEMENT to a grid column that exists
  * in neither direction, and a caption is not in the grid at all.
  *
+ * AN OUT-OF-FLOW BOX WAS IN THIS LIST AND IS NOT ANY MORE, and the retired sentence is kept because it names
+ * the one thing a reader will otherwise re-derive: it said "an out-of-flow box is §9.3.2's offsets over a
+ * static position", which is TRUE and is not a missing piece — §9.3.2's offsets are CSS 2.1 §10.3.7's and
+ * §10.6.4's constraint equations (core/layout/used_value.h), the static position is §9.4.1's own walk read out
+ * at the skipped child's content position (core/layout/block_flow.h), and `flow_static_position` below is
+ * where the two rectangles meet. `flow_border_box_origin` places such a box like any other.
+ *
  * WHAT STILL CRASHES, each naming ITS OWN missing piece rather than one shared "there is no layout": a float
- * is §9.5's own positioning, an out-of-flow box is §9.3.2's offsets over a static position, an `inline-flex`
+ * is §9.5's own positioning, an `inline-flex`
  * or `inline-grid` waits on the USED MAIN SIZE its own module owns (css-flexbox-1 §9.9.1 "Flex Container
  * Intrinsic Main Sizes", css-grid-1 §5.2 "Sizing Grid Containers") and on the baseline that falls out of that
  * module's layout, an `inline-table` waits on NEITHER OF THOSE AND THIS LIST USED TO GROUP IT WITH THEM — its
@@ -109,6 +116,8 @@
  * core/frame/viewport.h's one seam is where either crosses to a page. */
 #ifndef ENGINE_HOST_BROWSER_CORE_LAYOUT_FLOW_POSITION_H
 #define ENGINE_HOST_BROWSER_CORE_LAYOUT_FLOW_POSITION_H
+
+#include <stdbool.h>
 
 #include <lexbor/dom/dom.h>
 
@@ -137,6 +146,30 @@ FlowPoint flow_border_box_origin(lxb_dom_element_t *el);
    makes a scroll container's SCROLLPORT — the visual viewport CSSOM VIEW §6.1's determine the scroll-into-view
    position aligns against — "coincide with its padding box". */
 FlowPoint flow_padding_box_origin(lxb_dom_element_t *el);
+
+/* CSS 2.1 §10.3.7's and §10.6.4's STATIC POSITION — the distance from the LEADING edge of `el`'s containing
+   block (§10.1's third or fourth case, since `el` is absolutely positioned) to the leading MARGIN edge of the
+   HYPOTHETICAL box those sections define: the element "if its specified `position` value had been `static`
+   and its specified `float` had been `none`".
+   IT IS A DIFFERENCE BETWEEN TWO ORIGINS, WHICH IS WHY IT IS HERE. core/layout/block_flow.h answers where
+   §9.4.1's stack would have reached that box, in its own containing block's frame, and §10.1's second case is
+   the rectangle it answers against; the sections ask for the distance from a DIFFERENT rectangle, and this is
+   the only component in which both of them are coordinates.
+   `trailing` IS §10.3.7's `right` AND CARRIES THAT SECTION'S OWN SIGN: "the static position for `right` is the
+   distance from the RIGHT edge of the containing block to the right margin edge of the same hypothetical
+   box… the value is POSITIVE if the hypothetical box is to the LEFT of the containing block's edge". It is
+   asked only where §10.3.7 asks for it — a static-position containing block whose `direction` is `rtl`, which
+   is the element core/layout/block_flow.h names — and it CRASHES on the block axis, because §10.6.4 names
+   `top` in both of the entries that use a static position and defines none for `bottom`.
+   §10.3.7's OWN EXCEPTION FOR A FIXED BOX IS APPLIED HERE AND NOWHERE ELSE: "for the purposes of calculating
+   the static position, the containing block of fixed positioned elements is the INITIAL containing block
+   instead of the viewport, and all scrollable boxes should be assumed to be scrolled to their origin". So a
+   `position: fixed` box's static position is measured from the canvas origin while its solved offsets are
+   measured from the viewport, and the two differ by the scroll position.
+   THE LEADING ANSWER MAY BE NEGATIVE, which §10.3.7 states outright ("the value is negative if the
+   hypothetical box is to the left of the containing block"), and every case the hypothetical placement cannot
+   be stated for crashes in core/layout/block_flow.c naming its own section. */
+CssPx flow_static_position(lxb_dom_element_t *el, bool vertical, bool trailing);
 
 /* ONE BORDER AREA in the same space — a position and the two extents that go with it. */
 typedef struct {

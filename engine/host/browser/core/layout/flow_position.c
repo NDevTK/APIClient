@@ -790,6 +790,166 @@ static void fp_require_placeable(lxb_dom_element_t *el)
        normal block box inside the table WRAPPER box and therefore not over this containing-block chain. */
 }
 
+/* ---- CSS 2.1 §10.3.7's and §10.6.4's STATIC POSITION, AS A COORDINATE --------------------------------------
+ * core/layout/block_flow.h answers where §9.4.1's stack would have reached the HYPOTHETICAL box, in its own
+ * containing block's frame. What those two sections ask for is that distance measured from a DIFFERENT
+ * rectangle — the one §10.1's third or fourth case gives the box now that it is out of flow — so the static
+ * position is the difference between two origins and this file is where both of them exist.
+ *
+ * THE TWO AXES ARE NOT THE SAME DERIVATION AND WRITING THEM AS ONE WOULD INVENT A WALK. §9.4.1 states two
+ * rules and only the vertical one is a stack: "boxes are laid out one after the other, VERTICALLY, beginning
+ * at the top of a containing block", which is the walk block_flow.h reads out; and "each box's LEFT OUTER EDGE
+ * touches the left edge of the containing block (for right-to-left formatting, right edges touch)", which is
+ * not a walk at all — a block-level box's inline-axis margin edge is its containing block's own content edge,
+ * whatever its siblings did. So the horizontal static position needs no hypothetical placement and asks for
+ * none.
+ *
+ * `trailing` IS §10.3.7's `right` AND ITS SIGN IS THE SECTION'S OWN, which is the opposite of the leading
+ * one's: "the static position for 'right' is the distance from the RIGHT edge of the containing block to the
+ * right margin edge of the same hypothetical box… the value is POSITIVE if the hypothetical box is to the
+ * LEFT of the containing block's edge". It is asked for only where §10.3.7 asks for it — an `rtl`
+ * static-position containing block — and never on the block axis, because §10.6.4 names `top` in both of the
+ * entries that use a static position and has no `bottom` arm at all.
+ *
+ * NAMED RESIDUAL — THE HYPOTHETICAL BOX'S OWN INLINE SIZE IS NOT SOLVED, AND §9.4.1's RULE IS WHY THAT IS
+ * EXACT RATHER THAN NARROW. The rule places a MARGIN EDGE against a containing block edge, and a margin edge
+ * needs no width; the `rtl` arm needs the containing block's own content width, which `used_value_content_px`
+ * answers, and still no width of the hypothetical box. WHAT IS NOT COVERED: a hypothetical box whose
+ * §10.3.3 equation would not put its margin edge at that edge — an `auto` horizontal margin, which §10.3.3's
+ * rules 2 and 4 turn into SLACK and which centres the box. WHAT THE NEXT DIFF BUILDS: §10.3.3's own solve
+ * over the hypothetical box, whose `width` term is the shrink-to-fit or the declared length the box would
+ * have had in flow. HOW ITS ABSENCE WOULD SHOW: an absolutely positioned box with `margin-left: auto` and no
+ * declared `left` sits at its static-position containing block's leading content edge, where a browser puts
+ * it at the centre of that rectangle. */
+
+/* §10.1's THIRD and FOURTH cases turned into a coordinate — the LEADING edge of the rectangle the absolutely
+   positioned box's offsets are stated against, in the initial containing block's space, and its EXTENT on the
+   axis asked for. The extent is read from `used_value_containing_block_width` (and its block-axis twin
+   through §10.6.4's own equation) at the caller, so what this answers is the origin alone. */
+static CssPx fp_abs_cb_leading(lxb_dom_element_t *el, bool vertical, bool for_static_position)
+{
+    lxb_dom_element_t *anc = NULL;
+    lxb_dom_node_t *n;
+    JSContext *dctx;
+    char nbuf[160];
+
+    switch (used_value_abs_containing_block(el, &anc)) {
+    case USED_VALUE_ABS_CB_INITIAL:
+        /* §10.1's own words for the initial containing block: "anchored at the canvas origin", which IS this
+           component's coordinate space (see the header). Its leading edge is that origin on both axes. */
+        return css_px(0.0);
+    case USED_VALUE_ABS_CB_VIEWPORT:
+        /* css-position-3 §2.1 "Containing Blocks of Positioned Boxes" makes a fixed box's containing block
+           "the layout viewport … as a result, fixed boxes do not move when the document is scrolled", and
+           CSSOM VIEW §4 states the viewport's own position in THIS space: `scrollX` is "the x-coordinate,
+           RELATIVE TO THE INITIAL CONTAINING BLOCK ORIGIN, of the left of the viewport". So the viewport's
+           leading edge is the scroll position, and the two sentences together are what makes a fixed box move
+           WITH the viewport rather than against the document.
+           §10.3.7's OWN SENTENCE ABOUT THIS IS NOT THIS ONE AND MUST NOT BE FOLDED IN: "for the purposes of
+           calculating the STATIC POSITION, the containing block of fixed positioned elements is the initial
+           containing block instead of the viewport, and all scrollable boxes should be assumed to be scrolled
+           to their origin". That is a rule about the HYPOTHETICAL box's frame, applied at the caller below,
+           and `for_static_position` is that rule: the ICB and the viewport are the same SIZE (§10.1: the
+           ICB "has the dimensions of the viewport") and differ only in where they sit, so the whole of
+           §10.3.7's sentence is this one branch. Its second half — "all scrollable boxes should be assumed to
+           be scrolled to their origin" — needs nothing here: `flow_padding_box_origin` answers in the initial
+           containing block's space and subtracts no scroll offset from any ancestor, so a box inside a
+           scrolled one is already reported as if it were at its origin. */
+        if (for_static_position) return css_px(0.0);
+        n = lxb_dom_interface_node(el);
+        DCHECKF(n->owner_document != NULL,
+               "%s: §10.1's third case was asked for an element whose node has no owner document — every node "
+               "this engine mints belongs to the document that created it",
+               box_subject(el, nbuf, sizeof nbuf));
+        dctx = document_active_realm_of(lxb_dom_interface_node(n->owner_document));
+        DCHECKF(dctx != NULL && viewport_exists(dctx),
+               "%s: §10.1's third case is the VIEWPORT and this element's document is presented in none. "
+               "core/dom/element_view.h's has-a-box predicate is where an element outside a rendered tree "
+               "leaves, and the two answers have come apart",
+               box_subject(el, nbuf, sizeof nbuf));
+        return css_px(viewport_window_scroll(dctx, vertical));
+    case USED_VALUE_ABS_CB_PADDING_EDGE: {
+        /* §10.1's FOURTH case: "the containing block is formed by the PADDING EDGE of the ancestor" —
+           `flow_padding_box_origin` is that edge and is derived from this same file's border-box origin, so
+           an ancestor this component cannot place crashes there naming its own section. */
+        FlowPoint o;
+
+        DCHECKF(anc != NULL,
+               "%s: §10.1's FOURTH case names \"the padding edge of the ancestor\" and `uv_cb` reported that "
+               "case with no ancestor. The tag and the element are written together out of one walk, so a "
+               "NULL here is that walk having produced a case it has no box for",
+               box_subject(el, nbuf, sizeof nbuf));
+        o = flow_padding_box_origin(anc);
+        return vertical ? o.y : o.x;
+    }
+    }
+    DFAILF("%s: §10.1 gives an absolutely positioned box one of three rectangles and this is a fourth",
+           box_subject(el, nbuf, sizeof nbuf));
+    return css_px(0.0);
+}
+
+CssPx flow_static_position(lxb_dom_element_t *el, bool vertical, bool trailing)
+{
+    lxb_dom_element_t *spcb;
+    FlowPoint o;
+    CssPx edge, cb_edge;
+
+    DCHECK(el != NULL, "CSS 2.1 §10.3.7's static position was asked for with no element");
+    DCHECK(!vertical || !trailing,
+           "CSS 2.1 §10.6.4 names `top` in BOTH of the entries that use a static position — its "
+           "all-three-`auto` case (\"set `top` to the static position and apply rule number three below\") and "
+           "its rule 2 — and states no static position for `bottom` anywhere. A trailing static position on "
+           "the block axis is §10.3.7's `rtl` arm having been carried across an axis it is not written for");
+    spcb = block_flow_static_position_containing_block(el);
+    o = flow_border_box_origin(spcb);
+    if (vertical) {
+        /* §9.4.1's VERTICAL rule, read out of the walk that implements it. The offset is from the
+           static-position containing block's TOP CONTENT EDGE, so §8.1's leading border and padding of that
+           box are what nests it inside the border box origin above — the same composition §10.1's second case
+           makes for a box that IS in flow, and the reason this file adds them rather than block_flow.h. */
+        edge = css_px_add(css_px_add(o.y, used_value_leading_edge_px(spcb, true)),
+                          block_flow_static_child_top(el));
+    } else if (!trailing) {
+        /* §9.4.1's HORIZONTAL rule: "each box's left outer edge touches the left edge of the containing
+           block". The left OUTER edge is §8.1's margin edge, which is what §10.3.7 asks for, so the
+           hypothetical box's is its containing block's own left content edge and no placement is needed. */
+        edge = css_px_add(o.x, used_value_leading_edge_px(spcb, false));
+    } else {
+        /* …"(for right-to-left formatting, right edges touch)", which is the same sentence's other half: the
+           hypothetical box's RIGHT margin edge is at the static-position containing block's right content
+           edge, which is its left one plus that box's own content width. */
+        edge = css_px_add(css_px_add(o.x, used_value_leading_edge_px(spcb, false)),
+                          used_value_content_px(spcb, false));
+    }
+    cb_edge = fp_abs_cb_leading(el, vertical, true);
+    if (!trailing) return css_px_sub(edge, cb_edge);
+    /* §10.3.7's `right` is measured from the containing block's RIGHT edge and is POSITIVE when the box is to
+       the LEFT of it, so the subtraction runs the other way and the rectangle's own extent is added to its
+       leading edge to reach that edge. §10.1's fourth case makes the extent the ancestor's PADDING box, which
+       is exactly what `used_value_containing_block_width` composes. */
+    return css_px_sub(css_px_add(cb_edge, used_value_containing_block_width(el)), edge);
+}
+
+/* CSS 2 §9.3.2 "Box offsets: `top`, `right`, `bottom`, `left`"' PLACEMENT of an absolutely positioned box —
+   the two offsets §10.3.7 and §10.6.4 solved, over the rectangle §10.1's third or fourth case gave the box.
+   §10.3.7's constraint equation puts the box's leading BORDER edge at the containing block's leading edge
+   plus the used offset plus the used margin, and that sum is all there is to it: no ancestor's border and
+   padding are added, because §10.1's FOURTH case already names the PADDING edge as the rectangle and
+   `fp_abs_cb_leading` answers that edge rather than a content one. That is the one difference between this
+   composition and §10.1's second case below, and it is why the two do not share an arm. */
+static FlowPoint fp_abs_origin(lxb_dom_element_t *el)
+{
+    FlowPoint p;
+
+    p.x = css_px_add(css_px_add(fp_abs_cb_leading(el, false, false),
+                                used_value_abs_offset_px(el, false)),
+                     used_value_px(el, "margin-left"));
+    p.y = css_px_add(css_px_add(fp_abs_cb_leading(el, true, false),
+                                used_value_abs_offset_px(el, true)),
+                     used_value_px(el, "margin-top"));
+    return p;
+}
+
 FlowPoint flow_border_box_origin(lxb_dom_element_t *el)
 {
     FlowPoint p = { { 0.0, CSS_ENV_NONE, NULL }, { 0.0, CSS_ENV_NONE, NULL } };
@@ -805,24 +965,13 @@ FlowPoint flow_border_box_origin(lxb_dom_element_t *el)
 
     /* §9.4.1 PLACES BOXES IN NORMAL FLOW, so a box that is not in one leaves through its own section first —
        §9.3's positioning scheme is what decides which, and it decides it before any placement rule applies. */
+    /* CSS 2 §9.3.1 takes an ABSOLUTELY POSITIONED box out of normal flow, so §9.4.1's placement does not
+       apply to it at all: its position is §9.3.2's `top`/`right`/`bottom`/`left` resolved against the
+       containing block §10.1's third and fourth cases give it, and §10.6.4 solves the vertical pair the same
+       way §10.3.7 solves the horizontal one. Both sections fall back on the STATIC POSITION for their `auto`
+       cases, which is why this is a CONSUMER of §9.4.1's flow layout and not an alternative to it. */
     if (fp_computed_is(el, "position", "absolute") || fp_computed_is(el, "position", "fixed"))
-        DFAILF("%s, computed `position` `%s`: "
-              "CSS 2 §9.3.1 takes an ABSOLUTELY POSITIONED box out of normal flow, so §9.4.1's placement does "
-              "not apply to it at all: its position is §9.3.2's `top`/`right`/`bottom`/`left` resolved against "
-              "the containing block §10.1's third and fourth cases give it, and §10.6.4 solves the vertical "
-              "pair the same way §10.3.7 solves the horizontal one. Both sections fall back on the STATIC "
-              "POSITION — 'where the box would have been in normal flow' — for their `auto` cases, so this is "
-              "not an alternative to §9.4.1's flow layout but a consumer of it. "
-              "THE RECTANGLE IS NO LONGER WHAT IS MISSING AND THIS LINE USED TO SAY THE BLOCKER WAS §9.4.1's "
-              "VERTICAL STACKING: that stacking is BUILT (core/layout/block_flow.h's `block_flow_child_top`, "
-              "which the last arm of this very function calls), and core/layout/used_value.h now answers "
-              "§10.1's third and fourth cases — `used_value_containing_block_width` composes the positioned "
-              "ancestor's padding box and the viewport's rectangle from the same walk. WHAT IS LEFT IS THE "
-              "STATIC POSITION AND THE TWO EQUATIONS OVER IT, in that order: §10.6.3 is exactly what keeps an "
-              "out-of-flow child OUT of core/layout/block_flow.c's walk, so EXTEND that walk to report a "
-              "skipped child's would-be position, then BUILD §10.3.7 and §10.6.4, then place the box here "
-              "from the offsets they solve",
-              box_subject(el, nbuf, sizeof nbuf), box_subject_computed(el, "position", vbuf, sizeof vbuf));
+        return fp_abs_origin(el);
     if (!fp_computed_is(el, "float", "none"))
         DFAILF("%s, computed `float` `%s`: "
               "CSS 2 §9.5 'Floats' positions a FLOATING box, and §9.4.1's rule does not: a float is shifted to "

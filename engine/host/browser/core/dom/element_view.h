@@ -30,9 +30,12 @@
  *   padding plus core/layout/block_flow.h's stack of the preceding siblings' used heights with §8.3.1's
  *   collapsing between them. That was the one subproblem §10.6.3's content-based height was waiting on too,
  *   and building it built both. What still crashes there is named per box and not per component: a float is
- *   §9.5's own positioning, an out-of-flow box is §9.3.2's offsets over a static position, a table-internal box
+ *   §9.5's own positioning, a table-internal box
  *   is §17.5 "Visual layout of table contents"' grid, and an atomic `inline-table`/`inline-flex`/`inline-grid`
- *   waits on a number its own module owns.
+ *   waits on a number its own module owns. AN OUT-OF-FLOW BOX WAS IN THAT LIST TOO and its retired entry read
+ *   "§9.3.2's offsets over a static position" — which was never a missing piece but a composition, and it is
+ *   built: CSS 2.1 §10.3.7 and §10.6.4 solve the offsets (core/layout/used_value.h) over the would-be position
+ *   §9.4.1's own walk reads out for a child §10.6.3 skips (core/layout/block_flow.h).
  *   AN INLINE BOX WAS IN THAT LIST AND IS NOT ANY MORE, and the retired reason is kept because it is the one a
  *   reader re-derives: §9.4.2 "Inline formatting contexts" IS a different positioning scheme from §9.4.1's
  *   stacking, so an inline box genuinely could not be placed by the induction above — and it is placed by that

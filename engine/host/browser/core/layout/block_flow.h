@@ -69,8 +69,11 @@
  *     number that walk still lacks. Read the site rather than this line — it is a header nothing re-checks, and
  *     it said the walk simply stopped here until the day §17.5.3 was built.
  *   - An OUT-OF-FLOW child is not a gap at all: §10.6.3 states outright that "absolutely positioned boxes are
- *     ignored", so skipping one is the rule running, and the box's own position is §9.3.2's over a static
- *     position that this walk is what will one day provide.
+ *     ignored", so skipping one is the rule running, and the box's own position is §9.3.2's over a STATIC
+ *     POSITION THIS WALK NOW PROVIDES — `block_flow_static_child_top` below, which reads the running position
+ *     out at the skipped child's content position and puts nothing on the stack. The two facts are not in
+ *     tension and the entry is what keeps them from becoming so: the child contributes nothing to this box's
+ *     height, AND where it would have gone is a reading of the very walk that decided to skip it.
  *
  * NOTHING IS STORED, FOR used_value.h's REASON, RESTATED BECAUSE THIS COMPONENT IS WHERE IT WOULD FIRST BE
  * TEMPTING TO BREAK IT. A layout is per-flow state — two flows with different DOMs have different boxes — so a
@@ -392,5 +395,49 @@ CssPx block_flow_auto_height(lxb_dom_element_t *el);
    first. An element the walk over its containing block's children never places crashes rather than answering
    a coordinate no box has. */
 CssPx block_flow_child_top(lxb_dom_element_t *el);
+
+/* ---- CSS 2.1 §10.3.7's and §10.6.4's STATIC POSITION -----------------------------------------------------
+   The one thing §10.6.3 takes out of the walk above and the two constraint equations then ask for back.
+   §10.6.3 says "only children in the normal flow are taken into account (i.e., floating boxes and absolutely
+   positioned boxes are ignored)", and §10.3.7 and §10.6.4 each open by naming what that removal costs: "the
+   term static position … refers, roughly, to the position an element would have had in the normal flow". So
+   this is not a second walk beside §9.4.1's, it is a THIRD READING of the running position §9.4.1's walk
+   already computes — the same reading `block_flow_child_top` takes for a box that IS placed, taken at the
+   content position of one that is not.
+   IT COSTS THE WALK NOTHING AND CHANGES IT NOWHERE. The hypothetical box is never put on the stack, never
+   merged into §8.3.1's run and never advances the running position, because §10.6.3's sentence is that the
+   real box contributes nothing and the hypothetical one is not in this document at all. A height taken from
+   the same walk with a static position asked for is byte-identical to one taken without. */
+
+/* THE ELEMENT WHOSE CONTENT EDGE THE STATIC POSITION IS MEASURED DOWN FROM — §10.3.7's "static-position
+   containing block", which is §10.1's SECOND case for the hypothetical box: "the content edge of the nearest
+   block container ancestor box". NEVER NULL; an element with no block container ancestor crashes, because
+   §10.1's first case cannot be reached from here (the root element is a block container in every document
+   this engine parses) and answering the initial containing block for a detached subtree would be a rectangle
+   no box of this document has.
+   IT IS EXPORTED BECAUSE §10.3.7 READS A PROPERTY OFF THIS EXACT ELEMENT AND OFF NO OTHER. Its all-three-auto
+   entry and its rule 2 both say "the `direction` property of the element establishing the STATIC-POSITION
+   containing block", while its over-constrained arm says "the `direction` property of the containing block" —
+   two different boxes, and core/layout/used_value.h answers only the second. A caller deriving this one from
+   the element's parent would be right for a block-container parent and wrong for an inline one, which is the
+   case §10.1's second case exists to state. */
+lxb_dom_element_t *block_flow_static_position_containing_block(lxb_dom_element_t *el);
+
+/* THE HYPOTHETICAL BOX'S TOP MARGIN EDGE, as a distance from that element's TOP CONTENT EDGE — the same frame
+   `block_flow_child_top` answers in, and the same frame §10.1's second case states.
+   IT IS THE MARGIN EDGE AND NOT THE BORDER EDGE, which is §10.6.4's own words ("the static position for `top`
+   is the distance from the top edge of the containing block to the top MARGIN EDGE of a hypothetical box")
+   and which makes the round trip exact: §10.6.4 sets `top` to this number and its constraint equation then
+   places the border edge at `top + margin-top`, so the box lands where the hypothetical one would have. A
+   border edge reported here would put it one margin too low wherever a margin is declared.
+   THE DISTANCE MAY BE NEGATIVE and §10.3.7 says so outright — "the value is negative if the hypothetical box
+   is above the containing block" — which is what §8.3.1's collapse-through note produces when the box's own
+   top margin would have escaped through its container's top edge.
+   `el` IS THE OUT-OF-FLOW ELEMENT ITSELF and this entry does not ask whether it is out of flow, because the
+   answer is the same for a box that is in flow: it is where §9.4.1's stack reaches that content position.
+   Every case the walk cannot state crashes naming it — a hypothetical box §9.7 leaves INLINE-LEVEL (§9.4.2's
+   line, core/layout/line_box.h), an element §9.2.1.1's content order does not reach, and a run with
+   box-generating inline content in front of the element, whose anonymous box §9.2.1.1 splits in two. */
+CssPx block_flow_static_child_top(lxb_dom_element_t *el);
 
 #endif

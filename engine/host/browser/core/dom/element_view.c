@@ -983,9 +983,10 @@ static JSValue ev_client_extent(JSContext *ctx, const EvTarget *t, bool vertical
        one that carries the ICB's domain, which is why the conversion below hands the pair to viewport.h rather
        than returning an integer. A FLOATED OR INLINE-BLOCK box answers here too, through CSS 2.2 §10.3.5's
        shrink-to-fit over core/layout/intrinsic_size.h's measurement of its own text. The arms that still crash
-       are that component's own subproblem and not this one's — an absolutely positioned box's width needs
-       §10.3.7's static position, and a box whose content this engine cannot measure crashes inside the
-       intrinsic walk naming what it met. */
+       are that component's own subproblem and not this one's, and an ABSOLUTELY POSITIONED box is no longer
+       among them: CSS 2.1 §10.3.7's constraint equation is built over the static position §9.4.1's own walk
+       reads out, so this member answers a real number for one. What still crashes there is a box whose
+       content this engine cannot measure, inside the intrinsic walk, naming what it met. */
     return ev_length_long(ctx, used_value_padding_edge_px(lxb_dom_interface_element(t->node), vertical));
 }
 

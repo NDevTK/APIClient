@@ -147,9 +147,12 @@
  *     cases crash, and for reasons that are not this one's: a `fixed` box's containing block is the viewport
  *     (the same rectangle, but §10.3.7's equation is what turns it into a used width) and an `absolute` box's
  *     is the PADDING EDGE of the nearest positioned ancestor — a RECTANGLE, where this component computes
- *     extents. That rectangle's ORIGIN is answered now: core/layout/flow_position.h places every in-flow
- *     block-level box under §9.4.1. What both cases still wait on is the STATIC POSITION their `auto` offsets
- *     fall back to, which is a would-be position for a box §10.6.3 tells the flow walk to skip.
+ *     extents. BOTH ARE ANSWERED NOW and this clause used to say they still waited on the STATIC POSITION
+ *     their `auto` offsets fall back to: core/layout/block_flow.h reads that would-be position out of
+ *     §9.4.1's own walk, core/layout/flow_position.h turns it into a coordinate, and `uv_abs_solve` runs
+ *     §10.3.7's and §10.6.4's constraint equations over it — so `used_value_abs_containing_block` names each
+ *     rectangle and `used_value_abs_offset_px` answers the offset. A reader who follows the retired clause
+ *     will build a second static position.
  *
  * A GEOMETRY IS CONCRETE AND A GEOMETRY DERIVED FROM THE VIEWPORT IS NOT, WHICH IS WHY A USED VALUE IS A
  * `CssPx` AND NOT A `double`. c35f1fed decided the first half and it is right: viewport.h's test is whether the
@@ -414,6 +417,37 @@ CssPx used_value_default_replaced_size(bool vertical);
    back — which is what both callers in core/layout do — would be inset by that ancestor's own border on
    every side. */
 lxb_dom_element_t *used_value_containing_block(lxb_dom_element_t *el);
+
+/* ---- §10.1's THIRD and FOURTH cases, AS A RECTANGLE A CALLER CAN COMPOSE AN ORIGIN FROM ----------------
+   The view the entry above refuses by name. Its return type is an element, and §10.1 gives an absolutely
+   positioned box a rectangle that is either NO BOX AT ALL (the initial containing block, the viewport) or a
+   box at an edge that entry does not carry ("the padding edge of the ancestor"), so the tag is which of the
+   three and `*element` is the ancestor for the one case that has one and NULL for the other two.
+   IT IS A TAG AND NOT A SECOND WALK: `uv_cb` decides §10.1's four cases once and both views read it. */
+typedef enum {
+    USED_VALUE_ABS_CB_INITIAL = 0,   /* §10.1's FOURTH case's last sentence — "if there is no such ancestor,
+                                        the containing block is the initial containing block". No element. */
+    USED_VALUE_ABS_CB_VIEWPORT,      /* §10.1's THIRD case: a `position: fixed` box's. No element. */
+    USED_VALUE_ABS_CB_PADDING_EDGE   /* §10.1's FOURTH case: `*element`'s PADDING edge. */
+} UsedValueAbsCb;
+
+UsedValueAbsCb used_value_abs_containing_block(lxb_dom_element_t *el, lxb_dom_element_t **element);
+
+/* CSS 2.1 §10.3.7's and §10.6.4's USED `left` (or `top`) — the distance from the LEADING EDGE of the
+   rectangle above to this box's leading MARGIN edge, which is what those sections' one constraint equation
+   solves for alongside the size and the two margins.
+   IT IS THE OFFSET AND NOT THE ORIGIN, and the difference is the whole of why the two components split here:
+   this file derives an EXTENT and every term of §10.3.7's equation is one, while WHERE the containing block's
+   leading edge sits in the initial containing block's coordinate space is core/layout/flow_position.h's, and
+   §10.1's third case has no element for this file to hand back at all.
+   THE SIZE IT IS SOLVED AGAINST IS §10.4/§10.7's FINAL PASS's, so a box whose `width` was clamped by a
+   `max-width` has the offset that clamp produced. That is the same substitution `margin: 0 auto` centres by
+   one axis over, and it is why this entry reads `uv_sized` rather than the property.
+   IT DOES NOT ANSWER THE TRAILING OFFSET, and that is not an omission: §10.3.7 and §10.6.4 place the box from
+   the leading pair (`left + margin-left`, `top + margin-top`) and the trailing one is the same equation's
+   remainder, so a caller composing an origin from both would be adding a number it had just subtracted. The
+   day CSSOM §9's inset arm reports a resolved `right`, it is a second view over the same solve. */
+CssPx used_value_abs_offset_px(lxb_dom_element_t *el, bool vertical);
 
 /* css-position-3 §2.1 "Containing Blocks of Positioned Boxes"' OPEN LIST OF PROPERTIES, AS ONE FACT WITH TWO
    READERS. §2.1's two Notes name what can make a box establish an absolute or a fixed positioning containing

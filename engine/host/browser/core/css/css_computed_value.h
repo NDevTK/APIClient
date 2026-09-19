@@ -109,6 +109,27 @@ lxb_dom_element_t *css_parent_element(lxb_dom_element_t *el);
    the wrong section. `n` must be an element's node. */
 char *css_box_parent_display(const lxb_dom_node_t *n);
 
+/* CSS 2.1 §10.3.7 "Absolutely positioned, non-replaced elements"' HYPOTHETICAL BOX's computed `display` — what
+   CSS Display §2.7's blockification would have produced "if its specified `position` value had been `static`
+   and its specified `float` had been `none`". OWNED.
+   IT IS HERE AND NOT AT THE LAYOUT CALLER BECAUSE §10.3.7's OWN NOTE MAKES IT A CASCADE QUESTION: "note that
+   due to the rules in section 9.7, this hypothetical calculation might require also assuming a different
+   computed value for `display`". §9.7's rule is §2.7's blockification, which this file implements once; a
+   caller re-deriving it from a SPECIFIED value would hold a second copy of the map — the one that says
+   `inline-table` blockifies to `table` and not to `block`, and that a layout-internal box additionally
+   converts its inner type — and would fall behind it the day a keyword is added.
+   THE TWO BLOCKIFIERS THAT SURVIVE THE HYPOTHESIS ARE THE ONES §10.3.7 DOES NOT HYPOTHESISE, and they are the
+   whole difference between this entry and `css_computed_value(el, "display")`: §2.8's root rule and §2.7's
+   "a parent with a grid or flex display value blockifies the box's display type" are facts about the ROOT and
+   about the PARENT, and §10.3.7 changes only this element's own two properties. So an absolutely positioned
+   `<span>` in a block container answers `inline` here and `block` there, which is exactly the difference that
+   decides whether its hypothetical box is on CSS 2 §9.4.1's stack or on §9.4.2's line.
+   IT IS NOT A PREDICATE AND MUST NOT BECOME ONE: the caller that wants "is the hypothetical box block-level"
+   asks §9.2.1's own classification of this string, which core/layout/block_flow.h owns for every box on that
+   stack — a boolean here would be §9.2.1's list written a second time, keyed on a value only this file can
+   produce. */
+char *css_hypothetical_static_display(lxb_dom_element_t *el);
+
 /* CSSOM §9's own split, per property. */
 typedef enum {
     CSS_RESOLVED_COMPUTED = 0,      /* "Any other property": the resolved value is the computed value */

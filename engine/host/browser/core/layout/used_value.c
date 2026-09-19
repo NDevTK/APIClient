@@ -18,6 +18,7 @@
 #include "core/layout/box_subject.h"
 #include "core/layout/flex_item.h"
 #include "core/layout/flex_line.h"
+#include "core/layout/flow_position.h"
 #include "core/layout/intrinsic_size.h"
 #include "core/layout/replaced_element.h"
 #include "core/layout/table_border_collapse.h"
@@ -1427,8 +1428,11 @@ static UvCb uv_cb(lxb_dom_element_t *el)
        already crashed if any of the three is declared anywhere above this box. With none declared, no
        ancestor establishes a fixed positioning containing block and the initial one is the answer EXACTLY,
        which is the same derivation core/html/html_element_view.h states for CSSOM VIEW §7's chain.
-       IT IS ITS OWN TAG AND NOT `UV_CB_INITIAL`, WHICH IS A DISTINCTION THE VIEWS BELOW DO NOT YET USE AND
-       THE ONE THAT PLACES A BOX WILL. §10.1's first case is a rectangle "anchored at the canvas origin" and
+       IT IS ITS OWN TAG AND NOT `UV_CB_INITIAL`, AND THE VIEW THAT PLACES A BOX IS THE ONE THAT USES THE
+       DISTINCTION — core/layout/flow_position.c's `fp_abs_cb_leading`, which answers the SCROLL POSITION for
+       this tag and the canvas origin for the other, and then applies §10.3.7's own exception by answering the
+       canvas origin for BOTH when the rectangle asked for is the static position's. This clause used to say
+       no view used it yet. §10.1's first case is a rectangle "anchored at the canvas origin" and
        css-position-3 §2.1's is "the layout viewport (whose size matches the dynamic viewport size); as a
        result, fixed boxes do not move when the document is scrolled" — the same DIMENSIONS and a different
        ORIGIN, and CSS 2.1 §10.3.7 says outright that they are two rectangles by excepting one of them: "For
@@ -1721,6 +1725,40 @@ static UvCb uv_cb(lxb_dom_element_t *el)
 
 /* §10.1's ANSWER AS AN ELEMENT — the view used_value.h's contract is written over, and the one that has to
    REFUSE a box no element's principal box is. */
+/* §10.1's FIRST, THIRD and FOURTH cases as the TAGGED BOX a positioned box's placement needs, which is the
+   view the entry below refuses and names. It is the same walk and the same fact; what differs is that this
+   return type carries WHICH EDGE, so a caller can compose an origin from it instead of taking a content edge
+   off an element whose rectangle is its padding box. */
+UsedValueAbsCb used_value_abs_containing_block(lxb_dom_element_t *el, lxb_dom_element_t **element)
+{
+    UvCb cb;
+    char nbuf[160];
+
+    DCHECK(el != NULL && element != NULL,
+           "§10.1's rectangle for an absolutely positioned box was asked for with no element or nowhere to "
+           "report the ancestor");
+    DCHECKF(uv_box_kind(el) == UV_BOX_ABS,
+           "%s: §10.1's THIRD and FOURTH cases are stated over a box whose computed `position` is `fixed` or "
+           "`absolute`, and this box is neither — every other box's containing block is a CONTENT edge and "
+           "`used_value_containing_block` is the view that names it",
+           box_subject(el, nbuf, sizeof nbuf));
+    cb = uv_cb(el);
+    *element = cb.element;
+    if (cb.box == UV_CB_VIEWPORT) return USED_VALUE_ABS_CB_VIEWPORT;
+    if (cb.box == UV_CB_POSITIONED_PADDING) return USED_VALUE_ABS_CB_PADDING_EDGE;
+    /* §10.1's FIRST case reaches an absolutely positioned box through its FOURTH case's last sentence — "if
+       there is no such ancestor, the containing block is the initial containing block" — and through nothing
+       else, because the root element is never absolutely positioned in a document whose root this walk can
+       reach. Both spellings are the ICB and the tag says so once. */
+    DCHECKF(cb.box == UV_CB_INITIAL,
+           "%s: §10.1 gave an absolutely positioned box a rectangle that is neither the initial containing "
+           "block, nor the viewport, nor a positioned ancestor's padding edge — the three the section defines "
+           "for one. A CONTENT edge here is §10.1's second case having been taken for a box §9.3.1 removed "
+           "from normal flow",
+           box_subject(el, nbuf, sizeof nbuf));
+    return USED_VALUE_ABS_CB_INITIAL;
+}
+
 lxb_dom_element_t *used_value_containing_block(lxb_dom_element_t *el)
 {
     UvCb cb = uv_cb(el);
@@ -2551,11 +2589,15 @@ static CssPx uv_margin(lxb_dom_element_t *el, const char *name, const char *oppo
         if (box == UV_BOX_BLOCK_FLOW) return css_px(0.0);
         DFAIL("a VERTICAL margin computes to `auto` on a box CSS 2.1 §10.6.3 does not cover. §10.6.3 is the "
               "block-level-in-normal-flow section and it is the only one that gives `margin-top: auto` a used "
-              "value of 0 outright; §10.6.4 solves the vertical `auto` margins of an ABSOLUTELY POSITIONED box "
-              "from its own constraint equation (they centre the box between `top` and `bottom` when both are "
-              "given), §10.6.1 says nothing at all about an INLINE box's vertical margins, and "
+              "value of 0 outright; §10.6.1 says nothing at all about an INLINE box's vertical margins, and "
               "css-flexbox-1 §9.6 \"Cross-Axis Alignment\" gives a flex item's `auto` cross-axis margins the "
-              "free space. BUILD the section this box's type names — uv_box_kind above says which it is");
+              "free space. BUILD the section this box's type names — uv_box_kind above says which it is. "
+              "§10.6.4's ABSOLUTELY POSITIONED BOX IS NOT ON THAT LIST ANY MORE AND THIS SENTENCE USED TO NAME "
+              "IT FIRST: its two vertical margins are terms of the same constraint equation as its `height` "
+              "and its `top`/`bottom` pair, so `used_value_px` routes all five to `uv_abs_solve` before this "
+              "function is reached. A reader who follows the retired clause will build §10.6.4 a second "
+              "time — and would build it HERE, where the axis carries no property name and the equation "
+              "therefore cannot tell `margin-top` from `margin-bottom`");
         return css_px(0.0);
     }
     /* THREE SECTIONS STATE THE MARGIN OUTRIGHT and the rest solve an equation instead, which is why the box
@@ -2662,20 +2704,16 @@ static CssPx uv_margin(lxb_dom_element_t *el, const char *name, const char *oppo
               "equally among these margins\". It is the container's FREE SPACE and not §10.3.3's slack — the "
               "two differ because the container has already flexed every item. "
               "BUILD the flex layout algorithm over the container's own used content size");
-    DFAIL("a HORIZONTAL margin computes to `auto` on an ABSOLUTELY POSITIONED box, whose used value CSS 2.1 "
-          "§10.3.7 solves from its own constraint equation — 'left + margin-left + border-left-width + "
-          "padding-left + width + padding-right + border-right-width + margin-right + right = width of "
-          "containing block' — under the section's own "
-          "ordered rules: an `auto` `left` or `right` replaces an `auto` margin with 0 first, both `auto` "
-          "margins then get EQUAL values 'unless this would make them negative', and an over-constrained set "
-          "ignores one offset depending on the containing block's `direction`. Three things are missing and "
-          "none of them is the containing block's WIDTH, which §10.1's chain answers now, and none is "
-          "`direction`, which core/css/css_computed_value.c models now: the used `left` and `right` (CSSOM §9's "
-          "inset arm crashes on the same equation), and the STATIC POSITION its `auto` cases fall back to. "
-          "§9.4.1's NORMAL FLOW IS BUILT (core/layout/flow_position.h) and it places every IN-FLOW block-level "
-          "box; what no part of it produces is a position for an OUT-OF-FLOW one, because §10.6.3 tells "
-          "core/layout/block_flow.c's walk to skip exactly those children and it does. EXTEND that walk to "
-          "report where a skipped child WOULD have been placed, then §10.3.7 over it");
+    DFAIL("a HORIZONTAL `auto` margin reached the END of §10.3's per-box-type dispatch. The box types this "
+          "function answers for have each returned above, and the ONE that is left — an ABSOLUTELY POSITIONED "
+          "box — does not arrive here at all: CSS 2.1 §10.3.7 solves its two margins from the SAME constraint "
+          "equation as its `width` and its two offsets, so all five come out of one `uv_abs_solve` and "
+          "`used_value_px` routes the pair before this function is called. It is routed there rather than "
+          "here because §10.6.4 does the same thing on the VERTICAL axis and this function cannot express it: "
+          "its `vertical` IS `opposite == NULL`, so a vertical call carries no property name and could not "
+          "say whether `margin-top` or `margin-bottom` was asked for — which §10.6.3 never needed and "
+          "§10.6.4's equation does. So this is `uv_box_kind`'s list and `used_value_px`'s routing having come "
+          "apart, and the value below is a margin from no section at all");
     return css_px(0.0);
 }
 
@@ -3062,6 +3100,327 @@ static bool uv_flex_item_main_size(lxb_dom_element_t *el, UvBox box, bool vertic
 /* §10.3 AND §10.6, RUN WITH `len` AS THE COMPUTED SIZE — "Calculating widths and margins" and "Calculating
    heights and margins", which is exactly the unit §10.4 and §10.7 re-run. It reads no size property: `len` is
    the pass's, and after §10.4 substitutes a limit the two are different values. */
+/* ---- CSS 2.1 §10.3.7 "Absolutely positioned, non-replaced elements" and §10.6.4, of the same name ----------
+ * ONE EQUATION PER AXIS AND FIVE VALUES OUT OF IT, WHICH IS WHY THIS IS ONE FUNCTION AND NOT FOUR ENTRIES.
+ * Each section states a single constraint — "left + margin-left + border-left-width + padding-left + width +
+ * padding-right + border-right-width + margin-right + right = width of containing block", and §10.6.4's
+ * vertical twin — and then a chain of rules that decides WHICH of its `auto` terms the equation is solved
+ * for. The used `width`, the used `margin-left`, the used `left` and the used `right` are therefore not four
+ * questions: they are four coordinates of one answer, and a component that computed each on its own would run
+ * the rule chain four times and be free to take a different branch each time.
+ *
+ * THE TERMS ARE CSS 2.1's, SO THE SIZE INSIDE THE EQUATION IS THE CONTENT BOX. css-sizing-3 §3.3's
+ * `box-sizing` conversion is applied to the size on the way in and on the way out, exactly as §10.3.3's
+ * equation does it two functions up: CSS 2.1 knows one box and `uv_pass_size`'s contract is the box §3.3
+ * exposes.
+ *
+ * TWO DIFFERENT ELEMENTS' `direction` ARE READ AND CONFLATING THEM GETS ONE OF THEM WRONG. §10.3.7's
+ * over-constrained arm says "ignore the value for 'left' (in case the 'direction' property of THE CONTAINING
+ * BLOCK is 'rtl') or 'right' (in case 'direction' is 'ltr')", and its two static-position arms say "if the
+ * 'direction' property of THE ELEMENT ESTABLISHING THE STATIC-POSITION CONTAINING BLOCK is 'ltr'". Those are
+ * §10.1's fourth-case rectangle and §10.1's second-case one — the positioned ancestor's padding box and the
+ * nearest block container ancestor's content box — and they are routinely different elements.
+ * CSS 2.1 §10.6.4 READS NO `direction` AT ALL, including in its over-constrained arm, which is unconditional in its
+ * own words: "if the values are over-constrained, ignore the value for 'bottom' and solve for that value."
+ * A vertical axis written as the horizontal one with a flag would have invented an `rtl` arm for it.
+ *
+ * THE STATIC POSITION IS NEEDED BY TWO ENTRIES AND NOT ONE, which the crash this function replaces had wrong
+ * and which is worth stating because the wrong reading is the natural one. CSS 2.1 §10.3.7's ALL-THREE-`auto` entry
+ * uses it, and so does rule 2 of the six — "'left' and 'right' are 'auto' and 'width' is not 'auto', then if
+ * the 'direction' property of the element establishing the static-position containing block is 'ltr' set
+ * 'left' to the static position" — which is the commonest absolutely positioned box on the web, a box with a
+ * declared size and no declared offsets. §10.6.4's all-three-`auto` entry and its own rule 2 are the same
+ * pair. What genuinely needs NO static position is the SHRINK-TO-FIT of rules 1 and 3, whose available width
+ * CSS 2.1 §10.3.7 states as "solving for 'width' after setting 'left' (in case 1) or 'right' (in case 3) to 0" — each
+ * of those rules has exactly one `auto` offset, that one is zero and the other is declared.
+ *
+ * WHY THE SHRINK-TO-FIT IS WRITTEN HERE AND NOT ROUTED TO `uv_shrink_to_fit_width`: that function's own
+ * DCHECK says why, and it is the AVAILABLE WIDTH. §10.3.5's is the containing block less the box's own six
+ * surrounding terms; §10.3.7's is that less the two OFFSETS as well, one of which the rule has just set to
+ * zero. The three-term `min(max(…))` is the same formula and is spelled once here over the other available
+ * width, which is the smaller duplication of the two.
+ *
+ * THE CLAMP IS NOT HERE AND MUST NOT BE. CSS 2.1 §10.4 and §10.7 re-run "the rules above" with a limit
+ * substituted for the size, and `uv_sized` is where that substitution lives for every box type — so this
+ * function takes the pass's `size_len` as an argument and is run again by that caller with a different one.
+ * A clamp applied inside would be §10.4's step 2 running before its step 1. */
+typedef struct {
+    CssPx before;     /* the used `left` / `top` */
+    CssPx m_before;   /* the used `margin-left` / `margin-top` */
+    CssPx size;       /* the used size, in the box css-sizing-3 §3.3 exposes — `uv_pass_size`'s contract */
+    CssPx m_after;
+    CssPx after;      /* the used `right` / `bottom` */
+} UvAbs;
+
+/* ONE OF THE EQUATION'S DECLARED TERMS AGAINST ITS OWN BASIS — an inset or the size, both of which CSS 2.1
+   §9.3.2 and §10.2/§10.5 give the grammar `<length> | <percentage> | auto`, and whose `auto` the caller has
+   already taken out through `uv_len_is_auto`. The BASIS is the caller's because the two axes differ in it and
+   in nothing else: §9.3.2 gives `left`/`right` and §10.2 give `width` the containing block's WIDTH, while
+   `top`/`bottom` and `height` take its HEIGHT. A math function carrying both a length and a percentage
+   resolves in one step, css-values-4 §5.6 "Mixing Percentages and Dimensions". */
+static CssPx uv_abs_len(CssLength len, CssPx basis)
+{
+    if (len.kind == CSS_LENGTH_ABSOLUTE) return len.px;
+    DCHECK(len.kind == CSS_LENGTH_PERCENTAGE || len.kind == CSS_LENGTH_CALCULATED,
+           "CSS 2.1 §9.3.2's and §10.2's `<length> | <percentage> | auto` admit nothing else, and the `auto` "
+           "keyword left through the caller's own test — so a keyword here is a cascade layer that answered "
+           "with a value the grammar does not have");
+    return css_length_resolve_pct(len, basis);
+}
+
+/* §8.3's basis for a margin, which is the containing block's WIDTH on BOTH axes ("note that this is true for
+   'margin-top' and 'margin-bottom' as well"), and §8.3's own note that a margin is not floored. */
+static CssPx uv_abs_margin(CssLength len, CssPx width_basis)
+{
+    if (len.kind == CSS_LENGTH_ABSOLUTE) return len.px;
+    DCHECK(len.kind == CSS_LENGTH_PERCENTAGE || len.kind == CSS_LENGTH_CALCULATED,
+           "CSS 2.1 §8.3's <margin-width> admits a length, a percentage and `auto`, and `auto` left through "
+           "the caller's own test");
+    return css_length_resolve_pct(len, width_basis);
+}
+
+/* css-sizing-3 §3.3 IN BOTH DIRECTIONS, as the pair of conversions between the equation's CONTENT term and
+   the value `uv_pass_size` hands back. They are two functions over one surround so the sum added is the sum
+   subtracted — `uv_surround_total`'s own reason. */
+static CssPx uv_abs_content_of(lxb_dom_element_t *el, CssPx exposed, UvSurround s)
+{
+    if (!uv_is_border_box(el)) return exposed;
+    return css_px_sub(exposed, uv_surround_total(s));
+}
+
+static CssPx uv_abs_exposed_of(lxb_dom_element_t *el, CssPx content, UvSurround s)
+{
+    if (!uv_is_border_box(el)) return content;
+    return css_px_add(content, uv_surround_total(s));
+}
+
+/* CSS 2.1 §10.3.7's shrink-to-fit over ITS OWN available width — "calculation of the shrink-to-fit width is
+   similar
+   to calculating the width of a table cell using the automatic table layout algorithm … then the shrink-to-fit
+   width is: min(max(preferred minimum width, available width), preferred width)". The available width is the
+   caller's, because it is the only term that differs from §10.3.5's and it differs per rule. */
+static CssPx uv_abs_shrink_to_fit(lxb_dom_element_t *el, CssPx available)
+{
+    IntrinsicInlineSizes in = intrinsic_inline_sizes(el);
+
+    return css_px_min(css_px_max(in.min_content, available), in.max_content);
+}
+
+/* CSS 2.1 §10.3.7's "the 'direction' property of the element establishing the static-position containing
+   block", which
+   is a DIFFERENT box from `used_value_containing_block_is_rtl`'s and is named by core/layout/block_flow.h's
+   own §10.1-second-case walk. */
+static bool uv_abs_static_cb_is_rtl(lxb_dom_element_t *el)
+{
+    lxb_dom_element_t *spcb = block_flow_static_position_containing_block(el);
+    char *d = uv_computed(spcb, "direction");
+    bool rtl = strcmp(d, "rtl") == 0;
+
+    free(d);
+    return rtl;
+}
+
+static UvAbs uv_abs_solve(lxb_dom_element_t *el, CssLength size_len, bool vertical)
+{
+    UvSurround s = uv_surround(el, vertical);
+    CssPx width_basis = used_value_containing_block_width(el);
+    CssPx cb = width_basis;
+    CssLength lb = css_computed_length(el, vertical ? "top" : "left");
+    CssLength la = css_computed_length(el, vertical ? "bottom" : "right");
+    CssLength mb = css_computed_length(el, vertical ? "margin-top" : "margin-left");
+    CssLength ma = css_computed_length(el, vertical ? "margin-bottom" : "margin-right");
+    bool a_before = uv_len_is_auto(lb), a_after = uv_len_is_auto(la), a_size = uv_len_is_auto(size_len);
+    bool a_mb = uv_len_is_auto(mb), a_ma = uv_len_is_auto(ma);
+    CssPx free_space, content;
+    UvAbs r;
+
+    DCHECK(uv_box_kind(el) == UV_BOX_ABS,
+           "CSS 2.1 §10.3.7 and §10.6.4 are stated over an ABSOLUTELY POSITIONED box and this one is not — "
+           "`uv_box_kind` is the classification every §10 rule in this file is dispatched on, so a box "
+           "arriving here with another kind has had its section decided twice");
+    if (vertical) {
+        /* WRITTEN THROUGH A SEPARATE VARIABLE so that the release arm of the assert below is a ZERO-height
+           containing block and not the WIDTH one, which is what `cb`'s initialiser holds and which is a
+           plausible number from the wrong axis. The assert cannot fire — every rectangle §10.1 gives an
+           absolutely positioned box answers `true` — and a state that cannot arise is still a state the
+           release build has to leave somewhere defined. */
+        CssPx h = css_px(0.0);
+        bool definite = uv_cb_height(el, &h);
+
+        cb = h;
+        DCHECK(definite,
+               "CSS 2.1 §10.6.4's constraint equation needs the HEIGHT of the containing block and §10.1 gave "
+               "none. Every rectangle §10.1 hands an absolutely positioned box has one without a layout — the "
+               "initial containing block's and the viewport's are the viewport's own, and the fourth case's is "
+               "the positioned ancestor's padding box, which §10.5's note says \"can always be resolved\" for "
+               "exactly this reason — so an indefinite answer here is `uv_cb`'s walk having produced a case "
+               "§10.1 does not give an absolutely positioned box at all");
+    }
+    /* The equation with the four surrounding terms already taken out: what is left for the five values below
+       to share is `before + m_before + SIZE + m_after + after`. */
+    free_space = css_px_sub(cb, uv_surround_total(s));
+    r.before = a_before ? css_px(0.0) : uv_abs_len(lb, cb);
+    r.after = a_after ? css_px(0.0) : uv_abs_len(la, cb);
+    r.m_before = a_mb ? css_px(0.0) : uv_abs_margin(mb, width_basis);
+    r.m_after = a_ma ? css_px(0.0) : uv_abs_margin(ma, width_basis);
+    content = a_size ? css_px(0.0)
+                     : uv_abs_content_of(el,
+                                         uv_is_border_box(el)
+                                             ? uv_border_box_size(el, uv_abs_len(size_len, cb), vertical)
+                                             : uv_abs_len(size_len, cb),
+                                         s);
+
+    /* ---- CSS 2.1 §10.3.7's and §10.6.4's FIRST entry: "if all three of `left`, `width` and `right` are
+       `auto`" ---- */
+    if (a_before && a_size && a_after) {
+        /* CSS 2.1 §10.3.7 zeroes the two margins here in its own words ("first set any `auto` values for
+           `margin-left` and `margin-right` to 0"); §10.6.4 does not say so at this entry and rule 3, which
+           both of them then apply, says it. The two spellings are one behaviour and `r.m_*` already holds a
+           zero for an `auto` margin, so there is nothing to do at this line but say why. */
+        if (vertical || !uv_abs_static_cb_is_rtl(el)) {
+            /* CSS 2.1 §10.3.7's "…set `left` to the static position and apply rule number three below" — and
+               §10.6.4's "set
+               `top` to the static position and apply rule number three below", which has no `rtl` arm to
+               choose between because a block axis has no bidirectional order to reverse. */
+            r.before = flow_static_position(el, vertical, false);
+            content = vertical
+                          ? block_flow_auto_height(el)
+                          : uv_abs_shrink_to_fit(
+                                el, css_px_sub(css_px_sub(css_px_sub(free_space, r.before), r.m_before),
+                                               r.m_after));
+            r.after = css_px_sub(css_px_sub(css_px_sub(css_px_sub(free_space, r.before), r.m_before), content),
+                                 r.m_after);
+        } else {
+            /* "…otherwise, set `right` to the static position and apply rule number one below." */
+            r.after = flow_static_position(el, false, true);
+            content = uv_abs_shrink_to_fit(
+                el, css_px_sub(css_px_sub(css_px_sub(free_space, r.after), r.m_before), r.m_after));
+            r.before = css_px_sub(css_px_sub(css_px_sub(css_px_sub(free_space, r.m_before), content),
+                                             r.m_after),
+                                  r.after);
+        }
+        r.size = uv_abs_exposed_of(el, content, s);
+        return r;
+    }
+    /* ---- the SECOND entry: "if none of the three is `auto`" ------------------------------------------- */
+    if (!a_before && !a_size && !a_after) {
+        CssPx slack = css_px_sub(css_px_sub(css_px_sub(free_space, r.before), content), r.after);
+
+        if (a_mb && a_ma) {
+            /* CSS 2.1 §10.6.4's "…solve the equation under the extra constraint that the two margins get
+               equal values". §10.3.7
+               adds an exception §10.6.4 deliberately does not: "unless this would make them negative, in
+               which case when direction of the containing block is `ltr` (`rtl`), set `margin-left`
+               (`margin-right`) to zero and solve for `margin-right` (`margin-left`)". A vertical axis has no
+               such arm and a shared one would have invented it. */
+            if (!vertical && slack.px < 0.0) {
+                if (used_value_containing_block_is_rtl(el)) {
+                    r.m_after = css_px(0.0);
+                    r.m_before = slack;
+                } else {
+                    r.m_before = css_px(0.0);
+                    r.m_after = slack;
+                }
+            } else {
+                CssPx half = css_px_scale(slack, 0.5);
+
+                r.m_before = half;
+                r.m_after = half;
+            }
+        } else if (a_mb) {
+            /* "if one of `margin-left` or `margin-right` is `auto`, solve the equation for that value." */
+            r.m_before = css_px_sub(slack, r.m_after);
+        } else if (a_ma) {
+            r.m_after = css_px_sub(slack, r.m_before);
+        } else {
+            /* CSS 2.1 §10.3.7's "If the values are over-constrained, ignore the value for `left` (in case the
+               `direction`
+               property of the containing block is `rtl`) or `right` (in case `direction` is `ltr`) and solve
+               for that value" — and §10.6.4's, which names `bottom` UNCONDITIONALLY: "if the values are
+               over-constrained, ignore the value for `bottom` and solve for that value."
+               THE `direction` READ HERE IS THE CONTAINING BLOCK'S and not the static-position containing
+               block's, which is the other element §10.3.7 names and which the entry above reads. */
+            CssPx fixed = css_px_add(r.m_before, r.m_after);
+
+            /* The ignored value is SOLVED FOR and not adjusted, which is what "ignore the value" means: the
+               declared one is dropped out of the equation entirely rather than corrected by the slack. The
+               two spellings agree in real arithmetic and not in IEEE, and only this one cannot leave an ulp
+               of a declared offset in a coordinate every descendant is placed against. */
+            if (!vertical && used_value_containing_block_is_rtl(el))
+                r.before = css_px_sub(css_px_sub(css_px_sub(free_space, fixed), content), r.after);
+            else
+                r.after = css_px_sub(css_px_sub(css_px_sub(free_space, r.before), fixed), content);
+        }
+        r.size = uv_abs_exposed_of(el, content, s);
+        return r;
+    }
+    /* ---- the THIRD entry: "otherwise, set `auto` values for `margin-left` and `margin-right` to 0, and pick
+       the one of the following six rules that applies". The zeroing is already in `r.m_*`; what is left is the
+       six rules, which partition the remaining cases by WHICH of the three is `auto` and are written here in
+       the section's own order so each line can be read against its sentence. `free_space` less every term the
+       rule has fixed is the value it solves for, so the arithmetic below is the constraint equation once and
+       the branches choose its subject. ------------------------------------------------------------------- */
+    {
+        CssPx fixed = css_px_add(r.m_before, r.m_after);
+
+        if (a_before && a_size) {
+            /* Rule 1: "`left` and `width` are `auto` and `right` is not `auto`, then the width is
+               shrink-to-fit. Then solve for `left`." CSS 2.1 §10.6.4's rule 1 is "the height is based on the
+               content
+               per 10.6.7" instead, which is core/layout/block_flow.h's same walk under §8.3.1's escape flags.
+               The available width is §10.3.7's own — "this is found by solving for 'width' after setting
+               'left' (in case 1) or 'right' (in case 3) to 0" — so the term taken out for THIS rule's `auto`
+               offset is a literal zero and `right` is declared. */
+            content = vertical ? block_flow_auto_height(el)
+                               : uv_abs_shrink_to_fit(el, css_px_sub(css_px_sub(free_space, fixed), r.after));
+            r.before = css_px_sub(css_px_sub(css_px_sub(free_space, fixed), content), r.after);
+        } else if (a_before && a_after) {
+            /* Rule 2: "`left` and `right` are `auto` and `width` is not `auto`, then if the `direction`
+               property of the element establishing the static-position containing block is `ltr` set `left`
+               to the static position, otherwise set `right` to the static position. Then solve for `left`
+               (if `direction` is `rtl`) or `right` (if `direction` is `ltr`)." §10.6.4's rule 2 is the same
+               shape with no `direction` in it: "set `top` to the static position … and solve for `bottom`".
+               THIS IS THE SECOND ENTRY THAT NEEDS A STATIC POSITION and it is the one a real page reaches:
+               a box with a declared size and no declared offsets is exactly this rule on both axes. */
+            if (vertical || !uv_abs_static_cb_is_rtl(el)) {
+                r.before = flow_static_position(el, vertical, false);
+                r.after = css_px_sub(css_px_sub(css_px_sub(free_space, r.before), fixed), content);
+            } else {
+                r.after = flow_static_position(el, false, true);
+                r.before = css_px_sub(css_px_sub(css_px_sub(free_space, r.after), fixed), content);
+            }
+        } else if (a_size && a_after) {
+            /* Rule 3: "`width` and `right` are `auto` and `left` is not `auto`, then the width is
+               shrink-to-fit. Then solve for `right`", over the available width "found by solving for `width`
+               after setting … `right` (in case 3) to 0". */
+            content = vertical ? block_flow_auto_height(el)
+                               : uv_abs_shrink_to_fit(el, css_px_sub(css_px_sub(free_space, fixed), r.before));
+            r.after = css_px_sub(css_px_sub(css_px_sub(free_space, r.before), fixed), content);
+        } else if (a_before) {
+            /* Rule 4: "`left` is `auto`, `width` and `right` are not `auto`, then solve for `left`." */
+            r.before = css_px_sub(css_px_sub(css_px_sub(free_space, fixed), content), r.after);
+        } else if (a_size) {
+            /* Rule 5: "`width` is `auto`, `left` and `right` are not `auto`, then solve for `width`." It is
+               the one rule whose subject is the SIZE and is therefore the one that can come out negative on a
+               box whose two offsets already exceed its containing block; css-sizing-3 §3.1 "Sizing
+               Properties"' "the inner size is always floored at zero" is what that floor is, and it is the
+               same sentence §10.3.3's equation is floored by one function up. */
+            content = css_px_max(
+                css_px_sub(css_px_sub(css_px_sub(free_space, r.before), fixed), r.after), css_px(0.0));
+        } else {
+            /* Rule 6: "`right` is `auto`, `left` and `width` are not `auto`, then solve for `right`." */
+            DCHECK(a_after,
+                   "CSS 2.1 §10.3.7's six rules partition the cases in which at least one and not all three "
+                   "of the offsets and the size are `auto`, and the two entries above took the all-three and "
+                   "the none-at-all cases — so a box reaching this line with nothing `auto` is one of those "
+                   "three tests disagreeing with the other two about what `auto` is");
+            r.after = css_px_sub(css_px_sub(css_px_sub(free_space, r.before), fixed), content);
+        }
+        r.size = uv_abs_exposed_of(el, content, s);
+    }
+    return r;
+}
+
 static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool vertical)
 {
     /* THE BASIS A PERCENTAGE SIZE RESOLVES AGAINST, AND WHETHER THERE IS ONE — the one difference between the
@@ -3281,17 +3640,13 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
            css-sizing-3 §3.3's CONVERSION IS APPLIED TO THE RESULT, exactly as it is to §10.3.3's equation two
            functions down: the walk answers the CONTENT box, which is what CSS 2.1 knows, and css-sizing-3 §3.3
            makes the used value "as exposed for instance through getComputedStyle()" the border box's. */
-        if (box == UV_BOX_ABS)
-            DFAIL("CSS 2.1 §10.6.4 solves an ABSOLUTELY POSITIONED box's `height: auto` from its own constraint "
-                  "equation — 'top + margin-top + border-top-width + padding-top + height + padding-bottom + "
-                  "border-bottom-width + margin-bottom + bottom = height of containing block' — and its rules 1 "
-                  "and 3, where `top` or `bottom` is `auto` alongside `height`, send it on to §10.6.7's "
-                  "content-based height instead. TWO things are missing and the walk is not one of them: the "
-                  "used `top` and `bottom` (CSSOM §9's inset arm crashes on the same equation) and the STATIC "
-                  "POSITION its `auto` cases fall back to, which is where the box would have been in normal "
-                  "flow. §9.4.1's normal flow is BUILT for IN-FLOW boxes (core/layout/flow_position.h) and "
-                  "§10.6.3 is what keeps an out-of-flow child out of its walk, so EXTEND core/layout/"
-                  "block_flow.c to report a skipped child's would-be position, then §10.6.4 over it");
+        /* CSS 2.1 §10.6.4 "Absolutely positioned, non-replaced elements" — this box's height is a term of its
+           own constraint equation and not §10.6.3's walk, and the two rules of the six that send it BACK to a
+           content-based height (`top` or `bottom` `auto` alongside it) reach §10.6.7 through that equation
+           rather than instead of it. `uv_abs_solve` runs the whole chain and this entry reads one of its five
+           values; the other four are read by `uv_margin` and by `used_value_abs_offset_px`, from the same
+           call, so no two of them can take different branches of the same rule. */
+        if (box == UV_BOX_ABS) return uv_abs_solve(el, len, true).size;
         /* A TABLE BOX with `height: auto` does not reach here either, for the same reason and through
            the same route: CSS 2.1 §17.5.3 Table height algorithms owns both of its arms and
            `uv_pass_size` takes them together. §10.6.3's stack of block-level children is not a
@@ -3333,27 +3688,11 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
        equation over different terms. It was always reachable through CSSOM §9's resolved value; CSSOM VIEW §6's
        `clientWidth` on a floated or inline-block box is the ordinary way a page arrives here. */
     if (box == UV_BOX_FLOAT || box == UV_BOX_INLINE_BLOCK) return uv_shrink_to_fit_width(el, len, box);
-    if (box == UV_BOX_ABS)
-        DFAIL("CSS 2.2 §10.3.7 \"Absolutely positioned, non-replaced elements\" sends this box's `auto` width to "
-              "the shrink-to-fit formula in its rules 1 and 3 — the ones where `left` or `right` is `auto` "
-              "alongside `width` — and its rule 5, with both offsets given, solves the constraint equation for "
-              "`width` instead. THE FORMULA ITSELF IS BUILT (uv_shrink_to_fit_width above) and so are the two "
-              "intrinsic terms it needs, so what is missing is neither: it is §10.3.7's OWN AVAILABLE WIDTH, "
-              "which is not §10.3.5 \"Floating, non-replaced elements\"'s — and it is NOT the containing block "
-              "minus BOTH offsets. §10.3.7 states it as \"this is found by solving for 'width' after setting "
-              "'left' (in case 1) or 'right' (in case 3) to 0\", and cases 1 and 3 ARE rules 1 and 3, each of "
-              "which has exactly ONE `auto` offset: that one is ZERO and the other is declared. So this arm "
-              "needs no offset this engine cannot supply. DO NOT compute it from a static position — §10.3.7 "
-              "uses the static position for the ALL-THREE-`auto` entry alone, \"if the 'direction' property of "
-              "the element establishing the static-position containing block is 'ltr' set 'left' to the static "
-              "position and apply rule number three below; otherwise, set 'right' to the static position and "
-              "apply rule number one below\", and even there the rule it then applies zeroes the OTHER offset. "
-              "THAT entry is the one needing \"the position an element would have had in the normal flow\": "
-              "§9.4.1's normal flow is BUILT for IN-FLOW boxes (core/layout/flow_position.h) and §10.6.3 is "
-              "exactly what keeps an out-of-flow child out of its walk, so EXTEND core/layout/block_flow.c to "
-              "report a skipped child's would-be position FOR THE ALL-THREE-`auto` ENTRY, and write THIS arm's "
-              "available width from the constraint equation with the `auto` offset at 0 — after which this arm "
-              "is the same three-term `min(max(...))` the function above already computes");
+    /* CSS 2.2 §10.3.7 "Absolutely positioned, non-replaced elements" — the horizontal twin of the arm above,
+       through the same solve. Its rules 1 and 3 send the width to a SHRINK-TO-FIT over an available width that
+       is not §10.3.5's, which is why `uv_shrink_to_fit_width` refuses this box by name and the formula is
+       spelled over §10.3.7's own available width inside the solve. */
+    if (box == UV_BOX_ABS) return uv_abs_solve(el, len, false).size;
     /* The two box types §10 does not own at all reach the `auto` arm as well as the declared one, and their
        `auto` case is a DIFFERENT algorithm from their declared case, so each says which. */
     /* A TABLE box with `width: auto` is CSS 2.1 §17.5.2.2 Automatic table layout's, and §17.5.2.1 Fixed table
@@ -3583,7 +3922,24 @@ CssPx used_value_px(lxb_dom_element_t *el, const char *name)
         const char *self = vertical ? NULL : MARGINS[side];
         const char *opposite = vertical ? NULL : MARGINS[(side + 2) % 4];
 
-        if (!vertical && uv_margin_reads_width(box)) {
+        /* CSS 2.1 §10.3.7's and §10.6.4's FIVE VALUES ARE ONE ANSWER, so an absolutely positioned box's
+           margins are routed HERE and not through the dispatch below. Two reasons, and the second is the one
+           that decides the placement: (1) the margin, the size and the two offsets are solved together by one
+           rule chain, so reading any of them through a second road is that chain run twice and free to take a
+           different branch; (2) `uv_margin`'s axis IS `opposite == NULL`, so a VERTICAL call carries no
+           property name at all — which is exactly right for §10.6.3, whose sentence gives both `auto` margins
+           0 without distinguishing them, and cannot express §10.6.4, whose equation solves for one of them.
+           THE SIZE HANDED OVER IS THE PASS'S, on both axes, for the reason the horizontal arm below gives:
+           §10.4 and §10.7 re-run "the rules above" with a limit substituted, and the margins §10.3.7 and
+           §10.6.4 solve are the ones that final pass produced. That is what centres a `margin: auto` box
+           against its `max-width` rather than against its declared `width`. */
+        if (box == UV_BOX_ABS) {
+            UvAbs abs = uv_abs_solve(el, uv_sized(el, box, vertical).len, vertical);
+
+            /* `side` indexes §8.1's four sides in the order top, right, bottom, left, so the LEADING side of
+               either axis is `top` or `left` and the trailing one is its opposite. */
+            out = (side == 0 || side == 3) ? abs.m_before : abs.m_after;
+        } else if (!vertical && uv_margin_reads_width(box)) {
             CssLength width = uv_sized(el, box, false).len;
 
             out = uv_margin(el, self, opposite, len, box, &width);
@@ -3595,6 +3951,26 @@ CssPx used_value_px(lxb_dom_element_t *el, const char *name)
     else                 out = uv_sized(el, box, vertical).used;
     return out;
 }
+
+/* CSS 2.1 §10.3.7's and §10.6.4's USED `left` or `top`, out of the same solve that answers this box's size
+   and its margins — see `uv_abs_solve`. The SIZE it is solved against is the one §10.4/§10.7's final pass ran
+   with, which is what `uv_sized` reports and why this entry does not read the property. */
+CssPx used_value_abs_offset_px(lxb_dom_element_t *el, bool vertical)
+{
+    UvBox box;
+    char nbuf[160];
+
+    DCHECK(el != NULL, "§10.3.7's used offset was asked for with no element");
+    box = uv_box_kind(el);
+    DCHECKF(box == UV_BOX_ABS,
+           "%s: CSS 2.1 §10.3.7 and §10.6.4 are the only sections that SOLVE an offset, and they are stated "
+           "over an absolutely positioned box. A relatively positioned box's `left` is CSS 2.1 §9.4.3's PAIR "
+           "and a statically positioned one's does not apply at all — core/css/css_computed_value.c's CSSOM "
+           "§9 inset arm is where both of those are decided",
+           box_subject(el, nbuf, sizeof nbuf));
+    return uv_abs_solve(el, uv_sized(el, box, vertical).len, vertical).before;
+}
+
 
 /* css-flexbox-1 §9.4 "Cross Size Determination"' STEP 7's "as if it were an in-flow block-level box". See
    used_value.h for why this is an entry rather than two lines at its caller and for what `min-height: auto`

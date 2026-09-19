@@ -347,7 +347,9 @@ static BlockFlowChildKind bf_element_child(lxb_dom_element_t *el)
        layout of later siblings" — and §10.6.3 says the same thing for the one walk in this file: "Only children
        in the normal flow are taken into account (i.e., floating boxes and absolutely positioned boxes are
        ignored…)". That is the rule RUNNING and not a gap; the box's OWN position is §9.3.2's offsets over a
-       static position, which is a different question this walk is what will one day answer. */
+       static position, which is a different question ANSWERED BY THE SAME WALK — `block_flow_static_child_top`
+       reads the running position out at this child's content position without ever putting it on the stack,
+       which is why this classification does not have to change for it. */
     if (bf_computed_is(el, "position", "absolute") || bf_computed_is(el, "position", "fixed")) {
         free(d);
         return BLOCK_FLOW_CHILD_NO_BOX;
@@ -981,6 +983,56 @@ static BfBox bf_anon_box(lxb_dom_element_t *parent, BlockFlowRun run, BfBaseline
     return out;
 }
 
+/* ---- CSS 2.1 §10.3.7's and §10.6.4's STATIC POSITION, AS A THIRD READING OF §9.4.1's RUNNING POSITION -----
+   Both sections define it in the same words — "the position an element would have had in the normal flow",
+   more precisely the top (or left) MARGIN EDGE "of a hypothetical box that would have been the first box of
+   the element if its specified `position` value had been `static` and its specified `float` had been `none`"
+   — and §10.6.3 is exactly what keeps the real box out of the walk that would place it ("only children in the
+   normal flow are taken into account, i.e. floating boxes and absolutely positioned boxes are ignored").
+   IT IS A READING AND NOT A PLACEMENT, which is the whole reason it costs nothing and changes nothing. The
+   walk below is byte-identical whether or not one is asked for: the hypothetical box is never put on the
+   stack, never merged into a run and never advances `pos`, because §10.6.3 says the REAL box contributes
+   nothing and the hypothetical one is not in this document at all. What is read out is the stack's own state
+   at the CONTENT POSITION the element occupies — the same `pos` and the same open run `block_flow_child_top`
+   reports for a box that IS placed there, which is why this lives here rather than being composed at a caller
+   out of a height and a sibling count.
+   `after` IDENTIFIES THAT CONTENT POSITION AS THE RUN IT FALLS IN, named by the block-level box that run
+   FOLLOWS (NULL for the run before the first one). §9.2.1.1's runs partition the container's content and each
+   is visited exactly once by the enumeration below, so this is a key and not a search.
+   `margin` IS THE HYPOTHETICAL BOX'S OWN `margin-top`, RESOLVED BY THE CALLER, and it is an operand rather
+   than a read for a reason that is not tidiness: reading it through `used_value_px` would send an absolutely
+   positioned box into CSS 2.1 §10.6.4's constraint equation, which is the section that ASKED for this number.
+   The caller resolves §10.6.3's own sentence instead ("if `margin-top`, or `margin-bottom` are `auto`, their
+   used value is 0"), which is what the hypothetical STATIC box's margin is. */
+typedef struct {
+    lxb_dom_node_t *after;   /* the block-level box the hypothetical box's run follows; NULL is the first run */
+    CssPx margin;            /* §10.6.3's used `margin-top` for the hypothetical box */
+    CssPx *top;              /* out: its TOP MARGIN EDGE from this container's TOP CONTENT EDGE */
+    bool *found;             /* out: whether the enumeration reached that run at all */
+} BfStatic;
+
+/* §8.3.1's collapse applied to the hypothetical box, then CSS 2 §8.1's own definition of a margin edge.
+   THE BORDER EDGE IS WHERE §9.4.1's STACK WOULD REACH IT: the open run merged with the box's own top margin,
+   applied to the running position — or, when that run is still ESCAPING through this container's top edge,
+   §8.3.1's note's own answer, "the top border edge of the box is defined to be the same as the parent's".
+   THE MARGIN EDGE IS THAT LESS THE MARGIN, WHICH IS §8.1 AND NOT A SECOND COLLAPSING RULE. §8.1 nests the
+   margin edge outside the border edge by the margin whatever the margin collapsed with, so a box whose top
+   margin escaped its container has a margin edge ABOVE that container's content edge — a negative distance,
+   which is the sign CSS 2.1 §10.6.4 states outright ("the value is negative if the hypothetical box is above
+   the containing block"). §10.3.7 states the inline-axis half of the same thing in its own words, "to the
+   left of the containing block" rather than "above" it, which is the one place the two sections' wording
+   differs and is why this entry quotes the one it answers for.
+   AND THE ROUND TRIP IS WHY THE MARGIN EDGE IS THE RIGHT THING TO REPORT rather than the border edge: §10.3.7
+   and §10.6.4 both set the offset TO this number and then place the box at `offset + margin` through their
+   own constraint equation, so the margin cancels and the box lands exactly where the hypothetical one would
+   have. Reporting the border edge would place it one margin too low in every case a margin is declared. */
+static CssPx bf_static_margin_edge(CssPx pos, BfRun run, CssPx margin, bool escaping)
+{
+    CssPx border = escaping ? pos : css_px_add(pos, bf_run_value(bf_run_merge(run, bf_run_of(margin))));
+
+    return css_px_sub(border, margin);
+}
+
 /* §9.4.1's placement rule over §8.3.1's runs, for the in-flow children of one block container. It answers this
    box's own contribution, and on the way it hands the caller the offset of `want`'s top border edge from this
    box's top CONTENT edge — the same running position read out at the child that asked for it, which is why
@@ -993,7 +1045,7 @@ static BfBox bf_anon_box(lxb_dom_element_t *parent, BlockFlowRun run, BfBaseline
    already decided its size (`bf_height_needs_content`), so a height walk that always asked would look inside
    boxes §10.6.3 never needs to open, doubling the tree walked at every level and reaching sections that crash. */
 static BfBox bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *want_top, bool *found,
-                       BfAnonSink *anon, BfBaseline pass)
+                       BfAnonSink *anon, BfStatic *st, BfBaseline pass)
 {
     lxb_dom_node_t *prev = NULL, *brk;
     bool at_run = true;
@@ -1047,6 +1099,18 @@ static BfBox bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wa
         CssPx first_baseline = css_px(0.0), last_baseline = css_px(0.0);
         CssPx h;
 
+        /* §9.2.1.1's SPLIT, AS THE ONE SHAPE OF IT THIS WALK CAN STATE. A hypothetical BLOCK-LEVEL box in a
+           container that establishes §9.4.2's inline formatting context makes that container MIXED — "if a
+           block container box has a block-level box inside it, then we force it to have only block-level
+           boxes inside it" — so the hypothetical box is the first box on a stack this container does not
+           currently have, at its top content edge. The caller has already established that no box-generating
+           content precedes it (`block_flow_run_generates_box` over the run that ends at it), which is what
+           makes "the first box" true rather than assumed; where content DOES precede it the caller refuses,
+           because the anonymous box that content would become has a height this branch never measures. */
+        if (st != NULL && st->after == NULL) {
+            *st->top = bf_static_margin_edge(css_px(0.0), bf_run_empty(), st->margin, esc_top);
+            *st->found = true;
+        }
         DCHECK(want == NULL,
                "CSS 2 §9.4.1's placement was asked for a box whose containing block establishes §9.4.2's "
                "INLINE formatting context, so the box on the line is inline-level and its position is a "
@@ -1130,6 +1194,16 @@ static BfBox bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wa
         anon_run.end = brk;
         if (at_run) {
             at_run = false;
+            /* §10.3.7's and §10.6.4's STATIC POSITION, READ AT THE RUN THE HYPOTHETICAL BOX FALLS IN and
+               before anything is done with that run — §9.2.1.1's runs partition this container's content and
+               each is visited exactly once here, so `prev` names this one and the test cannot fire twice. It
+               is read BEFORE the generates-a-box escape below because a run that generates NO box is the
+               commonest position an out-of-flow child sits at (two block-level siblings with white space
+               between them), and that `continue` would otherwise skip the only reading there is. */
+            if (st != NULL && !*st->found && prev == st->after) {
+                *st->top = bf_static_margin_edge(pos, run, st->margin, escaping);
+                *st->found = true;
+            }
             if (!block_flow_run_generates_box(el, anon_run)) continue;
             b = bf_anon_box(el, anon_run, pass);
         } else if (brk != NULL) {
@@ -1508,7 +1582,7 @@ static BfBox bf_box(lxb_dom_element_t *el, BfBaseline pass)
            be §10.6.3's rule running for a box §10.6.2 already sized. */
         b.border_h = used_value_border_edge_px(el, true);
         {
-            BfBox inner = bf_layout(el, NULL, &sink, &sunk, NULL, pass);
+            BfBox inner = bf_layout(el, NULL, &sink, &sunk, NULL, NULL, pass);
 
             DCHECK(!sunk, "the child walk reported placing a box it was not looking for");
             /* §8.3.1's fourth adjoining pair needs "zero or auto computed height", which is exactly what
@@ -1526,7 +1600,7 @@ static BfBox bf_box(lxb_dom_element_t *el, BfBaseline pass)
         }
         return b;
     }
-    b = bf_layout(el, NULL, &sink, &sunk, NULL, pass);
+    b = bf_layout(el, NULL, &sink, &sunk, NULL, NULL, pass);
     DCHECK(!sunk, "the child walk reported placing a box it was not looking for");
     if (b.collapse_through) return b;
     /* A box whose height BEHAVES AS AUTO (css-sizing-3 §3.2.1) is the one whose border-box height is this
@@ -1679,7 +1753,7 @@ CssPx block_flow_auto_height(lxb_dom_element_t *el)
               "context' — so there is no block formatting context inside it for this walk to run over. The "
               "caller is core/layout/used_value.c, which classifies the box type before asking, so the two "
               "lists have come apart");
-    b = bf_layout(el, NULL, &unused, &found, NULL, BF_BASELINE_NONE);
+    b = bf_layout(el, NULL, &unused, &found, NULL, NULL, BF_BASELINE_NONE);
     DCHECK(!found, "the content-height walk reported placing the box it was not looking for");
     return b.content_h;
 }
@@ -1711,7 +1785,7 @@ bool block_flow_last_line_box_baseline(lxb_dom_element_t *el, CssPx *baseline)
            "stated over exactly that box, and core/layout/line_box.c has classified the box type — and taken "
            "out the REPLACED `inline-block`, which has no baseline at all — before asking, so the two lists "
            "have come apart");
-    b = bf_layout(el, NULL, &unused, &found, NULL, BF_BASELINE_LAST);
+    b = bf_layout(el, NULL, &unused, &found, NULL, NULL, BF_BASELINE_LAST);
     DCHECK(!found, "the baseline walk reported placing a box it was not looking for");
     /* `bf_layout` measures both of its distances from this box's TOP CONTENT EDGE, which is the frame this
        entry's contract states, so there is no conversion here and none is hidden in the caller either. */
@@ -1749,7 +1823,7 @@ bool block_flow_first_line_box_baseline(lxb_dom_element_t *el, CssPx *baseline)
            "list having come apart, and a REPLACED cell (an `<img style=\"display:table-cell\">`) reaching "
            "this walk is CSS 2.1 §17.2 The CSS table model's \"replaced elements with these 'display' values "
            "are treated as their given display types during layout\" needing an arm §17.5.3 does not write");
-    b = bf_layout(el, NULL, &unused, &found, NULL, BF_BASELINE_FIRST);
+    b = bf_layout(el, NULL, &unused, &found, NULL, NULL, BF_BASELINE_FIRST);
     DCHECK(!found, "the first-baseline walk reported placing a box it was not looking for");
     /* Same frame as the entry above and as `block_flow_auto_height`: the distance is from this box's own TOP
        CONTENT EDGE, so a caller measuring from a BORDER edge adds its own border and padding and this file
@@ -1803,7 +1877,7 @@ CssPx block_flow_child_top(lxb_dom_element_t *el)
            "reached the box",
            box_subject(el, nbuf, sizeof nbuf), box_subject(cb, cbuf, sizeof cbuf),
            box_subject_node(lxb_dom_interface_node(el)->parent, pbuf, sizeof pbuf));
-    (void)bf_layout(cb, el, &top, &found, NULL, BF_BASELINE_NONE);
+    (void)bf_layout(cb, el, &top, &found, NULL, NULL, BF_BASELINE_NONE);
     if (!found)
         DFAIL("CSS 2 §9.4.1's walk over this box's containing block placed every in-flow block-level child it "
               "found and NEVER REACHED THIS BOX, so there is no position to report. The walk skips exactly what "
@@ -1813,6 +1887,191 @@ CssPx block_flow_child_top(lxb_dom_element_t *el)
               "the first and core/layout/flow_position.c's own §9.3 test covers the last. The two answers have "
               "come apart, and reporting a coordinate for a box that is not in this formatting context would be "
               "a number in the right units for a box that is not there");
+    return top;
+}
+
+/* ---- CSS 2.1 §10.3.7's and §10.6.4's HYPOTHETICAL BOX -----------------------------------------------------
+   Both sections define the static position over "a hypothetical box that would have been the FIRST box of the
+   element if its specified `position` value had been `static` and its specified `float` had been `none`", and
+   the three entries below are that box's three facts: WHERE it would sit on §9.4.1's stack, WHOSE content
+   edge that stack belongs to, and — inside the walk — what its own top margin is. */
+
+/* §10.3.7's Note, asked as §9.2.1 asks it of every other box on the stack: "note that due to the rules in
+   section 9.7, this hypothetical calculation might require also assuming a different computed value for
+   `display`". core/css/css_computed_value.h answers the value; this turns it into §9.2.1's LEVEL, using the
+   same list `bf_element_child` classifies a real child with, because it is the same question about the same
+   box list. A box that is not block-level is on §9.4.2's LINE and its static position is a position ALONG one,
+   which is a different algorithm and not a narrower answer. */
+static bool bf_hypothetical_is_block_level(lxb_dom_element_t *el)
+{
+    char *d = css_hypothetical_static_display(el);
+    bool block = strcmp(d, "block") == 0 || strcmp(d, "flow-root") == 0 || strcmp(d, "list-item") == 0 ||
+                 strcmp(d, "flex") == 0 || strcmp(d, "grid") == 0 ||
+                 /* §17.4 puts a TABLE WRAPPER BOX on this stack for `display: table`, exactly as
+                    `bf_element_child` does for a real child. */
+                 table_box_kind_generates_table_box(table_box_kind(d));
+
+    free(d);
+    return block;
+}
+
+/* §10.6.3's OWN SENTENCE for the hypothetical box's `margin-top` — "if `margin-top`, or `margin-bottom` are
+   `auto`, their used value is 0" — and CSS 2 §8.3's basis for a percentage one, "calculated with respect to
+   the WIDTH of the generated box's containing block. Note that this is true for `margin-top` and
+   `margin-bottom` as well". The containing block is the HYPOTHETICAL one, which is `cb`'s content edge
+   (§10.1's second case for a static box) and NOT the positioned ancestor's padding edge the real box resolves
+   against — two different rectangles, and a percentage margin resolved against the wrong one is a length no
+   box has.
+   IT IS RESOLVED HERE RATHER THAN READ THROUGH `used_value_px` BECAUSE THAT ROUTE IS THE CALLER. An absolutely
+   positioned box's `margin-top` is solved by §10.6.4's constraint equation, which is the section asking for
+   this number, so asking that entry for it is a cycle with no base case. §10.6.3's sentence is what the
+   hypothetical STATIC box's margin is, and it is one line. */
+static CssPx bf_hypothetical_margin_top(lxb_dom_element_t *el, lxb_dom_element_t *cb)
+{
+    CssLength len = css_computed_length(el, "margin-top");
+
+    if (len.kind == CSS_LENGTH_ABSOLUTE) return len.px;
+    if (len.kind == CSS_LENGTH_PERCENTAGE || len.kind == CSS_LENGTH_CALCULATED)
+        return css_length_resolve_pct(len, used_value_content_px(cb, false));
+    DCHECK(len.kind == CSS_LENGTH_KEYWORD && strcmp(len.keyword, "auto") == 0,
+           "a `margin-top` computed to something CSS 2 §8.3's <margin-width> grammar does not admit — it is a "
+           "length, a percentage or `auto`, and lexbor validates the declaration against exactly that");
+    return css_px(0.0);
+}
+
+/* THE BLOCK-LEVEL BOX THE HYPOTHETICAL BOX'S RUN FOLLOWS, and whether the container's content order reaches
+   the element at all. §9.2.1.1's runs partition the container's CONTENT, so a content position is named by
+   the box list entry before it; NULL is the run before the first block-level box, which is also the whole
+   content of a container that has none.
+   IT WALKS THE CONTENT AND NOT THE CHILD LIST, for `bf_block_box_at`'s reason: §9.2.1.1 breaks an inline box
+   around an in-flow block-level box inside it and makes that box "a sibling of those anonymous boxes", so a
+   position inside a BREAKING inline box is a position in this container's own content. A position inside an
+   inline box that does NOT break is not reached, and that is the honest answer rather than an omission — see
+   the crash at the caller. */
+static lxb_dom_node_t *bf_static_run_after(lxb_dom_element_t *cb, lxb_dom_node_t *target, bool *reached)
+{
+    lxb_dom_node_t *n, *last = NULL;
+
+    *reached = false;
+    for (n = lxb_dom_interface_node(cb)->first_child; n != NULL; n = bf_content_next(cb, n)) {
+        if (n == target) { *reached = true; return last; }
+        DCHECK(n->parent != NULL && n->parent->type == LXB_DOM_NODE_TYPE_ELEMENT,
+               "CSS 2.2 §9.2.1.1's content order reached a node whose parent is not an element, so §9.2's box "
+               "generation cannot be asked about it");
+        if (block_flow_child_kind(lxb_dom_interface_element(n->parent), n) == BLOCK_FLOW_CHILD_BLOCK) last = n;
+    }
+    return last;
+}
+
+lxb_dom_element_t *block_flow_static_position_containing_block(lxb_dom_element_t *el)
+{
+    lxb_dom_node_t *n;
+    char nbuf[160];
+
+    DCHECK(el != NULL, "CSS 2.1 §10.3.7's static-position containing block was asked for with no element");
+    for (n = lxb_dom_interface_node(el)->parent; n != NULL && n->type == LXB_DOM_NODE_TYPE_ELEMENT;
+         n = n->parent) {
+        lxb_dom_element_t *a = lxb_dom_interface_element(n);
+        char *d = bf_computed(a, "display");
+        bool container = block_flow_display_is_block_container(d);
+
+        free(d);
+        if (container) return a;
+    }
+    DFAILF("%s: CSS 2.1 §10.3.7 states the static position against \"the containing block of a hypothetical "
+           "box that would have been the first box of the element if its specified `position` value had been "
+           "`static`\", and §10.1's SECOND case makes that \"the content edge of the nearest BLOCK CONTAINER "
+           "ancestor box\" — and this element has no block container ancestor at all. The root element is one "
+           "for every document this engine parses (§2.8 computes a root `display` of `contents` to `block`), "
+           "so what reaches here is an element outside a rendered tree: a DOMParser fragment, or a subtree "
+           "detached from its document. THE CALLER SHOULD HAVE DECLINED IT — core/dom/element_view.h's "
+           "has-a-box predicate is where an unrendered element leaves — so the two answers have come apart",
+           box_subject(el, nbuf, sizeof nbuf));
+    return NULL;
+}
+
+CssPx block_flow_static_child_top(lxb_dom_element_t *el)
+{
+    lxb_dom_element_t *cb;
+    lxb_dom_node_t *n, *after;
+    BlockFlowRun before;
+    BfStatic st;
+    CssPx top = css_px(0.0);
+    bool found = false, reached = false;
+    char nbuf[160], cbuf[160];
+
+    DCHECK(el != NULL, "CSS 2.1 §10.3.7's static position was asked for with no element");
+    n = lxb_dom_interface_node(el);
+    cb = block_flow_static_position_containing_block(el);
+    /* §10.3.7's Note first, because every other step below is written about a box on §9.4.1's stack and this
+       is what decides whether the hypothetical box is one. */
+    if (!bf_hypothetical_is_block_level(el))
+        DFAILF("%s: CSS 2.1 §10.3.7's hypothetical box — the element \"if its specified `position` value had "
+               "been `static` and its specified `float` had been `none`\" — is INLINE-LEVEL, so §9.4.2's line "
+               "boxes hold it and not §9.4.1's stack. Its static position is therefore a position ALONG a "
+               "line box, which is core/layout/line_box.h's fragment and not this walk's running offset: the "
+               "hypothetical box would sit at whatever inline position the line had reached, on whichever "
+               "line box §9.4.2's fill had got to. §10.3.7's own Note is what makes this case exist — \"note "
+               "that due to the rules in section 9.7, this hypothetical calculation might require also "
+               "assuming a different computed value for `display`\" — since §9.7 blockifies the REAL box's "
+               "`display` and the hypothetical one keeps the specified value "
+               "(core/css/css_computed_value.h's `css_hypothetical_static_display`). BUILD it as "
+               "core/layout/line_box.h's fill over a box list that CONTAINS this element, and report the "
+               "fragment's origin: the fill is the same one §9.4.2 already runs, and what it does not have is "
+               "a box for an element §9.3.1 took out of flow",
+               box_subject(el, nbuf, sizeof nbuf));
+    after = bf_static_run_after(cb, n, &reached);
+    if (!reached)
+        DFAILF("%s, whose static-position containing block is %s: CSS 2.2 §9.2.1.1's CONTENT ORDER for that "
+               "container never reached this element, so there is no run for §10.3.7's hypothetical box to "
+               "sit in. The order steps over a child's subtree except through an inline box the section "
+               "BREAKS, so what reaches here is an element inside an inline box that breaks nowhere TODAY and "
+               "would break around this very box in the hypothetical document — §9.2.1.1: \"when an inline box "
+               "contains an in-flow block-level box, the inline box … is broken around the block-level box\". "
+               "A `display: contents` ancestor is the other producer and `bf_element_child` names it. BUILD "
+               "the box list over the HYPOTHETICAL document that §10.3.7 describes, in which this element's "
+               "`position` is `static` — the same enumeration, asked of a child list one member longer",
+               box_subject(el, nbuf, sizeof nbuf), box_subject(cb, cbuf, sizeof cbuf));
+    /* §9.2.1.1's SPLIT, WHICH THIS WALK CANNOT MEASURE AND WILL NOT GUESS AT. A hypothetical block-level box
+       inside a run of inline content breaks that run into TWO anonymous block boxes and sits between them, so
+       its position is the running position plus the height of the FIRST of them — a height this walk measures
+       for the WHOLE run and never for a prefix of it. Where nothing box-generating precedes the element in
+       its run there is no first box and the position is the run's own start, which is the reading below and
+       is the common case: an out-of-flow child between two block-level siblings, or at the start of a
+       container's content, has only collapsible white space in front of it. */
+    before.after = after;
+    before.end = n;
+    if (block_flow_run_generates_box(cb, before))
+        DFAILF("%s, whose static-position containing block is %s: CSS 2.2 §9.2.1.1 would break the anonymous "
+               "block box this element sits in — \"if a block container box … has a block-level box inside it "
+               "…, then we force it to have only block-level boxes inside it\" — because §10.3.7's "
+               "hypothetical "
+               "box is BLOCK-LEVEL and inline-level content precedes it inside one run. Its static position "
+               "is then this run's start plus the HEIGHT of the anonymous box that leading content becomes, "
+               "and this walk measures the whole run as ONE box rather than the two the hypothetical document "
+               "has. BUILD the split: `bf_anon_box` already measures a run and `block_flow_run_generates_box` "
+               "already decides whether one is a box, so what is missing is the ENUMERATION yielding an extra "
+               "break at this element — after which the position falls out of the same loop body every other "
+               "box on the stack is placed by",
+               box_subject(el, nbuf, sizeof nbuf), box_subject(cb, cbuf, sizeof cbuf));
+    st.after = after;
+    st.margin = bf_hypothetical_margin_top(el, cb);
+    st.top = &top;
+    st.found = &found;
+    {
+        CssPx unused = css_px(0.0);
+        bool want_found = false;
+
+        (void)bf_layout(cb, NULL, &unused, &want_found, NULL, &st, BF_BASELINE_NONE);
+    }
+    if (!found)
+        DFAILF("%s, whose static-position containing block is %s: CSS 2 §9.4.1's walk over that container "
+               "visited every one of CSS 2.2 §9.2.1.1's runs and none of them was the one this element sits "
+               "in. The run is named by the block-level box it FOLLOWS and the enumeration visits each run "
+               "exactly once, so the two readings of the box list — `bf_static_run_after`'s and the walk's — "
+               "have come apart, which they can only do if one of them classified a child differently from "
+               "the other",
+               box_subject(el, nbuf, sizeof nbuf), box_subject(cb, cbuf, sizeof cbuf));
     return top;
 }
 
@@ -1846,7 +2105,7 @@ size_t block_flow_anonymous_boxes(lxb_dom_element_t *el, BlockFlowAnonBox **out)
        come from. It is run whatever this container's `height` says — `bf_height_needs_content` decides whether
        a box's own content decides ITS SIZE, which is a different question from where the boxes inside it are,
        and a container with a declared height is exactly the one whose text can overflow it. */
-    (void)bf_layout(el, NULL, &unused, &found, &sink, BF_BASELINE_NONE);
+    (void)bf_layout(el, NULL, &unused, &found, &sink, NULL, BF_BASELINE_NONE);
     DCHECK(!found, "the anonymous-box walk reported placing a box it was not looking for");
     DCHECK(sink.n > 0,
            "CSS 2.2 §9.2.1.1's forcing generated NO anonymous block box inside a container whose child list "
