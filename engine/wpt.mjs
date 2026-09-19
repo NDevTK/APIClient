@@ -916,6 +916,33 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                       RASTERIZER rather than a layout number. This gate owns the testharness fifth. Nothing here
                       claims the rest is covered, and a reader who reads `css/css-flexbox` in this list as "the
                       flexbox area is tested" has read it as four times the statement it makes.
+                      AND THE FOUR FIFTHS ARE COUNTED BY `engine/wpt_reftest_scope.py`, WHICH IS THE THIRD
+                      COMMAND AND THE ONLY ONE THAT ASKS THE CLASSIFIER FOR ANYTHING BUT ITS TESTHARNESS
+                      ANSWER. `wpt_classify.py` keeps one kind and drops the rest on its own second line, so
+                      until that script landed nothing in this tree COUNTED a reftest — the `find` above is a
+                      count of FILES and stands in for a count of tests, which is a proxy rather than a
+                      classification. The new one walks the same tree with the same authority and reports the
+                      whole breakdown, the reference GRAPH (relations, how many references a test names, and
+                      how many of those references are themselves reftest nodes, which is what makes it a
+                      graph and not a pair), and two population bounds a reader of this entry needs.
+                      IT ALSO REPORTS THE ONE BAND THAT IS A FACT ABOUT THIS CHECKOUT RATHER THAN ABOUT THE
+                      CORPUS, and that band refines the sentence above rather than contradicting it: the
+                      reftest-ness of a CSS area is not a gap in the cone, and a large part of the reftest
+                      population is nonetheless unrunnable here, because the files those tests name as their
+                      references are not on disk. They are shared — a handful of reference documents carry
+                      most of the population — and they live in `css/reference` and `css/CSS2/reference`,
+                      which are real directories at the pinned corpus revision and sit outside the entries
+                      below. The same is true of `fonts`, which is where the corpus keeps the one typeface
+                      CSS tests use to make a text run a predictable size.
+                      THIS IS THE SHAPE THE `idlharness` ENTRY ABOVE ALREADY RECORDS, ARRIVING AT A DIFFERENT
+                      FAMILY, and it is worth naming here because the reading it invites is the expensive
+                      one: a reftest whose reference is absent does not report a missing file, it reports a
+                      FAILING TEST, and the component it names is the ENGINE. A first reference-image run
+                      made against this cone would therefore hand back a number that is a statement about
+                      WHICH DIRECTORIES ARE CHECKED OUT wearing the clothes of a rendering score. Run the
+                      script and read its absent band before reading any such number.
+                      NOTHING IS PREDICTED HERE ABOUT WHAT A REFERENCE-IMAGE RUN WOULD SCORE. No instrument
+                      in this tree has ever compared two renderings, so a first one is a BASELINE.
                       AND THE FIFTH IT DOES OWN HAS A REAL LAYOUT ORACLE IN IT, which is why the entries are
                       worth the disk at all: 341 of the 1055 load `resources/check-layout-th.js`, whose
                       assertions read `offsetWidth`/`offsetHeight`/`offsetTop`/`offsetLeft`,
