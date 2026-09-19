@@ -90,28 +90,36 @@
  * argued: the four wedges' shoelace areas are held to `w*h - (w-l-r)*(h-t-b)`, a number written out of the
  * EXTENTS and sharing no term with the vertices, and four rectangles fail it by exactly (l+r)(t+b).
  *
- * NAMED RESIDUAL — NINE OF CSS 2.1 §8.5.3's TEN `<border-style>` VALUES ARE NOT DRAWN.
- * WHAT IS NOT COVERED: every value that is neither `solid` nor a value whose used width is zero.
+ * NAMED RESIDUAL — EIGHT OF CSS 2.1 §8.5.3's TEN `<border-style>` VALUES ARE NOT DRAWN.
+ * WHAT IS NOT COVERED: every value that is none of `solid`, `double` and a value whose used width is zero.
  * CSS 2.1 §8.5.3 "Border style: 'border-top-style', 'border-right-style', 'border-bottom-style', 'border-left-style',
  * and 'border-style'" makes exactly ONE of its ten a single filled band — `solid`, "The border is a single
- * line segment" — and `none` and `hidden` compute to a used width of zero, so what this component draws is
- * the whole of what it can draw without picking a second thing no section states. The property that separates
- * the seven, rather than a list of them: each needs an operand the standards explicitly leave to the UA —
- * `double` a line THICKNESS ("The thickness of the lines is not specified, but the sum of the lines and the
- * space must equal border-width", css-backgrounds-3 §3.2), `dotted` and `dashed` a RHYTHM ("There is no
- * control over the spacing of the dots and dashes, nor over the length of the dashes", §3.2), and `groove`,
- * `ridge`, `inset` and `outset` a derived COLOUR ("UAs may choose their own algorithm to calculate the actual
- * colors used", CSS 2.1 §8.5.3). The mitre above is a pick too and is a different kind of pick: without SOME partition
- * of the corner no border can be drawn at all, so it is forced by the problem, where each of these is a
- * second choice for a side that would otherwise already be drawable.
- * WHAT THE NEXT DIFF BUILDS: `double`, because it is the only one of the seven whose missing operand is a
- * single number and whose shape this road already has. A sub-wedge entry beside `dlr_border_wedges` takes a
- * fraction pair [a, b] and answers the quadrilateral whose two edges are a wedge's outer and inner edges
- * linearly interpolated at a and at b — the full side being [0, 1] — and the `double` arm calls it at
- * [0, 1/3] and [2/3, 1], with the third named as this user agent's pick beside §3.2's parenthesis. The
- * partition assert generalises with it: a sub-wedge [a, b] of a trapezoid whose parallel sides are A and B at
- * a height H has area H*((b-a)*A + (b*b-a*a)*(B-A)/2), which sums over [0, 1] to the wedge's own.
- * HOW ITS ABSENCE WOULD SHOW: a dev build aborts at the first box declaring one of the seven, naming that
+ * line segment" — `double` is that band cut into three at a fraction this file names, and `none` and
+ * `hidden` compute to a used width of zero. The property that separates the six, rather than a list of them:
+ * each needs an operand the standards explicitly leave to the UA — `dotted` and `dashed` a RHYTHM ("There is
+ * no control over the spacing of the dots and dashes, nor over the length of the dashes",
+ * css-backgrounds-3 §3.2 "Line Patterns: the border-style properties"), and `groove`, `ridge`, `inset` and
+ * `outset` a derived COLOUR ("UAs may choose their own algorithm to calculate the actual colors used",
+ * CSS 2.1 §8.5.3). `double` needed one too — a line THICKNESS, "The thickness of the lines is not specified,
+ * but the sum of the lines and the space must equal border-width" (§3.2) — and what let it land ahead of the
+ * six is that its operand is a SINGLE NUMBER this file can state, where a rhythm is two and a colour is an
+ * entry another component does not have. The mitre above is a pick too and is a different kind of pick:
+ * without SOME partition of the corner no border can be drawn at all, so it is forced by the problem, where
+ * each of these is a second choice for a side that would otherwise already be drawable.
+ * WHAT THE NEXT DIFF BUILDS: `dashed`, because it is the only one of the six whose whole cost is in this
+ * file. Its shape is already this road's — §3.2 gives it as "A series of square-ended dashes", which is
+ * quadrilaterals and needs no curve — so what it wants is a dash length and a gap picked from the side's
+ * used width and named as this user agent's beside §3.2's note, distributed along the wedge's OUTER edge so
+ * that the note's "Implementations are encouraged to choose a spacing that makes the corners symmetrical"
+ * is satisfiable, with each dash clipped to its own wedge by `dlr_border_subwedge`'s neighbour in the other
+ * axis. THE OTHER FIVE ARE NOT NEXT AND EACH FOR A REASON THAT IS NOT ITS DIFFICULTY. `dotted` is "A series
+ * of round dots" (§3.2), so it is `raster_path_ellipse` and therefore `cos` and `sin`, and
+ * core/graphics/raster_path.c's own residual narrows two HOSTS' byte-for-byte agreement away from exactly
+ * those — a dotted border would widen that record's population from documents containing a canvas arc to
+ * every document declaring one, so its answer is owed first. `groove`, `ridge`, `inset` and `outset` want a
+ * derived colour, and core/css/css_color.h carries no entry that LIGHTENS or DARKENS at all; their SHAPE is
+ * `dlr_border_subwedge` and not a second geometry.
+ * HOW ITS ABSENCE WOULD SHOW: a dev build aborts at the first box declaring one of the six, naming that
  * value; a release build draws that SIDE's band nothing and its siblings normally, so a box comes out with
  * some of its four rules present and the rest missing while every background around it is painted — which is
  * the observation, and which side of which box exhibits it is a fact about a document rather than about this

@@ -175,9 +175,11 @@ static double dlr_wedge_surplus(const double q[4][4][2], double w, double h,
  * well. §3.2's note is cited first because it is the one that reaches a corner with no radius at all.
  *
  * THE PICK IS LOAD-BEARING FOR THE COMPONENT AND NOT FOR ONE STYLE, which is what separates it from the
- * splits `dlr_border_side` refuses below: without SOME partition of the corner there is no way to draw any
- * border at all, so this choice is forced by the problem, where a `double` line's thickness is a second
- * choice a side that is already drawable would need. */
+ * per-style splits below: without SOME partition of the corner there is no way to draw any border at all,
+ * so this choice is forced by the problem, where a `double` line's thickness is a second choice a side
+ * that is ALREADY DRAWABLE needs. That is why the two are stated differently and not merely in different
+ * places — this one is argued from the problem, and the third `DLR_DOUBLE_LINE_NUM` picks is named as
+ * this USER AGENT'S beside the two sections that decline to state it. */
 typedef struct { double x0, y0, x1, y1, xi0, yi0, xi1, yi1; } DlrBorderEdges;
 
 static void dlr_border_wedges(const DlrBorderEdges *b, double q[4][4][2])
@@ -204,6 +206,65 @@ static void dlr_border_wedges(const DlrBorderEdges *b, double q[4][4][2])
     q[3][3][0] = b->xi0; q[3][3][1] = b->yi1;
 }
 
+/* THIS USER AGENT'S `double` SPLIT, AS A RATIO OF INTEGERS SO ITS ONE CONSTRAINT IS A COMPILE-TIME ONE.
+ * NO SECTION STATES THE THICKNESS AND BOTH STATE THE SUM. CSS 2.1 §8.5.3 "Border style: 'border-top-style',
+ * 'border-right-style', 'border-bottom-style', 'border-left-style', and 'border-style'" gives `double` as
+ * "The border is two solid lines. The sum of the two lines and the space between them equals the value of
+ * 'border-width'", and css-backgrounds-3 §3.2 "Line Patterns: the border-style properties" renders it as
+ * "two parallel solid lines with some space between them" and then says the rest outright in its own
+ * parenthesis — "The thickness of the lines is not specified, but the sum of the lines and the space must
+ * equal border-width." So the THICKNESS is this user agent's pick and the SUM is the standards', which is
+ * why the pick is a FRACTION OF THE USED WIDTH rather than a length: at any width the two lines and the
+ * space are NUM/DEN, (DEN-2*NUM)/DEN and NUM/DEN of it and add to exactly DEN/DEN, so the sentence both
+ * sections state holds by construction at every width rather than at the one this file was written against.
+ * A THIRD IS THE PICK. What the two sections constrain is only that the space not be negative, and that is
+ * the `_Static_assert` below — an INTEGER one, which is why the fraction is spelled as a ratio rather than
+ * as a `double`: a floating comparison is not an integer constant expression, so it would have to become a
+ * runtime check of a literal against a literal, which is the shape CLAUDE.md names as an assert whose two
+ * sides cannot disagree. */
+#define DLR_DOUBLE_LINE_NUM 1
+#define DLR_DOUBLE_LINE_DEN 3
+_Static_assert(DLR_DOUBLE_LINE_NUM > 0 && 2 * DLR_DOUBLE_LINE_NUM <= DLR_DOUBLE_LINE_DEN,
+               "this user agent's `double` split lays a line of NUM/DEN of the used width at each edge of a "
+               "side, so a NUM of zero draws no line at all and a 2*NUM past DEN overlaps the two lines in "
+               "the middle. css-backgrounds-3 §3.2's \"the sum of the lines and the space must equal "
+               "border-width\" is the sum this ratio satisfies by construction; a NEGATIVE space is the one "
+               "way to spell a ratio that does not, and it is the only thing either section forbids");
+
+/* ONE SUB-BAND OF ONE MITRED WEDGE, at depths `a` and `b` of the way from the side's OUTER edge to the
+ * padding edge — [0, 1] being the whole wedge and giving its own four vertices back unchanged.
+ * IT INTERPOLATES THE TWO MITRE DIAGONALS AND NOT THE TWO PARALLEL EDGES, which is the only construction
+ * that stays inside the wedge. `dlr_border_wedges` indexes a wedge outer-first, outer-second, inner-second,
+ * inner-first, so q[0]->q[3] and q[1]->q[2] ARE that side's two diagonals and the point at depth t on each
+ * is the band's own corner there; the band therefore narrows exactly as the wedge does. A band built
+ * instead by insetting the outer edge along its own normal keeps the outer edge's LENGTH, so it leaves the
+ * wedge at both ends and paints into the two neighbouring sides — which is the overlap the wedges exist to
+ * remove, re-introduced one level down.
+ * IT REACHES NO `cos`, `sin` OR `hypot`: every coordinate is one `-`, one `*` and one `+` over vertices
+ * `dlr_border_wedges` has already produced, so display_list_raster.h's argument that this road keeps
+ * core/graphics/rasterizer.h's cross-host checksum oracle intact survives a `double` side unchanged. */
+static void dlr_border_subwedge(const double q[4][2], double a, double b, double out[4][2])
+{
+    int k;
+
+    for (k = 0; k < 2; k++) {
+        out[0][k] = q[0][k] + (q[3][k] - q[0][k]) * a;
+        out[1][k] = q[1][k] + (q[2][k] - q[1][k]) * a;
+        out[2][k] = q[1][k] + (q[2][k] - q[1][k]) * b;
+        out[3][k] = q[0][k] + (q[3][k] - q[0][k]) * b;
+    }
+}
+
+/* WHAT THREE BANDS OF ONE SIDE COVER, LESS THE WEDGE THEY WERE CUT FROM — positive when something is
+   covered twice and negative when something is covered by nothing. It is `dlr_wedge_surplus` one level
+   down and is called from the DCHECK in `dlr_border_side` and from nowhere else, for that predicate's own
+   stated reason: a `DCHECKF`'s condition and message arguments are both a `sizeof` in release, so neither
+   this nor the four shoelaces under it costs a release build anything. */
+static double dlr_band_surplus(const double band[3][4][2], const double whole[4][2])
+{
+    return dlr_quad_area(band[0]) + dlr_quad_area(band[1]) + dlr_quad_area(band[2]) - dlr_quad_area(whole);
+}
+
 /* ONE SIDE'S INK, WHICH IS ITS STYLE'S QUESTION AND NOT ITS WIDTH'S. CSS 2.1 §8.5.3 "Border style:
  * 'border-top-style', 'border-right-style', 'border-bottom-style', 'border-left-style', and 'border-style'"
  * and css-backgrounds-3 §3.2 "Line Patterns: the border-style properties" define the same ten values, and
@@ -226,6 +287,11 @@ static void dlr_border_side(const DisplayBorderSide *side, const double q[4][2],
                             DisplayListRasterCount *count)
 {
     RasterPath p;
+    /* THE THREE BANDS A `double` SIDE IS CUT INTO, outer line, space, inner line — declared here rather than
+       in the arm so that this entry stays one translation unit's worth of C89-shaped declarations like every
+       other function in this file, and read by that arm alone. */
+    double band[3][4][2];
+    double f;
 
     if (side->width.px == 0.0) return;
     switch (side->style) {
@@ -236,29 +302,67 @@ static void dlr_border_side(const DisplayBorderSide *side, const double q[4][2],
     case DISPLAY_BORDER_STYLE_NONE:
     case DISPLAY_BORDER_STYLE_HIDDEN:
         return;
-    /* THE ONE STYLE THIS COMPONENT DRAWS. */
+    /* CSS 2.1 §8.5.3's `solid`, "The border is a single line segment" — the whole wedge, and the only one of
+       the ten that is a SINGLE filled band. */
     case DISPLAY_BORDER_STYLE_SOLID:
         raster_path_init(&p);
         dlr_quad(&p, q);
         dlr_fill(&p, &side->color, surface, count);
         raster_path_free(&p);
         return;
+    /* CSS 2.1 §8.5.3's `double`, "The border is two solid lines" — the wedge's outer and inner thirds, with
+       `DLR_DOUBLE_LINE_NUM`/`DLR_DOUBLE_LINE_DEN` above carrying this user agent's pick of the third and the
+       two citations that leave it to one.
+       TWO BANDS IN ONE PATH AND ONE FILL, WHICH IS WHAT KEEPS `dlr_fill`'s OWN ACCOUNT TRUE: that entry says
+       a border mark lays "UP TO FOUR of them", one per side, and a second fill here would make it eight and
+       would composite any pixel the two bands shared TWICE — at an alpha below one that is a visibly darker
+       run, and it is the same double-composite the mitre exists to remove one level up. The two bands are
+       disjoint and wound the same way, so `RASTER_FILL_NONZERO` fills both from one path and a row crossing
+       both is two runs of ONE fill rather than one run of each of two. */
     case DISPLAY_BORDER_STYLE_DOUBLE:
-        DFAIL("a `double` border side reached the rasterizer, which draws only CSS 2.1 §8.5.3's `solid` — see "
-              "core/paint/display_list_raster.h's residual. THE GEOMETRY IS THIS COMPONENT'S AND THE SPLIT IS "
-              "NOT: CSS 2.1 §8.5.3 gives `double` as \"The border is two solid lines. The sum of the two lines and "
-              "the space between them equals the value of 'border-width'\", and css-backgrounds-3 §3.2 "
-              "\"Line Patterns: the border-style properties\" says the rest outright in its own parenthesis — "
-              "\"(The thickness of the lines is not specified, but the sum of the lines and the space must "
-              "equal border-width.)\". So a `double` side needs a RATIO no section states, where the mitre "
-              "above is forced by the problem rather than picked per style. WHAT THE NEXT DIFF BUILDS: a "
-              "sub-wedge entry beside `dlr_border_wedges` taking a fraction pair [a, b] and answering the "
-              "quadrilateral whose two edges are the wedge's outer and inner edges linearly interpolated at a "
-              "and at b — the full side being [0, 1] — and two calls of it at [0, 1/3] and [2/3, 1] with the "
-              "third named as this user agent's pick beside those two citations");
+        f = (double)DLR_DOUBLE_LINE_NUM / (double)DLR_DOUBLE_LINE_DEN;
+        dlr_border_subwedge(q, 0.0, f, band[0]);
+        dlr_border_subwedge(q, f, 1.0 - f, band[1]);
+        dlr_border_subwedge(q, 1.0 - f, 1.0, band[2]);
+        /* THE SENTENCE BOTH SECTIONS STATE, ASSERTED AS AREAS RATHER THAN RESTATED AS A COMMENT. "The sum of
+           the two lines and the space between them equals the value of 'border-width'" is a claim that the
+           three bands COVER this side with no overlap and no gap, which over one wedge is the same shape as
+           the partition `dlr_border` holds the four wedges to — and like that one it is read off the
+           VERTICES about to be handed to the path, so it is a statement about what the fill will see rather
+           than about the fractions the bands were built from. THE DEFECT IT CATCHES IS A BAND CUT FROM THE
+           WRONG PAIR OF RAYS: such a band still has an area and still looks like a band, and the three then
+           overlap or leave a gap. The tolerance is `dlr_border`'s own, written against this WEDGE's area
+           because that is the magnitude these twelve shoelace terms accumulate over. */
+        DCHECKF(fabs(dlr_band_surplus((const double (*)[4][2])band, q)) <= 1e-9 * (dlr_quad_area(q) + 1.0),
+                "a `double` side's two lines and the space between them miss the wedge they were cut from, "
+                "which is %g device pixels, by %g. CSS 2.1 §8.5.3 \"Border style: 'border-top-style', "
+                "'border-right-style', 'border-bottom-style', 'border-left-style', and 'border-style'\" "
+                "requires that \"The sum of the two lines and the space between them equals the value of "
+                "'border-width'\", so the three bands PARTITION the side — a SURPLUS is two of them "
+                "overlapping and a SHORTFALL is a strip of the side nothing covers, and either is "
+                "`dlr_border_subwedge` having interpolated something other than this wedge's two mitre "
+                "diagonals",
+                dlr_quad_area(q), dlr_band_surplus((const double (*)[4][2])band, q));
+        /* AND THE SPACE IS WHAT MAKES IT TWO LINES, so a wedge with any area at all has one. Without this
+           the arm is held only to a partition, and a split of [0, 1/2] and [1/2, 1] satisfies a partition
+           EXACTLY while painting the side as one unbroken band — the single wrong answer that is invisible
+           in every count this component reports, since two touching bands lay the same spans and the same
+           pixels as the `solid` arm above. */
+        DCHECKF(dlr_quad_area(q) <= 0.0 || dlr_quad_area((const double (*)[2])band[1]) > 0.0,
+                "a `double` side cut from a wedge of %g device pixels left a space of %g between its two "
+                "lines. CSS 2.1 §8.5.3 gives `double` as \"The border is two solid lines\" and "
+                "css-backgrounds-3 §3.2 \"Line Patterns: the border-style properties\" as \"two parallel "
+                "solid lines with some space between them\", so a space of zero draws them touching, which "
+                "is ONE line and is this engine's `solid`",
+                dlr_quad_area(q), dlr_quad_area((const double (*)[2])band[1]));
+        raster_path_init(&p);
+        dlr_quad(&p, (const double (*)[2])band[0]);
+        dlr_quad(&p, (const double (*)[2])band[2]);
+        dlr_fill(&p, &side->color, surface, count);
+        raster_path_free(&p);
         return;
     case DISPLAY_BORDER_STYLE_DOTTED:
-        DFAIL("a `dotted` border side reached the rasterizer, which draws only CSS 2.1 §8.5.3's `solid` — see "
+        DFAIL("a `dotted` border side reached the rasterizer, which draws only CSS 2.1 §8.5.3's `solid` and its `double` — see "
               "core/paint/display_list_raster.h's residual. IT IS THE ONE STYLE WHOSE GEOMETRY IS NOT THIS "
               "ROAD'S: css-backgrounds-3 §3.2 \"Line Patterns: the border-style properties\" gives it as \"A "
               "series of round dots\", and a ROUND dot is `raster_path_ellipse`, whose vertices come off "
@@ -270,7 +374,7 @@ static void dlr_border_side(const DisplayBorderSide *side, const double q[4][2],
               "Implementations are encouraged to choose a spacing that makes the corners symmetrical\"");
         return;
     case DISPLAY_BORDER_STYLE_DASHED:
-        DFAIL("a `dashed` border side reached the rasterizer, which draws only CSS 2.1 §8.5.3's `solid` — see "
+        DFAIL("a `dashed` border side reached the rasterizer, which draws only CSS 2.1 §8.5.3's `solid` and its `double` — see "
               "core/paint/display_list_raster.h's residual. THE SHAPE IS ALREADY THIS ROAD'S AND THE RHYTHM "
               "IS THE GAP: css-backgrounds-3 §3.2 \"Line Patterns: the border-style properties\" gives it as "
               "\"A series of square-ended dashes\", which is quadrilaterals and needs no curve, and then says "
@@ -293,7 +397,8 @@ static void dlr_border_side(const DisplayBorderSide *side, const double q[4][2],
     case DISPLAY_BORDER_STYLE_INSET:
     case DISPLAY_BORDER_STYLE_OUTSET:
         DFAIL("a `groove`, `ridge`, `inset` or `outset` border side reached the rasterizer, which draws only "
-              "CSS 2.1 §8.5.3's `solid` — see core/paint/display_list_raster.h's residual. THE MISSING THING "
+              "CSS 2.1 §8.5.3's `solid` and its `double` — see core/paint/display_list_raster.h's "
+              "residual. THE MISSING THING "
               "IS A COLOUR AND NOT A SHAPE: core/css/css_color.h has `css_color_parse`, `css_color_convert`, "
               "`css_color_quantize_8bit` and `css_color_serialize_html` and no entry that LIGHTENS or DARKENS "
               "a colour at all, so there is nothing here to compute the two tones css-backgrounds-3 §3.2 "
@@ -301,9 +406,10 @@ static void dlr_border_side(const DisplayBorderSide *side, const double q[4][2],
               "are slightly lighter and darker than the specified border-color.)\" — and CSS 2.1 §8.5.3 "
               "leaves the algorithm to the UA. WHAT THE NEXT DIFF BUILDS: that derivation in "
               "core/css/css_color.h, over a colour space CSS Color 4 names rather than by scaling sRGB "
-              "components, which is the same rule this road already obeys about conversion; the SHAPE is then "
-              "two half-width sub-wedges for `groove` and `ridge` and one whole wedge for `inset` and "
-              "`outset`, which is the `double` entry above and not a second one");
+              "components, which is the same rule this road already obeys about conversion; the SHAPE is ALREADY "
+              "HERE and is not a second geometry: `dlr_border_subwedge` above cuts a band of a wedge at "
+              "any depth pair, so `groove` and `ridge` are two half-width bands of it and `inset` and "
+              "`outset` are the whole wedge, and what those four are waiting on is the COLOUR alone");
         return;
     }
     /* A STYLE OUTSIDE THE VOCABULARY, WHICH THE DOOR ALREADY REFUSED. core/paint/display_list.c asserts
