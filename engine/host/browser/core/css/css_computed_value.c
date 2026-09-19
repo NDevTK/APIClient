@@ -1061,21 +1061,33 @@ bool css_computed_models(const char *name)
 }
 
 /* THE THREE CONDITIONS EVERY COMPUTED-VALUE RULE BELOW IS DERIVED UNDER. Both entries go through it, so
-   neither can be reached with a property this component does not model or whose shorthands are unexpanded. */
+   neither can be reached with a property this component does not model or whose shorthands are unexpanded.
+
+   EACH NAMES ITS PROPERTY, because the remedy these two crashes state is PER-PROPERTY and the operand is the
+   whole of the address. They said "BUILD the property's own `Computed value:` line" without printing WHICH
+   property, and a remedy with no object is a crash nobody can act on: the reader is told exactly what to do
+   and not to what. It is the shared-helper shape one step in — there the missing address is a file:line and
+   here it is the operand — and it is worse for the same reason, since every caller of this component reports
+   the identical two sentences. MEASURED: a real page (MDN) aborted here after seven minutes of CPU having
+   served its document and not one subresource, and the crash could not say which property to build, so the
+   next diff had to be found by re-running rather than by reading. RETIREMENT: this note goes when no
+   should-never-happen in this component states a per-operand remedy without printing that operand. */
 static void css_cv_modelled(lxb_dom_element_t *el, const char *name)
 {
     DCHECK(el != NULL && name != NULL, "a computed value was asked for with no element or no property name");
-    DCHECK(css_computed_models(name),
-           "a computed value was asked for a property this component does not derive. It answers a NAMED set "
-           "(css_computed_models) and crashes outside it rather than handing back a specified value under the "
-           "word `computed` — the two differ for every length-valued property, and the caller asking is a spec "
-           "algorithm that reads the computed one. BUILD the property's own `Computed value:` line here, and "
-           "record the shorthands that can set it in css_shorthand.c");
-    DCHECK(css_shorthand_complete_for(name),
-           "a computed value was derived for a property whose SHORTHANDS are not all expanded by "
-           "css_shorthand.c, so the cascade it reads may never have looked at the declaration that set it — a "
-           "`margin: 0` two lines above a `margin-top` read is invisible, and the answer is a real number with "
-           "nothing to say it is the initial value. Record the complete set in css_shorthand_complete_for");
+    DCHECKF(css_computed_models(name),
+            "`%s`: a computed value was asked for a property this component does not derive. It answers a "
+            "NAMED set (css_computed_models) and crashes outside it rather than handing back a specified value "
+            "under the word `computed` — the two differ for every length-valued property, and the caller "
+            "asking is a spec algorithm that reads the computed one. BUILD THAT PROPERTY'S own `Computed "
+            "value:` line here, and record the shorthands that can set it in css_shorthand.c",
+            name);
+    DCHECKF(css_shorthand_complete_for(name),
+            "`%s`: a computed value was derived for a property whose SHORTHANDS are not all expanded by "
+            "css_shorthand.c, so the cascade it reads may never have looked at the declaration that set it — "
+            "a `margin: 0` two lines above a `margin-top` read is invisible, and the answer is a real number "
+            "with nothing to say it is the initial value. Record THAT PROPERTY in css_shorthand_complete_for",
+            name);
 }
 
 CssLength css_computed_length(lxb_dom_element_t *el, const char *name)
