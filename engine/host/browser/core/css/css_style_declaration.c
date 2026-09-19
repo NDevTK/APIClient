@@ -1710,8 +1710,10 @@ unsigned cssom_parse_rules(const char *text, size_t len, CssomRuleFn cb, void *u
  * the top covers none of the numbers under it. The sections are:
  *   HTML §15.3.1  Hidden elements                  — the fourteen-element `display: none` rule
  *   HTML §15.3.2  The page                         — `html, body { display: block }`
- *   HTML §15.3.3  Flow content                     — the block-level flow rule, and `slot { display: contents }`
- *   HTML §15.3.6  Sections and headings            — `article, aside, :heading, hgroup, nav, section`
+ *   HTML §15.3.3  Flow content                     — the block-level flow rule, `slot { display: contents }`, and
+ *                                                    its two margin rules `margin-block: 1em` / `margin-inline: 40px`
+ *   HTML §15.3.6  Sections and headings            — `article, aside, :heading, hgroup, nav, section`, and its six
+ *                                                    `:heading(n)` rules' font sizes and block margins
  *   HTML §15.3.7  Lists                            — `dir, dd, dl, dt, menu, ol, ul`, and `li { display: list-item }`
  *   HTML §15.3.8  Tables                           — the nine table box types, and its two `vertical-align` rules
  *   HTML §15.3.10 Form controls                    — `input, button { display: inline-block }`
@@ -1729,34 +1731,66 @@ unsigned cssom_parse_rules(const char *text, size_t len, CssomRuleFn cb, void *u
  * block containers and differ in the marker box alone, so the deviation is in the marker and not in the box
  * type, and closing it needs a structural selector this layer does not evaluate. HTML §15.3.7's list-style rules
  * are the same absence stated once above.
- *   `:heading(n)`'S FONT SIZES USED TO BE ON THAT LIST AND ARE NOT AN ABSENCE ANY MORE — `cssd_ua_heading_font_size`
- *   below answers them, because the level that pseudo-class selects on is HTML §4.3.11.1 "Heading levels & offsets"'s
+ *   `:heading(n)`'S FONT SIZES AND BLOCK MARGINS USED TO BE ON THAT LIST AND ARE NOT AN ABSENCE ANY MORE —
+ *   `cssd_ua_heading_font_size` and `cssd_ua_heading_margin_block`
+ *   below answer them, because the level that pseudo-class selects on is HTML §4.3.11.1 "Heading levels & offsets"'s
  *   algorithm over the element alone rather than a selector anything has to match. The clause is rewritten and
  *   not deleted so that a reader who re-derives a-pseudo-class-needs-a-matcher from the `summary` case above
  *   does not conclude the same of a level: the two are different in kind, and which one a rule is decides
  *   whether it is buildable here.
- *   THE MARGINS OF HTML §15.3.3 Flow content AND HTML §15.3.6 Sections and headings ARE STILL ABSENT AND THE REASON
- *   IS NOT THE SELECTOR — their selectors are ordinary tags (`blockquote, figure, listing, p, plaintext, pre,
- *   xmp { margin-block: 1em }`, `blockquote, figure { margin-inline: 40px }`) and §15.3.6's is the level this
- *   file now computes. It is the PROPERTY — the rendering section states every one of its margins and
- *   paddings LOGICALLY — AND THE REASON THE PROPERTY BLOCKED IT IS RETIRED, WHICH IS RECORDED HERE RATHER
- *   THAN QUIETLY DROPPED BECAUSE THE RETIRED REASONING NAMED THE WRONG LAYER AND A READER WILL RE-DERIVE IT.
+ *   THE MARGINS OF HTML §15.3.3 Flow content AND HTML §15.3.6 Sections and headings ARE HERE NOW — the first
+ *   as longhand rows of the table, the second as `cssd_ua_heading_margin_block` beside the font sizes — AND
+ *   THE RESIDUAL THAT NAMED THEM IS RETIRED WITH ITS REASONING REWRITTEN RATHER THAN DROPPED, TWICE OVER,
+ *   because both retired reasons are ones a reader re-derives from the code in front of them.
+ *   THE FIRST RETIRED REASON WAS THE LAYER, and it was retired by the diff that landed core/css/css_logical.h.
  *   It read: a row spelling `margin-block-start` is a declaration the cascade would carry and NO layout read
  *   would ever ask for — the write-with-no-reader shape — since core/layout/used_value.c carries the ten
  *   PHYSICAL box-model lengths and DFAILs by name on a logical spelling; and a row spelling `margin-top`
  *   instead would be this file deciding a writing mode on core/layout's behalf. THE SECOND HALF STILL HOLDS
  *   AND THE FIRST DOES NOT. css-logical-1 §4 "Flow-Relative Box Model Properties" pairs the two properties and
  *   makes them SHARE A COMPUTED VALUE, so a `margin-block-start` declaration is what `margin-top`'s computed
- *   value is cascaded from — core/css/css_logical.h is that mapping and `cssd_decls_collect` applies it — and
- *   block_flow.c's `used_value_px(el, "margin-top")` therefore reads a row written logically. The layer was
- *   the whole of the error: at `used_value_px`, where the retired clause put it, the mapping would have left
- *   the COMPUTED value of `margin-top` at its initial `0`, which §4's own last sentence forbids.
- *   WHAT THE NEXT DIFF BUILDS: these rows, transcribed in the section's own spelling — HTML §15.3.3's
- *   `blockquote, figure, listing, p, plaintext, pre, xmp { margin-block: 1em }` and `blockquote, figure
- *   { margin-inline: 40px }` — which needs the UA table to carry a row whose property is a css-logical-1 §4.2
- *   SHORTHAND, since `margin-block` expands to two longhands and every row here states one property.
- *   ITS ABSENCE SHOWS as a rendered document whose block-level boxes all touch: every band of ink is separated
- *   from the next by the line box alone, with no gap anywhere a margin is stated. */
+ *   value is cascaded from — `cssom_cascaded_value` reads the partner and collects BOTH members' UA rows into
+ *   one cascade — and block_flow.c's `used_value_px(el, "margin-top")` therefore reads a row written
+ *   logically. The layer was the whole of that error: at `used_value_px`, where the retired clause put it, the
+ *   mapping would have left the COMPUTED value of `margin-top` at its initial `0`, which
+ *   css-logical-1 §4's own last sentence forbids.
+ *   THE SECOND RETIRED REASON WAS THE REPLACEMENT CLAUSE ITSELF, WHICH WAS WRONG WHEN WRITTEN, and that is
+ *   recorded here rather than quietly corrected because a next-diff clause is read once, by somebody who has
+ *   already decided to do the work. It said these rows "need the UA table to carry a row whose property is a
+ *   css-logical-1 §4.2 SHORTHAND, since `margin-block` expands to two longhands and every row here states one
+ *   property". THE PREMISE IS THIS BLOCK'S OWN RULE AND THE CONCLUSION INVERTS IT: the lead-in twelve lines
+ *   above says a row is ALWAYS A LONGHAND and says why — `cssd_ua_value` finds a row by `strcmp` on the
+ *   property name and `cssom_cascaded_value` asserts the cascade is over longhands only — so a shorthand row
+ *   is unreachable by construction and the table needed no new capability at all. What the rows needed was the
+ *   expansion the lead-in already prescribes, and css-logical-1 §4.2 states it: "If only one value is given,
+ *   it applies to both the start and end edges." THE TELL WAS IN THE CLAUSE'S OWN SENTENCE — it named a
+ *   mechanism ("carry a shorthand row") as the thing to build, and a clause that names a mechanism is a claim
+ *   about THIS TREE written by somebody who knew what was missing and was guessing at what fills it.
+ *   WHAT IS NOT COVERED — the margins and paddings of FOUR OTHER SECTIONS, all of them type selectors this
+ *   table could express and none of them landing with these two. HTML §15.3.7 Lists is
+ *   `dir, dl, menu, ol, ul { margin-block: 1em }`, `dd { margin-inline-start: 40px }` and
+ *   `dir, menu, ol, ul { padding-inline-start: 40px }`; HTML §15.3.8 Tables is `td, th { padding: 1px }`;
+ *   HTML §15.3.11 The hr element is `hr { margin-block: 0.5em; margin-inline: auto }`; HTML §15.3.12 The
+ *   fieldset and legend elements is `fieldset { margin-inline: 2px; padding-block: 0.35em 0.625em;
+ *   padding-inline: 0.75em }` and `legend { padding-inline: 2px }`. HTML §15.3.3's own
+ *   `form { margin-block-end: 1em }` is NOT in that list and is not an absence: its prose puts it under "In
+ *   quirks mode, the following rules are also expected to apply", and this table holds no quirks rules.
+ *   §15.3.7 IS THE ONE THAT MUST NOT LAND ALONE, and the reason is a companion rule rather than a missing
+ *   value: `:is(dir, dl, menu, ol, ul) :is(dir, dl, menu, ol, ul) { margin-block: 0 }` is a DESCENDANT
+ *   COMBINATOR this layer does not evaluate, so the type rule without it gives a NESTED list the 1em a
+ *   browser takes away — trading a wrong answer on top-level lists for a wrong answer on nested ones rather
+ *   than closing either. It lands in the diff that gives this layer core/dom/selector_match.h's matcher,
+ *   which the §15.3.8 `table > tr` comment below already names as its own next diff.
+ *   WHAT THE NEXT DIFF BUILDS: §15.3.11's and §15.3.12's rows, which have no companion rule and are two
+ *   sections of pure type selectors — §15.3.11 needing `auto` to survive core/layout/used_value.c's CSS 2.1
+ *   §10.3.3 margin arm, and §15.3.12 needing the TWO-VALUE form of a css-logical-1 §4.2 shorthand
+ *   (`padding-block: 0.35em 0.625em`), whose two edges take DIFFERENT values and which is therefore the one
+ *   expansion these two rules did not exercise.
+ *   HOW ITS ABSENCE WOULD SHOW: a rendered document gains its gaps between paragraphs, headings, blockquotes
+ *   and `<pre>` blocks and keeps none between list items, around an `<hr>`, or inside a `<fieldset>` — so a
+ *   page whose structure is a list reads as one unbroken band of ink while the prose beside it does not.
+ *   RETIREMENT: this record goes when every margin and padding HTML §15 states over a bare type selector has
+ *   a row here, at which point there is no partial transcription left for a reader to re-derive a reason for. */
 /*
  * AND HTML §15.3.4 Phrasing content's `ruby { display: ruby }` / `rt { display: ruby-text }` ARE DELIBERATELY
  * ABSENT, which is the one place adding a row would make this engine WORSE rather than more complete, and the
@@ -1807,6 +1841,49 @@ static const struct { const char *tag; const char *prop; const char *value; } UA
        already read. The number here was css-display-3 §3.1, which is that module's "Reordering and
        Accessibility". */
     { "slot", "display", "contents" },
+    /* HTML §15.3.3 Flow content's TWO MARGIN RULES, transcribed verbatim from that section:
+         blockquote, figure, listing, p, plaintext, pre, xmp {
+           margin-block: 1em;
+         }
+
+         blockquote, figure { margin-inline: 40px; }
+       EACH IS FOUR LONGHAND ROWS PER TAG AND NOT ONE SHORTHAND ROW, which is the lead-in's rule and is where
+       this file's own retired residual had it wrong: it named "a row whose property is a css-logical-1 §4.2
+       SHORTHAND" as the thing the next diff needed, and `cssd_ua_value` finds a row by `strcmp` on the
+       property NAME while `cssom_cascaded_value` asserts the cascade is over LONGHANDS ONLY — so a
+       `margin-block` row is a declaration no read can ever reach. The expansion is the shorthand's own
+       sentence, in css-logical-1 §4.2 "Flow-Relative Margins: the margin-block-start, margin-block-end,
+       margin-inline-start, margin-inline-end properties and margin-block and margin-inline shorthands":
+       "These two shorthand properties set the margin-block-start & margin-block-end and margin-inline-start &
+       margin-inline-end, respectively. The first value represents the start edge style, and the second value
+       represents the end edge style. If only one value is given, it applies to both the start and end edges."
+       BOTH RULES GIVE ONE VALUE, so both edges of each pair carry it — and the emphasis is outside the
+       quotation marks deliberately, because this file writes emphasis in capitals and a capitalised run
+       inside a quotation is bytes the standard does not have.
+       THE SPELLING IS THE SECTION'S OWN — FLOW-RELATIVE — AND THAT IS WHAT MAKES THE ROWS READABLE rather
+       than a second decision about a writing mode. css-logical-1 §4 "Flow-Relative Box Model Properties"
+       pairs each of these with one physical margin using the element's own computed writing mode and makes
+       the pair SHARE A COMPUTED VALUE, and `cssom_cascaded_value` collects BOTH members of the pair into one
+       cascade — so `used_value_px(el, "margin-top")`, which core/layout/block_flow.c asks of every block
+       container, is answered by the `margin-block-start` row here in a horizontal-tb document and by the
+       `margin-inline-start` row in a vertical one, with no line in this file naming an axis.
+       NO PAIR HAS BOTH MEMBERS DECLARED HERE, which `cssom_cascaded_value` asserts rather than assumes: these
+       are the flow-relative members and no physical margin row exists for any of these seven tags. The
+       PHYSICAL margin spellings HTML §15.3.3 and HTML §15.4.2 Images do carry (`hr[align=left i]`,
+       `img[align=left i]`) are presentational hints and quirks rules, which css-cascade-5 §6.5 puts in a
+       different origin and which this table does not hold.
+       WITHOUT THESE ROWS EVERY BLOCK-LEVEL BOX IN EVERY RENDERED DOCUMENT TOUCHED THE NEXT — a paragraph, a
+       blockquote and a `<pre>` were separated from their neighbours by the line box alone, which is the
+       picture the retired residual named as the way its absence would show. */
+    { "blockquote", "margin-block-start", "1em" }, { "blockquote", "margin-block-end", "1em" },
+    { "figure", "margin-block-start", "1em" },     { "figure", "margin-block-end", "1em" },
+    { "listing", "margin-block-start", "1em" },    { "listing", "margin-block-end", "1em" },
+    { "p", "margin-block-start", "1em" },          { "p", "margin-block-end", "1em" },
+    { "plaintext", "margin-block-start", "1em" },  { "plaintext", "margin-block-end", "1em" },
+    { "pre", "margin-block-start", "1em" },        { "pre", "margin-block-end", "1em" },
+    { "xmp", "margin-block-start", "1em" },        { "xmp", "margin-block-end", "1em" },
+    { "blockquote", "margin-inline-start", "40px" }, { "blockquote", "margin-inline-end", "40px" },
+    { "figure", "margin-inline-start", "40px" },     { "figure", "margin-inline-end", "40px" },
     /* HTML §15.3.6 Sections and headings */
     { "article", "display", "block" }, { "aside", "display", "block" },
     { "h1", "display", "block" },    { "h2", "display", "block" },
@@ -2018,33 +2095,14 @@ static const char *cssd_ua_display_conditional(lxb_dom_element_t *el, const lxb_
     return NULL;
 }
 
-/* HTML §15.3.6 Sections and headings' SIX FONT-SIZE RULES, whose selector is `:heading(n)` — a pseudo-class and
- * therefore not a row of the type-name table, and NOT a selector this layer has to evaluate either, because
- * the LEVEL it selects on is an algorithm over the element alone. That is the same reason `[hidden]` and
- * `dialog:not([open])` are functions above rather than rows: what a `{tag, prop}` key cannot express and a
- * matcher is not needed for is a question asked of one element, which is exactly what these are.
- *
- * WHY THESE SIX AND NOT THE REST OF §15.3.6 AND §15.3.4, which is the whole of the judgement here and is the
- * test this file's own lead-in states — "The question to ask of a rendering-section declaration is therefore
- * not whether it is missing but whether anything READS the property, and where something does, the row is owed
- * rather than excused". `font-size` is read all the way to the rasterizer: core/css/css_computed_value.c's
- * `css_font_size_px` is what css-values-4 §6.1.1's advance measure scales a glyph's width by
- * (core/layout/text_run.c), what core/layout/line_box.c's used line height is derived from, and what
- * core/paint/box_paint.c writes into a glyph mark's `em` for core/paint/display_list_raster.c to size the
- * outline with. So a missing `font-size` row is not an absent declaration, it is every heading on every page
- * laid out and PAINTED at body size — which is what this engine did.
- *   §15.3.6's `:heading { font-weight: bold }` and §15.3.4's `b, strong { font-weight: bolder }`,
- *   `cite, dfn, em, i, var { font-style: italic }` and `code, kbd, samp, tt { font-family: monospace }` are
- *   DELIBERATELY ABSENT by that same test and not by oversight: `font-weight`, `font-style` and `font-family`
- *   are carried by the cascade and read by NOTHING — no layout entry, no paint entry, no computed-value entry
- *   names any of the three — so a row for one is a declaration with no reader, which is the write-with-no-reader
- *   shape and not a smaller transcription. They land in the diff that gives core/css/font_metrics.h a second
- *   face to select, because that is the consumer whose absence makes them inert.
- *   §15.3.4's `sub, sup { line-height: normal }` IS read (core/layout/line_box.c takes
- *   `css_used_line_height_px`) and is left for the next diff rather than excused: `normal` is that property's
- *   own initial value, so the row's whole effect is to STOP an inherited non-normal line height reaching a
- *   `<sub>`, which is a second property with a second value arm to verify and not a rider on this one.
- *   §15.3.3's and §15.3.7's MARGINS are a different absence with a different reason, stated at the table.
+/* HTML §4.3.11.1 Heading levels & offsets' COMPUTED HEADING LEVEL, or 0 for an element that has none.
+ * IT IS ONE FUNCTION BECAUSE THE SECTION IS ONE ALGORITHM AND §15.3.6 STATES TWO PROPERTIES OVER IT — the
+ * font sizes and the block margins are two row sets keyed by the SAME level, and a second copy of this walk
+ * beside the second table is the shape where one of them ends up reading `headingoffset` and the other not.
+ * THE `9` HERE IS §4.3.11.1'S OWN LAST STEP and belongs to the algorithm rather than to either table: "If
+ * level is greater than 9, then return 9". Each reader below asserts its own rows against it separately,
+ * because a table added or shortened without the other moving is exactly the state this split makes
+ * possible and the cap cannot see.
  *
  * HTML §4.3.11.1 Heading levels & offsets IS THE LEVEL, and it is not the digit in the tag name: "Increment
  * level by the result of getting an element's computed heading offset given element", where the offset is an
@@ -2057,25 +2115,21 @@ static const char *cssd_ua_display_conditional(lxb_dom_element_t *el, const lxb_
  * THE WALK IS `css_parent_element` AND NOT A RAW PARENT because §4.3.11.1's own step is "If inclusiveAncestor's
  * parent is a shadow root, then set inclusiveAncestor to that shadow root's host and continue", which is
  * exactly what that entry does, and its next step — "Set inclusiveAncestor to inclusiveAncestor's parent
- * element" — is the NULL that entry answers for a Document parent. */
-static const char *cssd_ua_heading_font_size(lxb_dom_element_t *el, const lxb_char_t *tag, size_t taglen)
+ * element" — is the NULL that entry answers for a Document parent.
+ */
+static unsigned cssd_ua_heading_level(lxb_dom_element_t *el, const lxb_char_t *tag, size_t taglen)
 {
-    /* §15.3.6, transcribed in the spec's own spelling. The index is the LEVEL minus one, so the table is a
-       total function over §4.3.11.1's whole range: levels 1-5 are that section's five single-level rules and
-       6-9 are its `:heading(6, 7, 8, 9)` rule, which exists precisely because an offset can push a level past
-       the six tag names. LEVEL 4's `1.00em` IS THE IDENTITY of the inherited value and is transcribed anyway:
-       it is a rule of the section, and a hole where a rule is would have to be re-derived by the next reader
-       from the fact that `1em` and inheritance agree — a fact about this property, not about this table. */
-    static const char *const HEADING_FONT_SIZE[9] = {
-        "2.00em", "1.50em", "1.17em", "1.00em", "0.83em", "0.67em", "0.67em", "0.67em", "0.67em"
-    };
     unsigned level, offset = 0;
     lxb_dom_element_t *anc;
 
     /* §4.3.11.1's first six steps, verbatim: "If element's local name is h1, then set level to 1" and so on to
        h6, then "Assert: level is not 0". An element the six do not name has NO heading level, which is also
-       what makes Selectors 5 §8's non-functional `:heading` exactly these six elements. */
-    if (taglen != 2 || tag[0] != 'h' || tag[1] < '1' || tag[1] > '6') return NULL;
+       what makes Selectors 5 §8's non-functional `:heading` exactly these six elements.
+       `0` IS THAT ANSWER AND IT CANNOT COLLIDE WITH A LEVEL, which is why the readers below test it rather
+       than carrying a separate found flag: §4.3.11.1 seeds level from one of the six tag names and then only
+       ADDS an offset to it, and its own next step is "Assert: level is not 0" — so every level this function
+       can return is at least 1 and 0 is free to mean `this element has no heading level`. */
+    if (taglen != 2 || tag[0] != 'h' || tag[1] < '1' || tag[1] > '6') return 0;
     level = (unsigned)(tag[1] - '1') + 1u;
     /* §4.3.11.1's GET AN ELEMENT'S COMPUTED HEADING OFFSET. The accumulator SATURATES at 9 rather than being
        carried wide, which is not a cap on the walk: §4.3.11.1's next step is "If level is greater than 9, then
@@ -2107,21 +2161,110 @@ static const char *cssd_ua_heading_font_size(lxb_dom_element_t *el, const lxb_ch
         if (lxb_dom_element_has_attribute(anc, (const lxb_char_t *)"headingreset", 12)) break;
     }
     level += offset;
+    /* HTML §4.3.11.1 Heading levels & offsets' own last step, "If level is greater than 9, then return 9". */
     if (level > 9) level = 9;
-    /* THE CAP AND THE TABLE ARE TWO SEPARATE NINES AND THIS IS WHERE THEY ARE HELD TOGETHER. The line above is
-       HTML §4.3.11.1 Heading levels & offsets' own last step, "If level is greater than 9, then return 9", written
-       as a literal; the row set is HTML §15.3.6 Sections and headings' and carries its own length. A row added or
-       dropped without the other moving is a read past the end of this table, which is a state an edit can
-       reach and the only one it can — an assert over the LEVEL alone could not fail here, because the seed is
-       one of six and the cap is directly above it. The emptiness half is the same invariant
-       `cssd_ua_table_check` asserts of every row of the type table: an empty string is a value the cascade
-       would carry, not an absent declaration. */
-    DCHECK(level - 1 < sizeof(HEADING_FONT_SIZE) / sizeof(HEADING_FONT_SIZE[0]) &&
-               HEADING_FONT_SIZE[level - 1] != NULL && HEADING_FONT_SIZE[level - 1][0] != '\0',
-           "HTML §15.3.6 (Sections and headings)'s font-size row set and HTML §4.3.11.1 (Heading levels & offsets)'s "
-           "level range have come apart — a computed heading level selected past the last row transcribed "
-           "here, or selected one with no value in it");
+    return level;
+}
+
+/* THE CAP AND A ROW SET ARE TWO SEPARATE NINES AND THIS IS WHERE EACH PAIR IS HELD TOGETHER. The cap is
+   HTML §4.3.11.1 Heading levels & offsets' and lives in `cssd_ua_heading_level` above; a row set is
+   HTML §15.3.6 Sections and headings' and carries its own length. A row added or dropped without the other
+   moving is a read past the end of that table, which is a state an edit can reach and the only one it can —
+   an assert over the LEVEL alone could not fail, because the seed is one of six and the cap is right above
+   the return. THE SPLIT MADE THIS ASSERT LOAD-BEARING TWICE RATHER THAN ONCE: two tables now key on one
+   level and each can come apart from the cap on its own, so the check is at each reader and is not hoisted
+   into the level function, which has no row set to check against. The emptiness half is the same invariant
+   `cssd_ua_table_check` asserts of every row of the type table: an empty string is a value the cascade
+   would carry, not an absent declaration. */
+#define CSSD_UA_HEADING_ROW(level, table, section)                                                          \
+    DCHECK((level) - 1u < sizeof(table) / sizeof((table)[0]) &&                                             \
+               (table)[(level) - 1u] != NULL && (table)[(level) - 1u][0] != '\0',                           \
+           "HTML §15.3.6 (Sections and headings)'s " section " row set and HTML §4.3.11.1 (Heading levels & "  \
+           "offsets)'s level range have come apart — a computed heading level selected past the last row "   \
+           "transcribed here, or selected one with no value in it")
+
+/* HTML §15.3.6 Sections and headings' SIX FONT-SIZE RULES, whose selector is `:heading(n)` — a pseudo-class and
+ * therefore not a row of the type-name table, and NOT a selector this layer has to evaluate either, because
+ * the LEVEL it selects on is an algorithm over the element alone. That is the same reason `[hidden]` and
+ * `dialog:not([open])` are functions above rather than rows: what a `{tag, prop}` key cannot express and a
+ * matcher is not needed for is a question asked of one element, which is exactly what these are.
+ *
+ * WHY THESE SIX AND NOT THE REST OF §15.3.6 AND §15.3.4, which is the whole of the judgement here and is the
+ * test this file's own lead-in states — "The question to ask of a rendering-section declaration is therefore
+ * not whether it is missing but whether anything READS the property, and where something does, the row is owed
+ * rather than excused". `font-size` is read all the way to the rasterizer: core/css/css_computed_value.c's
+ * `css_font_size_px` is what css-values-4 §6.1.1's advance measure scales a glyph's width by
+ * (core/layout/text_run.c), what core/layout/line_box.c's used line height is derived from, and what
+ * core/paint/box_paint.c writes into a glyph mark's `em` for core/paint/display_list_raster.c to size the
+ * outline with. So a missing `font-size` row is not an absent declaration, it is every heading on every page
+ * laid out and PAINTED at body size — which is what this engine did.
+ *   §15.3.6's `:heading { font-weight: bold }` and §15.3.4's `b, strong { font-weight: bolder }`,
+ *   `cite, dfn, em, i, var { font-style: italic }` and `code, kbd, samp, tt { font-family: monospace }` are
+ *   DELIBERATELY ABSENT by that same test and not by oversight: `font-weight`, `font-style` and `font-family`
+ *   are carried by the cascade and read by NOTHING — no layout entry, no paint entry, no computed-value entry
+ *   names any of the three — so a row for one is a declaration with no reader, which is the write-with-no-reader
+ *   shape and not a smaller transcription. They land in the diff that gives core/css/font_metrics.h a second
+ *   face to select, because that is the consumer whose absence makes them inert.
+ *   §15.3.4's `sub, sup { line-height: normal }` IS read (core/layout/line_box.c takes
+ *   `css_used_line_height_px`) and is left for the next diff rather than excused: `normal` is that property's
+ *   own initial value, so the row's whole effect is to STOP an inherited non-normal line height reaching a
+ *   `<sub>`, which is a second property with a second value arm to verify and not a rider on this one.
+ *   §15.3.3's MARGINS ARE NO LONGER ON THIS LIST — they are rows of the table above, and §15.3.6's own
+ *   `margin-block` rules are the function directly below this one, which is what `margin-block` and
+ *   `font-size` sharing a level and a selector makes possible. §15.3.7's are still absent and the reason is
+ *   a different one, stated at the table.
+ *
+ */
+static const char *cssd_ua_heading_font_size(lxb_dom_element_t *el, const lxb_char_t *tag, size_t taglen)
+{
+    /* §15.3.6, transcribed in the spec's own spelling. The index is the LEVEL minus one, so the table is a
+       total function over §4.3.11.1's whole range: levels 1-5 are that section's five single-level rules and
+       6-9 are its `:heading(6, 7, 8, 9)` rule, which exists precisely because an offset can push a level past
+       the six tag names. LEVEL 4's `1.00em` IS THE IDENTITY of the inherited value and is transcribed anyway:
+       it is a rule of the section, and a hole where a rule is would have to be re-derived by the next reader
+       from the fact that `1em` and inheritance agree — a fact about this property, not about this table. */
+    static const char *const HEADING_FONT_SIZE[9] = {
+        "2.00em", "1.50em", "1.17em", "1.00em", "0.83em", "0.67em", "0.67em", "0.67em", "0.67em"
+    };
+    unsigned level = cssd_ua_heading_level(el, tag, taglen);
+
+    if (level == 0) return NULL;
+    CSSD_UA_HEADING_ROW(level, HEADING_FONT_SIZE, "font-size");
     return HEADING_FONT_SIZE[level - 1];
+}
+
+/* HTML §15.3.6 Sections and headings' SIX MARGIN RULES, which that section states beside the font sizes in
+ * the same six declarations and in the same `:heading(n)` selector:
+ *     :heading(1) { margin-block: 0.67em; font-size: 2.00em; }
+ *     :heading(2) { margin-block: 0.83em; font-size: 1.50em; }
+ *     :heading(3) { margin-block: 1.00em; font-size: 1.17em; }
+ *     :heading(4) { margin-block: 1.33em; font-size: 1.00em; }
+ *     :heading(5) { margin-block: 1.67em; font-size: 0.83em; }
+ *     :heading(6, 7, 8, 9) { font-size: 0.67em; margin-block: 2.33em; }
+ * SO THEY ARE A FUNCTION AND NOT ROWS FOR THE REASON THE FONT SIZES ARE, and the reason is worth not
+ * re-deriving: the selector is a pseudo-class, which a `{tag, prop}` key cannot express — and the LEVEL it
+ * selects on is HTML §4.3.11.1's algorithm over the element alone, so no matcher is needed either. A
+ * `{"h1", "margin-block-start", "0.67em"}` ROW WOULD BE WRONG rather than narrow for exactly the reason
+ * stated at the font sizes: an `<h1>` inside `<article headingoffset="1">` has level 2 and takes `0.83em`.
+ * EACH RULE IS TWO LONGHANDS, by css-logical-1 §4.2's own sentence — "If only one value is given, it applies
+ * to both the start and end edges" — and the two edges of one level always carry the same value, which is
+ * why ONE row per level answers both and the caller asks which edge it wants.
+ *   `margin-block` AND NOT `margin-top` IS WHAT MAKES THIS READABLE AT ALL: css-logical-1 §4's pairing is
+ *   applied by `cssom_cascaded_value`, so the value returned here for `margin-block-start` is what
+ *   `margin-top`'s computed value is cascaded from and core/layout/block_flow.c's `used_value_px(el,
+ *   "margin-top")` therefore reads it.
+ * WITHOUT THESE SIX EVERY HEADING ON EVERY PAGE SAT FLUSH AGAINST THE PROSE ABOVE AND BELOW IT — the same
+ * defect as the font sizes', in the same picture, and visible in it even after the sizes landed. */
+static const char *cssd_ua_heading_margin_block(lxb_dom_element_t *el, const lxb_char_t *tag, size_t taglen)
+{
+    static const char *const HEADING_MARGIN_BLOCK[9] = {
+        "0.67em", "0.83em", "1.00em", "1.33em", "1.67em", "2.33em", "2.33em", "2.33em", "2.33em"
+    };
+    unsigned level = cssd_ua_heading_level(el, tag, taglen);
+
+    if (level == 0) return NULL;
+    CSSD_UA_HEADING_ROW(level, HEADING_MARGIN_BLOCK, "margin-block");
+    return HEADING_MARGIN_BLOCK[level - 1];
 }
 
 /* THE UA DECLARATION for `name` on `el`, and its css-cascade-5 §6.3 IMPORTANCE. `*important` is written on EVERY path,
@@ -2162,6 +2305,22 @@ static const char *cssd_ua_value(lxb_dom_element_t *el, const char *name, bool *
         const char *fs = cssd_ua_heading_font_size(el, tag, n);
 
         if (fs) return fs;
+    }
+    /* HTML §15.3.6's `:heading(n)` BLOCK MARGINS, asked here for the same reason and answering the same level.
+       BOTH EDGES TAKE ONE ROW because `margin-block: <one value>` gives them one value — css-logical-1 §4.2's
+       "If only one value is given, it applies to both the start and end edges" — so the two names below are
+       the two longhands of one declaration rather than two rules.
+       THE INLINE EDGES ARE NOT HERE AND THAT IS §15.3.6 AND NOT AN OMISSION: the section writes `margin-block`
+       and never `margin-inline`, so a heading's inline margins are its initial `0` in a browser too.
+       THE SIX HEADING TAGS CARRY NO MARGIN ROW IN THE TABLE BELOW, so the order these two questions are asked
+       in cannot decide anything today — and it is written the way css-cascade-5 §6.1's Specificity criterion
+       would decide it if one arrived, exactly as the `font-size` arm above is: `:heading(n)` is a class,
+       (0,1,0), and a type selector is (0,0,1). NORMAL importance, for the reason stated one branch up: §15.3.6
+       writes no `!important`, and the flag is left as the `false` set above. */
+    if (strcmp(name, "margin-block-start") == 0 || strcmp(name, "margin-block-end") == 0) {
+        const char *mb = cssd_ua_heading_margin_block(el, tag, n);
+
+        if (mb) return mb;
     }
     for (i = 0; i < sizeof(UA_DEFAULT) / sizeof(UA_DEFAULT[0]); i++)
         if (strlen(UA_DEFAULT[i].tag) == n && memcmp(UA_DEFAULT[i].tag, tag, n) == 0 &&
