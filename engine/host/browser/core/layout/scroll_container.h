@@ -76,4 +76,32 @@ bool scroll_container_is(lxb_dom_element_t *el);
  * `used_value_padding_edge_px` on each axis — this entry answers WHETHER, never WHAT. */
 bool scroll_container_content_clip_is(lxb_dom_element_t *el);
 
+/* css-overflow-3 §3.1.4 "Overflow Viewport Propagation" — IS `el` THE ONE ELEMENT PER DOCUMENT WHOSE OVERFLOW
+ * WAS GIVEN AWAY TO THE VIEWPORT, so that its own USED overflow is `visible` whatever it computed to?
+ *
+ * ONE FACT, THREE QUESTIONS, WHICH IS WHY IT IS AN ENTRY AND NOT A THIRD `strcmp`. The two predicates above
+ * ask it to decide whether a box is a scroll container and whether it has a content clip. CSS 2 §9.4.1's own
+ * parenthesis asks the SAME fact for a third: a block box with overflow other than visible establishes a block
+ * formatting context "except when that value has been propagated to the viewport", which decides whether that
+ * box's margins collapse through its edges — core/layout/block_flow.h's run. A caller that spelled §3.1.4's
+ * root-and-body walk itself would be a second copy of a rule whose two arms are exactly the ones that drift.
+ *
+ * IT IS TOTAL, so there is no precondition a caller can forget. §3.1.4's own `display value is not none`
+ * conditions — on the root in its first sentence, on the body in its second — are asked HERE, of both
+ * elements. The two predicates above still ask their own box question first, and that is not a second reading
+ * of this one: theirs are `a scroll container is a box` and `a content clip is a box's`, which are their rules
+ * rather than §3.1.4's.
+ *
+ * THE ANSWER IS ABOUT THE USED VALUE AND NEVER THE COMPUTED ONE, SO IT MAY NOT BE BUILT INTO THE CASCADE.
+ * §3.1.4 ends "The element from which the value is propagated must then have a used overflow value of
+ * visible", and CSSOM §9 "Resolved Values" leaves `overflow-x` and `overflow-y` under "Any other property",
+ * whose resolved value IS the computed value — so `getComputedStyle(document.body).overflowX` on
+ * `body { overflow-x: hidden }` must still answer `"hidden"`. A propagation folded into
+ * core/css/css_computed_value.c's `computed_overflow` would answer `"visible"` there, which is a
+ * page-observable divergence from every browser rather than a fidelity gain. That is not a hypothetical: the
+ * crash this entry replaced named that function as the place to build §3.1.4. RETIREMENT: this paragraph goes
+ * when `computed_overflow` cannot read an element's ancestors at all, which makes the wrong layer unspellable
+ * rather than merely argued against. */
+bool scroll_container_propagates_overflow_to_viewport(lxb_dom_element_t *el);
+
 #endif

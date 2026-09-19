@@ -17,6 +17,7 @@
 #include "core/layout/flex_item.h"
 #include "core/layout/line_box.h"
 #include "core/layout/replaced_element.h"
+#include "core/layout/scroll_container.h"
 #include "core/layout/table_box.h"
 #include "core/layout/table_wrapper.h"
 #include "core/layout/used_value.h"
@@ -56,12 +57,6 @@ static bool bf_length_is_zero(lxb_dom_element_t *el, const char *name)
 static bool bf_is_root(const lxb_dom_node_t *n)
 {
     return n->parent != NULL && n->parent->type == LXB_DOM_NODE_TYPE_DOCUMENT;
-}
-
-static bool bf_is_body(const lxb_dom_node_t *n)
-{
-    return n->owner_document != NULL &&
-           document_body_of(lxb_dom_interface_node(n->owner_document)) == (lxb_dom_node_t *)n;
 }
 
 bool block_flow_display_is_block_container(const char *display)
@@ -166,23 +161,29 @@ static bool bf_no_collapse_through_edges(lxb_dom_element_t *el)
     free(d);
     if (bfc) return true;
     if (bf_computed_is(el, "overflow-x", "visible") && bf_computed_is(el, "overflow-y", "visible")) return false;
-    /* §9.4.1's own parenthesis — "except when that value has been propagated to the viewport" — is a question
-       about the ROOT element and the BODY, and css-overflow §3.5 is the rule it is excepting. The root left
-       through the first line above; the body has not, and the answer decides whether its margins collapse with
-       its children's. */
-    if (bf_is_body(n))
-        DFAIL("CSS 2 §9.4.1 excepts an overflow 'propagated to the viewport' from the boxes that establish a "
-              "block formatting context, and this is the BODY element with a computed overflow that is not "
-              "`visible`. css-overflow §3.5 is that rule: 'UAs must apply the overflow-* values set on the root "
-              "element to the viewport', and when the root's own used value is `visible` the value is taken "
-              "from the body instead — after which 'the element from which the value is propagated must then "
-              "have a used overflow value of visible', so this box would NOT establish a formatting context and "
-              "its margins WOULD collapse with its children's. Whether that happened is a fact about the ROOT "
-              "element's used overflow, and core/css/css_computed_value.c's computed_overflow implements "
-              "css-overflow §3's visible-plus-scrollable pairing and not §3.5's propagation at all. BUILD §3.5 "
-              "there — a rule that reads the root element's cascade from the body's computed value, which is "
-              "the shape §7's inheritance already has — and this crash becomes the boolean it stands in for");
-    return true;
+    /* §9.4.1's own parenthesis — "except when that value has been propagated to the viewport" — and the rule
+       it is excepting is css-overflow-3 §3.1.4 "Overflow Viewport Propagation", which ends "The element from
+       which the value is propagated must then have a used overflow value of visible". A box whose USED
+       overflow is `visible` is not on §9.4.1's list at all, so it establishes no formatting context and its
+       margins DO collapse with its children's.
+       THE ROOT CANNOT REACH THIS LINE — it left through the first test above, under §8.3.1's own exception for
+       the root element's margins — so the only box this answers `false` for is the one §3.1.4's `html`-and-
+       `body` arm names. IT IS ASKED UNCONDITIONALLY RATHER THAN UNDER A `body` TEST, and the deleted test is
+       the point: which element propagates is §3.1.4's question, and a local `is this the body` here would be
+       half of that rule written where it could disagree with the whole. core/layout/scroll_container.h holds
+       it once and answers this, the scroll-container question and the content-clip question from it.
+       WHAT STOOD HERE WAS A `DFAIL` WHOSE REMEDY CLAUSE WAS WRONG IN BOTH HALVES, recorded because a reader
+       who re-derives it will re-propose it. It said to build §3.1.4 in core/css/css_computed_value.c's
+       `computed_overflow`: wrong LAYER, because §3.1.4 gives a USED value and folding it into the cascade
+       would make `getComputedStyle(document.body).overflowX` answer `"visible"` where a browser answers
+       `"hidden"` (scroll_container.h states that derivation); and wrong TREE, because scroll_container.c had
+       been reading §3.1.4 for two of its own questions since before the crash was written, so the premise
+       that nothing implemented it was true only of the one file the clause happened to name. Its citation was
+       unlevelled and its number was in no level — neither css-overflow-3 nor css-overflow-4 has a §3.5 — and
+       its quotation read "the overflow-* values" where §3.1.4 reads "the overflow values", which is the same
+       error written twice. RETIREMENT: this note goes when no css-overflow citation in this tree omits its
+       level, since an unlevelled number is what let a section that exists in no document stand unplaced. */
+    return !scroll_container_propagates_overflow_to_viewport(el);
 }
 
 /* CSS 2 §8.1 "Box dimensions"' TWO EDGES between a box's TOP BORDER EDGE and its TOP CONTENT EDGE. §9.4.1's

@@ -88,6 +88,8 @@ static bool sc_computed_is(lxb_dom_element_t *el, const char *name, const char *
 
 /* css-overflow-3 §3.1.4 "Overflow Viewport Propagation" — the ONE element per document whose `overflow` does
  * not make its own box a scroll container, because the value was taken away from it and given to the viewport.
+ * See scroll_container.h for why this is an EXPORTED entry with three callers rather than a file-local one
+ * with two, and for why the used value it reports may not be folded into the cascade.
  * §3.1.4: "UAs must apply the overflow values set on the ROOT ELEMENT to the viewport when the root element's
  * display value is not none. However, when the root element is an [HTML] html element … whose overflow value is
  * VISIBLE (in both axes), and that element has as a child a BODY element whose display value is also not none,
@@ -103,23 +105,32 @@ static bool sc_computed_is(lxb_dom_element_t *el, const char *name, const char *
  * is the propagator the root's own overflow was `visible` in both axes to begin with, so the root is not a
  * scroll container by §3.1's own sentence and needs no help from this one. The arm's only effect is on the
  * BODY. */
-static bool sc_propagates_overflow_to_viewport(lxb_dom_element_t *el)
+bool scroll_container_propagates_overflow_to_viewport(lxb_dom_element_t *el)
 {
-    lxb_dom_node_t *n = lxb_dom_interface_node(el), *root;
+    lxb_dom_node_t *n, *root;
     lxb_dom_element_t *rel;
     size_t taglen = 0;
     const lxb_char_t *tag;
 
+    DCHECK(el != NULL, "css-overflow-3 §3.1.4's propagation question was asked with no element");
+    n = lxb_dom_interface_node(el);
     DCHECK(n->owner_document != NULL, "an element with no owner document reached §3.1.4's propagation test");
     root = document_document_element_of(lxb_dom_interface_node(n->owner_document));
     if (root == NULL) return false;
-    /* §3.1.4's FIRST sentence. Its "when the root element's display value is not none" is already established:
-       the caller has asked whether this element has a box. */
+    /* NEITHER CANDIDATE, ASKED FIRST because it is the answer for every element in the document but two and it
+       costs two pointer comparisons, where §3.1.4's own conditions below each read a cascade. */
+    if (n != root && n != document_body_of(lxb_dom_interface_node(n->owner_document))) return false;
+    /* §3.1.4's FIRST sentence carries its own condition — "UAs must apply the overflow values set on the root
+       element to the viewport when the root element's display value is not none" — and it is asked HERE rather
+       than left to the caller, because the ROOT is not the element the caller asked about on the body arm
+       below and no caller's own box check reaches it. */
+    if (!element_view_has_box(root)) return false;
     if (n == root) return true;
-    if (n != document_body_of(lxb_dom_interface_node(n->owner_document))) return false;
     /* §3.1.4's SECOND sentence, over the ROOT: an `html` element in the HTML namespace, whose computed
-       `overflow` is `visible` in both axes. The body half of its condition ("has as a child a body element
-       whose display value is also not none") is this element, whose box the caller established. */
+       `overflow` is `visible` in both axes. Its body half — "and that element has as a child a body element
+       whose display value is also not none" — is this element, asked here for the same reason, so that this
+       entry answers §3.1.4 whole rather than answering the part its first two callers had already tested. */
+    if (!element_view_has_box(n)) return false;
     rel = lxb_dom_interface_element(root);
     tag = lxb_dom_element_local_name(rel, &taglen);
     if (root->ns != LXB_NS_HTML || taglen != 4 || memcmp(tag, "html", 4) != 0) return false;
@@ -133,7 +144,7 @@ bool scroll_container_is(lxb_dom_element_t *el)
        be about, so it establishes no scrolling box whatever its `overflow` computed to. */
     if (!element_view_has_box(lxb_dom_interface_node(el))) return false;
     /* §3.1.4's USED value comes before §3.1's computed one, because it is what §3.1 is then applied to. */
-    if (sc_propagates_overflow_to_viewport(el)) return false;
+    if (scroll_container_propagates_overflow_to_viewport(el)) return false;
     if (!sc_overflow_applies(el)) return false;
     /* "If neither axis computes to a scrollable value, the box is not a scroll container" — so ONE is enough,
        and §3.1's own single-axis case ("If only one axis computes to a scrollable value … the box is a
@@ -154,7 +165,7 @@ bool scroll_container_content_clip_is(lxb_dom_element_t *el)
        VIEWPORT does the clipping in its place. `<html style="overflow-x:hidden">` and the `<body>` spelling of
        the same thing are the two commonest overflow declarations on the web, and a component that read the
        computed value would report a content clip on the root or the body of a large fraction of all pages. */
-    if (sc_propagates_overflow_to_viewport(el)) return false;
+    if (scroll_container_propagates_overflow_to_viewport(el)) return false;
     if (!sc_overflow_applies(el)) return false;
     return sc_axis_value_clips(el, false) || sc_axis_value_clips(el, true);
 }
