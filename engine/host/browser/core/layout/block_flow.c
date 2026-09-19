@@ -10,7 +10,6 @@
 #include "check.h"
 #include "core/css/css_computed_value.h"
 #include "core/css/css_length.h"
-#include "core/dom/document.h"
 #include "core/layout/block_flow.h"
 #include "core/layout/box_subject.h"
 #include "core/layout/flex_cross_size.h"
