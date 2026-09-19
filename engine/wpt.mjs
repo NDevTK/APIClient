@@ -886,7 +886,33 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                       the whole walk. All reproduced to the digit, which is what makes these measurements and
                       not estimates. RETIRED when a run prints its own collected total per entry.
                       NOTHING IS PREDICTED HERE ABOUT WHAT IT SCORES. */
-                   "html/canvas/element", "html/canvas/resources"];
+                   "html/canvas/element", "html/canvas/resources",
+                   /* THE LAYOUT AREAS, ADDED BECAUSE THE SECTIONS THEY JUDGE WERE BUILT AND NOTHING COULD FAIL
+                      ON THEM. This file's own header says the list "grows as areas are covered \u2014 an area
+                      absent here is honestly untested, which is a different statement from \"passes\"", and that
+                      sentence had been true and unacted-on for a whole session of layout work: CSS 2.1 \u00a710.1's
+                      containing-block cases, \u00a710.3.7 and \u00a710.6.4 over the static position, css-flexbox-1 \u00a74's
+                      anonymous item, \u00a78.3's `align-items`, \u00a79.3 in both axes and \u00a79.4 steps 7-11,
+                      css-overflow-3 \u00a73.1.4's viewport propagation, css-writing-modes-4 \u00a76.4's axis rows,
+                      css-sizing-3 \u00a75.1's replaced rules and HTML \u00a715.4.3's dimension hints all landed against
+                      a cone holding css-fonts, css-typed-om, css-values, cssom and cssom-view \u2014 five areas,
+                      NONE of which lays anything out. The engine's own DCHECKs were the only judge, and a
+                      DCHECK exists only where an author thought to write one.
+                      THE POPULATION IS MEASURED, NOT ESTIMATED, and it MOVES THE DENOMINATOR: `find <area>
+                      -name "*.html" | wc -l` over the checkout at this revision reads css-sizing 864,
+                      css-flexbox 1765, css-position 485, css-writing-modes 791, css-overflow 1096,
+                      css-display 155, css-logical 98 \u2014 5254 documents. That is a raw file count and NOT this
+                      gate's own collected total, which `testKind`/`nameIsNonTest` decide; the rows above give
+                      the derivation for that and it is theirs to run. A pass count taken across this entry is
+                      a fraction of a different population from one taken before it.
+                      THE DISK COST IS ZERO AND THAT IS A PROPERTY OF THE CLONE, not of the areas: `--filter=blob:none`
+                      means a widened cone fetches no blobs until a file is READ, so `df` was unchanged across
+                      all seven adds. The cost arrives on the first run that opens them.
+                      NOTHING IS PREDICTED HERE ABOUT WHAT THEY SCORE. A first run over an area this engine has
+                      never been measured against is a BASELINE, and a low one is the honest starting number
+                      rather than a regression. */
+                   "css/css-sizing", "css/css-flexbox", "css/css-position", "css/css-writing-modes",
+                   "css/css-overflow", "css/css-display", "css/css-logical"];
 
 /* AND THE DIRECTORIES WHOSE OWN LEVEL CONE MODE HAS ALREADY PUT ON DISK. A cone-mode checkout materializes every
    file of every directory ON THE PATH to a listed one, so naming one helper's `resources` lands its standard's
