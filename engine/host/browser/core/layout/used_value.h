@@ -413,8 +413,21 @@ CssPx used_value_default_replaced_size(bool vertical);
    rather than a convenience. That wrapper refuses a TABLE box and a FLEX/GRID ITEM because a USED width for
    either comes from its container's algorithm; an INTRINSIC size is css-sizing-3 §5.1's hypothetical FLOAT,
    and CSS 2.1 §10.3.6 "Floating, replaced elements" answers a float in one sentence — "the used value of
-   'width' is determined as for inline replaced elements". So that caller needs no box-type branch at all, and routing
-   it through the wrapper would abort on a replaced flex item whose §9.9.3 contribution is exactly this number.
+   'width' is determined as for inline replaced elements". So the INLINE side needs no box-type branch at all,
+   and routing it through the wrapper would abort on a replaced flex item whose css-flexbox-1 §9.9.3 "Flex Item
+   Intrinsic Size Contributions" contribution is exactly this number.
+   NAMED RESIDUAL — THAT IS TRUE OF THE INLINE SIDE AND NOT OF THE WHOLE CALL, because arm 2 reads the
+   OPPOSITE axis through the PUBLIC `used_value_px`, which routes a replaced element straight back into
+   `uv_replaced_size` and therefore does carry the two refusals. WHAT IS NOT COVERED: a replaced element that
+   is a FLEX or GRID ITEM or a TABLE box, whose `height` computes to something other than `auto` and which has
+   a natural aspect ratio — arm 2's only shape that reads the other axis. WHAT THE NEXT DIFF BUILDS: nothing
+   here. That abort is CORRECT and is the one `uv_replaced_size` already names — css-flexbox-1 §9.2 "Line
+   Length Determination" makes a declared size the FLEX BASE SIZE, so the item's used height is its
+   container's algorithm's answer and not §10.6.2's, and the diff that retires it is the flex layout that
+   refusal asks for rather than a second door beside it. HOW ITS ABSENCE WOULD SHOW: an intrinsic-size request
+   for such a box aborts naming css-flexbox-1 §9.2 from inside a css-sizing-3 §5.1 walk, so a reader arrives
+   at a flex refusal while asking a sizing question. It is written down because the paragraph above reads as a
+   promise that no box-type branch is reachable from here, and one is.
    NEITHER IS css-sizing-3 §3.3's `box-sizing` CONVERSION, for the reason the arms themselves have: every term
    §10.3.2 names is CSS 2.1's and CSS 2.1 knows only the content box, so the conversion belongs to whichever
    box the caller is reporting — the wrapper's used value is exposed as the border box, and
