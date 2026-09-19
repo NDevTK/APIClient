@@ -898,13 +898,39 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                       a cone holding css-fonts, css-typed-om, css-values, cssom and cssom-view \u2014 five areas,
                       NONE of which lays anything out. The engine's own DCHECKs were the only judge, and a
                       DCHECK exists only where an author thought to write one.
-                      THE POPULATION IS MEASURED, NOT ESTIMATED, and it MOVES THE DENOMINATOR: `find <area>
-                      -name "*.html" | wc -l` over the checkout at this revision reads css-sizing 864,
-                      css-flexbox 1765, css-position 485, css-writing-modes 791, css-overflow 1096,
-                      css-display 155, css-logical 98 \u2014 5254 documents. That is a raw file count and NOT this
-                      gate's own collected total, which `testKind`/`nameIsNonTest` decide; the rows above give
-                      the derivation for that and it is theirs to run. A pass count taken across this entry is
-                      a fraction of a different population from one taken before it.
+                      THE POPULATION IS MEASURED BY THE CORPUS'S OWN CLASSIFIER AND NOT BY A `find`, because
+                      those two answer questions an order of magnitude apart. `find <area> -name "*.html" | wc -l`
+                      reads 5254 across the seven; `python3 engine/wpt_classify.py engine/.work/wpt` — which is
+                      WPT's own tools/manifest/sourcefile.py, the same oracle this gate already diffs its
+                      collector against — names 1055 of them as tests, every one of which loads
+                      `resources/testharness.js` (checked file by file, 1055 of 1055). The derivations are those
+                      two commands and the figures are what they answered at this revision; run them rather than
+                      quoting these. A pass count taken across this entry is a fraction of a different
+                      population from one taken before it.
+                      THE STRUCTURAL FACT IS THE HALF THAT DOES NOT ROT, AND IT PREDICTS THE NEXT CSS AREA
+                      WITHOUT ANYBODY COUNTING: a CSS area is predominantly REFTESTS — a pair of documents and
+                      a `<link rel=match>`, asserting that two RENDERINGS are pixel-identical — so a
+                      testharness-only gate measures a MINORITY of any such area BY CONSTRUCTION, and the four
+                      fifths it cannot see are not a gap in the checkout or in the collector. They are a
+                      different INSTRUMENT: the reference-image kind, which is exactly what measures a
+                      RASTERIZER rather than a layout number. This gate owns the testharness fifth. Nothing here
+                      claims the rest is covered, and a reader who reads `css/css-flexbox` in this list as "the
+                      flexbox area is tested" has read it as four times the statement it makes.
+                      AND THE FIFTH IT DOES OWN HAS A REAL LAYOUT ORACLE IN IT, which is why the entries are
+                      worth the disk at all: 341 of the 1055 load `resources/check-layout-th.js`, whose
+                      assertions read `offsetWidth`/`offsetHeight`/`offsetTop`/`offsetLeft`,
+                      `clientWidth`/`clientHeight`/`clientTop`/`clientLeft`, `scrollWidth`/`scrollHeight` and
+                      `getComputedStyle` off the laid-out tree and compare them against `data-expected-*`
+                      attributes the test author wrote. That is a USED-VALUE oracle written by the people who
+                      wrote the spec, which is the one thing neither the IDL audit (presence) nor the smoke
+                      fixture (whatever its author thought of) can be. All eleven of those members exist in this
+                      engine — `core/html/html_element_view.c`, `core/dom/element_view.c`,
+                      `core/css/css_style_declaration.c` — so the family is not blocked at a fixture.
+                      AND IF IT WERE, THE TELL IS THE ONE THE `idlharness` ROW ABOVE ALREADY NAMES: a family
+                      whose members all report the SAME SMALL SUBTEST COUNT is a family that is not running,
+                      because one missing member fails every one of them at the identical point, while a family
+                      that is merely scoring badly VARIES. Read the subtest counts beside the verdicts before
+                      reading any total over this entry.
                       THE DISK COST IS ZERO AND THAT IS A PROPERTY OF THE CLONE, not of the areas: `--filter=blob:none`
                       means a widened cone fetches no blobs until a file is READ, so `df` was unchanged across
                       all seven adds. The cost arrives on the first run that opens them.
