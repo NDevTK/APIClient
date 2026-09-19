@@ -1162,6 +1162,25 @@ static void cssd_author_collect(lxb_dom_element_t *el, const char *name, const c
            `sheet.disabled = true` and `<style disabled>`'s forwarding both land here, and until the cascade
            read the objects neither could do anything at all. */
         if (css_style_sheet_disabled(sheet)) { JS_FreeValue(ctx, sheet); continue; }
+        /* HTML §4.2.4.1 "Processing the media attribute"'s MUST, and it governs BOTH kinds of sheet in
+           this list rather than only the `<link>` that made it reachable: "if the link is an external
+           resource link, then the media attribute is prescriptive. The user agent must APPLY the external
+           resource when the media attribute's value matches the environment and the other relevant
+           conditions apply, and must not apply it otherwise."
+           A `<style media=print>` was already reaching this loop and cascading, which is the same wrong
+           answer through the other creator — CSSOM §6.1 gives a `<style>` sheet its media from the identical
+           content attribute, and CSS Cascade 5 §6.2 admits a declaration to the author origin only from a
+           sheet that applies. One question asked the same wrong way at two sites is one defect, so the
+           repair is here, at the one place both creators' sheets are read, rather than at whichever of them
+           was noticed. What made it REACHABLE at scale is the `<link>` arm: a real page's print rules ship in
+           a separate `media=print` sheet, and cascading one over a screen render is the difference between a
+           screenshot of the page and a screenshot of its printout.
+           THE `@media` AT-RULES INSIDE THE SHEET ARE A DIFFERENT QUESTION AND ARE ALREADY ANSWERED BELOW —
+           §4.2.4.1's own note says so ("the external resource might have further restrictions defined within
+           that limit its applicability. For example, a CSS style sheet might have some @media blocks. This
+           specification does not override such further restrictions"), so this gate is the OUTER one and
+           neither subsumes nor duplicates it. */
+        if (!css_style_sheet_media_matches(ctx, sheet)) { JS_FreeValue(ctx, sheet); continue; }
         if (!cssd_sheet_view(ctx, sheet, order, &view)) { JS_FreeValue(ctx, sheet); continue; }
         JS_FreeValue(ctx, sheet);
         /* A SHEET CAN DECLARE LAYERS AND EMIT NO RULES — `@layer a, b;` alone is a whole sheet establishing an

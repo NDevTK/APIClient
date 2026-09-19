@@ -38,6 +38,7 @@
 #include "core/css/css_rule_list.h"
 #include "core/css/css_style_sheet.h"
 #include "core/css/media_list.h"   /* §6.1's media state item IS a §4.4 MediaList object */
+#include "core/css/media_query.h"   /* …and HTML §4.2.4.1 asks that object whether it matches */
 #include "core/css/style_sheet_list.h"
 #include "core/dom/document.h"   /* §6.1's constructor step 2 reads the realm's document base URL */
 #include "core/dom/node.h"
@@ -289,6 +290,36 @@ bool css_style_sheet_disabled(JSValueConst sheet)
                       "that forward to it hold a value they took off an association slot, and that slot holds "
                       "a sheet or nothing");
     return s->disabled;
+}
+
+/* HTML §4.2.4.1 "Processing the media attribute"'s MUST, over §6.1's media state item. See css_style_sheet.h
+   for why it is asked here and not at the fetch, and for why the empty collection answers true.
+   THE SET IS PARSED PER ASK RATHER THAN CACHED, which is the same decision core/html/html_link.c's
+   `link_media_matches` makes over the same object and for a sharper reason here: §6.1.1 declares `media`
+   `[SameObject, PutForwards=mediaText]`, so a page can rewrite this collection at any moment through the very
+   object it holds, and a parse cached beside it would answer the text the sheet was created with for ever. */
+bool css_style_sheet_media_matches(JSContext *ctx, JSValueConst sheet)
+{
+    CssStyleSheetData *s = sheet_of(sheet);
+    MediaQuerySet *set;
+    bool m;
+
+    DCHECK(s != NULL,
+           "HTML §4.2.4.1 \"Processing the media attribute\"'s prescriptive media was asked of something that "
+           "is not a CSS style sheet — the cascade asks it of members of CSSOM §6.2's list, whose add is the "
+           "one thing that ever puts one in");
+    DCHECK(media_list_is(ctx, s->media),
+           "a CSS style sheet's §6.1 media state item is not a §4.4 MediaList object — both creators mint one "
+           "before JS_SetOpaque and §6.1.1's `[PutForwards=mediaText]` writes THROUGH it rather than replacing "
+           "it, so there is no algorithm that could have left something else here");
+    set = media_list_query_set(ctx, s->media);
+    DCHECK(set != NULL,
+           "a CSS style sheet's media collection did not parse — Media Queries 4 §2.1 gives every string an "
+           "answer (an unparseable query is `not all`, and the empty list matches everything), so a NULL here "
+           "is the parser refusing input it defines an answer for rather than a media list with no verdict");
+    m = media_query_matches_now(ctx, set);
+    media_query_free(set);
+    return m;
 }
 
 void css_style_sheet_set_disabled(JSValueConst sheet, bool disabled)

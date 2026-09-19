@@ -4648,13 +4648,16 @@ void css_rule_install_proto(JSContext *ctx)
        `styleSheet` IS ABSENT, AND THAT IS THE HONEST ANSWER RATHER THAN A NULL. CSSOM §6.4.4 declares
        `[SameObject] readonly attribute CSSStyleSheet? styleSheet` and defines it as "the associated CSS style
        sheet, if any, or null otherwise", with a note giving the one case that produces null: an import whose
-       supports() condition does not match. This engine FETCHES NO IMPORTED SHEET — there is no CSS resource
-       load at all, not for `@import` and not for `<link rel=stylesheet>` — so a getter here could only ever
-       answer null, and that null is byte-for-byte the spec's own real answer for a different rule. A page
+       supports() condition does not match. This engine FETCHES NO IMPORTED SHEET — so a getter here could
+       only ever answer null, and that null is byte-for-byte the spec's own real answer for a different rule. A page
        (and this engine's own reader) could not tell "there is no sheet" from "this build never fetched it",
        which is the one shape §NO STUBS forbids: a wrong answer that reads exactly like a right one. Absent, it
        is a TypeError the page names and a MISSING member the IDL gap audit reports. The capability to build is
-       the sheet fetch, and it is named in css_rule.h. */
+       the IMPORT's sheet fetch, and it is named in css_rule.h.
+       A CLAUSE STOOD HERE saying there is no CSS resource load at all, not for `@import` and not for a
+       `<link rel=stylesheet>`, and it is NARROWED RATHER THAN DELETED: HTML §4.6.8.23 Link type "stylesheet"
+       is built, so this engine does load a CSS resource — just not through this rule. The half that is this
+       member's subject is unchanged, which is why the conclusion is. */
     import_rule = JS_NewObjectProto(ctx, base);
     CHECK(!JS_IsException(import_rule), "CSSImportRule.prototype could not be allocated");
     idl_interface_tag(ctx, import_rule, "CSSImportRule");

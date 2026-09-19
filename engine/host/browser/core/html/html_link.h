@@ -51,11 +51,18 @@
  * "Main fetch" step 7 and the park, and that IS one function (link_fetch_request), because four hand-written
  * copies of step 7 is the shape core/fetch/fetch.h records going wrong.
  *
- * THE ONE IT NAMES AND DOES NOT RUN, which is not a fallback and not debt against either of them:
- *   §4.6.8.23 Link type "stylesheet" needs a CSS style sheet to APPLY the response to, and
- *   core/css/css_rule.h already records that there is none ("there is no `@import` fetch and no
- *   `<link rel=stylesheet>` sheet either"). Building the fetch without the consumer would be a response nothing
- *   reads, which is the mirror of the read-with-no-writer defect and is what §NO STUBS forbids.
+ * THE THIRD IS §4.6.8.23 Link type "stylesheet", AND THIS ENTRY USED TO BE THE ONE IT NAMED AND DID NOT RUN.
+ * It read: that type needs a CSS style sheet to APPLY the response to, and core/css/css_rule.h already
+ * records that there is none; building the fetch without the consumer would be a response nothing reads,
+ * which is the mirror of the read-with-no-writer defect and is what §NO STUBS forbids. THE RULE WAS RIGHT AND
+ * ITS PREMISE WAS WRONG, WHICH IS WHY IT IS REWRITTEN HERE RATHER THAN DELETED — a reader who re-derives it
+ * from the same sentence in css_rule.h will re-reach the same conclusion. The consumer EXISTED THE WHOLE TIME:
+ * `css_style_sheet_create` and `css_style_sheet_set_rules_from_text` have built `<style>`'s sheets since that
+ * component landed, CSSOM §6.2's list takes one at creation, and the author cascade reads that list. What was
+ * missing was never the sheet — it was the FETCH, the CSS Syntax 3 §3.2 decode between the bytes and the
+ * rules, and HTML §4.2.4.1's media gate on the cascade so that a `media=print` sheet does not paint the screen.
+ * The tell that the premise had rotted is the one CLAUDE.md names for a claim of this shape: it was a sentence
+ * about THIS TREE, standing in a header, checked by nobody since the day it was true.
  *
  * AND NEITHER IS §4.6.8.12's MODULE MAP, WHICH IS THE SAME RULE AGAIN AND IS A NAMED RESIDUAL AT
  * link_modulepreload: this engine's module loading is ECMAScript §16.2.1.10 HostLoadImportedModule parking

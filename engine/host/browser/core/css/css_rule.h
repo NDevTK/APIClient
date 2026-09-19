@@ -23,12 +23,20 @@
  *
  * `CSSImportRule.styleSheet` IS ABSENT, AND IT IS THE ONE MEMBER OF THESE INTERFACES THAT IS. CSSOM §6.4.4 defines it
  * as "the associated CSS style sheet, if any, or null otherwise" and its own note gives the case that produces null
- * (an import whose `supports()` condition does not match). This engine loads no CSS subresource at all — there is no
- * `@import` fetch and no `<link rel=stylesheet>` sheet either, so `css_style_sheet_create` has exactly one caller and
- * it is `<style>` — which means a getter here could only ever answer null, and that null is indistinguishable from the
- * spec's real one. That is the shape §NO STUBS forbids: not a missing answer but a WRONG one wearing a right one's
- * clothes, invisible to the page and to the next reader. So the member is honestly missing, the page's own TypeError
- * names it, and the IDL gap audit reports it. THE CAPABILITY TO BUILD IS THE SHEET FETCH: CSSOM §6.3's "obtain a CSS
+ * (an import whose `supports()` condition does not match). This engine RUNS NO `@import` FETCH, so a getter here
+ * could only ever answer null, and that null is indistinguishable from the spec's real one. That is the shape §NO
+ * STUBS forbids: not a missing answer but a WRONG one wearing a right one's clothes, invisible to the page and to
+ * the next reader. So the member is honestly missing, the page's own TypeError names it, and the IDL gap audit
+ * reports it.
+ * A WIDER SENTENCE STOOD HERE, saying this engine loads no CSS subresource at all — no `@import` fetch and no
+ * `<link rel=stylesheet>` sheet either, so that `css_style_sheet_create` had exactly one caller and it was
+ * `<style>`. IT IS NARROWED RATHER THAN DELETED BECAUSE THE WIDER CLAIM IS THE ONE A READER RE-DERIVES. HTML §4.6.8.23
+ * Link type "stylesheet" is built (core/html/html_link.c), so `css_style_sheet_create` has TWO callers and a
+ * document's author layer can hold a sheet that arrived over the network. What that landing did NOT build is the
+ * `@import` fetch, which is this member's own subject — so the conclusion above is untouched and only its premise
+ * moved. The tell that the two were ever one sentence: they are one FETCH and two ALGORITHMS, and the `<link>` one
+ * reaches no CSSImportRule at all.
+ * THE CAPABILITY TO BUILD IS THE IMPORT'S OWN SHEET FETCH: CSSOM §6.3's "obtain a CSS
  * style sheet" over the import's URL, resolved against the importing sheet's base URL, creating a child sheet whose
  * parent CSS style sheet is the importer and whose owner CSS rule is the import rule — which is also what fills the
  * `ownerRule` css_style_sheet.c already reads off its record for exactly this day.

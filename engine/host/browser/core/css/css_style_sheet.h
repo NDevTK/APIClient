@@ -126,6 +126,27 @@ JSValue css_style_sheet_title(JSContext *ctx, JSValueConst sheet);
 bool css_style_sheet_disabled(JSValueConst sheet);
 void css_style_sheet_set_disabled(JSValueConst sheet, bool disabled);
 
+/* DOES §6.1's MEDIA MATCH THE ENVIRONMENT — the question HTML §4.2.4.1 "Processing the media attribute" makes
+   a MUST of, asked of the SHEET because the sheet is what the answer decides the fate of: "if the link is an
+   external resource link, then the media attribute is prescriptive. The user agent must apply the external
+   resource when the media attribute's value matches the environment and the other relevant conditions apply,
+   and must not apply it otherwise."
+   IT IS ASKED AT THE CASCADE AND NOT AT THE FETCH, and that is §4.2.4.1's own verb rather than a convenience:
+   the sentence says APPLY, and its note says the resource "might have further restrictions defined within
+   that limit its applicability. For example, a CSS style sheet might have some @media blocks" — so a sheet
+   whose `media` does not match is one a browser FETCHES, hands to `link.sheet`, counts in
+   `document.styleSheets`, and DOES NOT CASCADE. A gate at the fetch would answer three of those four wrongly.
+   HTML §4.6.8.20 Link type "preload" gates its FETCH on the same section and that is not a disagreement: for
+   a preload there is nothing to apply but the obtaining itself, so declining to apply IS declining to fetch.
+   THE EMPTY COLLECTION MATCHES EVERYTHING, which is where an absent `media` content attribute lands (§6.2's
+   create specifies the attribute and core/css/css_style_sheet.c turns NULL into ""), so this answers true for
+   every sheet that states no media at all — the overwhelming majority, and the reason a gate here is safe to
+   put in front of the whole author layer.
+   NON-FORKING, through core/css/media_query.h's `media_query_matches_now`, which is the read that header
+   already names the cascade as a caller of: C cannot fork, so it takes the arm this flow committed to and
+   falls back to the modelled example. A forking read here would fork at every computed-value ask. */
+bool css_style_sheet_media_matches(JSContext *ctx, JSValueConst sheet);
+
 /* §6.1's CONSTRUCTED FLAG — set by §6.1's create a constructed CSSStyleSheet and by nothing else. It is reached
    by name for ONE reader, core/css/css_rule.c's insert, because §6.1.2's `insertRule` step 5 is the only step
    in this build that branches on it: "If parsed rule is an @import rule, and the constructed flag is set, throw
