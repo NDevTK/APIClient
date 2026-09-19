@@ -204,6 +204,7 @@
 #include <lexbor/dom/dom.h>
 
 #include "core/css/css_length.h"
+#include "core/layout/replaced_element.h"
 
 /* THE USED VALUE of `name` on `el`, in CSS pixels. `name` is one of the physical box-model lengths CSSOM §9
    routes here — the four margins, the four paddings, `width` and `height` — and the caller has ALREADY
@@ -391,6 +392,34 @@ CssPx used_value_block_level_content_px(lxb_dom_element_t *el, bool vertical);
    that depended on a viewport would be defining itself. See used_value.c for the citation and for the assert
    that keeps the answer's domain a single point. */
 CssPx used_value_default_replaced_size(bool vertical);
+
+/* CSS 2.1 §10.3.2 "Inline, replaced elements"' FIVE ARMS, as a CONTENT-box width in CSS pixels, over the
+   natural dimensions `rep` states. `rep` is the CALLER'S OWN `replaced_element_of` answer and not one derived
+   here, because HTML §15.4.2's classification "CHANGES under the running flow as a reply lands"
+   (core/layout/replaced_element.h) — so two reads inside one algorithm are free to disagree about whether the
+   element is replaced at all, and the caller that already holds one hands it over.
+   THE PRECONDITION IS `width` BEHAVING AS `auto`, AND THE TWO CALLERS ESTABLISH IT BY DIFFERENT ROUTES, which
+   is why it is not asserted here and why each caller states its own. §10.3's dispatch establishes it by
+   READING the computed value, because a declared `width` takes §10.3.3's equation instead. css-sizing-3 §5.1
+   "Intrinsic Sizes" establishes it BY DEFINITION and reads nothing: a box's intrinsic size in an axis is "the
+   size it would have if it was a float given an AUTO preferred size IN THAT AXIS (and no minimum or maximum
+   size in that axis)", so the box's own declared `width` is removed before this runs and asserting it `auto`
+   would abort on `<img width="18">`, which is a document rather than a defect. The OPPOSITE axis is NOT
+   removed by that sentence — css-sizing-3 §5.1 says "in that axis" twice — which is why this function still
+   reads `height`, and why css-sizing-3 §5.1's own Note says "when the box has a preferred aspect ratio, size
+   constraints in the opposite dimension will transfer through and can affect the auto size in the considered
+   one".
+   THE BOX-TYPE REFUSALS IN `uv_replaced_size` ARE DELIBERATELY NOT PART OF THIS, and that is a derivation
+   rather than a convenience. That wrapper refuses a TABLE box and a FLEX/GRID ITEM because a USED width for
+   either comes from its container's algorithm; an INTRINSIC size is css-sizing-3 §5.1's hypothetical FLOAT,
+   and CSS 2.1 §10.3.6 "Floating, replaced elements" answers a float in one sentence — "the used value of
+   'width' is determined as for inline replaced elements". So that caller needs no box-type branch at all, and routing
+   it through the wrapper would abort on a replaced flex item whose §9.9.3 contribution is exactly this number.
+   NEITHER IS css-sizing-3 §3.3's `box-sizing` CONVERSION, for the reason the arms themselves have: every term
+   §10.3.2 names is CSS 2.1's and CSS 2.1 knows only the content box, so the conversion belongs to whichever
+   box the caller is reporting — the wrapper's used value is exposed as the border box, and
+   core/layout/intrinsic_size.h's pair is documented as content-box widths. */
+CssPx used_value_replaced_auto_width_px(lxb_dom_element_t *el, const ReplacedElement *rep);
 
 /* CSS 2.1 §10.1's CONTAINING BLOCK as an ELEMENT — the box whose CONTENT EDGE is the rectangle every
    percentage and every `auto` in §10.3 is stated against. NULL exactly where §10.1's answer is the INITIAL

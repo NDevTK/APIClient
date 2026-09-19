@@ -2944,8 +2944,16 @@ static CssPx uv_shrink_to_fit_width(lxb_dom_element_t *el, CssLength size_len, U
    box; css-sizing-3 §3.3's `box-sizing` conversion is applied to the RESULT by the caller, exactly as it is to
    §10.3.3's equation. Which is also why arm 2's "(used height)" is read through `uv_content_size` and not
    through `used_value_px` — under `border-box` the latter is the BORDER box (css-sizing-3 §3.3's exposed used value), and
-   multiplying that by an aspect ratio would be a ratio of two different boxes. */
-static CssPx uv_replaced_width(lxb_dom_element_t *el, const ReplacedElement *rep)
+   multiplying that by an aspect ratio would be a ratio of two different boxes.
+   IT IS EXPORTED, AND THE SECOND CALLER IS AN INTRINSIC SIZE RATHER THAN A USED ONE. css-sizing-3 §5.1
+   "Intrinsic Sizes" ends by naming this very section as the definition of a replaced box's max-content size:
+   "a block-level or inline-level replaced element whose height or width behaves as auto is effectively
+   defined to use its max-content size". So core/layout/intrinsic_size.c asks for THIS number, and a second
+   copy of these five arms there would be one replaced box with two widths, free to disagree about the same
+   `img`. See used_value.h for how the two callers establish the
+   `width: auto` precondition by different routes, and for why the box-type refusals in `uv_replaced_size`
+   below are NOT part of what is exported. */
+CssPx used_value_replaced_auto_width_px(lxb_dom_element_t *el, const ReplacedElement *rep)
 {
     bool h_auto = uv_length_is(el, "height", "auto");
 
@@ -2997,7 +3005,10 @@ static CssPx uv_replaced_width(lxb_dom_element_t *el, const ReplacedElement *rep
    'inline-block' replaced elements in normal flow and floating replaced elements" — and §10.6.5 "Absolutely
    positioned, replaced elements" adds the fifth by reference ("the used value of 'height' is determined as for
    inline replaced elements"), so every replaced box this engine can classify is covered by this one function.
-   ITS SECOND ARM READS THE USED WIDTH AS A CONTENT EXTENT, for the reason `uv_replaced_width` states. */
+   ITS SECOND ARM READS THE USED WIDTH AS A CONTENT EXTENT, for the reason `used_value_replaced_auto_width_px`
+   states. THIS ONE IS NOT EXPORTED AND ITS SIBLING IS, which is not an oversight: css-sizing-3 §5.1 defines
+   the INLINE pair this engine computes, so the only caller outside §10.3's own dispatch asks for a width. The
+   day a block-axis intrinsic size exists it asks for this function by the same argument. */
 static CssPx uv_replaced_height(lxb_dom_element_t *el, const ReplacedElement *rep)
 {
     bool w_auto = uv_length_is(el, "width", "auto");
@@ -3065,7 +3076,7 @@ static CssPx uv_replaced_size(lxb_dom_element_t *el, const ReplacedElement *rep,
               "answer, and returning one here would report an unflexed size as the used value. BUILD the flex "
               "layout over the container's own "
               "used content size");
-    content = vertical ? uv_replaced_height(el, rep) : uv_replaced_width(el, rep);
+    content = vertical ? uv_replaced_height(el, rep) : used_value_replaced_auto_width_px(el, rep);
     DCHECK(content.px >= 0.0,
            "CSS 2.1 §10.3.2 or §10.6.2 produced a NEGATIVE used size for a replaced element. Every arm of both "
            "is either a natural dimension (core/layout/replaced_element.c asserts those non-negative at their "
