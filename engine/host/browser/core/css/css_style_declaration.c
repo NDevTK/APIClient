@@ -1714,10 +1714,14 @@ unsigned cssom_parse_rules(const char *text, size_t len, CssomRuleFn cb, void *u
  *                                                    its two margin rules `margin-block: 1em` / `margin-inline: 40px`
  *   HTML §15.3.6  Sections and headings            — `article, aside, :heading, hgroup, nav, section`, and its six
  *                                                    `:heading(n)` rules' font sizes and block margins
- *   HTML §15.3.7  Lists                            — `dir, dd, dl, dt, menu, ol, ul`, and `li { display: list-item }`
- *   HTML §15.3.8  Tables                           — the nine table box types, and its two `vertical-align` rules
+ *   HTML §15.3.7  Lists                            — `dir, dd, dl, dt, menu, ol, ul`, `li { display: list-item }`,
+ *                                                    and its two unconditional inline-edge rules
+ *   HTML §15.3.8  Tables                           — the nine table box types, its two `vertical-align` rules, and
+ *                                                    `td, th { padding: 1px }`
  *   HTML §15.3.10 Form controls                    — `input, button { display: inline-block }`
- *   HTML §15.3.12 The fieldset and legend elements — `fieldset { display: block }`
+ *   HTML §15.3.11 The hr element                   — its block margins and its `auto` inline margins
+ *   HTML §15.3.12 The fieldset and legend elements — `fieldset { display: block }`, and the fieldset's and the
+ *                                                    legend's margins and paddings
  *   HTML §15.5.5  The details and summary elements — `details, summary { display: block }`
  *   HTML §15.5.13 The marquee element              — `marquee { display: inline-block }`
  *   HTML §15.5.16 The select element               — `select { display: inline-block }`, `option`, `optgroup`
@@ -1766,29 +1770,41 @@ unsigned cssom_parse_rules(const char *text, size_t len, CssomRuleFn cb, void *u
  *   it applies to both the start and end edges." THE TELL WAS IN THE CLAUSE'S OWN SENTENCE — it named a
  *   mechanism ("carry a shorthand row") as the thing to build, and a clause that names a mechanism is a claim
  *   about THIS TREE written by somebody who knew what was missing and was guessing at what fills it.
- *   WHAT IS NOT COVERED — the margins and paddings of FOUR OTHER SECTIONS, all of them type selectors this
- *   table could express and none of them landing with these two. HTML §15.3.7 Lists is
- *   `dir, dl, menu, ol, ul { margin-block: 1em }`, `dd { margin-inline-start: 40px }` and
- *   `dir, menu, ol, ul { padding-inline-start: 40px }`; HTML §15.3.8 Tables is `td, th { padding: 1px }`;
- *   HTML §15.3.11 The hr element is `hr { margin-block: 0.5em; margin-inline: auto }`; HTML §15.3.12 The
- *   fieldset and legend elements is `fieldset { margin-inline: 2px; padding-block: 0.35em 0.625em;
- *   padding-inline: 0.75em }` and `legend { padding-inline: 2px }`. HTML §15.3.3's own
- *   `form { margin-block-end: 1em }` is NOT in that list and is not an absence: its prose puts it under "In
- *   quirks mode, the following rules are also expected to apply", and this table holds no quirks rules.
- *   §15.3.7 IS THE ONE THAT MUST NOT LAND ALONE, and the reason is a companion rule rather than a missing
- *   value: `:is(dir, dl, menu, ol, ul) :is(dir, dl, menu, ol, ul) { margin-block: 0 }` is a DESCENDANT
- *   COMBINATOR this layer does not evaluate, so the type rule without it gives a NESTED list the 1em a
- *   browser takes away — trading a wrong answer on top-level lists for a wrong answer on nested ones rather
- *   than closing either. It lands in the diff that gives this layer core/dom/selector_match.h's matcher,
- *   which the §15.3.8 `table > tr` comment below already names as its own next diff.
- *   WHAT THE NEXT DIFF BUILDS: §15.3.11's and §15.3.12's rows, which have no companion rule and are two
- *   sections of pure type selectors — §15.3.11 needing `auto` to survive core/layout/used_value.c's CSS 2.1
- *   §10.3.3 margin arm, and §15.3.12 needing the TWO-VALUE form of a css-logical-1 §4.2 shorthand
- *   (`padding-block: 0.35em 0.625em`), whose two edges take DIFFERENT values and which is therefore the one
- *   expansion these two rules did not exercise.
- *   HOW ITS ABSENCE WOULD SHOW: a rendered document gains its gaps between paragraphs, headings, blockquotes
- *   and `<pre>` blocks and keeps none between list items, around an `<hr>`, or inside a `<fieldset>` — so a
- *   page whose structure is a list reads as one unbroken band of ink while the prose beside it does not.
+ *   THE FOUR OTHER SECTIONS' MARGINS AND PADDINGS ARE HERE NOW except for TWO RULES, and the clause that
+ *   named them is rewritten rather than deleted because it was wrong in a way a reader re-derives.
+ *   IT WAS A PER-SECTION ANSWER TO A PER-RULE QUESTION. It read `§15.3.7 IS THE ONE THAT MUST NOT LAND
+ *   ALONE`, on the ground that `:is(dir, dl, menu, ol, ul) :is(dir, dl, menu, ol, ul) { margin-block: 0 }` is
+ *   a DESCENDANT COMBINATOR this layer does not evaluate, so a type rule landing without it gives a NESTED
+ *   list the 1em a browser takes away. That reasoning is exactly right and it is about ONE of HTML §15.3.7
+ *   "Lists"' three margin-and-padding rules. The section has three descendant rules and every one of them
+ *   governs `margin-block`, `list-style-type` or (in quirks mode) `list-style-position`; NOTHING in it alters
+ *   a `padding-inline-start`, and `dd` is a member of none of the `:is()` lists — so `dd { margin-inline-start:
+ *   40px }` and `dir, menu, ol, ul { padding-inline-start: 40px }` answer the same at every nesting depth in a
+ *   browser and land below, while `dir, dl, menu, ol, ul { margin-block: 1em }` waits.
+ *   AND ITS ENUMERATION WAS SHORT BY A RULE INSIDE THE SECTION IT HAD JUST LANDED, which is the failure a
+ *   list of absences has: it named four OTHER sections and HTML §15.3.3 "Flow content"'s own
+ *   `dialog { margin: auto; padding: 1em }` is a bare type selector in that section's main block — neither a
+ *   presentational hint nor a quirks rule — and is owed here as much as any of them.
+ *   WHAT IS NOT COVERED, AS TWO RULES RATHER THAN AS SECTIONS:
+ *     HTML §15.3.7 "Lists"' `dir, dl, menu, ol, ul { margin-block: 1em }`, for the companion-rule reason
+ *     above. WHAT THE NEXT DIFF BUILDS: a UA rule whose key is a SELECTOR compiled through
+ *     core/dom/selector_match.h's `selector_list_compile` and matched with `selector_match_node` — which
+ *     `cssd_author_collect` above already runs once per element per rule — so this table's `{tag, prop}` key
+ *     becomes the degenerate shape of one; the §15.3.8 `table > tr` comment below names the same diff.
+ *     HTML §15.3.3 "Flow content"'s `dialog { margin: auto; padding: 1em }`, which is NINE declarations of one
+ *     rule whose parts decide each other: `position: absolute`, `width: fit-content` and `height: fit-content`
+ *     are what make its `margin: auto` CENTRE the box. Landing the margin alone would be RIGHT ONLY WHILE
+ *     `position` IS MISSING — a static block takes CSS 2.1 §10.3.3's rule 5 and both margins are 0 — and
+ *     core/layout/used_value.c DFAILs by name on that state, in its own words — "a HORIZONTAL margin
+ *     computes to `auto` on an ABSOLUTELY POSITIONED box, whose used value CSS 2.1 §10.3.7 solves from its
+ *     own constraint equation" — so the row would silently become an abort on the day the row beside it
+ *     lands. WHAT THE NEXT DIFF BUILDS: CSS 2.1 §10.3.7 "Absolutely positioned, non-replaced elements"' used
+ *     `left`/`right` and static position in core/layout/used_value.c, and css-sizing-3 §3.2 "Sizing Values:
+ *     the <length-percentage [0,∞]>, auto | none, stretch, min-content, max-content, and fit-content
+ *     values"' `fit-content`, with the whole rule landing together afterwards.
+ *   HOW THEIR ABSENCE WOULD SHOW: a nested `<ul>` carries a block margin between its items where a browser
+ *   carries none, and an OPEN `<dialog>` is a full-width static band rather than a shrink-wrapped box centred
+ *   in its containing block.
  *   RETIREMENT: this record goes when every margin and padding HTML §15 states over a bare type selector has
  *   a row here, at which point there is no partial transcription left for a reader to re-derive a reason for. */
 /*
@@ -1896,6 +1912,28 @@ static const struct { const char *tag; const char *prop; const char *value; } UA
     { "dl", "display", "block" },    { "dt", "display", "block" },
     { "menu", "display", "block" },  { "ol", "display", "block" },
     { "ul", "display", "block" },    { "li", "display", "list-item" },
+    /* HTML §15.3.7 "Lists"' TWO UNCONDITIONAL INLINE-EDGE RULES, transcribed verbatim from that section:
+         dd { margin-inline-start: 40px; }
+         dir, menu, ol, ul { padding-inline-start: 40px; }
+       EACH IS ONE ROW PER TAG AND NOT TWO, which is the difference between these and every `margin-block`
+       above: css-logical-1 §4.2 "Flow-Relative Margins: the margin-block-start, margin-block-end,
+       margin-inline-start, margin-inline-end properties and margin-block and margin-inline shorthands"' two
+       edges belong to the SHORTHAND, and both rules here name a LONGHAND — the start edge alone — so the end
+       edge keeps its initial `0` in a browser too.
+       `dl` IS IN THE FIRST LIST AND NOT THE SECOND AND `dd` IS IN NEITHER, which is the section's own spelling
+       and is the kind of thing a re-spelling loses: `dir, menu, ol, ul` is four tags where the section's
+       display rule is seven, so a `<dl>` has NO padding and a `<dd>` has a margin instead.
+       WHY THESE TWO LAND AND THE SECTION'S `margin-block` RULE DOES NOT is the per-rule answer the retired
+       residual above got wrong as a per-section one, and the test is a companion rule: §15.3.7's three
+       descendant-combinator rules govern `margin-block`, `list-style-type` and (in quirks mode)
+       `list-style-position`, and not one of them names a `padding-inline-start` or reaches a `dd`. So a
+       browser answers these two identically at every nesting depth and this table can too.
+       WITHOUT THEM EVERY `<ul>` AND `<ol>` IN EVERY RENDERED DOCUMENT WAS FLUSH WITH ITS CONTAINING BLOCK —
+       the list indent is 40px of `padding-inline-start` and nothing else, so a nav, a table of contents and a
+       bulleted list all sat in the margin of the prose around them rather than inside it. */
+    { "dd", "margin-inline-start", "40px" },
+    { "dir", "padding-inline-start", "40px" }, { "menu", "padding-inline-start", "40px" },
+    { "ol", "padding-inline-start", "40px" },  { "ul", "padding-inline-start", "40px" },
     /* HTML §15.3.8 Tables — all nine box types, because a `<tbody>` reading `inline` is not a table this engine
        cannot lay out, it is a box CSS 2 §9.2 says exists nowhere in a table. */
     { "table", "display", "table" }, { "caption", "display", "table-caption" },
@@ -1903,6 +1941,29 @@ static const struct { const char *tag; const char *prop; const char *value; } UA
     { "thead", "display", "table-header-group" }, { "tbody", "display", "table-row-group" },
     { "tfoot", "display", "table-footer-group" }, { "tr", "display", "table-row" },
     { "td", "display", "table-cell" }, { "th", "display", "table-cell" },
+    /* HTML §15.3.8 "Tables"' CELL PADDING, which that section states verbatim as `td, th { padding: 1px; }`.
+       IT IS THE ONE MARGIN-OR-PADDING RULE IN HTML §15 THIS TABLE HOLDS PHYSICALLY, and that is transcription
+       rather than a decision: `padding` is the PHYSICAL shorthand, so css-cascade-5 §3 "Shorthand Properties"
+       makes it set `padding-top`, `padding-right`, `padding-bottom` and `padding-left` — the flow-relative
+       spelling would be this file re-writing the sheet. IT ALSO COSTS NOTHING TO BE PHYSICAL HERE, which is
+       why the choice is free rather than merely faithful: all four sides carry ONE value, so every
+       css-writing-modes-4 §6.4 "Abstract-to-Physical Mappings" permutation of the four gives the same answer
+       and no writing mode is being decided on core/layout's behalf.
+       AND IT REFUTES A GENERALISATION `cssom_cascaded_value` BELOW USED TO MAKE — that "§15's rendering rules
+       state every margin and padding LOGICALLY" and the physical spellings appear "only in the
+       presentational-hint and quirks rules". This rule is in §15.3.8's MAIN block under neither qualifier.
+       The DCHECK that sentence sits above is untouched by it and still holds: it asks whether BOTH members of
+       one css-logical-1 §4 "Flow-Relative Box Model Properties" pair carry a UA row, and a cell has a physical
+       padding row and no flow-relative one.
+       CSS 2.1 §17.5 "Visual layout of table contents" IS WHAT MAKES THE ROW READABLE — "Cells have padding as
+       well" — so core/layout/used_value.c's `uv_side` asks a cell for it under every border model but the
+       collapsed table's, where §17.6.2 "The collapsing border model" removes the TABLE's padding and not the
+       cell's. Without these eight rows every cell's text touched its own cell edge and its neighbour's, which
+       is the one gap in a rendered table that no amount of border work closes. */
+    { "td", "padding-top", "1px" },    { "td", "padding-right", "1px" },
+    { "td", "padding-bottom", "1px" }, { "td", "padding-left", "1px" },
+    { "th", "padding-top", "1px" },    { "th", "padding-right", "1px" },
+    { "th", "padding-bottom", "1px" }, { "th", "padding-left", "1px" },
     /* HTML §15.3.8 Tables' TWO `vertical-align` RULES, which that section states verbatim as:
          thead, tbody, tfoot, table > tr { vertical-align: middle; }
          tr, td, th { vertical-align: inherit; }
@@ -1950,6 +2011,37 @@ static const struct { const char *tag; const char *prop; const char *value; } UA
     { "td", "baseline-shift", "inherit" },
     { "th", "baseline-source", "inherit" }, { "th", "alignment-baseline", "inherit" },
     { "th", "baseline-shift", "inherit" },
+    /* HTML §15.3.11 "The hr element"' MARGINS, two of the six declarations that section states over the bare
+       type selector `hr`:
+         hr {
+           color: gray;
+           border-style: inset;
+           border-width: 1px;
+           margin-block: 0.5em;
+           margin-inline: auto;
+           overflow: hidden;
+         }
+       `auto` SURVIVES core/layout/used_value.c BECAUSE OF THE ROW THAT IS NOT HERE, which is worth stating
+       because it looks like luck: an `<hr>` is `display: block` with no `width` row, so CSS 2.1 §10.3.3
+       "Block-level, non-replaced elements in normal flow"' rule 5 applies — "if 'width' is set to 'auto', any
+       other 'auto' values become '0'" — and both inline margins are 0, which is what a browser gives a
+       full-width rule too. The arm that would abort is §10.3.7's, and only an ABSOLUTELY POSITIONED box
+       reaches it.
+       WHAT IS NOT COVERED — the section's `border-style: inset` and `border-width: 1px`, which are what a
+       browser PAINTS an `<hr>` as, and they are held out by the RASTERIZER rather than by this table:
+       core/paint/display_list_raster.c DFAILs by name on it, in that file's own words — "a `groove`,
+       `ridge`, `inset` or `outset` border side reached the rasterizer, which draws only CSS 2.1 §8.5.3's
+       `solid`" — so these two rows would abort every document containing an `<hr>` rather than draw one.
+       WHAT THE NEXT DIFF BUILDS: a lightening and a darkening entry in core/css/css_color.h, which that
+       crash names as the
+       missing thing and which this file cannot supply. HOW ITS ABSENCE WOULD SHOW: an `<hr>` occupies the
+       right amount of vertical space in a rendered document and paints no line in it, so a page divided by
+       rules reads as one column of prose with gaps at the divisions.
+       THE SPACE IS NOT THE LINE AND LANDING IT TAKES NOTHING AWAY — an `<hr>` had `margin: 0` and a 0 content
+       height, so it occupied no space at all and separated nothing; it now separates its neighbours by the
+       1em a browser gives them, and is still invisible. */
+    { "hr", "margin-block-start", "0.5em" },  { "hr", "margin-block-end", "0.5em" },
+    { "hr", "margin-inline-start", "auto" },  { "hr", "margin-inline-end", "auto" },
     /* HTML §15.3.10 Form controls, HTML §15.3.12 The fieldset and legend elements, and HTML §15.5's widget sections. An
        `<input>` is the single most measured element on the web and `input.clientWidth` was zero for every one
        of them. */
@@ -1959,6 +2051,55 @@ static const struct { const char *tag; const char *prop; const char *value; } UA
     { "marquee", "display", "inline-block" },
     { "select", "display", "inline-block" }, { "textarea", "display", "inline-block" },
     { "option", "display", "block" }, { "optgroup", "display", "block" },
+    /* HTML §15.3.12 "The fieldset and legend elements"' MARGINS AND PADDINGS, transcribed verbatim from the
+       two rules that section states over bare type selectors:
+         fieldset {
+           display: block;
+           margin-inline: 2px;
+           border: groove 2px ThreeDFace;
+           padding-block: 0.35em 0.625em;
+           padding-inline: 0.75em;
+           min-inline-size: min-content;
+         }
+
+         legend {
+           padding-inline: 2px;
+         }
+       `padding-block: 0.35em 0.625em` IS THE TWO-VALUE FORM AND IS THE ONLY ONE IN THIS TABLE, so it is the
+       one expansion the rules above did not exercise: css-logical-1 §4.4 "Flow-Relative Padding: the
+       padding-block-start, padding-block-end, padding-inline-start, padding-inline-end properties and
+       padding-block and padding-inline shorthands" says "The first value represents the start edge style, and
+       the second value represents the end edge style", so the two edges take DIFFERENT values and the
+       one-value sentence the margins above quote does not apply to it.
+       WHAT IS NOT COVERED — TWO THINGS, and neither is a transcription this table declined to make.
+         THE BORDER, `groove 2px ThreeDFace`, is held out at BOTH ends: core/paint/display_list_raster.c
+         DFAILs on a `groove` side exactly as it does on the `<hr>`'s `inset` above, and
+         core/css/css_system_color.c carries no `ThreeDFace` row, so the colour has nowhere to resolve either.
+         WHAT THE NEXT DIFF BUILDS: that rasterizer's named colour derivation, and the `ThreeDFace` keyword
+         beside the system colours already there — one of the deprecated ones CSS Color Module Level 4 §6.2
+         "System Colors" sends to its own Appendix A.
+         §15.3.12'S OWN USED-VALUE RULE, which is a LAYOUT rule and not a sheet one: the section says of a
+         fieldset's box that "The used value of the 'padding-top', 'padding-right', 'padding-bottom', and
+         'padding-left' properties are expected to be zero", the padding being applied instead by the
+         ANONYMOUS FIELDSET CONTENT BOX, which the same section makes inherit `padding-bottom`, `padding-left`,
+         `padding-right` and `padding-top` from the fieldset element. SO THE COMPUTED VALUE IS THIS TABLE'S AND
+         THE USED VALUE IS core/layout's, and the row below is the thing that box would read rather than a
+         stand-in for it — which is why it lands here rather than waiting: with no anonymous box the padding
+         insets the content from the fieldset's own border edge, which is the picture a browser draws through
+         a box this engine does not build. WHAT THE NEXT DIFF BUILDS: that anonymous content box in
+         core/layout, taking the fieldset's computed padding and leaving the fieldset's own used padding at
+         zero, together with §15.3.12's rendered legend. HOW ITS ABSENCE WOULD SHOW:
+         `getComputedStyle(fieldset).paddingTop` answers the declared length where a browser answers `0px`,
+         because CSSOM §9 "Resolved Values" makes a padding's resolved value the USED one; and `clientWidth`
+         measures the fieldset's own padding edge rather than the anonymous box's.
+       `min-inline-size: min-content` IS NOT A MARGIN OR A PADDING and is outside this row block's subject; it
+       is css-sizing-3 §3.2 "Sizing Values: the <length-percentage [0,∞]>, auto | none, stretch,
+       min-content, max-content, and fit-content values"' `min-content`, and it lands with the intrinsic
+       sizing the `dialog` rule above waits on. */
+    { "fieldset", "margin-inline-start", "2px" },     { "fieldset", "margin-inline-end", "2px" },
+    { "fieldset", "padding-block-start", "0.35em" },  { "fieldset", "padding-block-end", "0.625em" },
+    { "fieldset", "padding-inline-start", "0.75em" }, { "fieldset", "padding-inline-end", "0.75em" },
+    { "legend", "padding-inline-start", "2px" },      { "legend", "padding-inline-end", "2px" },
     /* HTML §15.3.1's FIRST RULE, entire: `area, base, basefont, datalist, head, link, meta, noembed, noframes,
        param, rp, script, style, template, title { display: none }`. Seven of the fourteen used to be here and
        seven were not, which is not a smaller stylesheet — it is a `<datalist>` this engine says generates a
@@ -2738,13 +2879,19 @@ char *cssom_cascaded_value(lxb_dom_element_t *el, const char *name)
        box to an element the UA sheet says has none. */
     ua = cssd_ua_value(el, name, &ua_important);
     pua = partner ? cssd_ua_value(el, partner, &pua_important) : NULL;
-    /* @LOGICAL — AT MOST ONE MEMBER OF A PAIR HAS A UA ROW, which is HTML §15's own spelling and is checked
-       rather than assumed. §15's rendering rules state every margin and padding LOGICALLY — HTML §15.3.3
-       "Flow content" is `blockquote, figure, listing, p, plaintext, pre, xmp { margin-block: 1em }` and
-       `blockquote, figure { margin-inline: 40px }` — while the physical spellings in that section appear only
-       in the presentational-hint and quirks rules, which are a different css-cascade-5 §6.2 origin. So no
-       (element, group) has both members declared in the UA origin, and the table below has no column for the
-       order between two rows of one pair if one ever did. */
+    /* @LOGICAL — AT MOST ONE MEMBER OF A PAIR HAS A UA ROW, which is checked rather than assumed, and the
+       REASON THAT USED TO BE GIVEN FOR IT IS WITHDRAWN. It read: §15's rendering rules state every margin and
+       padding LOGICALLY — HTML §15.3.3 "Flow content" is `blockquote, figure, listing, p, plaintext, pre, xmp
+       { margin-block: 1em }` and `blockquote, figure { margin-inline: 40px }` — while the physical spellings
+       in that section appear only in the presentational-hint and quirks rules. THE EXAMPLE IS EXACT AND THE
+       GENERALISATION IS FALSE: HTML §15.3.8 "Tables"' main block states `td, th { padding: 1px }`, the
+       PHYSICAL shorthand, under neither qualifier, and HTML §15.3.3's own `dialog { margin: auto; padding:
+       1em }` does the same. It is rewritten rather than deleted because a reader who re-derives it from the
+       §15.3.3 rows will re-derive it the same way and will then read a physical row below as a mistake.
+       WHAT HOLDS IS THE INVARIANT AND NOT THE RULE OF THUMB: a section states each of its margins and
+       paddings in exactly ONE spelling, so no (element, group) has both members declared in the UA origin —
+       which is what this DCHECK asks, and which a physical row satisfies as readily as a flow-relative one.
+       The table below has no column for the order between two rows of one pair if one ever did. */
     DCHECK(ua == NULL || pua == NULL,
            "BOTH members of a css-logical-1 §4 logical property group have a USER-AGENT declaration on one "
            "element. HTML §15's rendering rules state each of its margins and paddings in exactly one "
