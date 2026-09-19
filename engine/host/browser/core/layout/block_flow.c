@@ -1694,7 +1694,23 @@ static bool bf_flex_auto_block_size(lxb_dom_element_t *el, CssPx *out)
                "here is a BLOCK-axis max-content contribution, and "
                "css-sizing-3 §3.2 \"Sizing Values: …\" is what that is: \"for a box's block size, unless "
                "otherwise specified, this is equivalent to its automatic size\" — so the operand re-enters "
-               "this entry one level down, which core/layout/used_value.c already reads the same way",
+               "this entry one level down, which core/layout/used_value.c already reads the same way. "
+               "AND THE POPULATION REACHING THIS CRASH IS NOT THE ONE IT LOOKS LIKE, WHICH DECIDES WHAT THE "
+               "NEXT DIFF IS: this arm is reached ONLY when the height BEHAVES AS AUTO, and a height the "
+               "author DECLARED behaves as auto whenever its unit is one lexbor cannot parse — "
+               "`lxb_css_property_state_length` returns false when `lxb_css_unit_absolute_relative_by_name` "
+               "answers NULL, and a dropped declaration leaves the initial `auto` behind with nothing "
+               "anywhere to say so. core/css/css_length.c's `css_length_is_length_unit` admits every length "
+               "unit any specification defines; lexbor's tables carry only the absolute, font-relative and "
+               "DEFAULT viewport families, so the small, large and dynamic viewport families and the "
+               "container units all arrive here wearing `auto`. MEASURED on a frozen native binary, with "
+               "controls both ways: a `height` of `100dvh`, of `100cqh` and of an INVENTED `100zzq` all "
+               "reach THIS crash, while `100vh` and `50em` do not reach it at all. SO A PAGE MEETING THIS "
+               "CRASH MAY HAVE DECLARED A DEFINITE HEIGHT, and building the max-content main size named "
+               "above will not lay such a page out — it computes a content-based size for a box whose "
+               "author gave it one. The two are separate subproblems and the unit table is the EARLIER. "
+               "RETIREMENT: this paragraph goes when lexbor's unit set and `css_length_is_length_unit`'s "
+               "agree, after which every element reaching this arm has a genuinely auto height",
                box_subject(el, nbuf, sizeof nbuf));
         return false;
     }
