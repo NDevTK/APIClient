@@ -23557,7 +23557,16 @@ static size_t tf_pt_glyphs(const DisplayList *dl)
 
 /* ONE PAINT of the fixture's own active document, with `<p style=STYLE>TEXT</p>` appended to its body and
    removed again. A NULL `style` is the BASE paint — the same document with no paragraph in it, which is what
-   makes "the tail of the list is the paragraph's" a checked statement rather than an assumption. */
+   makes "the tail of the list is the paragraph's" a checked statement rather than an assumption.
+   THE BORROW IS A BASELINE WRITE AND NOT THE CAPTURING CHOKEPOINT, WHICH THIS FILE HAD WRONG AND WHICH COST A
+   WHOLE RUN. It used dom_cow_append_child/dom_cow_remove_child, and those fire the tree hook: this document's
+   realm is installed by the time a paint can be asked for at all, so core/dom/element.c's element_tree_changed
+   RECORDED DOM §4.2.3 "Mutation algorithms"' steps for every node this function placed and for the removal
+   after it. Only a declared IDL member's step machine drains that list, this function is C running on HOST
+   TIME with no member and no flow anywhere, and so the FIRST declared member the run reached anywhere aborted
+   at core/idl_args.c's stage-0 assert — with a message whose remedy ("declare that member") names no site,
+   because there is no member here to declare. solver/dom_cow.h's baseline write is the entry for a host-time
+   write into the tree every flow starts from, and it states what it does and does not owe. */
 static bool tf_pt_paint(JSContext *ctx, lxb_html_document_t *dom, const char *style, const char *text,
                         DisplayList *out, unsigned *offers)
 {
@@ -23581,19 +23590,19 @@ static bool tf_pt_paint(JSContext *ctx, lxb_html_document_t *dom, const char *st
         p = document_create_element_html(d, "p", 1);
         lxb_dom_element_set_attribute(p, (const lxb_char_t *)"style", 5,
                                       (const lxb_char_t *)style, strlen(style));
-        dom_cow_append_child(lxb_dom_interface_node(body), lxb_dom_interface_node(p));
+        dom_cow_append_baseline(lxb_dom_interface_node(body), lxb_dom_interface_node(p));
         t = lxb_dom_document_create_text_node(d, (const lxb_char_t *)text, strlen(text));
         CHECK(t != NULL, "the Text node this file wrote for CSS 2.1 §E.2's step 7.2.1 was not created — its "
                          "bytes are a C string literal in this file, so a failure here is an allocation and "
                          "not a document");
-        dom_cow_append_child(lxb_dom_interface_node(p), lxb_dom_interface_node(t));
+        dom_cow_append_baseline(lxb_dom_interface_node(p), lxb_dom_interface_node(t));
     }
     display_list_init(out);
     ok = box_paint_stacking_context(ctx, root, out, offers);
     /* OUT AGAIN BEFORE ANYTHING IS ASSERTED, so a failing expectation below leaves the tree exactly as the
        selftests after this one expect to find it — and so the removal is not a step an early return can
        skip. The detached subtree is the document's own arena memory and is released with it. */
-    if (p != NULL) dom_cow_remove_child(lxb_dom_interface_node(p));
+    if (p != NULL) dom_cow_remove_baseline(lxb_dom_interface_node(p));
     return ok;
 }
 
@@ -24520,8 +24529,10 @@ static void box_paint_scratch_selftest(JSContext *ctx)
 }
 
 /* `<p>` WITH AN INLINE BOX IN IT, BUILT INTO THE FIXTURE'S OWN ACTIVE DOCUMENT AND TAKEN OUT AGAIN — the
-   same borrow `tf_pt_paint` above makes, through the same two chokepoints, for the reason the banner below
-   states. THE HTML NAMESPACE IS NAMED for the reason that function states: the vendor entry decides it from
+   same borrow `tf_pt_paint` above makes, through the same two BASELINE-WRITE entries and for the reason that
+   function's banner now states: a host-time write into the presented tree may not go through the capturing
+   chokepoint, whose tree hook records §4.2.3's steps for a member that does not exist here.
+   THE HTML NAMESPACE IS NAMED for the reason that function states: the vendor entry decides it from
    `lxb_dom_document_t::type`, which nothing in this engine writes. */
 static lxb_dom_element_t *tf_ib_box(lxb_dom_document_t *d, lxb_dom_node_t *parent, const char *name,
                                     const char *decl)
@@ -24534,7 +24545,7 @@ static lxb_dom_element_t *tf_ib_box(lxb_dom_document_t *d, lxb_dom_node_t *paren
     if (decl != NULL)
         lxb_dom_element_set_attribute(el, (const lxb_char_t *)"style", 5,
                                       (const lxb_char_t *)decl, strlen(decl));
-    dom_cow_append_child(parent, lxb_dom_interface_node(el));
+    dom_cow_append_baseline(parent, lxb_dom_interface_node(el));
     return el;
 }
 
@@ -24545,7 +24556,7 @@ static void tf_ib_text(lxb_dom_document_t *d, lxb_dom_node_t *parent, const char
     CHECK(t != NULL, "the Text node this file wrote for CSS 2.1 §E.2's step 7.2.1 was not created — its bytes "
                      "are a C string literal in this file, so a failure here is an allocation and not a "
                      "document");
-    dom_cow_append_child(parent, lxb_dom_interface_node(t));
+    dom_cow_append_baseline(parent, lxb_dom_interface_node(t));
 }
 
 /* THE BODY OF THE FIXTURE'S OWN ACTIVE DOCUMENT, which is where the three paragraphs below go. Asserted in
@@ -24584,7 +24595,7 @@ static bool tf_ib_paint_flat(JSContext *ctx, lxb_html_document_t *dom, const cha
     /* OUT AGAIN BEFORE ANYTHING IS ASSERTED, which is `tf_pt_paint`'s own rule and is what makes the removal
        CHECKED rather than trusted: all three passes below are counted against ONE base, so a paragraph left
        in puts the next pass's marks past `base + 7` and that pass's own count assertion reports it. */
-    dom_cow_remove_child(lxb_dom_interface_node(p));
+    dom_cow_remove_baseline(lxb_dom_interface_node(p));
     return ok;
 }
 
@@ -24612,7 +24623,7 @@ static bool tf_ib_paint_nested(JSContext *ctx, lxb_html_document_t *dom, const c
     tf_ib_text(d, lxb_dom_interface_node(p), "e");
     display_list_init(out);
     ok = box_paint_stacking_context(ctx, root, out, offers);
-    dom_cow_remove_child(lxb_dom_interface_node(p));
+    dom_cow_remove_baseline(lxb_dom_interface_node(p));
     return ok;
 }
 

@@ -148,6 +148,40 @@ void dom_cow_remove_child(lxb_dom_node_t *node);
    the same node, because a `_move_out` with no `_move_in` is a node removed with no removing steps. */
 void dom_cow_move_out(lxb_dom_node_t *node);
 void dom_cow_move_in(lxb_dom_node_t *parent, lxb_dom_node_t *node, lxb_dom_node_t *ref);
+/* A BASELINE TREE WRITE — the same two captures the append and remove chokepoints push, and NO TREE HOOK.
+   THE ABSENCE OF THE HOOK IS THE WHOLE OPERATION rather than an omission, exactly as it is for the move pair
+   above, and the reason is a different one: a move is a §4.2.3 primitive that runs no insertion or removing
+   steps, while this is a write made on HOST TIME, before any flow exists, into the tree every flow will start
+   from. HTML §13.2.6 "Tree construction" already writes that tree and reaches DOM §4.2.3 "Mutation
+   algorithms" at no point at all — the parse's cb table calls `lxb_dom_node_insert_child` directly — so a
+   baseline write that DID record would be the one write into the baseline document that owes a member's
+   drain, and there is no member on host time for it to be owed to.
+   WHAT GOES WRONG WITHOUT IT, MEASURED. core/dom/element.c's element_tree_changed records for every connected
+   insert whose document has a realm, and a host that installs the realm and THEN writes into the tree it
+   presents satisfies both tests — so the entries are made, nothing drains them (only a declared member's step
+   machine can), and the next declared member to start anywhere aborts at core/idl_args.c's stage-0 assert
+   with a message whose remedy names no site, because the mutator is not a member and cannot be declared as
+   one. In a release build, with that DCHECK compiled out, the entries are instead handed to whichever member
+   happens to run next, which walks them over nodes the borrow has since DETACHED.
+   THE SLICE IS ASSERTED AND IT IS AN ASSERTION, NEVER A BRANCH — solver/quantum.h's `quantum_slice_open` is
+   this engine's one spelling of host time, and a caller that BRANCHED on it would be choosing between a
+   scheduled path and an unscheduled one, which is the fallback CLAUDE.md §C-stack bans. Each caller statically
+   calls one entry or the other: a flow's mutation calls the chokepoint above, a host-time write calls this,
+   and nothing anywhere selects between them. The assert is what makes that structural rather than hoped.
+   NAMED RESIDUAL. WHAT IS NOT COVERED: §4.2.3's steps for the subtree this places never run, so a baseline
+   write of an `<iframe>` gets no child navigable, a `<script>` is never prepared, a `<style>` contributes no
+   sheet and a custom element is not upgraded. That is the state HTML §7.5.2 "Loading HTML documents"' own
+   parse has always been in — core/dom/document.c's document_install answers it for the parsed tree with the
+   parsed-walk family (html_base_element_parsed, html_script_parsed, declarative_shadow_parsed,
+   media_element_parsed, html_image_parsed, html_link_parsed, html_style_element_parsed,
+   iframe_document_parsed, autofocus_document_parsed) — so this makes a baseline write agree with the parse
+   beside it rather than narrowing either. WHAT THE NEXT DIFF BUILDS: the same walk over the subtree a
+   baseline write places, so a host-time write owes exactly what the parse owes and by the same family.
+   HOW ITS ABSENCE WOULD SHOW: a document whose baseline write places an element the parsed-walk family has a
+   member for renders as though that element were inert — the count a painter derives over it is right and the
+   navigable, the sheet or the program it should also have produced is absent, with no abort anywhere. */
+void dom_cow_append_baseline(lxb_dom_node_t *parent, lxb_dom_node_t *child);
+void dom_cow_remove_baseline(lxb_dom_node_t *node);
 /* A character-data node's VALUE (§4.10 `data`) — the third thing a flow can change about the tree, on a node
    whose identity must survive the write, so it cannot be a remove+insert of a replacement. */
 void dom_cow_set_text(lxb_dom_node_t *node, const char *val, size_t val_len);

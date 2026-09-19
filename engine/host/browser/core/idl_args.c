@@ -4044,11 +4044,36 @@ static int js_idl_args_step_inner(JSContext *ctx, void *st, JSValue cb_result, J
            THE LOAD IS RULED OUT AT THE RECORD AND NOT HERE, by core/dom/element.c's tree_steps_can_run: the
            walk runs a node's steps in the NODE'S document's realm, and this engine installs that realm AFTER
            the parse, so a load's node has none and is not recorded. That is a fact about the node, which is
-           what lets it survive a load resting between constructs while sibling flows run. So the remedy below
-           is once again the only shape that can reach here, and a member is once again the only answer. */
+           what lets it survive a load resting between constructs while sibling flows run.
+           AND THE CLAUSE THAT ENDED THIS PARAGRAPH — "a member is once again the only answer" — WAS WRONG
+           TOO, WHICH IS THE THIRD TIME AND IS RECORDED RATHER THAN QUIETLY REPLACED. It is a next-diff clause
+           naming a MECHANISM, which CLAUDE.md rates as the least reliable half of a crash: the SPEC reasoning
+           above it was correct both times and the remedy was not, and a reader who reaches this comment has
+           already decided to do the work, so a wrong one is not caught, it is EXECUTED. THE THIRD SHAPE IS A
+           WRITE MADE ON HOST TIME: engine/host/test_forced.c's paint selftests borrowed the PRESENTED
+           document's tree from plain C — appending a `<p>` for one paint and removing it again — and every
+           test at the record is satisfied, because the node is connected and its document's realm was
+           installed before any paint could be asked for at all. core/dom/element.c's tree_steps_can_run
+           cannot refuse it: there is no fact about the NODE to refuse it by. What is missing is a MEMBER, and
+           unlike the raw JS_CFUNC_DEF below there is no member to declare, because the mutation happened
+           before any flow existed.
+           SO THIS ONE MESSAGE STATED ONE REMEDY FOR TWO STATES THAT TAKE OPPOSITE WORK, which is the shape
+           §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS names, and the remedy it stated was the one that fits the
+           state it did NOT fire on. They are separated below, and the separator is solver/quantum.h's
+           `quantum_slice_open` — this engine's one spelling of host time. It is named here as the thing that
+           TELLS THE TWO APART and is deliberately NOT asked at the record: a gate on it would be choosing
+           between a scheduled path and an unscheduled one, which is the fallback §C-stack bans, and this
+           file's own measurement is that a predicate about whether the engine is executing is the one a
+           reader spells wrongly. */
         DCHECK(!g_tree || !g_tree->recorded(),
-               "a DOM mutation recorded tree steps outside any declared member — declare that member so it "
-               "converges on this machine, which is the only thing that drains them");
+               "a DOM mutation recorded tree steps outside any declared member. TWO STATES REACH THIS AND "
+               "THEY TAKE OPPOSITE WORK, told apart by solver/quantum.h's quantum_slice_open. INSIDE A FLOW'S "
+               "SLICE: a raw JS_CFUNC_DEF mutated the tree — DECLARE THAT MEMBER, so it converges on this "
+               "machine, which is the only thing that drains them. ON HOST TIME, with no flow anywhere: there "
+               "is no member to declare, and the write belongs in solver/dom_cow.h's dom_cow_append_baseline "
+               "/ dom_cow_remove_baseline, which fire no tree hook for the same reason HTML §13.2.6 \"Tree "
+               "construction\"'s own writes fire none — a baseline write is part of the tree every flow "
+               "starts from rather than a flow's mutation of it");
         /* WEB IDL §3.7 Interfaces' IMPLEMENTATION-CHECK, WHICH IS THE ONE ALGORITHM §3.7.7 Operations' and
          * §3.7.6 Attributes' opening steps both spell out — the security check and the receiver's brand, in
          * that order. It is asked HERE because here is where every declared member converges: see

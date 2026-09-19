@@ -12,6 +12,7 @@
 #include "core/dom/node_heap.h"     /* …and its BYTES are the agent's, which is why kind 8 asserts and moves nothing */
 #include "core/dom/node_interface.h"   /* dom_document_destroy — a document's nodes go back before its arenas do */
 #include "core/dom/node.h"   /* node_template_content — §4.12.3's second tree, which a parse also builds into */
+#include "solver/quantum.h"   /* quantum_slice_open — HOST TIME, asserted by the baseline write below */
 #include "solver/attr_shadow.h"   /* the taint shadow rides the attribute delta (per-flow isolation of stashed taint) */
 /* DOM §4.4 Interface Node's `clone a node` STEP 3 CLONING STEPS, which a private tree's copy owes exactly as
    clone-a-node does — these are the same two component entries core/dom/node.c calls at its own step 3, and
@@ -2036,6 +2037,40 @@ void dom_cow_move_in(lxb_dom_node_t *parent, lxb_dom_node_t *node, lxb_dom_node_
     dom_insert_capture(node);
     if (ref) lxb_dom_node_insert_before(ref, node);
     else     lxb_dom_node_insert_child(parent, node);
+}
+
+/* THE BASELINE WRITE — see dom_cow.h for why the missing tree hook IS the operation, for the release-build
+   failure it closes, and for the named residual it leaves. The captures are byte-for-byte the chokepoint's,
+   so a baseline write time-travels exactly like any other write and only the §4.2.3 record is absent. */
+void dom_cow_append_baseline(lxb_dom_node_t *parent, lxb_dom_node_t *child) {
+    DCHECK(parent != NULL && child != NULL, "a baseline tree write was asked to put nothing anywhere");
+    DCHECK(!quantum_slice_open(),
+           "a BASELINE tree write was made while a flow held the thread — this entry exists for HOST TIME, "
+           "before any flow, where there is no declared member for DOM §4.2.3's steps to be owed to and the "
+           "tree being written is the one every flow starts from. A write from inside a slice is a FLOW's "
+           "mutation: it must go through dom_cow_append_child, whose tree hook records §4.2.3's steps for the "
+           "member's own drain, and taking this door instead would silently skip an inserted <script>'s "
+           "preparation, an <iframe>'s child navigable and a custom element's upgrade");
+    g_dom_version++;
+    dom_insert_capture(child);
+    lxb_dom_node_insert_child(parent, child);
+    /* THE SAME ASSERTION THE APPEND CHOKEPOINT MAKES, kept because it is about where LEXBOR put the node and
+       not about the hook: a caller that reads back the subtree it just placed is entitled to the same answer
+       on both doors. */
+    DCHECK(child->parent == parent && child->next == NULL,
+           "a baseline tree write did not land where it was aimed — the caller reads the subtree back at this "
+           "position, so a node that is not the parent's last child is a tree nobody built");
+}
+
+void dom_cow_remove_baseline(lxb_dom_node_t *node) {
+    if (!node) return;
+    DCHECK(!quantum_slice_open(),
+           "a BASELINE tree removal was made while a flow held the thread — see dom_cow_append_baseline for "
+           "why this entry is host time's and why a flow's removal must go through dom_cow_remove_child, "
+           "whose tree hook records §4.2.3's removing steps for the member's own drain");
+    g_dom_version++;
+    dom_remove_capture(node);
+    lxb_dom_node_remove(node);
 }
 /* dom_revert — the "DISCARD the running flow's writes -> baseline" twin of dom_unapply — is DELETED, and this
  * note is here because the deletion is the point rather than a tidy-up. It was the ONE caller's (flow_finish's)
