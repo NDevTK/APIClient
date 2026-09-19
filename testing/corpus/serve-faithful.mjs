@@ -89,10 +89,20 @@ html = html.replace(/(<(?:script|link)\b[^>]*?\b(?:src|href)\s*=\s*)(["'])([^"']
   (m, head, q, val) => (/^(data:|about:|javascript:|#)/i.test(val) || /<base\b/i.test(head) ? m
     : head + q + localize(unent(val), BASEURL) + q));
 
-let served = 0, missed = 0;
+let served = 0, missed = 0, docServed = 0;
 createServer((req, res) => {
   const p = new URL(req.url, 'http://x');
   if (p.pathname === '/' || p.pathname === '/index.html') {
+    /* THE DOCUMENT IS COUNTED ON ITS OWN LINE AND NOT INTO `served`, BECAUSE THE TWO ANSWER DIFFERENT
+       QUESTIONS AND ONE COUNTER ANSWERING BOTH IS WHAT MADE A ZERO UNREADABLE. This arm returns BEFORE the
+       `served++` below, so `served 0` has always meant "no SUBRESOURCE was fetched" and never "nothing was
+       served" — and a reader who takes the second reading concludes the fixture is broken when the engine
+       simply never got past the document. MEASURED, and it is why this line exists: an MDN drive aborted in
+       its first layout and reported `served 0, missed 0` while the document had plainly been parsed, because
+       the abort names a `<button>` that only the parsed markup contains. The two facts take opposite work —
+       a document that was never requested is a HARNESS problem, and a document served with no subresource
+       behind it is an ENGINE that stopped early. */
+    docServed++;
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
     return res.end(html);
   }
@@ -146,4 +156,7 @@ createServer((req, res) => {
 }).listen(port, '127.0.0.1', () => {
   console.log(`${id} on ${port} — ${(site.resources || []).length} resources, doc ${(doc.length / 1024).toFixed(0)}KiB`);
 });
-process.on('SIGTERM', () => { console.log(`served ${served}, missed ${missed}`); process.exit(0); });
+process.on('SIGTERM', () => {
+  console.log(`document served ${docServed}x; subresources served ${served}, missed ${missed}`);
+  process.exit(0);
+});
