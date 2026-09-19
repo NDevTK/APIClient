@@ -391,7 +391,7 @@
     "fetchedAt": "2026-09-17T02:55:41.380Z",
     "via": "runtime",
     "composedFrom": "/assets/webpack/empty-projects-md.37ca8dc8.svg",
-    "declined": "content-type image/svg+xml — seen and not stored; the fixture keeps its 404"
+    "path": "gitlab.com/assets/webpack/empty-projects-md.37ca8dc8.svg"
    },
    {
     "url": "https://gitlab.com/assets/favicon-72a2cad5025aa931d6ea56c3201d1f18e68a8cd39788c7c80d5b2b82aa5143ef.png",
@@ -402,7 +402,7 @@
     "fetchedAt": "2026-09-17T02:55:41.564Z",
     "via": "runtime",
     "composedFrom": "/_m/gitlab.com/assets/favicon-72a2cad5025aa931d6ea56c3201d1f18e68a8cd39788c7c80d5b2b82aa5143ef.png",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "gitlab.com/assets/favicon-72a2cad5025aa931d6ea56c3201d1f18e68a8cd39788c7c80d5b2b82aa5143ef.png"
    },
    {
     "url": "https://gitlab.com/assets/webpack/initInviteMembersTrigger.348a5f8f.chunk.js",
@@ -632,7 +632,7 @@
     "fetchedAt": "2026-09-17T02:57:32.429Z",
     "via": "runtime",
     "composedFrom": "/_m/helixapp.com/favicon.png",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "helixapp.com/favicon.png"
    },
    {
     "url": "https://helixapp.com/_nuxt/index-B4viQ93w.js",
@@ -1325,7 +1325,7 @@
     "fetchedAt": "2026-09-17T03:00:16.749Z",
     "via": "runtime",
     "composedFrom": "/helix-bg-poster.webp",
-    "declined": "content-type image/webp — seen and not stored; the fixture keeps its 404"
+    "path": "helixapp.com/helix-bg-poster.webp"
    },
    {
     "url": "https://helixapp.com/svg/blurs/blur-1.svg",
@@ -1336,7 +1336,7 @@
     "fetchedAt": "2026-09-17T03:00:17.298Z",
     "via": "runtime",
     "composedFrom": "/svg/blurs/blur-1.svg",
-    "declined": "content-type image/svg+xml — seen and not stored; the fixture keeps its 404"
+    "path": "helixapp.com/svg/blurs/blur-1.svg"
    },
    {
     "url": "https://helixapp.com/images/home/app-store.svg",
@@ -1347,7 +1347,7 @@
     "fetchedAt": "2026-09-17T03:00:17.585Z",
     "via": "runtime",
     "composedFrom": "/images/home/app-store.svg",
-    "declined": "content-type image/svg+xml — seen and not stored; the fixture keeps its 404"
+    "path": "helixapp.com/images/home/app-store.svg"
    },
    {
     "url": "https://helixapp.com/images/home/google-play.svg",
@@ -1358,7 +1358,7 @@
     "fetchedAt": "2026-09-17T03:00:17.965Z",
     "via": "runtime",
     "composedFrom": "/images/home/google-play.svg",
-    "declined": "content-type image/svg+xml — seen and not stored; the fixture keeps its 404"
+    "path": "helixapp.com/images/home/google-play.svg"
    },
    {
     "url": "https://helixapp.com/images/home/helix-mobile.webp",
@@ -1369,7 +1369,7 @@
     "fetchedAt": "2026-09-17T03:00:18.373Z",
     "via": "runtime",
     "composedFrom": "/images/home/helix-mobile.webp",
-    "declined": "content-type image/webp — seen and not stored; the fixture keeps its 404"
+    "path": "helixapp.com/images/home/helix-mobile.webp"
    },
    {
     "url": "https://helixapp.com/images/helix-platform-long.webp",
@@ -1380,7 +1380,7 @@
     "fetchedAt": "2026-09-17T03:00:18.608Z",
     "via": "runtime",
     "composedFrom": "/images/helix-platform-long.webp",
-    "declined": "content-type image/webp — seen and not stored; the fixture keeps its 404"
+    "path": "helixapp.com/images/helix-platform-long.webp"
    },
    {
     "url": "https://helixapp.com/_nuxt/Inter-Medium.DwMxL0mc.woff2",
@@ -1391,7 +1391,7 @@
     "fetchedAt": "2026-09-17T03:00:18.833Z",
     "via": "runtime",
     "composedFrom": "/_m/helixapp.com/_nuxt/Inter-Medium.DwMxL0mc.woff2",
-    "declined": "content-type font/woff2 — seen and not stored; the fixture keeps its 404"
+    "path": "helixapp.com/_nuxt/Inter-Medium.DwMxL0mc.woff2"
    },
    {
     "url": "https://helixapp.com/_nuxt/Inter-Bold.Bj1B9WKG.woff2",
@@ -1402,7 +1402,7 @@
     "fetchedAt": "2026-09-17T03:00:19.021Z",
     "via": "runtime",
     "composedFrom": "/_m/helixapp.com/_nuxt/Inter-Bold.Bj1B9WKG.woff2",
-    "declined": "content-type font/woff2 — seen and not stored; the fixture keeps its 404"
+    "path": "helixapp.com/_nuxt/Inter-Bold.Bj1B9WKG.woff2"
    },
    {
     "url": "https://helixapp.com/_nuxt/stream-C3ok6WoO.js",
@@ -2864,7 +2864,7 @@
     "fetchedAt": "2026-09-17T02:56:06.105Z",
     "via": "runtime",
     "composedFrom": "/static/ona-lettermark.svg",
-    "declined": "content-type image/svg+xml — seen and not stored; the fixture keeps its 404"
+    "path": "app.gitpod.io/static/ona-lettermark.svg"
    },
    {
     "url": "https://app.gitpod.io/api/gitpod.v1.AccountService/GetAccount",
@@ -2926,7 +2926,7 @@
     "fetchedAt": "2026-09-17T02:56:07.974Z",
     "via": "runtime",
     "composedFrom": "/_m/app.gitpod.io/static/ona-logo.svg",
-    "declined": "content-type image/svg+xml — seen and not stored; the fixture keeps its 404"
+    "path": "app.gitpod.io/static/ona-logo.svg"
    },
    {
     "url": "https://app.gitpod.io/static/ona32.png",
@@ -2937,7 +2937,7 @@
     "fetchedAt": "2026-09-17T02:56:08.147Z",
     "via": "runtime",
     "composedFrom": "/_m/app.gitpod.io/static/ona32.png",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "app.gitpod.io/static/ona32.png"
    },
    {
     "url": "https://app.gitpod.io/static/favicon.ico",
@@ -3111,7 +3111,7 @@
     "fetchedAt": "2026-09-17T02:54:30.578Z",
     "via": "runtime",
     "composedFrom": "/_m/excalidraw.com/favicon-32x32.png",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "excalidraw.com/favicon-32x32.png"
    },
    {
     "url": "https://excalidraw.com/favicon-16x16.png",
@@ -3122,7 +3122,7 @@
     "fetchedAt": "2026-09-17T02:54:30.764Z",
     "via": "runtime",
     "composedFrom": "/_m/excalidraw.com/favicon-16x16.png",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "excalidraw.com/favicon-16x16.png"
    },
    {
     "url": "https://excalidraw.com/sw.js",
@@ -3176,7 +3176,7 @@
     "bytes": 803246,
     "sha256": "91885ddd065d5320814cbf2dd563d400f1f65d69b50c2abbe7f6c8a975a1805f",
     "fetchedAt": "2026-09-13T07:54:45.631Z",
-    "path": "astexplorer.net/vendors~app-02cf37b0ee2da2390f7c-27.js"
+    "path": "astexplorer.net/vendors_app-02cf37b0ee2da2390f7c-27.js"
    },
    {
     "url": "https://astexplorer.net/parsers~app-69d1875edf89a39a446a-27.js",
@@ -3185,7 +3185,7 @@
     "bytes": 269724,
     "sha256": "4aee91e2e4c9d59dfa7d4bfb3c7fe528131b99ecf1ae55530082250febc23b40",
     "fetchedAt": "2026-09-13T07:54:45.956Z",
-    "path": "astexplorer.net/parsers~app-69d1875edf89a39a446a-27.js"
+    "path": "astexplorer.net/parsers_app-69d1875edf89a39a446a-27.js"
    },
    {
     "url": "https://astexplorer.net/app-ae28f02d9edd285e0304-27.js",
@@ -3205,7 +3205,7 @@
     "fetchedAt": "2026-09-17T03:12:27.848Z",
     "via": "runtime",
     "composedFrom": "/_m/astexplorer.net/vendors~app-8a2ad0cc579d962e3d27-27.css",
-    "path": "astexplorer.net/vendors~app-8a2ad0cc579d962e3d27-27.css"
+    "path": "astexplorer.net/vendors_app-8a2ad0cc579d962e3d27-27.css"
    },
    {
     "url": "https://astexplorer.net/app-c1f5ca2f8d02233bb6e6-27.css",
@@ -3238,7 +3238,7 @@
     "fetchedAt": "2026-09-17T03:12:28.887Z",
     "via": "runtime",
     "composedFrom": "/_m/astexplorer.net/favicon.png",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "astexplorer.net/favicon.png"
    },
    {
     "url": "https://astexplorer.net/20fd1704ea223900efa9fd4e869efb08.woff2",
@@ -3249,7 +3249,7 @@
     "fetchedAt": "2026-09-17T03:12:38.637Z",
     "via": "runtime",
     "composedFrom": "/_m/astexplorer.net/20fd1704ea223900efa9fd4e869efb08.woff2",
-    "declined": "content-type font/woff2 — seen and not stored; the fixture keeps its 404"
+    "path": "astexplorer.net/20fd1704ea223900efa9fd4e869efb08.woff2"
    },
    {
     "url": "https://astexplorer.net/f691f37e57f04c152e2315ab7dbad881.woff",
@@ -3260,7 +3260,7 @@
     "fetchedAt": "2026-09-17T03:12:39.104Z",
     "via": "runtime",
     "composedFrom": "/_m/astexplorer.net/f691f37e57f04c152e2315ab7dbad881.woff",
-    "declined": "content-type font/woff — seen and not stored; the fixture keeps its 404"
+    "path": "astexplorer.net/f691f37e57f04c152e2315ab7dbad881.woff"
    },
    {
     "url": "https://astexplorer.net/1e59d2330b4c6deb84b340635ed36249.ttf",
@@ -3941,7 +3941,7 @@
     "fetchedAt": "2026-09-17T03:13:02.248Z",
     "via": "runtime",
     "composedFrom": "/favicon.svg",
-    "declined": "content-type image/svg+xml — seen and not stored; the fixture keeps its 404"
+    "path": "www.tldraw.com/favicon.svg"
    },
    {
     "url": "https://www.tldraw.com/favicon-32x32.png",
@@ -3952,7 +3952,7 @@
     "fetchedAt": "2026-09-17T03:13:02.539Z",
     "via": "runtime",
     "composedFrom": "/favicon-32x32.png",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "www.tldraw.com/favicon-32x32.png"
    },
    {
     "url": "https://www.tldraw.com/favicon-16x16.png",
@@ -3963,7 +3963,7 @@
     "fetchedAt": "2026-09-17T03:13:02.803Z",
     "via": "runtime",
     "composedFrom": "/favicon-16x16.png",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "www.tldraw.com/favicon-16x16.png"
    },
    {
     "url": "https://www.tldraw.com/cf-fonts/v/inter/5.2.8/latin/wght/normal.woff2",
@@ -3974,7 +3974,7 @@
     "fetchedAt": "2026-09-17T03:13:12.952Z",
     "via": "runtime",
     "composedFrom": "/cf-fonts/v/inter/5.2.8/latin/wght/normal.woff2",
-    "declined": "content-type font/woff2 — seen and not stored; the fixture keeps its 404"
+    "path": "www.tldraw.com/cf-fonts/v/inter/5.2.8/latin/wght/normal.woff2"
    },
    {
     "url": "https://www.tldraw.com/api/app/feature-flags",
@@ -3996,7 +3996,7 @@
     "fetchedAt": "2026-09-17T03:13:13.580Z",
     "via": "runtime",
     "composedFrom": "/assets/canva-DaLR1xAm.png",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "www.tldraw.com/assets/canva-DaLR1xAm.png"
    },
    {
     "url": "https://www.tldraw.com/assets/codepen-DyKoYQgX.png",
@@ -4007,7 +4007,7 @@
     "fetchedAt": "2026-09-17T03:13:13.794Z",
     "via": "runtime",
     "composedFrom": "/assets/codepen-DyKoYQgX.png",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "www.tldraw.com/assets/codepen-DyKoYQgX.png"
    },
    {
     "url": "https://www.tldraw.com/assets/codesandbox-B_MRVt0x.png",
@@ -4018,7 +4018,7 @@
     "fetchedAt": "2026-09-17T03:13:13.992Z",
     "via": "runtime",
     "composedFrom": "/assets/codesandbox-B_MRVt0x.png",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "www.tldraw.com/assets/codesandbox-B_MRVt0x.png"
    },
    {
     "url": "https://www.tldraw.com/assets/desmos-xMYWZcR_.png",
@@ -4029,7 +4029,7 @@
     "fetchedAt": "2026-09-17T03:13:14.188Z",
     "via": "runtime",
     "composedFrom": "/assets/desmos-xMYWZcR_.png",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "www.tldraw.com/assets/desmos-xMYWZcR_.png"
    },
    {
     "url": "https://www.tldraw.com/assets/excalidraw-BdergSJ4.png",
@@ -4040,7 +4040,7 @@
     "fetchedAt": "2026-09-17T03:13:14.438Z",
     "via": "runtime",
     "composedFrom": "/assets/excalidraw-BdergSJ4.png",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "www.tldraw.com/assets/excalidraw-BdergSJ4.png"
    },
    {
     "url": "https://www.tldraw.com/assets/felt-CWo18xlx.png",
@@ -4051,7 +4051,7 @@
     "fetchedAt": "2026-09-17T03:13:14.647Z",
     "via": "runtime",
     "composedFrom": "/assets/felt-CWo18xlx.png",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "www.tldraw.com/assets/felt-CWo18xlx.png"
    },
    {
     "url": "https://www.tldraw.com/assets/figma-BxZlvDp1.png",
@@ -4062,7 +4062,7 @@
     "fetchedAt": "2026-09-17T03:13:14.948Z",
     "via": "runtime",
     "composedFrom": "/assets/figma-BxZlvDp1.png",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "www.tldraw.com/assets/figma-BxZlvDp1.png"
    },
    {
     "url": "https://www.tldraw.com/assets/github_gist-DN7rfWIe.png",
@@ -4073,7 +4073,7 @@
     "fetchedAt": "2026-09-17T03:13:15.150Z",
     "via": "runtime",
     "composedFrom": "/assets/github_gist-DN7rfWIe.png",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "www.tldraw.com/assets/github_gist-DN7rfWIe.png"
    },
    {
     "url": "https://www.tldraw.com/assets/google_calendar-J14QdmxX.png",
@@ -4084,7 +4084,7 @@
     "fetchedAt": "2026-09-17T03:13:15.337Z",
     "via": "runtime",
     "composedFrom": "/assets/google_calendar-J14QdmxX.png",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "www.tldraw.com/assets/google_calendar-J14QdmxX.png"
    },
    {
     "url": "https://www.tldraw.com/assets/google_maps-CytTb9A_.png",
@@ -4095,7 +4095,7 @@
     "fetchedAt": "2026-09-17T03:13:15.580Z",
     "via": "runtime",
     "composedFrom": "/assets/google_maps-CytTb9A_.png",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "www.tldraw.com/assets/google_maps-CytTb9A_.png"
    },
    {
     "url": "https://www.tldraw.com/assets/google_slides-CVTAzW8G.png",
@@ -4106,7 +4106,7 @@
     "fetchedAt": "2026-09-17T03:13:15.760Z",
     "via": "runtime",
     "composedFrom": "/assets/google_slides-CVTAzW8G.png",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "www.tldraw.com/assets/google_slides-CVTAzW8G.png"
    },
    {
     "url": "https://www.tldraw.com/assets/observable-CXRNNqoq.png",
@@ -4117,7 +4117,7 @@
     "fetchedAt": "2026-09-17T03:13:15.982Z",
     "via": "runtime",
     "composedFrom": "/assets/observable-CXRNNqoq.png",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "www.tldraw.com/assets/observable-CXRNNqoq.png"
    },
    {
     "url": "https://www.tldraw.com/assets/replit-KDczLuEW.png",
@@ -4128,7 +4128,7 @@
     "fetchedAt": "2026-09-17T03:13:16.184Z",
     "via": "runtime",
     "composedFrom": "/assets/replit-KDczLuEW.png",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "www.tldraw.com/assets/replit-KDczLuEW.png"
    },
    {
     "url": "https://www.tldraw.com/assets/scratch-K5xmC6hV.png",
@@ -4139,7 +4139,7 @@
     "fetchedAt": "2026-09-17T03:13:16.484Z",
     "via": "runtime",
     "composedFrom": "/assets/scratch-K5xmC6hV.png",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "www.tldraw.com/assets/scratch-K5xmC6hV.png"
    },
    {
     "url": "https://www.tldraw.com/assets/spotify-3Mohkh2W.png",
@@ -4150,7 +4150,7 @@
     "fetchedAt": "2026-09-17T03:13:16.710Z",
     "via": "runtime",
     "composedFrom": "/assets/spotify-3Mohkh2W.png",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "www.tldraw.com/assets/spotify-3Mohkh2W.png"
    },
    {
     "url": "https://www.tldraw.com/assets/tldraw-CIdeAd43.png",
@@ -4161,7 +4161,7 @@
     "fetchedAt": "2026-09-17T03:13:17.024Z",
     "via": "runtime",
     "composedFrom": "/assets/tldraw-CIdeAd43.png",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "www.tldraw.com/assets/tldraw-CIdeAd43.png"
    },
    {
     "url": "https://www.tldraw.com/assets/val_town-DDqJsrr3.png",
@@ -4172,7 +4172,7 @@
     "fetchedAt": "2026-09-17T03:13:17.205Z",
     "via": "runtime",
     "composedFrom": "/assets/val_town-DDqJsrr3.png",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "www.tldraw.com/assets/val_town-DDqJsrr3.png"
    },
    {
     "url": "https://www.tldraw.com/assets/youtube-Dg8Ty0kH.png",
@@ -4183,7 +4183,7 @@
     "fetchedAt": "2026-09-17T03:13:17.494Z",
     "via": "runtime",
     "composedFrom": "/assets/youtube-Dg8Ty0kH.png",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "www.tldraw.com/assets/youtube-Dg8Ty0kH.png"
    },
    {
     "url": "https://www.tldraw.com/assets/vimeo-sHG6Il8x.png",
@@ -4194,7 +4194,7 @@
     "fetchedAt": "2026-09-17T03:13:17.720Z",
     "via": "runtime",
     "composedFrom": "/assets/vimeo-sHG6Il8x.png",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "www.tldraw.com/assets/vimeo-sHG6Il8x.png"
    }
   ],
   "baseUrl": "https://www.tldraw.com/",
@@ -4607,7 +4607,7 @@
     "fetchedAt": "2026-09-17T03:05:14.728Z",
     "via": "runtime",
     "composedFrom": "/_m/web.telegram.org/k/assets/img/favicon.ico?v=jw3mK7G9Ry",
-    "declined": "content-type image/x-icon — seen and not stored; the fixture keeps its 404"
+    "path": "web.telegram.org/k/assets/img/favicon.ico__q15e7b1af"
    },
    {
     "url": "https://web.telegram.org/k/assets/img/favicon-32x32.png?v=jw3mK7G9Ry",
@@ -4618,7 +4618,7 @@
     "fetchedAt": "2026-09-17T03:05:15.164Z",
     "via": "runtime",
     "composedFrom": "/_m/web.telegram.org/k/assets/img/favicon-32x32.png?v=jw3mK7G9Ry",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "web.telegram.org/k/assets/img/favicon-32x32.png__q15e7b1af"
    },
    {
     "url": "https://web.telegram.org/k/assets/img/favicon-16x16.png?v=jw3mK7G9Ry",
@@ -4629,7 +4629,7 @@
     "fetchedAt": "2026-09-17T03:05:15.618Z",
     "via": "runtime",
     "composedFrom": "/_m/web.telegram.org/k/assets/img/favicon-16x16.png?v=jw3mK7G9Ry",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "web.telegram.org/k/assets/img/favicon-16x16.png__q15e7b1af"
    },
    {
     "url": "https://web.telegram.org/k/assets/img/android-chrome-192x192.png?v=jw3mK7G9Ry",
@@ -4640,7 +4640,7 @@
     "fetchedAt": "2026-09-17T03:05:16.078Z",
     "via": "runtime",
     "composedFrom": "/_m/web.telegram.org/k/assets/img/android-chrome-192x192.png?v=jw3mK7G9Ry",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "web.telegram.org/k/assets/img/android-chrome-192x192.png__q15e7b1af"
    },
    {
     "url": "https://web.telegram.org/k/assets/fonts/KFOmCnqEu92Fr1Mu4mxKKTU1Kg.woff2",
@@ -4695,7 +4695,7 @@
     "fetchedAt": "2026-09-17T03:05:38.404Z",
     "via": "runtime",
     "composedFrom": "/assets/img/pattern.svg",
-    "declined": "content-type image/svg+xml — seen and not stored; the fixture keeps its 404"
+    "path": "web.telegram.org/k/assets/img/pattern.svg"
    },
    {
     "url": "https://web.telegram.org/k/bootstrapIm-BZBY4Hc-.js",
@@ -4959,7 +4959,7 @@
     "fetchedAt": "2026-09-17T03:05:59.829Z",
     "via": "runtime",
     "composedFrom": "/_m/web.telegram.org/k/assets/fonts/tgico.woff?akge1f",
-    "declined": "content-type application/font-woff — seen and not stored; the fixture keeps its 404"
+    "path": "web.telegram.org/k/assets/fonts/tgico.woff__qfbbb858e"
    },
    {
     "url": "https://web.telegram.org/k/getInputPasskeyResponse-j7ubj3Zr.js",
@@ -4992,7 +4992,7 @@
     "fetchedAt": "2026-09-17T03:06:20.462Z",
     "via": "runtime",
     "composedFrom": "/assets/img/logo_padded.svg",
-    "declined": "content-type image/svg+xml — seen and not stored; the fixture keeps its 404"
+    "path": "web.telegram.org/k/assets/img/logo_padded.svg"
    }
   ],
   "baseUrl": "https://web.telegram.org/k/",
@@ -5422,7 +5422,7 @@
     "fetchedAt": "2026-09-17T02:54:06.838Z",
     "via": "runtime",
     "composedFrom": "/_m/jsoncrack.com/favicon.ico",
-    "declined": "content-type image/vnd.microsoft.icon — seen and not stored; the fixture keeps its 404"
+    "path": "jsoncrack.com/favicon.ico"
    }
   ],
   "baseUrl": "https://jsoncrack.com/editor",
@@ -5525,7 +5525,7 @@
     "fetchedAt": "2026-09-17T03:03:38.306Z",
     "via": "runtime",
     "composedFrom": "/static/assets/icons/favicon-196.png",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "regex101.com/static/assets/icons/favicon-196.png"
    },
    {
     "url": "https://regex101.com/static/assets/JTUSjIg1_i6t8kCHKm459WlhyyTh89Y.73f48d747e3908e4ba64.woff2",
@@ -5536,7 +5536,7 @@
     "fetchedAt": "2026-09-17T03:03:52.026Z",
     "via": "runtime",
     "composedFrom": "/static/assets/JTUSjIg1_i6t8kCHKm459WlhyyTh89Y.73f48d747e3908e4ba64.woff2",
-    "declined": "content-type font/woff2 — seen and not stored; the fixture keeps its 404"
+    "path": "regex101.com/static/assets/JTUSjIg1_i6t8kCHKm459WlhyyTh89Y.73f48d747e3908e4ba64.woff2"
    },
    {
     "url": "https://regex101.com/static/assets/-F63fjptAgt5VM-kVkqdyU8n1i8q131nj-o.06fca3e534134e9c7968.woff2",
@@ -5636,7 +5636,7 @@
     "fetchedAt": "2026-09-17T03:11:09.917Z",
     "via": "runtime",
     "composedFrom": "/static/stable/favicon.ico",
-    "declined": "content-type image/vnd.microsoft.icon — seen and not stored; the fixture keeps its 404"
+    "path": "vscode.dev/static/stable/favicon.ico"
    },
    {
     "url": "https://main.vscode-cdn.net/stable/645f29cc3176500b4b5762ba887cf2a7f0ffdf2c/out/media/letterpress-dark.svg",
@@ -5647,7 +5647,7 @@
     "fetchedAt": "2026-09-17T03:11:22.436Z",
     "via": "runtime",
     "composedFrom": "/_m/main.vscode-cdn.net/stable/645f29cc3176500b4b5762ba887cf2a7f0ffdf2c/out/media/letterpress-dark.svg",
-    "declined": "content-type image/svg+xml — seen and not stored; the fixture keeps its 404"
+    "path": "main.vscode-cdn.net/stable/645f29cc3176500b4b5762ba887cf2a7f0ffdf2c/out/media/letterpress-dark.svg"
    },
    {
     "url": "https://main.vscode-cdn.net/stable/645f29cc3176500b4b5762ba887cf2a7f0ffdf2c/out/media/codicon.ttf",
@@ -5658,7 +5658,7 @@
     "fetchedAt": "2026-09-17T03:11:22.934Z",
     "via": "runtime",
     "composedFrom": "/_m/main.vscode-cdn.net/stable/645f29cc3176500b4b5762ba887cf2a7f0ffdf2c/out/media/codicon.ttf",
-    "declined": "content-type font/ttf — seen and not stored; the fixture keeps its 404"
+    "path": "main.vscode-cdn.net/stable/645f29cc3176500b4b5762ba887cf2a7f0ffdf2c/out/media/codicon.ttf"
    },
    {
     "url": "https://main.vscode-cdn.net/stable/645f29cc3176500b4b5762ba887cf2a7f0ffdf2c/out/media/code-icon.svg",
@@ -5669,7 +5669,7 @@
     "fetchedAt": "2026-09-17T03:11:23.153Z",
     "via": "runtime",
     "composedFrom": "/_m/main.vscode-cdn.net/stable/645f29cc3176500b4b5762ba887cf2a7f0ffdf2c/out/media/code-icon.svg",
-    "declined": "content-type image/svg+xml — seen and not stored; the fixture keeps its 404"
+    "path": "main.vscode-cdn.net/stable/645f29cc3176500b4b5762ba887cf2a7f0ffdf2c/out/media/code-icon.svg"
    }
   ],
   "baseUrl": "https://vscode.dev/",
@@ -6199,7 +6199,7 @@
     "fetchedAt": "2026-09-17T03:02:14.897Z",
     "via": "runtime",
     "composedFrom": "/static/ssr/contrast.d86e85c43de8dee8.svg",
-    "declined": "content-type image/svg+xml — seen and not stored; the fixture keeps its 404"
+    "path": "developer.mozilla.org/static/ssr/contrast.d86e85c43de8dee8.svg"
    },
    {
     "url": "https://developer.mozilla.org/static/ssr/languages.dcba936080e5be86.svg",
@@ -6210,7 +6210,7 @@
     "fetchedAt": "2026-09-17T03:02:15.073Z",
     "via": "runtime",
     "composedFrom": "/static/ssr/languages.dcba936080e5be86.svg",
-    "declined": "content-type image/svg+xml — seen and not stored; the fixture keeps its 404"
+    "path": "developer.mozilla.org/static/ssr/languages.dcba936080e5be86.svg"
    },
    {
     "url": "https://developer.mozilla.org/static/ssr/filter.b77a4ccbfb57e2ef.svg",
@@ -6221,7 +6221,7 @@
     "fetchedAt": "2026-09-17T03:02:15.259Z",
     "via": "runtime",
     "composedFrom": "/static/ssr/filter.b77a4ccbfb57e2ef.svg",
-    "declined": "content-type image/svg+xml — seen and not stored; the fixture keeps its 404"
+    "path": "developer.mozilla.org/static/ssr/filter.b77a4ccbfb57e2ef.svg"
    },
    {
     "url": "https://developer.mozilla.org/api/v1/whoami",
@@ -6243,7 +6243,7 @@
     "fetchedAt": "2026-09-17T03:02:15.703Z",
     "via": "runtime",
     "composedFrom": "/_m/developer.mozilla.org/favicon.svg",
-    "declined": "content-type image/svg+xml — seen and not stored; the fixture keeps its 404"
+    "path": "developer.mozilla.org/favicon.svg"
    },
    {
     "url": "https://developer.mozilla.org/favicon.ico",
@@ -6254,7 +6254,7 @@
     "fetchedAt": "2026-09-17T03:02:15.867Z",
     "via": "runtime",
     "composedFrom": "/_m/developer.mozilla.org/favicon.ico",
-    "declined": "content-type image/x-icon — seen and not stored; the fixture keeps its 404"
+    "path": "developer.mozilla.org/favicon.ico"
    },
    {
     "url": "https://developer.mozilla.org/static/client/inter-italic-latin.fd2627ec16333c05.woff2",
@@ -6265,7 +6265,7 @@
     "fetchedAt": "2026-09-17T03:02:25.664Z",
     "via": "runtime",
     "composedFrom": "/static/client/inter-italic-latin.fd2627ec16333c05.woff2",
-    "declined": "content-type font/woff2 — seen and not stored; the fixture keeps its 404"
+    "path": "developer.mozilla.org/static/client/inter-italic-latin.fd2627ec16333c05.woff2"
    },
    {
     "url": "https://developer.mozilla.org/static/client/menu.74ccd9bb64dbf543.svg",
@@ -6276,7 +6276,7 @@
     "fetchedAt": "2026-09-17T03:02:25.960Z",
     "via": "runtime",
     "composedFrom": "/static/client/menu.74ccd9bb64dbf543.svg",
-    "declined": "content-type image/svg+xml — seen and not stored; the fixture keeps its 404"
+    "path": "developer.mozilla.org/static/client/menu.74ccd9bb64dbf543.svg"
    },
    {
     "url": "https://developer.mozilla.org/static/client/chevron-right.a81fc439dd5e4839.svg",
@@ -6287,7 +6287,7 @@
     "fetchedAt": "2026-09-17T03:02:26.123Z",
     "via": "runtime",
     "composedFrom": "/static/client/chevron-right.a81fc439dd5e4839.svg",
-    "declined": "content-type image/svg+xml — seen and not stored; the fixture keeps its 404"
+    "path": "developer.mozilla.org/static/client/chevron-right.a81fc439dd5e4839.svg"
    },
    {
     "url": "https://developer.mozilla.org/static/client/external-link.4f3a2dc8e402cae5.svg",
@@ -6298,7 +6298,7 @@
     "fetchedAt": "2026-09-17T03:02:26.271Z",
     "via": "runtime",
     "composedFrom": "/static/client/external-link.4f3a2dc8e402cae5.svg",
-    "declined": "content-type image/svg+xml — seen and not stored; the fixture keeps its 404"
+    "path": "developer.mozilla.org/static/client/external-link.4f3a2dc8e402cae5.svg"
    },
    {
     "url": "https://developer.mozilla.org/static/client/github.4d94e1bf436aa7ed.svg",
@@ -6309,7 +6309,7 @@
     "fetchedAt": "2026-09-17T03:02:26.450Z",
     "via": "runtime",
     "composedFrom": "/static/client/github.4d94e1bf436aa7ed.svg",
-    "declined": "content-type image/svg+xml — seen and not stored; the fixture keeps its 404"
+    "path": "developer.mozilla.org/static/client/github.4d94e1bf436aa7ed.svg"
    },
    {
     "url": "https://developer.mozilla.org/static/client/bluesky.a9421882d093c829.svg",
@@ -6320,7 +6320,7 @@
     "fetchedAt": "2026-09-17T03:02:26.586Z",
     "via": "runtime",
     "composedFrom": "/static/client/bluesky.a9421882d093c829.svg",
-    "declined": "content-type image/svg+xml — seen and not stored; the fixture keeps its 404"
+    "path": "developer.mozilla.org/static/client/bluesky.a9421882d093c829.svg"
    },
    {
     "url": "https://developer.mozilla.org/static/client/x.4c7e68bf52af030a.svg",
@@ -6331,7 +6331,7 @@
     "fetchedAt": "2026-09-17T03:02:26.733Z",
     "via": "runtime",
     "composedFrom": "/static/client/x.4c7e68bf52af030a.svg",
-    "declined": "content-type image/svg+xml — seen and not stored; the fixture keeps its 404"
+    "path": "developer.mozilla.org/static/client/x.4c7e68bf52af030a.svg"
    },
    {
     "url": "https://developer.mozilla.org/static/client/mastodon.1a5c0fde8353f680.svg",
@@ -6342,7 +6342,7 @@
     "fetchedAt": "2026-09-17T03:02:26.875Z",
     "via": "runtime",
     "composedFrom": "/static/client/mastodon.1a5c0fde8353f680.svg",
-    "declined": "content-type image/svg+xml — seen and not stored; the fixture keeps its 404"
+    "path": "developer.mozilla.org/static/client/mastodon.1a5c0fde8353f680.svg"
    },
    {
     "url": "https://developer.mozilla.org/static/client/rss.37214526d7308d0c.svg",
@@ -6353,7 +6353,7 @@
     "fetchedAt": "2026-09-17T03:02:27.042Z",
     "via": "runtime",
     "composedFrom": "/static/client/rss.37214526d7308d0c.svg",
-    "declined": "content-type image/svg+xml — seen and not stored; the fixture keeps its 404"
+    "path": "developer.mozilla.org/static/client/rss.37214526d7308d0c.svg"
    },
    {
     "url": "https://developer.mozilla.org/pong/get",
@@ -6465,7 +6465,7 @@
     "fetchedAt": "2026-09-17T03:02:44.720Z",
     "via": "runtime",
     "composedFrom": "/static/images/ia-logo.svg",
-    "declined": "content-type image/svg+xml — seen and not stored; the fixture keeps its 404"
+    "path": "openlibrary.org/static/images/ia-logo.svg"
    },
    {
     "url": "https://openlibrary.org/static/images/onboarding/read.png",
@@ -6476,7 +6476,7 @@
     "fetchedAt": "2026-09-17T03:02:45.124Z",
     "via": "runtime",
     "composedFrom": "/static/images/onboarding/read.png",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "openlibrary.org/static/images/onboarding/read.png"
    },
    {
     "url": "https://openlibrary.org/static/images/onboarding/reading_goal.svg",
@@ -6487,7 +6487,7 @@
     "fetchedAt": "2026-09-17T03:02:45.524Z",
     "via": "runtime",
     "composedFrom": "/static/images/onboarding/reading_goal.svg",
-    "declined": "content-type image/svg+xml — seen and not stored; the fixture keeps its 404"
+    "path": "openlibrary.org/static/images/onboarding/reading_goal.svg"
    },
    {
     "url": "https://openlibrary.org/static/images/onboarding/track.png",
@@ -6498,7 +6498,7 @@
     "fetchedAt": "2026-09-17T03:02:45.960Z",
     "via": "runtime",
     "composedFrom": "/static/images/onboarding/track.png",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "openlibrary.org/static/images/onboarding/track.png"
    },
    {
     "url": "https://openlibrary.org/static/images/onboarding/library_explorer.png",
@@ -6509,7 +6509,7 @@
     "fetchedAt": "2026-09-17T03:02:46.350Z",
     "via": "runtime",
     "composedFrom": "/static/images/onboarding/library_explorer.png",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "openlibrary.org/static/images/onboarding/library_explorer.png"
    },
    {
     "url": "https://openlibrary.org/static/images/openlibrary-logo-tighter.svg",
@@ -6520,7 +6520,7 @@
     "fetchedAt": "2026-09-17T03:02:46.742Z",
     "via": "runtime",
     "composedFrom": "/static/images/openlibrary-logo-tighter.svg",
-    "declined": "content-type image/svg+xml — seen and not stored; the fixture keeps its 404"
+    "path": "openlibrary.org/static/images/openlibrary-logo-tighter.svg"
    },
    {
     "url": "https://openlibrary.org/static/images/onboarding/fulltext.png",
@@ -6531,7 +6531,7 @@
     "fetchedAt": "2026-09-17T03:02:47.093Z",
     "via": "runtime",
     "composedFrom": "/static/images/onboarding/fulltext.png",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "openlibrary.org/static/images/onboarding/fulltext.png"
    },
    {
     "url": "https://openlibrary.org/static/images/onboarding/librarian.png",
@@ -6542,7 +6542,7 @@
     "fetchedAt": "2026-09-17T03:02:47.505Z",
     "via": "runtime",
     "composedFrom": "/static/images/onboarding/librarian.png",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "openlibrary.org/static/images/onboarding/librarian.png"
    },
    {
     "url": "https://openlibrary.org/static/images/onboarding/volunteer.png",
@@ -6553,7 +6553,7 @@
     "fetchedAt": "2026-09-17T03:02:48.193Z",
     "via": "runtime",
     "composedFrom": "/static/images/onboarding/volunteer.png",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "openlibrary.org/static/images/onboarding/volunteer.png"
    },
    {
     "url": "https://openlibrary.org/static/images/onboarding/feedback.png",
@@ -6564,7 +6564,7 @@
     "fetchedAt": "2026-09-17T03:02:48.560Z",
     "via": "runtime",
     "composedFrom": "/static/images/onboarding/feedback.png",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "openlibrary.org/static/images/onboarding/feedback.png"
    },
    {
     "url": "https://openlibrary.org/static/icons/sprite.svg?v=b10d8add581262b268b9873d0e7f7dbe",
@@ -6707,7 +6707,7 @@
     "fetchedAt": "2026-09-17T03:02:53.964Z",
     "via": "runtime",
     "composedFrom": "/_m/openlibrary.org/static/images/openlibrary-128x128.png",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "openlibrary.org/static/images/openlibrary-128x128.png"
    },
    {
     "url": "https://openlibrary.org/sw.js",
@@ -6729,7 +6729,7 @@
     "fetchedAt": "2026-09-17T03:02:54.694Z",
     "via": "runtime",
     "composedFrom": "/_m/openlibrary.org/static/images/openlibrary-192x192.png",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "openlibrary.org/static/images/openlibrary-192x192.png"
    },
    {
     "url": "https://openlibrary.org/static/images/icons/octicon-link-external-24.svg",
@@ -6740,7 +6740,7 @@
     "fetchedAt": "2026-09-17T03:03:06.229Z",
     "via": "runtime",
     "composedFrom": "/static/images/icons/octicon-link-external-24.svg",
-    "declined": "content-type image/svg+xml — seen and not stored; the fixture keeps its 404"
+    "path": "openlibrary.org/static/images/icons/octicon-link-external-24.svg"
    },
    {
     "url": "https://openlibrary.org/static/images/ajax-loader-bar.gif",
@@ -6751,7 +6751,7 @@
     "fetchedAt": "2026-09-17T03:03:06.802Z",
     "via": "runtime",
     "composedFrom": "/static/images/ajax-loader-bar.gif",
-    "declined": "content-type image/gif — seen and not stored; the fixture keeps its 404"
+    "path": "openlibrary.org/static/images/ajax-loader-bar.gif"
    },
    {
     "url": "https://openlibrary.org/static/images/ajax-loader.gif",
@@ -6762,7 +6762,7 @@
     "fetchedAt": "2026-09-17T03:03:07.256Z",
     "via": "runtime",
     "composedFrom": "/static/images/ajax-loader.gif",
-    "declined": "content-type image/gif — seen and not stored; the fixture keeps its 404"
+    "path": "openlibrary.org/static/images/ajax-loader.gif"
    },
    {
     "url": "https://openlibrary.org/static/images/icons/icon_slick-arrow-right.svg",
@@ -6773,7 +6773,7 @@
     "fetchedAt": "2026-09-17T03:03:07.835Z",
     "via": "runtime",
     "composedFrom": "/static/images/icons/icon_slick-arrow-right.svg",
-    "declined": "content-type image/svg+xml — seen and not stored; the fixture keeps its 404"
+    "path": "openlibrary.org/static/images/icons/icon_slick-arrow-right.svg"
    },
    {
     "url": "https://openlibrary.org/partials/LazyCarousel.json?query=trending_score_hourly_sum%3A%5B1+TO+*%5D+readinglog_count%3A%5B4+TO+*%5D+language%3Aeng+-subject%3A%22content_warning%3Acover%22&sort=trending&key=trending&limit=20&search=false&has_fulltext_only=false&layout=carousel&fallback=false&title=Trending+Books",
@@ -6817,7 +6817,7 @@
     "fetchedAt": "2026-09-17T03:03:11.051Z",
     "via": "runtime",
     "composedFrom": "/static/images/logo_OL-lg.png",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "openlibrary.org/static/images/logo_OL-lg.png"
    }
   ],
   "baseUrl": "https://openlibrary.org/",
@@ -6853,7 +6853,7 @@
     "fetchedAt": "2026-09-17T03:11:35.268Z",
     "via": "runtime",
     "composedFrom": "/c/icon-demo-large-photo-18da387a.jpg",
-    "declined": "content-type image/jpeg — seen and not stored; the fixture keeps its 404"
+    "path": "squoosh.app/c/icon-demo-large-photo-18da387a.jpg"
    },
    {
     "url": "https://squoosh.app/c/icon-demo-artwork-9eba1655.jpg",
@@ -6864,7 +6864,7 @@
     "fetchedAt": "2026-09-17T03:11:35.533Z",
     "via": "runtime",
     "composedFrom": "/c/icon-demo-artwork-9eba1655.jpg",
-    "declined": "content-type image/jpeg — seen and not stored; the fixture keeps its 404"
+    "path": "squoosh.app/c/icon-demo-artwork-9eba1655.jpg"
    },
    {
     "url": "https://squoosh.app/c/icon-demo-device-screen-5d52d8b9.jpg",
@@ -6875,7 +6875,7 @@
     "fetchedAt": "2026-09-17T03:11:35.715Z",
     "via": "runtime",
     "composedFrom": "/c/icon-demo-device-screen-5d52d8b9.jpg",
-    "declined": "content-type image/jpeg — seen and not stored; the fixture keeps its 404"
+    "path": "squoosh.app/c/icon-demo-device-screen-5d52d8b9.jpg"
    },
    {
     "url": "https://squoosh.app/c/icon-demo-logo-326ed9b6.png",
@@ -6886,7 +6886,7 @@
     "fetchedAt": "2026-09-17T03:11:35.955Z",
     "via": "runtime",
     "composedFrom": "/c/icon-demo-logo-326ed9b6.png",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "squoosh.app/c/icon-demo-logo-326ed9b6.png"
    },
    {
     "url": "https://squoosh.app/c/small-db1eae6f.svg",
@@ -6897,7 +6897,7 @@
     "fetchedAt": "2026-09-17T03:11:36.168Z",
     "via": "runtime",
     "composedFrom": "/c/small-db1eae6f.svg",
-    "declined": "content-type image/svg+xml — seen and not stored; the fixture keeps its 404"
+    "path": "squoosh.app/c/small-db1eae6f.svg"
    },
    {
     "url": "https://squoosh.app/c/simple-258b6ed5.svg",
@@ -6908,7 +6908,7 @@
     "fetchedAt": "2026-09-17T03:11:36.372Z",
     "via": "runtime",
     "composedFrom": "/c/simple-258b6ed5.svg",
-    "declined": "content-type image/svg+xml — seen and not stored; the fixture keeps its 404"
+    "path": "squoosh.app/c/simple-258b6ed5.svg"
    },
    {
     "url": "https://squoosh.app/c/secure-a66bbdfe.svg",
@@ -6919,7 +6919,7 @@
     "fetchedAt": "2026-09-17T03:11:36.542Z",
     "via": "runtime",
     "composedFrom": "/c/secure-a66bbdfe.svg",
-    "declined": "content-type image/svg+xml — seen and not stored; the fixture keeps its 404"
+    "path": "squoosh.app/c/secure-a66bbdfe.svg"
    },
    {
     "url": "https://squoosh.app/c/github-logo-bc05494c.svg",
@@ -6930,7 +6930,7 @@
     "fetchedAt": "2026-09-17T03:11:36.706Z",
     "via": "runtime",
     "composedFrom": "/c/github-logo-bc05494c.svg",
-    "declined": "content-type image/svg+xml — seen and not stored; the fixture keeps its 404"
+    "path": "squoosh.app/c/github-logo-bc05494c.svg"
    },
    {
     "url": "https://squoosh.app/c/blob-anim-97c315b2.js",
@@ -6974,7 +6974,7 @@
     "fetchedAt": "2026-09-17T03:11:37.454Z",
     "via": "runtime",
     "composedFrom": "/_m/squoosh.app/c/favicon-c9cf50ef.ico",
-    "declined": "content-type image/vnd.microsoft.icon — seen and not stored; the fixture keeps its 404"
+    "path": "squoosh.app/c/favicon-c9cf50ef.ico"
    },
    {
     "url": "https://squoosh.app/c/idb-keyval-c33d3116.js",
@@ -7029,7 +7029,7 @@
     "fetchedAt": "2026-09-17T03:12:15.281Z",
     "via": "runtime",
     "composedFrom": "/c/logo-bcc20dd5.svg",
-    "declined": "content-type image/svg+xml — seen and not stored; the fixture keeps its 404"
+    "path": "squoosh.app/c/logo-bcc20dd5.svg"
    }
   ],
   "baseUrl": "https://squoosh.app/",
@@ -7306,7 +7306,7 @@
     "fetchedAt": "2026-09-17T03:04:10.336Z",
     "via": "runtime",
     "composedFrom": "/_m/a.slack-edge.com/9cc0056/img/icons/favicon-32.png",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "a.slack-edge.com/9cc0056/img/icons/favicon-32.png"
    },
    {
     "url": "https://a.slack-edge.com/bv1-13-br/salesforce-sans-bold-1385939fead426e2.woff2",
@@ -7317,7 +7317,7 @@
     "fetchedAt": "2026-09-17T03:04:20.547Z",
     "via": "runtime",
     "composedFrom": "/_m/a.slack-edge.com/bv1-13-br/salesforce-sans-bold-1385939fead426e2.woff2",
-    "declined": "content-type font/woff2 — seen and not stored; the fixture keeps its 404"
+    "path": "a.slack-edge.com/bv1-13-br/salesforce-sans-bold-1385939fead426e2.woff2"
    },
    {
     "url": "https://a.slack-edge.com/bv1-13-br/salesforce-sans-semi-bold-32ef2933d5cf7e38.woff2",
@@ -7328,7 +7328,7 @@
     "fetchedAt": "2026-09-17T03:04:20.991Z",
     "via": "runtime",
     "composedFrom": "/_m/a.slack-edge.com/bv1-13-br/salesforce-sans-semi-bold-32ef2933d5cf7e38.woff2",
-    "declined": "content-type font/woff2 — seen and not stored; the fixture keeps its 404"
+    "path": "a.slack-edge.com/bv1-13-br/salesforce-sans-semi-bold-32ef2933d5cf7e38.woff2"
    },
    {
     "url": "https://a.slack-edge.com/bv1-13-br/avant-garde-181346a5874daa50.woff2",
@@ -7339,7 +7339,7 @@
     "fetchedAt": "2026-09-17T03:04:21.164Z",
     "via": "runtime",
     "composedFrom": "/_m/a.slack-edge.com/bv1-13-br/avant-garde-181346a5874daa50.woff2",
-    "declined": "content-type font/woff2 — seen and not stored; the fixture keeps its 404"
+    "path": "a.slack-edge.com/bv1-13-br/avant-garde-181346a5874daa50.woff2"
    },
    {
     "url": "https://a.slack-edge.com/bv1-13-br/salesforce-sans-regular-8bfcbbd54976174c.woff2",
@@ -7350,7 +7350,7 @@
     "fetchedAt": "2026-09-17T03:04:21.333Z",
     "via": "runtime",
     "composedFrom": "/_m/a.slack-edge.com/bv1-13-br/salesforce-sans-regular-8bfcbbd54976174c.woff2",
-    "declined": "content-type font/woff2 — seen and not stored; the fixture keeps its 404"
+    "path": "a.slack-edge.com/bv1-13-br/salesforce-sans-regular-8bfcbbd54976174c.woff2"
    },
    {
     "url": "https://a.slack-edge.com/bv1-13-br/dark-comp-sparkles-8c9226adb05cafb2.png",
@@ -7361,7 +7361,7 @@
     "fetchedAt": "2026-09-17T03:04:21.658Z",
     "via": "runtime",
     "composedFrom": "/_m/a.slack-edge.com/bv1-13-br/dark-comp-sparkles-8c9226adb05cafb2.png",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "a.slack-edge.com/bv1-13-br/dark-comp-sparkles-8c9226adb05cafb2.png"
    },
    {
     "url": "https://a.slack-edge.com/bv1-13-br/salesforce-sans-bold-7399a2850da4decc.woff",
@@ -7372,7 +7372,7 @@
     "fetchedAt": "2026-09-17T03:04:21.908Z",
     "via": "runtime",
     "composedFrom": "/_m/a.slack-edge.com/bv1-13-br/salesforce-sans-bold-7399a2850da4decc.woff",
-    "declined": "content-type font/woff — seen and not stored; the fixture keeps its 404"
+    "path": "a.slack-edge.com/bv1-13-br/salesforce-sans-bold-7399a2850da4decc.woff"
    },
    {
     "url": "https://a.slack-edge.com/bv1-13-br/salesforce-sans-semi-bold-84163b51e0b404a7.woff",
@@ -7383,7 +7383,7 @@
     "fetchedAt": "2026-09-17T03:04:22.069Z",
     "via": "runtime",
     "composedFrom": "/_m/a.slack-edge.com/bv1-13-br/salesforce-sans-semi-bold-84163b51e0b404a7.woff",
-    "declined": "content-type font/woff — seen and not stored; the fixture keeps its 404"
+    "path": "a.slack-edge.com/bv1-13-br/salesforce-sans-semi-bold-84163b51e0b404a7.woff"
    },
    {
     "url": "https://a.slack-edge.com/bv1-13-br/avant-garde-15c0df5e5ca7de9a.woff",
@@ -7394,7 +7394,7 @@
     "fetchedAt": "2026-09-17T03:04:22.266Z",
     "via": "runtime",
     "composedFrom": "/_m/a.slack-edge.com/bv1-13-br/avant-garde-15c0df5e5ca7de9a.woff",
-    "declined": "content-type font/woff — seen and not stored; the fixture keeps its 404"
+    "path": "a.slack-edge.com/bv1-13-br/avant-garde-15c0df5e5ca7de9a.woff"
    },
    {
     "url": "https://a.slack-edge.com/bv1-13-br/salesforce-sans-regular-b6be745368c0e260.woff",
@@ -7405,7 +7405,7 @@
     "fetchedAt": "2026-09-17T03:04:22.397Z",
     "via": "runtime",
     "composedFrom": "/_m/a.slack-edge.com/bv1-13-br/salesforce-sans-regular-b6be745368c0e260.woff",
-    "declined": "content-type font/woff — seen and not stored; the fixture keeps its 404"
+    "path": "a.slack-edge.com/bv1-13-br/salesforce-sans-regular-b6be745368c0e260.woff"
    },
    {
     "url": "https://a.slack-edge.com/bv1-13-br/icon-mobile-arrow-9655824e1c298799.svg",
@@ -7416,7 +7416,7 @@
     "fetchedAt": "2026-09-17T03:04:22.570Z",
     "via": "runtime",
     "composedFrom": "/_m/a.slack-edge.com/bv1-13-br/icon-mobile-arrow-9655824e1c298799.svg",
-    "declined": "content-type image/svg+xml — seen and not stored; the fixture keeps its 404"
+    "path": "a.slack-edge.com/bv1-13-br/icon-mobile-arrow-9655824e1c298799.svg"
    },
    {
     "url": "https://a.slack-edge.com/bv1-13-br/salesforce-sans-light-italic-6e48ca13a5de1047.woff2",
@@ -7427,7 +7427,7 @@
     "fetchedAt": "2026-09-17T03:04:22.749Z",
     "via": "runtime",
     "composedFrom": "/_m/a.slack-edge.com/bv1-13-br/salesforce-sans-light-italic-6e48ca13a5de1047.woff2",
-    "declined": "content-type font/woff2 — seen and not stored; the fixture keeps its 404"
+    "path": "a.slack-edge.com/bv1-13-br/salesforce-sans-light-italic-6e48ca13a5de1047.woff2"
    },
    {
     "url": "https://a.slack-edge.com/bv1-13-br/salesforce-sans-book-d4b6246e65ff691a.woff2",
@@ -7438,7 +7438,7 @@
     "fetchedAt": "2026-09-17T03:04:22.974Z",
     "via": "runtime",
     "composedFrom": "/_m/a.slack-edge.com/bv1-13-br/salesforce-sans-book-d4b6246e65ff691a.woff2",
-    "declined": "content-type font/woff2 — seen and not stored; the fixture keeps its 404"
+    "path": "a.slack-edge.com/bv1-13-br/salesforce-sans-book-d4b6246e65ff691a.woff2"
    },
    {
     "url": "https://a.slack-edge.com/bv1-13-br/salesforce-sans-light-italic-d2762765e5dfbb78.woff",
@@ -7449,7 +7449,7 @@
     "fetchedAt": "2026-09-17T03:04:23.208Z",
     "via": "runtime",
     "composedFrom": "/_m/a.slack-edge.com/bv1-13-br/salesforce-sans-light-italic-d2762765e5dfbb78.woff",
-    "declined": "content-type font/woff — seen and not stored; the fixture keeps its 404"
+    "path": "a.slack-edge.com/bv1-13-br/salesforce-sans-light-italic-d2762765e5dfbb78.woff"
    },
    {
     "url": "https://a.slack-edge.com/bv1-13-br/salesforce-sans-book-8a7281f8631e2d8e.woff",
@@ -7460,7 +7460,7 @@
     "fetchedAt": "2026-09-17T03:04:23.416Z",
     "via": "runtime",
     "composedFrom": "/_m/a.slack-edge.com/bv1-13-br/salesforce-sans-book-8a7281f8631e2d8e.woff",
-    "declined": "content-type font/woff — seen and not stored; the fixture keeps its 404"
+    "path": "a.slack-edge.com/bv1-13-br/salesforce-sans-book-8a7281f8631e2d8e.woff"
    },
    {
     "url": "https://cdn.cookielaw.org/scripttemplates/202604.2.0/otBannerSdk.js",
@@ -7857,7 +7857,7 @@
     "fetchedAt": "2026-09-17T02:55:07.071Z",
     "via": "runtime",
     "composedFrom": "/_next/image?url=%2F_next%2Fstatic%2Fmedia%2Falgolia.a8da3961.png&w=384&q=75",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "codesandbox.io/_next/image__qbd184e17"
    },
    {
     "url": "https://codesandbox.io/_next/image?url=%2F_next%2Fstatic%2Fmedia%2Fmicrosoft.73a237e1.png&w=384&q=75",
@@ -7868,7 +7868,7 @@
     "fetchedAt": "2026-09-17T02:55:07.687Z",
     "via": "runtime",
     "composedFrom": "/_next/image?url=%2F_next%2Fstatic%2Fmedia%2Fmicrosoft.73a237e1.png&w=384&q=75",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "codesandbox.io/_next/image__q33d8b056"
    },
    {
     "url": "https://codesandbox.io/_next/image?url=%2F_next%2Fstatic%2Fmedia%2Fintel.8f37f35e.png&w=384&q=75",
@@ -7879,7 +7879,7 @@
     "fetchedAt": "2026-09-17T02:55:08.200Z",
     "via": "runtime",
     "composedFrom": "/_next/image?url=%2F_next%2Fstatic%2Fmedia%2Fintel.8f37f35e.png&w=384&q=75",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "codesandbox.io/_next/image__qbb7671ca"
    },
    {
     "url": "https://codesandbox.io/_next/image?url=%2F_next%2Fstatic%2Fmedia%2Fstripe.b63b30d6.png&w=384&q=75",
@@ -7890,7 +7890,7 @@
     "fetchedAt": "2026-09-17T02:55:08.528Z",
     "via": "runtime",
     "composedFrom": "/_next/image?url=%2F_next%2Fstatic%2Fmedia%2Fstripe.b63b30d6.png&w=384&q=75",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "codesandbox.io/_next/image__q8e1d0144"
    },
    {
     "url": "https://codesandbox.io/_next/image?url=%2F_next%2Fstatic%2Fmedia%2Fnvidia.cd0e3efe.png&w=384&q=75",
@@ -7901,7 +7901,7 @@
     "fetchedAt": "2026-09-17T02:55:08.867Z",
     "via": "runtime",
     "composedFrom": "/_next/image?url=%2F_next%2Fstatic%2Fmedia%2Fnvidia.cd0e3efe.png&w=384&q=75",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "codesandbox.io/_next/image__qa0f906d2"
    },
    {
     "url": "https://codesandbox.io/_next/image?url=%2F_next%2Fstatic%2Fmedia%2Fatlassian.6951c1d4.png&w=384&q=75",
@@ -7912,7 +7912,7 @@
     "fetchedAt": "2026-09-17T02:55:09.262Z",
     "via": "runtime",
     "composedFrom": "/_next/image?url=%2F_next%2Fstatic%2Fmedia%2Fatlassian.6951c1d4.png&w=384&q=75",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "codesandbox.io/_next/image__q96e9a6e6"
    },
    {
     "url": "https://codesandbox.io/_next/image?url=%2F_next%2Fstatic%2Fmedia%2Fuber.c72e37e8.png&w=384&q=75",
@@ -7923,7 +7923,7 @@
     "fetchedAt": "2026-09-17T02:55:09.579Z",
     "via": "runtime",
     "composedFrom": "/_next/image?url=%2F_next%2Fstatic%2Fmedia%2Fuber.c72e37e8.png&w=384&q=75",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "codesandbox.io/_next/image__qb2d157e6"
    },
    {
     "url": "https://codesandbox.io/_next/image?url=%2F_next%2Fstatic%2Fmedia%2Fzendesk.9554db3d.png&w=384&q=75",
@@ -7934,7 +7934,7 @@
     "fetchedAt": "2026-09-17T02:55:09.950Z",
     "via": "runtime",
     "composedFrom": "/_next/image?url=%2F_next%2Fstatic%2Fmedia%2Fzendesk.9554db3d.png&w=384&q=75",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "codesandbox.io/_next/image__qb4eee240"
    },
    {
     "url": "https://codesandbox.io/_next/image?url=%2F_next%2Fstatic%2Fmedia%2Fadobe.eb5d0979.png&w=384&q=75",
@@ -7945,7 +7945,7 @@
     "fetchedAt": "2026-09-17T02:55:10.260Z",
     "via": "runtime",
     "composedFrom": "/_next/image?url=%2F_next%2Fstatic%2Fmedia%2Fadobe.eb5d0979.png&w=384&q=75",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "codesandbox.io/_next/image__qcf8a12ff"
    },
    {
     "url": "https://codesandbox.io/_next/image?url=%2F_next%2Fstatic%2Fmedia%2Fshopify.a92c5be1.png&w=384&q=75",
@@ -7956,7 +7956,7 @@
     "fetchedAt": "2026-09-17T02:55:10.551Z",
     "via": "runtime",
     "composedFrom": "/_next/image?url=%2F_next%2Fstatic%2Fmedia%2Fshopify.a92c5be1.png&w=384&q=75",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "codesandbox.io/_next/image__q9510c6c9"
    },
    {
     "url": "https://codesandbox.io/_next/image?url=%2F_next%2Fstatic%2Fmedia%2Fbrian.1d5e2de9.jpg&w=48&q=75",
@@ -7967,7 +7967,7 @@
     "fetchedAt": "2026-09-17T02:55:10.871Z",
     "via": "runtime",
     "composedFrom": "/_next/image?url=%2F_next%2Fstatic%2Fmedia%2Fbrian.1d5e2de9.jpg&w=48&q=75",
-    "declined": "content-type image/jpeg — seen and not stored; the fixture keeps its 404"
+    "path": "codesandbox.io/_next/image__qa2f8e8e6"
    },
    {
     "url": "https://codesandbox.io/_next/image?url=%2F_next%2Fstatic%2Fmedia%2Fjonnie.debf7c8e.jpg&w=48&q=75",
@@ -7978,7 +7978,7 @@
     "fetchedAt": "2026-09-17T02:55:11.179Z",
     "via": "runtime",
     "composedFrom": "/_next/image?url=%2F_next%2Fstatic%2Fmedia%2Fjonnie.debf7c8e.jpg&w=48&q=75",
-    "declined": "content-type image/jpeg — seen and not stored; the fixture keeps its 404"
+    "path": "codesandbox.io/_next/image__qe2f88a13"
    },
    {
     "url": "https://codesandbox.io/_next/image?url=%2F_next%2Fstatic%2Fmedia%2Frobert-rizk.8ab4d44c.jpg&w=48&q=75",
@@ -7989,7 +7989,7 @@
     "fetchedAt": "2026-09-17T02:55:11.468Z",
     "via": "runtime",
     "composedFrom": "/_next/image?url=%2F_next%2Fstatic%2Fmedia%2Frobert-rizk.8ab4d44c.jpg&w=48&q=75",
-    "declined": "content-type image/jpeg — seen and not stored; the fixture keeps its 404"
+    "path": "codesandbox.io/_next/image__qa3d19191"
    },
    {
     "url": "https://codesandbox.io/_next/image?url=%2F_next%2Fstatic%2Fmedia%2Fedwin-webb.c3751f06.jpg&w=48&q=75",
@@ -8000,7 +8000,7 @@
     "fetchedAt": "2026-09-17T02:55:11.747Z",
     "via": "runtime",
     "composedFrom": "/_next/image?url=%2F_next%2Fstatic%2Fmedia%2Fedwin-webb.c3751f06.jpg&w=48&q=75",
-    "declined": "content-type image/jpeg — seen and not stored; the fixture keeps its 404"
+    "path": "codesandbox.io/_next/image__qce572ff0"
    },
    {
     "url": "https://codesandbox.io/_next/image?url=%2F_next%2Fstatic%2Fmedia%2Fmatthew-phillips.19ff74ac.jpg&w=48&q=75",
@@ -8011,7 +8011,7 @@
     "fetchedAt": "2026-09-17T02:55:12.105Z",
     "via": "runtime",
     "composedFrom": "/_next/image?url=%2F_next%2Fstatic%2Fmedia%2Fmatthew-phillips.19ff74ac.jpg&w=48&q=75",
-    "declined": "content-type image/jpeg — seen and not stored; the fixture keeps its 404"
+    "path": "codesandbox.io/_next/image__qb51b5b5f"
    },
    {
     "url": "https://codesandbox.io/_next/image?url=%2F_next%2Fstatic%2Fmedia%2Fdominik.548c1515.jpg&w=48&q=75",
@@ -8022,7 +8022,7 @@
     "fetchedAt": "2026-09-17T02:55:12.412Z",
     "via": "runtime",
     "composedFrom": "/_next/image?url=%2F_next%2Fstatic%2Fmedia%2Fdominik.548c1515.jpg&w=48&q=75",
-    "declined": "content-type image/jpeg — seen and not stored; the fixture keeps its 404"
+    "path": "codesandbox.io/_next/image__qce137482"
    },
    {
     "url": "https://codesandbox.io/_next/image?url=%2F_next%2Fstatic%2Fmedia%2Fimage.4a712740.png&w=3840&q=75",
@@ -8033,7 +8033,7 @@
     "fetchedAt": "2026-09-17T02:55:13.104Z",
     "via": "runtime",
     "composedFrom": "/_next/image?url=%2F_next%2Fstatic%2Fmedia%2Fimage.4a712740.png&w=3840&q=75",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "codesandbox.io/_next/image__qca72d5ba"
    },
    {
     "url": "https://codesandbox.io/_next/static/media/material-symbols-outlined.43ee5b2a.woff2",
@@ -8044,7 +8044,7 @@
     "fetchedAt": "2026-09-17T02:55:23.247Z",
     "via": "runtime",
     "composedFrom": "/_next/static/media/material-symbols-outlined.43ee5b2a.woff2",
-    "declined": "content-type font/woff2 — seen and not stored; the fixture keeps its 404"
+    "path": "codesandbox.io/_next/static/media/material-symbols-outlined.43ee5b2a.woff2"
    }
   ],
   "baseUrl": "https://codesandbox.io/",
@@ -8276,7 +8276,7 @@
     "bytes": 602,
     "sha256": "dbfa780cb2e2184f33f1809aedccbba831919cd6ce62d01f0f6371df08c3b2f7",
     "fetchedAt": "2026-09-13T08:04:29.211Z",
-    "path": "www.figma.com/_netlify/_next/static/chunks/app/%5Blang%5D/(bespoke)/page-aff18a19d8591e1c.js"
+    "path": "www.figma.com/_netlify/_next/static/chunks/app/%5Blang%5D/_bespoke_/page-aff18a19d8591e1c.js"
    },
    {
     "url": "https://www.figma.com/_netlify/_next/static/chunks/app/%5Blang%5D/error-a6502a68df4ea2fe.js",
@@ -8480,7 +8480,7 @@
     "fetchedAt": "2026-09-17T03:07:05.707Z",
     "via": "runtime",
     "composedFrom": "/_m/static.figma.com/app/icon/2/favicon.ico",
-    "declined": "content-type image/x-icon — seen and not stored; the fixture keeps its 404"
+    "path": "static.figma.com/app/icon/2/favicon.ico"
    },
    {
     "url": "https://static.figma.com/app/icon/2/favicon.svg",
@@ -8491,7 +8491,7 @@
     "fetchedAt": "2026-09-17T03:07:06.282Z",
     "via": "runtime",
     "composedFrom": "/_m/static.figma.com/app/icon/2/favicon.svg",
-    "declined": "content-type image/svg+xml — seen and not stored; the fixture keeps its 404"
+    "path": "static.figma.com/app/icon/2/favicon.svg"
    },
    {
     "url": "https://static.figma.com/app/icon/2/favicon.png",
@@ -8502,7 +8502,7 @@
     "fetchedAt": "2026-09-17T03:07:06.777Z",
     "via": "runtime",
     "composedFrom": "/_m/static.figma.com/app/icon/2/favicon.png",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "static.figma.com/app/icon/2/favicon.png"
    },
    {
     "url": "https://static.figma.com/app/icon/2/icon-128.png",
@@ -8513,7 +8513,7 @@
     "fetchedAt": "2026-09-17T03:07:07.017Z",
     "via": "runtime",
     "composedFrom": "/_m/static.figma.com/app/icon/2/icon-128.png",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "static.figma.com/app/icon/2/icon-128.png"
    },
    {
     "url": "https://static.figma.com/app/icon/2/icon-192.png",
@@ -8524,7 +8524,7 @@
     "fetchedAt": "2026-09-17T03:07:07.253Z",
     "via": "runtime",
     "composedFrom": "/_m/static.figma.com/app/icon/2/icon-192.png",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "static.figma.com/app/icon/2/icon-192.png"
    },
    {
     "url": "https://static.figma.com/app/icon/2/icon-256.png",
@@ -8535,7 +8535,7 @@
     "fetchedAt": "2026-09-17T03:07:07.836Z",
     "via": "runtime",
     "composedFrom": "/_m/static.figma.com/app/icon/2/icon-256.png",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "static.figma.com/app/icon/2/icon-256.png"
    },
    {
     "url": "https://www.figma.com/api/geoip",
@@ -8685,7 +8685,7 @@
     "fetchedAt": "2026-09-17T03:09:12.323Z",
     "via": "runtime",
     "composedFrom": "/_m/grafana-assets.grafana.net/grafana/13.3.0-34259522365/public/build/img/fav32.png",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "grafana-assets.grafana.net/grafana/13.3.0-34259522365/public/build/img/fav32.png"
    },
    {
     "url": "https://play.grafana.org/ofrep/v1/evaluate/flags",
@@ -10259,7 +10259,7 @@
     "fetchedAt": "2026-09-17T03:07:32.871Z",
     "via": "runtime",
     "composedFrom": "/public/fonts/ReplitDiatypeMonoVariable.woff2",
-    "declined": "content-type font/woff2 — seen and not stored; the fixture keeps its 404"
+    "path": "replit.com/public/fonts/ReplitDiatypeMonoVariable.woff2"
    },
    {
     "url": "https://replit.com/cdn-cgi/challenge-platform/scripts/jsd/main.js",
@@ -10281,7 +10281,7 @@
     "fetchedAt": "2026-09-17T03:07:33.527Z",
     "via": "runtime",
     "composedFrom": "/_m/replit.com/public/icons/favicon-prompt-192-rebrand.png",
-    "declined": "content-type image/png — seen and not stored; the fixture keeps its 404"
+    "path": "replit.com/public/icons/favicon-prompt-192-rebrand.png"
    }
   ],
   "baseUrl": "https://replit.com/",

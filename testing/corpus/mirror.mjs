@@ -239,7 +239,18 @@ for (const [id, url, stack] of rows) {
     const u = new URL(abs);
     let rel = u.host + u.pathname + (u.search ? '__q' + createHash('sha256').update(u.search).digest('hex').slice(0, 8) : '');
     if (rel.endsWith('/')) rel += 'index';
-    const f = join(dir, rel.replace(/[^A-Za-z0-9._/@%+-]/g, '_'));
+    /* THE SANITIZE HAPPENS ONCE, HERE, BECAUSE `path` IS A LOCATOR AND NOT A FLAG. This used to sanitize at
+       the `join` and record the UNSANITIZED `rel`, so a URL holding a character outside the class above was
+       WRITTEN at one path and RECORDED at another — and `path` then answered two questions with one field,
+       "was this stored" truthfully and "where is it" wrongly. MEASURED across provenance.json: 4 of 784
+       records, three astexplorer chunks spelled `vendors~app-…` and one figma chunk holding `(bespoke)`,
+       every one of them present on disk at the sanitized name and absent at the recorded one.
+       SERVING NEVER BROKE, WHICH IS WHY IT SURVIVED: serve-faithful.mjs RECOMPUTES the path from the URL
+       rather than reading this field, so it looked where the file is. What broke is every OTHER reader —
+       any tool that trusts `path` to find the bytes gets a miss for those rows, which is how this was
+       found: testing/corpus/backfill.mjs's path-rule control refused to write until the two agreed. */
+    rel = rel.replace(/[^A-Za-z0-9._/@%+-]/g, '_');
+    const f = join(dir, rel);
     mkdirSync(dirname(f), { recursive: true });
     writeFileSync(f, r.buf);
     written.add(f);
@@ -441,7 +452,36 @@ function missToCandidates(reqPath, BASEURL, DOCURL) {
 /* A DECLARATION AND NOT A `const`, because the dispatch that calls into this section runs ABOVE it and a
    `const` here is in its temporal dead zone at that point -- which throws at the first resource of the
    first round, after a browser and a server have already been started. */
-function runtimeStorable(ct) { return /javascript|ecmascript|json|\/css|\/html|\/xml/i.test(ct || ''); }
+function runtimeStorable(ct) {
+  return /javascript|ecmascript|json|\/css|\/html|\/xml/i.test(ct || '')
+      || /^image\/|^font\/|\/font-woff/i.test(ct || '');
+}
+/* IMAGES AND FONTS ARE STORED, AND THE ARGUMENT THAT EXCLUDED THEM IS RETIRED RATHER THAN DELETED BECAUSE IT
+   WAS RIGHT WHEN IT WAS WRITTEN AND A READER WILL RE-DERIVE IT. It read: the mirror is TRACKED, so every
+   stored byte is a byte in every clone for ever, and a corpus builder that stores a site's PHOTOGRAPHY buys
+   nothing an engine can read. Both halves have moved.
+   THE `NOTHING AN ENGINE CAN READ` HALF WENT FALSE ON A DATE: core/image/png_decode.h decodes PNG and
+   core/paint/box_paint.c lays a `DISPLAY_MARK_IMAGE` for a decoded one, so a stored PNG is now ink in a
+   rendered document. That is the stale-justification shape this project keeps paying for — a gate whose
+   REASON is checked by nobody after the thing it assumed became untrue.
+   THE `PHOTOGRAPHY` HALF WAS NEVER TRUE OF THIS CORPUS, which is a measurement and not an opinion: across
+   provenance.json the declined set holds 61 `image/png` totalling 0.27 MB — an average of 4.4 KB each —
+   plus 36 `image/svg+xml` at 0.61 MB and 9 `image/jpeg` at 0.02 MB. Those are ICONS AND LOGOS. The whole
+   image-and-font widening is 138 resources and 5.3 MB against a corpus already storing 784 and 91.5 MB, so
+   it is 5.8% for the difference between a page that renders and a page that does not.
+   AND THE DECIDING ARGUMENT IS NEITHER OF THOSE — IT IS FAITHFULNESS, WHICH IS THIS FILE'S OWN RULE ONE
+   FUNCTION OVER. serve-faithful.mjs records being burned by a fixture that answered 200-with-prose where it
+   meant 404, because the engine parsed the prose as a program: "a fixture that answers 200-with-prose where
+   it means 404 manufactures engine bugs". A 404 WHERE THE ORIGIN SAID 200 IS THAT DEFECT MIRRORED. A page
+   whose icon 404s takes its ERROR path, fires its error handlers and lays no ink, so the fixture is serving
+   a DIFFERENT PROGRAM from the one the origin serves — and every finding taken from it is a finding about
+   the mirror. An engine that cannot yet decode a stored SVG or decompress a stored woff2 answers exactly as
+   a browser without that decoder answers, which is a fact about the ENGINE and is the one this corpus
+   exists to expose; an engine handed a 404 for a resource that exists answers a question nobody asked.
+   WHAT IS STILL DECLINED IS UNCHANGED AND DELIBERATE: `text/plain` (the note below, whose measurement
+   stands), `application/octet-stream` and a reply with no type at all — those are AMBIGUOUS rather than
+   merely undecodable, and the octet-stream rows alone are 0.94 MB this buys nothing for. A type this engine
+   cannot read is stored; a type nobody can NAME is not. */
 /* `text/plain` IS NOT IN THIS SET, AND THE REASON IS A MEASUREMENT RATHER THAN A PREFERENCE. It was, on the
    argument that a CDN sometimes serves JavaScript that way -- which is true in general and buys NOTHING
    here: across the 445 resources the markup pass had already frozen, the content types are 233
@@ -616,6 +656,7 @@ async function runtimeCapture(id, maxRounds, dwellMs) {
         const u = new URL(gotUrl);
         let rel = u.host + u.pathname + (u.search ? '__q' + createHash('sha256').update(u.search).digest('hex').slice(0, 8) : '');
         if (rel.endsWith('/')) rel += 'index';
+        rel = rel.replace(/[^A-Za-z0-9._/@%+-]/g, '_');
         const entry = {
           url: gotUrl, status: got.code, contentType: got.ct, bytes: got.buf.length,
           sha256: sha(got.buf), fetchedAt: now(), via: 'runtime', composedFrom: p,
@@ -654,7 +695,8 @@ async function runtimeCapture(id, maxRounds, dwellMs) {
             + 'not stored; storing it would put an error page under a real URL\'s name';
           declined++;
         } else if (runtimeStorable(got.ct)) {
-          const f = join(dir, rel.replace(/[^A-Za-z0-9._/@%+-]/g, '_'));
+          /* Sanitized at its own site above, for the reason the markup pass states: `path` is a LOCATOR. */
+          const f = join(dir, rel);
           /* A PATH THAT IS BOTH A FILE AND A DIRECTORY CANNOT BE BOTH ON DISK, AND THE COLLISION IS RECORDED
              RATHER THAN CRASHED ON. The saved-path rule -- `<host><path>`, with `index` appended only for a
              TRAILING SLASH -- is shared with serve-faithful.mjs, which recomputes it rather than keeping an
