@@ -656,6 +656,7 @@ void display_list_raster(const DisplayList *dl, double device_px_per_css_px, Ras
            two beside it are what say how much of the text was drawn. */
         case DISPLAY_MARK_GLYPH:
             dlr_glyph(m, s, surface, count);
+            count->marks++;
             break;
         /* THE ONE ARM THAT NEEDS THE LIST AND NOT JUST THE MARK, which is `DisplayImage`'s ownership answer
            arriving at its consumer: the pixels are the LIST's, so the mark's index is resolved against `dl`
@@ -673,4 +674,26 @@ void display_list_raster(const DisplayList *dl, double device_px_per_css_px, Ras
            names this site the day one lands, which display_list.h names as the mechanism, and a `default:`
            would take that away. */
     }
+    /* EVERY MARK TOOK AN ARM AND EVERY ARM COUNTED ITS MARK — the parts sum to the total, asserted rather
+       than described, because the paragraph above each arm ALREADY said so and one arm did not do it.
+       MEASURED: the `DISPLAY_MARK_GLYPH` arm was the only one of the five that never raised `marks`, under
+       a comment reading "THE GLYPH KIND, WHICH IS ONE FILL AND ONE MARK — and which is counted even where it
+       lays nothing". The ink was right and only the tally was wrong, which is why nothing downstream looked
+       broken: a document's text composited its spans and its pixels and reported ZERO marks for all of it,
+       and core/paint/document_paint.c forwards this number verbatim, so every mark figure ever quoted for a
+       painted page was short by its whole glyph count.
+       IT IS AN EQUALITY RATHER THAN A PER-ARM CHECK BECAUSE THE PER-ARM CHECK IS THE COMMENT THAT FAILED.
+       `display_list_append` is the only door into a list and asserts `dl_kind_is_defined`, so every one of
+       `dl->n` marks reaches exactly one arm of the switch above — which makes the count of arms taken a fact
+       this function may assert about ITSELF rather than a claim about its caller. A sixth kind added without
+       its `marks++` therefore fires HERE, on the first list that carries one, instead of silently reporting a
+       smaller number that no reader can tell from a page with less ink on it. */
+    DCHECKF(count->marks == dl->n,
+            "a display list of %zu mark(s) was rasterized and %zu of them were counted. `marks` is this "
+            "rasterizer's count of marks it HAD AN ARM FOR AND PROCESSED, and core/paint/display_list.h "
+            "makes an append the only way ink enters a list and asserts the kind at that door — so every "
+            "mark here reaches an arm, and a shortfall is an arm that ran without raising the count rather "
+            "than a mark this component was not built for. The arm to look at is the one whose kind is "
+            "missing from the tally, and the repair is one line at that arm and never a weakening here",
+            dl->n, count->marks);
 }
