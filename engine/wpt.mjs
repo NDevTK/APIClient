@@ -931,9 +931,14 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                       population is nonetheless unrunnable here, because the files those tests name as their
                       references are not on disk. They are shared — a handful of reference documents carry
                       most of the population — and they live in `css/reference` and `css/CSS2/reference`,
-                      which are real directories at the pinned corpus revision and sit outside the entries
-                      below. The same is true of `fonts`, which is where the corpus keeps the one typeface
-                      CSS tests use to make a text run a predictable size.
+                      which are real directories at the pinned corpus revision.
+                      THOSE TWO DIRECTORIES AND `fonts` ARE NOW LISTED, WHICH RETIRES THE HALF OF THIS
+                      PARAGRAPH THAT SAID THEY SIT OUTSIDE THE ENTRIES — see the three rows at the end of
+                      this list for what each one supplies and what it leaves behind. What is NOT retired is
+                      the sentence above it: the reftest population is still a population NOTHING IN THIS
+                      TREE RUNS, and putting a reference document on disk does not change that by one test.
+                      The absent band does not go to zero either, and the entries say which references
+                      survive it and why each is a refusal rather than an oversight.
                       THIS IS THE SHAPE THE `idlharness` ENTRY ABOVE ALREADY RECORDS, ARRIVING AT A DIFFERENT
                       FAMILY, and it is worth naming here because the reading it invites is the expensive
                       one: a reftest whose reference is absent does not report a missing file, it reports a
@@ -965,7 +970,107 @@ const WPT_PATHS = ["resources", "fetch/api/headers", "fetch/api/response", "fetc
                       never been measured against is a BASELINE, and a low one is the honest starting number
                       rather than a regression. */
                    "css/css-sizing", "css/css-flexbox", "css/css-position", "css/css-writing-modes",
-                   "css/css-overflow", "css/css-display", "css/css-logical"];
+                   "css/css-overflow", "css/css-display", "css/css-logical",
+                   /* THE REFERENCE DOCUMENTS EVERY CSS REFTEST NAMES, AND THE TYPEFACE ITS TESTS MEASURE
+                      THEMSELVES AGAINST. Three rows, one shape, and the shape is the one the `idlharness`
+                      entry at the head of this list already records: a fixture the corpus DECLARES, that
+                      resolves at the pinned revision, and that this cone does not hold — so the family
+                      naming it does not report a missing file, it reports a result that names the ENGINE.
+                      THE TWO ROWS ARE NOT THE SAME KIND OF GAIN AND MUST NOT BE READ AS ONE, WHICH IS THE
+                      whole reason they carry separate paragraphs below. `fonts` supplies a fixture to tests
+                      THIS GATE ALREADY COLLECTS AND RUNS. `css/reference` and `css/CSS2/reference` supply
+                      references to a population NOTHING HERE RUNS. Only the first can move a verdict, and
+                      conflating them is how a reader comes to believe this list now covers reftests.
+
+                      `fonts` — 213 blobs, 5004445 bytes. THE ROW THAT REACHES THE TESTS ALREADY BEING RUN.
+                      A CSS test makes a text run a predictable size by loading a typeface whose every glyph
+                      is one em box, then asserting a used value the engine computed from it. When the
+                      typeface does not arrive the element falls back to whatever the host has, and the
+                      assertion is then about a font nobody chose — a declared fixture that never arrives,
+                      failing inside a family that collects, runs and reports like any other. The derivation
+                      is two commands and they are what the figures below came from:
+                        python3 engine/wpt_classify.py engine/.work/wpt | cut -f1 | sort > /tmp/h
+                        cd engine/.work/wpt && grep -rl '/fonts/' --include='*.html' --include='*.htm' \
+                          --include='*.xht' --include='*.xhtml' --include='*.js' --include='*.svg' \
+                          --include='*.xml' . | sed 's|^\./||' | sort | comm -12 - /tmp/h
+                      That answered 174 COLLECTED TESTHARNESS TESTS naming a path under `/fonts/`, across
+                      fourteen distinct URLs, every one of them absent from this checkout. Eleven of the
+                      fourteen resolve at the pinned revision and this entry supplies them; the tests naming
+                      ONLY those eleven number 171 of the 174, counted file by file rather than estimated.
+                      AND THE OTHER THREE ARE A CORPUS FACT, NOT A MISSING ENTRY — exactly like the
+                      `comparisons.js` residual this list already records for css-typed-om. They are
+                      `/fonts/Rochester.otf` (named by css/css-values/lh-unit-003.html),
+                      `/fonts/RobotoExtremo-VF.subset.ttf` (css/css-fonts/font-variation-settings-
+                      serialization-002.html) and `/fonts/FontWithFancyFeatures.otf`
+                      (css/css-fonts/idlharness.html), and `git ls-tree -r` at the pinned revision finds no
+                      such path under `fonts` for any of the three. Each file EXISTS, under
+                      `css/css-fonts/support/fonts/`, which is already on disk and is reached at a different
+                      address — so the tests ask the server for a path the corpus does not serve, and no
+                      entry in this list can supply it. Those three go on failing at a fixture and saying so
+                      here is what stops the next reader adding a fourth directory to chase them.
+
+                      `css/reference` — 25 blobs, 9242 bytes — and `css/CSS2/reference` — 25 blobs, 15821
+                      bytes. THE REFERENCE HALF, AND WHAT IT DOES NOT BUY IS THE PART TO READ FIRST. The
+                      derivation is one command:
+                        python3 engine/wpt_reftest_scope.py engine/.work/wpt
+                      Its ABSENT band answered 22 distinct references not on disk, blocking 1158 reftests
+                      whole-corpus; over the seven CSS layout areas listed directly above, 18 references
+                      blocking 1054. Two documents carry most of it. Attributing that band by directory —
+                      the same command, its absent lines grouped by the directory each reference lives in —
+                      puts 18 references and 1148 blocked tests in `css/reference`, two and two in
+                      `css/CSS2/reference`, one and seven in `css/filter-effects/reference`, and one and one
+                      in `compat`. These two entries take the first two rows, which is every reference the
+                      seven areas above name: over those areas the band goes to nothing, and whole-corpus it
+                      goes from 22 references to the two named below.
+                      EVERY ONE OF THE 22 WAS RESOLVED AT THE PINNED REVISION BEFORE THIS LANDED, one by
+                      one, with `git cat-file -e <rev>:<path>` against each absent path and `[ -e <path> ]`
+                      beside it: 22 of 22 present in the revision, 22 of 22 absent from the working
+                      checkout. That is the idlharness lesson applied rather than restated — a fixture claim
+                      is checked at the revision, not inferred from a directory existing.
+
+                      WHAT THIS DOES NOT FIX, AND IT IS THE LARGER HALF: NOTHING IN THIS TREE RUNS A
+                      REFTEST. No instrument here has ever compared two renderings, and these entries put
+                      documents on disk without building one. A reader who takes a `css/reference` row in
+                      this list as "reftests are handled now" has read it as the opposite of what it says.
+                      The reference-image driver is a separate subproblem and remains unbuilt; what these
+                      two rows change is that a first such driver would no longer hand back a number that is
+                      a statement about WHICH DIRECTORIES ARE CHECKED OUT wearing the clothes of a rendering
+                      score. That is a precondition for measuring, not a measurement.
+
+                      TWO DIRECTORIES IN THAT BAND ARE DELIBERATELY NOT LISTED, AND THE REASON IS THE SAME
+                      ONE IN BOTH CASES: each would put test files on disk that nothing runs, which the
+                      census at the foot of this file FAILS the gate for — so adding them to unblock a
+                      reference is a widening smuggled in under another justification, and the price is
+                      paid by a population nobody decided to measure.
+                      `compat` supplies ONE reference and unblocks ONE test, and it holds 13 testharness
+                      tests of its own. `css/filter-effects/reference` supplies ONE reference and unblocks
+                      SEVEN, and cone mode materializes every directory ON THE PATH to a listed one, so
+                      naming it drags `css/filter-effects`'s OWN LEVEL onto disk — 459 blobs, 411472 bytes,
+                      of which SEVEN are testharness tests. Both are real gaps and both are decisions for a
+                      diff that means to take those areas on. The derivation for each is the corpus's own
+                      classifier over the directory in question, which is what produced those two counts:
+                        git archive <rev> <dir> | tar -x -C <scratch> && ln -s <wpt>/tools <scratch>/tools
+                        python3 engine/wpt_reftest_scope.py <scratch> <dir>   # read its KINDS line
+                      THE SAME QUESTION WAS ASKED OF EVERY DIRECTORY THIS DIFF DOES LIST, BEFORE IT LISTED
+                      THEM, because a widening that trips the gate's own assertion is worse than none. Over
+                      `css/reference`, `css/CSS2/reference` and `fonts` that classifier answers ZERO
+                      testharness — 3 reftests and 22 support, 25 support, and 213 support respectively —
+                      and this file's own `testKind` agrees with it for the reason that matters at the
+                      collector: none of those 263 files is a `.js`, and none of them holds a
+                      `<script src=/resources/testharness.js>` element, which are `testKind`'s only two
+                      positive arms. So all three collect nothing, exactly as `resources` and `interfaces`
+                      do, and the stray census is unmoved.
+                      THE PATHS WERE PRICED TOO, WHICH IS THE PART THE FILTERED CLONE MAKES EASY TO MISS.
+                      `css/reference` sits under `css`, whose own level is two files and both already on
+                      disk. `css/CSS2/reference` drags `css/CSS2`'s own level — 22 blobs, 100730 bytes,
+                      which that same classifier calls 13 reftest, 6 support, 1 crashtest, 1 visual and ZERO
+                      testharness. `fonts` is top level and drags nothing. Total for the three rows and the
+                      one dragged level: 285 blobs, 5130238 bytes, which `df` will show on the first run
+                      that opens them rather than at checkout, because the clone is filtered.
+                      NOTHING IS PREDICTED HERE ABOUT WHAT ANY AREA SCORES. A fixture that starts arriving
+                      changes what a family is measuring, so a count taken across this entry is a fraction
+                      of a different population from one taken before it. */
+                   "css/reference", "css/CSS2/reference", "fonts"];
 
 /* AND THE DIRECTORIES WHOSE OWN LEVEL CONE MODE HAS ALREADY PUT ON DISK. A cone-mode checkout materializes every
    file of every directory ON THE PATH to a listed one, so naming one helper's `resources` lands its standard's
