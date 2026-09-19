@@ -943,7 +943,12 @@ static BfBox bf_anon_box(lxb_dom_element_t *parent, BlockFlowRun run, BfBaseline
        their initial values, so this box's border edge, padding edge and content edge are ONE rectangle and the
        distance line_box.h measures from the top CONTENT edge is the distance the stack outside measures from
        the top BORDER edge. That is the same identity `bf_anon_record` states for the position. */
-    h = line_box_content_height(parent, run, &any_line_box, &first_baseline, &last_baseline);
+    /* §9.2.1.1's ANONYMOUS BLOCK BOX IS THE CASE WHERE `style` ANSWERS BOTH QUESTIONS, which is why the
+       width is left to be derived rather than stated: "non-inherited properties have their initial value", so
+       CSS 2.1 §10.3.3's constraint equation with six zero terms makes this box's width its containing block's,
+       which is `parent`'s content width — the very number `line_box_available_width_derived` reads. */
+    h = line_box_content_height(parent, run, line_box_available_width_derived(),
+                                &any_line_box, &first_baseline, &last_baseline);
     out.baseline = pass == BF_BASELINE_FIRST ? first_baseline : last_baseline;
     out.has_line_box = any_line_box;
     /* §9.2.1.1's anonymous block box wraps a run of INLINE-LEVEL children; a table wrapper is block-level
@@ -1064,7 +1069,11 @@ static BfBox bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wa
                container that holds no block-level box, stated here rather than reconstructed. */
             whole.after = NULL;
             whole.end = NULL;
-            h = line_box_content_height(el, whole, &any_line_box, &first_baseline, &last_baseline);
+            /* THE BOX HAS AN ELEMENT AND ITS OWN CONTENT BOX IS THE CONTAINING BLOCK OF ITS LINES, so
+               §9.4.2's width is `el`'s and is left to be derived — which also keeps it unread for a run with
+               no break position in it, the skip line_box.h states as load-bearing. */
+            h = line_box_content_height(el, whole, line_box_available_width_derived(),
+                                        &any_line_box, &first_baseline, &last_baseline);
         }
         /* WHICH of the two the caller asked for — this box establishes the ONE inline formatting context here,
            so both of §9.4.2's ends are inside it and the pass is the whole of the choice. */

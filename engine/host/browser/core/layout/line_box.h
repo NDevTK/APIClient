@@ -78,8 +78,52 @@
 #include "core/css/css_length.h"
 #include "core/layout/block_flow.h"
 
+/* CSS 2.2 §9.4.2 "Inline formatting contexts"' OWN SENTENCE — "The width of a line box is determined by a
+ * containing block and the presence of floats" — AS AN ARGUMENT, because for one box in this engine the
+ * containing block is not the element whose style the lines are measured with.
+ *
+ * WHY IT IS AN ARGUMENT AND NOT A SECOND READ OF `style`. `style` answers TWO questions at every entry below:
+ * whose properties the box has, and whose content box the lines are filled into. For §9.2.1.1's anonymous
+ * block box those two have the same answer, and the fill's own banner proves it rather than assuming it — the
+ * anonymous box's non-inherited properties "have their initial value", so CSS 2.1 §10.3.3's constraint
+ * equation with six zero terms makes its width the containing block's, which is the enclosing element's
+ * content width. For css-flexbox-1 §4 "Flex Items"' ANONYMOUS BLOCK CONTAINER FLEX ITEM the two answers are
+ * DIFFERENT NUMBERS: its style is still the flex container's, and its width is css-flexbox-1 §9.7 "Resolving
+ * Flexible Lengths"' used main size, which equals the container's inner main size only when §9.7 happened to
+ * flex it to the whole line. One operand answering two questions is decided by whichever caller is stricter
+ * and the cost lands silently on the other, so the two are split here.
+ *
+ * `stated` FALSE IS NOT A ZERO WIDTH AND `px` IS NOT READ AT ALL ON THAT ARM. It is the presence flag
+ * core/layout/replaced_element.h gives every natural dimension, for the same reason: a real width and a
+ * spelling that means there is none must not be one value. It is also not merely a null: the DERIVED arm is
+ * LAZY by design, and that laziness is load-bearing rather than an optimisation — this header's own
+ * "THE AVAILABLE WIDTH IS ASKED FOR ONLY WHERE IT IS AN OPERAND" paragraph is why, since a run with no break
+ * position inside it is ONE line box at every width and deriving one for it would run CSS 2.1 §10.3 over a box
+ * whose used width `used_value.c` may still crash for. A caller cannot decide that in advance — whether the
+ * run splits is the fill's own answer — so `derive it if you turn out to need it` has to be a value.
+ *
+ * THE TWO ARE BUILT BY ENTRIES AND NEVER BY HAND so that an unstated width has no `px` for anyone to read. */
+typedef struct {
+    bool  stated;
+    CssPx px;   /* read ONLY where `stated`; §9.4.2's line box width, a CONTENT-box extent in CSS pixels */
+} LineBoxAvailableWidth;
+
+/* "determined by a containing block" LEFT TO THE WALK, which reads `style`'s own used content width and reads
+   it only if the run turns out to have a break position in it. */
+LineBoxAvailableWidth line_box_available_width_derived(void);
+
+/* "determined by a containing block" STATED BY THE CALLER, for a box whose containing rectangle is not
+   `style`'s content box. `px` must be non-negative — css-sizing-3 §3.3 "Box Edges for Sizing: the box-sizing
+   property" floors every inner size at zero and css-flexbox-1 §9.7 "Resolving Flexible Lengths" floors "its
+   content-box size at zero" in its own words — and it is asserted at the walk rather than here. */
+LineBoxAvailableWidth line_box_available_width_stated(CssPx px);
+
 /* CSS 2.2 §10.6.3's FIRST BULLET for the block container box that establishes ONE inline formatting context —
-   "the distance from its top content edge to the bottom edge of the last line box" — in CSS pixels.
+   "the distance from its top content edge to the first applicable of the following", whose first bullet is
+   "the bottom edge of the last line box" — in CSS pixels. THE TWO RUNS ARE QUOTED SEPARATELY BECAUSE THE
+   STANDARD DOES NOT WRITE THEM TOGETHER: the sentence names a list and the bullet is an item of it, so the
+   one-run spelling that stood here — and that two other sites in this component copied — was a SPLICE of two
+   non-contiguous fragments, which reads as a verbatim sentence and is the shape no reader re-checks.
    THE FORMATTING CONTEXT IS ONE OF §9.2.1.1's RUNS OF `style`'s CONTENT, AND `style` IS WHOSE PROPERTIES THE
    BOX HAS. Those are two arguments and not one because §9.2.1.1's anonymous block box has no element: a mixed
    container generates one box per run, and each of them "inherit[s] from the enclosing non-anonymous box" —
@@ -120,8 +164,23 @@
    THE CALLER HAS ALREADY ESTABLISHED §9.4.2's OWN CONDITION over the run it passes — that this box contains no
    block-level boxes — because deciding it requires classifying every child, which core/layout/block_flow.c
    does once, both to choose between the two formatting contexts and to delimit §9.2.1.1's runs. A block-level
-   box reaching this walk is those two classifications having come apart, and it crashes here saying so. */
-CssPx line_box_content_height(lxb_dom_element_t *style, BlockFlowRun run,
+   box reaching this walk is those two classifications having come apart, and it crashes here saying so.
+   `avail` IS §9.4.2's LINE BOX WIDTH and is the one argument `style` does not answer — see
+   `LineBoxAvailableWidth` above for why the two were one operand and what that cost. A caller measuring one of
+   §9.2.1.1's runs passes `line_box_available_width_derived()`, which is the number this walk always read; a
+   caller measuring a box whose containing rectangle is not `style`'s content box states it.
+   IT IS ON THIS ENTRY AND NOT ON THE THREE BELOW, WHICH IS A NAMED RESIDUAL AND NOT AN OVERSIGHT.
+   `line_box_content_span`, `line_box_glyphs` and `line_box_inline_fragments` reduce the SAME fill and still
+   derive their width from `style`, so a box measured through this entry at a stated width and placed through
+   one of those would be two readings of one formatting context — line boxes filled at two widths break in two
+   places. WHAT IS NOT COVERED is any box whose containing rectangle is not `style`'s content box AND which is
+   painted or scrolled rather than only measured. WHAT THE NEXT DIFF BUILDS is the same argument on those three
+   entries, threaded to the same `lb_fill`. HOW ITS ABSENCE WOULD SHOW: a box so measured reports a height taken
+   over one set of line breaks and glyph positions taken over another, so its painted text overflows or falls
+   short of the rectangle its own height claimed. THE PAIR IS UNREACHABLE WHILE NO CALLER BOTH
+   STATES A WIDTH AND PLACES THE BOX, which is a property of the callers and not a list of boxes — and whether
+   it still holds is one grep for those three entries' call sites, never a fact to take from this sentence. */
+CssPx line_box_content_height(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAvailableWidth avail,
                               bool *any_line_box, CssPx *first_baseline, CssPx *last_baseline);
 
 /* WHERE THE BOXES ON THIS FORMATTING CONTEXT'S LINE BOXES REACH on ONE PHYSICAL AXIS — `*lo` and `*hi` receive

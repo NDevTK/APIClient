@@ -37,10 +37,25 @@
 
 /* §9.7's last step for ONE item — "Set each item's used main size to its target main size" — as a CONTENT-box
    extent in CSS pixels, in the MAIN axis of `container`.
-   `item` must be one of `container`'s flex items (css-flexbox-1 §4 "Flex Items", core/layout/flex_item.h's
-   `flex_item_child_kind` answering `FLEX_ITEM_CHILD_ELEMENT` for it), and `container`'s main axis must be its
-   INLINE axis — a `row` or `row-reverse` container, by §5.1 "Flex Flow Direction: the flex-direction
-   property"' mapping. Both are asserted here rather than at the call, for core/layout/flex_intrinsic_size.h's
+   `item` NAMES ONE OF `container`'s FLEX ITEMS BY ITS FIRST NODE, which is a NODE and not an element because
+   one of them is not one: css-flexbox-1 §4 "Flex Items" says "each child text sequence is wrapped in an
+   ANONYMOUS BLOCK CONTAINER FLEX ITEM", and §4's own figure calls that box "(Anonymous, unstyleable)". So the
+   subject is the ELEMENT'S NODE where core/layout/flex_item.h's `flex_item_child_kind` answers
+   `FLEX_ITEM_CHILD_ELEMENT`, and the FIRST TEXT NODE of the sequence where it answers `FLEX_ITEM_CHILD_TEXT`
+   (`flex_item_text_sequence_end` delimits the rest of it).
+   IT IS A NODE THE CONTAINER'S CHILD LIST ALREADY HOLDS AND NEVER A STAND-IN, which is what makes the
+   anonymous item nameable without a fabricated element or a reserved value: a text node is not an element
+   node, and two child text sequences begin at two different text nodes, so no two items of one line can
+   answer to one subject and no subject can mean `the one I could not name`. A sentinel element in its place
+   would be the shape where a whole population lands on one value and every member of it matches every other.
+   THE ENTRY WAS KEYED ON AN ELEMENT AND THAT COST THE ANONYMOUS ITEM'S MAIN SIZE ENTIRELY, which is written
+   down because the narrower signature reads as the natural one: this component has always COLLECTED that item
+   — `fl_collect` gives it a record with a NULL `el` and §9.7 flexes it like any other — and only the LOOKUP
+   could not name it, so a caller holding a text sequence had no way to ask for a number the line had already
+   computed.
+   `container`'s MAIN AXIS MUST BE ITS INLINE AXIS — a `row` or `row-reverse` container, by §5.1 "Flex Flow
+   Direction: the flex-direction property"' mapping. Both preconditions are asserted here rather than at the
+   call, for core/layout/flex_intrinsic_size.h's
    reason: this component reads §5, §7 and §9's properties, whose `Applies to:` lines are flex containers and
    flex items, and reading one off any other box answers the cascade's initial keyword.
    IT IS A CONTENT BOX AND §9.7's OWN ARITHMETIC IS TOO, which is worth stating because the used value
@@ -50,6 +65,6 @@
    property" says "flex-basis determines the size of the content box, unless otherwise specified, such as by
    box-sizing". So the conversion belongs to the CALLER that exposes a used value, and every number inside this
    component is an inner one. */
-CssPx flex_line_used_main_size(lxb_dom_element_t *container, lxb_dom_element_t *item);
+CssPx flex_line_used_main_size(lxb_dom_element_t *container, lxb_dom_node_t *item);
 
 #endif

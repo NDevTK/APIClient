@@ -875,6 +875,53 @@ static LbExtent lb_line_extent(lxb_dom_element_t *style, const TextRunMeasure *m
     return out;
 }
 
+/* CSS 2.2 §9.4.2's "The width of a line box is determined by a containing block", STATED or DERIVED — see
+   line_box.h's `LineBoxAvailableWidth` for why `style` cannot answer it for every box this engine lays out.
+   THE TWO CONSTRUCTORS ARE ENTRIES RATHER THAN A STRUCT LITERAL AT EACH CALL so that an unstated width has no
+   `px` for anyone to read: the DERIVED arm leaves it at a zero that is not a coordinate, exactly as
+   `line_box_content_height`'s baselines are zeros that are not distances when no line box exists. */
+LineBoxAvailableWidth line_box_available_width_derived(void)
+{
+    LineBoxAvailableWidth w;
+
+    w.stated = false;
+    w.px = css_px(0.0);
+    return w;
+}
+
+LineBoxAvailableWidth line_box_available_width_stated(CssPx px)
+{
+    LineBoxAvailableWidth w;
+
+    /* css-flexbox-1 §9.7 "Resolving Flexible Lengths" floors "its content-box size at zero" in its own words
+       and css-sizing-3 §3.3 "Box Edges for Sizing: the box-sizing property" floors every `border-box`
+       conversion at zero "(as the inner size of a box cannot be negative)" — so every producer of this number
+       has already floored it, and a negative here is a derivation that lost an operand rather than a page.
+       IT IS ASSERTED AT THE CONSTRUCTOR AND NOT AT THE FILL, which is §Offensive-programming's "at its
+       origin": the fill reads this value only where the run has a break position in it, so a check there would
+       be silent for every single-line run and would name the WALK rather than whoever computed the width. */
+    DCHECKF(px.px >= 0.0,
+            "CSS 2.2 §9.4.2's line box width was stated as %g CSS pixels. \"The width of a line box is "
+            "determined by a containing block and the presence of floats\", and a containing block's content "
+            "box is an inner size that cannot be negative — css-sizing-3 §3.3 \"Box Edges for Sizing: the "
+            "box-sizing property\" floors its own conversion \"(as the inner size of a box cannot be "
+            "negative)\" and css-flexbox-1 §9.7 \"Resolving Flexible Lengths\" floors \"its content-box size "
+            "at zero\" — so this is a derivation that lost an operand and not a declaration",
+            px.px);
+    w.stated = true;
+    w.px = px;
+    return w;
+}
+
+/* THE ONE READ OF THAT VALUE, held apart from the fill so the DERIVED arm stays lazy: line_box.h's own
+   "THE AVAILABLE WIDTH IS ASKED FOR ONLY WHERE IT IS AN OPERAND" paragraph is why running CSS 2.1 §10.3 over
+   `style` may not happen for a run that has no break position in it. */
+static CssPx lb_available_width(lxb_dom_element_t *style, LineBoxAvailableWidth avail)
+{
+    if (avail.stated) return avail.px;
+    return used_value_content_px(style, false);
+}
+
 /* ---- §9.4.2's CONTENT, COLLECTED AND DISTRIBUTED — the half every answer below shares ----------------------
    ONE COLLECTION AND ONE FILL PER QUESTION, and the two answers share this rather than each running their own,
    for the reason core/layout/text_run.h gives about its three partitions: the fill's whole result is a function
@@ -883,7 +930,8 @@ static LbExtent lb_line_extent(lxb_dom_element_t *style, const TextRunMeasure *m
    THE CALLER OWNS `*lines` AND OWES `m` EXACTLY ONE `text_run_measure_release`, which is why this is a static
    with two call sites and not an entry: the collection and the [UAX14] pass stay alive for as long as the
    `TextRunLine`s index them, and that lifetime is a property of the loop the caller writes. */
-static size_t lb_fill(TextRunMeasure *m, lxb_dom_element_t *style, BlockFlowRun run, TextRunLine **lines)
+static size_t lb_fill(TextRunMeasure *m, lxb_dom_element_t *style, BlockFlowRun run,
+                      LineBoxAvailableWidth avail, TextRunLine **lines)
 {
     CssPx available = css_px(0.0);
     lxb_dom_node_t *root, *at;
@@ -940,7 +988,12 @@ static size_t lb_fill(TextRunMeasure *m, lxb_dom_element_t *style, BlockFlowRun 
     text_run_measure_finish(m);
     /* §9.4.2: "THE WIDTH OF A LINE BOX IS DETERMINED BY A CONTAINING BLOCK and the presence of floats", and
        the float half is refused at the walk above — so every line box here is as wide as the content box of
-       the block container that establishes this formatting context, which is `style`.
+       the block container that establishes this formatting context, which for the boxes that have an element
+       naming them is `style`. WHICH BOXES THOSE ARE IS NOW `avail`'s QUESTION AND NOT THIS FILE'S, because
+       `style` was answering two of them: css-flexbox-1 §4 "Flex Items"' anonymous block container flex item
+       has `style`'s properties and css-flexbox-1 §9.7 "Resolving Flexible Lengths"' width, and the paragraph
+       below is the proof that §9.2.1.1's anonymous block box is the case where the two coincide rather than
+       the rule that they always do.
        FOR §9.2.1.1's ANONYMOUS BLOCK BOX THAT IS STILL `style`'s CONTENT WIDTH and not a second derivation:
        the anonymous box's non-inherited properties "have their initial value", so it has no margin, border or
        padding, and it is a block-level box in its parent's block formatting context — §10.3.3's constraint
@@ -952,7 +1005,7 @@ static size_t lb_fill(TextRunMeasure *m, lxb_dom_element_t *style, BlockFlowRun 
        throw the answer away — and for a great many block containers (`<div><span></span></div>`, an empty
        one) that layout is not merely wasted but is the earlier subproblem `used_value.c` still crashes for.
        The fill asserts the theorem this skip rests on rather than trusting it. */
-    if (text_run_measure_splits(m)) available = used_value_content_px(style, false);
+    if (text_run_measure_splits(m)) available = lb_available_width(style, avail);
     n = text_run_measure_fill(m, available, lines);
     DCHECK(n == 0 || *lines != NULL, "CSS 2.2 §9.4.2's fill reported line boxes and handed back none of them");
     return n;
@@ -977,7 +1030,7 @@ static size_t lb_fill(TextRunMeasure *m, lxb_dom_element_t *style, BlockFlowRun 
    reads a measurement rather than whatever it initialised. Its zero when `any` is false is not a coordinate:
    there is no line box for a baseline to be inside, exactly as §10.6.3 then has no last line box for its
    bottom edge to be, and both callers read `any` first. */
-static LbLines lb_reduce(lxb_dom_element_t *style, BlockFlowRun run)
+static LbLines lb_reduce(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAvailableWidth avail)
 {
     TextRunMeasure m;
     TextRunLine *lines = NULL;
@@ -988,7 +1041,7 @@ static LbLines lb_reduce(lxb_dom_element_t *style, BlockFlowRun run)
     out.first_baseline = css_px(0.0);
     out.last_baseline = css_px(0.0);
     out.any = false;
-    n = lb_fill(&m, style, run, &lines);
+    n = lb_fill(&m, style, run, avail, &lines);
     for (i = 0; i < n; i++) {
         bool exists = false;
         LbExtent e = lb_line_extent(style, &m, lines[i], &exists);
@@ -1019,8 +1072,9 @@ static LbLines lb_reduce(lxb_dom_element_t *style, BlockFlowRun run)
         if (!out.any) out.first_baseline = out.last_baseline;
         out.any = true;
         /* §9.4.2: "line boxes are stacked with NO VERTICAL SEPARATION (except as specified elsewhere) and they
-           never overlap", so §10.6.3's "distance from its top content edge to the bottom edge of the last line
-           box" is the SUM of the heights above it — no gap term, and no need to carry a running position. */
+           never overlap", so §10.6.3's "distance from its top content edge to the first
+           applicable of the following" — whose first bullet is "the bottom edge of the last line box" — is
+           the SUM of the heights above it — no gap term, and no need to carry a running position. */
         out.height = css_px_add(out.height, lh);
     }
     free(lines);
@@ -1031,7 +1085,7 @@ static LbLines lb_reduce(lxb_dom_element_t *style, BlockFlowRun run)
     return out;
 }
 
-CssPx line_box_content_height(lxb_dom_element_t *style, BlockFlowRun run,
+CssPx line_box_content_height(lxb_dom_element_t *style, BlockFlowRun run, LineBoxAvailableWidth avail,
                               bool *any_line_box, CssPx *first_baseline, CssPx *last_baseline)
 {
     LbLines r;
@@ -1052,7 +1106,7 @@ CssPx line_box_content_height(lxb_dom_element_t *style, BlockFlowRun run,
            "question about the same lines. The reduction below computes it whether or not anyone reads it, "
            "because it is the same running position §10.6.3's height ends at, so declining it buys nothing and "
            "a caller holding a nullable one would be a second walk waiting to be written");
-    r = lb_reduce(style, run);
+    r = lb_reduce(style, run, avail);
     *any_line_box = r.any;
     /* When no line box exists, §10.6.3 has no last line box for its bottom edge to be and the accumulated
        height is exactly the zero the reduction started at — the caller learns through `any_line_box` that this
@@ -1119,7 +1173,7 @@ void line_box_content_span(lxb_dom_element_t *style, BlockFlowRun run,
        other operand — so the seed is invisible to the extreme the caller takes and cannot invent an overflow. */
     *lo = css_px(0.0);
     *hi = css_px(0.0);
-    n = lb_fill(&m, style, run, &lines);
+    n = lb_fill(&m, style, run, line_box_available_width_derived(), &lines);
     if (!vertical) {
         /* §9.4.2's INLINE AXIS. "In general, the left edge of a line box touches the left edge of its
            containing block and the right edge touches the right edge of its containing block", and css-text-4
@@ -1363,7 +1417,7 @@ size_t line_box_glyphs(lxb_dom_element_t *style, BlockFlowRun run, LineBoxGlyph 
     DCHECK(style != NULL && out != NULL,
            "CSS 2.1 §E.2 \"Painting order\"'s step 7.2.1 text was asked for with no element whose properties "
            "the establishing box has, or with nowhere to report the characters");
-    n = lb_fill(&m, style, run, &lines);
+    n = lb_fill(&m, style, run, line_box_available_width_derived(), &lines);
     for (i = 0; i < n; i++) {
         bool exists = false;
         LbExtent e = lb_line_extent(style, &m, lines[i], &exists);
@@ -2092,7 +2146,7 @@ size_t line_box_inline_fragments(lxb_dom_element_t *el, lxb_dom_element_t **esta
         bool has_open, has_close, present;
 
         top = ctx.box[b].origin_y;
-        n = lb_fill(&m, style, ctx.box[b].run, &lines);
+        n = lb_fill(&m, style, ctx.box[b].run, line_box_available_width_derived(), &lines);
         DCHECK(n >= 1,
                "CSS 2.2 §9.4.2's fill produced NO line box for one of CSS 2.2 §9.2.1.1 \"Anonymous block boxes\"' "
                "boxes. \"Line boxes are created as needed to hold inline-level content\" and the section generates "

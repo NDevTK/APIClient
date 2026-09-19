@@ -10,9 +10,12 @@
 #include "check.h"
 #include "core/css/css_computed_value.h"
 #include "core/css/css_length.h"
+#include "core/layout/block_flow.h"
 #include "core/layout/box_subject.h"
 #include "core/layout/flex_cross_size.h"
 #include "core/layout/flex_item.h"
+#include "core/layout/flex_line.h"
+#include "core/layout/line_box.h"
 #include "core/layout/used_value.h"
 
 static bool fx_computed_is(lxb_dom_element_t *el, const char *name, const char *kw)
@@ -69,20 +72,33 @@ static CssPx fx_cross_margins(lxb_dom_element_t *el)
    those is a BASELINE alignment and puts the item in §9.4's step 8.1 collection, so a test that admitted only
    the Level 1 spelling would answer NO for a page this engine's cascade may well accept. Refusing MORE is the
    safe direction here because the refusal is a crash and not a number. */
-static void fx_require_no_baseline_alignment(lxb_dom_element_t *container, lxb_dom_element_t *item)
+static void fx_require_no_baseline_alignment(lxb_dom_element_t *container, lxb_dom_element_t *item,
+                                             lxb_dom_node_t *subject)
 {
-    char *self = css_computed_value(item, "align-self");
     char *items = css_computed_value(container, "align-items");
+    char *self = NULL;
     bool baseline;
     char nbuf[160];
 
-    DCHECK(self != NULL && items != NULL,
-           "the cascade produced no computed value for `align-self` or `align-items` — both are in lexbor's "
-           "registry with an initial value, so the last layer always answers");
+    DCHECK(items != NULL,
+           "the cascade produced no computed value for `align-items` — it is in lexbor's registry with an "
+           "initial value, so the last layer always answers");
+    /* §4's ANONYMOUS FLEX ITEM IS `item == NULL` AND IS NOT EXEMPT, which is §8.3's own sentence and the
+       reason this test is asked of it at all: "align-items sets the default alignment for all of the flex
+       container's items, INCLUDING ANONYMOUS FLEX ITEMS." §4 makes that box unstyleable, so it declares no
+       `align-self` and takes the same arm an element item taking `auto` takes — the container's keyword is
+       the whole answer, and skipping the question here would put a baseline-aligned box into §9.4 "Cross
+       Size Determination"' step 8.2's maximum where that section's step 8.1's collection owns it. */
+    if (item != NULL) {
+        self = css_computed_value(item, "align-self");
+        DCHECK(self != NULL,
+               "the cascade produced no computed value for `align-self` — it is in lexbor's registry with an "
+               "initial value, so the last layer always answers");
+    }
     /* §8.3's `Initial: auto` on `align-self` is what makes the container's `align-items` the value that
        decides an item that declares nothing, which is the whole of that keyword's meaning. */
-    baseline = strstr(self, "baseline") != NULL ||
-               (strcmp(self, "auto") == 0 && strstr(items, "baseline") != NULL);
+    baseline = (self != NULL && strstr(self, "baseline") != NULL) ||
+               ((self == NULL || strcmp(self, "auto") == 0) && strstr(items, "baseline") != NULL);
     free(self);
     free(items);
     if (!baseline) return;
@@ -97,6 +113,11 @@ static void fx_require_no_baseline_alignment(lxb_dom_element_t *container, lxb_d
            "it either — two items whose baselines sit at different depths push the line TALLER than either of "
            "them is — so taking the walk below for it would report a line shorter than the page draws, which "
            "is the one answer a crash here is preferable to. "
+           "FOR §4 \"Flex Items\"' ANONYMOUS FLEX ITEM THE KEYWORD CAME FROM THE CONTAINER, which §8.3 "
+           "states outright — \"align-items sets the default alignment for all of the flex container's items, "
+           "including anonymous flex items\" — so that box is in §9.4 \"Cross Size Determination\"' "
+           "step 8.1's collection exactly as an element "
+           "item declaring `align-self: auto` under the same container is. "
            "WHAT IT NEEDS IS A BASELINE PER ITEM, MEASURED IN THE SAME FRAME AS THE OUTER CROSS EDGES, and "
            "core/layout/block_flow.h has both halves: `block_flow_first_line_box_baseline` and "
            "`block_flow_last_line_box_baseline` each report a distance from the box's TOP CONTENT EDGE and "
@@ -104,7 +125,7 @@ static void fx_require_no_baseline_alignment(lxb_dom_element_t *container, lxb_d
            "Container Baselines\"' own fallback condition. So what is missing is §8.5's choice between them "
            "and the two distances' conversion from the content edge to the item's OUTER cross edges, not a "
            "measurement",
-           box_subject(item, nbuf, sizeof nbuf));
+           box_subject_node(subject, nbuf, sizeof nbuf));
 }
 
 /* ONE ITEM'S OUTER HYPOTHETICAL CROSS SIZE — §9.4's step 7 plus css-sizing-3 §2.2 "Intrinsic Size
@@ -136,6 +157,67 @@ static CssPx fx_outer_hypothetical_cross(lxb_dom_element_t *item)
            "floor is a step of the `border-box` conversion while §3.1's is unconditional, so a floor that "
            "converts nothing cites §3.1");
     return css_px_add(inner, css_px_add(fx_cross_border_padding(item), fx_cross_margins(item)));
+}
+
+/* §4 "Flex Items"' ANONYMOUS FLEX ITEM'S OUTER HYPOTHETICAL CROSS SIZE — §9.4's step 7 for the one box a
+   flex container's item list holds that is not an element, so `fx_outer_hypothetical_cross` cannot be asked
+   for it and this is not a second copy of that function but the SAME step over a different box.
+   THE TWO HALVES THE ELEMENT ARM GETS FROM core/layout/used_value.h ARE BOTH ANSWERED HERE, and each is a
+   sentence rather than a simplification.
+     - THE INNER HALF. Step 7's own words are "performing layout as if it were an in-flow block-level box WITH
+       THE USED MAIN SIZE and the given available space, treating auto as fit-content" — and §4 makes this box
+       an "anonymous block container", whose content is a CHILD TEXT SEQUENCE and therefore holds no
+       block-level box at all. So CSS 2.2 §9.4.2 "Inline formatting contexts" is the formatting context by
+       §9.4.1's own alternative, CSS 2.1 §10.6.3's first bullet is the whole height rule — "the distance
+       from its top content edge to the first applicable of the following", whose first bullet is "the bottom
+       edge of the last line box" — and core/layout/line_box.h answers it.
+       THE WIDTH IS STATED AND THAT IS THE WHOLE POINT OF THE ARGUMENT: `style` is the CONTAINER, because §4's
+       box is unstyleable and therefore has the container's properties, and the container's content box is the
+       WHOLE LINE rather than this item's share of it. Handing the walk `style` alone would lay the run out at
+       the container's inner main size, which equals this item's used main size only where §9.7 "Resolving
+       Flexible Lengths" happened to flex it to the entire line.
+     - THE OUTER HALF IS ZERO AND IS NOT READ. css-sizing-3 §2.2 "Intrinsic Size Contributions"' outer step
+       adds the box's margin, border and padding, and §4's box has none to add: it is anonymous, so
+       CSS 2.2 §9.2.1.1 "Anonymous block boxes"' rule applies — "non-inherited properties have their initial
+       value" — and every one of CSS 2.1 §8's four edges is initially zero on all four sides. Reading them off
+       the CONTAINER would report the container's own padding as this item's, which is the same mistake in the
+       cross axis that core/layout/flex_line.c refuses in the main one by answering zero for a NULL element. */
+static CssPx fx_anonymous_outer_hypothetical_cross(lxb_dom_element_t *container, lxb_dom_node_t *first,
+                                                   lxb_dom_node_t *end, CssPx used_main)
+{
+    bool any_line_box;
+    CssPx first_baseline, last_baseline, inner;
+    BlockFlowRun seq;
+    char nbuf[160];
+
+    /* §4's CHILD TEXT SEQUENCE AS core/layout/block_flow.h's HALF-OPEN RUN, built in ONE place and from the
+       two nodes the caller's own walk already holds: `after` is the sibling BEFORE the sequence (NULL where it
+       opens the container's content) and `end` is one past its last text node, which is exactly the form
+       core/layout/flex_line.c hands the same sequence to the intrinsic pass. */
+    seq.after = first->prev;
+    seq.end = end;
+    inner = line_box_content_height(container, seq, line_box_available_width_stated(used_main),
+                                    &any_line_box, &first_baseline, &last_baseline);
+
+    DCHECKF(any_line_box,
+            "%s: css-flexbox-1 §4 \"Flex Items\"' ANONYMOUS FLEX ITEM was measured and CSS 2.2 §9.4.2 "
+            "\"Inline formatting contexts\" reports that it contains NO LINE BOX. Two of this engine's own "
+            "components have then disagreed about one child text sequence: §4's classification already "
+            "answered FLEX_ITEM_CHILD_NONE for a sequence that \"contains only document white space "
+            "characters\", so a sequence that reached this measurement holds at least one character that is "
+            "not one — and CSS 2.2 §9.4.2's zero-height rule begins \"line boxes that contain NO TEXT\", "
+            "which such a line does not satisfy. So this is core/layout/flex_item.c's white-space test and "
+            "core/layout/line_box.c's existence test reading one run differently, not a page",
+            box_subject_node(first, nbuf, sizeof nbuf));
+    DCHECK(inner.px >= 0.0,
+           "css-flexbox-1 §9.4 \"Cross Size Determination\"' step 7 produced a NEGATIVE hypothetical cross "
+           "size for §4 \"Flex Items\"' anonymous flex item. CSS 2.1 §10.6.3's first bullet is a running sum "
+           "of line box heights and CSS 2.2 §10.8's step 3 makes each of those \"the distance between the "
+           "uppermost box top and the lowermost box bottom\" — which core/layout/line_box.c asserts "
+           "non-negative at its own origin — so a negative here is a derivation that lost an operand rather "
+           "than a page");
+    /* §4's box has no margin, border or padding to add, so the INNER size IS the outer one — see the banner. */
+    return inner;
 }
 
 CssPx flex_cross_size_content_based(lxb_dom_element_t *container)
@@ -229,29 +311,38 @@ CssPx flex_cross_size_content_based(lxb_dom_element_t *container)
 
         if (kind == FLEX_ITEM_CHILD_NONE) { c = next; continue; }
         switch (kind) {
-        case FLEX_ITEM_CHILD_TEXT:
+        case FLEX_ITEM_CHILD_TEXT: {
+            /* css-flexbox-1 §4 "Flex Items"' ANONYMOUS FLEX ITEM — "each child text sequence is wrapped in an
+               anonymous block container flex item" — which §9.4's step 8 needs an OUTER HYPOTHETICAL CROSS
+               SIZE for exactly like every other item on the line, and which used to crash here for two
+               reasons that were BOTH about naming rather than about measuring.
+               (1) ITS USED MAIN SIZE COULD NOT BE ASKED FOR. core/layout/flex_line.h had always COLLECTED
+               this box and flexed it — §9.7 "Resolving Flexible Lengths" gives it a target main size like any
+               other item — and only its LOOKUP was keyed on an element, so the number existed and had no
+               name. It is now named by the item's FIRST NODE, which is this text node: §4's box is anonymous,
+               so a DOM node the container's own child list holds is the only identity available that cannot
+               collide with another item's.
+               (2) ITS CROSS SIZE IS A RUN OF LINE BOXES AT THAT WIDTH, and core/layout/line_box.h derived the
+               width from the element it was GIVEN — which here is the CONTAINER, whose content box is the
+               whole line. That entry now takes §9.4.2's line box width as an argument, and this is the caller
+               that states one.
+               THE RUN IS §4's CHILD TEXT SEQUENCE AND IS DELIMITED THE SAME WAY core/layout/flex_line.c
+               DELIMITS IT, through the same entry over the same child list, because it is the same sequence —
+               and `next` IS that delimiter, so the node this walk advances to and the node the measurement
+               stops at are ONE value rather than two reads of one question. */
+            CssPx used_main;
+
             next = flex_item_text_sequence_end(container, c);
-            DFAILF("%s: this is css-flexbox-1 §4 \"Flex Items\"' ANONYMOUS FLEX ITEM — the one box a flex "
-                   "container's item list holds that is not an element — and §9.4 \"Cross Size "
-                   "Determination\"' step 8 needs its OUTER HYPOTHETICAL CROSS SIZE like every other item's. "
-                   "TWO DIFFERENT THINGS ARE MISSING AND NEITHER IS THE MEASUREMENT ITSELF. (1) ITS USED MAIN "
-                   "SIZE CANNOT BE ASKED FOR: core/layout/flex_line.h's entry is keyed on an ELEMENT item and "
-                   "asserts that item is a child of the container, and §4 makes this box unstyleable, so the "
-                   "line it is on resolves it internally and publishes it for nobody. (2) ITS CROSS SIZE IS A "
-                   "RUN OF LINE BOXES AT THAT WIDTH, and core/layout/line_box.h's `line_box_content_height` "
-                   "takes the run but derives its available width from `used_value_content_px` OF THE ELEMENT "
-                   "IT IS GIVEN — which here is the CONTAINER, so it would lay the run out at the container's "
-                   "inner main size rather than at this item's used main size, and the two are equal only "
-                   "when §9.7 \"Resolving Flexible Lengths\" happened to flex it to the full line. BUILD (1) "
-                   "FIRST: an entry on core/layout/flex_line.h that reports the whole LINE — one used main "
-                   "size per item in the order §9.3 \"Main Size Determination\"' step 5 collected them, the "
-                   "anonymous ones included — which this walk then reads instead of asking per item, and "
-                   "which also retires the N-line-resolutions-per-container cost flex_cross_size.h states. "
-                   "THEN (2): an available width parameter on the line-box height, which is the same operand "
-                   "§9.4's step 11 will need when it recalculates an item's cross size \"using the flex "
-                   "line's cross size … as the available space\"",
-                   box_subject_node(c, nbuf, sizeof nbuf));
+            /* §9.4's step 8.1 IS ASKED OF THIS BOX TOO — §8.3 "Cross-axis Alignment: the align-items and
+               align-self properties" says `align-items` sets the default "for all of the flex container's
+               items, including anonymous flex items", so the container's keyword reaches it and a baseline
+               one puts it in the first collection rather than in the maximum below. */
+            fx_require_no_baseline_alignment(container, NULL, c);
+            used_main = flex_line_used_main_size(container, c);
+            largest = css_px_max(largest,
+                                 fx_anonymous_outer_hypothetical_cross(container, c, next, used_main));
             break;
+        }
         case FLEX_ITEM_CHILD_ELEMENT: {
             lxb_dom_element_t *item = lxb_dom_interface_element(c);
 
@@ -275,7 +366,7 @@ CssPx flex_cross_size_content_based(lxb_dom_element_t *container)
                        "collapsed item's line cross size and run itself again with those items at zero main "
                        "size and out of the maximum below",
                        box_subject(item, nbuf, sizeof nbuf));
-            fx_require_no_baseline_alignment(container, item);
+            fx_require_no_baseline_alignment(container, item, c);
             largest = css_px_max(largest, fx_outer_hypothetical_cross(item));
             break;
         }

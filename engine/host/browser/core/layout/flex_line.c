@@ -32,6 +32,12 @@
    INNER one everywhere else. */
 typedef struct {
     lxb_dom_element_t *el;
+    /* THE ITEM'S OWN IDENTITY, WHICH `el` IS NOT FOR ALL OF THEM — the element's node for §4's element item,
+       and the FIRST TEXT NODE of the child text sequence for §4's anonymous one. It is a DOM node this
+       container's child list already holds and never a value this file invents, which is the whole of why an
+       anonymous item can be named at all: a text node is not an element node, and two child text sequences
+       begin at two different text nodes, so nothing here can collide with anything else on the line. */
+    lxb_dom_node_t    *first;
     CssPx  base;          /* §9.2 "Line Length Determination"'s FLEX BASE SIZE */
     CssPx  hypothetical;  /* §9.2's HYPOTHETICAL MAIN SIZE */
     CssPx  surround;      /* the item's main-axis margin + border + padding */
@@ -387,12 +393,14 @@ static size_t fl_collect(lxb_dom_element_t *container, CssPx inner_main, FlItem 
             seq.end = end;
             next = end;
             it.el = NULL;
+            it.first = c;
             if (out != NULL) fl_fill(&it, inner_main, intrinsic_inline_run_sizes(container, seq));
             break;
         }
         case FLEX_ITEM_CHILD_ELEMENT:
             next = c->next;
             it.el = lxb_dom_interface_element(c);
+            it.first = c;
             /* css-flexbox-1 §4.4 "Collapsed Items" gives this item a SECOND layout round and this component
                runs the first one only, so its answer for the container would be the round a browser discards.
                §9.4 "Cross Size Determination"' step 10 is the sentence: "If any flex items have visibility:
@@ -620,7 +628,7 @@ static void fl_resolve(FlItem *items, size_t n, CssPx inner_main)
     }
 }
 
-CssPx flex_line_used_main_size(lxb_dom_element_t *container, lxb_dom_element_t *item)
+CssPx flex_line_used_main_size(lxb_dom_element_t *container, lxb_dom_node_t *item)
 {
     FlItem *items;
     size_t n, i;
@@ -631,7 +639,7 @@ CssPx flex_line_used_main_size(lxb_dom_element_t *container, lxb_dom_element_t *
     DCHECK(container != NULL && item != NULL,
            "css-flexbox-1 §9.3 \"Main Size Determination\"'s used main size was asked for with no container "
            "or no item");
-    DCHECK(lxb_dom_interface_node(item)->parent == lxb_dom_interface_node(container),
+    DCHECK(item->parent == lxb_dom_interface_node(container),
            "css-flexbox-1 §9.7 \"Resolving Flexible Lengths\"' used main size was asked for an item that is "
            "not a child of the container it was asked about. §9.7's every sum is over \"all items on the "
            "line\", so a subject drawn from one container and a free space drawn from another is an item "
@@ -711,14 +719,18 @@ CssPx flex_line_used_main_size(lxb_dom_element_t *container, lxb_dom_element_t *
 
     out = css_px(0.0);
     for (i = 0; i < n; i++)
-        if (items[i].el == item) { out = items[i].target; found = true; break; }
+        if (items[i].first == item) { out = items[i].target; found = true; break; }
     free(items);
     DCHECKF(found,
             "%s: css-flexbox-1 §4 \"Flex Items\"' walk over this item's own flex container did not produce "
             "the item the used main size was asked for. Every caller establishes that it IS one before asking "
-            "— core/layout/used_value.c classifies the box as a flex item from its box parent's `display` — "
-            "so the two readings of one child list have disagreed, and the number this entry would otherwise "
-            "return is another item's",
-            box_subject(item, nbuf, sizeof nbuf));
+            "— core/layout/used_value.c classifies the box as a flex item from its box parent's `display`, and "
+            "core/layout/flex_cross_size.c reaches §4's anonymous item through the same "
+            "`flex_item_child_kind` walk this one runs — so the two readings of one child list have "
+            "disagreed, and the number this entry would otherwise return is another item's. THE SUBJECT IS A "
+            "NODE AND NOT AN ELEMENT for the reason §4 gives: its anonymous block container flex item is \"the "
+            "one box a flex container's item list holds that is not an element\", so a TEXT node here is the "
+            "FIRST node of a child text sequence and an ELEMENT node is an item in its own right",
+            box_subject_node(item, nbuf, sizeof nbuf));
     return out;
 }

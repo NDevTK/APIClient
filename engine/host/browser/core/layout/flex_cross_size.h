@@ -30,9 +30,21 @@
  *
  * NOTHING IS STORED, for core/layout/flex_line.h's reason: a layout is per-flow state, so a cached line cross
  * size is shared state solver/dom_cow.h does not swap and a stale one is another flow's document. The cost is
- * stated here because a reader meets it before they meet the reason — this entry asks
- * `flex_line_used_main_size` once per item and that entry resolves the whole line each time, so a container of
- * N items costs N line resolutions and this walk adds a second N on top of them.
+ * stated here because a reader meets it before they meet the reason — `flex_line_used_main_size` resolves the
+ * WHOLE line every time it is asked, and this walk reaches it ONCE PER ITEM, so a container of N items costs
+ * N line resolutions and this walk adds a second N on top of them.
+ * THE ROUTE IS DIRECT FOR ONE KIND OF ITEM AND TRANSITIVE FOR THE OTHER, WHICH IS WHAT DECIDES WHAT WOULD
+ * RETIRE THAT COST — and the sentence here used to say only "asks", which reads as one direct call and sent a
+ * next-diff clause the wrong way. For §4 "Flex Items"' ANONYMOUS item the walk asks that entry itself, with
+ * the text node naming the item. For an ELEMENT item it does not ask at all: it asks
+ * `used_value_block_level_content_px` for the item's CROSS size, whose `auto` arm is CSS 2.1 §10.6.3's line
+ * boxes, whose available width is that item's own used WIDTH — and THAT read is what routes through
+ * `uv_flex_item_main_size` into the line. So a LINE published from core/layout/flex_line.h would give this
+ * walk the anonymous item's number and would NOT retire the N resolutions, because the element items' asks
+ * are made inside a call this walk cannot hand a precomputed width to. What would retire them is the same
+ * argument one level further out — a stated main size on `used_value_block_level_content_px`, so §9.4's step
+ * 7 lays an element item out at the size §9.7 already gave it rather than re-deriving it — and that is a
+ * different diff from publishing a line.
  *
  * THE RELEASE ARM OF EVERY `DFAIL` BELOW RETURNS A NUMBER, and that is stated rather than left to be
  * discovered: with the asserts compiled out each refusal falls through into the walk beneath it, so a

@@ -3047,7 +3047,11 @@ static bool uv_flex_item_main_size(lxb_dom_element_t *el, UvBox box, bool vertic
         if (!same) return false;
     }
     if (flex_container_main_axis(container) != FLEX_MAIN_AXIS_INLINE) return false;
-    content = flex_line_used_main_size(container, el);
+    /* THE SUBJECT IS A NODE because one of a flex container's items has no element — css-flexbox-1 §4 "Flex
+       Items"' anonymous block container flex item — and that entry therefore names every item by its FIRST
+       NODE. For an element item that node IS this element, so the cast is the whole of the difference and
+       there is no second spelling of the question. */
+    content = flex_line_used_main_size(container, lxb_dom_interface_node(el));
     /* css-sizing-3 §3.3 "Box Edges for Sizing: the box-sizing property"' conversion, run HERE because this is
        the boundary that exposes a used value: §9.7 "Resolving Flexible Lengths" is stated over content boxes
        in its own words ("floor its content-box size at zero") and `used_value_px`'s contract is §3.3's box. */
