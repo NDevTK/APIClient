@@ -15,16 +15,29 @@
  *
  * IT IS THE CROSS AXIS AND NOTHING ELSE, which is §5.1 "Flex Flow Direction: the flex-direction property"'
  * dispatch rather than a narrowing — the same sentence core/layout/flex_line.h states for the main axis and
- * the mirror of it. A `row` container's cross axis is its BLOCK axis, so this answers a HEIGHT; a `column`
- * container's cross axis is its inline axis and this entry refuses it by name, because §9.2 "Line Length
- * Determination"' last step and not §9.6 is what determines that container's block size and the two share no
- * step. A caller holding a PHYSICAL axis asks core/layout/flex_item.h's `flex_container_main_axis` first.
+ * the mirror of it. WHICH PHYSICAL AXIS THAT IS, IS ASKED RATHER THAN ASSUMED: a `row` container's cross
+ * axis is its BLOCK axis and a `column` container's is its INLINE one, and
+ * `flex_container_axis_is_vertical` (core/layout/flex_item.h) composes §5.1's mapping with
+ * css-writing-modes-4 §6.4 "Abstract-to-Physical Mappings" to answer it. A caller holding a PHYSICAL axis
+ * asks that entry rather than deciding for itself.
+ * THE SENTENCE HERE USED TO SAY THIS COMPONENT REFUSED A `column` CONTAINER BY NAME, because §9.2 "Line
+ * Length Determination"' last step and not §9.6 determines that container's BLOCK size and the two share no
+ * step. Both halves of that reason stay exactly true and the CONCLUSION was wrong: §9.2 owns that
+ * container's block size because the block size is its MAIN size, and what §9.4 owes it is its INLINE size —
+ * which §9.4's steps 7 and 11 answer in the same words they answer a `row` container's height in. The
+ * refusal was this component reading `margin-top`, `padding-top` and the top border width as the cross pair
+ * unconditionally; those come from css-writing-modes-4 §7.2 "Dimensional Mapping" now, so the two entries
+ * below differ in which AXIS they accept and the difference is about their CALLERS rather than about §9.4.
  *
  * WHAT IT DOES NOT DO, AND WHY EACH IS A DIFFERENT SECTION RATHER THAN A CASE. §9.4's step 9 distributes
  * spare cross space to the lines under `align-content: stretch` and its condition is "if the flex container
  * has a DEFINITE cross size" — which is exactly what this entry is called to produce and therefore exactly
- * what it does not have, so that step is unreachable from here rather than skipped. §9.6's steps 12, 13 and
- * 15 PLACE the items, which is not a size this entry is asked for and is not built.
+ * what it does not have, so that step is unreachable from here rather than skipped. §9.6's steps 13, 14 and
+ * 16 PLACE the items and its step 15 is the one this entry answers, which is not a size distinction but a
+ * numbering one and is corrected here rather than left: the sentence read "steps 12, 13 and 15", and step 12
+ * is §9.5 "Main-Axis Alignment"' while step 15 is the very step named at the top of this header as §9.6's
+ * LAST-BUT-ONE. §9 "Flex Layout Algorithm" numbers its steps GLOBALLY — one `<ol>` runs from §9.1 "Initial
+ * Setup"' step 1 to §9.6's step 16 — so §9.6 holds steps 13 through 16 and nothing earlier.
  * §9.4's STEP 11 IS THIS COMPONENT'S SECOND ENTRY AND NOT A THIRD STEP OF THIS ONE, which is worth a line
  * because the sentence here used to say step 11 was not this file's at all and that core/layout/used_value.c
  * refused an item's used cross size at both of its arms. It does not any more: `flex_cross_size_used_item_
@@ -67,10 +80,17 @@
    lines' cross sizes" for `container`, as a CONTENT-box extent in CSS pixels on the container's CROSS axis.
    `container` must BE a flex container (css-flexbox-1 §3 "Flex Containers: the flex and inline-flex display
    values", core/layout/flex_item.h's `flex_item_display_is_flex_container` answering true for its computed
-   `display`) and its main axis must be its INLINE axis — a `row` or `row-reverse` container by §5.1 "Flex Flow
+   `display`) and its CROSS axis must be its BLOCK axis — a `row` or `row-reverse` container by §5.1 "Flex Flow
    Direction: the flex-direction property"' mapping. Both are asserted here rather than at the call, for
    core/layout/flex_line.h's reason: this component reads §5, §8 and §9's properties, whose `Applies to:` lines
    are flex containers and flex items, and reading one off any other box answers the cascade's initial keyword.
+   THE AXIS PRECONDITION IS THIS ENTRY'S AND NOT §9.4's, WHICH IS A STATEMENT ABOUT WHO ASKS: §9.6's step
+   reaches here only where a CONTENT-BASED cross size is NEEDED, and a `column` container's cross size is a
+   WIDTH whose "rules of the formatting context in which it participates" are CSS 2.1 §10.3.3 "Block-level,
+   non-replaced elements in normal flow"' constraint equation — a number that needs no content at all. So the
+   inline reading of step 8's walk would be a measurement with no consumer, and the section that a
+   SHRINK-TO-FIT `column` container really asks for is §9.9.2 "Flex Container Intrinsic Cross Sizes". The
+   refusal says so at the site.
    IT IS THE CONTENT BOX AND §9.4's ARITHMETIC IS TOO. §9.6's own sentence makes the answer the sum of the flex
    lines' cross sizes, and a flex line is inside the container's content box with nothing between them — so
    there is no border and no padding in this number, and css-sizing-3 §3.3 "Box Edges for Sizing: the
@@ -100,11 +120,16 @@ CssPx flex_cross_size_content_based(lxb_dom_element_t *container);
    the CALLER rather than a narrowing of §9.4. Step 11's other arm — "Otherwise, the used cross size is the
    item's hypothetical cross size" — is, for an item with a DECLARED cross size, its own step 7 run over that
    declaration: "performing layout as if it were an in-flow block-level box", and for a block-level box with a
-   DECLARED height that layout computes nothing — every rule CSS 2.1 §10.6.3 "Block-level, non-replaced
-   elements in normal flow when 'overflow' computes to 'visible'" states is conditioned on the property being
-   `auto` ("If 'height' is 'auto', the height depends on whether the element has any block-level children"),
-   so what is left is CSS 2.1 §10.5 "Content height: the 'height' property" making the declaration the height:
-   "This property specifies the content height of boxes." That is the
+   DECLARED size that layout computes nothing ON EITHER AXIS. In the BLOCK dimension every rule CSS 2.1
+   §10.6.3 "Block-level, non-replaced elements in normal flow when 'overflow' computes to 'visible'" states is
+   conditioned on the property being `auto` ("If 'height' is 'auto', the height depends on whether the element
+   has any block-level children"), so what is left is CSS 2.1 §10.5 "Content height: the 'height' property"
+   making the declaration the height: "This property specifies the content height of boxes." In the INLINE
+   dimension CSS 2.1 §10.3.3 "Block-level, non-replaced elements in normal flow"' equation solves for `width`
+   only where `width` is `auto` — "If 'width' is not 'auto' and 'border-left-width' + … is larger than the
+   width of the containing block, then any 'auto' values for 'margin-left' or 'margin-right' are … treated as
+   zero", the over-constrained case, which adjusts a MARGIN and not the width — so §10.2 "Content width: the
+   'width' property" makes the declaration the width. That is the
    number core/layout/used_value.c's declared arm already computes for every other box, so routing it here
    would be a second copy of css-sizing-3 §3.3 "Box Edges for Sizing: the box-sizing property"' conversion and
    of §10.2's percentage resolution. The declared arm therefore FALLS THROUGH there and this entry is not
@@ -124,9 +149,15 @@ CssPx flex_cross_size_content_based(lxb_dom_element_t *container);
    words ("Clamp each non-frozen item's target main size by its used min and max main sizes"), so §10.4 must
    not run again over the main size; §9.4's step 11 states NO clamp of its own and §8.3 hands its one to
    CSS 2.1's properties by name, so §10.7 is where it belongs.
-   `container` MUST BE `item`'s FLEX CONTAINER with the box tree agreeing, SINGLE-LINE, `horizontal-tb`, and
-   its main axis must be its INLINE axis — the same four preconditions `flex_cross_size_content_based` states,
-   asserted here for that entry's reason and because this one reaches it. */
+   `container` MUST BE `item`'s FLEX CONTAINER with the box tree agreeing, SINGLE-LINE and `horizontal-tb` —
+   three of the four preconditions `flex_cross_size_content_based` states, asserted here for that entry's
+   reason and because this one reaches it. THE FOURTH IS NOT SHARED: this entry answers WHICHEVER axis §5.1
+   makes the cross one, so a `column` container's item asked for its WIDTH is answered here and a `row`
+   container's item asked for its HEIGHT is too. `horizontal-tb` is still required, and for a reason that is
+   not the same as the removed one: it is what makes the ONE bit this component threads name both a physical
+   EDGE pair (css-writing-modes-4 §7.2 "Dimensional Mapping") and a sizing DIMENSION — step 7's block arm is
+   CSS 2.1 §10.6 "Calculating heights and margins"' and its inline arm is css-sizing-3 §5.1 "Intrinsic
+   Sizes"' pair, and in a vertical writing mode those two facts come apart. */
 CssPx flex_cross_size_used_item_cross(lxb_dom_element_t *container, lxb_dom_element_t *item);
 
 #endif

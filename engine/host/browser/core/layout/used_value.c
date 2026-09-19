@@ -2150,7 +2150,7 @@ static bool uv_limit(lxb_dom_element_t *el, UvBox box, bool vertical, bool is_ma
        evaluation here would be the second implementation css_math.h exists to prevent.
        AND css-values-4 §9.1 "Numeric Functions"'S CLAMP IS WHY IT IS NO LONGER AN ASSERT. CSS 2.1
        §10.4 and §10.7 both state the range outright — "negative values for 'min-width' and 'max-width' are
-       illegal" — and §5.1 "Range Restrictions and Range Definition Notation" makes a value outside an allowed
+       illegal" — and css-values-4 §5.1 "Range Restrictions and Range Definition Notation" makes a value outside an allowed
        range a DROPPED DECLARATION, so a negative LITERAL still cannot reach here and that half of the assert
        was right. The half that is no longer true is that nothing else can: §9.1 states the opposite rule for a
        math function — "numeric functions returning out-of-range values NEVER cause a declaration to become
@@ -2354,13 +2354,26 @@ static UvLimits uv_limits(lxb_dom_element_t *el, UvBox box, bool vertical)
  * a work queue rather than an edge case, and the per-axis clamp it stands in front of is the WRONG answer for
  * exactly the element that now reaches it.
  *
- * HTML §15.4.3 "Attributes for embedded content and images" WOULD MOVE IT OUT OF REACH AGAIN, and that is
- * worth knowing before anyone reads a green run as this being fixed: §15.4.3 maps the `width`/`height` CONTENT
- * attributes to presentational hints on the `width`/`height` PROPERTIES, which makes the antecedent's "both
- * specified as 'auto'" FALSE for every `<canvas width=… height=…>`. A bare `<canvas>` under a `max-width`
- * still reaches it, and so does an `<img>` the day a DECODER gives §15.4.2's first rule real natural
- * dimensions — which is the case that matters most, because it is what makes a narrow viewport scale a
- * photograph's height instead of leaving it at its natural one. BUILD the eleven rows. */
+ * THE SENTENCE HERE SAID HTML §15.4.3 "Attributes for embedded content and images" WOULD MOVE IT OUT OF
+ * REACH AGAIN, AND IT WAS SPEC-WRONG ABOUT ITS OWN SUBJECT. It read: §15.4.3 maps the `width`/`height`
+ * CONTENT attributes to presentational hints on the `width`/`height` PROPERTIES, which makes the antecedent's
+ * "both specified as 'auto'" FALSE for every `<canvas width=… height=…>`, so only a bare `<canvas>` under a
+ * `max-width` still reaches this. THE MECHANISM IS EXACTLY RIGHT AND `canvas` IS NOT IN IT. §15.4.3 has two
+ * paragraphs that map those attributes to the DIMENSION PROPERTIES and `canvas` is in neither: the first is
+ * "The width and height attributes on an img element's dimension attribute source map to the dimension
+ * properties 'width' and 'height' on the img element respectively", and the second is the same sentence for
+ * "embed, iframe, object, and video elements, and input elements with a type attribute in the Image Button
+ * state". `canvas` gets ONE sentence in that section and it is a different property — "The width and height
+ * attributes map to the aspect-ratio property on canvas elements" — which leaves `width` and `height`
+ * computing to `auto` whatever the attributes say. So a SIZED `<canvas width=300 height=150>` reaches this
+ * abort exactly as a bare one does, its 300x150 being HTML §4.12.5 "The canvas element"'s BITMAP and
+ * therefore a NATURAL dimension rather than a hint, and the eleven rows are owed for the whole population
+ * rather than for a corner of it.
+ * WHAT THE RETIRED SENTENCE IS RIGHT ABOUT IS `<img>`, which IS in the first paragraph — so a presentational
+ * hint really does falsify the antecedent there, and what still reaches this is an `<img>` with no dimension
+ * attributes the day a DECODER gives §15.4.2 "Images"' first rule real natural dimensions. That is the case
+ * that matters most, because it is what makes a narrow viewport scale a photograph's height instead of
+ * leaving it at its natural one. BUILD the eleven rows. */
 static void uv_require_no_ratio_table(lxb_dom_element_t *el, const UvLimits *lim)
 {
     ReplacedElement rep;
@@ -2734,12 +2747,43 @@ static CssPx uv_margin(lxb_dom_element_t *el, const char *name, const char *oppo
                                         uv_pass_size(el, *size_len, box, false));
         }
     }
+    /* A FLEX ITEM'S `auto` MARGIN IS TWO SECTIONS AND WHICH ONE IS AN AXIS QUESTION, asked through the one
+       predicate that already decides it everywhere else in this file. The sentence here used to name
+       css-flexbox-1 §9.5 "Main-Axis Alignment" for EVERY flex item whose horizontal margin computes to
+       `auto`, and that is right for a `row` container and wrong for a `column` one: §9.5's step is stated
+       over a MAIN-AXIS margin and §9.6 "Cross-Axis Alignment"' first step over a CROSS-AXIS one, so a
+       `column` container's `margin-left: auto` was being sent to the section that does not own it — the
+       same defect core/layout/flex_cross_size.c carried one axis over and the reason both are repaired in
+       one diff. The VERTICAL arm above already named both sections, which is why only this one moved.
+       THE TWO STEPS ARE NOT INTERCHANGEABLE AND THAT IS WHY THE REMEDY HAD TO SPLIT: §9.5's operand is the
+       LINE's remaining free space after §9.7 "Resolving Flexible Lengths" has flexed every item, and §9.6's
+       is the difference between ONE item's outer cross size and the cross size of its line. A reader sent to
+       the wrong one builds a number from the wrong axis. */
+    if (box == UV_BOX_ITEM && uv_flex_item_cross_axis(el, box, false))
+        DFAIL("a CROSS-AXIS `auto` margin on a FLEX ITEM, which css-flexbox-1 §9.6 \"Cross-Axis "
+              "Alignment\"' first step answers before alignment does: \"If its outer cross size (treating "
+              "those auto margins as zero) is less than the cross size of its flex line, distribute the "
+              "difference in those sizes equally to the auto margins.\" The step's own condition is \"If a "
+              "flex item has auto cross-axis margins\", which is the box in front of you. "
+              "The horizontal axis is the CROSS axis here because this box's flex container is a "
+              "`column` one (css-flexbox-1 §5.1 \"Flex Flow Direction: the flex-direction property\"), "
+              "which `uv_flex_item_cross_axis` asked rather than assumed. "
+              "IT IS THE LINE'S CROSS SIZE AND NOT §10.3.3's SLACK, and the difference is the whole reason "
+              "this is not the arm below: the line's cross size is css-flexbox-1 §9.4 \"Cross Size "
+              "Determination\"' step 8, which is a MAXIMUM over the items on the line and therefore a number "
+              "no equation over this one box can produce. core/layout/flex_cross_size.h holds that step and "
+              "states in its own words that an `auto` cross margin is what it cannot answer at step 8, "
+              "because the line's cross size is an operand of the very distribution this margin needs. BUILD "
+              "§9.6's first step there, over the line that component already resolves");
     if (box == UV_BOX_ITEM)
-        DFAIL("a horizontal `auto` margin on a FLEX or GRID ITEM, which css-flexbox-1 §9.5 "
+        DFAIL("a MAIN-AXIS `auto` margin on a FLEX or GRID ITEM, which css-flexbox-1 §9.5 "
               "\"Main-Axis Alignment\" answers before alignment does: \"If the remaining free space is "
               "positive and at least one main-axis margin on this line is auto, distribute the free space "
               "equally among these margins\". It is the container's FREE SPACE and not §10.3.3's slack — the "
               "two differ because the container has already flexed every item. "
+              "THE AXIS IS NOW ASKED AND THIS ARM IS WHAT IS LEFT: a `row` container's item, whose "
+              "horizontal axis is its MAIN axis, and a GRID item, for which css-grid-1 §11 \"Grid Layout "
+              "Algorithm\"' own auto-margin rule is the section rather than either of css-flexbox-1's. "
               "BUILD the flex layout algorithm over the container's own used content size");
     DFAIL("a HORIZONTAL `auto` margin reached the END of §10.3's per-box-type dispatch. The box types this "
           "function answers for have each returned above, and the ONE that is left — an ABSOLUTELY POSITIONED "
@@ -2785,7 +2829,7 @@ static CssPx uv_padding(lxb_dom_element_t *el, CssLength len)
     /* css-values-4 §9.1 "Numeric Functions"'s CLAMP, at §9.1's own "at USED VALUE TIME otherwise" — this is the
        first point at which the percentage has a basis, so it is the first point at which there is a number to
        range-check. CSS 2.1 §8.4 states the range in words: "unlike margin properties, values for padding
-       values cannot be negative", and §5.1 "Range Restrictions and Range Definition Notation" makes a negative
+       values cannot be negative", and css-values-4 §5.1 "Range Restrictions and Range Definition Notation" makes a negative
        LITERAL a dropped declaration — so a negative here is a math function's top-level result and §9.1 says
        outright that one "never cause[s] a declaration to become invalid". `css_px_max` and not an `if`, so the
        clamped-away operand's environment facts stay in the domain: `calc(2% - 1rem)` is a function of the
@@ -3648,8 +3692,8 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
            had been specified"), and a §17.5 that answered without knowing would get that rule wrong silently.
            THE CLAMP IS css-values-4 §9.1 "Numeric Functions"'s, at its own "at USED VALUE TIME otherwise" — a
            percentage has no number to range-check before this point. CSS 2.1 §10.2 states the range in words
-           ("negative values for 'width' are illegal") and §5.1 "Range Restrictions and Range Definition
-           Notation" makes a negative LITERAL a dropped declaration, so a negative reaching here is a math
+           ("negative values for 'width' are illegal") and css-values-4 §5.1 "Range Restrictions and
+           Range Definition Notation" makes a negative LITERAL a dropped declaration, so a negative reaching here is a math
            function's top-level result, which §9.1 says "never cause[s] a declaration to become invalid" and
            clamps instead. That is exactly `width: calc(50% - 100px)` on a narrow viewport, which is the single
            most common thing calc() is written for. `css_px_max` keeps the clamped-away operand's environment
@@ -3787,6 +3831,41 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
 
         if (rep.replaced) return uv_replaced_size(el, &rep, box, vertical);
     }
+    /* css-flexbox-1 §9.4 "Cross Size Determination"' STEP 11 — a ROUTE by §C-stack's test for its reason:
+       delete `flex_cross_size_used_item_cross` and the question still has to be asked, because a flex item's
+       cross size was never CSS 2.1 §10's to compute on either axis.
+       IT IS ASKED ONCE, ABOVE THE AXIS SPLIT, AND THAT IS THE WHOLE POINT OF ITS POSITION. It used to sit
+       inside the VERTICAL arm with a literal `true`, which was correct while step 11 answered only a `row`
+       container's item; a second copy of it in the horizontal arm would be the per-site `if` §C-stack bans —
+       the same question asked twice, with each spelling free to drift from `uv_limit`'s §4.5 "Automatic
+       Minimum Size of Flex Items" test over the identical set. `uv_flex_item_cross_axis` takes THIS PASS's
+       own `vertical` and answers for whichever axis §5.1 "Flex Flow Direction: the flex-direction property"
+       makes the cross one, which is what that section states — one mapping, not two algorithms.
+       NOTHING IT PASSES IS REACHED BEFORE IT. A flex item is never `UV_BOX_ABS` (css-position §2 takes an
+       absolutely positioned box out of flow before `uv_box_kind` looks at its parent) and never
+       `UV_BOX_TABLE`, and a REPLACED one has already left through `uv_replaced_size` above, which refuses a
+       flex or grid item by name — so moving this ahead of those arms took no box away from them.
+       IT RETURNS A CONTENT EXTENT AND THE CONVERSION IS SPELLED HERE, exactly as it is for
+       `block_flow_auto_height` below and for the same reason: §9.4's arithmetic is over content boxes and
+       `used_value_px`'s contract is css-sizing-3 §3.3 "Box Edges for Sizing: the box-sizing property"'.
+       IT DOES *NOT* RETURN EARLY FROM `uv_sized` THE WAY THE MAIN ROUTE DOES, AND THE DIFFERENCE IS THE
+       SECTION RATHER THAN AN OVERSIGHT. §9.7 "Resolving Flexible Lengths" applies §10.4's clamp itself
+       ("Clamp each non-frozen item's target main size by its used min and max main sizes"), so running
+       §10.4 again over a main size would repeat it. §9.4's step 11 states no clamp at all and §8.3
+       "Cross-axis Alignment: the align-items and align-self properties" hands its one to CSS 2.1's
+       properties BY NAME — "while still respecting the constraints imposed by
+       min-height/min-width/max-height/max-width" — so CSS 2.1 §10.4 "Minimum and maximum widths: 'min-width'
+       and 'max-width'"' and §10.7 "Minimum and maximum heights: 'min-height' and 'max-height'"' three steps
+       are that clamp and this value is a TENTATIVE used value they run over. That is also what makes a
+       percentage limit correct here: those sections re-run the whole pass with the limit substituted, so a
+       `max-height: 50%` is resolved against §10.1's basis rather than clamped as a raw number. */
+    if (uv_flex_item_cross_axis(el, box, vertical)) {
+        lxb_dom_element_t *container = uv_flex_item_container(el, box);
+        CssPx cross = flex_cross_size_used_item_cross(container, el);
+
+        if (!uv_is_border_box(el)) return cross;
+        return css_px_add(cross, uv_surround_total(uv_surround(el, vertical)));
+    }
     if (vertical) {
         /* CSS 2.1 §10.6.3's CONTENT-BASED HEIGHT — "the distance from its top content edge to … the bottom
            edge of the bottom (possibly collapsed) margin of its last in-flow child" — is core/layout/
@@ -3808,35 +3887,6 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
            the same route: CSS 2.1 §17.5.3 Table height algorithms owns both of its arms and
            `uv_pass_size` takes them together. §10.6.3's stack of block-level children is not a
            table's height under any value of the property. */
-        /* css-flexbox-1 §9.4 "Cross Size Determination"' STEP 11, for the one axis and the one container
-           shape that section answers — the CROSS twin of `uv_flex_item_main_size`'s route above, and a ROUTE
-           by §C-stack's test for its reason: delete `flex_cross_size_used_item_cross` and the question still
-           has to be asked, because a flex item's cross size was never CSS 2.1 §10.6.3's to compute.
-           IT RETURNS A CONTENT EXTENT AND THE CONVERSION IS SPELLED HERE, exactly as it is for
-           `block_flow_auto_height` four lines down and for the same reason: §9.4's arithmetic is over content
-           boxes and `used_value_px`'s contract is css-sizing-3 §3.3's.
-           IT DOES *NOT* RETURN EARLY FROM `uv_sized` THE WAY THE MAIN ROUTE DOES, AND THE DIFFERENCE IS THE
-           SECTION RATHER THAN AN OVERSIGHT. §9.7 "Resolving Flexible Lengths" applies §10.4's clamp itself
-           ("Clamp each non-frozen item's target main size by its used min and max main sizes"), so running
-           §10.4 again over a main size would repeat it. §9.4's step 11 states no clamp at all and §8.3
-           "Cross-axis Alignment: the align-items and align-self properties" hands its one to CSS 2.1's
-           properties BY NAME — "while still respecting the constraints imposed by
-           min-height/min-width/max-height/max-width" — so §10.7's three steps are that clamp and this value
-           is a TENTATIVE used value they run over. That is also what makes a percentage limit correct here:
-           §10.7 re-runs the whole pass with the limit substituted, so `max-height: 50%` is resolved against
-           §10.1's basis rather than clamped as a raw number. */
-        /* THE GUARD IS THE CROSS-AXIS PREDICATE AND NOT A BARE `is this an item of a flex container`, which
-           is what it was while §5.1's mapping sat inside the walk: this arm is the VERTICAL one, so it may
-           only run where the container's cross axis IS the vertical one, and a `column` container's vertical
-           axis is its MAIN axis, whose `auto` size §9.3 owns and §9.4 does not. Asking the one predicate is
-           what keeps this arm and `uv_limit`'s §4.5 test over the same set by construction. */
-        if (uv_flex_item_cross_axis(el, box, true)) {
-            lxb_dom_element_t *container = uv_flex_item_container(el, box);
-            CssPx cross = flex_cross_size_used_item_cross(container, el);
-
-            if (!uv_is_border_box(el)) return cross;
-            return css_px_add(cross, uv_surround_total(uv_surround(el, true)));
-        }
         if (box == UV_BOX_ITEM)
             DFAIL("a FLEX or GRID ITEM with `height: auto` that the css-flexbox-1 §9.4 \"Cross Size "
                   "Determination\"' step 11 route above DECLINED. Its cross size is its CONTAINER's "
@@ -3920,7 +3970,9 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
         uv_table_non_cell_width_fail(el, kind);
     }
     if (box == UV_BOX_ITEM)
-        DFAIL("a FLEX or GRID ITEM with `width: auto`, which `uv_sized`'s flex route declined. css-grid-1 §11 "
+        DFAIL("a FLEX or GRID ITEM with `width: auto` that the css-flexbox-1 §9.4 \"Cross Size "
+              "Determination\"' step 11 route above DECLINED. Its INLINE size is its CONTAINER's algorithm "
+              "and CSS 2.1 §10.3.3's constraint equation is not it. css-grid-1 §11 "
               "\"Grid Layout Algorithm\" sizes a grid item to its TRACK, which is itself sized from the items "
               "in it, and that is an intrinsic size rather than §10.3.3's equation. THE FLEX HALF OF THE "
               "SENTENCE THAT STOOD HERE IS RETIRED AND IS WRITTEN OUT SO IT IS NOT REBUILT: it said "
@@ -3931,25 +3983,28 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
               "read that core/layout/flex_line.c \"names each of those refusals at the site it makes them\", "
               "and that component REFUSES NOTHING ABOUT A `column` CONTAINER any more — it reads "
               "css-writing-modes-4 §7.2 \"Dimensional Mapping\"' BLOCK dimension and ANSWERS such an item's "
-              "MAIN size. The clause is written out because its own worked example survives the change and a "
-              "reader re-derives it: a `column` container's item arrives here because its INLINE size is its "
-              "CROSS size, so the main-axis route correctly DECLINES it and the section that owes the number "
-              "is §9.4's rather than §9.3's. The other arrival is a `contents` splice between the item and "
-              "its container. "
-              "§9.4's STEP 11 IS BUILT (core/layout/flex_cross_size.h) AND IS NOT WHAT IS MISSING HERE, which "
-              "is the second remedy this line has had retired and is written out for that reason. Step 11 "
-              "answers a `row` container's item on its CROSS axis, which is the BLOCK axis, and the box at "
-              "this line is being asked for its INLINE size — so reaching that component from here would need "
-              "it to accept a `column` container, which it refuses by name at its own entry. THE REMEDY THAT "
-              "STOOD HERE SAID TO BUILD css-writing-modes-4 §7.4 \"Flow-Relative Mappings\", AND THAT WAS "
-              "MIS-AIMED: §7.4 is the rule deciding WHOSE writing mode a flow-relative question is read "
-              "against, not a mapping table, and the table is §6.4 \"Abstract-to-Physical Mappings\" — "
-              "transcribed and asserted in core/css/css_logical.c since long before this line was written, "
-              "and now exported as `css_logical_axis_is_vertical`. What core/layout/flex_cross_size.c is "
-              "actually missing for this box is an INLINE-AXIS reading of §9.4's steps 7, 8 and 11: every "
-              "edge it adds is `margin-top`, `padding-top` and the top border width, which "
-              "css-writing-modes-4 §7.2 \"Dimensional Mapping\" makes the BLOCK dimension's pair, and a "
-              "`column` container's cross axis is the INLINE one. BUILD THAT, and this arm becomes a call");
+              "MAIN size. "
+              "A THIRD REMEDY HAS NOW BEEN RETIRED AND IT IS WRITTEN OUT FOR THE SAME REASON, because its "
+              "own worked example is one a reader re-derives in one step: it read that a `column` "
+              "container's item arrives here because its INLINE size is its CROSS size, that §9.4's step 11 "
+              "\"answers a `row` container's item on its CROSS axis, which is the BLOCK axis\" and refuses "
+              "a `column` container by name, and that what core/layout/flex_cross_size.c was missing was an "
+              "INLINE-AXIS reading of §9.4's steps 7, 8 and 11 because \"every edge it adds is "
+              "`margin-top`, `padding-top` and the top border width\". THE DIAGNOSIS WAS EXACTLY RIGHT AND "
+              "IS SPENT: those edges come from css-writing-modes-4 §7.2 through that component's own "
+              "`fx_cross_props` now, step 7 reads css-sizing-3 §5.1 \"Intrinsic Sizes\"' pair in the "
+              "inline dimension where css-sizing-3 §3.2's fit-content formula needs two terms rather than "
+              "one, and STEP 11 ANSWERS A `column` CONTAINER'S ITEM — so the route above takes that box and "
+              "a reader who follows the old sentence builds it a second time. Its STEP 8 half is "
+              "deliberately NOT built in the inline dimension and that component's own refusal says why: "
+              "§9.6 \"Cross-Axis Alignment\"' step asks for a content-based cross size only where the "
+              "formatting context needs one, and a block-level `column` container's width is §10.3.3's "
+              "equation. "
+              "WHAT IS LEFT REACHING THIS LINE IS TWO SECTIONS AND NEITHER IS §9.4's. A GRID item is "
+              "css-grid-1 §11's. An item whose BOX parent is not its DOM parent is css-display-3 §2.5 "
+              "\"Box Generation: the none and contents keywords\"' `contents` splice, where §9's algorithms "
+              "are stated over the CONTAINER's items and the item list this box is in is not its parent's "
+              "child list. BUILD the one the box in front of you is");
     if (box == UV_BOX_INLINE_FLEX_GRID)
         DFAIL("an INLINE-LEVEL FLEX OR GRID CONTAINER with `width: auto`. It is CSS 2.2 §9.2.2's ATOMIC "
               "INLINE-LEVEL box, so its own module sends it to the section this file already runs for an "
