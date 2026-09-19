@@ -176,6 +176,41 @@ typedef enum {
 
 BlockFlowChildKind block_flow_child_kind(lxb_dom_element_t *parent, lxb_dom_node_t *child);
 
+/* ---- CSS 2.2 §9.5 "Floats"' OWN POPULATION, ASKED BY A BOX THAT IS NOT THE FLOAT -------------------------
+   THE FIRST FLOAT, IN DOCUMENT ORDER, IN THE BLOCK FORMATTING CONTEXT `el`'s OWN CONTENTS ARE LAID OUT IN —
+   or NULL where that context holds none.
+   IT IS A QUESTION ABOUT A CONTEXT AND NOT ABOUT A CHILD LIST, WHICH IS THE WHOLE REASON IT IS A SECOND ENTRY
+   BESIDE `block_flow_child_kind`. CSS 2.2 §9.5.1 "Positioning the float: the 'float' property" ends its nine
+   rules with the sentence that fixes their scope — "References to other elements in these rules refer only to
+   other elements in the same block formatting context as the float" — and CSS 2.2 §10.6.7 "'Auto' heights for
+   block formatting context roots" says the same thing from the other end, "Only floats that participate in
+   this block formatting context are taken into account, e.g., floats inside absolutely positioned descendants
+   or other floats are not". A float is therefore NOT a fact about the container it is a child of: it reaches
+   every line box in one formatting context, however deeply nested, and a walk over one container's children
+   answers a strictly narrower question that happens to coincide where the float is a sibling.
+   WHICH CONTEXT IS `el`'s CONTENTS' AND NOT `el`'s OWN, and the two differ for exactly the boxes CSS 2.2
+   §9.4.1 "Block formatting contexts" lists: an `overflow: hidden` box's line boxes are shortened by the floats
+   INSIDE it and by none outside it, which is what "establish new block formatting contexts FOR THEIR CONTENTS"
+   means. So the search starts at `el` itself and walks up only while nothing establishes one, and it stops at
+   the root element whatever that element's `display` is — css-display-3 §2.8 "The Root Element's Principal
+   Box" states it outright, "its principal box always establishes an independent formatting context", which
+   CSS 2.2 §9.4.1's own list does not say and does not need to, since there is no box above it to belong to.
+   THE WALK DOWN SKIPS EVERY SUBTREE THAT ESTABLISHES ITS OWN CONTEXT, which is §10.6.7's own example read as
+   an algorithm rather than as an aside: a float inside an absolutely positioned descendant, inside another
+   float, inside an `inline-block` or inside a `table-cell` is in THAT box's context and not in this one.
+   IT ANSWERS AND IT NEVER REFUSES, for `block_flow_child_kind`'s reason: what a float MEANS to the caller is
+   the caller's own section — a shortened line box (§9.4.2), a clearance (§9.5.2), a height increase (§10.6.7) —
+   and a refusal written here would report THIS line for every one of them.
+   IT COSTS A WALK OF THE WHOLE CONTEXT WHEN THE ANSWER IS `NULL`, AND THE CONTRACT SAYS SO RATHER THAN THE
+   CALLERS GUESSING. A float ends the search where it is found, so a document that HAS one is answered out of
+   the first few elements; a document that has NONE is a proof of absence, and there is no shorter proof than
+   the subtree, because a float reaching these line boxes may sit anywhere in the context. There is no memo and
+   there must not be one: a remembered answer is state about a tree the cascade can change under it, and
+   core/layout holds none. A caller that asks this per unit of work asks it once per unit of work; where that
+   is a check rather than a computation, `#if APICLIENT_DEV` is what keeps a release build from paying for a
+   proof it will not read. */
+lxb_dom_element_t *block_flow_context_first_float(lxb_dom_element_t *el);
+
 /* ---- CSS 2.2 §9.2.1.1 "Anonymous block boxes"' BOX LIST, IN CONTENT ORDER --------------------------------
    A block container's box list is not a partition of its child nodes and the section says so outright: an
    inline box holding an in-flow block-level box "is broken around the block-level box …, splitting the inline

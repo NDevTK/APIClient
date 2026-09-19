@@ -129,22 +129,36 @@ static CssPx bf_run_value(BfRun r)
 
 /* ---- what a box is, for §8.3.1's two lists ---------------------------------------------------------------- */
 
-/* §9.4.1's own list of what establishes a new block formatting context — "floats, absolutely positioned
+/* CSS 2.2 §9.4.1 "Block formatting contexts"' OWN LIST, WHOLE AND ALONE — "Floats, absolutely positioned
    elements, block containers (such as inline-blocks, table-cells, and table-captions) that are not block
-   boxes, and block boxes with overflow other than visible (except when that value has been propagated to the
-   viewport)" — plus css-display §2.1's `flow-root`, which is the same box under its own name.
-   THE ROOT ELEMENT IS HERE FOR A DIFFERENT REASON AND THE CALLER ONLY EVER ASKS THE COMBINED QUESTION: it
-   establishes nothing the other entries do, but §8.3.1's first exception states outright that "margins of the
-   root element's box do not collapse", which is the same answer to the only question this predicate is asked —
-   may a child's margin run escape through this box's edge. Keeping them apart would be two predicates whose
-   callers all merge them again. */
-static bool bf_no_collapse_through_edges(lxb_dom_element_t *el)
+   boxes, and block boxes with 'overflow' other than 'visible' (except when that value has been propagated to
+   the viewport) establish new block formatting contexts for their contents" — plus css-display-3 §2.2 "Inner
+   Display Layout Models: the flow, flow-root, table, flex, grid, and ruby keywords"' `flow-root`, which is the
+   same box under its own name: that section says of it, in as many words, "it always establishes a new block
+   formatting context for its contents".
+   THE CITATION FOR `flow-root` READ `css-display §2.1` UNTIL THIS COMMIT and is corrected rather than dropped,
+   because a reader who re-derives it from the keyword's own name will reach for the OUTER display roles again:
+   §2.1 "Outer Display Roles for Flow Layout: the block, inline, and run-in keywords" does not contain the word
+   at all — `flow-root` is an INNER display type, so it is §2.2's — and the number was unlevelled besides, which
+   is the shielded form core/layout/block_flow.c's own overflow note below already warns about.
+   IT IS ITS OWN PREDICATE AND THE ROOT ELEMENT IS NOT IN IT, which is a split of a bit that used to answer two
+   questions. THE RETIRED ARGUMENT IS WRITTEN OUT RATHER THAN DELETED, BECAUSE A READER WILL RE-DERIVE IT: it
+   said the root belongs here because CSS 2.1 §8.3.1 "Collapsing margins"' first exception — "margins of the
+   root element's box do not collapse" — gives the same answer to the only question it was ever asked,
+   `may a child's margin run escape through this box's edge`, and that
+   `keeping them apart would be two predicates whose callers all merge them again`. Every
+   word of that was true of every caller there was, and all of them were §8.3.1's. It stops being true the
+   moment a caller asks WHICH BOXES SHARE ONE FORMATTING CONTEXT, because that question is answered by this
+   section's list and the root element is on §8.3.1's list for a reason this section does not give. The two
+   answers coincide at the root — a search for a context root has to stop there either way — so the split
+   repairs no number; what it repairs is which SENTENCE a reader is standing on, which is the whole of what
+   §9.5's population is decided by. RETIREMENT: this note goes when no caller of `bf_no_collapse_through_edges`
+   remains, since the fold is then one predicate again and there is nothing to re-derive. */
+static bool bf_establishes_block_formatting_context(lxb_dom_element_t *el)
 {
-    lxb_dom_node_t *n = lxb_dom_interface_node(el);
     char *d;
     bool bfc;
 
-    if (bf_is_root(n)) return true;
     if (bf_computed_is(el, "position", "absolute") || bf_computed_is(el, "position", "fixed")) return true;
     if (!bf_computed_is(el, "float", "none")) return true;
     d = bf_computed(el, "display");
@@ -183,6 +197,118 @@ static bool bf_no_collapse_through_edges(lxb_dom_element_t *el)
        error written twice. RETIREMENT: this note goes when no css-overflow citation in this tree omits its
        level, since an unlevelled number is what let a section that exists in no document stand unplaced. */
     return !scroll_container_propagates_overflow_to_viewport(el);
+}
+
+/* CSS 2.1 §8.3.1 "Collapsing margins"' OWN QUESTION — may a child's margin run escape through this box's
+   edge? — which is the list above PLUS the root element, for the reason §8.3.1 states itself and CSS 2.2
+   §9.4.1 "Block formatting contexts" does not: "margins of the root element's box do not collapse". */
+static bool bf_no_collapse_through_edges(lxb_dom_element_t *el)
+{
+    if (bf_is_root(lxb_dom_interface_node(el))) return true;
+    return bf_establishes_block_formatting_context(el);
+}
+
+/* ---- CSS 2.2 §9.5 "Floats"' POPULATION FOR ONE BOX — see block_flow.h for the contract ---------------------
+   THE BOX WHOSE CONTENTS' BLOCK FORMATTING CONTEXT `el`'s CONTENTS ARE IN. `el` ITSELF IS TESTED FIRST AND
+   THAT IS NOT AN OFF-BY-ONE: §9.4.1's list establishes a context "for their contents", so a box on it holds
+   its own contents' context and a box not on it hands them to the nearest ancestor that is.
+   THE ROOT ELEMENT ENDS THE WALK WHATEVER ITS `display` IS — css-display-3 §2.8 "The Root Element's Principal
+   Box": "its principal box always establishes an independent formatting context" — and the crash below is the
+   only other way out, because a chain that leaves the element tree without passing a root is not a box tree
+   any of §9.4.1's boxes are in. */
+static lxb_dom_element_t *bf_context_root(lxb_dom_element_t *el)
+{
+    lxb_dom_node_t *n = lxb_dom_interface_node(el);
+    char nbuf[160];
+
+    for (;;) {
+        lxb_dom_element_t *e = lxb_dom_interface_element(n);
+
+        if (bf_is_root(n) || bf_establishes_block_formatting_context(e)) return e;
+        DCHECKF(n->parent != NULL && n->parent->type == LXB_DOM_NODE_TYPE_ELEMENT,
+                "%s: CSS 2.2 §9.4.1's walk for the block formatting context this box's contents are in left "
+                "the element tree without reaching a root element, so there is no outermost context for it to "
+                "stop at. css-display-3 §2.8 \"The Root Element's Principal Box\" makes the root's own box the "
+                "one that \"always establishes an independent formatting context\", so a chain that misses it is "
+                "a box in no formatting context at all — which is a DETACHED subtree being laid out, and "
+                "core/dom/element_view.h's has-a-box predicate is the caller's step that declines one",
+                box_subject_node(n, nbuf, sizeof nbuf));
+        n = n->parent;
+    }
+}
+
+/* §9.5's FLOAT, ANYWHERE IN ONE CONTEXT'S SUBTREE, IN DOCUMENT ORDER — which a pre-order walk IS, and which
+   matters because every one of §9.5.1's nine rules that mentions another box says "earlier in the source
+   document".
+   THE THREE TESTS ARE IN THIS ORDER BECAUSE CSS 2.2 §9.7 "Relationships between 'display', 'position', and
+   'float'" IS NOT APPLIED TO THE COMPUTED `float` IN THIS ENGINE. §9.7 says an absolutely positioned box's
+   computed `float` is `none`, and core/css/css_computed_value.c applies §9.7 to `display` only — so an
+   `position: absolute; float: left` element still reads `left` here, and asking the FLOAT question first
+   would report a box §9.3.1 has already taken out of flow. Asking POSITION first makes this walk right
+   whichever way that gap is later closed, and it is not a local fix for it: this file may not restate one
+   section's rule where it could drift from the cascade's.
+   A SKIPPED SUBTREE IS SKIPPED WHOLE, never merely not-reported, which is §10.6.7's own example — "floats
+   inside absolutely positioned descendants or other floats are not [taken into account]" — and is why the
+   float test and the establishes-a-context test cannot be one `if`: a float is BOTH, and it must be answered
+   before its own contents are passed over. */
+static lxb_dom_element_t *bf_subtree_float(lxb_dom_node_t *n, bool is_context_root)
+{
+    lxb_dom_node_t *c;
+
+    if (n->type == LXB_DOM_NODE_TYPE_ELEMENT && !is_context_root) {
+        lxb_dom_element_t *e = lxb_dom_interface_element(n);
+
+        /* §9.2 "Controlling box generation": `display: none` generates no box, so there is nothing here for
+           §9.5 to float and nothing under it either. `contents` is NOT folded in — css-display-3 §2.5 "Box
+           Generation: the none and contents keywords" keeps the CHILDREN's boxes, and the loop below already
+           reaches them because this walk is over the element tree rather than over a box list. */
+        if (bf_computed_is(e, "display", "none")) return NULL;
+        if (bf_computed_is(e, "position", "absolute") || bf_computed_is(e, "position", "fixed")) return NULL;
+        if (!bf_computed_is(e, "float", "none")) return e;
+        if (bf_establishes_block_formatting_context(e)) return NULL;
+    }
+    for (c = n->first_child; c != NULL; c = c->next) {
+        lxb_dom_element_t *f = bf_subtree_float(c, false);
+
+        if (f != NULL) return f;
+    }
+    return NULL;
+}
+
+lxb_dom_element_t *block_flow_context_first_float(lxb_dom_element_t *el)
+{
+    lxb_dom_element_t *root, *f, *up;
+    lxb_dom_node_t *fp;
+    char fbuf[160], rbuf[160], ubuf[160];
+
+    DCHECK(el != NULL, "CSS 2.2 §9.5's population was asked about a formatting context with no box to name it");
+    root = bf_context_root(el);
+    f = bf_subtree_float(lxb_dom_interface_node(root), true);
+    if (f == NULL) return NULL;
+    /* ONE FACT REACHED TWO WAYS, ASSERTED AGAINST ITSELF. The walk DOWN decides membership by skipping every
+       subtree whose root is on CSS 2.2 §9.4.1 "Block formatting contexts"' list; the walk UP decides it by
+       stopping at the first ancestor on that
+       same list. They are the same list read in opposite directions, so a float this search reports must name
+       THIS context when asked from its own side — and the day one of the two rules is changed without the
+       other, that is what says so rather than a float quietly belonging to two contexts. The float's OWN box
+       establishes a context (§9.4.1's first entry), so the question is asked of its PARENT: `bf_context_root`
+       answers where a box's CONTENTS sit, and the float sits in its parent's. */
+    fp = lxb_dom_interface_node(f)->parent;
+    DCHECKF(fp != NULL && fp->type == LXB_DOM_NODE_TYPE_ELEMENT,
+            "%s: CSS 2.2 §9.5's float was found with no element parent, so there is no box whose formatting "
+            "context it participates in. The search starts at a context root and descends through element "
+            "children only, so the float it reports always has one — unless the tree changed under the walk",
+            box_subject(f, fbuf, sizeof fbuf));
+    up = bf_context_root(lxb_dom_interface_element(fp));
+    DCHECKF(up == root,
+            "%s: CSS 2.2 §9.4.1's membership was reached two ways and they disagree — the walk DOWN from %s "
+            "reported this float as belonging to that context, and the walk UP from its parent stops at %s "
+            "instead. §9.5.1's own scope sentence is what both are reading (\"References to other elements in "
+            "these rules refer only to other elements in the same block formatting context as the float\"), so "
+            "one of the two readings of §9.4.1's list has been changed without the other",
+            box_subject(f, fbuf, sizeof fbuf), box_subject(root, rbuf, sizeof rbuf),
+            box_subject(up, ubuf, sizeof ubuf));
+    return f;
 }
 
 /* CSS 2 §8.1 "Box dimensions"' TWO EDGES between a box's TOP BORDER EDGE and its TOP CONTENT EDGE. §9.4.1's

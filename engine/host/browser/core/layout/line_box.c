@@ -12,6 +12,7 @@
 #include "core/css/css_computed_value.h"
 #include "core/css/css_length.h"
 #include "core/layout/block_flow.h"
+#include "core/layout/box_subject.h"
 #include "core/layout/intrinsic_size.h"
 #include "core/layout/line_box.h"
 #include "core/layout/phrasing_break.h"
@@ -986,8 +987,72 @@ static size_t lb_fill(TextRunMeasure *m, lxb_dom_element_t *style, BlockFlowRun 
            "changed under the walk — and the boxes just collected are some prefix of a formatting context no "
            "box has");
     text_run_measure_finish(m);
+    /* CSS 2.2 §9.5 "Floats" REACHES EVERY LINE BOX IN ONE FORMATTING CONTEXT AND THE WALK ABOVE ONLY SEES
+       THE RUN. The refusal in `lb_child` is about a float among the boxes THIS run collects; §9.5 is about a
+       float anywhere in the same BLOCK formatting context — "the current and subsequent line boxes created
+       next to the float are shortened as necessary to make room for the margin box of the float" — and §9.4.2
+       "Inline formatting contexts" says the same thing about the number this fill is about to use, "floating
+       boxes may come between the containing block edge and the line box edge" so that line boxes "may vary in
+       width if available horizontal space is reduced due to floats".
+       SO THE SENTENCE BELOW WAS A GUARANTEE THIS FILE DID NOT HAVE, AND THAT IS WHY THIS CHECK IS HERE RATHER
+       THAN ANYWHERE ELSE. It read `the float half is refused at the walk above`, which is true of a float in
+       the run and false of every other float in the context — a float in a PRECEDING SIBLING's subtree, or in
+       an ancestor container, shortens these line boxes and no walk over this run can see it. What the fill
+       produced for those was not an abort but a WIDTH: the containing block's, unshortened, which is a real
+       number of the right kind for a line box that is not this wide. A plausible datum is indistinguishable
+       from a measurement, so it is the concealment rather than the symptom.
+       IT WAS NOT UNREACHABLE EITHER, WHICH IS THE PART THAT MAKES IT A DEFECT AND NOT A FUTURE ONE.
+       core/layout/block_flow.c refuses §9.4.1's STACK for a container that has a float CHILD, and that refusal
+       is what has been keeping most of this population away from here — but it is a fact about one child list,
+       so `<body><div><span style="float:left">…</span></div><div><p>text</p></div></body>` passes it at every
+       step: neither `div` has a float child, and the `p`'s line boxes are laid out beside a float that is in
+       their own block formatting context. One component's blanket refusal was load-bearing for another
+       component's correctness, and neither file said so.
+       THE REFUSAL IS BROADER THAN THE SPEC'S OWN TEST AND THAT IS A NAMED RESIDUAL, NOT AN OVERSIGHT.
+       NOT COVERED: this asks whether the context HOLDS a float, where §9.5 asks whether a line box is NEXT TO
+       one — "a line box is next to a float when there exists a vertical position that satisfies all of these
+       four conditions: (a) at or below the top of the line box, (b) at or above the bottom of the line box,
+       (c) below the top margin edge of the float, and (d) above the bottom margin edge of the float" — so the
+       property this refusal lacks is VERTICAL OVERLAP, which cannot be asked of a float that has no placed
+       margin box. NEXT DIFF: §9.5's shortening itself, which is that four-condition test plus "if a shortened
+       line box is too small to contain any content, then the line box is shifted downward (and its width
+       recomputed) until either some content fits or there are no more floats present", over the placement
+       core/layout/flow_position.c's own §9.5.1 crash names; `line_box.h`'s `LineBoxAvailableWidth` is the one
+       width this file has and §9.5 makes it PER LINE BOX, so that type is what the diff changes and a grep for
+       it is the whole of its consumer list. HOW ITS ABSENCE SHOWS: a formatting context whose only float sits
+       below all of its text refuses every line box in it, where a browser lays all of them out at the full
+       containing-block width — so the observation is this abort firing for a document in which no line box
+       and no float share a vertical position. */
+    /* THE BLOCK IS `#if APICLIENT_DEV` AND NOT A BARE `DCHECKF` BECAUSE THE SEARCH IS A SUBTREE WALK. A
+       `DCHECKF` compiles its CONDITION out of a release build but not a statement beside it, and this one
+       needs the float in a LOCAL so the message can name it — so the local would cost a walk of the whole
+       formatting context, per fill, in release, to feed an abort that is not there. core/html/close_watcher.c
+       makes the same trade for the same reason. */
+#if APICLIENT_DEV
+    {
+        lxb_dom_element_t *fl = block_flow_context_first_float(style);
+        char sbuf[160], fbuf[160];
+
+        DCHECKF(fl == NULL,
+                "%s: CSS 2.2 §9.5 \"Floats\" puts %s in the same block formatting context as the line boxes "
+                "this fill is about to measure, and §9.4.2 \"Inline formatting contexts\" makes that float an "
+                "operand of their width: \"although line boxes in the same inline formatting context generally "
+                "have the same width (that of the containing block), they may vary in width if available "
+                "horizontal space is reduced due to floats\". The width this fill would use is the containing "
+                "block's, which is the right number only where no float is next to any of these lines — and "
+                "which line boxes those are is §9.5's own four-condition test over the float's MARGIN BOX, so "
+                "the answer needs the float PLACED. BUILD §9.5's shortening: core/layout/flow_position.c "
+                "crashes for §9.5.1 \"Positioning the float: the 'float' property\"' placement, and this is "
+                "the consumer that turns that placement into a width. UNTIL THEN THE ABORT IS THE ANSWER — "
+                "the alternative is the containing block's width reported for a line box that is not that "
+                "wide, which no gate here can tell from a measurement",
+                box_subject(style, sbuf, sizeof sbuf), box_subject(fl, fbuf, sizeof fbuf));
+    }
+#endif
     /* §9.4.2: "THE WIDTH OF A LINE BOX IS DETERMINED BY A CONTAINING BLOCK and the presence of floats", and
-       the float half is refused at the walk above — so every line box here is as wide as the content box of
+       the float half is refused ABOVE — by `lb_child` for a float in this run and by the context check just
+       made for every other float that reaches these line boxes, which is the pair that makes the next clause
+       true rather than intended — so every line box here is as wide as the content box of
        the block container that establishes this formatting context, which for the boxes that have an element
        naming them is `style`. WHICH BOXES THOSE ARE IS NOW `avail`'s QUESTION AND NOT THIS FILE'S, because
        `style` was answering two of them: css-flexbox-1 §4 "Flex Items"' anonymous block container flex item
