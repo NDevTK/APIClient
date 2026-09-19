@@ -812,8 +812,16 @@ FlowPoint flow_border_box_origin(lxb_dom_element_t *el)
               "the containing block §10.1's third and fourth cases give it, and §10.6.4 solves the vertical "
               "pair the same way §10.3.7 solves the horizontal one. Both sections fall back on the STATIC "
               "POSITION — 'where the box would have been in normal flow' — for their `auto` cases, so this is "
-              "not an alternative to §9.4.1's flow layout but a consumer of it. BUILD §9.4.1's vertical "
-              "stacking first, then §10.3.7 and §10.6.4 over it",
+              "not an alternative to §9.4.1's flow layout but a consumer of it. "
+              "THE RECTANGLE IS NO LONGER WHAT IS MISSING AND THIS LINE USED TO SAY THE BLOCKER WAS §9.4.1's "
+              "VERTICAL STACKING: that stacking is BUILT (core/layout/block_flow.h's `block_flow_child_top`, "
+              "which the last arm of this very function calls), and core/layout/used_value.h now answers "
+              "§10.1's third and fourth cases — `used_value_containing_block_width` composes the positioned "
+              "ancestor's padding box and the viewport's rectangle from the same walk. WHAT IS LEFT IS THE "
+              "STATIC POSITION AND THE TWO EQUATIONS OVER IT, in that order: §10.6.3 is exactly what keeps an "
+              "out-of-flow child OUT of core/layout/block_flow.c's walk, so EXTEND that walk to report a "
+              "skipped child's would-be position, then BUILD §10.3.7 and §10.6.4, then place the box here "
+              "from the offsets they solve",
               box_subject(el, nbuf, sizeof nbuf), box_subject_computed(el, "position", vbuf, sizeof vbuf));
     if (!fp_computed_is(el, "float", "none"))
         DFAILF("%s, computed `float` `%s`: "

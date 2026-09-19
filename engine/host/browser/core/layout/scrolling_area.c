@@ -149,12 +149,39 @@ static bool sa_excluded(lxb_dom_element_t *el, lxb_dom_element_t *descendant)
        frame list already gives, while the descendant is one of however many boxes the walk reached. The
        element is named BESIDE it because the claim being contradicted is that the second is strictly below the
        first, and both halves of that are needed to check it. */
-    DCHECKF(cb != NULL,
-           "descendant %s, of %s: "
-           "§10.1's FIRST case — the initial containing block — was answered for a strict DESCENDANT of an "
-           "element, and that case is the ROOT ELEMENT's alone. A descendant of any element has a root element "
-           "above it, so this is the root test and the tree's own shape having come apart",
-           box_subject(descendant, dbuf, sizeof dbuf), box_subject(el, ebuf, sizeof ebuf));
+    /* §10.1's INITIAL CONTAINING BLOCK, WHICH IS TWO SENTENCES AND NOT ONE, AND THIS ASSERT USED TO KNOW ONLY
+       THE FIRST. It said the initial containing block "is the ROOT ELEMENT's alone", which was true while
+       §10.1's fourth case crashed: `used_value_containing_block` answered NULL for exactly one element, so a
+       strict descendant reaching it meant the root test and the tree had come apart. §10.1's fourth case ends
+       "If there is no such ancestor, the containing block is the initial containing block", so an absolutely
+       positioned descendant at any depth with nothing positioned above it now answers the same NULL — which
+       is the commonest shape this clause exists for rather than a corner of it.
+       WHAT §2 DOES NOT SETTLE IS WHETHER IT IS EXCLUDED, and picking would be a silent wrong `scrollWidth`
+       either way, which is why this is a crash and not a default. §2's clause is written over an ELEMENT —
+       "excluding boxes that have an ancestor of the element as their containing block" — and the initial
+       containing block is no element's box, so the literal reading does NOT exclude it. §2's own TABLE reads
+       the other way: its VIEWPORT column is built out of "the initial containing block" directly, so a box
+       laid out in that rectangle is already accounted for in the viewport's scrolling area, and it is
+       anchored at the canvas origin and therefore does not move when THIS element scrolls, which is the
+       property the exclusion selects for. DECIDE IT AGAINST A REAL USER AGENT — `scrollWidth` on an
+       `overflow: scroll` element holding a `position: absolute` child with no positioned ancestor, placed
+       beyond the element's right padding edge — and write the answer here as §2's clause read over the
+       RECTANGLE rather than over an element name, because that is the reading the table forces if the
+       measurement agrees with it. THE RELEASE ARM IS THE LITERAL READING, and it is stated because it is a
+       shipped path rather than a consequence: with `DFAILF` compiled out the walk below compares this
+       element's ancestors against a NULL node and never matches, so the box is INCLUDED — §2's clause taken
+       at its word, which is the arm to keep if the measurement agrees with the words rather than the table. */
+    if (cb == NULL)
+        DFAILF("descendant %s, of %s: "
+              "§10.1's INITIAL CONTAINING BLOCK is this descendant's containing block, and CSSOM VIEW §2's "
+              "scrolling-area clause is written over an ELEMENT — \"excluding boxes that have an ancestor of "
+              "the element as their containing block\" — which the initial containing block is not. So §2 "
+              "neither includes nor excludes this box in its own words, and BOTH answers are a number rather "
+              "than a crash: including it grows this element's scrolling area by a box that does not move "
+              "when it scrolls, and excluding it drops a real margin edge out of `scrollWidth`. See the note "
+              "above this line for the measurement that decides it and for why §2's table argues for the "
+              "second",
+              box_subject(descendant, dbuf, sizeof dbuf), box_subject(el, ebuf, sizeof ebuf));
     cbn = lxb_dom_interface_node(cb);
     /* An ANCESTOR of the element, which is strictly above it: a box whose containing block is the ELEMENT
        ITSELF is in the scrolling area, so the walk starts at the element's parent. */

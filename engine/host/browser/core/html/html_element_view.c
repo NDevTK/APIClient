@@ -134,7 +134,15 @@ static bool hev_html_local_name_is(const lxb_dom_node_t *n, const char *name)
    a stacking context and the two containing blocks, and nothing else. CSSOM VIEW §7 says it a third time for
    the two members that read no ancestor: an extent is returned "ignoring any transforms that apply to the
    element and its ancestors", so the transform never enters the number even where one applies. */
-static const char *const HEV_UNREADABLE_POSITIONING[] = { "transform", "will-change" };
+/* THE SET ITSELF IS NOT DECLARED HERE ANY MORE AND THE CITATIONS ABOVE ARE WHY IT WAS. It was a two-name
+   array in this file while this was the only component reading §2.1's Note; core/layout/used_value.c reads
+   it too now, to decide CSS 2.1 §10.1's third and fourth cases, so the Note is spelled ONCE beside §10.1's
+   four cases and both components ask the same entry for it. A second copy here would be free to gain a
+   property that one did not, after which this chain check would pass over an ancestor whose containing
+   block the layout could not read. The ONE difference the move makes to this file is that `contain` is now
+   on the list this loop walks as well as on `HEV_UNREADABLE_ALWAYS` above — §2.1's Note names it and the
+   Note is what the shared entry is — and the ALWAYS loop runs FIRST, so a declared `contain` still crashes
+   with the message written for it rather than with the positioning one. */
 
 /* AN OPERAND OF EVERY QUESTION §7 ASKS, INCLUDING THE TWO MEMBERS THAT READ NO ANCESTOR. `contain` is in §2.1's
    list too and does NOT stop there, which is what keeps it here rather than above: css-contain-2 §3.1 "Size
@@ -246,9 +254,13 @@ static void hev_require_readable_chain(JSContext *ctx, lxb_dom_node_t *n, HevCha
                        "different-effective-zoom bullet can fire. BUILD this property's `Computed value:` line "
                        "in css_computed_value.c and record its shorthands in css_shorthand.c",
                        HEV_UNREADABLE_ALWAYS[i]);
-        for (i = 0; positioning == NULL && i < sizeof HEV_UNREADABLE_POSITIONING /
-                                               sizeof HEV_UNREADABLE_POSITIONING[0]; i++)
-            if (hev_declares(el, HEV_UNREADABLE_POSITIONING[i])) positioning = HEV_UNREADABLE_POSITIONING[i];
+        {
+            size_t np;
+            const char *const *props = used_value_positioning_cb_properties(&np);
+
+            for (i = 0; positioning == NULL && i < np; i++)
+                if (hev_declares(el, props[i])) positioning = props[i];
+        }
         root = a;
     }
     if (root->parent != NULL && shadow_root_is(root->parent))

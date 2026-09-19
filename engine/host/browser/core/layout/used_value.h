@@ -196,6 +196,7 @@
 #define ENGINE_HOST_BROWSER_CORE_LAYOUT_USED_VALUE_H
 
 #include <stdbool.h>
+#include <stddef.h>
 
 #include <lexbor/dom/dom.h>
 
@@ -384,8 +385,14 @@ CssPx used_value_block_level_content_px(lxb_dom_element_t *el, bool vertical);
 CssPx used_value_default_replaced_size(bool vertical);
 
 /* CSS 2.1 §10.1's CONTAINING BLOCK as an ELEMENT — the box whose CONTENT EDGE is the rectangle every
-   percentage and every `auto` in §10.3 is stated against. NULL exactly for the ROOT ELEMENT, whose containing
-   block is §10.1's first case, the initial containing block, and is no element's box.
+   percentage and every `auto` in §10.3 is stated against. NULL exactly where §10.1's answer is the INITIAL
+   CONTAINING BLOCK, which is no element's box — its FIRST case, the root element's; and the last sentence of
+   its FOURTH case, "If there is no such ancestor, the containing block is the initial containing block",
+   which is an absolutely positioned box at any depth with nothing positioned above it. THE NULL USED TO BE
+   DOCUMENTED AS THE ROOT ELEMENT'S ALONE and that was true while the fourth case crashed: the two sentences
+   name one rectangle, and the tree is what gained the second way of reaching it. A caller that read the NULL
+   as "this element is the root" was reading a coincidence, and `core/layout/scrolling_area.c` held exactly
+   that reading in an assert.
    IT IS EXPORTED BECAUSE A RECTANGLE HAS A POSITION AS WELL AS A WIDTH. This component derives the width and
    needs nothing else of the box; core/layout/flow_position.c and core/layout/block_flow.c need the BOX — its
    origin, its top and left border and padding, and the child list §9.4.1 stacks below it — and a second walk
@@ -397,9 +404,32 @@ CssPx used_value_default_replaced_size(bool vertical);
    containing block is a box this return type cannot spell. The WALK answers it; this view REFUSES it, naming
    what a caller wanting the box still needs (the wrapper's own child box list, which is not any element's DOM
    child list). A caller that wants only the rectangle's WIDTH or its `direction` is answered by the two
-   entries below, which read the same walk and do not refuse. THE `NULL` STAYS §10.1's FIRST CASE ALONE — it
-   is never "there is no answer", which is what makes the refusal a crash rather than a third meaning for it. */
+   entries below, which read the same walk and do not refuse. THE `NULL` STAYS THE INITIAL CONTAINING BLOCK —
+   it is never "there is no answer", which is what makes the refusal a crash rather than a third meaning for
+   it.
+   §10.1's THIRD AND FOURTH CASES ARE REFUSED BY THIS VIEW AND ANSWERED BY THE TWO BELOW, because their
+   rectangles are not any box's CONTENT edge: the third is css-position-3 §2.1's layout viewport, which is no
+   element's box at all, and the fourth is "formed by the padding edge of the ancestor", which is an element's
+   box at an edge this return type cannot name. A caller adding `used_value_leading_edge_px` to what it gets
+   back — which is what both callers in core/layout do — would be inset by that ancestor's own border on
+   every side. */
 lxb_dom_element_t *used_value_containing_block(lxb_dom_element_t *el);
+
+/* css-position-3 §2.1 "Containing Blocks of Positioned Boxes"' OPEN LIST OF PROPERTIES, AS ONE FACT WITH TWO
+   READERS. §2.1's two Notes name what can make a box establish an absolute or a fixed positioning containing
+   block — "Properties that can cause a box to establish an absolute positioning containing block include
+   position, transform, will-change, contain…", and the same list minus `position` for the fixed one — and
+   every name on it but `position` is a property core/css/css_computed_value.h derives no computed value for.
+   So the list is a DETECTOR for an input neither reader can see, and `n` is its length; the entry hands back
+   the array AND its length rather than a NULL-terminated array, because a terminator every caller must
+   supply is a contract nothing checks: a scan that runs off the end is undefined behaviour an optimiser is
+   entitled to assume cannot happen, and what it emits from that assumption is a loop with no exit.
+   IT IS EXPORTED SO THE NOTE IS SPELLED ONCE. core/layout/used_value.c asks whether ONE ancestor can be
+   classified while §10.1's third and fourth cases are being answered; core/html/html_element_view.c asks
+   whether a declaration ANYWHERE ON A CSSOM VIEW §7 CHAIN makes one of that section's members unreadable.
+   Two questions, one set — and a second copy of the set is free to gain a property the first did not, after
+   which the component that fell behind goes on answering from a chain it can no longer read. */
+const char *const *used_value_positioning_cb_properties(size_t *n);
 
 /* THE SAME RECTANGLE'S WIDTH — §10.1's first case out of the viewport, its second out of the CONTENT EDGE of
    the box above, and §17.4's table wrapper box out of §17.4's own sentence ("The width of the table wrapper
