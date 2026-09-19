@@ -202,6 +202,19 @@ int stacking_level(lxb_dom_element_t *el)
     int level;
 
     DCHECK(el != NULL, "CSS 2.1 §9.9.1's stack level was asked about no element");
+    /* THE BOX QUESTION RUNS BEFORE THE POSITIONED ONE, which is CSS 2.1 §9.7 "Relationships between
+       'display', 'position', and 'float'"'s own order and the order `stacking_layer_of` below runs its
+       own three tests in. A `display: none; position: absolute` element satisfies the test beneath this
+       one, so asking the two the other way round hands a stack level to a box CSS 2.1 §9.2
+       "Controlling box generation" generates none of. */
+    DCHECKF(so_generates_box(el),
+            "%s: CSS 2.1 §9.9.1's stack level was asked of an element that generates no box. The concept is "
+            "stated over one — \"Each positioned box in a given stacking context has an integer stack "
+            "level\" — and css-display-3 §2.5 \"Box Generation: the none and contents keywords\" says there "
+            "is no box here to have one: \"Elements with either of these values do not have inner or outer "
+            "display types\". A caller that reached here with such an element has classified it into a layer "
+            "a stack level orders, which is the defect to fix rather than a 0 to return",
+            box_subject(el, nbuf, sizeof nbuf));
     DCHECKF(so_is_positioned(el) || so_is_root_element(lxb_dom_interface_node(el)),
             "%s: CSS 2.1 §9.9.1's stack level was asked of a box that has none. `z-index`'s own \"Applies to:\" "
             "line is \"positioned elements\", and §9.9.1 says the same thing where it defines the concept — "
@@ -216,9 +229,18 @@ int stacking_level(lxb_dom_element_t *el)
 
 lxb_dom_element_t *stacking_context_of(lxb_dom_element_t *el)
 {
+    char nbuf[160];
     lxb_dom_element_t *p;
 
     DCHECK(el != NULL, "the stacking context of no element was asked for");
+    DCHECKF(so_generates_box(el),
+            "%s: the stacking context of an element that generates no box was asked for. CSS 2.1 §9.9.1 "
+            "states that membership over a BOX and never over an element — \"Each box belongs to one "
+            "stacking context\" — so there is no member here for any context to hold. THE WALK BELOW STILL "
+            "STEPS OVER A BOXLESS ANCESTOR and that stays, because it is the other question: such an "
+            "ancestor is a real flat-tree parent of boxes that DO exist, while an `el` with no box of its "
+            "own contributes nothing for a context to contain",
+            box_subject(el, nbuf, sizeof nbuf));
     /* THE FLAT TREE AND NOT THE CONTAINING-BLOCK CHAIN, which §9.9.1 states outright: "Stacking contexts are
        not necessarily related to containing blocks." `css_parent_element` is CSS Cascade §7.2's flattened
        element tree — the parent node when it is an element and the HOST when it is a shadow root — which is
@@ -358,6 +380,25 @@ int stacking_order_compare(JSContext *ctx, lxb_dom_element_t *a, lxb_dom_element
                         "order is DOM §4.8 \"Interface ShadowRoot\"'s shadow-including one, whose walker reads "
                         "a per-flow association kept on an element's wrapper");
     DCHECK(a != NULL && b != NULL, "CSS 2.1 §9.9.1's paint order was asked about a NULL element");
+    /* THE BOX PRECONDITION, ASKED AT THIS ENTRY AND PER OPERAND. stacking_order.h states it for this call
+       in its own words — both elements "must each generate a box" — and asserting it only where the
+       partition is finally read reports `stacking_layer_of`'s line for a caller that never named it, which
+       is the one shape a crash naming a remedy cannot be acted on in: the remedy is the CALLER's walk and
+       the address printed is a helper two frames down. It is ONE check per operand so the abort names
+       WHICH of the two, and it runs before the `a == b` arm because a caller comparing a boxless element
+       with itself has made the identical mistake and a 0 would answer it. */
+    DCHECKF(so_generates_box(a),
+            "%s: CSS 2.1 §9.9.1's paint order was asked about a FIRST element that generates no box. Every "
+            "sentence the order is built out of is stated over one — \"Each box belongs to one stacking "
+            "context\", \"Boxes with greater stack levels are always formatted in front of boxes with lower "
+            "stack levels\" — so there is nothing here to paint before or behind anything, and a number "
+            "returned for it would order a box css-display-3 §2.5 \"Box Generation: the none and contents "
+            "keywords\" says draws nothing",
+            box_subject(a, nbuf, sizeof nbuf));
+    DCHECKF(so_generates_box(b),
+            "%s: CSS 2.1 §9.9.1's paint order was asked about a SECOND element that generates no box — see "
+            "the first operand's abort above this line for why the order has no answer over one",
+            box_subject(b, nbuf, sizeof nbuf));
     if (a == b) return 0;
     DCHECKF(lxb_dom_interface_node(a)->owner_document == lxb_dom_interface_node(b)->owner_document,
             "%s: CSS 2.1 §9.9.1's paint order was asked of two elements in DIFFERENT documents. CSS 2.1 §E.2 "

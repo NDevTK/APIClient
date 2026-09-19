@@ -147,6 +147,11 @@ bool stacking_context_forms(lxb_dom_element_t *el);
 /* CSS 2.1 §9.9.1's STACK LEVEL of `el`'s box, within the stacking context it belongs to. For `z-index: auto`, §9.9.1
    itself: "The stack level of the generated box in the current stacking context is 0." For an `<integer>`:
    "This integer is the stack level of the generated box in the current stacking context."
+   ONLY A BOX HAS ONE AT ALL, and that is the PRIOR question rather than a restatement of the next one:
+   §9.9.1 says "Each positioned box in a given stacking context has an integer stack level", so an element
+   css-display-3 §2.5 "Box Generation: the none and contents keywords" generates no box for crashes BEFORE
+   the positioned test below it — CSS 2.1 §9.7 "Relationships between 'display', 'position', and 'float'"'s
+   own order, `display` first — because `display: none; position: absolute` satisfies that test.
    ONLY A POSITIONED BOX HAS ONE. `z-index`'s own "Applies to:" line is "positioned elements", so a stack level
    is not a property every box has a value of, and asking for one of a static box is asking a question §9.9.1
    does not answer — it crashes. §9.9.1's layers 2, 6 and 7 are the only ones a stack level orders, and every
@@ -155,6 +160,10 @@ int stacking_level(lxb_dom_element_t *el);
 
 /* THE STACKING CONTEXT `el`'s BOX BELONGS TO — the nearest FLAT-TREE ancestor for which
    `stacking_context_forms` is true, or NULL when `el` is itself the root element and there is none above it.
+   `el` ITSELF MUST GENERATE A BOX and crashes otherwise, which is a DIFFERENT question from the boxless
+   ANCESTOR the walk steps over two sentences down: §9.9.1 states the membership over a box — "Each box
+   belongs to one stacking context" — so an `el` with none contributes no member for a context to hold,
+   while such an ANCESTOR is a real flat-tree parent of boxes that do exist.
    THE WALK SKIPS A POSITIONED ANCESTOR THAT FORMS NO CONTEXT, which is not an optimisation but the rule:
    css-position-3 §2.2 says a relative or absolute box at `z-index: auto` is painted "as if those elements did
    generated new stacking contexts, except that their positioned descendants and any would-be child stacking
