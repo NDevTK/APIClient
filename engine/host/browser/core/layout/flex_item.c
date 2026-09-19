@@ -8,6 +8,7 @@
 
 #include "check.h"
 #include "core/css/css_computed_value.h"
+#include "core/css/css_logical.h"
 #include "core/layout/block_flow.h"
 #include "core/layout/box_subject.h"
 #include "core/layout/flex_item.h"
@@ -90,6 +91,28 @@ FlexMainAxis flex_container_main_axis(lxb_dom_element_t *el)
     }
     free(v);
     return axis;
+}
+
+bool flex_container_axis_is_vertical(lxb_dom_element_t *container, FlexAxis axis)
+{
+    FlexMainAxis main_axis;
+    CssLogicalAxis abstract;
+
+    DCHECK(axis == FLEX_AXIS_MAIN || axis == FLEX_AXIS_CROSS,
+           "css-flexbox-1 §2 \"Flex Layout Box Model\" gives a flex container TWO axes and this is neither — "
+           "\"The axis perpendicular to the main axis is called the cross axis\" is the whole of the pair");
+    /* §5.1's mapping, which also establishes that `container` is a flex container at all. */
+    main_axis = flex_container_main_axis(container);
+    /* §2's perpendicularity — "The axis perpendicular to the main axis is called the cross axis" — read over
+       css-writing-modes-4 §6.1 "Abstract Dimensions"' pair: the two abstract
+       axes ARE the perpendicular pair, so the cross axis is simply the other one of them. It is written as
+       one expression rather than a four-armed switch because the four arms would be four chances to write
+       the same fact differently, and `css_logical_init` already asserts that §6.4's dimension rows send the
+       two abstract axes to two DIFFERENT physical ones — so a cross axis derived this way cannot land on the
+       main axis's own physical dimension. */
+    abstract = (main_axis == FLEX_MAIN_AXIS_INLINE) == (axis == FLEX_AXIS_MAIN) ? CSS_LOGICAL_AXIS_INLINE
+                                                                                : CSS_LOGICAL_AXIS_BLOCK;
+    return css_logical_axis_is_vertical(container, abstract);
 }
 
 bool flex_container_is_multi_line(lxb_dom_element_t *el)

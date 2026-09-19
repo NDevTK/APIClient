@@ -1656,10 +1656,18 @@ static bool bf_flex_auto_block_size(lxb_dom_element_t *el, CssPx *out)
                "a `column` container in a vertical mode has its MAIN axis along the horizontal, so the arm "
                "that reads §9.2 \"Line Length Determination\" for it would be answering about a width. "
                "css-writing-modes-4 §3.2 \"Block Flow Direction: the writing-mode property\" is what makes "
-               "the block flow direction a property at all. BUILD css-writing-modes-4 §7.4 \"Flow-Relative "
-               "Mappings\", which is the same absent capability core/layout/flow_position.c names for a box's "
-               "PLACEMENT, and then this dispatch reads the flow-relative axes instead of assuming the "
-               "physical ones",
+               "the block flow direction a property at all. THE REMEDY THAT STOOD HERE SAID TO BUILD "
+               "css-writing-modes-4 §7.4 \"Flow-Relative Mappings\" SO THIS DISPATCH COULD READ THE "
+               "FLOW-RELATIVE AXES, AND THE CITATION WAS MIS-AIMED — §7.4 is the rule for WHOSE writing mode "
+               "a flow-relative question is read against, and the TABLE is §6.4 \"Abstract-to-Physical "
+               "Mappings\", held in core/css/css_logical.c and now exported for the axis question as "
+               "`css_logical_axis_is_vertical`, with §5.1's composition in "
+               "`flex_container_axis_is_vertical` (core/layout/flex_item.h). THE DISPATCH IS THEREFORE NO "
+               "LONGER WHAT IS MISSING. What is missing is that the two arms it dispatches to are physical "
+               "all the way down: css-writing-modes-4 §7.2 \"Dimensional Mapping\" puts CSS 2.1 §10.6's "
+               "rules on the BLOCK size and §10.3's on the INLINE size, and this file measures a HEIGHT with "
+               "§10.6's walk — which in a vertical writing mode is this box's inline size. BUILD the "
+               "dimension-parameterised reading of that walk and the dispatch above becomes a call",
                box_subject(el, nbuf, sizeof nbuf),
                box_subject_computed(el, "writing-mode", wbuf, sizeof wbuf));
         return false;

@@ -98,6 +98,62 @@ CssLogicalGroup css_logical_group_of(const char *longhand, bool *pphysical);
    asked. */
 const char *css_logical_partner_of(lxb_dom_element_t *el, const char *longhand);
 
+/* css-writing-modes-4 §6.1 "Abstract Dimensions"' TWO ABSTRACT AXES, which that section defines by name —
+   `block axis` is "The axis in the block dimension, i.e. the vertical axis in horizontal writing modes and
+   the horizontal axis in vertical writing modes", and `inline axis` is its perpendicular twin. */
+typedef enum {
+    CSS_LOGICAL_AXIS_BLOCK = 0,
+    CSS_LOGICAL_AXIS_INLINE,
+} CssLogicalAxis;
+
+/* WHICH PHYSICAL AXIS `axis` IS ON `el` — true for the vertical one — through css-writing-modes-4 §6.4
+ * "Abstract-to-Physical Mappings"' DIMENSION rows, the same table `css_logical_partner_of` reads for a
+ * property name. §6.1 names no direction in either definition and `css_logical_init` asserts the table agrees,
+ * so this reads the writing mode alone and never reaches the used direction a vertical mode cannot yet give.
+ *
+ * SEVERAL SITES IN THIS TREE NAMED §7.4 "Flow-Relative Mappings" AS A MAPPING TO BUILD, AND §7.4 IS NOT A
+ * MAPPING TABLE. The population is stated as a PROPERTY rather than a count, because a count of sites shrinks
+ * as they are repaired and its only reader is the person repairing one: it is every site whose remedy asks for
+ * §7.4 as the thing that would turn a flow-relative axis or edge into a physical one. NO GREP IS OFFERED FOR
+ * THAT SET AND THE OMISSION IS DELIBERATE — a repaired site keeps the retired remedy quoted at it, by this
+ * project's own recording rule, so any pattern matching the live form matches the retired one too and a
+ * reader running it would count repairs as work. NOT EVERY SITE NAMING §7.4 IS ONE OF
+ * THEM, and the distinction is the whole of the correction rather than a caveat on it:
+ * core/layout/flow_position.c and core/layout/line_box.c ask §7.4 to RESTATE CSS 2 §9.4.1's and §9.4.2's rules
+ * over the block and inline axes and then name §6.4 separately as the table applied at the end, which is
+ * exactly what §7.4 is for and is not corrected here.
+ * IT IS WORTH STATING RATHER THAN QUIETLY BUILDING THE RIGHT THING, because the mis-aimed
+ * citation reads as complete — the section is real, its title is exactly as those sites write it, and it is
+ * about the algorithms they are stating — so a reader who fetches it finds a section that discusses their
+ * problem and concludes the coordinate is good. §7.4's own sentences are a rule about WHOSE writing mode a
+ * flow-relative question is answered against: "Flow-relative directions are calculated with respect to the
+ * writing mode of the containing block of the box and used to abstract layout rules related to the box
+ * properties (margins, borders, padding) and any properties related to positioning the box within its
+ * containing block", with "For inline-level boxes, the writing mode of the parent box is used instead", and
+ * a second paragraph giving the box's OWN writing mode for rules about its CONTENTS (`text-align`,
+ * `text-indent`, table column and row ordering). The TABLE is §6.4, and it has been in this file, transcribed
+ * cell by cell and asserted by `css_logical_init`, for as long as the sites asking for it have stood.
+ * SO WHAT THOSE SITES WERE MISSING WAS AN ENTRY AND NOT AN ALGORITHM, which is the difference between a diff
+ * that transcribes a standard's table and a diff that exports two lines.
+ *
+ * §7.4 IS STILL LOAD-BEARING AND IT IS A CONTRACT ON THE ARGUMENT, WHICH IS WHY IT IS NAMED HERE RATHER THAN
+ * DISCHARGED HERE. `el` IS THE ELEMENT WHOSE WRITING MODE GOVERNS, and §7.4 is what decides which element
+ * that is: for a box's own contents it is the box, and for a box's layout WITHIN ITS CONTAINING BLOCK it is
+ * the CONTAINING BLOCK. This entry cannot answer that for its caller without walking to a containing block,
+ * and core/layout/used_value.c already owns that walk — a second one here would be the two-copies shape whose
+ * halves are free to disagree about which box establishes a rectangle. So each caller names the element it
+ * passes and says which of §7.4's two rules chose it.
+ *
+ * WHAT IS NOT COVERED — §6.4's SIDE rows are not exported, only its DIMENSION rows. A PLACEMENT question
+ * (`which physical edge is this box's block-start margin`) needs the side half, and core/layout/block_flow.c,
+ * core/layout/flow_position.c and core/layout/line_box.c each name it. WHAT THE NEXT DIFF BUILDS: the side
+ * twin of this entry over `logical_physical_role`'s existing side arm, landed with the first placement caller
+ * that reads it, because a mapping with no reader answers nothing and cannot be wrong where anyone would see.
+ * HOW ITS ABSENCE WOULD SHOW: a layout component asked for a flow-relative edge has no entry to call, so it
+ * reads a physical property name directly and refuses any writing mode that would make the two differ — which
+ * is what every such site in this tree is observed to do at its own entry. */
+bool css_logical_axis_is_vertical(lxb_dom_element_t *el, CssLogicalAxis axis);
+
 /* The table's own invariants, asserted once per instance beside the shorthand table's. */
 void css_logical_init(void);
 

@@ -298,19 +298,44 @@ static void fx_require_supported_container(lxb_dom_element_t *container)
            "flex container or a flex item on its `Applies to:` line, so on any other box the walk below would "
            "be reading the cascade's initial keywords and reporting them as a layout");
     /* css-writing-modes-4 §3.2 "Block Flow Direction: the writing-mode property" is what makes the CROSS axis
-       of a `row` container the VERTICAL one, and it is asked FIRST and refused rather than assumed — the same
-       question core/layout/block_flow.c asks one call up and core/layout/flex_line.c asks for the main axis,
-       each naming css-writing-modes-4 §7.4 "Flow-Relative Mappings" as the one absent capability all three
-       are waiting on. It is re-asked here rather than taken on trust from the caller because this header
-       states it as this component's own precondition and every physical edge below depends on it. */
+       of a `row` container the VERTICAL one, and it is asked FIRST and refused rather than assumed. It is
+       re-asked here rather than taken on trust from the caller because this header states it as this
+       component's own precondition and every physical edge below depends on it.
+       THE CLAUSE THAT STOOD HERE NAMED css-writing-modes-4 §7.4 "Flow-Relative Mappings" AS THE ONE ABSENT
+       CAPABILITY THIS AND TWO OTHER COMPONENTS WERE WAITING ON, AND THAT CITATION WAS MIS-AIMED. §7.4 is not
+       a mapping table: it is the rule deciding WHOSE writing mode a flow-relative question is read against —
+       "Flow-relative directions are calculated with respect to the writing mode of the CONTAINING BLOCK of
+       the box" for a box's layout within it, and the box's own for rules about its contents. The TABLE is
+       §6.4 "Abstract-to-Physical Mappings", and core/css/css_logical.c has held it, transcribed cell by cell
+       and asserted by `css_logical_init`, for longer than these refusals have stood; its DIMENSION rows are
+       now exported as `css_logical_axis_is_vertical` and composed with §5.1 by
+       `flex_container_axis_is_vertical` (core/layout/flex_item.h), which core/layout/used_value.c routes on.
+       SO THE MAPPING IS NOT WHAT THIS COMPONENT IS WAITING FOR, and the two questions below are not one
+       question that a mapping would collapse. They are two and they stay two: the FIRST is that the CROSS
+       axis is the vertical one, which decides whether `margin-top` and `padding-top` are the edges this walk
+       adds; the SECOND is that the vertical axis is the BLOCK dimension, which decides whether
+       `used_value_block_level_content_px` — CSS 2.1 §10.6.3's stack of block-level children, which
+       css-writing-modes-4 §7.2 "Dimensional Mapping" names as the BLOCK dimension's rule — is the right
+       measurement at all. A `vertical-rl` `column` container satisfies the first and fails the second, so a
+       single mapping question here would admit a box whose cross size §10.6 does not compute. */
     if (!fx_computed_is(container, "writing-mode", "horizontal-tb"))
         DFAILF("%s, computed `writing-mode` `%s`: this FLEX CONTAINER's block axis is not the vertical one, "
                "so css-flexbox-1 §5.1 \"Flex Flow Direction: the flex-direction property\"' mapping does not "
                "make `margin-top`, `padding-top` and the top border width the CROSS-axis edges this walk adds "
-               "— and every operand of §9.4 \"Cross Size Determination\"' step 8 below is one of those. BUILD "
-               "css-writing-modes-4 §7.4 \"Flow-Relative Mappings\", which core/layout/block_flow.c and "
-               "core/layout/flex_line.c name as the same absent capability, and then this component reads the "
-               "flow-relative edges instead of assuming the physical ones",
+               "— and every operand of §9.4 \"Cross Size Determination\"' step 8 below is one of those. "
+               "THE REMEDY THAT STOOD HERE SAID TO BUILD css-writing-modes-4 §7.4 \"Flow-Relative "
+               "Mappings\", NAMING core/layout/block_flow.c AND core/layout/flex_line.c AS WAITING ON THE "
+               "SAME THING, AND THE CITATION WAS MIS-AIMED. §7.4 is the rule for WHOSE writing mode a "
+               "flow-relative question is read against; the TABLE is §6.4 \"Abstract-to-Physical "
+               "Mappings\", which core/css/css_logical.c holds and whose dimension rows are exported as "
+               "`css_logical_axis_is_vertical`. WHAT THIS COMPONENT NEEDS IS NOT THAT MAPPING BUT §9.4's "
+               "STEPS 7, 8 AND 11 READ IN THE OTHER DIMENSION: its measurements are "
+               "`used_value_block_level_content_px`, which is CSS 2.1 §10.6.3's stack of block-level "
+               "children and which css-writing-modes-4 §7.2 \"Dimensional Mapping\" names as the BLOCK "
+               "dimension's rule — so a container whose cross axis is the vertical one while its BLOCK "
+               "dimension is the horizontal one has a cross size §10.6 does not compute. BUILD the inline "
+               "reading (css-sizing-3 §5.1's two intrinsic sizes are what §10.3 is to §10.6), and then this "
+               "component reads whichever dimension the mapping names",
                box_subject(container, nbuf, sizeof nbuf),
                box_subject_computed(container, "writing-mode", wbuf, sizeof wbuf));
     if (flex_container_main_axis(container) != FLEX_MAIN_AXIS_INLINE)

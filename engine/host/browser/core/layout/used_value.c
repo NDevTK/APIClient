@@ -3092,11 +3092,19 @@ static CssPx uv_replaced_size(lxb_dom_element_t *el, const ReplacedElement *rep,
        where it is established.
      - THE PARENT IS ITSELF A FLEX CONTAINER, asked of its OWN computed `display` and not only of the box
        parent's, because those are two reads that a spliced tree makes different values.
-     - THE MAIN AXIS IS THE INLINE AXIS — §5.1 "Flex Flow Direction: the flex-direction property"' mapping,
-       which is what lets each caller name its axis with a `vertical` flag. It is NOT folded into either
-       caller's test, because the two callers want OPPOSITE answers from it and a bit that answered one of
-       them would silently decide the other. */
-static lxb_dom_element_t *uv_flex_item_row_container(lxb_dom_element_t *el, UvBox box)
+   THE MAIN AXIS IS NOT ONE OF THEM ANY MORE, AND THE CLAUSE THAT STOOD HERE IS REWRITTEN RATHER THAN DELETED
+   BECAUSE IT NAMED A REAL HAZARD WITH THE WRONG REMEDY. It read: "THE MAIN AXIS IS THE INLINE AXIS — §5.1
+   'Flex Flow Direction: the flex-direction property' mapping, which is what lets each caller name its axis
+   with a `vertical` flag. It is NOT folded into either caller's test, because the two callers want OPPOSITE
+   answers from it and a bit that answered one of them would silently decide the other." The hazard is exactly
+   right and the walk was the wrong place to discharge it: folding §5.1 in here made this function answer NULL
+   for a `column` container, so BOTH callers refused it and every `column` container's item died on the
+   declared-size crash below — including a `width: 100%` child, which is that container's CROSS size and which
+   §9.4 "Cross Size Determination"' step 11 answers in one sentence. What each caller needs is not a shared
+   bit but its OWN axis question, which `flex_container_axis_is_vertical` (core/layout/flex_item.h) now
+   answers by composing §5.1 with css-writing-modes-4 §6.4 "Abstract-to-Physical Mappings". Opposite answers
+   from one question is what that entry is for. */
+static lxb_dom_element_t *uv_flex_item_container(lxb_dom_element_t *el, UvBox box)
 {
     lxb_dom_node_t *parent = lxb_dom_interface_node(el)->parent;
     lxb_dom_element_t *container;
@@ -3118,16 +3126,24 @@ static lxb_dom_element_t *uv_flex_item_row_container(lxb_dom_element_t *el, UvBo
         free(own);
         if (!same) return NULL;
     }
-    if (flex_container_main_axis(container) != FLEX_MAIN_AXIS_INLINE) return NULL;
     return container;
 }
 
 /* css-flexbox-1 §9.4 "Cross Size Determination"' STEP 11 OWNS THIS BOX'S SIZE ON THIS AXIS — the CROSS twin
    of the predicate `uv_flex_item_main_size` is, over the same fact and asking the opposite question of it.
-   A `row` container's CROSS axis is its BLOCK axis by §5.1's mapping and css-writing-modes-4 §3.2 "Block Flow
-   Direction: the writing-mode property" makes a `horizontal-tb` box's block axis the vertical one — which
-   core/layout/flex_cross_size.c asserts for itself rather than taking on trust, so this reads `vertical`
-   alone and that component refuses a container whose writing mode would make it false.
+   WHICH PHYSICAL AXIS THE CROSS AXIS IS, IS ASKED RATHER THAN ASSUMED. THIS BANNER USED TO READ that a `row`
+   container's cross axis is its block axis by §5.1's mapping, that css-writing-modes-4 §3.2 "Block Flow
+   Direction: the writing-mode property" makes a `horizontal-tb` box's block axis the vertical one, that
+   core/layout/flex_cross_size.c asserts as much for itself rather than taking it on trust, and that this
+   predicate could therefore read `vertical` alone because that component refuses a container whose writing
+   mode would make it false. It is written out rather than deleted because every clause of it is true OF A
+   `row` CONTAINER and a reader re-derives it in one step. Reading `vertical` alone made this predicate
+   answer FALSE for a `column` container's item asked for its WIDTH — which is that item's cross size and
+   which step 11 answers. The question is now
+   `flex_container_axis_is_vertical(container, FLEX_AXIS_CROSS)` (core/layout/flex_item.h),
+   which is §5.1's mapping composed with css-writing-modes-4 §6.4 "Abstract-to-Physical Mappings" and is
+   asked of the CONTAINER because css-writing-modes-4 §7.4 "Flow-Relative Mappings" gives a box's layout
+   within its containing block the containing block's writing mode.
    IT IS ASKED AT THREE SITES AND IS ONE QUESTION AT ALL THREE, which is why it is a predicate and not an `if`
    at each: the `auto` arm routes to step 11, the DECLARED arm falls through to §10.6's own answer because
    step 11's other arm IS that answer, and `uv_limit` reads it to decide whether css-flexbox-1 §4.5
@@ -3135,7 +3151,9 @@ static lxb_dom_element_t *uv_flex_item_row_container(lxb_dom_element_t *el, UvBo
    spelling of the same question is a fourth chance for one of them to drift. */
 static bool uv_flex_item_cross_axis(lxb_dom_element_t *el, UvBox box, bool vertical)
 {
-    return vertical && uv_flex_item_row_container(el, box) != NULL;
+    lxb_dom_element_t *container = uv_flex_item_container(el, box);
+
+    return container != NULL && flex_container_axis_is_vertical(container, FLEX_AXIS_CROSS) == vertical;
 }
 
 /* css-flexbox-1 §9.3 "Main Size Determination"'s USED MAIN SIZE OF A FLEX ITEM, for the one axis and the one
@@ -3145,13 +3163,21 @@ static bool uv_flex_item_cross_axis(lxb_dom_element_t *el, UvBox box, bool verti
    `uv_pass_size`'s two crashes say so. What this predicate selects between is WHICH SECTION owns the number,
    which is the same thing `uv_box_kind` decides one level up and the same thing the table arms decide.
    THE THREE CONDITIONS ARE THREE DIFFERENT SECTIONS' AND EACH LEAVES THOSE REFUSALS INTACT. TWO OF THEM
-   ARE NOW ESTABLISHED BY `uv_flex_item_row_container` ABOVE AND THE REASONING STAYS HERE RATHER THAN MOVING
+   ARE NOW ESTABLISHED BY `uv_flex_item_container` ABOVE AND THE REASONING STAYS HERE RATHER THAN MOVING
    WITH THE CODE, because it is about WHICH SECTION owns the number and that is this route's question; the
    shared walk's own banner states only what it establishes.
      - A GRID item is css-grid-1 §11 "Grid Layout Algorithm"'s and shares no step with §9.
-     - A `column` container's INLINE axis is its CROSS axis by css-flexbox-1 §5.1 "Flex Flow Direction: the
-       flex-direction property"' mapping, so §9.4 "Cross Size Determination"' step 11 owns it and §9.3 does
-       not — `flex_line_used_main_size` refuses it by name for exactly that reason.
+     - AN AXIS THAT IS NOT THE MAIN ONE, which is now asked of the MAPPING and was a bare `if (vertical)
+       return false;`. That test was a `column` container's item being refused on BOTH axes, because it read
+       `vertical` as a synonym for "the cross axis" — true of a `row` container in a `horizontal-tb` writing
+       mode and of nothing else. §9.4 "Cross Size Determination"' step 11 owns whichever axis is the cross
+       one, and this route owns whichever is the main one, and
+       `flex_container_axis_is_vertical(container, FLEX_AXIS_MAIN)` is the one place that decides.
+       WHAT IT NO LONGER DECIDES IS WHETHER §9.3 CAN SERVE THE ANSWER, which is deliberate and is §C-stack's
+       rule rather than an oversight: a `column` container's MAIN axis is its BLOCK axis, every operand
+       `flex_line_used_main_size` reads is named in the inline dimension, and that component refuses the
+       shape BY NAME at its own entry. One convergence point, one refusal, and a capability test here would
+       be a second copy of it free to disagree.
      - A BOX PARENT that is not the DOM parent is css-display-3 §2.5 "Box Generation: the none and contents
        keywords"' `contents` splice, where the flex container is an ancestor and the item list this box is in
        is not its parent's child list. §9's algorithms are all stated over the CONTAINER's items, so the walk
@@ -3162,9 +3188,9 @@ static bool uv_flex_item_main_size(lxb_dom_element_t *el, UvBox box, bool vertic
     lxb_dom_element_t *container;
     CssPx content;
 
-    if (vertical) return false;
-    container = uv_flex_item_row_container(el, box);
+    container = uv_flex_item_container(el, box);
     if (container == NULL) return false;
+    if (flex_container_axis_is_vertical(container, FLEX_AXIS_MAIN) != vertical) return false;
     /* THE SUBJECT IS A NODE because one of a flex container's items has no element — css-flexbox-1 §4 "Flex
        Items"' anonymous block container flex item — and that entry therefore names every item by its FIRST
        NODE. For an element item that node IS this element, so the cast is the whole of the difference and
@@ -3173,7 +3199,13 @@ static bool uv_flex_item_main_size(lxb_dom_element_t *el, UvBox box, bool vertic
     /* css-sizing-3 §3.3 "Box Edges for Sizing: the box-sizing property"' conversion, run HERE because this is
        the boundary that exposes a used value: §9.7 "Resolving Flexible Lengths" is stated over content boxes
        in its own words ("floor its content-box size at zero") and `used_value_px`'s contract is §3.3's box. */
-    *out = uv_is_border_box(el) ? css_px_add(content, uv_surround_total(uv_surround(el, false))) : content;
+    /* THE SURROUND IS THE MAIN AXIS'S AND THE AXIS IS NOW `vertical`, which was a literal `false` while this
+       route could only ever be reached on the inline axis. css-writing-modes-4 §7.2 "Dimensional Mapping"
+       is why the two must move together — "the rules used to calculate box dimensions and positions are
+       logical", with CSS 2.1 §10.3's rules applying "to the inline size … and to the inline-start and
+       inline-end margins, padding, and border" — so a main-axis size and a main-axis surround are one
+       dimension's pair and a literal here would add the other one's edges. */
+    *out = uv_is_border_box(el) ? css_px_add(content, uv_surround_total(uv_surround(el, vertical))) : content;
     return true;
 }
 
@@ -3689,13 +3721,20 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
                    "declaration \"as if it were an in-flow block-level box\", which CSS 2.1 §10.6.2 and "
                    "§10.6.3 make the declared value itself, so that case FALLS THROUGH the test above into the "
                    "lines below and is answered here rather than elsewhere. "
-                   "WHAT IS LEFT IS THREE SECTIONS AND EACH IS A DIFFERENT ONE. A GRID item is css-grid-1 §11, "
-                   "which shares no step with §9. A flex item whose container's main axis is its BLOCK axis — "
-                   "a `column` container — is css-flexbox-1 §9.3 \"Main Size Determination\" in the BLOCK "
-                   "axis for its HEIGHT and §9.4's step 11 for its WIDTH, and core/layout/flex_line.c and "
-                   "core/layout/flex_cross_size.c each refuse that container by name at their own entry: BUILD "
-                   "css-writing-modes-4 §7.4 \"Flow-Relative Mappings\" and then those two components read "
-                   "flow-relative edges instead of physical ones. An item whose BOX parent is not its DOM "
+                   "A THIRD CASE LEFT TOO, AND ITS REMEDY WAS MIS-AIMED, WHICH IS WHY THE WHOLE CLAUSE IS "
+                   "WRITTEN OUT: it said a `column` container's item is §9.3 in the BLOCK axis for its HEIGHT "
+                   "and §9.4's step 11 for its WIDTH, that both components refuse that container by name, and "
+                   "to BUILD css-writing-modes-4 §7.4 \"Flow-Relative Mappings\" so they read flow-relative "
+                   "edges. The css-flexbox-1 half is exactly right. The css-writing-modes-4 half named a "
+                   "section that is not a mapping table at all — §7.4 is the rule for WHOSE writing mode a "
+                   "flow-relative question is answered against (\"calculated with respect to the writing mode "
+                   "of the containing block of the box\"), and the TABLE is §6.4 \"Abstract-to-Physical "
+                   "Mappings\", which core/css/css_logical.c has held, transcribed and asserted, the whole "
+                   "time. So a `column` container's item asked for its CROSS size no longer reaches this line: "
+                   "`uv_flex_item_cross_axis` asks §6.4 through `flex_container_axis_is_vertical` and a "
+                   "DECLARED cross size falls through to §10.2's own answer, whichever physical axis it is on. "
+                   "WHAT IS LEFT IS TWO SECTIONS AND EACH IS A DIFFERENT ONE. A GRID item is css-grid-1 §11, "
+                   "which shares no step with §9. An item whose BOX parent is not its DOM "
                    "parent is css-display-3 §2.5 \"Box Generation: the none and contents keywords\"' "
                    "`contents` splice, where §9's algorithms are stated over the CONTAINER's items and the "
                    "item list this box is in is not its parent's child list",
@@ -3775,15 +3814,17 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
            is a TENTATIVE used value they run over. That is also what makes a percentage limit correct here:
            §10.7 re-runs the whole pass with the limit substituted, so `max-height: 50%` is resolved against
            §10.1's basis rather than clamped as a raw number. */
-        {
-            lxb_dom_element_t *container = uv_flex_item_row_container(el, box);
+        /* THE GUARD IS THE CROSS-AXIS PREDICATE AND NOT A BARE `is this an item of a flex container`, which
+           is what it was while §5.1's mapping sat inside the walk: this arm is the VERTICAL one, so it may
+           only run where the container's cross axis IS the vertical one, and a `column` container's vertical
+           axis is its MAIN axis, whose `auto` size §9.3 owns and §9.4 does not. Asking the one predicate is
+           what keeps this arm and `uv_limit`'s §4.5 test over the same set by construction. */
+        if (uv_flex_item_cross_axis(el, box, true)) {
+            lxb_dom_element_t *container = uv_flex_item_container(el, box);
+            CssPx cross = flex_cross_size_used_item_cross(container, el);
 
-            if (container != NULL) {
-                CssPx cross = flex_cross_size_used_item_cross(container, el);
-
-                if (!uv_is_border_box(el)) return cross;
-                return css_px_add(cross, uv_surround_total(uv_surround(el, true)));
-            }
+            if (!uv_is_border_box(el)) return cross;
+            return css_px_add(cross, uv_surround_total(uv_surround(el, true)));
         }
         if (box == UV_BOX_ITEM)
             DFAIL("a FLEX or GRID ITEM with `height: auto` that the css-flexbox-1 §9.4 \"Cross Size "
@@ -3875,9 +3916,16 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
               "is the second remedy this line has had retired and is written out for that reason. Step 11 "
               "answers a `row` container's item on its CROSS axis, which is the BLOCK axis, and the box at "
               "this line is being asked for its INLINE size — so reaching that component from here would need "
-              "it to accept a `column` container, which it refuses by name at its own entry and which is "
-              "css-writing-modes-4 §7.4 \"Flow-Relative Mappings\": BUILD THAT, and then both flex "
-              "components read flow-relative edges and a `column` container stops being a shape they decline");
+              "it to accept a `column` container, which it refuses by name at its own entry. THE REMEDY THAT "
+              "STOOD HERE SAID TO BUILD css-writing-modes-4 §7.4 \"Flow-Relative Mappings\", AND THAT WAS "
+              "MIS-AIMED: §7.4 is the rule deciding WHOSE writing mode a flow-relative question is read "
+              "against, not a mapping table, and the table is §6.4 \"Abstract-to-Physical Mappings\" — "
+              "transcribed and asserted in core/css/css_logical.c since long before this line was written, "
+              "and now exported as `css_logical_axis_is_vertical`. What core/layout/flex_cross_size.c is "
+              "actually missing for this box is an INLINE-AXIS reading of §9.4's steps 7, 8 and 11: every "
+              "edge it adds is `margin-top`, `padding-top` and the top border width, which "
+              "css-writing-modes-4 §7.2 \"Dimensional Mapping\" makes the BLOCK dimension's pair, and a "
+              "`column` container's cross axis is the INLINE one. BUILD THAT, and this arm becomes a call");
     if (box == UV_BOX_INLINE_FLEX_GRID)
         DFAIL("an INLINE-LEVEL FLEX OR GRID CONTAINER with `width: auto`. It is CSS 2.2 §9.2.2's ATOMIC "
               "INLINE-LEVEL box, so its own module sends it to the section this file already runs for an "

@@ -343,12 +343,31 @@ static void fl_fill(FlItem *it, CssPx inner_main, IntrinsicInlineSizes measured)
     it->frozen = false;
 }
 
-/* css-writing-modes-4 §7.4 "Flow-Relative Mappings"' MAPPING, REQUIRED RATHER THAN PERFORMED. Every edge this
-   component reads is PHYSICAL — `margin-left`, `padding-right`, the left and right border widths — and §5.1
+/* THE INLINE DIMENSION, REQUIRED RATHER THAN MAPPED. Every edge this component reads is PHYSICAL —
+   `margin-left`, `padding-right`, the left and right border widths — and every size it reads is `width`,
+   `min-width` or `max-width`, which css-writing-modes-4 §7.2 "Dimensional Mapping" pins to the physical width
+   in every writing mode ("The height properties (height, min-height, and max-height) refer to the physical
+   height, and the width properties (width, min-width, and max-width) refer to the physical width"). §5.1
    "Flex Flow Direction: the flex-direction property" states the main axis in FLOW-RELATIVE terms, so the two
-   coincide only where the writing mode is `horizontal-tb`. A reader who finds this refusing rather than
-   mapping has found the same absent capability core/layout/block_flow.c and core/layout/flow_position.c name
-   for a box's own PLACEMENT, and building it once serves all three.
+   coincide only where the inline dimension is the horizontal one.
+   THIS BANNER NAMED css-writing-modes-4 §7.4 "Flow-Relative Mappings" AS THE ABSENT CAPABILITY AND THAT WAS
+   MIS-AIMED, which is written out rather than quietly corrected because the mis-aim is invisible: §7.4 is
+   real, its title is exactly as this file wrote it, and it is about the algorithms this file states. It is
+   not a mapping table — it is the rule deciding WHOSE writing mode a flow-relative question is read against
+   ("Flow-relative directions are calculated with respect to the writing mode of the containing block of the
+   box"). The TABLE is §6.4 "Abstract-to-Physical Mappings" and core/css/css_logical.c has held it all along;
+   its dimension rows are exported as `css_logical_axis_is_vertical` and composed with §5.1 by
+   `flex_container_axis_is_vertical` (core/layout/flex_item.h), which core/layout/used_value.c routes on.
+   SO WHAT THIS COMPONENT IS WAITING ON IS NOT A MAPPING. css-writing-modes-4 §7.2 says "the rules used to
+   calculate box dimensions and positions are logical" and then names which rules those are: "the calculation
+   rules in CSS2.1 Section 10.3 are used for the inline dimension measurements", and "the calculation rules in
+   CSS2.1 Section 10.6 are used in the block dimension". A `column` container's main axis IS the block
+   dimension, so §9.2 "Line Length Determination"'
+   step 3 would have to size its items with a BLOCK-axis automatic size where `fl_fill` passes an
+   `intrinsic_inline_sizes`, and §4.5's content-based minimum would have to be the block-axis one. BUILD THAT
+   MEASUREMENT — css-sizing-3 §3.2 sends both intrinsic keywords in the block axis to the automatic size,
+   which CSS 2.1 §10.6.3 is and which `used_value_block_level_content_px` already computes — and this
+   component becomes an axis parameter rather than a refusal.
    IT IS ASKED OF THE ITEM AS WELL AS OF THE CONTAINER, and that is not redundancy: the two are different
    elements with different cascades, and an item in a perpendicular mode is css-writing-modes-4 §7.3
    "Orthogonal Flows"' box whose own inline size lies along the CONTAINER's block axis — so summing it would
@@ -363,10 +382,15 @@ static void fl_require_horizontal_tb(lxb_dom_element_t *el, const char *what)
            "css-flexbox-1 §5.1 \"Flex Flow Direction: the flex-direction property\" mapping that made this "
            "container's MAIN axis its inline axis does not make it the axis `margin-left`, `padding-left` and "
            "the left border width lie along — and every operand of §9.7 \"Resolving Flexible Lengths\" below "
-           "is one of those. BUILD css-writing-modes-4 §7.4 \"Flow-Relative Mappings\", which is the same "
-           "absent capability core/layout/flow_position.c names for a box's PLACEMENT and "
-           "core/layout/block_flow.c names for a flex container's own auto block size, and then this "
-           "component reads the flow-relative edges instead of assuming the physical ones",
+           "is one of those. THE REMEDY THAT STOOD HERE SAID TO BUILD css-writing-modes-4 §7.4 "
+           "\"Flow-Relative Mappings\" AND THE CITATION WAS MIS-AIMED: §7.4 is the rule for WHOSE writing "
+           "mode a flow-relative question is read against, the TABLE is §6.4 \"Abstract-to-Physical "
+           "Mappings\", and core/css/css_logical.c holds it with its dimension rows exported as "
+           "`css_logical_axis_is_vertical`. WHAT IS ABSENT IS THE BLOCK-DIMENSION READING OF §9.2 \"Line "
+           "Length Determination\"' step 3 and §4.5 \"Automatic Minimum Size of Flex Items\": "
+           "css-writing-modes-4 §7.2 \"Dimensional Mapping\" puts CSS 2.1 §10.3's rules on the inline "
+           "size and §10.6's on the block size, and every measurement below is §10.3's. BUILD the block "
+           "one and this becomes an axis parameter",
            box_subject(el, nbuf, sizeof nbuf), box_subject_computed(el, "writing-mode", wbuf, sizeof wbuf),
            what);
 }
@@ -674,10 +698,17 @@ CssPx flex_line_used_main_size(lxb_dom_element_t *container, lxb_dom_node_t *ite
                "REACHES THIS BOX, and the reason is the one this refusal opens with: both of those components "
                "refuse a `column` container at their own entry, because every physical edge they add is "
                "chosen by §5.1's mapping and css-writing-modes-4 §3.2 \"Block Flow Direction: the "
-               "writing-mode property\". BUILD css-writing-modes-4 §7.4 \"Flow-Relative Mappings\", which "
-               "this component, core/layout/flex_cross_size.c and core/layout/block_flow.c each name as the "
-               "same one absent capability — and then a `column` container stops being a shape any of the "
-               "three declines",
+               "writing-mode property\". A THIRD REMEDY IS RETIRED HERE AND IS WRITTEN OUT WITH THE OTHER "
+               "TWO: it said to BUILD css-writing-modes-4 §7.4 \"Flow-Relative Mappings\", naming this "
+               "component, core/layout/flex_cross_size.c and core/layout/block_flow.c as waiting on one "
+               "absent capability. §7.4 is not a mapping table — it decides WHOSE writing mode a "
+               "flow-relative question is read against — and the table, §6.4 \"Abstract-to-Physical "
+               "Mappings\", is in core/css/css_logical.c with its dimension rows now exported. "
+               "core/layout/used_value.c routes on that mapping today, which is why a `column` container's "
+               "item asked for its DECLARED cross size no longer reaches any of these three. WHAT IS LEFT "
+               "for this component is the BLOCK-DIMENSION measurement css-writing-modes-4 §7.2 "
+               "\"Dimensional Mapping\" names — CSS 2.1 §10.6's rules where every operand below is "
+               "§10.3's — and for core/layout/flex_cross_size.c the INLINE one",
                box_subject(container, nbuf, sizeof nbuf));
     fl_require_horizontal_tb(container, "FLEX CONTAINER");
     /* §5.2 "Flex Line Wrapping: the flex-wrap property"' other arm. §9.3's step 5 has a SECOND sentence this

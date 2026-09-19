@@ -72,6 +72,35 @@ typedef enum {
 
 FlexMainAxis flex_container_main_axis(lxb_dom_element_t *el);
 
+/* THE TWO AXES OF A FLEX CONTAINER — the pair §5.1's mapping above sends onto the writing mode's two, named
+   by css-flexbox-1 §2 "Flex Layout Box Model": "The main axis of a flex container is the primary axis along
+   which flex items are laid out", and "The axis perpendicular to the main axis is called the cross axis." */
+typedef enum {
+    FLEX_AXIS_MAIN = 0,
+    FLEX_AXIS_CROSS
+} FlexAxis;
+
+/* WHICH PHYSICAL AXIS ONE OF `container`'s TWO AXES IS — true for the vertical one — by composing §5.1's
+ * FLOW-RELATIVE mapping above with css-writing-modes-4 §6.4 "Abstract-to-Physical Mappings"' dimension rows
+ * (core/css/css_logical.h). It exists because §5.1 answers an ABSTRACT axis and every layout operand in this
+ * engine is named physically, so the two must be joined somewhere; joining them at each call site is the
+ * per-site `if` that drifts, and joining them here is one question with one answer.
+ *
+ * THE WRITING MODE READ IS `container`'s, AND css-writing-modes-4 §7.4 "Flow-Relative Mappings" IS WHY. §7.4
+ * gives a box's layout within its containing block the CONTAINING BLOCK's writing mode, and css-flexbox-1 §4
+ * "Flex Items" makes the flex container the containing block of its items — so an ITEM's main and cross axes
+ * are read off the CONTAINER, which is also what §5.1's own "the current writing mode" means where it is
+ * stated over the container. The two readings agree here and they do not agree everywhere: an ITEM in a
+ * perpendicular writing mode is css-writing-modes-4 §7.3 "Orthogonal Flows"' box, whose OWN inline axis lies
+ * along the container's block axis, and core/layout/flex_intrinsic_size.c refuses exactly that shape. So a
+ * caller must not pass an item here expecting its container's answer, and must not read this answer as a
+ * statement about the item's own axes.
+ *
+ * IT ASSERTS `container` IS A FLEX CONTAINER, through `flex_container_main_axis` — §5.1's `Applies to:` line
+ * is flex containers, so on any other box the keyword read would be the cascade's initial `row` standing for
+ * an answer that box has no question for. */
+bool flex_container_axis_is_vertical(lxb_dom_element_t *container, FlexAxis axis);
+
 /* §5.2's TWO ARMS, which §6 "Flex Lines" states in the vocabulary every consumer uses: "A single-line flex
    container (i.e. one with flex-wrap: nowrap) lays out all of its children in a single line, even if that
    would cause its contents to overflow", against a multi-line one, "one with flex-wrap: wrap or flex-wrap:

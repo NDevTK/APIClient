@@ -317,6 +317,31 @@ static LgRole logical_abstract_role(lxb_dom_element_t *el, LgRole physical)
     return LG_BLOCK_START;
 }
 
+bool css_logical_axis_is_vertical(lxb_dom_element_t *el, CssLogicalAxis axis)
+{
+    LgRole physical;
+
+    DCHECK(el != NULL,
+           "css-writing-modes-4 §6.4 \"Abstract-to-Physical Mappings\"' DIMENSION rows were asked with no "
+           "element. The element is not optional and is not a convenience: §6.1 \"Abstract Dimensions\" "
+           "defines the block axis as \"the vertical axis in horizontal writing modes and the horizontal axis "
+           "in vertical writing modes\", so an abstract axis names no physical one until a writing mode is in "
+           "hand, and css-writing-modes-4 §7.4 \"Flow-Relative Mappings\" is what decides WHOSE");
+    DCHECK(axis == CSS_LOGICAL_AXIS_BLOCK || axis == CSS_LOGICAL_AXIS_INLINE,
+           "css-writing-modes-4 §6.1 \"Abstract Dimensions\" defines TWO abstract axes and this is neither — "
+           "the block axis and the inline axis are the whole of that section's list, so a third value is a "
+           "caller passing something that is not a `CssLogicalAxis`");
+    physical = logical_physical_role(el, axis == CSS_LOGICAL_AXIS_BLOCK ? LG_BLOCK_DIM : LG_INLINE_DIM);
+    /* `logical_physical_role`'s dimension arm reads `LG_DIM`, whose every cell `css_logical_init` has already
+       checked is one of the two physical dimensions and whose two entries per column it has checked DIFFER —
+       §6.1's two measurements are perpendicular, so this is that pair of invariants re-read at the boundary
+       that exposes them rather than a third opinion about the table. */
+    DCHECK(physical == LG_VERTICAL || physical == LG_HORIZONTAL,
+           "a cell of css-writing-modes-4 §6.4 \"Abstract-to-Physical Mappings\"' dimension rows answered a "
+           "role that is neither physical dimension, which `css_logical_init` asserts cannot be in the table");
+    return physical == LG_VERTICAL;
+}
+
 CssLogicalGroup css_logical_group_of(const char *longhand, bool *pphysical)
 {
     int at;
