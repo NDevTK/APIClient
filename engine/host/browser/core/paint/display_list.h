@@ -170,12 +170,18 @@
  * 2 block arm is three marks in a fixed sequence — "background color of element", "background image of
  * element", "border of element" — of which this vocabulary has the first and the LAST and not the middle
  * one; its step 7.2.1 sub-list reaches "the text", which HAS a kind now, and the three decoration lines over
- * and under it, which do not; and its step 7.1 reaches "the replaced content, atomically", which is a SURFACE
- * rather than a mark.
- * WHAT THE NEXT DIFF BUILDS: the two remaining items' PRODUCERS. The image MARK now exists and so does the
- * operand it wanted — an `<image>` that has become PIXELS — but only ONE of §E.2's four image items produces
- * one: step 7.2.1's "For inline-level replaced elements: the replaced content, atomically", whose pixels
- * arrive because HTML §4.8.4.3.5 "Updating the image data" already fetched them. The other three are a
+ * and under it, which do not.
+ * THIS CLAUSE USED TO END BY NAMING §E.2's step 7.1 — "the replaced content, atomically" — as a SURFACE
+ * rather than a mark. It is this kind for the elements whose contents are PIXELS: core/paint/box_paint.c's
+ * `bp_replaced_content` is ONE producer under both of §E.2's two replaced-content items, so step 7.1 and step
+ * 7.2.1's item 4 third arm append the same mark and the word this vocabulary was said to lack is
+ * `DISPLAY_MARK_IMAGE`. THE SURFACE THAT REMAINS IS ONE REPLACED ELEMENT RATHER THAN A STEP: an `iframe`'s
+ * replaced content is its child navigable's own rendering, which is a SECOND document's display list and not
+ * a bitmap, and that is the only thing in either item this vocabulary still has no word for.
+ * WHAT THE NEXT DIFF BUILDS: the remaining items' PRODUCERS. The image MARK now exists and so does the
+ * operand it wanted — an `<image>` that has become PIXELS — but only §E.2's REPLACED-CONTENT items produce
+ * one, and they do it because HTML §4.8.4.3.5 "Updating the image data" already fetched an `img`'s bytes or
+ * because HTML §4.12.5 "The canvas element" already holds a `canvas`'s own bitmap. The rest are a
  * `background-image`, a `list-style-image` and step 1's root-element background image, and every one of them
  * is blocked on the SAME missing step rather than on this vocabulary: this engine's `<image>` road ends at a
  * validity test — core/css/css_image.h answers whether a component value matches css-images-3 §2 "Image
@@ -183,7 +189,7 @@
  * is never fetched at all, and the diff that lands those three is the one that gives a computed `<image>` a
  * fetch. The DECORATION LINES are a second and unrelated gap and want a mark this vocabulary still has no
  * word for.
- * HOW ITS ABSENCE WOULD SHOW: a painted document has its text and its `img` elements but no CSS pictures —
+ * HOW ITS ABSENCE WOULD SHOW: a painted document has its text and its replaced content but no CSS pictures —
  * every background image and every `list-style-image` missing, with the area CSS 2.1 §E.2 puts each one in
  * drawn in whatever colour sits under it, and no underline or strikethrough on any text that declares one.
  * RETIREMENT: this record loses a clause as each kind lands, and goes when every mark CSS 2.1 §E.2's

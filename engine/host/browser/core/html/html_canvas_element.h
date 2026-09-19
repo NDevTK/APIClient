@@ -80,8 +80,12 @@ typedef struct {
     bool     origin_clean;
 } CanvasBitmap;
 
-/* Resolve `canvas`'s bitmap. False when the element has none — which is every canvas in context mode none, and
-   is a STATE rather than a failure. Never throws. */
+/* Resolve `canvas`'s bitmap. False when the element has none — which is every canvas in context mode none and
+   every canvas no flow has reached, and is a STATE rather than a failure. Never throws.
+   IT READS THE ELEMENT'S RECORD AND NEVER MINTS ONE, which callers may rely on: core/paint/box_paint.c asks
+   this entry while PAINTING, for HTML §15.4.1 "Embedded content"'s "the element's bitmap, if any", and a
+   minting read would make a painter write to the flow's heap once per canvas it looked at. A canvas with no
+   record has no bitmap, which is the same answer minting one would have produced. */
 bool canvas_bitmap_get(JSContext *ctx, JSValueConst canvas, CanvasBitmap *out);
 
 /* §4.12.5.1's "set bitmap dimensions to width and height", steps 2 to 5 — step 1 is *reset the rendering context

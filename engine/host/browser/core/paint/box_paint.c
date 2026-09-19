@@ -15,11 +15,14 @@
 #include "core/css/css_length.h"
 #include "core/dom/document.h"       /* document_active_realm_of — CSS 2.1 §10.1's initial containing block is
                                         the ELEMENT's document's, never the running realm's */
+#include "core/dom/element.h"        /* element_wrap — HTML §4.12.5's bitmap is a JS value on the element's own
+                                        JS object, so a canvas's pixels are reached through its wrapper */
 #include "core/dom/element_view.h"
 #include "core/frame/viewport.h"
-#include "core/html/html_image.h"    /* html_image_decoded_rgba — CSS 2.1 §E.2 step 7.2.1 item 4's
-                                        third arm, "the replaced content", for the one replaced element that
-                                        fetches its own */
+#include "core/html/html_canvas_element.h" /* canvas_bitmap_get — HTML §15.4.1's "the contents of such
+                                              elements are the element's bitmap, if any" */
+#include "core/html/html_image.h"    /* html_image_decoded_rgba — CSS 2.1 §E.2's "the replaced content", for
+                                        the one replaced element that fetches its own */
 #include "core/layout/block_flow.h"  /* CSS 2.2 §9.2.1.1's TWO shapes of one inline formatting context */
 #include "core/layout/line_box.h"    /* line_box_glyphs — CSS 2.1 §E.2 step 7.2.1's "the text", placed */
 #include "core/layout/replaced_element.h" /* the `replaced` bit that separates item 4's THIRD arm from
@@ -383,23 +386,8 @@ static void bp_content_box_origin(lxb_dom_element_t *el, CssPx *x, CssPx *y)
     *y = css_px_add(box[1], css_px_add(width[0], used_value_px(el, "padding-top")));
 }
 
-/* CSS 2.1 §E.2 "Painting order"'s STEP 7.2.1, ITEM 4, THIRD ARM — "For inline-level replaced elements: the
- * replaced content, atomically".
- *
- * WHICH OF THE TWO "replaced content, atomically" ITEMS THIS IS, because §E.2 has two and they are different
- * steps. The other is STEP 7.1, "If the element is a block-level replaced element, then: the replaced content,
- * atomically", which core/paint/paint_order.h offers as `PAINT_STEP_REPLACED_CONTENT` and which the switch in
- * `bp_step_marks` still answers with no ink. THIS one is inside step 7.2.1's own enumeration, reached for a
- * box on a LINE, and it is the one a default `img` takes: HTML §4.8.1 "Embedded content" makes `img` a
- * replaced element and the UA sheet leaves it `display: inline`, so it is INLINE-LEVEL and never block-level.
- * Building the block-level item on top of this one is a `used_value_content_px` and a rectangle away and is
- * deliberately not done here: it is offered through a different step, it is reached for a different set of
- * boxes, and a producer written at both at once would have one failure with two possible causes.
- *
- * "ATOMICALLY" IS DISCHARGED BY THE MARK BEING ONE MARK. §E.2 gives the replaced content as a single item of
- * its sub-list and core/paint/paint_order.h's own paragraph reads that as making the box a UNIT; a
- * `DISPLAY_MARK_IMAGE` is one mark carrying one rectangle and one bitmap, so there is no interior for another
- * step's ink to land inside and nothing here has to arrange that.
+/* ONE BITMAP, COMPOSITED INTO `el`'s CONTENT BOX — the single place CSS 2.1 §E.2 "Painting order"'s replaced
+ * content becomes ink, whatever kind of element produced the pixels.
  *
  * THE RECTANGLE IS THE CONTENT BOX, and it is composed from the two derivations that already exist rather than
  * from a third: `bp_content_box_origin` is CSS 2 §8.1 "Box dimensions"' nesting read forward, which this file
@@ -409,26 +397,39 @@ static void bp_content_box_origin(lxb_dom_element_t *el, CssPx *x, CssPx *y)
  * "Object-Sizing Terminology"' natural dimensions are the SOURCE's, and a `width` attribute or a `width`
  * declaration is exactly what makes the two differ.
  *
- * A REFUSAL LAYS NO MARK AND IS NOT AN ERROR. `html_image_decoded_rgba` answers NULL for an element that has
- * issued no request, one whose reply has not arrived, one the network refused, one whose state is `broken`
- * and one whose bytes are in a format this engine has no decoder for — and every one of those is a document's
- * or a server's doing rather than this engine's, so the answer is ink that is absent and never an abort. That
- * is the same shape `dlr_glyph` gives an empty outline one kind over: the mark count beside the surface is
- * what a reader tells the two apart by.
+ * THE PIXELS ARE BORROWED AND THE LIST TAKES A COPY, which is what lets the two producers hand over memory
+ * they own differently: `html_image_decoded_rgba` answers a buffer its caller must `free`, and
+ * `canvas_bitmap_get` answers a pointer INTO the canvas's own typed array that nothing here may release. One
+ * `const uint8_t *` covers both because `display_list_add_bitmap` copies before it returns — see
+ * display_list.h's `DisplayImage` for why the list owns its pixels rather than borrowing them.
  *
- * IT RETURNS TRUE ON A REFUSAL, which is this file's own convention and is worth saying because the opposite
- * reading is available: a `false` return here means AN OPERAND THIS PAINTER COULD NOT COMPUTE, which stops
- * the walk and keeps the prefix, and an image nobody fetched is not that — it is a box that contributed no
- * ink, exactly as a `background-color: transparent` does. */
-static bool bp_inline_replaced_content(BpState *st, lxb_dom_element_t *el)
+ * NOTHING IS ASSERTED HERE AND THAT IS DELIBERATE. `display_list_add_bitmap` already asserts the pointer, the
+ * two extents and their agreement with the byte count, and its zero-extent message ends by telling its caller
+ * what to do instead — "A caller with nothing to composite appends NO MARK, which is the positive statement
+ * that this element contributed no ink". A second copy of those three here would be two answers to one
+ * question, so what each ARM does instead is test what its OWN producer says: an `img` with no decoded bytes
+ * and a `canvas` with no bitmap each leave before reaching this function, and both of those are a state
+ * rather than a failure. Every path that does reach it carries a nonzero extent BY CONSTRUCTION — PNG §11.2.1
+ * "IHDR Image header" makes zero invalid so a decoded image has none, and `canvas_bitmap_get` answers a NULL
+ * pointer for exactly the zero-area bitmap — and the door's assert is what says so if that ever stops holding.
+ *
+ * NAMED RESIDUAL — css-images-3 §4.5 "Sizing Objects: the object-fit property" IS NOT READ.
+ * WHAT IS NOT COVERED: the pixels are stretched to the content box, which is §4.5's INITIAL `fill` ("The
+ * replaced content is sized to fill the element's content box") and is wrong for the four other keywords —
+ * and HTML §15.4.1 "Embedded content"'s own UA sheet sets one of them, `video { object-fit: contain; }`, so
+ * the property is not merely an author's to declare.
+ * WHAT THE NEXT DIFF BUILDS: `object-fit` in core/css/css_computed_value.c's modelled set beside `visibility`,
+ * and css-images-3 §4.3 "Concrete Object Size Resolution" over it here — §4.3's default sizing algorithm is
+ * the one derivation all five keywords are stated against, so it is one component and not five arms.
+ * HOW ITS ABSENCE WOULD SHOW: a replaced element whose content box has a different aspect ratio from its
+ * pixels paints them DISTORTED where a browser letterboxes or crops, observable as a mark whose rectangle is
+ * the content box for a bitmap whose ratio is not that box's.
+ * RETIREMENT: this record goes when the rectangle below is §4.3's concrete object size rather than the
+ * content box. */
+static void bp_composite_content_box(BpState *st, lxb_dom_element_t *el,
+                                     const uint8_t *rgba, uint32_t w, uint32_t h)
 {
     DisplayMark m;
-    uint8_t *rgba;
-    uint32_t w = 0, h = 0;
-
-    st->offers++;
-    rgba = html_image_decoded_rgba(st->ctx, el, &w, &h);
-    if (rgba == NULL) return true;
 
     memset(&m, 0, sizeof m);
     m.kind = DISPLAY_MARK_IMAGE;
@@ -438,11 +439,158 @@ static bool bp_inline_replaced_content(BpState *st, lxb_dom_element_t *el)
     /* THE PIXELS ENTER THE LIST BEFORE THE MARK THAT NAMES THEM, which is the order core/paint/display_list.h
        forces and the only one that works: `display_list_add_bitmap` ANSWERS the index, so a mark built first
        would carry a promise about a bitmap that had not arrived, and `display_list_append` asserts against
-       exactly that. The buffer is this caller's to free and the list took a COPY — see display_list.h's
-       `DisplayImage` for why the list owns its pixels rather than borrowing them. */
+       exactly that. */
     m.image.bitmap = display_list_add_bitmap(st->out, rgba, w, h, (size_t)w * (size_t)h * 4);
-    free(rgba);
     display_list_append(st->out, &m);
+}
+
+/* HTML §15.4.2 "Images"' FIRST RULE — "If the element represents an image, the user agent is expected to treat
+ * the element as a replaced element and render the image according to the rules for doing so defined in CSS."
+ *
+ * A REFUSAL LAYS NO MARK AND IS NOT AN ERROR. `html_image_decoded_rgba` answers NULL for an element that has
+ * issued no request, one whose reply has not arrived, one the network refused, one whose state is `broken`
+ * and one whose bytes are in a format this engine has no decoder for — and every one of those is a document's
+ * or a server's doing rather than this engine's, so the answer is ink that is absent and never an abort. That
+ * is the same shape `dlr_glyph` gives an empty outline one kind over: the mark count beside the surface is
+ * what a reader tells the two apart by.
+ * THE BRAND TEST IS THE CALLER'S AND IS NOT WRITTEN HERE. `html_image_decoded_rgba` opens with a DCHECK that
+ * its element is an HTML `img`, which is a contract between two of this engine's own components and is sound
+ * — what was wrong was the CALL, and `bp_replaced_content`'s dispatch is what makes that contract hold. */
+static bool bp_replaced_image(BpState *st, lxb_dom_element_t *el)
+{
+    uint8_t *rgba;
+    uint32_t w = 0, h = 0;
+
+    rgba = html_image_decoded_rgba(st->ctx, el, &w, &h);
+    if (rgba == NULL) return true;
+    bp_composite_content_box(st, el, rgba, w, h);
+    free(rgba);
+    return true;
+}
+
+/* HTML §15.4.1 "Embedded content"'s CANVAS SENTENCE, ENTIRE — "A canvas element that represents embedded
+ * content is expected to be treated as a replaced element; the contents of such elements are the element's
+ * bitmap, if any, or else a transparent black bitmap with the same natural dimensions as the element."
+ *
+ * ITS TWO ARMS ARE ONE ARM HERE, AND THAT IS DERIVED RATHER THAN COLLAPSED. A transparent black bitmap
+ * composites nothing under core/graphics/raster_surface.h's source-over, so the second arm's ink is empty at
+ * every size — and `canvas_bitmap_get` answers FALSE for exactly the canvases that have no bitmap of their
+ * own (HTML §4.12.5 "The canvas element"'s context mode NONE, which that component's own header states has no
+ * storage at all). So the false answer IS the second arm, discharged, and not a case this file skipped.
+ * THE ELEMENT IS ASKED THROUGH ITS WRAPPER because §4.12.5's bitmap is a JS typed array on the element's own
+ * JS object — CLAUDE.md's rule that platform data a flow holds is a JS value, which is what makes a canvas's
+ * pixels fork per flow and park with it. A canvas no flow has reached has no wrapper and therefore no bitmap,
+ * which is the same complete answer as context mode NONE.
+ * THE BITMAP'S ORIGIN-CLEAN FLAG IS NOT READ AND THAT IS NOT AN OMISSION. It restricts what the PAGE may
+ * read back through `getImageData`, and this is the user agent compositing its own document; a browser paints
+ * a tainted canvas on screen exactly as it paints a clean one. The flag rides `CanvasBitmap` for the member
+ * that does have to ask.
+ * THE POINTER IS BORROWED FOR THE LENGTH OF ONE CALL. `canvas_bitmap_get` answers a pointer into the bitmap's
+ * ArrayBuffer, so the wrapper is held across the composite and released after it; `display_list_add_bitmap`
+ * has copied by then. */
+static bool bp_replaced_canvas(BpState *st, lxb_dom_element_t *el)
+{
+    JSValue wrapper;
+    CanvasBitmap bm;
+
+    wrapper = element_wrap(st->ctx, el);
+    if (JS_IsNull(wrapper)) return true;
+    if (canvas_bitmap_get(st->ctx, wrapper, &bm) && bm.rgba != NULL)
+        bp_composite_content_box(st, el, bm.rgba, bm.width, bm.height);
+    JS_FreeValue(st->ctx, wrapper);
+    return true;
+}
+
+/* CSS 2.1 §E.2 "Painting order"'s TWO "the replaced content, atomically" ITEMS, WHICH ARE ONE PRODUCER UNDER
+ * TWO STEPS — its step 7.1, "If the element is a block-level replaced element, then: the replaced content,
+ * atomically", and the third arm of its step 7.2.1 item 4, "For inline-level replaced elements: the replaced
+ * content, atomically".
+ *
+ * WHY ONE PRODUCER. core/paint/paint_order.c's `po_offer_content` asks `po_is_inline_level` ONCE and sends the
+ * box to `PAINT_STEP_REPLACED_CONTENT` or to `PAINT_STEP_LINE_BOXES` on the answer, so the two items PARTITION
+ * the replaced elements and cannot both reach one box. What each of them wants is the same rectangle over the
+ * same operand, which is why this is one function with two callers — the shape `bp_background_color_at`
+ * already has for three items of §E.2.
+ * THIS FUNCTION'S HEADER USED TO SAY THE BLOCK-LEVEL ITEM WAS "a `used_value_content_px` and a rectangle away
+ * and is deliberately not done here: it is offered through a different step, it is reached for a different
+ * set of boxes, and a producer written at both at once would have one failure with two possible causes". That
+ * was right about the ORDER and this diff is the next one it described: the inline item landed alone and was
+ * exercised, and the block-level item is now that producer reached from a second arm.
+ *
+ * "ATOMICALLY" IS DISCHARGED BY THE MARK BEING ONE MARK. §E.2 gives the replaced content as a single item of
+ * its sub-list and core/paint/paint_order.h's own paragraph reads that as making the box a UNIT; a
+ * `DISPLAY_MARK_IMAGE` is one mark carrying one rectangle and one bitmap, so there is no interior for another
+ * step's ink to land inside and nothing here has to arrange that.
+ *
+ * THE DISPATCH IS ON WHAT THE ELEMENT REPRESENTS, AND IT IS THE WHOLE OF THIS FUNCTION'S JOB. "The replaced
+ * content" is a different thing for each replaced element and HTML states each one separately — §15.4.2
+ * "Images"' first rule for an `img`, §15.4.1 "Embedded content"'s canvas sentence for a `canvas` — so a
+ * producer that asked ONE of them for every box would be reading the wrong resource. WHAT USED TO BE HERE DID
+ * EXACTLY THAT: it called `html_image_decoded_rgba` for every box `replaced_element_of(el).replaced` answered
+ * true for, and that entry's FIRST act is a DCHECK that its element is an HTML `img` — so an inline-level
+ * `<canvas>`, `<iframe>`, `<video>` or `<embed>` on a line ABORTED THE PAINT, in a dev build, on markup the
+ * DOCUMENT chose. That is CLAUDE.md's line between what may be asserted and what must be dispatched, arriving
+ * at a caller rather than at the assert: the contract inside `html_image_decoded_rgba` is sound and it was
+ * the CALL that had no right to be made.
+ *
+ * THE TAIL IS A GUARD AND NOT A GAP. The set of elements that reach here is core/layout/replaced_element.c's
+ * `replaced_element_of`, which is a closed list of HTML TAGS THIS ENGINE ENUMERATES — an `audio`, an `object`
+ * and every `input` but §4.10.5.1.19's image button answer `rep_not` there, and that file's image-button arm
+ * is an always-fatal CHECK of its own — so the five arms above are total at this revision and a sixth is that
+ * component gaining a row. The crash therefore names THAT file, because the remedy is an arm here written
+ * against whatever sentence made the new element replaced.
+ *
+ * IT RETURNS TRUE ON A REFUSAL, which is this file's own convention and is worth saying because the opposite
+ * reading is available: a `false` return here means AN OPERAND THIS PAINTER COULD NOT COMPUTE, which stops
+ * the walk and keeps the prefix, and an image nobody fetched is not that — it is a box that contributed no
+ * ink, exactly as a `background-color: transparent` does.
+ *
+ * NAMED RESIDUAL — THREE OF THE FIVE REPLACED ELEMENTS CONTRIBUTE NO INK, FOR THREE DIFFERENT REASONS.
+ * WHAT IS NOT COVERED: an `iframe`'s replaced content is its child navigable's own rendering, which is a
+ * SURFACE composed from a SECOND document's display list and is the one thing in this paragraph that
+ * core/paint/display_list.h genuinely has no kind for. A `video`'s is HTML §15.4.1's "When a video element
+ * represents a poster frame or frame of video", and this agent has neither a poster fetch nor a frame source,
+ * so no video represents one. An `embed`'s is a plugin, and this agent has none.
+ * WHAT THE NEXT DIFF BUILDS: the `video` arm, because it is the only one of the three whose operand is
+ * already a road this engine has — HTML §4.8.8 "The video element"'s `poster` attribute names an IMAGE, so
+ * its pixels come through the same §4.8.4.3 "Processing model" fetch an `img`'s do and the arm is
+ * `bp_replaced_image` under a different address. The `iframe` arm waits on a cross-document surface and the
+ * `embed` arm on nothing this agent will have.
+ * HOW ITS ABSENCE WOULD SHOW: a document whose only content is an `<iframe>`, a `<video poster>` or an
+ * `<embed>` paints its borders and its background and nothing inside them, so the display list's mark count
+ * is that box's chrome alone — which `box_paint_stacking_context`'s offer count beside it is what separates
+ * from a walk that never reached the box.
+ * RETIREMENT: this record loses a clause as each arm lands, and goes when every arm below composites. */
+static bool bp_replaced_content(BpState *st, lxb_dom_element_t *el)
+{
+    lxb_dom_node_t *n = lxb_dom_interface_node(el);
+
+    DCHECK(replaced_element_of(el).replaced,
+           "CSS 2.1 §E.2 \"Painting order\"'s replaced content was asked of an element core/layout/"
+           "replaced_element.h does not call replaced. Both of §E.2's two items open with the word REPLACED, "
+           "and both of this function's callers test it — core/paint/paint_order.c for step 7.1 and the "
+           "step 7.2.1 enumeration for item 4's third arm — so an element here is those two tests and that "
+           "component having come apart");
+    if (lxb_html_tree_node_is(n, LXB_TAG_IMG)) return bp_replaced_image(st, el);
+    if (lxb_html_tree_node_is(n, LXB_TAG_CANVAS)) return bp_replaced_canvas(st, el);
+    /* THE THREE THAT REPRESENT NOTHING THIS AGENT CAN COMPOSITE — see the residual above for which sentence
+       makes each of them empty. They are spelled out rather than folded into the tail so that the tail stays
+       a statement about `replaced_element_of` growing a row. */
+    if (lxb_html_tree_node_is(n, LXB_TAG_IFRAME) || lxb_html_tree_node_is(n, LXB_TAG_VIDEO)
+        || lxb_html_tree_node_is(n, LXB_TAG_EMBED))
+        return true;
+    DFAIL("CSS 2.1 §E.2 \"Painting order\"'s \"the replaced content, atomically\" was offered for an element "
+          "this painter has no arm for. The arms here are the closed list core/layout/replaced_element.c's "
+          "`replaced_element_of` answers `replaced` for — `img`, `canvas`, `iframe`, `video` and `embed` — so "
+          "reaching this line means THAT file gained a row and this one did not. BUILD the arm here, against "
+          "the sentence that made the new element replaced: HTML §15.4.1 \"Embedded content\" states one per "
+          "element and names what each one's contents ARE, which is the operand the arm needs");
+    /* THE RELEASE ARM LAYS NO INK AND THAT IS A COMPLETE ANSWER RATHER THAN A SILENT FAILURE, which is worth
+       stating because CLAUDE.md rates a `DFAIL` whose release arm returns successfully as a hazard. It is one
+       where the next component is handed a state it will not test for, and there is no next component here: a
+       replaced element that composites nothing is exactly what the three arms above already are, and what a
+       release build then paints is that box's chrome without its content. Returning FALSE instead would stop
+       the walk and lose every later box's ink for one element this painter has not been taught yet. */
     return true;
 }
 
@@ -622,10 +770,19 @@ static bool bp_step_7_2_1(BpState *st, lxb_dom_element_t *parent, lxb_dom_node_t
                core/paint/paint_order.c answers it for an inline-block and an inline-table as well as for a
                replaced element — so the `replaced` test is what separates the two, and without it an
                `inline-block` would be asked for a replaced content it does not have. The second arm is a
-               pseudo-stacking-context and is core/paint/paint_order.h's own residual, not this one's. */
-            if (paint_order_inline_kind(box) == PAINT_INLINE_ATOMIC && replaced_element_of(box).replaced
-                && !bp_inline_replaced_content(st, box))
-                return false;
+               pseudo-stacking-context and is core/paint/paint_order.h's own residual, not this one's.
+               THE OFFER IS COUNTED HERE AND NOT INSIDE THE PRODUCER, which is where it used to be and is a
+               move rather than a change: `bp_visit` counts every box core/paint/paint_order.c OFFERS, and a
+               box on a line is not one of those — this enumeration is box_paint.c's own, so its sub-offer has
+               to be counted by whoever makes it. Leaving the count inside `bp_replaced_content` would now
+               DOUBLE-count a block-level replaced element, whose step 7.1 offer `bp_visit` has already
+               tallied, and box_paint.h states that the count is an ANSWER rather than an instrument — a
+               figure that says how many boxes this painter was asked about cannot be one some boxes are in
+               twice. */
+            if (paint_order_inline_kind(box) == PAINT_INLINE_ATOMIC && replaced_element_of(box).replaced) {
+                st->offers++;
+                if (!bp_replaced_content(st, box)) return false;
+            }
             if (!bp_step_7_2_1(st, box, child->first_child, NULL, g, n, cursor, origin_x, origin_y))
                 return false;
         }
@@ -712,9 +869,14 @@ static bool bp_context_step_7_2_1(BpState *st, lxb_dom_element_t *style, BlockFl
  * NAMED RESIDUAL — STEP 7.2.1's ITEM 2 IS THE BACKGROUND IMAGE, WHICH NO STEP OF §E.2 CAN LAY.
  * WHAT IS NOT COVERED: `bp_inline_box_marks` lays items 1 and 3 — "background color of element" and "border of
  * element" — and not item 2, "background image of element". It is the same ONE gap box_paint.h's first
- * residual names for the canvas: no mark kind in core/paint/display_list.h holds an image, and nothing in this
- * engine turns a `<url>` into pixels, so every image item of every step of §E.2 waits on one diff and this item
- * is not a step-7.2.1 absence at all.
+ * residual names for the canvas, and it is now ONE gap rather than two: this clause used to say that no mark
+ * kind in core/paint/display_list.h held an image AND that nothing in this engine turned a `<url>` into
+ * pixels, and the first half stopped being true when `DISPLAY_MARK_IMAGE` landed — it is the kind
+ * `bp_replaced_content` appends for both of §E.2's "replaced content" items. WHAT REMAINS IS THE SECOND HALF AND IT IS EXACT: this
+ * engine turns an `<img>` ELEMENT into pixels through HTML §4.8.4.3 "Processing model"'s image request, which
+ * is a record on that element's own JS object, and a background image is named by a COMPUTED VALUE and has no
+ * element request to hang one on. So every image item of every step of §E.2 still waits on one diff and this
+ * item is not a step-7.2.1 absence at all.
  * WHAT THE NEXT DIFF BUILDS: not this component's — see box_paint.h's first residual, which names the `<image>`
  * road that ends at core/css/css_image.h's validity test.
  * HOW ITS ABSENCE WOULD BE OBSERVED: a `<span>` whose background is declared as an image alone paints no
@@ -838,14 +1000,15 @@ static bool bp_visit(PaintStep step, lxb_dom_element_t *el, void *user)
        table box are box_paint.h's third residual. */
     case PAINT_STEP_CELL_BACKGROUND:
         return bp_background_color(st, el);
-    /* NO MARK LAID — counted as offers and painted nowhere, for two different reasons. The four intermediate
-       table background levels are box_paint.h's third residual and are a GEOMETRY this engine does not derive.
-       The TWO REMAINING content steps are its second and no longer share one absence: step 7.1's replaced
-       content is a SURFACE that core/paint/display_list.h has no kind for, while step 6's line boxes want the
-       ENUMERATION core/paint/paint_order.h's residual (c) names and not a mark — the glyph kind exists and
-       `PAINT_STEP_LINE_BOXES` below lays it. `PAINT_STEP_TABLE_BORDERS` is neither: the MARK now exists, and
-       what that item still wants is the
-       ENUMERATION of which boxes' borders it covers and in what order — CSS 2.1 §E.2's item is "all table
+    /* NO MARK LAID — counted as offers and painted nowhere. The four intermediate table background levels are
+       box_paint.h's third residual and are a GEOMETRY this engine does not derive. The ONE REMAINING content
+       step is step 6's line boxes, which want the ENUMERATION core/paint/paint_order.h's residual (c) names
+       and not a mark — the glyph kind exists and `PAINT_STEP_LINE_BOXES` below lays it.
+       THIS SENTENCE USED TO SAY THERE WERE TWO REMAINING and to name step 7.1's replaced content as the
+       other, calling it a SURFACE core/paint/display_list.h had no kind for. The kind exists and that step is
+       laid below.
+       `PAINT_STEP_TABLE_BORDERS` is neither of those: the MARK now exists, and what that item still wants is
+       the ENUMERATION of which boxes' borders it covers and in what order — CSS 2.1 §E.2's item is "all table
        borders (in tree order for separated borders)" and paint_order.h offers it ONCE carrying the table, so
        painting the table's own border here would be one box's ink where CSS 2.1 §E.2 asks for every box's. */
     case PAINT_STEP_COLUMN_GROUP_BACKGROUND:
@@ -853,15 +1016,24 @@ static bool bp_visit(PaintStep step, lxb_dom_element_t *el, void *user)
     case PAINT_STEP_ROW_GROUP_BACKGROUND:
     case PAINT_STEP_ROW_BACKGROUND:
     case PAINT_STEP_TABLE_BORDERS:
-    /* STILL NO MARK, AND THE TWO REMAINING CONTENT STEPS ARE NOT THE SAME ABSENCE. `PAINT_STEP_REPLACED_CONTENT`
-       is CSS 2.1 §E.2's step 7.1 "the replaced content, atomically", which core/paint/paint_order.h calls a
-       SURFACE rather than a mark and which this vocabulary has no word for. `PAINT_STEP_INLINE_LINE_BOXES` is
-       step 6 — the line boxes an INLINE stacking context is in — and its sub-list is the same step 7.2.1
-       `bp_step_7_2_1` performs below; what it waits on is the ENTRY into that walk for a box that is ON a line
-       rather than one that establishes the lines. See box_paint.h's residual for the triple it needs. */
+    /* STILL NO MARK. `PAINT_STEP_INLINE_LINE_BOXES` is CSS 2.1 §E.2's step 6 — the line boxes an INLINE
+       stacking context is in — and its sub-list is the same step 7.2.1 `bp_step_7_2_1` performs below; what
+       it waits on is the ENTRY into that walk for a box that is ON a line rather than one that establishes
+       the lines. See box_paint.h's residual for the triple it needs.
+       THIS ARM USED TO CARRY `PAINT_STEP_REPLACED_CONTENT` BESIDE IT, under a sentence calling that step a
+       SURFACE rather than a mark and saying this vocabulary had no word for it. That was true when it was
+       written and had stopped being true: `DISPLAY_MARK_IMAGE` is the word, and core/paint/display_list.h's
+       own residual had already recorded the mark as landed while this sentence went on denying it. The step
+       is laid below. */
     case PAINT_STEP_INLINE_LINE_BOXES:
-    case PAINT_STEP_REPLACED_CONTENT:
         return true;
+    /* CSS 2.1 §E.2's STEP 7.1 — "If the element is a block-level replaced element, then: the replaced
+       content, atomically". The ONE producer `bp_replaced_content` is also what item 4's third arm of step
+       7.2.1 reaches for an INLINE-level replaced element, and core/paint/paint_order.c's `po_offer_content`
+       asks `po_is_inline_level` once and sends each box to exactly one of the two — so the offer is counted
+       by `bp_visit` above and never a second time. */
+    case PAINT_STEP_REPLACED_CONTENT:
+        return bp_replaced_content(st, el);
     /* CSS 2.1 §E.2's STEP 7.2 — "Otherwise, for each line box of that element", whose sub-list is step 7.2.1's
        enumeration over the boxes in each of those line boxes. See `bp_line_boxes` for the two shapes of one
        formatting context and `bp_step_7_2_1` for the enumeration and for why it is performed here. */

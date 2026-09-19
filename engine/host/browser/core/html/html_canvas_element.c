@@ -121,7 +121,19 @@ bool canvas_bitmap_get(JSContext *ctx, JSValueConst canvas, CanvasBitmap *out)
     out->rgba = NULL; out->width = 0; out->height = 0; out->origin_clean = true;
     if (!canvas_element_is(canvas)) return false;
 
-    st = canvas_state(ctx, canvas);
+    /* THE RECORD IS READ AND NOT MINTED, which is a property this entry owes its callers rather than a saving.
+       `canvas_state` CREATES the record when the element has none and DEFINES it on the element's JS object,
+       which is a heap WRITE — captured by the per-flow COW delta like any other property write. That is right
+       for `getContext` and for every member that goes on to change the canvas, and it is wrong for a READER:
+       core/paint/box_paint.c asks this entry for HTML §15.4.1 "Embedded content"'s "the element's bitmap, if
+       any" while painting, so a minting read would have the painter write to the flow's heap once per canvas
+       it looked at. THE ANSWER IS IDENTICAL EITHER WAY, which is what makes this a removal rather than a
+       behaviour change: a freshly minted record has `data` set to JS_NULL, so the arm below returned false for
+       exactly the elements this early return now answers false for. It is the same contract, and the same
+       reason, core/html/html_image.c's state and natural-dimension readers give for reaching through
+       `JS_GetOwnSlot` instead of through their own minting entry. */
+    DCHECK(g_atom_state != JS_ATOM_NULL, "a canvas's bitmap was asked for before §4.12.5 was declared");
+    if (JS_GetOwnSlot(ctx, &st, canvas, g_atom_state) <= 0) return false;
     data = JS_GetPropertyStr(ctx, st, "data");
     if (JS_IsNull(data)) { JS_FreeValue(ctx, data); JS_FreeValue(ctx, st); return false; }
 

@@ -31,9 +31,16 @@
  * "Such backgrounds must also be anchored at the same point as they would be if they were painted only for
  * the root element".
  * NEITHER OF THE TWO THINGS THAT USED TO BLOCK STEP 1 BLOCKS THIS: the EXTENT is `bp_canvas_region`'s answer
- * and the CONDITION is `bp_canvas_background_element`'s, and the colour item uses both today. What blocks it
- * is the IMAGE MARK, which core/paint/display_list.h has no kind for — and that is ONE gap and not one per
- * step, because every image item of every step of CSS 2.1 §E.2 wants the same operand and no step has it.
+ * and the CONDITION is `bp_canvas_background_element`'s, and the colour item uses both today.
+ * THIS CLAUSE USED TO NAME A THIRD — it said what blocked the item was the IMAGE MARK, which
+ * core/paint/display_list.h had no kind for. THE MARK EXISTS: `DISPLAY_MARK_IMAGE`, which
+ * `bp_replaced_content` appends for both of CSS 2.1 §E.2's replaced-content items. The sentence went on
+ * denying it while core/paint/display_list.h's own residual recorded the kind as landed, which is one
+ * component disagreeing with itself in the UNDER-CLAIM direction: a reader deciding whether to BUILD an image
+ * mark is the only reader such a sentence has, so a stale one argues for a second kind beside the one that is
+ * already there.
+ * WHAT BLOCKS IT IS THE OPERAND, and that is ONE gap and not one per step, because every image item of every
+ * step of CSS 2.1 §E.2 wants the same operand and no step has it.
  * THE ANCHORING IS AN IMAGE CONCERN AND NOT A SECOND EXTENT, which is worth saying because both sentences
  * quoted above are about it: a `background-position` names the origin a repeating image is laid from, and a
  * SOLID COLOUR covering an area CSS 2.1 §2.3.1 "The canvas" makes infinite has no origin to be anchored at.
@@ -50,12 +57,14 @@
  * RETIREMENT: this record goes when `box_paint_stacking_context` appends a mark for CSS 2.1 §E.2's step 1
  * second item.
  *
- * NAMED RESIDUAL — THE THREE STEPS THAT STILL APPEND NOTHING, AND THE THREE DIFFERENT THINGS THEY WANT.
- * WHAT IS NOT COVERED: `PAINT_STEP_TABLE_BORDERS`, `PAINT_STEP_INLINE_LINE_BOXES` and
- * `PAINT_STEP_REPLACED_CONTENT` are each counted as an offer and append nothing, and no two of them are
- * waiting on the same thing. `PAINT_STEP_REPLACED_CONTENT` wants a VOCABULARY — CSS 2.1 §E.2's step 7.1 is
- * "the replaced content, atomically", which core/paint/paint_order.h calls a SURFACE rather than a mark and
- * core/paint/display_list.h has no kind for. `PAINT_STEP_INLINE_LINE_BOXES` wants neither a mark nor an
+ * NAMED RESIDUAL — THE TWO STEPS THAT STILL APPEND NOTHING, AND THE TWO DIFFERENT THINGS THEY WANT.
+ * WHAT IS NOT COVERED: `PAINT_STEP_TABLE_BORDERS` and `PAINT_STEP_INLINE_LINE_BOXES` are each counted as an
+ * offer and append nothing, and the two are not waiting on the same thing.
+ * THIS RECORD USED TO NAME A THIRD, `PAINT_STEP_REPLACED_CONTENT`, and to say it wanted a VOCABULARY — that
+ * CSS 2.1 §E.2's step 7.1 was a SURFACE rather than a mark and core/paint/display_list.h had no kind for it.
+ * The kind exists and that step now appends through `bp_replaced_content`, which is the same producer step
+ * 7.2.1's item 4 third arm reaches.
+ * `PAINT_STEP_INLINE_LINE_BOXES` wants neither a mark nor an
  * enumeration any more, and THIS SENTENCE USED TO SAY IT WANTED THE ENUMERATION core/paint/paint_order.h's
  * residual (c) NAMES: step 6's sub-list is the same step 7.2.1 `bp_step_7_2_1` now performs, so the sequence
  * exists and the gap moved. What it wants is an ENTRY INTO that walk for a box that is ON a line rather than
