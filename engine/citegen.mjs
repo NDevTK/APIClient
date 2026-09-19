@@ -927,6 +927,80 @@ const SPECS = [
     base: "https://drafts.csswg.org/css-text-4/", edition: "maintained", anchors: ["css-text-4"] },
   { key: "csswritingmodes4", label: "CSS Writing Modes Level 4", kind: "bikeshed",
     base: "https://drafts.csswg.org/css-writing-modes-4/", edition: "maintained", anchors: ["css-writing-modes-4"] },
+  /* CSS LOGICAL PROPERTIES AND VALUES, AND THE THING THAT MADE IT WORTH A ROW IS THAT ITS SILENCE WAS ALREADY
+     BENIGN — which is the state a missing row is LEAST likely to be in, and is why the usual argument for one
+     does not fit. A standard with no row is counted and never checked, and CLAUDE.md's own split says whether
+     that buys SILENCE or an ACCUSATION is a property of the OTHER standards in the corpus rather than of the
+     missing one. Here it bought silence, and by luck rather than by a decision: this tree writes the LEVELLED
+     shortname at nearly every site, LEVELLED accepts any hyphenated word ending in a digit, and classifyAnchor
+     therefore answered `other:css-logical-1` — foreign, never judged, never leaked to a vote. Measured before
+     the row, over the two components that carry the most of them: zero placed only by a file vote at either.
+     SO THE ROW BUYS ANSWERS AND NOT THE END OF A WRONG ANSWER, and that changes what has to be proved. A row
+     that ends an accusation pays for itself at the sites it clears; one that ends a silence has to be shown
+     not to CREATE an accusation somewhere else, because indexing a standard makes it a NEIGHBOUR of every
+     other — the `sri` row above records exactly that going wrong, where a title collision handed a citation
+     nothing had placed to a newly-indexed document it never named, and the neighbourhood check is blind to it
+     because a number is the same number in both. So the deliverable was a WHOLE-CORPUS index diff and never a
+     per-component one, taken as two runs inside ONE frozen snapshot of one revision.
+     WHAT THE THREE SITES THAT WERE NOT PROTECTED LOOK LIKE, since the levelled spelling is not the whole
+     population: two components write the UNLEVELLED name. `css_style_declaration.c` writes it spaced, which
+     reached the bare CSS-module word on the foreign list and went foreign for the right reason by the wrong
+     route; `css_computed_value.c` writes it hyphenated-without-a-level inside a crash message, which LEVELLED
+     cannot accept and no list held, so it classified NULL and fell to its file's vote — the one genuinely
+     unprotected site, and it is the shape CLAUDE.md rates worst, a label a crash prints pointing at another
+     document. All three anchors are here for that reason and the bare CSS-module word STAYS on the foreign
+     list: classifyAnchor asks the longest tail first, so the two-word name now ANSWERS while the one-word
+     common noun still REFUSES, which is the split those two populations actually need.
+     BIKESHED-RENDERED AND RE-DERIVED RATHER THAN ASSUMED, with a positive AND a negative control, because a
+     format probe that has never spoken has calibrated nothing: twenty-one `data-level` headings, a dt-updated
+     of 12 December 2025, and no `respecConfig`. The control is the already-indexed CSS Writing Modes row
+     directly above, fetched through the same probe in the same minute: fifty-eight headings, a dt-updated, no
+     `respecConfig` — the same shape. The negative control is the unrendered ReSpec source the `pointer events`
+     foreign entry records, which answers a `respecConfig` and ZERO numbered headings of either shape, so the
+     probe can tell the two apart rather than agreeing with whatever it is shown.
+     EVERY NUMBER THIS TREE WRITES FOR IT EXISTS IN THAT DOCUMENT — checked by hand against the fetched heading
+     list before the row was written, all ten distinct coordinates, which is the whole population and not a
+     sample. So this row was never going to raise an unknown-section finding at its own sites, and what it was
+     always going to do is submit fifty-odd quotations and title claims to a check that had never asked them.
+     THE NUMBERS ARE WRITTEN WITHOUT A SECTION SIGN AND WITHOUT A DOTTED NUMBER THROUGHOUT THIS NOTE, for the
+     reason the Mixed Content row two screens up gives: this file audits itself, so a worked example carrying a
+     real citation joins that number's group here and helps decide how every other citation of it in this file
+     resolves. That is also what makes the measurement here a clean pair — this note contributes no citation
+     and no quotation, so the count of citations READ is identical on both sides of it.
+     MEASURED AS AN INDEX DIFF OVER THE WHOLE CORPUS AND NEVER OVER THIS STANDARD, which is the only reading
+     that can tell a row that ENDS a defect from one that MOVES it: three whole-tree runs inside ONE frozen
+     snapshot of one revision, back to back, differing only in this row and in one site repair beneath it.
+     Baseline 971 findings; with this row alone 972; with the site repair beside it 971 again. Findings
+     INTRODUCED anywhere outside this standard's own component cone: ZERO — not one site of any other
+     standard changed verdict, band or resolution, and every accusing channel held its count exactly
+     (unknown-section nine, misattributed one hundred and seventy-eight, title-mismatch three, both step
+     channels, the mis-transcribed half of the quotation channel). Findings RETIRED: none, which is the
+     honest half and is what a row buying ANSWERS rather than ending a WRONG ANSWER looks like. What it
+     bought instead: fifty-nine more citations judged on their own evidence, twenty more quotations compared
+     of which seventeen came back VERIFIED and two were confirmed by a number their own comment cites,
+     fifty-four citations out of the counted-and-never-checked band, and a corpus count of sixty-nine with
+     none refused on either side. The count of citations READ was IDENTICAL on all three runs, which is the
+     control that says this note itself contributed nothing to the population it reports on.
+     THE ONE FINDING THE ROW ALONE INTRODUCED WAS A USE-VERSUS-MENTION FALSE POSITIVE AT A CORRECTLY-WRITTEN
+     SITE, and it is named rather than absorbed, because a wrong finding is worse than none and this file
+     says so at its own head. `core/css/css_shorthand.h` carries a retirement note that records a citation it
+     had aimed at the wrong section, and it showed the wrong RENDERING of the standard's sentence in
+     quotation marks in order to withdraw it — so the quotation channel, which cannot read a withdrawal the
+     disclaimer list does not spell, compared a specimen against the document and reported it. The repair is
+     the authoring rule rather than a widening of that list: a run that is a SPELLING BEING SHOWN goes in
+     backticks and leaves the channel BY CONSTRUCTION. Verified by exercising the mask's own pattern rather
+     than reading the prose above it — a single-backtick run admits exactly one newline, and that run spans
+     one. The correct quotation beside it stays a quotation and is confirmed by the section the same comment
+     cites, which is the prose-unit rule doing exactly what it is for.
+     AND THE SITE THE ROW MOST NEEDED WAS NOT ONE OF THE FIFTY-TWO. `core/css/css_computed_value.c` writes
+     this standard's name hyphenated WITHOUT its level, inside a crash message: the shape regex cannot accept
+     it and no list held it, so it classified as nothing at all and its file's vote answered with CSSOM View
+     — a label a crash prints, pointing at a document the comment does not name. That is the one genuinely
+     wrong answer this row ends, and it was invisible in the census line, which counts a standard by a name
+     the resolver produced. */
+  { key: "csslogical1", label: "CSS Logical Properties and Values Module Level 1", kind: "bikeshed",
+    base: "https://drafts.csswg.org/css-logical-1/", edition: "maintained",
+    anchors: ["css-logical-1", "css logical", "css-logical"] },
   { key: "cssinline3", label: "CSS Inline Layout Module Level 3", kind: "bikeshed",
     base: "https://drafts.csswg.org/css-inline-3/", edition: "maintained", anchors: ["css-inline-3"] },
   { key: "cssoverflow3", label: "CSS Overflow Module Level 3", kind: "bikeshed",

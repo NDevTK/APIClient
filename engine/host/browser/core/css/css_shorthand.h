@@ -136,8 +136,8 @@ unsigned css_shorthand_shorthands_of(const char *longhand, const char **out, uns
    Properties", not §2 — css-logical-1 §2 is "Flow-Relative Values: block-start, block-end, inline-start,
    inline-end", which is about the VALUES `caption-side`, `float`, `clear` and `text-align` take and names no
    property group at all. The quotation went with it: the sentence begins "Each set of parallel flow-relative
-   properties and physical properties", and this header rendered it "any pair of flow-relative properties and
-   physical properties". */
+   properties and physical properties", and this header rendered it `any pair of flow-relative properties and
+   physical properties`. */
 
 /* CSSOM §6.7.2's SERIALIZE A CSS VALUE over a LIST of longhand declarations: the value a hypothetical
    `shorthand` declaration would carry, given `values[i]` as the serialized value of

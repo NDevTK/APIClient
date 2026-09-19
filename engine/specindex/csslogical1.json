@@ -1,0 +1,447 @@
+{
+ "spec": "CSS Logical Properties and Values Module Level 1",
+ "key": "csslogical1",
+ "base": "https://drafts.csswg.org/css-logical-1/",
+ "specUpdated": "12 December 2025",
+ "fetched": "2026-09-19",
+ "sections": {
+  "1": {
+   "title": "Introduction",
+   "page": "",
+   "id": "intro"
+  },
+  "2": {
+   "title": "Flow-Relative Values: block-start",
+   "page": "",
+   "id": "directional-keywords"
+  },
+  "3": {
+   "title": "Flow-Relative Page Classifications",
+   "page": "",
+   "id": "page"
+  },
+  "4": {
+   "title": "Flow-Relative Box Model Properties",
+   "page": "",
+   "id": "box"
+  },
+  "5": {
+   "title": "Acknowledgements",
+   "page": "",
+   "id": "acknowledgements"
+  },
+  "6": {
+   "title": "Changes",
+   "page": "",
+   "id": "changes"
+  },
+  "1.1": {
+   "title": "Value Definitions",
+   "page": "",
+   "id": "values"
+  },
+  "2.1": {
+   "title": "Logical Values for the caption-side Property",
+   "page": "",
+   "id": "caption-side"
+  },
+  "2.2": {
+   "title": "Flow-Relative Values for the float and clear Properties",
+   "page": "",
+   "id": "float-clear"
+  },
+  "2.3": {
+   "title": "Flow-Relative Values for the text-align Property",
+   "page": "",
+   "id": "text-align"
+  },
+  "4.1": {
+   "title": "Logical Height and Logical Width: the block-size / inline-size , min-block-size / min-inline-size , and max-block-size / max-inline-size properties",
+   "page": "",
+   "id": "dimension-properties"
+  },
+  "4.2": {
+   "title": "Flow-Relative Margins: the margin-block-start , margin-block-end , margin-inline-start , margin-inline-end properties and margin-block and margin-inline shorthands",
+   "page": "",
+   "id": "margin-properties"
+  },
+  "4.3": {
+   "title": "Flow-Relative Offsets: the inset-block-start , inset-block-end , inset-inline-start , inset-inline-end properties and inset-block , inset-inline , and inset shorthands",
+   "page": "",
+   "id": "position-properties"
+  },
+  "4.4": {
+   "title": "Flow-Relative Padding: the padding-block-start , padding-block-end , padding-inline-start , padding-inline-end properties and padding-block and padding-inline shorthands",
+   "page": "",
+   "id": "padding-properties"
+  },
+  "4.5": {
+   "title": "Flow-Relative Borders",
+   "page": "",
+   "id": "border-properties"
+  },
+  "4.5.1": {
+   "title": "Flow-Relative Border Widths: the border-block-start-width , border-block-end-width , border-inline-start-width , border-inline-end-width properties and border-block-width and border-inline-width shorthands",
+   "page": "",
+   "id": "border-width"
+  },
+  "4.5.2": {
+   "title": "Flow-Relative Border Styles: the border-block-start-style , border-block-end-style , border-inline-start-style , border-inline-end-style properties and border-block-style and border-inline-style shorthands",
+   "page": "",
+   "id": "border-style"
+  },
+  "4.5.3": {
+   "title": "Flow-Relative Border Colors: the border-block-start-color , border-block-end-color , border-inline-start-color , border-inline-end-color properties and border-block-color and border-inline-color shorthands",
+   "page": "",
+   "id": "border-color"
+  },
+  "4.5.4": {
+   "title": "Flow-Relative Border Shorthands: the border-block-start , border-block-end , border-inline-start , border-inline-end properties and border-block and border-inline shorthands",
+   "page": "",
+   "id": "border-shorthands"
+  },
+  "4.6": {
+   "title": "Flow-Relative Corner Rounding: the border-start-start-radius , border-start-end-radius , border-end-start-radius , border-end-end-radius properties",
+   "page": "",
+   "id": "border-radius-properties"
+  },
+  "4.7": {
+   "title": "Four-Directional Shorthand Properties: the margin , padding , border-width , border-style , and border-color shorthands",
+   "page": "",
+   "id": "logical-shorthand-keyword"
+  }
+ },
+ "dfns": {
+  "block size": [
+   "4.1"
+  ],
+  "border block": [
+   "4.5.4"
+  ],
+  "border block color": [
+   "4.5.3"
+  ],
+  "border block end": [
+   "4.5.4"
+  ],
+  "border block end color": [
+   "4.5.3"
+  ],
+  "border block end style": [
+   "4.5.2"
+  ],
+  "border block end width": [
+   "4.5.1"
+  ],
+  "border block start": [
+   "4.5.4"
+  ],
+  "border block start color": [
+   "4.5.3"
+  ],
+  "border block start style": [
+   "4.5.2"
+  ],
+  "border block start width": [
+   "4.5.1"
+  ],
+  "border block style": [
+   "4.5.2"
+  ],
+  "border block width": [
+   "4.5.1"
+  ],
+  "border end end radius": [
+   "4.6"
+  ],
+  "border end start radius": [
+   "4.6"
+  ],
+  "border inline": [
+   "4.5.4"
+  ],
+  "border inline color": [
+   "4.5.3"
+  ],
+  "border inline end": [
+   "4.5.4"
+  ],
+  "border inline end color": [
+   "4.5.3"
+  ],
+  "border inline end style": [
+   "4.5.2"
+  ],
+  "border inline end width": [
+   "4.5.1"
+  ],
+  "border inline start": [
+   "4.5.4"
+  ],
+  "border inline start color": [
+   "4.5.3"
+  ],
+  "border inline start style": [
+   "4.5.2"
+  ],
+  "border inline start width": [
+   "4.5.1"
+  ],
+  "border inline style": [
+   "4.5.2"
+  ],
+  "border inline width": [
+   "4.5.1"
+  ],
+  "border start end radius": [
+   "4.6"
+  ],
+  "border start start radius": [
+   "4.6"
+  ],
+  "inline size": [
+   "4.1"
+  ],
+  "inset block": [
+   "4.3"
+  ],
+  "inset block end": [
+   "4.3"
+  ],
+  "inset block start": [
+   "4.3"
+  ],
+  "inset inline": [
+   "4.3"
+  ],
+  "inset inline end": [
+   "4.3"
+  ],
+  "inset inline start": [
+   "4.3"
+  ],
+  "inset properties": [
+   "4.3"
+  ],
+  "logical property group": [
+   "4"
+  ],
+  "mapping logic": [
+   "4"
+  ],
+  "margin block": [
+   "4.2"
+  ],
+  "margin block end": [
+   "4.2"
+  ],
+  "margin block start": [
+   "4.2"
+  ],
+  "margin inline": [
+   "4.2"
+  ],
+  "margin inline end": [
+   "4.2"
+  ],
+  "margin inline start": [
+   "4.2"
+  ],
+  "max block size": [
+   "4.1"
+  ],
+  "max inline size": [
+   "4.1"
+  ],
+  "min block size": [
+   "4.1"
+  ],
+  "min inline size": [
+   "4.1"
+  ],
+  "padding block": [
+   "4.4"
+  ],
+  "padding block end": [
+   "4.4"
+  ],
+  "padding block start": [
+   "4.4"
+  ],
+  "padding inline": [
+   "4.4"
+  ],
+  "padding inline end": [
+   "4.4"
+  ],
+  "padding inline start": [
+   "4.4"
+  ]
+ },
+ "ops": {},
+ "uses": {
+  "block size": {
+   "6": 2
+  },
+  "border block": {
+   "6": 3
+  },
+  "border block color": {
+   "6": 2
+  },
+  "border block end": {
+   "6": 2
+  },
+  "border block end color": {
+   "6": 2
+  },
+  "border block end style": {
+   "6": 2
+  },
+  "border block end width": {
+   "6": 2
+  },
+  "border block start": {
+   "6": 2
+  },
+  "border block start color": {
+   "6": 2
+  },
+  "border block start style": {
+   "6": 2
+  },
+  "border block start width": {
+   "6": 2
+  },
+  "border block style": {
+   "6": 2
+  },
+  "border block width": {
+   "6": 2
+  },
+  "border end end radius": {
+   "6": 2
+  },
+  "border end start radius": {
+   "6": 2
+  },
+  "border inline": {
+   "6": 3
+  },
+  "border inline color": {
+   "6": 2
+  },
+  "border inline end": {
+   "6": 2
+  },
+  "border inline end color": {
+   "6": 2
+  },
+  "border inline end style": {
+   "6": 2
+  },
+  "border inline end width": {
+   "6": 2
+  },
+  "border inline start": {
+   "6": 2
+  },
+  "border inline start color": {
+   "6": 2
+  },
+  "border inline start style": {
+   "6": 2
+  },
+  "border inline start width": {
+   "6": 2
+  },
+  "border inline style": {
+   "6": 2
+  },
+  "border inline width": {
+   "6": 2
+  },
+  "border start end radius": {
+   "6": 2
+  },
+  "border start start radius": {
+   "6": 2
+  },
+  "inline size": {
+   "6": 2
+  },
+  "inset block": {
+   "6": 2
+  },
+  "inset block end": {
+   "6": 2
+  },
+  "inset block start": {
+   "6": 2
+  },
+  "inset inline": {
+   "6": 2
+  },
+  "inset inline end": {
+   "6": 2
+  },
+  "inset inline start": {
+   "6": 2
+  },
+  "inset properties": {
+   "6": 2
+  },
+  "logical property group": {
+   "4.1": 3
+  },
+  "margin block": {
+   "6": 2
+  },
+  "margin block end": {
+   "6": 2
+  },
+  "margin block start": {
+   "6": 2
+  },
+  "margin inline": {
+   "6": 2
+  },
+  "margin inline end": {
+   "6": 2
+  },
+  "margin inline start": {
+   "4": 2,
+   "6": 2
+  },
+  "max block size": {
+   "6": 2
+  },
+  "max inline size": {
+   "6": 2
+  },
+  "min block size": {
+   "6": 2
+  },
+  "min inline size": {
+   "6": 2
+  },
+  "padding block": {
+   "6": 2
+  },
+  "padding block end": {
+   "6": 2
+  },
+  "padding block start": {
+   "6": 2
+  },
+  "padding inline": {
+   "6": 2
+  },
+  "padding inline end": {
+   "6": 2
+  },
+  "padding inline start": {
+   "6": 2
+  }
+ }
+}
