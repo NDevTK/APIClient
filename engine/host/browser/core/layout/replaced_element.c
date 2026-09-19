@@ -194,14 +194,50 @@ static ReplacedElement rep_img(JSContext *ctx, lxb_dom_element_t *el)
        `sizes="auto"` case exactly — the image is measured while its own request is being set up — so the
        predicate is §4.8.3's `complete` getter's own four conditions, computed by the one function in
        core/html/html_image.c that the member itself uses.
-       THE THIRD ARM IS FALSE IN THIS BUILD AND IS NOT A SKIPPED STEP: "already has natural dimensions (e.g.
-       from the dimension attributes or CSS rules)" needs HTML §15.4.3 "Attributes for embedded content and
-       images" to map a `width`/`height` content attribute to a presentational hint, and
-       core/css/css_presentational_hints.c carries no such row — so no `img` in this agent has natural
-       dimensions from that source, in quirks mode or out of it. The day that row exists this arm is written
-       beside it. */
+       THE THIRD ARM IS UNBUILT RATHER THAN FALSE, AND THE RETIRED SENTENCE IS RESTATED BECAUSE A READER WHO
+       RE-DERIVES IT WILL RE-INTRODUCE IT. It said the arm was FALSE IN THIS BUILD: that HTML §15.4.2's own
+       "already has natural dimensions (e.g., from the dimension attributes or CSS rules)" needs §15.4.3
+       "Attributes for embedded content and images" to map a `width`/`height` content attribute to a
+       presentational hint, that core/css/css_presentational_hints.c carried no such row, and that
+       `the day that row exists this arm is written beside it`. THE ROW EXISTS — §15.4.3: "The width and
+       height attributes on an img element's dimension attribute source map to the dimension properties
+       'width' and 'height' on the img element respectively" — so the reason this arm was skipped is retired.
+       ITS NEXT-DIFF CLAUSE WAS WRONG AND THAT IS THE HALF WORTH KEEPING: the row makes the arm REACHABLE and
+       not DECIDABLE, because a hint declares a CSS PROPERTY where this arm asks about NATURAL DIMENSIONS.
+       css-images-3 §4.1 "Object-Sizing Terminology": "These natural dimensions represent the preferred sizing
+       intrinsic to the object itself; that is, they are not a function of the context in which the object is
+       used." A `width` from the dimension attributes is a function of the element's context, and so is one
+       from "CSS rules" — so HTML's parenthetical names two sources its own linked term excludes. Under §4.1's
+       sentence the arm is VACUOUS here, since rules 2 to 4 are reached only when the element does NOT
+       represent an image and rule 1's DCHECK above records that representing an image and having natural
+       dimensions are one fact in this engine. Under the parenthetical it is LIVE for any quirks-mode `img`
+       whose dimension attribute source carries either attribute, and that is the reading under which the arm
+       is not dead prose: it is the whole of what makes a broken image with an `alt` a box of the attribute's
+       size in quirks mode and its text's size outside one. WHICH READING GOVERNS IS THE DECISION THE NEXT
+       DIFF MAKES, and it was never the row. */
     if (!complete) return rep_bare();
     if (!rep_attr_present(el, "alt")) return rep_bare();
+
+    /* RULE 2's THIRD DISJUNCT IS WHERE THIS LINE STANDS AND IT IS NOT ASKED, so every quirks-mode `img`
+       reaching here takes rule 3's or rule 4's classification without the disjunct that would outrank them
+       having been evaluated. That is a capability this engine has not built rather than an arm that is merely
+       narrow: the answer is RIGHT for the elements carrying no `width`/`height` and no CSS width, and nothing
+       here established which ones those are. BUILD the disjunct — it needs HTML §4.8.3 "The img element"'s
+       DIMENSION ATTRIBUTE SOURCE shared rather than re-derived (core/css/css_presentational_hints.c holds the
+       only walk of §4.8.4.3.9 step 5.9 and it is `static` there), and the reading above settled. THE CASCADE
+       HALF IS REACHABLE WITHOUT A CYCLE, which is worth recording because the obvious fear is the wrong one:
+       core/css/css_property_applies.c does call `replaced_element_of`, but it is reached from
+       `css_resolved_value` and NOT from `css_computed_value`, so a computed `width` read from here does not
+       come back round. */
+    DCHECK(lxb_dom_interface_node(el)->owner_document->compat_mode != LXB_DOM_DOCUMENT_CMODE_QUIRKS,
+           "HTML §15.4.2 \"Images\"' second rule reached a QUIRKS-MODE `img` and this engine cannot ask that "
+           "rule's THIRD DISJUNCT — \"the Document is in quirks mode, and the element already has natural "
+           "dimensions (e.g., from the dimension attributes or CSS rules)\" — so the rule this element is "
+           "about to be given below was not derived. The disjunct OUTRANKS rules 3 and 4, and the answers "
+           "differ wherever it holds: rule 2 makes the element REPLACED, which is what lets HTML §15.4.3's "
+           "`width` hint reach it at all — CSS 2.1 §10.2 \"Content width: the 'width' property\" applies to "
+           "\"all elements but non-replaced inline elements\" — where rule 3 makes it a NON-REPLACED phrasing "
+           "element whose `width` does not apply and rule 4 gives it natural dimensions of 0. BUILD it here");
 
     /* RULE 3: "If the element is an img element that represents some text and the user agent does not expect
        this to change — the user agent is expected to treat the element as a NON-REPLACED PHRASING ELEMENT
