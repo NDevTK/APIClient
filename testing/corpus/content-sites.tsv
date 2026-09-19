@@ -1,0 +1,7 @@
+# Content-rich, server-rendered real websites. The default corpus (sites.tsv) is
+# JS-heavy app shells, chosen for API-surface exploration; those are the hardest
+# possible RENDERING subjects because their markup is an empty root div. These
+# are real sites whose content is in the HTML before a bundle runs.
+wikipedia_bourbaki	https://en.wikipedia.org/wiki/Nicolas_Bourbaki	MediaWiki, server-rendered
+hn_front	https://news.ycombinator.com/	server-rendered, table layout, minimal CSS
+csswg_flexbox	https://drafts.csswg.org/css-flexbox-1/	Bikeshed static HTML

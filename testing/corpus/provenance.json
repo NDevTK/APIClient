@@ -10295,5 +10295,473 @@
    "unresolvable": 0,
    "storedBytes": 20660
   }
+ },
+ {
+  "id": "wikipedia_bourbaki",
+  "stack": "MediaWiki, server-rendered",
+  "requestedUrl": "https://en.wikipedia.org/wiki/Nicolas_Bourbaki",
+  "finalUrl": "https://en.wikipedia.org/wiki/Nicolas_Bourbaki",
+  "status": 200,
+  "contentType": "text/html; charset=UTF-8",
+  "csp": "script-src 'unsafe-eval' blob: 'self' meta.wikimedia.org *.wikimedia.org *.wikipedia.org *.wikinews.org *.wiktionary.org *.wikibooks.org *.wikiversity.org *.wikisource.org wikisource.org *.wikiquote.org *.wikidata.org *.wikifunctions.org *.wikivoyage.org *.mediawiki.org mediawiki.org wikimedia.org *.wmflabs.org *.wmcloud.org *.toolforge.org wss://*.toolforge.org *.jsdelivr.net unpkg.com cdnjs.cloudflare.com raw.githubusercontent.com *.github.com code.jquery.com cdn.mathjax.org use.typekit.net fonts.cdnfonts.com use.fontawesome.com i.ytimg.com rsms.me doi.org localhost https://localhost:* http://localhost:* wss://localhost:* ws://localhost:* *.google.com *.gstatic.com *.googleapis.com *.translate.yandex.net yastatic.net ya.ru radically.github.io cdn.sammdot.ca cdn.fontshare.com viaf.org publicai-proxy.alaexis.workers.dev iiif.archive.org api.flickr.com live.staticflickr.com api.anthropic.com api.openai.com api.publicai.co catalogo.pusc.it parsifal.urbe.it opac.sbn.it overpass-api.de api.openrouteservice.org archive.org *.openstreetmap.org *.waymarkedtrails.org *.thunderforest.com registry.ipe.wiki analytics.ipe.wiki qlever.dev app.goacoustic.com wikipedia-archive.ourworldindata.org api.inaturalist.org inaturalist-open-data.s3.amazonaws.com validator.w3.org db.onlinewebfonts.com fontlibrary.org 'unsafe-inline' auth.wikimedia.org; default-src 'self' data: blob: upload.wikimedia.org thumb.wikimedia.org https://commons.wikimedia.org meta.wikimedia.org *.wikimedia.org *.wikipedia.org *.wikinews.org *.wiktionary.org *.wikibooks.org *.wikiversity.org *.wikisource.org wikisource.org *.wikiquote.org *.wikidata.org *.wikifunctions.org *.wikivoyage.org *.mediawiki.org mediawiki.org wikimedia.org *.wmflabs.org *.wmcloud.org *.toolforge.org wss://*.toolforge.org *.jsdelivr.net unpkg.com cdnjs.cloudflare.com raw.githubusercontent.com *.github.com code.jquery.com cdn.mathjax.org use.typekit.net fonts.cdnfonts.com use.fontawesome.com i.ytimg.com rsms.me doi.org localhost https://localhost:* http://localhost:* wss://localhost:* ws://localhost:* *.google.com *.gstatic.com *.googleapis.com *.translate.yandex.net yastatic.net ya.ru radically.github.io cdn.sammdot.ca cdn.fontshare.com viaf.org publicai-proxy.alaexis.workers.dev iiif.archive.org api.flickr.com live.staticflickr.com api.anthropic.com api.openai.com api.publicai.co catalogo.pusc.it parsifal.urbe.it opac.sbn.it overpass-api.de api.openrouteservice.org archive.org *.openstreetmap.org *.waymarkedtrails.org *.thunderforest.com registry.ipe.wiki analytics.ipe.wiki qlever.dev app.goacoustic.com wikipedia-archive.ourworldindata.org api.inaturalist.org inaturalist-open-data.s3.amazonaws.com validator.w3.org db.onlinewebfonts.com fontlibrary.org en.wikibooks.org en.wikinews.org en.wikiquote.org en.wikisource.org en.wikiversity.org en.wikivoyage.org en.wiktionary.org www.mediawiki.org commons.wikimedia.org foundation.wikimedia.org incubator.wikimedia.org species.wikimedia.org wikimania.wikimedia.org www.wikidata.org www.wikifunctions.org auth.wikimedia.org; style-src 'self' data: blob: upload.wikimedia.org thumb.wikimedia.org https://commons.wikimedia.org meta.wikimedia.org *.wikimedia.org *.wikipedia.org *.wikinews.org *.wiktionary.org *.wikibooks.org *.wikiversity.org *.wikisource.org wikisource.org *.wikiquote.org *.wikidata.org *.wikifunctions.org *.wikivoyage.org *.mediawiki.org mediawiki.org wikimedia.org *.wmflabs.org *.wmcloud.org *.toolforge.org wss://*.toolforge.org *.jsdelivr.net unpkg.com cdnjs.cloudflare.com raw.githubusercontent.com *.github.com code.jquery.com cdn.mathjax.org use.typekit.net fonts.cdnfonts.com use.fontawesome.com i.ytimg.com rsms.me doi.org localhost https://localhost:* http://localhost:* wss://localhost:* ws://localhost:* *.google.com *.gstatic.com *.googleapis.com *.translate.yandex.net yastatic.net ya.ru radically.github.io cdn.sammdot.ca cdn.fontshare.com viaf.org publicai-proxy.alaexis.workers.dev iiif.archive.org api.flickr.com live.staticflickr.com api.anthropic.com api.openai.com api.publicai.co catalogo.pusc.it parsifal.urbe.it opac.sbn.it overpass-api.de api.openrouteservice.org archive.org *.openstreetmap.org *.waymarkedtrails.org *.thunderforest.com registry.ipe.wiki analytics.ipe.wiki qlever.dev app.goacoustic.com wikipedia-archive.ourworldindata.org api.inaturalist.org inaturalist-open-data.s3.amazonaws.com validator.w3.org db.onlinewebfonts.com fontlibrary.org 'unsafe-inline'; object-src 'none'; report-uri /w/api.php?action=cspreport&format=json; report-to csp-report-to-endpoint",
+  "bytes": 761868,
+  "sha256": "a1128faf0a17ef989d378154140644065309b67b7a85fd700bbb02f6f8b325a6",
+  "fetchedAt": "2026-09-19T21:00:27.694Z",
+  "resources": [
+   {
+    "url": "https://en.wikipedia.org/w/load.php?lang=en&modules=startup&only=scripts&raw=1&skin=vector-2022",
+    "status": 200,
+    "contentType": "text/javascript; charset=utf-8",
+    "bytes": 69641,
+    "sha256": "595ccffca9677176a99c1e3551b37b5fa5e6ed8b4c83b47dbc37696b64a4d97a",
+    "fetchedAt": "2026-09-19T21:00:28.030Z",
+    "path": "en.wikipedia.org/w/load.php__q72e309bc"
+   },
+   {
+    "url": "https://en.wikipedia.org/w/load.php?lang=en&modules=ext.cite.parsoid.styles%7Cext.cite.styles%7Cext.uls.interlanguage%7Cext.visualEditor.desktopArticleTarget.noscript%7Cext.wikimediamessages.styles%7Cjquery.makeCollapsible.styles%7Cjquery.tablesorter.styles%7Cmediawiki.skinning.content.parsoid%7Cmediawiki.skins.legacy%7Cskins.vector.icons%2Cstyles%7Cskins.vector.search.codex.styles%7Cwikibase.client.init&only=styles&skin=vector-2022",
+    "status": 200,
+    "contentType": "text/css; charset=utf-8",
+    "bytes": 212700,
+    "sha256": "9a1be94118968c8323e481e805c205b56398638bfa145d9ef540be47c30bba32",
+    "fetchedAt": "2026-09-19T21:01:34.650Z",
+    "via": "runtime",
+    "composedFrom": "/_m/en.wikipedia.org/w/load.php?lang=en&modules=ext.cite.parsoid.styles%7Cext.cite.styles%7Cext.uls.interlanguage%7Cext.visualEditor.desktopArticleTarget.noscript%7Cext.wikimediamessages.styles%7Cjquery.makeCollapsible.styles%7Cjquery.tablesorter.styles%7Cmediawiki.skinning.content.parsoid%7Cmediawiki.skins.legacy%7Cskins.vector.icons%2Cstyles%7Cskins.vector.search.codex.styles%7Cwikibase.client.init&only=styles&skin=vector-2022",
+    "path": "en.wikipedia.org/w/load.php__qdd83cf44"
+   },
+   {
+    "url": "https://en.wikipedia.org/w/load.php?lang=en&modules=site.styles&only=styles&skin=vector-2022",
+    "status": 200,
+    "contentType": "text/css; charset=utf-8",
+    "bytes": 6839,
+    "sha256": "3f439934c51c220c4b92072d4dec2219920cef1bbafb58eda32a7161df7b9d0c",
+    "fetchedAt": "2026-09-19T21:01:34.994Z",
+    "via": "runtime",
+    "composedFrom": "/_m/en.wikipedia.org/w/load.php?lang=en&modules=site.styles&only=styles&skin=vector-2022",
+    "path": "en.wikipedia.org/w/load.php__q02530593"
+   },
+   {
+    "url": "https://en.wikipedia.org/static/images/mobile/copyright/wikipedia-wordmark-en-25.svg",
+    "status": 200,
+    "contentType": "image/svg+xml",
+    "bytes": 9865,
+    "sha256": "169241aebac0b1222230274878e82c34fd51865f825c29516386810fcdbf6fc2",
+    "fetchedAt": "2026-09-19T21:01:35.128Z",
+    "via": "runtime",
+    "composedFrom": "/static/images/mobile/copyright/wikipedia-wordmark-en-25.svg",
+    "path": "en.wikipedia.org/static/images/mobile/copyright/wikipedia-wordmark-en-25.svg"
+   },
+   {
+    "url": "https://en.wikipedia.org/static/images/icons/enwiki-25.svg",
+    "status": 200,
+    "contentType": "image/svg+xml",
+    "bytes": 115918,
+    "sha256": "095fb188212ac25419535feb7aee7a6a7b2d58270ae42a168abf9942d1b44315",
+    "fetchedAt": "2026-09-19T21:01:35.284Z",
+    "via": "runtime",
+    "composedFrom": "/static/images/icons/enwiki-25.svg",
+    "path": "en.wikipedia.org/static/images/icons/enwiki-25.svg"
+   },
+   {
+    "url": "https://en.wikipedia.org/static/images/mobile/copyright/wikipedia-tagline-en-25.svg",
+    "status": 200,
+    "contentType": "image/svg+xml",
+    "bytes": 15219,
+    "sha256": "400508c091b4e9cd71f55512b8c871e08e4ad6ddfc54597c6ec0733d67d064ca",
+    "fetchedAt": "2026-09-19T21:01:35.423Z",
+    "via": "runtime",
+    "composedFrom": "/static/images/mobile/copyright/wikipedia-tagline-en-25.svg",
+    "path": "en.wikipedia.org/static/images/mobile/copyright/wikipedia-tagline-en-25.svg"
+   },
+   {
+    "url": "https://en.wikipedia.org/ins-502b/v2/events?hasty=true",
+    "via": "runtime",
+    "composedFrom": "/ins-502b/v2/events?hasty=true",
+    "fetchedAt": "2026-09-19T21:01:36.001Z",
+    "error": "no candidate origin answered 2xx (tried 2: https://en.wikipedia.org/ins-502b/v2/events?hasty=true https://en.wikipedia.org/wiki/ins-502b/v2/events?hasty=true)"
+   },
+   {
+    "url": "https://en.wikipedia.org/static/favicon/wikipedia.ico",
+    "status": 200,
+    "contentType": "image/vnd.microsoft.icon",
+    "bytes": 2734,
+    "sha256": "3638de61226857e62cf5187d7d59cf902111ad4f792b5bdff1bfed3f5ed5e608",
+    "fetchedAt": "2026-09-19T21:01:36.140Z",
+    "via": "runtime",
+    "composedFrom": "/_m/en.wikipedia.org/static/favicon/wikipedia.ico",
+    "path": "en.wikipedia.org/static/favicon/wikipedia.ico"
+   },
+   {
+    "url": "https://en.wikipedia.org/w/skins/Vector/resources/skins.vector.styles/images/arrow-down-progressive.svg?5cd6d",
+    "status": 200,
+    "contentType": "image/svg+xml",
+    "bytes": 217,
+    "sha256": "57e3ab07391cd97b6b0c95e7d0142f34af796bff0932d8a83179b0638256a188",
+    "fetchedAt": "2026-09-19T21:01:44.160Z",
+    "via": "runtime",
+    "composedFrom": "/w/skins/Vector/resources/skins.vector.styles/images/arrow-down-progressive.svg?5cd6d",
+    "path": "en.wikipedia.org/w/skins/Vector/resources/skins.vector.styles/images/arrow-down-progressive.svg__q3b2851c5"
+   },
+   {
+    "url": "https://en.wikipedia.org/w/skins/Vector/resources/skins.vector.styles/images/link-external-small-ltr-progressive.svg?fb64d",
+    "status": 200,
+    "contentType": "image/svg+xml",
+    "bytes": 298,
+    "sha256": "b324430a72a978ffc29853c1dbb95679833c58b30e5b5d10e5063f96f98c5ba2",
+    "fetchedAt": "2026-09-19T21:01:44.468Z",
+    "via": "runtime",
+    "composedFrom": "/w/skins/Vector/resources/skins.vector.styles/images/link-external-small-ltr-progressive.svg?fb64d",
+    "path": "en.wikipedia.org/w/skins/Vector/resources/skins.vector.styles/images/link-external-small-ltr-progressive.svg__q12457153"
+   },
+   {
+    "url": "https://en.wikipedia.org/w/resources/src/mediawiki.skinning/images/magnify-clip-ltr.svg?8330e",
+    "status": 200,
+    "contentType": "image/svg+xml",
+    "bytes": 305,
+    "sha256": "78f5ef3e585b3073c58b955ace7c662e51ee29bb2ff4ef4b0769bc46e8d7110c",
+    "fetchedAt": "2026-09-19T21:01:44.598Z",
+    "via": "runtime",
+    "composedFrom": "/w/resources/src/mediawiki.skinning/images/magnify-clip-ltr.svg?8330e",
+    "path": "en.wikipedia.org/w/resources/src/mediawiki.skinning/images/magnify-clip-ltr.svg__qe9b05211"
+   },
+   {
+    "url": "https://en.wikipedia.org/w/resources/src/jquery.tablesorter.styles/images/sort_both.svg?0e440",
+    "status": 200,
+    "contentType": "image/svg+xml",
+    "bytes": 171,
+    "sha256": "97bc609b5e47b7f61dc6b6149e2149f2af49c647f3b73dff16d866b21c4c5c94",
+    "fetchedAt": "2026-09-19T21:01:44.745Z",
+    "via": "runtime",
+    "composedFrom": "/w/resources/src/jquery.tablesorter.styles/images/sort_both.svg?0e440",
+    "path": "en.wikipedia.org/w/resources/src/jquery.tablesorter.styles/images/sort_both.svg__q3ffa9b84"
+   }
+  ],
+  "baseUrl": "https://en.wikipedia.org/wiki/Nicolas_Bourbaki",
+  "runtimeCapture": {
+   "at": "2026-09-19T21:01:44.746Z",
+   "rounds": 2,
+   "converged": false,
+   "docSha256": "a1128faf0a17ef989d378154140644065309b67b7a85fd700bbb02f6f8b325a6",
+   "stored": 10,
+   "declined": 0,
+   "unresolvable": 1,
+   "storedBytes": 364266
+  }
+ },
+ {
+  "id": "hn_front",
+  "stack": "server-rendered, table layout, minimal CSS",
+  "requestedUrl": "https://news.ycombinator.com/",
+  "finalUrl": "https://news.ycombinator.com/",
+  "status": 200,
+  "contentType": "text/html; charset=utf-8",
+  "csp": "default-src 'self'; script-src 'self' 'unsafe-inline' https://www.google.com/recaptcha/ https://www.gstatic.com/recaptcha/ https://cdnjs.cloudflare.com/; frame-src 'self' https://www.google.com/recaptcha/; style-src 'self' 'unsafe-inline'; img-src 'self' https://account.ycombinator.com; frame-ancestors 'self'",
+  "bytes": 34327,
+  "sha256": "963da91cf7e6362f3fb32dd894c216a68a671cf05e4005e3049e3c3d68b5b473",
+  "fetchedAt": "2026-09-19T21:00:28.412Z",
+  "resources": [
+   {
+    "url": "https://news.ycombinator.com/hn.js?Ro13umrbtHiT536hT1ka",
+    "status": 200,
+    "contentType": "text/javascript; charset=utf-8",
+    "bytes": 5217,
+    "sha256": "2e38ff883bd36dc4cc26f129f19169b0357cf32059988c926a4f73e5bfaa37f0",
+    "fetchedAt": "2026-09-19T21:00:28.764Z",
+    "path": "news.ycombinator.com/hn.js__q0f7fbcc2"
+   },
+   {
+    "url": "https://news.ycombinator.com/news.css?Ro13umrbtHiT536hT1ka",
+    "status": 200,
+    "contentType": "text/css; charset=utf-8",
+    "bytes": 7418,
+    "sha256": "de4722818cb6e7859a4287ba956bf04973a63ca97318f6d4c4f44d55e7d454b5",
+    "fetchedAt": "2026-09-19T21:01:53.029Z",
+    "via": "runtime",
+    "composedFrom": "/_m/news.ycombinator.com/news.css?Ro13umrbtHiT536hT1ka",
+    "path": "news.ycombinator.com/news.css__q0f7fbcc2"
+   },
+   {
+    "url": "https://news.ycombinator.com/y18.svg",
+    "status": 200,
+    "contentType": "image/svg+xml",
+    "bytes": 315,
+    "sha256": "e1b6622b6ea15f1f48dfda6e720265cd426981d2a7ae1f9d7ddeb8409897c6ff",
+    "fetchedAt": "2026-09-19T21:01:53.664Z",
+    "via": "runtime",
+    "composedFrom": "/y18.svg",
+    "path": "news.ycombinator.com/y18.svg"
+   },
+   {
+    "url": "https://news.ycombinator.com/s.gif",
+    "status": 200,
+    "contentType": "image/gif",
+    "bytes": 43,
+    "sha256": "2dfe28cbdb83f01c940de6a88ab86200154fd772d568035ac568664e52068363",
+    "fetchedAt": "2026-09-19T21:01:54.016Z",
+    "via": "runtime",
+    "composedFrom": "/s.gif",
+    "path": "news.ycombinator.com/s.gif"
+   },
+   {
+    "url": "https://news.ycombinator.com/triangle.svg",
+    "status": 200,
+    "contentType": "image/svg+xml",
+    "bytes": 131,
+    "sha256": "3e155f895282e786a1a3c540eba727b4f04865eccbdad5dac17b3c2e184a5bd8",
+    "fetchedAt": "2026-09-19T21:02:01.856Z",
+    "via": "runtime",
+    "composedFrom": "/_m/news.ycombinator.com/triangle.svg",
+    "path": "news.ycombinator.com/triangle.svg"
+   }
+  ],
+  "baseUrl": "https://news.ycombinator.com/",
+  "runtimeCapture": {
+   "at": "2026-09-19T21:02:01.857Z",
+   "rounds": 2,
+   "converged": false,
+   "docSha256": "963da91cf7e6362f3fb32dd894c216a68a671cf05e4005e3049e3c3d68b5b473",
+   "stored": 4,
+   "declined": 0,
+   "unresolvable": 0,
+   "storedBytes": 7907
+  }
+ },
+ {
+  "id": "csswg_flexbox",
+  "stack": "Bikeshed static HTML",
+  "requestedUrl": "https://drafts.csswg.org/css-flexbox-1/",
+  "finalUrl": "https://drafts.csswg.org/css-flexbox-1/",
+  "status": 200,
+  "contentType": "text/html; charset=utf-8",
+  "csp": "",
+  "bytes": 1546063,
+  "sha256": "3839f65eb1c79cb74e7733885e04f42893a94d1aee244f9c336dc68b0fee631b",
+  "fetchedAt": "2026-09-19T21:00:29.365Z",
+  "resources": [
+   {
+    "url": "https://www.w3.org/scripts/TR/2021/fixup.js",
+    "status": 200,
+    "contentType": "application/javascript; charset=utf-8",
+    "bytes": 16623,
+    "sha256": "81bd814cfab6e6be40978c9d22f93472635040df12c51071f2a7e557a36474d8",
+    "fetchedAt": "2026-09-19T21:00:29.579Z",
+    "path": "www.w3.org/scripts/TR/2021/fixup.js"
+   },
+   {
+    "url": "https://www.w3.org/StyleSheets/TR/2021/W3C-ED",
+    "via": "runtime",
+    "composedFrom": "/_m/www.w3.org/StyleSheets/TR/2021/W3C-ED",
+    "fetchedAt": "2026-09-19T21:02:10.189Z",
+    "error": "no candidate origin answered 2xx (tried 1: https://www.w3.org/StyleSheets/TR/2021/W3C-ED)"
+   },
+   {
+    "url": "https://drafts.csswg.org/css-flexbox-1/images/computer.jpg",
+    "status": 200,
+    "contentType": "image/jpeg",
+    "bytes": 7106,
+    "sha256": "e695cf7843d7443241e1612ad2f9ba815fd32977042a3ea71dcbaff2e4b10f32",
+    "fetchedAt": "2026-09-19T21:02:10.947Z",
+    "via": "runtime",
+    "composedFrom": "/images/computer.jpg",
+    "path": "drafts.csswg.org/css-flexbox-1/images/computer.jpg"
+   },
+   {
+    "url": "https://drafts.csswg.org/css-flexbox-1/images/printer.png",
+    "status": 200,
+    "contentType": "image/png",
+    "bytes": 1959,
+    "sha256": "42136eec59061ce9ad5e732670ef420fae2c8185c9a24663a1c66a021706a2b7",
+    "fetchedAt": "2026-09-19T21:02:11.394Z",
+    "via": "runtime",
+    "composedFrom": "/images/printer.png",
+    "path": "drafts.csswg.org/css-flexbox-1/images/printer.png"
+   },
+   {
+    "url": "https://drafts.csswg.org/css-flexbox-1/images/flex-flow3.svg",
+    "status": 200,
+    "contentType": "image/svg+xml",
+    "bytes": 901,
+    "sha256": "2b98b848c406dc5bdf6abac46dfddf58ad91f2b6c7b0087392b0842943f94fbd",
+    "fetchedAt": "2026-09-19T21:02:11.848Z",
+    "via": "runtime",
+    "composedFrom": "/images/flex-flow3.svg",
+    "path": "drafts.csswg.org/css-flexbox-1/images/flex-flow3.svg"
+   },
+   {
+    "url": "https://drafts.csswg.org/css-flexbox-1/images/flex-direction-terms.svg",
+    "status": 200,
+    "contentType": "image/svg+xml",
+    "bytes": 2999,
+    "sha256": "22d1e9717f1b2daf05725aeb8fc804b12c6651093791b30a54e7bd87059606e1",
+    "fetchedAt": "2026-09-19T21:02:12.282Z",
+    "via": "runtime",
+    "composedFrom": "/images/flex-direction-terms.svg",
+    "path": "drafts.csswg.org/css-flexbox-1/images/flex-direction-terms.svg"
+   },
+   {
+    "url": "https://drafts.csswg.org/css-flexbox-1/images/flex-flow2.svg",
+    "status": 200,
+    "contentType": "image/svg+xml",
+    "bytes": 896,
+    "sha256": "5736196a4894869ed1063afc29fb0927f51394581260c4493dd8a5204d7cfb1a",
+    "fetchedAt": "2026-09-19T21:02:12.867Z",
+    "via": "runtime",
+    "composedFrom": "/images/flex-flow2.svg",
+    "path": "drafts.csswg.org/css-flexbox-1/images/flex-flow2.svg"
+   },
+   {
+    "url": "https://drafts.csswg.org/css-flexbox-1/images/flex-flow1.svg",
+    "status": 200,
+    "contentType": "image/svg+xml",
+    "bytes": 897,
+    "sha256": "06762736eda16059562539c42602e9232b57a40d93e4827b149b8018edd2cc1b",
+    "fetchedAt": "2026-09-19T21:02:13.562Z",
+    "via": "runtime",
+    "composedFrom": "/images/flex-flow1.svg",
+    "path": "drafts.csswg.org/css-flexbox-1/images/flex-flow1.svg"
+   },
+   {
+    "url": "https://drafts.csswg.org/css-flexbox-1/images/flex-flow-english.svg",
+    "status": 200,
+    "contentType": "image/svg+xml",
+    "bytes": 896,
+    "sha256": "15ecc163375a7e1f87fd2c6c4615f5ca018a8dfd10801991fadd655ac410f0f1",
+    "fetchedAt": "2026-09-19T21:02:14.006Z",
+    "via": "runtime",
+    "composedFrom": "/images/flex-flow-english.svg",
+    "path": "drafts.csswg.org/css-flexbox-1/images/flex-flow-english.svg"
+   },
+   {
+    "url": "https://drafts.csswg.org/css-flexbox-1/images/flex-flow-japanese.svg",
+    "status": 200,
+    "contentType": "image/svg+xml",
+    "bytes": 907,
+    "sha256": "67bb532159ad10da1f59265f10fbc1bf86e45955bf9c444d3b8a80d08c2b92e8",
+    "fetchedAt": "2026-09-19T21:02:14.331Z",
+    "via": "runtime",
+    "composedFrom": "/images/flex-flow-japanese.svg",
+    "path": "drafts.csswg.org/css-flexbox-1/images/flex-flow-japanese.svg"
+   },
+   {
+    "url": "https://drafts.csswg.org/css-flexbox-1/images/flex-order-page.svg",
+    "status": 200,
+    "contentType": "image/svg+xml",
+    "bytes": 1054,
+    "sha256": "48d0ccd54347aba441ce87877a25dc0b4aa4e9022e9de98d063a93306c12a51a",
+    "fetchedAt": "2026-09-19T21:02:14.699Z",
+    "via": "runtime",
+    "composedFrom": "/images/flex-order-page.svg",
+    "path": "drafts.csswg.org/css-flexbox-1/images/flex-order-page.svg"
+   },
+   {
+    "url": "https://www.w3.org/StyleSheets/TR/2021/dark.css",
+    "status": 200,
+    "contentType": "text/css; charset=utf-8",
+    "bytes": 3384,
+    "sha256": "c303961273d94d393d67e11079de144bd5b2ac530b5978f95781fb7c69b9dfa0",
+    "fetchedAt": "2026-09-19T21:02:14.897Z",
+    "via": "runtime",
+    "composedFrom": "/_m/www.w3.org/StyleSheets/TR/2021/dark.css",
+    "path": "www.w3.org/StyleSheets/TR/2021/dark.css"
+   },
+   {
+    "url": "https://drafts.csswg.org/css-flexbox-1/images/flex-item-determination.png",
+    "status": 200,
+    "contentType": "image/png",
+    "bytes": 1334,
+    "sha256": "c7ab10becdba70d34158ac8a07e168658f8bba0d22ee3d9c2a19b573cba3f864",
+    "fetchedAt": "2026-09-19T21:02:15.354Z",
+    "via": "runtime",
+    "composedFrom": "/images/flex-item-determination.png",
+    "path": "drafts.csswg.org/css-flexbox-1/images/flex-item-determination.png"
+   },
+   {
+    "url": "https://drafts.csswg.org/css-flexbox-1/images/multiline-no-flex.svg",
+    "status": 200,
+    "contentType": "image/svg+xml",
+    "bytes": 897,
+    "sha256": "293afa310565d72ab552a9d428fb96c73152d8c56aeb7eb5f423f9e8e533abcb",
+    "fetchedAt": "2026-09-19T21:02:15.650Z",
+    "via": "runtime",
+    "composedFrom": "/images/multiline-no-flex.svg",
+    "path": "drafts.csswg.org/css-flexbox-1/images/multiline-no-flex.svg"
+   },
+   {
+    "url": "https://drafts.csswg.org/css-flexbox-1/images/multiline-flex.svg",
+    "status": 200,
+    "contentType": "image/svg+xml",
+    "bytes": 900,
+    "sha256": "0c5c5d47d0ea80ff2c91e2725abbc462966638386f76f061dcdd107e5472e770",
+    "fetchedAt": "2026-09-19T21:02:16.306Z",
+    "via": "runtime",
+    "composedFrom": "/images/multiline-flex.svg",
+    "path": "drafts.csswg.org/css-flexbox-1/images/multiline-flex.svg"
+   },
+   {
+    "url": "https://drafts.csswg.org/css-flexbox-1/images/rel-vs-abs-flex.svg",
+    "status": 200,
+    "contentType": "image/svg+xml",
+    "bytes": 2896,
+    "sha256": "9e2d0ba3d9f8e5d583869b9c43ae626b8ef5462e3d89426ec7ed994727789d19",
+    "fetchedAt": "2026-09-19T21:02:16.721Z",
+    "via": "runtime",
+    "composedFrom": "/images/rel-vs-abs-flex.svg",
+    "path": "drafts.csswg.org/css-flexbox-1/images/rel-vs-abs-flex.svg"
+   },
+   {
+    "url": "https://drafts.csswg.org/css-flexbox-1/images/flex-pack.svg",
+    "status": 200,
+    "contentType": "image/svg+xml",
+    "bytes": 2399,
+    "sha256": "22c024b834af854f352865ac641627122462c4ca92f081106a8226f1681d8319",
+    "fetchedAt": "2026-09-19T21:02:17.275Z",
+    "via": "runtime",
+    "composedFrom": "/images/flex-pack.svg",
+    "path": "drafts.csswg.org/css-flexbox-1/images/flex-pack.svg"
+   },
+   {
+    "url": "https://drafts.csswg.org/css-flexbox-1/images/flex-align.svg",
+    "status": 200,
+    "contentType": "image/svg+xml",
+    "bytes": 3609,
+    "sha256": "8c789d5ec62580102eeeb324e9f25de6fd130fbecec796f424cffda3392f75ad",
+    "fetchedAt": "2026-09-19T21:02:17.565Z",
+    "via": "runtime",
+    "composedFrom": "/images/flex-align.svg",
+    "path": "drafts.csswg.org/css-flexbox-1/images/flex-align.svg"
+   },
+   {
+    "url": "https://drafts.csswg.org/css-flexbox-1/images/align-content-example.svg",
+    "status": 200,
+    "contentType": "image/svg+xml",
+    "bytes": 4307,
+    "sha256": "879c3034517fb2062fbb3c954fffc8db441808a26284a7d78e3afba7e6a1c1a7",
+    "fetchedAt": "2026-09-19T21:02:17.875Z",
+    "via": "runtime",
+    "composedFrom": "/images/align-content-example.svg",
+    "path": "drafts.csswg.org/css-flexbox-1/images/align-content-example.svg"
+   },
+   {
+    "url": "https://drafts.csswg.org/csslogo.ico",
+    "status": 200,
+    "contentType": "image/vnd.microsoft.icon",
+    "bytes": 15086,
+    "sha256": "70fa7b45e3635fdf3ad4918c2f1015f932a1efed4ebab6a24cf39980bfa020d2",
+    "fetchedAt": "2026-09-19T21:02:18.023Z",
+    "via": "runtime",
+    "composedFrom": "/_m/drafts.csswg.org/csslogo.ico",
+    "path": "drafts.csswg.org/csslogo.ico"
+   }
+  ],
+  "baseUrl": "https://drafts.csswg.org/css-flexbox-1/",
+  "runtimeCapture": {
+   "at": "2026-09-19T21:02:25.401Z",
+   "rounds": 2,
+   "converged": true,
+   "docSha256": "3839f65eb1c79cb74e7733885e04f42893a94d1aee244f9c336dc68b0fee631b",
+   "stored": 18,
+   "declined": 0,
+   "unresolvable": 1,
+   "storedBytes": 52427
+  }
  }
 ]
