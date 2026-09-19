@@ -372,6 +372,80 @@ static void tw_distribute(CssPx *cols, const TableColumnWidth *head, size_t n, C
     }
 }
 
+/* ---- §17.5.2's SUBJECT ---------------------------------------------------------------------------------
+   THE REFUSAL IS ONE FUNCTION AND NOT ONE PER ENTRY. Both of this component's entries are stated by §17.5.2
+   over "the 'table' or 'inline-table' element" and both have the same answer for every other box type, so a
+   second copy of this crash would be a second reading of §17.2 The CSS table model's ten box types, free to
+   drift from this one about which of them is routed where. IT NAMES ITS SUBJECT AND NOT A CALL SITE, which is
+   what makes one copy enough: the ADDRESS a reader needs here is the ELEMENT, which `box_subject` prints. */
+static void tw_require_table_box(lxb_dom_element_t *table)
+{
+    char *display = tw_computed(table, "display");
+    bool is_table_box = table_box_kind_generates_table_box(table_box_kind(display));
+    char nbuf[160];
+
+    free(display);
+    if (is_table_box) return;
+    DFAILF("%s: CSS 2.1 §17.5.2 Table width algorithms: the 'table-layout' property is stated over a TABLE "
+           "box — both of its final rules name \"the 'table' or 'inline-table' element\" — and this box's "
+           "computed `display` (printed above) is a different one of CSS 2.1 §17.2 The CSS table model's "
+           "box types. NEITHER OF THIS COMPONENT'S TWO QUESTIONS IS ASKED OF ONE — §17.5.2 states the used "
+           "width over \"the 'table' or 'inline-table' element\" and css-sizing-3 §5.1 \"Intrinsic Sizes\"' "
+           "pair is the same box's. The width of a table-internal box must not be answered "
+           "from it: a CELL's is the used width of the columns it occupies, which this component "
+           "distributes and reports in `TableUsedWidths.columns` and which "
+           "`table_cell_used_border_box` takes out of them; a ROW's and a ROW GROUP's is NOT the "
+           "table's own content width, which an earlier form of this line claimed — §17.5 Visual layout "
+           "of table contents' rules 1 and 2 give each of them the whole grid row, and that section's own "
+           "last paragraph then places their EDGES, \"in the separated borders model the edges coincide "
+           "with the border edges of cells, and thus in this model there may be gaps between the rows, "
+           "columns, row groups or column groups corresponding to the 'border-spacing' property\", so a "
+           "row is narrower than the table's content width by the TWO OUTER spacings §17.6.1 The "
+           "separated borders model counts into it; and a COLUMN box's is that section's rules 3 and 4, "
+           "which nothing in this directory places yet. ROUTE the caller to the table box above this one "
+           "(core/layout/table_box.h's `table_box_table_of`) and ask it for the columns the caller wants",
+           box_subject(table, nbuf, sizeof nbuf));
+}
+
+/* ---- §17.5.2.2's MIN AND MAX ----------------------------------------------------------------------------
+   The two sums §17.5.2.2 Automatic table layout's final rules are stated over, named in the section's own
+   words: "the minimum width required by all the columns plus cell spacing or borders (MIN)" and "the maximum
+   width required by the columns plus cell spacing or borders (MAX)". The "plus cell spacing or borders" is
+   `spacing_total` — §17.6.1 The separated borders model's term, already zero under §17.6.2 The collapsing
+   border model, where those borders arrive inside the column widths instead.
+   IT IS ONE LOOP WITH TWO CALLERS because the pair is ONE fact about a table and the two entries below would
+   otherwise each own a copy of it — two sums over one array, free to disagree about whether the spacing is in.
+   The pair is the operand of a COMPARISON in both of them, which is why the relation is asserted here rather
+   than at either caller: core/layout/table_column_width.c asserts `max >= min` per column at its own boundary,
+   so a crossed pair after summing is this loop's arithmetic and not a document. */
+typedef struct {
+    CssPx min;   /* §17.5.2.2's MIN */
+    CssPx max;   /* §17.5.2.2's MAX */
+} TwColumnSums;
+
+static TwColumnSums tw_column_sums(const TableColumnWidth *head, size_t n, CssPx spacing_total)
+{
+    TwColumnSums s;
+    size_t i;
+
+    DCHECK(head != NULL || n == 0,
+           "CSS 2.1 §17.5.2.2's MIN and MAX were summed over a non-zero column count with no array — "
+           "`table_column_widths` stores NULL only for a grid with no columns");
+    s.min = spacing_total;
+    s.max = spacing_total;
+    for (i = 0; i < n; i++) {
+        s.min = css_px_add(s.min, head[i].min);
+        s.max = css_px_add(s.max, head[i].max);
+    }
+    DCHECK(s.min.px >= 0.0 && s.max.px >= s.min.px,
+           "CSS 2.1 §17.5.2.2's MIN and MAX came out NEGATIVE or CROSSED. Every term of either is a "
+           "non-negative column width or the same non-negative spacing total, and core/layout/"
+           "table_column_width.c asserts `max >= min` for each column where it answers them — so a crossed sum "
+           "here is arithmetic that lost an operand, and §17.5.2.2's final rules would then put the table's "
+           "own width on the wrong side of a comparison with nothing downstream to say so");
+    return s;
+}
+
 /* ---- §17.5.2.2 Automatic table layout's FINAL RULES ---------------------------------------------------------
    The four steps are core/layout/table_column_width.h's; what is left is the two rules under "Column and
    caption widths influence the final table width as follows", plus the sums MIN and MAX those rules are stated
@@ -380,7 +454,8 @@ static void tw_auto_layout(lxb_dom_element_t *table, const TableGrid *grid, CssP
                            bool has_declared, CssPx declared, TableUsedWidths *out)
 {
     TableColumnWidth *head = NULL;
-    CssPx spacing_total, min_sum, max_sum, capmin, used;
+    TwColumnSums sums;
+    CssPx min_sum, max_sum, capmin, used;
     size_t n, i;
 
     n = table_column_widths(table, grid, &head);
@@ -390,13 +465,9 @@ static void tw_auto_layout(lxb_dom_element_t *table, const TableGrid *grid, CssP
     DCHECK(head != NULL || n == 0,
            "CSS 2.1 §17.5.2.2's four steps answered a non-zero column count with no array — that entry stores "
            "NULL only for a grid with no columns");
-    spacing_total = tw_spacing_total(spacing, n);
-    min_sum = spacing_total;
-    max_sum = spacing_total;
-    for (i = 0; i < n; i++) {
-        min_sum = css_px_add(min_sum, head[i].min);
-        max_sum = css_px_add(max_sum, head[i].max);
-    }
+    sums = tw_column_sums(head, n, tw_spacing_total(spacing, n));
+    min_sum = sums.min;
+    max_sum = sums.max;
     capmin = tw_capmin(table);
     if (has_declared) {
         /* RULE 1: "If the 'table' or 'inline-table' element's 'width' property has a computed value (W) other
@@ -632,10 +703,9 @@ void table_widths(lxb_dom_element_t *table, const TableGrid *grid, TableUsedWidt
 {
     CssBorderSpacing spacing;
     CssPx used_spacing, edges, declared = css_px(0.0), check_sum, slack;
-    char *display, *layout;
-    bool is_table_box, fixed, has_declared, collapsing;
+    char *layout;
+    bool fixed, has_declared, collapsing;
     size_t i;
-    char nbuf[160];
 
     DCHECK(table != NULL && grid != NULL && out != NULL,
            "CSS 2.1 §17.5.2's table width was asked for with no element, no grid or nowhere to put it. The grid "
@@ -645,27 +715,7 @@ void table_widths(lxb_dom_element_t *table, const TableGrid *grid, TableUsedWidt
            "CSS 2.1 §17.5.2 was handed a grid with no cell array and a non-zero cell count — `table_grid_build` "
            "stores NULL only for a table whose rows generate no cell, so the two have been carried apart since "
            "it answered");
-    display = tw_computed(table, "display");
-    is_table_box = table_box_kind_generates_table_box(table_box_kind(display));
-    free(display);
-    if (!is_table_box)
-        DFAILF("%s: CSS 2.1 §17.5.2 Table width algorithms: the 'table-layout' property is stated over a TABLE "
-               "box — both of its final rules name \"the 'table' or 'inline-table' element\" — and this box's "
-               "computed `display` (printed above) is a different one of CSS 2.1 §17.2 The CSS table model's "
-               "box types. The width of a table-internal box is NOT this question and must not be answered "
-               "from it: a CELL's is the used width of the columns it occupies, which this component "
-               "distributes and reports in `TableUsedWidths.columns` and which "
-               "`table_cell_used_border_box` above takes out of them; a ROW's and a ROW GROUP's is NOT the "
-               "table's own content width, which an earlier form of this line claimed — §17.5 Visual layout "
-               "of table contents' rules 1 and 2 give each of them the whole grid row, and that section's own "
-               "last paragraph then places their EDGES, \"in the separated borders model the edges coincide "
-               "with the border edges of cells, and thus in this model there may be gaps between the rows, "
-               "columns, row groups or column groups corresponding to the 'border-spacing' property\", so a "
-               "row is narrower than the table's content width by the TWO OUTER spacings §17.6.1 The "
-               "separated borders model counts into it; and a COLUMN box's is that section's rules 3 and 4, "
-               "which nothing in this directory places yet. ROUTE the caller to the table box above this one "
-               "(core/layout/table_box.h's `table_box_table_of`) and ask it for the columns the caller wants",
-               box_subject(table, nbuf, sizeof nbuf));
+    tw_require_table_box(table);
     /* §17.6's MODEL, ASKED ONCE FOR THE WHOLE ALGORITHM. It is a fact about the TABLE — `border-collapse` is
        `Inherited: yes` and its Applies-to line is "'table' and 'inline-table' elements" — so every term below
        takes its arm from this one read and no arm re-asks. */
@@ -748,6 +798,70 @@ void table_widths(lxb_dom_element_t *table, const TableGrid *grid, TableUsedWidt
 }
 
 /* See table_width.h for the reading the N-1 spacings encode and for why this is a BORDER-box number. */
+/* ---- css-sizing-3 §5.1's PAIR FOR A TABLE BOX ---------------------------------------------------------------
+   §17.5.2.2 Automatic table layout's second final rule evaluated at css-sizing-3 §5.1's two hypothetical
+   containing blocks — see core/layout/table_width.h for the derivation, for why §17.5.2.1 Fixed table layout
+   has no arm in it, and for why this is NOT `table_widths` with its answer read out.
+   NOTHING HERE READS THE CONTAINING BLOCK, AND THAT IS THE INVARIANT THIS ENTRY IS BUILT ON rather than a
+   property it happens to have: `table_column_widths` reads none, `tw_capmin` resolves a caption's cyclic
+   percentages to zero under css-sizing-3 §5.2.1, and the table's own `width` is not read at all because §5.1
+   removes it ("given an auto preferred size in that axis"). A read added to any of the three turns an
+   ordinary `<div style="float:left"><table>…</table></div>` into unbounded recursion through
+   CSS 2.2 §10.3.5's shrink-to-fit. `tw_table_edges` IS THE ONE A READER WILL REACH FOR AND IT IS THE ONE THAT WOULD
+   DO IT — it resolves a PERCENTAGE padding on the table through core/layout/used_value.h, against the table's
+   own containing block. Its absence here is a DERIVATION and not an oversight: core/layout/intrinsic_size.h
+   contracts for a CONTENT-box width, so the table box's own padding and border are the CALLER's
+   css-sizing-3 §3.3 conversion, and `table_widths` reads those edges only to convert the DECLARED border-box width that
+   §5.1 has already removed. */
+IntrinsicInlineSizes table_intrinsic_inline_sizes(lxb_dom_element_t *table, const TableGrid *grid)
+{
+    TableColumnWidth *head = NULL;
+    IntrinsicInlineSizes out;
+    TwColumnSums sums;
+    CssBorderSpacing spacing;
+    CssPx capmin;
+    bool collapsing;
+    size_t n;
+
+    DCHECK(table != NULL && grid != NULL,
+           "css-sizing-3 §5.1's intrinsic inline sizes were asked of a table with no element or no grid. The "
+           "grid is the OPERAND §17.5.2.2 Automatic table layout's four steps are stated over, and nothing "
+           "before core/layout/table_grid.h says which cells occupy which column");
+    tw_require_table_box(table);
+    /* §17.6's MODEL AND §17.6.1's SPACING, read exactly as `table_widths` reads them and for the same reason:
+       `border-collapse` is a fact about the TABLE, so one read serves every term. The spacing is a TERM of MIN
+       and MAX — §17.5.2.2 names it in both ("plus cell spacing or borders") — and it is the one input this
+       entry shares with the used-width algorithm, which is why both take it from `tw_used_spacing` rather than
+       from the property. */
+    collapsing = table_border_collapse_selected(table);
+    spacing = css_computed_border_spacing(table);
+    n = table_column_widths(table, grid, &head);
+    DCHECK(n == grid->ncols,
+           "CSS 2.1 §17.5.2.2's four steps answered a different number of columns than the grid they were run "
+           "over holds — that entry answers `grid->ncols` and nothing else, so the two have come apart");
+    sums = tw_column_sums(head, n, tw_spacing_total(tw_used_spacing(spacing.horizontal, collapsing), n));
+    free(head);
+    /* CAPMIN IS A TERM OF BOTH SIZES AND NOT OF NEITHER, because §17.5.2.2's rule is what this function is the
+       evaluation of and CAPMIN is in that rule at both containing blocks — max(CAPMIN, MIN) at zero, and
+       max(MAX, CAPMIN) at infinity. §17.4 Tables in the visual formatting model puts the caption in the
+       WRAPPER rather than in the table box, which is why this reads as though it were the wrong box's term and
+       is not: §17.5.2.2 floors the TABLE's own width by it, and §17.4 then takes the wrapper's width from that
+       number, so the caption reaches the wrapper through the table box in the used-width algorithm and must
+       reach it the same way here. */
+    capmin = tw_capmin(table);
+    out.min_content = css_px_max(sums.min, capmin);
+    out.max_content = css_px_max(sums.max, capmin);
+    DCHECK(out.min_content.px >= 0.0 && out.max_content.px >= out.min_content.px,
+           "css-sizing-3 §5.1's intrinsic inline sizes of a TABLE box came out NEGATIVE or CROSSED. Each is a "
+           "maximum of CAPMIN with one of §17.5.2.2's two sums, both of which `tw_column_sums` has just "
+           "asserted non-negative and uncrossed and `tw_capmin` non-negative — and a maximum taken against ONE "
+           "common operand preserves the order of the other two, so a crossed pair here is arithmetic rather "
+           "than a document. It is asserted at the boundary because core/layout/intrinsic_size.h's consumers "
+           "read the pair as two ends of CSS 2.2 §10.3.5's clamp, where a crossed pair silently returns the "
+           "wrong end");
+    return out;
+}
+
 CssPx table_cell_used_border_box(const TableUsedWidths *widths, const TableGridCell *cell)
 {
     CssPx w;

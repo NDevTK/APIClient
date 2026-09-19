@@ -17,6 +17,9 @@
 #include "core/layout/intrinsic_size.h"
 #include "core/layout/phrasing_break.h"
 #include "core/layout/replaced_element.h"
+#include "core/layout/table_box.h"
+#include "core/layout/table_grid.h"
+#include "core/layout/table_width.h"
 #include "core/layout/text_run.h"
 #include "core/layout/used_value.h"
 
@@ -971,6 +974,23 @@ static IntrinsicInlineSizes is_replaced_sizes(lxb_dom_element_t *el, const Repla
     return out;
 }
 
+/* CSS 2.1 §17.5.2 Table width algorithms: the 'table-layout' property's BOX, WHOSE MODULE OWNS IT — the same
+   route core/layout/used_value.c's `uv_table_used_width` takes for the USED width, over the same grid, so one
+   table's two numbers are answered by one component out of one structure.
+   THE GRID IS BUILT PER CALL AND NOT CACHED, for core/layout/block_flow.h's reason and used_value.c's: a
+   layout is per-flow state, so a cached grid is shared state solver/dom_cow.h's delta does not swap and a
+   stale one is another flow's document. */
+static IntrinsicInlineSizes is_table_sizes(lxb_dom_element_t *el)
+{
+    TableGrid grid;
+    IntrinsicInlineSizes out;
+
+    table_grid_build(el, &grid);
+    out = table_intrinsic_inline_sizes(el, &grid);
+    table_grid_release(&grid);
+    return out;
+}
+
 IntrinsicInlineSizes intrinsic_inline_sizes(lxb_dom_element_t *el)
 {
     IntrinsicInlineSizes out;
@@ -997,18 +1017,37 @@ IntrinsicInlineSizes intrinsic_inline_sizes(lxb_dom_element_t *el)
         char *d = is_computed(el, "display");
         bool container = block_flow_display_is_block_container(d);
         bool flex = flex_item_display_is_flex_container(d);
+        bool table = table_box_kind_generates_table_box(table_box_kind(d));
 
         free(d);
         /* css-flexbox-1 §3 "Flex Containers: the flex and inline-flex display values"' box, WHOSE MODULE
-           OWNS IT — the same dispatch this crash below describes, taken rather than described for the one
-           `display` that now has a component. §9.9's answer is the same PAIR in the same box as this
-           function's, so a consumer never learns which module produced its number. */
+           OWNS IT — the first of the two dispatches the crash below RECORDS rather than asks for. §9.9's
+           answer is the same PAIR in the same box as this function's, so a consumer never learns which module
+           produced its number. THIS CLAUSE USED TO CALL FLEX "the one `display` that now has a component" and
+           the arm beneath this one made that false in the same diff that added it — which is why the count is
+           gone rather than corrected: the next `display` to gain a module falsifies any number written here. */
         if (flex) return flex_intrinsic_inline_sizes(el);
+        /* CSS 2.1 §17.2 The CSS table model's `table` and `inline-table`, WHOSE MODULE OWNS THEM — the second
+           dispatch the crash below RECORDS, taken rather than asked for. §17.5.2.2 Automatic table layout's
+           answer is the same PAIR in the same box as this function's, so a consumer never learns which module
+           produced its number. THE TWO `display` VALUES TAKE ONE ARM because nothing in §17.5.2 tells them
+           apart: they differ only in the outer display type §17.4 Tables in the visual formatting model gives
+           the wrapper, which is the CALLER's question and not this one's. */
+        if (table) return is_table_sizes(el);
         if (!container)
             DFAIL("css-sizing-3 §5.1's intrinsic inline sizes were asked of a box that is NOT A BLOCK CONTAINER, "
                   "so neither of CSS 2.2 §9.4's two formatting contexts is what lays its content out and "
                   "neither §9.4.2's line boxes nor §9.4.1's stack is the algorithm. Which module owns it is its "
-                  "own `display`, and TWO OF THE THREE ARE NO LONGER AN ALGORITHM TO WRITE HERE. "
+                  "own `display`, and TWO OF THE THREE HAVE LEFT THROUGH ARMS ABOVE THIS LINE, so what still "
+                  "reaches this crash is the GRID and whatever `display` no module here models. "
+                  "A TABLE-INTERNAL BOX IS NOT ONE OF THEM AND MUST NOT BE ANSWERED AS IF IT WERE: a "
+                  "`table-cell` and a `table-caption` ARE block containers and took neither arm nor this "
+                  "crash, and a row, a row group and a column box have no intrinsic inline size of their own "
+                  "at all — CSS 2.1 §17.5 Visual layout of table contents' rules 1 and 2 give a row the whole "
+                  "grid row, so its width is the TABLE's and the question belongs to the table box above it "
+                  "(core/layout/table_box.h's `table_box_table_of`). Reaching this crash with one means "
+                  "core/layout/block_flow.c's classification let a misparented box through, which is where "
+                  "§17.2.1 Anonymous table objects is owed and not here. "
                   "A FLEX CONTAINER LEFT THROUGH THE LINE ABOVE AND THIS SENTENCE USED TO SEND ITS READER TO "
                   "BUILD FLEX LINE BREAKING FOR IT: it said css-flexbox-1 §9.9 \"Intrinsic Sizes\" derives a "
                   "flex container's intrinsic sizes from its flex lines, and §9.9 says the opposite for the "
@@ -1019,17 +1058,24 @@ IntrinsicInlineSizes intrinsic_inline_sizes(lxb_dom_element_t *el)
                   "the whole of §9.3 \"Main Size Determination\" before writing a single contribution. "
                   "core/layout/flex_intrinsic_size.h is the component, and what it still refuses it refuses by "
                   "name. "
-                  "THE TABLE ARM IS NOT ONE EITHER AND THIS LINE USED TO SAY IT WAS: "
-                  "§17.2.1's structure is core/layout/table_box.h's, §17.5 Visual layout of table contents' "
-                  "grid is core/layout/table_grid.h's, and §17.5.2 itself is core/layout/table_width.h's — a "
-                  "reader following the old sentence would have built the whole of it a second time. WHAT IS "
-                  "LEFT FOR THIS ENTRY IS AN EXPORT, NOT A LAYOUT: §17.5.2.2 Automatic table layout names the "
-                  "pair this function returns in its own final rules — \"the minimum width required by all the "
-                  "columns plus cell spacing or borders (MIN)\" and \"the maximum width required by the "
-                  "columns plus cell spacing or borders (MAX)\" — and core/layout/table_width.c computes both "
-                  "to reach a USED width without publishing either, over per-column minima and maxima "
-                  "core/layout/table_column_width.h already exports. So MAKE §17.5.2.2's MIN and MAX a second "
-                  "producer of `IntrinsicInlineSizes` for a table box. WHAT IS LEFT AS A LAYOUT IS THE GRID, "
+                  "A TABLE LEFT THROUGH THE LINE ABOVE AND THIS SENTENCE USED TO SEND ITS READER TO BUILD "
+                  "IT: it is core/layout/table_width.h's `table_intrinsic_inline_sizes`, and what the retired "
+                  "clause got RIGHT is worth keeping because it is why that entry is an EXPORT and not a "
+                  "layout — §17.5.2.2 Automatic table layout names the pair this function returns in its own "
+                  "final rules, \"the minimum width required by all the columns plus cell spacing or borders "
+                  "(MIN)\" and \"the maximum width required by the columns plus cell spacing or borders "
+                  "(MAX)\", over per-column minima and maxima core/layout/table_column_width.h already "
+                  "exports. IT WAS INCOMPLETE ON TWO POINTS AND BOTH CHANGED THE CODE, which is the record a "
+                  "reader re-deriving this needs rather than the instruction. It named MIN and MAX and NOT "
+                  "CAPMIN, and §17.5.2.2's rule this is the evaluation of carries all three — a producer "
+                  "returning the bare column sums reports a table narrower than a caption its own §17.4 "
+                  "wrapper has to hold. And it said EXPORT without saying WHAT MUST NOT BE EXPORTED: the "
+                  "obvious reading is `table_widths`, whose answer is a USED width, and that reads the "
+                  "CONTAINING BLOCK — which for a table inside a float or an inline-block returns through CSS "
+                  "2.2 §10.3.5's shrink-to-fit into THIS function for the ancestor, so the naive export "
+                  "recurses until the C stack ends on an ordinary document. The pair is containing-block-free "
+                  "by css-sizing-3 §5.1's own definition, which removes the preferred size and thereby "
+                  "§17.5.2.1 Fixed table layout with it. WHAT IS LEFT AS A LAYOUT IS THE GRID, "
                   "AND ITS SECTION NUMBER USED TO BE WRONG HERE — this line said css-grid-2 §11.5, which is "
                   "\"Aligning the Grid: the justify-content and align-content properties\" and decides nothing "
                   "about a size. The sentence that governs is css-grid-2 §5.2 \"Sizing Grid Containers\": \"The "

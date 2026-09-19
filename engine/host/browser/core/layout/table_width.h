@@ -70,6 +70,7 @@
 #include <lexbor/dom/dom.h>
 
 #include "core/css/css_length.h"
+#include "core/layout/intrinsic_size.h"
 #include "core/layout/table_grid.h"
 
 /* §17.5.2's ANSWER, which is ONE fact in three shapes and never three facts: `content` is the sum of `columns`
@@ -138,6 +139,56 @@ typedef struct {
    and that number travels into §17.4's wrapper, into core/layout/flow_position.h's coordinates and out through
    CSSOM VIEW as a rectangle no reader can distinguish from a measured one. */
 void table_widths(lxb_dom_element_t *table, const TableGrid *grid, TableUsedWidths *out);
+
+/* css-sizing-3 §5.1 "Intrinsic Sizes"' PAIR FOR A TABLE BOX, over `table` and that table's own `grid` — the
+   SECOND PRODUCER of `IntrinsicInlineSizes` beside core/layout/intrinsic_size.h's own §9.4 walk and
+   core/layout/flex_intrinsic_size.h's, for a box neither of CSS 2.2 §9.4's formatting contexts lays out.
+   `table` must generate a TABLE box, exactly as `table_widths` requires and for the same reason.
+
+   IT IS §17.5.2.2's SECOND FINAL RULE EVALUATED AT TWO CONTAINING BLOCKS, NOT A SECOND ALGORITHM.
+   css-sizing-3 §5.1 states both sizes as ONE hypothetical float with two containing blocks — the min-content size is "the
+   size it would have if it was a float given an auto preferred size in that axis (and no minimum or maximum
+   size in that axis) and if its containing block was zero-sized in that axis", the max-content size the same
+   sentence "and if its containing block was infinitely-sized in that axis" — and CSS 2.1 §17.5.2.2 Automatic
+   table layout's `width: auto` rule is a function of that one number: "If the 'table' or 'inline-table'
+   element has 'width: auto', the used width is the greater of the table's containing block width, CAPMIN, and
+   MIN. However, if either CAPMIN or the maximum width required by the columns plus cell spacing or borders
+   (MAX) is less than that of the containing block, use max(MAX, CAPMIN)." At a ZERO containing block the
+   "However" CANNOT fire — CAPMIN and MAX are sums of non-negative terms, so neither is less than zero — and
+   the rule reads max(CAPMIN, MIN). At an INFINITE one it ALWAYS fires, on CAPMIN alone, and the rule reads
+   max(MAX, CAPMIN). So the pair is max(MIN, CAPMIN) and max(MAX, CAPMIN), and CAPMIN is IN BOTH because
+   §17.5.2.2 put it in the rule this is the evaluation of — a producer returning the bare column sums would
+   report a table narrower than a caption its own wrapper has to hold.
+
+   §17.5.2.1 Fixed table layout IS THEREFORE NOT A SECOND PRODUCER AND HAS NO ARM HERE, WHICH IS A DERIVATION
+   AND NOT AN OMISSION. §5.1 removes the PREFERRED SIZE by definition ("given an auto preferred size in that
+   axis"), and §17.5.2.1's own second paragraph hands a table with no declared width back to the other
+   algorithm: "A value of 'auto' (for both 'display: table' and 'display: inline-table') means use the
+   automatic table layout algorithm." `table_widths` dispatches on a CONJUNCTION (`fixed && has_declared`) and
+   §5.1 strikes out its second half, so `table-layout` is not read here at all and a `fixed` table has the same
+   intrinsic sizes as an `auto` one.
+
+   IT IS NOT `table_widths` WITH THE ANSWER READ OUT, AND THAT IS AN UNBOUNDED RECURSION RATHER THAN A
+   PREFERENCE — the one thing to establish before changing this entry. `table_widths` reaches the CONTAINING
+   BLOCK twice: `tw_declared_content_width` resolves a percentage `width` against it, and the rule above
+   compares against it. For a table inside a FLOAT or an INLINE-BLOCK that read returns through
+   CSS 2.2 §10.3.5's shrink-to-fit, which asks `intrinsic_inline_sizes` for THE ANCESTOR, whose §9.4.1 stack asks this
+   table again: `<div style="float:left"><table>…</table></div>` recurses until the C stack ends. Every operand
+   this entry uses is containing-block-free today and none may stop being so — core/layout/table_column_width.c
+   reads none at all (its percentage arms CRASH rather than resolving, which is what keeps it so), and CAPMIN
+   resolves a caption's cyclic percentages to zero under css-sizing-3 §5.2.1 "Intrinsic Contributions of
+   Percentage-Sized Boxes". RETIREMENT: this record goes when a containing-block read is UNSPELLABLE from this
+   entry rather than merely absent from it — which is what an operand set passed in, instead of reached for,
+   would make it.
+
+   THE ANSWER IS THE TABLE BOX'S CONTENT WIDTH IN §17.6.1's SENSE, which is the box `TableUsedWidths.content`
+   is in and the box core/layout/intrinsic_size.h contracts for ("THE ANSWER IS THE CONTENT BOX'S INLINE
+   SIZE"), so the two producers of one table's two numbers answer in ONE box. §17.4 Tables in the visual
+   formatting model's WRAPPER needs no term of its own here: its width is "the border-edge width of the table
+   box inside it", the wrapper carries no border and no padding, and the caller's own css-sizing-3 §3.3
+   conversion over the TABLE BOX's surround is exactly that edge — the same composition
+   `used_value_border_edge_px` already performs over `TableUsedWidths.content`. */
+IntrinsicInlineSizes table_intrinsic_inline_sizes(lxb_dom_element_t *table, const TableGrid *grid);
 
 /* ONE CELL'S USED BORDER-BOX WIDTH, taken out of the answer above — the number CSS 2.1 §17.5 Visual layout of
    table contents leaves implicit and every consumer of a cell's geometry needs: "Each cell is thus a
