@@ -16,6 +16,7 @@
 #include "core/frame/viewport.h"
 #include "core/layout/block_flow.h"
 #include "core/layout/box_subject.h"
+#include "core/layout/flex_cross_size.h"
 #include "core/layout/flex_item.h"
 #include "core/layout/flex_line.h"
 #include "core/layout/flow_position.h"
@@ -2124,6 +2125,12 @@ typedef struct {
     CssPx max;
 } UvLimits;
 
+/* FORWARD, for the same reason `uv_pass_size`'s below is: css-sizing-3 §3.2's "unless otherwise defined by
+   the RELEVANT LAYOUT MODULE" is answered for a flex item by which AXIS the limit is on, and the predicate
+   that decides that is defined beside the two routes that ask the same question of it — one question in one
+   place beats a declaration-ordering convenience. */
+static bool uv_flex_item_cross_axis(lxb_dom_element_t *el, UvBox box, bool vertical);
+
 /* ONE limit. `is_max` picks the property; `box` is read only where the answer depends on the box's type, which
    is exactly css-sizing-3 §3.2's "unless otherwise defined by the relevant layout module". */
 static bool uv_limit(lxb_dom_element_t *el, UvBox box, bool vertical, bool is_max, CssPx *out)
@@ -2210,7 +2217,30 @@ static bool uv_limit(lxb_dom_element_t *el, UvBox box, bool vertical, bool is_ma
            "both, and a keyword, and the arms above have taken the first three");
     if (is_max && strcmp(len.keyword, "none") == 0) return false;
     if (!is_max && uv_len_is_auto(len)) {
-        if (box == UV_BOX_ITEM)
+        /* css-flexbox-1 §4.5 "Automatic Minimum Size of Flex Items" IS STATED OVER THE MAIN AXIS AND OVER
+           NOTHING ELSE, so a FLEX item's CROSS-axis `min-height: auto` is not its automatic minimum size and
+           never was — §4.5's own sentence is "the used value of a MAIN AXIS automatic minimum size on a flex
+           item whose computed overflow value is non-scrollable is its content-based minimum size". With no
+           module defining the cross axis, css-sizing-3 §3.2 "Sizing Values: …"' own fall-back is the whole
+           rule and it is the same one every non-item box below takes: "UNLESS OTHERWISE DEFINED BY THE
+           RELEVANT LAYOUT MODULE, however, it resolves to a used value of 0."
+           THE CRASH BELOW WAS THEREFORE TOO BROAD BY ONE AXIS, and it is narrowed rather than deleted because
+           it is exactly right about the other one and about the other item kind. It was also UNREACHABLE while
+           it said so — its own text records that "every arm of §10 crashes for a flex or grid item first" —
+           so nothing observed it being wrong, and the diff that makes §9.4 "Cross Size Determination"' step 11
+           answer is the diff that makes it reachable. THAT IS THE ORDER THIS NARROWING BELONGS IN rather than
+           a tidy-up that could have been landed alone: on its own it has no caller, and one commit later it
+           would be the line a `min-height: auto` flex item dies on.
+           A GRID ITEM KEEPS THE CRASH ON BOTH AXES and that is css-grid-1's own scope rather than caution:
+           §6.6 "Automatic Minimum Size of Grid Items" says "the used value of its automatic minimum size IN A
+           GIVEN AXIS is the content-based minimum size if all of the following are true", and its conditions
+           are about the TRACK the item spans — "it spans at least one track in that axis whose min track
+           sizing function is auto" — so both axes are defined and neither is this engine's to answer yet.
+           `uv_flex_item_cross_axis` is what tells the two apart, and it is the same predicate the two routes
+           in `uv_pass_size` ask, so a flex item whose cross size step 11 answers and a flex item whose
+           `min-height: auto` resolves to zero are the SAME SET by construction rather than by two lists
+           agreeing. */
+        if (box == UV_BOX_ITEM && !uv_flex_item_cross_axis(el, box, vertical))
             DFAIL("`min-width`/`min-height` is `auto` on a FLEX or GRID ITEM, which is the one box css-sizing-3 "
                   "§3.2 hands to another module: \"specifies an automatic minimum size. UNLESS OTHERWISE "
                   "DEFINED BY THE RELEVANT LAYOUT MODULE, however, it resolves to a used value of 0.\" "
@@ -2218,9 +2248,16 @@ static bool uv_limit(lxb_dom_element_t *el, UvBox box, bool vertical, bool is_ma
                   "CONTENT-BASED minimum — the item's min-content size, clamped by its specified size "
                   "suggestion and by its natural aspect ratio. THE MIN-CONTENT SIZE IS BUILT "
                   "(core/layout/intrinsic_size.h), so what is missing here is §4.5's clamp and the flex layout "
-                  "it is part of, not the measurement. This element never reaches here through "
-                  "`used_value_px`: every arm of §10 crashes for a flex or grid item first, naming the "
-                  "container's algorithm. BUILD the flex layout");
+                  "it is part of, not the measurement. BUILD the flex layout. "
+                  "THE SENTENCE THAT STOOD HERE SAID THIS ELEMENT NEVER REACHES HERE — \"every arm of §10 "
+                  "crashes for a flex or grid item first\" — AND IT IS HALF RETIRED, which is why it is "
+                  "rewritten rather than dropped: a reader who re-derives it will conclude this crash is "
+                  "decorative. A `row` container's item on its CROSS axis is now ANSWERED by css-flexbox-1 "
+                  "§9.4 \"Cross Size Determination\"' step 11 and REACHES this function, which is exactly "
+                  "the case the test above lets past. What still cannot reach this line is the other three: "
+                  "a `row` container's item on its MAIN axis returns from `uv_sized` before `uv_limits` is "
+                  "called at all, and a `column` container's item and a GRID item still crash in "
+                  "`uv_pass_size` first");
         /* §3.2, for every other box: "it resolves to a used value of 0". Its very next sentence pins that for
            the boxes this component classifies — "for backwards-compatibility, the resolved value of this
            keyword is zero for boxes of all [CSS2] display types: block and inline boxes, inline blocks, and
@@ -3042,13 +3079,75 @@ static CssPx uv_replaced_size(lxb_dom_element_t *el, const ReplacedElement *rep,
     return css_px_add(content, uv_surround_total(uv_surround(el, vertical)));
 }
 
+/* THE ONE FACT BOTH FLEX ROUTES BELOW ARE QUESTIONS OVER — WHICH FLEX CONTAINER THIS BOX IS AN ITEM OF, in a
+   shape css-flexbox-1 §9 is stated about, or NULL. It was the opening of `uv_flex_item_main_size` while that
+   was the only route; §9.4 "Cross Size Determination"' step 11 needs the identical walk for the OTHER axis, so
+   it is one fact here and a predicate at each caller rather than two walks that are free to disagree about
+   which element is the container.
+   WHAT IT ESTABLISHES IS THREE THINGS AND EACH IS A DIFFERENT SECTION'S PRECONDITION.
+     - THE BOX PARENT AND THE DOM PARENT AGREE, which is true exactly when no `display: contents` ancestor
+       sits between them — css-display-3 §2.5 "Box Generation: the none and contents keywords"' splice, where
+       §9's algorithms are stated over the CONTAINER's items and the item list this box is in is not its
+       parent's child list. Both flex components state that precondition in their own asserts and this is
+       where it is established.
+     - THE PARENT IS ITSELF A FLEX CONTAINER, asked of its OWN computed `display` and not only of the box
+       parent's, because those are two reads that a spliced tree makes different values.
+     - THE MAIN AXIS IS THE INLINE AXIS — §5.1 "Flex Flow Direction: the flex-direction property"' mapping,
+       which is what lets each caller name its axis with a `vertical` flag. It is NOT folded into either
+       caller's test, because the two callers want OPPOSITE answers from it and a bit that answered one of
+       them would silently decide the other. */
+static lxb_dom_element_t *uv_flex_item_row_container(lxb_dom_element_t *el, UvBox box)
+{
+    lxb_dom_node_t *parent = lxb_dom_interface_node(el)->parent;
+    lxb_dom_element_t *container;
+    char *bpd;
+    bool is_flex;
+
+    if (box != UV_BOX_ITEM) return NULL;
+    if (parent == NULL || parent->type != LXB_DOM_NODE_TYPE_ELEMENT) return NULL;
+    bpd = css_box_parent_display(lxb_dom_interface_node(el));
+    if (bpd == NULL) return NULL;
+    is_flex = flex_item_display_is_flex_container(bpd);
+    free(bpd);
+    container = lxb_dom_interface_element(parent);
+    if (!is_flex) return NULL;
+    {
+        char *own = css_computed_value(container, "display");
+        bool same = own != NULL && flex_item_display_is_flex_container(own);
+
+        free(own);
+        if (!same) return NULL;
+    }
+    if (flex_container_main_axis(container) != FLEX_MAIN_AXIS_INLINE) return NULL;
+    return container;
+}
+
+/* css-flexbox-1 §9.4 "Cross Size Determination"' STEP 11 OWNS THIS BOX'S SIZE ON THIS AXIS — the CROSS twin
+   of the predicate `uv_flex_item_main_size` is, over the same fact and asking the opposite question of it.
+   A `row` container's CROSS axis is its BLOCK axis by §5.1's mapping and css-writing-modes-4 §3.2 "Block Flow
+   Direction: the writing-mode property" makes a `horizontal-tb` box's block axis the vertical one — which
+   core/layout/flex_cross_size.c asserts for itself rather than taking on trust, so this reads `vertical`
+   alone and that component refuses a container whose writing mode would make it false.
+   IT IS ASKED AT THREE SITES AND IS ONE QUESTION AT ALL THREE, which is why it is a predicate and not an `if`
+   at each: the `auto` arm routes to step 11, the DECLARED arm falls through to §10.6's own answer because
+   step 11's other arm IS that answer, and `uv_limit` reads it to decide whether css-flexbox-1 §4.5
+   "Automatic Minimum Size of Flex Items" is the section that owns a `min-height: auto` on this box. A fourth
+   spelling of the same question is a fourth chance for one of them to drift. */
+static bool uv_flex_item_cross_axis(lxb_dom_element_t *el, UvBox box, bool vertical)
+{
+    return vertical && uv_flex_item_row_container(el, box) != NULL;
+}
+
 /* css-flexbox-1 §9.3 "Main Size Determination"'s USED MAIN SIZE OF A FLEX ITEM, for the one axis and the one
    container shape that section answers — true when it did, false when `uv_pass_size` must refuse instead.
    IT IS A ROUTE AND NOT A FALLBACK, by §C-stack's own test: delete `flex_line_used_main_size` and this
    question still has to be asked, because a flex item's main size was never CSS 2.1 §10's to compute and
    `uv_pass_size`'s two crashes say so. What this predicate selects between is WHICH SECTION owns the number,
    which is the same thing `uv_box_kind` decides one level up and the same thing the table arms decide.
-   THE THREE CONDITIONS ARE THREE DIFFERENT SECTIONS' AND EACH LEAVES THOSE REFUSALS INTACT.
+   THE THREE CONDITIONS ARE THREE DIFFERENT SECTIONS' AND EACH LEAVES THOSE REFUSALS INTACT. TWO OF THEM
+   ARE NOW ESTABLISHED BY `uv_flex_item_row_container` ABOVE AND THE REASONING STAYS HERE RATHER THAN MOVING
+   WITH THE CODE, because it is about WHICH SECTION owns the number and that is this route's question; the
+   shared walk's own banner states only what it establishes.
      - A GRID item is css-grid-1 §11 "Grid Layout Algorithm"'s and shares no step with §9.
      - A `column` container's INLINE axis is its CROSS axis by css-flexbox-1 §5.1 "Flex Flow Direction: the
        flex-direction property"' mapping, so §9.4 "Cross Size Determination"' step 11 owns it and §9.3 does
@@ -3060,31 +3159,12 @@ static CssPx uv_replaced_size(lxb_dom_element_t *el, const ReplacedElement *rep,
        step for §9.2.1.1's runs. */
 static bool uv_flex_item_main_size(lxb_dom_element_t *el, UvBox box, bool vertical, CssPx *out)
 {
-    lxb_dom_node_t *parent = lxb_dom_interface_node(el)->parent;
     lxb_dom_element_t *container;
-    char *bpd;
-    bool is_flex;
     CssPx content;
 
-    if (box != UV_BOX_ITEM || vertical) return false;
-    if (parent == NULL || parent->type != LXB_DOM_NODE_TYPE_ELEMENT) return false;
-    bpd = css_box_parent_display(lxb_dom_interface_node(el));
-    if (bpd == NULL) return false;
-    /* The DOM parent and the BOX parent agree exactly when no `display: contents` ancestor sits between them,
-       which is what makes this element's flex container the element `flex_line_used_main_size` may be asked
-       about — its own assert states that precondition and this is where it is established. */
-    is_flex = flex_item_display_is_flex_container(bpd);
-    free(bpd);
-    container = lxb_dom_interface_element(parent);
-    if (!is_flex) return false;
-    {
-        char *own = css_computed_value(container, "display");
-        bool same = own != NULL && flex_item_display_is_flex_container(own);
-
-        free(own);
-        if (!same) return false;
-    }
-    if (flex_container_main_axis(container) != FLEX_MAIN_AXIS_INLINE) return false;
+    if (vertical) return false;
+    container = uv_flex_item_row_container(el, box);
+    if (container == NULL) return false;
     /* THE SUBJECT IS A NODE because one of a flex container's items has no element — css-flexbox-1 §4 "Flex
        Items"' anonymous block container flex item — and that entry therefore names every item by its FIRST
        NODE. For an element item that node IS this element, so the cast is the whole of the difference and
@@ -3572,28 +3652,55 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
            declaration as an INPUT to its own comparison rather than as the used value ("Any other
            value is treated as a minimum height"), so the declared and `auto` cases are ONE route.
            The crash that stood here told its reader to build §17.5.3, which is built. */
-        if (box == UV_BOX_ITEM)
-            DFAIL("this box is a FLEX or GRID ITEM, so its used main and cross sizes come from its container's "
-                  "algorithm and not from CSS 2.1 §10 at all — a declared `width` is only the FLEX BASE SIZE "
-                  "that `flex-grow` and `flex-shrink` then adjust against the container's free space, and "
-                  "css-grid-1 §11 \"Grid Layout Algorithm\" sizes a grid item to its track. "
-                  "THE SENTENCE THAT STOOD HERE SAID css-flexbox-1 §9.7 \"Resolving Flexible Lengths\" WAS "
-                  "WHAT TO BUILD, AND IT IS BUILT — core/layout/flex_line.h resolves it over §9.3 \"Main Size "
-                  "Determination\"' single line, `uv_sized` reaches it before this pass runs at all, and a reader who "
-                  "follows the old "
-                  "sentence will build §9.7 a second time. WHAT IS LEFT HERE IS EVERY CASE THAT ROUTE "
-                  "DECLINES, and each is a DIFFERENT section: a GRID item (css-grid-1 §11); a flex item whose "
-                  "container's main axis is its BLOCK axis, or a `row` container's item asked for its HEIGHT, "
-                  "both of which are css-flexbox-1 §9.4 \"Cross Size Determination\"' step 11 and neither of "
-                  "which §9.3 answers; and an item whose BOX parent is not its DOM parent, which is "
-                  "css-display-3 §2.5 \"Box Generation: the none and contents keywords\"' `contents` splice "
-                  "and which core/layout/block_flow.c names as the same absent box-tree step. BUILD §9.4's "
-                  "STEP 11, WHICH IS THE ONLY HALF OF §9.4 STILL MISSING: its steps 7 and 8 are built "
-                  "(core/layout/flex_cross_size.h) and produce the LINE cross size step 11 recalculates "
-                  "against, and the clause that stood here named core/layout/block_flow.c as naming the same "
-                  "absence — that file now CALLS that component for a `row` container's own auto cross size, "
-                  "so a reader who follows the old sentence finds a call. Step 11 takes THIS component's "
-                  "used main sizes as its step 7 operand");
+        /* css-flexbox-1 §9.4 "Cross Size Determination"' STEP 11's SECOND ARM IS THIS FALL-THROUGH AND NOT A
+           ROUTE, which is why the flex CROSS axis leaves the crash below by a test and not by a call.
+           "Otherwise, the used cross size is the item's hypothetical cross size" — and the hypothetical cross
+           size is step 7, "performing layout as if it were an in-flow block-level box WITH THE USED MAIN SIZE
+           and the given available space", which for a box with a DECLARED cross size is CSS 2.1 §10.6.2's and
+           §10.6.3's one sentence: the declared value IS the used value. That is what the lines below this
+           crash compute for every other box, including css-sizing-3 §3.3 "Box Edges for Sizing: the
+           box-sizing property"' conversion and §10.2's percentage basis, so calling the component here would
+           be a second copy of both and the two would be free to disagree about a `height: 50%`.
+           THE USED MAIN SIZE STEP 7 NAMES IS NOT AN OPERAND OF THIS ARM, which is worth stating because step
+           7's own sentence carries it and a reader will look for where it went: a declaration decides the
+           cross size outright, so the layout step 7 describes has nothing left to measure and the main size
+           it would have been measured at does not enter. It enters the OTHER arm, where
+           core/layout/flex_cross_size.c reaches `used_value_block_level_content_px`, and that entry's own
+           header records the same absence — the main size is re-derived there rather than stated. */
+        if (box == UV_BOX_ITEM && !uv_flex_item_cross_axis(el, box, vertical)) {
+            char nbuf[160];
+
+            DFAILF("%s, %s axis: this box is a FLEX or GRID ITEM, so its used main and cross sizes come from "
+                   "its container's algorithm and not from CSS 2.1 §10 at all — a declared `width` is only the "
+                   "FLEX BASE SIZE that `flex-grow` and `flex-shrink` then adjust against the container's free "
+                   "space, and css-grid-1 §11 \"Grid Layout Algorithm\" sizes a grid item to its track. "
+                   "THE SUBJECT AND THE AXIS ARE PRINTED BECAUSE THIS ONE LINE IS FOUR SECTIONS' REFUSAL AND "
+                   "NAMED NONE OF THEM: it carried no box and no axis, so a reader could not tell a GRID item "
+                   "from a `column` container's item from a `contents` splice, and the remedy it stated had no "
+                   "object. The four are now separated below and each names what to build. "
+                   "TWO OF THE FIVE CASES THAT USED TO REACH THIS LINE NO LONGER DO, and the sentence is "
+                   "rewritten rather than deleted because both readings are ones a reader re-derives. "
+                   "css-flexbox-1 §9.7 \"Resolving Flexible Lengths\" IS BUILT (core/layout/flex_line.h) and "
+                   "`uv_sized` reaches it before this pass runs at all, so a reader who builds it finds it. "
+                   "css-flexbox-1 §9.4 \"Cross Size Determination\"' STEP 11 IS BUILT "
+                   "(core/layout/flex_cross_size.h) and a `row` container's item asked for its HEIGHT does not "
+                   "reach this crash: step 11's own second arm — \"Otherwise, the used cross size is the "
+                   "item's hypothetical cross size\" — is, for a DECLARED cross size, step 7's layout of that "
+                   "declaration \"as if it were an in-flow block-level box\", which CSS 2.1 §10.6.2 and "
+                   "§10.6.3 make the declared value itself, so that case FALLS THROUGH the test above into the "
+                   "lines below and is answered here rather than elsewhere. "
+                   "WHAT IS LEFT IS THREE SECTIONS AND EACH IS A DIFFERENT ONE. A GRID item is css-grid-1 §11, "
+                   "which shares no step with §9. A flex item whose container's main axis is its BLOCK axis — "
+                   "a `column` container — is css-flexbox-1 §9.3 \"Main Size Determination\" in the BLOCK "
+                   "axis for its HEIGHT and §9.4's step 11 for its WIDTH, and core/layout/flex_line.c and "
+                   "core/layout/flex_cross_size.c each refuse that container by name at their own entry: BUILD "
+                   "css-writing-modes-4 §7.4 \"Flow-Relative Mappings\" and then those two components read "
+                   "flow-relative edges instead of physical ones. An item whose BOX parent is not its DOM "
+                   "parent is css-display-3 §2.5 \"Box Generation: the none and contents keywords\"' "
+                   "`contents` splice, where §9's algorithms are stated over the CONTAINER's items and the "
+                   "item list this box is in is not its parent's child list",
+                   box_subject(el, nbuf, sizeof nbuf), vertical ? "BLOCK" : "INLINE");
+        }
         /* css-sizing-3 §3.3 decides which BOX EDGE the declared length is on, and the used value it exposes.
            It runs on §10.4's SUBSTITUTED limit too — §3.3 says the property "affects the interpretation of ALL
            SIZING PROPERTIES", so a `max-width` under `border-box` bounds the border box and its own content
@@ -3651,14 +3758,49 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
            the same route: CSS 2.1 §17.5.3 Table height algorithms owns both of its arms and
            `uv_pass_size` takes them together. §10.6.3's stack of block-level children is not a
            table's height under any value of the property. */
+        /* css-flexbox-1 §9.4 "Cross Size Determination"' STEP 11, for the one axis and the one container
+           shape that section answers — the CROSS twin of `uv_flex_item_main_size`'s route above, and a ROUTE
+           by §C-stack's test for its reason: delete `flex_cross_size_used_item_cross` and the question still
+           has to be asked, because a flex item's cross size was never CSS 2.1 §10.6.3's to compute.
+           IT RETURNS A CONTENT EXTENT AND THE CONVERSION IS SPELLED HERE, exactly as it is for
+           `block_flow_auto_height` four lines down and for the same reason: §9.4's arithmetic is over content
+           boxes and `used_value_px`'s contract is css-sizing-3 §3.3's.
+           IT DOES *NOT* RETURN EARLY FROM `uv_sized` THE WAY THE MAIN ROUTE DOES, AND THE DIFFERENCE IS THE
+           SECTION RATHER THAN AN OVERSIGHT. §9.7 "Resolving Flexible Lengths" applies §10.4's clamp itself
+           ("Clamp each non-frozen item's target main size by its used min and max main sizes"), so running
+           §10.4 again over a main size would repeat it. §9.4's step 11 states no clamp at all and §8.3
+           "Cross-axis Alignment: the align-items and align-self properties" hands its one to CSS 2.1's
+           properties BY NAME — "while still respecting the constraints imposed by
+           min-height/min-width/max-height/max-width" — so §10.7's three steps are that clamp and this value
+           is a TENTATIVE used value they run over. That is also what makes a percentage limit correct here:
+           §10.7 re-runs the whole pass with the limit substituted, so `max-height: 50%` is resolved against
+           §10.1's basis rather than clamped as a raw number. */
+        {
+            lxb_dom_element_t *container = uv_flex_item_row_container(el, box);
+
+            if (container != NULL) {
+                CssPx cross = flex_cross_size_used_item_cross(container, el);
+
+                if (!uv_is_border_box(el)) return cross;
+                return css_px_add(cross, uv_surround_total(uv_surround(el, true)));
+            }
+        }
         if (box == UV_BOX_ITEM)
-            DFAIL("a FLEX or GRID ITEM with `height: auto`. Its cross size is its CONTAINER's algorithm — "
-                  "css-flexbox-1 §9.3 \"Main Size Determination\" collects the items into flex lines, §9.7 "
-                  "resolves the flexible lengths on each, and §9.4 \"Cross Size Determination\" then gives "
-                  "the item its used cross size from the cross size of the line it is on; css-grid-1 §11 "
-                  "\"Grid Layout Algorithm\" sizes the item to its TRACK — and "
-                  "CSS 2.1 §10.6.3's stack of block-level children is not it. BUILD the flex layout over "
-                  "the container's own used content size");
+            DFAIL("a FLEX or GRID ITEM with `height: auto` that the css-flexbox-1 §9.4 \"Cross Size "
+                  "Determination\"' step 11 route above DECLINED. Its cross size is its CONTAINER's "
+                  "algorithm and CSS 2.1 §10.6.3's stack of block-level children is not it. "
+                  "THE FLEX HALF OF THE SENTENCE THAT STOOD HERE IS RETIRED AND IS WRITTEN OUT SO IT IS NOT "
+                  "REBUILT: it said §9.3 \"Main Size Determination\" collects the items into lines, §9.7 "
+                  "\"Resolving Flexible Lengths\" resolves them and §9.4 then gives the item its used cross "
+                  "size from the line's, and all three are built — core/layout/flex_line.h for the first two "
+                  "and core/layout/flex_cross_size.h for step 11 — so a reader who follows the old sentence "
+                  "builds them a second time. WHAT REACHES THIS LINE IS WHAT THAT ROUTE DECLINES and each is "
+                  "a different section: a GRID item, whose block axis css-grid-1 §11 \"Grid Layout "
+                  "Algorithm\" sizes to its TRACK; a `column` container's item, whose BLOCK axis is its MAIN "
+                  "axis and therefore §9.3's rather than §9.4's, refused by core/layout/flex_line.c at its "
+                  "own entry; and an item whose BOX parent is not its DOM parent, which is css-display-3 §2.5 "
+                  "\"Box Generation: the none and contents keywords\"' `contents` splice. BUILD the one the "
+                  "box in front of you is");
         if (box == UV_BOX_INLINE_FLEX_GRID)
             DFAIL("an INLINE-LEVEL FLEX OR GRID CONTAINER with `height: auto`. Both modules give the container "
                   "the same automatic block size and neither of them is §10.6.3's walk: css-grid-1 §5.2 "
@@ -3727,11 +3869,15 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
               "max-content contribution and §9.7 \"Resolving Flexible Lengths\" then flexes it, and both of "
               "those are built (core/layout/flex_line.h). What reaches this line from a FLEX container is now "
               "only what that route refuses, and core/layout/flex_line.c names each of those refusals at the "
-              "site it makes them — a `column` container's item, whose INLINE size is its CROSS size and is "
-              "css-flexbox-1 §9.4 \"Cross Size Determination\"' step 11; and a `contents` splice between the "
-              "item and its container. BUILD §9.4's STEP 11 — its steps 7 and 8 are built "
-              "(core/layout/flex_cross_size.h) and produce the LINE cross size step 11 recalculates against, "
-              "so a reader who takes the bare \"BUILD §9.4\" that stood here will build them twice");
+              "site it makes them — a `column` container's item, whose INLINE size is its CROSS size; and a "
+              "`contents` splice between the item and its container. "
+              "§9.4's STEP 11 IS BUILT (core/layout/flex_cross_size.h) AND IS NOT WHAT IS MISSING HERE, which "
+              "is the second remedy this line has had retired and is written out for that reason. Step 11 "
+              "answers a `row` container's item on its CROSS axis, which is the BLOCK axis, and the box at "
+              "this line is being asked for its INLINE size — so reaching that component from here would need "
+              "it to accept a `column` container, which it refuses by name at its own entry and which is "
+              "css-writing-modes-4 §7.4 \"Flow-Relative Mappings\": BUILD THAT, and then both flex "
+              "components read flow-relative edges and a `column` container stops being a shape they decline");
     if (box == UV_BOX_INLINE_FLEX_GRID)
         DFAIL("an INLINE-LEVEL FLEX OR GRID CONTAINER with `width: auto`. It is CSS 2.2 §9.2.2's ATOMIC "
               "INLINE-LEVEL box, so its own module sends it to the section this file already runs for an "

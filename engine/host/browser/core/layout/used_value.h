@@ -352,12 +352,17 @@ CssPx used_value_content_px(lxb_dom_element_t *el, bool vertical);
    So this is not a reclassification invented for a caller's convenience — it is the section naming the
    algorithm it wants, and this entry running exactly that one.
    IT IS THE ONLY WAY TO ASK, WHICH IS WHY IT IS AN ENTRY AND NOT A CALLER'S TWO LINES. `used_value_px` reads
-   the box's REAL kind, and for a flex item that kind refuses on both arms by name — a declared cross size and
-   an `auto` one each crash naming §9.4 — because an item's USED cross size is §9.4's step 11 and depends on
-   the cross size of the line it is on. Step 7's HYPOTHETICAL cross size is a different quantity, stated one
-   step earlier and deliberately about a box that is NOT being treated as a flex item, and it is what step 8
-   takes the largest of. A caller resolving the declaration itself would be a second copy of §10.6 and §10.7,
-   including their percentage rules and their non-commutative min/max order.
+   the box's REAL kind, and for a flex item that kind answers §9.4's step 11 — the item's USED cross size,
+   which depends on the cross size of the line it is on. Step 7's HYPOTHETICAL cross size is a DIFFERENT
+   QUANTITY, stated one step earlier and deliberately about a box that is NOT being treated as a flex item,
+   and it is what step 8 takes the largest of; asking `used_value_px` for it would get step 11's answer, which
+   for a stretched item is the LINE's cross size and is therefore the very number step 8 is trying to compute.
+   THE SENTENCE HERE USED TO SAY `used_value_px` CRASHES ON BOTH ARMS FOR A FLEX ITEM, and it is rewritten
+   rather than deleted because the reason it gave is still the reason this entry exists and a reader who
+   re-derives it from the crashes that remain will re-add it: those crashes are now what step 11's route
+   DECLINES — a GRID item, a `column` container's item, a `contents` splice — and not the flex cross axis.
+   A caller resolving the declaration itself would be a second copy of §10.6 and §10.7, including their
+   percentage rules and their non-commutative min/max order.
    `min-height: auto` ANSWERS 0 HERE AND THAT IS THE POINT RATHER THAN A SIDE EFFECT. css-sizing-3 §3.2
    "Sizing Values: the <length-percentage [0,∞]>, auto | none, stretch, min-content, max-content, and
    fit-content values" hands that keyword to "the relevant layout module" and falls back to a used value of 0,

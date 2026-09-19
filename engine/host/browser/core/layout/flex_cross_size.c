@@ -60,6 +60,74 @@ static CssPx fx_cross_margins(lxb_dom_element_t *el)
     return css_px_add(used_value_px(el, "margin-top"), used_value_px(el, "margin-bottom"));
 }
 
+/* §8.3's RESOLVED CROSS-AXIS ALIGNMENT FOR ONE ITEM, AS THE KEYWORD ITSELF — ONE FACT, WITH THE QUESTIONS
+   ASKED OF IT BELOW. It was computed inline inside the baseline refusal while that was the only question this
+   component asked of it; §9.4's step 11 asks a DIFFERENT one of the same value ("is this item STRETCHED"), and
+   two resolutions of one keyword are two answers that are free to disagree about `align-self: auto`. So the
+   resolution is the fact and each caller is a predicate over it, which is also why this returns the KEYWORD
+   rather than a bool: a second bool would be a second resolution wearing a narrower name.
+   §4's ANONYMOUS FLEX ITEM IS `item == NULL` AND IS NOT EXEMPT, which is §8.3's own sentence and the reason
+   the question is asked of it at all: "align-items sets the default alignment for all of the flex container's
+   items, INCLUDING ANONYMOUS FLEX ITEMS." §4 makes that box unstyleable, so it declares no `align-self` and
+   takes the same arm an element item taking `auto` takes.
+   §8.3's `Initial: auto` on `align-self` is what makes the container's `align-items` the value that decides an
+   item that declares nothing, which is the whole of that keyword's meaning.
+   THE CALLER FREES THE RESULT. */
+static char *fx_resolved_align(lxb_dom_element_t *container, lxb_dom_element_t *item)
+{
+    char *items = css_computed_value(container, "align-items");
+    char *self = NULL;
+
+    DCHECK(items != NULL,
+           "the cascade produced no computed value for `align-items` — it is in lexbor's registry with an "
+           "initial value, so the last layer always answers");
+    if (item != NULL) {
+        self = css_computed_value(item, "align-self");
+        DCHECK(self != NULL,
+               "the cascade produced no computed value for `align-self` — it is in lexbor's registry with an "
+               "initial value, so the last layer always answers");
+    }
+    if (self == NULL || strcmp(self, "auto") == 0) {
+        free(self);
+        return items;
+    }
+    free(items);
+    return self;
+}
+
+/* §8.3's `stretch` VALUE'S OWN ANTECEDENT, WHICH IS THREE CONDITIONS AND NOT ONE: "If the cross size property
+   of the flex item computes to `auto`, and neither of the cross-axis margins are `auto`, the flex item is
+   STRETCHED." The keyword alone is not the test and reading it as one is the whole of what this predicate
+   exists to prevent — a `stretch`-aligned item with a DECLARED cross size is not stretched, and neither is one
+   with an `auto` cross margin, which §9.6 "Cross-Axis Alignment"' first step gives the spare cross space to
+   instead.
+   THE CROSS SIZE PROPERTY IS READ AS COMPUTED AND NOT AS THE PASS'S VALUE, which matters because the two come
+   apart exactly once: CSS 2.1 §10.7's re-run substitutes a LIMIT for the size and runs the pass again, and
+   that pass takes the DECLARED arm in core/layout/used_value.c rather than reaching this component at all. So
+   `auto` here is §8.3's own word and never a restatement of which arm the caller is in — and a PERCENTAGE
+   cross size that css-sizing-3 §3.2.1 "“Behaving as auto”" makes behave as auto is correctly NOT stretched,
+   because §8.3 says COMPUTES TO `auto` and a percentage does not.
+   THE MARGINS ARE READ AS COMPUTED FOR THE SAME REASON AND A SECOND ONE: core/layout/used_value.c REFUSES a
+   vertical `auto` margin on a flex item by name, naming §9.6, so asking for its used value here would crash on
+   the very page this arm exists to answer NO for. */
+static bool fx_is_stretched(lxb_dom_element_t *container, lxb_dom_element_t *item)
+{
+    char *align;
+    bool stretch;
+
+    DCHECK(item != NULL,
+           "css-flexbox-1 §8.3 \"Cross-axis Alignment: the align-items and align-self properties\"' STRETCHED "
+           "test was asked with no item element. §4 \"Flex Items\"' anonymous flex item has no used cross size "
+           "any caller asks for yet — §9.6 \"Cross-Axis Alignment\" is what would place it — so a NULL here is "
+           "a caller that reached this predicate through a walk that should have stopped at step 8");
+    align = fx_resolved_align(container, item);
+    stretch = strcmp(align, "stretch") == 0;
+    free(align);
+    if (!stretch) return false;
+    if (!fx_computed_is(item, "height", "auto")) return false;
+    return !fx_computed_is(item, "margin-top", "auto") && !fx_computed_is(item, "margin-bottom", "auto");
+}
+
 /* css-flexbox-1 §9.4's STEP 8.1 — the BASELINE GROUP — which this component does not compute and therefore
    must not silently leave out of step 8.3's maximum. §8.3 "Cross-axis Alignment: the align-items and
    align-self properties" declares both properties over the closed value list
@@ -75,32 +143,12 @@ static CssPx fx_cross_margins(lxb_dom_element_t *el)
 static void fx_require_no_baseline_alignment(lxb_dom_element_t *container, lxb_dom_element_t *item,
                                              lxb_dom_node_t *subject)
 {
-    char *items = css_computed_value(container, "align-items");
-    char *self = NULL;
+    char *align = fx_resolved_align(container, item);
     bool baseline;
     char nbuf[160];
 
-    DCHECK(items != NULL,
-           "the cascade produced no computed value for `align-items` — it is in lexbor's registry with an "
-           "initial value, so the last layer always answers");
-    /* §4's ANONYMOUS FLEX ITEM IS `item == NULL` AND IS NOT EXEMPT, which is §8.3's own sentence and the
-       reason this test is asked of it at all: "align-items sets the default alignment for all of the flex
-       container's items, INCLUDING ANONYMOUS FLEX ITEMS." §4 makes that box unstyleable, so it declares no
-       `align-self` and takes the same arm an element item taking `auto` takes — the container's keyword is
-       the whole answer, and skipping the question here would put a baseline-aligned box into §9.4 "Cross
-       Size Determination"' step 8.2's maximum where that section's step 8.1's collection owns it. */
-    if (item != NULL) {
-        self = css_computed_value(item, "align-self");
-        DCHECK(self != NULL,
-               "the cascade produced no computed value for `align-self` — it is in lexbor's registry with an "
-               "initial value, so the last layer always answers");
-    }
-    /* §8.3's `Initial: auto` on `align-self` is what makes the container's `align-items` the value that
-       decides an item that declares nothing, which is the whole of that keyword's meaning. */
-    baseline = (self != NULL && strstr(self, "baseline") != NULL) ||
-               ((self == NULL || strcmp(self, "auto") == 0) && strstr(items, "baseline") != NULL);
-    free(self);
-    free(items);
+    baseline = strstr(align, "baseline") != NULL;
+    free(align);
     if (!baseline) return;
     DFAILF("%s: this FLEX ITEM is BASELINE-ALIGNED in the cross axis (css-flexbox-1 §8.3 \"Cross-axis "
            "Alignment: the align-items and align-self properties\"), so css-flexbox-1 §9.4 \"Cross Size "
@@ -220,23 +268,31 @@ static CssPx fx_anonymous_outer_hypothetical_cross(lxb_dom_element_t *container,
     return inner;
 }
 
-CssPx flex_cross_size_content_based(lxb_dom_element_t *container)
+/* THE FOUR PRECONDITIONS BOTH ENTRIES OF THIS COMPONENT STATE, ASKED IN ONE PLACE — that it IS a flex
+   container, that its block axis is the vertical one, that its main axis is its INLINE axis, and that it is
+   SINGLE-LINE. They were written inside `flex_cross_size_content_based` while that was the only entry, and
+   they are moved here rather than copied because they are one FACT about the container and not one entry's
+   question about it: css-flexbox-1 §9.4 "Cross Size Determination"' step 8 and its step 11 are two steps of
+   ONE algorithm over ONE container, so a second copy is two lists that can come apart and the one that
+   drifts is whichever entry a later reader does not open.
+   THE MESSAGES NAME THE SECTION AND NOT THE CALLER, WHICH IS WHAT THE MOVE COSTS AND IS WORTH IT: a refusal
+   reading "the number THIS ENTRY answers" was true while there was one entry, and a step 11 caller meeting
+   it would read it as a claim about step 8. */
+static void fx_require_supported_container(lxb_dom_element_t *container)
 {
-    lxb_dom_node_t *c;
-    CssPx largest = css_px(0.0);
     char nbuf[160], wbuf[64];
     char *display;
     bool is_container;
 
     DCHECK(container != NULL,
-           "css-flexbox-1 §9.6 \"Cross-Axis Alignment\"' content-based cross size was asked for with no "
+           "css-flexbox-1 §9.4 \"Cross Size Determination\"' cross sizing was asked for with no CONTAINER "
            "element");
     display = css_computed_value(container, "display");
     DCHECK(display != NULL, "the cascade produced no computed `display` for a box a layout is walking");
     is_container = flex_item_display_is_flex_container(display);
     free(display);
     DCHECK(is_container,
-           "css-flexbox-1 §9.6 \"Cross-Axis Alignment\"' content-based cross size was asked of a box that is "
+           "css-flexbox-1 §9.4 \"Cross Size Determination\"' cross sizing was asked of a box that is "
            "not a FLEX CONTAINER. §3 \"Flex Containers: the flex and inline-flex display values\" is the two "
            "spellings and core/layout/flex_item.h decides them; every property this component reads has a "
            "flex container or a flex item on its `Applies to:` line, so on any other box the walk below would "
@@ -261,7 +317,8 @@ CssPx flex_cross_size_content_based(lxb_dom_element_t *container)
         DFAILF("%s: this FLEX CONTAINER's main axis is its BLOCK axis (css-flexbox-1 §5.1 \"Flex Flow "
                "Direction: the flex-direction property\": a `column` container's main axis \"has the same "
                "orientation as the block axis of the current writing mode\"), so its CROSS axis is the INLINE "
-               "one and the number this entry answers is a WIDTH rather than the height it was reached for. "
+               "one, so every number this component answers on the CROSS axis is a WIDTH rather than the height "
+               "it was reached for — step 8's line cross size and step 11's item cross size alike. "
                "§9.6 \"Cross-Axis Alignment\" is not what determines a `column` container's block size: §9.2 "
                "\"Line Length Determination\"' last step is, in one sentence — \"Determine the main size of "
                "the flex container using the rules of the formatting context in which it participates. The "
@@ -287,8 +344,17 @@ CssPx flex_cross_size_content_based(lxb_dom_element_t *container)
                "has a definite cross size, align-content is stretch, and the sum of the flex lines' cross "
                "sizes is less than the flex container's inner cross size, increase the cross size of each "
                "flex line by equal amounts\" — a condition on a DEFINITE cross size, which is the one thing "
-               "this entry is called because the container does not have",
+               "a content-based cross size is asked for exactly because the container does not have",
                box_subject(container, nbuf, sizeof nbuf));
+}
+
+CssPx flex_cross_size_content_based(lxb_dom_element_t *container)
+{
+    lxb_dom_node_t *c;
+    CssPx largest = css_px(0.0);
+    char nbuf[160];
+
+    fx_require_supported_container(container);
     /* §9.4's step 8 HAS AN ARM FOR THE DEFINITE CASE — "If the flex container is single-line and has a
        definite cross size, the cross size of the flex line is the flex container's inner cross size" — AND
        THERE IS NO PRECONDITION HERE THAT RULES IT OUT, which is worth writing down because the obvious
@@ -408,4 +474,96 @@ CssPx flex_cross_size_content_based(lxb_dom_element_t *container)
        disagree and it would certify the walk without examining it. The invariant that is NOT vacuous is one
        step down and is asserted there, over the per-item hypothetical cross size this walk did not floor. */
     return largest;
+}
+
+/* css-flexbox-1 §9.4 "Cross Size Determination"' STEP 8's ANSWER FOR THE ONE LINE OF A SINGLE-LINE CONTAINER
+ * — ITS TWO ARMS COINCIDE HERE AND THAT IS A DERIVATION RATHER THAN A SHORTCUT, so it is spelled out: the
+ * obvious implementation is a dispatch on whether the container's cross size is definite, and a reader who
+ * finds one call instead will otherwise write the dispatch back.
+ *   - THE DEFINITE ARM IS THE CALL LITERALLY. "If the flex container is single-line and has a definite cross
+ *     size, the cross size of the flex line is the flex container's inner cross size", and
+ *     `used_value_content_px` on the cross axis IS the container's inner cross size.
+ *   - THE INDEFINITE ARM REACHES THE SAME NUMBER THROUGH §9.6. Its "Otherwise" branch makes the line's cross
+ *     size step 8.3's maximum, and §9.6 "Cross-Axis Alignment"' own step makes an auto-sized container's cross
+ *     size "the sum of the flex lines' cross sizes" — one term for a single-line container. So the container's
+ *     inner cross size IS that maximum, and core/layout/block_flow.c's `row` arm is the route that produces
+ *     it: `used_value_content_px` reaches `block_flow_auto_height`, which reaches `flex_cross_size_content_
+ *     based` above.
+ *   - STEP 8.3's SINGLE-LINE CLAMP FALLS OUT AND IS NOT WRITTEN TWICE. "If the flex container is single-line,
+ *     then clamp the line's cross-size to be within the container's computed min and max cross sizes" —
+ *     which is CSS 2.1 §10.7's three steps over the CONTAINER, and `used_value_content_px` answers a USED
+ *     value, so those steps have already run. The standard says as much in the note that follows: "Note that
+ *     if CSS 2.1's definition of min/max-width/height applied more generally, this behavior would fall out
+ *     automatically." THE CLAMP IS INSIDE THE `Otherwise` ARM AND NOT AFTER BOTH, which is a fact about the
+ *     source and not about the prose: its `<p>` is nested in step 8.3's own `<li>`, inside the `<ol>` the
+ *     "Otherwise, for each flex line:" paragraph opens. Reading it as applying to the definite arm too would
+ *     clamp a number §10.7 had already clamped.
+ * A STRETCHED CONTAINER IS COVERED BY THE FIRST ARM AND NOT BY AN EXCEPTION, which is the case that looks
+ * like a counterexample: a flex container that is ITSELF a stretched flex item has no declaration of its own
+ * and still has a definite cross size, because §9.8 "Definite and Indefinite Sizes" says so in its own words
+ * — "If a single-line flex container has a definite cross size, the automatic preferred outer cross size of
+ * any stretched flex items is the flex container's inner cross size (clamped to the flex item's min and max
+ * cross size) and IS CONSIDERED DEFINITE." `used_value_content_px` answers that box's used cross size, which
+ * is the stretched one.
+ * IT TERMINATES, AND THE REASON IS STEP 7's OWN RECLASSIFICATION rather than anything this file does. The
+ * only way back into this component from here is the indefinite arm's walk, and every per-item measurement
+ * that walk makes is `used_value_block_level_content_px`, which reads the item AS A BLOCK-LEVEL BOX — so it
+ * takes CSS 2.1 §10.6.3's stack and never re-enters §9.4's step 11. What DOES recur is the ancestor chain:
+ * an item's container may itself be an item, and each level asks its own container, which terminates at the
+ * first box that is not a flex item. */
+static CssPx fx_line_cross_size(lxb_dom_element_t *container)
+{
+    return used_value_content_px(container, true);
+}
+
+CssPx flex_cross_size_used_item_cross(lxb_dom_element_t *container, lxb_dom_element_t *item)
+{
+    CssPx line, surround;
+
+    fx_require_supported_container(container);
+    DCHECK(item != NULL,
+           "css-flexbox-1 §9.4 \"Cross Size Determination\"' step 11 was asked for with no item element");
+    DCHECK(lxb_dom_interface_node(item)->parent == lxb_dom_interface_node(container),
+           "css-flexbox-1 §9.4 \"Cross Size Determination\"' step 11 was asked for an item that is not a "
+           "child of the container it was asked about. Step 11's operand is \"the flex line's cross size\", "
+           "so a subject drawn from one container and a line drawn from another is an item sized against a "
+           "line it is not on — the same precondition core/layout/flex_line.h states for the main axis, and "
+           "the one that makes `css-display-3 §2.5 \"Box Generation: the none and contents keywords\"' "
+           "`contents` splice a case this component has not been handed rather than one it answers wrongly");
+    DCHECK(used_value_height_behaves_as_auto(item),
+           "css-flexbox-1 §9.4 \"Cross Size Determination\"' step 11 was asked for an item whose cross size "
+           "property DOES NOT behave as `auto`. This entry answers one arm of step 11 and its header says "
+           "which: the other arm — \"Otherwise, the used cross size is the item's hypothetical cross size\" — "
+           "is, for a declared cross size, step 7's own layout of that declaration \"as if it were an in-flow "
+           "block-level box\", which CSS 2.1 §10.6.2 and §10.6.3 make the declared value itself. "
+           "core/layout/used_value.c computes that for every other box already and FALLS THROUGH to it, so an "
+           "item arriving here with a declaration is that fall-through having been lost and the number this "
+           "entry would answer is the LINE's cross size reported as the item's");
+    /* STEP 11's FIRST ARM — "If a flex item's cross size depends on the available space in the cross axis,
+       recalculate its cross size using the flex line's cross size (rather than the flex container's) as the
+       available space." §8.3 "Cross-axis Alignment: the align-items and align-self properties" is what makes
+       an item's cross size depend on that space, and it names the state: "the flex item is STRETCHED. Its
+       used value is the length necessary to make the cross size of the item's MARGIN BOX as close to the
+       same size as the line as possible."
+       SO THE SUBTRACTION IS THE MARGIN BOX'S AND NOT THE BORDER BOX'S, which is the whole of the arithmetic:
+       the margins are subtracted alongside the border and padding because §8.3 equalises the MARGIN box, and
+       an item with a 10px cross margin under a 100px line has an 80px content box rather than a 90px one.
+       THE FLOOR IS §8.3's OWN "AS CLOSE … AS POSSIBLE" and not a defensive clamp: an item whose surround
+       alone exceeds the line cannot reach it, and the nearest cross size it can take is zero — which
+       css-sizing-3 §3.3 "Box Edges for Sizing: the box-sizing property" states as a standing property of a
+       content box in the same words ("as the inner size of a box cannot be negative").
+       THE MIN/MAX CLAMP §8.3's NEXT CLAUSE NAMES IS NOT HERE AND THE HEADER SAYS WHY — CSS 2.1 §10.7's three
+       steps are that clamp and they run over this number at the caller. */
+    if (fx_is_stretched(container, item)) {
+        line = fx_line_cross_size(container);
+        surround = css_px_add(fx_cross_border_padding(item), fx_cross_margins(item));
+        return css_px_max(css_px_sub(line, surround), css_px(0.0));
+    }
+    /* STEP 11's SECOND ARM — "Otherwise, the used cross size is the item's HYPOTHETICAL CROSS SIZE" — which is
+       step 7, and step 7 is `used_value_block_level_content_px` and nothing else. This is the INNER half of
+       what `fx_outer_hypothetical_cross` above returns rather than a second reading of it: that function adds
+       css-sizing-3 §2.2 "Intrinsic Size Contributions"' outer step because step 8.2 takes the largest OUTER
+       hypothetical cross size, and step 11 gives the item its own cross size, which is the inner one. Two
+       callers of one entry, each adding what its own step asks for. */
+    return used_value_block_level_content_px(item, true);
 }

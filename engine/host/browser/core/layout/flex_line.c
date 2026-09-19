@@ -301,12 +301,22 @@ static void fl_fill(FlItem *it, CssPx inner_main, IntrinsicInlineSizes measured)
                    "minimum and maximum cross sizes if they are definite), converted through the aspect "
                    "ratio\". THE RATIO IS NOT WHAT IS MISSING — core/layout/replaced_element.h answers "
                    "css-images-3 §4.1 \"Object-Sizing Terminology\"'s natural aspect ratio for this element "
-                   "already. WHAT IS MISSING IS THE USED CROSS SIZE, which is §9.4 \"Cross Size "
-                   "Determination\"' step 11 — AND NOT §9.4 AS A WHOLE, WHICH IS WHAT THE SENTENCE THAT "
-                   "STOOD HERE SAID: its steps 7 and 8 are built (core/layout/flex_cross_size.h), and the "
-                   "clause naming core/layout/block_flow.c as the same absence is retired because that file "
-                   "now CALLS that component for a `row` container's own auto cross size. BUILD §9.4's "
-                   "STEP 11, whose operand is the LINE cross size that component already answers",
+                   "already. WHAT IS MISSING IS NOT THE USED CROSS SIZE EITHER, WHICH IS THE THIRD REMEDY "
+                   "THIS ARM HAS HAD AND THE SECOND TO BE RETIRED — each was correct when written and each is "
+                   "left here because a reader re-derives them in the same order. The first said to build "
+                   "§9.4 whole; its steps 7 and 8 are built (core/layout/flex_cross_size.h) and "
+                   "core/layout/block_flow.c CALLS them. The second said to build §9.4's STEP 11, and that is "
+                   "built too (`flex_cross_size_used_item_cross`). WHAT BOTH SENTENCES ASKED FOR IS A USED "
+                   "SIZE AND WHAT THESE TWO RULES ASK FOR IS A DEFINITE ONE, which is a different question "
+                   "that css-flexbox-1 §9.8 \"Definite and Indefinite Sizes\" owns: step 11 answers for an "
+                   "INDEFINITE cross size as readily as for a definite one — its second arm is the item's "
+                   "hypothetical cross size — so calling it here would turn this arm's own `definite cross "
+                   "size` condition into a test that is always true and would run §9.2's arm B on every "
+                   "replaced item with a "
+                   "ratio. BUILD §9.8's DEFINITENESS TEST FOR THE CROSS AXIS, whose own sentences are the "
+                   "algorithm (\"If a single-line flex container has a definite cross size, the automatic "
+                   "preferred outer cross size of any stretched flex items is the flex container's inner "
+                   "cross size … and is considered definite\"), and then both rules become a call",
                    box_subject(it->el, nbuf, sizeof nbuf));
         it->grow = flex_item_flexibility_factor(it->el, "flex-grow");
         it->shrink = flex_item_flexibility_factor(it->el, "flex-shrink");
@@ -656,12 +666,18 @@ CssPx flex_line_used_main_size(lxb_dom_element_t *container, lxb_dom_node_t *ite
                "size of each flex item. If a flex item's cross size depends on the available space in the "
                "cross axis, recalculate its cross size using the flex line's cross size (rather than the flex "
                "container's) as the available space. Otherwise, the used cross size is the item's "
-               "hypothetical cross size.\" BUILD §9.4's STEP 11. THE SENTENCE THAT STOOD HERE SAID TO BUILD "
-               "§9.4 AND NAMED core/layout/block_flow.c AS THE SAME ABSENCE, and half of that is retired: "
-               "§9.4's steps 7 and 8 are built (core/layout/flex_cross_size.h) and block_flow.c CALLS them "
-               "for a `row` container's own auto cross size, so a reader who follows the old sentence finds "
-               "a call and not a crash. What is left is step 11, which takes the LINE cross size that "
-               "component produces and this component's used main sizes as its step 7 operand",
+               "hypothetical cross size.\" THE TWO REMEDIES THAT STOOD HERE ARE BOTH RETIRED AND ARE "
+               "WRITTEN OUT BECAUSE EACH IS A READING A READER RE-DERIVES: the first said to build §9.4 and "
+               "named core/layout/block_flow.c as the same absence, and that file now CALLS "
+               "core/layout/flex_cross_size.h for a `row` container's own auto cross size; the second said to "
+               "build §9.4's STEP 11, and step 11 is built (`flex_cross_size_used_item_cross`). NEITHER "
+               "REACHES THIS BOX, and the reason is the one this refusal opens with: both of those components "
+               "refuse a `column` container at their own entry, because every physical edge they add is "
+               "chosen by §5.1's mapping and css-writing-modes-4 §3.2 \"Block Flow Direction: the "
+               "writing-mode property\". BUILD css-writing-modes-4 §7.4 \"Flow-Relative Mappings\", which "
+               "this component, core/layout/flex_cross_size.c and core/layout/block_flow.c each name as the "
+               "same one absent capability — and then a `column` container stops being a shape any of the "
+               "three declines",
                box_subject(container, nbuf, sizeof nbuf));
     fl_require_horizontal_tb(container, "FLEX CONTAINER");
     /* §5.2 "Flex Line Wrapping: the flex-wrap property"' other arm. §9.3's step 5 has a SECOND sentence this

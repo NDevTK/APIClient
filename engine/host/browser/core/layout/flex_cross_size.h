@@ -23,10 +23,13 @@
  * WHAT IT DOES NOT DO, AND WHY EACH IS A DIFFERENT SECTION RATHER THAN A CASE. §9.4's step 9 distributes
  * spare cross space to the lines under `align-content: stretch` and its condition is "if the flex container
  * has a DEFINITE cross size" — which is exactly what this entry is called to produce and therefore exactly
- * what it does not have, so that step is unreachable from here rather than skipped. §9.4's step 11 gives each
- * ITEM its used cross size from the line's, and §9.6's steps 12, 13 and 15 place them; neither is a size this
- * entry is asked for, and core/layout/used_value.c refuses an item's used cross size by name at both of its
- * arms for that reason.
+ * what it does not have, so that step is unreachable from here rather than skipped. §9.6's steps 12, 13 and
+ * 15 PLACE the items, which is not a size this entry is asked for and is not built.
+ * §9.4's STEP 11 IS THIS COMPONENT'S SECOND ENTRY AND NOT A THIRD STEP OF THIS ONE, which is worth a line
+ * because the sentence here used to say step 11 was not this file's at all and that core/layout/used_value.c
+ * refused an item's used cross size at both of its arms. It does not any more: `flex_cross_size_used_item_
+ * cross` below answers it, and it lives here because its operands are this entry's — the item walk, the cross
+ * edges, §8.3's resolved alignment and the line cross size — rather than because §9.4 is one section.
  *
  * NOTHING IS STORED, for core/layout/flex_line.h's reason: a layout is per-flow state, so a cached line cross
  * size is shared state solver/dom_cow.h does not swap and a stale one is another flow's document. The cost is
@@ -85,5 +88,45 @@
    hand — and is right to, because the AUTOMATIC size is the one computed with the cross axis treated as
    indefinite. So the caller reads §9.6's condition; this entry asserts nothing about the declaration. */
 CssPx flex_cross_size_content_based(lxb_dom_element_t *container);
+
+/* css-flexbox-1 §9.4 "Cross Size Determination"' STEP 11 — THE USED CROSS SIZE OF ONE FLEX ITEM, as a
+   CONTENT-box extent in CSS pixels on `container`'s CROSS axis, for an item whose cross size property
+   COMPUTES TO `auto` or behaves as though it did. `item` is an ELEMENT and not a node, which is the whole of
+   what separates this entry's subject from core/layout/flex_line.h's: the only caller is
+   core/layout/used_value.c, which is asked a used value for an ELEMENT and is never asked one for §4 "Flex
+   Items"' anonymous flex item, so a node-keyed signature here would be a second spelling with no caller —
+   §4's box needs its USED cross size only when §9.6 "Cross-Axis Alignment" places it, which is unbuilt.
+   THE `auto` PRECONDITION IS WHAT MAKES THIS ONE ARM RATHER THAN THE WHOLE STEP, and it is a statement about
+   the CALLER rather than a narrowing of §9.4. Step 11's other arm — "Otherwise, the used cross size is the
+   item's hypothetical cross size" — is, for an item with a DECLARED cross size, its own step 7 run over that
+   declaration: "performing layout as if it were an in-flow block-level box", and for a block-level box with a
+   DECLARED height that layout computes nothing — every rule CSS 2.1 §10.6.3 "Block-level, non-replaced
+   elements in normal flow when 'overflow' computes to 'visible'" states is conditioned on the property being
+   `auto` ("If 'height' is 'auto', the height depends on whether the element has any block-level children"),
+   so what is left is CSS 2.1 §10.5 "Content height: the 'height' property" making the declaration the height:
+   "This property specifies the content height of boxes." That is the
+   number core/layout/used_value.c's declared arm already computes for every other box, so routing it here
+   would be a second copy of css-sizing-3 §3.3 "Box Edges for Sizing: the box-sizing property"' conversion and
+   of §10.2's percentage resolution. The declared arm therefore FALLS THROUGH there and this entry is not
+   asked; what reaches here is the arm where the declaration decides nothing.
+   IT IS THE CONTENT BOX, matching `used_value_block_level_content_px`'s convention and for its reason: §3.3's
+   conversion belongs to the boundary that exposes a used value, and this entry's caller is that boundary.
+   THE §10.7 CLAMP IS THE CALLER'S AND IS DELIBERATELY NOT HERE, which is worth a sentence because §8.3
+   "Cross-axis Alignment: the align-items and align-self properties" states one and a reader will look for it.
+   §8.3's stretch arm ends "while still respecting the constraints imposed by
+   min-height/min-width/max-height/max-width", and CSS 2.1 §10.7's three steps are exactly that clamp: the
+   caller returns this number as its tentative used value and `uv_sized` re-runs the pass with the limit
+   substituted, which takes the DECLARED arm above and answers the limit. Writing the clamp here as well would
+   be the second copy, and it would be the WRONG second copy — §10.7 re-runs the whole pass, so a limit that
+   is itself a percentage is resolved against §10.1's basis rather than clamped as a raw number.
+   THIS IS THEREFORE NOT THE EARLY RETURN core/layout/flex_line.h's main-axis twin takes, AND THE DIFFERENCE
+   IS THE SECTION RATHER THAN A PREFERENCE: §9.7 "Resolving Flexible Lengths" applies its own clamp in its own
+   words ("Clamp each non-frozen item's target main size by its used min and max main sizes"), so §10.4 must
+   not run again over the main size; §9.4's step 11 states NO clamp of its own and §8.3 hands its one to
+   CSS 2.1's properties by name, so §10.7 is where it belongs.
+   `container` MUST BE `item`'s FLEX CONTAINER with the box tree agreeing, SINGLE-LINE, `horizontal-tb`, and
+   its main axis must be its INLINE axis — the same four preconditions `flex_cross_size_content_based` states,
+   asserted here for that entry's reason and because this one reaches it. */
+CssPx flex_cross_size_used_item_cross(lxb_dom_element_t *container, lxb_dom_element_t *item);
 
 #endif
