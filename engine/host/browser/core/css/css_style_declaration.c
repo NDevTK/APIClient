@@ -2580,6 +2580,20 @@ static const struct { const char *name; const char *initial; } CSSD_INITIAL_UNRE
        `Computed value:` line asks for. */
     { "caption-side", "top" }, { "table-layout", "auto" },
     { "border-collapse", "separate" }, { "border-spacing", "0" },
+    /* css-align-3 §7.1 "Inline-Axis (or Main-Axis) Default Alignment: the justify-items property" gives
+       `justify-items` an `Initial:` of `legacy`, and css-align-3 §6.1 "Inline-Axis (or Main-Axis)
+       Self-Alignment: the justify-self property" gives `justify-self` an `Initial:` of `auto`. THE ROWS ARE WHAT MAKE THE TWO
+       ANSWERABLE AT ALL, for the same reason CSS 2.1 §17's four above need theirs: lexbor's registry carries
+       neither, so with no row here css-cascade-5 §7.1 has no initial value to fall to and the cascade answers
+       NULL for every element that does not declare one — which is every element on almost every page. Both
+       `Inherited:` lines are `no`, so unlike three of §17's four neither belongs in core/css/css_defaulting.c
+       and css-cascade-5 §7.2 needs no base case for them.
+       THEY ARRIVE WITH core/css/css_shorthand.c's `place-items` AND `place-self` ROWS, which are what sets
+       either property: an initial value with no way to declare one is a row for a property no page can reach,
+       and the shorthand's expansion is the reach. `legacy` IS an initial value a page never writes and the
+       grammar still admits — css-align-3 §7.1's `Value:` line carries it as its own term — so it is a declarable keyword
+       here and not a sentinel. */
+    { "justify-items", "legacy" }, { "justify-self", "auto" },
 };
 
 /* THE INITIAL VALUES LEXBOR'S REGISTRY GETS WRONG, each with the answer it gives today so the row EXPIRES.

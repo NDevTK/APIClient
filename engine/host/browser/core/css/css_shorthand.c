@@ -212,6 +212,52 @@ static const char *const OVERFLOW_KEYWORDS[] = {
 static const char *const FLEX_DIRECTION_KEYWORDS[] = { "row", "row-reverse", "column", "column-reverse" };
 static const char *const FLEX_WRAP_KEYWORDS[] = { "nowrap", "wrap", "wrap-reverse" };
 
+/* css-align-3 §7.3 "Default Alignment Shorthand: the place-items property"' and css-align-3 §6.3
+   "Self-Alignment Shorthand: the place-self property"' COMPONENT GRAMMARS. THE FIRST COMPONENT IS THIS ENGINE'S `align-items`
+   RATHER THAN css-align-3's, AND THAT IS THE SHORTHAND'S OWN DEFINITION RATHER THAN A NARROWING OF IT: both
+   are stated BY REFERENCE — `<'align-items'> <'justify-items'>?` and `<'align-self'> <'justify-self'>?` — so
+   the first component is whatever THIS engine's longhand admits, and lexbor's registry answers that.
+   `lxb_css_property_state_align_items` takes ONE IDENT and switches over
+   `flex-start | flex-end | center | baseline | stretch`, with a registry initial of
+   `LXB_CSS_ALIGN_ITEMS_STRETCH` — which is css-flexbox-1 §8.3 "Cross-axis Alignment: the align-items and
+   align-self properties"' `Value:` and `Initial:` lines exactly. A list written from css-align-3 §7.2's wider
+   grammar would put `normal`, or a two-word `safe center`, into the cascade under a longhand whose own parser
+   refuses both — the shorthand claiming a value the longhand cannot hold.
+   NAMED RESIDUAL: css-align-3 §7.2 "Block-Axis (or Cross-Axis) Default Alignment: the align-items property"
+   and css-align-3 §6.2 "Block-Axis (or Cross-Axis) Self-Alignment: the align-self property" supersede
+   css-flexbox-1 §8.3, and this engine implements css-flexbox-1 §8.3. WHAT IS NOT COVERED is every value of
+   css-align-3 §7.2's `Value:` line outside css-flexbox-1 §8.3's five — `normal`, the `first`/`last`
+   baseline pair, and any `safe`/`unsafe` prefix. WHAT THE NEXT DIFF BUILDS is css-align-3 §7.2's and
+   css-align-3 §6.2's `Value:` lines in lexbor's own `align-items` and `align-self` parsers, after which
+   these two lists are READ FROM that parser rather than restated here.
+   HOW ITS ABSENCE WOULD SHOW: a declaration naming one of those values is dropped as invalid, so the property
+   reads its initial value on an element that declared one.
+   THE `justify-*` LISTS ARE css-align-3's OWN, because lexbor's registry carries NEITHER property — there is
+   no parser to read them from and css-align-3 §7.1's and css-align-3 §6.1's `Value:` lines are the only source. They are the
+   SINGLE-KEYWORD forms of those lines: `<self-position>` is
+   `center | start | end | self-start | self-end | flex-start | flex-end`, `<baseline-position>` is
+   `[ first | last ]? && baseline` whose bare arm is the one word below, and `<overflow-position>?` and
+   `legacy &&` are two-word forms dropped for the same reason the residual above names. */
+static const char *const ALIGN_ITEMS_KEYWORDS[] = {
+    "flex-start", "flex-end", "center", "baseline", "stretch"
+};
+/* css-flexbox-1 §8.3's `align-self` is its `align-items` plus the one keyword meaning "take the container's", which is why
+   this is a second list rather than a shared one: they differ by exactly `auto`, and sharing would make
+   `align-items: auto` legal — a value css-flexbox-1 §8.3 gives only to `align-self`. */
+static const char *const ALIGN_SELF_KEYWORDS[] = {
+    "auto", "flex-start", "flex-end", "center", "baseline", "stretch"
+};
+static const char *const JUSTIFY_ITEMS_KEYWORDS[] = {
+    "normal", "stretch", "baseline", "legacy", "center", "start", "end",
+    "self-start", "self-end", "flex-start", "flex-end", "left", "right"
+};
+/* css-align-3 §6.1's `justify-self` is css-align-3 §7.1's `justify-items` with `auto` in place of `legacy`: those are the two
+   properties' `Initial:` lines and each keyword is on only its own property's `Value:` line. */
+static const char *const JUSTIFY_SELF_KEYWORDS[] = {
+    "auto", "normal", "stretch", "baseline", "center", "start", "end",
+    "self-start", "self-end", "flex-start", "flex-end", "left", "right"
+};
+
 /* css-backgrounds-3 §3.2's `<line-style>`, entire and in the spec's own order, and §3.3's three `<line-width>`
    keywords. THESE GRAMMARS HAVE TO BE HERE, unlike `<margin-width>`: lexbor's property registry carries no
    `border-width` and no `border-style` (it has `border`, the four `border-<side>` shorthands and the four
@@ -1007,6 +1053,44 @@ char *css_shorthand_component(const char *shorthand, const char *value, const ch
         return css_sh_dupn(t[term].p, t[term].n);
     }
 
+    /* ---- css-align-3 §7.3's `place-items` and §6.3's `place-self` -----------------------------------------
+       ONE RULE FOR BOTH, AND IT IS `overflow`'s. css-align-3 §7.3 states it as "The first value is assigned to
+       align-items. The second value is assigned to justify-items; if omitted, it is copied from the first
+       value", and css-align-3 §6.3 states the identical sentence over `align-self` and `justify-self` — which is
+       css-overflow §3.1's `{1,2}` exactly, and is why CSS_SH_TWO_AXIS is these two rows' kind as well.
+       THE TWO COMPONENTS TAKE DIFFERENT KEYWORD SETS, AND THAT IS THE GRAMMAR RATHER THAN AN ASYMMETRY: the
+       first is `<'align-items'>`/`<'align-self'>` and the second `<'justify-items'>`/`<'justify-self'>`, four
+       different `Value:` lines — so a keyword legal in the second position and not the first (`left`,
+       `start`, `normal`) is an INVALID DECLARATION when written first, which is what a per-position lookup
+       answers and a shared list could not.
+       A COPIED FIRST VALUE IS RE-VALIDATED AGAINST THE SECOND LIST, because css-align-3 §7.3's copy is of the VALUE and
+       not of its legality. Every keyword this engine's `align-items` admits is also a css-align-3 §7.1 `justify-items`
+       value — its `<self-position>` carries `flex-start`, `flex-end` and `center`, its `<baseline-position>`
+       carries `baseline`, and `stretch` is on its own `Value:` line — so the test passes for all five today
+       and is asked anyway: it is the one line that would catch a widening of one list and not the other. */
+    if (strcmp(shorthand, "place-items") == 0 || strcmp(shorthand, "place-self") == 0) {
+        bool items = strcmp(shorthand, "place-items") == 0;
+        const char *const *first = items ? ALIGN_ITEMS_KEYWORDS : ALIGN_SELF_KEYWORDS;
+        const char *const *second = items ? JUSTIFY_ITEMS_KEYWORDS : JUSTIFY_SELF_KEYWORDS;
+        unsigned nf = items ? CSS_SH_N(ALIGN_ITEMS_KEYWORDS) : CSS_SH_N(ALIGN_SELF_KEYWORDS);
+        unsigned ns = items ? CSS_SH_N(JUSTIFY_ITEMS_KEYWORDS) : CSS_SH_N(JUSTIFY_SELF_KEYWORDS);
+
+        if (strcmp(longhand, items ? "align-items" : "align-self") == 0) axis = 0;
+        else if (strcmp(longhand, items ? "justify-items" : "justify-self") == 0) axis = 1;
+        else return NULL;
+        /* CSS Cascade §7.3's keywords are the ENTIRE value for every property in CSS and set BOTH longhands
+           to themselves, so they precede CSS Cascade §7.3's own grammar, in which neither is a term. */
+        if (css_wide_keyword(value)) return css_sh_strdup(value);
+        /* Two components and no multiplier over either, so a third is an invalid declaration. */
+        n = css_words(value, w, wl, 2);
+        if (n < 1 || n > 2) return NULL;
+        kw[0] = css_sh_keyword(first, nf, w[0], wl[0]);
+        if (kw[0] == NULL) return NULL;
+        kw[1] = css_sh_keyword(second, ns, (n > 1) ? w[1] : w[0], (n > 1) ? wl[1] : wl[0]);
+        if (kw[1] == NULL) return NULL;
+        return css_sh_strdup(kw[axis]);
+    }
+
     if (strcmp(shorthand, "overflow") != 0) return NULL;
     if (strcmp(longhand, "overflow-x") == 0)      axis = 0;
     else if (strcmp(longhand, "overflow-y") == 0) axis = 1;
@@ -1089,6 +1173,13 @@ bool css_shorthand_validates_longhand(const char *longhand)
        lexbor's parser owns the colour's. The question is FORWARDED rather than answered here, because the list
        and the grammar behind it are one statement in one file. */
     if (css_background_shorthand_validates_longhand(longhand)) return true;
+    /* css-align-3 §7.1's `justify-items` and css-align-3 §6.1's `justify-self`, whose registry gap is the §17 table's
+       and needs the same sentence: lexbor carries NEITHER, so a `justify-items: center` reaches the cascade
+       as a `__CUSTOM` holding the name and the RAW TOKENS, with nothing having validated them and nothing
+       having lower-cased them. THEIR `align-*` PARTNERS ARE DELIBERATELY NOT HERE — lexbor types both of
+       those, and a second grammar standing beside its parser is the `border-*-color` mistake one property
+       along, where the registry speaks and this component must not answer over it. */
+    if (strcmp(longhand, "justify-items") == 0 || strcmp(longhand, "justify-self") == 0) return true;
     part = border_part_index(longhand, &side);
     (void)side;
     /* The four widths and the four styles. The four `border-*-color` longhands ARE in lexbor's registry — it
@@ -1119,6 +1210,16 @@ char *css_shorthand_longhand_value(const char *longhand, const char *value)
        grammar needs two component slots and the border longhands' needs one. */
     if (table_keyword_longhand_index(longhand) >= 0 || strcmp(longhand, "border-spacing") == 0)
         return table_longhand_value(longhand, value);
+    /* css-align-3 §7.1's and css-align-3 §6.1's single-keyword forms, over the two lists this component owns because
+       lexbor types neither property. One component value and no multiplier, so a second is invalid. */
+    if (strcmp(longhand, "justify-items") == 0 || strcmp(longhand, "justify-self") == 0) {
+        bool it = strcmp(longhand, "justify-items") == 0;
+
+        if (css_words(value, w, wl, 1) != 1) return NULL;
+        kw = it ? css_sh_keyword(JUSTIFY_ITEMS_KEYWORDS, CSS_SH_N(JUSTIFY_ITEMS_KEYWORDS), w[0], wl[0])
+                : css_sh_keyword(JUSTIFY_SELF_KEYWORDS, CSS_SH_N(JUSTIFY_SELF_KEYWORDS), w[0], wl[0]);
+        return kw ? css_sh_strdup(kw) : NULL;
+    }
     /* `<line-width>` and `<line-style>` are each ONE component value — no multiplier — so a second one is an
        invalid declaration and css_words reports it by refusing to write past `max`. */
     n = css_words(value, w, wl, 1);
@@ -1247,6 +1348,10 @@ static const char *const LH_OVERFLOW[] = { "overflow-x", "overflow-y" };
    all-terms-omitted case and CSSOM §6.7.2's "cannot exactly represent the values" arm is the answer, exactly
    as it is for `border-<side>`. */
 static const char *const LH_FLEX_FLOW[] = { "flex-direction", "flex-wrap" };
+/* css-align-3 §7.3's and css-align-3 §6.3's longhand pairs, each in the shorthand's own `Value:` order, which is the
+   order the expansion writes and the serialization reads positionally. */
+static const char *const LH_PLACE_ITEMS[] = { "align-items", "justify-items" };
+static const char *const LH_PLACE_SELF[] = { "align-self", "justify-self" };
 static const char *const FLEX_FLOW_INITIAL[] = { "row", "nowrap" };
 static const char *const LH_BORDER_WIDTH[] = {
     "border-top-width", "border-right-width", "border-bottom-width", "border-left-width"
@@ -1318,6 +1423,14 @@ static const CssShorthandRow SHORTHANDS[] = {
     { "margin",        LH_MARGIN,         4, CSS_SH_FOUR_SIDE, "1px 2px 3px 4px", NULL, NULL },
     { "overflow",      LH_OVERFLOW,       2, CSS_SH_TWO_AXIS,  "hidden auto", NULL, NULL },
     { "padding",       LH_PADDING,        4, CSS_SH_FOUR_SIDE, "1px 2px", NULL, NULL },
+    /* css-align-3 §7.3 and css-align-3 §6.3. The fixture names BOTH components with DIFFERENT values, which is the one
+       arrangement that exercises the whole of CSS_SH_TWO_AXIS: an EQUAL pair serializes to a single word, so
+       it would leave the second component's own keyword lookup and the omission rule untested in both
+       directions at once. `flex-start` is deliberately the second component because it is a member of BOTH
+       lists — the round trip then tests the PER-POSITION lookup without depending on a value only one of the
+       two carries, which is the half a shared list would have passed anyway. */
+    { "place-items",   LH_PLACE_ITEMS,    2, CSS_SH_TWO_AXIS,  "center flex-start", NULL, NULL },
+    { "place-self",    LH_PLACE_SELF,     2, CSS_SH_TWO_AXIS,  "center flex-start", NULL, NULL },
     /* css-text-4 §7.1. The fixture is the case §7.1's own sentence is about — a value "other than justify-all
        or match-parent", which is assigned to `text-align-all` and RESETS `text-align-last` to `auto` — so the
        round trip exercises the reset, which is the half an alias would not have. The two exception values are
@@ -2087,6 +2200,35 @@ bool css_shorthand_complete_for(const char *longhand)
        All four are absent from lexbor's property registry, so their grammars are this component's (the §17
        table above) and a declaration reaching the cascade has been through one.
 
+       `align-items`, `align-self`, `justify-items` and `justify-self` — css-align-3 §7.3 "Default Alignment
+       Shorthand: the place-items property"' `place-items` and css-align-3 §6.3 "Self-Alignment Shorthand: the place-self
+       property"' `place-self` are the ONLY shorthands in CSS that set any of the four, and BOTH ARE NOW IN
+       THE TABLE ABOVE. That pair of rows is the whole of what these entries were waiting on. No other module
+       states a container over them: css-flexbox-1 §8.3 "Cross-axis Alignment: the align-items and align-self
+       properties" declares the first two as standalone longhands with their own `Value:`, `Initial:` and
+       `Computed value:` lines, and that module's other shorthands set different properties —
+       css-flexbox-1 §5.3's `flex-flow` sets `flex-direction` and `flex-wrap`, css-flexbox-1 §7.1's `flex` sets
+       the three flexibility longhands, and css-flexbox-1 §5.4's `order` is a sibling property about
+       painting and ordering that sets nothing. The `place-*`
+       sentence two entries up — that those shorthands are "over `align-*`/`justify-*`, which are different
+       properties again" — is the DISMISSAL that is correct for `flex-basis` and for `baseline-shift`, and it
+       is exactly what makes these four the rows it does NOT dismiss.
+       UNTIL THOSE TWO TABLE ROWS EXISTED A `place-items: center` SET NOTHING AT ALL, which is the quietest
+       shape this defect has and the one `text-align` and `vertical-align` were each in: `align-items` and
+       `align-self` ARE in lexbor's property registry, so their own declarations were typed and validated all
+       along and it was the SHORTHAND that reached the cascade as a `__CUSTOM` nothing took apart.
+       css-flexbox-1 §9.4 "Cross Size Determination"' step 8 would have read css-flexbox-1 §8.3's `Initial:`
+       of `stretch` off every flex container whose author wrote the shorthand, and a baseline-aligned
+       item would have gone into that step's
+       second collection where its first one owns it.
+       THE TWO `justify-*` ROWS ARE TRUE FOR THE SAME REASON AND ARE HERE RATHER THAN LEFT OUT, because an
+       omission in this list is read as an unanswered question rather than as a property nobody has needed: the
+       same two shorthands are their only containers, and lexbor's registry carries NEITHER of them, so their
+       grammars are this component's (the `justify-*` keyword lists above) exactly as CSS 2.1 §17's four are.
+       What neither has is a `Computed value:` line in core/css/css_computed_value.c, so a reader asking for
+       one crashes at `css_cv_modelled`'s FIRST assert naming the property — which is the question that is
+       genuinely open about them, and it is a different question from this one.
+
        `z-index` — NO shorthand in CSS sets it. CSS 2.1 §9.9.1 "Specifying the stack level: the 'z-index'
        property" declares it as a standalone property with its own `Value:` line (`auto | <integer> |
        inherit`), and no later module states a container over it: css-position-3 §3.2 "Box Insets Shorthands:
@@ -2117,6 +2259,7 @@ bool css_shorthand_complete_for(const char *longhand)
         "border-top-style", "border-right-style", "border-bottom-style", "border-left-style",
         "border-top-color", "border-right-color", "border-bottom-color", "border-left-color",
         "caption-side", "table-layout", "border-collapse", "border-spacing",
+        "align-items", "align-self", "justify-items", "justify-self",
         "z-index",
     };
     unsigned i;

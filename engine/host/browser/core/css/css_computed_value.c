@@ -1073,6 +1073,26 @@ bool css_computed_models(const char *name)
               `0.0` and `0e0` a page may write. The third longhand, §7.2.3's `flex-basis`, is length-shaped
               and leaves through css_computed_models_length above. */
            strcmp(name, "flex-grow") == 0 || strcmp(name, "flex-shrink") == 0 ||
+           /* css-flexbox-1 §8.3 "Cross-axis Alignment: the align-items and align-self properties", whose
+              `Computed value:` line is "specified keyword" over a `Value:` line of
+              `flex-start | flex-end | center | baseline | stretch` — `align-self` adding `auto` — so the
+              as-specified arm is the whole of both rules. THEY ARE ONE ROW BECAUSE ONE ALGORITHM ASKS FOR
+              BOTH AND CANNOT ANSWER WITH EITHER ALONE: css-flexbox-1 §8.3's own prose makes the container's value the
+              default and the item's the override, so core/layout/flex_cross_size.h reads `align-items` off
+              the container and `align-self` off the item three lines apart, and css-flexbox-1 §4 "Flex Items"' ANONYMOUS
+              FLEX ITEM has no `align-self` to read at all. The answer decides which of css-flexbox-1 §9.4 "Cross Size
+              Determination"' step 8 collections an item belongs to, and the two are summed differently — so
+              a specified value handed back under the word `computed` would not be a rounding error, it would
+              put a baseline-aligned box into the arm that measures outer cross sizes.
+              THIS ENGINE IMPLEMENTS css-flexbox-1 §8.3 AND NOT css-align-3 §7.2, which supersedes it: lexbor's parser takes
+              ONE IDENT over css-flexbox-1 §8.3's five keywords and its registry initial is `LXB_CSS_ALIGN_ITEMS_STRETCH`,
+              css-flexbox-1 §8.3's `Initial:` line rather than css-align-3 §7.2's `normal`. The two
+              `Computed value:` lines agree on the RULE this entry is and differ only in the grammar it
+              runs over, so widening that grammar later
+              does not move this row — core/css/css_shorthand.c's `place-items` entry owns that residual.
+              `Inherited: no` on both is why neither is in core/css/css_defaulting.c's table — that table is
+              the INHERITED longhands, and non-inheritance is CSS's default rather than an omission. */
+           strcmp(name, "align-items") == 0 || strcmp(name, "align-self") == 0 ||
            /* css-display-3 §4 "Invisibility: the visibility property" (`visible | hidden | collapse`),
               `Computed value: as specified` over a keyword-only `Value:` line. It is here because
               css-flexbox-1 §4.4 "Collapsed Items" is stated over ONE of its three keywords — "Specifying
@@ -1584,6 +1604,7 @@ char *css_computed_value(lxb_dom_element_t *el, const char *name)
                strcmp(name, "flex-direction") == 0 || strcmp(name, "flex-wrap") == 0 ||
                strcmp(name, "flex-grow") == 0 || strcmp(name, "flex-shrink") == 0 ||
                strcmp(name, "visibility") == 0 || strcmp(name, "z-index") == 0 ||
+               strcmp(name, "align-items") == 0 || strcmp(name, "align-self") == 0 ||
                css_border_side_of(name, "style") >= 0,
            "a property this component claims to model reached the as-specified arm without a `Computed value: "
            "as specified` line to justify it — css_computed_models and this switch are one list and have come "

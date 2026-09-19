@@ -184,6 +184,8 @@ static const CssNumericRow CSS_NUMERIC[] = {
     { "inset-inline-end",          S_WHOL,     N_(LENGTH_PERCENTAGE) },
     { "inset-inline-start",        S_WHOL,     N_(LENGTH_PERCENTAGE) },
     { "justify-content",           S_NONE,      0 },
+    { "justify-items",             S_NONE,      0 },
+    { "justify-self",              S_NONE,      0 },
     { "left",                      S_WHOL,     N_(LENGTH_PERCENTAGE) },
     { "letter-spacing",            S_WHOL,     N_(LENGTH) },
     { "line-break",                S_NONE,      0 },
