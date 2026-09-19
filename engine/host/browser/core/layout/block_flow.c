@@ -1758,11 +1758,24 @@ CssPx block_flow_child_top(lxb_dom_element_t *el)
 
     DCHECK(el != NULL, "a box's vertical placement was asked for with no element");
     cb = used_value_containing_block(el);
+    /* A NULL CONTAINING BLOCK HAS TWO PRODUCERS AND ONLY ONE OF THEM CAN REACH HERE, which is why this
+       states which one rather than naming the root element outright. `used_value_containing_block` answers
+       NULL for §10.1's FIRST case (the root element, whose containing block is the initial one) and — since
+       the commit that built §10.1's FOURTH case — also for an absolutely positioned box with no ancestor
+       establishing a containing block, which §10.1 likewise gives the initial containing block. The SECOND
+       producer cannot arrive at this entry: §9.4.1's walk is over a block formatting context's IN-FLOW
+       boxes, and §9.3.1 takes an absolutely positioned box out of flow before any of them see it. So the
+       condition is unchanged and correct, and the message says the root element is what reaches it rather
+       than what NULL means. RETIREMENT: this note goes when an out-of-flow box cannot be spelled as an
+       argument to this entry — when the walk hands its own in-flow child list to it rather than an element
+       any caller may name — because the second producer is then impossible by construction. */
     DCHECK(cb != NULL,
-           "CSS 2 §9.4.1's placement was asked for a box whose containing block is CSS 2.1 §10.1's FIRST case, "
-           "the initial containing block — that is the ROOT ELEMENT, and core/layout/flow_position.c answers it "
-           "from §10.1 directly rather than by walking a parent's children. The caller's own root test and this "
-           "one have come apart");
+           "CSS 2 §9.4.1's placement was asked for a box with no containing block. §10.1 leaves that answer to "
+           "TWO cases — its FIRST, the root element, and its FOURTH with no ancestor establishing one — and only "
+           "the root element can reach this entry, because §9.4.1 walks a formatting context's IN-FLOW boxes and "
+           "§9.3.1 has already taken an absolutely positioned box out of flow. So this is the root element, "
+           "which core/layout/flow_position.c answers from §10.1 directly rather than by walking a parent's "
+           "children: the caller's own root test and this one have come apart");
     DCHECKF(lxb_dom_interface_node(cb) == lxb_dom_interface_node(el)->parent,
            "%s, whose containing block is %s and whose parent is %s: "
            "§10.1's containing block for this box is NOT its parent element, so §9.4.1's walk over that block's "
