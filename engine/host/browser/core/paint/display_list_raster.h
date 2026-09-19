@@ -124,35 +124,7 @@
  * some of its four rules present and the rest missing while every background around it is painted — which is
  * the observation, and which side of which box exhibits it is a fact about a document rather than about this
  * component.
- * RETIREMENT: this record loses a clause as each value lands and goes when all ten are drawn.
- *
- * NAMED RESIDUAL — NO FIXTURE IN THIS TREE RASTERIZES A BORDER MARK.
- * WHAT IS NOT COVERED: this entry's border arm has no caller that a run of this host reaches.
- * `display_list_raster` is called from `display_list_raster_selftest` and from `box_paint_selftest` in
- * engine/host/test_forced.c and from nowhere else in the program, and neither rasterizes a list holding a
- * `DISPLAY_MARK_BORDER`: the first builds only fill marks, and the second's own record states that no
- * document this host parses declares a border, so `bp_border` appends nothing. The arm is therefore held by
- * its own asserts — the partition, the two derivations of one box, and the two-counter identity — and by no
- * observation of a pixel.
- * WHAT THE NEXT DIFF BUILDS: rows in `display_list_raster_selftest` beside the two fill kinds', over a mark
- * this file states rather than one a document produced, and asserting the same kind of DERIVABLE quantity
- * those rows assert. THE QUANTITY IS `pixels` AND IT IS NOT THE AREA, which is the trap in writing them: the
- * arm's own assert holds the four wedges to an AREA, and `pixels` counts what each fill HANDED the surface,
- * which core/graphics/rasterizer.h makes every pixel of NONZERO coverage — so a mitre's diagonal, which
- * crosses pixels rather than running along their edges, is handed more pixels than it covers area, and a
- * fixture that asserted the area would fail on a correct arm. Worked, for a 16x8 border box at the surface's
- * own origin with all four used widths 2 and all four styles `solid`: the AREA is 16*8 - 12*4 = 80 and the
- * PIXELS are 88. The top wedge is (0,0) (16,0) (14,2) (2,2), whose row y=0 is handed columns 0 through 15 and
- * whose row y=1 is handed 1 through 14 — 30 — and the bottom is its mirror; the left wedge is (0,8) (0,0)
- * (2,2) (2,6), handed 1, 2, 2, 2, 2, 2, 2, 1 down its eight rows — 14 — and the right is its mirror.
- * 30+30+14+14. FOUR RECTANGLES ARE 96 — two full rows of 16 twice and two full columns of 8 twice — so that
- * is the number that separates this arm from the shortcut it replaced, and `spans` is NOT: both are one run
- * per row of each side, 2+2+8+8 = 20, at either geometry. A second mark with the four sides in four colours
- * and a read of the pixel at each side's own midpoint is what holds the index to top, right, bottom, left.
- * HOW ITS ABSENCE WOULD SHOW: `grep -c '@PAINT'` over a run's output answers the same number before and after
- * any change to the border arm, and no row anywhere reports a span or a pixel that a border laid.
- * RETIREMENT: this record goes when a fixture this host runs rasterizes a border mark and holds it to a
- * derived area. */
+ * RETIREMENT: this record loses a clause as each value lands and goes when all ten are drawn. */
 #ifndef ENGINE_HOST_BROWSER_CORE_PAINT_DISPLAY_LIST_RASTER_H
 #define ENGINE_HOST_BROWSER_CORE_PAINT_DISPLAY_LIST_RASTER_H
 

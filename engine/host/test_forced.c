@@ -22838,6 +22838,13 @@ static void display_list_raster_selftest(void)
     DisplayList border, border0;
     DisplayMark bm;
     CssColor side_color[4];
+    /* Section 8's geometry. The four used widths are NOT all equal and that is the whole point of them —
+       see the block's own banner. `dbl_w` is indexed top, right, bottom, left, which is the order
+       core/paint/display_list.h puts a border mark's sides in. */
+    static const int DBLW = 24, DBLH = 18;
+    static const double dbl_w[4] = { 6.0, 3.0, 6.0, 3.0 };
+    DisplayList dbl;
+    uint8_t band_a[6];
 
     /* 1. THE RECTANGLE KIND, whose rectangle IS its area. */
     display_list_init(&rect_list);
@@ -23114,6 +23121,169 @@ static void display_list_raster_selftest(void)
            "pixels. ONE MARK AND NO INK IS THE WHOLE CLAIM: a `marks` of 0 is a kind the rasterizer declined "
            "rather than processed, and any ink at all is a band of zero extent having been filled",
            count.marks, count.spans, count.pixels);
+
+    /* 8. AND THE `double` STYLE, WHICH UNTIL THIS BLOCK HAD NO CALLER ANY RUN OF THIS HOST REACHED.
+       Section 7 above draws `solid` and a zero used width, and `display_list_selftest` below APPENDS a mark
+       carrying a `double` side and never draws it — so core/paint/display_list_raster.c's
+       `DISPLAY_BORDER_STYLE_DOUBLE` arm was held entirely by its own two DCHECKs, and BOTH OF THOSE ARE
+       TAKEN OVER THE THREE BANDS' VERTICES, which says nothing whatever about which vertices reach a path.
+       An arm that cuts the bands correctly and then fills the WHOLE WEDGE satisfies both exactly; so does
+       one that fills all three bands; so does one that drops the inner line; so does one that cuts at a
+       depth read as a LENGTH. Those FOUR are caught by no assert in that file at all. The other two of the
+       six named below — the bands cut at halves rather than thirds, and a band cut from the wrong pair of
+       rays — ARE caught, in a DEV build only, because a `DCHECKF`'s condition is a `sizeof` in release. So
+       the counts and the pixels below are the first statement about any of the six a RELEASE build can fail.
+
+       A 24x18 BOX AT THE SURFACE ORIGIN, USED WIDTHS 6/3/6/3 (top, right, bottom, left), ALL FOUR STYLES
+       `double`, AT SCALE 1 ON A 24x18 SURFACE. Two properties of that geometry are chosen and neither is
+       decoration.
+
+       THE FOUR WIDTHS ARE DELIBERATELY UNEQUAL, AND THAT IS THE ONLY THING THAT SEPARATES A FRACTION FROM A
+       LENGTH. core/paint/display_list_raster.c spells this user agent's split as `DLR_DOUBLE_LINE_NUM` over
+       `DLR_DOUBLE_LINE_DEN`, a RATIO of the side's own used width, and argues from it that
+       css-backgrounds-3 §3.2 "Line Patterns: the border-style properties"' "The thickness of the lines is
+       not specified, but the sum of the lines and the space must equal border-width" is then satisfied at
+       EVERY used width and not only at the one that file was written against. A border whose four used
+       widths are EQUAL cannot observe that claim AT ALL: a third of a 6-pixel side and a flat depth of 2
+       pixels are the same number, so a split taken as an absolute length is byte-identical to the fraction
+       at every side, in every count and at every pixel. At 6/3/6/3 it is 72 runs and 260 pixels against 80
+       and 232, and the LEFT side's space comes out FILLED.
+
+       AND BOTH SPLITS LAND ON WHOLE PIXEL EDGES, WHICH IS WHAT MAKES THE SPACE A BYTE AND NOT A TOTAL. 6/3
+       is 2 and 3/3 is 1, so the top side's three bands are rows 0-1, 2-3 and 4-5 and the left side's are
+       columns 0, 1 and 2, and the middle of each is a whole pixel NO painted band touches. Section 7's 16x8
+       geometry cannot do that, and it is worth saying why rather than leaving the next reader to copy it:
+       at used widths of 2 the bands are two thirds of a pixel and the space straddles the row boundary at
+       y=1, so a `double` there hands the surface exactly the 88 pixels `solid` does — per side 30, 14, 30,
+       14 under both — with no pixel of the box left unpainted. A row written at that geometry asserting
+       `pixels` would PASS on an arm that painted the whole wedge solid.
+
+       THE COUNTS, AND WHAT EACH WRONG NUMBER NAMES. 348 pixels over 88 runs is THREE different wrong arms
+       at once — the whole wedge filled, all three bands filled, and the two bands cut at halves rather than
+       thirds — because each of them paints the side as ONE UNBROKEN BAND, which is exactly why
+       core/paint/display_list_raster.c holds the space band positive SEPARATELY from the partition. 248
+       over 80 is bands built by insetting the outer edge along its own normal instead of interpolating the
+       two mitre diagonals: it lays the SAME 80 runs as the correct arm, so `pixels` is the only count that
+       sees it and `spans` alone would not. 260 over 72 is the depth read as a length. 132 over 48 is the
+       inner line dropped. Every figure here was derived by transliterating core/graphics/rasterizer.c's
+       `raster_mean_below` and its prefix-sum loop, and the transliteration reproduces the 4/16, 8/128, 8/64,
+       32/88 and 68/336 this function already asserts above — which is what arms it. */
+    display_list_init(&dbl);
+    bm.kind = DISPLAY_MARK_BORDER;
+    bm.rect[0] = css_px(0.0); bm.rect[1] = css_px(0.0);
+    /* THE BOX IS THE SURFACE, at a scale of 1 and by construction rather than by two literals that agree:
+       the border box fills the bitmap exactly, so every pixel coordinate read below is a coordinate in the
+       box and a reader need not carry an offset. */
+    bm.rect[2] = css_px((double)DBLW); bm.rect[3] = css_px((double)DBLH);
+    bm.color = CSS_COLOR_OPAQUE_BLACK;
+    for (k = 0; k < 4; k++) {
+        bm.side[k].width = css_px(dbl_w[k]);
+        bm.side[k].style = DISPLAY_BORDER_STYLE_DOUBLE;
+        bm.side[k].color = side_color[k];
+    }
+    display_list_append(&dbl, &bm);
+    (void)tf_dlr_raster(&dbl, 1.0, DBLW, DBLH, &count);
+    CHECKF(count.marks == 1 && count.spans == 80 && count.pixels == 232,
+           "a 24x18 `DISPLAY_MARK_BORDER` with used widths 6/3/6/3 and all four styles `double` composited "
+           "%zu marks over %zu runs and %zu pixels of a 24x18 surface, where per side (top, right, bottom, "
+           "left) 88, 28, 88, 28 is 232 and 12, 28, 12, 28 is 80. 348 PIXELS OVER 88 RUNS IS THREE WRONG "
+           "ARMS AT ONCE, each of which paints a side as one unbroken band: the whole wedge filled, all "
+           "three bands filled, or the two bands cut at halves rather than thirds. 248 over 80 is a band "
+           "built by insetting the outer edge along its own normal rather than interpolating the wedge's two "
+           "mitre diagonals — the same run count as this, so only the pixels see it. 260 over 72 is the "
+           "split taken as an absolute LENGTH rather than as a fraction of each side's own used width, which "
+           "no border with four EQUAL widths can distinguish from the fraction. 132 over 48 is the inner "
+           "line dropped, and a `marks` of 0 is the kind reaching no arm at all",
+           count.marks, count.spans, count.pixels);
+
+    /* AND THE SPACE, WHICH IS THE WHOLE OF WHAT `double` MEANS AND WHICH NO TOTAL CAN STATE.
+       css-backgrounds-3 §3.2 "Line Patterns: the border-style properties" renders the value as "two
+       parallel solid lines with some space between them", and a count of 232 is satisfied by 232 pixels
+       ANYWHERE. The six reads below ARE that sentence, read off the bitmap: three pixels down one column of
+       the TOP side — outer line, space, inner line — and three along one row of the LEFT side, on the other
+       axis and at the other used width.
+       THE FOUR PAINTED READS ARM THE TWO EMPTY ONES. An arm that drew nothing whatever answers transparent
+       black at a space and would satisfy a claim made about the space alone, which is the unarmed control
+       CLAUDE.md names; and each painted read is in its OWN SIDE's colour, so it says which wedge laid it as
+       well as that something did. THE TWO INDEX READS AFTER THEM are the inner lines of the RIGHT and
+       BOTTOM sides in their own two colours: section 7's pixel reads reach the top and the left only, so
+       this is where a rotation of core/paint/display_list.h's top-right-bottom-left indexing into the other
+       two sides would show. */
+    tf_dlr_pixel(&dbl, 1.0, DBLW, DBLH, 12, 1, px);
+    band_a[0] = px[3];
+    CHECKF(px[0] == 255 && px[1] == 0 && px[2] == 0 && px[3] == 255,
+           "the pixel at (12, 1) is (%u, %u, %u, %u) where the TOP side's OUTER line is opaque red — its "
+           "band is rows 0 and 1, a third of a used width of 6. Transparent here is the first of the two "
+           "lines not having been drawn, and this read is what arms the space below it",
+           px[0], px[1], px[2], px[3]);
+    tf_dlr_pixel(&dbl, 1.0, DBLW, DBLH, 12, 2, px);
+    band_a[1] = px[3];
+    CHECKF(px[3] == 0,
+           "the pixel at (12, 2) is (%u, %u, %u, %u) — it is the middle band of the TOP side, rows 2 and 3, "
+           "which CSS 2.1 §8.5.3 \"Border style: 'border-top-style', 'border-right-style', "
+           "'border-bottom-style', 'border-left-style', and 'border-style'\" calls \"the space between "
+           "them\" and which this engine fills with nothing, so HTML §4.12.5.1.22 \"Drawing model\"'s "
+           "transparent black is what a correct arm leaves. AN OPAQUE RED HERE IS THE WHOLE DEFECT: the "
+           "side painted as ONE band, which is this engine's `solid` and which every count above is "
+           "consistent with at a geometry whose four used widths are equal",
+           px[0], px[1], px[2], px[3]);
+    tf_dlr_pixel(&dbl, 1.0, DBLW, DBLH, 12, 4, px);
+    band_a[2] = px[3];
+    CHECKF(px[0] == 255 && px[1] == 0 && px[2] == 0 && px[3] == 255,
+           "the pixel at (12, 4) is (%u, %u, %u, %u) where the TOP side's INNER line is opaque red — its "
+           "band is rows 4 and 5, the last third of the wedge. Transparent here with the two reads above "
+           "passing is the SECOND line missing, which is a `double` drawn as a single narrow rule",
+           px[0], px[1], px[2], px[3]);
+    tf_dlr_pixel(&dbl, 1.0, DBLW, DBLH, 0, 9, px);
+    band_a[3] = px[3];
+    CHECKF(px[0] == 0 && px[1] == 0 && px[2] == 255 && px[3] == 255,
+           "the pixel at (0, 9) is (%u, %u, %u, %u) where the LEFT side's OUTER line is opaque blue. This "
+           "side's used width is 3 and not 6, so its three bands are ONE column each — which is what makes "
+           "the three reads here a statement about the FRACTION rather than about a length",
+           px[0], px[1], px[2], px[3]);
+    tf_dlr_pixel(&dbl, 1.0, DBLW, DBLH, 1, 9, px);
+    band_a[4] = px[3];
+    CHECKF(px[3] == 0,
+           "the pixel at (1, 9) is (%u, %u, %u, %u) — the LEFT side's space, one column wide because a third "
+           "of 3 is 1. INK HERE IS THE READING THIS GEOMETRY EXISTS FOR: a split taken as an absolute depth "
+           "rather than as a fraction of each side's own used width lands correctly on the 6-pixel top and "
+           "bottom and wrongly on the 3-pixel left and right, so it is INVISIBLE in every count and at every "
+           "pixel of a border whose four widths are equal and shows up first exactly here",
+           px[0], px[1], px[2], px[3]);
+    tf_dlr_pixel(&dbl, 1.0, DBLW, DBLH, 2, 9, px);
+    band_a[5] = px[3];
+    CHECKF(px[0] == 0 && px[1] == 0 && px[2] == 255 && px[3] == 255,
+           "the pixel at (2, 9) is (%u, %u, %u, %u) where the LEFT side's INNER line is opaque blue, one "
+           "column against the top side's two. The six reads together are css-backgrounds-3 §3.2 \"Line "
+           "Patterns: the border-style properties\"' \"two parallel solid lines with some space between "
+           "them\" on two axes at two used widths",
+           px[0], px[1], px[2], px[3]);
+    tf_dlr_pixel(&dbl, 1.0, DBLW, DBLH, 21, 9, px);
+    CHECKF(px[0] == 0 && px[1] == 255 && px[2] == 0 && px[3] == 255,
+           "the pixel at (21, 9) is (%u, %u, %u, %u) where the RIGHT side's inner line is opaque green. "
+           "core/paint/display_list.h indexes a border mark's sides top, right, bottom, left, and the reads "
+           "above name only the first and the last — so a rotation that put the right side's colour on "
+           "another edge passes every one of them and fails this",
+           px[0], px[1], px[2], px[3]);
+    tf_dlr_pixel(&dbl, 1.0, DBLW, DBLH, 12, 12, px);
+    CHECKF(px[0] == 255 && px[1] == 255 && px[2] == 255 && px[3] == 255,
+           "the pixel at (12, 12) is (%u, %u, %u, %u) where the BOTTOM side's inner line is opaque white — "
+           "the fourth index, and the innermost row of a band that runs from the padding edge OUTWARD, so a "
+           "bottom wedge whose depths ran the other way would answer transparent here",
+           px[0], px[1], px[2], px[3]);
+
+    /* THE ROW. Every value in it is asserted above, so it fixes nothing new; what it is for is that an
+       artifact built before this block answers NOTHING for it, which is the control core/paint/
+       display_list_raster.h's retired fixture residual named — `grep -c '@PAINT'` over a run's output. The
+       six alphas are printed as the pattern rather than as a verdict so that a reader comparing two
+       artifacts can see 255 0 255 on each axis without opening this file, and `count` still holds the
+       rasterization asserted above because `tf_dlr_pixel` counts into a local of its own. */
+    printf("@PAINT border-double box=24x18 w=6/3/6/3 marks=%zu spans=%zu pixels=%zu top=%u,%u,%u "
+           "left=%u,%u,%u\n",
+           count.marks, count.spans, count.pixels,
+           band_a[0], band_a[1], band_a[2], band_a[3], band_a[4], band_a[5]);
+
+    display_list_free(&dbl);
 
     display_list_free(&border0);
     display_list_free(&border);
