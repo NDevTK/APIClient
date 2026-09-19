@@ -139,6 +139,14 @@ QJS_EXPORT int qjs_paint_complete(void);
    moves with every `qjs_step`, so a live read would name a timeline that is not the one in the picture. */
 QJS_EXPORT const char *qjs_paint_world(void);
 
+/* …AND WHETHER THAT TIMELINE STANDS ON A CONTRADICTION, WHICH IS THE HALF A NAME CANNOT CARRY. The entry
+   above says WHICH of a document's appearances this is; it says nothing about whether the path that laid the
+   ink ever took an arm its own concrete example CONTRADICTS, and a picture of such a path is a picture of a
+   page no session reaches. solver/flow.h's `path_forced` is that fact and main.c's body is where the words
+   are — including, as a NAMED RESIDUAL, the one thing this is NOT: an answer to whether this is the
+   appearance a browser would have produced. It is NECESSARY for that and it is not sufficient. */
+QJS_EXPORT const char *qjs_paint_forced(void);
+
 /* THE INSTRUMENT SEAM — a program a DRIVER wants evaluated in the analysed document's realm, and the dumped
    completion values coming back, one per live timeline. Its contract is at its body in main.c and its whole
    design at solver/engine.h's engine_request_dump; what is worth knowing from a declaration is that the two

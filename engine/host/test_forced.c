@@ -26122,6 +26122,17 @@ static void abi_report_declines(void)
  * told apart by a colon rather than by length — main.c's own `paint_world_name` is where that word is and why
  * a run whose frontier drained is legitimately standing on it.
  *
+ * AND WHAT THAT WORLD'S PATH STANDS ON, WHICH IS THE `#` LINE BESIDE IT AND IS NOT THE SAME FACT. A name says
+ * WHICH appearance; `qjs_paint_forced` says whether the path that laid the ink ever took an arm its own
+ * concrete example CONTRADICTS, so a picture of such a path is a picture of a page no session reaches. It is
+ * written out in a SENTENCE rather than as a bare word, because a `#` line is read by a person out of band
+ * and the load-bearing half of this fact is the caveat: `unforced` is NECESSARY and NOT SUFFICIENT for the
+ * appearance a browser would have produced, and main.c's `paint_forced_word` is where that residual is.
+ * THE FILE NAME DELIBERATELY DOES NOT CARRY IT, which is the diff a reader will otherwise propose: the grade
+ * is MONOTONE along a world's own path, so the same world painted twice can be `unforced` and then `forced`,
+ * and those two are one TIMELINE further along rather than two worlds. Overwriting is the right answer for
+ * them and putting the grade in the path would keep a stale picture of a world beside its current one.
+ *
  * NAMED RESIDUAL — WHAT IS NOT COVERED: the header states WHICH DOCUMENT and WHICH WORLD this is an image of
  * and does not state WHICH ENGINE REVISION drew it. The native link writes no build stamp —
  * `engine/build.mjs` writes a
@@ -26136,6 +26147,7 @@ static void abi_paint(const char *dir, const char *doc_id, const char *url)
 {
     const uint8_t *px;
     const char    *world;
+    const char    *forced;
     unsigned       n, w, h, offers, marks;
     int            complete, named, headed, closed;
     char           name[512];
@@ -26164,11 +26176,19 @@ static void abi_paint(const char *dir, const char *doc_id, const char *url)
     offers = qjs_paint_offers();
     marks = qjs_paint_marks();
     complete = qjs_paint_complete();
-    /* AND THE SIXTH, WHICH IS THE ONE THAT MAKES THIS AN IMAGE OF THIS ENGINE RATHER THAN OF A BROWSER. The
-       five above say what the ink is; this says whose TIMELINE it was laid in, and a document under a forced
-       multi-path solver has as many appearances as it has flows. It is read with the rest because it is a
-       fact about the SAME render — `qjs_paint` writes the register on the line that paints. */
+    /* AND THE TWO THAT MAKE THIS AN IMAGE OF THIS ENGINE RATHER THAN OF A BROWSER, WITH NO ORDINAL ON THEM
+       BECAUSE THE ONE THAT STOOD HERE HAD GONE WRONG AGAINST ITS OWN LIST: this comment called the world the
+       SIXTH reading, where it is the seventh, and spoke of `the five above` where there are six. The list is
+       what a reader can act on and the number is what they would quote onward, so the list is kept and the
+       numbers are dropped rather than corrected.
+       The readings above say what the INK is. These two say whose TIMELINE it was laid in — a document under
+       a forced multi-path solver has as many appearances as it has flows — and what that timeline STANDS ON,
+       which is the half a name cannot carry: a path that took an arm its own concrete example contradicts is
+       a picture of a page no session reaches. Both are read with the rest because both are facts about the
+       SAME render: `qjs_paint` writes the two registers on adjacent lines and off ONE read of the
+       running-flow stamp, so they can never be a grade of one timeline beside the name of another. */
     world = qjs_paint_world();
+    forced = qjs_paint_forced();
     /* THE SAME NEWLINE RULE AS THE TWO VALUES ABOVE, AND IT IS NOT COVERED BY THEIR ASSERT. A world's name is
        `<document>:<session>:<serial>` and the DOCUMENT half is a name the ZONE gave this instance — so the
        value reaching this `#` comment carries a string this process did not compose, exactly as `doc_id` and
@@ -26179,6 +26199,10 @@ static void abi_paint(const char *dir, const char *doc_id, const char *url)
           "the world an image was rendered in carries a newline. It reaches this PAM header as a `#` comment "
           "line, which a newline TERMINATES — so the rest of the name would be read as header syntax and the "
           "file would describe an image with the wrong dimensions or no ENDHDR at all");
+    /* AND NO SUCH CHECK FOR THE GRADE BESIDE IT, WHICH IS A STATEMENT RATHER THAN AN OMISSION. That value is
+       one of THREE CONSTANTS OF main.c's OWN — `forced`, `unforced`, `baseline` — so unlike a world's name it
+       carries no string any other party composed and there is no arrival for a newline to come in on. The day
+       it stops being a constant it is owed the assert its neighbour has. */
 
     /* THE SHAPE AND THE EXTENT ARE ONE FACT, ASSERTED HERE BECAUSE THIS IS THE FIRST CALLER THAT READS BOTH.
        core/paint/document_paint.c already holds its own surface to this equality; what is checked here is
@@ -26291,6 +26315,13 @@ static void abi_paint(const char *dir, const char *doc_id, const char *url)
                      "P7\n"
                      "# rendered by APIClient's engine from %s\n"
                      "# world %s\n"
+                     "# the path that laid this ink is %s\n"
+                     "#   `forced` means this timeline took an arm its own concrete example CONTRADICTS, so\n"
+                     "#   this is a picture of a page no session reaches. `unforced` is NECESSARY and NOT\n"
+                     "#   SUFFICIENT for the appearance a browser would have produced: a branch over a value\n"
+                     "#   carrying no example contradicts nothing and marks neither arm, so both siblings of\n"
+                     "#   an `if (__FLAGS.admin)` over absent server state read `unforced`. `baseline` is the\n"
+                     "#   document as no flow has written it, in which none of the page's own code has run.\n"
                      "# CSS 2.1 §E.2 \"Painting order\" offered %u step(s) and laid %u mark(s)\n"
                      "# the walk %s\n"
                      "WIDTH %u\n"
@@ -26299,7 +26330,7 @@ static void abi_paint(const char *dir, const char *doc_id, const char *url)
                      "MAXVAL 255\n"
                      "TUPLTYPE RGB_ALPHA\n"
                      "ENDHDR\n",
-                     url, world, offers, marks,
+                     url, world, forced, offers, marks,
                      complete ? "FINISHED: nothing was left unpainted that this engine paints"
                               : "STOPPED: this picture is PARTIAL — the painter met an operand it could not "
                                 "compute and every mark it had already laid is in the image",
@@ -26318,9 +26349,9 @@ static void abi_paint(const char *dir, const char *doc_id, const char *url)
        this arm's RECORD stream to the trusted zone, whose reader THROWS on a record it does not route — and
        it is right to: an unrouted record is a fact nothing reads. This line's reader is a PERSON, so it goes
        where `[abi]`'s own reports go and wears no marker that would claim to be part of a protocol. */
-    fprintf(stderr, "[abi paint] %s -> %s (world %s; %u x %u, %u bytes RGBA; %u offer(s), %u mark(s), "
-                    "walk %s)\n",
-            url, path, world, w, h, n, offers, marks,
+    fprintf(stderr, "[abi paint] %s -> %s (world %s, %s path; %u x %u, %u bytes RGBA; %u offer(s), "
+                    "%u mark(s), walk %s)\n",
+            url, path, world, forced, w, h, n, offers, marks,
             complete ? "complete" : "STOPPED — PARTIAL PICTURE");
     fflush(stderr);
 }

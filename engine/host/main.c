@@ -186,6 +186,23 @@ static DocumentPaintCount   g_paint_count;
  * of its own below. */
 static char                *g_paint_world;
 
+/* …AND WHAT THAT TIMELINE'S APPEARANCE IS WORTH, WHICH THE NAME ABOVE DOES NOT SAY. A world's name says
+ * WHICH of a document's appearances this is; solver/flow.h's `path_forced` says whether the path that laid
+ * the ink ever took an arm its own concrete example CONTRADICTS, and the argument for why no VALUE can answer
+ * that is at the field: the same bytes are the same bytes whichever arm reached them, so the discriminator is
+ * recorded where the ARM was taken and nowhere else.
+ *
+ * IT IS A STRING LITERAL AND NOT AN ALLOCATION, which is the one way this register differs from the two above
+ * it: the words are this file's own constants, so there is nothing to release before a new render and nothing
+ * to release at teardown. What teardown does to it is CLEAR it, which is not a free — it is the register
+ * agreeing with `g_painted` about whether a render has been asked for at all.
+ *
+ * CAPTURED AT THE RENDER FOR `g_paint_world`'s REASON EXACTLY, and out of the SAME read of the running-flow
+ * stamp rather than a second one. Two reads of a register that MOVES are two facts about worlds nothing
+ * forces to be one world; holding them a line apart makes them agree by ADJACENCY where `qjs_paint` can make
+ * them agree by construction. */
+static const char          *g_paint_forced;
+
 /* THE DOCUMENTS THAT JOINED THIS AGENT AFTER IT WAS ROOTED — `qjs_join`'s realms and trees, held because THIS
  * host is what gives them back. It is not a registry and does not answer any question about the agent: the
  * world registry names documents, `navigable.c` owns the §7.4 child realms, and these two arrays exist for the
@@ -1461,10 +1478,17 @@ QJS_EXPORT const char *qjs_result(void)
  * them and this entry would be guessing at it. One question, one word.
  *
  * ALLOCATED ON BOTH ARMS, because an ownership that differs by arm is one a caller has to remember, and the
- * free is at `qjs_paint`'s own line and at the teardown. */
-static char *paint_world_name(void)
+ * free is at `qjs_paint`'s own line and at the teardown.
+ *
+ * THE STAMP IS HANDED IN RATHER THAN READ HERE, AND EVERYTHING ABOVE ABOUT WHICH REGISTER IT IS AND WHY IT IS
+ * THE ONE MARK LEFT STANDING IS UNCHANGED — it is read one line earlier, in `qjs_paint`, and nowhere else.
+ * The reason is that TWO registers are now written off that one read: which world, and whether that world's
+ * path stands on a contradiction. A second `flow_running()` for the second of them would make the pair two
+ * facts about worlds nothing forces to be one world. Nothing can switch a flow between two adjacent lines of
+ * that entry, so the two reads would agree today — by adjacency, which is the convention one read replaces
+ * with construction. The MEMBERSHIP claim travels with the read for the same reason and is stated there. */
+static char *paint_world_name(Flow *f)
 {
-    Flow *f = flow_running();
     char *s;
 
     if (f == NULL) {
@@ -1474,15 +1498,57 @@ static char *paint_world_name(void)
                          "engine one document has as many appearances as it has flows");
         return s;
     }
-    /* THE STAMP NAMES A MEMBER OF THE FRONTIER, which is the two-sided half of the argument above. The three
-       writers pair the stamp with the delta, and this is the other end: a flow that has LEFT the frontier had
-       its world's death announced (solver/world.h's world_flow_gone), so a name taken from a departed flow
-       would be a name every peer has been told is gone. flow_release runs strictly after flow_finish's
-       `flow_set_running(NULL)`, so this cannot fire without one of those three sites having come apart. */
-    DCHECK(flow_is_member(f),
-           "the running-flow stamp names a flow the frontier no longer holds — the image about to be rendered "
-           "would be attributed to a timeline whose death has already been announced to every peer");
     return world_name(f->world);
+}
+
+/* …AND WHAT THAT WORLD'S APPEARANCE IS WORTH, WHICH IS A SECOND QUESTION ASKED OF THE SAME STAMP AND NOT A
+ * SECOND READ OF IT. solver/flow.h's `path_forced` is the fact: has this path ever taken an arm its own
+ * concrete example CONTRADICTS. A picture of a path that has is a picture of a page no session reaches — which
+ * is the whole point of being able to take it — and a reader holding it beside a browser's rendering must not
+ * be left to infer that from a file name.
+ *
+ * IT DOES NOT ROUTE TO `engine_prov_of_running_path`, WHICH IS THE CANONICAL SPELLING OF THIS BIT AND IS THE
+ * WRONG ONE HERE. The reason is recorded because routing to an established speller is what this codebase asks
+ * for, so a reader who re-derives that rule will propose it again: that entry answers PROV_DERIVED for a
+ * flow-less act DELIBERATELY, and solver/engine.h states why — a provenance may be wrong only in the
+ * UNDER-claiming direction, because over-claiming carries a reply to a request no client makes into the
+ * observed pool. The safe direction for a PICTURE is the opposite one, and the arm where they differ is
+ * exactly the flow-less one. §Boot's COW baseline is PRE-boot, so a baseline image is a document in which not
+ * one line of the page's own code has run; answering it in the same word as a real flow that took no
+ * contradicted arm would tell a reader that such a document is a candidate for the appearance a browser
+ * produces. One FACT, two PREDICATES over it, which is CLAUDE.md §A-PREDICATE-THAT-ANSWERS-TWO-QUESTIONS' own
+ * remedy rather than a second copy of the rule.
+ *
+ * THE ANSWER IS A WORD AND NOT AN `int`, AND THAT IS THE RESIDUAL BELOW MADE STRUCTURAL. A boolean here is
+ * read as "is this the browser's picture", the caller writes `if (!qjs_paint_forced())`, and that question is
+ * not recorded anywhere in this engine. `unforced` is a word a reader has to look up; `0` is a word a reader
+ * believes they already know. A word also leaves room for the fourth state the residual names without
+ * changing this entry's type under every caller that already switches on it.
+ *
+ * NAMED RESIDUAL — WHAT IS NOT COVERED: `unforced` does not separate a path that took only arms its own
+ * concrete examples AGREED with from one that took a branch over a value carrying NO example. §Solver-half
+ * makes genuinely external input and server-injected absent state example-free BY DESIGN — that is what makes
+ * them symbolic — so solver/decide.c's `decide_real_arm` answers REAL_ARM_UNOBSERVED over such a value,
+ * `decide_note_forced_arm` returns before marking anything, and BOTH siblings of that fork answer `unforced`
+ * here. That is correct about the FACT and it is not the question a reference comparison asks.
+ * WHAT THE NEXT DIFF BUILDS: solver/flow.h names the mechanism at `path_pinned`'s own residual — an arm of
+ * `decide_real_arm`'s answer that separates "the example contradicts this" from "there is no example" —
+ * recorded on the Flow beside `path_forced`, monotone and fork-carried for that field's reasons, and a fourth
+ * word here for it. It is not derivable from anything recorded today: `flow_path_forced` and
+ * `flow_path_pinned` are the Flow's two path-state accessors and the second is STRICTLY NESTED inside the
+ * first, so neither can be asked.
+ * HOW ITS ABSENCE WOULD SHOW: a reader holding two images of one document whose grade lines both read
+ * `unforced` cannot say whether one of them is the appearance a browser would have produced and the other is
+ * not, or whether the document has no single appearance at all — so a comparison against a reference
+ * rendering reports agreement for whichever image happens to match and disagreement for the other, with
+ * nothing in either file separating "this engine is wrong" from "this question has no answer here".
+ *
+ * NO ALLOCATION AND NO OWNERSHIP, unlike the name above: every arm answers one of this file's own constants,
+ * which is also why the value reaching a `#` comment line needs no newline check the way a world's name does. */
+static const char *paint_forced_word(Flow *f)
+{
+    if (f == NULL) return "baseline";
+    return flow_path_forced(f) ? "forced" : "unforced";
 }
 
 /* AN IMAGE OF THIS INSTANCE'S DOCUMENT — CSS 2.1 §E.2 "Painting order"'s ink composited onto a surface the
@@ -1509,8 +1575,11 @@ static char *paint_world_name(void)
    asked for no world by name. The ask changed which world is current; it did not make this entry selective.
    The end-of-run case is unchanged and is not an edge: a session that answers DONE has already closed,
    `engine_session_close` switches its last flow out, and the frontier it drained holds no member to be
-   standing in — so `paint_world_name` below reads `flow_running()` as NULL and answers the word `baseline`,
-   correctly, which is now the LAST image of a run rather than its only one.
+   standing in — so the running-flow stamp this entry reads is NULL, `paint_world_name` below answers the
+   word `baseline` for it and `paint_forced_word` answers `baseline` too, correctly, which is now the LAST
+   image of a run rather than its only one. (That sentence used to put the READ inside `paint_world_name`,
+   and it was true until a second fact had to be written off the same stamp; the read is in this entry now,
+   once, and both helpers are handed its answer.)
 
    AND THE NEXT-DIFF CLAUSE NAMED THE WRONG MECHANISM, RECORDED HERE BECAUSE THIS IS WHERE IT WAS WRITTEN AND
    BECAUSE IT WAS DISPATCHED AS A BRIEF BEFORE ANYBODY RE-DERIVED IT. In its own wording, with no quotation
@@ -1591,6 +1660,7 @@ static char *paint_world_name(void)
 QJS_EXPORT const uint8_t *qjs_paint(void)
 {
     bool region;
+    Flow *f;
 
     DCHECK(g_ctx != NULL && g_dom != NULL,
            "an image was asked of an instance that was never initialised — there is no document to render and "
@@ -1602,7 +1672,26 @@ QJS_EXPORT const uint8_t *qjs_paint(void)
     /* …AND THE PREVIOUS IMAGE'S WORLD WITH IT, because the two are one artifact and a register that outlived
        its pixels would name the timeline of a picture nobody is holding any more. */
     free(g_paint_world);
-    g_paint_world = paint_world_name();
+    /* THE RUNNING-FLOW STAMP, READ ONCE, BECAUSE TWO FACTS ABOUT THIS RENDER ARE WRITTEN OFF IT AND THEY HAVE
+       TO BE FACTS ABOUT ONE WORLD. `paint_world_name` holds the whole argument for why this register is the
+       one to ask and why it is the one mark `qjs_step` leaves standing across this ABI; what is here is that
+       it is asked ONCE.
+       AND THE MEMBERSHIP CLAIM COMES WITH THE READ RATHER THAN WITH EITHER READER, because it is one statement
+       about one value and stating it in both would be two spellers of one invariant. The three writers of the
+       stamp pair it with the delta, and this is the other end: a flow that has LEFT the frontier had its
+       world's death announced (solver/world.h's world_flow_gone), so an image attributed to a departed flow
+       would be attributed to a timeline every peer has been told is gone. flow_release runs strictly after
+       flow_finish's `flow_set_running(NULL)`, so this cannot fire without one of those three sites having
+       come apart. */
+    f = flow_running();
+    DCHECK(f == NULL || flow_is_member(f),
+           "the running-flow stamp names a flow the frontier no longer holds — the image about to be rendered "
+           "would be attributed to a timeline whose death has already been announced to every peer");
+    g_paint_world = paint_world_name(f);
+    /* …AND WHAT THAT TIMELINE'S APPEARANCE IS WORTH, on the adjacent line and for `g_paint_world`'s reason:
+       the two are one artifact, and a picture that says whose timeline it is of without saying whether that
+       timeline stands on a contradiction is one a reader will take for the page. */
+    g_paint_forced = paint_forced_word(f);
     region = document_paint(g_ctx, g_dom, &g_paint, &g_paint_count);
     g_painted = 1;
     DCHECKF(region || (g_paint_count.offers == 0u && g_paint_count.marks == 0u &&
@@ -1774,6 +1863,34 @@ QJS_EXPORT const char *qjs_paint_world(void)
            "lines, so a picture with no timeline on it is that pair having come apart and an image nothing "
            "downstream can attribute");
     return g_paint_world;
+}
+
+/* AND WHETHER THE PATH THAT LAID THAT PICTURE'S INK EVER TOOK AN ARM ITS OWN CONCRETE EXAMPLE CONTRADICTS —
+   `forced`, `unforced`, or the single word `baseline` for the document as no flow has written it. The whole
+   argument is at `paint_forced_word` above: which fact this is, why it is NOT routed through the canonical
+   provenance speller, why the answer is a word rather than a boolean, and — as a NAMED RESIDUAL — exactly
+   what `unforced` does not say.
+   IT ASSERTS THAT A RENDER HAPPENED FOR `qjs_paint_world`'s TWO REASONS, BOTH OF WHICH HOLD HERE VERBATIM:
+   `g_painted` is what separates "nobody has looked" from every real answer, and the real answers here include
+   one with no flow in it, so an unwritten register would be a NULL that reads exactly like the baseline arm
+   to a consumer testing for absence.
+   IT IS THE ANSWER FOR THE RENDER `qjs_paint` LAST PERFORMED, never for this instance now, and it comes out
+   of the SAME read of the running-flow stamp that named the world — so the two can never be a grade of one
+   timeline beside the name of another.
+   THE POINTER IS A CONSTANT OF THIS FILE AND THE HOST NEVER FREES IT, which is true of every `const char *`
+   this ABI answers and true here for a simpler reason than at its neighbours: nothing was allocated. */
+QJS_EXPORT const char *qjs_paint_forced(void)
+{
+    DCHECK(g_painted,
+           "what the path that laid an image's ink stands on was asked before an image was rendered — the "
+           "pair is ordered exactly as `qjs_paint_bytes` states, and an unwritten register answers NULL, "
+           "which a consumer reads as the field being absent rather than as this engine never having been "
+           "asked to paint");
+    DCHECK(g_paint_forced != NULL,
+           "a render has happened and left no statement of what its path stands on — `qjs_paint` writes this "
+           "register and the world's name beside it on adjacent lines and off ONE read of the running-flow "
+           "stamp, so a picture carrying a timeline and no grade is that pair having come apart");
+    return g_paint_forced;
 }
 
 QJS_EXPORT void qjs_teardown(void)
@@ -2012,6 +2129,11 @@ QJS_EXPORT void qjs_teardown(void)
        name that outlived its image would be the only thing left of a picture nobody can read. */
     free(g_paint_world);
     g_paint_world = NULL;
+    /* …AND THE STATEMENT OF WHAT THAT IMAGE'S PATH STOOD ON, WHICH IS A CLEAR AND NOT A RELEASE: the words
+       are this file's own constants and there is nothing here to free. It is cleared because the entry that
+       reads it asserts it is non-NULL, so a register that survived a teardown would answer about the previous
+       session's last render for a resumed one that has painted nothing. */
+    g_paint_forced = NULL;
     g_painted = 0;
     g_begun = 0;
     g_done = 0;
