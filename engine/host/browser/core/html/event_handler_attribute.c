@@ -115,12 +115,27 @@ void event_handler_attribute_changed(JSContext *ctx, lxb_dom_element_t *el, cons
        content attribute on a body and a frameset and on no other element — so `<div onunload="x">` is an
        ordinary attribute in every browser. A test that asked only whether the name is in the list would have
        registered a marker listener on the div for a type nothing dispatches at it.
-       IT IS ASKED OF EVERY ELEMENT AND NOT ONLY OF HTML ONES, because SVG2 §15.9 "Event attributes" gives SVG
+       IT IS ASKED OF EVERY ELEMENT AND NOT ONLY OF HTML ONES, because SVG 2 §15.8 "Event attributes" gives SVG
        elements the same attributes — its own example is `<rect onclick="MyClickHandler(evt)" .../>` and its
        text is "the character data content of an event attribute becomes the definition of the ECMAScript
        function which gets invoked in response to the event". `<svg onload=…>` is also the auto-firing position
        solver/solve_html.c's constructed breakouts end in, so an element-namespace filter here would make the
-       one markup class the solver derives for unreachable in the engine that has to run it. */
+       one markup class the solver derives for unreachable in the engine that has to run it.
+
+       THE SPELLING AND THE NUMBER WERE BOTH WRONG HERE, FOR TWO UNRELATED REASONS. This site read `SVG2`
+       as one token, and `citegen.mjs`'s `joinLevel` builds a levelled shortname only across a SPACE — the
+       other 37 SVG citations in this tree all write `SVG 2`, which joins to `svg-2`, which `LEVELLED`
+       accepts and `classifyAnchor` answers `other:` for, so they are foreign and unjudged. The no-space
+       form joins nothing and matches no list, so it anchored to NOTHING and fell to this file's own vote,
+       which is carried by a standard that never named it. §15.9 was then the 2018 Candidate
+       Recommendation's number: the Editor's Draft of 14 September 2025 DELETES that chapter's
+       `Magnification and panning`, so every section from §15.7 down shifts by one and `Event attributes`
+       is §15.8. The citation is owed to the document the editors MAINTAIN, and the two are seven years
+       apart. Chapter 9 and Appendix B — which carry every other SVG citation in this tree — are
+       heading-for-heading IDENTICAL between the two editions, so no sibling here pins an edition and this
+       is the first SVG citation in the tree that an edition can move.
+       RETIREMENT: this record goes when an SVG index row exists, because the number is then CHECKED
+       rather than argued, and the spelling is then reported rather than reasoned about. */
     index = event_target_handler_attribute_index(local, strlen(local));
     if (index < 0 || !event_target_handler_attribute_on_element(index, eha_is_body_or_frameset(n)))
         return;
