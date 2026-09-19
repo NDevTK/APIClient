@@ -945,9 +945,11 @@ IntrinsicInlineSizes intrinsic_inline_sizes(lxb_dom_element_t *el)
     }
     /* THE TWO ARE NON-NEGATIVE because every advance summed into them is, and a negative intrinsic size would
        make CSS 2.2 §10.3.5's formula produce a negative used width for a box with content in it — which
-       css-sizing-3 §3.3's "as the content width and height cannot be negative, this computation is floored at
-       zero" would then hide rather than the derivation being fixed. Asserted here, at the boundary where the
-       two numbers leave this component, so a caller never has to floor them. */
+       css-sizing-3 §3.1 "Sizing Properties"' "the inner size is always floored at zero" would then hide
+       rather than the derivation being fixed. §3.1 AND NOT §3.3, whose floor is a step of the `border-box`
+       conversion that §10.3.5 does not perform; core/layout/used_value.h argues the two apart. Asserted
+       here, at the boundary where the two numbers leave this component, so a caller never has to floor
+       them. */
     DCHECK(out.min_content.px >= 0.0 && out.max_content.px >= 0.0,
            "css-sizing-3 §5.1's intrinsic inline sizes came out NEGATIVE. Each is a sum of advance measures, "
            "every one of which is a non-negative OpenType 'hmtx' advanceWidth times a non-negative computed "

@@ -1507,12 +1507,13 @@ static const char *HTML =
     "cf.style.setProperty('max-width', 'min(500px, 200px)');"
     "fetch('/api/clamppct?v=' + (getComputedStyle(cp).width === '300px' &&"
     " getComputedStyle(cf).width === '200px' ? 'ispct' : 'wrong'));"
-    /* css-sizing-3 §3.3 "Box Edges for Sizing: the box-sizing property" — "it affects the interpretation of ALL
-       SIZING PROPERTIES" — so a `max-width` under `border-box` bounds the BORDER box, and §3.3's own floor
-       then applies to the substituted pass exactly as it does to a declared length: "as the content width and
-       height cannot be negative, this computation is floored at zero", so a 50px limit against an 80px
-       surround leaves the border box at 80 and not at 50. This is the case a `min` over two numbers gets
-       wrong in the other direction. */
+    /* css-sizing-3 §3.3 "Box Edges for Sizing: the box-sizing property" — "It affects the interpretation of
+       all sizing properties" — so a `max-width` under `border-box` bounds the BORDER box, and css-sizing-3
+       §3.3's own floor then applies to the substituted pass exactly as it does to a declared length: the
+       content box is "calculated by subtracting the border and padding in the corresponding axis from the
+       specified <length-percentage>, and flooring the result at zero (as the inner size of a box cannot be
+       negative)", so a 50px limit against an 80px surround leaves the border box at 80 and not at 50. This
+       is the case a `min` over two numbers gets wrong in the other direction. */
     "var cb2 = document.createElement('div'); cw.appendChild(cb2);"
     "cb2.style.setProperty('box-sizing', 'border-box');"
     "cb2.style.setProperty('padding-left', '40px'); cb2.style.setProperty('padding-right', '40px');"

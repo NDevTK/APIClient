@@ -126,13 +126,15 @@ static CssPx fx_outer_hypothetical_cross(lxb_dom_element_t *item)
            "<length-percentage>, and flooring the result at zero (as the inner size of a box cannot be "
            "negative)\", and CSS 2.1 §10.6.3's walk is a running sum of used heights — so a negative here is "
            "a derivation that lost an operand rather than a page. "
-           "THE WORDING IS THE STANDARD'S AND NOT THIS TREE'S, WHICH IS WORTH A CLAUSE BECAUSE THE TREE HAS "
-           "ANOTHER: five sites in core/layout render this same rule as \"as the content width and height "
-           "cannot be negative, this computation is floored at zero\", in quotation marks, and that sentence "
-           "occurs in NO section of css-sizing-3 — not in the committed corpus and not in the live Editor's "
-           "Draft. It is a paraphrase wearing a quotation's clothes, the five agree with each other and "
-           "disagree with the document, and the citation auditor cannot report it because this tree's own "
-           "prose holds the words. A reader copying a quotation from a sibling site here is copying that one");
+           "THE WORDING IS THE STANDARD'S CURRENT ONE, WHICH IS WORTH A CLAUSE BECAUSE THIS TREE SPENT EIGHT "
+           "SITES ON A SUPERSEDED ONE: they rendered the same floor in css-ui-3 §3.1 \"Changing the Box "
+           "Model: the box-sizing property\"'s words under a css-sizing-3 §3.3 citation. THAT IS A MIS-AIMED "
+           "QUOTATION AND NOT A FABRICATION — css-ui-3 defined `box-sizing` before css-sizing-3 took it "
+           "over, css-ui-4 records the handover in its own prose, and css-sizing-3 REWROTE the sentence, so "
+           "the words were a real standard's and were owed to no citation here. All eight are repaired and "
+           "core/layout/used_value.h holds the argument; what a reader re-deriving this needs is that §3.3's "
+           "floor is a step of the `border-box` conversion while §3.1's is unconditional, so a floor that "
+           "converts nothing cites §3.1");
     return css_px_add(inner, css_px_add(fx_cross_border_padding(item), fx_cross_margins(item)));
 }
 

@@ -112,10 +112,31 @@
  *         margin-right = width of containing block
  *     are every one of them read back through the arms above, so the section is a solve for whichever of them
  *     is `auto` (rule 5 for `width`, rules 2/4/6 for the margins) and nothing more. Its own floor at zero is
- *     css-sizing-3 §3.3's — "as the content width and height cannot be negative, this computation is floored
- *     at zero" — and NOT §10.4's `min-width: 0` running early, which is what stood here and made §10.4's real
- *     second pass look already done. What §10.3.3 still crashes for is its OVER-CONSTRAINED case, and it is
- *     not a layout gap:
+ *     css-sizing-3 §3.1 "Sizing Properties"' — "the inner size is always floored at zero" — and NOT §10.4's
+ *     `min-width: 0` running early, which is what stood here and made §10.4's real second pass look already
+ *     done.
+ *     WHICH css-sizing-3 SECTION OWNS THAT FLOOR IS WHAT THIS TREE GOT WRONG AT EIGHT SITES, AND THE TWO
+ *     CANDIDATE SECTIONS FLOOR DIFFERENT COMPUTATIONS, so the choice is not a matter of taste. §3.1 states
+ *     the floor UNCONDITIONALLY, of every sizing property, with no box model and no declaration in sight,
+ *     and §2 "Terminology" defines an "inner size" as "The content-box size of a box" — so §3.1 is the
+ *     floor any derivation of a content size may lean on, this equation's included. §3.3 "Box Edges for
+ *     Sizing: the box-sizing property"' floor is NARROWER and is a step of ONE computation: "the content
+ *     box width and height are calculated by subtracting the border and padding in the corresponding axis
+ *     from the specified <length-percentage>, and flooring the result at zero (as the inner size of a box
+ *     cannot be negative)". Cite §3.3 for the `border-box` conversion and §3.1 for everything else; citing
+ *     §3.3 for a floor that is not that conversion quotes a sentence about a computation the site never
+ *     performs.
+ *     AND THE RETIRED WORDING WAS A SUPERSEDED STANDARD'S REAL SENTENCE RATHER THAN A FABRICATION, which is
+ *     why it read so well and why eight sites agreed on it: `box-sizing` was defined by css-ui-3 §3.1
+ *     "Changing the Box Model: the box-sizing property" before css-sizing-3 took it over, and that section
+ *     states its own floor at 0 in wording css-sizing-3 REWROTE — so quoting css-ui-3's rendering under a
+ *     css-sizing-3 citation is a mis-aimed quotation, not an invented one, and no quotation check can see
+ *     it because the words really are some standard's. css-ui-4 records the handover in its own prose
+ *     ("has been moved to CSS Sizing 3 § 3.3 Box Edges for Sizing: the box-sizing property"), which is what
+ *     makes css-sizing-3 the maintained document and css-ui-3's sentence a retired edition's. A reader who
+ *     finds that sentence in css-ui-3 and reaches for it again is re-deriving the defect: it is owed to no
+ *     citation here, and css-sizing-3 says neither of the two sentences above in those words.
+ *     What §10.3.3 still crashes for is its OVER-CONSTRAINED case, and it is not a layout gap:
  *     WHICH of the two margins is ignored is a fact about the containing block's computed `direction`, and
  *     `direction` is not among the properties core/css/css_computed_value.h models — the cascade inherits it
  *     now (core/css/css_defaulting.h), and there is no entry to read the computed value through.

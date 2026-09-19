@@ -1265,14 +1265,16 @@ static BfBox bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wa
             pos = css_px_add(pos, bf_run_value(run));
         }
         /* §10.6.3's distance can be NEGATIVE — a last in-flow child with a negative bottom margin whose run
-           does not escape is exactly that — and a box's CONTENT HEIGHT cannot be, which is css-sizing-3 §3.3
-           "Box Edges for Sizing: the box-sizing property"'s own sentence ("as the content width and height
-           cannot be negative, this computation is floored at zero"). So this floor belongs to the walk and
-           holds with no limit declared at all. CSS 2.1 §10.7's CLAMP is a SEPARATE pass over the extent this
-           walk returns and is core/layout/used_value.c's — it re-runs the rules with `min-height`/`max-height`
-           substituted, and it runs on this value at every entry that consumes it. Calling this floor "§10.7's
-           min-height running early" was true of the number and wrong about which section owns it, and it made
-           the real clamp look already done. */
+           does not escape is exactly that — and a box's CONTENT HEIGHT cannot be, which is css-sizing-3 §3.1
+           "Sizing Properties"' own sentence: "the inner size is always floored at zero", an "inner size"
+           being "The content-box size of a box" by css-sizing-3 §2 "Terminology". §3.1 IS THE SECTION AND
+           §3.3 IS NOT, which is the correction core/layout/used_value.h argues out: §3.3's floor is a step
+           of the `border-box` conversion and this walk performs no conversion at all. So this floor belongs
+           to the walk and holds with no limit declared at all. CSS 2.1 §10.7's CLAMP is a SEPARATE pass over
+           the extent this walk returns and is core/layout/used_value.c's — it re-runs the rules with
+           `min-height`/`max-height` substituted, and it runs on this value at every entry that consumes it.
+           Calling this floor "§10.7's min-height running early" was true of the number and wrong about which
+           section owns it, and it made the real clamp look already done. */
         out.content_h = css_px_max(pos, css_px(0.0));
         return out;
     }

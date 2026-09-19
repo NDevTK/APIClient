@@ -2408,10 +2408,17 @@ static CssPx uv_padding(lxb_dom_element_t *el, CssLength len)
        margin-right = width of containing block
    solved for the one unknown. Every other term is read back through this component's own arms, so the `auto`
    margins rule 5 zeroes are zeroed by uv_margin and not a second time here.
-   THE FLOOR AT ZERO IS css-sizing-3 §3.3's AND NOT §10.4's, which is the correction the clamp forced. §3.3
-   states it of the CONTENT box outright — "as the content width and height cannot be negative, this
-   computation is floored at zero" — and it belongs here because the equation can produce a negative content
-   width from margins and borders alone, with no limit declared at all. §10.4's step 3 is a SEPARATE pass and
+   THE FLOOR AT ZERO IS css-sizing-3 §3.1's AND NOT §10.4's, which is the correction the clamp forced. §3.1
+   "Sizing Properties" states it of the inner box outright — "the inner size is always floored at zero" —
+   and it belongs here because the equation can produce a negative content width from margins and borders
+   alone, with no limit declared at all. css-sizing-3 §2 "Terminology" says so of THIS equation by name: its
+   stretch fit is that size "minus the box's computed margins (not collapsed, treating auto as zero), border,
+   and padding in the given dimension (such that the outer size is a perfect fit), and flooring at zero (so
+   that the inner size is not negative)", with a Note reading "This is the formula used to calculate the auto
+   widths of non-replaced blocks in normal flow in CSS2.1§10.3.3." THE SECTION USED TO
+   READ §3.3 HERE and that was a second mis-aim beside §10.4's: §3.3's floor is a step of the `border-box`
+   conversion, which this equation does not perform, and core/layout/used_value.h argues the two apart.
+   §10.4's step 3 is a SEPARATE pass and
    is `uv_sized`'s: it re-runs these rules with `min-width` substituted, which for a non-auto substitution is
    the declared arm and not this equation. Writing the floor as "§10.4's min-width: 0 running early" was true
    of the number and wrong about which section owns it, and it made the real step 3 look already done.
@@ -2521,8 +2528,11 @@ static CssPx uv_shrink_to_fit_width(lxb_dom_element_t *el, CssLength size_len, U
     /* THE RESULT NEEDS NO FLOOR, and that is the formula's own arithmetic rather than a clamp left out:
        `max(min-content, available)` is at least the min-content size, which core/layout/intrinsic_size.c
        asserts non-negative, and `min` with the max-content size cannot take it below that same non-negative
-       floor. css-sizing-3 §3.3's "the content width and height cannot be negative" is therefore already true
-       here, where §10.3.3's equation genuinely can produce a negative and does need it. */
+       floor. css-sizing-3 §3.1 "Sizing Properties"' "the inner size is always floored at zero" is therefore
+       already true here, where §10.3.3's equation genuinely can produce a negative and does need it. THE
+       CITATION USED TO READ §3.3 AND TO QUOTE A FRAGMENT, which hid the mis-aim twice over: §3.3 floors the
+       `border-box` conversion and not a shrink-to-fit, and a quotation cut to the clause that suited the
+       sentence is VERIFIED by a quotation check whatever the rest of it said. */
     DCHECK(content.px >= 0.0,
            "CSS 2.2 §10.3.5's shrink-to-fit width came out NEGATIVE, which its own three terms cannot produce: "
            "`max(preferred minimum width, available width)` is at least the preferred minimum width and both "
@@ -3349,15 +3359,22 @@ CssPx used_value_block_level_content_px(lxb_dom_element_t *el, bool vertical)
    plus the padding on each side — over css-sizing-3 §3.3, which is the only thing that varies: WHICH BOX the used
    size is the size of. That is why the paddings are added ONCE below, to the content box `uv_content_size`
    derives, rather than in two arms that would each have to remember the other's convention.
-   THE ASSERT IS THE WHOLE MECHANISM AND IT IS TWO-SIDED. §5 floors the content box at zero — "as the content
-   width and height cannot be negative, this computation is floored at zero" — and `uv_border_box_size`
+   THE ASSERT IS THE WHOLE MECHANISM AND IT IS TWO-SIDED. css-sizing-3 §3.3 floors the content box at zero as
+   a step of this very conversion — "the content box width and height are calculated by subtracting the border
+   and padding in the corresponding axis from the specified <length-percentage>, and flooring the result at
+   zero (as the inner size of a box cannot be negative)" — and `uv_border_box_size`
    IMPLEMENTS that floor, by returning the LARGER of the declared length and the four-term surround rather than
    the declared length alone. So under `border-box` the used size is a number that same sum already dominates,
    and subtracting the sum back out cannot go below zero: the floored case cancels to exactly zero because it is
    the identical `uv_surround_total` result going back, and the other case is a subtraction the `>` that chose
    it already decided the sign of. A negative content box here is therefore not a strange page and not a
    rounding artifact — it is the two derivations having stopped describing the same box: a used size that did
-   not come through §5's floor, or a surround computed from different terms than the one that produced it.
+   not come through §3.3's floor, or a surround computed from different terms than the one that produced it.
+   THE SECTION USED TO READ §5 AT BOTH LINES, and §5 is "Intrinsic Size Determination" — it states no floor
+   at all, so the number this assert rests on was attributed to a section that does not produce it. This is
+   the one site of the eight whose SECTION differed from its siblings', and it was the wrong one on both
+   axes; §3.3 is right HERE, uniquely among the eight, because this conversion is the computation §3.3's
+   floor is a step of.
    Under `content-box` the same assert says something simpler and just as necessary — CSS 2.1 §10.2's `width`
    is a non-negative <length>, so a negative used size is a derivation that lost an operand.
    AND THE TWO EDGES ARE ONE DERIVATION, which is why §8.1's border edge is a `with_border` here and not a
@@ -3510,8 +3527,10 @@ CssPx used_value_border_edge_from_content_px(lxb_dom_element_t *el, CssPx conten
     if (lim.has_max && used.px > lim.max.px) used = css_px_min(used, lim.max);
     if (lim.has_min && used.px < lim.min.px) used = css_px_max(used, lim.min);
     if (!uv_is_border_box(el)) return css_px_add(used, uv_surround_total(s));
-    /* §3.3's floor: "as the content width and height cannot be negative, this computation is floored at zero",
-       so a limit smaller than the surround leaves the border box AT the surround. Identical to the declared
-       arm's `uv_border_box_size`, and stated through it so the two cannot come to disagree. */
+    /* css-sizing-3 §3.3's floor, which is a step of this same conversion: the content box is "calculated by
+       subtracting the border and padding in the corresponding axis from the specified <length-percentage>,
+       and flooring the result at zero (as the inner size of a box cannot be negative)" — so a limit smaller
+       than the surround leaves the border box AT the surround. Identical to the declared arm's
+       `uv_border_box_size`, and stated through it so the two cannot come to disagree. */
     return uv_border_box_size(el, used, vertical);
 }
