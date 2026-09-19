@@ -315,6 +315,44 @@ CssPx used_value_border_edge_from_content_px(lxb_dom_element_t *el, CssPx conten
    `HTMLImageElement.width` reports. */
 CssPx used_value_content_px(lxb_dom_element_t *el, bool vertical);
 
+/* THE SAME EXTENT COMPUTED AS THOUGH THE BOX WERE BLOCK-LEVEL IN NORMAL FLOW — CSS 2.1 §10.6 "Calculating
+   heights and margins"' and §10.7 "Minimum and maximum heights: 'min-height' and 'max-height'"' rules run with
+   the box classified as §10.3.3's rather than as whatever it is, as a CONTENT-box extent.
+   ITS ONE CALLER IS css-flexbox-1 §9.4 "Cross Size Determination"' STEP 7 AND THE "AS THOUGH" IS THAT STEP'S
+   OWN WORDS: "Determine the hypothetical cross size of each item by performing layout as if it were an
+   in-flow block-level box with the used main size and the given available space, treating auto as
+   fit-content." WHICH LAYOUT "PERFORMING LAYOUT" MEANS IS NOT LEFT TO THE READER, and it is worth saying where
+   that is settled because the sentence above does not settle it: css-flexbox-1's Changes list records the
+   clarification that performing layout there means using the block-level layout rules, against its Issue 5188.
+   So this is not a reclassification invented for a caller's convenience — it is the section naming the
+   algorithm it wants, and this entry running exactly that one.
+   IT IS THE ONLY WAY TO ASK, WHICH IS WHY IT IS AN ENTRY AND NOT A CALLER'S TWO LINES. `used_value_px` reads
+   the box's REAL kind, and for a flex item that kind refuses on both arms by name — a declared cross size and
+   an `auto` one each crash naming §9.4 — because an item's USED cross size is §9.4's step 11 and depends on
+   the cross size of the line it is on. Step 7's HYPOTHETICAL cross size is a different quantity, stated one
+   step earlier and deliberately about a box that is NOT being treated as a flex item, and it is what step 8
+   takes the largest of. A caller resolving the declaration itself would be a second copy of §10.6 and §10.7,
+   including their percentage rules and their non-commutative min/max order.
+   `min-height: auto` ANSWERS 0 HERE AND THAT IS THE POINT RATHER THAN A SIDE EFFECT. css-sizing-3 §3.2
+   "Sizing Values: the <length-percentage [0,∞]>, auto | none, stretch, min-content, max-content, and
+   fit-content values" hands that keyword to "the relevant layout module" and falls back to a used value of 0,
+   and css-flexbox-1 §4.5 "Automatic Minimum Size of Flex Items" claims only ONE axis of it — "the used value
+   of a main axis automatic minimum size on a flex item whose computed overflow value is non-scrollable is its
+   content-based minimum size". So the CROSS axis has no module rule to be handed to and §3.2's 0 stands, which
+   is exactly what §10.7 reads when the box is read as block-level.
+   WHAT IT REFUSES IS TWO BOXES AND ONE OF THEM ONLY ON ONE ARM, which is a distinction worth keeping because
+   the narrower refusal is the one a reader would otherwise widen. A TABLE box is refused outright: CSS 2.1
+   §17.5.3 Table height algorithms owns its height under every value of the property, so there is no arm on
+   which §10.6 is its section. A REPLACED element is refused only where its size on the asked-for axis BEHAVES
+   AS AUTO — with a declared one, `uv_pass_size` takes the arm a non-replaced box takes and this entry is
+   simply right about it, and it is only §10.6.2's natural-dimension and intrinsic-ratio arms that would divide
+   by a width this entry's own reclassification has taken away from css-flexbox-1 §9.3 "Main Size
+   Determination". EVERY OTHER FLEX ITEM IS ALREADY BLOCK-LEVEL: css-display-3 §2.7 "Automatic Box Type
+   Transformations" has blockified it, so `inline-block` and `inline-flex` arrive here as the block-level boxes
+   this entry reads them as, and a FLOAT arrives as one because css-flexbox-1 §4 "Flex Items" says outright
+   that for a flex item "floating is ignored". */
+CssPx used_value_block_level_content_px(lxb_dom_element_t *el, bool vertical);
+
 /* CSS 2.1 §10.3.2's AND §10.6.2's DEFAULT REPLACED SIZE — the 300 x 150 rectangle a replaced element with no
    natural dimensions gets, capped by the device. `vertical` false is the width.
    IT TAKES NO REALM, DELIBERATELY: the cap is against the OUTPUT DEVICE (core/frame/screen.h) and not against

@@ -189,7 +189,7 @@ static CssPx fl_automatic_minimum_main(lxb_dom_element_t *el, CssPx inner_main, 
     return out;
 }
 
-/* THE TWO ARMS OF §9.2 "Line Length Determination"' STEP 2 THIS COMPONENT REACHES, which are NOT the two
+/* THE TWO ARMS OF §9.2 "Line Length Determination"' STEP 3 THIS COMPONENT REACHES, which are NOT the two
    core/layout/flex_intrinsic_size.c reaches, and saying which is what stops the two being merged.
      - ARM A, "If the item has a definite used flex basis, that's the flex base size", shared with that file.
      - ARM E, the section's "Otherwise, size the item into the available space using its used flex basis in
@@ -225,7 +225,18 @@ static CssPx fl_flex_base_size(lxb_dom_element_t *el, CssPx inner_main, Intrinsi
     return measured.max_content;
 }
 
-/* §9.2's STEP 2 CLOSING SENTENCE — "The hypothetical main size is the item's flex base size clamped according
+/* §9's ALGORITHM IS ONE ORDERED LIST CONTINUED ACROSS §9.1 TO §9.6, SO ITS STEP NUMBERS ARE GLOBAL AND NOT
+   PER-SECTION, and both numbers above and below are stated in the standard's own numbering rather than in a
+   count of the items under one heading. It is worth writing down because the local count is the intuitive one
+   and this file had it: the two sentences that now read STEP 3 read STEP 2, which is the second item under
+   §9.2 and the THIRD step of §9 "Flex Layout Algorithm". The standard settles it twice over — §9.1's list
+   opens `<ol start="1">` and every later section's continues it, and §9.8 "Definite and Indefinite Sizes"
+   points at the fifth item under §9.4 "Cross Size Determination" as "see step 11", which only the global
+   reading makes true. Every other step number in this component was already global (§9.3's step 5 is the
+   FIRST item under that heading), so the two that were not were an isolated slip and not a convention.
+   RETIREMENT: this note goes when a citation channel in this tree reads §9's continued list, at which point a
+   per-section count can no longer be written without something saying so.
+   §9.2's STEP 3 CLOSING SENTENCE — "The hypothetical main size is the item's flex base size clamped according
    to its used min and max main sizes (and flooring the content box size at zero)" — in CSS 2.1 §10.4 "Minimum
    and maximum widths: 'min-width' and 'max-width'"' order, the maximum capping first and the minimum flooring
    last, so a `min-width` above a `max-width` wins.
@@ -266,8 +277,12 @@ static void fl_fill(FlItem *it, CssPx inner_main, IntrinsicInlineSizes measured)
            gives. The two arms coincide exactly where the ratio has nothing to transfer.
            WHAT TO BUILD is §9.2's arm B over
            css-images-3 §4.1 "Object-Sizing Terminology"'s ratio, which core/layout/replaced_element.h already
-           answers, together with the CROSS-axis definiteness test §9.4 "Cross Size Determination" owns
-           — the same pair core/layout/block_flow.c names for a flex container's own auto cross size. */
+           answers, together with the CROSS-axis definiteness test §9.4 "Cross Size Determination" owns.
+           THAT SECOND HALF NOW HAS A COMPONENT AND THE SENTENCE THAT STOOD HERE SENT ITS READER TO THE WRONG
+           FILE: it named core/layout/block_flow.c as naming the same pair, and block_flow.c CALLS
+           core/layout/flex_cross_size.h for a `row` container's own auto cross size rather than refusing it.
+           What is absent there, and is this arm's other half, is §9.4's step 11 — the used cross size of one
+           ITEM, which is what "a definite cross size" would have to be read from. */
         if (rep.replaced && rep.has_ratio && !fl_computed_is(it->el, "height", "auto"))
             DFAILF("%s: this REPLACED flex item has a preferred aspect ratio and a declared cross size, so "
                    "css-flexbox-1 §9.2 \"Line Length Determination\"' arm B is its flex base size and §4.5 "
@@ -281,8 +296,11 @@ static void fl_fill(FlItem *it, CssPx inner_main, IntrinsicInlineSizes measured)
                    "ratio\". THE RATIO IS NOT WHAT IS MISSING — core/layout/replaced_element.h answers "
                    "css-images-3 §4.1 \"Object-Sizing Terminology\"'s natural aspect ratio for this element "
                    "already. WHAT IS MISSING IS THE USED CROSS SIZE, which is §9.4 \"Cross Size "
-                   "Determination\"' step 11 and which core/layout/block_flow.c names as the same absent "
-                   "section for a flex container's own auto cross size. BUILD §9.4",
+                   "Determination\"' step 11 — AND NOT §9.4 AS A WHOLE, WHICH IS WHAT THE SENTENCE THAT "
+                   "STOOD HERE SAID: its steps 7 and 8 are built (core/layout/flex_cross_size.h), and the "
+                   "clause naming core/layout/block_flow.c as the same absence is retired because that file "
+                   "now CALLS that component for a `row` container's own auto cross size. BUILD §9.4's "
+                   "STEP 11, whose operand is the LINE cross size that component already answers",
                    box_subject(it->el, nbuf, sizeof nbuf));
         it->grow = flex_item_flexibility_factor(it->el, "flex-grow");
         it->shrink = flex_item_flexibility_factor(it->el, "flex-shrink");
@@ -380,9 +398,12 @@ static size_t fl_collect(lxb_dom_element_t *container, CssPx inner_main, FlItem 
                §9.4 "Cross Size Determination"' step 10 is the sentence: "If any flex items have visibility:
                collapse, note the cross size of the line they're in as the item's strut size, and restart
                layout from the beginning. In this second layout round, when collecting items into lines, treat
-               the collapsed items as having zero main size." BUILD §9.4, which is what supplies the strut
-               size the second round needs and which core/layout/block_flow.c names as the same absent
-               section for a flex container's own auto cross size. */
+               the collapsed items as having zero main size." BUILD §9.4's STEP 10, which is what supplies
+               the strut size the second round needs. THE CLAUSE THAT STOOD HERE SAID TO BUILD §9.4 AND NAMED
+               core/layout/block_flow.c AS THE SAME ABSENCE, and both halves have moved: §9.4's steps 7 and 8
+               are built (core/layout/flex_cross_size.h), block_flow.c CALLS them, and that component refuses
+               a collapsed item at its own walk for the OTHER half of this same sentence — the strut its step
+               8 owes the line. */
             if (flex_item_is_collapsed(it.el))
                 DFAILF("%s: this flex item's computed `visibility` is `collapse`, so css-flexbox-1 §4.4 "
                        "\"Collapsed Items\" makes it a COLLAPSED FLEX ITEM and §9.4 \"Cross Size "
@@ -391,8 +412,10 @@ static size_t fl_collect(lxb_dom_element_t *container, CssPx inner_main, FlItem 
                        "collapsed item at ZERO main size. This component runs §9.3 \"Main Size "
                        "Determination\" once, so the used main size it would answer is the FIRST round's — "
                        "the one a browser throws away — and every other item on the line would be flexed "
-                       "against free space this item is still occupying. BUILD §9.4, whose step 10 owns both "
-                       "rounds and whose step 8 supplies the STRUT SIZE the second one carries",
+                       "against free space this item is still occupying. BUILD §9.4's STEP 10, WHICH OWNS "
+                       "BOTH ROUNDS — its step 8 is built (core/layout/flex_cross_size.h) and supplies "
+                       "the STRUT SIZE the second one carries, and refuses this same item at its own walk "
+                       "for that reason, so what is absent is the two ROUNDS and neither measurement",
                        box_subject(it.el, nbuf, sizeof nbuf));
             if (out != NULL) {
                 fl_require_horizontal_tb(it.el, "FLEX ITEM");
@@ -625,9 +648,12 @@ CssPx flex_line_used_main_size(lxb_dom_element_t *container, lxb_dom_element_t *
                "size of each flex item. If a flex item's cross size depends on the available space in the "
                "cross axis, recalculate its cross size using the flex line's cross size (rather than the flex "
                "container's) as the available space. Otherwise, the used cross size is the item's "
-               "hypothetical cross size.\" BUILD §9.4, which core/layout/block_flow.c names as the same "
-               "absent section for a flex container's own auto cross size and which needs THIS component's "
-               "used main sizes as its step 7 operand",
+               "hypothetical cross size.\" BUILD §9.4's STEP 11. THE SENTENCE THAT STOOD HERE SAID TO BUILD "
+               "§9.4 AND NAMED core/layout/block_flow.c AS THE SAME ABSENCE, and half of that is retired: "
+               "§9.4's steps 7 and 8 are built (core/layout/flex_cross_size.h) and block_flow.c CALLS them "
+               "for a `row` container's own auto cross size, so a reader who follows the old sentence finds "
+               "a call and not a crash. What is left is step 11, which takes the LINE cross size that "
+               "component produces and this component's used main sizes as its step 7 operand",
                box_subject(container, nbuf, sizeof nbuf));
     fl_require_horizontal_tb(container, "FLEX CONTAINER");
     /* §5.2 "Flex Line Wrapping: the flex-wrap property"' other arm. §9.3's step 5 has a SECOND sentence this

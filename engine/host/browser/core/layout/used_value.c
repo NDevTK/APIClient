@@ -2897,9 +2897,13 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
                   "both of which are css-flexbox-1 §9.4 \"Cross Size Determination\"' step 11 and neither of "
                   "which §9.3 answers; and an item whose BOX parent is not its DOM parent, which is "
                   "css-display-3 §2.5 \"Box Generation: the none and contents keywords\"' `contents` splice "
-                  "and which core/layout/block_flow.c names as the same absent box-tree step. BUILD §9.4, "
-                  "which core/layout/block_flow.c also names for a flex container's own auto cross size and "
-                  "which takes THIS component's used main sizes as its step 7 operand");
+                  "and which core/layout/block_flow.c names as the same absent box-tree step. BUILD §9.4's "
+                  "STEP 11, WHICH IS THE ONLY HALF OF §9.4 STILL MISSING: its steps 7 and 8 are built "
+                  "(core/layout/flex_cross_size.h) and produce the LINE cross size step 11 recalculates "
+                  "against, and the clause that stood here named core/layout/block_flow.c as naming the same "
+                  "absence — that file now CALLS that component for a `row` container's own auto cross size, "
+                  "so a reader who follows the old sentence finds a call. Step 11 takes THIS component's "
+                  "used main sizes as its step 7 operand");
         /* css-sizing-3 §3.3 decides which BOX EDGE the declared length is on, and the used value it exposes.
            It runs on §10.4's SUBSTITUTED limit too — §3.3 says the property "affects the interpretation of ALL
            SIZING PROPERTIES", so a `max-width` under `border-box` bounds the border box and its own content
@@ -3055,7 +3059,9 @@ static CssPx uv_pass_size(lxb_dom_element_t *el, CssLength len, UvBox box, bool 
               "only what that route refuses, and core/layout/flex_line.c names each of those refusals at the "
               "site it makes them — a `column` container's item, whose INLINE size is its CROSS size and is "
               "css-flexbox-1 §9.4 \"Cross Size Determination\"' step 11; and a `contents` splice between the "
-              "item and its container. BUILD §9.4");
+              "item and its container. BUILD §9.4's STEP 11 — its steps 7 and 8 are built "
+              "(core/layout/flex_cross_size.h) and produce the LINE cross size step 11 recalculates against, "
+              "so a reader who takes the bare \"BUILD §9.4\" that stood here will build them twice");
     if (box == UV_BOX_INLINE_FLEX_GRID)
         DFAIL("an INLINE-LEVEL FLEX OR GRID CONTAINER with `width: auto`. It is CSS 2.2 §9.2.2's ATOMIC "
               "INLINE-LEVEL box, so its own module sends it to the section this file already runs for an "
@@ -3257,6 +3263,86 @@ CssPx used_value_px(lxb_dom_element_t *el, const char *name)
     else if (group == 1) out = uv_padding(el, len);
     else                 out = uv_sized(el, box, vertical).used;
     return out;
+}
+
+/* css-flexbox-1 §9.4 "Cross Size Determination"' STEP 7's "as if it were an in-flow block-level box". See
+   used_value.h for why this is an entry rather than two lines at its caller and for what `min-height: auto`
+   answers through it. */
+CssPx used_value_block_level_content_px(lxb_dom_element_t *el, bool vertical)
+{
+    UvBox box;
+    CssPx used;
+    char nbuf[160];
+
+    DCHECK(el != NULL, "css-flexbox-1 §9.4 \"Cross Size Determination\"' step 7's layout of a box as an "
+                       "in-flow block-level one was asked for with no element");
+    box = uv_box_kind(el);
+    /* THE PRECONDITION IS WHAT MAKES THE RECLASSIFICATION HONEST rather than a way past a crash. This entry
+       exists because §9.4's step 7 says to lay a box out as something it is NOT, and the only box that step
+       is stated over is a FLEX ITEM — so a box whose real kind is already §10.3.3's has nothing to be read
+       "as if", and asking here for one would be a caller that could have called `used_value_px` and did not.
+       Every OTHER kind is a route this entry would silently take away from its own section. */
+    DCHECK(box == UV_BOX_ITEM,
+           "css-flexbox-1 §9.4 \"Cross Size Determination\"' step 7's \"as if it were an in-flow block-level "
+           "box\" was asked of a box that is not a FLEX OR GRID ITEM. That step is stated over the items of a "
+           "flex container and over nothing else, so for any other box this entry would be running §10.6's "
+           "rules in place of the section `uv_box_kind` classified it into — `used_value_px` is the entry "
+           "that asks a box its own question");
+    /* §10.6.2 and CSS 2.1 §17.5.3 Table height algorithms are the two sections a BLOCK-LEVEL reading would
+       take the box away from, and they are refused rather than approximated for css-flexbox-1 §9.4's own
+       reason: step 8 takes the LARGEST outer hypothetical cross size on the line, so one item measured by the
+       wrong algorithm is the line's cross size and therefore the container's. */
+    /* A REPLACED ITEM IS REFUSED ON ONE AXIS-ARM AND ANSWERED ON THE OTHER, and the split is `uv_pass_size`'s
+       own: it asks the replaced question only on the `auto` arm, because "a DECLARED length is the used value
+       for a replaced element and a non-replaced one alike". So a replaced flex item with a declared cross size
+       takes the same arm every other box takes and this entry is simply right about it; what it cannot answer
+       is the arm where CSS 2.1 §10.6.2's natural dimensions and intrinsic ratio decide the number. */
+    if (replaced_element_of(el).replaced &&
+        (vertical ? used_value_height_behaves_as_auto(el)
+                  : uv_len_is_auto(css_computed_length(el, "width"))))
+        DFAILF("%s: this FLEX ITEM is a REPLACED element with no declared size on the axis asked for, so "
+               "css-flexbox-1 §9.4 \"Cross Size Determination\"' step 7's \"performing layout as if it were an "
+               "in-flow block-level box\" is CSS 2.1 §10.6.2 \"Inline replaced elements, block-level replaced "
+               "elements in normal flow, 'inline-block' replaced elements in normal flow and floating replaced "
+               "elements\"' natural dimensions and intrinsic ratio. THE CRASH IS NOT HERE BECAUSE §10.6.2 IS "
+               "UNBUILT AND THE ARM WOULD NOT MERELY FAIL — IT WOULD ANSWER: `uv_pass_size` routes a "
+               "replaced box to `uv_replaced_height` before it reads the box type, so the forced block-level "
+               "reading above reaches §10.6.2's arms and comes back with a number. IT IS THE WRONG NUMBER FOR "
+               "ONE REASON AND THAT REASON IS THE WHOLE OF THIS ARM: §10.6.2's ratio arm derives the height "
+               "from the box's USED WIDTH, and `uv_flex_item_main_size` — the route that makes that width "
+               "css-flexbox-1 §9.3 \"Main Size Determination\"'s flexed one — is gated on the box kind this "
+               "entry has just overridden, so the width divided by would be §10.3's and not the item's used "
+               "main size, which step 7 asks for in its own words. §9.2 \"Line Length Determination\"' step 3 "
+               "names the same operand for the MAIN axis (\"if the flex item has a preferred aspect ratio, a "
+               "used flex basis of content, and a definite cross size, then the flex base size is calculated "
+               "from its used cross size and the flex item's aspect ratio\") and `uv_replaced_size` refuses "
+               "that one by name. BUILD A §10.6.2 THAT TAKES THE USED MAIN SIZE AS AN ARGUMENT rather than "
+               "re-deriving it from the box, and this arm becomes a call",
+               box_subject(el, nbuf, sizeof nbuf));
+    {
+        char *display = uv_computed(el, "display");
+        bool table = uv_display_is_table(display);
+
+        free(display);
+        if (table)
+            DFAILF("%s: this FLEX ITEM generates a TABLE box, whose height CSS 2.1 §17.5.3 Table height algorithms "
+                   "owns and §10.6.3 does not — a table's height is \"the sum of the row heights plus any cell "
+                   "spacing or borders\" and not a stack of block-level children, and `uv_pass_size` routes every "
+                   "other caller of a table's height to core/layout/table_height.h before §10.6 is reached. "
+                   "css-display-3 §2.7 \"Automatic Box Type Transformations\" blockifies an `inline-table` flex "
+                   "item to `table`, so this arm is reached by BOTH spellings and neither is an unusual page. "
+                   "ROUTE css-flexbox-1 §9.4 \"Cross Size Determination\"' step 7 to §17.5.3 for this box: the "
+                   "algorithm is BUILT and what is missing is that this entry hands the box to §10.6's rules "
+                   "instead, which is the reclassification this entry exists to perform and the one box it must "
+                   "not perform it on",
+                   box_subject(el, nbuf, sizeof nbuf));
+    }
+    used = uv_sized(el, UV_BOX_BLOCK_FLOW, vertical).used;
+    /* css-sizing-3 §3.3 "Box Edges for Sizing: the box-sizing property"' conversion, spelled here rather than
+       taken from `uv_content_size` because that helper re-enters `used_value_px`, which would re-derive the
+       box kind this entry has deliberately overridden and crash on the flex item it was handed. */
+    if (!uv_is_border_box(el)) return used;
+    return css_px_max(css_px_sub(used, uv_surround_total(uv_surround(el, vertical))), css_px(0.0));
 }
 
 /* CSS 2.1 §8's BOX MODEL — "the padding edge surrounds the box padding", and the padding box is the content box

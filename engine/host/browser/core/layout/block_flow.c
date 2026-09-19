@@ -13,6 +13,7 @@
 #include "core/dom/document.h"
 #include "core/layout/block_flow.h"
 #include "core/layout/box_subject.h"
+#include "core/layout/flex_cross_size.h"
 #include "core/layout/flex_item.h"
 #include "core/layout/line_box.h"
 #include "core/layout/replaced_element.h"
@@ -1527,12 +1528,12 @@ static BfBox bf_box(lxb_dom_element_t *el, BfBaseline pass)
 }
 
 /* A FLEX CONTAINER'S AUTO HEIGHT IS TWO DIFFERENT SECTIONS OF css-flexbox-1 AND §5.1 "Flex Flow Direction: the
- * flex-direction property" IS WHICH, so the question this entry cannot answer is TWO questions and they take
+ * flex-direction property" IS WHICH, so the question this entry answers is TWO questions and they take
  * opposite work. This split is the whole of what this function is: one crash for both arms was CORRECT for a
  * `row` container and WRONG for a `column` one, in the direction that costs the most — it named §9.6
  * "Cross-Axis Alignment" and the flex lines unconditionally, so a reader meeting it on a `column` container
  * was told to build §9.3 "Main Size Determination" and §9.4 "Cross Size Determination" for a number that
- * needs NO FLEX LINE AT ALL.
+ * needs NO FLEX LINE AT ALL. ONE OF THE TWO IS NOW BUILT AND THE SPLIT IS WHY THE OTHER STILL CRASHES.
  *
  * WHICH SIZE A *HEIGHT* IS, IS A FACT ABOUT THE WRITING MODE AND THEN ABOUT §5.1, in that order, and stating
  * only the second is one predicate answering two questions. A height is the BLOCK size only in a
@@ -1548,18 +1549,22 @@ static BfBox bf_box(lxb_dom_element_t *el, BfBaseline pass)
  * part-way through — the same reason core/layout/flex_intrinsic_size.c asks §5.1 first for the mirror
  * question, a flex container's intrinsic INLINE size.
  *
- * THE RELEASE ARM IS UNCHANGED BY THIS SPLIT AND IS NAMED BECAUSE IT IS SHARED: with the asserts compiled out
- * this returns, and `block_flow_auto_height` then falls through to CSS 2.1 §10.6.3's stack of block-level
- * boxes for a box that has none — a DEFINED wrong number, identical on both arms, which is what the single
- * crash already left behind and is not this diff's to choose.
+ * IT RETURNS A BOOL RATHER THAN A `CssPx` SO THAT THE RELEASE ARM OF THE ONE REMAINING CRASH IS UNCHANGED BY
+ * THIS DIFF, which is the one thing a half-built dispatch must not quietly alter. With the asserts compiled
+ * out a `DFAILF` is a no-op and control falls through whatever follows it, so returning the CROSS size from
+ * the bottom of this function would hand a `column` container a number from the wrong section in release —
+ * where today it falls through to CSS 2.1 §10.6.3's stack of block-level boxes, a DEFINED wrong number that
+ * is what the single crash already left behind and is not this diff's to choose. FALSE is therefore "this
+ * arm did not answer", and the caller's fall-through is §10.6.3 exactly as before.
  *
- * RETIREMENT: this function goes when both arms are built; a reader who finds only one of them still crashing
- * removes that arm and leaves the other, because the two are two algorithms and not two cases. */
-static void bf_flex_auto_block_size_unbuilt(lxb_dom_element_t *el)
+ * RETIREMENT: this function goes when the `column` arm is built; at that point there is no question left to
+ * dispatch on, the bool goes with the last crash, and `block_flow_auto_height` calls the two sections'
+ * components directly. */
+static bool bf_flex_auto_block_size(lxb_dom_element_t *el, CssPx *out)
 {
     char nbuf[160], wbuf[64];
 
-    if (!bf_computed_is(el, "writing-mode", "horizontal-tb"))
+    if (!bf_computed_is(el, "writing-mode", "horizontal-tb")) {
         DFAILF("%s, computed `writing-mode` `%s`: this FLEX CONTAINER's block axis is not the vertical one, so "
                "the HEIGHT this entry was asked for is not its block size and css-flexbox-1 §5.1 \"Flex Flow "
                "Direction: the flex-direction property\"' mapping below would send it to the wrong section — "
@@ -1572,8 +1577,10 @@ static void bf_flex_auto_block_size_unbuilt(lxb_dom_element_t *el)
                "physical ones",
                box_subject(el, nbuf, sizeof nbuf),
                box_subject_computed(el, "writing-mode", wbuf, sizeof wbuf));
+        return false;
+    }
 
-    if (flex_container_main_axis(el) == FLEX_MAIN_AXIS_BLOCK)
+    if (flex_container_main_axis(el) == FLEX_MAIN_AXIS_BLOCK) {
         DFAILF("%s: this FLEX CONTAINER's main axis is its BLOCK axis (css-flexbox-1 §5.1 \"Flex Flow "
                "Direction: the flex-direction property\": a `column` container's main axis \"has the same "
                "orientation as the block axis of the current writing mode\"), so the auto HEIGHT asked for "
@@ -1604,31 +1611,27 @@ static void bf_flex_auto_block_size_unbuilt(lxb_dom_element_t *el)
                "otherwise specified, this is equivalent to its automatic size\" — so the operand re-enters "
                "this entry one level down, which core/layout/used_value.c already reads the same way",
                box_subject(el, nbuf, sizeof nbuf));
+        return false;
+    }
 
-    DFAILF("%s: this FLEX CONTAINER's main axis is its INLINE axis (css-flexbox-1 §5.1 \"Flex Flow Direction: "
-           "the flex-direction property\": a `row` container's main axis \"has the same orientation as the "
-           "inline axis of the current writing mode\"), so the auto HEIGHT asked for here is its CROSS size. "
-           "§9.6 \"Cross-Axis Alignment\" determines it and CSS 2.1 §10.6.3 does not — it is §9.6 and not "
-           "§9.4 because the CONTAINER's cross size is the step that READS the lines rather than the one that "
-           "sizes them: §9.3 \"Main Size Determination\" collects the items into FLEX LINES, §9.4 \"Cross "
-           "Size Determination\" calculates each line's cross size from the items on it, and §9.6's own last "
-           "step is \"Determine the flex container's used cross size using the rules of the formatting "
-           "context in which it participates. If a content-based cross size is needed, use the sum of the "
-           "flex lines' cross sizes.\" None of that is a stack of block-level boxes with collapsing margins, "
-           "so this walk would answer a number from the wrong algorithm. "
-           "THE CONTAINER'S OWN USED MAIN SIZE IS ALREADY SOLVED FOR THIS ARM AND ONLY FOR THIS ARM: a `row` "
-           "container's main size is its INLINE size, which css-flexbox-1 §9.2 \"Line Length Determination\" "
-           "sends to \"the rules of the formatting context in which it participates\" and which "
-           "core/layout/used_value.c resolves as CSS 2.1 §10.3.3's constraint equation, one level up. "
-           "BUILD §9.3 AND §9.4. §9.3's first step is trivial for a SINGLE-LINE container — \"If the flex "
-           "container is single-line, collect all the flex items into a single flex line\" — so a "
-           "`flex-wrap: nowrap` container needs no line BREAKING at all, and what it still needs is §9.3's "
-           "second step, \"Resolve the flexible lengths of all the flex items to find their used main "
-           "size\" (§9.7 \"Resolving Flexible Lengths\"), because §9.4's first step sizes each item \"as if "
-           "it were an in-flow block-level box with the used main size\". core/layout/flex_intrinsic_size.c "
-           "names §9.3 and §9.4 as the same absent pair for a MULTI-LINE COLUMN container's max-content cross "
-           "size, so one component answers both",
-           box_subject(el, nbuf, sizeof nbuf));
+    /* THE `row` ARM, WHICH IS A CALL AND NOT AN ALGORITHM. §5.1 has just made this container's block axis its
+       CROSS axis, so the auto HEIGHT asked for is the cross size css-flexbox-1 §9.6 "Cross-Axis Alignment"'
+       own step determines — "Determine the flex container's used cross size using the rules of the formatting
+       context in which it participates. If a content-based cross size is needed, use the sum of the flex
+       lines' cross sizes" — and core/layout/flex_cross_size.h runs that step over §9.4 "Cross Size
+       Determination"' steps 7 and 8, which are what produce the lines' cross sizes it sums.
+       THE CRASH THAT STOOD HERE TOLD ITS READER TO BUILD §9.3 "Main Size Determination" AND §9.4, and §9.3 is
+       built (core/layout/flex_line.h) — a reader who follows the old sentence will build §9.7 "Resolving
+       Flexible Lengths" a second time, which is the identical hazard the `column` arm above records about
+       §9.9.3 "Flex Item Intrinsic Size Contributions". WHAT §9.3 DID NOT DO AND THIS DIFF DID is the CROSS
+       axis: the two sections share no step, which is the same sentence this function's own dispatch rests
+       on one level up.
+       IT IS A CONTENT EXTENT, which is what this function's contract returns and what §9.6's sum is: a flex
+       line sits inside the container's content box with nothing between them, so there is no edge to convert
+       and css-sizing-3 §3.3 "Box Edges for Sizing: the box-sizing property"' conversion stays with the caller
+       that exposes a used value, exactly as it does for CSS 2.1 §10.6.3's walk below. */
+    *out = flex_cross_size_content_based(el);
+    return true;
 }
 
 CssPx block_flow_auto_height(lxb_dom_element_t *el)
@@ -1645,8 +1648,15 @@ CssPx block_flow_auto_height(lxb_dom_element_t *el)
     flex = strcmp(d, "flex") == 0 || strcmp(d, "inline-flex") == 0;
     grid = strcmp(d, "grid") == 0 || strcmp(d, "inline-grid") == 0;
     free(d);
-    if (flex)
-        bf_flex_auto_block_size_unbuilt(el);
+    /* THE FLEX DISPATCH IS NOT AN `if` IN FRONT OF THIS WALK, IT IS A ROUTE THAT MAY ANSWER. A `row`
+       container's auto height is css-flexbox-1 §9.6 "Cross-Axis Alignment"' content-based cross size and
+       returns here; the `column` arm and the vertical writing modes still crash by name and return FALSE,
+       and their fall-through into §10.6.3's stack below is the release arm this walk already had for them. */
+    if (flex) {
+        CssPx cross;
+
+        if (bf_flex_auto_block_size(el, &cross)) return cross;
+    }
     if (grid)
         DFAIL("css-grid-1 §11 \"Grid Layout Algorithm\" sizes a GRID CONTAINER's ROWS and its auto height is "
               "the sum of the row track sizes plus the gutters, not CSS 2.1 §10.6.3's stack of block-level "
