@@ -1411,16 +1411,72 @@ static const char *HTML =
     "fetch('/api/sainlinedelta?i=' + (saWide.scrollWidth - saNarrow.scrollWidth) +"
     " '&b=' + (saTaller.scrollHeight - saTall.scrollHeight));"
     /* §4.8.3's `[CEReactions, ReflectSetter] attribute unsigned long width` — the SETTER is HTML §2.6.1's
-       reflection and the GETTER is determine-the-dimensions, so the two do NOT round-trip and that asymmetry
-       is what this asserts. Writing 64 sets the content attribute; reading back still reports the RENDERED
-       width, which is 300 until core/css/css_presentational_hints.c carries HTML §15.4.3's dimension-attribute
-       mapping. §2.6.1's setter range test is the second half: `unsigned long` converts -1 to 4294967295, which
-       is outside "the range minimum to 2147483647, inclusive", so `newValue` stays at `minimum` and the
-       attribute becomes "0" rather than the huge number. */
+       reflection and the GETTER is determine-the-dimensions, so the two are DIFFERENT QUESTIONS and this pair
+       is what holds them apart. THE SENTENCE THAT STOOD HERE SAID THEY DO NOT ROUND-TRIP AND ASSERTED 300,
+       and it was true of a tree with no row for HTML §15.4.3 "Attributes for embedded content and images":
+       the attribute reached the cascade nowhere, so the rendered width fell to CSS 2.1 §10.3.2's 300px
+       default whatever the attribute said. core/css/css_presentational_hints.c carries that row now, so
+       writing 64 to the content attribute IS what the rendered width follows — which is a browser's answer
+       and not a coincidence.
+       THE ASYMMETRY IS THEN SHOWN WHERE IT IS STILL REAL, AND IT IS THE CASCADE ORIGIN. css-cascade-5 §6.5
+       puts that hint in a "special-purpose author presentational hint origin between the regular user origin
+       and the author origin", so an AUTHOR declaration of any specificity outranks it: a `style` width of
+       10px leaves the CONTENT ATTRIBUTE at 64 and moves the rendered width to 10. A hint written into the
+       author origin, or into the UA sheet, would read 64 here — those are the two ways the row can be put in
+       the wrong band, and they differ from the right one in this one number.
+       §2.6.1's setter range test is the second half: `unsigned long` converts -1 to 4294967295, which is
+       outside "the range minimum to 2147483647, inclusive", so `newValue` stays at `minimum` and the
+       attribute becomes "0" rather than the huge number — which §15.4.3's row then maps to `height: 0px`,
+       the number the attribute states and not a floor this file chose. */
     "rd.width = 64;"
     "rd.height = -1;"
     "fetch('/api/replacedsetter?v=' + (rd.getAttribute('width') === '64' &&"
-    " rd.getAttribute('height') === '0' && rd.width === 300 ? 'isreflect' : 'wrong'));"
+    " rd.getAttribute('height') === '0' && rd.width === 64 ? 'isreflect' : 'wrong'));"
+    "rd.style.setProperty('width', '10px');"
+    "fetch('/api/preshintorigin?v=' + (rd.getAttribute('width') === '64' && rd.width === 10"
+    " ? 'isauthor' : 'wrong'));"
+    /* ---- HTML §15.4.3's MAPPING OF THE ATTRIBUTES HTML §4.8.17 "Dimension attributes" DEFINES --------------
+       THE ROW THAT MAKES A REAL PAGE RENDER. Hacker News ships `<img src="y18.svg" width="18" height="18">`
+       and every engine without this mapping lays it out at CSS 2.1 §10.3.2's 300px — a visible, whole-page
+       divergence from one missing row. EVERY NUMBER BELOW IS A LITERAL THIS FIXTURE WROTE: 18 comes from the
+       attribute and 300 is the default these same elements take when the attribute does not parse, so a run
+       that answers these lines has read the attribute rather than measured anything.
+       ALL FOUR IMAGES ARE PENDING FOR THE WHOLE OF THIS BLOCK — §4.8.4.3.5 writes a current URL after a
+       MICROTASK, so nothing here can be `complete` in the task that set it — which is HTML §15.4.2 "Images"'
+       SECOND rule, a replaced element with no natural dimensions. That is what makes 300 the control: the
+       failing arms fall to a number this file already asserts one probe above, and not to a number some
+       decoder produced. */
+    "var dimA = document.createElement('img'); dimA.src = '/api/dim-a.png';"
+    "dimA.setAttribute('width', '18'); dimA.setAttribute('height', '18');"
+    "document.body.appendChild(dimA);"
+    "fetch('/api/preshintdim?v=' + (getComputedStyle(dimA).width === '18px' &&"
+    " getComputedStyle(dimA).height === '18px' ? 'is18' : 'wrong'));"
+    /* HTML §2.3.4.4 "Percentages and lengths"' rules for parsing dimension values stop at the first code
+       point that is not a digit and then ask ONE question of it — is it U+0025 — so TRAILING CONTENT IS NOT
+       AN ERROR and `18px` is eighteen. A parser that required the whole attribute to be a number would
+       answer 300 here, which is the arm this separates. */
+    "var dimB = document.createElement('img'); dimB.src = '/api/dim-b.png';"
+    "dimB.setAttribute('width', '18px');"
+    "document.body.appendChild(dimB);"
+    "fetch('/api/preshintdimtrail?v=' + (getComputedStyle(dimB).width === '18px' ? 'is18' : 'wrong'));"
+    /* A FAILING PARSE IS THE ABSENCE OF THE HINT AND NEVER A DEFAULT. §2.3.4.4 takes no sign — a `-` is not
+       an ASCII digit, so its step 4 returns failure — and HTML §15.2 conditions the whole mapping on the
+       parse, so the property is simply undeclared by this origin and §10.3.2's last arm answers. §15.3.2's
+       8px fallback is that section's own sentence and reaching for it here would be a number invented out of
+       a different row. */
+    "var dimC = document.createElement('img'); dimC.src = '/api/dim-c.png';"
+    "dimC.setAttribute('width', '-5');"
+    "document.body.appendChild(dimC);"
+    "fetch('/api/preshintdimfail?v=' + (getComputedStyle(dimC).width === '300px' ? 'isdefault' : 'wrong'));"
+    /* §2.3.4.4's OTHER CATEGORY — "If the code point at position within input is U+0025 (%), then return
+       value as a percentage." This EMITS rather than comparing, because a percentage width resolves against
+       the containing block and pinning a number here would assert this fixture's viewport rather than the
+       categorisation. What it does hold is that the path ANSWERS: a run in which this row is absent is a run
+       that never reached the block. */
+    "var dimD = document.createElement('img'); dimD.src = '/api/dim-d.png';"
+    "dimD.setAttribute('width', '50%');"
+    "document.body.appendChild(dimD);"
+    "fetch('/api/preshintdimpct?w=' + encodeURIComponent(getComputedStyle(dimD).width));"
     /* AN `img` THAT IS NOT BEING RENDERED takes determine-the-dimensions' THIRD step — "return a width of 0
        and a height of 0" — which is the algorithm's own answer and not a fallback. `display: none` is the
        cheapest way to have a connected element with no box. */

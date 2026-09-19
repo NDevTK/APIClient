@@ -60,12 +60,17 @@ static char *hint_declaration(const char *property, const char *value, const cha
     return out;
 }
 
-/* HTML's RULES FOR PARSING NON-NEGATIVE INTEGERS, which §15.2's "maps to the pixel length property" is stated
-   over: the rules for parsing integers, and then an error for a negative result. The integer rules skip leading
-   ASCII whitespace, accept one optional sign, require an ASCII DIGIT next, and then "collect a sequence of code
-   points that are ASCII digits" — so TRAILING CONTENT IS NOT AN ERROR and `marginwidth="10px"` is ten.
-   WHAT COMES BACK IS THE DIGIT RUN, not a number, and that is deliberate: "interpret the resulting sequence as
-   a base-ten integer" has no upper bound, so accumulating into a C integer would need a range check, and a
+/* HTML §2.3.4.2 "Non-negative integers"' RULES FOR PARSING NON-NEGATIVE INTEGERS, which §15.2's "maps to the
+   pixel length property" is stated over: the rules for parsing integers, and then an error for a negative
+   result. THE QUOTED WORDS BELOW ARE §2.3.4.1 "Signed integers"' AND NOT §15.2's, which is where this comment
+   used to point them — §2.3.4.2's own algorithm is four steps that delegate ("Let value be the result of
+   parsing input using the rules for parsing integers"), so every sentence describing the scan is one section
+   up. The integer rules skip leading ASCII whitespace, accept one optional sign, require an ASCII DIGIT next,
+   and then §2.3.4.1's "Collect a sequence of code points that are ASCII digits from input given position, and
+   interpret the resulting sequence as a base-ten integer" — so TRAILING CONTENT IS NOT AN ERROR and
+   `marginwidth="10px"` is ten.
+   WHAT COMES BACK IS THE DIGIT RUN, not a number, and that is deliberate: §2.3.4.1's base-ten interpretation
+   has no upper bound, so accumulating into a C integer would need a range check, and a
    range check that rejects is a CAP on what a page may write. The digits ARE the value — the property this maps
    to is a `<length>`, and the caller writes them straight into one. Leading zeros are dropped so the specified
    value serializes canonically; `*plen` is at least 1 on success. */
@@ -75,7 +80,7 @@ static bool html_parse_non_negative_integer(const lxb_char_t *s, size_t n, const
 
     while (i < n && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\f' || s[i] == '\r')) i++;
     if (i == n) return false;
-    if (s[i] == '-') return false;   /* "if value is less than zero, return an error" */
+    if (s[i] == '-') return false;   /* §2.3.4.2: "If value is less than zero, return an error." */
     if (s[i] == '+') i++;
     if (i == n || s[i] < '0' || s[i] > '9') return false;
     start = i;
@@ -84,6 +89,66 @@ static bool html_parse_non_negative_integer(const lxb_char_t *s, size_t n, const
     *pd = s + start;
     *plen = i - start;
     return true;
+}
+
+/* HTML §2.3.4.4 "Percentages and lengths"' RULES FOR PARSING DIMENSION VALUES, which §15.2's "maps to the
+   dimension property" is stated over. It is a DIFFERENT algorithm from the integer rules above and not a
+   looser spelling of them: it takes NO SIGN (a `-` is simply not an ASCII digit, so `width="-5"` is failure
+   where `marginwidth="-5"` reaches the integer rules' own negative test), it accepts a FRACTIONAL part, and
+   it returns one of two CATEGORIES rather than a number — the current dimension value being "If the code
+   point at position within input is U+0025 (%), then return value as a percentage. Return value as a length."
+   WHAT COMES BACK IS THE CSS TEXT AND NOT A DOUBLE, for the reason the integer rules' digit run gives:
+   "interpret the resulting sequence as a base-ten integer" has no upper bound, so accumulating into a C
+   number would need a range check and a range check that rejects is a CAP on what a page may write. Writing
+   the DIGITS through also keeps the value exactly — CSS's own `<number>` admits the same digit syntax — so
+   there is no rounding here and none in the reader either.
+   NULL IS FAILURE AND FAILURE IS THE ABSENCE OF THE HINT, never a default. §15.2 conditions the whole mapping
+   on the parse: "if element has an attribute attribute set, and parsing that attribute's value using the
+   rules for parsing dimension values doesn't generate an error, THEN the user agent is expected to use the
+   parsed dimension". §15.3.2's 8px is that section's own sentence and belongs to no other row.
+   THE THREE RETURNING ARMS COLLAPSE TO ONE PASS, which is a rewriting rather than a shortcut: step 7.2's
+   "return the current dimension value" with no fraction digits consumed, step 7.4.4's "return value as a
+   length" at end of input, and step 8's "return the current dimension value" all end at the same two
+   questions — how many fraction digits were taken, and whether the code point at the final position is
+   U+0025. So `1.` is 1px, `1.%` is 1%, `18px` is 18px (TRAILING CONTENT IS NOT AN ERROR) and `50 %` is 50px
+   (the space ends the number and is not U+0025). */
+static char *html_parse_dimension_value(const lxb_char_t *s, size_t n)
+{
+    size_t i = 0, istart, iend, fstart, fend, o = 0, ulen;
+    const char *unit;
+    char *out;
+
+    while (i < n && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\f' || s[i] == '\r')) i++;
+    if (i == n || s[i] < '0' || s[i] > '9') return NULL;   /* step 4: "return failure" */
+    istart = i;
+    while (i < n && s[i] >= '0' && s[i] <= '9') i++;
+    iend = i;
+    fstart = fend = i;
+    if (i < n && s[i] == '.') {
+        i++;
+        fstart = i;
+        while (i < n && s[i] >= '0' && s[i] <= '9') i++;
+        fend = i;
+    }
+    unit = (i < n && s[i] == '%') ? "%" : "px";
+    ulen = strlen(unit);
+    /* Leading zeros are dropped so the specified value serializes canonically, keeping at least one digit —
+       `0.5` keeps its `0` rather than becoming a `.5px` whose leading dot a reader would have to admit
+       separately, and `0` stays `0`. */
+    while (istart + 1 < iend && s[istart] == '0') istart++;
+    out = malloc((iend - istart) + (fend > fstart ? 1 + (fend - fstart) : 0) + ulen + 1);
+    CHECK(out != NULL, "cssom: OOM building HTML §15.4.3's dimension hint — a dropped one reads as `width` "
+                       "being undeclared by this origin, which is the `auto` that sends a replaced box to "
+                       "CSS 2.1 §10.3.2's 300px default instead of to the number the attribute states");
+    memcpy(out + o, s + istart, iend - istart);
+    o += iend - istart;
+    if (fend > fstart) {
+        out[o++] = '.';
+        memcpy(out + o, s + fstart, fend - fstart);
+        o += fend - fstart;
+    }
+    memcpy(out + o, unit, ulen + 1);
+    return out;
 }
 
 /* §15.3.2's TABLE, entire. Its two rows each name a pair of properties and the attributes that source them, IN
@@ -277,6 +342,100 @@ static const struct {
     { ALIGN_BLOCK_TAGS,      ALIGN_BLOCK_VALUES,      "text-align" },
 };
 
+/* ---- HTML §15.4.3 "Attributes for embedded content and images" MAPS `width` AND `height` -----------------
+ *
+ * TWO PARAGRAPHS, differing in WHICH ELEMENT'S ATTRIBUTES ARE READ rather than in what they declare. "The
+ * width and height attributes on an img element's dimension attribute source map to the dimension properties
+ * 'width' and 'height' on the img element respectively", and "The width and height attributes on embed,
+ * iframe, object, and video elements, and input elements with a type attribute in the Image Button state and
+ * that either represents an image or that the user expects will eventually represent an image, map to the
+ * dimension properties 'width' and 'height' on the element respectively."
+ *
+ * `canvas` IS IN NEITHER LIST, which is the thing about this section most easily got wrong, because a
+ * `<canvas width=300 height=150>` really is 300 by 150 in every browser — from §4.12.5's BITMAP, which is a
+ * NATURAL dimension, and not from a hint. §15.4.3 gives `canvas` the aspect-ratio mapping alone. A row that
+ * included it would make CSS 2.1 §10.4's "both 'width' and 'height' specified as 'auto'" false for every
+ * sized canvas and take that section's constraint-violation table back out of reach; core/layout/used_value.c
+ * predicts exactly that of this diff, and the element list above is what refutes it.
+ *
+ * `input` IS ABSENT — NAMED RESIDUAL. Its clause is conditioned on what the element REPRESENTS, which is
+ * §4.10.5.1.19 "Image Button state (type=image)"'s two-case sentence over an IMAGE REQUEST this engine never
+ * creates for an `input`. NOT COVERED: an `input` in the Image Button state carrying a `width` or `height`
+ * attribute. THE NEXT DIFF builds §4.10.5.1.19's fetch and its request state — core/layout/replaced_element.c
+ * already names that same gap at an always-fatal `CHECK_FAIL` — and this list then gains `input` gated on it.
+ * ITS ABSENCE SHOWS as such an element laying out at CSS 2.1 §10.3.2's 300px rather than at its attribute's
+ * number; it cannot be observed until that `CHECK_FAIL` retires, because that abort is reached first by any
+ * read of the element's width.
+ *
+ * THE ASPECT-RATIO HALF IS A SEPARATE LANDING AND ITS ORDER IS FORCED. §15.4.3's other width/height paragraphs
+ * map the pair to `aspect-ratio` (using dimension rules) on `img` and `video`, and to `aspect-ratio` on
+ * `canvas`. NOT COVERED: any `aspect-ratio` hint. THE NEXT DIFF IS NOT THAT ROW BUT THE PROPERTY — `grep -ril
+ * aspect engine/lexbor/source/lexbor/css/` answers nothing, so a row spelling it would be a declaration no
+ * cascade read can reach, which is the write-with-no-reader shape this file's own header warns about. ITS
+ * ABSENCE SHOWS as `<img width=800 height=600>` under a stylesheet's `img { height: auto }`: the author
+ * declaration outranks this origin on the block axis, and with no ratio to reserve the box the height falls
+ * to CSS 2.1 §10.6.2's 150px instead of scaling with the used width.
+ */
+static const char *const DIM_ATTR_TAGS[] = { "embed", "iframe", "object", "video", NULL };
+
+/* HTML §4.8.3's DIMENSION ATTRIBUTE SOURCE — "An img element has a dimension attribute source, INITIALLY SET
+   TO THE ELEMENT ITSELF" — and the one step that moves it, §4.8.4.3.9 "Updating the source set" step 5.9: "If
+   child has width or height attributes, set el's dimension attribute source to child. Otherwise, set el's
+   dimension attribute source to el."
+   IT IS READ AS A PURE FUNCTION OF THE CURRENT TREE, which is what it is in this engine: core/html/
+   image_source_set.h records that step 5.9's assignment is not stored anywhere, so there is no slot holding a
+   value an earlier walk left behind and no state for this read to disagree with.
+   TWO SHAPES ANSWER `el` WITH CERTAINTY AND NEITHER NEEDS THE WALK. §4.8.4.3.9 step 3 replaces the walked list
+   only when "el is an img element whose PARENT NODE is a picture element", so an `img` anywhere else is the
+   first child considered, step 5.1 returns, and the slot keeps its initial value. And inside a `picture`,
+   step 5.9 can only name a `source` the walk REACHED, which the section's own note limits to the img's
+   previous siblings — "Each img element independently considers its previous sibling source elements plus the
+   img element itself" — so where no preceding `source` sibling carries either attribute, every child that
+   could win takes 5.9's "Otherwise" arm and the answer is `el` whichever one wins.
+   ANYTHING ELSE IS THE WALK, AND REFUSING IS THE POINT: reading the img's own attributes there would be a REAL
+   NUMBER for a page whose selected `<source>` states a different one, with nothing to say the wrong element
+   had been read.
+   THE RELEASE ARM IS `el` AND IS NAMED RATHER THAN LEFT TO FALL OUT, because a `DFAIL` is `((void)0)` at
+   `-DAPICLIENT_DEV=0` and this one returns rather than throwing. It is §4.8.4.3.9 step 5.9's own "Otherwise"
+   answer, so it is CORRECT for every walk the sized `source` does not win and wrong only for the ones it
+   does; the alternative — declaring nothing — is wrong for all of them, since it sends an `<img>` that
+   states its own size to §10.3.2's 300px. A hint is a pure read that leaves no state behind, so no sibling
+   component composes with this arm and the choice is local. */
+static lxb_dom_element_t *img_dimension_attribute_source(lxb_dom_element_t *el)
+{
+    lxb_dom_node_t *n = lxb_dom_interface_node(el), *p = n->parent, *c;
+    const lxb_char_t *tag;
+    size_t taglen = 0;
+
+    if (p == NULL || p->type != LXB_DOM_NODE_TYPE_ELEMENT || p->ns != LXB_NS_HTML) return el;
+    tag = lxb_dom_element_local_name(lxb_dom_interface_element(p), &taglen);
+    if (tag == NULL || taglen != 7 || memcmp(tag, "picture", 7) != 0) return el;
+    for (c = p->first_child; c != NULL && c != n; c = c->next) {
+        if (c->type != LXB_DOM_NODE_TYPE_ELEMENT || c->ns != LXB_NS_HTML) continue;
+        tag = lxb_dom_element_local_name(lxb_dom_interface_element(c), &taglen);
+        if (tag == NULL || taglen != 6 || memcmp(tag, "source", 6) != 0) continue;
+        /* "If child has width or height ATTRIBUTES" is presence and not value, so `has_attribute` rather than
+           the value read below — a `<source width>` with no value still moves the slot. */
+        if (!lxb_dom_element_has_attribute(lxb_dom_interface_element(c), (const lxb_char_t *)"width", 5) &&
+            !lxb_dom_element_has_attribute(lxb_dom_interface_element(c), (const lxb_char_t *)"height", 6))
+            continue;
+        DFAIL("HTML §15.4.3 \"Attributes for embedded content and images\" reads an `img`'s dimension "
+              "attributes off its DIMENSION ATTRIBUTE SOURCE, this `img` is a child of a `picture` one of "
+              "whose PRECEDING `source` siblings carries `width` or `height`, and §4.8.4.3.9 \"Updating the "
+              "source set\" step 5.9 makes that `source` the answer WHEN IT WINS THE WALK — so which element "
+              "is read cannot be decided from the tag alone. WHICH CHILD WINS IS DECIDED BY STEPS 5.2-5.6 AND "
+              "5.8 ALONE: is it a `source`, does it have a `srcset`, does that `srcset` parse to at least one "
+              "image source, does its `media` match the environment, is its `type` supported. Step 5.7 parses "
+              "`sizes` and has NO `continue`, so it cannot reject a child — which is why this answer needs no "
+              "source-size resolution and therefore none of the computed-style re-entrancy that would make it "
+              "unaskable from inside the cascade. BUILD a dimension-attribute-source query over those five "
+              "steps in core/html/image_source_set.h, beside `image_source_set_select`, which already "
+              "implements every one of them, and call it here");
+        return el;
+    }
+    return el;
+}
+
 char *css_presentational_hint(lxb_dom_element_t *el, const char *name)
 {
     lxb_dom_node_t *node = lxb_dom_interface_node(el);
@@ -340,12 +499,52 @@ char *css_presentational_hint(lxb_dom_element_t *el, const char *name)
            found cannot be parsed successfully, then a default value of 8px is expected to be used." */
         return hint_strdup(PAGE_MARGIN_DEFAULT);
     }
-    /* HTML §15.3.8 Tables' `align` HINT. The `@namespace` line of the block these rules are in is asked first
-       because they are attribute-gated: a `td` in another namespace can carry an `align` attribute, where a
-       foreign element only ever meets a type-name UA rule by its local name. */
+    /* THE `@namespace "http://www.w3.org/1999/xhtml"` LINE THE ROWS BELOW SHARE, asked once because every one
+       of them is ATTRIBUTE-GATED: a `td` or an `img` in another namespace can carry an `align` or a `width`
+       attribute, where a foreign element only ever meets a type-name UA rule by its own local name. §15.4.3's
+       two dimension paragraphs name HTML elements outright ("an img element", "embed, iframe, object, and
+       video elements"), so the same line governs them. */
     if (node->ns != LXB_NS_HTML) return NULL;
     tag = lxb_dom_element_local_name(el, &taglen);
     if (tag == NULL) return NULL;
+    /* HTML §15.4.3's MAPPING OF THE TWO ATTRIBUTES HTML §4.8.17 "Dimension attributes" DEFINES. The CSS
+       property and the content attribute share a spelling, so `name` is read for both — a coincidence of this
+       one row rather than a rule, and a row whose two names differed would have to carry them separately. */
+    if (strcmp(name, "width") == 0 || strcmp(name, "height") == 0) {
+        lxb_dom_element_t *src = NULL;
+        const char *const *t;
+
+        if (taglen == 3 && memcmp(tag, "img", 3) == 0) src = img_dimension_attribute_source(el);
+        for (t = DIM_ATTR_TAGS; src == NULL && *t != NULL; t++)
+            if (strlen(*t) == taglen && memcmp(*t, tag, taglen) == 0) src = el;
+        if (src != NULL) {
+            const lxb_char_t *v;
+            size_t vlen = 0;
+
+            v = lxb_dom_element_get_attribute(src, (const lxb_char_t *)name, strlen(name), &vlen);
+            /* Lexbor answers NULL both for an ABSENT attribute and for one PRESENT WITH AN EMPTY VALUE, and
+               §15.2's mapping does tell those apart — it is stated over presence, "if element has an
+               attribute attribute set". They reach the same answer here only because §2.3.4.4 step 4 fails
+               on an empty string, which is asserted rather than assumed: the day a row maps an attribute
+               whose parse ADMITS the empty string, the conflation stops being harmless. The call allocates
+               nothing on the failure path, so the condition is side-effect-free. */
+            DCHECK(html_parse_dimension_value((const lxb_char_t *)"", 0) == NULL,
+                   "HTML §2.3.4.4 \"Percentages and lengths\"' rules for parsing dimension values accepted "
+                   "the EMPTY STRING, and this row reads an absent attribute and one present with no value "
+                   "through the same NULL. Step 4 is what separated them — \"If position is past the end of "
+                   "input or the code point at position within input is not an ASCII digit, then return "
+                   "failure\" — so a parser that answers for the empty string makes "
+                   "`<img width>` and `<img>` take different §15.2 arms with one spelling between them");
+            if (v == NULL) return NULL;
+            /* NULL is §15.2's own answer for a value that does not parse: the hint is simply not declared by
+               this origin, and the property keeps what the UA sheet or its initial value gives it. */
+            return html_parse_dimension_value(v, vlen);
+        }
+        /* Not an element §15.4.3 names — FALL THROUGH rather than return, because another row of this file
+           may yet declare `width` (HTML §15.3.8's `col`, `td` and `table` mappings are not here) and an early
+           return would shadow it silently. */
+    }
+    /* HTML §15.3.8 Tables' `align` HINT. */
     {
         const lxb_char_t *v;
         size_t vlen = 0;
