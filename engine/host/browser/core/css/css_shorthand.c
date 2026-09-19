@@ -1438,74 +1438,21 @@ unsigned css_shorthand_shorthands_of(const char *longhand, const char **out, uns
     return n;
 }
 
-/* CSS Logical §2: "any pair of flow-relative properties and physical properties (ignoring shorthand
-   properties) related by setting equivalent styles on the various sides or dimensions of a box, forms a
-   logical property group ... paired properties share a computed value ... determined by cascading the
-   declarations of both properties together as one". THAT is why §6.6's serialization refuses to re-form a
-   shorthand across one: `margin: 10px` written where `margin-top` and `margin-inline-start` were declared in
-   a particular order would move one of them past the other, and the pair's shared computed value is decided by
-   which came last.
-   ONLY THE GROUPS THIS COMPONENT'S SHORTHANDS REACH ARE RECORDED, which is the complete answer for the
-   question asked: a declaration whose group is not recorded reads as group 0, and group 0 equals no group, so
-   it never blocks a consolidation it has no business blocking. The flow-relative spellings are here even
-   though lexbor's registry does not carry them — `margin-inline-start` reaches a declaration block as a
-   `__CUSTOM` and is exactly the declaration that has to block one. */
-enum { CSS_LG_NONE = 0, CSS_LG_MARGIN, CSS_LG_PADDING, CSS_LG_BORDER_WIDTH, CSS_LG_BORDER_STYLE,
-       CSS_LG_BORDER_COLOR, CSS_LG_OVERFLOW };
-
-static const struct { const char *name; unsigned group; bool physical; } LOGICAL_GROUP[] = {
-    { "margin-top", CSS_LG_MARGIN, true }, { "margin-right", CSS_LG_MARGIN, true },
-    { "margin-bottom", CSS_LG_MARGIN, true }, { "margin-left", CSS_LG_MARGIN, true },
-    { "margin-block-start", CSS_LG_MARGIN, false }, { "margin-block-end", CSS_LG_MARGIN, false },
-    { "margin-inline-start", CSS_LG_MARGIN, false }, { "margin-inline-end", CSS_LG_MARGIN, false },
-
-    { "padding-top", CSS_LG_PADDING, true }, { "padding-right", CSS_LG_PADDING, true },
-    { "padding-bottom", CSS_LG_PADDING, true }, { "padding-left", CSS_LG_PADDING, true },
-    { "padding-block-start", CSS_LG_PADDING, false }, { "padding-block-end", CSS_LG_PADDING, false },
-    { "padding-inline-start", CSS_LG_PADDING, false }, { "padding-inline-end", CSS_LG_PADDING, false },
-
-    { "border-top-width", CSS_LG_BORDER_WIDTH, true }, { "border-right-width", CSS_LG_BORDER_WIDTH, true },
-    { "border-bottom-width", CSS_LG_BORDER_WIDTH, true }, { "border-left-width", CSS_LG_BORDER_WIDTH, true },
-    { "border-block-start-width", CSS_LG_BORDER_WIDTH, false },
-    { "border-block-end-width", CSS_LG_BORDER_WIDTH, false },
-    { "border-inline-start-width", CSS_LG_BORDER_WIDTH, false },
-    { "border-inline-end-width", CSS_LG_BORDER_WIDTH, false },
-
-    { "border-top-style", CSS_LG_BORDER_STYLE, true }, { "border-right-style", CSS_LG_BORDER_STYLE, true },
-    { "border-bottom-style", CSS_LG_BORDER_STYLE, true }, { "border-left-style", CSS_LG_BORDER_STYLE, true },
-    { "border-block-start-style", CSS_LG_BORDER_STYLE, false },
-    { "border-block-end-style", CSS_LG_BORDER_STYLE, false },
-    { "border-inline-start-style", CSS_LG_BORDER_STYLE, false },
-    { "border-inline-end-style", CSS_LG_BORDER_STYLE, false },
-
-    { "border-top-color", CSS_LG_BORDER_COLOR, true }, { "border-right-color", CSS_LG_BORDER_COLOR, true },
-    { "border-bottom-color", CSS_LG_BORDER_COLOR, true }, { "border-left-color", CSS_LG_BORDER_COLOR, true },
-    { "border-block-start-color", CSS_LG_BORDER_COLOR, false },
-    { "border-block-end-color", CSS_LG_BORDER_COLOR, false },
-    { "border-inline-start-color", CSS_LG_BORDER_COLOR, false },
-    { "border-inline-end-color", CSS_LG_BORDER_COLOR, false },
-
-    /* css-overflow §3.1's property definition table says it in one line — "Logical property group: overflow" —
-       for all four of `overflow-x`, `overflow-y`, `overflow-block` and `overflow-inline`. */
-    { "overflow-x", CSS_LG_OVERFLOW, true }, { "overflow-y", CSS_LG_OVERFLOW, true },
-    { "overflow-block", CSS_LG_OVERFLOW, false }, { "overflow-inline", CSS_LG_OVERFLOW, false },
-};
-
-unsigned css_shorthand_logical_group(const char *longhand, bool *pphysical)
-{
-    unsigned i;
-
-    DCHECK(longhand != NULL && pphysical != NULL,
-           "the logical-property-group question was asked with no name or nowhere to report the mapping logic");
-    *pphysical = true;
-    for (i = 0; i < CSS_SH_N(LOGICAL_GROUP); i++) {
-        if (strcmp(LOGICAL_GROUP[i].name, longhand) != 0) continue;
-        *pphysical = LOGICAL_GROUP[i].physical;
-        return LOGICAL_GROUP[i].group;
-    }
-    return CSS_LG_NONE;
-}
-
+/* @LOGICAL — THE LOGICAL PROPERTY GROUP TABLE THAT STOOD HERE IS GONE, and it is gone rather than kept
+   because a second copy of one fact is how a `margin-inline-start` ends up in a group in one file and out of
+   it in another. It is core/css/css_logical.h's now, whole, and §6.6's serialization asks that component
+   through `css_logical_group_of`.
+   THE ARGUMENT IT CARRIED IS THE REASON §6.6 ASKS AT ALL, so it is rewritten here rather than deleted with
+   the code: css-logical-1 §4 "Flow-Relative Box Model Properties" says a pair of flow-relative and physical
+   properties "share a computed value ... determined by cascading the declarations of both properties together
+   as one", so re-forming `margin: 10px` across a block that declared `margin-top` and `margin-inline-start`
+   in a particular order would move one of them past the other and change which of the pair the shared value
+   comes from.
+   WHAT THE MOVE CHANGED IS THE GROUPS IT COVERS AND NOT THE ANSWER FOR ANY SHORTHAND THIS FILE HAS. The table
+   here recorded only the six groups these shorthands reach; css_logical.h's is css-logical-1 §4's own list
+   and adds `inset`, `size`, `min-size` and `max-size`. None of those four has a shorthand in SHORTHANDS
+   above — `inset` is a border-style keyword in this file and not a property — so the widening can block no
+   consolidation that used to happen, and it is the correct answer for the day one of them gains a row. */
 /* ---- §6.7.2's serialize a CSS value, over a list of longhands --------------------------------------------- */
 
 static char *css_sh_join(const char *const *parts, unsigned n)

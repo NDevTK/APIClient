@@ -16,6 +16,16 @@ typedef struct {
     const CssLayerNode *layer;            /* §6.4.3's node, or NULL for §6.1's implicit final layer */
     uint32_t            specificity;
     uint32_t            seq;              /* §6.1's Order of Appearance, and the rule's identity */
+    /* @LOGICAL — §6.1's Order of Appearance WITHIN the block `seq` names: the declaration's index in the
+       §6.6 declaration list of its rule or style attribute. `seq` alone was §6.1's whole answer while the
+       cascade was over ONE property, because §6.6's collapse leaves one declaration per property per block —
+       and css-logical-1 §4 "Flow-Relative Box Model Properties" cascades TWO properties together ("This
+       shared value is determined by cascading the declarations of both properties together as one"), so a
+       block declaring both members of a pair contributes two declarations under one `seq`. It is a SECOND
+       field rather than a finer `seq` because `seq` is also the RULE'S IDENTITY: §7.3.6's `revert-rule`
+       removes "the current style rule" entire, which is every declaration sharing a `seq`, and a per-
+       declaration `seq` would leave it removing one of the pair. */
+    uint32_t            decl_order;
     unsigned            origin;           /* a CssOrigin */
     bool                important;
     bool                element_attached;
@@ -55,7 +65,8 @@ void css_cascade_free(CssCascade *c)
 }
 
 void css_cascade_add(CssCascade *c, CssOrigin origin, bool important, bool element_attached,
-                     const CssLayerNode *layer, uint32_t specificity, uint32_t seq, const char *value)
+                     const CssLayerNode *layer, uint32_t specificity, uint32_t seq, uint32_t decl_order,
+                     const char *value)
 {
     CssCascadeDecl *d;
 
@@ -84,6 +95,7 @@ void css_cascade_add(CssCascade *c, CssOrigin origin, bool important, bool eleme
     d->layer = layer;
     d->specificity = specificity;
     d->seq = seq;
+    d->decl_order = decl_order;
     d->origin = (unsigned)origin;
     d->important = important;
     d->element_attached = element_attached;
@@ -164,12 +176,22 @@ static bool cascade_beats(const CssCascade *c, const CssCascadeDecl *a, const Cs
 
     if (la != lb) return la > lb;
     if (a->specificity != b->specificity) return a->specificity > b->specificity;
-    DCHECK(a->seq != b->seq,
-           "two declarations reached §6.1's ORDER OF APPEARANCE holding the same position. The position is the "
-           "collector's document-order counter and it is bumped per rule, and §6.6's collapse leaves one "
-           "declaration per property per rule — so a tie means two declarations were added under one counter "
-           "value and the cascade has no way to say which is last");
-    return a->seq > b->seq;
+    if (a->seq != b->seq) return a->seq > b->seq;
+    /* @LOGICAL — THE SAME BLOCK, WHICH ONLY css-logical-1 §4's PAIRING CAN REACH. Two declarations share a
+       `seq` exactly when they came from one rule or one style attribute, and §6.6's collapse leaves one
+       declaration per PROPERTY per block — so while the cascade was over a single property this was
+       unreachable and the assert that stood here said so. Cascading a logical property group's two members
+       together makes it the ordinary case, and §6.1's Order of Appearance answers it at the granularity the
+       block itself has: css-logical-1 §4's own worked example is `p { margin-inline-start: 1px; margin-left:
+       2px; margin-inline-end: 3px }`, whose computed `margin-left` in a horizontal-tb ltr paragraph is 2px
+       "since ... the declaration of margin-left is after the declaration of margin-inline-start". */
+    DCHECK(a->decl_order != b->decl_order,
+           "two declarations reached §6.1's ORDER OF APPEARANCE holding the same position IN THE SAME BLOCK. "
+           "The block is named by the collector's per-rule counter and the position within it is the "
+           "declaration's index in that block's §6.6 declaration list, which §6.6's collapse makes unique per "
+           "property — so a tie means one property was collected twice from one block, or a collector passed "
+           "a constant where the index belongs");
+    return a->decl_order > b->decl_order;
 }
 
 /* The live declaration §6.1 sorts highest, or NULL when the cascade holds none. */

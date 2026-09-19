@@ -74,11 +74,19 @@ void css_cascade_free(CssCascade *c);
    `specificity` is Selectors' number for the rule that matched, and is ZERO for a declaration that matched no
    selector (an element-attached one, a presentational hint, a UA default) — §6.1 never compares those against
    a style rule's, because Element-Attached Styles and Origin both sit above Specificity.
-   `seq` is §6.1's Order of Appearance: a position in the document-order walk, strictly increasing across the
-   whole cascade, which doubles as the identity of the RULE the declaration came from because §6.6's collapse
-   leaves one declaration per property per rule. `value` is COPIED. */
+   `seq` is §6.1's Order of Appearance ACROSS blocks: a position in the document-order walk, strictly
+   increasing across the whole cascade, which doubles as the identity of the RULE the declaration came from —
+   §7.3.6's `revert-rule` removes every declaration sharing one.
+   `decl_order` is §6.1's Order of Appearance WITHIN that block: the declaration's index in the §6.6
+   declaration list it was read from. The two are separate fields rather than one finer counter precisely
+   because `seq` is also that rule identity. It was not needed while the cascade was over ONE property — §6.6's
+   collapse leaves one declaration per property per block, so no two could tie — and css-logical-1 §4
+   "Flow-Relative Box Model Properties" is what makes a tie ordinary: it cascades a pair of properties
+   together as one, and a block may declare both members. A collector with one declaration per block passes 0.
+   `value` is COPIED. */
 void css_cascade_add(CssCascade *c, CssOrigin origin, bool important, bool element_attached,
-                     const CssLayerNode *layer, uint32_t specificity, uint32_t seq, const char *value);
+                     const CssLayerNode *layer, uint32_t specificity, uint32_t seq, uint32_t decl_order,
+                     const char *value);
 
 /* §6's CASCADED VALUE: the declaration §6.1 sorts highest, with §7.3's roll-backs discharged. OWNED. NULL when
    no declaration was added, which is §7.1 and §7.2's "unless the cascade results in a value" and a real answer

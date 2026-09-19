@@ -7,6 +7,7 @@
 
 #include "check.h"
 #include "core/css/css_computed_value.h"
+#include "core/css/css_logical.h"
 #include "core/css/css_property_applies.h"
 #include "core/layout/replaced_element.h"
 
@@ -99,6 +100,38 @@ bool css_property_applies(lxb_dom_element_t *el, const char *name)
 
     DCHECK(el != NULL && name != NULL,
            "an Applies-to line was asked for with no element or no property name");
+    /* A FLOW-RELATIVE LONGHAND IS ANSWERED BY ITS PHYSICAL PARTNER'S LINE, WHICH IS WHAT css-logical-1 WRITES
+       IN THE LINE ITSELF rather than something this component infers. Every non-shorthand property definition
+       in that standard gives "Applies to:" as `Same as <the physical twin>` — §4.1's three size properties say
+       "same as height and width", §4.2's "Same as margin-top", §4.4's "Same as padding-top", §4.5's three
+       "Same as border-top-width" / `-style` / `-color` — so the row to record here is not a second copy of a
+       physical line, it is the MAPPING, and recording a copy is how the two would drift.
+       §4.3's INSET group is the one that names a display-independent line of its own ("positioned elements"),
+       and it needs no arm either: the partner of `inset-block-start` is a physical inset, so the test directly
+       below answers it on the mapped name and the whole line stays declared in exactly one place.
+       THE MAPPING IS RESOLVED FIRST AND THE REST OF THIS FUNCTION NEVER SEES A LOGICAL NAME, which is why no
+       group list below gains a flow-relative member — css-logical-1 §4 pairs the two properties and
+       core/css/css_logical.h answers which physical one this element's writing mode pairs it with. */
+    {
+        bool physical_logic;
+
+        if (css_logical_group_of(name, &physical_logic) != CSS_LOGICAL_GROUP_NONE && !physical_logic) {
+            const char *physical = css_logical_partner_of(el, name);
+            bool partner_logic;
+
+            DCHECK(physical != NULL,
+                   "css-logical-1 §4's pairing answered no partner for a property it had just placed in a "
+                   "group. core/css/css_logical.h states the two together: the partner is NULL exactly when "
+                   "the property is in no group, so a grouped property with no partner is that contract "
+                   "broken rather than a property this line has to answer for");
+            DCHECK(css_logical_group_of(physical, &partner_logic) != CSS_LOGICAL_GROUP_NONE && partner_logic,
+                   "css-logical-1 §4's pairing answered a partner whose own MAPPING LOGIC is not physical, "
+                   "which would make this tail call recurse. The pairing is an INVOLUTION over one group with "
+                   "one member of each logic — css_logical_init asserts it — so the partner of a "
+                   "flow-relative longhand is the physical one and asking it terminates");
+            return css_property_applies(el, physical);
+        }
+    }
     /* §9.3.2: "Applies to: positioned elements". The whole line, and it names no display type, so it is
        answered before `display` is read. */
     if (css_pa_in(CSS_INSET_PROPERTIES, CSS_PA_N(CSS_INSET_PROPERTIES), name)) {
@@ -117,13 +150,11 @@ bool css_property_applies(lxb_dom_element_t *el, const char *name)
     if (!is_size && !is_margin && !is_padding && !is_overflow) {
         DFAIL("A caller asked whether a property APPLIES to an element, and this component has not recorded "
               "that property's `Applies to:` line. The four groups it carries are the physical box-model "
-              "lengths, the physical insets, the two sizes and the two overflow longhands; what CSSOM §9's own "
-              "table also routes here and this "
-              "does not answer is (1) the LOGICAL box-model properties — `inline-size`, `block-size`, "
-              "`margin-block-start`, `padding-inline-end` and the rest — whose Applies-to lines are their "
-              "physical twins' but which need css-writing-modes §6's mapping from the element's computed "
-              "`writing-mode` and `direction` to say WHICH twin, a mapping this engine does not have and "
-              "lexbor's property registry carries no logical longhand for; and (2) `transform-origin`, whose "
+              "lengths, the physical insets, the two sizes and the two overflow longhands, and a "
+              "FLOW-RELATIVE name never reaches this line at all — the arm at the top of this function maps "
+              "it through core/css/css_logical.h and asks again on the physical partner, which is what "
+              "css-logical-1 §4's own `Applies to: Same as <twin>` lines say to do. What CSSOM §9's table "
+              "also routes here and this does not answer is `transform-origin`, whose "
               "line is `transformable elements` (css-transforms-1 §4 \"The transform-origin Property\"). THE "
               "DEFINITION OF THAT TERM IS NO LONGER MISSING and this line used to imply it was: "
               "core/css/css_transform.h states css-transforms-1 §2 \"Terminology\"'s transformable element out "

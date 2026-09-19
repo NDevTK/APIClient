@@ -102,6 +102,7 @@
 #include "core/css/css_defaulting.h"
 #include "core/css/css_font_family.h"
 #include "core/css/css_keyframes.h"
+#include "core/css/css_logical.h"
 #include "core/css/css_math.h"
 #include "core/css/css_page.h"
 #include "core/css/css_property_numeric.h"
@@ -1025,17 +1026,38 @@ static bool cssd_property_important(const char *text, size_t len, const char *na
     return all;
 }
 
-/* css-cascade-5 §6.1's ELEMENT-ATTACHED declaration for `name`, or NULL — the contents of the style attribute,
-   which is per-flow because the attribute it reads is. The CASCADE reaches it with an element and no
-   declaration object, which is why this takes one rather than a block, and it reports the IMPORTANCE because
-   css-cascade-5 §6.1 compares that first: attached-ness is the criterion BELOW origin and importance, not
-   above it. */
-static char *cssd_inline_value(lxb_dom_element_t *el, const char *name, bool *pimportant)
+/* css-cascade-5 §6.1's ELEMENT-ATTACHED layer — the contents of the style attribute, which is per-flow
+   because the attribute it reads is. It reports the IMPORTANCE into the cascade because css-cascade-5 §6.1
+   compares that first: attached-ness is the criterion BELOW origin and importance, not above it.
+   @LOGICAL — IT COLLECTS THE css-logical-1 §4 PAIR AND NOT ONE PROPERTY, which is why it is a collector and
+   no longer an entry returning one value. The two declarations are ordered against EACH OTHER inside one
+   block, so each is added with its INDEX in that block; two separate single-property reads have no shared
+   position to order by, and the single-property entry that used to stand here is gone rather than kept
+   beside this one — it answered a question no caller asks any more.
+   THE BLOCK IS PARSED ONCE, which is also why the shared `cssd_value_in_block` is not reused here: that entry
+   answers ONE property and throws the parse away, so asking it twice would parse the attribute twice and
+   still not say which declaration came first. */
+static void cssd_inline_collect(lxb_dom_element_t *el, const char *name, const char *partner,
+                                CssCascade *cascade, CssLayerOrder *order, uint32_t *pseq)
 {
     size_t len = 0;
     const char *text = cssd_inline_text(el, &len);
+    const char *want[2];
+    CssDecls d = { 0 };
+    unsigned k, n = 0;
 
-    return cssd_value_in_block(text, len, name, pimportant);
+    want[n++] = name;
+    if (partner != NULL) want[n++] = partner;
+    cssd_decls_from_text(text, len, &d);
+    ++*pseq;
+    for (k = 0; k < n; k++) {
+        int at = cssd_decls_index(&d, want[k]);
+
+        if (at >= 0 && d.v[at].value)
+            css_cascade_add(cascade, CSS_ORIGIN_AUTHOR, d.v[at].important, true,
+                            css_layer_order_root(order), 0, *pseq, (uint32_t)at, d.v[at].value);
+    }
+    cssd_decls_free(&d);
 }
 
 /* THE AUTHOR ORIGIN's declarations, collected from THE SHEET OBJECTS of the element's root.
@@ -1086,14 +1108,22 @@ static bool cssd_sheet_view(JSContext *ctx, JSValueConst sheet, CssLayerOrder *o
     return ok;
 }
 
+/* @LOGICAL — THE ONE PARSER IS NOT RE-ENTRANT AND A NESTED RESOLUTION IS NOW REACHABLE. The AUTHOR-ORIGIN sheet walk below drives
+   `g_parser` — it sets the parser's arena, parses a sheet's text into that arena, and destroys the arena — and
+   css-logical-1 §4 "Flow-Relative Box Model Properties"'s pairing made the cascade ask for a computed
+   `writing-mode` in the middle of resolving some other property, which is a second resolution and therefore a
+   second walk. The bracket that asserts they do not nest is at the CALL, in `cssom_cascaded_value`, because
+   that is where the ordering which keeps them apart is written and this body has two exits. */
+static bool g_collecting_sheets = false;
+
 /* EVERY AUTHOR-ORIGIN DECLARATION OF `name` ON `el`, added to `cascade` — not the one that wins. css-cascade-5
    §6.1's sort is over the whole list at once and css-cascade-5 §7.3's roll-backs re-run it with a part removed,
    so a collector that kept only a running best would have thrown away exactly what both need. `*pseq` is the
    document-order counter css-cascade-5 §6.1's Order of Appearance reads, carried across the sheets so it is one
    sequence and not one per sheet, and bumped per RULE so it also names the rule css-cascade-5 §7.3.6's
    `revert-rule` removes. */
-static void cssd_author_collect(lxb_dom_element_t *el, const char *name, CssCascade *cascade,
-                                CssLayerOrder *order, uint32_t *pseq)
+static void cssd_author_collect(lxb_dom_element_t *el, const char *name, const char *partner,
+                                CssCascade *cascade, CssLayerOrder *order, uint32_t *pseq)
 {
     lxb_dom_node_t *self = lxb_dom_interface_node(el);
     /* THE REALM IS THE ELEMENT'S OWN DOCUMENT'S, never the running one: the sheets hang off the root's WRAPPER,
@@ -1188,10 +1218,25 @@ static void cssd_author_collect(lxb_dom_element_t *el, const char *name, CssCasc
                    counter can be both css-cascade-5 §6.1's order of appearance and css-cascade-5 §7.3.6's
                    identity of the rule. */
                 cssd_decls_from_list(st->declarations, view.text, strlen(view.text), &rd);
+                /* @LOGICAL — BOTH MEMBERS OF css-logical-1 §4's PAIR ARE TAKEN FROM THIS ONE BLOCK, in ONE
+                   pass and with each declaration's own index in it. The index is css-cascade-5 §6.1's Order
+                   of Appearance at the granularity a block has: two names in one rule share `*pseq +
+                   at_rule` — which is that rule's identity for css-cascade-5 §7.3.6's `revert-rule` — and
+                   css-logical-1 §4's worked example turns on which of them the author wrote second.
+                   A SECOND WALK FOR THE PARTNER WOULD BE WRONG AND NOT MERELY WASTEFUL: every rule of the
+                   second walk would carry a LATER `*pseq` than every rule of the first, so the partner would
+                   win every tie in the document regardless of where it was written. */
                 at = cssd_decls_index(&rd, name);
                 if (at >= 0 && rd.v[at].value)
                     css_cascade_add(cascade, CSS_ORIGIN_AUTHOR, rd.v[at].important, false, layer,
-                                    (uint32_t)spec, *pseq + at_rule, rd.v[at].value);
+                                    (uint32_t)spec, *pseq + at_rule, (uint32_t)at, rd.v[at].value);
+                if (partner != NULL) {
+                    int pat = cssd_decls_index(&rd, partner);
+
+                    if (pat >= 0 && rd.v[pat].value)
+                        css_cascade_add(cascade, CSS_ORIGIN_AUTHOR, rd.v[pat].important, false, layer,
+                                        (uint32_t)spec, *pseq + at_rule, (uint32_t)pat, rd.v[pat].value);
+                }
                 cssd_decls_free(&rd);
             }
             DCHECK(back == view.n,
@@ -1311,16 +1356,17 @@ static bool cssd_try_shorthand(const CssDecls *d, bool *done, const char *shorth
        answer. Writing the shorthand would move its longhands to one position and reorder them across the
        flow-relative declaration sitting between — a different cascade for the same bytes. */
     for (j = lo + 1; j < hi; j++) {
-        unsigned group;
+        CssLogicalGroup group;
         bool physical = true, mine = true, chosen = false;
 
         for (i = 0; i < n; i++)
             if (at[i] == j) { chosen = true; break; }
         if (chosen) continue;
-        group = css_shorthand_logical_group(d->v[j].name, &physical);
-        if (group == 0) continue;   /* a property in no group pairs with nothing, so it cannot reorder one */
+        group = css_logical_group_of(d->v[j].name, &physical);
+        /* A property in no group pairs with nothing, so it cannot reorder one. */
+        if (group == CSS_LOGICAL_GROUP_NONE) continue;
         for (i = 0; i < n; i++)
-            if (css_shorthand_logical_group(lh[i], &mine) == group && mine != physical) return false;
+            if (css_logical_group_of(lh[i], &mine) == group && mine != physical) return false;
     }
     /* "Let value be the result of invoking serialize a CSS value with current longhands. If value is the empty
        string, continue with the steps labeled shorthand loop." */
@@ -1692,17 +1738,25 @@ unsigned cssom_parse_rules(const char *text, size_t len, CssomRuleFn cb, void *u
  *   THE MARGINS OF HTML §15.3.3 Flow content AND HTML §15.3.6 Sections and headings ARE STILL ABSENT AND THE REASON
  *   IS NOT THE SELECTOR — their selectors are ordinary tags (`blockquote, figure, listing, p, plaintext, pre,
  *   xmp { margin-block: 1em }`, `blockquote, figure { margin-inline: 40px }`) and §15.3.6's is the level this
- *   file now computes. It is the PROPERTY: the rendering section states every one of its margins and paddings
- *   LOGICALLY, and core/layout/used_value.c carries the ten PHYSICAL box-model lengths and DFAILs by name on a
- *   logical spelling ("§9's own used-if-rendered list also names the LOGICAL spellings … which need
- *   css-writing-modes §6's mapping to a physical property before §10 can be asked anything"). A row spelling
- *   `margin-block-start` is therefore a declaration the cascade would carry and NO layout read would ever ask
- *   for — the write-with-no-reader shape — and a row spelling `margin-top` instead would be this file deciding
- *   a writing mode on core/layout's behalf, one component away from the mapping that owns the question. The
- *   next diff is css-writing-modes §6's logical-to-physical mapping at `used_value_px`, after which these rows
- *   are transcribed in the section's own spelling. ITS ABSENCE SHOWS as a rendered document whose block-level
- *   boxes all touch: every band of ink is separated from the next by the line box alone, with no gap anywhere a
- *   margin is stated. */
+ *   file now computes. It is the PROPERTY — the rendering section states every one of its margins and
+ *   paddings LOGICALLY — AND THE REASON THE PROPERTY BLOCKED IT IS RETIRED, WHICH IS RECORDED HERE RATHER
+ *   THAN QUIETLY DROPPED BECAUSE THE RETIRED REASONING NAMED THE WRONG LAYER AND A READER WILL RE-DERIVE IT.
+ *   It read: a row spelling `margin-block-start` is a declaration the cascade would carry and NO layout read
+ *   would ever ask for — the write-with-no-reader shape — since core/layout/used_value.c carries the ten
+ *   PHYSICAL box-model lengths and DFAILs by name on a logical spelling; and a row spelling `margin-top`
+ *   instead would be this file deciding a writing mode on core/layout's behalf. THE SECOND HALF STILL HOLDS
+ *   AND THE FIRST DOES NOT. css-logical-1 §4 "Flow-Relative Box Model Properties" pairs the two properties and
+ *   makes them SHARE A COMPUTED VALUE, so a `margin-block-start` declaration is what `margin-top`'s computed
+ *   value is cascaded from — core/css/css_logical.h is that mapping and `cssd_decls_collect` applies it — and
+ *   block_flow.c's `used_value_px(el, "margin-top")` therefore reads a row written logically. The layer was
+ *   the whole of the error: at `used_value_px`, where the retired clause put it, the mapping would have left
+ *   the COMPUTED value of `margin-top` at its initial `0`, which §4's own last sentence forbids.
+ *   WHAT THE NEXT DIFF BUILDS: these rows, transcribed in the section's own spelling — HTML §15.3.3's
+ *   `blockquote, figure, listing, p, plaintext, pre, xmp { margin-block: 1em }` and `blockquote, figure
+ *   { margin-inline: 40px }` — which needs the UA table to carry a row whose property is a css-logical-1 §4.2
+ *   SHORTHAND, since `margin-block` expands to two longhands and every row here states one property.
+ *   ITS ABSENCE SHOWS as a rendered document whose block-level boxes all touch: every band of ink is separated
+ *   from the next by the line box alone, with no gap anywhere a margin is stated. */
 /*
  * AND HTML §15.3.4 Phrasing content's `ruby { display: ruby }` / `rt { display: ruby-text }` ARE DELIBERATELY
  * ABSENT, which is the one place adding a row would make this engine WORSE rather than more complete, and the
@@ -2421,10 +2475,10 @@ char *cssom_cascaded_value(lxb_dom_element_t *el, const char *name)
 {
     CssLayerOrder *order;
     CssCascade *cascade;
-    const char *ua;
+    const char *partner, *ua, *pua;
     uint32_t seq = 0;
-    bool important = false, ua_important = false;
-    char *v, *out;
+    bool ua_important = false, pua_important = false;
+    char *v, *pv, *out;
 
     DCHECK(g_ready, "the cascade was resolved before cssom_init built the CSS parser it parses every layer "
                     "with — the component is initialised with the DOM, so a caller reaching it first is a "
@@ -2446,27 +2500,76 @@ char *cssom_cascaded_value(lxb_dom_element_t *el, const char *name)
        css-cascade-5 §6.3 both say it
        loses to ("an important declaration takes precedence over a normal declaration", and Element-Attached is
        the criterion BELOW Origin and Importance, reached only when it ties). */
+    /* @LOGICAL — css-logical-1 §4 "Flow-Relative Box Model Properties": "Within each logical property group,
+       corresponding flow-relative and physical properties are paired using the element's own computed writing
+       mode. Although the specified value of each property remains distinct, PAIRED PROPERTIES SHARE A COMPUTED
+       VALUE. This shared value is determined by CASCADING THE DECLARATIONS OF BOTH PROPERTIES TOGETHER AS ONE."
+       So the pair is ONE cascade and not two resolutions compared afterwards, and every layer below collects
+       both members — which is why the partner is read here, once, rather than at each layer.
+       IT IS RESOLVED BEFORE ANY DECLARATION IS COLLECTED because §4 says the mapping is a prerequisite: "It
+       also requires that writing-mode, direction, and text-orientation be computed as a prerequisite for
+       cascading together the flow-relative and physical declarations of a logical property group to find their
+       computed values." Those three are in NO group — core/css/css_logical.c asserts exactly that — so the
+       nested resolution this line starts terminates at depth one rather than re-entering itself.
+       NULL IS THE ANSWER FOR MOST PROPERTIES and it is a real one: a property in no group has no second
+       declaration list, and every collector below then behaves exactly as it did. */
+    partner = css_logical_partner_of(el, name);
+    DCHECK(partner == NULL || strcmp(partner, name) != 0,
+           "css-logical-1 §4's pairing answered the property it was asked about. The pair's two members have "
+           "DIFFERENT mapping logic — one physical, one flow-relative — so a property is never its own "
+           "partner, and collecting it twice would put two identical declarations at one position in "
+           "css-cascade-5 §6.1's order");
     order = css_layer_order_create();
     cascade = css_cascade_create(order);
-    cssd_author_collect(el, name, cascade, order, &seq);
+    /* @LOGICAL — THE BRACKET THE NESTED RESOLUTION ABOVE MADE NECESSARY. The partner is resolved BEFORE this
+       line and that ordering is what keeps the two sheet walks apart: the inner one has destroyed its lexbor
+       arena before the outer one sets its own, so `g_parser` has one owner at a time. Moving the partner read
+       below this call would nest them and the inner walk would destroy the arena the outer walk is parsing
+       into — a use-after-free whose symptom is nowhere near the edit, which is why the resource asserts it
+       rather than a comment describing the ordering. */
+    DCHECK(!g_collecting_sheets,
+           "the AUTHOR-ORIGIN sheet walk was re-entered. It owns `g_parser` and the lexbor arena it parses "
+           "each sheet into, and the inner walk destroys that arena when it finishes — so the outer walk "
+           "would go on reading a stylesheet, its rules and its selectors out of freed memory. The only "
+           "nested resolution on this path is css-logical-1 §4's PREREQUISITE — the computed `writing-mode` "
+           "and `direction` the pairing above is derived from — and it is ordered ahead of this call for "
+           "exactly this reason; a second nested read added below it is what this crash names");
+    g_collecting_sheets = true;
+    cssd_author_collect(el, name, partner, cascade, order, &seq);
+    g_collecting_sheets = false;
     /* css-cascade-5 §6.1's ELEMENT-ATTACHED STYLES: "declarations that are attached directly to an element (such as the
        contents of a style attribute) rather than indirectly mapped by means of a style rule selector take
        precedence over declarations the same importance that are mapped via style rule." It is in the AUTHOR
        origin ([CSSSTYLEATTR]) and in no explicit cascade layer, and css-cascade-5 §6.1's Order of Appearance places it after
        every style sheet ("declarations from style attributes ... are all placed after any style sheets"),
        which is what the counter reaching here already is. */
-    v = cssd_inline_value(el, name, &important);
-    if (v) {
-        css_cascade_add(cascade, CSS_ORIGIN_AUTHOR, important, true, css_layer_order_root(order), 0, ++seq, v);
-        free(v);
-    }
+    cssd_inline_collect(el, name, partner, cascade, order, &seq);
     /* css-cascade-5 §6.5's AUTHOR PRESENTATIONAL HINT ORIGIN, "between the regular user origin and the author
        origin". It is an ORIGIN and not a row of the UA table below because that is where css-cascade-5 §6.5 puts it: an
        author rule of any specificity outranks a hint, and a hint outranks the UA sheet. */
     v = css_presentational_hint(el, name);
+    pv = partner ? css_presentational_hint(el, partner) : NULL;
+    /* @LOGICAL — AT MOST ONE MEMBER OF A PAIR IS HINTED, and that is a fact about HTML §15.4 "Replaced
+       elements" and §15.5's attribute mappings rather than a convenience: every one of them is stated
+       PHYSICALLY ("The hspace attribute of embed, img, or object elements ... maps to the dimension
+       properties 'margin-left' and 'margin-right'"), so the flow-relative member of any pair is hinted by
+       nothing. The hint origin is ONE css-cascade-5 §6.1 position, so two hints would need an order between
+       them that a per-property table has no column for — hence the crash rather than a pick. */
+    DCHECK(v == NULL || pv == NULL,
+           "BOTH members of a css-logical-1 §4 logical property group carry a css-cascade-5 §6.5 "
+           "presentational hint on one element. HTML §15's attribute mappings are all stated over PHYSICAL "
+           "properties, so a flow-relative hint is a row somebody added — and the hint origin is a single "
+           "position in css-cascade-5 §6.1's Order of Appearance, with no column saying which of two hints "
+           "the UA sheet writes first. Give core/css/css_presentational_hints.h an ORDER over its rows and "
+           "pass it as the declaration position, exactly as the author walk passes a block index");
+    ++seq;
     if (v) {
-        css_cascade_add(cascade, CSS_ORIGIN_PRESENTATIONAL_HINT, false, false, NULL, 0, ++seq, v);
+        css_cascade_add(cascade, CSS_ORIGIN_PRESENTATIONAL_HINT, false, false, NULL, 0, seq, 0, v);
         free(v);
+    }
+    if (pv) {
+        css_cascade_add(cascade, CSS_ORIGIN_PRESENTATIONAL_HINT, false, false, NULL, 0, seq, 1, pv);
+        free(pv);
     }
     /* css-cascade-5 §6.2's USER-AGENT ORIGIN, with css-cascade-5 §6.3's IMPORTANCE carried rather than assumed
        normal: two of HTML §15.3.1's
@@ -2475,7 +2578,24 @@ char *cssom_cascaded_value(lxb_dom_element_t *el, const char *name)
        — above important author declarations — so a flag dropped here is a page's own rule silently giving a
        box to an element the UA sheet says has none. */
     ua = cssd_ua_value(el, name, &ua_important);
-    if (ua) css_cascade_add(cascade, CSS_ORIGIN_UA, ua_important, false, NULL, 0, ++seq, ua);
+    pua = partner ? cssd_ua_value(el, partner, &pua_important) : NULL;
+    /* @LOGICAL — AT MOST ONE MEMBER OF A PAIR HAS A UA ROW, which is HTML §15's own spelling and is checked
+       rather than assumed. §15's rendering rules state every margin and padding LOGICALLY — HTML §15.3.3
+       "Flow content" is `blockquote, figure, listing, p, plaintext, pre, xmp { margin-block: 1em }` and
+       `blockquote, figure { margin-inline: 40px }` — while the physical spellings in that section appear only
+       in the presentational-hint and quirks rules, which are a different css-cascade-5 §6.2 origin. So no
+       (element, group) has both members declared in the UA origin, and the table below has no column for the
+       order between two rows of one pair if one ever did. */
+    DCHECK(ua == NULL || pua == NULL,
+           "BOTH members of a css-logical-1 §4 logical property group have a USER-AGENT declaration on one "
+           "element. HTML §15's rendering rules state each of its margins and paddings in exactly one "
+           "spelling, so this is two rows added for one pair — and the UA table is a flat {tag, property, "
+           "value} scan whose row ORDER is the sheet's, which nothing here reports, so css-cascade-5 §6.1's "
+           "Order of Appearance between them is unavailable. Report the row index from cssd_ua_value and pass "
+           "it as the declaration position, exactly as the author walk passes a block index");
+    ++seq;
+    if (ua) css_cascade_add(cascade, CSS_ORIGIN_UA, ua_important, false, NULL, 0, seq, 0, ua);
+    if (pua) css_cascade_add(cascade, CSS_ORIGIN_UA, pua_important, false, NULL, 0, seq, 1, pua);
     /* css-cascade-5 §6.4.3 "Layer Ordering"'s order is a fact about the WHOLE document's layers, so it is sealed once every sheet has been
        walked and before the first index is read. Nothing below declares a layer. */
     css_layer_order_seal(order);
@@ -2653,15 +2773,16 @@ char *cssom_parse_a_css_value(const char *name, const char *value)
 static void cssd_decls_set(CssDecls *d, const char *name, char *value, bool important)
 {
     int at = cssd_decls_index(d, name);
+    CssLogicalGroup group = CSS_LOGICAL_GROUP_NONE;
     bool physical = true, move = false;
-    unsigned group, j;
+    unsigned j;
 
     if (at >= 0) {
-        group = css_shorthand_logical_group(name, &physical);
-        for (j = (unsigned)at + 1; group != 0 && j < d->n; j++) {
+        group = css_logical_group_of(name, &physical);
+        for (j = (unsigned)at + 1; group != CSS_LOGICAL_GROUP_NONE && j < d->n; j++) {
             bool other = true;
 
-            if (css_shorthand_logical_group(d->v[j].name, &other) == group && other != physical) {
+            if (css_logical_group_of(d->v[j].name, &other) == group && other != physical) {
                 move = true;
                 break;
             }
@@ -4381,6 +4502,11 @@ void cssom_init(JSContext *ctx)
        in both directions and the cascade walks it in one, so a row that disagrees with itself is a wrong
        string and a wrong computed value at once. */
     css_shorthand_init();
+    /* @LOGICAL — css-writing-modes-4 §6.4 "Abstract-to-Physical Mappings"' table and css-logical-1 §4's
+       group table, checked here for the same reason the two beside it are: both are read by a scan that
+       stops at the first match, and the §6.4 one must additionally be a PERMUTATION in every column or its
+       inverse — which is the direction a `margin-top` query takes — silently answers the wrong side. */
+    css_logical_init();
     /* The numeric-production table's, likewise before anything reads it: it is read by BINARY SEARCH, so an
        out-of-order row is not a slow answer but a row the search never reaches — reported as a property the
        table has never heard of, two lines below the row that holds it. */

@@ -127,13 +127,17 @@ const char *css_shorthand_property_named(const char *name);
    one. `max` must be at least CSS_SHORTHAND_MAX_OF. The names are BORROWED. */
 unsigned css_shorthand_shorthands_of(const char *longhand, const char **out, unsigned max);
 
-/* CSS Logical §2's LOGICAL PROPERTY GROUP of `longhand` — "any pair of flow-relative properties and physical
-   properties ... related by setting equivalent styles on the various sides or dimensions of a box" — as an
-   opaque group id, 0 for a property in none this component records. `*pphysical` is that property's MAPPING
-   LOGIC. §6.6's declaration-block serialization needs exactly this pair: a shorthand is NOT re-formed when a
-   declaration of the same group with the OTHER mapping logic sits between its longhands, because the two
-   members of a pair cascade together and reordering them would change which one wins. */
-unsigned css_shorthand_logical_group(const char *longhand, bool *pphysical);
+/* @LOGICAL — THE LOGICAL PROPERTY GROUP ENTRY THAT STOOD HERE IS `css_logical_group_of` IN
+   core/css/css_logical.h, and it moved rather than being wrapped: a forwarder here would be a second door on
+   one question, and this component's §6.6 serialization is a CALLER of that question rather than its owner.
+   ITS CITATION WAS ALSO MIS-AIMED and the repair is worth recording where the wrong number was read, because
+   a reader who re-derives it from the sentence will reach for the same section: the "logical property group"
+   definition and the sentence about cascading a pair together are css-logical-1 §4 "Flow-Relative Box Model
+   Properties", not §2 — css-logical-1 §2 is "Flow-Relative Values: block-start, block-end, inline-start,
+   inline-end", which is about the VALUES `caption-side`, `float`, `clear` and `text-align` take and names no
+   property group at all. The quotation went with it: the sentence begins "Each set of parallel flow-relative
+   properties and physical properties", and this header rendered it "any pair of flow-relative properties and
+   physical properties". */
 
 /* CSSOM §6.7.2's SERIALIZE A CSS VALUE over a LIST of longhand declarations: the value a hypothetical
    `shorthand` declaration would carry, given `values[i]` as the serialized value of
