@@ -3588,6 +3588,12 @@ lxb_css_property_state_clear(lxb_css_parser_t *parser,
         case LXB_CSS_CLEAR_TOP:
         case LXB_CSS_CLEAR_BOTTOM:
         case LXB_CSS_CLEAR_NONE:
+        /* CSS 2.1/CSS 2.2 §9.5.2's `both`, which CSS Page Floats 3's `clear` grammar does not carry — see
+           LXB_CSS_CLEAR_BOTH in property/const.h. Without this arm the ident is a value no case names, the
+           default arm fails the parse, and CSS Syntax 3 §5.5.6 "Consume a declaration" DROPS the whole
+           declaration: `clear: both` then reads back as the initial `none`, which is a plausible value with
+           nothing anywhere to say the declaration was refused. */
+        case LXB_CSS_CLEAR_BOTH:
             declar->u.clear->type = type;
             break;
 

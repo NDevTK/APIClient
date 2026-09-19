@@ -863,8 +863,10 @@ lxb_dom_node_t *block_flow_next_block_box(lxb_dom_element_t *el, lxb_dom_node_t 
    does to its SIBLINGS: §9.5.2's `clear` on a later block-level box introduces CLEARANCE, §8.3.1 makes a
    margin with clearance NON-ADJOINING ("no line boxes, no clearance, no padding and no border separate them"),
    and §9.5.2 then shifts that box down past the float's bottom margin edge. One float therefore invalidates
-   every collapse and every offset below it in this formatting context, and `clear` is not among the properties
-   core/css/css_computed_value.c models, so there is nothing to read it through either. §10.6.7 wants the float
+   every collapse and every offset below it in this formatting context. `clear` IS NOW A COMPUTED VALUE
+   core/css/css_computed_value.c derives — its `Computed value: as specified` row, with CSS 2.1 §9.5.2's
+   `both` restored to the parser, which CSS Page Floats 3's grammar had dropped — so the PROPERTY is no longer
+   what is missing and the PLACEMENT the clearance is measured against is. §10.6.7 wants the float
    as well, for a container that establishes a formatting context: "if the element has any floating descendants
    whose bottom margin edge is below the element's bottom content edge, then the height is increased to include
    those edges". */
@@ -880,11 +882,15 @@ static void bf_require_no_float_on_the_stack(lxb_dom_element_t *el)
                    "makes a later block-level box's margin non-adjoining and shifts it past the float's bottom "
                    "margin edge, and §10.6.7's own rule pulls this container's height down to a floating "
                    "descendant's edge. So there is no arm on this stack that is right by default. BUILD "
-                   "§9.5.1 \"Positioning the float: the 'float' property\"'s placement, and record `clear` — "
-                   "CSS 2 §9.5.2 gives it `Computed value: as specified`, so it is a row of "
-                   "css_computed_models' as-specified arm and a row of css_shorthand_complete_for. "
-                   "core/layout/line_box.c and core/layout/intrinsic_size.c each name §9.5.1 as the same "
-                   "absent capability under their own section's reason. %s",
+                   "§9.5.1 \"Positioning the float: the 'float' property\"'s placement — `clear` IS RECORDED "
+                   "NOW (core/css/css_computed_value.c's as-specified arm and css_shorthand_complete_for, with "
+                   "CSS 2.1 §9.5.2's `both` restored to lexbor's parser), so the PROPERTY is no longer the "
+                   "blocker and the float's POSITION is the whole of what is left: §9.5.2 measures clearance "
+                   "against the float's BOTTOM OUTER EDGE, which nothing here can compute. "
+                   "core/layout/line_box.c, core/layout/intrinsic_size.c and core/layout/flow_position.c each "
+                   "name §9.5.1 as the same absent capability under their own section's reason — FOUR "
+                   "consumers of ONE capability, and this list read THREE until flow_position.c's own crash "
+                   "was counted. %s",
                    box_subject_node(c, nbuf, sizeof nbuf));
 }
 

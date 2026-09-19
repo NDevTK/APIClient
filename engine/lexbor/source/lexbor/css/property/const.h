@@ -307,7 +307,14 @@ enum {
     LXB_CSS_CLEAR_RIGHT        = LXB_CSS_VALUE_RIGHT,
     LXB_CSS_CLEAR_TOP          = LXB_CSS_VALUE_TOP,
     LXB_CSS_CLEAR_BOTTOM       = LXB_CSS_VALUE_BOTTOM,
-    LXB_CSS_CLEAR_NONE         = LXB_CSS_VALUE_NONE
+    LXB_CSS_CLEAR_NONE         = LXB_CSS_VALUE_NONE,
+    /* CSS 2.1/CSS 2.2 §9.5.2 "Controlling flow next to floats: the 'clear' property" states
+       `Value: none | left | right | both | inherit`, and the rest of this enum is CSS Page Floats 3's
+       `clear` (`inline-start | inline-end | block-start | block-end | left | right | top | bottom | none`),
+       which DROPPED `both`. The two value sets are not nested: every other member here is the draft's
+       addition, and this one is the Recommendation's member the draft removed. A parser carrying only the
+       draft's set refuses the one `clear` value the web actually writes. */
+    LXB_CSS_CLEAR_BOTH         = LXB_CSS_VALUE_BOTH
 };
 typedef unsigned int lxb_css_clear_type_t;
 

@@ -1042,7 +1042,8 @@ bool css_computed_models(const char *name)
 {
     DCHECK(name != NULL, "the computed-value model question was asked about a NULL property name");
     return strcmp(name, "overflow-x") == 0 || strcmp(name, "overflow-y") == 0 ||
-           strcmp(name, "display") == 0 || strcmp(name, "float") == 0 || strcmp(name, "position") == 0 ||
+           strcmp(name, "display") == 0 || strcmp(name, "float") == 0 || strcmp(name, "clear") == 0 ||
+           strcmp(name, "position") == 0 ||
            strcmp(name, "box-sizing") == 0 || strcmp(name, "white-space") == 0 ||
            strcmp(name, "direction") == 0 || strcmp(name, "writing-mode") == 0 ||
            strcmp(name, "line-height") == 0 ||
@@ -1525,6 +1526,35 @@ char *css_computed_value(lxb_dom_element_t *el, const char *name)
        together — "determining the inline-start and inline-end sides of a box depends not only on the
        writing-mode property but also the direction property". Each of those three crashed for want of this one
        row.
+       CSS 2.1 §9.5.2 "Controlling flow next to floats: the 'clear' property" states `Computed value: as
+       specified` over a keyword-only `Value:` line (`none | left | right | both | inherit`), so the
+       as-specified arm is the whole of its rule, exactly as it is for `float` one section up. THE TWO ARE ONE
+       ROW FOR ONE REASON: §9.5.2 is written about what a float does to a LATER block-level box, so a consumer
+       that can read `float` and not `clear` can see that a box is out of flow and not that its successor was
+       told to get out of its way.
+       ITS CONSUMER IS NOT A LAYOUT ALGORITHM YET AND IT IS NOT HYPOTHETICAL EITHER: `clear` is in lexbor's
+       property registry, so CSSOM §6.6.1's per-property attribute is installed for it on every realm by the
+       loop over that registry, and CSSOM §9's resolved value for it is asked through `css_resolved_value` with
+       no gate in front — so `getComputedStyle(el).clear` and `getPropertyValue("clear")` both reached
+       `css_cv_modelled` and aborted, on any page that reads either. THE PARSE HAD TO LAND WITH THE ROW rather
+       than after it: lexbor's `clear` grammar is CSS Page Floats 3's, which DROPPED `both`, so the ident
+       failed the parse and CSS Syntax 3 §5.5.6 "Consume a declaration" dropped the declaration — and a row
+       added on its own would have answered the initial `none` for every `clear: both` on the web, which is a
+       plausible value and not an absent one.
+       NAMED RESIDUAL. WHAT IS NOT COVERED: nothing in core/layout reads this computed value, so a `clear`
+       this engine now reports moves no box. §9.5.2's CLEARANCE — "Values other than 'none' potentially
+       introduce clearance. Clearance inhibits margin collapsing and acts as spacing above the margin-top of an
+       element" — is unbuilt, and so is the float placement its amount is measured against.
+       WHAT THE NEXT DIFF BUILDS: CSS 2.1 §9.5.1 "Positioning the float: the 'float' property"'s nine
+       constraints, which core/layout/flow_position.c, core/layout/line_box.c, core/layout/intrinsic_size.c and
+       core/layout/block_flow.c each crash for under their own section's reason; §9.5.2's clearance is stated
+       over the float's bottom outer edge and is therefore a CONSUMER of that placement rather than an
+       alternative to it.
+       HOW ITS ABSENCE WOULD SHOW: a page reads a non-`none` `clear` back off an element whose box sits exactly
+       where the same element with `clear: none` would sit — observed by comparing that box's own offset
+       against a float's bottom outer edge in the same block formatting context, at whichever component first
+       places a block-level box below a float. It cannot be observed at all until that placement exists, which
+       is why the next-diff clause above is the placement and not the clearance.
        css-inline-3 §4.2.1 "Alignment Baseline Source: the baseline-source longhand" (`auto | first | last`)
        and §4.2.2 "Alignment Baseline Type: the alignment-baseline longhand" (`baseline | text-bottom |
        alphabetic | ideographic | middle | central | mathematical | text-top`) both state `Computed value:
@@ -1596,7 +1626,8 @@ char *css_computed_value(lxb_dom_element_t *el, const char *name)
        core/paint/stacking_order.h reads. Its two arms are not two values of one kind: `auto` decides whether
        the box FORMS a context and an `<integer>` decides both that and WHERE it sits, so a caller that could
        not tell them apart could place neither. */
-    DCHECK(strcmp(name, "float") == 0 || strcmp(name, "position") == 0 || strcmp(name, "box-sizing") == 0 ||
+    DCHECK(strcmp(name, "float") == 0 || strcmp(name, "clear") == 0 ||
+               strcmp(name, "position") == 0 || strcmp(name, "box-sizing") == 0 ||
                strcmp(name, "white-space") == 0 || strcmp(name, "direction") == 0 ||
                strcmp(name, "writing-mode") == 0 || strcmp(name, "alignment-baseline") == 0 ||
                strcmp(name, "baseline-source") == 0 || strcmp(name, "caption-side") == 0 ||

@@ -2066,6 +2066,15 @@ bool css_shorthand_complete_for(const char *longhand)
          overflow-x, overflow-y — `overflow` is the only shorthand in CSS that sets them (css-overflow §3.1;
            the logical `overflow-block`/`overflow-inline` are longhands of the same group, not shorthands);
          display, float, position, box-sizing — NO shorthand sets any of the four;
+         clear — NO shorthand in CSS sets it. CSS 2.1 §9.5.2 "Controlling flow next to floats: the 'clear'
+           property" declares it as a standalone property with its own `Value:`, `Initial:` and `Computed
+           value:` lines, and CSS 2.1 states no container over it; CSS Page Floats 3 redeclares the same
+           property name with a wider keyword set and adds no shorthand either. It shares its section's
+           subject with `float` and its name with nothing — CSS 2.1 §9.5.1 "Positioning the float: the
+           'float' property" declares `float` separately, and the two are siblings rather than longhands of
+           anything. IT IS IN lexbor's PROPERTY REGISTRY
+           (`LXB_CSS_PROPERTY_CLEAR`, initial `LXB_CSS_CLEAR_NONE`), so the row is what lets a declaration
+           the cascade already carries be READ as a computed value;
          the four margins — `margin` is the only shorthand that sets them (CSS 2.1 §8.3; the logical
            `margin-block`/`margin-inline` set the logical longhands, which are different properties);
          the four paddings — `padding`, likewise (§8.4);
@@ -2242,7 +2251,8 @@ bool css_shorthand_complete_for(const char *longhand)
        READ as a computed one: core/css/css_computed_value.c asserts this predicate before it derives
        anything. */
     static const char *const RECORDED[] = {
-        "overflow-x", "overflow-y", "display", "float", "position", "box-sizing", "color", "white-space",
+        "overflow-x", "overflow-y", "display", "float", "clear", "position", "box-sizing", "color",
+        "white-space",
         "direction", "writing-mode", "transform", "visibility",
         "flex-direction", "flex-wrap", "flex-grow", "flex-shrink", "flex-basis",
         "background-image", "background-position", "background-size", "background-repeat",
