@@ -722,7 +722,17 @@ static void lb_child(LbRun *r, lxb_dom_element_t *parent, lxb_dom_node_t *n)
        §10.8.1 puts inside it, core/layout/block_flow.h's walk over §9.4.1's stack, which reaches this file
        again for whichever box on that stack holds the last line box. */
     if (on_the_line) {
-        text_run_measure_add_atomic(r->m, el, used_value_margin_edge_px(el, false));
+        /* ONE USED WIDTH, STATED AS BOTH OF css-sizing-3 §2.1's MEMBERS, and that is a POSITIVE statement
+           rather than a member left unfilled. This line box is being filled at an available width its
+           containing block has ALREADY determined, so CSS 2.2 §10.3.9 "'Inline-block', non-replaced elements
+           in normal flow"'s shrink-to-fit is resolved and this box has exactly one width on this line — there
+           is no hypothetical zero-sized or infinitely-sized containing block anywhere in the question the fill
+           is asking. core/layout/text_run.h's `text_run_measure_fill` asserts that the atomics of a run it is
+           handed carry one number, which is what keeps THIS walk's items and core/layout/intrinsic_size.c's
+           §5.2 contributions from being crossed without anything saying so. */
+        CssPx used = used_value_margin_edge_px(el, false);
+
+        text_run_measure_add_atomic(r->m, el, used, used);
         return;
     }
     /* HTML §15.4 "Replaced elements" MAKES THIS A REPLACED ELEMENT, which is css-text-3 §5.5's "each replaced
@@ -738,7 +748,14 @@ static void lb_child(LbRun *r, lxb_dom_element_t *parent, lxb_dom_node_t *n)
        ITS HEIGHT IS READ AT THE LINE AND NOT HERE, because §10.8's step 1 is a question about the LINE the item
        lands on — `lb_atomic_extent` is where the same margin box is asked for on the other axis. */
     if (replaced_element_of(el).replaced) {
-        text_run_measure_add_atomic(r->m, el, used_value_margin_edge_px(el, false));
+        /* ONE USED WIDTH, STATED TWICE, for the reason the `inline-block` arm above states in full: the fill
+           is at a determined available width, so §10.3.2's used width is this box's whole answer on this
+           line. It is additionally the case here that css-sizing-3 §5.1 "Intrinsic Sizes" gives a REPLACED
+           box two EQUAL numbers even under the two hypothetical containing blocks, so this arm would state
+           one number twice under either question — which is a second reason and not the one that governs. */
+        CssPx used = used_value_margin_edge_px(el, false);
+
+        text_run_measure_add_atomic(r->m, el, used, used);
         return;
     }
     /* THE ELEMENTS THAT CHANGE WHERE THE RUN BREAKS ARE PLACED BEFORE ANYTHING ELSE IS COLLECTED FOR THEM,

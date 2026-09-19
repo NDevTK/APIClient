@@ -11,7 +11,6 @@
 #include "core/css/css_computed_value.h"
 #include "core/css/css_length.h"
 #include "core/layout/block_flow.h"
-#include "core/layout/box_subject.h"
 #include "core/layout/flex_intrinsic_size.h"
 #include "core/layout/flex_item.h"
 #include "core/layout/intrinsic_size.h"
@@ -243,13 +242,26 @@ static void is_require_acyclic(lxb_dom_element_t *el, const char *name)
            "those three did not ask. For a "
            "`width` or a `max-width` on a REPLACED box the two contributions genuinely DIFFER — the "
            "max-content contribution treats the whole value as that property's INITIAL value, the min-content "
-           "contribution resolves it against zero — and core/layout/text_run.h's atomic item cannot carry "
-           "that: `TEXT_RUN_ITEM_ATOMIC` holds ONE `size`, and text_run.c sums that one field into both "
-           "answers through `tr_line_size`. BUILD THE PAIR ON THE ITEM FIRST — a min-content and a "
-           "max-content inline size on `TEXT_RUN_ITEM_ATOMIC` and on `text_run_measure_add_atomic`, with the "
-           "two accumulators reading their own — and then this arm supplies §5.2.1's two numbers and the "
-           "refusal goes. Until the item carries two, an arm here could only pick one of §5.2.1's answers and "
-           "report it as both, which is a wrong shrink-to-fit width rather than an approximate one",
+           "contribution resolves it against zero. "
+           "THE ITEM CARRIES A PAIR NOW AND THAT RETIRES NONE OF THE FIVE, WHICH IS WHAT THIS MESSAGE USED TO "
+           "SAY IT WOULD. It said `TEXT_RUN_ITEM_ATOMIC` holds ONE `size` and instructed its reader to BUILD "
+           "THE PAIR ON THE ITEM FIRST, after which \"this arm supplies §5.2.1's two numbers and the refusal "
+           "goes\". The first half was exactly right about the tree and the SECOND HALF WAS WRONG ABOUT THE "
+           "WORK, in the direction that would have had a reader delete this crash with nothing behind it. The "
+           "item was a BLOCKER for two of the five properties and was never the missing CAPABILITY for any of "
+           "them: for `min-width`, `padding-top` and `padding-bottom` it was not even the blocker, since "
+           "§5.2.1 gives those ONE number for both contributions and what stops them is WHERE that zero may "
+           "live, exactly as the sentence above this one says. "
+           "WHAT THE NEXT DIFF BUILDS, and it is the same thing for all five: an entry that runs CSS 2.1 "
+           "§10.3.2 \"Inline, replaced elements\" over a CALLER-SUPPLIED substitution rather than over the "
+           "element's own computed values. `used_value_content_px` cannot be it — its three non-intrinsic "
+           "callers named above ask a question in which these percentages are not cyclic at all — and "
+           "`is_replaced_sizes` in this file is the shape that can be: it already composes §10.3.2 through "
+           "`used_value_replaced_auto_width_px` for the case where the property states nothing. GREP BOTH "
+           "BEFORE BUILDING: neither takes a substituted value today. Then this arm calls it TWICE, once per "
+           "contribution, and hands `is_atomic_replaced`'s producer the two different numbers the item can now "
+           "hold. Until that entry exists an arm here could only pick one of §5.2.1's answers and report it as "
+           "both, which is a wrong shrink-to-fit width rather than an approximate one",
            name);
 }
 
@@ -283,14 +295,27 @@ static void is_atomic_replaced(TextRunMeasure *m, lxb_dom_element_t *el)
        arm measures correctly. `padding-top` and `padding-bottom` ARE here, because §10.3.2's intrinsic-ratio
        arm reads the used HEIGHT and the surround that read computes is the vertical pair. */
     static const char *const CYCLIC[] = { "width", "min-width", "max-width", "padding-top", "padding-bottom" };
-    CssPx lead, trail;
+    CssPx lead, trail, outer;
     size_t i;
 
     for (i = 0; i < sizeof CYCLIC / sizeof CYCLIC[0]; i++) is_require_acyclic(el, CYCLIC[i]);
     lead = is_intrinsic_edge_px(el, false);
     trail = is_intrinsic_edge_px(el, true);
-    text_run_measure_add_atomic(m, el,
-                                css_px_add(css_px_add(lead, used_value_content_px(el, false)), trail));
+    outer = css_px_add(css_px_add(lead, used_value_content_px(el, false)), trail);
+    /* ONE NUMBER STATED AS BOTH OF css-sizing-3 §2.1's CONTRIBUTIONS, WHICH IS A DERIVATION AND NOT A MEMBER
+       LEFT UNFILLED — and the derivation is `is_replaced_sizes`' own, in full at its site: §5.1 separates the
+       pair by ONE input, the containing block being hypothetically zero-sized or infinitely-sized IN THAT
+       AXIS, and no arm of CSS 2.2 §10.3.2 "Inline, replaced elements" reads the containing block's INLINE
+       size at all. So both hypotheticals leave every operand of §10.3.2 unchanged and the two numbers are
+       equal, which is also why a replaced box has no soft wrap opportunity inside it to take or leave — the
+       one thing css-sizing-3 §2.1 says the pair otherwise differs over.
+       THE EDGES DO NOT BREAK IT EITHER: `is_intrinsic_edge_px` resolves a cyclic percentage against zero under
+       css-sizing-3 §5.2.1, which that section gives as ONE answer for both contributions ("For the min size
+       properties, as well as for margins and paddings (and gutters), a cyclic percentage is resolved against
+       zero for determining intrinsic size contributions"), so the same sum brackets both. WHAT WOULD MAKE THEM
+       DIFFER IS §5.2.1's REPLACED rule for a cyclic `width` or `max-width`, and `is_require_acyclic` above
+       refuses exactly that case rather than reporting one of its two answers as both. */
+    text_run_measure_add_atomic(m, el, outer, outer);
 }
 
 /* ONE CHILD NODE of the box whose intrinsic sizes are being measured. The shape mirrors core/layout/
@@ -320,6 +345,11 @@ typedef struct {
 } IsRun;
 
 static void is_child(IsRun *r, lxb_dom_element_t *parent, lxb_dom_node_t *n);
+/* css-sizing-3 §5.2's declared-size step, DECLARED HERE AND DEFINED WITH §9.4.1's STACK, because §9.4.2's walk
+   above needs the SAME three steps for an atomic inline-level box that the stack applies to a block-level one.
+   A second composition written up here is the one way those two could start disagreeing about what a child
+   with `width: 500px` contributes. */
+static IntrinsicInlineSizes is_declared_inline_sizes(lxb_dom_element_t *ch, IntrinsicInlineSizes measured);
 
 static void is_walk(IsRun *r, lxb_dom_element_t *el)
 {
@@ -334,7 +364,6 @@ static void is_child(IsRun *r, lxb_dom_element_t *parent, lxb_dom_node_t *n)
     lxb_dom_element_t *el;
     char *d;
     bool inline_box;
-    char nbuf[160];
 
     /* THE RUN'S END, TESTED AT EVERY DEPTH AND BEFORE ANYTHING ELSE. It is CSS 2.2 §9.2.1.1's block-level box
        — the one that "becomes a sibling of those anonymous boxes" — so it is not content of this run at any
@@ -389,6 +418,24 @@ static void is_child(IsRun *r, lxb_dom_element_t *parent, lxb_dom_node_t *n)
               "this walk's sum along the line nor a maximum over it, and there is no arm here that is right by "
               "default. BUILD §9.5.1's float placement, which core/layout/line_box.c and "
               "core/layout/flow_position.c both name as the same absent capability");
+    /* CSS 2.2 §9.2.2 "Inline-level elements and inline boxes" MAKES A REPLACED ELEMENT AN ATOMIC INLINE-LEVEL
+       BOX WHEREVER ITS `display` PUTS IT, and this test used to sit inside the `inline` arm below — where the
+       comment beside it said exactly this sentence and the code applied it to ONE `display` value. CSS 2.2
+       §9.2.2's own list is "replaced inline-level elements, inline-block elements, and inline-table elements", three
+       populations of which the FIRST is stated over the element's nature: "a non-replaced element with a
+       `display` value of `inline` generates an inline box", so `display` decides the box only for a
+       NON-replaced one. A replaced `<img style="display:inline-block">` therefore took neither arm and fell to
+       the crash at the end of this function.
+       IT IS HOISTED RATHER THAN COPIED INTO THE SECOND ARM because the alternative is two derivations of one
+       box's contribution: `is_atomic_replaced` below composes CSS 2.1 §10.3.2 "Inline, replaced elements"' used
+       content width, and the atomic arm at the end of this function composes css-sizing-3 §5.1's pair — and
+       CSS 2.1 §10.3.10 "'Inline-block', replaced elements in normal flow" is one sentence saying they are the
+       same question ("Exactly as inline replaced elements."), so two answers to it could only ever drift.
+       IT IS STILL ASKED AFTER §9.7's THREE QUESTIONS ABOVE, which is the order CSS 2.2 §9.7 "Relationships
+       between 'display', 'position', and 'float'" states and core/layout/block_flow.c asks them in: an
+       out-of-flow or floated replaced box is not on this line at all, so classifying it as atomic first would
+       put an `<img style="float:left">` in a run §9.5 takes out of it. */
+    if (replaced_element_of(el).replaced) { is_atomic_replaced(r->m, el); return; }
     d = is_computed(el, "display");
     inline_box = strcmp(d, "inline") == 0;
     /* FREED BEFORE EITHER CRASH AND READ AGAIN BY NEITHER, for the reason `tr_wraps` states: a DFAIL is
@@ -426,10 +473,12 @@ static void is_child(IsRun *r, lxb_dom_element_t *parent, lxb_dom_node_t *n)
         case PHRASING_BREAK_NONE:
             break;
         }
-        /* CSS 2.2 §9.2.2 makes a REPLACED element an ATOMIC inline-level box wherever its `display` puts it,
-           so the `inline` above does not settle which of the two this is. It is asked before the descent
-           because an atomic inline has no text of this run inside it to descend to. */
-        if (replaced_element_of(el).replaced) { is_atomic_replaced(r->m, el); return; }
+        /* A REPLACED ELEMENT HAS ALREADY LEFT, above the `display` read — see there for why the question is
+           asked of the element's NATURE before its `display` and not inside this arm. What reaches here is
+           CSS 2.2 §9.2.2's "non-replaced element with a `display` value of `inline`", which is the one box the
+           section calls an INLINE BOX rather than an atomic one, and the descent below is its content.
+           THE ORDER MATTERS AND IS NOT ALPHABETICAL: an atomic inline has no text of THIS run inside it to
+           descend to, so the question has to be settled before the two edges bracket anything. */
         /* §5.5: "inline box boundaries do not introduce a forced line break or soft wrap opportunity in the
            flow", and css-text-3 §4.1.1's collapsing crosses the boundary too ("even one outside the boundary
            of the inline containing that space, provided both spaces are within the same inline formatting
@@ -488,26 +537,68 @@ static void is_child(IsRun *r, lxb_dom_element_t *parent, lxb_dom_node_t *n)
            "sibling of the anonymous boxes, whether it is a direct child or is reached through an inline box "
            "it breaks — so no run this walk is ever handed may contain one, and whichever of "
            "`bf_content_kind` and `block_flow_next_block_box` stopped agreeing with the other is the fix");
-    DFAILF("CSS 2.2 §9.2.2 \"Inline-level elements and inline boxes\"' ATOMIC INLINE-LEVEL BOX THAT IS NOT "
-           "REPLACED — an `inline-block`, an `inline-flex`, an `inline-grid` or an `inline-table`, and the list "
-           "is closed rather than illustrative. §9.2.1's dispatch has already established that the measured box "
-           "\"either contains only block-level boxes or establishes an inline formatting context and thus "
-           "contains only inline-level boxes\" and that it is the second, and the assert directly above "
-           "establishes the same of a child reached THROUGH an inline box, so this child is inline-level "
-           "either way. It failed the `display: inline` test above and `replaced_element_of` says it is not "
-           "replaced, which leaves exactly those four. ITS ITEM IS THE ONE `is_atomic_replaced` ALREADY EMITS "
-           "and its size is `intrinsic_inline_sizes` one level down under css-sizing-3 §2.2 \"Intrinsic Size "
-           "Contributions\"' outer size (\"Intrinsic size contributions are based on the outer size of the box; "
-           "for this purpose, auto margins are treated as zero\"), which `is_intrinsic_edge_px` answers on both "
-           "sides. WHAT IS MISSING IS THAT THE ITEM CARRIES ONE NUMBER: core/layout/text_run.h's `TextRunItem` "
-           "holds a single `CssPx size` and `text_run_measure_add_atomic` takes one, and a REPLACED box is the "
-           "only atomic inline for which that is enough — its used width does not depend on where lines break, "
-           "so css-sizing-3 §5.1 \"Intrinsic Sizes\" gives it two EQUAL numbers, while an `inline-block`'s own "
-           "content wraps and gives it two different ones. BUILD THE PAIR ON THE ITEM — a min-content and a "
-           "max-content size on `TEXT_RUN_ITEM_ATOMIC` and on `text_run_measure_add_atomic`, with text_run.c's "
-           "two accumulators reading their own — which is the SAME missing thing `is_require_acyclic` above "
-           "names for a percentage `width` on a replaced box, so one diff retires both. %s",
-           box_subject_node(n, nbuf, sizeof nbuf));
+    /* CSS 2.2 §9.2.2 "Inline-level elements and inline boxes"' ATOMIC INLINE-LEVEL BOX THAT IS NOT REPLACED,
+       CONTRIBUTED AS ONE ITEM OF THIS RUN. §9.2.2 is what makes it one item rather than a bracketed descent —
+       such a box participates in its inline formatting context "as a single opaque box" — and css-text-3 §5.5
+       "Line Breaking Details" is why the item is this run's business at all, putting "a soft wrap opportunity
+       before and after each replaced element or other atomic inline" so the min-content partition cuts there.
+       WHICH BOXES REACH THIS LINE IS A CLOSED LIST AND CSS 2.2 §9.2.2 IS NOT WHAT CLOSES IT, which the crash
+       that stood here got wrong and is worth recording because the number and the title were both exactly
+       right. CSS 2.2 §9.2.2's own `display` list is THREE values — "the following values of the 'display' property
+       make an element inline-level: 'inline', 'inline-table', and 'inline-block'" — and its atomic examples
+       are introduced with "such as", which is illustrative by construction. The FOUR-value closure is
+       css-display-3 §2.6 "Precomposed Inline-level Display Values" (`inline-block`, `inline-table`,
+       `inline-flex`, `inline-grid`) and, in THIS tree, core/layout/block_flow.c's `bf_element_child`, whose
+       `inline_level` test is those four plus `inline`. The same crash also said `replaced_element_of` had
+       answered NO on this path and that call had not run at all — it sat inside the `inline` arm — which is
+       what left a replaced `inline-block` falling to a message asserting it was not replaced. It is asked
+       above the `display` read now.
+       CSS 2.2 §9.2.1's DISPATCH AND THE ASSERT ABOVE ARE WHAT MAKE THIS CHILD INLINE-LEVEL EITHER WAY: the measured
+       box "either contains only block-level boxes or establishes an inline formatting context and thus
+       contains only inline-level boxes" and this walk is the second arm, and a child reached THROUGH an inline
+       box is covered by the assert directly above. So this box failed the `display: inline` test, is not
+       replaced, and is inline-level — which leaves exactly the four, and each of them is sized by the module
+       that owns it one level down rather than by an arm here: `intrinsic_inline_sizes` sends an `inline-block`
+       to §9.4's own two formatting contexts, an `inline-table` to CSS 2.1 §17.5.2.2 Automatic table layout, an
+       `inline-flex` to css-flexbox-1 §9.9 "Intrinsic Sizes", and an `inline-grid` to a crash naming css-grid-2
+       §5.2 "Sizing Grid Containers". A `switch` here would be a second classification of one box.
+       THE THREE STEPS ARE css-sizing-3 §5.2 "Intrinsic Contributions"' AND THEY ARE THE SAME THREE §9.4.1's
+       STACK APPLIES TO A BLOCK-LEVEL CHILD — §5.1's measurement of the box's own content, then the box's own
+       `width`/`min-width`/`max-width` over it, then §2.2's OUTER size ("Intrinsic size contributions are based
+       on the outer size of the box; for this purpose, auto margins are treated as zero"). css-sizing-3 §5.2
+       states the
+       contribution as "the size of the content box of a hypothetical auto-sized float that contains only that
+       box", which says nothing whatever about the box's own outer display type, so the composition is `is_-
+       block_context`'s verbatim and is CALLED rather than repeated: two spellings of it would be one document
+       with two ideas of what a child declaring `width: 500px` contributes.
+       THE PAIR IS WHY THE ITEM NOW CARRIES TWO SIZES. css-sizing-3 §2.1 "Auto Box Sizes" separates the two by
+       which soft wrap opportunities are taken, and the opportunities inside THIS box are not this run's to
+       take — they are that box's answer to the same question — so under the run's max-content partition this
+       box stands at its max-content contribution and under the min-content partition at its min-content one.
+       A REPLACED box is the one atomic inline for which one number would have sufficed, and that is a fact
+       about REPLACED elements (css-sizing-3 §5.1 gives it two equal numbers, because no arm of CSS 2.2 §10.3.2
+       "Inline, replaced elements" reads the containing block's inline size) rather than about atomic inlines.
+       THIS ARM CANNOT RE-ENTER THE MEASUREMENT IT IS PART OF, ESTABLISHED BY READING THE CALL PATH AND NOT BY
+       A GUARD. `intrinsic_inline_sizes` is stated by css-sizing-3 §5.1 over hypothetical containing blocks, so
+       it reads no real one; `el` is a strict DESCENDANT of the box being measured and every call this arm makes
+       descends further, so the recursion is bounded by the depth of a tree that has no cycles. The two
+       dispatches that leave this component keep that property and say so at their own sites —
+       core/layout/table_width.h records in full that `table_intrinsic_inline_sizes` is the containing-block-free
+       entry and that `table_widths` is NOT, precisely because a table inside a float or an inline-block returns
+       through CSS 2.2 §10.3.5's shrink-to-fit into `intrinsic_inline_sizes` for the ANCESTOR and recurses until
+       the C stack ends. So the hazard is real, it is one entry away, and this arm is on the safe side of it:
+       `<span style="display:inline-block"><table>` reaches `table_intrinsic_inline_sizes` and never
+       `table_widths`. `is_require_acyclic` above guards a DIFFERENT cycle — a PERCENTAGE resolving against the
+       width this walk is producing — and it is not owed here, because css-sizing-3 §5.2.1 "Intrinsic
+       Contributions of Percentage-Sized Boxes" substitutes every cyclic percentage on this box away before it
+       is read: `intrinsic_declared_sizing_px` answers false for one and `is_intrinsic_edge_px` resolves one
+       against zero. */
+    {
+        IntrinsicInlineSizes inner = is_declared_inline_sizes(el, intrinsic_inline_sizes(el));
+        IntrinsicInlineSizes outer = intrinsic_outer_contribution(el, inner);
+
+        text_run_measure_add_atomic(r->m, el, outer.min_content, outer.max_content);
+    }
 }
 
 /* CSS 2.2 §9.4.2's INLINE FORMATTING CONTEXT, MEASURED, over ONE RUN of `el`'s CONTENT. The run is given as

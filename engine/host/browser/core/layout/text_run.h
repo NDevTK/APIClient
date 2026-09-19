@@ -187,9 +187,31 @@ typedef enum {
     TEXT_RUN_ITEM_EDGE,       /* an inline box boundary: an inline size, and no code point at all */
     TEXT_RUN_ITEM_FORCED_BREAK, /* HTML §15.3.4's `display-outside: newline`: a code point, and no size */
     TEXT_RUN_ITEM_ATOMIC,     /* css-text-3 §5.5's replaced element or other atomic inline: a size AND a code
-                                 point — CSS 2.2 §9.4.2's margin box on the line, and the U+FFFC whose [UAX14]
-                                 class CB puts an opportunity on each side of it */
+                                 point — CSS 2.2 §8.1 "Box dimensions"' margin box, put on the line by CSS 2.2
+                                 §9.4.2 "Inline formatting contexts", and the U+FFFC whose [UAX14] class CB
+                                 puts an opportunity on each side of it */
 } TextRunItemKind;
+
+/* WHICH OF css-sizing-3 §2.1 "Auto Box Sizes"' TWO CONSTRAINTS A PER-LINE SUM IS BEING TAKEN UNDER. It exists
+   because ONE kind of item answers the two differently: an ATOMIC INLINE is a whole box whose own content
+   wraps, so css-sizing-3 §5.2 "Intrinsic Contributions" gives it a min-content contribution and a max-content
+   contribution that are two numbers, and a line summed under the wrong one reports that box at a width no
+   constraint puts it at.
+   EVERY OTHER SIZED ITEM READS ONE NUMBER UNDER BOTH, AND THAT IS A DERIVATION RATHER THAN A CONVENIENCE: an
+   inline box EDGE is the three lengths css-sizing-3 §5.2.1 "Intrinsic Contributions of Percentage-Sized Boxes"
+   resolves identically for the two contributions ("For the min size properties, as well as for margins and
+   paddings (and gutters), a cyclic percentage is resolved against zero for determining intrinsic size
+   contributions"), so its producer states ONE number and `text_run_measure_add_box_edge` writes it into both
+   — a caller cannot forget the second member because it never supplies one.
+   CSS 2.2 §9.4.2 "Inline formatting contexts"' FILL IS UNDER NEITHER CONSTRAINT AND CHOOSES NEITHER MEMBER.
+   A line box is filled at an available width its containing block has already determined, so every box on it
+   has ONE used width and its producer states that one number twice; `text_run_measure_fill` ASSERTS that
+   rather than picking a half, which is what stops a measurement built by an INTRINSIC walk being laid out at
+   whichever member the fill happened to read. */
+typedef enum {
+    TEXT_RUN_SIZE_MIN_CONTENT = 0,
+    TEXT_RUN_SIZE_MAX_CONTENT = 1,
+} TextRunSizeBasis;
 
 /* ONE ITEM OF THE COLLECTED RUN. The inline it belongs to travels with it because both of the properties this
    measurement reads are per-element and the run crosses elements: css-values-4 §6.1.1's advance measure is
@@ -220,15 +242,21 @@ typedef struct {
        other `white-space` value would not be trimmable, so the flag is carried rather than re-derived from the
        code point. */
     bool collapsible_space;
-    /* THE INLINE SIZE THIS ITEM OCCUPIES ON ITS LINE, for the two kinds that have one and NOT the same quantity
-       for both. TEXT_RUN_ITEM_EDGE holds css-sizing-3 §2.2's outer-size contribution at ONE boundary of an
-       inline box, so the box's two edges carry its two halves; TEXT_RUN_ITEM_ATOMIC holds the WHOLE margin box
-       (CSS 2 §8.1's outer edge) of a box CSS 2.2 §9.2.2 makes "a single opaque box", so there is no second item
-       for the other half. They share a slot because the per-line sum does the same thing with both — add it at
-       the position the item sits at — and they are told apart by the KIND, which is what every accessor below
-       asserts on. A CHARACTER's contribution is css-values-4 §6.1.1's advance measure of its own code point and
-       is not stored, and a FORCED BREAK contributes none at all. */
-    CssPx size;
+    /* THE INLINE SIZE THIS ITEM OCCUPIES ON ITS LINE, ONE PER `TextRunSizeBasis`, for the two kinds that have
+       one and NOT the same quantity for both. TEXT_RUN_ITEM_EDGE holds css-sizing-3 §2.2's outer-size
+       contribution at ONE boundary of an inline box, so the box's two edges carry its two halves;
+       TEXT_RUN_ITEM_ATOMIC holds the WHOLE margin box (CSS 2 §8.1's outer edge) of a box CSS 2.2 §9.2.2 makes
+       "a single opaque box", so there is no second item for the other half. They share a slot because the
+       per-line sum does the same thing with both — add it at the position the item sits at — and they are told
+       apart by the KIND, which is what every accessor below asserts on. A CHARACTER's contribution is
+       css-values-4 §6.1.1's advance measure of its own code point and is not stored, and a FORCED BREAK
+       contributes none at all.
+       IT IS INDEXED AND NOT TWO NAMED FIELDS BECAUSE THE SUM SELECTS RATHER THAN BRANCHES: `tr_line_prefix`
+       is handed the basis it is summing under and adds `size[basis]` at every sized item, so a third kind
+       gaining a size adds no arm and a basis added later cannot be forgotten at one of them. WHICH MEMBERS
+       DIFFER IS A PROPERTY OF THE PRODUCER and is recorded on the measurement rather than re-derived per item
+       — see `atomic_sizes_differ`. */
+    CssPx size[2];
 } TextRunItem;
 
 /* THE RUNNING STATE OF ONE INLINE FORMATTING CONTEXT'S MEASUREMENT. The fields are written ONLY by the entries
@@ -264,6 +292,15 @@ typedef struct {
        mandatory and that one is not a split — it closes the run rather than dividing it — so this is false for
        a run the section says "overflows the line box" rather than being distributed. */
     bool splits;
+    /* WHETHER ANY ATOMIC INLINE IN THIS RUN CARRIES TWO DIFFERENT SIZES, written by `text_run_measure_add_atomic`
+       as it appends. It is a fact about the PRODUCER and not about any one item: a run whose atomics were given
+       css-sizing-3 §5.2's two contributions is an INTRINSIC measurement and has no used width in it, so
+       CSS 2.2 §9.4.2's fill would be distributing boxes at a size no layout ever assigned them.
+       `text_run_measure_fill` and `text_run_measure_line_offset` refuse exactly that.
+       IT IS RECORDED AT THE APPEND AND NOT SCANNED FOR AT THE FILL because the fill's per-item offset entry is
+       called once per box on a line, so a scan there would be quadratic in the run — one bool written once per
+       atomic answers the same question at every read. */
+    bool atomic_sizes_differ;
     bool finished;
     /* `release` has run. The two sizes and the fill are all derived from a collection it freed, so this is the
        end of the measurement and not a step in it — read through the same assert the answers go through. */
@@ -326,14 +363,31 @@ void text_run_measure_add_forced_break(TextRunMeasure *m, lxb_dom_element_t *sty
    an `inline-block`, and its own module's for an inline-flex or inline-grid — which is why this entry takes the
    number rather than deriving it: a component that chose the section would be classifying the box a second
    time, in a file that has no reason to know the difference.
+   IT IS TWO NUMBERS AND NOT ONE, WHICH IS WHAT SEPARATES THIS BOX FROM EVERY OTHER SIZED ITEM. An atomic
+   inline is a whole box whose own content wraps, so css-sizing-3 §2.1 "Auto Box Sizes"' two constraints give
+   it two different sizes: at a hypothetical infinitely-sized containing block its content takes none of its
+   soft wrap opportunities and at a zero-sized one it takes all of them, and both of those are questions about
+   text INSIDE a box this run holds as "a single opaque box". A REPLACED box is the one atomic inline for which
+   one number would have been enough — css-sizing-3 §5.1 "Intrinsic Sizes" gives it two EQUAL numbers because
+   no arm of CSS 2.2 §10.3.2 reads the containing block's inline size at all — and that is a property of
+   REPLACED elements rather than of atomic inlines, so it may not be the shape of this entry.
+   A CALLER THAT HAS ONE NUMBER STATES IT TWICE, AND THAT IS A POSITIVE STATEMENT RATHER THAN A DEFAULT.
+   core/layout/line_box.c fills a line at a width the containing block has already determined, so the box in
+   front of it has a USED width — CSS 2.2 §10.3.9's shrink-to-fit already resolved — and stating it as both
+   members is that fact and not a member left unfilled. `text_run_measure_fill` asserts exactly this, so the
+   two populations cannot be crossed silently.
    IT TAKES NO CODE POINT, for `text_run_measure_add_forced_break`'s reason: WHICH code point expresses §5.5's
    two opportunities is a fact about the section and not the caller's to vary, so two callers cannot disagree
    about what an atomic inline is to [UAX14].
-   `size` MAY BE ZERO — HTML §15.4.2's fourth rule gives an `img` that represents nothing natural dimensions of
-   0, and CSS 2.2 §10.3.2's first arm takes that width whole — and it may be NEGATIVE, because CSS 2.2 §8.3
-   "Margin properties" allows negative margins and the margin box is the border box plus both of them. Neither
-   is a call to skip: the item's POSITION is what puts §5.5's two opportunities on the line. */
-void text_run_measure_add_atomic(TextRunMeasure *m, lxb_dom_element_t *style, CssPx size);
+   EITHER SIZE MAY BE ZERO — HTML §15.4.2's fourth rule gives an `img` that represents nothing natural
+   dimensions of 0, and CSS 2.2 §10.3.2's first arm takes that width whole — and either may be NEGATIVE,
+   because CSS 2.2 §8.3 "Margin properties" allows negative margins and the margin box is the border box plus
+   both of them. Neither is a call to skip: the item's POSITION is what puts §5.5's two opportunities on the
+   line. WHAT IS REFUSED IS AN INVERTED PAIR, because css-sizing-3 §2.2 "Intrinsic Size Contributions" is where
+   a negative margin's inversion is repaired — "the effective max-content contribution is floored by the
+   min-content contribution" — one level up, before either number arrives here. */
+void text_run_measure_add_atomic(TextRunMeasure *m, lxb_dom_element_t *style, CssPx min_content,
+                                 CssPx max_content);
 
 /* RUN [UAX14] OVER EVERYTHING COLLECTED and produce css-sizing-3 §2.1's two answers. Every caller must reach
    this: the measurement does not exist until it runs. Adding a node afterwards is a caller that ran two

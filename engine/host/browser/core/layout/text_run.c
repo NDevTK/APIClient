@@ -173,6 +173,7 @@ void text_run_measure_init(TextRunMeasure *m)
     m->max_content = css_px(0.0);
     m->min_content = css_px(0.0);
     m->splits = false;
+    m->atomic_sizes_differ = false;
     m->finished = false;
     m->released = false;
 }
@@ -201,7 +202,8 @@ static TextRunItem *tr_append_item(TextRunMeasure *m, TextRunItemKind kind, lxb_
     it->cp = 0;
     it->wraps = false;
     it->collapsible_space = false;
-    it->size = css_px(0.0);
+    it->size[TEXT_RUN_SIZE_MIN_CONTENT] = css_px(0.0);
+    it->size[TEXT_RUN_SIZE_MAX_CONTENT] = css_px(0.0);
     return it;
 }
 
@@ -281,6 +283,20 @@ static const TextRunItem *tr_sized_at(const TextRunMeasure *m, size_t i)
     return &m->items[i];
 }
 
+/* ONE SIZED ITEM'S CONTRIBUTION UNDER ONE OF css-sizing-3 §2.1's TWO CONSTRAINTS. It is a separate accessor
+   from `tr_sized_at` rather than an index at each call because the BASIS is an operand a caller can get wrong
+   silently — both members are a `CssPx` of the same box — so the one place that reads the array asserts that
+   the index it was handed is one of the two the enum names. */
+static CssPx tr_sized_px(const TextRunMeasure *m, size_t i, TextRunSizeBasis basis)
+{
+    DCHECK(basis == TEXT_RUN_SIZE_MIN_CONTENT || basis == TEXT_RUN_SIZE_MAX_CONTENT,
+           "a line was summed under a css-sizing-3 §2.1 constraint that is neither of the two the section "
+           "names. `TextRunSizeBasis` has exactly two members and indexes an item's two sizes, so a third "
+           "value here reads past the pair and reports a line width out of whatever followed it in the "
+           "item record");
+    return tr_sized_at(m, i)->size[basis];
+}
+
 /* THE CODE POINT [UAX14] IS HANDED FOR THIS ITEM, for the two kinds that have one. It is a separate accessor
    from `tr_char_at` because the two questions have different answer sets: an advance measure is asked only of a
    character, while the break pass is asked of a character AND of a forced break, and one accessor serving both
@@ -312,7 +328,20 @@ void text_run_measure_add_box_edge(TextRunMeasure *m, lxb_dom_element_t *style, 
            "and a border width are non-negative by their own properties' `Value:` lines, and §2.2's \"for this "
            "purpose auto margins are treated as zero\" leaves only a declared negative margin — which is real "
            "CSS, and is a case this sum has not been derived for rather than one to let through");
-    tr_append_item(m, TEXT_RUN_ITEM_EDGE, style)->size = size;
+    {
+        /* ONE NUMBER UNDER BOTH OF css-sizing-3 §2.1's CONSTRAINTS, WRITTEN HERE SO NO CALLER CAN STATE A
+           SECOND. This entry's operand is the three lengths css-sizing-3 §5.2.1 "Intrinsic Contributions of
+           Percentage-Sized Boxes" resolves identically for the two contributions — "For the min size
+           properties, as well as for margins and paddings (and gutters), a cyclic percentage is resolved
+           against zero for determining intrinsic size contributions" — and on a real line it is
+           core/layout/intrinsic_size.h's `used_inline_box_edge_px`, which is one used value. So an edge has
+           ONE size under every question this component is asked, and writing it into both members is the
+           positive statement of that rather than a member left at whatever `tr_append_item` zeroed. */
+        TextRunItem *it = tr_append_item(m, TEXT_RUN_ITEM_EDGE, style);
+
+        it->size[TEXT_RUN_SIZE_MIN_CONTENT] = size;
+        it->size[TEXT_RUN_SIZE_MAX_CONTENT] = size;
+    }
     /* AN EDGE DOES NOT CLOSE A COLLAPSIBLE WHITE-SPACE RUN, which is css-text-3 §4.1.1's own scope rather than
        a convenience: the collapsing is stated over the inline formatting CONTEXT and applies "even one outside
        the boundary of the inline containing that space", so a space either side of a box boundary is one run
@@ -373,7 +402,8 @@ void text_run_measure_add_forced_break(TextRunMeasure *m, lxb_dom_element_t *sty
    different code point would be two answers to what an atomic inline is to the annex. */
 #define TR_OBJECT_REPLACEMENT 0xFFFCU
 
-void text_run_measure_add_atomic(TextRunMeasure *m, lxb_dom_element_t *style, CssPx size)
+void text_run_measure_add_atomic(TextRunMeasure *m, lxb_dom_element_t *style, CssPx min_content,
+                                 CssPx max_content)
 {
     TextRunItem *it;
 
@@ -403,9 +433,39 @@ void text_run_measure_add_atomic(TextRunMeasure *m, lxb_dom_element_t *style, Cs
            "kind IS, and the code point is how it is expressed to the annex — a different class here means the "
            "generated table and this constant have come apart, and the run would break around an image "
            "according to whatever rule that other class reaches");
+    /* THE TWO ARE ORDERED AND THAT IS WHAT MAKES TWO ADJACENT `CssPx` ARGUMENTS SAFE TO TAKE POSITIONALLY.
+       css-sizing-3 §2.1 "Auto Box Sizes" states the min-content inline size over the same content with MORE
+       soft wrap opportunities taken, so it cannot exceed the max-content one — which means a caller that
+       transposed the pair either trips this or handed over two equal numbers, and two equal numbers transposed
+       are the same call. There is no third outcome, so the ordering assert IS the argument check.
+       IT IS A `DCHECK` AND NOT A REFUSAL OF THE DOCUMENT because both operands are numbers THIS CODEBASE
+       computed — core/layout/intrinsic_size.h's §5.2 contribution on one side and core/layout/used_value.h's
+       used width on the other — so an inversion is this engine's own arithmetic and never a page's. §2.2's
+       own floor is where a NEGATIVE margin's inversion is repaired, one level up, before either number
+       arrives. */
+    DCHECK(min_content.px <= max_content.px,
+           "an atomic inline was added whose MIN-CONTENT contribution is WIDER than its max-content one. "
+           "css-sizing-3 §2.1 \"Auto Box Sizes\" states the first over the same content with more soft wrap "
+           "opportunities taken, and css-sizing-3 §2.2 \"Intrinsic Size Contributions\" repairs the one case "
+           "that can invert them before a contribution leaves its producer — \"if the ideal max-content "
+           "contribution would be smaller than the min-content contribution (e.g. due to the use of negative "
+           "margins), the effective max-content contribution is floored by the min-content contribution\". So "
+           "this is either a producer that skipped §2.2's floor or a caller that passed the pair in the other "
+           "order, and the two arguments are the same type, so nothing else would have caught it");
     it = tr_append_item(m, TEXT_RUN_ITEM_ATOMIC, style);
     it->cp = TR_OBJECT_REPLACEMENT;
-    it->size = size;
+    it->size[TEXT_RUN_SIZE_MIN_CONTENT] = min_content;
+    it->size[TEXT_RUN_SIZE_MAX_CONTENT] = max_content;
+    /* A RUN HOLDING ONE OF THESE IS AN INTRINSIC MEASUREMENT AND CANNOT BE FILLED — see text_run.h's
+       `atomic_sizes_differ`. Recorded at the append because the fill asks the question once per placed box.
+       THE WHOLE `CssPx` IS COMPARED AND NOT ITS EXAMPLE, which is core/css/css_length.h's layering rather than
+       caution: a length carries the SET OF ENVIRONMENT FACTS it is a joint function of beside the modelled
+       number, and two contributions derived from different facts are two different answers even where this
+       viewport makes their examples agree. Asking only about `px` would let a pair the solver must fork over
+       through as though the producer had stated one used width. */
+    if (min_content.px != max_content.px || min_content.env != max_content.env ||
+        min_content.realm != max_content.realm)
+        m->atomic_sizes_differ = true;
     /* AN ATOMIC INLINE CLOSES A COLLAPSIBLE WHITE-SPACE RUN, and unlike the forced break's flag this one is
        OBSERVABLE. css-text-3 §4.1.1 step 4 collapses "any collapsible space IMMEDIATELY FOLLOWING another
        collapsible space", and this box is a character between them in §4.1.1's sense — it renders — so the
@@ -501,7 +561,8 @@ void text_run_measure_add_text(TextRunMeasure *m, lxb_dom_element_t *style, cons
    drift apart because there is nothing for them to drift between.
    `upto == hi` IS THEREFORE A REAL ANSWER AND NOT AN EDGE CASE — it is where the line's last item ENDS, which
    is what a caller reporting a fragment's far edge asks for. */
-static CssPx tr_line_prefix(const TextRunMeasure *m, size_t lo, size_t hi, size_t upto)
+static CssPx tr_line_prefix(const TextRunMeasure *m, size_t lo, size_t hi, size_t upto,
+                            TextRunSizeBasis basis)
 {
     CssPx sum = css_px(0.0);
     size_t i, keep_lo = hi, keep_hi = lo;
@@ -534,7 +595,7 @@ static CssPx tr_line_prefix(const TextRunMeasure *m, size_t lo, size_t hi, size_
            of CSS 2 §8.1's margin box, which is CSS 2.2 §9.4.2's "horizontal margins, borders, and padding are
            respected between these boxes" for a box the section makes "a single opaque box". */
         if (tr_kind_has_size(m->items[i].kind)) {
-            sum = css_px_add(sum, tr_sized_at(m, i)->size);
+            sum = css_px_add(sum, tr_sized_px(m, i, basis));
             continue;
         }
         /* A FORCED BREAK OCCUPIES A POSITION AND NO WIDTH. The U+000A it carries exists for [UAX14] alone — see
@@ -557,9 +618,9 @@ static CssPx tr_line_prefix(const TextRunMeasure *m, size_t lo, size_t hi, size_
 
 /* ONE LINE'S INLINE SIZE — the prefix above taken to the line's own end, which is what CSS 2.2 §9.4.2's
    distribution compares against an available width. */
-static CssPx tr_line_size(const TextRunMeasure *m, size_t lo, size_t hi)
+static CssPx tr_line_size(const TextRunMeasure *m, size_t lo, size_t hi, TextRunSizeBasis basis)
 {
-    return tr_line_prefix(m, lo, hi, hi);
+    return tr_line_prefix(m, lo, hi, hi, basis);
 }
 
 /* IS THE SOFT WRAP OPPORTUNITY AT THIS BOUNDARY ENABLED — css-text-3 §5.5 "Line Breaking Details" states the
@@ -771,8 +832,8 @@ void text_run_measure_finish(TextRunMeasure *m)
            §9.4.2's own count reached from the inline-size side, and it is a THEOREM here for the same reason it
            is one there — independent of every width in the document. `splits` stays FALSE for exactly that
            statement, which is what tells the fill's caller it has no available width to derive. */
-        m->max_content = tr_line_size(m, 0, m->count);
-        m->min_content = m->max_content;
+        m->max_content = tr_line_size(m, 0, m->count, TEXT_RUN_SIZE_MAX_CONTENT);
+        m->min_content = tr_line_size(m, 0, m->count, TEXT_RUN_SIZE_MIN_CONTENT);
         return;
     }
     cps = malloc(m->ncps * sizeof *cps);
@@ -859,11 +920,13 @@ void text_run_measure_finish(TextRunMeasure *m)
                    "apart");
         }
         if (forced) {
-            m->max_content = css_px_max(m->max_content, tr_line_size(m, max_line, at));
+            m->max_content = css_px_max(m->max_content,
+                                        tr_line_size(m, max_line, at, TEXT_RUN_SIZE_MAX_CONTENT));
             max_line = at;
         }
         if (forced || soft) {
-            m->min_content = css_px_max(m->min_content, tr_line_size(m, min_line, at));
+            m->min_content = css_px_max(m->min_content,
+                                        tr_line_size(m, min_line, at, TEXT_RUN_SIZE_MIN_CONTENT));
             min_line = at;
         }
     }
@@ -929,6 +992,31 @@ static void tr_require_answers(const TextRunMeasure *m)
            "the second as the size \"if NONE\" were, over the same characters — so with every advance "
            "non-negative the first is a sub-run of the second. The two spellings of the shrink-to-fit formula "
            "agree only under this relation, so its failure would silently switch which algorithm runs");
+}
+
+/* CSS 2.2 §9.4.2's FILL AND ITS PER-ITEM POSITIONS ARE ABOUT A LINE THAT EXISTS, so every box on it has a
+   USED width — ONE number — and this is where that is established rather than assumed. The fill sums an
+   item's size under a single basis, and an ATOMIC INLINE carrying css-sizing-3 §5.2's TWO contributions has no
+   used width in it at all: it is a box measured under a hypothetical zero-sized and a hypothetical
+   infinitely-sized containing block, neither of which is the width the line is being filled at. Reading either
+   member would place that box at a size no layout assigned it, and both readings look equally plausible in the
+   output, which is why this is a crash and not a choice of member.
+   IT IS A STATEMENT ABOUT THE PRODUCER AND IS READ OFF ONE BOOL. core/layout/line_box.c hands every atomic its
+   used margin-box width and therefore states the same number twice; core/layout/intrinsic_size.c hands over
+   §5.2's pair and never fills. So the flag is false for every measurement that may be filled, and a true one
+   is the two walks having been crossed. */
+static void tr_require_used_sizes(const TextRunMeasure *m)
+{
+    DCHECK(!m->atomic_sizes_differ,
+           "CSS 2.2 §9.4.2's line boxes were asked of a run holding an ATOMIC INLINE whose two css-sizing-3 "
+           "§5.2 \"Intrinsic Contributions\" differ, so that box has no USED width for a line to place it at. "
+           "css-sizing-3 §5.1 \"Intrinsic Sizes\" defines the pair as the sizes the box would have under a "
+           "hypothetical ZERO-sized and a hypothetical INFINITELY-sized containing block, and a line box is "
+           "filled at neither — it is filled at a width the containing block has already determined. "
+           "core/layout/line_box.c supplies `used_value_margin_edge_px` for both members precisely so that "
+           "this cannot arise; a true flag here is an INTRINSIC measurement from core/layout/intrinsic_size.c "
+           "being handed to the fill, and every box on the resulting line would be positioned at a size no "
+           "layout ever assigned it");
 }
 
 CssPx text_run_measure_max_content(const TextRunMeasure *m)
@@ -1019,6 +1107,7 @@ size_t text_run_measure_fill(const TextRunMeasure *m, CssPx available, TextRunLi
     size_t i, n = 0, start = 0, prev = 0;
 
     tr_require_answers(m);
+    tr_require_used_sizes(m);
     DCHECK(lines != NULL,
            "CSS 2.2 §9.4.2's line boxes were asked for with nowhere to put them. The count alone is not the "
            "answer this entry has: a caller asks which line each BOX is on — §10.8's step 3 is two maxima over "
@@ -1048,7 +1137,7 @@ size_t text_run_measure_fill(const TextRunMeasure *m, CssPx available, TextRunLi
                            "counted and this arm not taken");
         out[0].from = 0;
         out[0].to = m->count;
-        out[0].size = tr_line_size(m, 0, m->count);
+        out[0].size = tr_line_size(m, 0, m->count, TEXT_RUN_SIZE_MAX_CONTENT);
         *lines = out;
         return 1;
     }
@@ -1068,13 +1157,13 @@ size_t text_run_measure_fill(const TextRunMeasure *m, CssPx available, TextRunLi
            position were not taken, which is why the comparison is against `at` and the emission is at `prev`.
            `prev > start` is §9.4.2's cannot-be-split condition stated positively: below it there is no earlier
            position on this line to fall back to, and the section says the content overflows instead. */
-        if (prev > start && tr_line_size(m, start, at).px > available.px) {
+        if (prev > start && tr_line_size(m, start, at, TEXT_RUN_SIZE_MAX_CONTENT).px > available.px) {
             DCHECK(n < m->count, "CSS 2.2 §9.4.2's fill produced more line boxes than the run has items, and "
                                  "the lines partition the items — so a line was emitted empty or a boundary "
                                  "went backwards");
             out[n].from = start;
             out[n].to = prev;
-            out[n].size = tr_line_size(m, start, prev);
+            out[n].size = tr_line_size(m, start, prev, TEXT_RUN_SIZE_MAX_CONTENT);
             n++;
             start = prev;
         }
@@ -1086,7 +1175,7 @@ size_t text_run_measure_fill(const TextRunMeasure *m, CssPx available, TextRunLi
                                  "FORCED break, and the lines partition the items");
             out[n].from = start;
             out[n].to = at;
-            out[n].size = tr_line_size(m, start, at);
+            out[n].size = tr_line_size(m, start, at, TEXT_RUN_SIZE_MAX_CONTENT);
             n++;
             start = at;
         }
@@ -1118,6 +1207,7 @@ size_t text_run_measure_fill(const TextRunMeasure *m, CssPx available, TextRunLi
 CssPx text_run_measure_line_offset(const TextRunMeasure *m, TextRunLine line, size_t i)
 {
     tr_require_answers(m);
+    tr_require_used_sizes(m);
     DCHECK(line.from <= line.to && line.to <= m->count,
            "CSS 2.2 §9.4.2's per-item position was asked over a line that is not one of the fill's — the fill's "
            "lines PARTITION the collected items, so a range outside `[0, count]` is a `TextRunLine` some other "
@@ -1128,5 +1218,5 @@ CssPx text_run_measure_line_offset(const TextRunMeasure *m, TextRunLine line, si
            "intersection), so an index outside the line is a caller that has lost which fragment it is placing "
            "— and the answer would be a real distance measured along the wrong line. `line.to` itself IS "
            "admitted: it is where the line's last item ENDS, which is a fragment's far edge");
-    return tr_line_prefix(m, line.from, line.to, i);
+    return tr_line_prefix(m, line.from, line.to, i, TEXT_RUN_SIZE_MAX_CONTENT);
 }
