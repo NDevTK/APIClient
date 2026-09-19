@@ -283,6 +283,19 @@ const char *engine_take_dumps(void);
  * RETURNING THE THREAD with that member switched in — at which point the host's own `qjs_paint` renders the
  * world it is standing in, exactly as it renders today. Nothing about the painter changes; what changes is
  * WHICH world the host is handed.
+ *   AND THE MOMENT IS THE CLOSING EDGE OF A TURN, NEVER ITS OPENING ONE, WHICH IS A FACT A HOST HAS TO KNOW
+ * BEFORE IT DECIDES WHEN TO ASK. A member is "switched in with its deltas applied" at both ends of every turn
+ * it takes, and only the closing end can hold anything that member DID: the discharge is therefore taken
+ * where the member finishes (engine.c's FLOW_STEP_DONE arm, with the finish deferred across the return
+ * because flow_finish is what unapplies the deltas) or where a slice-end yield hands the host that same
+ * standing member. It USED TO BE the opening edge, and the cost of that was exact rather than theoretical:
+ * the earliest a host may ask is before its first `qjs_step` — this entry's own DCHECK requires a live
+ * frontier — so the member alive at the ask had run nothing, its deltas were EMPTY, and the image was
+ * byte-identical to the `baseline` one the same run writes at session close. A host asking at the only moment
+ * it is guaranteed to be able to ask got a copy of the picture it already had, under a world's name.
+ *   SO AN ASK MADE EARLY IS ANSWERED LATE, AND THAT IS THE POINT. A mark laid down before the first step is
+ * spent at the end of that member's first turn, not at its start; a host that wants a specific mid-run world
+ * asks while that world is live, exactly as before.
  *   IT IS THE ANSWER TO A REACH PROBLEM AND NOT A RENDERING ONE. main.c's `qjs_paint` already names the gap in
  * its own residual: a host reaches this engine only between two steps, so the only worlds it can render are the
  * ones the scheduler happened to leave standing at a yield, and the `if (__FLAGS.admin)` sibling — the picture

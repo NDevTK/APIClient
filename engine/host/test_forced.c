@@ -26500,22 +26500,39 @@ static int abi_main(int argc, char **argv)
        serial on a forking run, and that reads the WRONG CHANNEL: this driver renders on EVERY round, so deeper
        serials appear there from quantum boundaries the ask does not govern, on a run whose ask is exactly as
        narrow as its own first clause says.
-       WHAT IS NOT COVERED is a picture of a world at a moment that world has DONE something. An opportunity is
-       a RETURN TO THIS LOOP and returns are governed by the QUANTUM, so a document that completes inside one
-       slice gets exactly two — the discharge, which precedes every instruction, and the final paint, which
-       follows the switch-out of the last member (solver/engine.c's engine_session_close) — and both hold the
-       parsed document, while every world the run forked is photographed by nothing.
-       WHAT THE NEXT DIFF BUILDS is a SECOND discharge in the scheduler at the member's LAST moment — the
-       post-step arm where it finishes or parks, with its COW and DOM deltas still applied — and the mark
-       INHERITED by a fork. Neither half works alone, which is why they are one diff: inheritance under today's
-       discharge photographs a newborn before its arm has run, and an end-of-life discharge reaches only the
-       members alive at the ask. Together they need no cap and none is allowed — a member ends once, so the ask
-       costs exactly one image per world and nothing decides that any world will not be photographed.
-       HOW ITS ABSENCE WOULD SHOW: two worlds of one document whose pixel payloads are byte-identical while the
-       run reports forks — read with `cmp` past each file's own header, and corroborated by the mark counts the
-       `[abi paint]` lines carry, which are what the paint walk LAID rather than a value this engine can make
-       unknown. RETIREMENT: this record goes when a world's image is taken at a moment that world reached
-       rather than at one the quantum did. */
+       THE HALF OF THIS RESIDUAL THAT SAID THE DISCHARGE "PRECEDES EVERY INSTRUCTION" IS BUILT AND GONE, and
+       what it cost is recorded at the line that used to take it (solver/engine.c's pre-step block): the
+       discharge now happens at the CLOSING edge of a member's turn — where it finishes, or where a slice-end
+       yield hands the host that same standing member — so a document that completes inside one slice is
+       photographed after its script has run rather than before.
+       AND THE NEXT-DIFF CLAUSE THAT STOOD HERE WAS WRONG ON BOTH ITS HALVES, WHICH IS RECORDED AT THE SITE
+       THAT WROTE IT BECAUSE A CLAUSE IS READ ONCE, BY SOMEBODY WHO HAS ALREADY DECIDED TO DO THE WORK. In its
+       own words it asked for a SECOND discharge at the member's last moment AND for the mark to be INHERITED
+       by a fork, and said "Neither half works alone". (1) A SECOND discharge is not what was needed — a mark
+       is ONE BIT and the first discharge spends it, so adding an end-of-life site beneath the pre-step one
+       would have changed nothing at all for the population the shipped ask is made over; the discharge had to
+       MOVE. (2) "Neither half works alone" is false of the half that landed: an end-of-life discharge alone
+       makes a single-flow document's own world differ from its baseline, which is the whole observation this
+       residual existed to end. (3) The INHERITANCE half is not an unbuilt thing but a REFUSED one, and the
+       refusal is landed, reasoned and in two places — solver/flow.h's `paint_owed` says a plain flag is
+       chosen over a generation stamp precisely so that "a newborn arm reading marked would make an ask over a
+       forking frontier an ask that never finishes — every fork would owe an image, and §NO BOUNDS forbids
+       capping the answer once it is owed", and solver/engine.h states the same decision as the contract.
+       Building it would have overturned a decision by quoting a clause written without reading it.
+       WHAT IS NOT COVERED, now that those are settled, is a world FORKED AFTER THE ASK. `engine_request_paint`
+       marks the members alive when it is called and a fork inherits nothing, so an arm born later is
+       photographed only if the quantum happens to leave it standing — which for a document that finishes
+       inside one slice is never. This is a HOST question rather than an engine one and solver/engine.h
+       already states its answer in one sentence: "A host that wants the arms a run has since grown asks
+       again." WHAT THE NEXT DIFF BUILDS is therefore in THIS file — a re-ask on a cadence this driver can
+       defend, which is a decision about how many extra returns a picture is worth and not a mechanism the
+       scheduler is missing. It may not be a re-ask per round: a round triggered by a discharge would re-mark
+       every member and buy another, which does not terminate.
+       HOW ITS ABSENCE WOULD SHOW: a run whose `_forkAt` names two branch sites writes fewer image files than
+       it forked worlds, and the worlds that are missing are the ones whose flows were born after the host's
+       single ask — observed on the directory's file NAMES, which carry the world, against the fork table the
+       same run publishes. RETIREMENT: this record goes when a world this run forked is photographed because
+       somebody asked for it rather than because the quantum left it standing. */
     if (paint_dir != NULL) qjs_request_paint();
 
     for (;;) {

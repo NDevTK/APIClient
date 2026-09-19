@@ -4101,14 +4101,20 @@ void flow_set_paint_owed(Flow *f) {
 
 void flow_clear_paint_owed(Flow *f) {
     DCHECK(f != NULL, "an image ask was discharged against no flow at all");
-    /* A DISCHARGE THAT WAS NEVER ASKED FOR IS A SCHEDULER HANDING THE HOST A TURN NOBODY BOUGHT. The one caller
-       is the slice, which clears the mark it has just tested, so an unmarked flow reaching here is that test
-       and this clear having come apart — and the cost is a YIELD per pick for the rest of the session, which
-       from outside is a scheduler that stopped stepping. */
+    /* A DISCHARGE THAT WAS NEVER ASKED FOR IS A SCHEDULER HANDING THE HOST A TURN NOBODY BOUGHT. Every caller
+       is inside engine_sched_slice and each clears the mark it has just tested, so an unmarked flow reaching
+       here is that test and this clear having come apart — and the cost is a YIELD per pick for the rest of
+       the session, which from outside is a scheduler that stopped stepping.
+       THERE ARE TWO SUCH SITES AND THEY ARE THE TWO CLOSING EDGES OF A TURN, which is worth saying here
+       because this DCHECK used to say "the one caller" and a reader counting callers would now find it wrong
+       about the tree while still right about the rule. One is the FLOW_STEP_DONE arm, which buys a return so
+       a member's last world can be rendered before flow_finish unapplies it; the other is the slice-end
+       yield, which buys nothing because the host is already being handed that member standing. A mark is
+       spent by whichever comes first, so "at most one image per ask" is unchanged. */
     DCHECK(f->paint_owed,
-           "an image ask was discharged on a member that owed none — the slice tests the mark and clears the "
-           "one it tested, so this is a discharge reached by a route that never took the ask, and every later "
-           "pick of this member hands the thread back for a picture no host asked for");
+           "an image ask was discharged on a member that owed none — every discharge tests the mark and clears "
+           "the one it tested, so this is a discharge reached by a route that never took the ask, and every "
+           "later pick of this member hands the thread back for a picture no host asked for");
     f->paint_owed = 0;
 }
 

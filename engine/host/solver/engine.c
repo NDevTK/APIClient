@@ -976,6 +976,23 @@ static int g_root_n;
 static int g_root_n_held, g_root_n_awaited;
 static Flow *g_sess_cur;
 static int g_sess_live;
+/* THE FINISH `g_sess_cur` IS OWED, DEFERRED ACROSS ONE RETURN TO THE HOST — @PERWORLD, and it exists for
+   exactly one reason: a member's LAST moment is the only moment its world is complete, and that moment is
+   INSIDE flow_finish's caller rather than at a yield.
+   WHY A DEFERRAL RATHER THAN A DIFFERENT PLACE TO YIELD. flow_finish unapplies the COW delta and the DOM
+   delta (`cow_unapply`, `dom_unapply`) — that IS the finish — so after it there is no world left to render
+   and before it there is no way to hand the host a turn without leaving the finish undone. The two facts
+   cannot be reconciled inside one call, so the finish is SPLIT ACROSS the return: the slice yields with the
+   member standing and its deltas applied, the host renders, and the next entry into this function performs
+   the finish that was owed. Nothing else is deferred and nothing is skipped.
+   IT IS A FLAG AND NOT A SECOND `Flow *`, because the flow it names is already held in `g_sess_cur` and a
+   second pointer would be a second answer to "which member is the scheduler holding" — the shape this file
+   already refuses for the pick. The pair is asserted where it is consumed.
+   EVERY PATH THAT COULD REACH `engine_session_close` WITH ONE OUTSTANDING RUNS THROUGH THE CONSUMER FIRST,
+   which is why there is no second discharge site: the three calls to that function are the park at this
+   function's own entry and the two exits below its loop, and the consumer stands ABOVE all three. The one
+   state this cannot cover is a host that never steps again, and that host's session is torn down whole. */
+static int g_sess_finish_owed;
 
 /* THE URLS THE HOST OWES, newline-joined across every live flow, or "" — one register, the flows' own. The
    buffer is this function's and is valid until the next call. */
@@ -11590,6 +11607,30 @@ static int engine_sched_slice(void) {
     DCHECK(cur == NULL || flow_is_member(cur),
            "the flow this quantum resumes is no longer in the frontier — it was removed while the scheduler was "
            "returned to the host, so the resume is neither the same flow nor a byte-identical frontier");
+    /* THE FINISH THE PREVIOUS SLICE DEFERRED SO THE HOST COULD PHOTOGRAPH THIS MEMBER'S LAST MOMENT —
+       @PERWORLD; the whole argument is at `g_sess_finish_owed`. It stands ABOVE the park, above the pick and
+       above every `engine_session_close` in this function, which is what makes the deferral a split call
+       rather than a second teardown path: whatever this slice goes on to do, the member that answered
+       FLOW_STEP_DONE last time is finished FIRST and by the same two lines that would have finished it then.
+       THE MEMBER IS STILL SWITCHED IN, and that is the state the return left rather than something re-created
+       here — the host between the two does not switch flows (there is no ABI entry that does), so the delta
+       this unapplies is the delta the picture was taken of. */
+    if (g_sess_finish_owed) {
+        DCHECK(cur != NULL,
+               "a finish was deferred for a picture and the member it was deferred for is gone — the yield "
+               "hands the thread back with that flow standing and this is the one line that completes it, so "
+               "a NULL here is a session that lost its own cursor across the return and a flow whose COW and "
+               "DOM deltas are still applied to the shared baseline with nothing left to unapply them");
+        DCHECK(!flow_paint_owed(cur),
+               "a finish deferred for a picture belongs to a member that still owes one — the discharge and "
+               "the deferral are written at one line, so this is a mark laid down again while the thread was "
+               "with the host, which would photograph a world that has already ended");
+        g_sess_finish_owed = 0;
+        solve_flow_end(cur);
+        flow_finish(ctx, cur);
+        cur = NULL;
+        g_sess_cur = NULL;
+    }
     /* THE PARK IS TAKEN HERE — BEFORE the first pick, and that position is the mechanism rather than a
        convenience. Every flow's decision state has to be in its OWN blob for the walk to read it, and the one
        flow whose state is NOT is whichever the scheduler is holding: decide.c keeps the running flow's
@@ -11676,35 +11717,36 @@ static int engine_sched_slice(void) {
                total, not the last slice's. */
             g_switches++;
         }
-        /* THE IMAGE THIS MEMBER OWES THE HOST, TAKEN BEFORE IT STEPS — @PERWORLD, asked for by
-           engine_request_paint and discharged HERE because this is the one line in the engine where a member
-           is switched in, its COW and DOM deltas are applied, `flow_running()` names it, and it has not yet
-           executed an instruction. Everything above this point is the scheduler's own turn (the seeding, the
-           pick, the swap, solve_flow_begin) — the same boundary ENGINE_NO_STRAY is declared at just below —
-           so the world the host is about to render is this member's and nothing of this step is in it yet.
-           IT IS A YIELD AND NOT A HOOK, which is the whole of why the solver grows no painter. The host that
-           asked is the party that renders: it gets the thread back with this member standing and calls its own
-           `qjs_paint`, which is the entry that already performs a render and already names the world it
-           rendered (main.c's paint_world_name reads flow_running()). Nothing crosses this seam but the turn.
-           AT MOST ONE IMAGE IS UN-DRAINED BY CONSTRUCTION, because there is no image on this side of the seam
-           at all. The mark is cleared on the line the thread is handed over, so the member is stepped normally
-           at the next slice and no member can be handed over twice for one ask — which is what makes the ask
-           terminate on a frontier that keeps forking: a fork inherits no mark, so the extra returns this ask
-           costs are exactly the members alive when it was made.
-           IT CHANGES NO RANK AND TRUNCATES NOTHING. The pick has already chosen this member under the one WFQ
-           order; this line does not promote it, does not reorder the frontier and does not decide that any
-           work will not happen — §scheduler's razor is satisfied in its own terms, since the frontier the next
-           slice resumes on is byte-identical and `cur` is carried in the same static every other yield uses.
-           THE HOST'S RENDER BURNS THIS THREAD, AND THAT IS THE EXISTING MISATTRIBUTION RATHER THAN A NEW ONE.
-           A slice already returns to a host that routes records, provides replies and answers requests on this
-           same thread, and the next slice's `quantum_thread_us()` reading already carries all of it into the
-           aging charge of whichever member is stepped next. A page render is a LARGER instance of that, not a
-           different one — and it is paid only by a host that asked for pictures. */
-        if (flow_paint_owed(cur)) {
-            flow_clear_paint_owed(cur);
-            g_sess_cur = cur;
-            return ENGINE_STEP_YIELD;
-        }
+        /* THE IMAGE THIS MEMBER OWES THE HOST IS NOT TAKEN HERE, AND THIS PARAGRAPH IS WHY — @PERWORLD.
+           A discharge STOOD at this line, before the step, and its stated reason was that this is "the one
+           line in the engine where a member is switched in, its COW and DOM deltas are applied,
+           `flow_running()` names it, and it has not yet executed an instruction". Every clause of that is
+           TRUE, and the last one is the defect: a member's deltas at the OPENING of its FIRST turn are EMPTY,
+           so the picture taken here is the document as no flow has written it — which is BYTE-IDENTICAL to
+           the `baseline` image the same run already writes at `engine_session_close`, under a world's name.
+           MEASURED, on the shipped ABI through engine/trusted.mjs against a five-line document whose inline
+           script writes one element's textContent: the two PAM payloads md5 to one value, 445 ink pixels of
+           the PRE-SCRIPT text in both, on a run reporting `pageErrors: []` and one finished flow. Two files,
+           one fact — CLAUDE.md's plausible datum arriving as an artifact, since the second file reads as a
+           timeline's appearance and is a copy of the timeline nobody asked about.
+           IT DEFEATED THE ASK AT PRECISELY THE POPULATION THE ASK IS MADE OVER. `engine_request_paint`'s own
+           DCHECK requires a live frontier, so the earliest a host may ask is before its first `qjs_step` —
+           when the one member is the boot flow and has run nothing. flow.h's `paint_owed` says the mark
+           exists because "§Boot's `if (__FLAGS.admin)` sibling holds a DOM and a heap its primary never had";
+           a discharge before the member's first instruction photographs neither.
+           A MEMBER'S TURN HAS TWO SUCH MOMENTS AND THE CLOSING ONE IS THE WORLD. The opening and the closing
+           of a turn both satisfy "switched in with its deltas applied", and only the closing one can hold
+           anything the member did. So the discharge moved to where a turn CLOSES: the FLOW_STEP_DONE arm
+           below (deferred across the return, because flow_finish is what unapplies the deltas) and the
+           slice-end yields beside it (free, because the host is already being handed that exact turn).
+           WHAT THIS DOES NOT CHANGE is every other sentence the deleted paragraph made, which is why they are
+           restated here rather than lost. It is a YIELD AND NOT A HOOK — the host that asked is the party
+           that renders, and nothing crosses this seam but the turn. AT MOST ONE IMAGE IS UN-DRAINED, because
+           there is no image on this side of the seam at all and each mark is cleared by the one discharge
+           that spends it. It CHANGES NO RANK AND TRUNCATES NOTHING: no discharge promotes a member, reorders
+           the frontier, or decides that any work will not happen. And the host's render burns this thread,
+           which is the misattribution a slice already carries for every record it routes and reply it
+           provides, paid only by a host that asked for pictures. */
         {
             /* AGING IS CHARGED IN THREAD TIME, not in steps, and the difference is what a step MEANS.
                `flow_age_running(1)` was written when a step was a whole drain — a long, roughly comparable
@@ -12264,7 +12306,27 @@ static int engine_sched_slice(void) {
                 }
             }
 #endif
-            if (r == FLOW_STEP_DONE) { solve_flow_end(cur); flow_finish(ctx, cur); cur = NULL; }
+            if (r == FLOW_STEP_DONE) {
+                /* THE IMAGE THIS MEMBER OWES THE HOST, TAKEN AT THE ONE MOMENT ITS WORLD IS COMPLETE —
+                   @PERWORLD. This is the closing edge of the member's last turn: it has run everything it
+                   will ever run, `flow_running()` still names it, and its COW and DOM deltas are still
+                   applied, because the two lines below are what unapply them. A member ends exactly ONCE, so
+                   a mark spent here costs exactly one return and one picture per world — the same price the
+                   discharge above this loop used to charge for a picture of nothing.
+                   THE YIELD IS TAKEN BEFORE THE FINISH AND THE FINISH IS OWED ACROSS IT, which is the whole
+                   of `g_sess_finish_owed` and is not a second teardown path: the SAME two calls run, at this
+                   function's own entry, before anything else this session does. Yielding after them would
+                   render a document whose delta had just been reverted — the baseline again, one turn later.
+                   NOTHING IS DEFERRED FOR A MEMBER THAT OWES NO PICTURE, so a run made without
+                   `engine_request_paint` reaches none of this and finishes on the line it always did. */
+                if (flow_paint_owed(cur)) {
+                    flow_clear_paint_owed(cur);
+                    g_sess_finish_owed = 1;
+                    g_sess_cur = cur;
+                    return ENGINE_STEP_YIELD;
+                }
+                solve_flow_end(cur); flow_finish(ctx, cur); cur = NULL;
+            }
             else if (r == FLOW_STEP_OWED) {
                 /* THIS FLOW CAN MAKE NO PROGRESS UNTIL THE HOST ANSWERS, and the scheduler records that ON THE
                    FLOW. It is NOT skipped and NOT removed — it stays in the WFQ at its own weight with every
@@ -12343,26 +12405,42 @@ static int engine_sched_slice(void) {
            there the running flow parks, here the step returns. Asking it twice from one source is what makes a
            flow that parked on the quantum and a step that ends on it the same event rather than two policies
            that have to be kept in step. */
-        if (quantum_expired()) {
-            g_sess_cur = cur;
-            return ENGINE_STEP_YIELD;
-        }
-        /* VALUE: this engine's best is now worth less than the runner-up engine's, so the thread belongs there.
-           The flow keeps its snapshot and resumes where it stands — an order decision, never a drop. */
-        if (cur && flow_weight(cur) < g_yield_floor) {
-            g_sess_cur = cur;
-            return ENGINE_STEP_YIELD;
-        }
-        /* VALUE: a better DOCUMENT is waiting — same lossless yield. A FINITE weight only, and that is the
-           whole of the difference between the two answers this engine can give a host. engine_top_weight is
-           now the RUNNABLE pick, so -inf means this frontier can hand the thread to nobody at all — which is
-           not "the other document is worth more", it is the STALL, and the host has to be told which because
-           they ask for opposite things: a yield asks to be outranked, a stall asks to be PAID. The stall is one
-           iteration away (the pick at the top of the loop returns NULL and breaks to it), so the guard costs a
-           comparison and keeps the two verdicts from collapsing into the weaker one. */
+        /* VALUE, in the two shapes below it: this engine's best is now worth less than the runner-up ENGINE's,
+           or a better DOCUMENT is waiting. The flow keeps its snapshot and resumes where it stands — an order
+           decision, never a drop. The document arm takes a FINITE weight only, and that is the whole of the
+           difference between the two answers this engine can give a host. engine_top_weight is the RUNNABLE
+           pick, so -inf means this frontier can hand the thread to nobody at all — which is not "the other
+           document is worth more", it is the STALL, and the host has to be told which because they ask for
+           opposite things: a yield asks to be outranked, a stall asks to be PAID. The stall is one iteration
+           away (the pick at the top of the loop returns NULL and breaks to it), so the guard costs a
+           comparison and keeps the two verdicts from collapsing into the weaker one.
+           THE THREE ARE ONE DECISION READ INTO ONE LOCAL, AND THAT IS WHAT MAKES THE DISCHARGE BELOW SOUND
+           RATHER THAN A SECOND COPY OF THEM. They used to be three `if`s with three returns; a picture owed at
+           a slice boundary has to be spent on exactly the turns that RETURN, and a second spelling of "does
+           this turn return" beside the first is two right answers to one question, which is the shape that
+           drifts the day a fourth yield is added. One evaluation, one answer, both consumers. `engine_top_weight`
+           is also asked exactly once here, where the old shape would have asked it twice. */
         {
-            double top = engine_top_weight();
-            if (top > -1.0 / 0.0 && top < g_yield_floor) {
+            int yielding = 0;
+
+            if (quantum_expired()) yielding = 1;
+            else if (cur && flow_weight(cur) < g_yield_floor) yielding = 1;
+            else {
+                double top = engine_top_weight();
+                if (top > -1.0 / 0.0 && top < g_yield_floor) yielding = 1;
+            }
+            /* AND THE OTHER CLOSING EDGE OF A TURN, DISCHARGED WITHOUT BUYING A RETURN — @PERWORLD. A yield
+               hands the host this exact member, standing, with its COW and DOM deltas applied and a step of
+               real work behind it: that IS the turn a picture is owed of, so a member whose mark is still up
+               when one fires has been paid, and clearing it is the discharge rather than a shortcut past one.
+               No extra return is taken because the return is already happening.
+               IT IS WHAT KEEPS A MEMBER THAT NEVER FINISHES FROM NEVER BEING PHOTOGRAPHED, which is the one
+               thing moving the discharge off the pre-step line could otherwise have cost: a flow that loops
+               for the rest of the session reaches the DONE arm never and reaches a slice boundary constantly.
+               The guard on `cur` is the same one the weight arm above carries — a slice can reach this line
+               with no member standing at all. */
+            if (yielding) {
+                if (cur != NULL && flow_paint_owed(cur)) flow_clear_paint_owed(cur);
                 g_sess_cur = cur;
                 return ENGINE_STEP_YIELD;
             }
