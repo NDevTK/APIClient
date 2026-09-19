@@ -590,6 +590,32 @@ static bool bp_step_7_2_1(BpState *st, lxb_dom_element_t *parent, lxb_dom_node_t
         if (child->type == LXB_DOM_NODE_TYPE_ELEMENT) {
             lxb_dom_element_t *box = lxb_dom_interface_element(child);
 
+            /* A CHILD THAT CONTRIBUTES NO BOX IS NOT A MEMBER OF THIS LINE AND IS NOT ASKED ANYTHING ELSE.
+               The paragraph above says every element child is descended into and only a non-atomic inline box
+               gets marks, and those two rules are both about a child that HAS a box — the question of whether
+               there is one at all was never asked here, so the classification below was put to elements CSS 2
+               §9.2 generates nothing for. `paint_order_inline_kind` answers it through CSS 2.1 §9.9.1's
+               partition, and that partition is stated over BOXES: core/paint/stacking_order.c aborts by name
+               for an element that generates none ("the seven layers are a partition of a stacking context's
+               BOXES, so there is no member here to place"), which is the correct crash asked the wrong
+               question. MEASURED on a frozen build: `<body>hello<script>…</script></body>` — an ordinary
+               block container with inline content and a `<script>` element child — aborted at that DCHECK,
+               with the `<script>` named as the subject, before a single mark was laid.
+               IT ROUTES TO core/layout/block_flow.h RATHER THAN ASKING `display` HERE, which is that entry's
+               own contract: "This is those three questions' ONE answer for one child, and every walk over a
+               block container's children needs it before it can do anything else". A second reading of
+               css-display-3 §2.5 in this file would be a third copy of a predicate core/paint/document_paint.h
+               already records as having no public home yet, and it would go on to disagree with the one the
+               glyph fill uses.
+               `BLOCK_FLOW_CHILD_NO_BOX` IS EXACTLY WHAT THE GLYPH FILL ALREADY EXCLUDED, which is what keeps
+               `bp_context_step_7_2_1`'s `cursor == n` assert true rather than merely unbroken by luck. That
+               kind folds CSS 2 §9.2's box generation together with §9.3.1's out-of-flow, and
+               core/layout/line_box.c's own child walk — which runs FIRST, at the `line_box_glyphs` call
+               above this walk — returns for `position: absolute` and `position: fixed` and returns for
+               `display: none`, so it placed no character for any child this test now skips. §9.5's FLOAT is
+               deliberately not folded into that kind and does not need to be: line_box.c aborts on one before
+               any cursor exists. So the set skipped here is the set that contributed nothing to `g`. */
+            if (block_flow_child_kind(parent, child) == BLOCK_FLOW_CHILD_NO_BOX) continue;
             if (paint_order_inline_kind(box) == PAINT_INLINE_NON_ATOMIC && !bp_inline_box_marks(st, box))
                 return false;
             /* ITEM 4's THIRD ARM. `PAINT_INLINE_ATOMIC` is item 4's second AND third arms together —
