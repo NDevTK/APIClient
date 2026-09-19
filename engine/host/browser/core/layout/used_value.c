@@ -416,7 +416,37 @@ static UvBox uv_box_kind(lxb_dom_element_t *el)
 static bool uv_margin_reads_width(UvBox box)
 {
     return box != UV_BOX_INLINE && box != UV_BOX_FLOAT && box != UV_BOX_INLINE_BLOCK &&
-           box != UV_BOX_INLINE_FLEX_GRID;
+           box != UV_BOX_INLINE_FLEX_GRID && box != UV_BOX_ITEM;
+}
+
+/* TWO QUESTIONS OVER ONE FACT, AND `UV_BOX_ITEM` IS THE BOX WHERE THEY COME APART — which is why this is a
+   second predicate over the same `box` rather than a second list. They are:
+     (1) does resolving this margin need a used WIDTH?           `uv_margin_reads_width`
+     (2) does this box's section state a horizontal `auto` margin as a FLAT 0?   this one
+   For §10.3.1's inline box, §10.3.5's float and inline-block and §10.3.9's inline-level flex or grid
+   container the answers coincide — no equation to read a width from IS a section that states the margin
+   outright — and one predicate answered both for as long as those four were the whole population.
+   A FLEX ITEM ANSWERS `no` TO BOTH, and no single bit can say that. css-flexbox-1 §9.5 "Main-Axis
+   Alignment" does not state a flat 0: "If the remaining free space is positive and at least one main-axis
+   margin on this line is auto, distribute the free space equally among these margins" — so (2) is `false`
+   and the §9.5 crash below must stay reachable. And it needs no width: a non-`auto` margin is its declared
+   length, and a percentage one already resolves against `used_value_containing_block_width` rather than
+   against the pass's `size_len` — so (1) is `false` too.
+   WHAT THE ONE BIT COST WAS NOT A WRONG ANSWER BUT A CRASH, and not this engine's kind: with `UV_BOX_ITEM`
+   absent from (1), a flex item's margin resolved a width, `uv_flex_item_main_size` asked
+   `flex_line_used_main_size`, `fl_collect` reached `fl_fill` and `fl_main_margins` asked for the same margin
+   again — an eight-frame cycle with no assert anywhere on it, SIGSEGV rather than `@WHY`. MEASURED at
+   `112d7c03`: 1708 frames over 239 turns on a two-item witness declaring NO margins at all (the width is
+   resolved unconditionally, so a `0` margin cycles exactly as an `auto` one does), and 1709 frames over 238
+   turns on `helixapp.com`, a real site. Deterministic, 5 of 5 runs across two artifacts.
+   ADDING `UV_BOX_ITEM` TO (1) ALONE WOULD HAVE BEEN WRONG, WHICH IS WHY (2) EXISTS: the early return below
+   is spelled over (1)'s negation, so a one-line widening would have routed a flex item's `auto` margin to
+   §10.3.1/§10.3.5/§10.3.9's flat 0 — a plausible datum from three sections that do not govern that box —
+   and SILENTLY DELETED the §9.5 crash that names what to build. */
+static bool uv_margin_is_flat_zero(UvBox box)
+{
+    return box == UV_BOX_INLINE || box == UV_BOX_FLOAT || box == UV_BOX_INLINE_BLOCK ||
+           box == UV_BOX_INLINE_FLEX_GRID;
 }
 
 /* `auto` is the answer three of §10.3's rules and two of §10.6's branch on, and it is also what CSS 2.1
@@ -2224,11 +2254,14 @@ static CssPx uv_margin(lxb_dom_element_t *el, const char *name, const char *oppo
        §9.2 sends an inline-level flex container to its formatting context's rules, so §10.3.9 IS their margin
        section — and this is the arm where that delegation pays, because it answers `margin-left: auto` on an
        `inline-flex` with the 0 the spec states while the box's WIDTH is still an unbuilt intrinsic size.
-       IT IS `uv_margin_reads_width`'S OWN LIST, negated, and it is spelled that way rather than repeated
-       because it IS the same question: a section that states the margin outright is exactly a section with no
-       equation to read a width from, so a box type added to one list and not the other would take this arm's
-       0 while the caller resolved a width for it, or the reverse. */
-    if (!uv_margin_reads_width(box)) return css_px(0.0);
+       IT USED TO BE `uv_margin_reads_width`'S OWN LIST NEGATED, on the argument that it IS the same question
+       — a section that states the margin outright is exactly a section with no equation to read a width from
+       — and that a box type added to one list and not the other would take this arm's 0 while the caller
+       resolved a width for it, or the reverse. THAT ARGUMENT HELD FOR FOUR BOX TYPES AND A FIFTH BROKE IT:
+       `UV_BOX_ITEM` reads no width AND is not stated as a flat 0, so the two questions want opposite answers
+       and the negation would answer this arm with a 0 css-flexbox-1 §9.5 does not state. See
+       `uv_margin_is_flat_zero` for both questions and for the crash the one-bit spelling produced. */
+    if (uv_margin_is_flat_zero(box)) return css_px(0.0);
     if (box == UV_BOX_BLOCK_FLOW) {
         /* Rule 5's condition is asked of the PASS's width, so `margin: 0 auto` under a `max-width` that bound
            reaches rules 4 and 6 and centres the box — with the raw computed `auto` it would take rule 5 and
