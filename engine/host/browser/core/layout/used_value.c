@@ -4089,10 +4089,39 @@ typedef struct {
 
 static UvSized uv_sized(lxb_dom_element_t *el, UvBox box, bool vertical)
 {
+#if APICLIENT_DEV
+    /* The chain node is on THIS frame, like `used_value_px`'s — layout_question.h says why the chain is
+       intrusive and why a heap mirror of these frames would be the worse of two copies. */
+    LayoutQuestionOpen open;
+#endif
     UvSized r;
     UvLimits lim;
 
+    /* THE SINGLE EXIT BELOW IS WHAT MAKES THE CLOSE UNMISSABLE, and it is a `goto` rather than a forwarder
+       ON PURPOSE. §10.4's flex return and its table return are both early, so the alternative shapes were a
+       close at each of three returns — three chances to drop one, caught only by `LAYOUT_QUESTION_CLOSE`'s
+       LIFO assert after the fact — or the split this file already uses at `used_value_px`/`uv_px_ask`, a
+       guarding forwarder over a renamed body. THE FORWARDER IS THE ONE TO REFUSE HERE: it costs a C FRAME
+       PER ASK at -O0, and the number this component exists to publish is C FRAMES PER LEVEL OF NESTING, so
+       the instrument would move the census it is the instrument for. A label costs none. */
     r.len = css_computed_length(el, vertical ? "height" : "width");
+    LAYOUT_QUESTION_OPEN(&open,
+                         layout_question(LAYOUT_Q_UV_SIZED, el, vertical ? "height" : "width",
+                                         (unsigned) box + 1u),
+                         "THE REPEAT IS THIS BOX'S OWN FINAL PASS STANDING AS ITS OWN INPUT, and the two "
+                         "shapes that reach it WITHOUT crossing `used_value_px` are the two this kind exists "
+                         "to name: css-flexbox-1 §9.4 \"Cross Size Determination\"' step 7 re-entering "
+                         "`used_value_block_level_content_px` for the item it is already laying out, and "
+                         "CSS 2.1 §10.3.7's solve re-entering `used_value_abs_offset_px` for the box whose "
+                         "offset it is already solving. FIX IT AT THE RULE THAT RE-ENTERS: read the chain for "
+                         "the first node whose operand the frame below ALREADY HOLDS and pass it down rather "
+                         "than re-deriving it, which is what `used_value_block_level_content_px` does one "
+                         "line later with css-sizing-3 §3.3's conversion — spelled out in its own words "
+                         "rather than taken from `uv_content_size`, because that helper re-enters. AND A "
+                         "THIRD SHAPE CROSSES `used_value_px` AND IS STILL INVISIBLE TO ITS KIND: a `width` "
+                         "ask and a `margin-left` ask are two DIFFERENT used-value questions that resolve to "
+                         "this ONE size question, so the pair repeats here and nowhere else — which is why "
+                         "this kind is not redundant with the one above it");
     /* STEP 1 — the TENTATIVE used value, "calculated WITHOUT 'min-width' and 'max-width'". It runs before the
        limits are even read, which is also what sends the box types §10 does not own to their own section — a
        flex or grid item to its crash, and a table box to CSS 2.1 §17.5.2 Table width algorithms: the
@@ -4113,7 +4142,7 @@ static UvSized uv_sized(lxb_dom_element_t *el, UvBox box, bool vertical)
         if (uv_flex_item_main_size(el, box, vertical, &flexed)) {
             r.len = uv_len_px(flexed);
             r.used = flexed;
-            return r;
+            goto done;
         }
     }
     r.used = uv_pass_size(el, r.len, box, vertical);
@@ -4123,7 +4152,7 @@ static UvSized uv_sized(lxb_dom_element_t *el, UvBox box, bool vertical)
        tentative value IS the used value here, and `uv_limits`' assert that no table box ever reaches it stays
        true — which is what it is for. The comment above used to say the crashes were what kept a table out of
        that assert; §17.5.2 now ANSWERS for a table's width, so the return is what keeps it out. */
-    if (box == UV_BOX_TABLE) return r;
+    if (box == UV_BOX_TABLE) goto done;
     lim = uv_limits(el, box, vertical);
     uv_require_no_ratio_table(el, &lim);
     /* STEP 2 — "if the tentative used width is greater than 'max-width' … using the computed value of
@@ -4144,6 +4173,8 @@ static UvSized uv_sized(lxb_dom_element_t *el, UvBox box, bool vertical)
            "configuration the OTHER algorithm normalises away with \"take the max-width and max-height as "
            "max(min, max)\". A used value below the floor here means the two steps ran in the wrong order or "
            "step 3's own re-run did not take");
+done:
+    LAYOUT_QUESTION_CLOSE(&open);
     return r;
 }
 
@@ -4345,42 +4376,62 @@ static CssPx uv_px_ask(lxb_dom_element_t *el, const char *name)
        N =  8 -> 64 layout frames on the stack, 11 of them this entry (17.2%)
        N = 12 -> 88 layout frames on the stack, 15 of them this entry (17.0%)
 
-   which is 6N + 16 frames of which N + 3 are recorded, so the share is a CONSTANT sixth at every depth rather
-   than something that improves on a real page. THE FIRST COLUMN IS THE LARGER FINDING AND IT IS THE REASON
+   which is 6N + 16 frames of which N + 3 are recorded at THIS entry, so this entry's share is a CONSTANT
+   sixth at every depth rather than something that improves on a real page. `uv_sized` is a second of the six
+   and is recorded too now, which is arithmetic over the SAME table and not a second measurement — the census
+   has not been re-run, and a reader who wants it re-run needs gdb and a native build.
+   THE FIRST COLUMN IS THE LARGER FINDING AND IT IS THE REASON
    THIS COMPONENT EXISTS: laying out a document costs SIX C FRAMES PER LEVEL OF NESTING and nothing bounds the
    nesting, so the C stack is a function of the document — which is not a thing a browser does, and is the
    SIGSEGV-with-no-`@WHY` above arriving by DEPTH rather than by repetition. Re-derive both columns rather than
    quoting them: gdb, `break used_value_px` with a `bt` command, and count the frames whose names belong to
    core/layout.
 
-   NAMED RESIDUAL. WHAT IS NOT COVERED: every cycle that closes without crossing this entry, which is not the
-   tail of the problem but most of it — cut this one function out of the cluster's SCC and a component of SIXTY
-   functions is STILL mutually recursive, `block_flow.c`'s box walk, `line_box.c`'s extents, `flow_position.c`'s
-   origins, `table_height.c`'s rows, `flex_cross_size.c`'s hypothetical crosses and this file's own `uv_sized`
-   and `uv_abs_solve` among them. So the chain records the ASKS and not the LAYOUTS: between two consecutive
-   nodes of it five C frames come and go with nothing anywhere naming them, and C-stack exhaustion by DEPTH
-   rather than by repetition is not a repeated pair and does not fire here.
-   WHAT THE NEXT DIFF BUILDS: a second KIND at `uv_sized`, whose question is (element, box type, axis), the
-   axis being a `bool` and therefore the first parameter that has to be encoded ONE-BASED for the reason
-   layout_question.h states of `code` — a `vertical` of false is a real answer and a `code` of 0 is the
-   absence of one, and a kind that conflates them renders two different questions as one chain node while the
-   cycle test correctly keeps them apart. It is the
-   best second cut there is, taking that residual from SIXTY mutually recursive functions to TWENTY-ONE, and
-   the smallest surface on which a second kind's contract can be exercised at all. The static cut and the
-   frame census agree on it independently: `uv_sized` is one of the five unrecorded frames per level in the
-   census above, and it is the second cut the SCC names. Read the arm it would assert over before building
-   it — §10.4's three steps call `uv_pass_size` for ONE (element, box, axis) up to three times, SEQUENTIALLY,
-   so those are not re-entrant and the pair is still a defect; a reader who finds otherwise has found that
-   this kind must not be declared, which is the answer the test in layout_question.h asks for.
-   AND NOT `used_value_content_px` OR `used_value_containing_block_width`, WHICH THE COMMIT THAT WROTE THIS
-   RESIDUAL NAMED AND WHICH A DERIVATION REFUTES: neither is in that sixty-function residual, so every cycle
-   through either of them ALREADY crosses this entry and a chain at either would catch nothing this one does
-   not. That clause was a claim about this tree written by someone who knew exactly what was missing and was
-   guessing at what fills it, which is the half of a residual a reader cannot check by fetching anything —
-   re-derive the cut before building to this one.
+   NAMED RESIDUAL. WHAT IS NOT COVERED: every cycle that closes without crossing THIS entry OR `uv_sized`,
+   which after the second kind landed is TWENTY-ONE mutually recursive functions rather than sixty — eight of
+   them core/layout/block_flow.c's box walk, four each of core/layout/line_box.c's extents and
+   core/layout/flex_line.c's lines, two of core/layout/flex_cross_size.c's hypothetical crosses, and this
+   file's `uv_limit`, `uv_limits` and `used_value_border_edge_from_content_px`. So the chain still records the
+   ASKS and not the LAYOUTS: between two consecutive nodes of it C frames come and go with nothing anywhere
+   naming them, and C-stack exhaustion by DEPTH rather than by repetition is not a repeated pair and does not
+   fire here.
+   THE SECOND KIND IS BUILT AND WHAT ASKED FOR IT WAS WRONG IN TWO PLACES, recorded here because a residual's
+   next-diff clause is the half a reader cannot check by fetching anything and is read exactly once, by
+   someone who has already decided to do the work. (1) It called this cut `the best second cut there is`, and the
+   cut ranking gives a THREE-WAY TIE at twenty-one — `fx_hypothetical_cross` and
+   `used_value_block_level_content_px` do exactly as well, and the reason to prefer `uv_sized` is not the
+   number but that it is the one of the three whose question a CALLER already holds in its own argument
+   registers. (2) Its encoding half named the AXIS as the operand needing a one-based `code` because it is a
+   `bool`; the reason is right, the operand is not, and layout_question.h's own paragraph on this kind states
+   why. NEITHER ERROR WAS ABOUT THE SPEC AND BOTH WERE ABOUT THIS TREE, which is the split to expect.
+   WHAT WAS CHECKED BEFORE DECLARING IT, because the clause asked for a REFUSAL if the arm turned out
+   re-entrant and a reader repeating that check should not have to re-find the answer: §10.4's three steps
+   call `uv_pass_size` for one (element, box, axis) up to three times SEQUENTIALLY — each assignment returns
+   before the next runs — so they close no cycle at this kind. The two sites that spell
+   `uv_abs_solve(el, uv_sized(...).len, vertical)` are safe for a second reason worth keeping: the argument is
+   evaluated first, so the `uv_sized` node is CLOSED before `uv_abs_solve` opens. And of this kind's four
+   asking sites, three pass the element's own `uv_box_kind` while `used_value_block_level_content_px` passes
+   `UV_BOX_BLOCK_FLOW` for a box it has just asserted is a `UV_BOX_ITEM` — which is why the box type is a
+   PARAMETER of the question and not derived from the element.
+   HOW THE NUMBERS ARE RE-DERIVED, as a method rather than a figure: a call-graph SCC over core/layout and
+   core/css, cut one node at a time, ranking each cut by the largest SCC that remains. A SOURCE-TEXT extractor
+   answers 133 for the whole cluster where the census that first reported it answered 132, and that one-node
+   disagreement is the instrument rather than the tree — a text extractor cannot see an edge through a
+   function pointer (so its cycle set is a FLOOR) and can invent one from a name that is not a call (so its
+   node set is not a ceiling). engine/check_recursion.mjs's LLVM IR is the exact edge set for direct calls and
+   needs a compile; the cut ranking is not in it. Every figure in this banner is quoted with that
+   caveat or not quoted.
+   WHAT THE NEXT DIFF BUILDS: a THIRD kind at `bf_layout`, CSS 2.1 §9.4.1 "Block formatting contexts"' walk,
+   which the same ranking makes the best third cut by a clear margin — twenty-one to SIX, against seven for
+   `bf_box` and nine for the next three. It is also already a probe in engine/layout_cost.mjs, so its call
+   count is a number this tree can already produce. THE ARM CHECK IS OWED FIRST AND IS NOT THE SAME ONE:
+   a BFC walk descending into a NESTED formatting context is a re-entry with a DIFFERENT element and is
+   legitimate, so the question is whether one element's walk can be open twice — read what `bf_box` hands back
+   to the walk and whether any pass re-enters the walk for the box it is already laying out. A reader who
+   finds that it can has found that this kind must not be declared, and that answer belongs at the site.
    HOW ITS ABSENCE WOULD SHOW: a terminal SIGSEGV on a real document with no `@WHY` line anywhere in the run
-   and a backtrace that is one short frame cycle repeated to the guard page, whose repeated frames do not
-   include this function. ----------------------------------------------------------------------------- */
+   and a backtrace that is one short frame cycle repeated to the guard page, whose repeated frames include
+   neither this function nor `uv_sized`. ---------------------------------------------------------------- */
 CssPx used_value_px(lxb_dom_element_t *el, const char *name)
 {
 #if APICLIENT_DEV

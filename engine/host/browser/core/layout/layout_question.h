@@ -67,7 +67,31 @@
    declaration with no consumer, and a kind whose re-entry is LEGITIMATE turns a working engine into an abort.
    The test is the one the used-value kind's own site states — arrival must be an ASK that is its own input. */
 #define LAYOUT_QUESTIONS(X) \
-    X(LAYOUT_Q_USED_VALUE_PX, "CSS 2.1 §6.1.3 \"Used values\"' used box-model length")
+    X(LAYOUT_Q_USED_VALUE_PX, "CSS 2.1 §6.1.3 \"Used values\"' used box-model length") \
+    X(LAYOUT_Q_UV_SIZED, \
+      "CSS 2.1 §10.4 \"Minimum and maximum widths: 'min-width' and 'max-width'\"'/§10.7's final pass")
+
+/* THE SECOND KIND'S PARAMETER IS TWO VALUES AND THE FIELD THAT HOLDS A NUMBER IS ONE, which is the whole of
+   what its site has to get right and is not what the clause that asked for this kind said it was.
+   `uv_sized`'s question is (element, BOX TYPE, AXIS): the axis rides `name` as the property that names it —
+   `width` or `height`, which is the value that function reads off the element on its own first line, so it
+   is that function's vocabulary rather than an invention — and the box type rides `code` ONE-BASED. THE
+   CLAUSE THAT ASKED FOR THIS KIND IS WRONG ON BOTH HALVES OF THE ENCODING AND ITS REASON IS RIGHT, which is
+   the combination a reader inherits without noticing. It named the AXIS as `the first parameter that has to
+   be encoded ONE-BASED` because it is a `bool`. The reason — a legitimate zero is indistinguishable from an
+   absent parameter in a field the equality reads raw — is exactly the paragraph above and is correct. What
+   it got wrong is WHICH operand and HOW MANY: `UV_BOX_INLINE` is 0, so the box type has the identical
+   defect and goes unmentioned, and a struct with ONE numeric field cannot hold two numeric parameters at
+   all, which the clause never reaches. Whoever builds a third kind over two numeric operands meets the same
+   wall: one of them becomes a STRING, or they are packed and the pack is one-based as a pair. WHAT `#N`
+   MEANS TO A READER: `UvBox + 1`, and it is worth reading precisely at ONE node — the one where it
+   disagrees with the box `box_subject` names. Three of this kind's four asking sites pass the element's own
+   `uv_box_kind`, so `#N` there says nothing the subject does not; the fourth is
+   css-flexbox-1 §9.4 "Cross Size Determination"' step 7, which lays a FLEX ITEM out "as if it were an
+   in-flow block-level box" and therefore passes a box type the element does not have. That site is why the
+   box type is IN the question rather than derived from the element inside this component: derive it and
+   step 7's ask and the item's own ask become one question, and the engine aborts on a document that is
+   doing nothing wrong. */
 
 #define LAYOUT_QUESTION_ENUM(id, label) id,
 #define LAYOUT_QUESTION_LABEL(id, label) label,
