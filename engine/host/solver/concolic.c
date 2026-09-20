@@ -4641,11 +4641,28 @@ static int concolic_exotic_own_names(JSContext *ctx, JSPropertyEnum **ptab, uint
                        "without asking it. The fork is NOT missing and a second one must not be built: "
                        "step_ownkeys_run asks JSConcolicHooks.own_keys_pred, forks the boolean through the "
                        "step driver, runs the unknown-member chain on the true arm and only then issues "
-                       "request 11. ROUTE THE CONSUMER ONTO IT. step_request_check names the two routes to "
-                       "GP_OWNKEYS that do not pass through that wrapper and are therefore invisible to its "
-                       "own assert — PerformPromiseAllKeyed step 1, which asks under its own step code, and "
-                       "§10.5.11's invariant walk, which reads the TARGET's keys from the driver's own "
-                       "continuation — so read the frame list for those two before looking anywhere else",
+                       "request 11. ROUTE THE CONSUMER ONTO IT — AND DERIVE WHICH ONE RATHER THAN READING A "
+                       "LIST, because an earlier form of this message listed the two routes step_request_check "
+                       "names and was short by a whole SHAPE. THE PROPERTY, WHICH DOES NOT ROT AS THE ENGINE "
+                       "GAINS CONSUMERS: the seam asks its question about the object THE CONSUMER NAMED, and "
+                       "the keyed entry walks `fwd ? gp_fwd : gp_obj` — so this line is reached with no arm "
+                       "exactly when the object FINALLY WALKED is not the object a step_ownkeys_run call was "
+                       "handed. That has two shapes and a list of REQUESTERS can only express one. (1) The "
+                       "request was issued elsewhere, so step_request_check never judged it: "
+                       "PerformPromiseAllKeyed step 1 asks under its own step code, and the proxy invariant "
+                       "driver asks from JS_CallInternal under no step code at all. (2) The request PASSED "
+                       "step_request_check and its OPERAND was replaced afterwards — which no strengthening "
+                       "of that assert can ever reach, because the request did come from this wrapper and "
+                       "only the object changed. ECMAScript §10.5.11 \"[[OwnPropertyKeys]] ( )\" holds one "
+                       "of each, and only its step 11, \"Let targetKeys be ? target.[[OwnPropertyKeys]]()\", "
+                       "was named here. ITS STEP 6 IS THE OTHER SHAPE AND IS WHY THIS CRASH MEETS ORDINARY "
+                       "PAGES: \"If trap is undefined, then Return ? target.[[OwnPropertyKeys]]()\" is "
+                       "performed INLINE as gp_fwd over a trapless proxy's target, so a page that wraps an "
+                       "unknown in `new Proxy(x, {})` and enumerates it lands here with the seam having "
+                       "asked its question about the PROXY. SO RUN BOTH GREPS AND NEVER "
+                       "ONE: `git grep -n 'gp_op = GP_OWNKEYS' engine/qjs/quickjs.c` names every REQUESTER, "
+                       "`git grep -n 'gp_fwd =' engine/qjs/quickjs.c` names every SUBSTITUTION, and the "
+                       "requester grep alone is what missed shape (2)",
                        c->ident);
             }
         }

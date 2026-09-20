@@ -28901,10 +28901,23 @@ static void step_request_check(JSContext *ctx, const JSStepHdr *h, int st, bool 
        and nowhere else, and the way to make that un-forgettable is to make a request that did not come through
        it crash HERE rather than be served. `keys_phase` is that wrapper's own cursor and nothing else writes
        it, so GET_PH_GOT is exactly the signature of a request it issued.
-       WHAT THIS DOES NOT COVER, because a partial guarantee stated as a total one is worse than none: step code
-       11 is not the only route to GP_OWNKEYS. PerformPromiseAllKeyed's step 1 asks under its own code, and
-       10.5.11's invariant walk reads the TARGET's keys from the driver's own continuation; neither passes
-       through a step machine's request at all, so neither is visible from here. */
+       WHAT THIS DOES NOT COVER, because a partial guarantee stated as a total one is worse than none. THIS
+       ASSERT IS ABOUT THE REQUESTER, AND AN EXOTIC [[OwnPropertyKeys]] HOOK IS REACHED BY THE OPERAND — which
+       the keyed entry walks as `fwd ? gp_fwd : gp_obj` — so a walk whose question nobody asked is one whose
+       operand is not the object the step_ownkeys_run call was handed, and that has TWO SHAPES.
+       (1) ISSUED ELSEWHERE, so this assert never judged it at all. PerformPromiseAllKeyed's step 1 asks under
+       its own step code; and ECMAScript §10.5.11 "[[OwnPropertyKeys]] ( )" step 11,
+       "Let targetKeys be ? target.[[OwnPropertyKeys]]()", is asked by the proxy invariant driver straight
+       from JS_CallInternal under no step code at all.
+       (2) SUBSTITUTED AFTER THIS ASSERT PASSED, which no strengthening of the condition can ever reach: the
+       request DID come from step_ownkeys_run and only the OBJECT changed afterwards. §10.5.11 step 6,
+       "If trap is undefined, then Return ? target.[[OwnPropertyKeys]]()", is performed INLINE as gp_fwd over
+       a trapless proxy's target — so `Object.keys(new Proxy(x, {}))` walks x with the seam having asked its
+       question about the PROXY, and a page reaches that with no help from this engine.
+       An earlier form of this paragraph listed shape (1) alone, which is why the population is DERIVED rather
+       than enumerated here: `git grep -n 'gp_op = GP_OWNKEYS' engine/qjs/quickjs.c` names every writer of
+       gp_obj, `git grep -n 'gp_fwd =' engine/qjs/quickjs.c` names every writer of gp_fwd, and every one of
+       those but step code 11's own reaches an exotic hook with nothing having asked it anything. */
     DCHECK(st != 11 || h->keys_phase == GET_PH_GOT,
            "a step machine issued [[OwnPropertyKeys]] (step code 11) without going through step_ownkeys_run — "
            "that wrapper is the ONE issuer of this request, so a second one bypasses everything the engine "
