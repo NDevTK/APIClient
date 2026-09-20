@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html><head><title>themepin pinned</title>
+<style>
+html { background-color: #00ff00; }
+html[data-theme=dark]  { background-color: #101011; }
+html[data-theme=light] { background-color: #f9fafb; }
+#sw { width: 400px; height: 200px; background-color: #00ff00; }
+html[data-theme=dark]  #sw { background-color: #101011; }
+html[data-theme=light] #sw { background-color: #f9fafb; }
+</style></head>
+<body><div id="sw">themepin pinned</div>
+<script>
+/* THE SUBJECT. Identical to its unpinned sibling except for the two equalities below, and they are
+   written in THE ORDER A REAL PAGE WRITES THEM — the attribute is set from the unknown FIRST and the
+   equality that pins it comes AFTER, which is tldraw's own order in `theme-init.js` and is the order
+   that makes the pin a fact the cascade must go back and read rather than one it had in hand.
+   Each equality PINS the value on the arm that takes it, so the frontier holds a dark-pinned world
+   and a light-pinned world; a cascade that reads the pin decides `[data-theme=dark]` TRUE in the
+   first and FALSE in the second, and the two worlds paint #101011 against #f9fafb across the whole
+   viewport. TWO RASTERS THAT DIFFER IS THE RESULT; one raster is the pin not being read. */
+var stored = localStorage.getItem('themepin_session');
+if (stored) {
+  var parsed = JSON.parse(stored);
+  if (parsed && parsed.theme) {
+    document.documentElement.setAttribute('data-theme', parsed.theme);
+    if (parsed.theme === 'dark') { window.__themepin = 1; }
+    else if (parsed.theme === 'light') { window.__themepin = 2; }
+  }
+}
+</script>
+</body></html>

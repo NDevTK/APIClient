@@ -42,6 +42,28 @@ testing/fixtures/*
 # else names. Its `color` control is declared in the same attribute as its subject, so a run of it is only
 # readable against the revision it was written for.
 !testing/fixtures/tf_decl_probe.html
+# THE FIVE-FIXTURE PARTITION FOR AN ATTRIBUTE SELECTOR DECIDED FROM AN UNKNOWN, re-included by name
+# because the five are ONE EXPERIMENT and each differs from its neighbours on ONE axis: whether the value
+# behind `[data-theme=...]` is a LITERAL, an UNKNOWN NOBODY PINNED, or an UNKNOWN THE FLOW WENT ON TO PIN —
+# and, among the pinned ones, whether the page READ THE PROPERTY TWICE or once into a shared variable, and
+# whether the equality that pins runs BEFORE or AFTER the store. A partition is worth nothing unless every
+# arm is in the revision the others were measured at, because the whole reading is a COMPARISON between them:
+# a run of one arm alone answers nothing, and an arm that is not in the clone cannot be served by a frozen
+# gate, which is the only place these numbers are quotable.
+# `themepin_literal` is the POSITIVE CONTROL and is the load-bearing one: it contains no unknown at all, so
+# a run of it that paints #00ff00 rather than #101011 says the cascade does not re-run over an attribute
+# selector after `setAttribute` AT ALL — and every zero the other four report is then a statement about that
+# and not about a pin. `themepin_unpinned` is the second control, and the one that arms the SEAM: nothing
+# ever pins its value, so the abort must SPEAK there. CLAUDE.md
+# §A-CONTROL-ARMS-ONLY-ON-A-SITE-THE-INSTRUMENT-CAN-JUDGE: a probe that has never made its check speak has
+# calibrated nothing, and the failure direction is the expensive one, since this file's prescribed response
+# to a real blind spot is to go and build an instrument for it.
+# MEASURED at ed034f57, five drives of the served fixtures through the shipped ABI, so the two controls are
+# not a hope: `literal` paints TWO worlds whose centre pixels are `00 ff 00` and `10 10 11`, and `unpinned`
+# fires the seam 1 with its negative control at 0. The three pinned arms are BYTE-IDENTICAL to each other —
+# same two worlds, same seam count, same terminal — which is what retires the read-count and the ordering as
+# explanations and leaves the pin read itself as the subject.
+!testing/fixtures/themepin_*.html
 # THE `webpackJsonp` PRESENT/ABSENT PAIR AND THE FOUR BODIES IT LOADS. THREE TRACKED FILES QUOTE NUMBERS
 # MEASURED ON THIS DOCUMENT AND NAME IT BY PATH, and the bytes were in no revision: engine/host/solver/flow.c's
 # argument for why `rankChanges` is not the arrival count (34315 against 34309 at the last of twelve samples,
