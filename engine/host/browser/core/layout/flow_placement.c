@@ -12,11 +12,28 @@
 #include "check.h"
 #include "core/css/css_length.h"
 #include "core/layout/flow_placement.h"
+#include "core/layout/flow_position.h"   /* FlowPoint — the second fact a pass holds about a box */
 #include "solver/dom_cow.h"   /* dom_cow_version — the tree number the span is held to, SWAP included */
 
+/* ONE ENTRY PER BOX AND TWO FACTS IN IT, WHICH IS ONE TABLE AND NOT TWO. The two questions a whole-tree
+   geometry walk asks about a box are keyed on the same element, go stale on the same events and live in the
+   same span, so two tables would be two probe implementations, two growth policies and two key spaces over
+   one key — and the origin's own check reads BOTH facts of a box in one lookup, which two tables would make
+   two. `has_top` and `has_origin` are separate because the two are written by DIFFERENT components at
+   DIFFERENT moments: core/layout/block_flow.c's walk reports a top for every box it places whether or not
+   anybody asks its origin, and core/layout/flow_position.c records an origin for boxes §9.4.1 never stacks. */
 typedef struct {
     const lxb_dom_element_t *el;   /* NULL is EMPTY; nothing is ever removed, so there are no tombstones */
     CssPx                    top;
+    FlowPoint                origin;
+    /* THE CONTAINING BLOCK THE ORIGIN WAS DERIVED FROM, and NULL for every other arm — which is the whole of
+       what the origin's check needs to know about how the value was produced. core/layout/flow_position.c's
+       §10.1 SECOND case is the only arm with an equation over another box's recorded origin; the root arm,
+       the out-of-flow arms and the §17.5 table arms each derive their point some other way, so a non-NULL
+       here says "this point is that equation" and a NULL says "this component has no second route to it". */
+    const lxb_dom_element_t *origin_cb;
+    bool                     has_top;
+    bool                     has_origin;
 } FpEntry;
 
 static FpEntry  *g_tab;
@@ -30,6 +47,9 @@ static long long g_served;
 static long long g_walks;
 static long long g_placements;
 static long long g_passes;
+static long long g_origin_asks;
+static long long g_origin_served;
+static long long g_origin_derived;
 
 /* THE ONE INITIAL CAPACITY, AND IT IS NOT A BOUND ON ANYTHING. §NO BOUNDS forbids deciding that work will not
    happen; this decides only how many placements fit before the table is rebuilt at twice the size, which is a
@@ -150,6 +170,10 @@ void flow_placement_record(const lxb_dom_element_t *el, CssPx top)
         g_tab[i].el = el;
         g_used++;
         g_placements++;
+    } else if (!g_tab[i].has_top) {
+        /* The box already has an ORIGIN entry and no top yet — one key, two facts, written by two components
+           in whichever order the walk reached them. */
+        g_placements++;
     } else {
         /* THE SAME BOX PLACED TWICE IN ONE PASS, WHICH IS ORDINARY AND MUST AGREE. §9.4.1's walk over one
            container runs whenever anything asks that container a question — a child's position, its own
@@ -169,6 +193,92 @@ void flow_placement_record(const lxb_dom_element_t *el, CssPx top)
         g_placements++;
     }
     g_tab[i].top = top;
+    g_tab[i].has_top = true;
+}
+
+/* THE LOOKUP, SHARED BY EVERY READER AND COUNTING NOTHING — see the header for why the census belongs to the
+   ASK rather than to the lookup under it. Also where the pass's tree number is checked on the read side, so
+   the FIRST served answer after a change is what crashes rather than a picture that is already drawn. */
+bool flow_placement_peek(const lxb_dom_element_t *el, CssPx *out)
+{
+    size_t i;
+
+    DCHECK(el != NULL, "CSS 2.1 §9.4.1's placement record was asked about no box");
+    DCHECK(out != NULL, "CSS 2.1 §9.4.1's placement record was asked with nowhere to put the answer");
+    if (!g_open || g_cap == 0) return false;
+    DCHECKF(dom_cow_version() == g_ver,
+            "CSS 2.1 §9.4.1's placement record was read at tree version %llu inside a pass opened at %llu. "
+            "See this record's close for why the two must agree; asking at the ANSWER as well as at the close "
+            "is what makes the first served position after a change the thing that crashes",
+            (unsigned long long)dom_cow_version(), (unsigned long long)g_ver);
+    i = fp_probe(g_tab, g_cap, el);
+    if (g_tab[i].el == NULL || !g_tab[i].has_top) return false;
+    *out = g_tab[i].top;
+    return true;
+}
+
+bool flow_placement_origin_peek(const lxb_dom_element_t *el, FlowPoint *out, const lxb_dom_element_t **cb_out)
+{
+    size_t i;
+
+    DCHECK(el != NULL, "CSS 2 §8.1 \"Box dimensions\"' border-box origin record was asked about no box");
+    DCHECK(out != NULL, "CSS 2 §8.1 \"Box dimensions\"' border-box origin record was asked with nowhere "
+                        "to put the answer");
+    if (!g_open || g_cap == 0) return false;
+    DCHECKF(dom_cow_version() == g_ver,
+            "CSS 2 §8.1 \"Box dimensions\"' border-box origin record was read at tree version %llu inside a "
+            "pass opened at "
+            "%llu — see this record's close",
+            (unsigned long long)dom_cow_version(), (unsigned long long)g_ver);
+    i = fp_probe(g_tab, g_cap, el);
+    if (g_tab[i].el == NULL || !g_tab[i].has_origin) return false;
+    *out = g_tab[i].origin;
+    if (cb_out != NULL) *cb_out = g_tab[i].origin_cb;
+    return true;
+}
+
+void flow_placement_origin_record(const lxb_dom_element_t *el, FlowPoint origin,
+                                  const lxb_dom_element_t *derived_from)
+{
+    size_t i;
+
+    DCHECK(el != NULL, "CSS 2 §8.1 \"Box dimensions\"' border-box origin record was handed a point with "
+                       "no box to attach it to");
+    if (!g_open) return;
+    if (g_used * 2 >= g_cap) fp_grow();
+    i = fp_probe(g_tab, g_cap, el);
+    if (g_tab[i].el == NULL) {
+        g_tab[i].el = el;
+        g_used++;
+    } else {
+        /* ONE BOX'S ORIGIN COMPUTED TWICE IN ONE PASS, WHICH THE MEMO MAKES UNREACHABLE AND WHICH IS THEREFORE
+           WORTH ASSERTING RATHER THAN ALLOWING. core/layout/flow_position.c asks this record before it
+           computes and records every point it computes, so a second computation means a read that missed
+           where a write had already landed — a probe that answers two slots for one key. The numbers are
+           compared rather than the state, because a disagreement is the finding and an agreement under a
+           broken probe would be a coincidence worth knowing about too. */
+        DCHECKF(!g_tab[i].has_origin ||
+                    (fp_same_example(g_tab[i].origin.x, origin.x) && fp_same_example(g_tab[i].origin.y, origin.y)),
+                "CSS 2 §8.1 \"Box dimensions\"' border-box origin was computed twice in one pass for one box and "
+                "the two "
+                "disagree: (%g, %g) then (%g, %g). core/layout/flow_position.c reads this record before it "
+                "computes, so a second computation at all means a read missed a key a write had landed — and "
+                "two different answers mean the document moved under the pass on an axis its tree version "
+                "cannot see",
+                g_tab[i].origin.x.px, g_tab[i].origin.y.px, origin.x.px, origin.y.px);
+    }
+    g_tab[i].origin = origin;
+    g_tab[i].origin_cb = derived_from;
+    g_tab[i].has_origin = true;
+    g_origin_derived++;
+}
+
+bool flow_placement_origin_ask(const lxb_dom_element_t *el, FlowPoint *out, const lxb_dom_element_t **cb_out)
+{
+    g_origin_asks++;
+    if (!flow_placement_origin_peek(el, out, cb_out)) return false;
+    g_origin_served++;
+    return true;
 }
 
 bool flow_placement_ask(const lxb_dom_element_t *el, CssPx *out)
@@ -185,21 +295,18 @@ bool flow_placement_ask(const lxb_dom_element_t *el, CssPx *out)
             "the close is what makes the first served position after a change the thing that crashes, rather "
             "than a picture that is already drawn",
             (unsigned long long)dom_cow_version(), (unsigned long long)g_ver);
-    i = fp_probe(g_tab, g_cap, el);
-    if (g_tab[i].el == NULL) return false;
-    *out = g_tab[i].top;
+    if (!flow_placement_peek(el, out)) return false;
     g_served++;
     return true;
 }
 
 bool flow_placement_agrees(const lxb_dom_element_t *el, CssPx top)
 {
-    size_t i;
+    CssPx rec;
 
     DCHECK(el != NULL, "CSS 2.1 §9.4.1's placement record was asked to agree about no box");
-    if (!g_open || g_cap == 0) return false;
-    i = fp_probe(g_tab, g_cap, el);
-    return g_tab[i].el != NULL && fp_same_example(g_tab[i].top, top);
+    if (!flow_placement_peek(el, &rec)) return false;
+    return fp_same_example(rec, top);
 }
 
 void flow_placement_walked(void) { g_walks++; }
@@ -217,9 +324,23 @@ void flow_placement_census(FlowPlacementCensus *out)
             "record did not answer — so a gap is a return between the two, and the ratio a reader takes off "
             "these rows would be a share of a denominator that is not the population",
             g_asks, g_served, g_walks);
+    /* AND THE ORIGIN PAIR, WHOSE SHORTFALL IS A DERIVATION AND NOT A WALK, which is why it is named `derived`
+       and not `walks`: a missed origin ask runs CSS 2 §10.1's own step for that box — one equation over its
+       containing block's recorded point — and the RECURSION it used to pay is what the record removes. The
+       two close the same way the pair above does and for the same reason. */
+    DCHECKF(g_origin_asks == g_origin_served + g_origin_derived,
+            "CSS 2 §8.1 \"Box dimensions\"' border-box origin census does not close: %lld asks against %lld "
+            "served and %lld "
+            "derived. Every ask is answered out of this record or derives the point and records it, with no "
+            "third arm — so a gap is a return between the ask and the record, and the share a reader takes "
+            "off these rows would be over a denominator that is not the population",
+            g_origin_asks, g_origin_served, g_origin_derived);
     out->asks = g_asks;
     out->served = g_served;
     out->walks = g_walks;
     out->placements = g_placements;
     out->passes = g_passes;
+    out->origin_asks = g_origin_asks;
+    out->origin_served = g_origin_served;
+    out->origin_derived = g_origin_derived;
 }

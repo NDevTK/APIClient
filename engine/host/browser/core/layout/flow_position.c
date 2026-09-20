@@ -13,6 +13,7 @@
 #include "core/frame/viewport.h"
 #include "core/layout/block_flow.h"
 #include "core/layout/box_subject.h"
+#include "core/layout/flow_placement.h"
 #include "core/layout/flow_position.h"
 #include "core/layout/line_box.h"
 #include "core/layout/replaced_element.h"
@@ -216,9 +217,19 @@ static CssPx fp_left_offset(lxb_dom_element_t *el, CssPx cb_width)
    into a distance from the TABLE BOX's content edge — so two copies of this preamble would be two places for
    §17.5.2 Table width algorithms: the 'table-layout' property's columns and §17.5.3 Table height algorithms'
    rows to be built, free to be built over a different grid than the rectangle was read out of.
-   NOTHING IS STORED BETWEEN CALLS, for the reason core/layout/block_flow.h states of every layout in this
-   directory: a layout is per-flow state, so a cached grid is shared state solver/dom_cow.h's delta does not
-   swap and a stale one is another flow's document. */
+   NOTHING IS STORED BETWEEN CALLS, and the reason is narrower than the one that used to be given here. It
+   read: `for the reason core/layout/block_flow.h states of every layout in this directory: a layout is`
+   `per-flow state, so a cached grid is shared state solver/dom_cow.h's delta does not swap and a stale one`
+   `is another flow's document.` The hazard is exactly right and the SCOPE was a claim about the directory:
+   core/layout/flow_placement.h now holds two of this file's own answers, and holds them soundly, because it
+   has a SPAN — two ends in one function, empty outside it, with solver/dom_cow.h's number asserted across it
+   and the style axis closed at the write. This grid has no such span: it is built inside one placement and
+   discarded with it, and giving it one would mean deciding where a table's layout begins and ends, which is
+   a question §17.5 answers and this preamble does not. So the rule is not that nothing may be stored, it is
+   that nothing is stored without a span that says when it is empty — and this frame has no span to be held
+   under, not merely no cache.
+   RETIREMENT: this paragraph goes when a table's layout is a phase with two ends of its own, because the
+   frame is then held under that phase and the sentence has nothing left to warn against. */
 typedef struct {
     lxb_dom_element_t *table;
     FlowPoint          origin;    /* the TABLE box's border-box origin, which §17.4 makes the wrapper's */
@@ -950,7 +961,49 @@ static FlowPoint fp_abs_origin(lxb_dom_element_t *el)
     return p;
 }
 
-FlowPoint flow_border_box_origin(lxb_dom_element_t *el)
+/* §10.1's SECOND CASE, RE-DERIVED FROM THE RECORD, FOR AN ASSERTION AND FOR NOTHING ELSE — the check
+   core/layout/flow_placement.h's §10.1 section is written around.
+   IT IS TWO ANSWERS OFF TWO LINES AND THEY CAN DISAGREE. The recorded point was written by the arm below;
+   this reads the CONTAINING BLOCK'S point out of the same record, the box's own stack position out of the
+   OTHER record core/layout/block_flow.c fills, and the two edge terms out of the CASCADE — three sources,
+   one of which is a different component and one of which is not a record at all. A recorded point that no
+   longer satisfies its own equation is the record answering for a box it does not hold, or a computed value
+   that moved inside a span nothing else can see move.
+   IT READS THE ANCESTOR RATHER THAN ASKING FOR IT, which is what keeps it O(1) and non-recursive: calling
+   the entry would trigger that entry's own check, and a check that recomputes through the checked entry is
+   exponential in depth. `flow_placement_origin_peek` counts nothing and recurses nowhere.
+   IT ANSWERS TRUE WHERE IT CANNOT SPEAK — no pass, a point from another arm, an ancestor or a stack position
+   this pass does not hold — and those are not silent passes: each is a state in which this file has no
+   second route to the number, which is exactly what `derived_from` being NULL records. */
+/* TWO LENGTHS' EXAMPLES, COMPARED FOR AN ASSERTION AND FOR NOTHING ELSE — the same private comparison
+   core/layout/flow_placement.c holds and for the same reason: a public equality over a `CssPx` is a
+   predicate a caller can branch on, and §Solver-half forbids a C branch on a concolic's EXAMPLE because it
+   deletes the arm the other world takes. Inside a `DCHECK` there is no arm to delete. NaN equals itself
+   here, because two runs of one derivation that both produced NaN agree. */
+static bool fp_same_example(CssPx a, CssPx b)
+{
+    return a.px == b.px || (a.px != a.px && b.px != b.px);
+}
+
+static bool fp_origin_agrees(lxb_dom_element_t *el, const lxb_dom_element_t *cb, FlowPoint rec)
+{
+    FlowPoint o;
+    CssPx     top, x, y;
+
+    if (cb == NULL) return true;
+    if (!flow_placement_origin_peek(cb, &o, NULL)) return true;
+    if (!flow_placement_peek(el, &top)) return true;
+    x = css_px_add(css_px_add(o.x, used_value_leading_edge_px((lxb_dom_element_t *)cb, false)),
+                   fp_left_offset(el, used_value_containing_block_width(el)));
+    y = css_px_add(css_px_add(o.y, used_value_leading_edge_px((lxb_dom_element_t *)cb, true)), top);
+    return fp_same_example(x, rec.x) && fp_same_example(y, rec.y);
+}
+
+/* CSS 2 §8.1 "Box dimensions"' BORDER BOX, PLACED THROUGH §10.1's CASES — the origin itself, with the
+   arm it took reported to its caller. `*cb_out` is the containing
+   block for §10.1's SECOND case and stays NULL for every other arm, which is the one thing the record needs
+   to know about how a point was produced — see core/layout/flow_placement.h. */
+static FlowPoint fp_border_box_origin_compute(lxb_dom_element_t *el, const lxb_dom_element_t **cb_out)
 {
     FlowPoint p = { { 0.0, CSS_ENV_NONE, NULL }, { 0.0, CSS_ENV_NONE, NULL } };
     lxb_dom_node_t *n;
@@ -1057,6 +1110,46 @@ FlowPoint flow_border_box_origin(lxb_dom_element_t *el)
     p.x = css_px_add(css_px_add(o.x, used_value_leading_edge_px(cb, false)),
                      fp_left_offset(el, used_value_containing_block_width(el)));
     p.y = css_px_add(css_px_add(o.y, used_value_leading_edge_px(cb, true)), block_flow_child_top(el));
+    /* THE ONE ARM WITH A SECOND ROUTE TO ITS OWN NUMBER, REPORTED AS SUCH. Every other arm above derives its
+       point some other way and leaves `*cb_out` NULL, which is the record saying that this file has no
+       equation to check it against rather than a caller inferring one. */
+    *cb_out = cb;
+    return p;
+}
+
+/* CSS 2 §8.1 "Box dimensions"' BORDER-BOX ORIGIN, ASKED OF THE PASS FIRST.
+   THE COST THIS REMOVES IS A RECURSION AND NOT A WALK, which is why a remembered return value is the right
+   instrument here and the wrong one one component over — core/layout/flow_placement.h argues both halves.
+   §10.1's second case derives a box's point from its CONTAINING BLOCK's, so the body above climbs the chain
+   on every ask: over a document N levels deep, N boxes asked about a constant number of times each cost
+   O(N) apiece and the total is quadratic in DEPTH. With the pass answering, a climb terminates at the first
+   ancestor already derived, so a whole pass derives one point per box.
+   OUTSIDE A PASS NOTHING IS HELD AND NOTHING IS ANSWERED, so a page reading `offsetTop` between two renders
+   gets the same freshly-climbed number it always did. */
+FlowPoint flow_border_box_origin(lxb_dom_element_t *el)
+{
+    FlowPoint                p;
+    const lxb_dom_element_t *cb = NULL;
+
+    DCHECK(el != NULL, "a border box's position was asked for with no element");
+    if (flow_placement_origin_ask(el, &p, &cb)) {
+        DCHECKF(fp_origin_agrees(el, cb, p),
+                "CSS 2 §10.1's second case puts this box's border-box origin at its containing block's "
+                "origin plus that block's leading border and padding plus §9.4.1's stack position, and the "
+                "point this pass recorded for it no longer satisfies that equation — recorded (%g, %g). The "
+                "three operands come from three places: the containing block's own recorded point, "
+                "core/layout/block_flow.c's placement record, and the CASCADE. So this is one of two things "
+                "and they take opposite work. EITHER the record answered for a box it does not hold — read "
+                "core/layout/flow_placement.c's probe, which is the only code that decides which entry a key "
+                "reaches — OR a computed value moved INSIDE the pass, which is the axis the pass's tree "
+                "version cannot see and which solver/dom_cow.c's attribute chokepoint exists to make "
+                "impossible. If that chokepoint did not fire, the change arrived by a route it does not own "
+                "and the route is the finding",
+                p.x.px, p.y.px);
+        return p;
+    }
+    p = fp_border_box_origin_compute(el, &cb);
+    flow_placement_origin_record(el, p, cb);
     return p;
 }
 

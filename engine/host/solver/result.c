@@ -2471,9 +2471,21 @@ char *result_json(JSContext *ctx) {
                                 scheduler's counters are byte-identical for a document of one box and a
                                 document of forty. `placements` is how many positions those walks reported
                                 into the record and `passes` how many whole-tree spans opened; `placements /
-                                childTopWalks` is what one walk now pays for. */
+                                childTopWalks` is what one walk now pays for.
+                                AND THE SECOND PAIR IS CSS 2 §8.1 "Box dimensions"' BORDER-BOX ORIGIN, WHOSE
+                                SHORTFALL IS A DERIVATION AND NOT
+                                A WALK — which is why the row is `originDerived` and not `originWalks`.
+                                §10.1's second case derives a box's border-box origin from its CONTAINING
+                                BLOCK's, so an unanswered ask climbs the ancestor chain; `originDerived` is
+                                how many boxes this run computed a point for, and on a tree of N boxes that is
+                                O(N) while the climb it replaces was the sum of every ask's own DEPTH. So
+                                `childTopWalks` is the row to read against a container's CHILD COUNT and
+                                `originDerived` the row to read against a document's DEPTH — real pages are
+                                deep, and the two multipliers are separate facts that no single row states.
+                                `originAsks == originServed + originDerived` closes and is asserted. */
                              "\"_layout\":{\"childTopAsks\":%lld,\"childTopServed\":%lld,"
-                             "\"childTopWalks\":%lld,\"placements\":%lld,\"passes\":%lld},"
+                             "\"childTopWalks\":%lld,\"placements\":%lld,\"passes\":%lld,"
+                             "\"originAsks\":%lld,\"originServed\":%lld,\"originDerived\":%lld},"
                              /* AND WHAT ALL OF THE ABOVE WERE DENOMINATED IN — the one nested object here that
                                 is neither a total nor a reading of an instant, but a property of the HOST that
                                 decides whether two of these documents may be compared at all. result.h and
@@ -2487,7 +2499,8 @@ char *result_json(JSContext *ctx) {
                      routedEnds[ROUTED_TASK_TARGET_GONE], routedEnds[ROUTED_TASK_THREW],
                      srcReads, sinkReached, sinkTainted, sinkSuppressed,
                      orphansDriven, orphansAsked, wfq, cold, heap, swap, forkAt, absent,
-                     place.asks, place.served, place.walks, place.placements, place.passes, quantum,
+                     place.asks, place.served, place.walks, place.placements, place.passes,
+                     place.origin_asks, place.origin_served, place.origin_derived, quantum,
                      cold_park_json());
     }
     free(eps);

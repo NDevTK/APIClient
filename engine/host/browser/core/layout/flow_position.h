@@ -133,7 +133,13 @@ typedef struct {
 /* THE TOP-LEFT CORNER OF `el`'s BORDER BOX, in that space. The caller has already established that the element
    HAS a box (core/dom/element_view.h's one predicate) — an element that generates none has no position at all
    and the caller's own step says so before reaching here. Every box CSS 2 §9.4 places and this component does
-   not crashes naming its own section; there is no fallback coordinate. */
+   not crashes naming its own section; there is no fallback coordinate.
+   §10.1's SECOND CASE MAKES THIS A RECURSION OVER ANCESTORS, so a caller asking about every box in a deep
+   document pays each box's own DEPTH. core/layout/flow_placement.h answers it for the span of one whole-tree
+   geometry pass, which collapses the climb to one derivation per box; the answer is unchanged, and outside a
+   pass nothing is held and the climb runs exactly as it always did. That header states why a remembered
+   return value is the right instrument for a recursion and the wrong one for a walk, and this entry's
+   recorded point is re-derived from its own §10.1 equation at every answer the pass serves. */
 FlowPoint flow_border_box_origin(lxb_dom_element_t *el);
 
 /* THE TOP-LEFT CORNER OF `el`'s PADDING BOX, in that same space — the border box origin moved inward by CSS 2

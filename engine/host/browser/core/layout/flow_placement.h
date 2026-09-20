@@ -9,11 +9,18 @@
  * just computed; a consumer that asks for the position of every box in a container therefore runs N walks of
  * N children where ONE walk had already produced all N answers.
  *
- * WHICH IS WHY MEMOIZING THE FUNCTION WOULD NOT HAVE HELPED, and that is the whole reason this is a RECORD
- * WRITTEN BY THE WALK rather than a remembered return value. A memo keyed on the asked-about element still
- * runs one walk per distinct element, and each walk is still over the whole child list — N walks of O(N),
- * which is the same product. What removes the multiplier is that the walk REPORTS every position it
- * establishes, so the first ask about any child of a container answers every later ask about its siblings.
+ * WHICH IS WHY MEMOIZING *THAT* FUNCTION WOULD NOT HAVE HELPED, and that is the whole reason §9.4.1's half
+ * of this component is a RECORD WRITTEN BY THE WALK rather than a remembered return value. A memo keyed on
+ * the asked-about element still runs one walk per distinct element, and each walk is still over the whole
+ * child list — N walks of O(N), which is the same product. What removes the multiplier is that the walk
+ * REPORTS every position it establishes, so the first ask about any child of a container answers every later
+ * ask about its siblings.
+ * READ NARROWLY: IT IS A STATEMENT ABOUT A WALK AND NOT ABOUT MEMOS. This file's OTHER half is a memo of a
+ * return value, deliberately, because CSS 2 §8.1 "Box dimensions"' border-box origin is a RECURSION over
+ * ancestors rather
+ * than a walk over siblings — and for a recursion, remembering the return value IS the collapse. The
+ * §10.1 section below states the difference; a reader who takes this paragraph as a rule against memos will
+ * refuse the one instrument the other question needs.
  *
  * ITS LIFETIME IS A PASS AND IT HAS NO INVALIDATION RULE AT ALL, WHICH IS THE POINT AND NOT AN OMISSION.
  * core/layout/block_flow.h states the standing objection to remembering anything here — a remembered answer
@@ -56,6 +63,7 @@
 #include <lexbor/dom/dom.h>
 
 #include "core/css/css_length.h"
+#include "core/layout/flow_position.h"
 
 /* OPEN AND CLOSE THE PASS. `open` empties the record and takes the tree version it will be held to; `close`
    empties it again and releases its storage, so no allocation and no entry outlives the span. Both are
@@ -87,6 +95,12 @@ void flow_placement_record(const lxb_dom_element_t *el, CssPx top);
    with `flow_placement_walked` so the census closes. */
 bool flow_placement_ask(const lxb_dom_element_t *el, CssPx *out);
 
+/* THE SAME LOOKUP WITH NO CENSUS ON IT — the entry an ASSERTION takes. §Offensive-programming requires an
+   assertion's condition to be side-effect-free, and an ask counted from inside a `DCHECK` would make
+   `asks == served + walks` false in a dev build and true in a release one, so the census would be a fact
+   about which build took the measurement rather than about the render. */
+bool flow_placement_peek(const lxb_dom_element_t *el, CssPx *out);
+
 /* DOES THIS RECORD ALREADY HOLD `el` AT `top` — the entry a DCHECK takes, and the reason it is not
    `flow_placement_ask` with its census suppressed. It COUNTS NOTHING and MUTATES NOTHING, which is what
    §Offensive-programming requires of an assertion's condition: an ask counted from inside a check would make
@@ -102,6 +116,44 @@ bool flow_placement_agrees(const lxb_dom_element_t *el, CssPx top);
    so that `asks == served + walks` holds at every instant and not merely at the end. */
 void flow_placement_walked(void);
 
+/* ---- CSS 2 §8.1 "Box dimensions"' BORDER-BOX ORIGIN, PLACED THROUGH §10.1's CASES --------------------
+ * THE SECOND FACT A PASS HOLDS ABOUT A BOX, AND IT IS A MEMO OF A RETURN VALUE — which the argument above
+ * says would not have helped for the FIRST one, so the difference has to be stated or this record reads as
+ * the thing that paragraph forbids.
+ * THE TWO COSTS HAVE DIFFERENT SHAPES AND THAT IS THE WHOLE OF IT. `block_flow_child_top`'s cost is a WALK
+ * OVER A SIBLING LIST, so remembering its answer per element leaves one walk per element and N walks of O(N)
+ * is the same product — the only thing that removes it is the walk REPORTING what it already computed.
+ * `flow_border_box_origin`'s cost is a RECURSION OVER ANCESTORS: CSS 2 §10.1 "Definition of 'containing
+ * block'"' second case derives a box's
+ * point from its containing block's, so an element whose ancestors are already answered costs ONE equation.
+ * Remembering the return value is therefore exactly the collapse — the recursion terminates at the first
+ * answered ancestor, and a whole pass over a tree of N boxes derives N points instead of one chain per ask.
+ * A memo is the wrong instrument for a walk and the right one for a recursion, and which of the two a
+ * function is costs one reading of it.
+ *
+ * ITS CHECK IS WHAT THE TREE VERSION CANNOT BE, WHICH IS WHY IT IS WORTH ITS COST. The span's own number
+ * moves for an insert, a removal and the COW swap and does NOT move for an attribute or a stylesheet, so the
+ * style axis is held by a crash at solver/dom_cow.c's write chokepoint and by nothing on the read side.
+ * core/layout/flow_position.c re-derives §10.1's second-case equation AT EVERY ANSWER this record serves,
+ * reading `used_value_leading_edge_px` and `fp_left_offset` out of the CASCADE — so a computed value that
+ * moved inside the span makes the recomputed point disagree with the recorded one and the assert fires,
+ * whatever route the change arrived by. That is a span check from the inside, at every hit, over the one axis
+ * the version number is blind to; the memo-integrity it also buys is the smaller half.
+ * IT DOES NOT RE-ENTER, which is what keeps it O(1): the recomputation reads the CONTAINING BLOCK'S point out
+ * of this record rather than calling the entry again, so a check cannot trigger a check. An assert that
+ * recomputed through the entry would be exponential in depth, and that is the shape to look for if this is
+ * ever widened.
+ *
+ * `derived_from` IS THE CONTAINING BLOCK when §10.1's second case produced the point and NULL on every other
+ * arm — the root, the out-of-flow arms and CSS 2.1 §17.5 "Visual layout of table contents"' arms each reach
+ * their point some other way, so there is no second route for a check to take and the record says so rather
+ * than the caller guessing. It is stored because the write path HAS it: re-deriving which arm a recorded
+ * point came from would mean re-asking the cascade the arm predicates it already asked. */
+bool flow_placement_origin_ask(const lxb_dom_element_t *el, FlowPoint *out, const lxb_dom_element_t **cb_out);
+bool flow_placement_origin_peek(const lxb_dom_element_t *el, FlowPoint *out, const lxb_dom_element_t **cb_out);
+void flow_placement_origin_record(const lxb_dom_element_t *el, FlowPoint origin,
+                                  const lxb_dom_element_t *derived_from);
+
 /* THE CENSUS, in solver/result.c's vocabulary. Every field is a LIFETIME counter of this agent — it states
    what has happened, never what stands now — so every one may be differenced across two samples.
    `asks` is the number of times §9.4.1's stack position of a box was asked for; `served` is how many of those
@@ -109,13 +161,22 @@ void flow_placement_walked(void);
    than left to a reader's arithmetic, because it is the one property of the pair that says the two outcomes
    were counted at the same event. `placements` is how many positions the walks reported into the record and
    `passes` is how many whole-tree spans have opened; `placements / walks` is the amortization this component
-   buys and `walks` alone is the number that must stop being quadratic in a container's child count. */
+   buys and `walks` alone is the number that must stop being quadratic in a container's child count.
+   `origin_asks`, `origin_served` and `origin_derived` are the border-box origin's pair and close the same
+   way. The
+   shortfall is named `derived` rather than `walks` because a missed origin ask runs ONE equation over an
+   already-answered ancestor, never a walk: `origin_derived` is therefore the count of boxes whose point this
+   pass computed, which on a tree of N boxes is O(N) and which USED TO BE the sum of every ask's ancestor
+   chain — the row that must stop growing with the square of a document's DEPTH. */
 typedef struct {
     long long asks;
     long long served;
     long long walks;
     long long placements;
     long long passes;
+    long long origin_asks;
+    long long origin_served;
+    long long origin_derived;
 } FlowPlacementCensus;
 void flow_placement_census(FlowPlacementCensus *out);
 
