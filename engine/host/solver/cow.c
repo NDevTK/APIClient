@@ -83,7 +83,15 @@ enum { COW_CUR_UNRECORDED = 0, COW_CUR_ABSENT = 1, COW_CUR_PRESENT = 2 };
                         is what the other two targets already do.
    `state_kind` rather than a nullness test on the target: a third target cannot be told from the second by
    asking whether a pointer is set, and a fourth could not be told from any of them.
-   Not slot-keyed (kept out of the hash index, like gendata and map): each is captured once per flow. */
+   KEYED ON (state_kind, state_key) IN THE HASH INDEX, like a slot and a cell and unlike gendata and map.
+   `state_key` is the thing whose state this is and is the entry's IDENTITY — `target` for the three kinds
+   that have one (MODULE, HOST, HOST_REC), the object pointer for the FOUR that do not (ASYNC, BUFFER,
+   OBJECT, ITER) — and it is a SECOND field rather than a reader over `target` because a reader would have to
+   be a per-kind list somewhere, which is the third copy this file's X-macro exists to prevent, and because
+   one of those four must not be given a raw pointer to name at all (a buffer's storage is freed by a detach
+   and reallocated by a resize, which is why that entry names the buffer OBJECT). It is written by cow_state_entry_set and by nothing else, so it cannot
+   be set after the entry is filed. Each is still captured once per flow; what changed is the COST of
+   asking, which was a linear scan of the whole head at every reach. */
 #define COW_MAP_ADD       0
 #define COW_MAP_OVERWRITE 1
 #define COW_MAP_DELETE    2
@@ -150,7 +158,8 @@ typedef struct { JSValue obj; JSAtom atom; int existed; JSPropertyDescriptor bas
                  int cur_state; void *vref;
                  int is_gendata; void *g0; void *g1; int is_map; int map_op; int map_pos; JSValue map_old;
                  JSCowWeakRef *map_weak;
-                 int is_state; int state_kind; void *target; size_t a_len; void *a_base; void *a_cur;
+                 int is_state; int state_kind; void *state_key;
+                 void *target; size_t a_len; void *a_base; void *a_cur;
                  const CowRecord *rec; } CowEntry;
 
 /* EVERY FIELD OF A NEW ENTRY, IN ONE PLACE. Eleven producers each spelled the whole struct out, which is a list
@@ -329,18 +338,56 @@ void cow_delta_head_stats(const CowDelta *d, long *entries, long *bytes) {
 }
 static void cow_install_chain(JSContext *ctx, CowSeg *want);   /* defined with the rest of the chain walk */
 
-static uint32_t cow_slot_hash(void *p, uint32_t atom) {
-    uint64_t h = (uint64_t)(uintptr_t)p * 0x9E3779B97F4A7C15ull ^ ((uint64_t)atom * 0xC2B2AE3D27D4EB4Full);
+/* THREE KEY SPACES SHARE ONE INDEX, AND THE SPACE IS PART OF THE KEY RATHER THAN A PROPERTY OF THE POINTER.
+   A cell keys on its JSVarRef, a property slot on (obj pointer, atom), a STATE BLOB on (state kind, the thing
+   whose state it is) — and those three pointers are drawn from the same address space, so nothing about a raw
+   pointer says which space it belongs to. Encoding the state kind in the `atom` field instead is the obvious
+   shortening and it is WRONG IN THE ONE DIRECTION THIS FILE CANNOT TOLERATE: a kind id is a small integer and
+   JS_ATOM_NULL and the first real atoms are small integers, so a state entry over an object would answer a
+   SLOT lookup on that same object, and the capture that asked would be told its slot is already recorded and
+   record nothing. `space` makes the three disjoint by construction, which is a fact about the key and not an
+   argument about which pointers can alias.
+   COW_KEY_SLOT IS 0 SO A SLOT'S HASH IS UNCHANGED by the space term — the two hot paths that were already
+   indexed keep their exact bucket distribution, so this change cannot be read in their timings. */
+enum { COW_KEY_SLOT = 0, COW_KEY_CELL = 1, COW_KEY_STATE = 2 };
+typedef struct { int space; void *ptr; uint32_t tag; } CowKey;
+
+/* IS THIS ENTRY KEYED — does it have an identity some capture looks up? Stated ONCE, because the rebuild's
+   filter and cow_key's own precondition are the same sentence and a rebuild that admitted an entry cow_key
+   cannot key is exactly the defect recorded at the rebuild below. gendata dedups by walking for its object
+   (cow_delta_gendata_for) and a map entry is an UNDO-LOG record that must never dedup at all, so neither has
+   a key to be found by. */
+static bool cow_entry_keyed(const CowEntry *e) { return !e->is_gendata && !e->is_map; }
+
+/* THE KEY OF AN ENTRY, DERIVED FROM THE ENTRY — the one function the insert and the lookup BOTH go through,
+   so the bucket a key is filed under and the test that recognises it there cannot come to disagree. That is
+   the whole safety argument for the state arm: cow_hash_find's match is `this candidate's own key equals the
+   key I asked for`, evaluated on the candidate's fields, so an index that is stale, over-full or simply wrong
+   can only FAIL TO FIND an entry (one duplicate entry, which unapply and apply both compose correctly) and can
+   never hand back an entry that is not the one asked for (a capture SKIPPED, which is a flow's write missing
+   from its delta and another flow observing it, with nothing anywhere to say so). The two directions are not
+   alike and only one of them is expressible. */
+static CowKey cow_key(const CowEntry *e) {
+    CowKey k;
+    DCHECK(cow_entry_keyed(e),
+           "a COW entry with no key reached the hash index — a coroutine swap and a Set/Map undo record are "
+           "not looked up by identity, so indexing one files a row under a key no capture will ever ask for");
+    if (e->is_state) { k.space = COW_KEY_STATE; k.ptr = e->state_key; k.tag = (uint32_t)e->state_kind; }
+    else if (e->vref) { k.space = COW_KEY_CELL; k.ptr = e->vref; k.tag = 0; }
+    else { k.space = COW_KEY_SLOT; k.ptr = JS_VALUE_GET_PTR(e->obj); k.tag = e->atom; }
+    return k;
+}
+static uint32_t cow_key_hash(CowKey k) {
+    uint64_t h = (uint64_t)(uintptr_t)k.ptr * 0x9E3779B97F4A7C15ull
+               ^ ((uint64_t)k.tag * 0xC2B2AE3D27D4EB4Full)
+               ^ ((uint64_t)(uint32_t)k.space * 0xD6E8FEB86659FD93ull);
     return (uint32_t)(h ^ (h >> 32));
 }
-/* The slot key: a closure cell keys on its vref; a property slot on (obj pointer, atom). */
-static void cow_key(const CowEntry *e, void **key, uint32_t *atom) {
-    if (e->vref) { *key = e->vref; *atom = 0; }
-    else { *key = JS_VALUE_GET_PTR(e->obj); *atom = e->atom; }
+static bool cow_key_eq(CowKey a, CowKey b) {
+    return a.space == b.space && a.ptr == b.ptr && a.tag == b.tag;
 }
 static void cow_hash_put(CowDelta *d, int idx) {   /* insert entry idx; caller guarantees room */
-    void *key; uint32_t atom; cow_key(&d->e[idx], &key, &atom);
-    uint32_t m = (uint32_t)d->hash_cap - 1, h = cow_slot_hash(key, atom) & m;
+    uint32_t m = (uint32_t)d->hash_cap - 1, h = cow_key_hash(cow_key(&d->e[idx])) & m;
     while (d->hash[h]) h = (h + 1) & m;
     d->hash[h] = idx + 1;
 }
@@ -355,30 +402,42 @@ static void cow_hash_rebuild(CowDelta *d) {   /* size to >= 2*n (power of two), 
     CHECK(nh, "cow: OOM hash index");
     d->hash = nh; d->hash_cap = nc;
     memset(d->hash, 0, (size_t)d->hash_cap * sizeof(int));
-    /* gendata / state / MAP entries are not slot-keyed. The map arm was missing, so a rebuild put every map
-       entry into the index under (collection, JS_ATOM_NULL) — an entry the CowEntry comment says is kept out of
-       it, indexed under a key no capture ever looks up. It never returned a wrong entry; it filled the table
-       with rows nothing could find, which is the same statement being true in one place and false in another. */
+    /* EVERY KEYED ENTRY, and the filter is cow_entry_keyed rather than a list spelled here, because a list
+       spelled here is what went wrong twice. The map arm was missing once, so a rebuild put every map entry
+       into the index under (collection, JS_ATOM_NULL) — a key no capture ever looks up; it never returned a
+       wrong entry, it filled the table with rows nothing could find. Then `is_state` was in the exclusion for
+       the opposite reason — a state blob genuinely had no key to be filed under — and the list outlived that
+       reason by six kinds, so every state capture paid a linear scan of the whole head at every reach while
+       the three already-indexed captures next to it were O(1). State entries have a key now; the predicate is
+       one sentence in one place, and cow_key crashes on an entry that reaches it without one. */
     for (int i = 0; i < d->n; i++)
-        if (!d->e[i].is_gendata && !d->e[i].is_state && !d->e[i].is_map) cow_hash_put(d, i);
+        if (cow_entry_keyed(&d->e[i])) cow_hash_put(d, i);
 }
 /* Record entry (d->n-1) in the hash, growing/rebuilding the table when it would exceed half-full. */
 static void cow_hash_add_last(CowDelta *d) {
     if (!d->hash || d->hash_cap < d->n * 2) cow_hash_rebuild(d);
     else cow_hash_put(d, d->n - 1);
 }
-/* Find an existing entry for a slot: returns its index or -1. vref!=NULL keys on the cell; else on (objptr,atom). */
-static int cow_hash_find(CowDelta *d, void *objptr, uint32_t atom, void *vref) {
+/* Find the entry holding this key: its index, or -1. The match is cow_key_eq over the CANDIDATE'S OWN key —
+   see cow_key for why that, and not a hand-written field comparison, is what makes a skipped capture
+   inexpressible rather than merely unlikely. */
+static int cow_hash_find(CowDelta *d, CowKey k) {
     if (!d->hash) return -1;
-    uint32_t m = (uint32_t)d->hash_cap - 1, h = cow_slot_hash(vref ? vref : objptr, vref ? 0 : atom) & m;
+    uint32_t m = (uint32_t)d->hash_cap - 1, h = cow_key_hash(k) & m;
     while (d->hash[h]) {
-        CowEntry *e = &d->e[d->hash[h] - 1];
-        if (vref ? (e->vref == vref)
-                 : (e->vref == NULL && JS_VALUE_GET_PTR(e->obj) == objptr && e->atom == atom))
-            return d->hash[h] - 1;
+        if (cow_key_eq(cow_key(&d->e[d->hash[h] - 1]), k)) return d->hash[h] - 1;
         h = (h + 1) & m;
     }
     return -1;
+}
+/* The three key constructors. A capture names its space by CALLING ONE, so "which space is this lookup in" is
+   answered at the call and never inferred from whether a pointer happens to be NULL. */
+static CowKey cow_key_slot(JSValueConst obj, JSAtom atom) {
+    CowKey k = { COW_KEY_SLOT, JS_VALUE_GET_PTR(obj), (uint32_t)atom }; return k;
+}
+static CowKey cow_key_cell(void *vref) { CowKey k = { COW_KEY_CELL, vref, 0 }; return k; }
+static CowKey cow_key_state(int kind, void *target) {
+    CowKey k = { COW_KEY_STATE, target, (uint32_t)kind }; return k;
 }
 
 /* ROOM FOR ONE MORE ENTRY, in ONE place, and the reason it is one place is the refusal edge underneath it.
@@ -465,14 +524,39 @@ static CowDelta *cow_state_ask(int kind) {
    rather than on a census somebody reads later — which is the only thing standing between a new unit and a
    denominator that silently reports it as never asked for. The two sides can disagree, which is the test
    CLAUDE.md puts on an assert: delete the ask in any capture here and this fires on that unit's next entry. */
-static void cow_state_entry_set(CowEntry *e, int kind) {
+/* …AND IT FILES THE ENTRY IN THE HASH INDEX, which is what makes "every state entry is findable in O(1)" a
+   property of the program rather than a line seven capture sites each have to remember. `e->is_state = 1` is
+   assigned HERE AND NOWHERE ELSE in this file, so an unindexed state entry is not expressible: the only thing
+   that can make one is the thing that files it. That is the §Fix-the-ROOT form of the obligation — there is no
+   guard against forgetting, because forgetting has no spelling.
+   THE KEY IS AN ARGUMENT AND NOT A FIELD READ AFTERWARDS, for the same reason: a key set by the caller after
+   this returns would be filed as NULL and found by nobody, and the site would look correct. A kind added later
+   cannot compile without naming its identity.
+   THE TWO ASSERTS ARE THE PRECONDITIONS cow_hash_add_last HAS ALWAYS HAD AND NEVER STATED. It files entry
+   `d->n - 1`, so an entry that is not the delta's last would be filed under THIS entry's key — and THAT is the
+   one remaining route to the failure this whole mechanism exists to prevent: a later capture of a different
+   target finding a row that answers for it, being told its state is already recorded, and recording nothing.
+   A missing write in a flow's delta is another flow observing it, at some later switch, with no crash. */
+static void cow_state_entry_set(CowDelta *d, CowEntry *e, int kind, void *key) {
+    DCHECK(g_capturing > 0,
+           "a COW state entry was constructed outside a capture scope — filing it can grow the index, and "
+           "cow_delta_alloc refuses to hand a delta memory where a sale could raise a capture into it");
+    DCHECK(e == &d->e[d->n - 1],
+           "a COW state entry was constructed somewhere other than the delta's LAST entry — the hash index "
+           "files the last entry, so this one's key would name a different entry and the next capture of that "
+           "key would be told its state is already recorded when it is not");
+    DCHECK(key != NULL,
+           "a COW state entry was constructed with no identity — every state capture dedups by one, so a NULL "
+           "key files a row nothing can find and the unit records one entry per reach instead of one per flow");
     e->is_state = 1;
     e->state_kind = kind;
+    e->state_key = key;
     g_state_made[kind]++;
     DCHECKF(g_state_made[kind] <= g_state_asks[kind],
             "a COW state entry of kind `%s` was recorded without the capture that made it having been counted "
             "as an ASK — its prologue does not go through cow_state_ask, so this unit's census reports entries "
             "against a denominator that never moved", cow_state_kind_name(kind));
+    cow_hash_add_last(d);
 }
 
 int cow_state_kind_count(void) { return COW_STATE_KIND_N; }
@@ -646,7 +730,7 @@ void cow_capture_hook(JSContext *ctx, JSValueConst obj, JSAtom atom) {
        fork_gen) is private to the flow: no sibling can observe it, so its writes are never captured. A baseline
        object (flow_gen 0) and any object that existed at the fork (flow_gen <= fork_gen) IS shared and captured. */
     if (JS_ObjFlowGen(obj) > d->fork_gen) return;
-    if (cow_hash_find(d, JS_VALUE_GET_PTR(obj), atom, NULL) >= 0) return;   /* capture each slot ONCE (O(1)) */
+    if (cow_hash_find(d, cow_key_slot(obj, atom)) >= 0) return;   /* capture each slot ONCE (O(1)) */
 
     cow_capture_begin();
     JSPropertyDescriptor base;
@@ -701,7 +785,7 @@ void cow_capture_arr_append(JSContext *ctx, JSValueConst obj, JSAtom atom) {
     if (cow_hooks_off() || !g_current) return;
     CowDelta *d = g_current;
     if (JS_ObjFlowGen(obj) > d->fork_gen) return;
-    if (cow_hash_find(d, JS_VALUE_GET_PTR(obj), atom, NULL) >= 0) return;   /* capture each slot ONCE (O(1)) */
+    if (cow_hash_find(d, cow_key_slot(obj, atom)) >= 0) return;   /* capture each slot ONCE (O(1)) */
     cow_capture_begin();
     cow_room_for_one(d, "cow: OOM growing delta (arr_append)");
     CowEntry *e = &d->e[d->n++];
@@ -794,19 +878,18 @@ void cow_capture_async_state(JSContext *ctx, JSValueConst obj) {
        broken or an allocation failure — and both mean this flow's settle goes uncaptured and leaks into every
        sibling, which is a corrupted frontier rather than a degraded one. */
     CHECK(blob, "cow: a shared async object's settlement could not be captured — the flow's timeline would leak");
-    for (int i = 0; i < d->n; i++)                  /* one entry per object: the FIRST baseline is the baseline */
-        if (d->e[i].is_state && d->e[i].state_kind == COW_STATE_ASYNC &&
-            JS_VALUE_GET_PTR(d->e[i].obj) == JS_VALUE_GET_PTR(obj)) {
-            JS_AsyncStateFree(JS_GetRuntime(ctx), blob);
-            cow_capture_end();
-            return;
-        }
+    /* one entry per object: the FIRST baseline is the baseline */
+    if (cow_hash_find(d, cow_key_state(COW_STATE_ASYNC, JS_VALUE_GET_PTR(obj))) >= 0) {
+        JS_AsyncStateFree(JS_GetRuntime(ctx), blob);
+        cow_capture_end();
+        return;
+    }
     if (cow_room_for_one(d, "cow: OOM growing delta (async_state) — a lost settlement leaks a flow's timeline"))
         cow_hash_rebuild(d);
     CowEntry *e = &d->e[d->n++];
     cow_entry_init(e);
     e->obj = JS_DupValue(ctx, obj);
-    cow_state_entry_set(e, COW_STATE_ASYNC); e->a_base = blob;
+    cow_state_entry_set(d, e, COW_STATE_ASYNC, JS_VALUE_GET_PTR(obj)); e->a_base = blob;
     cow_capture_end();
 }
 
@@ -962,8 +1045,8 @@ void cow_capture_module_eval(JSContext *ctx, void *mod) {
     if (!mod) return;
     d = cow_state_ask(COW_STATE_MODULE);
     if (!d) return;
-    for (int i = 0; i < d->n; i++)                  /* one entry per module: the FIRST baseline is the baseline */
-        if (d->e[i].is_state && d->e[i].state_kind == COW_STATE_MODULE && d->e[i].target == mod) return;
+    /* one entry per module: the FIRST baseline is the baseline */
+    if (cow_hash_find(d, cow_key_state(COW_STATE_MODULE, mod)) >= 0) return;
     cow_capture_begin();
     void *blob = JS_ModuleEvalStateSave(ctx, mod);
     CHECK(blob, "cow: a module's evaluation state could not be captured — a sibling flow would inherit this "
@@ -972,7 +1055,7 @@ void cow_capture_module_eval(JSContext *ctx, void *mod) {
         cow_hash_rebuild(d);
     CowEntry *e = &d->e[d->n++];
     cow_entry_init(e);
-    cow_state_entry_set(e, COW_STATE_MODULE); e->target = mod; e->a_base = blob;
+    cow_state_entry_set(d, e, COW_STATE_MODULE, mod); e->target = mod; e->a_base = blob;
     cow_capture_end();
 }
 
@@ -1005,15 +1088,15 @@ void cow_capture_host_state_at(JSContext *ctx, JSValueConst owner, void *p, size
             "a component's state was captured with no owning object, at %s:%d — the storage it points into "
             "would be freed out from under a parked flow's delta", file, line);
     if (JS_ObjFlowGen(owner) > d->fork_gen) return;   /* flow-private skip — the O(shared-state) invariant */
-    for (int i = 0; i < d->n; i++)                    /* one entry per record: the FIRST baseline is the baseline */
-        if (d->e[i].is_state && d->e[i].state_kind == COW_STATE_HOST && d->e[i].target == p) return;
+    /* one entry per record: the FIRST baseline is the baseline */
+    if (cow_hash_find(d, cow_key_state(COW_STATE_HOST, p)) >= 0) return;
     cow_capture_begin();
     if (cow_room_for_one(d, "cow: OOM growing delta (host_state)"))
         cow_hash_rebuild(d);
     CowEntry *e = &d->e[d->n++];
     cow_entry_init(e);
     e->obj = JS_DupValue(ctx, owner);
-    cow_state_entry_set(e, COW_STATE_HOST); e->target = p; e->a_len = n;
+    cow_state_entry_set(d, e, COW_STATE_HOST, p); e->target = p; e->a_len = n;
     e->a_base = cow_state_save(ctx, e);   /* the bytes as this flow found them */
     cow_capture_end();
 }
@@ -1042,16 +1125,15 @@ void cow_capture_buffer(JSContext *ctx, JSValueConst abuf) {
        resizable buffer up and writes into it left no entry at all, and the sibling inherited both the new
        extent and the write. The extent is in this entry now, so an empty buffer is captured like any other. */
     if (!JS_GetBufferBytes(abuf, &len)) return;
-    for (int i = 0; i < d->n; i++)                   /* one entry per buffer: the FIRST state is the baseline */
-        if (d->e[i].is_state && d->e[i].state_kind == COW_STATE_BUFFER &&
-            JS_VALUE_GET_PTR(d->e[i].obj) == JS_VALUE_GET_PTR(abuf)) return;
+    /* one entry per buffer: the FIRST state is the baseline */
+    if (cow_hash_find(d, cow_key_state(COW_STATE_BUFFER, JS_VALUE_GET_PTR(abuf))) >= 0) return;
     cow_capture_begin();
     if (cow_room_for_one(d, "cow: OOM growing delta (buffer state)"))
         cow_hash_rebuild(d);
     CowEntry *e = &d->e[d->n++];
     cow_entry_init(e);
     e->obj = JS_DupValue(ctx, abuf);
-    cow_state_entry_set(e, COW_STATE_BUFFER);
+    cow_state_entry_set(d, e, COW_STATE_BUFFER, JS_VALUE_GET_PTR(abuf));
     e->a_base = cow_state_save(ctx, e);   /* the storage as this flow found it */
     cow_capture_end();
 }
@@ -1064,9 +1146,8 @@ void cow_capture_obj_state(JSContext *ctx, JSValueConst obj) {
     if (!d) return;
     DCHECK(JS_IsObject(obj), "an object's own state was captured with no object");
     if (JS_ObjFlowGen(obj) > d->fork_gen) return;   /* flow-private skip — the O(shared-state) invariant */
-    for (int i = 0; i < d->n; i++)                  /* one entry per object: the FIRST state is the baseline */
-        if (d->e[i].is_state && d->e[i].state_kind == COW_STATE_OBJECT &&
-            JS_VALUE_GET_PTR(d->e[i].obj) == JS_VALUE_GET_PTR(obj)) return;
+    /* one entry per object: the FIRST state is the baseline */
+    if (cow_hash_find(d, cow_key_state(COW_STATE_OBJECT, JS_VALUE_GET_PTR(obj))) >= 0) return;
     cow_capture_begin();
     if (cow_room_for_one(d, "cow: OOM growing delta (obj_state) — a lost freeze/prototype/internal slot leaks "
                             "one flow's write into every sibling"))
@@ -1074,7 +1155,7 @@ void cow_capture_obj_state(JSContext *ctx, JSValueConst obj) {
     CowEntry *e = &d->e[d->n++];
     cow_entry_init(e);
     e->obj = JS_DupValue(ctx, obj);
-    cow_state_entry_set(e, COW_STATE_OBJECT);
+    cow_state_entry_set(d, e, COW_STATE_OBJECT, JS_VALUE_GET_PTR(obj));
     e->a_base = cow_state_save(ctx, e);   /* the object as this flow found it */
     cow_capture_end();
 }
@@ -1086,28 +1167,20 @@ void cow_capture_obj_state(JSContext *ctx, JSValueConst obj) {
    per-write hook to forget: quickjs routes both of OP_for_in_next's arms through one accessor, so a flow that
    TOUCHES the record captures it, and the dedup below makes that one entry per iterator per flow however many
    keys the walk yields.
-   THIS IS THE FIRST PER-KEY CALLER OF A DEDUP SCAN WRITTEN FOR RARE ONES, so why that is affordable is stated
-   here rather than left to be rediscovered by whoever profiles it. State entries are deliberately kept out of
-   the hash index (see the CowEntry banner), so the scan below is O(this flow's HEAD) and it runs once per key
-   the walk yields — on a real bundle the hottest path there is, since a per-element x per-key expansion over an
-   unknown array is what most of a page's frontier is made of. It is affordable because the two cases are
-   disjoint and each is cheap for its own reason. A walk that has NOT forked since the iterator was built reads
-   its own creation, so JS_ObjFlowGen(obj) > d->fork_gen returns before the scan and the whole capture is two
-   compares. A walk that HAS forked pays the scan — over a head cow_delta_fork has just EMPTIED, for the parent
-   as well as the sibling, because the freeze takes the whole head into the shared segment. So the shape that
-   makes this path hot (a fork per key) is the same shape that keeps the head short, and the scan is O(1) in
-   exactly the case that runs most.
-   IT RETIRES WHEN A MEASUREMENT SAYS OTHERWISE, and the measurement is cow_delta_head_stats' entry count taken
-   on a page whose forks are per-key: a head that is long THERE is the case this argument does not cover, and
-   the repair would be to give state entries a key in the hash index rather than to move this capture. */
+   THE DEDUP IS THE HASH INDEX'S O(1) FIND, the same one every other capture uses. It used to be a linear scan
+   of the whole head, under an argument that the two reachable cases were each cheap for their own reason: an
+   unforked walk skips before the scan on the generational test, and a forked one scans a head cow_delta_fork
+   has just emptied. That argument named its own retiring measurement and the measurement came back against it
+   — not from this unit but from COW_STATE_HOST_REC, whose reach is a component's `*_of(v)` unwrap on a
+   BASELINE object, which never takes the generational skip and never sees a short head. The case the argument
+   did not cover is a long-lived flow that has not forked recently, and it is the ordinary one. */
 void cow_capture_iter_state(JSContext *ctx, JSValueConst obj) {
     CowDelta *d = cow_state_ask(COW_STATE_ITER);
     if (!d) return;
     DCHECK(JS_IsObject(obj), "an iteration record's state was captured with no object");
     if (JS_ObjFlowGen(obj) > d->fork_gen) return;   /* flow-private skip — the O(shared-state) invariant */
-    for (int i = 0; i < d->n; i++)                  /* one entry per iterator: the FIRST state is the baseline */
-        if (d->e[i].is_state && d->e[i].state_kind == COW_STATE_ITER &&
-            JS_VALUE_GET_PTR(d->e[i].obj) == JS_VALUE_GET_PTR(obj)) return;
+    /* one entry per iterator: the FIRST state is the baseline */
+    if (cow_hash_find(d, cow_key_state(COW_STATE_ITER, JS_VALUE_GET_PTR(obj))) >= 0) return;
     cow_capture_begin();
     if (cow_room_for_one(d, "cow: OOM growing delta (iter_state) — a lost cursor leaves two arms of a fork "
                             "splitting one enumeration, each walking a proper subset of it"))
@@ -1115,7 +1188,7 @@ void cow_capture_iter_state(JSContext *ctx, JSValueConst obj) {
     CowEntry *e = &d->e[d->n++];
     cow_entry_init(e);
     e->obj = JS_DupValue(ctx, obj);
-    cow_state_entry_set(e, COW_STATE_ITER);
+    cow_state_entry_set(d, e, COW_STATE_ITER, JS_VALUE_GET_PTR(obj));
     e->a_base = cow_state_save(ctx, e);   /* the walk as this flow found it */
     cow_capture_end();
 }
@@ -1161,15 +1234,15 @@ void cow_capture_host_record_at(JSValueConst owner, void *p, const CowRecord *re
                     vj, vi, (unsigned)rec->val_off[vi], file, line);
     }
     if (JS_ObjFlowGen(owner) > d->fork_gen) return;   /* flow-private skip — the O(shared-state) invariant */
-    for (int i = 0; i < d->n; i++)
-        if (d->e[i].is_state && d->e[i].state_kind == COW_STATE_HOST_REC && d->e[i].target == p) return;
+    /* one entry per record: the FIRST state is the baseline */
+    if (cow_hash_find(d, cow_key_state(COW_STATE_HOST_REC, p)) >= 0) return;
     cow_capture_begin();
     if (cow_room_for_one(d, "cow: OOM growing delta (host_record)"))
         cow_hash_rebuild(d);
     CowEntry *e = &d->e[d->n++];
     cow_entry_init(e);
     e->obj = JS_DupValue(ctx, owner);
-    cow_state_entry_set(e, COW_STATE_HOST_REC); e->target = p; e->rec = rec;
+    cow_state_entry_set(d, e, COW_STATE_HOST_REC, p); e->target = p; e->rec = rec;
     e->a_base = cow_state_save(ctx, e);   /* the record as this flow found it */
     cow_capture_end();
 }
@@ -1220,7 +1293,7 @@ void cow_record_set_at(JSContext *ctx, void *p, const CowRecord *rec, JSValue *s
 void cow_capture_varref(JSContext *ctx, void *vref) {
     if (cow_hooks_off() || !g_current || !vref) return;
     CowDelta *d = g_current;
-    if (cow_hash_find(d, NULL, 0, vref) >= 0) return;   /* capture each cell ONCE (O(1)) */
+    if (cow_hash_find(d, cow_key_cell(vref)) >= 0) return;   /* capture each cell ONCE (O(1)) */
     cow_capture_begin();
     cow_room_for_one(d, "cow: OOM growing delta (var_ref)");
     CowEntry *e = &d->e[d->n++];
