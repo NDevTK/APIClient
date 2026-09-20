@@ -603,21 +603,36 @@ static char *literal_ident(JSContext *ctx, JSValueConst v)
            concolic_exotic_own_names' `c->ident == NULL` arm, which aborts on a record whose shape is fully
            spelled except for a `?` in one argument position, and that abort is a live wall on a real bundle
            rather than a number climbing.
-           AND THE KIND OF THE UNNAMEABLE ARGUMENT SPLITS THIS RESIDUAL IN TWO, ONLY ONE HALF OF WHICH NEEDS
-           THE ORDINAL — measured over the bare site rows of a real minified bundle, where every one of them
-           is a CALL whose RECEIVER is named and whose argument is a page-created FUNCTION or a REGEXP
-           (`.some(?)`, `.match(?)`, a hook registration taking a callback). A FUNCTION needs it: quickjs
-           composes a body locator at JS_OrphanHash and says in its own words that it names the BYTECODE and
-           NOT the closure, so a factory called three times is one locator and three functions — which is the
-           1:N this ordinal exists for, arriving in the population that is actually blocking.
-           A REGEXP MAY NOT NEED IT AT ALL, and that is the next ordinal-free half rather than a smaller
-           version of this one: its source and its flags are text the PAGE wrote, so they are reproducible by
-           the replay a resumed flow performs, exactly as a registry key is. WHAT DECIDES IT IS `lastIndex`,
-           which §22.2.7.2 RegExpBuiltinExec ( R, S ) reads and writes for a global pattern — so two RegExps
-           sharing one source and one flag set are NOT one question, and a name composed of source and flags
-           alone would be 1:N again with the same lost arms. Read that before building it, not after; the
-           property is non-configurable by §22.2.8.1 "lastIndex", so a page cannot turn it into an accessor
-           and reading it runs no trap.
+           AND THE KIND OF THE UNNAMEABLE ARGUMENT DOES NOT SPLIT THIS RESIDUAL IN TWO, WHICH IS THE
+           CORRECTION THIS PARAGRAPH CARRIES — measured over the bare site rows of a real minified bundle,
+           where every one of them is a CALL whose RECEIVER is named and whose argument is a page-created
+           FUNCTION or a REGEXP (`.some(?)`, `.match(?)`, a hook registration taking a callback). A FUNCTION
+           needs the ordinal: quickjs composes a body locator at JS_OrphanHash and says in its own words that
+           it names the BYTECODE and NOT the closure, so a factory called three times is one locator and three
+           functions — the 1:N this ordinal exists for, in the population that is actually blocking.
+           THIS USED TO READ `A REGEXP MAY NOT NEED IT AT ALL, and that is the next ordinal-free half`, AND IS
+           REWRITTEN RATHER THAN DELETED BECAUSE ITS REASONING IS WHAT A READER RE-DERIVES: a RegExp's source
+           and its flags ARE text the page wrote, so they are reproducible by the replay a resumed flow
+           performs, exactly as a registry key is. What that argument reaches is the MATCH, and a name denotes
+           the OBJECT — ident_of_operand is asked of EVERY argument of every call on an unknown, never only of
+           a receiver's regexp methods. ECMAScript §22.2.7.2 "RegExpBuiltinExec ( regexp, string )" is why the
+           ordinal-free reading looked reachable: "If global is false and sticky is false, set lastIndex to 0",
+           so two such RegExps of one source and one flag set really do match alike. ECMAScript §22.2.8.1
+           "lastIndex" refutes it unconditionally — "This property shall have the attributes { [[Writable]]:
+           true, [[Enumerable]]: false, [[Configurable]]: false }" — so `r.lastIndex = 5` is observable on one
+           of a pair and not on the other whatever its flags are, and a RegExp is an ordinary object besides,
+           on which a page may set own properties and for which `r1 === r2` is false. Source-and-flags alone is
+           1:N and LOSES ARMS exactly as a bare site does. SO THERE IS ONE HALF AND NOT TWO: a RegExp's SITE
+           composer is its source and its flags where a function's is JS_OrphanHash, and both take the SAME
+           ordinal beside them.
+           AND THE FUNCTION HALF'S FIRST HOP IS IN QUICKJS AND NOT IN THIS FILE. literal_ident is handed every
+           operand of every call on an unknown, and operand_kind sends EVERY object to this arm — a bound
+           function, a Proxy and a C function among them. JS_OrphanHash DCHECKs on a value with no bytecode
+           body, and quickjs.h exports nothing narrower than JS_IsFunction, which is true of all three; so a
+           namer written here would abort on `arr.some(f.bind(this))`, a page-held abort switch on ordinary
+           input. The first diff is therefore the quickjs-side question `does this value have a bytecode body`,
+           answered ABSENT rather than asserted, because this file's contract is that an operand it cannot name
+           answers NULL.
            RETIREMENT: this note goes with the residual it belongs to.
            `{}` IS NOT THAT SPELLING AND NAMING IT AS ONE SENDS A READER TO GREP FOR THE WRONG THING: `{}` is
            what a CONCOLIC handed no shape renders as, and it was also this site's own spelling for an object
