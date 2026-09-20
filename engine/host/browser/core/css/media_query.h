@@ -121,6 +121,36 @@ bool media_query_length_px(JSContext *ctx, double n, const char *unit, size_t un
    about the SITE, it is correct, and it stays. What is missing is one ask per document per condition from a
    point that can carry a sibling — `solver_decide_restartable` (solver/decide.h), whose contract is engine
    code re-reached by re-running the flow's scheduler step. This read is then already its consumer.
+   AND THIS CLAUSE NAMED A MECHANISM AND NO SITE, WHICH IS HOW IT WAS READ AS NAMING THE WRONG ONE — recorded
+   here rather than silently repaired, because a reader who re-derives a site from `one ask per document per
+   condition` reaches the same wrong one. The natural reading is HTML §8.1.7.3 update the rendering STEP 10,
+   which is where a document's media queries are already walked. IT CANNOT HOLD THIS ASK. That walk is inside
+   the update-the-rendering STEP MACHINE, whose driver is an ordinary `JS_CFUNC_step` C function enqueued as a
+   call task, and `js_call_c_function` sets `rt->current_stack_frame` before it dispatches — so
+   `JS_HasActivation` is TRUE for the whole of that machine and the seam's second precondition fires by name
+   (`a restartable fork was asked for while page code was on the stack`, solver/engine.c, whose own text
+   already lists `a listener inside a rendering step`). Its FIRST precondition passes, which is what makes the
+   wrong site look right: a C activation leaves the flow's frame handle NULL.
+   THE SITE THAT DOES HOLD IT is §8.1.7.3's IN-PARALLEL half — core/rendering/rendering.c's
+   `rendering_run_opportunity`, which the scheduler calls as a rung of the flow's own step with nothing of the
+   flow on any stack. It is not a hopeful candidate: it ALREADY asks this seam, through
+   core/timing/event_loop.h's `event_loop_before`, and has done since before this residual was written. The
+   ask goes at its TOP, above `event_loop_advance_to` and the task enqueue, because the contract is that the
+   whole computation is re-reached by re-running the step — a sibling assembled below those would advance the
+   clock twice and queue a second rendering task.
+   AND A STEP MACHINE IS NOT WITHOUT A SEAM, WHICH IS THE OTHER HALF A READER NEEDS: it has its own, and a
+   different one. `step_tobool_run` (quickjs-step.h) is the BRANCH seam asked from inside a machine — it keys
+   on the VALUE'S OWN branch identity, which is exactly the key `decide_value_arm` below reads, and it returns
+   JS_STEP_FORK for the driver to snapshot. So a machine-side ask is buildable; it is simply not
+   `solver_decide_restartable`, and the two are not interchangeable.
+   THE ORDERED SUBPROBLEMS, because this is more than one landing. (1) A media feature's value must be a FACT
+   two queries can both narrow, or an asker that mints every condition a sheet holds populates environments no
+   user agent has — stated with its own three clauses at `mq_source` in media_query.c, and first because the
+   motivating pages carry a `dark` block AND a `light` block. (2) The ENUMERATION: which conditions a document
+   holds. Nothing answers it today; the cascade's own walk is the honest set, since a condition no cascade
+   consults steers nothing. (3) The ask itself, at the site above. Each of (2) and (3) is inert without the
+   other — a recorded set nothing drains is a write with no reader — so they are ONE landing and not two.
+   RETIREMENT: this record goes when that ask exists, which retires the whole residual.
    ITS ABSENCE SHOWS wherever every flow of one document emits the same cascade text for a sheet whose only
    environment dependence is an `@media` block over a feature the table in media_query.c gives more than one
    legal value.

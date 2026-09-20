@@ -22,6 +22,7 @@
 #include "core/frame/screen.h"
 #include "core/frame/viewport.h"
 #include "core/frame/window_proxy.h"
+#include "solver/compose.h"
 #include "solver/concolic.h"
 #include "solver/decide.h"
 
@@ -1341,29 +1342,80 @@ bool media_query_matches(JSContext *ctx, const MediaQuerySet *set)
    `(min-width: 600px)` is genuinely a different question in each — one key would let a branch taken in the
    parent decide the iframe's. The SHAPE is the human-readable half a finding carries, so it names the query and
    not the document id. */
-static void mq_source(JSContext *ctx, const MediaQuerySet *set, char *shape, size_t nshape,
-                      char *src, size_t nsrc)
+/* THE KEY IS SIZED FROM ITS PARTS AND NOT FROM A NUMBER, and the reason is a defect this tree has already
+   measured once, one layer down, in the file that owns the mint. solver/concolic.c's `shapef` records it in
+   its own words: "Every shape in this file was a fixed 192- or 224-byte buffer, and concolic_exotic_get's
+   shape is ALSO the field path an @S candidate is injected at — so a chain long enough to truncate gave two
+   different sources one provenance." This composed a 256-byte `src` out of `media_query_serialize`, whose
+   length is the PAGE'S: `matchMedia` takes a page string and an `@media` prelude is page bytes, so two query
+   lists agreeing on a long enough prefix truncated to ONE identity. That is not a display defect. `src` is
+   what decide.c keys the flow's constraint by, so the second list is answered by the FIRST list's recorded
+   arm and its own branch does not fork at all — an arm deleted over a predicate nothing contradicted, which
+   §Solver-half admits only for a branch the flow has already fixed. An assert is the wrong instrument here
+   and not merely a weaker one: the length is page-supplied, so a DCHECK on it would hand any page an abort
+   switch (§Offensive-programming — assert only what this codebase computed). The state is made impossible
+   instead, by the composer that measures before it writes. */
+static void mq_source(JSContext *ctx, const MediaQuerySet *set, char **shape, char **src)
 {
     JSValueConst self = document_window_proxy(ctx);
     char *text = media_query_serialize(set);
 
     DCHECK(window_proxy_is(self), "a media query was reported in a realm whose document has no WindowProxy");
     CHECK(text != NULL, "media queries: OOM keying a media query's answer on its own serialization");
-    snprintf(shape, nshape, "{media:%s}", text);
-    snprintf(src, nsrc, "{media#%u}%s", (unsigned)window_proxy_doc(self), text);
+    *shape = composef("{media:%s}", text);
+    *src   = composef("{media#%u}%s", (unsigned)window_proxy_doc(self), text);
+    /* ALWAYS FATAL AND NOT DEV-ONLY: a mint whose `src` is absent is a value with no identity, so every
+       branch over it is observed and dropped and the frontier loses the arms it would have carried —
+       §Offensive-programming's allocation case, where a dropped flow corrupts the frontier. */
+    CHECK(*shape != NULL && *src != NULL,
+          "media queries: OOM composing the identity of a media query list's answer");
     free(text);
 }
 
 JSValue media_query_matches_value(JSContext *ctx, const MediaQuerySet *set)
 {
-    char shape[256], src[256];
+    char *shape, *src;
+    JSValue v;
 
     DCHECK(set != NULL, "a media query list's CSSOM answer was asked for after it was freed");
-    mq_source(ctx, set, shape, sizeof shape, src, sizeof src);
+    mq_source(ctx, set, &shape, &src);
     /* concolic_source_wrap hands back the plain boolean where no source overlay is installed (a conformance
        host), which is what keeps this component testable against the standard. */
-    return concolic_source_wrap(ctx, shape, src, JS_NewBool(ctx, media_query_matches(ctx, set)));
+    v = concolic_source_wrap(ctx, shape, src, JS_NewBool(ctx, media_query_matches(ctx, set)));
+    /* The mint COPIES both, which is what concolic_exotic_get's own `free(shape)` after its `concolic_alloc`
+       already relies on; a borrow here would be a use-after-free at every later read of this value's shape. */
+    free(shape);
+    free(src);
+    return v;
 }
+
+/* RESIDUAL — TWO QUERIES OVER ONE ENVIRONMENT FACT ARE TWO UNRELATED PREDICATES, SO A FLOW CAN STAND IN AN
+   ENVIRONMENT NO USER AGENT HAS.
+   NOT COVERED: the concolic above is minted over the query list's ANSWER, and `mq_env` is all `double` and
+   all discrete-feature defaults — so this engine holds no fact ABOUT THE ENVIRONMENT for two queries to
+   narrow in common. Pinning `(prefers-color-scheme: dark)` true records a truth about that boolean and says
+   nothing whatever about `(prefers-color-scheme: light)` — and Media Queries 5 §12.5 "Detecting the desire
+   for light or dark color schemes: the prefers-color-scheme feature" gives that feature `Value: light |
+   dark`, two values and no third, so the two queries are exact complements and a flow standing on both is in
+   an environment no user agent has. The same holds for `(min-width: 600px)` against `(min-width: 1000px)`
+   over one viewport width, where the second entails the first. §Attacker-sources is the rule this fails — a
+   source without its intrinsic browser constraints yields findings that do not reproduce — and the cost is
+   not only soundness: N such queries cost 2^N flows against N+1 real environments, which no ordering may
+   cap.
+   THE PARAGRAPH ABOVE `mq_unit_px` IS CORRECT AND DOES NOT COVER THIS. It argues that `100dvh` and `100lvh`
+   are rightly two forks because the dynamic and large viewport sizes genuinely differ, which is true of that
+   pair and false of any two queries over ONE fact; it is one arm of the question reasoned out, not the whole.
+   WHAT THE NEXT DIFF BUILDS: the key over the FACT rather than over the query text, which this engine already
+   does on the computed-value side — core/css/css_length.h's `CssEnvFact`/`CssEnvSet` and
+   core/frame/viewport.h's `viewport_env_derived` mint ONE joint domain over the set of facts a length reads,
+   and `mq_unit_px`'s own paragraph already names that as the answer for the viewport spellings. The discrete
+   features (`prefers-color-scheme`, `forced-colors`, `pointer`) have no row in that enum and need one whose
+   domain is the feature's own value set — which `MQ_FEATURES` at the top of this file already holds, one
+   value list per row, read off each feature's own `Value:` production.
+   HOW ITS ABSENCE WOULD SHOW: a flow that has taken the true arm of one query over a feature reaching a
+   second query over that same feature and FORKING there, rather than finding the arm the first decided —
+   observable in the fork census as two keys over one feature name with hits on all four combinations.
+   RETIRED BY: a media feature's value being a fact a length and a query both read. */
 
 bool media_query_matches_now(JSContext *ctx, const MediaQuerySet *set)
 {

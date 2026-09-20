@@ -87,6 +87,7 @@
 #include "core/idl_slots.h"
 #include "core/mime/mime_type.h"
 #include "core/realm.h"
+#include "solver/compose.h"
 #include "solver/concolic.h"
 #include "solver/decide.h"
 
@@ -351,14 +352,26 @@ bool media_device_renders(const MimeType *m)
 /* THE SOURCE IDENTITY of "the bytes at this address" — what the outcome fork is keyed by and what `duration`
    is tagged with. The ADDRESS is part of it because two `<video>` elements pointing at two URLs are two
    different questions, and one key would let a fork taken for one decide the other. */
-static void media_source_id(JSContext *ctx, JSValueConst st, char *shape, size_t nshape, char *src,
-                            size_t nsrc)
+/* THE KEY IS SIZED FROM ITS PARTS AND NOT FROM A NUMBER — the same defect core/css/media_query.c's
+   `mq_source` carries the argument for, reached through the other page-supplied operand. `currentSrc` is a
+   URL the page wrote (`<video src>`, a `data:` URL, a blob URL with a query), so it has no length this or any
+   other number bounds, and a fixed 256-byte `src` gave two resources agreeing on a long enough prefix ONE
+   identity. `src` is what decide.c keys the flow's constraint by, so the second element's `duration > 60`
+   was answered by the FIRST element's recorded arm and did not fork — an arm deleted over a predicate
+   nothing contradicted. The length is page-supplied, so a DCHECK on it would be a page-held abort switch
+   (§Offensive-programming); the state is made impossible instead. OWNED: both strings are the caller's to free,
+   and the mint COPIES them. */
+static void media_source_id(JSContext *ctx, JSValueConst st, char **shape, char **src)
 {
     JSValue cur = JS_GetPropertyStr(ctx, st, "currentSrc");
     const char *url = JS_ToCString(ctx, cur);
 
-    snprintf(shape, nshape, "{media:%s}", url ? url : "");
-    snprintf(src, nsrc, "{media}%s", url ? url : "");
+    *shape = composef("{media:%s}", url ? url : "");
+    *src   = composef("{media}%s", url ? url : "");
+    /* ALWAYS FATAL: a mint whose `src` is absent is a value with no identity, so every branch over it is
+       observed and dropped and the frontier loses the arms it would have carried. */
+    CHECK(*shape != NULL && *src != NULL,
+          "media elements: OOM composing the identity of a media element's resource");
     if (url) JS_FreeCString(ctx, url);
     JS_FreeValue(ctx, cur);
 }
@@ -369,10 +382,14 @@ static void media_source_id(JSContext *ctx, JSValueConst st, char *shape, size_t
    modelled device's own answer (the resource is usable) stands. */
 static JSValue media_resource_value(JSContext *ctx, JSValueConst st)
 {
-    char shape[256], src[256];
+    char *shape, *src;
+    JSValue v;
 
-    media_source_id(ctx, st, shape, sizeof shape, src, sizeof src);
-    return concolic_source_wrap(ctx, shape, src, JS_UNDEFINED);
+    media_source_id(ctx, st, &shape, &src);
+    v = concolic_source_wrap(ctx, shape, src, JS_UNDEFINED);
+    free(shape);
+    free(src);
+    return v;
 }
 
 /* ---- §4.8.11.14's TimeRanges --------------------------------------------------------------------------------
@@ -1839,14 +1856,17 @@ static JSValue js_media_get(JSContext *ctx, JSValueConst this_val, int magic)
 static JSValue js_media_duration(JSContext *ctx, JSValueConst this_val, int magic)
 {
     JSValue st = media_state_of(ctx, this_val, "duration"), out;
-    char shape[256], src[256];
 
     (void)magic;
     if (JS_IsException(st)) return st;
     out = JS_NewFloat64(ctx, st_num(ctx, st, "duration"));
     if (st_int(ctx, st, "readyState") >= HAVE_METADATA) {
-        media_source_id(ctx, st, shape, sizeof shape, src, sizeof src);
+        char *shape, *src;
+
+        media_source_id(ctx, st, &shape, &src);
         out = concolic_source_wrap(ctx, shape, src, out);
+        free(shape);
+        free(src);
     }
     JS_FreeValue(ctx, st);
     return out;
