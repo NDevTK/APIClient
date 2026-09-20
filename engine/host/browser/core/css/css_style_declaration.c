@@ -3346,9 +3346,16 @@ static void cssd_decls_remove_property(CssDecls *d, const char *name)
  * What would be invented is a value for an unknown with NO example, and that case does not reach here.
  *
  * THE RECORD IS KEYED BY PROPERTY NAME AND VALIDATED BY THE DECLARATION'S OWN BYTES, which is what keeps it
- * from going stale in a way no writer could be made to notice. Every entry's concolic carries, as its EXAMPLE,
- * exactly the bytes that write stored — that is how it is built below — so a read that finds the block no
+ * from going stale in a way no writer could be made to notice. Every entry STATES those bytes as a fact of its
+ * own, written in the same call that files the unknown — so a read that finds the block no
  * longer declaring those bytes has found a record about a declaration that is gone, and answers the text. A
+ * VALIDATION READ OUT OF THE UNKNOWN'S EXAMPLE IS WHAT USED TO STAND HERE AND IT WAS NOT A SECOND SPELLING OF
+ * THIS ONE: `concolic_example` answers PER FLOW and withdraws itself on a path whose own branch contradicted
+ * it, so the bytes went away under an entry nothing had touched — see `cssd_taint_set`. The key itself never
+ * had a value component and is the same key core/dom/element.c's attribute shadow uses (the SLOT's identity,
+ * nothing of what is in it); what parts the two is that an attribute has ONE writer — solver/dom_cow.h's
+ * chokepoint, which fuses the value and the taint — while a declaration's text has several, so this record
+ * needs a staleness test where that shadow needs none. A
  * wholesale replacement through `cssText`, through `setAttribute('style', …)` or through the rule's own text
  * therefore needs no invalidation call anywhere: there is no write that can leave a WRONG answer behind, only
  * one that leaves a silent entry. The residual is the other direction and it is SOUND: a concrete write of the
@@ -3393,53 +3400,102 @@ static JSValue cssd_taint_record(JSContext *ctx, JSValueConst block, bool create
     return rec;
 }
 
-/* Record `v` as the unknown behind the declaration named `name`, or CLEAR the entry when `v` is JS_UNDEFINED —
-   which is what a CONCRETE write says: this declaration is no longer an unknown's. */
-static void cssd_taint_write(JSContext *ctx, JSValueConst block, const char *name, JSValueConst v)
+/* ONE ENTRY STATES TWO FACTS AND THEY ARE WRITTEN IN ONE CALL, which is solver/dom_cow.h's own rule for an
+   attribute's value and its taint — "They were two calls every caller made in agreement over a key each
+   computed for itself: a caller that made one and not the other left a stale taint on a fresh value". The two
+   are the UNKNOWN the page's value was, and DECLARED, the bytes this write put in the block for it. */
+#define CSSD_TAINT_UNKNOWN  "unknown"
+#define CSSD_TAINT_DECLARED "declared"
+
+/* Record `v` — the unknown behind the declaration named `name` — beside `declared`, THE BYTES THIS WRITE
+   STORED IN THE BLOCK FOR IT. Those bytes are the entry's own fact and are NOT read back out of the unknown.
+   THE BYTES USED TO BE TAKEN FROM THE UNKNOWN'S EXAMPLE AT THE READ, AND THAT WAS A LIVE DEFECT RATHER THAN
+   only the thing that blocked a declaration holding an unknown with none. `concolic_example` is a PER-FLOW
+   accessor: solver/concolic.h's `concolic_contradict_example` makes a value answer with NO example on a path
+   whose own branch contradicted it, which is §Solver-half's forced sibling and is the central mechanism this
+   engine exists to run — `decide_note_forced_arm` files it under the branched value's identity AND under its
+   comparison subject's, and a value read back OUT of this record and branched on is exactly such a subject.
+   So `el.style.color = x; if (el.style.color === 'blue') …` left the read on the forced arm asking a value
+   that had stopped answering, after which the entry matched nothing and the member returned the BLOCK'S PLAIN
+   TEXT — the example the flow had just proved wrong, handed to the page as a concrete string with the domain
+   gone. The record's own header states the rule correctly ("VALIDATED BY THE DECLARATION'S OWN BYTES") and the
+   mechanism read them through the one accessor entitled to withdraw them. */
+static void cssd_taint_set(JSContext *ctx, JSValueConst block, const char *name, JSValueConst v,
+                           const char *declared)
 {
-    JSValue rec;
+    JSValue rec, entry, bytes;
     JSAtom k;
 
-    if (JS_IsUndefined(v)) {
-        rec = cssd_taint_record(ctx, block, false);
-        if (!JS_IsObject(rec)) { JS_FreeValue(ctx, rec); return; }
-    } else {
-        DCHECK(concolic_is(v),
-               "a declaration's unknown was recorded with a value that is not one — this record answers "
-               "§6.6.1's reads INSTEAD of the block's text, so a real string in it would be a second, "
-               "unvalidated copy of a declaration the text already holds");
-        rec = cssd_taint_record(ctx, block, true);
-    }
+    DCHECK(concolic_is(v),
+           "a declaration's unknown was recorded with a value that is not one — this record answers "
+           "§6.6.1's reads INSTEAD of the block's text, so a real string in it would be a second, "
+           "unvalidated copy of a declaration the text already holds");
+    DCHECK(declared != NULL,
+           "a declaration's unknown was recorded without the bytes the write stored for it — those bytes are "
+           "what ties the entry to THIS declaration rather than to a property name somebody has since written, "
+           "so an entry without them could never be matched to the block again");
+    rec = cssd_taint_record(ctx, block, true);
+    entry = idl_slots_new(ctx);
+    CHECK(JS_IsObject(entry),
+          "cssom: a declaration's unknown-value entry could not be allocated — a dropped one would read as a "
+          "declaration whose provenance the page never supplied");
+    bytes = JS_NewString(ctx, declared);
+    CHECK(JS_IsString(bytes),
+          "cssom: OOM copying the bytes a declaration's unknown was stored as — an entry that lost them would "
+          "match no declaration ever again, so the unknown would be dropped on the next read");
+    JS_SetPropertyStr(ctx, entry, CSSD_TAINT_UNKNOWN, JS_DupValue(ctx, v));
+    JS_SetPropertyStr(ctx, entry, CSSD_TAINT_DECLARED, bytes);
     k = JS_NewAtom(ctx, name);
     CHECK(k != JS_ATOM_NULL, "cssom: a property name could not be interned for the block's unknown record");
-    if (JS_IsUndefined(v)) JS_DeleteProperty(ctx, rec, k, 0);
-    else                   JS_SetProperty(ctx, rec, k, JS_DupValue(ctx, v));
+    JS_SetProperty(ctx, rec, k, entry);   /* consumes `entry` */
+    JS_FreeAtom(ctx, k);
+    JS_FreeValue(ctx, rec);
+}
+
+/* CLEAR the entry for `name`, which is what a CONCRETE write says: this declaration is no longer an unknown's.
+   IT IS A SEPARATE ENTRY AND NOT A SENTINEL ARGUMENT TO THE ONE ABOVE, because the pair (no unknown, some
+   declared bytes) and the pair (an unknown, no declared bytes) are both states that call would have to refuse
+   at runtime, and §Fix-the-ROOT wants them unspellable instead. */
+static void cssd_taint_clear(JSContext *ctx, JSValueConst block, const char *name)
+{
+    JSValue rec = cssd_taint_record(ctx, block, false);
+    JSAtom k;
+
+    if (!JS_IsObject(rec)) { JS_FreeValue(ctx, rec); return; }
+    k = JS_NewAtom(ctx, name);
+    CHECK(k != JS_ATOM_NULL, "cssom: a property name could not be interned for the block's unknown record");
+    JS_DeleteProperty(ctx, rec, k, 0);
     JS_FreeAtom(ctx, k);
     JS_FreeValue(ctx, rec);
 }
 
 /* The unknown behind the declaration `name` currently declares, or JS_UNDEFINED when there is none. `declared`
    is what the BLOCK'S TEXT says that property's value is, read by the caller through its own §6.6.1 step — the
-   record answers only for a declaration whose bytes are still the ones it was written about. OWNED. */
+   record answers only for a declaration whose bytes are still the ones it was written about, and the bytes it
+   compares are the ENTRY'S OWN, stated by the write. NOTHING HERE ASKS THE UNKNOWN ANYTHING, which is the
+   property that makes the record usable by a value with no example at all; the paragraph at `cssd_taint_set`
+   is why it is also a correctness rule for every value that has one. OWNED. */
 static JSValue cssd_taint_read(JSContext *ctx, JSValueConst block, const char *name, const char *declared)
 {
-    JSValue rec = cssd_taint_record(ctx, block, false), held, example;
-    const char *ex;
+    JSValue rec = cssd_taint_record(ctx, block, false), entry, held, bytes;
+    const char *stored;
     bool same;
 
     if (!JS_IsObject(rec) || !declared) { JS_FreeValue(ctx, rec); return JS_UNDEFINED; }
-    held = JS_GetPropertyStr(ctx, rec, name);
+    entry = JS_GetPropertyStr(ctx, rec, name);
     JS_FreeValue(ctx, rec);
-    if (!concolic_is(held)) { JS_FreeValue(ctx, held); return JS_UNDEFINED; }
-    example = concolic_example(ctx, held);
-    DCHECK(JS_IsString(example),
-           "a declaration's recorded unknown carries no string example, and its example is what this record "
-           "IS: the write stores the example's own bytes as the declaration and files the unknown under them, "
-           "so an entry without one names no declaration and could never be matched to the block again");
-    ex = JS_IsString(example) ? JS_ToCString(ctx, example) : NULL;
-    JS_FreeValue(ctx, example);
-    same = ex != NULL && strcmp(ex, declared) == 0;
-    if (ex) JS_FreeCString(ctx, ex);
+    if (!JS_IsObject(entry)) { JS_FreeValue(ctx, entry); return JS_UNDEFINED; }
+    held  = JS_GetPropertyStr(ctx, entry, CSSD_TAINT_UNKNOWN);
+    bytes = JS_GetPropertyStr(ctx, entry, CSSD_TAINT_DECLARED);
+    JS_FreeValue(ctx, entry);
+    DCHECK(concolic_is(held) && JS_IsString(bytes),
+           "a declaration's unknown-value entry holds something other than an unknown and the bytes it was "
+           "declared as — the entry is written in ONE call by this file alone, on a record whose own slot the "
+           "page cannot reach, so a half-formed one is this component disagreeing with itself");
+    stored = JS_IsString(bytes) ? JS_ToCString(ctx, bytes) : NULL;
+    JS_FreeValue(ctx, bytes);
+    same = stored != NULL && concolic_is(held) && strcmp(stored, declared) == 0;
+    if (stored) JS_FreeCString(ctx, stored);
     if (same) return held;
     JS_FreeValue(ctx, held);
     return JS_UNDEFINED;
@@ -3500,25 +3556,38 @@ static bool cssd_value(JSContext *ctx, JSValueConst value, const char *member, c
                    "parse and no way to decide step 6's \"If component value list is null, then return\". BOTH "
                    "OUTCOMES ARE FEASIBLE and neither may be picked: the block gains this declaration, or it is "
                    "left exactly as it was. "
-                   "WHAT IS MISSING IS A DECLARATION THAT CAN HOLD AN UNKNOWN WITH NO BYTES, AND IT IS OWED "
-                   "BEFORE ANY FORK. This crash used to name the OUTCOME FORK as the next diff — these three "
-                   "bodies as step machines asking quickjs-step.h's step_fork_run which completion the parse "
-                   "reached — and that clause is RETIRED AS FIRST rather than as wrong: it is the SECOND diff, "
-                   "and built first it would produce two arms that write the IDENTICAL block. The reason is one "
-                   "line below, at the write: `cssd_write_declaration` takes the value as a `const char *` and "
-                   "reads NULL as REMOVE, and all three callers spell the argument `*v.bytes ? v.bytes : NULL`, "
-                   "so an arm that has no bytes is the arm that removes the declaration — which is the other "
-                   "arm. The fork would stop this abort, run both worlds, and leave them byte-identical. "
-                   "THE STORE IS WHAT HAS TO EXIST FIRST, and the block's own unknown record above cannot be "
-                   "it as written: `cssd_taint_write` asserts its value is a concolic and `cssd_taint_read` "
-                   "validates an entry by strcmp of that concolic's EXAMPLE against the bytes the block "
-                   "declares, so the record is KEYED BY AN EXAMPLE and this value is the one kind that has "
-                   "none. THE SIBLING SEAM ANSWERS THE SAME QUESTION WITH NO EXAMPLE AT ALL and is the "
-                   "precedent to read: core/dom/element.c's `el_attr_value` stores `concolic_shape_c`'s SHAPE "
-                   "as the bytes in the tree and files the concolic itself in the (element, name) shadow, so "
-                   "the read gives the same concolic back and nothing is invented — a shape is a derivation, "
-                   "not a value this engine made up. That is why `setAttribute('data-theme', <this same "
-                   "unknown>)` does not abort and this write does. "
+                   "WHAT IS MISSING IS A DECLARATION THAT CAN HOLD AN UNKNOWN WITH NO BYTES. Half of that is "
+                   "BUILT and half is not, and the halves are not in the order this crash used to give. "
+                   "THE STORE IS BUILT. The block's unknown record above USED to validate an entry by strcmp "
+                   "of its concolic's EXAMPLE against the bytes the block declares, which keyed the record by "
+                   "an example and refused the one kind of value that has none; it now states those bytes as "
+                   "the ENTRY'S own fact and asks the unknown nothing, so an entry with no example is "
+                   "storable and readable today, and `cssd_taint_set` records why that was a live defect for "
+                   "the entries that DO have one. "
+                   "WHAT IS NOT BUILT IS THE DECLARATION'S OWN TEXT, AND IT IS NOT SEPARABLE FROM THE FORK — "
+                   "which retires this crash's older clause that the fork is a SECOND diff and leaves the "
+                   "REASON that clause gave standing, because the reason is still the trap. That reason is "
+                   "one line below, at the write: `cssd_write_declaration` takes the value as a `const char *` "
+                   "and reads NULL as REMOVE, and all three callers spell the argument "
+                   "`*v.bytes ? v.bytes : NULL`, so an arm that has no bytes is the arm that REMOVES the "
+                   "declaration — which is the other arm — and a fork built with nothing for its success arm "
+                   "to write still runs both worlds and leaves them byte-identical. §6.6's declarations ARE "
+                   "text, so the block "
+                   "cannot hold a property at all without bytes for it, and every candidate for those bytes "
+                   "DECIDES step 5: this engine's parse is real (`cssom_parse_a_css_value` runs lexbor and "
+                   "answers NULL for a value the property's grammar refuses, which is step 6's own arm), so "
+                   "writing `concolic_shape_c`'s shape the way core/dom/element.c's `el_attr_value` writes it "
+                   "into an ATTRIBUTE is NOT the symmetric answer this crash used to call it — an attribute "
+                   "value has no grammar and a declaration's has one, so the shape parses as nothing and the "
+                   "write silently becomes the arm that leaves the block alone. What a declaration with no "
+                   "bytes must hold is a DISTINGUISHED IN-BAND VALUE, on the pattern "
+                   "core/css/css_pending_substitution.h already carries for css-values-5's "
+                   "pending-substitution value (`css_pending_make`/`css_pending_is`, read in exactly one place "
+                   "per reader), and writing one IS taking the arm on which the parse succeeded. "
+                   "WHAT THE NEXT DIFF BUILDS is therefore ONE diff and not two: these three bodies as step "
+                   "machines asking quickjs-step.h's `step_fork_run` which completion the parse reached, whose "
+                   "success arm declares that distinguished value and files this record's entry for it, and "
+                   "whose other arm returns. "
                    "HOW ITS ABSENCE WOULD SHOW, as an observation: a run carries this abort at a value derived "
                    "on an arm the run FORCED rather than observed — a forced sibling drops the example its "
                    "branch contradicted, so every value computed downstream of one has no example, and a page "
@@ -3586,18 +3655,19 @@ static void cssd_write_declaration(JSContext *ctx, JSValueConst block, const cha
     else       cssd_decls_remove_property(&d, name);
     for (i = 0; i < set.n; i++) {
         int at = cssd_decls_index(&d, set.name[i]);
-        JSValue derived = JS_UNDEFINED;
 
         DCHECK(at >= 0 && d.v[at].value != NULL,
                "a write reported setting a declaration the list does not hold — the two are one step, and a "
                "name reported without a value is a report composed somewhere other than at the set");
         if (at < 0 || !d.v[at].value) continue;
-        if (concolic_is(taint)) {
+        if (!concolic_is(taint)) { cssd_taint_clear(ctx, block, set.name[i]); continue; }
+        {
             /* MEASURED AND NOT CAPPED, because the operation name is HALF THE DERIVATION'S IDENTITY: a custom
                property's name is whatever the page wrote, so a fixed buffer would truncate two long names to
                one string and file two declarations under one constraint key. */
             size_t n = sizeof CSSD_TAINT_OP - 1 + strlen(set.name[i]) + 1;
             char *op = malloc(n);
+            JSValue derived;
 
             CHECK(op != NULL, "cssom: OOM naming the derivation behind an unknown declaration value");
             memcpy(op, CSSD_TAINT_OP, sizeof CSSD_TAINT_OP - 1);
@@ -3608,9 +3678,12 @@ static void cssd_write_declaration(JSContext *ctx, JSValueConst block, const cha
                    "a derivation over an unknown declaration value came back as something other than an "
                    "unknown — solver/concolic.h answers JS_UNINITIALIZED only for an operand that is not one, "
                    "and this one was tested directly above");
+            /* THE BYTES THIS WRITE STORED, handed to the record as the entry's own fact. They are the same
+               string the derivation above was given as its example, and that is a COINCIDENCE OF THIS CALL
+               rather than the record's rule: the example answers per flow and these bytes do not. */
+            cssd_taint_set(ctx, block, set.name[i], derived, d.v[at].value);
+            JS_FreeValue(ctx, derived);
         }
-        cssd_taint_write(ctx, block, set.name[i], derived);
-        JS_FreeValue(ctx, derived);
     }
     /* §6.6.1's removeProperty steps 5 and 6 take the declaration away, so every record about it is about a
        declaration that is gone. The shorthand walk is the same one the removal made, asked of the same entry. */
@@ -3619,8 +3692,8 @@ static void cssd_write_declaration(JSContext *ctx, JSValueConst block, const cha
         unsigned n;
 
         lh = css_shorthand_longhands(name, &n);
-        if (lh) for (i = 0; i < n; i++) cssd_taint_write(ctx, block, lh[i], JS_UNDEFINED);
-        else    cssd_taint_write(ctx, block, name, JS_UNDEFINED);
+        if (lh) for (i = 0; i < n; i++) cssd_taint_clear(ctx, block, lh[i]);
+        else    cssd_taint_clear(ctx, block, name);
     }
     next = cssd_serialize_decls(&d);
     cssd_decls_free(&d);
