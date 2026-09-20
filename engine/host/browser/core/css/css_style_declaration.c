@@ -1523,6 +1523,67 @@ static char *cssd_serialize_decls(const CssDecls *d)
     return out.s;
 }
 
+/* IS THE SERIALIZATION ABOVE A FAITHFUL BACKING FOR THIS BLOCK — WHICH IS A DIFFERENT QUESTION FROM WHETHER IT
+   IS A FAITHFUL SERIALIZATION, and is asked only where the answer is about to become the block's STORAGE.
+   §6.6's serialize a CSS declaration block is an OBSERVATION algorithm: it answers what `cssText` and
+   `getAttribute('style')` show. This engine uses its output as the backing — `cssd_write_declaration` reads the
+   text, edits the declarations, serializes and writes the result back — so EVERY RULE THAT MAKES THE
+   SERIALIZATION HIDE SOMETHING MAKES THE WRITE DESTROY IT. The two coincide for a declaration whose value is
+   the page's own bytes, and they come apart for a value no page can spell.
+   THIS FILE HAS EXACTLY ONE SUCH VALUE TODAY and it is core/css/css_pending_substitution.h's, whose own
+   standard requires it to serialize as the empty string wherever an API can observe it. `cssd_serialize_decls`
+   obeys that rule, `cssd_append_declaration` then writes `name: ;`, and the very next parse of that text drops
+   the declaration whole. THE SHORTHAND CONSOLIDATION IS WHAT HIDES THIS IN THE ORDINARY CASE: a block whose
+   longhands are ALL pending from ONE original serializes back to that original and round-trips exactly, which
+   is also the mechanism that makes a pending value a per-parse DERIVATION rather than something the backing
+   ever holds. The loss needs a MIXED list, and two writes produce one — a block holding `margin: var(--g) 0`
+   written through `el.style.marginTop = '5px'` keeps `margin-top` and loses `margin-right`, `margin-bottom`
+   and `margin-left`, because no shorthand can absorb the three survivors and each goes out under its own name
+   with an empty value.
+   IT IS A NAME CHECK AND NOT A VALUE CHECK, deliberately: what a round trip may legitimately change is a
+   value's SPELLING (a shorthand consolidates, a grammar canonicalizes), and what it may never change is WHICH
+   PROPERTIES THE BLOCK DECLARES. `cssd_write_declaration`'s own header has claimed exactly that identity in
+   prose since the block stopped storing an unconsolidated list, and nothing checked it; read that header's
+   paragraph beside this one, because the claim is true of every value a page can spell and of nothing else.
+   IT IS SCOPED TO THE UNSPELLABLE VALUES AND THAT SCOPE IS THE CLAIM, not a way of keeping the check quiet: a
+   declaration whose value is the page's bytes parsed once and parses again, so the population where the
+   backing and the serialization can disagree is exactly the population where the value is not bytes. A later
+   diff that adds a SECOND such value — §6.6.1's write of an unknown with no example is the one this file
+   aborts for — widens this scan rather than writing a second one, and this is the instrument any carrier it
+   proposes must pass before it is believed.
+   RETIREMENT: this record goes when the block's backing keeps its declarations as VALUES rather than as their
+   serialization, after which a serialization rule cannot reach the storage and there is no round trip to
+   assert over. */
+#if APICLIENT_DEV
+static void cssd_backing_assert_round_trip(const CssDecls *d, const char *next)
+{
+    CssDecls back = { 0 };
+    bool any = false;
+    unsigned i;
+
+    for (i = 0; i < d->n; i++) any = any || css_pending_is(d->v[i].value);
+    if (!any) return;
+    cssd_decls_from_text(next, next ? strlen(next) : 0, &back);
+    for (i = 0; i < d->n; i++) {
+        if (!css_pending_is(d->v[i].value)) continue;
+        DCHECKF(cssd_decls_index(&back, d->v[i].name) >= 0,
+                "a write to a CSS declaration block DESTROYED the declaration `%s`, which the block held "
+                "before the write and which the write did not remove. Its value is one no page can spell — "
+                "core/css/css_pending_substitution.h's, standing in for a shorthand that is not substituted "
+                "yet — and §6.6's serialization is required to show such a value as the empty string wherever "
+                "an API can observe it. THIS ENGINE STORES THAT SERIALIZATION, so the rule that hides the "
+                "value from a reader deletes the declaration from the block, and the next parse of the text "
+                "cannot find it. WHAT IS MISSING IS A BACKING THAT KEEPS DECLARATIONS AS VALUES RATHER THAN "
+                "AS THEIR SERIALIZATION: `cssd_declarations_text`/`cssd_declarations_write` are the seam, and "
+                "the block's declarations must survive a write without passing through an algorithm whose job "
+                "is to decide what a page is allowed to see. Until then the serialization is answering two "
+                "questions and one of them is not its own",
+                d->v[i].name);
+    }
+    cssd_decls_free(&back);
+}
+#endif
+
 static char *cssd_serialize_block(const lxb_css_rule_declaration_list_t *list, const char *text, size_t len)
 {
     CssDecls d = { 0 };
@@ -3553,9 +3614,19 @@ static bool cssd_value(JSContext *ctx, JSValueConst value, const char *member, c
             DFAILF("CSSOM §6.6.1 The CSSStyleDeclaration Interface's %s reached step 5, \"Let component value "
                    "list be the result of parsing value for property property\", for the property `%s` with a "
                    "value that is UNKNOWN EXTERNAL INPUT WITH NO EXAMPLE (`%s`) — so there are no bytes to "
-                   "parse and no way to decide step 6's \"If component value list is null, then return\". BOTH "
-                   "OUTCOMES ARE FEASIBLE and neither may be picked: the block gains this declaration, or it is "
-                   "left exactly as it was. "
+                   "parse and no way to decide step 6's \"If component value list is null, then return\" — nor "
+                   "step 3's \"If value is the empty string, invoke removeProperty() with property as "
+                   "argument and return\", two steps above it. "
+                   "THERE ARE THREE FEASIBLE COMPLETIONS AND NOT TWO, and none of them may be picked. THIS "
+                   "SENTENCE SAID `BOTH` AND NAMED THE FIRST AND THIRD, which is the enumeration error that "
+                   "comes of counting the arms of the STEP a crash stands at rather than the OBSERVABLE "
+                   "outcomes of the member: the block GAINS this declaration (step 5 parsed something), the "
+                   "block LOSES it (step 3 — every caller spells the write `*v.bytes ? v.bytes : NULL` and "
+                   "`cssd_write_declaration` reads NULL as REMOVE, so an unknown standing for the empty "
+                   "string is a removeProperty), or the block is left exactly as it was (step 6). The third "
+                   "is not the second: they differ on every block that already declares this property, and "
+                   "js_cssd_set_property's step-3 paragraph already names that world for an unknown that HAS "
+                   "an example. "
                    "WHAT IS MISSING IS A DECLARATION THAT CAN HOLD AN UNKNOWN WITH NO BYTES, AND HALF OF IT "
                    "IS BUILT. THE STORE IS: this block's unknown record above used to validate an entry by "
                    "strcmp of its concolic's EXAMPLE against the declared bytes, which keyed the record by an "
@@ -3576,12 +3647,41 @@ static bool cssd_value(JSContext *ctx, JSValueConst value, const char *member, c
                    "`el_attr_value` writes it into an ATTRIBUTE is NOT the symmetric answer this crash used to "
                    "call it: an attribute value has no grammar and a declaration's has one, so the shape "
                    "parses as nothing and the write silently becomes the arm that leaves the block alone. "
-                   "WHAT THE NEXT DIFF BUILDS is therefore ONE diff and not two — these three bodies as step "
-                   "machines asking quickjs-step.h's `step_fork_run` which completion the parse reached, whose "
-                   "success arm declares a DISTINGUISHED IN-BAND value (the `css_pending_make`/`css_pending_is` "
-                   "pattern core/css/css_pending_substitution.h already carries for css-values-5's "
-                   "pending-substitution value) and files this record's entry for it, and whose other arm "
-                   "returns. "
+                   "WHAT THE NEXT DIFF BUILDS — AND ITS FIRST HALF IS ONE STEP LOWER THAN THIS CLAUSE USED TO "
+                   "SAY. THE FORK IS UNCHANGED AND IS RIGHT: these three bodies as step machines asking "
+                   "quickjs-step.h's `step_fork_run` which completion the member reached, numbered so that "
+                   "outcome 0 is the ordinary one in which the declaration is written. WHAT WAS WRONG WAS THE "
+                   "CARRIER. The clause named `css_pending_make`/`css_pending_is` as the pattern "
+                   "core/css/css_pending_substitution.h already carries, and that is a real encoding of the "
+                   "WRONG KIND: a pending-substitution value is never STORED. It is DERIVED AT EVERY PARSE "
+                   "from the shorthand's own text — `cssd_decls_collect_declaration` mints one per longhand "
+                   "whenever a shorthand's value references an arbitrary substitution function, and "
+                   "`cssd_try_shorthand` writes the group back out as that ORIGINAL SHORTHAND — so the "
+                   "block's backing never holds one and never has to. A value with NO BYTES has no text to be "
+                   "derived from, so the pattern cannot carry it. Read those two together with "
+                   "`cssd_serialize_decls`: that is the whole derivation and it needs no run. "
+                   "SO THE FIRST SUBPROBLEM IS THE BACKING AND NOT THE MEMBERS. §6.6's declarations are kept "
+                   "here as the SERIALIZATION of the block, re-parsed by lexbor on every read, and a "
+                   "serialization is an OBSERVATION algorithm — it is defined to hide things. Every candidate "
+                   "carrier written into it is therefore one of two wrong answers: a value the re-parse DROPS "
+                   "(the declaration is destroyed, so the write arm and the leave-alone arm become one world "
+                   "and the fork bought nothing), or a value the re-parse KEEPS, which is by construction a "
+                   "value a page can write and can read back out of `getAttribute('style')` — so the engine "
+                   "would have answered the page with bytes it invented, which is the thing this crash "
+                   "exists to refuse. `cssd_backing_assert_round_trip` is the instrument that decides which "
+                   "of the two any proposed carrier is, and it already reports that loss for the ONE "
+                   "unspellable value this file has. "
+                   "ORDERED: (1) a backing that keeps a block's declarations as VALUES rather than as their "
+                   "serialization, so a declaration may hold one that has no bytes; (2) these three bodies as "
+                   "step machines over `step_fork_run`; (3) the write arm files this record's entry against "
+                   "the declaration (1) now lets the block hold. (2) DOES NOT LAND FIRST: a success arm with "
+                   "nothing to write leaves two identical worlds, which is the trap the paragraph above "
+                   "already names. "
+                   "AND THAT ORDER IS THIS CRASH'S ALONE — IT DOES NOT DEFER THE OTHER TWO FORKS THE SAME "
+                   "MEMBERS OWE. js_cssd_set_property's step-3 and step-4 residuals are about an unknown that "
+                   "HAS an example, and a success arm there has real bytes to write, so (2) builds them with "
+                   "no new backing under it. A reader arriving here from one of those must not read (1) as "
+                   "standing in front of it: what (1) unblocks is the NO-EXAMPLE write and nothing else. "
                    "HOW ITS ABSENCE WOULD SHOW, as an observation: a run carries this abort at a value derived "
                    "on an arm the run FORCED rather than observed — a forced sibling drops the example its "
                    "branch contradicted, so every value computed downstream of one has no example, and a page "
@@ -3617,13 +3717,19 @@ static void cssd_value_free(JSContext *ctx, CssdValue *v) { if (v->owned) JS_Fre
 /* The whole of a member's write: read the declarations, edit them, put them back — where "put them back" is
    §6.6's UPDATE STYLE ATTRIBUTE, whose step is "set an attribute value for owner node using 'style' and the
    result of SERIALIZING declaration block", generalized to the backing the block actually has.
-   THE SERIALIZATION IS LOSSLESS FOR THE DECLARATIONS NOW AND WAS NOT BEFORE, which is why the block used to
-   store an unconsolidated list instead. §6.6's serialization CONSOLIDATES — four `margin-*` declarations become
-   one `margin` — and while a block held the author's shorthand unexpanded, storing that threw away which
-   longhands it declared, so the very next `removeProperty('margin-top')` found nothing by that name. Now the
-   declarations ARE longhands: `margin: 2px 1px 1px` parses back to exactly the four the serializer consolidated,
-   so the round trip is the identity on the block's declarations, and what a page reads out of
-   `getAttribute('style')` is the string a browser writes there. */
+   THE SERIALIZATION IS LOSSLESS FOR THE DECLARATIONS A PAGE CAN SPELL, AND WAS NOT BEFORE, which is why the
+   block used to store an unconsolidated list instead. §6.6's serialization CONSOLIDATES — four `margin-*`
+   declarations become one `margin` — and while a block held the author's shorthand unexpanded, storing that
+   threw away which longhands it declared, so the very next `removeProperty('margin-top')` found nothing by that
+   name. Now the declarations ARE longhands: `margin: 2px 1px 1px` parses back to exactly the four the serializer
+   consolidated, so the round trip is the identity on them, and what a page reads out of `getAttribute('style')`
+   is the string a browser writes there.
+   THAT SENTENCE READ `LOSSLESS FOR THE DECLARATIONS` WITHOUT THE QUALIFIER AND IS REWRITTEN RATHER THAN
+   DELETED, because the argument it makes is correct and a reader who re-derives it from the consolidation
+   alone will re-state it unqualified. It is FALSE of a declaration whose value is one no page can spell, and
+   the reason is not the consolidation at all: §6.6's serialization is an OBSERVATION algorithm and is required
+   to HIDE such a value, so storing its output deletes the declaration. `cssd_backing_assert_round_trip`, above,
+   is where that is asserted rather than argued, and it names the capability the backing is missing. */
 /* `taint` IS THE UNKNOWN THE PAGE'S VALUE WAS, or JS_UNDEFINED when the value was a real string — and a
    CONCRETE write is a positive statement that this declaration is nobody's unknown any more, which is why it
    clears rather than leaving the last one standing.
@@ -3690,6 +3796,11 @@ static void cssd_write_declaration(JSContext *ctx, JSValueConst block, const cha
         else    cssd_taint_clear(ctx, block, name);
     }
     next = cssd_serialize_decls(&d);
+#if APICLIENT_DEV
+    /* ASKED BEFORE THE DECLARATIONS ARE RELEASED, because the check compares what this write MEANT the block
+       to declare against what the text it is about to store gives back — and the first of those two is `d`. */
+    cssd_backing_assert_round_trip(&d, next);
+#endif
     cssd_decls_free(&d);
 
     free(text);
