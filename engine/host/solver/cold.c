@@ -1809,6 +1809,23 @@ void cold_resume(JSContext *ctx, const char *recipes)
            "the rebuild read more orphan locators than it rebuilt flows — an 'o' record names the flow before "
            "it, so more of them than there are flows means at least one was bound to a flow that already had "
            "one and a drive the residue was saved for is gone");
+    /* RESIDUAL: THE TOTAL SURVIVES AN ABORT AND THE DECOMPOSITION DOES NOT, WHICH INVERTS WHICH OF THE TWO
+       THE PARAGRAPH ABOVE IS AN ARGUMENT FOR. That paragraph's reason for printing here rather than into the
+       result document is exactly right - "a session that goes on to crash still has to have said that it
+       resumed" - and the six numbers this merge has just established are published on TWO DIFFERENT
+       SCHEDULES: `flows` on the line below, at this instant, and segs/cands/cands_withdrawn/worlds/orphans
+       only through result.c's @COLD census, which is composed at the first scheduler sample. A session that
+       aborts BETWEEN the merge and that sample therefore publishes exactly the one number cold.h says cannot
+       do the job - "a single total cannot distinguish a residue of nothing but plain flows from one that
+       also carried an @S candidate" - and it is the @S arm that the surviving number is least able to name.
+       NOT COVERED: the five per-kind numbers, on any run that does not reach a census sample.
+       THE NEXT DIFF emits them at THIS moment through a channel that already has a reader - @COLD's
+       `resumed*` rows, which result.c composes - and NOT as a fresh marker beside the line below, which
+       would be a write with no reader, and NOT by widening that line, which extension/bridge.js parses as a
+       bare decimal tail and raises on.
+       ITS ABSENCE SHOWS as a run whose emitted marker set holds @RESUMED and no @COLD: the residue's
+       composition is then unrecoverable from the stream, and a round-trip reader reports that nothing said
+       what was rebuilt while this function held the answer. */
     printf("@RESUMED %ld\n", flows);
     fflush(stdout);
 }
