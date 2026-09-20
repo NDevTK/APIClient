@@ -592,9 +592,9 @@ static void park_rec_orphan(const Flow *f)
    BOTH FIELDS CROSS AS HEX for park_hex's own reason: a routed record holds the TABs of its own transport
    fields and a base64 payload, and a serialized origin is whatever origin_serialize wrote — neither is a
    charset this grammar can state, and a ';' in either would split the record in two on the way back. */
-/* WHICH SENDING TIMELINE A RECEIVING ONE IS IN — one record per [vector, taken] pair of the flow's commitment
-   record (solver/flow.h), written immediately AFTER the 'f' or 'c' record of the flow it belongs to and bound
-   to it by POSITION, exactly as the orphan locator and the unmade delivery are.
+/* WHICH SENDING TIMELINE A RECEIVING ONE IS IN — one record per [vector, taken, arm] row of the flow's
+   commitment record (solver/flow.h), written immediately AFTER the 'f' or 'c' record of the flow it belongs to
+   and bound to it by POSITION, exactly as the orphan locator and the unmade delivery are.
    IT IS NOT DERIVABLE FROM THE 'm' RECORDS BESIDE IT and that is the whole reason it crosses. Those are the
    messages this timeline has NOT yet delivered; a commitment is a message it already DID (or an arm of a
    branch it foreclosed), and both are gone from the queue. A resumed flow rebuilt without them starts as a
@@ -603,8 +603,15 @@ static void park_rec_orphan(const Flow *f)
    THE VECTOR CROSSES AS HEX for park_hex's reason: a world vector holds the colons and commas world_serialize
    writes and whatever the host called the root document, none of which this grammar states. The FLAG is one
    digit and needs no encoding, and it is written rather than inferred because the two kinds refuse different
-   things — a record whose flag was dropped would be read as whichever kind the first test asked for. */
-static void park_rec_commit(const char *vector, int taken)
+   things — a record whose flag was dropped would be read as whichever kind the first test asked for.
+   …AND THE MINTING MECHANISM IS THE THIRD FIELD, BY THE SAME SENTENCE ONE LEVEL UP. Both kinds refuse by
+   DEFERRING to a flow on the other side of the branch the row names, and whether such a flow exists is a fact
+   about the mechanism that pushed the row rather than about the vector (flow.h's FlowCommitArm). A resumed
+   row that lost it would be read as FLOW_COMMIT_ARM_NONE — the member that ABORTS — so the distinction is
+   carried rather than defaulted, which is also why a two-field 'r' is refused by NAME on the way back in.
+   It is one digit for the FLAG's reason, and asserted to be one here: the reader splits on commas, so a
+   member that needed two characters would come back as a value this vocabulary has no member for. */
+static void park_rec_commit(const char *vector, int taken, FlowCommitArm arm)
 {
     DCHECK(vector != NULL && *vector,
            "a receiving timeline's commitment was written to the park document with no world vector — the "
@@ -612,10 +619,20 @@ static void park_rec_commit(const char *vector, int taken)
     DCHECK(taken == 0 || taken == 1,
            "a receiving timeline's commitment was written with neither RECEIVED nor FORECLOSED — the two are "
            "the whole vocabulary and a third value would come back as one of them");
+    DCHECK((int)arm >= 0 && (int)arm <= 9,
+           "a receiving timeline's commitment was written with a minting mechanism that is not one digit — "
+           "this field is read back by splitting on commas, so a wider value comes back as a number "
+           "FlowCommitArm has no member for, or splits the record. The vocabulary is flow.h's and its width "
+           "is this grammar's, so a member past nine is a grammar change and not a new constant");
     park_open_rec();
     park_str("r");
     park_hex(vector);
     park_str(taken ? ",1" : ",0");
+    {
+        char f[3];
+        f[0] = ','; f[1] = (char)('0' + (int)arm); f[2] = '\0';
+        park_str(f);
+    }
 }
 
 static void park_rec_deliver(const char *record, const char *sender_origin)
@@ -980,15 +997,22 @@ void cold_park_flow(Flow *f)
             JSValue e = flow_world_commit_at(f, k);
             JSValue vv = JS_GetPropertyUint32(qctx, e, 0);
             JSValue tv = JS_GetPropertyUint32(qctx, e, 1);
+            JSValue av = JS_GetPropertyUint32(qctx, e, 2);
             const char *vec = JS_ToCString(qctx, vv);
 
             CHECK(vec != NULL,
                   "the cold tier could not read which sending timeline a flow is in — a commitment that "
                   "cannot be written is a resumed timeline that will accept the sender arm it did not take");
-            park_rec_commit(vec, JS_VALUE_GET_INT(tv));
+            DCHECK(JS_VALUE_GET_TAG(av) == JS_TAG_INT,
+                   "a flow being parked holds a commitment with no small-integer minting mechanism — the row "
+                   "states which mechanism minted the flow on the other side of its branch (flow.h's "
+                   "FlowCommitArm) and this tier may not invent one, so a row without it would be written "
+                   "out as FLOW_COMMIT_ARM_NONE and come back as a refusal that defers to nobody");
+            park_rec_commit(vec, JS_VALUE_GET_INT(tv), (FlowCommitArm)JS_VALUE_GET_INT(av));
             JS_FreeCString(qctx, vec);
             JS_FreeValue(qctx, vv);
             JS_FreeValue(qctx, tv);
+            JS_FreeValue(qctx, av);
             JS_FreeValue(qctx, e);
         }
     }
@@ -1305,15 +1329,19 @@ static Flow *park_flow_add(JSContext *ctx, double val, int before, long flows)
        "the world of a departing flow is not HELD — a live flow never holds a retired name", and again at its
        next cross-instance post. (2) Minting both as siblings of a fresh point is well-formed and INERT: the
        `sent` filter drops an edge nothing has sent, so every vector stays a bare head and no observable moves.
-       (3) Forcing the comma anyway is refused by the consumer BY NAME — deliver_admits says "a design that
-       hangs an ancestor off a root merely to put a comma in the vector would make this line PASS while the arm
-       it asserts still does not exist", trading a loud abort for a silent wrong answer.
-       WHAT THE NEXT DIFF BUILDS IS THE DELIVERY SEAM'S, and that abort already carries the condition: it
-       "RETIRES when a RECEIVED row states which mechanism minted its sibling arm, at which point this asks
-       that question instead of asking the vector's shape". This tier's half is a field on the 'r' record naming
-       that mechanism, landing WITH the consult or buying nothing. Reaching the abort needs no park at all —
-       two @S candidate sessions are the same comma-less pair of roots — which is why a reader sent from it to
-       this file finds nothing here to fix.
+       (3) Forcing the comma anyway BUYS NOTHING AT ALL NOW, and that is a weaker statement than the one that
+       stood here, which is why the change is recorded rather than made quietly. It read: forcing the comma "is
+       refused by the consumer BY NAME — deliver_admits says 'a design that hangs an ancestor off a root merely
+       to put a comma in the vector would make this line PASS while the arm it asserts still does not exist',
+       trading a loud abort for a silent wrong answer." That was true while the consumer read the vector's
+       SHAPE. It reads the row's own statement of which mechanism minted the other side now (flow.h's
+       FlowCommitArm), so a comma hung off a root does not move that answer in either direction — the abort
+       neither fires nor stops firing because of it. The design is still refused, by (1) and (2) above, and no
+       longer by the consumer.
+       AND THE FIELD THAT WAS OWED HERE IS LANDED: the 'r' record carries the minting mechanism beside the
+       flag, so a park no longer loses the distinction between "no flow is on the other side of this branch"
+       and "one is". That was written as this tier's half of the delivery seam's retirement, "landing WITH the
+       consult or buying nothing", and it did land with it.
        AND PASSING A PARENT WAS SAID TO MOVE A SECOND THING, ON A MECHANISM THAT DOES NOT EXIST. The retired
        clause read: flow_add_unseeded's `world_is_none(parent)` decides both the world edge and the arrival, a
        rebuilt member wants the first and not the second, and this is "harmless ONLY because flow_restore_reward
@@ -1327,8 +1355,23 @@ static Flow *park_flow_add(JSContext *ctx, double val, int before, long flows)
        HOW ITS ABSENCE WOULD SHOW, as an observation and not as whichever member forked last: a peer receiving
        from two members of one resumed document, already holding a RECEIVED commitment to the first, aborts at
        deliver_admits' arm-existence DCHECK when the second arrives.
-       RETIREMENT: this record goes when that assert reads a row's minting mechanism instead of `strchr(c,
-       ',')`, at which point a resumed member's bare vector is owed to nobody. */
+       RETIREMENT — AND THE CONDITION THAT STOOD HERE WAS SATISFIED WITHOUT ITS CONSEQUENCE BECOMING TRUE,
+       WHICH IS RECORDED BECAUSE THE NEXT READER WOULD OTHERWISE RETIRE THIS RECORD ON A DIFF THAT CHANGED
+       NOTHING IT IS ABOUT. It read: "this record goes when that assert reads a row's minting mechanism
+       instead of `strchr(c, ',')`, at which point a resumed member's bare vector is owed to nobody." The
+       assert reads the mechanism now. The bare vector is still owed to it, and to the SAME abort: the row
+       that fires it is pushed LIVE at the RECEIVING peer by deliver_commit_taken, out of a vector the resumed
+       SENDER wrote, and the mechanism it records is FLOW_COMMIT_ARM_NONE for exactly the reason the comma was
+       absent — world_session_resume asserts the minted table is EMPTY, so nothing a resume mints has been
+       `sent`, world_ancestry's filter drops every edge, and the receiving peer's deliver_fork_arm declines to
+       mint for a root sending world. Reading the mechanism gives the same answer through a sounder channel;
+       it does not make the answer go away. THE TWO CLAUSES WERE INDEPENDENT AND WERE WRITTEN AS ONE — the
+       first is about HOW the consumer knows, the second about WHAT a resumed document's vectors are, and only
+       the first was in that diff's reach.
+       RETIREMENT: this record goes when a resumed member that has posted can carry an ancestry a peer can
+       fork at — which is a question about what `sent` means across a generation, and is not this grammar's.
+       Until then the abort a peer takes on two members of one resumed document is CORRECT: the two sending
+       worlds really are roots, and no arm of that peer really does hold the second one's messages. */
     Flow *fl = flow_add(ctx, JS_UNDEFINED, WORLD_NONE);
     /* IT WENT ON THE END, WHICH IS THE HALF OF THE MERGE A LIVE FRONTIER CARES ABOUT. A rebuilt flow must be
        an addition and never a substitution: the registry appends, so this one belongs at `before` plus however
@@ -1596,12 +1639,37 @@ void cold_resume(JSContext *ctx, const char *recipes)
                    "was never in that sender's arm");
             for (comma = q; comma < end && *comma != ','; comma++)
                 ;
-            DCHECK(comma < end && end - comma == 2 && (comma[1] == '0' || comma[1] == '1'),
+            DCHECK(comma < end && end - comma >= 2 && (comma[1] == '0' || comma[1] == '1'),
                    "a parked commitment has no RECEIVED/FORECLOSED flag after its world vector — the two kinds "
                    "refuse different things, so a reader that inferred one would either re-admit a message "
                    "this timeline foreclosed or refuse one it is entitled to");
+            /* AND A RESIDUE FROM A BUILD THAT WROTE NO MINTING MECHANISM IS NAMED HERE RATHER THAN LEFT TO
+               THE FIELD CHECK BELOW, for the reason the 'c' record's missing ROOT field is: such a record ends
+               at its flag, so the reader would find no third field and report a malformed record, which is
+               true and tells the reader nothing about the real cause. It is a real document sitting in a real
+               IndexedDB. There is no version field and none is wanted — a record short of a field a reader
+               needs must FAIL rather than resume, and this is the one field whose absence cannot be read as
+               an absence: FLOW_COMMIT_ARM_NONE is a real member, and it is the member that ABORTS, so a
+               defaulted one would resume a timeline whose every refusal defers to a flow that never existed
+               and blame the delivery seam for it. Drop the residue and let the frontier re-derive. */
+            DCHECK(end - comma != 2,
+                   "a parked commitment ends at its RECEIVED/FORECLOSED flag — this is a residue from a build "
+                   "whose 'r' record carried no minting mechanism, the field that says whether any flow is on "
+                   "the other side of the branch this row names (flow.h's FlowCommitArm). It cannot be "
+                   "defaulted: absent reads as FLOW_COMMIT_ARM_NONE, which is the member deliver_admits "
+                   "aborts on, so every refusal this resumed timeline made would be reported as a delivery "
+                   "seam defect. Drop the residue and let the frontier re-derive these flows");
+            DCHECK(end - comma == 4 && comma[2] == ',' && comma[3] >= '0' && comma[3] <= '9',
+                   "a parked commitment's minting mechanism is not a single digit after its flag — this "
+                   "grammar splits on commas and writes the mechanism as one, so anything else was not "
+                   "written by this engine's park and would be read as a member FlowCommitArm does not have");
             vec = park_unhex(q, comma);
-            flow_world_commit_push(ctx, last_flow, vec, comma[1] == '1');
+            /* THE VOCABULARY IS NOT CHECKED HERE, DELIBERATELY: flow_world_commit_push owns which values are
+               members, and a second reader of that list is always the one that drifts from it. What this line
+               owes is that the FIELD is there and is a digit — its MEANING is the push's, and a digit naming
+               no member aborts there, at the one place the vocabulary is written down. */
+            flow_world_commit_push(ctx, last_flow, vec, comma[1] == '1',
+                                   (FlowCommitArm)(comma[3] - '0'));
             free(vec);
         } else if (kind == 'm') {
             /* A MESSAGE A PEER SENT AND THIS DOCUMENT HAD NOT YET RECEIVED, put back on the queue of the flow

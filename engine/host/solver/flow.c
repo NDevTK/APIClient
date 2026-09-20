@@ -2259,7 +2259,7 @@ void flow_release(JSContext *ctx, Flow *f) {
     /* AND THE ROUTED DELIVERIES, one release for the array and every [record, senderOrigin] pair it names. That
        they are gone at all is asserted above and by the caller, never cleaned up quietly here. */
     JS_FreeValue(ctx, f->deliver_q); f->deliver_q = JS_UNDEFINED;
-    /* AND WHICH SENDING TIMELINES IT WAS IN — one release for the array and every [vector, taken] pair it
+    /* AND WHICH SENDING TIMELINES IT WAS IN — one release for the array and every [vector, taken, arm] row it
        names. It is NOT on the work-item list the assert above refuses to drop, and that is the distinction
        rather than an omission: a commitment is not work owed to anybody, it is what this timeline WAS. A flow
        that has ended has no timeline left to be wrong about. */
@@ -2931,8 +2931,9 @@ JSValue flow_world_commit_at(const Flow *f, int i) {
            "a flow's delivery-world record was read past its end — the caller asked it for its length to get "
            "here");
     e = JS_GetPropertyUint32(pending_ctx(), f->deliver_world_q, (uint32_t)i);
-    DCHECK(JS_IsObject(e), "a flow's delivery-world record held something that is not a [vector, taken] pair — "
-                           "it is this engine's own Array and nothing outside flow_world_commit_push appends");
+    DCHECK(JS_IsObject(e), "a flow's delivery-world record held something that is not a [vector, taken, arm] "
+                           "triple — it is this engine's own Array and nothing outside flow_world_commit_push "
+                           "appends");
     return e;
 }
 
@@ -2940,7 +2941,7 @@ JSValue flow_world_commit_at(const Flow *f, int i) {
    record about a flow, written from outside any flow's delta, and a delta that captured it would un-commit a
    timeline the moment a sibling switched in — which is exactly the state this field exists to make
    impossible. */
-void flow_world_commit_push(JSContext *ctx, Flow *f, const char *vector, int taken) {
+void flow_world_commit_push(JSContext *ctx, Flow *f, const char *vector, int taken, FlowCommitArm arm) {
     JSValue e;
 
     DCHECK(vector != NULL && *vector,
@@ -2949,6 +2950,21 @@ void flow_world_commit_push(JSContext *ctx, Flow *f, const char *vector, int tak
     DCHECK(taken == 0 || taken == 1,
            "a delivery-world commitment carried something other than RECEIVED or FORECLOSED — the two are the "
            "whole vocabulary, and a third value would be read as one of them by whichever test asked first");
+    DCHECK(arm == FLOW_COMMIT_ARM_NONE || arm == FLOW_COMMIT_ARM_DELIVERY_FORK,
+           "a delivery-world commitment named a minting mechanism this engine has no member for — the "
+           "vocabulary is flow.h's FlowCommitArm and a producer states one of its members or states nothing "
+           "true, so an unknown value here is either a producer that was never given a member or a park "
+           "document written by something that is not this engine");
+    /* AND A FORECLOSED ROW'S OTHER SIDE IS ITS PARENT, WHICH EXISTS BY WHAT THE ROW MEANS. Such a row says
+       "this flow IS the arm minted where its parent took `vector`" — so the parent is the flow this one was
+       forked FROM, and a FORECLOSED row with no other side is not a row with a missing field, it is a claim
+       that contradicts itself. Asked here rather than at the one producer because the COLD tier replays rows
+       off a document, and a replay is exactly the producer that can hand over a pair no live code makes. */
+    DCHECK(taken != 0 || arm != FLOW_COMMIT_ARM_NONE,
+           "a receiving timeline FORECLOSED a sender subtree while naming no flow on the other side of that "
+           "branch — a FORECLOSED row means this flow is the arm minted where its PARENT took that world, so "
+           "the other side is the flow this one was forked from and cannot be absent. A row like this refuses "
+           "every record at or under its subtree and defers them to nobody");
     /* AND THE RECEIVED ROWS STAY PAIRWISE CONSISTENT — the one claim this LIST makes that no row of it makes,
        asked at the APPEND because that is where a producer hands one over. Two RECEIVED worlds that CONTRADICT
        are two sending timelines of which neither is the other continued, so no timeline of that document is in
@@ -3009,6 +3025,7 @@ void flow_world_commit_push(JSContext *ctx, Flow *f, const char *vector, int tak
     cow_engine_write_begin();
     JS_SetPropertyUint32(ctx, e, 0, JS_NewString(ctx, vector));
     JS_SetPropertyUint32(ctx, e, 1, JS_NewInt32(ctx, taken));
+    JS_SetPropertyUint32(ctx, e, 2, JS_NewInt32(ctx, (int)arm));
     if (!JS_IsObject(f->deliver_world_q)) {
         JS_FreeValue(ctx, f->deliver_world_q);
         f->deliver_world_q = JS_NewArray(ctx);
@@ -5950,7 +5967,7 @@ void flow_remove(JSContext *ctx, Flow *f) {
        release crashes at the removal instead of holding an Array and its every string for the process. */
     DCHECK(JS_IsUndefined(f->deliver_world_q),
            "a flow was removed still holding the record of which sending timelines it was in — flow_release "
-           "frees that Array and every [vector, taken] pair it names, so a flow reaching here with one was "
+           "frees that Array and every [vector, taken, arm] row it names, so a flow reaching here with one was "
            "removed without being released");
     DCHECK(f->dyn == NULL && f->dyn_cand == NULL && f->dyn_type == NULL && f->dyn_url == NULL &&
            f->dyn_el == NULL && f->dyn_doc == NULL && f->dyn_id == NULL && f->dyn_token == NULL &&

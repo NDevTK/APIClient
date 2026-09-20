@@ -1043,11 +1043,16 @@ typedef struct Flow {
        without it the very same pair is refused when both are queued at once and accepted when the first is
        delivered before the second arrives, which is the schedule-dependent finding §Testing's differential
        exists to catch.
-       EACH ENTRY IS AN IMMUTABLE [vector, taken] PAIR, and the flag is the whole of the mechanism:
+       EACH ENTRY IS AN IMMUTABLE [vector, taken, arm] TRIPLE. The flag is which of the two kinds it is:
          - taken = 1: a world this timeline RECEIVED. Nothing that CONTRADICTS it may be received here.
          - taken = 0: a world subtree this timeline FORECLOSED — the arm's half of a delivery-time fork. It is
            the sibling minted where its parent took `vector`, so nothing at or under `vector` is this
            timeline's; that message is the parent's and is delivered there.
+       …AND `arm` IS WHAT MAKES EITHER REFUSAL SAFE TO MAKE (FlowCommitArm below): both kinds refuse a record
+       by deferring to a flow on the other side of the branch this row names, so a row whose other side does
+       not exist is a refusal that loses the message outright. That is a fact about the MECHANISM that minted
+       the row, known only to the producer and at the instant it pushes, so it is written down rather than
+       inferred downstream from the vector's shape.
        A JS ARRAY OF PAIRS for the three reasons the two queues above are: the runtime's leak walk cannot see a
        `char *`, TEXT crosses a park and an instance where a pointer does not, and a fork hands each arm its own
        Array naming the parent's entries at one refcount each. It is NOT a work item and is never on the list a
@@ -1150,16 +1155,52 @@ JSValue flow_deliver_fork(JSContext *ctx, const Flow *parent);
 /* …AND THE SAME FOUR OVER THE COMMITMENT RECORD BESIDE IT (`deliver_world_q` above), which is a separate list
  * because it answers a different question and outlives every entry of the queue: the queue is what this
  * timeline still has to DO, this is what it has already BECOME.
- * The pair is [vector, taken] — the sending world's wire vector, and whether this timeline received it (1) or
- * foreclosed it (0). Entries are never edited after they are pushed, which is what lets a fork share them; the
+ * The triple is [vector, taken, arm] — the sending world's wire vector, whether this timeline received it (1)
+ * or foreclosed it (0), and which mechanism minted the flow on the other side of the branch (FlowCommitArm).
+ * Entries are never edited after they are pushed, which is what lets a fork share them; the
  * ARRAY is per-flow because each arm adds its own commitments from the branch onward.
  * `flow_world_commit_at` hands back an entry the CALLER owns and frees, exactly as the delivery queue's does.
  * WHAT A COMMITMENT MEANS is engine.c's (it is the one component that holds both a record's vector and the
  * receiving flow); what lives here is the FIELD and the four things that happen to it, for the reason the
  * queue's four live here: a second writer of the Array is always the one missing the shape assert. */
+/* WHICH MECHANISM MINTED THE FLOW ON THE OTHER SIDE OF THE BRANCH A COMMITMENT NAMES — the third element of
+ * every row, and the reason a refusal made out of one is not a lost message.
+ *
+ * BOTH REFUSAL KINDS DEFER, AND NEITHER CAN CHECK ITS OWN DEFERRAL. A RECEIVED row refuses a contradicting
+ * record and leaves it to the SIBLING ARM minted where this timeline took that world; a FORECLOSED row refuses
+ * one at or under its subtree and leaves it to the PARENT that took it. Both of those flows are minted by the
+ * mechanism that pushed the row, at the instant it pushed it — so whether one exists is a fact about that
+ * mechanism, and it is the producer's to state. A reader cannot re-derive it: the row's own vector says
+ * whether the SENDING world came through a branch, which is a different question that happens to have the same
+ * answer for the one producer this file has today (solver/engine.c's delivery-time fork), and silently does
+ * not for the next one.
+ *
+ * SO THE VALUES ARE MECHANISMS AND NOT SHAPES, and the vocabulary is this engine's own — a producer names a
+ * member or it does not compile, and a reader that meets one it has no arm for CRASHES rather than filing it
+ * under whichever it tested first. That is the same closure `taken` has and for the same reason.
+ *
+ * NAMED RESIDUAL — A MECHANISM THAT MINTS ITS ARM AFTER THE ROW IS PUSHED HAS NO MEMBER HERE, AND THE
+ * VOCABULARY IS NOT YET WIDE ENOUGH FOR ONE. Both members below are decided AT the push, which is true of
+ * every producer that exists. It is NOT true of a cross-instance ANSWER: solver/engine.c's flow_answer_fork
+ * mints the arm for an answer commitment when the peer's NEXT answer arrives — not at the push, and not
+ * necessarily ever — so such a row can state neither member honestly, and a third meaning "an arm is OWED by
+ * another mechanism, later" is what it needs. WHAT THE NEXT DIFF BUILDS: that member, landed WITH the producer
+ * that writes it and WITH the arm deliver_admits grows for it, because a member no producer writes is a value
+ * a reader can only guess the meaning of. HOW ITS ABSENCE WOULD SHOW: a producer of a commitment whose arm is
+ * minted elsewhere has, at its push, no member that is true of it — so it is discovered by writing one, not by
+ * any run of the engine today. */
+typedef enum {
+    /* NO FLOW IS ON THE OTHER SIDE. The refusal a row like this makes is a message no timeline of this
+       document receives, which is why deliver_admits aborts on one rather than answering. */
+    FLOW_COMMIT_ARM_NONE = 0,
+    /* THE DELIVERY-TIME FORK (solver/engine.c's deliver_fork_arm) minted it, and it inherited this flow's
+       delivery queue at that instant — so it was handed every record this flow consumes from there on. */
+    FLOW_COMMIT_ARM_DELIVERY_FORK = 1
+} FlowCommitArm;
+
 int     flow_world_commits(const Flow *f);
 JSValue flow_world_commit_at(const Flow *f, int i);
-void    flow_world_commit_push(JSContext *ctx, Flow *f, const char *vector, int taken);
+void    flow_world_commit_push(JSContext *ctx, Flow *f, const char *vector, int taken, FlowCommitArm arm);
 JSValue flow_world_commit_fork(JSContext *ctx, const Flow *parent);
 
 /* THIS FLOW'S JOB QUEUE, AND EVERYTHING THAT EVER HAPPENS TO IT — declared beside the field for the reason the
