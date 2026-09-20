@@ -825,13 +825,34 @@ char *css_length_serialize_calc(double pct, double px)
 
 /* ---- css-values-4 §10.11 "Computed Value"'s USED-VALUE-TIME SIMPLIFICATION (see css_length.h) ------------- */
 
-CssPx css_length_resolve_pct(CssLength len, CssPx basis)
+CssPx css_length_resolve_pct_at(CssLength len, CssPx basis, const char *file, int line)
 {
-    DCHECK(len.kind == CSS_LENGTH_PERCENTAGE || len.kind == CSS_LENGTH_CALCULATED,
-           "a value with NO percentage in it was handed css-values-4 §10.11's used-value-time resolution. The "
-           "two kinds that carry one are the whole of what a basis means, and an absolute length resolved "
-           "against a containing block would be scaled by a measure it does not depend on — so this is a "
-           "caller that dispatched on something other than the kind");
+    /* THE ADDRESS IS ASSERTED AND NOT TOLERATED. Every caller reaches this entry through
+       css_length.h's macro, which spells __FILE__ at the call, so a NULL here is a hand-written
+       call that bypassed the one spelling — and the address IS the claim these refusals make
+       rather than decoration on it. */
+    DCHECK(file != NULL,
+           "a percentage was resolved with no caller site. core/css/css_length.h's macro spells "
+           "__FILE__ and __LINE__ at the call and `CSS_LENGTH_SITE_INTERNAL` is what a path inside "
+           "this file types instead, so neither of the two ways to reach this entry can pass NULL");
+    /* THE OPERAND AND THE SITE, BECAUSE THE REMEDY IS AT THE CALLER AND THERE ARE SIXTEEN OF THEM. Which
+       KIND arrived decides which repair: a `CSS_LENGTH_KEYWORD` is a grammar arm the caller's own dispatch
+       let through and the keyword names it (`auto`, `none`, a css-sizing-3 §3.1.1 intrinsic size), while a
+       `CSS_LENGTH_ABSOLUTE` reading exactly 0 with an EMPTY fact set is the signature of a zeroed `CssLength`
+       rather than of a mis-dispatched real length — `CSS_LENGTH_ABSOLUTE` is 0, so a struct nobody wrote
+       reads as one — and those two take opposite repairs, one at the dispatch and one at the producer. */
+    DCHECKF(len.kind == CSS_LENGTH_PERCENTAGE || len.kind == CSS_LENGTH_CALCULATED,
+            "%s:%d handed css-values-4 §10.11's used-value-time resolution a `%s` (keyword `%s`, length %g "
+            "CSS px): a value with NO percentage in it. The two kinds that carry one are the whole of what a "
+            "basis means, and an absolute length resolved against a containing block would be scaled by a "
+            "measure it does not depend on — so this is a caller that dispatched on something other than the "
+            "kind",
+            file, line,
+            len.kind == CSS_LENGTH_ABSOLUTE  ? "CSS_LENGTH_ABSOLUTE"
+            : len.kind == CSS_LENGTH_KEYWORD ? "CSS_LENGTH_KEYWORD"
+                                             : "kind outside the four css_length.h defines",
+            len.kind == CSS_LENGTH_KEYWORD ? len.keyword : "-",
+            len.px.px);
     /* A `CSS_LENGTH_PERCENTAGE` COMES FROM ONE PRODUCTION AND NEVER FROM A MATH FUNCTION, which is why this
        arm's single expression is right: css-values-4 §5.5 "Percentages: the <percentage> type" is a bare
        `<percentage>` with no second term to state, and `css_length_parse` writes it over a zeroed pair.
@@ -852,10 +873,16 @@ CssPx css_length_resolve_pct(CssLength len, CssPx basis)
        expression is only right if the unused half is the additive identity WITH AN EMPTY FACT SET. A length
        term left there would be added silently; an environment fact left there would be UNIONED into the
        result's domain and fork a world the value does not depend on. */
-    DCHECK(len.kind != CSS_LENGTH_PERCENTAGE || (len.px.px == 0.0 && len.px.env == CSS_ENV_NONE),
-           "a `<percentage>` computed value carries a LENGTH term. css_length_parse writes the percentage arm "
-           "over a zeroed pair and css-values-4 §5.5 \"Percentages: the <percentage> type\" has no second term "
-           "to write, so this is a producer that set `pct` on a value it had already given a length");
+    /* THE SITE IS CARRIED HERE TOO AND IT IS NOT THE ADDRESS TO REPAIR, which is why it is worded as a route
+       rather than as a culprit: the defect this one names is a PRODUCER's, and the caller is printed only
+       because it names the PROPERTY whose parse to go and read. */
+    DCHECKF(len.kind != CSS_LENGTH_PERCENTAGE || (len.px.px == 0.0 && len.px.env == CSS_ENV_NONE),
+            "a `<percentage>` computed value carries a LENGTH term (%g CSS px), reached through %s:%d. "
+            "css_length_parse writes the percentage arm over a zeroed pair and css-values-4 §5.5 "
+            "\"Percentages: the <percentage> type\" has no second term to write, so this is a PRODUCER that "
+            "set `pct` on a value it had already given a length — the repair is at whichever parse wrote it, "
+            "and the site named here points only at the property to go and read",
+            len.px.px, file, line);
     /* §5.6's "both values are converted to absolute lengths and added", as ONE expression — the scaled basis
        carries the basis's facts, the length term carries its own, and `css_px_add` is what makes the answer a
        joint function of both rather than of whichever operand was resolved last. */

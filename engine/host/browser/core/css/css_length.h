@@ -416,7 +416,34 @@ CssPx css_length_snap_line_width(JSContext *realm, CssPx len);
    value of a numeric function is clamped to the range allowed in the context it is used at computed value time
    if possible, and at USED VALUE TIME otherwise" — and the range is the PROPERTY's, which this component does
    not know: a `margin` may be negative and a `padding` may not. So the caller that named the basis clamps too. */
-CssPx css_length_resolve_pct(CssLength len, CssPx basis);
+/* THE CALLER'S ADDRESS, THREADED — and the reason this entry is a MACRO over an `_at` function rather than a
+ * function. The refusal above is written at ONE line and is reached from every site in core/css/ and
+ * core/layout/ that resolves a percentage, so the crash named a remedy with NO OBJECT: "this is a caller that
+ * dispatched on something other than the kind", with no way to say WHICH of them. CLAUDE.md's rule for
+ * exactly that shape is that the site TRAVELS WITH THE OPERATION, captured at the caller and threaded to the
+ * check, and the cost of reading one without it is measured rather than argued: webamp.org terminated three
+ * runs out of three at that line, and the address was recoverable only by reading all sixteen call sites.
+ *
+ * WHY A MACRO AND NOT A HELPER. __FILE__ and __LINE__ inside a function are THAT function's, so a forwarding
+ * hop would stamp core/css/css_length.c for every caller — which is the defect rather than the cure. A
+ * function-like macro is expanded AT THE CALL, so the pair is the caller's by construction and no existing
+ * call site changed text. This is core/idl_args.h's IDL_SITE convention, ROUTED TO rather than re-derived;
+ * core/agent_state.h routes to it the same way and for the same reason.
+ *
+ * THE PAIR IS REQUIRED AND NOT DEFAULTED. The `_at` entry takes both, so a caller that reaches it without a
+ * site DOES NOT COMPILE, and the file pointer is DCHECKed rather than tolerated. A defaulted address is what
+ * lets an unconverted caller masquerade as one with nothing to say.
+ *
+ * A FORWARDER INSIDE THIS COMPONENT SAYS SO BY NAME. `CSS_LENGTH_SITE_INTERNAL` is what a css_length.c-internal
+ * path types INSTEAD, and the difference is not cosmetic: the macro is in scope inside css_length.c too, so a
+ * future internal caller spelling the plain name would stamp THIS file and read as a resolution site — which
+ * is a lie in exactly the form this mechanism exists to remove. It has NO USER TODAY (this entry is called
+ * from no other function in its own file) and is declared anyway, because the alternative a future forwarder
+ * reaches for is the plain macro, silently. NULL is not an option either way: the entry asserts the pointer. */
+CssPx css_length_resolve_pct_at(CssLength len, CssPx basis, const char *file, int line);
+#define CSS_LENGTH_SITE           __FILE__, __LINE__
+#define CSS_LENGTH_SITE_INTERNAL  "core/css/css_length.c (an internal path with no caller site to carry)", -1
+#define css_length_resolve_pct(len, basis) css_length_resolve_pct_at((len), (basis), CSS_LENGTH_SITE)
 
 /* CSSOM §6.7.2's "serialize a CSS value" for an absolute length and for a percentage: the number, then `px` or
    `%`. The number is css-values §serializing's SHORTEST FORM THAT ROUND-TRIPS, which is what makes `4px` come

@@ -2588,15 +2588,29 @@ static CssPx uv_margin(lxb_dom_element_t *el, const char *name, const char *oppo
                 CssPx used_size = uv_pass_size(el, *size_len, box, false);
                 CssPx inner = uv_is_border_box(el) ? used_size : css_px_add(used_size, uv_surround_total(s));
                 CssLength ol = css_computed_length(el, opposite);
-                CssPx other = ol.kind == CSS_LENGTH_ABSOLUTE
-                                  ? ol.px
-                                  : css_length_resolve_pct(ol, used_value_containing_block_width(el));
+                CssPx other;
 
-                DCHECK(ol.kind == CSS_LENGTH_ABSOLUTE || ol.kind == CSS_LENGTH_PERCENTAGE ||
-                           ol.kind == CSS_LENGTH_CALCULATED,
-                       "§10.3.3's over-constrained case read the OPPOSITE margin and found a keyword. The test "
-                       "above has already established that it is not `auto`, and CSS 2.1 §8.3's <margin-width> "
-                       "grammar admits a length, a percentage and `auto` and nothing else");
+                /* EAGERLY, AND IT USED TO STAND UNDER THE LINE IT GUARDS — which made it a NON-CHECK wearing
+                   the syntax of one. The dispatch below is two-way (`ABSOLUTE` or resolve), so a keyword goes
+                   to `css_length_resolve_pct`, whose OWN refusal aborts on exactly the state this assert
+                   names. For every input that would falsify it the callee therefore fired FIRST, and this
+                   line could not run at any revision: the population it was written for is the one population
+                   it never saw. CLAUDE.md's rule is that an invariant is asserted at its ORIGIN, and the
+                   origin of this one is HERE — the caller that knows the property name and holds the pair of
+                   margins — not in a shared entry sixteen call sites reach. The keyword is printed because it
+                   is the whole of what separates the repairs: `auto` means this arm's own guard above has
+                   come apart, and anything else means a cascade layer answered with a value §8.3's
+                   <margin-width> does not have. */
+                DCHECKF(ol.kind == CSS_LENGTH_ABSOLUTE || ol.kind == CSS_LENGTH_PERCENTAGE ||
+                            ol.kind == CSS_LENGTH_CALCULATED,
+                        "`%s` computed to the keyword `%s`: §10.3.3's over-constrained case read the OPPOSITE "
+                        "margin and found a keyword. The test above has already established that it is not "
+                        "`auto`, and CSS 2.1 §8.3's <margin-width> grammar admits a length, a percentage and "
+                        "`auto` and nothing else",
+                        opposite, ol.kind == CSS_LENGTH_KEYWORD ? ol.keyword : "-");
+                other = ol.kind == CSS_LENGTH_ABSOLUTE
+                            ? ol.px
+                            : css_length_resolve_pct(ol, used_value_containing_block_width(el));
                 /* NOT FLOORED AT ZERO, and that is §10.3.3's own arithmetic rather than an omission: the
                    sentence is "the value is calculated so as to make the equality true", and a box whose
                    declared width and other margin already exceed the containing block makes that value
