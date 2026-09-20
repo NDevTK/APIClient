@@ -4228,6 +4228,37 @@ JSValue document_selection(JSContext *ctx, JSValueConst doc)
     return JS_DupValue(ctx, d->selection);
 }
 
+/* SELECTION API §2's REPLACEMENT — "A document's selection is a singleton object associated with that
+   document, so it gets replaced with a new object when Document.open() is called." The note names ONE writer
+   besides the install, and this is it.
+   IT IS HERE AND NOT IN THE OPEN STEPS because `selection` is this record's field: core/dom/selection.c mints
+   the object and core/html/document_open.c runs the algorithm, and neither owns the slot. A replacement
+   written at either of those would be a second component reaching into a record whose invariant is asserted
+   one screen up — that a Document has a selection exactly when it has a browsing context.
+   THAT INVARIANT IS WHY THE UNDEFINED ARM RETURNS RATHER THAN MINTING. `implementation.createHTMLDocument("")`
+   has no browsing context and therefore no selection, and §8.4.1's steps are reachable on such a document;
+   minting one here would give it a selection its `getSelection()` must answer null for, which is the pair
+   `document_selection` asserts can never disagree. The absent case stays absent and the present case is
+   replaced — two arms of one fact, never a default filling a hole.
+   THE OLD OBJECT IS FREED RATHER THAN DETACHED. §2 makes the selection a singleton PER DOCUMENT, so this
+   engine holds the only reference; a page that kept its own keeps a live object that is no longer the
+   document's, which is what "replaced with a new object" means for the page as well. */
+void document_replace_selection(JSContext *ctx, JSValueConst doc)
+{
+    Document *d = doc_receiver(ctx, doc);
+    JSValue fresh;
+
+    if (!d) return;
+    if (JS_IsUndefined(d->selection)) return;   /* no browsing context: §4.1 answers null, and still will */
+    fresh = selection_new(ctx, doc);
+    DCHECK(!JS_IsException(fresh),
+           "Selection API §2's replacement could not mint the new selection — §8.4.1's steps have already "
+           "emptied the tree by the time this runs, so leaving the old one would hold a Selection over a tree "
+           "that no longer exists, which is the state this replacement exists to end");
+    JS_FreeValue(ctx, d->selection);
+    d->selection = fresh;
+}
+
 /* DOCUMENT.PROTOTYPE, and the Document as a real NODE. §4.4 `interface Document : Node`, and it was neither —
    a plain JS_NewObject with the members copied onto it. So `document.nodeType` was undefined,
    `document.appendChild` was not a function, `document.contains(el)` (which is how a page asks whether a node

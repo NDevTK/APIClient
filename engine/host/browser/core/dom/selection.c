@@ -714,19 +714,18 @@ static JSValue js_document_get_selection(JSContext *ctx, JSValueConst this_val, 
                                          int magic)
 {
     (void)argc; (void)argv; (void)magic;
-    /* §2's OTHER WRITER, WHICH THIS ENGINE HAS NO PRODUCER FOR: "A document's selection is a singleton object
-       associated with that document, so it gets replaced with a new object when Document.open() is called."
-       Nothing in this build has an `open()`, so the singleton is written exactly once — by document_install —
-       and there is no replacement step to run. Asserted rather than written down, so that the day `open()`
-       lands this fires HERE, at the member whose answer would otherwise be a Selection belonging to a document
-       that no longer exists.
-       IT IS ASKED AT THE MEMBER AND NOT AT THE INSTALL, and that is not a preference: `Document` reaches the
-       global well after this component builds a realm's selection, so a probe at the install would resolve a
-       path that is not there yet and would pass for ever — a check that can never fire is worse than none. */
-    realm_awaits(ctx, "Document.prototype.open",
-                 "Selection API §2's note — a document's selection \"gets replaced with a new object when "
-                 "Document.open() is called\" — now has a producer, and nothing replaces it: HTML's document "
-                 "open steps must build a fresh Selection on the Document's record beside the new tree");
+    /* §2's OTHER WRITER IS BUILT, AND THE ASSERTION THAT WAITED FOR IT IS GONE WITH IT. "A document's
+       selection is a singleton object associated with that document, so it gets replaced with a new object
+       when Document.open() is called." A `realm_awaits` stood here, correctly, for as long as this build had
+       an `open()` and no replacement: it fired at THIS member, because a stale singleton is observable
+       nowhere else. §8.4.1's step 11 now calls core/dom/document.c's `document_replace_selection` on the line
+       after it empties the tree, so the singleton has exactly two writers and both are landed.
+       IT IS DELETED RATHER THAN LEFT STANDING, which is the whole discipline: a crash naming an absence that
+       has since been filled reads as authoritative and sends its next reader to build what is already there.
+       The argument for asking at the MEMBER rather than at the install is kept because it is what a reader
+       re-derives when they add the next such wait — `Document` reaches the global well after this component
+       builds a realm's selection, so a probe at the install resolves a path that is not there yet and passes
+       for ever, and a check that can never fire is worse than none. */
     return document_selection(ctx, this_val);
 }
 

@@ -291,6 +291,20 @@ bool document_open_steps(JSContext *ctx, JSValueConst doc_obj, lxb_dom_document_
         next = n->next;
         dom_cow_remove_child(n);
     }
+    /* …AND SELECTION API §2's SINGLETON, REPLACED WITH THE TREE IT POINTED INTO. §2's note states the one
+       writer besides the install — "it gets replaced with a new object when Document.open() is called" — and
+       HERE is where the object it describes stops being about anything: every node the old selection could
+       have been anchored in has just left the tree. Placed after the removal rather than before it so the
+       fresh object is never momentarily the selection of the OLD tree, which is the ordering the note's own
+       sentence implies and the only one under which a reader of `getSelection()` between the two lines could
+       not observe a mixture.
+       THE RECORD OWNS THE SLOT AND PERFORMS THE SWAP — core/dom/document.c's `document_replace_selection`,
+       which leaves a document with no browsing context without one rather than minting it a selection §4.1
+       must answer null for. Until this line existed, core/dom/selection.c asserted at `getSelection()` that
+       no producer for this replacement had been built; that assertion is retired by this call and deleted at
+       its site, because a crash that outlives the absence it names is the failure mode this project rates
+       worst. */
+    document_replace_selection(ctx, doc_obj);
     /* …AND THE FOUR POINTERS LEXBOR CACHES INTO THE TREE THAT JUST WENT, which are part of the same step and
        not bookkeeping after it. A Document node's children ARE its doctype and its document element, and
        lexbor additionally caches `head` and `body`; every one of them now names a node that is no longer in

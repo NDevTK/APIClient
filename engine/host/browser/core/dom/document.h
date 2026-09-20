@@ -188,6 +188,10 @@ JSValueConst document_object(JSContext *ctx);
    is not one is Web IDL §3.7.7 Operations' TypeError, thrown here — `getSelection()` is an operation, so the
    step is "If jsValue does not implement the interface target, throw a TypeError". OWNED. */
 JSValue document_selection(JSContext *ctx, JSValueConst doc);
+/* SELECTION API §2's OTHER WRITER — the replacement §8.4.1's document open steps owe. The body says why it
+   lives with the record rather than with the algorithm, and why a document with no browsing context is left
+   without a selection rather than given a fresh one. */
+void document_replace_selection(JSContext *ctx, JSValueConst doc);
 /* HTML §8.1.3.2 Environment settings objects' API BASE URL of this realm, which §7.2.2.6 Script settings for
    Window objects answers — "Return the current base URL of window's associated Document." —
    which HTML §2.4.2's parse a URL resolves every relative reference against. It is §2.4.3's DOCUMENT BASE URL
