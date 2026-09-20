@@ -3795,7 +3795,7 @@ void navigable_root_ancestor_origins(JSContext *ctx, JSValueConst proxy, const c
  * asserting the opposite of what the standard says — "an absent url is the empty string, which resolves
  * against the document's own address — so `open(\"\", \"_self\")` reloads". §7.2.2.1 step 16.1 navigates an
  * existing navigable ONLY "if urlRecord is not null", and its step 3 leaves urlRecord null exactly when url is
- * the empty string, so that call must NOT reload. §4.6.5 step 9 navigates unconditionally, so the same line
+ * the empty string, so that call must NOT reload. §4.6.5 step 11 navigates unconditionally, so the same line
  * WAS right for the hyperlink caller — one tail serving two algorithms that disagree, which is why it could
  * not be right for both and why the fix is a split rather than a condition. See navigable.h's WindowType.
  *
@@ -3849,7 +3849,7 @@ JSValue navigable_open(JSContext *ctx, const char *url, const char *target, cons
     if (JS_IsUndefined(chosen) && !target_name_is(name, "_blank") && !noopener)
         chosen = navigable_choose_name(ctx, name);
     /* STEPS 4-7 ANSWERED, so windowType stays step 2's `existing or none` and the navigable is handed back
-       UNNAVIGATED — §7.2.2.1 step 16.1 and §4.6.5 step 9 are the callers' own steps and they disagree about
+       UNNAVIGATED — §7.2.2.1 step 16.1 and §4.6.5 step 11 are the callers' own steps and they disagree about
        the empty url, so neither may be performed here on the other's behalf. */
     if (window_proxy_is(chosen)) return chosen;
     JS_FreeValue(ctx, chosen);

@@ -363,7 +363,7 @@ typedef enum {
 } WindowType;
 
 /* HTML §7.3.1.7 "Navigable target names" — THE RULES FOR CHOOSING A NAVIGABLE, and NOTHING AFTER THEM.
-   It used to be the rules PLUS an unconditional navigate, which is §4.6.5 step 9's tail and is the WRONG tail
+   It used to be the rules PLUS an unconditional navigate, which is §4.6.5 step 11's tail and is the WRONG tail
    for §7.2.2.1 — see WindowType above for what that cost. Each caller now runs its own steps over the two
    values this answers with. TWO callers, and they are not variants of each other: §7.2.2.1's window open steps
    reach it after parsing a features string, and §4.6.5's FOLLOWING A HYPERLINK reaches it from an `<a>`'s
@@ -384,8 +384,8 @@ typedef enum {
    `out_window_type` receives §7.3.1.7's SECOND return value and is NOT optional — a caller that does not read
    it is a caller running one arm of a two-arm algorithm, which is the state this parameter exists to end.
    AND THE CONTRACT ON `url` IS ASYMMETRIC, WHICH THE CALLER MUST KNOW RATHER THAN GUESS. An EXISTING navigable
-   is chosen and NOT navigated: §7.2.2.1 step 16.1 and §4.6.5 step 9 are the caller's own steps and they do not
-   agree (16.1 skips an empty url; step 9 does not), so doing it here would be one of them imposed on both — the
+   is chosen and NOT navigated: §7.2.2.1 step 16.1 and §4.6.5 step 11 are the caller's own steps and they do not
+   agree (16.1 skips an empty url; step 11 does not), so doing it here would be one of them imposed on both — the
    defect this split repaired. A NEW navigable HAS already been navigated to `url`, by §7.4 step 14 inside
    navigable_create, which is where this engine's create puts it; a caller that navigates it again loads the
    address twice into two documents of one navigable. The asymmetry is stated because it is real, and it is the
