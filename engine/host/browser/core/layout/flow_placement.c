@@ -94,9 +94,13 @@ void flow_placement_pass_open(void)
            "CSS 2.1 §9.4.1's placement pass was opened INSIDE a pass. The two would share one record with two "
            "lifetimes, and the inner close empties a record the outer walk is still reading — so the outer "
            "walk's later asks would run §9.4.1's walk again, which is correct, while its own recorded "
-           "positions vanished half way through a picture. The entry that opens a pass is the one that "
-           "performs a whole-tree geometry walk, and there is exactly one of those: a second opener is the "
-           "thing to find");
+           "positions vanished half way through a picture. THE CASE THAT WILL REACH THIS FIRST IS NOT A "
+           "MISTAKE: core/paint/box_paint.c's replaced-content arm names an `iframe`'s rendering as its "
+           "child navigable's OWN, and painting one is a second core/paint/document_paint.c walk inside this "
+           "one. That nested document needs its own record and not a share of this one — its boxes are "
+           "placed by its own §9.4.1 stacks — so what the arm owes is a pass per DOCUMENT rather than a "
+           "global one: give this record a stack whose top is the document being walked, and the outer "
+           "walk's entries survive the inner close by construction");
     DCHECK(g_used == 0 && g_tab == NULL,
            "CSS 2.1 §9.4.1's placement record holds entries with no pass open. It is emptied at close and its "
            "storage released there, so anything standing here is a close that did not run — which means some "
