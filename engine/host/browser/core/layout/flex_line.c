@@ -339,25 +339,44 @@ static bool fl_declared_main_px(lxb_dom_element_t *el, CssPx inner_main, const c
                 box_subject(el, nbuf, sizeof nbuf), name, len.keyword, initial);
         return false;
     }
-    DCHECKF(len.kind == CSS_LENGTH_ABSOLUTE || len.kind == CSS_LENGTH_PERCENTAGE ||
-                len.kind == CSS_LENGTH_CALCULATED,
-            "%s: `%s` computed to none of the shapes css-sizing-3 §3.2 \"Sizing Values: the "
-            "<length-percentage [0,∞]>, auto | none, stretch, min-content, max-content, and fit-content "
-            "values\" admits",
-            box_subject(el, nbuf, sizeof nbuf), name);
-    /* css-flexbox-1 §7.2.3's own sentence for the percentage half: "percentage values of flex-basis are
-       resolved against the flex item's containing block (i.e. its flex container)". A `width` percentage
-       resolves against the same rectangle by CSS 2.1 §10.2 "Content width: the 'width' property", so both
-       spellings take one basis here. */
-    /* THE BASIS IS THE MAIN SIZE ON EITHER AXIS, which is one sentence for `flex-basis` and two for a size
-       property. §7.2.3 states it directly for the first. For the second, CSS 2.1 §10.2 "Content width: the
-       'width' property" resolves a `width` percentage against the containing block's WIDTH and CSS 2.1 §10.5
-       "Content height: the 'height' property" resolves a `height` percentage against its HEIGHT, and the flex
-       container IS that containing block — so on each axis the basis is the container's inner size ON THAT
-       AXIS, which is `inner_main` here by construction. A `height` percentage against an INDEFINITE height
-       never reaches this line at all: css-sizing-3 §3.2.1 "“Behaving as auto”" makes it behave as `auto`, and
-       core/layout/block_flow.c refuses the container whose height that is before `inner_main` exists. */
-    declared = css_length_resolve_pct(len, inner_main);
+    /* THE ABSOLUTE LENGTH IS ALREADY THE ANSWER AND IS NOT css-values-4 §10.11'S SUBJECT, so it is SPLIT OFF
+       here rather than handed a basis. css-values-4 §10.11 "Computed Value" is stated over a MATH FUNCTION
+       — "The calculation tree is again simplified at used value time; with used value time information, a
+       math function always simplifies down to a single numeric value" — and the used-value-time information
+       IS the percentage basis, so `css_length_resolve_pct` answers for the two kinds that CARRY a percentage
+       and refuses the third at its own entry. core/layout/intrinsic_size.c argues that in full at its margin
+       arm and every other caller of that entry splits the same way. THIS ONE ASSERTED THE THREE-SHAPE GRAMMAR
+       WITHOUT SPLITTING IT, which ADMITS the kind the callee refuses: webamp.org terminated on it 3 runs of 3
+       at a main size of 16 CSS px. An assert that ADMITS a kind is not a dispatch that ROUTES it, and a sweep
+       asking only whether a site checks the kind before the call cannot tell those two apart — which is how
+       this site was read as guarded while being the one that was not.
+       RETIREMENT: this note goes when an absolute length cannot be spelled into that call at all. */
+    if (len.kind == CSS_LENGTH_ABSOLUTE) {
+        declared = len.px;
+    } else {
+        DCHECKF(len.kind == CSS_LENGTH_PERCENTAGE || len.kind == CSS_LENGTH_CALCULATED,
+                "%s: `%s` computed to a kind outside the four core/css/css_length.h declares. The keyword arm "
+                "above and the absolute arm beside this one take the other two, so this is a four-way "
+                "dispatch's `default:` over an enum this engine OWNS — a guard, and not a shape "
+                "css-sizing-3 §3.2 \"Sizing Values: the <length-percentage [0,∞]>, auto | none, stretch, "
+                "min-content, max-content, and fit-content values\" admits and this file has not built",
+                box_subject(el, nbuf, sizeof nbuf), name);
+        /* css-flexbox-1 §7.2.3's own sentence for the percentage half: "percentage values of flex-basis are
+           resolved against the flex item's containing block (i.e. its flex container)". A `width` percentage
+           resolves against the same rectangle by CSS 2.1 §10.2 "Content width: the 'width' property", so both
+           spellings take one basis here. */
+        /* THE BASIS IS THE MAIN SIZE ON EITHER AXIS, which is one sentence for `flex-basis` and two for a size
+           property. §7.2.3 states it directly for the first. For the second, CSS 2.1 §10.2 "Content width: the
+           'width' property" resolves a `width` percentage against the containing block's WIDTH, and
+           CSS 2.1 §10.5 "Content height: the 'height' property" resolves a `height` percentage against its
+           HEIGHT, and the flex container IS that containing block — so on each axis the basis is the
+           container's inner size ON THAT AXIS, which is `inner_main` here by construction. A `height`
+           percentage against an
+           INDEFINITE height never reaches this line at all: css-sizing-3 §3.2.1 "“Behaving as auto”" makes it
+           behave as `auto`, and core/layout/block_flow.c refuses the container whose height that is before
+           `inner_main` exists. */
+        declared = css_length_resolve_pct(len, inner_main);
+    }
     if (fl_computed_is(el, "box-sizing", "border-box"))
         declared = css_px_max(css_px_sub(declared, fl_main_border_padding(el, vertical)), css_px(0.0));
     *out = css_px_max(declared, css_px(0.0));
