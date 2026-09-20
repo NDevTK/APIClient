@@ -7,8 +7,8 @@
  *   node engine/build.mjs native [min]     -> the smoke fixture built and run NATIVELY (the memory series)
  *   node engine/build.mjs native leak      -> the same under LeakSanitizer
  *   node engine/build.mjs native address   -> the same under AddressSanitizer
- *   node engine/build.mjs native cold      -> the CROSS-SESSION round trip: session one parks its frontier to a
- *                                            file, session two (a second process) resumes from it
+ *   (the CROSS-SESSION round trip -- session one parks its frontier to a file, session two, a second
+ *    process, resumes from it -- now runs on EVERY build above; `cold` as an argument is inert)
  *
  * Build success/failure is the milestone-0 signal (does clean quickjs-ng compile
  * + link + boot). Design-correctness verification stays on the live Chrome
@@ -5556,6 +5556,78 @@ function sanitizerRuntime(kind) {
                 + "found). Install llvm's compiler-rt or gcc's libsanitizer (Debian/Ubuntu: libclang-rt-dev, "
                 + "or lib" + lib + (lib === "asan" ? "8" : "0") + " with gcc installed)." };
 }
+/* THE CROSS-SESSION ROUND TRIP, AS A FUNCTION BOTH TARGETS CALL — AND IT IS NO LONGER BEHIND AN ARGUMENT.
+   It was `if (process.argv.includes("cold"))`, and §Testing's excluded-test rule reaches one layer further
+   than the paragraph below it had applied: a target that is only BUILT is the excluded test one layer down,
+   and a STAGE reachable only behind a word nobody types is the excluded test one layer down from THAT. It is
+   not a hypothetical population. No build in the on-disk corpus has ever passed `cold`, so the read half of
+   the residue — the segment rebuild, park_unhex, solve_resume_candidate, the probe address — was exercised by
+   nothing, and on its first exercise it found a reproducible resume-ONLY abort: `solve.c:1603`, 3/3 with zero
+   spread, absent from the `--cold-park` control run of the same binary over the same document. A gate that
+   would have caught that on the day it landed was one argv word away from running and the word was never said.
+   THE COST IS MEASURED AND IT IS THE REASON THIS NEEDS NO POLICY: park 3.4 s, resume 3.5 s — SEVEN SECONDS
+   against a native run that had not finished after two minutes. Both sessions currently abort early, so that
+   figure is a FLOOR and will rise once they run to their probe tables; it is bounded by the same RLIMIT_CPU
+   every other child here runs under, and it is two spawns of a binary this target has already linked.
+   WHY THE DEFAULT BUILD AND NOT ONLY `native`: the argument is the one the two-instance ABI drive already
+   carries a few screens down — "nothing in this tree asks that question a second time … so excusing it from
+   the verdict would delete the only cross-instance gate there is". Nothing else in this tree runs a residue
+   through a PROCESS BOUNDARY, so a failure here is unobserved by every other gate, and its host is NATIVE:
+   it is the same binary whose slice is CPU-denominated, so it decides rather than merely disagreeing.
+   `cold` on a command line is now INERT rather than removed — it selects nothing, because there is nothing
+   left to select. The header above says so. */
+function coldRoundTripStages(bin, kind) {
+  const store = join(OUT, "park.recipes");
+  /* THE SHELF IS EMPTY BEFORE SESSION ONE. A residue left by an earlier run of a DIFFERENT tree would resume
+     flows standing on segments this build never wrote — and it would look like a pass. */
+  rmSync(store, { force: true });
+  const v1 = bin === null
+    ? skipped("session ONE (--cold-park)", "the native program did not link")
+    : runChild("session ONE (--cold-park)", bin, ["--cold-park", store],
+    "read its `@H park-*` rows beside the round-trip line below: a 0 kind names which record the park did " +
+    "not write, and the moment it was taken at is `fixture_want_park` in engine/host/test_forced.c.");
+  /* SESSION TWO IS SKIPPED AND NOT MERELY UNREPORTED. This is a real data dependency and not a door — the
+     resume reads the residue session ONE writes, so with no residue there is nothing for it to be a test OF
+     — and it is stated as a skip with that reason so the report never has a silent hole in it.
+     THE DEPENDENCY IS THE RESIDUE, SO THE RESIDUE IS WHAT IS ASKED. This read `v1.code`, and an exit code is
+     not that fact: it folds session ONE's six park rows — and every other probe in the fixture — into one
+     door, so a run that wrote a full residue and failed a row named an arm it did not exercise was reported
+     under a sentence claiming it had written nothing. That is the shape this file warns about elsewhere,
+     three states behind one answer, with the printed REASON being the part that was false. Session ONE still
+     FAILS on its own rows and the report below still fails with it; what changes is that the read half is no
+     longer gated on the write half being perfect, which is the whole reason the round trip is two spawns. */
+  /* READ RATHER THAN STAT'D, and not for want of `statSync`: cold.c's rule is that "an engine with no members
+     writes no bytes at all", so ABSENT and EMPTY are the same non-residue and a size is one of the two ways to
+     ask. Reading it asks both at once and costs nothing at this size — the document is a few hundred bytes. */
+  const residue = existsSync(store) && readFileSync(store, "utf8").trim().length > 0;
+  const v2 = bin === null
+    ? skipped("session TWO (--cold-resume)", "the native program did not link")
+    : !residue
+    ? skipped("session TWO (--cold-resume)", "session ONE wrote no residue for it to resume from")
+    : runChild("session TWO (--cold-resume)", bin, ["--cold-resume", store],
+               "the round-trip line below says what it rebuilt out of the residue; a kind session one " +
+               "wrote and this one did not rebuild is the arm to look at.");
+  /* AND THE ROUND TRIP IS REPORTED RATHER THAN HINTED AT, which is this file's own recorded lesson applied
+     to the last two places that had not had it. The hints these replace "named the mechanism, named the
+     obstacle, and left the reporter printing an instruction to a human about numbers the reporter itself
+     could have read" — and worse, they printed only on a NON-PASS, so the round trip that WORKED said
+     nothing at all and `orphansUnmet`, the round trip's own verdict, has never been read by anything. */
+  if (!v1.code && !v2.code) console.log("[build] cold round trip (" + kind + ") — " +
+                                        coldRoundTrip(v1, v2, store) + " — residue at " + store);
+  /* COLLECTED, NOT REPORTED, and the difference is a whole stage. `report()` ALWAYS exits — both arms end in
+     `process.exit` — so reporting here ended the run, and the native run below was UNREACHABLE FROM `cold`.
+     Not merely on a red cold round trip: on every invocation of it, green included. So `node engine/build.mjs
+     native cold` has never once run the fixture, and the paragraph immediately below is the one that says why
+     that is the defect — "a target that is only built is the excluded test one layer down". The two stages
+     were written months apart and the second never noticed the first could not fall through to it.
+     IT COST A REAL MEASUREMENT: a lane converted 45 probe rows to record-scoped clauses and asked for a run
+     of the fixture to confirm none of them had become a term that can only ever read 0 — the defect that
+     fixture records having had three times — and `native cold` answered with a cold verdict and no fixture at
+     all. The two are INDEPENDENT questions about one binary, so they are two stages of one report, and a red
+     cold round trip must not decide whether the fixture is exercised. */
+  return [onHost(v1, STAGE_HOST.NATIVE), onHost(v2, STAGE_HOST.NATIVE)];
+}
+
 function nativeProgram(kind, dev) {
   /* THE ASSERTION REGIME IS A PARAMETER OF THE TARGET AND NOT A CONSTANT, and it is REQUIRED AT EVERY CALL
      SITE rather than defaulted. A default would let a caller that never stated it masquerade as one with
@@ -5709,57 +5781,7 @@ if (NATIVE) {
    * IT IS NOT A DRIVER. The shelf is a file, the resume is engine_sched_begin's own choice between a residue
    * and a boot flow, and everything between the two spawns is the store — which is exactly what the trusted
    * zone is to the shipped engine. */
-  if (process.argv.includes("cold")) {
-    const store = join(OUT, "park.recipes");
-    /* THE SHELF IS EMPTY BEFORE SESSION ONE. A residue left by an earlier run of a DIFFERENT tree would resume
-       flows standing on segments this build never wrote — and it would look like a pass. */
-    rmSync(store, { force: true });
-    const v1 = bin === null
-      ? skipped("session ONE (--cold-park)", "the native program did not link")
-      : runChild("session ONE (--cold-park)", bin, ["--cold-park", store],
-      "read its `@H park-*` rows beside the round-trip line below: a 0 kind names which record the park did " +
-      "not write, and the moment it was taken at is `fixture_want_park` in engine/host/test_forced.c.");
-    /* SESSION TWO IS SKIPPED AND NOT MERELY UNREPORTED. This is a real data dependency and not a door — the
-       resume reads the residue session ONE writes, so with no residue there is nothing for it to be a test OF
-       — and it is stated as a skip with that reason so the report never has a silent hole in it.
-       THE DEPENDENCY IS THE RESIDUE, SO THE RESIDUE IS WHAT IS ASKED. This read `v1.code`, and an exit code is
-       not that fact: it folds session ONE's six park rows — and every other probe in the fixture — into one
-       door, so a run that wrote a full residue and failed a row named an arm it did not exercise was reported
-       under a sentence claiming it had written nothing. That is the shape this file warns about elsewhere,
-       three states behind one answer, with the printed REASON being the part that was false. Session ONE still
-       FAILS on its own rows and the report below still fails with it; what changes is that the read half is no
-       longer gated on the write half being perfect, which is the whole reason the round trip is two spawns. */
-    /* READ RATHER THAN STAT'D, and not for want of `statSync`: cold.c's rule is that "an engine with no members
-       writes no bytes at all", so ABSENT and EMPTY are the same non-residue and a size is one of the two ways to
-       ask. Reading it asks both at once and costs nothing at this size — the document is a few hundred bytes. */
-    const residue = existsSync(store) && readFileSync(store, "utf8").trim().length > 0;
-    const v2 = bin === null
-      ? skipped("session TWO (--cold-resume)", "the native program did not link")
-      : !residue
-      ? skipped("session TWO (--cold-resume)", "session ONE wrote no residue for it to resume from")
-      : runChild("session TWO (--cold-resume)", bin, ["--cold-resume", store],
-                 "the round-trip line below says what it rebuilt out of the residue; a kind session one " +
-                 "wrote and this one did not rebuild is the arm to look at.");
-    /* AND THE ROUND TRIP IS REPORTED RATHER THAN HINTED AT, which is this file's own recorded lesson applied
-       to the last two places that had not had it. The hints these replace "named the mechanism, named the
-       obstacle, and left the reporter printing an instruction to a human about numbers the reporter itself
-       could have read" — and worse, they printed only on a NON-PASS, so the round trip that WORKED said
-       nothing at all and `orphansUnmet`, the round trip's own verdict, has never been read by anything. */
-    if (!v1.code && !v2.code) console.log("[build] cold round trip (" + kind + ") — " +
-                                          coldRoundTrip(v1, v2, store) + " — residue at " + store);
-    /* COLLECTED, NOT REPORTED, and the difference is a whole stage. `report()` ALWAYS exits — both arms end in
-       `process.exit` — so reporting here ended the run, and the native run below was UNREACHABLE FROM `cold`.
-       Not merely on a red cold round trip: on every invocation of it, green included. So `node engine/build.mjs
-       native cold` has never once run the fixture, and the paragraph immediately below is the one that says why
-       that is the defect — "a target that is only built is the excluded test one layer down". The two stages
-       were written months apart and the second never noticed the first could not fall through to it.
-       IT COST A REAL MEASUREMENT: a lane converted 45 probe rows to record-scoped clauses and asked for a run
-       of the fixture to confirm none of them had become a term that can only ever read 0 — the defect that
-       fixture records having had three times — and `native cold` answered with a cold verdict and no fixture at
-       all. The two are INDEPENDENT questions about one binary, so they are two stages of one report, and a red
-       cold round trip must not decide whether the fixture is exercised. */
-    stages.push(onHost(v1, STAGE_HOST.NATIVE), onHost(v2, STAGE_HOST.NATIVE));
-  }
+  stages.push(...coldRoundTripStages(bin, kind));
   /* AND IT IS RUN, because a target that is only built is the excluded test one layer down: the whole point is
      the stream it prints and the report it ends with, and nothing else in the tree produces either. */
   stages.push(onHost(bin === null
@@ -6420,6 +6442,12 @@ const NATIVE_SMOKE = NATIVE_BUILT.bin === null
              "HELD THE THREAD for. The @H row printed 0 above names a statement engine/host/test_forced.c's " +
              "probe table declares and this run did not answer.");
 STAGES.push(onHost(NATIVE_SMOKE, STAGE_HOST.NATIVE));
+
+/* AND THE CROSS-SESSION ROUND TRIP, ON THE BUILD CLAUDE.md NAMES AS THE BUILD. The `native` target runs it
+   too, and that is not where it mattered: `node engine/build.mjs` is the command the file names, so a stage
+   only the other target runs is a stage the graph of what actually gets run does not contain. Same binary as
+   the verdict run above, two more spawns of it, seven seconds at today's early aborts. */
+STAGES.push(...coldRoundTripStages(NATIVE_BUILT.bin, "none"));
 
 /* ── AND THE VEHICLE'S RUN, WHICH STILL RUNS AND DECIDES NOTHING ──────────────────────────────────────────
    ITS HOST DEPENDS ON WHETHER THE NATIVE RUN HAPPENED, and that is not a hedge - it is the rule STAGE_HOST
