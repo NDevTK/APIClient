@@ -157,7 +157,12 @@ static const MfDef MQ_FEATURES[] = {
     { "scan",                 MFK_DISCRETE, "progressive", "interlace progressive", 1 },
     { "grid",                 MFK_INTEGER },
     { "update",               MFK_DISCRETE, "fast", "none slow fast", 1 },
-    { "overflow-block",       MFK_DISCRETE, "scroll", "none scroll optional-paged paged", 1 },
+    /* `optional-paged` STOOD HERE AS A FOURTH VALUE AND IS ONE IN NEITHER LEVEL. MQ4’s own "Changes"
+       section is the evidence in one sentence — "Dropped the optional-paged value of overflow-block due
+       to a lack of current UAs having the behavior that it described" — and MQ4 and MQ5 both give
+       `Value: none | scroll | paged`. The list is not decoration: `value_ok` reads it, so this row is
+       what decided whether `(overflow-block: optional-paged)` named a feature at all. */
+    { "overflow-block",       MFK_DISCRETE, "scroll", "none scroll paged", 1 },
     { "overflow-inline",      MFK_DISCRETE, "scroll", "none scroll", 1 },
     { "color",                MFK_INTEGER },
     { "color-index",          MFK_INTEGER },
