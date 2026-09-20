@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html><head><title>cssd backing: mixed pending round trip</title></head>
+<body><div id="m" style="margin: var(--g) 0">mixed</div>
+<script>
+/* THE PREDICTED LOSS, as a falsifiable pair with `cssdback_m5ey_concrete.html`.
+   A block holding `margin: var(--g) 0` holds FOUR longhands, every one of them
+   css_pending_substitution.h's pending-substitution value. Writing ONE of them
+   concretely leaves a MIXED list, which `cssd_try_shorthand` cannot consolidate
+   back into the original shorthand — so each survivor goes out under its own
+   name, a pending value serializes as the empty string, `margin-right: ;` is
+   what the text says, and the very next parse of that text drops the
+   declaration. `cssd_backing_assert_round_trip` is the instrument that says so.
+   THE SECOND STATEMENT IS THE REACHABILITY WITNESS and is why this file has a
+   twin: an ABSENT abort and a statement that never ran render alike, so both
+   arms end at a §6.6.1 write of an unknown with NO EXAMPLE, which aborts in
+   `cssd_value` by name. The concrete twin reaches it; this one must not. */
+var el = document.getElementById('m');
+el.style.marginTop = '5px';
+var p = JSON.parse(localStorage.getItem('zzm5eyabsentkey'));
+el.style.backgroundColor = p.zzm5eywitnessfield;
+</script>
+</body></html>

@@ -993,18 +993,16 @@ static const char *cssd_inline_text(lxb_dom_element_t *el, size_t *plen)
    the table does not record — because a recorded shorthand is not IN the declarations and is answered from its
    longhands by §6.6.1's own steps one function along. The two backings differ in WHERE the text is kept and in
    nothing else, so the cascade's inline layer and §6.6.1's members share this. OWNED. */
-static char *cssd_value_in_block(const char *text, size_t len, const char *name, bool *pimportant)
+static char *cssd_value_in_decls(const CssDecls *d, const char *name, bool *pimportant)
 {
-    CssDecls d = { 0 };
     char *out = NULL;
     int at;
 
-    cssd_decls_from_text(text, len, &d);
-    at = cssd_decls_index(&d, name);
+    at = cssd_decls_index(d, name);
     /* THE BLOCK DECLARES A PROPERTY AT MOST ONCE, so there is no "last wins" left to do here: which of several
        declarations of one property survives is decided where they are COLLECTED, by the cascade's own two
        criteria (importance, then order), and this is the one answer that came out. */
-    if (at >= 0 && d.v[at].value) {
+    if (at >= 0 && d->v[at].value) {
         /* css-values-5 "Appendix A: Arbitrary Substitution Functions" / "Substitution in Shorthand
            Properties" — AN APPENDIX, so the titles are the citation: "Pending-substitution values must be
            serialized as the empty string, if an API allows them to be observed." THIS ENTRY IS EVERY SUCH
@@ -1018,9 +1016,21 @@ static char *cssd_value_in_block(const char *text, size_t len, const char *name,
            associated with must instead be filled in". Collapsing the two would
            make `margin: var(--g)` read back as a block that never mentioned `margin-top`, which is the state
            this engine was in before the pending-substitution value existed. */
-        out = cssd_strdup(css_pending_is(d.v[at].value) ? "" : d.v[at].value);
-        if (pimportant) *pimportant = d.v[at].important;
+        out = cssd_strdup(css_pending_is(d->v[at].value) ? "" : d->v[at].value);
+        if (pimportant) *pimportant = d->v[at].important;
     }
+    return out;
+}
+
+/* The same question asked of a block that is kept as TEXT and nothing else — the cascade's element-attached
+   layer and `cssom_declared_value`'s callers, neither of which has a §6.6 block object to hold a store. */
+static char *cssd_value_in_block(const char *text, size_t len, const char *name, bool *pimportant)
+{
+    CssDecls d = { 0 };
+    char *out;
+
+    cssd_decls_from_text(text, len, &d);
+    out = cssd_value_in_decls(&d, name, pimportant);
     cssd_decls_free(&d);
     return out;
 }
@@ -1044,32 +1054,29 @@ char *cssom_declared_value(const char *text, size_t len, const char *name)
    them) — which is
    exactly the split WPT's border-shorthand-serialization.html pins.
    OWNED, NULL when the block gives the property no value. */
-static char *cssd_property_value(const char *text, size_t len, const char *name)
+static char *cssd_property_value(const CssDecls *d, const char *name)
 {
     const char *const *lh;
     const char *values[CSS_SHORTHAND_MAX_LONGHANDS];
-    CssDecls d = { 0 };
     unsigned n, i;
     bool important = false, ok = true;
     char *out = NULL;
     int at;
 
     lh = css_shorthand_longhands(name, &n);
-    if (!lh) return cssd_value_in_block(text, len, name, NULL);
+    if (!lh) return cssd_value_in_decls(d, name, NULL);
     CHECK(n <= CSS_SHORTHAND_MAX_LONGHANDS,
           "cssom: a shorthand's longhand list outgrew the array §6.6.1's getPropertyValue sized from it");
-    cssd_decls_from_text(text, len, &d);
     for (i = 0; i < n && ok; i++) {
-        at = cssd_decls_index(&d, lh[i]);
+        at = cssd_decls_index(d, lh[i]);
         /* "If declaration is null, then return the empty string", and "if important flags of all declarations
            in list are same, then return the serialization of list" — otherwise the empty string. */
-        if (at < 0 || !d.v[at].value) { ok = false; break; }
-        if (i == 0) important = d.v[at].important;
-        else if (d.v[at].important != important) { ok = false; break; }
-        values[i] = d.v[at].value;
+        if (at < 0 || !d->v[at].value) { ok = false; break; }
+        if (i == 0) important = d->v[at].important;
+        else if (d->v[at].important != important) { ok = false; break; }
+        values[i] = d->v[at].value;
     }
     if (ok) out = css_shorthand_serialize_value(name, (const char *const *)values);
-    cssd_decls_free(&d);
     return out;
 }
 
@@ -1077,29 +1084,26 @@ static char *cssd_property_value(const char *text, size_t len, const char *name)
    each longhand property longhand that property maps to, append the result of invoking getPropertyPriority()
    with longhand as argument to list. If all items in list are the string 'important', then return the string
    'important'." A longhand the block does not declare has no priority, so the answer is not "important". */
-static bool cssd_property_important(const char *text, size_t len, const char *name)
+static bool cssd_property_important(const CssDecls *d, const char *name)
 {
     const char *const *lh;
-    CssDecls d = { 0 };
     unsigned n, i;
     bool all = true;
 
     lh = css_shorthand_longhands(name, &n);
     if (!lh) {
         bool imp = false;
-        char *v = cssd_value_in_block(text, len, name, &imp);
+        char *v = cssd_value_in_decls(d, name, &imp);
         bool got = v != NULL && imp;
 
         free(v);
         return got;
     }
-    cssd_decls_from_text(text, len, &d);
     for (i = 0; i < n && all; i++) {
-        int at = cssd_decls_index(&d, lh[i]);
+        int at = cssd_decls_index(d, lh[i]);
 
-        all = at >= 0 && d.v[at].value != NULL && d.v[at].important;
+        all = at >= 0 && d->v[at].value != NULL && d->v[at].important;
     }
-    cssd_decls_free(&d);
     return all;
 }
 
@@ -1523,66 +1527,19 @@ static char *cssd_serialize_decls(const CssDecls *d)
     return out.s;
 }
 
-/* IS THE SERIALIZATION ABOVE A FAITHFUL BACKING FOR THIS BLOCK — WHICH IS A DIFFERENT QUESTION FROM WHETHER IT
-   IS A FAITHFUL SERIALIZATION, and is asked only where the answer is about to become the block's STORAGE.
-   §6.6's serialize a CSS declaration block is an OBSERVATION algorithm: it answers what `cssText` and
-   `getAttribute('style')` show. This engine uses its output as the backing — `cssd_write_declaration` reads the
-   text, edits the declarations, serializes and writes the result back — so EVERY RULE THAT MAKES THE
-   SERIALIZATION HIDE SOMETHING MAKES THE WRITE DESTROY IT. The two coincide for a declaration whose value is
-   the page's own bytes, and they come apart for a value no page can spell.
-   THIS FILE HAS EXACTLY ONE SUCH VALUE TODAY and it is core/css/css_pending_substitution.h's, whose own
-   standard requires it to serialize as the empty string wherever an API can observe it. `cssd_serialize_decls`
-   obeys that rule, `cssd_append_declaration` then writes `name: ;`, and the very next parse of that text drops
-   the declaration whole. THE SHORTHAND CONSOLIDATION IS WHAT HIDES THIS IN THE ORDINARY CASE: a block whose
-   longhands are ALL pending from ONE original serializes back to that original and round-trips exactly, which
-   is also the mechanism that makes a pending value a per-parse DERIVATION rather than something the backing
-   ever holds. The loss needs a MIXED list, and two writes produce one — a block holding `margin: var(--g) 0`
-   written through `el.style.marginTop = '5px'` keeps `margin-top` and loses `margin-right`, `margin-bottom`
-   and `margin-left`, because no shorthand can absorb the three survivors and each goes out under its own name
-   with an empty value.
-   IT IS A NAME CHECK AND NOT A VALUE CHECK, deliberately: what a round trip may legitimately change is a
-   value's SPELLING (a shorthand consolidates, a grammar canonicalizes), and what it may never change is WHICH
-   PROPERTIES THE BLOCK DECLARES. `cssd_write_declaration`'s own header has claimed exactly that identity in
-   prose since the block stopped storing an unconsolidated list, and nothing checked it; read that header's
-   paragraph beside this one, because the claim is true of every value a page can spell and of nothing else.
-   IT IS SCOPED TO THE UNSPELLABLE VALUES AND THAT SCOPE IS THE CLAIM, not a way of keeping the check quiet: a
-   declaration whose value is the page's bytes parsed once and parses again, so the population where the
-   backing and the serialization can disagree is exactly the population where the value is not bytes. A later
-   diff that adds a SECOND such value — §6.6.1's write of an unknown with no example is the one this file
-   aborts for — widens this scan rather than writing a second one, and this is the instrument any carrier it
-   proposes must pass before it is believed.
-   RETIREMENT: this record goes when the block's backing keeps its declarations as VALUES rather than as their
-   serialization, after which a serialization rule cannot reach the storage and there is no round trip to
-   assert over. */
-#if APICLIENT_DEV
-static void cssd_backing_assert_round_trip(const CssDecls *d, const char *next)
-{
-    CssDecls back = { 0 };
-    bool any = false;
-    unsigned i;
-
-    for (i = 0; i < d->n; i++) any = any || css_pending_is(d->v[i].value);
-    if (!any) return;
-    cssd_decls_from_text(next, next ? strlen(next) : 0, &back);
-    for (i = 0; i < d->n; i++) {
-        if (!css_pending_is(d->v[i].value)) continue;
-        DCHECKF(cssd_decls_index(&back, d->v[i].name) >= 0,
-                "a write to a CSS declaration block DESTROYED the declaration `%s`, which the block held "
-                "before the write and which the write did not remove. Its value is one no page can spell — "
-                "core/css/css_pending_substitution.h's, standing in for a shorthand that is not substituted "
-                "yet — and §6.6's serialization is required to show such a value as the empty string wherever "
-                "an API can observe it. THIS ENGINE STORES THAT SERIALIZATION, so the rule that hides the "
-                "value from a reader deletes the declaration from the block, and the next parse of the text "
-                "cannot find it. WHAT IS MISSING IS A BACKING THAT KEEPS DECLARATIONS AS VALUES RATHER THAN "
-                "AS THEIR SERIALIZATION: `cssd_declarations_text`/`cssd_declarations_write` are the seam, and "
-                "the block's declarations must survive a write without passing through an algorithm whose job "
-                "is to decide what a page is allowed to see. Until then the serialization is answering two "
-                "questions and one of them is not its own",
-                d->v[i].name);
-    }
-    cssd_decls_free(&back);
-}
-#endif
+/* §6.6'S SERIALIZATION IS NO LONGER THIS BLOCK'S BACKING, AND `cssd_backing_assert_round_trip` IS RETIRED
+   WITH THE STATE IT ASSERTED OVER. That check asked whether the text a write was about to STORE still NAMED
+   every declaration whose value no page can spell, and answered no for a block holding `margin: var(--g) 0`
+   written through `el.style.marginTop = '5px'` — measured, 3 of 3, at the abort it named. Its own stated
+   retirement condition was that the record goes when the block's backing keeps its declarations as values
+   rather than as their serialization, after which a serialization rule cannot reach the storage and there is
+   no round trip to assert over. `cssd_declarations_put` is that backing, so the condition is met and the
+   record goes with the diff that met it rather than being kept beside it.
+   WHAT REPLACES IT IS IN `cssd_decls_load` AND ASKS A DIFFERENT QUESTION, which is why it is not this check
+   moved: the store's declarations must SERIALIZE BACK to the projection they were filed beside, so what is
+   asserted is this file's own encode against its own decode, over two `CssDecls` built by two different runs.
+   The old question — does the projection still name them — is now a question about a string the block does
+   not store, and its answer is NO by design for exactly the values the store exists to carry. */
 
 static char *cssd_serialize_block(const lxb_css_rule_declaration_list_t *list, const char *text, size_t len)
 {
@@ -1616,20 +1573,6 @@ static char *cssd_serialize_at_block(const lxb_css_rule_list_t *block, const cha
     return out;
 }
 
-/* The same, from the TEXT a backing keeps — which is what §6.6.1's `cssText` getter answers for both backings:
-   "return the result of serializing the declarations", where the declarations are what parsing that text
-   produced, NOT the bytes the page happened to write. `<div style="color:red">` therefore reads back as
-   "color: red;" exactly as it does in a browser. OWNED, NULL for a block that declares nothing. */
-static char *cssd_serialize_text(const char *text, size_t len)
-{
-    CssDecls d = { 0 };
-    char *out;
-
-    cssd_decls_from_text(text, len, &d);
-    out = cssd_serialize_decls(&d);
-    cssd_decls_free(&d);
-    return out;
-}
 
 char *cssom_serialize_declarations(const char *text, size_t len, CssomBlockContext context)
 {
@@ -3175,6 +3118,242 @@ static void cssd_declarations_write(JSContext *ctx, JSValueConst block, const ch
     dom_cow_set_attribute(el, "style", text, len, JS_UNDEFINED);
 }
 
+/* ---- §6.6's DECLARATIONS AS VALUES: the block's own store, over the text the two backings keep -------------
+ *
+ * THE BACKING ABOVE IS A SERIALIZATION, AND A SERIALIZATION IS AN OBSERVATION ALGORITHM. §6.6's serialize a
+ * CSS declaration block answers what `cssText` and `getAttribute('style')` SHOW, so every rule that makes it
+ * hide something makes a write that stores its output DESTROY that something — the two coincide for a
+ * declaration whose value is the page's own bytes and come apart for a value no page can spell.
+ *
+ * THAT IS NOT A DEFECT IN THE SERIALIZER AND FIXING IT THERE IS SPEC-WRONG, which is worth stating because it
+ * is the repair a reader reaches for first — emit the shorthand for the longhands that still share one
+ * pending value and the overriding longhand after it, and the text round-trips. MEASURED by fetching the
+ * current editor's draft of CSSOM §6.6 "CSS Declaration Blocks": the block algorithm's DECLARATION arm has no
+ * skip-if-empty step at all — it serializes the declaration and appends the result to the output list
+ * unconditionally, so a longhand whose value serializes to nothing is written as `name: ;`. (THE TITLE HERE
+ * READ "Serializing CSS Values" AND THAT IS §6.7.2, caught by `citegen.mjs` on the first run against this
+ * banner; the number was right and the title named a different section, which is the pair a reader cannot
+ * check by eye and the instrument can.) And the SHORTHAND arm may not rescue it either: css-values-5's
+ * "Substitution in Shorthand
+ * Properties" requires a shorthand with a MIXED set of longhands to serialize as the empty string, which
+ * §6.6's shorthand loop reads as "continue". Both rules are quoted in full, once, at
+ * core/css/css_pending_substitution.h, which also records why an audit reports them against the wrong
+ * standard; they are not re-quoted here, because N copies of one spec sentence are N chances to be stale.
+ * So `margin-right: ;` is exactly what a browser writes, and the very next parse of it drops the declaration
+ * whole. The standard is obeyed and the STORAGE is what must stop being that string.
+ *
+ * SO THE DECLARATIONS ARE KEPT AS VALUES, AND THE TEXT IS THE PROJECTION. A write serializes as before and
+ * writes the backing as before — §6.6's "update style attribute" is unchanged, so `getAttribute('style')`,
+ * `cssText` and the cascade's element-attached layer read byte-identically what they read before — and it
+ * additionally files the declarations THEMSELVES beside the bytes it wrote.
+ *
+ * IT IS A JS ARRAY ON THE BLOCK'S OWN RECORD, for the reason `cssd_taint_set`'s record states in full: an
+ * ordinary property write is what the per-flow COW delta captures, so the store forks, parks and resumes for
+ * free, and a malloc'd C list beside it would be state the delta does not swap.
+ *
+ * THE STORE IS VALIDATED BY CONTENT AND NEEDS NO INVALIDATION CALL ANYWHERE, which is the same property and
+ * the same argument the unknown record below is built on. It files the PROJECTION it wrote beside the values,
+ * and a read takes the values only while the backing still holds exactly those bytes. A `setAttribute('style',
+ * …)`, a `cssText =` through another path, a rule's own text written elsewhere, a COW rewind that restores the
+ * attribute — every one of them leaves a text the projection does not match, and the read then parses the text
+ * exactly as it did before this store existed. There is no write that can leave a WRONG answer behind.
+ *
+ * THAT QUESTION IS ROUTING AND NOT A FALLBACK, by §C-stack's own test: delete the values store and the text
+ * parse is STILL the only way to answer a block whose text the page wrote directly, because the page's own
+ * `setAttribute` is a declaration list this component never saw. What a fallback would look like is a second
+ * ANSWER to a question this store can answer, and there is none: where the projection matches, the text is not
+ * consulted at all.
+ *
+ * WHAT IT DOES NOT REACH, NAMED. The cascade's element-attached layer (`cssd_inline_collect`) reads the
+ * element's `style` attribute directly and has no block in hand, so a declaration this store holds and the
+ * projection hides is invisible to the cascade. That population is EMPTY for every value a page can spell and
+ * is exactly the population §6.6.1's no-example write will create. WHAT THE NEXT DIFF BUILDS: the fork and its
+ * record entry (`cssd_value`'s ordered (2) and (3)), after which the cascade's inline collector must ask the
+ * BLOCK rather than the attribute for an element that has one. HOW ITS ABSENCE WOULD SHOW, as an observation:
+ * a block that declares a property through `el.style` and a `getComputedStyle` of the same element that does
+ * not, on one element, with no write to the attribute in between. */
+#define CSSD_DECLS_FIELD      "declarations"
+/* The bytes the write that filed those declarations left in the backing — the whole of the staleness test. */
+#define CSSD_DECLS_TEXT_FIELD "declarationsProjection"
+
+/* FILE the declarations `proj` was the serialization of, or CLEAR the store when `proj` is NULL. Clearing is a
+   positive statement and not an omission: a write whose bytes the backing did not keep verbatim has left a
+   block this store cannot describe, and a stale array left behind would be read by the next matching
+   projection. */
+static void cssd_decls_store(JSContext *ctx, JSValueConst block, const CssDecls *d, const char *proj)
+{
+    JSValue arr;
+    unsigned i;
+
+    if (!proj) {
+        JS_SetPropertyStr(ctx, block, CSSD_DECLS_FIELD, JS_UNDEFINED);
+        JS_SetPropertyStr(ctx, block, CSSD_DECLS_TEXT_FIELD, JS_UNDEFINED);
+        return;
+    }
+    arr = JS_NewArray(ctx);
+    CHECK(JS_IsObject(arr),
+          "cssom: the declaration block's value store could not be allocated — a dropped one would silently "
+          "return the block to a backing that cannot hold a value no page can spell");
+    /* THREE ENTRIES PER DECLARATION AND NOT AN OBJECT PER DECLARATION, because the three are ONE fact written
+       in ONE step — the same reason the unknown record below writes its two in one call — and because a
+       declaration's VALUE is the field that must be able to be absent: `JS_NULL` is a declaration the block
+       holds and has no bytes for, which is the capability the text backing did not have. */
+    for (i = 0; i < d->n; i++) {
+        JS_SetPropertyUint32(ctx, arr, i * 3u,      JS_NewString(ctx, d->v[i].name));
+        JS_SetPropertyUint32(ctx, arr, i * 3u + 1u,
+                             d->v[i].value ? JS_NewString(ctx, d->v[i].value) : JS_NULL);
+        JS_SetPropertyUint32(ctx, arr, i * 3u + 2u, JS_NewBool(ctx, d->v[i].important));
+    }
+    JS_SetPropertyStr(ctx, block, CSSD_DECLS_FIELD, arr);
+    JS_SetPropertyStr(ctx, block, CSSD_DECLS_TEXT_FIELD, JS_NewString(ctx, proj));
+}
+
+/* THE STORE, WHEN THE BACKING STILL HOLDS THE BYTES IT WAS FILED BESIDE. FALSE means the caller parses the
+   text, which is every block this component has not written and every block somebody else has. */
+static bool cssd_decls_load(JSContext *ctx, JSValueConst block, const char *cur, size_t curlen, CssDecls *out)
+{
+    JSValue arr, proj;
+    const char *held;
+    size_t heldlen = 0;
+    uint32_t n = 0, i;
+    bool same, shaped = true;
+
+    DCHECK(out->n == 0,
+           "the declaration block's value store was decoded into a list that already holds declarations — the "
+           "store IS the block's declarations, so appending them to somebody else's would file one block's "
+           "under another's and the round-trip check below would be asked about neither");
+    proj = JS_GetPropertyStr(ctx, block, CSSD_DECLS_TEXT_FIELD);
+    if (!JS_IsString(proj)) { JS_FreeValue(ctx, proj); return false; }
+    held = JS_ToCStringLen(ctx, &heldlen, proj);
+    JS_FreeValue(ctx, proj);
+    if (!held) return false;
+    /* BYTE-FOR-BYTE AND NEVER A LENGTH OR A PREFIX. The two strings are a serialization this component wrote
+       and whatever the backing answers now, and the only thing that makes the store safe is that nothing but
+       that exact write can produce the first. */
+    same = heldlen == curlen && (curlen == 0 || memcmp(held, cur ? cur : "", curlen) == 0);
+    JS_FreeCString(ctx, held);
+    if (!same) return false;
+    arr = JS_GetPropertyStr(ctx, block, CSSD_DECLS_FIELD);
+    if (!JS_IsArray(arr)) { JS_FreeValue(ctx, arr); return false; }
+    {
+        JSValue len = JS_GetPropertyStr(ctx, arr, "length");
+
+        JS_ToUint32(ctx, &n, len);
+        JS_FreeValue(ctx, len);
+    }
+    /* THE SHAPE IS VALIDATED BEFORE ONE DECLARATION IS TAKEN, and a store that fails it is REFUSED WHOLE
+       rather than read past. Refusing is a real answer and not a hole: the caller parses the backing's text,
+       which is exactly what every block without a store does, so the release arm of this assert is a DEFINED
+       narrower answer rather than a block with some of its declarations missing. */
+    if (n % 3u != 0) shaped = false;
+    for (i = 0; shaped && i + 2u < n; i += 3u) {
+        JSValue jn = JS_GetPropertyUint32(ctx, arr, i);
+        JSValue jv = JS_GetPropertyUint32(ctx, arr, i + 1u);
+        JSValue ji = JS_GetPropertyUint32(ctx, arr, i + 2u);
+
+        shaped = JS_IsString(jn) && (JS_IsString(jv) || JS_IsNull(jv)) && JS_IsBool(ji);
+        JS_FreeValue(ctx, jn);
+        JS_FreeValue(ctx, jv);
+        JS_FreeValue(ctx, ji);
+    }
+    DCHECK(shaped,
+           "the declaration block's value store is not a run of (name, value-or-null, important) triples — "
+           "the array is written in one loop by this file alone, on a record whose own slot no page can "
+           "reach, so a malformed one is this component disagreeing with itself. A declaration with no NAME "
+           "is one no member could ever ask for again, and a value that is neither bytes nor the stated "
+           "absence of them is a third state this store has no reading for");
+    if (!shaped) { JS_FreeValue(ctx, arr); return false; }
+    for (i = 0; i + 2u < n; i += 3u) {
+        JSValue jn = JS_GetPropertyUint32(ctx, arr, i);
+        JSValue jv = JS_GetPropertyUint32(ctx, arr, i + 1u);
+        JSValue ji = JS_GetPropertyUint32(ctx, arr, i + 2u);
+        const char *name = JS_ToCString(ctx, jn);
+        const char *value = JS_IsString(jv) ? JS_ToCString(ctx, jv) : NULL;
+
+        CHECK(name != NULL && (value != NULL || JS_IsNull(jv)),
+              "cssom: OOM reading a declaration back out of the block's value store — a dropped one would "
+              "take the declaration with it, and this loop has already refused to be a partial read");
+        /* APPENDED AND NOT COLLECTED, because the stored list has ALREADY been through the collapse and the
+           ORDER is part of what it stores: §6.6's shorthand loop asks what sits BETWEEN two longhands, so a
+           decode that re-ran the collector would answer a different serialization for the same block. */
+        cssd_decls_append(out, cssd_strdup(name), value ? cssd_strdup(value) : NULL, JS_ToBool(ctx, ji));
+        JS_FreeCString(ctx, name);
+        if (value) JS_FreeCString(ctx, value);
+        JS_FreeValue(ctx, jn);
+        JS_FreeValue(ctx, jv);
+        JS_FreeValue(ctx, ji);
+    }
+    JS_FreeValue(ctx, arr);
+#if APICLIENT_DEV
+    /* THE ONE CHECK THIS STORE OWES AND THE ONE THAT CAN FAIL: the declarations it just handed back must
+       serialize to the very projection it was filed beside. It is NOT the identity by construction — the two
+       strings are produced by two different runs of `cssd_serialize_decls` over two different `CssDecls`, one
+       built by a write and one decoded here — so it is exactly the encode/decode round trip, and it is asked
+       where the answer is about to become a member's answer.
+       IT IS TOTAL AND NOT SCOPED, AND THE COST ARGUMENT IS WHY IT CAN AFFORD TO BE: what this store REPLACED
+       on every read was a full lexbor parse of the block's text, and a serialization is cheaper than that —
+       so a dev read is cheaper than it was before this diff and a release read is cheaper still. A check
+       scoped to blocks holding a value no page can spell would have been the population where the ANSWER is
+       load-bearing and not the population where the DEFECT lives: an encode/decode disagreement is a property
+       of this file's two loops and shows on any block at all.
+       WHAT IT REPLACES IS `cssd_backing_assert_round_trip`, which is RETIRED and not restated: that check
+       asked whether the TEXT still named every declaration, which after this diff is a question about a
+       string the block does not store and whose answer is NO by design for the values the store carries. */
+    {
+        char *again = cssd_serialize_decls(out);
+        JSValue jp = JS_GetPropertyStr(ctx, block, CSSD_DECLS_TEXT_FIELD);
+        const char *want = JS_IsString(jp) ? JS_ToCString(ctx, jp) : NULL;
+
+        DCHECKF(want != NULL && strcmp(again ? again : "", want) == 0,
+                "a CSS declaration block's value store decoded to declarations that do NOT serialize back to "
+                "the projection they were filed beside — `%s` against `%s`. The store and the backing are one "
+                "write, so the two can only disagree if this file's encode and its decode disagree, and the "
+                "store is what every §6.6.1 member now reads INSTEAD of the block's text",
+                again ? again : "", want ? want : "(absent)");
+        if (want) JS_FreeCString(ctx, want);
+        JS_FreeValue(ctx, jp);
+        free(again);
+    }
+#endif
+    return true;
+}
+
+/* THE BLOCK'S DECLARATIONS — the store when it still describes the backing, and a parse of the backing's text
+   when it does not. Every §6.6.1 member that reads declarations goes through here, so no two of them can
+   disagree about which of the two answered. */
+static void cssd_declarations_read(JSContext *ctx, JSValueConst block, CssDecls *out)
+{
+    size_t len = 0;
+    char *text = cssd_declarations_text(ctx, block, &len);
+
+    if (!cssd_decls_load(ctx, block, text, len, out))
+        cssd_decls_from_text(text, len, out);
+    free(text);
+}
+
+/* THE WHOLE OF A WRITE'S STORAGE STEP: serialize, update the backing, and file the declarations beside the
+   bytes that landed. THE BYTES ARE RE-READ RATHER THAN ASSUMED, because a backing may not keep what it was
+   handed — `css_rule_set_block_text` re-serializes a PAGE, MARGIN or KEYFRAME rule's block through that
+   context's own restriction, so what it stores is a SUBSET of what this call serialized. Filing `d` beside a
+   projection the backing did not keep would make the store claim declarations the restriction removed, which
+   is a wrong answer where the missing store is merely a smaller one — so a write the backing altered files
+   NOTHING and that block keeps exactly the behaviour it had before this store existed. */
+static void cssd_declarations_put(JSContext *ctx, JSValueConst block, const CssDecls *d)
+{
+    char *next = cssd_serialize_decls(d);
+    size_t nlen = next ? strlen(next) : 0;
+    char *back;
+    size_t blen = 0;
+    bool kept;
+
+    cssd_declarations_write(ctx, block, next ? next : "", nlen);
+    back = cssd_declarations_text(ctx, block, &blen);
+    kept = blen == nlen && (nlen == 0 || memcmp(back ? back : "", next ? next : "", nlen) == 0);
+    free(back);
+    cssd_decls_store(ctx, block, d, kept ? (next ? next : "") : NULL);
+    free(next);
+}
+
 /* §6.6.1's "let component value list be the result of parsing value for property property", asked of THE
    PARSER: the declaration `name: value` goes through exactly what a declaration in a block goes through —
    cssd_decl_take, the ONE answer to CSSOM §6.7.1 "Parsing CSS Values" — and what comes back is the canonical
@@ -3627,26 +3806,30 @@ static bool cssd_value(JSContext *ctx, JSValueConst value, const char *member, c
                    "is not the second: they differ on every block that already declares this property, and "
                    "js_cssd_set_property's step-3 paragraph already names that world for an unknown that HAS "
                    "an example. "
-                   "WHAT IS MISSING IS A DECLARATION THAT CAN HOLD AN UNKNOWN WITH NO BYTES, AND HALF OF IT "
-                   "IS BUILT. THE STORE IS: this block's unknown record above used to validate an entry by "
-                   "strcmp of its concolic's EXAMPLE against the declared bytes, which keyed the record by an "
-                   "example and refused the one kind of value that has none; it now states those bytes as the "
-                   "ENTRY'S own fact and asks the unknown nothing, so a no-example entry is storable and "
-                   "readable today — and `cssd_taint_set` records why that keying was ALSO a live defect for "
-                   "the entries that do have an example. "
-                   "WHAT IS NOT BUILT IS THE DECLARATION'S OWN TEXT, AND IT IS NOT SEPARABLE FROM THE FORK. "
-                   "That retires this crash's older clause that the fork is a SECOND diff and leaves that "
-                   "clause's REASON standing, because the reason is still the trap: `cssd_write_declaration` "
-                   "reads a NULL value as REMOVE and all three callers spell the argument "
-                   "`*v.bytes ? v.bytes : NULL`, so an arm with no bytes IS the arm that removes the "
-                   "declaration, and a fork whose success arm has nothing to write still leaves two identical "
-                   "worlds. §6.6's declarations are TEXT, so the block cannot hold a property without bytes for "
-                   "it, and every candidate for those bytes DECIDES step 5: the parse here is REAL "
-                   "(`cssom_parse_a_css_value` runs lexbor and answers NULL for a value the grammar refuses, "
-                   "which IS step 6's arm). So writing `concolic_shape_c`'s shape the way core/dom/element.c's "
-                   "`el_attr_value` writes it into an ATTRIBUTE is NOT the symmetric answer this crash used to "
-                   "call it: an attribute value has no grammar and a declaration's has one, so the shape "
-                   "parses as nothing and the write silently becomes the arm that leaves the block alone. "
+                   "WHAT IS MISSING IS THE FORK AND THE RECORD ENTRY ITS SUCCESS ARM FILES, AND EVERYTHING "
+                   "UNDER THEM IS BUILT. THE STORE IS: this block's unknown record above used to validate an "
+                   "entry by strcmp of its concolic's EXAMPLE against the declared bytes, which keyed the "
+                   "record by an example and refused the one kind of value that has none; it now states those "
+                   "bytes as the ENTRY'S own fact and asks the unknown nothing — and `cssd_taint_set` records "
+                   "why that keying was ALSO a live defect for the entries that do have an example. AND THE "
+                   "DECLARATION ITSELF IS STORABLE NOW: `cssd_declarations_put` keeps a block's declarations "
+                   "as VALUES on its own record and the backing text is the PROJECTION, so a declaration the "
+                   "serialization must hide survives the write that made it. "
+                   "THE SENTENCE `§6.6'S DECLARATIONS ARE TEXT, SO THE BLOCK CANNOT HOLD A PROPERTY WITHOUT "
+                   "BYTES FOR IT` STOOD HERE AND IS REWRITTEN RATHER THAN DELETED, because it is what a "
+                   "reader re-derives from `getAttribute('style')` and because the TRAP it was guarding is "
+                   "untouched: `cssd_write_declaration` still reads a NULL value as REMOVE and all three "
+                   "callers still spell the argument `*v.bytes ? v.bytes : NULL`, so an arm with no bytes IS "
+                   "the arm that removes the declaration, and a fork whose success arm goes through that "
+                   "spelling still leaves two identical worlds. What has changed is that the success arm now "
+                   "HAS somewhere to put a declaration with no bytes, so the fix is at the three call sites "
+                   "and the write's own NULL contract rather than in the storage. And the older refusal "
+                   "stands unchanged: writing `concolic_shape_c`'s shape the way core/dom/element.c's "
+                   "`el_attr_value` writes it into an ATTRIBUTE is NOT the symmetric answer this crash once "
+                   "called it — an attribute value has no grammar and a declaration's has one, the parse here "
+                   "is REAL (`cssom_parse_a_css_value` runs lexbor and answers NULL for a value the grammar "
+                   "refuses, which IS step 6's arm), so the shape would parse as nothing and the write would "
+                   "silently become the arm that leaves the block alone. "
                    "WHAT THE NEXT DIFF BUILDS — AND ITS FIRST HALF IS ONE STEP LOWER THAN THIS CLAUSE USED TO "
                    "SAY. THE FORK IS UNCHANGED AND IS RIGHT: these three bodies as step machines asking "
                    "quickjs-step.h's `step_fork_run` which completion the member reached, numbered so that "
@@ -3660,29 +3843,37 @@ static bool cssd_value(JSContext *ctx, JSValueConst value, const char *member, c
                    "block's backing never holds one and never has to. A value with NO BYTES has no text to be "
                    "derived from, so the pattern cannot carry it. Read those two together with "
                    "`cssd_serialize_decls`: that is the whole derivation and it needs no run. "
-                   "SO THE FIRST SUBPROBLEM IS THE BACKING AND NOT THE MEMBERS. §6.6's declarations are kept "
-                   "here as the SERIALIZATION of the block, re-parsed by lexbor on every read, and a "
-                   "serialization is an OBSERVATION algorithm — it is defined to hide things. Every candidate "
-                   "carrier written into it is therefore one of two wrong answers: a value the re-parse DROPS "
-                   "(the declaration is destroyed, so the write arm and the leave-alone arm become one world "
-                   "and the fork bought nothing), or a value the re-parse KEEPS, which is by construction a "
-                   "value a page can write and can read back out of `getAttribute('style')` — so the engine "
-                   "would have answered the page with bytes it invented, which is the thing this crash "
-                   "exists to refuse. `cssd_backing_assert_round_trip` is the instrument that decides which "
-                   "of the two any proposed carrier is, and it already reports that loss for the ONE "
-                   "unspellable value this file has. "
-                   "ORDERED: (1) a backing that keeps a block's declarations as VALUES rather than as their "
-                   "serialization, so a declaration may hold one that has no bytes; (2) these three bodies as "
-                   "step machines over `step_fork_run`; (3) the write arm files this record's entry against "
-                   "the declaration (1) now lets the block hold. (2) DOES NOT LAND FIRST: a success arm with "
-                   "nothing to write leaves two identical worlds, which is the trap the paragraph above "
-                   "already names. "
-                   "AND THIS DOES NOT REOPEN THAT PARAGRAPH'S `NOT SEPARABLE FROM THE FORK`, WHICH IS ABOUT A "
-                   "DIFFERENT THING AND STILL HOLDS. What is inseparable is (2) from (3): the fork and the "
-                   "value its success arm writes are ONE landing, because either alone is a pair of identical "
-                   "worlds. (1) is a change to the block's STORAGE that alters no member's behaviour and no "
-                   "page-visible answer, so it lands on its own and can be measured on its own — which is "
-                   "exactly why it is numbered first rather than folded in. "
+                   "SUBPROBLEM (1) — THE BACKING — IS BUILT, AND THE SENTENCES THAT DESCRIBED IT AS MISSING "
+                   "ARE REWRITTEN RATHER THAN DELETED, because a reader who re-derives the argument from the "
+                   "serialization alone will re-state it. The argument was: §6.6's declarations are kept as "
+                   "the SERIALIZATION of the block, re-parsed on every read, and a serialization is an "
+                   "OBSERVATION algorithm — so every candidate carrier written into it is one of two wrong "
+                   "answers, a value the re-parse DROPS (the write arm and the leave-alone arm become one "
+                   "world and the fork bought nothing) or a value the re-parse KEEPS, which is by "
+                   "construction a value a page can read back out of `getAttribute('style')`. Every clause of "
+                   "that is still true OF THE SERIALIZATION and is no longer true of the STORAGE: "
+                   "`cssd_declarations_put` files the declarations THEMSELVES on the block's record beside the "
+                   "bytes it wrote, and `cssd_declarations_read` takes them while the backing still holds "
+                   "those bytes. A declaration with NO BYTES is therefore storable, which is the capability "
+                   "this crash said was missing. "
+                   "SO WHAT REMAINS IS (2) AND (3), WHICH ARE ONE LANDING: these three bodies as step "
+                   "machines over `step_fork_run`, and the write arm filing this record's entry against the "
+                   "declaration the store now lets the block hold. Either alone is a pair of identical "
+                   "worlds, which is the trap the paragraph above names; neither is blocked by anything else. "
+                   "AND (1) DID NOT LAND AS PREDICTED IN ONE RESPECT, RECORDED HERE BECAUSE THE NEXT READER "
+                   "WILL OTHERWISE INHERIT THE PREDICTION. This clause said (1) \"alters no member's "
+                   "behaviour and no page-visible answer\". It alters exactly the answers the loss was "
+                   "corrupting: a block holding `margin: var(--g) 0` written through "
+                   "`el.style.marginTop = '5px'` used to DESTROY `margin-right`, `margin-bottom` and "
+                   "`margin-left` — measured 3 of 3 at the instrument that has now retired — so `length` "
+                   "answered 1 where css-values-5 \"Substitution in Shorthand Properties\" says the block "
+                   "declares four, and `item(i)` enumerated one. Those answers are now right. What is "
+                   "unchanged is what a page can SEE of the values: a pending-substitution value still reads "
+                   "back as the empty string, and `cssText` and `getAttribute('style')` are byte-identical to "
+                   "what they were, because §6.6's serialization is untouched. The lesson is the general one: "
+                   "a storage change that FIXES a destroyed declaration cannot also leave every member's "
+                   "answer alone, and a clause claiming both was describing the storage it wanted rather than "
+                   "the defect it was fixing. "
                    "AND THAT ORDER IS THIS CRASH'S ALONE — IT DOES NOT DEFER THE OTHER TWO FORKS THE SAME "
                    "MEMBERS OWE. js_cssd_set_property's step-3 and step-4 residuals are about an unknown that "
                    "HAS an example, and a success arm there has real bytes to write, so (2) builds them with "
@@ -3734,8 +3925,12 @@ static void cssd_value_free(JSContext *ctx, CssdValue *v) { if (v->owned) JS_Fre
    DELETED, because the argument it makes is correct and a reader who re-derives it from the consolidation
    alone will re-state it unqualified. It is FALSE of a declaration whose value is one no page can spell, and
    the reason is not the consolidation at all: §6.6's serialization is an OBSERVATION algorithm and is required
-   to HIDE such a value, so storing its output deletes the declaration. `cssd_backing_assert_round_trip`, above,
-   is where that is asserted rather than argued, and it names the capability the backing is missing. */
+   to HIDE such a value, so storing its output deletes the declaration.
+   AND THE WHOLE PARAGRAPH IS NOW ABOUT THE PROJECTION RATHER THAN ABOUT THE STORAGE, which is the one thing
+   that changed under it: `cssd_declarations_put` files the declarations THEMSELVES beside the bytes it wrote,
+   so the serialization's faithfulness decides what a READER sees and no longer decides what the block HOLDS.
+   Every sentence above stays true of `getAttribute('style')` and of `cssText`, which is what they were always
+   really about; what they may no longer be read as is a claim about what survives a write. */
 /* `taint` IS THE UNKNOWN THE PAGE'S VALUE WAS, or JS_UNDEFINED when the value was a real string — and a
    CONCRETE write is a positive statement that this declaration is nobody's unknown any more, which is why it
    clears rather than leaving the last one standing.
@@ -3749,14 +3944,11 @@ static void cssd_value_free(JSContext *ctx, CssdValue *v) { if (v->owned) JS_Fre
 static void cssd_write_declaration(JSContext *ctx, JSValueConst block, const char *name, const char *value,
                                    bool important, JSValueConst taint)
 {
-    size_t len = 0;
-    char *text = cssd_declarations_text(ctx, block, &len);
     CssDecls d = { 0 };
     CssdSetNames set = { { NULL }, 0 };
-    char *next;
     unsigned i;
 
-    cssd_decls_from_text(text, len, &d);
+    cssd_declarations_read(ctx, block, &d);
     if (value) cssd_decls_set_property(&d, name, value, important, &set);
     else       cssd_decls_remove_property(&d, name);
     for (i = 0; i < set.n; i++) {
@@ -3801,17 +3993,8 @@ static void cssd_write_declaration(JSContext *ctx, JSValueConst block, const cha
         if (lh) for (i = 0; i < n; i++) cssd_taint_clear(ctx, block, lh[i]);
         else    cssd_taint_clear(ctx, block, name);
     }
-    next = cssd_serialize_decls(&d);
-#if APICLIENT_DEV
-    /* ASKED BEFORE THE DECLARATIONS ARE RELEASED, because the check compares what this write MEANT the block
-       to declare against what the text it is about to store gives back — and the first of those two is `d`. */
-    cssd_backing_assert_round_trip(&d, next);
-#endif
+    cssd_declarations_put(ctx, block, &d);
     cssd_decls_free(&d);
-
-    free(text);
-    cssd_declarations_write(ctx, block, next ? next : "", next ? strlen(next) : 0);
-    free(next);
 }
 
 /* ---- the interfaces --------------------------------------------------------------------------------------- */
@@ -3856,14 +4039,16 @@ static JSValue js_cssd_prop_op(JSContext *ctx, JSValueConst this_val, int argc, 
     if (magic == 1) {
         /* §6.6.1's removeProperty step 3: "Let value be the return value of invoking getPropertyValue() with
            property as argument" — read BEFORE the removal, because step 8's "Return value" returns it. */
-        size_t len = 0;
-        char *text = cssd_declarations_text(ctx, block, &len);
-        char *old = cssd_property_value(text, len, name);
+        CssDecls d = { 0 };
+        char *old;
+        JSValue unknown;
+
+        cssd_declarations_read(ctx, block, &d);
+        old = cssd_property_value(&d, name);
         /* The declaration's own unknown, read BEFORE the removal clears it — the value this member returns is
            the value it had, and if that value was an unknown then so is what step 8 returns. */
-        JSValue unknown = cssd_taint_read(ctx, block, name, old);
-
-        free(text);
+        unknown = cssd_taint_read(ctx, block, name, old);
+        cssd_decls_free(&d);
         /* §6.6.1's step 5 — "If property is a shorthand property, for each longhand property longhand that
            property maps to" — is one edit of the declarations, made where every other edit is. The extra
            removal of the SHORTHAND'S OWN NAME that used to be here is gone with the thing that made it
@@ -3885,11 +4070,11 @@ static JSValue js_cssd_prop_op(JSContext *ctx, JSValueConst this_val, int argc, 
         bool important = false;
 
         if (!computed) {
-            size_t len = 0;
-            char *text = cssd_declarations_text(ctx, block, &len);
+            CssDecls d = { 0 };
 
-            important = cssd_property_important(text, len, name);
-            free(text);
+            cssd_declarations_read(ctx, block, &d);
+            important = cssd_property_important(&d, name);
+            cssd_decls_free(&d);
         }
         r = JS_NewString(ctx, important ? "important" : "");
     } else if (computed) {
@@ -3899,9 +4084,12 @@ static JSValue js_cssd_prop_op(JSContext *ctx, JSValueConst this_val, int argc, 
            `char *` here would carry the number and drop the fork. */
         r = css_resolved_value(ctx, cssd_owner_element(ctx, block), name);
     } else {
-        size_t len = 0;
-        char *text = cssd_declarations_text(ctx, block, &len);
-        char *v = cssd_property_value(text, len, name);
+        CssDecls d = { 0 };
+        char *v;
+        JSValue unknown;
+
+        cssd_declarations_read(ctx, block, &d);
+        v = cssd_property_value(&d, name);
         /* The declaration's own unknown, when the value the page wrote was one — see the record above. It is
            asked with the bytes the block CURRENTLY declares, which is what ties the record to this declaration
            rather than to a property name that has since been written by somebody else.
@@ -3913,9 +4101,9 @@ static JSValue js_cssd_prop_op(JSContext *ctx, JSValueConst this_val, int argc, 
            example; it is the same joint the `border-spacing` arm of core/css/css_computed_value.c names from
            the read side. ITS ABSENCE SHOWS as `el.style.margin` answering a plain string while
            `el.style.marginTop` answers an unknown, on one block, after one `style.margin = w + 'px'`. */
-        JSValue unknown = cssd_taint_read(ctx, block, name, v);
+        unknown = cssd_taint_read(ctx, block, name, v);
 
-        free(text);
+        cssd_decls_free(&d);
         r = !JS_IsUndefined(unknown) ? unknown
           : v ? JS_NewString(ctx, v) : JS_NewStringLen(ctx, "", 0);
         free(v);
@@ -4051,12 +4239,15 @@ static JSValue js_cssd_property_get(JSContext *ctx, JSValueConst this_val, int m
     if (cssd_flag(ctx, block, "computed")) {
         r = css_resolved_value(ctx, cssd_owner_element(ctx, block), pname);
     } else {
-        size_t len = 0;
-        char *text = cssd_declarations_text(ctx, block, &len);
-        char *v = cssd_property_value(text, len, pname);
-        JSValue unknown = cssd_taint_read(ctx, block, pname, v);
+        CssDecls d = { 0 };
+        char *v;
+        JSValue unknown;
 
-        free(text);
+        cssd_declarations_read(ctx, block, &d);
+        v = cssd_property_value(&d, pname);
+        unknown = cssd_taint_read(ctx, block, pname, v);
+
+        cssd_decls_free(&d);
         r = !JS_IsUndefined(unknown) ? unknown
           : v ? JS_NewString(ctx, v) : JS_NewStringLen(ctx, "", 0);
         free(v);
@@ -4503,8 +4694,8 @@ static JSValue js_cssd_descriptor_get(JSContext *ctx, JSValueConst this_val, int
 {
     const char *name = cssd_descriptor(magic);
     JSValue block = cssd_block(ctx, this_val), r, unknown;
-    size_t len = 0;
-    char *text, *v;
+    CssDecls d = { 0 };
+    char *v;
 
     if (JS_IsException(block)) return block;
     DCHECK(!cssd_flag(ctx, block, "computed"),
@@ -4512,10 +4703,10 @@ static JSValue js_cssd_descriptor_get(JSContext *ctx, JSValueConst this_val, int
            "is the "
            "only creator that sets that flag and it mints a CSSStyleProperties, which has no descriptor "
            "attribute for this member to have been reached through");
-    text = cssd_declarations_text(ctx, block, &len);
-    v = cssd_property_value(text, len, name);
+    cssd_declarations_read(ctx, block, &d);
+    v = cssd_property_value(&d, name);
     unknown = cssd_taint_read(ctx, block, name, v);
-    free(text);
+    cssd_decls_free(&d);
     r = !JS_IsUndefined(unknown) ? unknown
       : v ? JS_NewString(ctx, v) : JS_NewStringLen(ctx, "", 0);
     free(v);
@@ -4553,8 +4744,8 @@ static JSValue js_cssd_descriptor_set(JSContext *ctx, JSValueConst this_val, JSV
 static JSValue js_cssd_css_text(JSContext *ctx, JSValueConst this_val, int magic)
 {
     JSValue block = cssd_block(ctx, this_val), r;
-    size_t len = 0;
-    char *text, *out;
+    CssDecls d = { 0 };
+    char *out;
 
     (void)magic;
     if (JS_IsException(block)) return block;
@@ -4562,24 +4753,30 @@ static JSValue js_cssd_css_text(JSContext *ctx, JSValueConst this_val, int magic
         JS_FreeValue(ctx, block);
         return JS_NewStringLen(ctx, "", 0);
     }
-    text = cssd_declarations_text(ctx, block, &len);
-    out = cssd_serialize_text(text, len);
-    free(text);
+    /* §6.6's SERIALIZE A CSS DECLARATION BLOCK, over the block's declarations — which are now the store's
+       where it has one. The answer is byte-identical to the projection the backing holds for every block
+       whose store matched, and that is not a coincidence to rely on: it is the equality `cssd_decls_load`
+       asserts, so this member and `getAttribute('style')` cannot come apart. */
+    cssd_declarations_read(ctx, block, &d);
+    out = cssd_serialize_decls(&d);
+    cssd_decls_free(&d);
     r = out ? JS_NewString(ctx, out) : JS_NewStringLen(ctx, "", 0);
     free(out);
     JS_FreeValue(ctx, block);
     return r;
 }
 
-/* Setting it: throw when readonly, then "empty the declarations" and parse the given value into them. Writing
-   the value through unparsed is what the backing then re-parses, and for a rule it is what `cssRules` reports —
-   so it goes through the same serialization every other write does, which is what drops an invalid declaration
-   here rather than at every later read. */
+/* Setting it: throw when readonly, then "empty the declarations" and parse the given value into them. It goes
+   through the same storage step every other write does, which is what drops an invalid declaration here
+   rather than at every later read.
+   THE SENTENCE THAT STOOD HERE SAID THE UNPARSED VALUE IS "what the backing then re-parses", and that is
+   rewritten rather than deleted because it was true of a text backing and a reader who re-derives it from the
+   attribute alone will re-state it. The parse happens HERE now, once, and what the block keeps is its result;
+   the backing still receives the serialization, because §6.6's update-style-attribute step is unchanged. */
 static JSValue js_cssd_set_css_text(JSContext *ctx, JSValueConst this_val, JSValueConst val, int magic)
 {
     JSValue block = cssd_block(ctx, this_val);
     const char *v;
-    char *out;
 
     (void)magic;
     if (JS_IsException(block)) return block;
@@ -4606,12 +4803,21 @@ static JSValue js_cssd_set_css_text(JSContext *ctx, JSValueConst this_val, JSVal
                concolic_shape_c(val) ? concolic_shape_c(val) : "{}");
     v = JS_ToCString(ctx, val);
     if (!v) { JS_FreeValue(ctx, block); return JS_EXCEPTION; }
-    out = cssd_serialize_text(v, strlen(v));
     /* §6.6.1's cssText setter step 2, "Empty the declarations" — every unknown the block recorded was about a
        declaration this write has just taken away. */
     cssd_taint_empty(ctx, block);
-    cssd_declarations_write(ctx, block, out ? out : "", out ? strlen(out) : 0);
-    free(out);
+    /* Step 3's parse, then the ONE storage step every other write makes. It used to serialize the parse
+       straight into the backing and leave the store untouched, which is the state a wholesale replacement
+       must never leave: the content test would have refused the stale store anyway, so this is not a
+       correctness fix but it is the difference between a block that CARRIES its declarations after a
+       `cssText =` and one that has to re-parse them at the very next read. */
+    {
+        CssDecls d = { 0 };
+
+        cssd_decls_from_text(v, strlen(v), &d);
+        cssd_declarations_put(ctx, block, &d);
+        cssd_decls_free(&d);
+    }
     JS_FreeCString(ctx, v);
     JS_FreeValue(ctx, block);
     return JS_UNDEFINED;
@@ -4682,13 +4888,8 @@ static void cssd_computed_names(CssDecls *d)
    the other two. Both §6.6.1 members that need them go through here. */
 static void cssd_declared_decls(JSContext *ctx, JSValueConst block, CssDecls *out)
 {
-    size_t len = 0;
-    char *text;
-
     if (cssd_flag(ctx, block, "computed")) { cssd_computed_names(out); return; }
-    text = cssd_declarations_text(ctx, block, &len);
-    cssd_decls_from_text(text, len, out);
-    free(text);
+    cssd_declarations_read(ctx, block, out);
 }
 
 /* §6.6.1 `readonly attribute unsigned long length` — "the number of CSS declarations in the declarations". It
