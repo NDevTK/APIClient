@@ -19,6 +19,7 @@
 #include "core/layout/flex_cross_size.h"
 #include "core/layout/flex_item.h"
 #include "core/layout/flex_line.h"
+#include "core/layout/flow_placement.h"
 #include "core/layout/flow_position.h"
 #include "core/layout/intrinsic_size.h"
 #include "core/layout/layout_question.h"
@@ -1813,20 +1814,81 @@ lxb_dom_element_t *used_value_containing_block(lxb_dom_element_t *el)
     return cb.element;
 }
 
+/* TWO RECORDED EXAMPLES, COMPARED FOR AN ASSERTION AND FOR NOTHING ELSE — the same private comparison
+   core/layout/flow_placement.c and core/layout/flow_position.c each hold, written here a third time rather
+   than exported for the reason both of them give: a public equality over a `CssPx` is a predicate a caller
+   can branch on, and §Solver-half forbids a C branch on a concolic's EXAMPLE because it deletes the arm the
+   other world takes. Inside a `DCHECK` there is no arm to delete. NaN equals itself here, because two runs
+   of one derivation that both produced NaN agree. */
+static bool uv_same_example(CssPx a, CssPx b)
+{
+    return a.px == b.px || (a.px != a.px && b.px != b.px);
+}
+
+/* §10.1's ARM DISPATCH, RE-READ FROM THE CASCADE FOR AN ASSERTION AND FOR NOTHING ELSE — the check
+   core/layout/flow_placement.h's §10.1 section is written around.
+   IT RE-READS `uv_cb` AND NOT THE NUMBER, AND THAT SCOPE IS THE WHOLE OF WHAT IT CLAIMS. Re-deriving the
+   width means the ancestor's content size, which is the ancestor's used `width`, which is the entry this is
+   a check ON — and a check that recomputes through the checked entry is exponential in depth, which is the
+   shape core/layout/flow_placement.h tells its reader to look for. What re-reads with no re-entry at all is
+   WHICH ancestor §10.1 chose: `uv_cb` reaches computed `display` and `position` and the tree and reaches no
+   used value on any arm, so this is a CASCADE-axis check — the one axis the pass's tree version is blind to
+   — and it says nothing whatever about the number on the arms that name an element.
+   §10.1's FIRST AND THIRD CASES ARE CHECKED BY THEIR NUMBER, because those two name no element at all: the
+   rectangle is the viewport, `uv_icb` is one read that re-enters nothing, and the arm that recorded a NULL
+   ancestor is therefore the one arm whose VALUE this can compare. */
+static bool uv_cb_width_agrees(lxb_dom_element_t *el, const lxb_dom_element_t *cb, CssPx rec)
+{
+    UvCb now = uv_cb(el);
+
+    if (now.box == UV_CB_INITIAL || now.box == UV_CB_VIEWPORT)
+        return cb == NULL && uv_same_example(rec, uv_icb(el, false));
+    return now.element == cb;
+}
+
 /* THE CONTAINING BLOCK'S WIDTH — §10.1's first case answered by the viewport, its second by the CONTENT EDGE
-   of the ancestor box, and §17.4's wrapper by §17.4's own sentence. */
+   of the ancestor box, and §17.4's wrapper by §17.4's own sentence.
+   ASKED OF THE PASS FIRST, FOR core/layout/flow_placement.h's REASON AND NOT AS AN OPTIMISATION OF THIS
+   FILE'S OWN: §10.1's second case derives this number from the ancestor's own used width, which CSS 2.1
+   §10.3.3 "Block-level, non-replaced elements in normal flow"' equation derives from ITS containing block's,
+   so the body below climbs the whole chain on every ask and a document N levels deep pays the sum of its
+   boxes' depths. That is a RECURSION and not a walk, which is what makes a remembered return value the
+   collapse here and the wrong instrument one component over — that header argues both halves, and CSS 2
+   §8.1's border-box origin is the same recursion already routed through it.
+   OUTSIDE A PASS NOTHING IS HELD AND NOTHING IS ANSWERED, so a page reading CSSOM VIEW §6's members between
+   two renders gets the same freshly-climbed number it always did.
+   THE SINGLE EXIT IS A LABEL AND NOT A GUARDING FORWARDER, for the reason `uv_sized` states at its own: a
+   forwarder costs a C FRAME PER ASK, and C FRAMES PER LEVEL OF NESTING is a number this component is
+   measured by, so the guard would move the census it is a guard for. */
 CssPx used_value_containing_block_width(lxb_dom_element_t *el)
 {
-    UvCb cb = uv_cb(el);
+    UvCb cb;
+    CssPx w;
+    const lxb_dom_element_t *rec_cb = NULL;
 
-    if (cb.box == UV_CB_INITIAL) return uv_icb(el, false);
+    if (flow_placement_cb_width_ask(el, &w, &rec_cb)) {
+        DCHECKF(uv_cb_width_agrees(el, rec_cb, w),
+                "CSS 2.1 §10.1's recorded containing-block width for this box was derived against an ancestor "
+                "the cascade no longer names — recorded %g. The arm dispatch reads computed `display` and "
+                "`position` and the tree, so this is one of two things and they take opposite work: the "
+                "record answered for a box it does not hold, which is core/layout/flow_placement.c's probe "
+                "and the only code that decides which entry a key reaches, OR a computed value moved INSIDE "
+                "the pass, which is the axis its tree version cannot see and which solver/dom_cow.c's "
+                "attribute chokepoint exists to make impossible. If that chokepoint did not fire, the change "
+                "arrived by a route it does not own and the route is the finding",
+                w.px);
+        return w;
+    }
+    cb = uv_cb(el);
+
+    if (cb.box == UV_CB_INITIAL) { w = uv_icb(el, false); goto done; }
     /* §10.1's THIRD case. The rectangle is css-position-3 §2.1's initial fixed containing block — "in
        continuous media, the layout viewport (whose size matches the dynamic viewport size)" — and §10.1's
        first case is "the dimensions of the viewport" for the same medium, so the two tags differ in their
        ORIGIN and agree in their EXTENT. `uv_icb` is the entry that asks the element's own document's realm
        for that number, so this arm routes to it rather than asking the viewport a second way and being free
        to disagree with §10.1's first case about the width of one rectangle. */
-    if (cb.box == UV_CB_VIEWPORT) return uv_icb(el, false);
+    if (cb.box == UV_CB_VIEWPORT) { w = uv_icb(el, false); goto done; }
     /* §10.1's FOURTH case: "the containing block is formed by the PADDING EDGE of the ancestor". CSS 2 §8.1
        "Box dimensions" nests the padding box immediately outside the content box, so the extent owed is that
        ancestor's content width plus the padding on both sides — the pair `uv_surround` already answers, from
@@ -1837,7 +1899,8 @@ CssPx used_value_containing_block_width(lxb_dom_element_t *el)
     if (cb.box == UV_CB_POSITIONED_PADDING) {
         UvSurround s = uv_surround(cb.element, false);
 
-        return css_px_add(uv_content_size(cb.element, false, s), s.padding);
+        w = css_px_add(uv_content_size(cb.element, false, s), s.padding);
+        goto done;
     }
     /* CSS 2 §17.4 Tables in the visual formatting model: "The width of the table wrapper box is the
        border-edge width of the table box inside it, as described by section 17.5.2." It is the CONTENT edge
@@ -1856,9 +1919,13 @@ CssPx used_value_containing_block_width(lxb_dom_element_t *el)
                "the table box, which is what leaves the wrapper with no border and no padding and makes its "
                "CONTENT edge the same rectangle as the border edge §17.4 states its width over. If any of "
                "those three is now the wrapper's, this composition is measuring the wrong box");
-        return used_value_border_edge_px(cb.element, false);
+        w = used_value_border_edge_px(cb.element, false);
+        goto done;
     }
-    return uv_content_size(cb.element, false, uv_surround(cb.element, false));
+    w = uv_content_size(cb.element, false, uv_surround(cb.element, false));
+done:
+    flow_placement_cb_width_record(el, w, cb.element);
+    return w;
 }
 
 /* THE CONTAINING BLOCK'S `direction`, with §10.1's FIRST-case exception stated once. "The 'direction' property

@@ -2551,11 +2551,25 @@ char *result_json(JSContext *ctx) {
                                 computed; growing with the square of a document's DEPTH is a render
                                 computing one box's contribution once per ancestor that asks. It is taken
                                 over the ONE baseline pass the record serves, because §10.8.1's baseline is
-                                the only fact of a contribution that depends on which pass asked. */
+                                the only fact of a contribution that depends on which pass asked.
+                                AND THE FOURTH PAIR IS CSS 2.1 §10.1 "Definition of 'containing block'"'
+                                WIDTH, WHICH IS THE ORIGIN'S SHAPE OVER THE ORIGIN'S OWN SECTION. §10.1's
+                                fourth case makes a box's containing block the CONTENT EDGE of an ancestor,
+                                so an unanswered ask climbs that ancestor's own used width and its
+                                ancestor's after it; `cbWidthDerived` is how many widths this run derived —
+                                IN OR OUT of a render, for `originDerived`'s reason — and over a rendered
+                                tree of N boxes that is O(N) while the climb it replaces was the sum of
+                                every ask's own DEPTH. It is the SECOND row here to read against a
+                                document's depth and it is not the same fact as `originDerived`: those two
+                                are §10.1 answering for a POINT and for an EXTENT, through two chains that
+                                take the same shape and share no arm, so one of them falling says nothing
+                                about the other. `cbWidthAsks == cbWidthServed + cbWidthDerived` closes and
+                                is asserted. */
                              "\"_layout\":{\"childTopAsks\":%lld,\"childTopServed\":%lld,"
                              "\"childTopWalks\":%lld,\"placements\":%lld,\"passes\":%lld,"
                              "\"originAsks\":%lld,\"originServed\":%lld,\"originDerived\":%lld,"
-                             "\"boxAsks\":%lld,\"boxServed\":%lld,\"boxDerived\":%lld},"
+                             "\"boxAsks\":%lld,\"boxServed\":%lld,\"boxDerived\":%lld,"
+                             "\"cbWidthAsks\":%lld,\"cbWidthServed\":%lld,\"cbWidthDerived\":%lld},"
                              /* AND WHAT ALL OF THE ABOVE WERE DENOMINATED IN — the one nested object here that
                                 is neither a total nor a reading of an instant, but a property of the HOST that
                                 decides whether two of these documents may be compared at all. result.h and
@@ -2571,7 +2585,9 @@ char *result_json(JSContext *ctx) {
                      orphansDriven, orphansAsked, wfq, cold, heap, swap, forkAt, absent,
                      place.asks, place.served, place.walks, place.placements, place.passes,
                      place.origin_asks, place.origin_served, place.origin_derived,
-                     place.box_asks, place.box_served, place.box_derived, quantum,
+                     place.box_asks, place.box_served, place.box_derived,
+                     place.cb_width_asks, place.cb_width_served, place.cb_width_derived,
+                     quantum,
                      cold_park_json());
     }
     free(eps);

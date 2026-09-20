@@ -221,6 +221,45 @@ bool flow_placement_box_ask(const lxb_dom_element_t *el, FlowPlacementBox *out);
 bool flow_placement_box_peek(const lxb_dom_element_t *el, FlowPlacementBox *out);
 void flow_placement_box_record(const lxb_dom_element_t *el, const FlowPlacementBox *box);
 
+/* ---- CSS 2.1 §10.1 "Definition of 'containing block'"' WIDTH ------------------------------------------
+ * THE FOURTH FACT A PASS HOLDS ABOUT A BOX, AND IT IS THE RECURSION SHAPE AGAIN — the same argument the
+ * border-box origin's section above makes, about the same section of the same standard, one quantity over.
+ * §10.1's fourth case makes a box's containing block "the content edge of the nearest block container
+ * ancestor box", so `used_value_containing_block_width` answers out of that ancestor's own used width —
+ * which CSS 2.1 §10.3.3 "Block-level, non-replaced elements in normal flow"' constraint equation derives
+ * from ITS containing block's, and so on up to §10.1's first case. An ask at depth d costs d derivations,
+ * N boxes asked a constant number of times each cost the sum of their depths, and the total is quadratic in
+ * DEPTH. Remembering the return value is therefore the collapse, exactly as it is for the origin: the climb
+ * terminates at the first answered ancestor and a whole pass derives one width per box.
+ * IT WAS MEASURED BESIDE ITS OWN CONTROL RATHER THAN ARGUED, AND THE CONTROL IS THE SECTION ABOVE IT.
+ * engine/layout_cost.mjs counts both chains in ONE run of ONE binary over ONE document: CSS 2 §8.1's
+ * border-box origin, which goes through this record, is LINEAR in a document's depth, and §10.1's width,
+ * which did not, is QUADRATIC. Two §10.1 recursions in one walk inside one span, one routed here and one
+ * not — which is a comparison no artifact of the hour, the machine or the revision can produce.
+ * ITS CHECK IS THE ARM DISPATCH AND NOT THE NUMBER, WHICH IS NARROWER THAN THE ORIGIN'S CHECK AND IS
+ * NARROWER FOR A REASON RATHER THAN FOR CONVENIENCE. Re-deriving the NUMBER means the ancestor's content
+ * size, which is the ancestor's used `width`, which is this entry again — the shape the origin's section
+ * names as exponential in depth and tells its reader to look for. What re-reads with no re-entry at all is
+ * WHICH ancestor §10.1 chose, because that dispatch is computed `display` and `position` and the tree and
+ * nothing else. So a hit asserts that the cascade still names the ancestor this answer was derived from,
+ * which is the one axis the pass's tree version is blind to — and it is stated here that this does NOT
+ * assert the number, because a check whose scope is not written down is read as checking everything.
+ * AND §10.1's FIRST CASE IS CHECKED BY ITS NUMBER, because that arm has no ancestor at all: the initial
+ * containing block is the viewport, which is one read that re-enters nothing, so the arm that records a
+ * NULL ancestor is the one arm whose VALUE is compared.
+ * `cb_out` IS THE ANCESTOR §10.1's second, third and fourth cases chose and NULL for its FIRST — the same
+ * role `derived_from` plays for the origin, and stored for the same reason: the write path has it, and
+ * re-deriving which arm a recorded width came from at the check would mean re-asking the cascade a question
+ * the arm dispatch already asked.
+ * NOT COVERED: §10.1's HEIGHT. The same recursion one axis over is not held here, so a document whose boxes
+ * resolve percentage heights against definite ancestors pays the climb it always did. WHAT THE NEXT DIFF
+ * BUILDS: the same pair over the same key for that quantity, whose extra field is DEFINITENESS rather than
+ * a second idea. HOW ITS ABSENCE WOULD SHOW: engine/layout_cost.mjs's `deep` column for the height chain
+ * staying superlinear after the width one has fallen. */
+bool flow_placement_cb_width_ask(const lxb_dom_element_t *el, CssPx *out, const lxb_dom_element_t **cb_out);
+bool flow_placement_cb_width_peek(const lxb_dom_element_t *el, CssPx *out, const lxb_dom_element_t **cb_out);
+void flow_placement_cb_width_record(const lxb_dom_element_t *el, CssPx width, const lxb_dom_element_t *cb);
+
 /* THE CENSUS, in solver/result.c's vocabulary. Every field is a LIFETIME counter of this agent — it states
    what has happened, never what stands now — so every one may be differenced across two samples.
    `asks` is the number of times §9.4.1's stack position of a box was asked for; `served` is how many of those
@@ -242,7 +281,14 @@ void flow_placement_box_record(const lxb_dom_element_t *el, const FlowPlacementB
    geometry through the members rather than through a paint; core/layout/flow_placement.c holds the reason
    at the line whose ORDER decides it. So a run with no render at all has `origin_asks == origin_derived`
    and `origin_served` of zero, which is the correct reading and not an instrument that failed to see a
-   pass. */
+   pass.
+   `cb_width_asks`, `cb_width_served` and `cb_width_derived` are CSS 2.1 §10.1's WIDTH and close the
+   same way, with the shortfall named `derived` for the origin's reason — a missed ask runs ONE
+   equation over an already-answered ancestor and never a walk. It is this AGENT's and not this
+   pass's, for the same reason the origin's is: a width derived with no pass open stores nothing and
+   is still a derivation, and counting only the stored ones would put the ask in the numerator and in
+   neither denominator. `cb_width_derived` is the row that must stop growing with the square of a
+   document's DEPTH. */
 typedef struct {
     long long asks;
     long long served;
@@ -255,6 +301,9 @@ typedef struct {
     long long box_asks;
     long long box_served;
     long long box_derived;
+    long long cb_width_asks;
+    long long cb_width_served;
+    long long cb_width_derived;
 } FlowPlacementCensus;
 void flow_placement_census(FlowPlacementCensus *out);
 

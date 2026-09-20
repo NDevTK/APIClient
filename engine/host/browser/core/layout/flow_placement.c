@@ -33,9 +33,15 @@ typedef struct {
        here says "this point is that equation" and a NULL says "this component has no second route to it". */
     const lxb_dom_element_t *origin_cb;
     FlowPlacementBox         box;
+    /* CSS 2.1 §10.1's WIDTH for this box, and the ANCESTOR the arm dispatch chose — NULL for §10.1's first
+       case, whose rectangle is no element's box, which is the one thing that record's check needs to know
+       about how the number was produced. See core/layout/flow_placement.h's §10.1 section. */
+    CssPx                    cb_width;
+    const lxb_dom_element_t *cb_width_cb;
     bool                     has_top;
     bool                     has_origin;
     bool                     has_box;
+    bool                     has_cb_width;
 } FpEntry;
 
 static FpEntry  *g_tab;
@@ -55,6 +61,9 @@ static long long g_origin_derived;
 static long long g_box_asks;
 static long long g_box_served;
 static long long g_box_derived;
+static long long g_cb_width_asks;
+static long long g_cb_width_served;
+static long long g_cb_width_derived;
 
 /* THE ONE INITIAL CAPACITY, AND IT IS NOT A BOUND ON ANYTHING. §NO BOUNDS forbids deciding that work will not
    happen; this decides only how many placements fit before the table is rebuilt at twice the size, which is a
@@ -365,6 +374,69 @@ bool flow_placement_origin_ask(const lxb_dom_element_t *el, FlowPoint *out, cons
     return true;
 }
 
+bool flow_placement_cb_width_peek(const lxb_dom_element_t *el, CssPx *out, const lxb_dom_element_t **cb_out)
+{
+    size_t i;
+
+    DCHECK(el != NULL, "CSS 2.1 §10.1 \"Definition of 'containing block'\"' width record was asked about no "
+                       "box");
+    DCHECK(out != NULL, "CSS 2.1 §10.1's width record was asked with nowhere to put the answer");
+    if (!g_open || g_cap == 0) return false;
+    DCHECKF(dom_cow_version() == g_ver,
+            "CSS 2.1 §10.1's width record was read at tree version %llu inside a pass opened at %llu — see "
+            "this record's close",
+            (unsigned long long)dom_cow_version(), (unsigned long long)g_ver);
+    i = fp_probe(g_tab, g_cap, el);
+    if (g_tab[i].el == NULL || !g_tab[i].has_cb_width) return false;
+    *out = g_tab[i].cb_width;
+    if (cb_out != NULL) *cb_out = g_tab[i].cb_width_cb;
+    return true;
+}
+
+bool flow_placement_cb_width_ask(const lxb_dom_element_t *el, CssPx *out, const lxb_dom_element_t **cb_out)
+{
+    g_cb_width_asks++;
+    if (!flow_placement_cb_width_peek(el, out, cb_out)) return false;
+    g_cb_width_served++;
+    return true;
+}
+
+void flow_placement_cb_width_record(const lxb_dom_element_t *el, CssPx width, const lxb_dom_element_t *cb)
+{
+    size_t i;
+
+    DCHECK(el != NULL, "CSS 2.1 §10.1's width record was handed a width with no box to attach it to");
+    /* THE COUNT BEFORE THE GUARD, which is the discipline the two records above state at their own sites and
+       which one of them was landed without: one `if (!g_open)` answering both "is there anywhere to store
+       this" and "did this agent derive one" refuses the second silently, and every width derived outside a
+       render — which is every width CSSOM VIEW §6's members ask for between two paints — then sits in the
+       numerator and in neither denominator. */
+    g_cb_width_derived++;
+    if (!g_open) return;
+    if (g_used * 2 >= g_cap) fp_grow();
+    i = fp_probe(g_tab, g_cap, el);
+    if (g_tab[i].el == NULL) {
+        g_tab[i].el = el;
+        g_used++;
+    } else {
+        /* ONE BOX'S CONTAINING-BLOCK WIDTH DERIVED TWICE IN ONE PASS, WHICH THE ASK MAKES UNREACHABLE AND
+           WHICH IS THEREFORE ASSERTED RATHER THAN ALLOWED — the same guard the origin above carries and for
+           the same reason: core/layout/used_value.c asks this record before it derives and records every
+           width it derives, so a second derivation at all means a read missed a key a write had landed,
+           which is this file's probe and nothing else. Two DIFFERENT answers mean the cascade moved inside a
+           span the pass's tree version cannot see move. */
+        DCHECKF(!g_tab[i].has_cb_width || fp_same_example(g_tab[i].cb_width, width),
+                "CSS 2.1 §10.1's containing-block width was derived twice in one pass for one box and the two "
+                "disagree: %g then %g. core/layout/used_value.c reads this record before it derives, so a "
+                "second derivation means a read missed a key a write had landed — and two different answers "
+                "mean the document moved under the pass on an axis its tree version cannot see",
+                g_tab[i].cb_width.px, width.px);
+    }
+    g_tab[i].cb_width = width;
+    g_tab[i].cb_width_cb = cb;
+    g_tab[i].has_cb_width = true;
+}
+
 bool flow_placement_ask(const lxb_dom_element_t *el, CssPx *out)
 {
     size_t i;
@@ -436,4 +508,16 @@ void flow_placement_census(FlowPlacementCensus *out)
     out->box_asks = g_box_asks;
     out->box_served = g_box_served;
     out->box_derived = g_box_derived;
+    /* AND CSS 2.1 §10.1's WIDTH PAIR, WHOSE SHORTFALL IS A DERIVATION FOR THE ORIGIN'S REASON — a missed ask
+       runs §10.1's own arm over an ancestor this pass has usually already answered, never a walk. */
+    DCHECKF(g_cb_width_asks == g_cb_width_served + g_cb_width_derived,
+            "CSS 2.1 §10.1 \"Definition of 'containing block'\"' width census does not close: %lld asks "
+            "against %lld served and %lld derived. Every ask is answered out of this record or derives the "
+            "width and records it, with no third arm — so a gap is a return between the ask and the record, "
+            "and the share a reader takes off these rows would be over a denominator that is not the "
+            "population",
+            g_cb_width_asks, g_cb_width_served, g_cb_width_derived);
+    out->cb_width_asks = g_cb_width_asks;
+    out->cb_width_served = g_cb_width_served;
+    out->cb_width_derived = g_cb_width_derived;
 }

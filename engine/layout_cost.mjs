@@ -114,12 +114,54 @@ const MAX = Number(maxArg || 6);
    BOTH ROWS PASS THIS FILE'S OWN ADMISSION TEST, which is the one the dropped rule-list probe failed: each
    reads the SAME NUMBER TWICE, reproduced to the digit under two differently-composed probe sets, so neither
    is a single-location parse that happened to work once. */
+/* AND §10.1's CHAIN ITSELF, WHICH IS WHERE THE PER-ANCESTOR MULTIPLIER IS PAID AND WHICH NO ROW ABOVE COULD
+   NAME. The rows above localise the cost to the used-value cluster and stop there — `used_value_px` and
+   `uv_sized` are QUADRATIC in `deep` while every ask over them is LINEAR — so the multiplier is below every
+   ask on that list and above nothing on it, and not one row states which LINK pays it. These eleven do.
+   `uv_px_ask` is `used_value_px`'s body under its chain node and must EQUAL it in every shape;
+   `uv_pass_size` is CSS 2.1 §10.4 "Minimum and maximum widths: 'min-width' and 'max-width'"' step 1 and
+   equals `uv_sized` exactly when that section's two re-runs never fired; `uv_block_auto_width` is CSS 2.1
+   §10.3.3 "Block-level, non-replaced elements in normal flow"' constraint equation, which is the arm a plain
+   `<div>` takes; `used_value_containing_block_width` is CSS 2.1 §10.1 "Definition of 'containing block'"'
+   answer and `uv_cb` is the walk that picks its case; `uv_surround`, `uv_margin` and `uv_edge_px` are the
+   per-derivation reads every arm makes, which is what makes `used_value_px` a MULTIPLE of `uv_sized` rather
+   than equal to it.
+   `uv_icb` IS THE ROW THAT DECIDES IT, AND IT DECIDES IT INSIDE ONE TABLE RATHER THAN ACROSS TWO RUNS. It is
+   §10.1's FIRST case — the viewport — which is the chain's BASE, so its count is the number of climbs that
+   REACHED the base. A cost inherent to the algorithm runs one climb per ask and every climb reaches the
+   base, so the base count and the step count have the SAME ORDER. MEASURED on `deep`: `uv_icb` is LINEAR
+   (16N + 22) while `used_value_containing_block_width` is QUADRATIC (8N*N + 42N + 40). A LINEAR number of
+   climbs taking a QUADRATIC number of steps is a climb whose LENGTH grows with the document, which is the
+   per-ancestor factor stated as arithmetic over two rows rather than as a reading of one.
+   AND THE CONTROL IS IN THE SAME TABLE, WHICH IS THE WHOLE REASON THE TWO `flow_placement` ROWS ARE HERE.
+   CSS 2 §8.1 "Box dimensions"' border-box origin is the SAME §10.1 recursion over ancestors, asked by the
+   same walk, inside the same span — and it is MEMOIZED. MEASURED on `deep`: `flow_border_box_origin` is
+   6N + 10 and LINEAR, `flow_placement_origin_ask` is the same 6N + 10, and `flow_placement_origin_record` —
+   the DERIVATIONS — is 2N + 4, so the record SERVED 4N + 6 and the pass was OPEN AND ANSWERING throughout
+   the run the width chain climbed through. Two §10.1 recursions, one document, one binary, one span: the one
+   routed through the record is LINEAR and the one that is not is QUADRATIC. No artifact of the hour, the
+   machine or the revision can produce that pair, which is what this instrument is for.
+   SO THE VERDICT IS NEITHER `THE ALGORITHM` NOR `A BUG` AND SAYING WHICH HALF IS WHICH IS THE POINT. The
+   per-ancestor CONSULTATION is the ALGORITHM: §10.3.3's equation genuinely reads §10.1's rectangle and a box
+   at depth d genuinely depends on d ancestors, so a fix that stopped consulting them would be wrong. The
+   per-ancestor RE-DERIVATION is the DEFECT, and it is the reading where the mechanism EXISTS, is REACHED,
+   and this question was never ROUTED to it — not the one where it exists, is reached, and correctly
+   declines, which is the reading a persistent row invites and which `flow_placement`'s served count refutes
+   in the same table.
+   RETIREMENT: these eleven go when `_layout`'s own rows state each chain's ORDER for an arbitrary document.
+   The census beside them publishes §10.1's width as an ASK and a DERIVATION, which is the two ends of a
+   climb and not the STEPS between them, so the rows that name the LINK stay until the steps are published
+   too. */
 const PROBES = ['bf_layout', 'bf_box', 'block_flow_child_top', 'block_flow_auto_height',
                 'flow_border_box_origin', 'element_view_bounding_box_px', 'bp_visit',
                 'used_value_border_edge_px', 'used_value_px', 'uv_sized', 'layout_question_repeat',
                 'cssom_cascaded_value', 'css_computed_value', 'css_cv_specified',
                 'css_logical_partner_of', 'cssd_ua_value', 'css_presentational_hint',
-                'lxb_css_stylesheet_parse', 'cascade_emit', 'style_sheet_list_add'];
+                'lxb_css_stylesheet_parse', 'cascade_emit', 'style_sheet_list_add',
+                'uv_px_ask', 'uv_pass_size', 'uv_block_auto_width',
+                'used_value_containing_block_width', 'uv_cb', 'uv_icb',
+                'uv_surround', 'uv_margin', 'uv_edge_px',
+                'flow_placement_origin_ask', 'flow_placement_origin_record'];
 
 const flat = (n) => '<!DOCTYPE html><html><head><title>t</title></head><body>' +
   Array.from({ length: n }, (_, i) => `<div>r${i}</div>`).join('') + '</body></html>';
