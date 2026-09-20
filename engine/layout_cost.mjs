@@ -32,6 +32,21 @@
  * document and is the entry for that question. And gdb must be on PATH; there is no fallback, because a
  * silently skipped count and a count of zero are the same characters on a terminal.
  *
+ * HOW TO READ A CHANGE BETWEEN TWO REVISIONS, WHICH IS THE ONLY THING ANYBODY EVER USES THIS FOR AND IS
+ * WHERE A CORRECT DIFF GETS REVERTED. The ORDER is the claim. A COEFFICIENT is not, and a fix that collapses
+ * a per-ANCESTOR cost lowers the coefficient at EVERY depth, because a constant-depth document still has
+ * ancestors — `flat` here is depth THREE, not depth zero. Predicting that a depth fix leaves `flat` untouched
+ * is therefore an over-claim that one run refutes, and refutes in the direction that argues for reverting
+ * something correct.
+ * MEASURED, on the commit that made this rule necessary: `flat block_flow_child_top` fell from `12N + 4` to
+ * `2N + 2` while staying LINEAR, and `2N + 2` is EXACTLY one derivation per §10.1-second-case element per
+ * pass — two passes over N divs plus the body — at every N from 1 to 6 with no residue. That is the memo
+ * working at its limit, and a reader holding only "flat moved" would have called it a reach.
+ * SO THE INVARIANT TO PREDICT IS TWO THINGS AND NEITHER IS "a row did not move": the ASK rows
+ * (`element_view_bounding_box_px`, `bp_visit`) are UNCHANGED, because they say what the consumer asked for
+ * and a diff that changes them changed the render rather than its cost; and NO ORDER moves where it was not
+ * aimed. Both of those are falsifiable, and a DERIVATION row falling is what success looks like.
+ *
  * RETIREMENT: this file goes when the engine publishes these counts itself for an arbitrary document — the
  * `_layout` census in `@RESULT` publishes two of them already — because the derivation is then a run of the
  * product rather than a debugger attached to it. */
@@ -129,6 +144,11 @@ try {
   console.log('per container child (flat) or per ancestor (deep); `cubic` is both at once. `bp_visit` is');
   console.log('CSS 2.1 §E.2\'s offer count and is linear by construction — a row above it that is not is a');
   console.log('cost this render pays per offer rather than per document.');
+  console.log('\nREADING A CHANGE BETWEEN TWO REVISIONS: the ORDER is the claim and a COEFFICIENT is not.');
+  console.log('A fix that collapses a per-ANCESTOR cost lowers the coefficient at EVERY depth — a constant-');
+  console.log('depth document still has ancestors — and changes the ORDER only where the depth grows. So');
+  console.log('`the other shape must not move` is the wrong invariant to predict and refutes correct diffs;');
+  console.log('what must hold is that the ASK rows are unchanged and no order moves where it was not aimed.');
 } finally {
   rmSync(dir, { recursive: true, force: true });
 }
