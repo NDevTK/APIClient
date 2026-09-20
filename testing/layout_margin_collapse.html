@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<!--
+CSS 2.1 §8.3.1 "Collapsing margins" AND §9.4.1 "Block formatting contexts" OVER THE THREE FIELDS NO OTHER
+FIXTURE IN THIS TREE EXERCISES — a correctness document whose every expected number is derived by hand from
+the spec's own reduction, so a divergence names a FIELD rather than a component.
+
+  node engine/one_document.mjs <native binary> testing/layout_margin_collapse.html https://fixture.invalid/ <dir>
+
+WHY THIS EXISTS BESIDE THE MARGINED DOCUMENTS THAT ALREADY PASS. core/layout/flow_placement.h holds three
+facts per box for the span of one render, and a fixture only tests a field whose value is NON-ZERO in it.
+Every margined document this project has run carries POSITIVE margins on boxes with DECLARED heights, and
+under those inputs three of the record's fields are zero in every box:
+  - §8.3.1's reduction is "the maximum of the positive adjoining margins" MINUS "the maximum of the absolute
+    values of the negative adjoining margins", so a run is TWO extrema. With no negative margin anywhere the
+    second is zero in every box, and a record that DROPPED it, transposed it, or replayed it as zero would
+    produce a document in which every number is still correct.
+  - a box that COLLAPSES THROUGH places nothing and has no border box, so its recorded height is the walk's
+    own zero and the arm that checks it never runs without one.
+  - CSS 2 §10.1's second case adds the containing block's LEADING BORDER AND PADDING, so with unpadded
+    ancestors that term is zero and a dropped one is invisible.
+This document makes all three non-zero, which is the only thing that makes a passing run evidence.
+
+THE EXPECTED GEOMETRY, DERIVED RATHER THAN OBSERVED. A run is (pos, neg); merge takes the two maxima; its
+value is pos - neg. Inside `.outer`, whose top edge is CLOSED by a border and a padding so nothing escapes:
+
+  .a       run {40,0}            -> top border edge at rel 40,   then +30 height  -> pos 70
+  .empty   run {40,0} u {25,0}   -> collapses through: §8.3.1's note puts its top border edge at
+                                    pos + value(run) = 70 + 40 = rel 110, and it takes NO height
+  .b       run {40,0} u {0,15}   -> value 40 - 15 = 25, so top border edge at rel 95, then +30 -> pos 125
+  .outer   content height 125, border-box height 5 + 10 + 125 + 10 = 150
+  .wrap    content height 150, border-box height 3 + 20 + 150 + 20 = 193
+
+  ABSOLUTE, with `.outer`'s content edge at 3 + 20 + 5 + 10 = 38:
+
+    .wrap    y =   0   height 193
+    .outer   y =  23   height 150
+    .a       y =  78   height  30
+    .b       y = 133   height  30
+    .empty   y = 148   height   0
+
+THE DISCRIMINATOR IS THAT `.empty` SITS BELOW `.b`, which is §8.3.1's collapse-through note read correctly
+and is what an implementation that places a collapsing box on the stack gets wrong.
+
+WHAT EACH DIVERGENCE NAMES, so a failing run is attributable without a second experiment:
+  - `.b` at 148 instead of 133 — exactly on top of `.empty` — is the NEGATIVE extremum lost: the run
+    reduced to its positive maximum alone.
+  - `.empty` anywhere but 148, or `.b` moving while `.a` does not, is the collapse-through flag.
+  - `.outer` height other than 150 is the content height or the arm that converts it to a border box.
+  - everything shifted by a constant is a leading border/padding term in §10.1's second case.
+  - EVERY number at or near zero is the stylesheet not reaching layout at all, which is a fact about
+    cascade plumbing and not about any of the above. Run the literal twin before concluding anything.
+
+ITS TWIN IS `testing/layout_margin_collapse_literal.html`, byte-for-byte the same geometry with every length
+written out instead of taken from a custom property. THE PAIR IS THE CONTROL: a divergence in THIS document
+that its twin does not show belongs to css-variables-1 §3's substitution; a divergence BOTH show belongs to
+layout. Neither file is meaningful without the other, which is why they are one commit.
+-->
+<html><head><meta charset="utf-8"><title>margin collapse</title><style>
+  :root { --gap: 40px; --pull: -15px; --pad: 10px; --bw: 5px; --wpad: 20px; --wbw: 3px; }
+  html, body { margin: 0; padding: 0; }
+  .wrap  { border-top: var(--wbw) solid #000; padding: var(--wpad); }
+  .outer { border-top: var(--bw) solid #000; padding: var(--pad); }
+  .a     { margin: var(--gap) 0; height: 30px; background: #c00; }
+  .empty { margin: 25px 0; }
+  .b     { margin-top: var(--pull); height: 30px; background: #0c0; }
+</style></head>
+<body><div class="wrap"><div class="outer">
+  <div class="a"></div><div class="empty"></div><div class="b"></div>
+</div></div></body></html>
