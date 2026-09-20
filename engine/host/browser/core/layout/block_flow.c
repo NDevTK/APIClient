@@ -40,13 +40,6 @@ static bool bf_computed_is(lxb_dom_element_t *el, const char *name, const char *
     return same;
 }
 
-static bool bf_length_is(lxb_dom_element_t *el, const char *name, const char *kw)
-{
-    CssLength len = css_computed_length(el, name);
-
-    return len.kind == CSS_LENGTH_KEYWORD && strcmp(len.keyword, kw) == 0;
-}
-
 static bool bf_length_is_zero(lxb_dom_element_t *el, const char *name)
 {
     CssLength len = css_computed_length(el, name);
@@ -354,7 +347,7 @@ static bool bf_edge_is_open(lxb_dom_element_t *el, bool top)
    walk — core/layout/used_value.c classifies it and sends its size to its container's algorithm. */
 static bool bf_min_height_is_zero(lxb_dom_element_t *el)
 {
-    return bf_length_is_zero(el, "min-height") || bf_length_is(el, "min-height", "auto");
+    return bf_length_is_zero(el, "min-height") || css_computed_length_is(el, "min-height", "auto");
 }
 
 /* ---- the child list --------------------------------------------------------------------------------------- */

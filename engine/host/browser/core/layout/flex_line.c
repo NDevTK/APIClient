@@ -62,6 +62,11 @@ static double fl_magnitude(double v)
     return v < 0.0 ? -v : v;
 }
 
+/* THE KEYWORD-VALUED PROPERTIES THIS COMPONENT READS, and only those. A LENGTH-valued one — a main or cross
+   size, a margin, a `flex-basis` — is `css_computed_length_is` (core/css/css_computed_value.h), which is a
+   different ENTRY and not a different spelling: a length's computed value is a `CssPx` carrying the
+   environment fact a `50vw` derives from, so the text entry refuses it rather than dropping it, and the abort
+   names the cascade's own invariant in place of the §9 question the caller was asking. */
 static bool fl_computed_is(lxb_dom_element_t *el, const char *name, const char *kw)
 {
     char *v = css_computed_value(el, name);
@@ -507,7 +512,8 @@ static void fl_fill(FlItem *it, CssPx inner_main, FlMainSizes measured, bool ver
            `column` container's cross axis is its INLINE axis, so the declaration that makes the condition
            true is a `width` there and a `height` in a `row` container. Reading one spelling for both would
            run §9.2's arm B for a `column` item on the strength of a declaration on its MAIN axis. */
-        if (rep.replaced && rep.has_ratio && !fl_computed_is(it->el, vertical ? "width" : "height", "auto"))
+        if (rep.replaced && rep.has_ratio &&
+            !css_computed_length_is(it->el, vertical ? "width" : "height", "auto"))
             DFAILF("%s: this REPLACED flex item has a preferred aspect ratio and a declared cross size, so "
                    "css-flexbox-1 §9.2 \"Line Length Determination\"' arm B is its flex base size and §4.5 "
                    "\"Automatic Minimum Size of Flex Items\"' TRANSFERRED SIZE SUGGESTION is part of its "

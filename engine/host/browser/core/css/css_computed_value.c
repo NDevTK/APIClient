@@ -96,12 +96,13 @@ static char *css_cv_specified(lxb_dom_element_t *el, const char *name)
         return cascaded;
     case CSS_DEFAULTING_INHERITED:
         free(cascaded);
-        DCHECK(!css_computed_models_length(name),
-               "a LENGTH-valued property was inherited through the entry that answers TEXT. §7.2's inherited "
-               "value is the parent's COMPUTED value, which for one of these is an ABSOLUTE LENGTH carrying "
-               "the environment fact it derives from — serializing it here to hand it down the tree is exactly "
-               "the drop css_computed_value.h describes, and `css_computed_length` is the entry that carries "
-               "it whole");
+        DCHECKF(!css_computed_models_length(name),
+               "`%s`: a LENGTH-valued property was inherited through the entry that answers TEXT. §7.2's "
+               "inherited value is the parent's COMPUTED value, which for one of these is an ABSOLUTE LENGTH "
+               "carrying the environment fact it derives from — serializing it here to hand it down the tree "
+               "is exactly the drop css_computed_value.h describes, and `css_computed_length` is the entry "
+               "that carries it whole",
+               name);
         parent = css_parent_element(el);
         if (parent == NULL) break;
         return css_computed_models(name) ? css_computed_value(parent, name) : css_cv_specified(parent, name);
@@ -1318,9 +1319,9 @@ CssLength css_computed_length(lxb_dom_element_t *el, const char *name)
     int side;
     char *cascaded;
 
-    DCHECK(css_computed_models_length(name),
-           "css_computed_length was asked for a property whose `Computed value:` line is not a LENGTH. For a "
-           "KEYWORD one — `display`, `float`, `position`, `box-sizing`, `direction`, `writing-mode`, "
+    DCHECKF(css_computed_models_length(name),
+           "`%s`: css_computed_length was asked for a property whose `Computed value:` line is not a LENGTH. "
+           "For a KEYWORD one — `display`, `float`, `position`, `box-sizing`, `direction`, `writing-mode`, "
            "`alignment-baseline`, `baseline-source`, `caption-side`, `table-layout`, `border-collapse`, an "
            "overflow axis or a `border-*-style` — there is nothing to absolutize and nothing for a `CssPx` to "
            "carry, so `css_computed_value` is the entry and asking this one would report a keyword as the "
@@ -1328,7 +1329,8 @@ CssLength css_computed_length(lxb_dom_element_t *el, const char *name)
            "neither of those entries can carry; `css_computed_line_height` is its own. For `border-spacing` it "
            "is TWO absolute lengths (CSS 2.1 §17.6.1 \"The separated borders model\"), and this entry answers "
            "ONE `CssLength` with nowhere to put the second, so it would report the horizontal spacing as the "
-           "whole of the property; `css_computed_border_spacing` answers the pair");
+           "whole of the property; `css_computed_border_spacing` answers the pair",
+           name);
     css_cv_modelled(el, name);
     side = css_border_side_of(name, "width");
     cascaded = css_cv_cascaded(el, name);
@@ -1370,6 +1372,17 @@ CssLength css_computed_length(lxb_dom_element_t *el, const char *name)
     if (side >= 0) return computed_border_width(el, name, cascaded);
     if (strcmp(name, "font-size") == 0) return computed_font_size(el, cascaded);
     return computed_length(el, name, cascaded);
+}
+
+/* The keyword arm of the entry above, asked as a question. See css_computed_value.h for why it is one entry
+   rather than two lines each caller writes, and for which spec rules ask it. */
+bool css_computed_length_is(lxb_dom_element_t *el, const char *name, const char *keyword)
+{
+    CssLength len;
+
+    DCHECK(keyword != NULL, "a computed length was asked whether it is a NULL keyword");
+    len = css_computed_length(el, name);
+    return len.kind == CSS_LENGTH_KEYWORD && strcmp(len.keyword, keyword) == 0;
 }
 
 /* ---- css-inline-3 §5.1 "Line Spacing: the line-height property" -------------------------------------------- */
@@ -1618,13 +1631,20 @@ char *css_computed_value(lxb_dom_element_t *el, const char *name)
 {
     char *spec;
 
-    DCHECK(!css_computed_models_length(name),
-           "css_computed_value was asked for a property whose `Computed value:` line is `the percentage as "
-           "specified or THE ABSOLUTE LENGTH`. An absolute length is where a `50vw` is resolved against the "
+    /* THE OPERAND IS PRINTED, for the reason `css_cv_modelled` states one paragraph up and for a measured
+       one of this crash's own: the remedy is `ask the other entry AT YOUR CALL SITE`, and a reader holding
+       the crash text alone cannot find that site — a real page (webamp.org) aborted here and the abort named
+       neither the property nor which of this engine's flex readers had asked for it, so the call had to be
+       found by reading every forwarding predicate in core/layout/ rather than by reading the message. */
+    DCHECKF(!css_computed_models_length(name),
+           "`%s`: css_computed_value was asked for a property whose `Computed value:` line is `the percentage "
+           "as specified or THE ABSOLUTE LENGTH`. An absolute length is where a `50vw` is resolved against the "
            "INITIAL CONTAINING BLOCK and a `border-*-width` is snapped to a DEVICE PIXEL, and both of those "
            "rectangles are PICKED environment facts (core/frame/viewport.h) — so the answer is a `CssPx` and "
            "text would carry the number while dropping the domain behind it, which is the fork "
-           "`getComputedStyle(el).width < 768` shares with `innerWidth < 768`. Ask css_computed_length");
+           "`getComputedStyle(el).width < 768` shares with `innerWidth < 768`. Ask css_computed_length — or, "
+           "where the call site is asking whether that length is a KEYWORD, `css_computed_length_is`",
+           name);
     css_cv_modelled(el, name);
     /* THE THIRD SHAPE LEAVES HERE BY NAME rather than through the as-specified assert below, which would fire
        with a true message about the wrong thing. css-inline-3 §5.1's `Computed value:` line is "the specified

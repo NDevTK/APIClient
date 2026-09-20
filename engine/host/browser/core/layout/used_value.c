@@ -92,17 +92,6 @@ static bool uv_computed_is(lxb_dom_element_t *el, const char *name, const char *
     return same;
 }
 
-/* THE SAME QUESTION OF A LENGTH-VALUED PROPERTY, which is a different entry and not a different spelling: a
-   length's computed value is a `CssPx` carrying the environment fact a `50vw` or a snapped border width
-   derives from (core/css/css_computed_value.h), so the keyword arm is one of three answers rather than the
-   whole of it. §10's rules branch on `auto` and on `none` constantly, and this is how they ask. */
-static bool uv_length_is(lxb_dom_element_t *el, const char *name, const char *kw)
-{
-    CssLength len = css_computed_length(el, name);
-
-    return len.kind == CSS_LENGTH_KEYWORD && strcmp(len.keyword, kw) == 0;
-}
-
 /* css-display §2.4's table display types, plus the two `<display-inside>`/`<display-legacy>` spellings that
    generate a table box. CSS 2.1 §17.5 owns every one of their sizes. */
 static bool uv_display_is_table(const char *d)
@@ -2381,7 +2370,7 @@ static void uv_require_no_ratio_table(lxb_dom_element_t *el, const UvLimits *lim
     /* The cheap conjuncts first, and the classification last — `replaced_element_of` reads an image request's
        state, and the table's subject is a shape that answers no to one of these two tests long before that. */
     if (!lim->has_max && !(lim->has_min && lim->min.px > 0.0)) return;
-    if (!uv_length_is(el, "width", "auto") || !uv_length_is(el, "height", "auto")) return;
+    if (!css_computed_length_is(el, "width", "auto") || !css_computed_length_is(el, "height", "auto")) return;
     rep = replaced_element_of(el);
     if (!rep.replaced || !rep.has_ratio) return;
     DFAIL("CSS 2.1 §10.4 \"Minimum and maximum widths: 'min-width' and 'max-width'\" has a SECOND algorithm "
@@ -2586,7 +2575,7 @@ static CssPx uv_margin(lxb_dom_element_t *el, const char *name, const char *oppo
            this pass has already fixed, and its own §10.3.3 pass would re-enter this test with the two margins'
            roles swapped, which is a recursion with no base case. */
         if (!vertical && box == UV_BOX_BLOCK_FLOW && !uv_len_is_auto(*size_len) &&
-            !uv_length_is(el, opposite, "auto")) {
+            !css_computed_length_is(el, opposite, "auto")) {
             bool rtl = used_value_containing_block_is_rtl(el);
             bool ignored = strcmp(name, rtl ? "margin-left" : "margin-right") == 0;
 
@@ -2999,7 +2988,7 @@ static CssPx uv_shrink_to_fit_width(lxb_dom_element_t *el, CssLength size_len, U
    below are NOT part of what is exported. */
 CssPx used_value_replaced_auto_width_px(lxb_dom_element_t *el, const ReplacedElement *rep)
 {
-    bool h_auto = uv_length_is(el, "height", "auto");
+    bool h_auto = css_computed_length_is(el, "height", "auto");
 
     /* "If 'height' and 'width' both have computed values of 'auto' and the element also has an intrinsic
        width, then that intrinsic width is the used value of 'width'." */
@@ -3055,7 +3044,7 @@ CssPx used_value_replaced_auto_width_px(lxb_dom_element_t *el, const ReplacedEle
    day a block-axis intrinsic size exists it asks for this function by the same argument. */
 static CssPx uv_replaced_height(lxb_dom_element_t *el, const ReplacedElement *rep)
 {
-    bool w_auto = uv_length_is(el, "width", "auto");
+    bool w_auto = css_computed_length_is(el, "width", "auto");
 
     /* "If 'height' and 'width' both have computed values of 'auto' and the element also has an intrinsic
        height, then that intrinsic height is the used value of 'height'." */

@@ -82,6 +82,24 @@ char *css_computed_value(lxb_dom_element_t *el, const char *name);
    and the text, as specified. Nothing is owned: the keyword rides the struct. */
 CssLength css_computed_length(lxb_dom_element_t *el, const char *name);
 
+/* IS THAT COMPUTED LENGTH THE KEYWORD `keyword` — the question CSS 2.1 §10 "Visual formatting model details"'s
+   rules ask of a length-valued property far oftener than they ask for its number, and the ONE place it is
+   spelled. CSS 2.1 §10.3.3 "Block-level, non-replaced elements in normal flow" branches on `auto` for `width`
+   and for either horizontal margin, CSS 2.1 §10.4 "Minimum and maximum widths: 'min-width' and 'max-width'"
+   branches on `none` for `max-width`, and css-flexbox-1 §8.3 "Cross-axis Alignment: the align-items and
+   align-self properties"' stretched test branches on `auto` for a cross size and for both cross-axis margins.
+   FALSE FOR EVERY OTHER ARM, which is what each of those callers means: an absolute length, a percentage and a
+   math function are each `not auto` and `not none`, and none of them is a keyword this can be asked about.
+   IT IS EXPORTED BECAUSE THE WRONG SPELLING IS SHORTER AND READS AS THOUGH IT MEANT THIS ONE. A layout file
+   typically holds a `css_computed_value` + `strcmp` predicate for the KEYWORD-valued properties it reads, and
+   the identical call written with `width` or `margin-top` does not answer wrongly — it ABORTS inside the
+   cascade, because the text entry cannot carry a length's environment fact and refuses rather than dropping
+   it. So the caller's own question is replaced at the crash by the cascade's invariant, with the property
+   name nowhere in it. Writing the two-line answer out per file is what let that happen at seven call sites in
+   two files while four other files held the same two lines correctly; a fifth copy is one more place the
+   keyword arm can come to be read as the whole of a computed length. */
+bool css_computed_length_is(lxb_dom_element_t *el, const char *name, const char *keyword);
+
 /* Does this component DERIVE `name`'s computed value from the cascade's specified value? */
 bool css_computed_models(const char *name);
 

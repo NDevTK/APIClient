@@ -19,6 +19,11 @@
 #include "core/layout/line_box.h"
 #include "core/layout/used_value.h"
 
+/* THE KEYWORD-VALUED PROPERTIES THIS COMPONENT READS, and only those. A LENGTH-valued one — a cross size or
+   either cross-axis margin — is `css_computed_length_is` (core/css/css_computed_value.h), which is a different
+   ENTRY and not a different spelling: a length's computed value is a `CssPx` carrying the environment fact a
+   `50vh` cross size derives from, so the text entry refuses it rather than dropping it, and the abort names
+   the cascade's own invariant in place of the §9.4 question the caller was asking. */
 static bool fx_computed_is(lxb_dom_element_t *el, const char *name, const char *kw)
 {
     char *v = css_computed_value(el, name);
@@ -122,8 +127,9 @@ static CssPx fx_cross_margins_stretch_fit(lxb_dom_element_t *el, bool vertical)
     FxCrossProps prop = fx_cross_props(vertical);
     CssPx m = css_px(0.0);
 
-    if (!fx_computed_is(el, prop.margin_start, "auto")) m = used_value_px(el, prop.margin_start);
-    if (!fx_computed_is(el, prop.margin_end, "auto")) m = css_px_add(m, used_value_px(el, prop.margin_end));
+    if (!css_computed_length_is(el, prop.margin_start, "auto")) m = used_value_px(el, prop.margin_start);
+    if (!css_computed_length_is(el, prop.margin_end, "auto"))
+        m = css_px_add(m, used_value_px(el, prop.margin_end));
     return m;
 }
 
@@ -197,8 +203,9 @@ static bool fx_is_stretched(lxb_dom_element_t *container, lxb_dom_element_t *ite
     stretch = strcmp(align, "stretch") == 0;
     free(align);
     if (!stretch) return false;
-    if (!fx_computed_is(item, prop.size, "auto")) return false;
-    return !fx_computed_is(item, prop.margin_start, "auto") && !fx_computed_is(item, prop.margin_end, "auto");
+    if (!css_computed_length_is(item, prop.size, "auto")) return false;
+    return !css_computed_length_is(item, prop.margin_start, "auto") &&
+           !css_computed_length_is(item, prop.margin_end, "auto");
 }
 
 /* css-flexbox-1 §9.4's STEP 8.1 — the BASELINE GROUP — which this component does not compute and therefore
@@ -767,10 +774,11 @@ CssPx flex_cross_size_used_item_cross(lxb_dom_element_t *container, lxb_dom_elem
        the parenthesis is the ONLY case it names. A percentage INLINE size has no such case — CSS 2.1 §10.2
        "Content width: the 'width' property" resolves it against the containing block's width, which is
        definite wherever this component runs — so on the inline axis behaving as auto IS computing to `auto`
-       and `fx_computed_is` is the whole test. Asking `used_value_height_behaves_as_auto` on either axis
-       would have read the item's HEIGHT, which for a `column` container's item is its MAIN size. */
+       and the computed-length keyword test is the whole of it. Asking
+       `used_value_height_behaves_as_auto` on either axis would have read the item's HEIGHT, which for a
+       `column` container's item is its MAIN size. */
     DCHECK(vertical ? used_value_height_behaves_as_auto(item)
-                    : fx_computed_is(item, fx_cross_props(false).size, "auto"),
+                    : css_computed_length_is(item, fx_cross_props(false).size, "auto"),
            "css-flexbox-1 §9.4 \"Cross Size Determination\"' step 11 was asked for an item whose cross size "
            "property DOES NOT behave as `auto`. This entry answers one arm of step 11 and its header says "
            "which: the other arm — \"Otherwise, the used cross size is the item's hypothetical cross size\" — "
