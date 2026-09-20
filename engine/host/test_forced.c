@@ -134,6 +134,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <errno.h>   /* `abi_paint`'s file I/O — the one place this host's failures are the DISK's */
 #include "core/dom/node_interface.h"   /* the ONE place a Document is made — see that header */
 
 /* THERE IS NO `eval` STAND-IN HERE, AND ITS ABSENCE IS THE POINT. This fixture used to install a C function
@@ -26319,7 +26320,7 @@ static void abi_paint(const char *dir, const char *doc_id, const char *url)
     const char    *world;
     const char    *forced;
     unsigned       n, w, h, offers, marks;
-    int            complete, named, headed, closed;
+    int            complete, named, headed, closed, werr, cerr, gone;
     char           name[512];
     char           path[1024];
     size_t         i, j, wn, put;
@@ -26396,10 +26397,18 @@ static void abi_paint(const char *dir, const char *doc_id, const char *url)
         /* CSS 2.1 §2.3.1 "The canvas": a document no navigable presents establishes no rendered region, and
            core/paint/document_paint.h answers FALSE for exactly that. It is a STATE and not a failure, so it
            is reported rather than crashed on — and it is reported rather than left silent because an absent
-           file and a run that was never asked to paint look identical on disk. */
-        fprintf(stderr, "[abi paint] %s — no image: CSS 2.1 §2.3.1 \"The canvas\" establishes no rendered "
-                        "region for this document, so there is nowhere for a picture to be. Nothing written.\n",
-                url);
+           file and a run that was never asked to paint look identical on disk.
+           AND IT NAMES THE WORLD, BECAUSE THE REGION IS A FACT ABOUT THE REALM THIS TIMELINE IS STANDING IN
+           RATHER THAN ABOUT THE DOCUMENT. core/paint/document_paint.c reads it through `viewport_canvas_region`
+           at the top of the walk and says in its own words that "two arms of one fork have two viewports", so
+           one world of a document can establish a region while its sibling does not — and a line that said
+           `this document` was reporting an absence a reader could attribute to no timeline, beside a directory
+           whose every other statement is per-world. The value is in hand already: it is read with the rest of
+           the render above, and its newline is refused there. */
+        fprintf(stderr, "[abi paint] %s — no image in world %s: CSS 2.1 §2.3.1 \"The canvas\" establishes no "
+                        "rendered region for the realm this timeline is standing in, so there is nowhere for a "
+                        "picture to be. Nothing written.\n",
+                url, world);
         fflush(stderr);
         return;
     }
@@ -26467,9 +26476,19 @@ static void abi_paint(const char *dir, const char *doc_id, const char *url)
            "one would overwrite each other's image while both reported success",
            named, sizeof path);
 
+    /* AND WHAT THE DISK SAID, ON EVERY ARM BELOW — this file's only `errno` reader, and the reason it is one.
+       Every other failure this host reports is a fact about the ENGINE, which states its own cause in the
+       sentence that aborts; these four are facts about a filesystem, whose cause is a number the C library
+       already wrote and nothing here was reading. Measured, and it cost a diagnosis: a real-site run filled
+       the disk, the short-write abort below reported a byte count and no reason, and a reader holding it could
+       not separate ENOSPC from EDQUOT, EIO or a closed descriptor — four states taking four different actions,
+       reported as one. `errno` is captured on the line after the call it belongs to, never once at the end:
+       a failing `fwrite` and the failing `fclose` that follows it write the SAME variable, so a single read
+       would report the flush's reason under the write's name. */
     f = fopen(path, "wb");
     CHECKF(f != NULL, "this host could not open %s to write the image of %s — the render already happened, so "
-                      "the only copy of that picture is about to go with the instance", path, url);
+                      "the only copy of that picture is about to go with the instance. The disk said: %s",
+           path, url, strerror(errno));
 
     /* netpbm's PAM header, in that format's own spelling: `P7`, then header lines in any order, then
        `ENDHDR`, then the raster with no delimiter of any kind. `DEPTH 4` and `TUPLTYPE RGB_ALPHA` are what
@@ -26505,15 +26524,60 @@ static void abi_paint(const char *dir, const char *doc_id, const char *url)
                               : "STOPPED: this picture is PARTIAL — the painter met an operand it could not "
                                 "compute and every mark it had already laid is in the image",
                      w, h);
-    CHECKF(headed > 0, "this host could not write the PAM header for %s — a raster with no header in front of "
-                       "it is not an image in any format and nothing will read it", path);
+    /* AND EVERY FAILURE FROM HERE DOWN TAKES THE PARTIAL FILE WITH IT, WHICH IS THIS BLOCK'S OWN ARGUMENT
+       OBEYED RATHER THAN A NEW POLICY. The abort below says in as many words that a truncated raster is WORSE
+       THAN NONE — the header in front of it states dimensions the bytes do not fill — and it used to leave
+       exactly that on disk, in a directory whose whole purpose is to be read as a set of pictures. The crash
+       still fires; what changes is that the thing it warns about is not also left behind for a reader to open.
+       IT IS NOT A FALLBACK BY §C-stack's TEST: delete the removal and the abort still has to happen, because
+       the question it answers is "did the image reach the disk" and not "is there a file". And the removal's
+       own outcome is REPORTED rather than assumed, because a sentence claiming a cleanup that failed is a
+       plausible datum in the one place a reader has nothing else to go on. Nothing asserts it: a second abort
+       here would replace the disk's reason with a tidy-up's.
+       AND IT DESTROYS NO EARLIER PICTURE, which is the objection a reader will otherwise raise against it: a
+       world already photographed in a previous round has its file at this same path, and the `fopen` above
+       opened it `"wb"` — so that image was gone before a byte of this one was attempted. The removal takes
+       the CORPSE of this render and never a picture anybody could still have read. */
+    if (headed <= 0) {
+        werr = errno;
+        fclose(f);
+        gone = remove(path);
+        CHECK_FAILF("this host could not write the PAM header for %s — a raster with no header in front of it "
+                    "is not an image in any format and nothing will read it. The disk said: %s. %s",
+                    path, strerror(werr),
+                    gone == 0 ? "The partial file has been removed."
+                              : "The partial file could NOT be removed and is still on disk.");
+    }
     put = fwrite(px, 1, (size_t)n, f);
+    werr = errno;
     closed = fclose(f);
-    CHECKF(put == (size_t)n && closed == 0,
-           "this host wrote %zu of the image's %u bytes to %s — a truncated raster is worse than none, "
-           "because the header in front of it states dimensions the bytes do not fill and every reader will "
-           "either refuse the file or paint whatever followed it",
-           put, n, path);
+    cerr = errno;
+    /* TWO CALLS, TWO FAILURES, TWO ABORTS — and they were ONE `CHECKF` over `put == n && closed == 0` whose
+       message printed `put` and `n` on both arms. On the CLOSE arm those two numbers are EQUAL, so the
+       sentence read "this host wrote 3686400 of the image's 3686400 bytes … a truncated raster" — a message
+       refuting itself in its own operands, which is the shape a reader trusts least and questions last.
+       THE TWO ARE NOT ONE FACT EVEN THOUGH THEY HAVE ONE OUTCOME. A short `fwrite` is bytes that never left
+       this process; a failing `fclose` is bytes that reached stdio's buffer and not the disk, so `put` is the
+       FULL extent and the file is short anyway — which is the state the old message could not express at all.
+       Both are truncations of the raster and neither is diagnosable from the other's numbers. */
+    if (put != (size_t)n) {
+        gone = remove(path);
+        CHECK_FAILF("this host wrote %zu of the image's %u bytes to %s — a truncated raster is worse than "
+                    "none, because the header in front of it states dimensions the bytes do not fill and "
+                    "every reader will either refuse the file or paint whatever followed it. The disk said: "
+                    "%s. %s", put, n, path, strerror(werr),
+                    gone == 0 ? "The partial file has been removed."
+                              : "The partial file could NOT be removed and is still on disk.");
+    }
+    if (closed != 0) {
+        gone = remove(path);
+        CHECK_FAILF("this host handed all %u of the image's bytes to stdio for %s and the CLOSE that flushes "
+                    "them failed — so the raster is short on disk while this process saw a complete write, "
+                    "and the header in front of it states dimensions the bytes do not fill. The disk said: "
+                    "%s. %s", n, path, strerror(cerr),
+                    gone == 0 ? "The partial file has been removed."
+                              : "The partial file could NOT be removed and is still on disk.");
+    }
 
     /* ON STDERR AND WITHOUT AN `@` PREFIX, WHICH IS THE CHANNEL CHOICE AND NOT A FORMATTING ONE. Stdout is
        this arm's RECORD stream to the trusted zone, whose reader THROWS on a record it does not route — and
