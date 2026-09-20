@@ -1956,9 +1956,14 @@ void platform_document_install(JSContext *ctx, JSValueConst global, lxb_html_doc
     /* AND THIS COLUMN'S REALM IS A WINDOW REALM — Web IDL §3.3.8 [Global], asked of the realm's OWN stated
        global names rather than of which host called this.
        IT WAS TRUE ONLY BY CONVENTION AND IS WRITTEN DOWN AT FIVE SITES AS IF IT WERE A GUARANTEE. Every one
-       of them reasons from it — "a realm that reaches no platform_document_install got neither name: a worker
-       realm always" — and §3.8's own placement loop at the end of this function says in its comment that it
-       "runs at the end of platform_document_install, which a worker realm never reaches". Nothing checked it.
+       of them reasons from it — `a realm that reaches no platform_document_install got neither name: a worker
+       realm always` — and §3.8's own placement loop at the end of this function says in its comment that it
+       `runs at the end of platform_document_install, which a worker realm never reaches`. Nothing checked it.
+       BOTH RUNS ABOVE ARE THIS TREE'S OWN PROSE AND ARE IN BACKTICKS FOR THAT REASON, not for emphasis: a
+       quoted run after a named standard is judged against THAT standard, and the second of these sits one
+       clause after a §3.8. Quoted, each was cleared only because the same sentence occurs unquoted in another
+       file — an exoneration that is evidence about THAT file and not about this one, and that a later edit
+       there withdraws silently. Backticked, they are outside the quotation channel by construction.
        What made it true was that all three hosts that call this build the realm with "Window": a fact about
        the CALLERS, which this function cannot see, so the invariant's subject was absent from every site that
        relied on it. CLAUDE.md §Fix-the-ROOT: where something is true only by convention, the diff to prefer
