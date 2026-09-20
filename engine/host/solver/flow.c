@@ -124,7 +124,9 @@ static int64_t g_picks_total = 0;
    so something raises the frontier generation a second time per fork and `flow_rank_changes` is the row that
    would name it.
    SUMMED, THE TWO RUNS EVALUATED 2.17 AND 2.22 BILLION MEMBER WEIGHTS TO PERFORM `unitsDone` 380 AND 522 —
-   about five and a half million weight evaluations per unit of work — split next 30.1%/30.0%, rival
+   5.70 and 4.25 million weight evaluations per unit of work — a figure whose 34% spread is ENTIRELY its
+   denominator's, which the sentence below names as the one column that moves, so it is quoted as the pair it
+   is rather than as the single number the first landing of this paragraph gave it — split next 30.1%/30.0%, rival
    49.0%/49.3%, other 20.7%/20.5%, census 0.2% on both. Those are COUNTS and not clocks, for the reason
    FLOW_SCANS gives, so a loaded box cannot have inflated any of them; `unitsDone` is the one column of this
    paragraph that moved with the interleaving and it is not what the paragraph is about.
