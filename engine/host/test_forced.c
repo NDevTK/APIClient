@@ -23999,6 +23999,7 @@ static bool tf_pt_paint(JSContext *ctx, lxb_html_document_t *dom, const char *st
     lxb_dom_element_t *root = lxb_dom_document_element(d);
     lxb_dom_element_t *body = lxb_dom_interface_element(lxb_html_document_body_element(dom));
     lxb_dom_element_t *p = NULL;
+    BoxPaintCensus census;
     bool ok;
 
     CHECK(root != NULL && body != NULL,
@@ -24023,7 +24024,13 @@ static bool tf_pt_paint(JSContext *ctx, lxb_html_document_t *dom, const char *st
         dom_cow_append_baseline(lxb_dom_interface_node(p), lxb_dom_interface_node(t));
     }
     display_list_init(out);
-    ok = box_paint_stacking_context(ctx, root, out, offers);
+    /* THE CENSUS IS TAKEN HERE AND ONLY ITS OFFER COUNT TRAVELS, which is a scope decision and not a loss:
+       core/paint/box_paint.h's entry answers what became of every offer and why, and what THIS row asserts
+       is the offer COUNT — the rows that read the partition are `box_paint_scratch_selftest` below, over a
+       document whose element set is four elements this file writes. A helper that carried the whole census
+       out would be handing every caller a struct three of them do not read. */
+    ok = box_paint_stacking_context(ctx, root, out, &census);
+    *offers = census.offers;
     /* OUT AGAIN BEFORE ANYTHING IS ASSERTED, so a failing expectation below leaves the tree exactly as the
        selftests after this one expect to find it — and so the removal is not a step an early return can
        skip. The detached subtree is the document's own arena memory and is released with it. */
@@ -24341,7 +24348,12 @@ static void box_paint_selftest(JSContext *ctx, lxb_html_document_t *dom)
     DisplayList dl;
     DisplayMark seed;
     lxb_dom_element_t *root;
-    unsigned offers = TF_BP_UNWRITTEN;
+    /* THE SENTINEL MOVES INTO THE CENSUS AND KEEPS ITS MEANING EXACTLY. core/paint/box_paint.h's entry now
+       ZEROES the whole census on every arm, so a sentinel that survives is the entry never having been
+       reached — which is the same statement the CHECK below has always made, asked of the field that is now
+       where the number is derived. */
+    BoxPaintCensus census;
+    unsigned offers;
     /* THE SHAPE OF THE TAIL, COUNTED RATHER THAN ASSUMED — see the CHECK below for why this block states the
        list's SHAPE and no longer its LENGTH. `bp_strays` is the number this file is entitled to assert about;
        `bp_glyphs` is DOCUMENT-DEPENDENT and is printed and never asserted, for the reason `@PAINTTEXT`'s own
@@ -24367,7 +24379,9 @@ static void box_paint_selftest(JSContext *ctx, lxb_html_document_t *dom)
     seed.color = CSS_COLOR_OPAQUE_BLACK;
     display_list_append(&dl, &seed);
 
-    ok = box_paint_stacking_context(ctx, root, &dl, &offers);
+    census.offers = TF_BP_UNWRITTEN;
+    ok = box_paint_stacking_context(ctx, root, &dl, &census);
+    offers = census.offers;
 
     CHECK(offers != TF_BP_UNWRITTEN,
           "core/paint/box_paint.h's entry left its `offers` out-parameter unwritten. It is required rather "
@@ -24716,12 +24730,12 @@ static void box_paint_selftest(JSContext *ctx, lxb_html_document_t *dom)
                LITERAL here was a fact about page CONTENT: it read ONE while every document this fixture
                parsed had nothing on it but its root's background, and `HTML`'s `<h1>` made it four higher
                without any component changing its answer. */
-            CHECKF(dc.offers == offers && dc.marks == dl.n - 1u,
+            CHECKF(dc.census.offers == offers && dc.marks == dl.n - 1u,
                    "the entry's walk offered %u step(s) and composited %zu mark(s) where this block's offered "
                    "%u and laid %zu beside the seed. The mark count is a count of the DOCUMENT'S OWN INK with "
                    "no seed under it, and the two walks are over one root in one realm — so a different "
                    "number here is the entry composing a list this block did not",
-                   dc.offers, dc.marks, offers, dl.n - 1u);
+                   dc.census.offers, dc.marks, offers, dl.n - 1u);
             for (ay = 0; ay < ds.height; ay++)
                 for (ax = 0; ax < ds.width; ax++) {
                     raster_surface_get(&ds, ax, ay, apx);
@@ -24763,7 +24777,7 @@ static void box_paint_selftest(JSContext *ctx, lxb_html_document_t *dom)
                zeros, which is the same control every other `@PAINT` row here carries. */
             printf("@PAINT document w=%d h=%d bytes=%zu offers=%u marks=%zu spans=%zu pixels=%zu green=%zu "
                    "complete=%d sum=%llu\n",
-                   ds.width, ds.height, raster_surface_bytes(&ds), dc.offers, dc.marks, dc.spans, dc.pixels,
+                   ds.width, ds.height, raster_surface_bytes(&ds), dc.census.offers, dc.marks, dc.spans, dc.pixels,
                    dgreen, dc.complete ? 1 : 0, (unsigned long long)sum_doc);
             raster_surface_free(&ds);
         }
@@ -24880,6 +24894,7 @@ static void box_paint_scratch_selftest(JSContext *ctx)
                                  "<head></head><body></body></html>";
     DisplayList dl;
     lxb_dom_element_t *root;
+    BoxPaintCensus census;
     unsigned offers;
     bool ok;
 
@@ -24888,8 +24903,9 @@ static void box_paint_scratch_selftest(JSContext *ctx)
                         "with no root element — HTML §13.2.6 \"Tree construction\" generates an `html` element "
                         "for markup that names none, and this markup names one");
     display_list_init(&dl);
-    offers = TF_BP_UNWRITTEN;
-    ok = box_paint_stacking_context(ctx, root, &dl, &offers);
+    census.offers = TF_BP_UNWRITTEN;
+    ok = box_paint_stacking_context(ctx, root, &dl, &census);
+    offers = census.offers;
 
     CHECK(offers != TF_BP_UNWRITTEN,
           "core/paint/box_paint.h's entry left its `offers` out-parameter unwritten over a document this file "
@@ -24930,15 +24946,72 @@ static void box_paint_scratch_selftest(JSContext *ctx)
            "core/css/css_computed_value.h's `css_used_color` — whose own two crashes stand in front of it in a "
            "DEV build, which is why this is a DCHECK: in release those are compiled out and a false answer for "
            "a `<color>` production this engine cannot parse is the correct one");
-    printf("@PAINT scratch-ink ok=%d offers=%u marks=%zu\n", ok ? 1 : 0, offers, dl.n);
+    /* AND WHAT BECAME OF EACH OF THOSE SEVEN, WHICH IS THE SAME DERIVATION ONE LEVEL FINER. Every number
+       below is a function of the four elements above and of CSS 2.1 §E.2's own steps, exactly as the SEVEN
+       is — none of it is a floor and none of it is a measurement. Offer by offer:
+         1. step 1 for the root. CSS 2.1 §14.2 "The background" takes the canvas's colour from the root, or
+            from its first `body` child where the root's is transparent; neither declares one, so
+            css-backgrounds-3 §2.2's `Initial: transparent` makes the alpha zero — TRANSPARENT.
+         2. step 2 for the root. Its item 1 carries "unless it is the root element" — ROOT_BACKGROUND — and
+            its item 3 is a border whose four USED widths are zero — NO_BORDER_AREA.
+         3. step 4 for `body`. TRANSPARENT and NO_BORDER_AREA, for the same two reasons.
+         4. step 4 for the `div`. Its `background-color` is opaque and CSS 2.1 §14.2 names a `div` in neither
+            of its two sentences, so the ONE mark of this document is laid here — INKED — with
+            NO_BORDER_AREA recorded beside it, which is what makes the reason tally not a partition.
+         5-7. step 7's content for all three boxes. `html` holds only `head` (no box) and `body` (block),
+            `body` holds only the `div`, and the `div` is EMPTY — so CSS 2.2 §9.4.2's establishing condition
+            is false for all three and core/layout/block_flow.c's anonymous-box enumeration yields none:
+            NO_INLINE_CONTEXT three times. NO_CHARACTERS is what an established context with an empty glyph
+            list would record and NO document here establishes one, which is why it reads zero.
+       THE PARTITION IS THE CLAIM AND THE REASONS ARE THE EVIDENCE. `dl.n == 1u` above and `inked == 1` are
+       two readings of one mark — the list's own length and the offer census — so they are the pair
+       core/paint/box_paint.c asserts from the inside, checked here from the outside over a document whose
+       every box is named. */
+    CHECKF(census.outcome[BOX_PAINT_INKED] == 1u && census.outcome[BOX_PAINT_SILENT] == 6u &&
+           census.outcome[BOX_PAINT_UNBUILT] == 0u && census.outcome[BOX_PAINT_STOPPED] == 0u,
+           "CSS 2.1 §E.2 \"Painting order\"'s walk over a four-element document reported %u inked, %u "
+           "silent, %u unbuilt and %u stopped offer(s) where the derivation above gives 1, 6, 0 and 0. The "
+           "four PARTITION the seven offers, so a disagreement is an offer whose outcome is not the one its "
+           "step's arm produces — and UNBUILT above zero is a step this document does not contain having "
+           "been offered at all",
+           census.outcome[BOX_PAINT_INKED], census.outcome[BOX_PAINT_SILENT],
+           census.outcome[BOX_PAINT_UNBUILT], census.outcome[BOX_PAINT_STOPPED]);
+    CHECKF(census.decline[BOX_PAINT_DECLINE_TRANSPARENT] == 2u &&
+           census.decline[BOX_PAINT_DECLINE_ROOT_BACKGROUND] == 1u &&
+           census.decline[BOX_PAINT_DECLINE_NO_BORDER_AREA] == 3u &&
+           census.decline[BOX_PAINT_DECLINE_NO_INLINE_CONTEXT] == 3u &&
+           census.decline[BOX_PAINT_DECLINE_NO_CHARACTERS] == 0u &&
+           census.decline[BOX_PAINT_DECLINE_PROPAGATED_TO_CANVAS] == 0u &&
+           census.decline[BOX_PAINT_DECLINE_NO_REPLACED_CONTENT] == 0u &&
+           census.decline[BOX_PAINT_DECLINE_UNBUILT_REPLACED] == 0u &&
+           census.decline[BOX_PAINT_DECLINE_UNBUILT_STEP] == 0u,
+           "CSS 2.1 §E.2 \"Painting order\"'s walk over a four-element document recorded %u transparent, %u "
+           "root-background, %u no-border-area, %u no-inline-context, %u no-characters, %u "
+           "propagated-to-canvas, %u no-replaced-content, %u unbuilt-replaced and %u unbuilt-step against "
+           "its seven offers, where the derivation above gives 2, 1, 3, 3 and six zeros. These do NOT sum to "
+           "the offers and are not meant to — one offer is one §E.2 STEP and a step's sub-list can decline "
+           "twice, which offer 2 and offer 4 above each do",
+           census.decline[BOX_PAINT_DECLINE_TRANSPARENT],
+           census.decline[BOX_PAINT_DECLINE_ROOT_BACKGROUND],
+           census.decline[BOX_PAINT_DECLINE_NO_BORDER_AREA],
+           census.decline[BOX_PAINT_DECLINE_NO_INLINE_CONTEXT],
+           census.decline[BOX_PAINT_DECLINE_NO_CHARACTERS],
+           census.decline[BOX_PAINT_DECLINE_PROPAGATED_TO_CANVAS],
+           census.decline[BOX_PAINT_DECLINE_NO_REPLACED_CONTENT],
+           census.decline[BOX_PAINT_DECLINE_UNBUILT_REPLACED],
+           census.decline[BOX_PAINT_DECLINE_UNBUILT_STEP]);
+    printf("@PAINT scratch-ink ok=%d offers=%u marks=%zu inked=%u silent=%u unbuilt=%u stopped=%u\n",
+           ok ? 1 : 0, offers, dl.n, census.outcome[BOX_PAINT_INKED], census.outcome[BOX_PAINT_SILENT],
+           census.outcome[BOX_PAINT_UNBUILT], census.outcome[BOX_PAINT_STOPPED]);
     display_list_free(&dl);
 
     /* AND THE ARM THAT STOPS — CSS 2.1 §E.2's step 1 over a canvas whose region no navigable establishes. */
     root = lxb_dom_document_element(lxb_dom_interface_document(bp_scratch_document(ctx, CANVAS)));
     CHECK(root != NULL, "the canvas markup this file wrote parsed into a document with no root element");
     display_list_init(&dl);
-    offers = TF_BP_UNWRITTEN;
-    ok = box_paint_stacking_context(ctx, root, &dl, &offers);
+    census.offers = TF_BP_UNWRITTEN;
+    ok = box_paint_stacking_context(ctx, root, &dl, &census);
+    offers = census.offers;
 
     CHECK(!ok && offers == 1u && dl.n == 0u,
           "CSS 2.1 §E.2 \"Painting order\"'s step 1 did not stop the walk for a root whose canvas has no "
@@ -24949,7 +25022,23 @@ static void box_paint_scratch_selftest(JSContext *ctx)
           "exactly as they stood. ONE offer because core/paint/box_paint.c counts the visit before it runs the "
           "step, and ZERO marks because step 1 is the first offer the walk makes. An `ok` of true here is this "
           "engine having invented a region for a medium it is not presenting on");
-    printf("@PAINT scratch-canvas ok=%d offers=%u marks=%zu\n", ok ? 1 : 0, offers, dl.n);
+    /* AND THE STOPPED ARM'S CENSUS, WHICH IS THE ONE PLACE A `BOX_PAINT_STOPPED` IS REACHABLE IN THIS FILE.
+       The walk's single offer met an operand it could not compute — a canvas whose region no navigable
+       establishes — so it is STOPPED and not SILENT, and it recorded NO REASON: a reason is why an offer that
+       RAN TO THE END laid nothing, and this one did not run to the end. That is what keeps the two
+       populations apart at the one offer where they would otherwise be confused, and it is why
+       `bp_offer_done`'s own assert demands a reason for a SILENT offer and never for a stopped one. */
+    CHECKF(census.outcome[BOX_PAINT_STOPPED] == 1u && census.outcome[BOX_PAINT_INKED] == 0u &&
+           census.outcome[BOX_PAINT_SILENT] == 0u && census.outcome[BOX_PAINT_UNBUILT] == 0u,
+           "CSS 2.1 §E.2 \"Painting order\"'s step 1 over a canvas with no rendered region reported %u "
+           "inked, %u silent, %u unbuilt and %u stopped offer(s) where ONE stopped and three zeros is the "
+           "only reading: `bp_canvas_region` answers false, `bp_canvas_background` returns false, and "
+           "core/paint/box_paint.h's partition puts a walk that stopped in exactly one bucket. A SILENT here "
+           "would be this painter reporting a box it could not compute as a box with nothing to compute",
+           census.outcome[BOX_PAINT_INKED], census.outcome[BOX_PAINT_SILENT],
+           census.outcome[BOX_PAINT_UNBUILT], census.outcome[BOX_PAINT_STOPPED]);
+    printf("@PAINT scratch-canvas ok=%d offers=%u marks=%zu stopped=%u\n",
+           ok ? 1 : 0, offers, dl.n, census.outcome[BOX_PAINT_STOPPED]);
     display_list_free(&dl);
 }
 
@@ -25006,6 +25095,7 @@ static bool tf_ib_paint_flat(JSContext *ctx, lxb_html_document_t *dom, const cha
     lxb_dom_document_t *d = lxb_dom_interface_document(dom);
     lxb_dom_element_t *root = lxb_dom_document_element(d);
     lxb_dom_element_t *p, *span;
+    BoxPaintCensus census;
     bool ok;
 
     CHECK(root != NULL, "the fixture's own active document has no root element for CSS 2.1 §E.2 \"Painting "
@@ -25016,7 +25106,13 @@ static bool tf_ib_paint_flat(JSContext *ctx, lxb_html_document_t *dom, const cha
     tf_ib_text(d, lxb_dom_interface_node(span), "cd");
     tf_ib_text(d, lxb_dom_interface_node(p), "ef");
     display_list_init(out);
-    ok = box_paint_stacking_context(ctx, root, out, offers);
+    /* THE CENSUS IS TAKEN HERE AND ONLY ITS OFFER COUNT TRAVELS, which is a scope decision and not a loss:
+       core/paint/box_paint.h's entry answers what became of every offer and why, and what THIS row asserts
+       is the offer COUNT — the rows that read the partition are `box_paint_scratch_selftest` below, over a
+       document whose element set is four elements this file writes. A helper that carried the whole census
+       out would be handing every caller a struct three of them do not read. */
+    ok = box_paint_stacking_context(ctx, root, out, &census);
+    *offers = census.offers;
     /* OUT AGAIN BEFORE ANYTHING IS ASSERTED, which is `tf_pt_paint`'s own rule and is what makes the removal
        CHECKED rather than trusted: all three passes below are counted against ONE base, so a paragraph left
        in puts the next pass's marks past `base + 7` and that pass's own count assertion reports it. */
@@ -25034,6 +25130,7 @@ static bool tf_ib_paint_nested(JSContext *ctx, lxb_html_document_t *dom, const c
     lxb_dom_document_t *d = lxb_dom_interface_document(dom);
     lxb_dom_element_t *root = lxb_dom_document_element(d);
     lxb_dom_element_t *p, *span, *em;
+    BoxPaintCensus census;
     bool ok;
 
     CHECK(root != NULL, "the fixture's own active document has no root element for CSS 2.1 §E.2 \"Painting "
@@ -25047,7 +25144,13 @@ static bool tf_ib_paint_nested(JSContext *ctx, lxb_html_document_t *dom, const c
     tf_ib_text(d, lxb_dom_interface_node(span), "d");
     tf_ib_text(d, lxb_dom_interface_node(p), "e");
     display_list_init(out);
-    ok = box_paint_stacking_context(ctx, root, out, offers);
+    /* THE CENSUS IS TAKEN HERE AND ONLY ITS OFFER COUNT TRAVELS, which is a scope decision and not a loss:
+       core/paint/box_paint.h's entry answers what became of every offer and why, and what THIS row asserts
+       is the offer COUNT — the rows that read the partition are `box_paint_scratch_selftest` below, over a
+       document whose element set is four elements this file writes. A helper that carried the whole census
+       out would be handing every caller a struct three of them do not read. */
+    ok = box_paint_stacking_context(ctx, root, out, &census);
+    *offers = census.offers;
     dom_cow_remove_baseline(lxb_dom_interface_node(p));
     return ok;
 }
@@ -25487,9 +25590,9 @@ static void document_paint_boxless_root_selftest(JSContext *ctx)
           "boxless arm below is being exercised by nothing");
     free(display);
 
-    none_count.offers = TF_DP_UNWRITTEN;
+    none_count.census.offers = TF_DP_UNWRITTEN;
     drew = document_paint(ctx, dom, &none_surf, &none_count);
-    CHECK(none_count.offers != TF_DP_UNWRITTEN,
+    CHECK(none_count.census.offers != TF_DP_UNWRITTEN,
           "core/paint/document_paint.h's entry returned without writing its count for a document whose root "
           "generates no box. Every field is written before any arm can return, so the sentinel surviving is a "
           "return that skipped that line rather than a walk that offered nothing");
@@ -25504,7 +25607,7 @@ static void document_paint_boxless_root_selftest(JSContext *ctx)
            "%dx%d. An empty picture of a page is still a picture OF that page, so its extent is the region's "
            "and a zero-area surface here would be the ABSENT image the false arm already means",
            none_surf.width, none_surf.height, dw, dh);
-    CHECKF(none_count.offers == 0u && none_count.marks == 0u && none_count.spans == 0u &&
+    CHECKF(none_count.census.offers == 0u && none_count.marks == 0u && none_count.spans == 0u &&
                none_count.pixels == 0u && none_count.complete,
            "a boxless root reported offers=%u marks=%zu spans=%zu pixels=%zu complete=%d, where css-display-3 "
            "§2.5's `none` leaves CSS 2.1 §E.2 \"Painting order\" nothing to walk. ZERO OFFERS is the part that "
@@ -25513,7 +25616,7 @@ static void document_paint_boxless_root_selftest(JSContext *ctx)
            "`complete` IS TRUE because nothing was left unpainted — false is stated for a painter that met an "
            "operand it could not compute and STOPPED, so reporting it here would tell a caller its picture is "
            "a fragment of one that does not exist",
-           none_count.offers, none_count.marks, none_count.spans, none_count.pixels,
+           none_count.census.offers, none_count.marks, none_count.spans, none_count.pixels,
            none_count.complete ? 1 : 0);
     for (y = 0; y < none_surf.height; y++)
         for (x = 0; x < none_surf.width; x++) {
@@ -25543,12 +25646,12 @@ static void document_paint_boxless_root_selftest(JSContext *ctx)
           "over boxes that would not exist");
     free(display);
 
-    contents_count.offers = TF_DP_UNWRITTEN;
+    contents_count.census.offers = TF_DP_UNWRITTEN;
     drew = document_paint(ctx, dom, &contents_surf, &contents_count);
-    CHECK(drew && contents_count.offers != TF_DP_UNWRITTEN,
+    CHECK(drew && contents_count.census.offers != TF_DP_UNWRITTEN,
           "core/paint/document_paint.h's entry refused a document whose root css-display-3 §2.8 blockifies, or "
           "left its count unwritten. This root's computed `display` is `block`, which is an ordinary box");
-    CHECKF(contents_count.offers == 1u && !contents_count.complete && contents_count.marks == 0u,
+    CHECKF(contents_count.census.offers == 1u && !contents_count.complete && contents_count.marks == 0u,
            "a `display:contents` root reported offers=%u marks=%zu complete=%d where ONE offer and a stopped "
            "walk is the derivation this tree already asserts for this exact shape. css-display-3 §2.8 made "
            "this root a `block`, so CSS 2.1 §E.2 \"Painting order\"'s walk RUNS and offers its step 1; "
@@ -25558,7 +25661,7 @@ static void document_paint_boxless_root_selftest(JSContext *ctx)
            "— so the step declines and the walk stops with nothing laid, exactly as `@PAINT scratch-canvas` "
            "above holds. ZERO OFFERS here would be the boxless arm swallowing a document that HAS a box, "
            "which is this pair's whole point",
-           contents_count.offers, contents_count.marks, contents_count.complete ? 1 : 0);
+           contents_count.census.offers, contents_count.marks, contents_count.complete ? 1 : 0);
     contents_sum = raster_surface_checksum(&contents_surf);
     raster_surface_free(&contents_surf);
 
@@ -25575,7 +25678,7 @@ static void document_paint_boxless_root_selftest(JSContext *ctx)
        0 rather than a row of zeros, which is this row's own control. */
     printf("@PAINT boxless-root w=%d h=%d none_offers=%u none_complete=%d contents_offers=%u "
            "contents_complete=%d opaque=%zu\n",
-           dw, dh, none_count.offers, none_count.complete ? 1 : 0, contents_count.offers,
+           dw, dh, none_count.census.offers, none_count.complete ? 1 : 0, contents_count.census.offers,
            contents_count.complete ? 1 : 0, opaque);
 }
 
@@ -26516,11 +26619,26 @@ static void abi_paint(const char *dir, const char *doc_id, const char *url)
     const uint8_t *px;
     const char    *world;
     const char    *forced;
-    unsigned       n, w, h, offers, marks;
+    unsigned       n, w, h, offers, marks, elements;
+    /* THE PARTITION AND THE TALLY, READ BY INDEX OVER THE TWO ENUMS core/paint/box_paint.h DECLARES AND THIS
+       FILE INCLUDES. They are read into arrays rather than into named locals so that the line below cannot
+       print a bucket under its neighbour's name: the LABEL and the INDEX come out of the same two tables, so
+       a member added to either enum is a row this loop prints and never a number that silently moves one
+       column left. */
+    unsigned       outcome[BOX_PAINT_OUTCOMES];
+    unsigned       decline[BOX_PAINT_DECLINES];
+    unsigned       k, part;
     int            complete, named, headed, closed, werr, cerr, gone;
     char           name[512];
     char           path[1024];
-    size_t         i, j, wn, put;
+    /* THE TWO BREAKDOWNS, COMPOSED ONCE AND WRITTEN TWICE — into the artifact's own header and onto the line
+       a person reads. A second composition would be two spellings of one census, free to disagree about
+       which picture they describe. They are bounded rather than asserted-to-fit for `snprintf`'s own reason
+       one buffer down: what matters is that the header this file writes is well-formed, and a breakdown that
+       did not fit would be a SHORTER sentence rather than a wrong image. */
+    char           parts[256];
+    char           whys[768];
+    size_t         i, j, wn, put, at;
     FILE          *f;
 
     DCHECK(dir != NULL && doc_id != NULL && url != NULL,
@@ -26542,6 +26660,17 @@ static void abi_paint(const char *dir, const char *doc_id, const char *url)
     w = qjs_paint_width();
     h = qjs_paint_height();
     offers = qjs_paint_offers();
+    /* WHAT BECAME OF EACH OF THOSE OFFERS, AND HOW BIG THE TREE WAS — read on the lines beside the offer
+       count and off the SAME render, which is what `qjs_paint`'s own register discipline guarantees: these
+       are output registers written by one call and not per-flow state that moves under a reader.
+       THE ELEMENT COUNT IS THE ONE THAT IS NOT ABOUT THE WALK, and it is the reason this line can answer the
+       question the offer count could not. A document whose UI its own JavaScript builds has an element count
+       that MOVES as the page mounts, and an offer count that moves with it — so seven offers over three
+       elements and seven offers over nine hundred are two different findings, and until this field existed
+       they printed identically. */
+    elements = qjs_paint_elements();
+    for (k = 0; k < (unsigned)BOX_PAINT_OUTCOMES; k++) outcome[k] = qjs_paint_offer_outcome(k);
+    for (k = 0; k < (unsigned)BOX_PAINT_DECLINES; k++) decline[k] = qjs_paint_decline(k);
     marks = qjs_paint_marks();
     complete = qjs_paint_complete();
     /* AND THE TWO THAT MAKE THIS AN IMAGE OF THIS ENGINE RATHER THAN OF A BROWSER, WITH NO ORDINAL ON THEM
@@ -26608,6 +26737,80 @@ static void abi_paint(const char *dir, const char *doc_id, const char *url)
                 url, world);
         fflush(stderr);
         return;
+    }
+
+    /* THE TWO BREAKDOWNS, COMPOSED FROM THE ENUMS AND NOT FROM A HAND-WRITTEN LIST OF LABELS. Each table is
+       indexed BY its enum, so the label and the number come out of one subscript and a column cannot slide
+       under its neighbour's name. WHAT NO COMPILER CATCHES IS A TABLE SHORTER THAN ITS ENUM — an array of
+       string literals has no member the language can miss — so the two lengths are ASSERTED against the
+       enums directly, which is the same shape core/paint/box_paint.c makes about the census itself: two
+       readings of one declaration, taken at two sites.
+       THE PARTITION PRINTS EVERY MEMBER AND THE TALLY PRINTS ONLY THE NON-ZERO ONES, and that asymmetry is
+       the difference between the two populations rather than a saving. A partition's zeros are LOAD-BEARING
+       — `0 unbuilt` is the statement that no step this engine cannot paint was reached, which is one of the
+       three things a walk of N offers and no marks can mean — while a reason that fired nowhere is a reason
+       this document did not meet, and eight of those on every line is furniture a reader stops reading.
+       THE PARTITION'S OWN SUM IS CHECKED HERE AND NOT PRINTED, which is a stronger statement than printing
+       it and is the reason this host adds it up at all. core/paint/box_paint.c already asserts the identity
+       INSIDE the engine, over the counters as it wrote them; this adds it up over the numbers that came back
+       ACROSS THE ABI, one call per bucket. The two are different readings — an entry that indexed the wrong
+       array, or a host whose enum is one member behind the engine's, is invisible to the engine's own assert
+       and lands here. A reader who wants the sum can add four numbers the line already carries. */
+    {
+        static const char *const OUTCOME_LABEL[] = { "inked", "silent", "unbuilt", "stopped" };
+        static const char *const DECLINE_LABEL[] = {
+            "transparent", "propagated-to-canvas", "root-background", "no-border-area",
+            "no-inline-context", "no-characters", "no-replaced-content", "unbuilt-replaced",
+            "unbuilt-step",
+        };
+        int put_n;
+
+        DCHECK(sizeof OUTCOME_LABEL / sizeof OUTCOME_LABEL[0] == (size_t)BOX_PAINT_OUTCOMES,
+               "this host's names for CSS 2.1 §E.2 \"Painting order\"'s offer outcomes are not as many as "
+               "core/paint/box_paint.h declares — so a bucket is printed under its neighbour's name, which is "
+               "a number that reads as a different finding rather than a number that is missing");
+        DCHECK(sizeof DECLINE_LABEL / sizeof DECLINE_LABEL[0] == (size_t)BOX_PAINT_DECLINES,
+               "this host's names for why CSS 2.1 §E.2 \"Painting order\"'s offers laid no ink are not as "
+               "many as core/paint/box_paint.h declares — see the outcome names above for why a label table "
+               "shorter than its enum is worse than no label at all");
+        /* THE SUM IS ITS OWN LOOP AND NOT A LINE INSIDE THE FORMATTING ONE, which is a correctness
+           requirement rather than tidiness: the formatting loop BREAKS on a buffer it could not fit, so a sum
+           accumulated inside it would stop short of the offers and the assert below would report an ABI
+           disagreement whose whole cause was the width of a string. A truncated sentence and a wrong
+           arithmetic identity are two different failures and only one of them is worth crashing on. */
+        part = 0;
+        for (k = 0; k < (unsigned)BOX_PAINT_OUTCOMES; k++) part += outcome[k];
+        at = 0;
+        for (k = 0; k < (unsigned)BOX_PAINT_OUTCOMES; k++) {
+            put_n = snprintf(parts + at, sizeof parts - at, "%s%u %s",
+                             k == 0 ? "" : ", ", outcome[k], OUTCOME_LABEL[k]);
+            if (put_n <= 0 || (size_t)put_n >= sizeof parts - at) break;
+            at += (size_t)put_n;
+        }
+        at = 0;
+        whys[0] = '\0';
+        for (k = 0; k < (unsigned)BOX_PAINT_DECLINES; k++) {
+            if (decline[k] == 0u) continue;
+            put_n = snprintf(whys + at, sizeof whys - at, "%s%u %s",
+                             at == 0 ? "" : ", ", decline[k], DECLINE_LABEL[k]);
+            if (put_n <= 0 || (size_t)put_n >= sizeof whys - at) break;
+            at += (size_t)put_n;
+        }
+        DCHECKF(part == offers,
+                "this host read %u offer(s) from CSS 2.1 §E.2 \"Painting order\"'s last render and %u "
+                "outcome(s) for them across %u bucket(s). core/paint/box_paint.h's outcomes PARTITION the "
+                "offers and core/paint/box_paint.c asserts that inside the engine, so a disagreement HERE is "
+                "this ABI's own reading: `qjs_paint_offer_outcome` indexing a different array than "
+                "`qjs_paint_offers` counts, or this host's `BOX_PAINT_OUTCOMES` being a different number "
+                "than the engine was built with",
+                offers, part, (unsigned)BOX_PAINT_OUTCOMES);
+        if (whys[0] == '\0') {
+            /* NO REASON AT ALL IS A REAL STATE AND IS SAID IN WORDS, because an empty list reads as a field
+               this host failed to fill. It is what a document EVERY box of which painted looks like, and it
+               is also what a walk that stopped at its first offer looks like — the partition beside it is
+               what separates those two, which is exactly the split the two populations exist for. */
+            snprintf(whys, sizeof whys, "none — no offer declined");
+        }
     }
 
     /* THE FILE IS NAMED BY THE DOCUMENT — the name the ZONE gave this instance, which is what its routing
@@ -26709,6 +26912,22 @@ static void abi_paint(const char *dir, const char *doc_id, const char *url)
                      "#   an `if (__FLAGS.admin)` over absent server state read `unforced`. `baseline` is the\n"
                      "#   document as no flow has written it, in which none of the page's own code has run.\n"
                      "# CSS 2.1 §E.2 \"Painting order\" offered %u step(s) and laid %u mark(s)\n"
+                     "#   of those offers: %s\n"
+                     "#   INKED laid at least one mark. SILENT computed every operand and none of them was\n"
+                     "#   ink, which is a CORRECT picture of a box with nothing to draw. UNBUILT met a step,\n"
+                     "#   or a replaced element's kind, that has no ink in this engine at this revision — a\n"
+                     "#   capability, named at core/paint/box_paint.h. STOPPED met an operand it could not\n"
+                     "#   compute; one per offer still open, so the walk ended inside the innermost.\n"
+                     "# and why the offers that laid nothing laid nothing: %s\n"
+                     "#   These do NOT partition the offers above and are not meant to: one offer is one\n"
+                     "#   §E.2 STEP, and a step's sub-list can decline twice — a box declaring neither a\n"
+                     "#   background nor a border meets two of them. Their denominator is the offer count.\n"
+                     "# the walk covered %u element(s) of DOM §4.8's shadow-including tree under the root\n"
+                     "#   That is the DOCUMENT's own size and every number above is the WALK's, taken at the\n"
+                     "#   same instant by the same walker. Few offers over MANY elements is a walk that\n"
+                     "#   reached almost none of a page; few offers over FEW is a page with nothing in it,\n"
+                     "#   which for a document whose UI its own JavaScript builds is the picture of a page\n"
+                     "#   that has not mounted. No inequality holds between the two and none is asserted.\n"
                      "# the walk %s\n"
                      "WIDTH %u\n"
                      "HEIGHT %u\n"
@@ -26716,7 +26935,7 @@ static void abi_paint(const char *dir, const char *doc_id, const char *url)
                      "MAXVAL 255\n"
                      "TUPLTYPE RGB_ALPHA\n"
                      "ENDHDR\n",
-                     url, world, forced, offers, marks,
+                     url, world, forced, offers, marks, parts, whys, elements,
                      complete ? "FINISHED: nothing was left unpainted that this engine paints"
                               : "STOPPED: this picture is PARTIAL — the painter met an operand it could not "
                                 "compute and every mark it had already laid is in the image",
@@ -26780,9 +26999,16 @@ static void abi_paint(const char *dir, const char *doc_id, const char *url)
        this arm's RECORD stream to the trusted zone, whose reader THROWS on a record it does not route — and
        it is right to: an unrouted record is a fact nothing reads. This line's reader is a PERSON, so it goes
        where `[abi]`'s own reports go and wears no marker that would claim to be part of a protocol. */
-    fprintf(stderr, "[abi paint] %s -> %s (world %s, %s path; %u x %u, %u bytes RGBA; %u offer(s), "
-                    "%u mark(s), walk %s)\n",
-            url, path, world, forced, w, h, n, offers, marks,
+    /* AND THE SAME TWO BREAKDOWNS ON THE LINE A PERSON READS, WHICH IS THE WHOLE POINT OF COMPOSING THEM
+       ONCE. `%u offer(s), %u mark(s)` was three findings behind one pair of numbers — every box legitimately
+       transparent, a step this engine has no ink for, or a painter that stopped — and a reader holding a
+       directory of frames could separate none of them without a debugger. What is added is the partition
+       that says WHICH, the reasons that say WHY, and the DOCUMENT's own size, which is the only number here
+       that is not the walk's own and is therefore the only one that can say whether the walk was over a page
+       or over an empty skeleton. */
+    fprintf(stderr, "[abi paint] %s -> %s (world %s, %s path; %u x %u, %u bytes RGBA; %u offer(s) over %u "
+                    "element(s) [%s], %u mark(s); declined: %s; walk %s)\n",
+            url, path, world, forced, w, h, n, offers, elements, parts, marks, whys,
             complete ? "complete" : "STOPPED — PARTIAL PICTURE");
     fflush(stderr);
 }

@@ -135,17 +135,87 @@
 #include "core/paint/display_list.h"
 #include "quickjs.h"
 
+/* WHAT BECAME OF ONE OFFER — the four answers that PARTITION the offers a walk made, which is the split the
+   offer count alone could not state.
+   THE COUNT WAS ONE NUMBER ANSWERING THREE QUESTIONS, which is the shape this header's own paragraph above
+   already names one level up and which the count itself then had: a walk reporting offers and no marks is a
+   walk every box of which was legitimately transparent, OR a walk that met a step this engine lays no ink
+   for, OR a walk that STOPPED — and those take opposite work. The first is a correct picture of a document
+   with no ink in it; the second names a capability to build; the third is a partial picture whose remaining
+   boxes were never looked at.
+   EXACTLY ONE MEMBER IS RECORDED PER OFFER and `box_paint_stacking_context` asserts that the four sum to the
+   offer count, which is what makes the total unable to move without one of its parts moving. */
+typedef enum {
+    BOX_PAINT_INKED,   /* the offer appended at least one mark to the list */
+    BOX_PAINT_SILENT,  /* every operand computed and none of them was ink — the CORRECT zero */
+    BOX_PAINT_UNBUILT, /* the step, or the replaced element's kind, has no ink in this engine at this
+                          revision — a capability named by one of this header's residuals */
+    BOX_PAINT_STOPPED, /* the painter met an operand it could not compute and stopped the walk. It is ONE PER
+                          OFFER THAT WAS STILL OPEN and not one per walk: CSS 2.1 §E.2's step 7.2.1 counts a
+                          sub-offer for an inline-level replaced element INSIDE the step 7.2 offer that is
+                          still being served, so a stop inside it is recorded for the sub-offer and again for
+                          its parent as the false answer travels out. The INNERMOST one is where the operand
+                          was; a count above one is a nesting depth and never a second failure */
+    BOX_PAINT_OUTCOMES
+} BoxPaintOutcome;
+
+/* AND WHY IT LAID NOTHING, WHICH IS A SECOND POPULATION AND NOT A SUB-PARTITION OF THE FIRST. An offer is
+   CSS 2.1 §E.2's STEP and a step's sub-list holds several items — its step 2 block arm is a background and a
+   border, its step 7.2 is every box on every line box of one container — so one offer can decline for TWO
+   reasons at once and a partition of the offers cannot express that. A `DISPLAY_MARK_FILL_RECT` laid beside a
+   border area of zero extent is an INKED offer that nevertheless met `BOX_PAINT_DECLINE_NO_BORDER_AREA`, and
+   a reader asking how many boxes declared no border wants it counted.
+   SO THESE ARE NOT EXCLUSIVE AND THEY DO NOT SUM TO ANYTHING. Each counts the offers that met that reason at
+   least once, their DENOMINATOR is the offer count, and each is therefore bounded by it — which is the one
+   arithmetic statement that can be made about them and is asserted. Reading them as a partition is reading
+   the other enum.
+   THE ONE THING THAT TIES THE TWO TOGETHER IS ASSERTED AT THE OFFER: a `BOX_PAINT_SILENT` offer that met NO
+   reason is a producer that declined and said nothing, which is the forcing function that makes a decline
+   site added later state itself rather than disappear into a number. */
+typedef enum {
+    BOX_PAINT_DECLINE_TRANSPARENT,          /* a background colour whose alpha is zero. css-backgrounds-3
+                                               §2.2's `Initial: transparent` makes this every box that
+                                               declares none, so it is the commonest reason there is */
+    BOX_PAINT_DECLINE_PROPAGATED_TO_CANVAS, /* CSS 2.1 §14.2 "The background" moved this background onto the
+                                               canvas, so the ink is at CSS 2.1 §E.2's step 1 and not here */
+    BOX_PAINT_DECLINE_ROOT_BACKGROUND,      /* CSS 2.1 §E.2's step 2 item 1 "unless it is the root element" */
+    BOX_PAINT_DECLINE_NO_BORDER_AREA,       /* four USED border widths of zero, which covers no pixel */
+    BOX_PAINT_DECLINE_NO_INLINE_CONTEXT,    /* a block-level box establishing no inline formatting context —
+                                               CSS 2.2 §9.2.1's container holding only block-level boxes */
+    BOX_PAINT_DECLINE_NO_CHARACTERS,        /* an inline formatting context whose line boxes placed none */
+    BOX_PAINT_DECLINE_NO_REPLACED_CONTENT,  /* a replaced element this engine has an arm for whose pixels are
+                                               absent — no request, no reply, a refusal, `broken`, no decoder,
+                                               or a canvas in HTML §4.12.5's context mode NONE */
+    BOX_PAINT_DECLINE_UNBUILT_REPLACED,     /* a replaced element whose content this agent cannot composite —
+                                               see this header's residual for which sentence empties each */
+    BOX_PAINT_DECLINE_UNBUILT_STEP,         /* a CSS 2.1 §E.2 step this painter lays no ink for at all */
+    BOX_PAINT_DECLINES
+} BoxPaintDecline;
+
+/* WHAT ONE WALK DID, in the numbers a display list cannot be asked. `offers` is unchanged in meaning and is
+   the DENOMINATOR of both arrays beside it; a caller that quotes one of them without it has published a
+   numerator alone. Both are LIFETIME COUNTERS over one walk — they rise and never fall, so two of them may be
+   differenced and a caller may accumulate them across several stacking contexts composed into one surface. */
+typedef struct {
+    unsigned offers;
+    unsigned outcome[BOX_PAINT_OUTCOMES];
+    unsigned decline[BOX_PAINT_DECLINES];
+} BoxPaintCensus;
+
 /* CSS 2.1 §E.2 "Painting order"'s INK FOR ONE STACKING CONTEXT, appended to `out` in CSS 2.1 §E.2's own
-   sequence, with the number of offers the walk made written to `offers`.
+   sequence, with what the walk did written to `census`.
    `out` must be an INITIALISED list and is appended to rather than replaced, so a caller composing several
-   contexts into one surface keeps the order it composed them in; `offers` is required for the reason the
+   contexts into one surface keeps the order it composed them in; `census` is required for the reason the
    header gives. `context_el` MUST FORM A STACKING CONTEXT — that is `paint_order_walk`'s own precondition and
    it crashes there, because CSS 2.1 §E.2's text is stated for "an element generating a stacking context".
+   `census` IS ZEROED BY THIS ENTRY ON EVERY ARM, so a caller planting a sentinel in it reads that sentinel
+   back only where the entry was never reached at all.
    ANSWERS what the walk answered: true when it ran to the end, and false when this painter met an operand it
-   could not compute and stopped it. A false answer LEAVES `out` AND `offers` AS THEY STOOD — every mark
-   already appended stays appended, which is what paint_order.h's visitor contract exists to make possible and
-   is why a document with one unpaintable box is a partial picture rather than no picture. */
+   could not compute and stopped it. A false answer LEAVES `out` AS IT STOOD and leaves `census` describing
+   the offers the walk DID make — every mark already appended stays appended, which is what paint_order.h's
+   visitor contract exists to make possible and is why a document with one unpaintable box is a partial
+   picture rather than no picture. The offer that stopped it is the one `BOX_PAINT_STOPPED`. */
 bool box_paint_stacking_context(JSContext *ctx, lxb_dom_element_t *context_el, DisplayList *out,
-                                unsigned *offers);
+                                BoxPaintCensus *census);
 
 #endif

@@ -115,12 +115,46 @@ QJS_EXPORT unsigned qjs_paint_bytes(void);
    boxes that painted nothing, or was STOPPED — and a caller handed only the bitmap cannot separate them".
    `complete` FALSE is a PARTIAL picture, which is the one of the three a host must never publish as a whole
    one. Each asserts that a render happened, for `qjs_paint_bytes`' own reason: zero is already an answer.
+   AND THE THREE OF THEM ARE A SUMMARY WHOSE PARTITION IS THE BLOCK BELOW — `qjs_paint_offers` is a total over
+   four outcomes that entry states and `qjs_paint_marks` is the ink those outcomes are counted against.
    THE BODIES AND THE REST OF THE CONTRACT ARE IN main.c, including why `spans` and `pixels` have no entry. */
 QJS_EXPORT unsigned qjs_paint_width(void);
 QJS_EXPORT unsigned qjs_paint_height(void);
 QJS_EXPORT unsigned qjs_paint_offers(void);
 QJS_EXPORT unsigned qjs_paint_marks(void);
 QJS_EXPORT int qjs_paint_complete(void);
+
+/* …AND WHAT BECAME OF EACH OF THOSE OFFERS, WHICH IS THE NUMBER ABOVE BROKEN APART. `qjs_paint_offers` beside
+   `qjs_paint_marks` separates a walk that ran from one that did not; it does NOT separate the three things a
+   walk that ran and laid nothing can mean, and those take opposite work. Every box was legitimately
+   transparent — the picture is correct and the document has no ink in it. A step or a replaced element's kind
+   has no ink IN THIS ENGINE — a capability to build, named by core/paint/box_paint.h's residuals. The painter
+   STOPPED — a partial picture whose remaining boxes were never looked at.
+   `qjs_paint_offer_outcome` IS A PARTITION AND `qjs_paint_decline` IS NOT, which is why they are two entries
+   and not one indexed register. The four outcomes sum to the offer count and core/paint/box_paint.c asserts
+   it; the reasons are NOT exclusive, because one offer is one of CSS 2.1 §E.2 "Painting order"'s STEPS and a
+   step's sub-list holds several items — a box declaring neither a background nor a border meets two of them.
+   Separate entries are what make reading a reason as a share of the offers a different CALL rather than a
+   different index.
+   THE INDEX IS A `BoxPaintOutcome` AND A `BoxPaintDecline`, which core/paint/box_paint.h declares and every
+   host of this ABI includes. Indexing is sound here for the one reason it ever is: the set is THIS ENGINE's
+   own and is fixed at its declaration, so a position is a fact about the operand rather than an ordinal over
+   something that moves. Both crash on an index outside their enum.
+   THEY ARE LIFETIME COUNTERS OVER ONE RENDER, like every number beside them, and their DENOMINATOR is
+   `qjs_paint_offers` — a host quoting one without it has published a numerator alone. */
+QJS_EXPORT unsigned qjs_paint_offer_outcome(unsigned outcome);
+QJS_EXPORT unsigned qjs_paint_decline(unsigned reason);
+
+/* …AND HOW BIG THE TREE WAS THAT THE WALK RAN OVER, which is the one fact none of the numbers above can
+   carry because every one of them is the WALK's own. An offer count is a statement about the painter and this
+   is a statement about the DOCUMENT, taken at the same instant, by the same walker, over the same subtree.
+   IT IS THE ONLY THING THAT SEPARATES AN EMPTY DOCUMENT FROM AN UNREACHED ONE. Seven offers over three
+   elements is a page with nothing in it; seven offers over nine hundred is a walk that reached almost none of
+   a page that HAS something in it — and for a document whose UI its own JavaScript builds, those are the two
+   readings a host holding an image most needs to tell apart.
+   IT IS A COMPARISON AND NEVER A BOUND. core/paint/document_paint.h states why no sound inequality holds in
+   either direction, and the answer is not asserted anywhere. */
+QJS_EXPORT unsigned qjs_paint_elements(void);
 
 /* …AND WHICH WORLD THE PICTURE IS OF, WHICH IS THE ONE FACT THAT MAKES AN IMAGE OF THIS ENGINE DIFFERENT FROM
    AN IMAGE OF A BROWSER. Everything above states what the ink IS; this states whose TIMELINE it was laid in.

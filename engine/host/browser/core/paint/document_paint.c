@@ -18,7 +18,42 @@
 #include "core/paint/display_list.h"
 #include "core/paint/display_list_raster.h"
 #include "core/paint/document_paint.h"
+#include "core/dom/shadow_root.h"    /* DOM §4.8's shadow-including tree order — the SAME walker CSS 2.1
+                                        §E.2's own walk advances through, which is what makes the element
+                                        count below a reading of the walk's own population */
 #include "quickjs.h"
+
+/* HOW BIG THE TREE IS THAT CSS 2.1 §E.2 "Painting order" IS ABOUT TO BE WALKED OVER — DOM §4.8 "Interface
+ * ShadowRoot"'s shadow-including inclusive descendants of `root` that are ELEMENTS, counted here so that the
+ * offer count beside it is read against a denominator rather than alone.
+ *
+ * IT IS THE SAME WALKER AND THE SAME SUBTREE AS THE PAINT, WHICH IS THE WHOLE POINT. core/paint/paint_order.c
+ * advances with `shadow_root_next_in_shadow_including` from the context element and says in its own words
+ * that a child navigable's Document is reached by NEITHER of that walker's two edges — so this counts exactly
+ * the population §E.2's steps could have collected from, and a document whose content sits in shadow trees is
+ * counted the same way the painter sees it. A plain child walk here would answer LOWER than the walk it is
+ * the denominator of, which is the one direction that turns a comparison into a contradiction.
+ *
+ * IT IS NOT A CHECK AND NOTHING IS ASSERTED ABOUT THE RATIO — core/paint/document_paint.h's field holds the
+ * reason, which is that no sound inequality exists in either direction.
+ *
+ * THE COST IS ONE TREE WALK PER PAINT and it is paid beside a walk that asks the CASCADE about every element
+ * many times over; this reads a node type and a pointer. The alternative — deriving it inside §E.2's own walk
+ * — would count only the elements that walk REACHED, which is the number `offers` already is. */
+static unsigned dp_element_count(JSContext *ctx, lxb_dom_element_t *root)
+{
+    lxb_dom_node_t *r = lxb_dom_interface_node(root);
+    lxb_dom_node_t *n;
+    unsigned count = 0;
+
+    for (n = r; n != NULL; n = shadow_root_next_in_shadow_including(ctx, n, r))
+        if (n->type == LXB_DOM_NODE_TYPE_ELEMENT) count++;
+    DCHECK(count >= 1u,
+           "the shadow-including inclusive descendants of a root ELEMENT hold no element at all — the walk "
+           "starts AT that element and DOM §4.8's tree order is INCLUSIVE, so a zero is this count and that "
+           "walker disagreeing about whether a node is one of its own inclusive descendants");
+    return count;
+}
 
 bool document_paint(JSContext *ctx, lxb_html_document_t *dom, RasterSurface *out, DocumentPaintCount *count)
 {
@@ -45,11 +80,16 @@ bool document_paint(JSContext *ctx, lxb_html_document_t *dom, RasterSurface *out
     /* EVERY FIELD, BEFORE ANY ARM CAN RETURN. The count is required rather than optional, so an entry that
        returned without writing it would hand a caller an image and no way to read it — which is the same
        defect as leaving it unwritten on the arm that draws. */
-    count->offers = 0;
     count->marks = 0;
     count->spans = 0;
     count->pixels = 0;
     count->complete = false;
+    /* AND THE TWO FIELDS THIS ENTRY GAINED, ON THE SAME ARM AND FOR THE SAME REASON THE PARAGRAPH ABOVE
+       GIVES: the count is required rather than optional, so an arm that returned without writing one of them
+       would hand a caller a census describing the render before this one. `memset` rather than a field list
+       for the census, because that struct's members are two ARRAYS whose lengths are enums that grow. */
+    memset(&count->census, 0, sizeof count->census);
+    count->elements = 0;
     /* AND THE SURFACE, so that the FALSE arm leaves a zero-area surface rather than whatever the caller's
        storage held. core/graphics/raster_surface.h makes that a STATE and not an absence — NULL pixels with
        both dimensions zero — so a caller frees unconditionally and there is no arm to remember. */
@@ -145,7 +185,13 @@ bool document_paint(JSContext *ctx, lxb_html_document_t *dom, RasterSurface *out
            level: the 'z-index' property"'s first sentence makes the root element form the root stacking
            context, which is box_paint's precondition satisfied by the operand rather than by a test here —
            and the one case that precondition does not admit is the arm above. */
-        count->complete = box_paint_stacking_context(ctx, root, &dl, &count->offers);
+        count->complete = box_paint_stacking_context(ctx, root, &dl, &count->census);
+        /* TAKEN AFTER THE WALK AND NOT BEFORE IT, which is a correctness requirement and not an ordering
+           taste: CSS 2.1 §E.2's walk reads the cascade and the layout and mutates no tree, so the two
+           readings are of ONE tree either way — and taking it after is what makes that an OBSERVATION rather
+           than an assumption, because a walk that HAD mutated the tree would show up as a count that
+           disagrees with the offers rather than as a count taken before the damage. */
+        count->elements = dp_element_count(ctx, root);
 
         /* AND THE INK, COMPOSITED, WHETHER OR NOT THE WALK FINISHED. box_paint's contract is that a stopped
            walk leaves every mark it already appended, so the image of a document with one unpaintable box is

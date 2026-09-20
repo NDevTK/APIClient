@@ -35,10 +35,45 @@
 #include "quickjs.h"
 
 typedef struct {
-    JSContext   *ctx;
-    DisplayList *out;
-    unsigned     offers;
+    JSContext      *ctx;
+    DisplayList    *out;
+    BoxPaintCensus *census;
+    /* WHY THE OFFER BEING SERVED RIGHT NOW LAID NOTHING — a bitmask over core/paint/box_paint.h's
+       `BoxPaintDecline`, cleared by `bp_visit` at each offer and read by `bp_offer_done` at that same offer's
+       tail. IT IS A MASK AND NOT A SINGLE VALUE because one offer is one of CSS 2.1 §E.2 "Painting order"'s
+       STEPS and a step's sub-list holds several items: its step 2 block arm is a background AND a border, so
+       a box that declares neither meets two reasons and a field holding one of them would report whichever
+       producer happened to run last. The header states the same thing from the consumer's side. */
+    unsigned        why;
 } BpState;
+
+/* ONE REASON THIS OFFER LAID NOTHING, RECORDED WHERE THE DECISION IS MADE. Every caller is a producer that
+   has just decided NOT to append, and each states its own reason in the one place holding the operand it
+   decided on — a census taken at the END of the walk could see only that nothing was appended, which is the
+   number this whole mechanism exists to break apart.
+   RECORDING THE SAME REASON TWICE IN ONE OFFER COUNTS ONCE, which is what a bitmask buys and is the answer a
+   reader wants: `bp_line_boxes` runs CSS 2.1 §E.2's step 7.2.1 once per anonymous block box of a mixed
+   container, so a container with four runs of text and no ink in any of them met ONE reason and not four.
+   The denominator these are read against is the OFFER count, so a reason able to exceed it would be a
+   numerator over the wrong population. */
+static void bp_decline(BpState *st, BoxPaintDecline why)
+{
+    DCHECK(st != NULL, "a CSS 2.1 §E.2 \"Painting order\" producer stated why it laid no mark with no painter "
+                       "state to record it against");
+    DCHECKF((unsigned)why < (unsigned)BOX_PAINT_DECLINES,
+            "a CSS 2.1 §E.2 \"Painting order\" producer stated reason %u, which is outside "
+            "core/paint/box_paint.h's `BoxPaintDecline`. That enum is a CLOSED list this engine writes and "
+            "every caller names a member of it by name, so a value here is this engine's own memory rather "
+            "than a reason somebody added", (unsigned)why);
+    st->why |= 1u << (unsigned)why;
+}
+
+/* THE TWO REASONS THAT MAKE AN OFFER `BOX_PAINT_UNBUILT` RATHER THAN `BOX_PAINT_SILENT`, spelled from the
+   enum rather than restated as a number: a step this painter has no arm for, and a replaced element whose
+   content this agent cannot composite. Every other reason is a box that WAS looked at and correctly had no
+   ink, which is a fact about the DOCUMENT; these two are facts about THIS ENGINE and name a capability. */
+#define BP_WHY_UNBUILT ((1u << (unsigned)BOX_PAINT_DECLINE_UNBUILT_REPLACED) | \
+                        (1u << (unsigned)BOX_PAINT_DECLINE_UNBUILT_STEP))
 
 /* "THE ROOT ELEMENT", ASKED OF THE DOCUMENT RATHER THAN OF THE PARENT. core/paint/paint_order.c and
    core/paint/stacking_order.c each hold one spelling of it — "the element whose parent is the Document" — and
@@ -213,7 +248,7 @@ static bool bp_canvas_background(BpState *st, lxb_dom_element_t *root)
     CssColor color;
 
     if (!css_used_color(bp_canvas_background_element(st->ctx, root), "background-color", &color)) return false;
-    if (color.a == 0.0) return true;
+    if (color.a == 0.0) { bp_decline(st, BOX_PAINT_DECLINE_TRANSPARENT); return true; }
     if (!bp_canvas_region(root, mark.rect)) return false;
     mark.kind = DISPLAY_MARK_FILL_CANVAS;
     mark.color = color;
@@ -239,8 +274,11 @@ static bool bp_background_color_at(BpState *st, lxb_dom_element_t *el, const Css
     /* AN ALPHA OF ZERO IS NO INK AND NOT A SMALL AMOUNT OF IT, so skipping the mark is exact rather than an
        approximation — compositing a fully transparent fill changes no pixel. It is also what makes §14.2's
        question below moot for the common case: a box with nothing to lay has nothing for that rule to move. */
-    if (color.a == 0.0) return true;
-    if (bp_background_propagates_to_canvas(st->ctx, el)) return true;
+    if (color.a == 0.0) { bp_decline(st, BOX_PAINT_DECLINE_TRANSPARENT); return true; }
+    if (bp_background_propagates_to_canvas(st->ctx, el)) {
+        bp_decline(st, BOX_PAINT_DECLINE_PROPAGATED_TO_CANVAS);
+        return true;
+    }
     mark.kind = DISPLAY_MARK_FILL_RECT;
     memcpy(mark.rect, rect, sizeof mark.rect);
     mark.color = color;
@@ -344,7 +382,7 @@ static bool bp_border_at(BpState *st, lxb_dom_element_t *el, const CssPx rect[4]
     used_value_border_widths_px(el, width);
     for (i = 0; i < 4; i++)
         if (width[i].px != 0.0) any = true;
-    if (!any) return true;
+    if (!any) { bp_decline(st, BOX_PAINT_DECLINE_NO_BORDER_AREA); return true; }
     for (i = 0; i < 4; i++) {
         mark.side[i].width = width[i];
         mark.side[i].style = bp_border_style(el, i);
@@ -462,7 +500,7 @@ static bool bp_replaced_image(BpState *st, lxb_dom_element_t *el)
     uint32_t w = 0, h = 0;
 
     rgba = html_image_decoded_rgba(st->ctx, el, &w, &h);
-    if (rgba == NULL) return true;
+    if (rgba == NULL) { bp_decline(st, BOX_PAINT_DECLINE_NO_REPLACED_CONTENT); return true; }
     bp_composite_content_box(st, el, rgba, w, h);
     free(rgba);
     return true;
@@ -494,9 +532,16 @@ static bool bp_replaced_canvas(BpState *st, lxb_dom_element_t *el)
     CanvasBitmap bm;
 
     wrapper = element_wrap(st->ctx, el);
-    if (JS_IsNull(wrapper)) return true;
+    /* A CANVAS NO FLOW HAS REACHED AND A CANVAS IN HTML §4.12.5's CONTEXT MODE NONE ARE ONE REASON AND NOT
+       TWO, which is this function's own banner read forward: that sentence's second arm is "a transparent
+       black bitmap", which composites nothing at every size, so both are a replaced element whose content is
+       ABSENT rather than an engine with no arm for it. `BOX_PAINT_DECLINE_UNBUILT_REPLACED` is the other
+       reason and is reserved for the three tags this agent cannot composite at all. */
+    if (JS_IsNull(wrapper)) { bp_decline(st, BOX_PAINT_DECLINE_NO_REPLACED_CONTENT); return true; }
     if (canvas_bitmap_get(st->ctx, wrapper, &bm) && bm.rgba != NULL)
         bp_composite_content_box(st, el, bm.rgba, bm.width, bm.height);
+    else
+        bp_decline(st, BOX_PAINT_DECLINE_NO_REPLACED_CONTENT);
     JS_FreeValue(st->ctx, wrapper);
     return true;
 }
@@ -577,8 +622,10 @@ static bool bp_replaced_content(BpState *st, lxb_dom_element_t *el)
        makes each of them empty. They are spelled out rather than folded into the tail so that the tail stays
        a statement about `replaced_element_of` growing a row. */
     if (lxb_html_tree_node_is(n, LXB_TAG_IFRAME) || lxb_html_tree_node_is(n, LXB_TAG_VIDEO)
-        || lxb_html_tree_node_is(n, LXB_TAG_EMBED))
+        || lxb_html_tree_node_is(n, LXB_TAG_EMBED)) {
+        bp_decline(st, BOX_PAINT_DECLINE_UNBUILT_REPLACED);
         return true;
+    }
     DFAIL("CSS 2.1 §E.2 \"Painting order\"'s \"the replaced content, atomically\" was offered for an element "
           "this painter has no arm for. The arms here are the closed list core/layout/replaced_element.c's "
           "`replaced_element_of` answers `replaced` for — `img`, `canvas`, `iframe`, `video` and `embed` — so "
@@ -590,9 +637,21 @@ static bool bp_replaced_content(BpState *st, lxb_dom_element_t *el)
        where the next component is handed a state it will not test for, and there is no next component here: a
        replaced element that composites nothing is exactly what the three arms above already are, and what a
        release build then paints is that box's chrome without its content. Returning FALSE instead would stop
-       the walk and lose every later box's ink for one element this painter has not been taught yet. */
+       the walk and lose every later box's ink for one element this painter has not been taught yet.
+       AND IT SAYS SO IN THE CENSUS, which is what stops a compiled-out crash from becoming a silent zero. A
+       release build reaching this line paints that box's chrome without its content, exactly as the three
+       tags above do, so it states the SAME reason they state rather than leaving the offer
+       `BOX_PAINT_SILENT` — which would report a box this engine cannot paint as a box with nothing to
+       paint. */
+    bp_decline(st, BOX_PAINT_DECLINE_UNBUILT_REPLACED);
     return true;
 }
+
+/* THE OFFER TAIL, DECLARED HERE BECAUSE CSS 2.1 §E.2's STEP 7.2.1 MAKES AN OFFER OF ITS OWN. `bp_step_7_2_1`
+   below counts a sub-offer for an inline-level replaced element — the argument is at that site — and an offer
+   this component counts is an offer this component owes an outcome for, so the enumeration reaches the same
+   tail `bp_visit` does rather than a second one. See the definition for the four outcomes and their order. */
+static bool bp_offer_done(BpState *st, PaintStep step, size_t marks_before, bool ok);
 
 /* ---- CSS 2.1 §E.2's STEP 7.2.1 — THE BOXES IN A LINE BOX, AND THE MARKS EACH OF THEM LAYS ------------------ */
 
@@ -664,7 +723,16 @@ static bool bp_inline_box_marks(BpState *st, lxb_dom_element_t *el)
     used_value_border_widths_px(el, width);
     for (side = 0; side < 4; side++)
         if (width[side].px != 0.0) ink = true;
-    if (!ink) return true;
+    /* BOTH REASONS, BECAUSE BOTH WERE TESTED HERE AND BOTH WERE EMPTY. This short-circuit stands in for
+       CSS 2.1 §E.2's step 7.2.1 items 1 and 3, which the two producers below would otherwise each decline in
+       their own words — it exists because the geometry those producers need is a CRASH SURFACE for a box that
+       lays no ink, which is the paragraph above. Reporting one reason would under-count whichever of the two
+       a reader happened to be asking about. */
+    if (!ink) {
+        bp_decline(st, BOX_PAINT_DECLINE_TRANSPARENT);
+        bp_decline(st, BOX_PAINT_DECLINE_NO_BORDER_AREA);
+        return true;
+    }
 
     n = line_box_inline_fragments(el, &establishing, &frag);
     DCHECK(establishing != NULL,
@@ -779,9 +847,28 @@ static bool bp_step_7_2_1(BpState *st, lxb_dom_element_t *parent, lxb_dom_node_t
                tallied, and box_paint.h states that the count is an ANSWER rather than an instrument — a
                figure that says how many boxes this painter was asked about cannot be one some boxes are in
                twice. */
+            /* AND IT IS AN OFFER WITH AN OUTCOME LIKE ANY OTHER, WHICH IS WHY THE MASK IS SAVED ACROSS IT.
+               This sub-offer sits INSIDE the `PAINT_STEP_LINE_BOXES` offer `bp_visit` is still serving, so
+               the two are the only nested pair in this component and each owns its own answer: the outer
+               one's reasons are the ones ITS producers stated, and an image whose pixels are absent is a
+               fact about this box rather than about the container's line boxes. Restoring rather than
+               merging is what keeps each reason's count a count of OFFERS — merged, one absent image would
+               be charged to every enclosing offer as well as to its own.
+               `sub_before` IS ITS OWN READING OF THE LIST, taken here rather than inherited, because the
+               outer offer's reading was taken before every character on every line of this container: an
+               image credited with the ink of the text around it would report `BOX_PAINT_INKED` for a
+               replaced element that composited nothing. */
             if (paint_order_inline_kind(box) == PAINT_INLINE_ATOMIC && replaced_element_of(box).replaced) {
-                st->offers++;
-                if (!bp_replaced_content(st, box)) return false;
+                unsigned outer_why = st->why;
+                size_t   sub_before = st->out->n;
+                bool     sub_ok;
+
+                st->census->offers++;
+                st->why = 0u;
+                sub_ok = bp_offer_done(st, PAINT_STEP_REPLACED_CONTENT, sub_before,
+                                       bp_replaced_content(st, box));
+                st->why = outer_why;
+                if (!sub_ok) return false;
             }
             if (!bp_step_7_2_1(st, box, child->first_child, NULL, g, n, cursor, origin_x, origin_y))
                 return false;
@@ -802,9 +889,21 @@ static bool bp_context_step_7_2_1(BpState *st, lxb_dom_element_t *style, BlockFl
 {
     LineBoxGlyph *g = NULL;
     size_t n = line_box_glyphs(style, run, &g), cursor = 0;
+    /* A CONTEXT THAT PLACED NO CHARACTER, STATED BEFORE THE WALK RATHER THAN INFERRED AFTER IT. The
+       enumeration below still runs — CSS 2.1 §E.2's step 7.2.1 items 1 and 3 are an inline box's own
+       background and border and are laid whether or not that box holds text — so this is a reason the offer
+       MET and never the outcome of the offer: a `<span style="background:yellow"></span>` on an otherwise
+       empty line records it and is `BOX_PAINT_INKED` all the same.
+       IT IS THE ONE READING THAT SEPARATES AN EMPTY DOCUMENT FROM A MEASURED ONE. `line_box_glyphs` reports
+       the characters core/layout/line_box.h placed on this context's lines, so a zero here is a container
+       with nothing in it — which is what a document whose body holds one empty `div` looks like from this
+       component, and is exactly what a walk over a page that has mounted does not look like. */
     lxb_dom_node_t *from = run.after != NULL ? run.after->next
                                              : lxb_dom_interface_node(style)->first_child;
-    bool ok = bp_step_7_2_1(st, style, from, run.end, g, n, &cursor, origin_x, origin_y);
+    bool ok;
+
+    if (n == 0) bp_decline(st, BOX_PAINT_DECLINE_NO_CHARACTERS);
+    ok = bp_step_7_2_1(st, style, from, run.end, g, n, &cursor, origin_x, origin_y);
 
     DCHECKF(!ok || cursor == n,
             "CSS 2.1 §E.2 \"Painting order\"'s step 7.2.1 walked one inline formatting context's boxes in tree "
@@ -942,7 +1041,13 @@ static bool bp_line_boxes(BpState *st, lxb_dom_element_t *el)
        identical read: core/layout/flow_position.h ABORTS for every positioning scheme it does not implement,
        so reading an origin for a container that generates none of §9.2.1.1's boxes would raise a float's or
        an out-of-flow box's crash at an element this walk has nothing to lay. */
-    if (n == 0) { free(v); return true; }
+    /* CSS 2.2 §9.2.1's THIRD SHAPE, STATED RATHER THAN SKIPPED — a block container holding only block-level
+       boxes establishes no inline formatting context at all, so CSS 2.1 §E.2's step 7.2 has nothing to
+       enumerate for it and its descendants get their own offers. That is a POSITIVE answer and it is the
+       reason `html` and `body` lay nothing on a document whose whole content is one `div`: the reader of a
+       frame needs it told apart from a context that ran and found no ink, which `BOX_PAINT_DECLINE_
+       NO_CHARACTERS` is. */
+    if (n == 0) { free(v); bp_decline(st, BOX_PAINT_DECLINE_NO_INLINE_CONTEXT); return true; }
     bp_content_box_origin(el, &x, &y);
     for (i = 0; i < n && ok; i++)
         ok = bp_context_step_7_2_1(st, el, v[i].run, css_px_add(x, v[i].content_x), css_px_add(y, v[i].content_y));
@@ -950,21 +1055,78 @@ static bool bp_line_boxes(BpState *st, lxb_dom_element_t *el)
     return ok;
 }
 
+/* WHAT ONE OFFER CAME TO, RECORDED AT THE OFFER'S OWN TAIL AND NOWHERE ELSE. Every arm of `bp_visit` routes
+ * its answer through here, which is what makes core/paint/box_paint.h's four-way partition sum to the offer
+ * count rather than being a remainder somebody computed.
+ *
+ * THE THREE INPUTS ARE THREE DIFFERENT MECHANISMS AND THAT IS WHAT MAKES THE SUM CHECKABLE. `ok` is the
+ * producer's own answer; the mark delta is the DISPLAY LIST's own length, which this file does not maintain;
+ * and `why` is a mask the producers wrote. An offer whose arm returned without coming through here would
+ * leave `offers` risen and no outcome recorded, and `box_paint_stacking_context`'s assert is what says so —
+ * which is exactly the editing mistake a switch of twelve `return` statements invites.
+ *
+ * THE ORDER OF THE FOUR IS NOT A PREFERENCE, IT IS A CONTAINMENT. A walk that STOPPED left its prefix in the
+ * list and may well have appended at this very offer (`PAINT_STEP_DESCENDANT_BOX` lays a background and then
+ * fails on a border colour), so the stopped arm is asked FIRST — a stopped offer counted as inked would make
+ * `BOX_PAINT_STOPPED` read zero for a walk that stopped. INK outranks a reason for the same reason: an offer
+ * that laid a background and declined a border is a box with ink on it, and the border's reason is recorded
+ * beside it in the decline tally rather than instead of it.
+ *
+ * AND AN OFFER THAT LAID NOTHING AND SAID NOTHING IS A CRASH, WHICH IS THE FORCING FUNCTION THIS WHOLE
+ * MECHANISM RESTS ON. Without it a producer added later declines silently, the offer lands in
+ * `BOX_PAINT_SILENT`, and the census goes on looking complete while the one number it exists to break apart
+ * quietly re-forms inside it. The assert names the STEP because that is what a reader needs to find the
+ * producer. It is a DCHECK and not a CHECK because every operand is this engine's own arithmetic and the
+ * release arm is a census whose silent bucket is one offer wide of the truth — a wrong number rather than a
+ * wrong picture. */
+static bool bp_offer_done(BpState *st, PaintStep step, size_t marks_before, bool ok)
+{
+    BoxPaintOutcome outcome;
+    unsigned r;
+
+    DCHECKF(st->out->n >= marks_before,
+            "CSS 2.1 §E.2 \"Painting order\"'s display list SHRANK across one offer — %zu marks before it and "
+            "%zu after. core/paint/display_list.h only ever appends, so a list that lost a mark is this "
+            "painter having been handed a different list part way through one walk",
+            marks_before, st->out->n);
+    if (!ok) outcome = BOX_PAINT_STOPPED;
+    else if (st->out->n > marks_before) outcome = BOX_PAINT_INKED;
+    else if ((st->why & BP_WHY_UNBUILT) != 0u) outcome = BOX_PAINT_UNBUILT;
+    else outcome = BOX_PAINT_SILENT;
+    DCHECKF(outcome != BOX_PAINT_SILENT || st->why != 0u,
+            "CSS 2.1 §E.2 \"Painting order\"'s step %u was offered, appended nothing, did not stop the walk "
+            "and stated no reason — so this painter declined and said why nowhere. Every producer that "
+            "returns without appending calls `bp_decline` with the reason it decided on; a producer added "
+            "since carries none, and the offer it served has just disappeared into `BOX_PAINT_SILENT`, which "
+            "is the bucket meaning a box was looked at and correctly had no ink. BUILD the `bp_decline` call "
+            "at whichever early return this step reaches, or add a `BoxPaintDecline` member for it if no "
+            "existing reason is the one that applies", (unsigned)step);
+    st->census->outcome[outcome]++;
+    for (r = 0; r < (unsigned)BOX_PAINT_DECLINES; r++)
+        if ((st->why & (1u << r)) != 0u) st->census->decline[r]++;
+    return ok;
+}
+
 static bool bp_visit(PaintStep step, lxb_dom_element_t *el, void *user)
 {
     BpState *st = user;
+    size_t before;
 
     DCHECK(st != NULL, "CSS 2.1 §E.2's walk offered a box to this painter with no state behind it");
     DCHECK(el != NULL, "CSS 2.1 §E.2's walk offered a box with no element — paint_order.h asserts that every "
                        "offer names an element of the document the walk was started in");
-    st->offers++;
+    st->census->offers++;
+    /* CLEARED HERE AND READ AT THIS OFFER'S TAIL, so a reason one step stated cannot be counted against the
+       next one. The pair is the whole of the mask's lifetime and there is no arm between them. */
+    st->why = 0u;
+    before = st->out->n;
     switch (step) {
     /* CSS 2.1 §E.2's STEP 1 — THE CANVAS. Its FIRST item only; the second is the canvas's background IMAGE
        and is box_paint.h's first residual, which is the same missing mark kind every other step's image item
        waits on. CSS 2.1 §E.2 offers this step for the root element, and CSS 2.1 §14.2 decides whether the
        root's own background properties or its first `body` child's are the ones the canvas takes. */
     case PAINT_STEP_ROOT_BACKGROUND:
-        return bp_canvas_background(st, el);
+        return bp_offer_done(st, step, before, bp_canvas_background(st, el));
     /* CSS 2.1 §E.2's STEP 2, BOTH ARMS — and the ROOT CLAUSE, which is the sub-list's and therefore this
        file's. Step 2's block arm reads "background color of element UNLESS IT IS THE ROOT ELEMENT" and its
        table arm's first item carries the same clause; core/paint/paint_order.h offers step 2 for the root like
@@ -982,24 +1144,34 @@ static bool bp_visit(PaintStep step, lxb_dom_element_t *el, void *user)
            canvas and says "The root element does not paint this background again", naming nothing of §8.5's
            twelve. An arm that returned early for the root would therefore suppress ink CSS 2.1 §E.2 lays for
            every bordered root in every document. */
-        if (!bp_is_root_element(el) && !bp_background_color(st, el)) return false;
-        return bp_border(st, el);
+        /* THE CLAUSE IS A DECLINE AND IS STATED AS ONE. A root's background is not absent and is not
+           unpaintable — CSS 2.1 §14.2 "The background" has already moved it onto the canvas, where
+           `PAINT_STEP_ROOT_BACKGROUND` paints it — so an offer that suppresses it here has a REASON, and a
+           reader who cannot see it is left to read the suppression as a transparent box. */
+        if (bp_is_root_element(el)) {
+            bp_decline(st, BOX_PAINT_DECLINE_ROOT_BACKGROUND);
+            return bp_offer_done(st, step, before, bp_border(st, el));
+        }
+        return bp_offer_done(st, step, before, bp_background_color(st, el) && bp_border(st, el));
     /* CSS 2.1 §E.2's step 2 TABLE arm item 1, which carries the clause on the item itself — "table
        backgrounds (color then image) unless it is the root element". That arm's borders are its item 7 and are
        `PAINT_STEP_TABLE_BORDERS` below, offered separately with five background levels between them. */
     case PAINT_STEP_CONTEXT_TABLE_BACKGROUND:
-        if (bp_is_root_element(el)) return true;
-        return bp_background_color(st, el);
+        if (bp_is_root_element(el)) {
+            bp_decline(st, BOX_PAINT_DECLINE_ROOT_BACKGROUND);
+            return bp_offer_done(st, step, before, true);
+        }
+        return bp_offer_done(st, step, before, bp_background_color(st, el));
     /* CSS 2.1 §E.2's STEP 4, BOTH ARMS. Neither carries the root clause and neither needs one: step 4 walks a
        context's DESCENDANTS and the root element is nothing's descendant. */
     case PAINT_STEP_DESCENDANT_BOX:
-        return bp_background_color(st, el) && bp_border(st, el);
+        return bp_offer_done(st, step, before, bp_background_color(st, el) && bp_border(st, el));
     case PAINT_STEP_DESCENDANT_TABLE_BACKGROUND:
     /* CSS 2.1 §17.5.1 "Table layers and transparency"' SIXTH LAYER — the cells. A cell's background is its own
        box's, which is what makes it the one internal level this mark can place; the four between it and the
        table box are box_paint.h's third residual. */
     case PAINT_STEP_CELL_BACKGROUND:
-        return bp_background_color(st, el);
+        return bp_offer_done(st, step, before, bp_background_color(st, el));
     /* NO MARK LAID — counted as offers and painted nowhere. The four intermediate table background levels are
        box_paint.h's third residual and are a GEOMETRY this engine does not derive. The ONE REMAINING content
        step is step 6's line boxes, which want the ENUMERATION core/paint/paint_order.h's residual (c) names
@@ -1026,19 +1198,20 @@ static bool bp_visit(PaintStep step, lxb_dom_element_t *el, void *user)
        own residual had already recorded the mark as landed while this sentence went on denying it. The step
        is laid below. */
     case PAINT_STEP_INLINE_LINE_BOXES:
-        return true;
+        bp_decline(st, BOX_PAINT_DECLINE_UNBUILT_STEP);
+        return bp_offer_done(st, step, before, true);
     /* CSS 2.1 §E.2's STEP 7.1 — "If the element is a block-level replaced element, then: the replaced
        content, atomically". The ONE producer `bp_replaced_content` is also what item 4's third arm of step
        7.2.1 reaches for an INLINE-level replaced element, and core/paint/paint_order.c's `po_offer_content`
        asks `po_is_inline_level` once and sends each box to exactly one of the two — so the offer is counted
        by `bp_visit` above and never a second time. */
     case PAINT_STEP_REPLACED_CONTENT:
-        return bp_replaced_content(st, el);
+        return bp_offer_done(st, step, before, bp_replaced_content(st, el));
     /* CSS 2.1 §E.2's STEP 7.2 — "Otherwise, for each line box of that element", whose sub-list is step 7.2.1's
        enumeration over the boxes in each of those line boxes. See `bp_line_boxes` for the two shapes of one
        formatting context and `bp_step_7_2_1` for the enumeration and for why it is performed here. */
     case PAINT_STEP_LINE_BOXES:
-        return bp_line_boxes(st, el);
+        return bp_offer_done(st, step, before, bp_line_boxes(st, el));
     case PAINT_STEP_OUTLINES:
         /* A GUARD AND NOT A GAP. `PaintStep` is a closed enum THIS engine writes and paint_order.h states in
            its own outline residual that `PAINT_STEP_OUTLINES` is declared and never offered — so this arm is
@@ -1050,7 +1223,10 @@ static bool bp_visit(PaintStep step, lxb_dom_element_t *el, void *user)
               "diff landed and this one did not. BUILD the outline mark in core/paint/display_list.h beside "
               "the fill, over the three longhands css-ui-4 §3.1 \"Outlines Shorthand: the outline property\" "
               "defines");
-        return false;
+        /* THE RELEASE ARM STOPS THE WALK, which is what it did before this census existed and is the one
+           answer that does not invent ink. It reaches the tail like every other arm so the offer it served
+           lands in `BOX_PAINT_STOPPED` rather than leaving `offers` risen with no outcome behind it. */
+        return bp_offer_done(st, step, before, false);
     }
     /* THE COMPILER IS THE REAL GUARD AND THIS IS ITS BACKSTOP. The switch above carries no `default:` label, so
        `-Wswitch` names THIS FILE at the moment core/paint/paint_order.h grows a step — which is how the eight
@@ -1060,29 +1236,85 @@ static bool bp_visit(PaintStep step, lxb_dom_element_t *el, void *user)
     DFAIL("CSS 2.1 §E.2 \"Painting order\" offered a step whose value is outside core/paint/paint_order.h's "
           "`PaintStep`. A step this painter has no arm for is caught at COMPILE time by -Wswitch, so what "
           "reaches here is not a new step but an out-of-range value");
-    return false;
+    /* AND IT REACHES THE TAIL TOO, for the reason the release arm above states: this line is reachable in a
+       release build, and an offer counted at the top of this function with no outcome recorded for it is the
+       one state `box_paint_stacking_context`'s own assert cannot distinguish from a missing `bp_offer_done`
+       call. There is deliberately no `default:` label on the switch — `-Wswitch` is the real guard and a
+       label would silence it — so this line is where an out-of-range value lands. */
+    return bp_offer_done(st, step, before, false);
 }
 
 bool box_paint_stacking_context(JSContext *ctx, lxb_dom_element_t *context_el, DisplayList *out,
-                                unsigned *offers)
+                                BoxPaintCensus *census)
 {
     BpState st;
+    size_t before;
+    unsigned i, sum = 0;
     bool ok;
 
     DCHECK(out != NULL, "CSS 2.1 §E.2's ink was asked for with no display list to lay it in");
-    DCHECK(offers != NULL,
-           "CSS 2.1 §E.2's ink was asked for with nowhere to report the offer count. A list of zero marks "
+    DCHECK(census != NULL,
+           "CSS 2.1 §E.2's ink was asked for with nowhere to report what the walk did. A list of zero marks "
            "means two things a caller must tell apart — the walk ran and every box it offered was transparent, "
-           "or the walk reached no box at all — and the count is the only thing that separates them, which is "
+           "or the walk reached no box at all — and the census is the only thing that separates them, which is "
            "why it is required rather than optional");
+    memset(census, 0, sizeof *census);
     st.ctx = ctx;
     st.out = out;
-    st.offers = 0;
+    st.census = census;
+    st.why = 0u;
+    before = out->n;
     /* `ctx` and `context_el` are asserted by `paint_order_walk`, which owns both preconditions: the realm
        because Appendix E §E.1's tree order is the shadow-including one, and the stacking context because CSS
        2.1 §E.2 has no painting order for an element that forms none. Restating either here would be a second
        copy of one rule, reported at the caller instead of at the component that depends on it. */
     ok = paint_order_walk(ctx, context_el, bp_visit, &st);
-    *offers = st.offers;
+
+    /* THE PARTS SUM TO THE TOTAL, AND THE TWO SIDES ARE WRITTEN AT DIFFERENT SITES, which is the whole of
+       what makes this a check rather than a restatement. `offers` rises at the TOP of `bp_visit`, before the
+       switch; an outcome is recorded at `bp_offer_done`, which every arm must route through. A `case` added
+       later that returns its producer's answer directly — the shape eleven of the twelve arms here already
+       look like, and therefore the shape the next one will be copied from — raises the first and not the
+       second, and this is the line that says so. It is a DCHECK because both operands are this engine's own
+       arithmetic and the release arm is a census that is short, which is a wrong NUMBER and not a wrong
+       picture. */
+    for (i = 0; i < (unsigned)BOX_PAINT_OUTCOMES; i++) sum += census->outcome[i];
+    DCHECKF(sum == census->offers,
+            "CSS 2.1 §E.2 \"Painting order\"'s walk made %u offer(s) and recorded %u outcome(s) for them. "
+            "core/paint/box_paint.h's four outcomes PARTITION the offers, so a shortfall is an arm of "
+            "`bp_visit` that answered its caller without going through `bp_offer_done` — the offer was "
+            "counted and what became of it was not",
+            census->offers, sum);
+
+    /* AND THE OFFER CENSUS AGAINST THE LIST'S OWN LENGTH, WHICH IS THE ONE OPERAND THIS FILE DOES NOT
+       MAINTAIN. `BOX_PAINT_INKED` is counted by comparing that length across one offer; the length itself is
+       core/paint/display_list.h's. So a mark appended OUTSIDE an offer — by a producer reached from
+       somewhere other than the visitor — raises one and not the other, and an offer credited with ink that
+       appended none raises the other and not the one. Neither is reachable today and neither is asserted
+       anywhere else. */
+    /* IT IS THE ZERO-IFF-ZERO FORM AND NOT `inked <= marks`, WHICH IS FALSE AND WAS WRITTEN HERE FIRST.
+       CSS 2.1 §E.2's step 7.2.1 nests a sub-offer for an inline-level replaced element INSIDE the
+       `PAINT_STEP_LINE_BOXES` offer that is still open, so ONE `DISPLAY_MARK_IMAGE` is ink for two offers and
+       an inequality over the whole walk is off by one per composited inline image. The biconditional
+       survives the nesting exactly — a mark inside a nested offer is a mark inside its parent — and it is
+       the half that catches the state this census exists for. */
+    DCHECKF((out->n > before) == (census->outcome[BOX_PAINT_INKED] > 0u),
+            "CSS 2.1 §E.2 \"Painting order\"'s walk laid %zu mark(s) and credited %u offer(s) with ink, and "
+            "exactly one of those two is zero. Every append this component makes happens inside an offer, so "
+            "ink with no inked offer is a mark laid outside the walk and an inked offer with no ink is an "
+            "offer credited for a length that did not move",
+            out->n - before, census->outcome[BOX_PAINT_INKED]);
+
+    /* AND EVERY REASON IS BOUNDED BY THE OFFER COUNT, which is the ONE arithmetic statement the decline tally
+       admits — they are NOT a partition and do not sum to anything, because one offer is one §E.2 step and a
+       step's sub-list can decline twice. A reason above the offer count would be `bp_decline` having been
+       counted per ITEM somewhere, which is a different population wearing this one's denominator. */
+    for (i = 0; i < (unsigned)BOX_PAINT_DECLINES; i++)
+        DCHECKF(census->decline[i] <= census->offers,
+                "CSS 2.1 §E.2 \"Painting order\"'s walk made %u offer(s) and recorded reason %u against %u "
+                "of them. Each reason counts the OFFERS that met it at least once — `bp_decline` sets a bit "
+                "on a mask `bp_visit` clears per offer — so a count above the offers is that mask having "
+                "been read more than once for one offer",
+                census->offers, i, census->decline[i]);
     return ok;
 }

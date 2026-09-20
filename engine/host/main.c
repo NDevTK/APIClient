@@ -1694,13 +1694,13 @@ QJS_EXPORT const uint8_t *qjs_paint(void)
     g_paint_forced = paint_forced_word(f);
     region = document_paint(g_ctx, g_dom, &g_paint, &g_paint_count);
     g_painted = 1;
-    DCHECKF(region || (g_paint_count.offers == 0u && g_paint_count.marks == 0u &&
+    DCHECKF(region || (g_paint_count.census.offers == 0u && g_paint_count.marks == 0u &&
                        !g_paint_count.complete),
             "core/paint/document_paint.h answered that CSS 2.1 §2.3.1 \"The canvas\" establishes no rendered "
             "region for this document and then reported a walk over it — %u offer(s), %zu mark(s), complete=%d. "
             "The false arm is stated to return before the walk, so a count with anything in it is that entry "
             "having painted a document it had already said has nowhere to be painted",
-            g_paint_count.offers, g_paint_count.marks, g_paint_count.complete ? 1 : 0);
+            g_paint_count.census.offers, g_paint_count.marks, g_paint_count.complete ? 1 : 0);
     return g_paint.px;
 }
 
@@ -1809,7 +1809,7 @@ QJS_EXPORT unsigned qjs_paint_offers(void)
            "what CSS 2.1 §E.2 \"Painting order\"'s walk offered was asked before any walk ran — the register "
            "is written by `qjs_paint` and its zero is that section's answer for a root that generates no box, "
            "so an unwritten one reports a document as empty that was never looked at");
-    return g_paint_count.offers;
+    return g_paint_count.census.offers;
 }
 
 QJS_EXPORT unsigned qjs_paint_marks(void)
@@ -1838,6 +1838,63 @@ QJS_EXPORT int qjs_paint_complete(void)
            "painter that STOPPED, so an unwritten register reports a partial picture for a document that has "
            "no picture at all");
     return g_paint_count.complete ? 1 : 0;
+}
+
+/* AND THE THREE ABOVE BROKEN APART — core/paint/box_paint.h's two populations and the document's own size,
+   which is where a reader stops having to guess what a walk of N offers and no marks MEANT.
+   THE PARTITION AND THE TALLY ARE TWO ENTRIES BECAUSE THEY ARE TWO POPULATIONS, and qjs_abi.h holds the
+   argument: the outcomes sum to the offer count and the reasons do not sum to anything. One indexed register
+   over both would make reading a reason as a share of the offers an INDEX mistake instead of a CALL
+   mistake, which is the difference between a wrong number nobody sees and a compile error.
+   THE INDEX CRASHES RATHER THAN CLAMPING. Both enums are closed lists this engine writes, so an index outside
+   one is this engine's own memory and never a host asking an awkward question — a clamp would answer the last
+   bucket's count under a name the caller chose, which is the plausible-datum shape with a number in it. It is
+   a DCHECK and not a CHECK because the operand is an ABI argument this process's own host composes from an
+   enum it includes, and the release arm reads a bucket that is in range by construction. */
+QJS_EXPORT unsigned qjs_paint_offer_outcome(unsigned outcome)
+{
+    DCHECK(g_painted,
+           "what became of the last render's offers was asked before one was rendered — every bucket of an "
+           "unwritten census answers zero, and a partition that is zero everywhere reads as a walk that made "
+           "no offers rather than as a walk nobody asked for");
+    DCHECKF(outcome < (unsigned)BOX_PAINT_OUTCOMES,
+            "outcome %u was asked of CSS 2.1 §E.2 \"Painting order\"'s census, which holds %u. "
+            "core/paint/box_paint.h's `BoxPaintOutcome` is a CLOSED list this engine writes and every host of "
+            "this ABI includes that header, so an index outside it is this engine's own memory rather than a "
+            "host asking about a bucket that might exist", outcome, (unsigned)BOX_PAINT_OUTCOMES);
+    return g_paint_count.census.outcome[outcome < (unsigned)BOX_PAINT_OUTCOMES ? outcome : 0u];
+}
+
+QJS_EXPORT unsigned qjs_paint_decline(unsigned reason)
+{
+    DCHECK(g_painted,
+           "why the last render's offers laid no ink was asked before one was rendered — zero is a real "
+           "answer for every reason at once (a document each of whose boxes painted), so an unwritten census "
+           "reports that finding for a page nobody painted");
+    DCHECKF(reason < (unsigned)BOX_PAINT_DECLINES,
+            "reason %u was asked of CSS 2.1 §E.2 \"Painting order\"'s census, which holds %u — see the "
+            "outcome entry above for why an index outside a closed enum this engine writes is not a question "
+            "a host can legitimately ask", reason, (unsigned)BOX_PAINT_DECLINES);
+    return g_paint_count.census.decline[reason < (unsigned)BOX_PAINT_DECLINES ? reason : 0u];
+}
+
+QJS_EXPORT unsigned qjs_paint_elements(void)
+{
+    DCHECK(g_painted,
+           "the size of the tree the last render walked was asked before one was rendered — this is the "
+           "DENOMINATOR the offer count is read against, so an unwritten register answers zero and makes "
+           "every walk look like a walk over an empty document");
+    /* AND IT IS AT LEAST ONE WHENEVER THE WALK RAN, WHICH IS NOT THE SAME CLAIM AS THE COUNTER'S OWN. The
+       count is taken over the ROOT's shadow-including inclusive descendants and the root is one of them, so a
+       zero beside a non-zero offer count is a walk that offered steps for a tree holding no element — the two
+       readings of one moment having been taken of two different trees. Zero with zero offers is the arm where
+       CSS 2.1 §2.3.1 "The canvas" establishes no region and neither was ever taken. */
+    DCHECKF(g_paint_count.elements >= 1u || g_paint_count.census.offers == 0u,
+            "CSS 2.1 §E.2 \"Painting order\"'s walk made %u offer(s) over a tree this host counts %u "
+            "element(s) in. Both are readings of the SAME subtree at the SAME instant — the walk's own and "
+            "core/paint/document_paint.c's — so offers over no elements is the pair having been taken of two "
+            "different documents", g_paint_count.census.offers, g_paint_count.elements);
+    return g_paint_count.elements;
 }
 
 /* WHICH WORLD THAT PICTURE IS OF — solver/world.h's `doc:session:serial` for a flow's timeline, or the single

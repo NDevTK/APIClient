@@ -79,6 +79,8 @@
 #include <lexbor/html/html.h>
 
 #include "core/graphics/raster_surface.h"
+#include "core/paint/box_paint.h"   /* `BoxPaintCensus` — what became of each of CSS 2.1 §E.2's offers, and
+                                       why the ones that laid nothing laid nothing */
 #include "quickjs.h"
 
 /* WHAT A PAINT DID, in the four numbers a bitmap cannot state and the one bit that says whether it is whole.
@@ -92,11 +94,36 @@
    It is TRUE for a root that generates no box, whose picture is whole and empty; `offers` is the field that
    separates that from a walk, because a walk over a root always offers at least one step. */
 typedef struct {
-    unsigned offers;
     size_t   marks;
     size_t   spans;
     size_t   pixels;
     bool     complete;
+    /* WHAT BECAME OF EACH OF THOSE OFFERS, and WHY the ones that laid nothing laid nothing —
+       core/paint/box_paint.h's two populations, carried whole rather than summarised. Its own `offers` is the
+       DENOMINATOR of both and is what a caller quoting any of these numbers quotes beside them; a decline
+       reported without it is a numerator alone.
+       THIS STRUCT USED TO CARRY ITS OWN `offers` FIELD BESIDE THE CENSUS AND IT IS DELETED RATHER THAN
+       ASSERTED EQUAL. Two fields holding one fact is the pair that drifts, and an assert between them would
+       have been the vacuous kind — this entry assigned one from the other on the line above it, so the two
+       sides could not disagree under any state of the program. The field that survives is the census's,
+       because the census is where the number is DERIVED. */
+    BoxPaintCensus census;
+    /* AND HOW BIG THE TREE WAS THAT THE WALK RAN OVER, which is the one fact `offers` cannot carry and the
+       one a reader needs most.
+       AN OFFER COUNT IS A STATEMENT ABOUT THE WALK AND THIS IS A STATEMENT ABOUT THE DOCUMENT, taken at the
+       same instant, by the same walker, over the same subtree — DOM §4.8 "Interface ShadowRoot"'s
+       shadow-including inclusive descendants of the root element, which is the population CSS 2.1 §E.2's own
+       walk advances through. Two readings of one moment: a walk offering seven steps over three elements is
+       a document with nothing in it, and a walk offering seven over nine hundred is a walk that reached
+       almost none of a document that HAS something in it, and those take opposite work. Nothing else this
+       entry reports separates them, because every number beside it is the walk's own.
+       IT IS NOT AN ASSERT AND CANNOT BE ONE, which is worth stating so the next reader does not spend a diff
+       trying: no sound inequality holds between the two. Every element may legitimately generate no box
+       (css-display-3 §2.5's `none`, which `po_box_generation` skips WITH its subtree), so the offers may be
+       far below the elements; and CSS 2.1 §E.2's table arm offers SEVEN steps for one `display: table`
+       element while its steps 4 and 7 offer two per in-flow block-level descendant, so the offers may be far
+       above them. The pair is a COMPARISON a reader makes and not a bound this engine may assert. */
+    unsigned elements;
 } DocumentPaintCount;
 
 /* RENDER THE DOCUMENT `dom` PRESENTS, in the realm `ctx`, into `out`, writing what it did to `count`.
