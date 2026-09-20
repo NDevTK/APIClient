@@ -524,7 +524,8 @@ typedef struct {
     SolveDelivered deliv; int deliv_seen; int deliv_runs; char **wit; int nwit, witcap;
     /* THE SEARCH'S RE-INJECTION POINT — the decision state the DETECTING flow stood on when the attacker value
        reached this sink, held so that EVERY candidate of this search REPLAYS that path instead of searching for
-       it again from nothing. One capture, at add_pending; queue_derived asserts it rather than taking a second.
+       it again from nothing. ONE capture (cand_learn_path) and TWO doors onto it — a DETECTION, and the
+       arrival of this search's own context probe, which is the only one a cold-resumed session reaches.
        WHY EVERY CANDIDATE AND NOT ONLY THE DERIVED ONES. A candidate with no path must find, among a fork tree
        as deep as the document's gate sequence, the one arm that reaches the sink — and it pays that in full
        whatever seeded it. Measured on the shipped artifact with K independent concolic gates in front of one
@@ -1145,6 +1146,89 @@ static void cand_learn_root(Cand *e, const char *root) {
                 (unsigned)declared_byte_refused(&e->deliv, concolic_source_encodes(e->root)));
 }
 
+/* HAS THIS SEARCH ALREADY FIRED? — DERIVED from the finding store rather than latched beside it, because that
+   store IS where a fire is recorded (record_sink) and a second copy of one fact is the copy that drifts. The
+   comparison is record_sink's own dedup comparison, which is what makes the two unable to disagree.
+   IT REPLACES A PROXY THE COLD TIER FALSIFIES. "Is this search closed" was read two ways, both of them sound
+   for a search this session DETECTED and neither for one it RESUMED: off `reinject == NULL`, which a resumed
+   search is BORN holding, and off `cand_has_escape`, which a resumed search never holds at all because its
+   payload rides the resumed FLOW and has no row in `pl` (cand_kind_of says so in its own note). Asked of the
+   fire itself, the question has one answer for both doors. */
+static int search_solved(const Cand *e) {
+    DCHECK(e != NULL && e->src != NULL,
+           "the solved question was asked of no search, or of one with no injection identity — the finding "
+           "store is keyed by (class, source) and a search with no source could not be found in it, so the "
+           "answer would be a confident `no` about a search that may well have fired");
+    for (int i = 0; i < g_sinks_n; i++)
+        if (g_sinks[i].cls == e->sink && !strcmp(g_sinks[i].source, e->src)) return 1;
+    return 0;
+}
+
+/* THE SEARCH TAKES THE PATH OF A FLOW STANDING AT ITS SINK — the ONE capture, reached from the TWO doors at
+   which a flow demonstrably stands there having got there with this source, rather than from the one door a
+   cold-resumed session never takes.
+   THE SECOND DOOR IS THIS SEARCH'S OWN CONTEXT PROBE COMING BACK. add_pending is a DETECTION and a verifying
+   flow does not detect, so in a session whose only arrivals at this sink are RESUMED CANDIDATES the capture
+   never happened and `reinject` stayed NULL for the life of the search. `search_seeds` reads that NULL, and
+   record_sink is entitled to make it read that way — its own words are "CLEARING IT IS WHAT CLOSES THE
+   SEARCH". So a resumed search was BORN in the state a fired one is LEFT in, and nothing anywhere told the
+   two apart: the value that means CLOSED is also the value a fresh entry starts at.
+   WHAT IT COST WAS THE WHOLE OUTPUT OF A RESUMED SEARCH. queue_derived's first line is `if (!search_seeds(e))
+   return;`, so every escape the derivation constructed from the resumed probe's witness was dropped in
+   silence; derive_from_witness's own assert caught it in dev, and in release the report stated
+   `probes == payloads`, which solve.h defines as the positive statement that this source can carry no exit
+   from the state its bytes landed in — a false-safe @S verdict on a resumed search. MEASURED on a park/resume
+   pair, 3/3 with zero spread: the park control never reaches that assert and the resume always does, and a
+   residue cut to the parked ESCAPE candidates alone resumes clean and FIRES while one cut to the parked
+   CONTEXT-PROBE candidates alone reproduces — which is what says the door is the witness arrival rather than
+   the candidate arm.
+   IT IS SOUND FOR THE REASON THE FIRST DOOR IS, AND THE FIELD ALREADY STATED IT: "Both demonstrably reach this
+   sink with this source, which is the only property a replayed path has to have." A resumed candidate flow
+   standing at this sink is one more such flow, and the field's own note calls that no new capability at all —
+   "the one cold_resume performs every time it brings one back".
+   IT CANNOT RE-OPEN A SEARCH THAT FIRED, which is the one thing a second door must not do. The probe's OTHER
+   arms keep arriving after a fire (queue_derived says so), so a capture guarded only on `reinject == NULL`
+   would hand a closed search a fresh path and it would seed again. The guard is therefore the FIRE, asked of
+   the store, so record_sink's release stays the closure rather than becoming one of two things that have to
+   agree.
+   IT PUSHES NOTHING, which is what keeps it out of solve_resume_candidate's way: that door declines to call
+   add_pending precisely because opening a search SEEDS it, and a resumed search's probes are already running
+   as flows. This takes the path and only the path. */
+static void cand_learn_path(Cand *e) {
+    DCHECK(e != NULL, "a re-injection point was taken for no search");
+    if (e->reinject) return;       /* the one capture has happened, at whichever door reached it first */
+    if (search_solved(e)) return;  /* a solved search seeds no further candidates — see record_sink */
+    e->reinject = decide_freeze_path();
+    /* AND HOW MANY ARMS THAT PATH HOLDS, TAKEN HERE BECAUSE THIS IS WHERE THE PATH EXISTS AND IS OWNED. It is
+       a SIZE fixed from this instant (decide.h's `entries`), it is the whole of what `runwayArms` reports,
+       and it is stored rather than re-derived because record_sink gives the blob back at the fire — a length
+       read at the emitter would be 0 for exactly the searches that succeeded.
+       IT PROMOTES NOTHING, WHICH IS A QUESTION THIS LINE HAD TO ANSWER RATHER THAN A REASSURANCE: the
+       accessor's null guard is an always-fatal CHECK, so a NULL blob here would be a release-mode abort where
+       a DCHECK is the only thing that looks today. decide_freeze_path cannot hand one over — it CHECKs its own
+       allocation and returns that pointer unconditionally — so the argument is non-NULL by construction and
+       this call adds no failure mode to a release build.
+       AND A CHAIN OF ZERO LENGTH IS A LEGITIMATE ANSWER AND NOT ONE TO ASSERT AGAINST. A flow that has
+       decided nothing freezes a blob whose segment is absent, which the accessor reports as 0 entries — that
+       is exactly the `runwayArms:0` reading, so a DCHECK demanding a nonzero here would abort on the one
+       state this field was added to be able to state. */
+    {
+        long arms = 0;
+        DCHECK(e->reinject_len == 0,
+               "a search's recorded path length was written twice — the pointer tested above is what makes "
+               "this the ONE capture, so a second write means this entry reached the capture holding no path "
+               "while a length from an earlier one still stood, and that first value described a path this "
+               "search no longer stands on");
+        decide_blob_stats(e->reinject, &arms, NULL);
+        DCHECK(arms >= 0 && arms <= 0x7fffffff,
+               "a frozen decision path reports a length that is not a count of slots — `runwayArms` is read "
+               "as whether this search offered its candidates any arm at all, so a negative value or one "
+               "truncated by the store would publish that answer on something that is not a length, and 0 is "
+               "the reading the whole pair turns on");
+        e->reinject_len = (int)arms;
+    }
+}
+
 /* A DETECTED SINK OPENS ITS SEARCH. A single-context class states its breakouts; every other class states the
    probe whose run the derivation reads its context from. */
 static void add_pending(const char *src, const char *root, int sink) {
@@ -1210,9 +1294,12 @@ static void add_pending(const char *src, const char *root, int sink) {
        from the vector — the recorded arms only replay the decisions the payload does not make. What differs is
        WHOSE path it is: the detecting flow's rather than the probe's. Both demonstrably reach this sink with
        this source, which is the only property a replayed path has to have.
-       THIS IS THE ONLY CAPTURE. queue_derived's `if (!e->reinject) e->reinject = decide_freeze_path()` is gone
-       with it, so there is one freeze, one owner and one release rather than two sites that had to agree about
-       which path wins — and the field is now unambiguous enough to answer a second question (search_seeds). */
+       THIS IS THE ONLY CAPTURE AND IT IS NO LONGER THE ONLY DOOR ONTO IT. queue_derived's `if (!e->reinject)
+       e->reinject = decide_freeze_path()` is gone, so there is one freeze, one owner and one release rather
+       than two sites that had to agree about which path wins — and the capture itself now lives in
+       cand_learn_path, which BOTH doors call: this one, and the arrival of a resumed search's own context
+       probe. A session whose only arrivals at this sink are RESUMED CANDIDATES never reaches this line at
+       all, and that is the whole of what the second door is for. */
     DCHECK(flow_running() != NULL,
            "an attacker source reached a sink with no flow running — a concolic value is minted by a flow and "
            "carried by one, so there is no route to this line from outside the scheduler, and the path about to "
@@ -1227,34 +1314,7 @@ static void add_pending(const char *src, const char *root, int sink) {
        latch, so that "no flow is running here" aborts as the invariant it is instead of being spent as a
        silently-skipped payment. */
     flow_credit_emit(1.0);
-    e->reinject = decide_freeze_path();
-    /* AND HOW MANY ARMS THAT PATH HOLDS, TAKEN HERE BECAUSE THIS IS WHERE THE PATH EXISTS AND IS OWNED. It is
-       a SIZE fixed from this instant (decide.h's `entries`), it is the whole of what `runwayArms` reports,
-       and it is stored rather than re-derived because record_sink gives the blob back at the fire — a length
-       read at the emitter would be 0 for exactly the searches that succeeded.
-       IT PROMOTES NOTHING, WHICH IS A QUESTION THIS LINE HAD TO ANSWER RATHER THAN A REASSURANCE: the
-       accessor's null guard is an always-fatal CHECK, so a NULL blob here would be a release-mode abort where
-       the DCHECK twenty lines down is the only thing that looks today. decide_freeze_path cannot hand one
-       over — it CHECKs its own allocation and returns that pointer unconditionally — so the argument is
-       non-NULL by construction and this call adds no failure mode to a release build.
-       AND A CHAIN OF ZERO LENGTH IS A LEGITIMATE ANSWER AND NOT ONE TO ASSERT AGAINST. A flow that has
-       decided nothing freezes a blob whose segment is absent, which the accessor reports as 0 entries — that
-       is exactly the `runwayArms:0` reading below, so a DCHECK demanding a nonzero here would abort on the
-       one state this field was added to be able to state. */
-    {
-        long arms = 0;
-        DCHECK(e->reinject_len == 0,
-               "a search's recorded path length was written twice — the freeze above is the ONE capture and "
-               "the `opened` latch is what makes it one, so a second write means this entry reached the "
-               "capture again and the first value described a path this search no longer stands on");
-        decide_blob_stats(e->reinject, &arms, NULL);
-        DCHECK(arms >= 0 && arms <= 0x7fffffff,
-               "a frozen decision path reports a length that is not a count of slots — `runwayArms` is read "
-               "as whether this search offered its candidates any arm at all, so a negative value or one "
-               "truncated by the store below would publish that answer on something that is not a length, "
-               "and 0 is the reading the whole pair turns on");
-        e->reinject_len = (int)arms;
-    }
+    cand_learn_path(e);
     sc = sink_class(sink);
     /* A SINGLE-CONTEXT CLASS'S WRITTEN-DOWN VECTORS ARE ATTACKS, which is what `probes:0` beside a non-empty
        list states and what used to be spelled by leaving `nprobe` at 0 for this arm. Said rather than
@@ -1432,12 +1492,17 @@ static void detect_sink(JSValueConst arg, int cls) {
 }
 
 /* DOES THIS SEARCH STILL SEED? — asked by the two callers that would otherwise each spell the answer, and the
- * re-injection point IS the answer rather than a proxy for it. A search holds a path from the moment detection
- * opens it (add_pending) until record_sink CLOSES it at the fire, and the two things record_sink does there are
- * one statement: it releases the path because "a solved search seeds no further candidates", and this is what
- * makes that sentence true instead of hoped. The third door agrees without an exception being written for it —
- * a cold-resumed entry (solve_resume_candidate) holds no path OF ITS OWN and seeds nothing through this file,
- * because its candidates come back as FLOWS rather than as payloads.
+ * re-injection point IS the answer rather than a proxy for it. A search holds a path from the moment a flow
+ * STANDING AT ITS SINK gives it one (cand_learn_path) until record_sink CLOSES it at the fire, and the two
+ * things record_sink does there are one statement: it releases the path because "a solved search seeds no
+ * further candidates", and this is what makes that sentence true instead of hoped.
+ * THE THIRD DOOR USED TO BE SAID TO AGREE WITHOUT AN EXCEPTION BEING WRITTEN FOR IT, AND IT DID NOT. That
+ * sentence read "a cold-resumed entry (solve_resume_candidate) holds no path OF ITS OWN and seeds nothing
+ * through this file, because its candidates come back as FLOWS rather than as payloads" — true of the ENTRY
+ * the resume creates, and the wrong verdict about the SEARCH, because a resumed search derives too. Its own
+ * context probe comes back, the derivation constructs this state's exits from the witness, and every one of
+ * them was dropped here. The capture is no longer detection's alone, so the resumed entry now acquires a path
+ * at whichever moment comes first and holds one whenever it has anything to seed.
  * THAT IS A STATEMENT ABOUT THE RESUME AND NOT ABOUT THE ENTRY, and the difference is the whole of what
  * add_pending's `opened` latch fixed. A resumed entry acquires a path the moment an EXPLORATION flow of this
  * session detects the same sink — which is a detection like any other and opens the search like any other —
@@ -1466,18 +1531,23 @@ static void queue_derived(void *user, const char *breakout) {
        so without this a breakout appended then was seeded on the next drain with the path already released. */
     if (!search_seeds(e)) return;
 
-    /* THE CAPTURE IS NOT HERE, AND THE ASSERT IS WHAT SAYS SO. This used to hold `if (!e->reinject) e->reinject
-       = decide_freeze_path();` — the search's ONLY path, taken at the moment a derivation happened — and that
-       is the site that has moved to add_pending, because a re-injection point is a fact about the search rather
-       than about the derivation and the DETECTING flow already stood at this sink holding it. A second capture
-       here would leak the first blob's segment reference and would replace a path that reached the sink with
-       another that also did, which is not an improvement to trade a leak for; with one capture there is no
-       second reference to release and no ordering between two of them to get wrong. */
-    DCHECK(e->reinject != NULL,
-           "a breakout was derived for a search that holds no re-injection point — add_pending takes one at the "
-           "moment the sink is detected, so a search reaching a derivation without one was opened by some other "
-           "door, and this breakout would be seeded to re-search the document's whole gate tree for an arm the "
-           "detection and the probe have each already taken");
+    /* THE CAPTURE IS NOT HERE, AND IT IS NOT add_pending's ALONE EITHER. This used to hold `if (!e->reinject)
+       e->reinject = decide_freeze_path();` — the search's ONLY path, taken at the moment a derivation happened
+       — and it moved out because a re-injection point is a fact about the SEARCH rather than about the
+       derivation. What was wrong with where it moved TO is that detection was made the only door, and a
+       cold-resumed search is never detected: derive_from_witness now takes it through cand_learn_path, one
+       call above the derivation whose output this receives, so by the time a breakout arrives here the search
+       that is going to hold it has a path. A second capture here would still leak the first blob's segment
+       reference and would still replace a path that reached the sink with another that also did; the single
+       capture is what makes neither possible, and it is now stated by the pointer rather than by a latch.
+       AND THE `DCHECK(e->reinject != NULL, ...)` THAT STOOD HERE IS DELETED BECAUSE IT COULD NOT FAIL. Its
+       condition is `search_seeds(e)`, spelled out, and the line two above returns when that is false — so the
+       assert was provably true at every reachable state of the program, which is a NON-check wearing a
+       check's syntax and produces a reassuring transcript rather than a guarantee. Its stated reason had
+       also gone wrong in the other direction: it said a search reaching a derivation with no path "was opened
+       by some other door", and the door it could not name was the cold tier's, where that is the NORMAL state
+       and not a corruption. What the assert was reaching for is checked one frame up, where it can actually
+       fail: derive_from_witness's own hand-off assert. */
     /* THE TWO-SIDED HALF OF THE CONSTRAINT. The derivation is handed this search's table and constructs within
        it (solve_html.c / solve_js.c decline at their own emitters), so a breakout arriving here carrying a
        byte the table says does not deliver is a derivation that read the constraint and ignored it — and what
@@ -1562,9 +1632,17 @@ static void learn_witness(Cand *e, const char *out) {
    CONSTRUCTED and the search never received leaves a list of nothing but instruments, which the report states
    as `probes == payloads` — read as "this search has built no escape", the state a reader takes to mean the
    source cannot carry an exit from the state its bytes are in. queue_derived has exactly one door that drops
-   (a search closed by a fire between the derivation and
-   the push), and a search that fired holds the breakout that fired it, so the implication holds with no
-   exception written for it. */
+   — a search CLOSED BY A FIRE between the derivation and the push — and the implication below is written
+   against that door and no other.
+   IT USED TO BE WRITTEN AGAINST A PROXY, AND THE COLD TIER FALSIFIED THE PROXY TWICE. The sentence here read
+   "a search that fired holds the breakout that fired it, so the implication holds with no exception written
+   for it", and both halves fail for a search this session RESUMED rather than detected. It held no path from
+   BIRTH and not only after a fire, because the capture was detection's alone and a verifying flow does not
+   detect — so the drop door stood open before anything had fired, and every escape this derivation built was
+   discarded in silence. And when a resumed search DOES fire, its payload rode the resumed FLOW and has no row
+   in `pl` at all (cand_kind_of), so it holds no breakout to show for it and `cand_has_escape` answers `no`
+   about a search that is solved. The first is repaired at the root by cand_learn_path below; the second by
+   asking the FIRE rather than the list, which is what `search_solved` is. */
 static void derive_from_witness(Cand *e) {
     int derive, built = 0;
 
@@ -1572,6 +1650,15 @@ static void derive_from_witness(Cand *e) {
            "a derivation was asked to run on a search that holds no witness — the witness is the string the "
            "context probe's own run handed this sink, so without one there is no observation to read a state "
            "off and the re-derivation would be a static shape of the expression");
+    /* THE SECOND DOOR ONTO THE ONE CAPTURE — see cand_learn_path. A witness exists only because one of this
+       search's own candidate flows reached this sink carrying the context probe, and learn_witness has just
+       asserted the turn that produced it — so a flow is standing here having got here with this source, which
+       is the only property a replayed path has to have. For a search this session DETECTED this is a no-op,
+       because add_pending already took the path; for one it RESUMED it is the only capture there is, and
+       without it every escape built below is dropped by queue_derived's first line. It is taken BEFORE the
+       derivation rather than after, because what needs it is the hand-off this function's own assert checks:
+       a search that cannot seed cannot receive what its probe just taught it. */
+    cand_learn_path(e);
     derive = sink_class(e->sink)->derive;
     /* THE ASSERT STAYS A `DCHECK` AND THE DISPATCH BELOW STOPS BEING AN `else`, WHICH ARE TWO DIFFERENT
        ANSWERS TO THE SAME OBJECTION. The state this guards is a fact about the SINKS table, and that table is
@@ -1595,12 +1682,15 @@ static void derive_from_witness(Cand *e) {
         if      (derive == SINK_DERIVE_HTML) built += solve_html_breakouts(e->wit[i], &e->deliv, queue_derived, e);
         else if (derive == SINK_DERIVE_JS)   built += solve_js_breakouts(e->wit[i], &e->deliv, queue_derived, e);
     }
-    DCHECK(built == 0 || cand_has_escape(e),
+    DCHECK(built == 0 || cand_has_escape(e) || search_solved(e),
            "a derivation constructed an escape that this search does not hold — the constructed count and the "
            "search's own payload list are the two ends of one hand-off, so a search left holding nothing but "
            "its probes after a derivation that built something has DROPPED it, and the report would state "
            "`probes == payloads` — which a reader takes as the positive statement that this source can carry no "
-           "exit from the state its bytes landed in");
+           "exit from the state its bytes landed in. The third term is the ONE drop this is not: a search "
+           "closed by a fire seeds nothing further by design, and a RESUMED one that fired holds no row in "
+           "`pl` to show for it, so the list is a proxy for closure that answers `no` about a solved search "
+           "and the fire is the fact");
 }
 
 /* WHICH OF THE BYTES THIS SOURCE'S COMPONENT PERCENT-ENCODES ACTUALLY REACHED THE SINK — §@S(2)'s
@@ -2582,15 +2672,16 @@ int solve_seed_candidates(JSContext *ctx) {
                DETECTION, when this problem does not arise" — and that last clause is the part measurement
                contradicts. A vector seeded at detection re-forks the document's whole gate tree exactly as a
                probe does (see the field's own note for the numbers); what a single-context class lacks is a
-               DERIVATION, never a path. add_pending now takes the path for every search at the one moment a
-               flow stands at the sink, so there is nothing left to select between and a NULL here is a search
-               opened by a door this file does not have. */
+               DERIVATION, never a path. cand_learn_path takes the path for every search at the moments a flow
+               stands at the sink — a detection, and this search's own context probe coming back — so there is
+               nothing left to select between and a NULL here is a search opened by a door this file does not
+               have. */
             {
                 DCHECK(e->reinject != NULL,
-                       "a candidate is being seeded for a search that holds no re-injection point — every "
-                       "search is opened by add_pending, which freezes the detecting flow's path before it "
-                       "pushes the first breakout, so a payload list with no path behind it belongs to an "
-                       "entry that acquired breakouts without ever being detected");
+                       "a candidate is being seeded for a search that holds no re-injection point — both "
+                       "doors onto a search freeze the path of the flow standing at its sink before anything "
+                       "can be queued against it, so a payload list with no path behind it belongs to an "
+                       "entry that acquired breakouts without either a detection or a witness");
                 DCHECK(f->dec_blob == NULL && f->pin_blob == NULL && !f->started,
                        "a freshly added flow already carries decision state — the re-injection install below "
                        "would overwrite it and drop that segment's reference, and the flow would replay a path "
