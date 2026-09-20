@@ -7863,6 +7863,180 @@ bool idl_member_exposed_in_realm(JSContext *ctx, const char *member)
     return (r->set & realm_global_names(ctx)) != 0u;
 }
 
+/* ---- WEB IDL §3.7.3's NOT-[Global] ARM, AS THE OBJECT AN INSTALL ASKS FOR ---------------------------------
+ *
+ * WHICH OBJECT A MEMBER GOES ON IS §3.7.3's OWN CONDITIONAL AND NEVER A REALM TEST — "If interface is not
+ * declared with the [Global] extended attribute, then: Define the regular attributes of interface on
+ * interfaceProtoObj, given realm", against §3.8 Platform objects implementing interfaces' other arm, "If
+ * interface is declared with the [Global] extended attribute, then: Define the regular operations of
+ * interface on instance, given realm". A component that owns a MIXIN member has to ask it in every realm,
+ * because §2.3 Interface mixins makes that member the INCLUDING interface's own and the including interface
+ * differs by realm: HTML §8.2 The WindowOrWorkerGlobalScope mixin is included by `Window`, which IS [Global],
+ * and by `WorkerGlobalScope`, which is NOT.
+ *
+ * IT ASKS THE GENERATED BAND AND NEVER A REALM KIND, WHICH IS THE WHOLE OF WHY IT EXISTS RATHER THAN THE FIVE
+ * LINES EACH COMPONENT WAS WRITING. `if (a worker prototype exists) … else … the global` is a HAND-PICKED LIST
+ * OF REALM KINDS wearing a routing costume: it answers correctly for the two realms this engine builds today
+ * and installs onto the GLOBAL in a ServiceWorker, SharedWorker or Worklet realm, each of which
+ * browser/idl_exposure.h already carries an IDL_GLOBALS row for and none of whose bands contains `crypto`,
+ * `performance` or `indexedDB`. The band is derived from the harvested IDL by engine/idlgen.mjs, so the
+ * question cannot drift from the corpus and no component has to know which realm kinds exist.
+ *
+ * IT DOES NOT DECIDE §3.3.7 STEP 1, which is asked at idl_global_member_refused below and asserted there
+ * against both tables. A member this realm does not expose keeps the GLOBAL as its target and is refused at
+ * that door; answering it here would put one algorithm in two places and give the refusal two spellings.
+ *
+ * THE ANSWER IS REGISTERED DATA BECAUSE OF THE LAYERING, not because a call would be awkward. A worker
+ * realm's object is `WorkerGlobalScope.prototype`, which core/workers/worker_global_scope.c builds, and
+ * core/ may not include core/workers/ — that inverts the dependency and makes every host that installs an
+ * attribute link the worker layer. So the owning component hands over a REALM-AWARE FUNCTION, exactly as
+ * core/events/event_target.h's event_target_set_worker_global_scope_terms already hands that component's
+ * brand to a layer that must not name it, and for the same reason the registration is AGENT-SCOPED: the
+ * function answers JS_UNDEFINED in a realm that has no such object, so one registration serves every realm.
+ *
+ * ONE REGISTRATION IS THE WHOLE ANSWER ONLY WHILE ONE NON-[Global] ANCESTOR CAN REACH THIS CALL, WHICH IS A
+ * FACT ABOUT THE CORPUS AND NOT A CHOICE HERE. Derived from the harvested IDL through webidl2, the deepest
+ * [Global] chain is `DedicatedWorkerGlobalScope : WorkerGlobalScope : EventTarget` — TWO non-[Global]
+ * ancestors, so the outer one is real. EventTarget's three members never arrive here: core/events/
+ * event_target.c defines them only on `EventTarget.prototype`, and browser/idl_exposure.h's
+ * IDL_PROTOTYPE_ONLY names them as never-own-anywhere for every realm. A SECOND registration is therefore the
+ * day that stops being true, and it aborts naming both claimants rather than replacing the first.
+ *
+ * NAMED RESIDUAL. NOT COVERED: the registry is keyed on the REALM and not on the interface that DECLARES the
+ * member, so a realm with two reachable non-[Global] ancestors cannot be served — the second would have to
+ * pick between two prototypes and this call has nothing to pick with. NEXT DIFF: the DATUM, not the
+ * transport, because the transport already exists twice over and naming it as the work would send a reader to
+ * build what is there. core/realm.h's realm_note_interface_prototype_object already records every §3.7.3
+ * prototype a realm builds BY IDENTIFIER, and realm_interface_prototype_object hands it back — so the object
+ * for ANY declaring interface is one call away and no registration is needed at all. What is missing is which
+ * interface to ask for: engine/idlgen.mjs emits the per-[Global] own bands and nothing that maps a MEMBER to
+ * the interface that DECLARES it, so the next diff is that table, after which this call reads it and asks the
+ * realm rather than reading a registered function. Both halves are gated on one more thing, which
+ * core/workers/worker_global_scope.h already names: that census is `#if APICLIENT_DEV`, so a release build
+ * cannot reach a realm's prototype by name and the registration below is what a release build has.
+ * HOW ITS ABSENCE WOULD SHOW: the duplicate-registration DCHECKF below fires at agent declaration, naming the
+ * two interfaces, before any realm is built. */
+static JSValue (*g_ancestor_proto_of_realm)(JSContext *ctx);
+static IdlThisIs   g_ancestor_this_is;
+static const char *g_ancestor_iface;
+
+void idl_set_global_ancestor_terms(JSValue (*proto_of_realm)(JSContext *ctx), IdlThisIs this_is,
+                                   const char *iface)
+{
+    DCHECK((proto_of_realm == NULL) == (this_is == NULL),
+           "Web IDL §3.7.3's not-[Global] terms were registered with an object and no brand or the other way "
+           "round — §3.7.6 Attributes' create an attribute setter step 1.1.2.3 asks whether the receiver "
+           "implements `target`, and on this arm `target` is the DECLARING interface, so the object and the "
+           "predicate that answers for it are one fact and are stated together or not at all");
+    DCHECK((proto_of_realm == NULL) == (iface == NULL),
+           "Web IDL §3.7.3's not-[Global] terms were registered with a function and no interface identifier "
+           "or the other way round — the identifier is what the duplicate-registration abort names, so a pair "
+           "with one half missing is a claimant that cannot be reported");
+    if (proto_of_realm != NULL)
+        DCHECKF(g_ancestor_proto_of_realm == NULL,
+                "`%s` has already registered Web IDL §3.7.3's interface prototype object for this agent and "
+                "`%s` is registering a second — the registry is keyed on the REALM rather than on the "
+                "interface that DECLARES a member, so it can serve exactly one reachable non-[Global] "
+                "ancestor. That was a fact about the corpus and it has stopped being one. DO NOT ADD A SECOND "
+                "SLOT: core/realm.h's realm_interface_prototype_object already hands back this realm's §3.7.3 "
+                "prototype for ANY identifier, so what is missing is the map from a MEMBER to the interface "
+                "that DECLARES it — engine/idlgen.mjs emits the per-[Global] own bands and not that one. "
+                "Build it, read it here, and ask the realm; the named residual above this function states the "
+                "one thing that still gates it, which is that the census is dev-only",
+                g_ancestor_iface, iface);
+    else
+        DCHECK(g_ancestor_proto_of_realm != NULL,
+               "Web IDL §3.7.3's not-[Global] terms were cleared twice — the registration is agent-scoped and "
+               "its owner clears it at release, so a second clear is a second owner");
+    g_ancestor_proto_of_realm = proto_of_realm;
+    g_ancestor_this_is = this_is;
+    g_ancestor_iface = iface;
+}
+
+JSValue idl_global_member_target_at(JSContext *ctx, JSValueConst global, const char *name,
+                                    const char *at_file, int at_line)
+{
+    JSValue proto;
+
+    DCHECK(at_file != NULL,
+           "a member asked Web IDL §3.7.3 for its object with no install site — idl_args.h's IDL_SITE macro "
+           "is what supplies it at the call, and the abort below names that site because this function has "
+           "one caller per member and a line here would name none of them");
+    DCHECK(name != NULL && *name,
+           "Web IDL §3.7.3's conditional was asked about no member — both of its arms are keyed on the "
+           "generated band, which is a table of member NAMES and has nothing else to look a member up by");
+    DCHECK(idl_target_is_realm_global(ctx, global),
+           "Web IDL §3.7.3's conditional was asked with something that is not this realm's global object — "
+           "the question it answers is which of TWO objects a member goes on, and the [Global] arm's object "
+           "is the realm's global by definition, so a caller holding anything else has already decided");
+
+    /* §3.3.7 step 1 is NOT asked here. A member this realm does not expose keeps the global and meets
+       idl_global_member_refused, which is where that step lives and where both generated tables are asserted
+       to agree about the refusal. */
+    if (!idl_member_exposed_in_realm(ctx, name)) return JS_DupValue(ctx, global);
+
+    /* §3.8's arm — this realm's own [Global] interface declares the member, so §3.8 WRITES it onto the
+       instance and the global is the target. idl_global_member_refused asserts the same band positively at
+       the door, so the two are one question asked twice rather than two answers that can disagree. */
+    if (idl_realm_global_declares(ctx, name)) return JS_DupValue(ctx, global);
+
+    /* §3.7.3's arm. */
+    proto = (g_ancestor_proto_of_realm != NULL) ? g_ancestor_proto_of_realm(ctx) : JS_UNDEFINED;
+    if (JS_IsObject(proto)) {
+#if APICLIENT_DEV
+        /* AND THE OBJECT IS THE ONE THIS REALM BUILT FOR THE INTERFACE THE REGISTRATION NAMES, which is the
+           half the PLAIN-accessor arm had nobody to ask. idl_check_proto_target makes this check and is
+           reached only from idl_install_replaceable_on_at, the form that CARRIES an identifier — so a member
+           installed through idl_install_accessor onto a §3.7.3 prototype was asserted by nothing at all:
+           §3.7.6's `target` is "the definition whose members are being defined on this object", and with no
+           identifier at the call there was no second side for the object to be asked against. Here there is
+           one, because the registration states both, and core/realm.h's census answers by identifier.
+           THE POPULATION IT COVERS IS THE ONE THAT REACHES THIS ARM AT ALL, which is every member a component
+           places through this resolver — so the two arms of §3.7.3's conditional are now each two-sided: the
+           [Global] one at idl_global_member_refused's positive band assert, this one here. */
+        JSValue recorded = realm_interface_prototype_object(ctx, g_ancestor_iface);
+
+        DCHECKF(JS_IsObject(recorded) && JS_IsSameValue(ctx, recorded, proto),
+                "%s:%d asked Web IDL §3.7.3 which object `%s` goes on, and the function registered for `%s` "
+                "answered an object this realm did not build as that interface's §3.7.3 Interface prototype "
+                "object — core/realm.h's census records every one a realm builds BY IDENTIFIER, so the "
+                "identifier the registration states and the object its function returns are one fact asked "
+                "two ways. Either the registered function reads the wrong slot, or the component that builds "
+                "`%s`'s prototype has not run in this realm yet, which is core/platform.c's DECLARATION order "
+                "and is what core/workers/worker_global_scope.c's banner over `g_dwgs_class` calls (a): the "
+                "registering row must stand AHEAD of every row that owns one of this interface's members",
+                at_file, at_line, name, g_ancestor_iface, g_ancestor_iface);
+        JS_FreeValue(ctx, recorded);
+#endif
+        return proto;
+    }
+    JS_FreeValue(ctx, proto);
+
+    /* THE RELEASE ARM RETURNS THE GLOBAL, which is byte-identical to what every caller did before this
+       function existed — so a release build's program is unchanged for exactly the population this abort
+       names, and §THE-ARM-BENEATH-A-DFAIL's question (what state does this leave a sibling component in) has
+       the answer `the one it already had`. */
+    DFAILF("%s:%d asks Web IDL §3.7.3 which object `%s` goes on in a realm whose §3.3.8 [Global] interface is "
+           "`%s`, and the answer is neither of the two this engine can name. `%s` is exposed in this realm — "
+           "§3.3.7 [Exposed] step 1 answered true above — and browser/idl_exposure.h's IDL_GLOBALS band for "
+           "`%s` does NOT declare it, so §3.8's \"Define the regular operations of interface on instance\" "
+           "arm cannot place it and §3.7.3's \"If interface is not declared with the [Global] extended "
+           "attribute\" arm must: it belongs on the interface prototype object of a NON-[Global] ANCESTOR, "
+           "and this agent has %s. REGISTER ONE. The owning component calls idl_set_global_ancestor_terms "
+           "with a realm-aware function returning that object, the way core/workers/worker_global_scope.c "
+           "does for `WorkerGlobalScope` — and if the ancestor this member needs is a SECOND one, that "
+           "registration aborts instead, which is the per-ancestor band named in the residual over this "
+           "function. THE SHAPE THAT PRODUCES THIS IS A REALM KIND THIS ENGINE HAS AN IDL_GLOBALS ROW FOR AND "
+           "NO COMPONENT BUILDING ITS ANCESTOR'S PROTOTYPE — ServiceWorkerGlobalScope, SharedWorkerGlobalScope "
+           "and the four WorkletGlobalScope rows are all in that state, and every one of them inherits a "
+           "non-[Global] ancestor whose members this band correctly refuses",
+           at_file, at_line, name, idl_realm_global_interface(ctx), name, idl_realm_global_interface(ctx),
+           (g_ancestor_proto_of_realm == NULL)
+               ? "registered none at all"
+               : "registered one whose function answered no object in this realm");
+    return JS_DupValue(ctx, global);
+}
+
 /* WEB IDL §3.7.6 Attributes' "If attr is not exposed in realm, then continue." AND §3.7.7 Operations' "If op
    is not exposed in realm, then continue.", as the one question every member-placing entry in this file asks
    before it builds anything.
@@ -7999,14 +8173,19 @@ static bool idl_global_member_refused(JSContext *ctx, JSValueConst target, const
             "EXISTS: `%s` may be declared by a NON-[Global] ANCESTOR of `%s`, whose §3.7.3 Interface "
             "prototype object is a DIFFERENT object — and §3.7.3's own arm, \"If interface is not declared "
             "with the [Global] extended attribute, then: Define the regular attributes of interface on "
-            "interfaceProtoObj, given realm\", is what places it there. Ask the component that BUILDS that "
-            "prototype for the object (core/workers/worker_global_scope.c's worker_global_scope_proto is the "
-            "one such entry today) and install onto whichever object you get: a plain readonly attribute "
-            "through idl_install_accessor, a [Replaceable] one through idl_install_replaceable_on, which "
-            "takes the declaring interface's own receiver predicate as §3.7.6's `target`. THIS SENTENCE USED "
-            "TO CALL THAT AN UNBUILT CAPABILITY and to send its reader to that file's banner to find out what "
-            "the three missing pieces were; they are built, and the banner now records what they WERE. What "
-            "is still owed is per MEMBER and not per mechanism — that file's residual (7) is the list. "
+            "interfaceProtoObj, given realm\", is what places it there. DO NOT ASK WHICH REALM THIS IS. Ask "
+            "§3.7.3's conditional, which is idl_global_member_target above: it reads browser/idl_exposure.h's "
+            "generated band and answers with the object, so install onto whatever it returns — a plain "
+            "readonly attribute through idl_install_accessor, a [Replaceable] one through "
+            "idl_install_replaceable_member, which resolves the object AND §3.7.6's `target` together "
+            "because on this arm the brand belongs to the DECLARING interface rather than to the install. "
+            "THE REMEDY HERE USED TO READ `ask the component that BUILDS that prototype for the object` AND "
+            "IS REWRITTEN RATHER THAN DELETED, because a reader who re-derives it from the two arms will "
+            "write it again: asking a named component for a prototype and branching on whether one came back "
+            "is a hand-picked list of the realm kinds this engine happens to build, and it installs onto the "
+            "GLOBAL in the ServiceWorker, SharedWorker and four Worklet realms that already have IDL_GLOBALS "
+            "rows. What is still owed is per MEMBER and not per mechanism — core/workers/"
+            "worker_global_scope.c's residual (7) is the list. "
             "AND A FIFTH CAUSE READS AS THAT FOURTH ONE AND IS NOT IT: THE "
             "NAME IS AN ANCESTOR'S, AND IS ALSO A DIFFERENT MEMBER OF A DIFFERENT TYPE THAT THIS COMPONENT "
             "DOES NOT HOLD. HTML §10.2.1.1 \"The WorkerGlobalScope common interface\" gives WorkerGlobalScope "
@@ -8937,6 +9116,33 @@ void idl_install_replaceable_on_at(JSContext *ctx, JSValueConst target, const ch
     if (idl_global_member_refused(ctx, target, name, at_file, at_line)) return;
     idl_define_replaceable(ctx, target, name, idl_mint_plain_getter(ctx, target, name, getter, getter_magic),
                            this_is, iface);
+}
+
+/* WEB IDL §3.7.3's CONDITIONAL AND §3.7.6's `target`, AS ONE CALL — the entry a component owning a MIXIN
+   member takes, so that it names its own member and nothing else.
+   IT IS ROUTING AND NOT A FALLBACK, by §C-stack's test: delete either arm and §3.7.3 still has to be asked of
+   every realm, because §2.3 Interface mixins makes the member's declaring interface the INCLUDING one and
+   HTML §8.2 states two includes whose hosts differ in [Global]. Neither arm is a narrowing of the other and
+   neither is reached by a predicate failing — the two objects exist in DIFFERENT REALMS.
+   THE QUESTION IS ASKED ONCE AND ANSWERED FROM ONE PLACE. The object comes from the generated band and the
+   brand from the same registration that supplied the object, so the two cannot disagree about which
+   interface this arm is for — which is the defect a component resolving the object itself would still have,
+   since it would then have to state a `target` belonging to an interface in another directory. */
+void idl_install_replaceable_member_at(JSContext *ctx, JSValueConst global, const char *name,
+                                       IdlGetter getter, int getter_magic,
+                                       const char *at_file, int at_line)
+{
+    JSValue target = idl_global_member_target_at(ctx, global, name, at_file, at_line);
+
+    /* THE ARM IS DECIDED BY WHICH OBJECT CAME BACK, never by asking the realm a second time. idl_target_is_realm_global
+       is this file's canonical spelling of that question and the resolver dups the global itself on §3.8's
+       arm, so the two agree by construction rather than by two readings of one band. */
+    if (idl_target_is_realm_global(ctx, target))
+        idl_install_replaceable_at(ctx, target, name, getter, getter_magic, at_file, at_line);
+    else
+        idl_install_replaceable_on_at(ctx, target, name, getter, getter_magic,
+                                      g_ancestor_this_is, g_ancestor_iface, at_file, at_line);
+    JS_FreeValue(ctx, target);
 }
 
 /* THE HELD-VALUE GETTER'S DATA IS TWO VALUES, and the second is the member's own NAME. §3.7.6's TypeError

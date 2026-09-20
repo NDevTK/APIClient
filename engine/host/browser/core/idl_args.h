@@ -3018,6 +3018,45 @@ void idl_install_accessor_unforgeable_at(JSContext *ctx, JSValueConst target, co
 #define idl_install_accessor_unforgeable(ctx, target, name, getter, magic, setter) \
     idl_install_accessor_unforgeable_at((ctx), (target), (name), (getter), (magic), (setter), IDL_SITE)
 
+/* WEB IDL §3.7.3 "Interface prototype object"'s CONDITIONAL, ASKED AT AN INSTALL — the object a member goes
+ * on in THIS realm, given the realm's global. OWNED: the caller frees.
+ *
+ * A COMPONENT THAT OWNS A MIXIN MEMBER MUST ASK IT AND MUST NOT ANSWER IT. §2.3 "Interface mixins" makes a
+ * mixin's members the INCLUDING interface's own — "all objects implementing an interface I ... must
+ * additionally include the members of interface mixin M" — so HTML §8.2's WindowOrWorkerGlobalScope member
+ * is a `Window` member in a Window realm and a `WorkerGlobalScope` member in a worker one, and §3.7.3's
+ * [Global] conditional then sends it to two different objects. This call is that conditional; asking the
+ * REALM KIND instead is a hand-picked list of the realms an engine happens to build, and it installs onto the
+ * global in every other one. idl_args.c states the derivation and the residual over the implementation.
+ *
+ * IT IS NOT §3.3.7 STEP 1 AND DOES NOT REPLACE IT. A member this realm does not expose is answered with the
+ * GLOBAL here and refused by the install entry, which is where that step is asked and asserted. So a caller
+ * installs onto whatever this returns and the entry decides whether the member is placed at all. */
+JSValue idl_global_member_target_at(JSContext *ctx, JSValueConst global, const char *name,
+                                    const char *at_file, int at_line);
+#define idl_global_member_target(ctx, global, name) \
+    idl_global_member_target_at((ctx), (global), (name), IDL_SITE)
+
+/* §3.7.3's not-[Global] arm's OBJECT, as data the component that builds it states — AGENT-SCOPED, registered
+ * at that component's declaration and cleared at its release. `proto_of_realm` is REALM-AWARE and answers
+ * JS_UNDEFINED (OWNED, the caller frees) in a realm that has no such object; `iface` is the interface whose
+ * §3.7.3 prototype it returns, and it is load-bearing rather than decorative — it is what the
+ * second-claimant abort names. Passing (NULL, NULL) clears. */
+void idl_set_global_ancestor_terms(JSValue (*proto_of_realm)(JSContext *ctx), IdlThisIs this_is,
+                                   const char *iface);
+
+/* A [Replaceable] ATTRIBUTE WHOSE DECLARING INTERFACE IS THE REALM'S — the two entries above this one, asked
+ * as ONE call because the object and the brand are one fact. §3.7.3's conditional decides the object; on the
+ * not-[Global] arm §3.7.6's create an attribute setter step 1.1.2.3 then asks whether the receiver implements
+ * `target`, and `target` there is the DECLARING interface, so a caller that resolved the object would still
+ * have to state a brand it does not own. Both come from the registration, so a component owning a mixin
+ * member writes one line and names no realm kind and no interface but its own member's. */
+void idl_install_replaceable_member_at(JSContext *ctx, JSValueConst global, const char *name,
+                                       IdlGetter getter, int getter_magic,
+                                       const char *at_file, int at_line);
+#define idl_install_replaceable_member(ctx, global, name, getter, magic) \
+    idl_install_replaceable_member_at((ctx), (global), (name), (getter), (magic), IDL_SITE)
+
 /* WEB IDL §3.7.6's [Replaceable] ATTRIBUTE. It is READONLY, and yet assigning to it works: the setter DEFINES
    an ordinary data property on the receiver, which replaces the accessor outright. So `window.length` is an
    accessor until a page writes to it and a `{writable:true}` data property afterwards, and the corpus reads

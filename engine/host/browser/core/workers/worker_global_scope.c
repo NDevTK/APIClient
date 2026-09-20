@@ -148,10 +148,15 @@ static JSClassID g_dwgs_class;
          predicate from a component a layer may not name. HOW ITS ABSENCE SHOWS: that function's own DCHECKF
          over idl_global_names_are_window fires in a dev build at the first READ of such a member, and in
          release the read throws naming interface Window from the worker global's own realm.
-     (c) THE INSTALLS, on `wgs_p` — core/timing/performance.c's `performance` and
-         core/indexeddb/indexed_db.c's `indexedDB`, each placed by the component that owns the member for
-         `Window`, because Web IDL §2.3 "Interface mixins" makes a mixin's members the INCLUDING interface's
-         own. This entry said their placement would be asserted by WGS_ASSERT_PLACED as §10.2.1.1's `self` is,
+     (c) THE INSTALLS — core/timing/performance.c's `performance` and core/indexeddb/indexed_db.c's
+         `indexedDB`, each placed by the component that owns the member for `Window`, because Web IDL §2.3
+         "Interface mixins" makes a mixin's members the INCLUDING interface's own. THIS CLAUSE READ `THE
+         INSTALLS, on wgs_p` AND THE OBJECT IS NO LONGER THE CALLER'S TO NAME — corrected rather than
+         deleted, since a reader who re-derives it from (a) will write `wgs_p` at the call again. Those two
+         components asked this file for the object and branched on whether one came back, which is a
+         hand-picked list of realm kinds; core/idl_args.c's idl_global_member_target asks §3.7.3's
+         conditional of the generated band instead, and this component REGISTERS its answer there. Neither
+         component includes this header any more. This entry said their placement would be asserted by WGS_ASSERT_PLACED as §10.2.1.1's `self` is,
          and it is NOT: that macro takes the three objects this file holds and those installs are in two other
          components, so what asserts them is core/idl_args.c's pair over the generated band, from both arms —
          which is stronger than a witness here could be, because it does not need this file to know which
@@ -184,11 +189,19 @@ bool worker_global_scope_implements(JSValueConst v)
  * hop rather than a slot of its own. What a second class id would buy is a place to put an object this
  * already has a place for, which is the plumbing-ahead-of-its-consumer that banner declines.
  *
- * THE CONSUMER IS A COMPONENT THAT OWNS ONE OF THOSE MEMBERS FOR Window ALREADY — core/timing/performance.c
- * and core/indexeddb/indexed_db.c today — because Web IDL §2.3 "Interface mixins" makes a mixin's members the
- * INCLUDING interface's own, so `performance` is a `Window` member in a Window realm and a `WorkerGlobalScope`
- * member in a worker one, and the value, the getter and the magic are that component's either way. Handing
- * those to this file instead would move the member away from the section that defines it.
+ * THE CONSUMER IS core/idl_args.c, AND THIS SENTENCE USED TO NAME THE MEMBER-OWNING COMPONENTS INSTEAD —
+ * rewritten rather than deleted, because the reasoning that named them is correct and is what a reader
+ * repeats. It said Web IDL §2.3 "Interface mixins" makes a mixin's members the INCLUDING interface's own, so
+ * `performance` is a `Window` member in a Window realm and a `WorkerGlobalScope` member in a worker one, and
+ * the value, the getter and the magic are that component's either way — all true, and none of it makes the
+ * OBJECT that component's to ask for. Which object is §3.7.3's conditional over the generated band, so
+ * core/idl_args.c asks it and this function is REGISTERED there (idl_set_global_ancestor_terms, at the init
+ * below) rather than called from a dozen directories. What that buys is not tidiness: a component asking THIS
+ * function and branching on whether an object came back is asking WHICH REALM KIND THIS IS, which answers
+ * correctly for the two realms this engine builds and installs onto the GLOBAL in every ServiceWorker,
+ * SharedWorker and Worklet realm browser/idl_exposure.h already has a row for.
+ * HANDING THE MEMBER ITSELF TO THIS FILE WOULD STILL BE WRONG, which is the half that has not changed: it
+ * would move the member away from the section that defines it.
  *
  * THE ORDER IS A CHECKED FACT AND NOT A REMEMBERED ONE, which is the whole of what the assert below is for:
  * core/realm.h runs the per-realm intrinsics in core/platform.c's DECLARATION order, so this component's row
@@ -580,6 +593,17 @@ void worker_global_scope_init(JSContext *ctx)
        AGENT-SCOPED, NOT PER REALM: the brand is the class id declared on the line above, which is the agent's,
        so a second registration per worker realm would be the second claimant that entry aborts on. */
     event_target_set_worker_global_scope_terms(wgs_event_implements);
+    /* WEB IDL §3.7.3's NOT-[Global] ARM, HANDED TO THE LAYER THAT MAY NOT NAME THIS DIRECTORY. A member of
+       `WorkerGlobalScope` — which is every member its `includes WindowOrWorkerGlobalScope` and
+       `includes FontFaceSource` bring, as §2.3 Interface mixins makes them — is defined on the object
+       worker_global_scope_proto returns, and the component that OWNS such a member (core/crypto/crypto.c's
+       `crypto`, core/indexeddb/indexed_db.c's `indexedDB`) must not have to know that. core/idl_args.c asks
+       §3.7.3's conditional against browser/idl_exposure.h's generated band and calls this function only when
+       the band says the realm's own [Global] interface does not declare the name, so a Window realm never
+       reaches it and a worker realm always does. AGENT-SCOPED for the same reason the line above is: the
+       function is realm-aware and answers JS_UNDEFINED where there is no such object. */
+    idl_set_global_ancestor_terms(worker_global_scope_proto, worker_global_scope_implements,
+                                  "WorkerGlobalScope");
     realm_declare_intrinsic(worker_global_scope_install_realm);
 }
 
@@ -590,6 +614,7 @@ void worker_global_scope_free(JSRuntime *rt)
        `event_target` in core/platform.c's list, and its reverse-declaration order is what makes that ordering
        a checked fact rather than a remembered one. */
     event_target_set_worker_global_scope_terms(NULL);
+    idl_set_global_ancestor_terms(NULL, NULL, NULL);
     /* The prototype is the REALM's — quickjs frees the per-context class-proto array with the context — so
        there is no reference here to give back, only the handle. THE LAST LINE, per core/agent_state.h. */
     agent_state_undo("worker_global_scope");
@@ -796,8 +821,15 @@ void worker_global_scope_free(JSRuntime *rt)
  *           dependency and would make every host that installs an attribute link the worker layer. So the
  *           brand travels as DATA the realm's [Global] interface STATES, registered where the realm is built,
  *           the way core/events/event_target.h's event_target_set_click_terms already hands a component's
- *           predicate to a layer that must not name it. That is the shape; it is not built, and this residual
- *           is the whole of what is claimed about it.
+ *           predicate to a layer that must not name it. THAT SHAPE IS NOW BUILT AND THIS ARM IS NOT SERVED BY
+ *           IT, which is the distinction to keep rather than to read as progress:
+ *           idl_set_global_ancestor_terms carries this component's brand to core/idl_args.c exactly as
+ *           described — and it is §3.7.3's NOT-[Global] arm's brand, the one a member on
+ *           `WorkerGlobalScope.prototype` needs. What (a) is about is §3.8's arm, a member on the worker
+ *           GLOBAL, where `target` is the instance's own [[PrimaryInterface]] and the registration above has
+ *           nothing to say: its predicate answers for `WorkerGlobalScope` and the receiver there implements
+ *           `DedicatedWorkerGlobalScope`. So the transport exists and the datum for this arm does not, which
+ *           is a smaller residual than it was and is not this one discharged.
  *           ABSENCE SHOWS AS: a PLAIN-C attribute installed on a worker global reaches that DCHECKF in a dev
  *           build, and in a release build throws "does not implement interface Window" when read from its own
  *           realm's global object — and NEITHER happens for a step accessor, which is what makes the two doors
@@ -859,6 +891,15 @@ void worker_global_scope_free(JSRuntime *rt)
  *     the subproblem under the five members §10.2.1.2 DECLARES, which really are own properties of the
  *     global. (The earlier correction that stands is the second half: step 1.1.2.3's brand, never the
  *     receiver resolution, which names no interface at all.)
+ *     AND `the two lines core/timing/performance.c and core/indexeddb/indexed_db.c write` IS NO LONGER WHAT
+ *     THEY WRITE — corrected here because this clause is the LIST a reader builds from, so a stale remedy in
+ *     it is executed rather than merely read. Each of those components wrote five lines that asked
+ *     worker_global_scope_proto for an object and branched on whether one came back; both now write ONE line
+ *     naming their own member and no realm kind at all, and NEITHER INCLUDES THIS HEADER ANY MORE. The line
+ *     is `idl_install_accessor(ctx, idl_global_member_target(ctx, global, "<member>"), …)` for a plain
+ *     readonly attribute and `idl_install_replaceable_member(ctx, global, "<member>", …)` for a
+ *     [Replaceable] one, the second resolving §3.7.6's `target` from the same registration that supplied the
+ *     object. So what each member of this residual owes is one line in its own component and nothing here.
  *     ABSENCE SHOWS AS: `typeof setTimeout` is `"undefined"` in a worker realm, so the very first line of most
  *     bundled worker code throws — and, in the auditor rather than the engine, as the ABSENT counts idlgen
  *     prints against these two interfaces, which were ZERO before this component existed because an interface

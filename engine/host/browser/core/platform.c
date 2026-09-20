@@ -793,10 +793,17 @@ static const PlatformComponent PLATFORM[] = {
        has been rewritten at its own row instead, because the constraint it was weighed against did not exist
        yet. Web IDL §3.7.3 "Interface prototype object" puts every member `WorkerGlobalScope` declares, and
        every member its `includes WindowOrWorkerGlobalScope` brings, on the prototype THIS row builds — so
-       every component that owns one of those members for `Window` (`performance` below, `indexed_db` further
-       down) asks this component for that object, and a row standing after one of them has nothing to give it.
-       worker_global_scope_proto asserts exactly that, so the ordering is a checked fact and not a remembered
-       one. It still reads no other component's state, which is what keeps the constraint one-sided.
+       every component that owns one of those members for `Window` (`performance` below, `crypto` and
+       `indexed_db` further down) needs that object while its own realm intrinsic is running, and a row
+       standing after one of them has nothing to give it. worker_global_scope_proto asserts exactly that, so
+       the ordering is a checked fact and not a remembered one.
+       THE CONSTRAINT IS UNCHANGED AND THE ROUTE IS NOT, WHICH IS WHY THIS SENTENCE READ `asks this component
+       for that object` AND NO LONGER DOES. Those components asked this one directly and branched on whether
+       an object came back, which is a hand-picked list of realm kinds; they now install through
+       core/idl_args.c, which asks Web IDL §3.7.3's conditional of the generated band and calls the function
+       THIS row registers. The call still happens inside the asking component's own realm intrinsic, so the
+       ordering requirement survives the indirection exactly — which is the point worth keeping: a
+       registration moves WHO calls, never WHEN. It still reads no other component's state, which is what keeps the constraint one-sided.
        ITS THIRD COLUMN IS EMPTY AND ALWAYS WILL BE. The third column is the PER-DOCUMENT install, and a
        WorkerGlobalScope realm has no Document to be installed over — HTML §10.2.6.2 Script settings for
        workers is what a worker environment states instead. That is the whole reason Web IDL §3.8 Platform

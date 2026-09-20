@@ -56,9 +56,11 @@
 #include "core/frame/window_proxy.h"
 #include "core/realm.h"
 #include "core/url/origin.h"
-/* HTML §10.2.1.1 "The WorkerGlobalScope common interface" builds the Web IDL §3.7.3 prototype this
-   component places `indexedDB` on in a worker realm — see the install below. */
-#include "core/workers/worker_global_scope.h"
+/* THIS COMPONENT NO LONGER NAMES core/workers/, AND THAT IS THE POINT RATHER THAN A TIDY-UP. It used to
+   include that header to ask for the Web IDL §3.7.3 prototype `indexedDB` lands on in a worker realm, which
+   made an Indexed Database component depend on the worker layer for a fact neither of them owns — §3.7.3's
+   conditional over the including interface. core/idl_args.c asks that now and the worker layer REGISTERS its
+   answer there, so the dependency runs the way the layering allows and this line is gone. */
 
 static JSClassID g_factory_class;
 static int       g_obj_slot = -1;
@@ -491,7 +493,7 @@ static JSValue js_idb_get_factory(JSContext *ctx, JSValueConst this_val, int mag
 
 static void indexed_db_install_realm(JSContext *ctx)
 {
-    JSValue proto, prev, ctor, obj, global, wgs_p;
+    JSValue proto, prev, ctor, obj, global, target;
 
     DCHECK(g_factory_class != 0, "a realm asked for IDBFactory before the interface was declared");
     prev = JS_GetClassProto(ctx, g_factory_class);
@@ -530,13 +532,19 @@ static void indexed_db_install_realm(JSContext *ctx)
        either object, which is this engine's standing state for every prototype accessor and is the residual
        core/idl_args.c names by shape. `performance` is `[Replaceable]`, so it ALSO gets §3.7.6's setter, and
        that setter runs all three steps wherever it is installed — which is the whole of why that member
-       needs the declaring interface's brand as data and this one does not. */
-    wgs_p = worker_global_scope_proto(ctx);
-    if (JS_IsObject(wgs_p))
-        idl_install_accessor(ctx, wgs_p, "indexedDB", js_idb_get_factory, 0, -1);
-    else
-        idl_install_accessor(ctx, global, "indexedDB", js_idb_get_factory, 0, -1);
-    JS_FreeValue(ctx, wgs_p);
+       needs the declaring interface's brand as data and this one does not.
+       THE TWO ARMS USED TO BE WRITTEN HERE, SELECTED BY `worker_global_scope_proto` ANSWERING AN OBJECT, AND
+       THAT SPELLING IS RETIRED RATHER THAN MERELY TIDIED — a reader who re-derives it from the two arms alone
+       will write it again. It asked whether THIS REALM IS A WORKER, which is a hand-picked list of the realm
+       kinds an engine happens to build: browser/idl_exposure.h carries IDL_GLOBALS rows for
+       ServiceWorkerGlobalScope, SharedWorkerGlobalScope and four WorkletGlobalScope interfaces, none of whose
+       bands declares this member and none of which has a `WorkerGlobalScope.prototype` in it, so the else-arm
+       would have installed onto those globals — the §3.8 violation whose only symptom is a descriptor read.
+       `idl_global_member_target` asks §3.7.3's conditional of the GENERATED BAND instead, which is derived
+       from the harvested IDL, and crashes by name where neither arm can be served. */
+    target = idl_global_member_target(ctx, global, "indexedDB");
+    idl_install_accessor(ctx, target, "indexedDB", js_idb_get_factory, 0, -1);
+    JS_FreeValue(ctx, target);
     JS_FreeValue(ctx, global);
 }
 

@@ -254,7 +254,7 @@ static JSValue crypto_get_crypto(JSContext *ctx, JSValueConst this_val, int magi
 
 static void crypto_install_realm(JSContext *ctx)
 {
-    JSValue proto, prev, global, obj;
+    JSValue proto, prev, global, obj, target;
     CryptoStream *stream;
 
     prev = JS_GetClassProto(ctx, g_crypto_class);
@@ -293,9 +293,27 @@ static void crypto_install_realm(JSContext *ctx)
     JS_SetOpaque(obj, stream);
     realm_value_set(ctx, g_obj_slot, obj);
 
-    /* THE WINDOW MEMBER. The mixin's partial puts it on the global, so it goes on THIS realm's global — a
-       nested navigable's `crypto` is its own, which is what `[SameObject]` means per realm. */
-    idl_install_accessor(ctx, global, "crypto", crypto_get_crypto, 0, -1);
+    /* WEBCRYPTO §10's `[SameObject] readonly attribute Crypto crypto`, WHOSE DECLARING INTERFACE IS THE
+       REALM'S. It is declared on a `partial interface mixin WindowOrWorkerGlobalScope`, and Web IDL §2.3
+       "Interface mixins" makes a mixin's members the INCLUDING interface's own — "all objects implementing an
+       interface I ... must additionally include the members of interface mixin M". HTML §8.2 states two
+       includes: `Window includes WindowOrWorkerGlobalScope` and `WorkerGlobalScope includes
+       WindowOrWorkerGlobalScope`. `Window` IS [Global] and `WorkerGlobalScope` is NOT, so §3.7.3's
+       conditional sends this member to the global in one realm and to `WorkerGlobalScope.prototype` in the
+       other, and a page reads the difference as `globalThis.hasOwnProperty("crypto")`.
+       THE COMMENT THAT STOOD HERE SAID "the mixin's partial puts it on the global" AND IS REWRITTEN RATHER
+       THAN DELETED, because it is what a reader re-derives from the partial alone: a mixin's partial says
+       nothing whatever about placement — §3.7.3's [Global] conditional does, and it is asked of the INCLUDING
+       interface, which the partial does not name. That sentence was true of every realm this engine built
+       when it was written and became false the day a worker realm existed; the abort it produced named this
+       line and the member.
+       WHICH OBJECT IS NOT ASKED HERE AND MUST NOT BE. `idl_global_member_target` asks §3.7.3 against
+       browser/idl_exposure.h's generated band, so the answer tracks the harvested IDL rather than a realm
+       kind this component would have to enumerate — and `[SameObject]` is unaffected either way, since the
+       VALUE is this realm's one Crypto in both arms. */
+    target = idl_global_member_target(ctx, global, "crypto");
+    idl_install_accessor(ctx, target, "crypto", crypto_get_crypto, 0, -1);
+    JS_FreeValue(ctx, target);
     JS_FreeValue(ctx, global);
 }
 
