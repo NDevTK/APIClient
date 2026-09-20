@@ -43335,9 +43335,43 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                    next create. `rfunc` is borrowed from it and is not touched again after this. */
                 if (r_apply) TRAMP_APPLY_RELEASE();
                 if (unlikely(!as)) { JS_FreeValue(ctx, rarg); goto exception; }
-                DCHECK(as->is_active,
-                       "a flow resumed a suspended async continuation that was already consumed — the per-flow "
-                       "activation swap did not isolate it");
+                /* THE ASSERT BELOW CAN ONLY FIRE ON AN ACTIVATION THAT WAS ALREADY CONSUMED WHEN THIS RESUME
+                   ARRIVED, and that is a proof rather than an observation: js_async_resume_isolate clones only
+                   while `s->is_active`, and a clone it takes is active by construction (js_async_frame_clone
+                   asserts it) while a swap the host DECLINES leaves the original — which was active, or the
+                   gate would not have run. So every arm of this call returns an ACTIVE state whenever it was
+                   handed one, and reaching here means the protection that was owed ran EARLIER, for somebody
+                   else, and did not.
+                   WHICH IS WHY THE SENTENCE THAT STOOD HERE WAS THE WRONG SHAPE: it named ONE mechanism (“the
+                   per-flow activation swap did not isolate it”) over a predicate that tests MEMBERSHIP, and at
+                   least three states reach it that take opposite work — the hook not installed at all, a flow
+                   that reads this closure SHARED (so it would itself have cloned, and the consumer that killed
+                   the original was some other resume), and a flow that reads it PRIVATE (so its own test says
+                   no sibling can hold this closure, and one demonstrably did). The numbers that separate them
+                   are all in hand at the abort and none of them survived into it, so a re-drive reproduced the
+                   same one sentence and answered nothing.
+                   THE PRIVATE READING IS SELF-REFUTING AND IS THE ONE TO ACT ON: it is the gate asking
+                   JS_IsFlowShared of the CLOSURE while js_async_resume_isolate’s own banner states the question
+                   about the ACTIVATION — two objects minted at two times, the activation at the call and the
+                   closure at the await (js_async_function_await_finish), so the closure’s generation is never
+                   below the activation’s and the implemented test is STRICTLY STRONGER than the intended one,
+                   erring by SKIPPING the clone. `forkGen 0` additionally says this flow has never forked
+                   (cow.c sets fork_gen only in cow_fork; every other delta is calloc’d), and a slice stamps
+                   from 1 — so for such a flow the test answers PRIVATE for every closure page code has ever
+                   minted and the isolation is unreachable by construction, not by circumstance.
+                   RETIREMENT: this comment goes when the gate asks its question of the activation. */
+                DCHECKF(as->is_active,
+                        "a flow resumed a suspended async continuation that was already consumed. hook=%d "
+                        "closureGen=%u forkGen=%u — this flow reads the continuation closure %s. SHARED says "
+                        "this flow would itself have cloned, so read coroSwapAsyncCalls/coroSwapAsyncMade for a "
+                        "resume the host declined the swap for. PRIVATE says this flow's own shared-test denies "
+                        "that any sibling holds this closure while one has just consumed what it names, which "
+                        "refutes the test: js_async_resume_isolate asks JS_IsFlowShared of the CLOSURE and owes "
+                        "the question of the ACTIVATION. hook=0 says the swap is not installed at all and the "
+                        "work is in cow_install_time_travel_hooks, not here",
+                        g_time_travel.async_fork != NULL,
+                        (unsigned)JS_ObjFlowGen(rfunc), (unsigned)g_flow_fork_gen,
+                        JS_IsFlowShared(rfunc) ? "SHARED" : "PRIVATE");
                 /* AND ONLY A SUSPENDED ACTIVATION CAN BE RE-ENTERED. §9.4.7 pushes a context that was suspended;
                    a finished one has no frame to push, and the entry below would read cur_sp/cur_pc off a torn-
                    down frame and run whatever bytecode those bytes named. */
@@ -54128,6 +54162,26 @@ static JSAsyncFunctionData *js_async_resume_isolate(JSContext *ctx, JSValueConst
     DCHECK(s != NULL,
            "an await continuation carries no async activation — §27.10.5.3's closures capture asyncContext at "
            "creation, so a closure with none was built by something other than js_async_function_resolve_one");
+    /* NAMED RESIDUAL — THE THIRD TERM ASKS ITS QUESTION OF THE CLOSURE AND THE BANNER ABOVE OWES IT OF THE
+       ACTIVATION, AND THOSE ARE TWO OBJECTS MINTED AT TWO TIMES.
+       NOT COVERED: an activation that IS shared with a sibling while the closure naming it reads flow-private.
+       The banner’s rule is “an activation created after this flow’s last fork is private”; JS_IsFlowShared is a
+       property of a JSObject’s flow_gen and a JSAsyncFunctionData has none, so the closure stands in for it.
+       The activation is born at the CALL and the closure at the AWAIT (js_async_function_await_finish mints a
+       fresh pair per await), so the closure’s generation is never below the activation’s: the implemented test
+       is strictly stronger than the intended one and every disagreement between them SKIPS the clone, which is
+       the direction that loses the isolation rather than the one that costs a spare copy.
+       NEXT DIFF: give the activation its own generation — stamped where the four JSAsyncFunctionData
+       constructors run (grep JS_GC_OBJ_TYPE_ASYNC_FUNCTION for the count; that number has been wrong here
+       before) and carried by js_async_frame_clone — and ask the shared question of THAT, leaving the closure
+       out of it. This clause is a hypothesis about this tree and not a measurement: re-derive it before
+       building it, because the same reading also has to answer why a flow that has NEVER forked (fork_gen 0,
+       which cow.c gives every delta cow_fork did not make) is entitled to skip the clone for every closure a
+       slice has stamped.
+       HOW ITS ABSENCE WOULD SHOW: the await-resume abort in do_async_resume_tramp reports the closure’s
+       generation against the running flow’s fork generation and says which way its own test answered. A flow
+       that reads PRIVATE there has had the activation it names consumed by somebody the test says cannot hold
+       it. RETIREMENT: this residual goes when the gate names the activation instead of `func_obj`. */
     if (g_time_travel.async_fork && s->is_active && JS_IsFlowShared(func_obj)) {
         JSAsyncFunctionData *c = js_async_frame_clone(ctx, s);
         if (unlikely(!c))
