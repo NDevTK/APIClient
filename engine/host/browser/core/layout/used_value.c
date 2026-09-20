@@ -1,7 +1,6 @@
 /* CSS 2.1 §10 — the used value of a box-model length. See used_value.h for the contract, for why the BOX TYPE
    is the first question, and for what the root element's `width: auto` is blocked on. */
 #include <stdbool.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -22,6 +21,7 @@
 #include "core/layout/flex_line.h"
 #include "core/layout/flow_position.h"
 #include "core/layout/intrinsic_size.h"
+#include "core/layout/layout_question.h"
 #include "core/layout/replaced_element.h"
 #include "core/layout/table_border_collapse.h"
 #include "core/layout/table_box.h"
@@ -4310,11 +4310,13 @@ static CssPx uv_px_ask(lxb_dom_element_t *el, const char *name)
    `@WHY` at all, which a harness reads as a run that produced no abort — and the cycle is recoverable only
    from a core dump. `uv_abs_margins`' banner above records the one that was found that way.
 
-   IT IS A CYCLE TEST AND NOT A DEPTH CAP, which §NO BOUNDS forbids: an arbitrarily deep box tree passes
-   here, and only a REPEATED (element, property) pair fails. The chain is INTRUSIVE — each node lives on the
-   frame that is asking — so it is exactly as deep as the recursion and has no capacity of its own. A fixed
-   array would be a depth cap wearing a buffer: past its Nth entry it would stop comparing, and a frame
-   nobody compared reads exactly like a frame with no repeat in it.
+   THE CHAIN, THE CYCLE TEST AND THE ARGUMENT FOR BOTH ARE core/layout/layout_question.h's, AND THAT MOVE IS
+   THE POINT RATHER THAN A TIDY-UP. This entry's question is a (element, property) PAIR, and the cluster it is
+   an entry to recurses over (element, QUESTION) pairs whose question is not always a property name — so a
+   record that can only spell THIS entry's pair can only ever be threaded at THIS entry, and the chain has to
+   be able to name a question before a resolver can push one. What used to sit here was that record with its
+   type welded to its one site; what is here now is the same record over a NAMED question, which is the work
+   stack's element type.
 
    WHY THE PAIR IS (ELEMENT, PROPERTY) AND WHY THIS IS THE SITE. This entry answers the ten physical
    box-model lengths its own `DFAIL` above enumerates, and its answer is a function of exactly that pair,
@@ -4335,82 +4337,67 @@ static CssPx uv_px_ask(lxb_dom_element_t *el, const char *name)
    ZERO in
    core/layout/intrinsic_size.c. So arrival here is an ASK, and an ask that is its own input.
 
-   THE RECORD IS A FILE STATIC AND THAT IS SOUND ONLY BECAUSE LAYOUT CANNOT SUSPEND. It is the shape of the
-   current C activation chain, which no flow switch can interleave today, because every one of these
-   questions runs to completion on the C stack. §C-stack makes that a NON-LIMIT for JavaScript and layout is
-   not converted: it still recurses on the real C stack, so it can still exhaust it on a shape with no cycle
-   in it, and it can neither park nor ride a COW snapshot. RETIREMENT: this record and this static go when a
-   used-value question can yield — at that point the chain belongs to the FLOW and a static one would be
-   another flow's questions, which is the defect this file's own layout-is-per-flow-state notes describe.
+   AND THE CHAIN IS ONE FRAME IN SIX, WHICH IS MEASURED AND NOT AN ESTIMATE — it is worth knowing before
+   anyone builds a resolver out of it, because it prices the granularity such a resolver could resume at.
+   Counting C frames with gdb breakpoints on this binary, over `<div>`-nested documents of depth N:
 
-   NAMED RESIDUAL. WHAT IS NOT COVERED: a cycle that closes without crossing this entry, and C-stack
-   exhaustion by DEPTH rather than by repetition — neither is a repeated pair and neither fires here. WHAT
-   THE NEXT DIFF BUILDS: the same chain at the cluster's other outer asks, `used_value_content_px` and
-   `used_value_containing_block_width` being the two this file exports that a walk re-enters through. HOW
-   ITS ABSENCE WOULD SHOW: a terminal SIGSEGV on a real document with no `@WHY` line anywhere in the run and
-   a backtrace that is one short frame cycle repeated to the guard page. ----------------------------- */
-#if APICLIENT_DEV
-typedef struct UvOpen {
-    struct UvOpen     *below;   /* the question the frame below this one is asking; NULL at the outermost */
-    lxb_dom_element_t *el;
-    const char        *name;    /* one of this entry's ten property names, owned by the caller's frame */
-} UvOpen;
+       N =  4 -> 40 layout frames on the stack, 7 of them this entry (17.5%)
+       N =  8 -> 64 layout frames on the stack, 11 of them this entry (17.2%)
+       N = 12 -> 88 layout frames on the stack, 15 of them this entry (17.0%)
 
-static UvOpen *g_uv_open;       /* innermost first; NULL when no used value is being computed */
-#endif
+   which is 6N + 16 frames of which N + 3 are recorded, so the share is a CONSTANT sixth at every depth rather
+   than something that improves on a real page. THE FIRST COLUMN IS THE LARGER FINDING AND IT IS THE REASON
+   THIS COMPONENT EXISTS: laying out a document costs SIX C FRAMES PER LEVEL OF NESTING and nothing bounds the
+   nesting, so the C stack is a function of the document — which is not a thing a browser does, and is the
+   SIGSEGV-with-no-`@WHY` above arriving by DEPTH rather than by repetition. Re-derive both columns rather than
+   quoting them: gdb, `break used_value_px` with a `bt` command, and count the frames whose names belong to
+   core/layout.
 
+   NAMED RESIDUAL. WHAT IS NOT COVERED: every cycle that closes without crossing this entry, which is not the
+   tail of the problem but most of it — cut this one function out of the cluster's SCC and a component of SIXTY
+   functions is STILL mutually recursive, `block_flow.c`'s box walk, `line_box.c`'s extents, `flow_position.c`'s
+   origins, `table_height.c`'s rows, `flex_cross_size.c`'s hypothetical crosses and this file's own `uv_sized`
+   and `uv_abs_solve` among them. So the chain records the ASKS and not the LAYOUTS: between two consecutive
+   nodes of it five C frames come and go with nothing anywhere naming them, and C-stack exhaustion by DEPTH
+   rather than by repetition is not a repeated pair and does not fire here.
+   WHAT THE NEXT DIFF BUILDS: a second KIND at `uv_sized`, whose question is (element, box type, axis) — the
+   best second cut there is, taking that residual from SIXTY mutually recursive functions to TWENTY-ONE, and
+   the smallest surface on which a second kind's contract can be exercised at all. The static cut and the
+   frame census agree on it independently: `uv_sized` is one of the five unrecorded frames per level in the
+   census above, and it is the second cut the SCC names. Read the arm it would assert over before building
+   it — §10.4's three steps call `uv_pass_size` for ONE (element, box, axis) up to three times, SEQUENTIALLY,
+   so those are not re-entrant and the pair is still a defect; a reader who finds otherwise has found that
+   this kind must not be declared, which is the answer the test in layout_question.h asks for.
+   AND NOT `used_value_content_px` OR `used_value_containing_block_width`, WHICH THE COMMIT THAT WROTE THIS
+   RESIDUAL NAMED AND WHICH A DERIVATION REFUTES: neither is in that sixty-function residual, so every cycle
+   through either of them ALREADY crosses this entry and a chain at either would catch nothing this one does
+   not. That clause was a claim about this tree written by someone who knew exactly what was missing and was
+   guessing at what fills it, which is the half of a residual a reader cannot check by fetching anything —
+   re-derive the cut before building to this one.
+   HOW ITS ABSENCE WOULD SHOW: a terminal SIGSEGV on a real document with no `@WHY` line anywhere in the run
+   and a backtrace that is one short frame cycle repeated to the guard page, whose repeated frames do not
+   include this function. ----------------------------------------------------------------------------- */
 CssPx used_value_px(lxb_dom_element_t *el, const char *name)
 {
 #if APICLIENT_DEV
-    const UvOpen *w;
-    UvOpen open;
-    CssPx answer;
-    unsigned n = 0;
-
-    if (el != NULL && name != NULL) {
-        for (w = g_uv_open; w != NULL; w = w->below) {
-            n++;
-            if (w->el == el && strcmp(w->name, name) == 0) break;
-        }
-        if (w != NULL) {
-            char chain[512];
-            char nbuf[160];
-            const UvOpen *p;
-            size_t at = 0;
-            bool cut = false;
-
-            chain[0] = '\0';
-            for (p = g_uv_open; p != NULL; p = p->below) {
-                int k = snprintf(chain + at, sizeof chain - at, "%s`%s` of %s", at == 0 ? "" : " <- ",
-                                 p->name, box_subject(p->el, nbuf, sizeof nbuf));
-
-                if (k < 0 || (size_t) k >= sizeof chain - at) { cut = true; break; }
-                at += (size_t) k;
-                if (p == w) break;
-            }
-            DFAILF("%s: CSS 2.1 §6.1.3 \"Used values\"' used `%s` for this box IS ITS OWN INPUT — the "
-                   "identical question is already open %u frame(s) up and nothing between the two "
-                   "occurrences made progress, so "
-                   "there is no fixed point to reach. The open chain, innermost first: %s%s. FIX IT AT THE "
-                   "RULE THAT RE-ENTERS AND BY CONSTRUCTION, never by a limit: read the chain for the one "
-                   "link whose operand the calling frame ALREADY HOLDS and split it off there, which is what "
-                   "CSS 2.1 §10.6.4 \"Absolutely positioned, non-replaced elements\"' two margins are — the "
-                   "`margin-top` that walk went looking for was sitting in "
-                   "`uv_abs_solve`'s own `r.m_before`. A depth cap would truncate a legitimately deep box "
-                   "tree and answers nothing here: the repetition is the defect, not the depth",
-                   box_subject(el, nbuf, sizeof nbuf), name, n, chain, cut ? " <- …" : "");
-        }
-    }
-    open.below = g_uv_open;
-    open.el = el;
-    open.name = name;
-    g_uv_open = &open;
-    answer = uv_px_ask(el, name);
-    g_uv_open = open.below;
-    return answer;
-#else
-    return uv_px_ask(el, name);
+    /* THE CHAIN NODE LIVES ON THIS FRAME, so the chain is exactly as deep as the recursion and has no
+       capacity of its own — see layout_question.h for why that is the design and why a heap-owned mirror of
+       these frames would be the worse of two copies rather than a step toward replacing them. At
+       -DAPICLIENT_DEV=0 the two macros below expand to nothing, this declaration is not compiled, and the
+       release frame is the size it was before any of this existed. */
+    LayoutQuestionOpen open;
 #endif
+    CssPx answer;
+
+    LAYOUT_QUESTION_OPEN(&open, layout_question(LAYOUT_Q_USED_VALUE_PX, el, name, 0),
+                         "FIX IT AT THE RULE THAT RE-ENTERS AND BY CONSTRUCTION, never by a limit: read the "
+                         "chain for the one link whose operand the calling frame ALREADY HOLDS and split it "
+                         "off there, which is what CSS 2.1 §10.6.4 \"Absolutely positioned, non-replaced "
+                         "elements\"' two margins are — the `margin-top` that walk went looking for was "
+                         "sitting in `uv_abs_solve`'s own `r.m_before`.");
+    answer = uv_px_ask(el, name);
+    LAYOUT_QUESTION_CLOSE(&open);
+    return answer;
 }
 
 /* CSS 2.1 §10.3.7's and §10.6.4's USED `left` or `top`, out of the same solve that answers this box's size
