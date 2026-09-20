@@ -1558,10 +1558,61 @@ typedef struct JSAsyncFunctionState {
 
 /* XXX: could use an object instead to avoid the
    JS_TAG_ASYNC_FUNCTION tag for the GC */
+/* WHICH ARM OF js_async_resume_isolate CLAIMED AN ACTIVATION FOR CONSUMPTION, and the name a crash prints for
+   it — ONE list, so the enum and the word cannot come apart. It exists because the abort that reports a
+   consumed activation reports four numbers and every one of them is a property of the flow that ARRIVED, not
+   of the one that CONSUMED: the gate is a three-term conjunction, the abort is reachable only when it
+   short-circuits at the SECOND term, and a term that short-circuited answers nothing about why the clone was
+   skipped. So the victim's crash carried no coordinate of the culprit at all, which is the defect
+   AN-ASSERT-THAT-NAMES-A-REMEDY-BUT-NOT-A-SITE names and whose cure is the same one: the site travels with
+   the OPERATION instead of being derived at the place the damage surfaces.
+   THE ARMS ARE NOT A RANKING, THEY ARE A PARTITION, and the four repairs they select are disjoint —
+   SKIPPED-PRIVATE indicts the shared test, HOST-DECLINED indicts the delta the host had in hand, HOOK-OFF
+   indicts the install order, CLONED says the gate did its job and one closure was resumed twice inside one
+   delta, which is a reaction-delivery question with nothing to do with isolation. NEVER-CLAIMED is the one
+   the three readings this abort used to enumerate did not contain: it says NOTHING THAT GOES THROUGH THIS
+   GATE consumed it, so the consumer is a teardown path (JS_FlowFree, flow_clone_state_free_shell, the
+   collector) and every question about the gate is the wrong question. It is zero on purpose: all four
+   JSAsyncFunctionData constructors allocate with js_mallocz (COUNTED, not taken from a sentence —
+   do_async_tramp_call, flow_clone_state_alloc, clone_deep_flow and js_async_function_start), so "no resume has
+   claimed this" is what a fresh activation says without one line of constructor cooperation, which is the one
+   way a hand-copied list here has already gone wrong twice. */
+#define JS_ASYNC_CLAIM_ARMS(X)                \
+    X(UNCLAIMED,       "NEVER-CLAIMED")       \
+    X(HOOK_OFF,        "HOOK-OFF")            \
+    X(SKIPPED_PRIVATE, "SKIPPED-PRIVATE")     \
+    X(HOST_DECLINED,   "HOST-DECLINED")       \
+    X(CLONED,          "CLONED")
+
+#define JS_ASYNC_CLAIM_ENUM_(n, s) JS_ASYNC_CLAIM_##n,
+typedef enum JSAsyncClaimArm { JS_ASYNC_CLAIM_ARMS(JS_ASYNC_CLAIM_ENUM_) } JSAsyncClaimArm;
+#undef JS_ASYNC_CLAIM_ENUM_
+
+/* The name, over a value THIS FILE enumerates — so the default arm is a GUARD and not a gap: the switch is
+   total over the list above, and a value outside it did not come from js_async_resume_isolate. */
+#define JS_ASYNC_CLAIM_CASE_(n, s) case JS_ASYNC_CLAIM_##n: return s;
+static const char *js_async_claim_arm_name(uint8_t arm)
+{
+    switch ((JSAsyncClaimArm)arm) { JS_ASYNC_CLAIM_ARMS(JS_ASYNC_CLAIM_CASE_) }
+    DFAIL("an async activation reported a claim arm that is not in JS_ASYNC_CLAIM_ARMS — the enum and the "
+          "name are two expansions of ONE list, so a value outside it was not written by the one function "
+          "that stamps this field");
+    return "(not a claim arm)";
+}
+#undef JS_ASYNC_CLAIM_CASE_
+
 typedef struct JSAsyncFunctionData {
     JSGCObjectHeader header; /* must come first */
     JSValue resolving_funcs[2];
     bool is_active; /* true if the async function state is valid */
+    /* WHO CLAIMED THIS ACTIVATION FOR CONSUMPTION AND UNDER WHICH FORK GENERATION — written by
+       js_async_resume_isolate on whichever activation the resume it guards is about to run, read by the abort
+       in do_async_resume_tramp when that activation turns out to be dead. NOT under APICLIENT_DEV: the fields
+       are two stores on a path that already takes a refcount and a frame push, and a struct whose LAYOUT
+       differs between dev and release is how this tree has already produced a program that read a record one
+       slot early. What is dev-only is the READ. */
+    uint8_t claim_arm;         /* JSAsyncClaimArm — 0 (NEVER-CLAIMED) until a resume claims it */
+    uint32_t claim_fork_gen;   /* the claiming flow's fork generation at the instant of the claim */
     JSAsyncFunctionState func_state;
 } JSAsyncFunctionData;
 
@@ -43342,37 +43393,70 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                    gate would not have run. So every arm of this call returns an ACTIVE state whenever it was
                    handed one, and reaching here means the protection that was owed ran EARLIER, for somebody
                    else, and did not.
-                   WHICH IS WHY THE SENTENCE THAT STOOD HERE WAS THE WRONG SHAPE: it named ONE mechanism (“the
-                   per-flow activation swap did not isolate it”) over a predicate that tests MEMBERSHIP, and at
-                   least three states reach it that take opposite work — the hook not installed at all, a flow
-                   that reads this closure SHARED (so it would itself have cloned, and the consumer that killed
-                   the original was some other resume), and a flow that reads it PRIVATE (so its own test says
-                   no sibling can hold this closure, and one demonstrably did). The numbers that separate them
-                   are all in hand at the abort and none of them survived into it, so a re-drive reproduced the
-                   same one sentence and answered nothing.
-                   THE PRIVATE READING IS SELF-REFUTING AND IS THE ONE TO ACT ON: it is the gate asking
-                   JS_IsFlowShared of the CLOSURE while js_async_resume_isolate’s own banner states the question
-                   about the ACTIVATION — two objects minted at two times, the activation at the call and the
-                   closure at the await (js_async_function_await_finish), so the closure’s generation is never
-                   below the activation’s and the implemented test is STRICTLY STRONGER than the intended one,
-                   erring by SKIPPING the clone. `forkGen 0` additionally says this flow has never forked
-                   (cow.c sets fork_gen only in cow_fork; every other delta is calloc’d), and a slice stamps
-                   from 1 — so for such a flow the test answers PRIVATE for every closure page code has ever
-                   minted and the isolation is unreachable by construction, not by circumstance.
+                   THE THREE READINGS THAT STOOD HERE GRADED A FLAG THIS ABORT'S OWN GATE NEVER ASKED FOR, AND
+                   THE GRADING IS REWRITTEN RATHER THAN DELETED BECAUSE A READER WHO RE-DERIVES IT WILL
+                   RE-DERIVE IT THE SAME WAY. They were: the hook not installed at all; a flow that reads this
+                   closure SHARED, “so it would itself have cloned, and the consumer that killed the original
+                   was some other resume”; and a flow that reads it PRIVATE, “so its own test says no sibling
+                   can hold this closure, and one demonstrably did” — with the PRIVATE one rated as the one to
+                   act on. Every sentence of that is true as a COUNTERFACTUAL about the arriving flow, and the
+                   split is still the wrong instrument, because the proof at the top of this comment settles
+                   which term of the gate decided: the gate is `hook && s->is_active && IsShared`, the assert
+                   fires only when the activation was dead ON ARRIVAL, and a dead activation short-circuits at
+                   the SECOND term. THE THIRD TERM IS THEREFORE NEVER ASKED ON ANY PATH THAT REACHES THIS LINE,
+                   so the SHARED/PRIVATE printed below is a RE-EVALUATION performed for the message and not the
+                   answer the gate acted on. It is a property of the flow that ARRIVED. So is `closureGen`, so
+                   is `forkGen`, and so is `hook` — all four numbers describe the party that found the corpse,
+                   and the crash carried no coordinate of the party that made one.
+                   MEASURED, AND THAT IS WHAT THE SPLIT COST: a real drive (vercel.com/login) returned
+                   `hook=1 closureGen=2887 forkGen=2887 closure=SHARED`, which under the old grading is the
+                   reading rated NOT the one to act on — so a correct crash, reproduced, left its reader with
+                   nothing to do. It is also the ONLY reading the defect can produce at the victim whenever the
+                   consuming flow was a different flow, which is every case the split was written for.
+                   WHAT INDICTS THE CONSUMER IS `consumedBy`, and it is not derived here: js_async_resume_isolate
+                   stamps the arm it took onto whichever activation it hands back, so the dead activation
+                   carries the name of the resume that claimed it — AN-ASSERT-THAT-NAMES-A-REMEDY-BUT-NOT-A-SITE's
+                   cure, the site travelling with the OPERATION rather than being reconstructed where the damage
+                   surfaces. The five arms are a PARTITION and each selects a different repair; read
+                   JS_ASYNC_CLAIM_ARMS for which. NEVER-CLAIMED is the one the three readings above could not
+                   express at all: it says the consumer never came through that gate, so every question about
+                   the gate is the wrong question and the consumer is a teardown path.
                    RETIREMENT: this comment goes when the gate asks its question of the activation. */
                 /* THE MESSAGE CARRIES THE STATE AND NOT THE ARGUMENT, AND THAT IS A LENGTH DECISION THE
                    COMPILER MADE RATHER THAN A PREFERENCE. `quickjs-check.h` gives a reason 512 bytes; the
                    first version of this abort expanded to at least 644, and `-Wformat-truncation` — which
                    `build.mjs` keeps ON, deliberately, with a comment recording a DFAIL that wrote 526 into
                    320 — said so. A crash that names less than it knows is the one failure this mechanism
-                   cannot have, so what a cut would have eaten is the part that is ALREADY ABOVE: the three
-                   readings and the SHARED/PRIVATE verdict stay here because only this line can produce them,
-                   and the account of what each one MEANS stays in the comment, where it costs no bytes and
-                   cannot be truncated. Do not re-expand this string; the argument did not go missing. */
+                   cannot have, so what a cut would have eaten is the part that is ALREADY ABOVE: the readings
+                   and the verdicts stay here because only this line can produce them, and the account of what
+                   each one MEANS stays in the comment, where it costs no bytes and cannot be truncated.
+                   THE `DO NOT RE-EXPAND THIS STRING` THAT STOOD HERE WAS A BOUND WITHOUT ITS NUMBER, WHICH IS
+                   WHY IT WAS OBEYABLE ONLY BY NOT TOUCHING THE LINE. The expansion is arithmetic and it is
+                   free: widest `%u` is 10 (uint32_t), widest arm name is `SKIPPED-PRIVATE` at 15, widest
+                   closure verdict is `PRIVATE` at 7, `%d` is 1, and the literal is 371 — WORST CASE 424
+                   BYTES against the 512 cap, 87 spare. Re-measure that sum before adding a field rather than
+                   deciding from the sentence; a bound stated as a prohibition is one nobody can satisfy
+                   except by leaving the defect in.
+                   AND THE COMPILER GUARDS THE LITERAL HALF OF THAT SUM AND NOT THE ARGUMENT HALF, WHICH IS A
+                   MEASUREMENT AND NOT A READING OF THE FLAG'S NAME. `-Wformat-truncation` is a MIDDLE-END
+                   warning: at `-fsyntax-only` it is silent at every level, so a syntax check that passes has
+                   said nothing about this line at all. Armed properly (`gcc -O1 -Wformat-truncation=2`) it
+                   DOES judge this site — a probe padding the literal to 572 named this DCHECKF by line,
+                   `' all describe the flow that ...' directive output truncated`. The SAME probe padding the
+                   literal to 492 while pushing the WORST CASE to 545 produced NOTHING here, though it raised
+                   eighteen truncation warnings elsewhere in the file (19 with the 572 one, which is the
+                   arithmetic that says the extra warning was mine). So the bound the compiler enforces is
+                   the literal plus the widths it can PROVE, and the widths of `%s`/`%u` arguments it cannot
+                   bound are guarded by the arithmetic above and by nothing else. A control that fires
+                   somewhere else in the translation unit is not a control for this line, and the flag being
+                   ON in `build.mjs` is not a promise about the half this abort actually grew in. */
                 DCHECKF(as->is_active,
-                        "a flow resumed a suspended async continuation that was already consumed. hook=%d "
-                        "closureGen=%u forkGen=%u closure=%s — read the paragraph above this DCHECKF for what "
-                        "each reading indicts, and coroSwapAsyncCalls/coroSwapAsyncMade beside it",
+                        "a flow resumed a suspended async continuation that was already consumed. "
+                        "consumedBy=%s@gen%u — that is the arm of js_async_resume_isolate that last claimed it "
+                        "and the ONLY reading here that indicts the CONSUMER; hook=%d closureGen=%u "
+                        "forkGen=%u closure=%s all describe the flow that ARRIVED. Read the paragraph above "
+                        "this DCHECKF, and coroSwapAsyncCalls/coroSwapAsyncMade beside it",
+                        js_async_claim_arm_name(as->claim_arm), (unsigned)as->claim_fork_gen,
                         g_time_travel.async_fork != NULL,
                         (unsigned)JS_ObjFlowGen(rfunc), (unsigned)g_flow_fork_gen,
                         JS_IsFlowShared(rfunc) ? "SHARED" : "PRIVATE");
@@ -54162,6 +54246,7 @@ static JSAsyncFunctionData *js_async_resume_isolate(JSContext *ctx, JSValueConst
 {
     JSObject *p = JS_VALUE_GET_OBJ(func_obj);
     JSAsyncFunctionData *s = p->u.async_function_data;
+    uint8_t arm;
 
     DCHECK(s != NULL,
            "an await continuation carries no async activation — §27.10.5.3's closures capture asyncContext at "
@@ -54174,28 +54259,76 @@ static JSAsyncFunctionData *js_async_resume_isolate(JSContext *ctx, JSValueConst
        The activation is born at the CALL and the closure at the AWAIT (js_async_function_await_finish mints a
        fresh pair per await), so the closure’s generation is never below the activation’s: the implemented test
        is strictly stronger than the intended one and every disagreement between them SKIPS the clone, which is
-       the direction that loses the isolation rather than the one that costs a spare copy.
+       the direction that loses the isolation rather than the one that costs a spare copy. That clause is about
+       the SPEC of this gate, it is untouched by anything below, and it stands.
+       THE `HOW ITS ABSENCE WOULD SHOW` CLAUSE THAT STOOD HERE WAS FALSE AT BIRTH, NOT STALE, AND IT IS
+       REWRITTEN RATHER THAN DELETED BECAUSE THE READING THAT PRODUCED IT IS THE ONE A READER RE-DERIVES. It
+       said: “the await-resume abort in do_async_resume_tramp reports the closure’s generation against the
+       running flow’s fork generation and says which way its own test answered. A flow that reads PRIVATE there
+       has had the activation it names consumed by somebody the test says cannot hold it.” THAT OBSERVATION
+       CANNOT BE PRODUCED BY THE MECHANISM THE CLAUSE ABOVE IT NAMES, and the proof is the gate’s own
+       short-circuit order rather than anything about the tree — which is why no revision, no re-drive and no
+       archaeology was ever going to settle it. The gate is `hook && s->is_active && IsShared`. For the THIRD
+       term to be evaluated at all the SECOND must already be true, so a resume whose PRIVATE reading actually
+       decided anything was handed a LIVE activation and returns it: that flow cannot reach the abort. The
+       abort is therefore reachable only when the gate short-circuits at the FIRST or SECOND term, and in both
+       of those the third term is never asked — so the SHARED/PRIVATE the abort prints is a RE-EVALUATION with
+       no causal role in the call it is printed from. It describes whether the ARRIVING flow would have cloned;
+       it says nothing whatever about the flow that CONSUMED.
+       THE TWO FLOWS ARE DIFFERENT FLOWS, WHICH IS THE WHOLE OF IT: the mechanism’s culprit reads PRIVATE and
+       never fires, and its victim fires and reads whatever it likes. So the clause named the VICTIM’S reading
+       while the mechanism constrains only the CULPRIT’S — and a SHARED reading, which is what a real drive
+       returned (hook=1 closureGen=2887 forkGen=2887 closure=SHARED, vercel.com/login), is FULLY CONSISTENT
+       with this residual’s mechanism having caused it one flow earlier. Nothing was learned and nothing was
+       refuted, which is exactly what a clause that names an unproducible observation buys.
+       HOW ITS ABSENCE WOULD SHOW (the replacement, and it is about the CULPRIT): the abort in
+       do_async_resume_tramp now prints the dead activation’s own `claim_arm` — the arm of THIS function that
+       last claimed it for consumption. This residual’s mechanism shows as `SKIPPED-PRIVATE` there, and only
+       as that; `HOST-DECLINED`, `HOOK-OFF` and `CLONED` each indict something else entirely, and
+       `NEVER-CLAIMED` says the consumer never came through this function at all.
        NEXT DIFF: give the activation its own generation — stamped where the four JSAsyncFunctionData
-       constructors run (grep JS_GC_OBJ_TYPE_ASYNC_FUNCTION for the count; that number has been wrong here
-       before) and carried by js_async_frame_clone — and ask the shared question of THAT, leaving the closure
-       out of it. This clause is a hypothesis about this tree and not a measurement: re-derive it before
-       building it, because the same reading also has to answer why a flow that has NEVER forked (fork_gen 0,
-       which cow.c gives every delta cow_fork did not make) is entitled to skip the clone for every closure a
-       slice has stamped.
-       HOW ITS ABSENCE WOULD SHOW: the await-resume abort in do_async_resume_tramp reports the closure’s
-       generation against the running flow’s fork generation and says which way its own test answered. A flow
-       that reads PRIVATE there has had the activation it names consumed by somebody the test says cannot hold
-       it. RETIREMENT: this residual goes when the gate names the activation instead of `func_obj`. */
-    if (g_time_travel.async_fork && s->is_active && JS_IsFlowShared(func_obj)) {
+       constructors run (COUNTED at four rather than taken from this sentence: grep
+       JS_GC_OBJ_TYPE_ASYNC_FUNCTION) and carried by js_async_frame_clone — and ask the shared question of
+       THAT, leaving the closure out of it. IT IS GATED ON A `SKIPPED-PRIVATE` READING AND NOT ON THIS CLAUSE:
+       this is a hypothesis about this tree, it has now been dispatched once and re-derived once, and the
+       re-derivation found it un-indicted rather than wrong. The same reading still has to answer why a flow
+       that has NEVER forked (fork_gen 0, which cow.c gives every delta cow_fork did not make) is entitled to
+       skip the clone for every closure a slice has stamped — and there is a second, sharper question the
+       activation generation does NOT answer, which is why the gate may need more than a better operand: a
+       PRIVATE reading is a claim about the flows that exist NOW, and `cow_delta_fork` sets BOTH arms’
+       fork_gen to the CURRENT generation, so the next fork retroactively makes every object at or below that
+       generation shared. A consumption that was private when it happened is not private afterwards.
+       RETIREMENT: this residual goes when the gate names the activation instead of `func_obj`. */
+    if (!g_time_travel.async_fork) {
+        arm = JS_ASYNC_CLAIM_HOOK_OFF;
+    } else if (!s->is_active) {
+        /* DEAD ON ARRIVAL — the caller’s abort owns this state, and returning UNSTAMPED is what lets it name
+           the culprit: a claim written here would overwrite the arm the CONSUMER left and replace the one
+           coordinate the crash has with a description of the flow that merely found the corpse. This is also
+           the only arm that reaches that abort, which is why the SHARED/PRIVATE it prints is a re-evaluation
+           and not the gate’s answer — see the residual above. */
+        return s;
+    } else if (!JS_IsFlowShared(func_obj)) {
+        arm = JS_ASYNC_CLAIM_SKIPPED_PRIVATE;
+    } else {
         JSAsyncFunctionData *c = js_async_frame_clone(ctx, s);
         if (unlikely(!c))
             return NULL;
         /* The host installs `c` and keeps `s` as the baseline — or DECLINES (no delta owns the swap, so there
            is no sibling to isolate from and nothing to undo it). Either way the closure is the authority on
-           which activation this flow resumes, so it is re-read rather than assumed. */
+           which activation this flow resumes, so it is re-read rather than assumed — and the re-read is also
+           what tells the two arms apart, since an install returns the clone and a decline returns `s` itself.
+           Compared by POINTER and not by asking the host, because the closure is already the authority named
+           one line up and a second question could answer differently. */
         g_time_travel.async_fork(ctx, func_obj, s, c);
+        arm = (p->u.async_function_data == s) ? JS_ASYNC_CLAIM_HOST_DECLINED : JS_ASYNC_CLAIM_CLONED;
         s = p->u.async_function_data;
     }
+    /* THE CLAIM IS STAMPED ON WHAT THIS RESUME WILL RUN, which is the clone when one was installed and the
+       original on every other arm — so an original that survives as a baseline keeps whatever claim it
+       already had, and the LAST claimer of any activation is by construction the one that consumed it. */
+    s->claim_arm = arm;
+    s->claim_fork_gen = g_flow_fork_gen;
     return s;
 }
 
