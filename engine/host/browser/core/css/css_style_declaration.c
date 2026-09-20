@@ -110,6 +110,7 @@
 #include "core/css/css_rule.h"
 #include "core/css/css_background_shorthand.h"
 #include "core/css/css_shorthand.h"
+#include "core/css/css_var.h"   /* css-variables-1 §3's var(), for the parse-time rule below */
 #include "core/css/css_style_declaration.h"
 #include "core/css/css_style_sheet.h"
 #include "core/css/style_sheet_list.h"
@@ -511,7 +512,15 @@ static void cssd_decls_collect(CssDecls *d, const char *name, char *value, bool 
        property could have asked for — they are the PAGE's mistake, and CLAUDE.md forbids an assert standing
        on bytes a page wrote. The two are told apart by core/css/css_math.h's middle rung, not by this file. */
 #if APICLIENT_DEV
-    if (value != NULL && !(name[0] == '-' && name[1] == '-') &&
+    /* …AND IT IS SCOPED AWAY FROM A VALUE NO PRODUCER HAS JUDGED YET, which is what an unsubstituted
+       arbitrary substitution function is. css-values-5 makes such a value "assumed to be valid at parse time"
+       and "only syntax-checked at computed-value time, after … functions have been substituted", so there is
+       no producer here to have asked the wrong production of and the invariant this assert states is not yet
+       about anything. `calc(var(--gap) + 1px)` is the shape: §10.9 cannot type an unsubstituted reference, so
+       `css_math_is_valid_function` already answers false for it and this conjunct changes no verdict today —
+       it is written because that is a fact about ANOTHER component's typing rather than about this rule, and
+       a value admitted by the arm above must not depend on it to stay out of an abort. */
+    if (value != NULL && !(name[0] == '-' && name[1] == '-') && !css_var_references(value) &&
         css_property_numeric_audited(name) && css_math_is_valid_function(value, strlen(value))) {
         unsigned prods, p;
         bool ok = false;
@@ -622,6 +631,41 @@ static bool cssd_undef_is_declaration(const char *name, const char *value)
        the revert-rule keyword", so which CSS-wide keywords survive its parse depends on which properties it
        happens to type — a wrong answer per property rather than a missing capability. */
     if (css_wide_keyword(value)) return true;
+    /* css-values-5: "If a property value contains one or more arbitrary substitution functions, and all of
+       those functions are themselves syntactically valid according to their argument grammars, THE ENTIRE
+       VALUE'S GRAMMAR MUST BE ASSUMED TO BE VALID AT PARSE TIME." That is the same question the two arms
+       around it ask — is this a value a LATER LEVEL OF CSS defines than the grammar that refused it — and
+       `var()` is its widest member yet: the vendored grammar predates css-variables-1 entirely, so EVERY
+       declaration whose value references a custom property arrived here and was dropped, on every property
+       and at every site. MEASURED before this arm, reading a rule's own style block back through CSSOM:
+       `background-color: var(--x)` and `margin-top: var(--pad)` were both absent from it while their literal
+       twins were present, and an inline `style="color:var(--x)"` was absent too — so the substitution step
+       core/css/css_computed_value.c performs was correct, was reached, and was handed nothing, because the
+       cascade had no declaration to substitute into.
+       NO NUMERIC SHAPE IS ASKED, UNLIKE THE MATH ARM BELOW, and that asymmetry is the standard's: a math
+       function has a TYPE, so it is a value of a property only where the grammar names a numeric production,
+       while an arbitrary substitution function may resolve to anything at all and the sentence above is
+       therefore unconditional on the property. Asking a shape here would re-impose at parse time exactly the
+       judgement the standard defers to computed-value time.
+       THE SCAN IS core/css/css_var.h's OWN, which is what keeps this arm and the substitution that follows it
+       from disagreeing about what a function token is: a `var(` inside a string is not one, and neither is
+       the `(` of an ident that merely ends in `var`. Two spellings of that question would let a declaration
+       be admitted here and then substituted into by a step that cannot see the function.
+       NAMED RESIDUAL — A SHORTHAND IS DELIBERATELY NOT ADMITTED, AND THE STANDARD SPLITS IT THE SAME WAY.
+       WHAT IS NOT COVERED: css-values-5 gives the shorthand case its own mechanism — "If a shorthand property
+       contains an arbitrary substitution function in its value, the longhand properties it's associated with
+       must instead be filled in with a special, unobservable-to-authors pending-substitution value that
+       indicates the shorthand contains an arbitrary substitution function, and thus the longhand's value
+       can't be determined until after substituted" — and this engine has no such value, so admitting a
+       shorthand here would hand core/css/css_shorthand.h a component it cannot split and the expansion would
+       fail with the declaration already in the block. WHAT THE NEXT DIFF BUILDS: the pending-substitution
+       value, cascaded as normal and resolved at computed-value time by substituting the ORIGINAL shorthand
+       value and expanding what comes back; its serialization is stated too ("Pending-substitution values must
+       be serialized as the empty string, if an API allows them to be observed"). HOW ITS ABSENCE WOULD SHOW,
+       as an observation: a shorthand whose value references a custom property sets none of its longhands,
+       while the same declaration written as longhands sets all of them — so a document styled through
+       shorthands paints less than its longhand twin and neither aborts. */
+    if (css_var_references(value)) return !css_shorthand_is_shorthand(name);
     if (!cssd_has_math_function(value)) return false;
     shape = css_property_numeric(name, &prods);
     /* The grammar names no numeric production anywhere, so a math function is not a value of this property and
