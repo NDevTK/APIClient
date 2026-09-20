@@ -327,7 +327,16 @@ static void park_str(const char *s) { park_raw(s, strlen(s)); }
 /* ONE RECORD BEGINS. The separator is written BEFORE the record rather than after it, so the document never
    carries a trailing byte a later append has to reach back and unwrite — the property the rendered closing
    bracket used to buy, now true of the accumulation itself. */
-static void park_open_rec(void) { if (g_park_recs++) park_str(";"); }
+/* THE DOCUMENT'S TOTAL AGAINST ITS CENSUS — defined beside the counters it reads, declared here because the
+   record that opens below is where the two can first disagree. */
+static void park_doc_agrees(void);
+
+/* AND THE CENSUS IS ASKED AT EVERY RECORD, BEFORE THE COUNT MOVES, WHICH IS THE ORIGIN EVERY RECORD IN THIS
+   FILE PASSES THROUGH: at this instant every record already in the document is finished and counted, so a
+   kind written without counting itself cannot survive past the NEXT record instead of surviving to whoever
+   reads the census. What this ask cannot see is a document's LAST record, which is why cold_park_flow and
+   cold_park ask again at their ends rather than relying on it alone. */
+static void park_open_rec(void) { park_doc_agrees(); if (g_park_recs++) park_str(";"); }
 
 /* ONE RECORD. The charset is asserted rather than escaped: a record is built from digits, the two arm
    characters and the punctuation below, so nothing in it can need JSON escaping on the way to the transport
@@ -360,13 +369,17 @@ static void park_gen_rec(void)
     char rec[32];
 
     if (g_park_gen_written) return;
-    g_park_gen_written = 1;
     DCHECK(g_park_recs == 0,
            "the generation record is not the first in the park document — every record after it is named under "
            "the generation above it, so a reader that met a flow first would rebuild it in the ended session's "
            "namespace and hand a peer a name it already holds a segment for");
     snprintf(rec, sizeof rec, "g%u", world_session());
     park_rec(rec);
+    /* THE FLAG GOES UP AFTER THE WRITE, SO IT IS A COUNT AND NOT AN INTENTION. park_doc_agrees reads it as the
+       number of 'g' records in this document, and one raised BEFORE park_rec would make that identity false
+       for exactly the length of a call that now asserts inside itself. Safe in this order because nothing
+       park_rec reaches can re-enter here, and the early return above is what keeps it one. */
+    g_park_gen_written = 1;
 }
 
 /* TEXT THIS FILE DID NOT COMPOSE CROSSES AS HEX, and it is the one thing in this document whose charset the
@@ -667,6 +680,43 @@ void cold_parked(ColdParked *out)
 {
     DCHECK(out != NULL, "the cold tier was asked to report a park into nothing");
     *out = g_parked_census;
+}
+
+/* THE TOTAL AND ITS PARTS ARE ONE NUMBER READ TWO WAYS — cold_park_records() is one 'g' plus every kind the
+   census counts, which is cold.h's own sentence about where the generation lives, asserted instead of said.
+   EIGHT KINDS, EIGHT COUNTERS, ONE TOTAL, and the total moves at park_open_rec whatever a writer forgets: the
+   eight summands here are the eight park_open_rec callers in this file, so a ninth added without a row is
+   caught by the next record rather than by a reader noticing the numbers look small.
+   WHAT IT IS FOR IS NOT TIDINESS. Nothing counted an 'r' or an 'm', so a census of this residue could be
+   STATED — by hand, by a summary, by a recollection — and no instrument here could contradict it. That is
+   §a-count-that-cannot-be-true with the parts already counted and the sum asserted nowhere, and the RESUMED
+   half has had exactly this assertion since it had counters at all (cold_resume's `flows + cands +
+   cands_withdrawn == flows`, whose own comment says it exists so that "an arm added to the grammar without a
+   counter is caught here"). The writing half did not.
+   A DCHECK AND NOT A CHECK, and the release arm is what decides it rather than the taxonomy alone. This is the
+   engine's arithmetic about its OWN writing — §Offensive-programming's first category — and the records are
+   accumulated by park_str independently of these counters, so a disagreement MISREPORTS the residue and does
+   not corrupt it: the document still holds every record and cold_resume still reads them. A CHECK would abort
+   the park at the one moment the cold tier exists for, losing a whole suspended frontier over a reporting
+   discrepancy, which is strictly worse than storing a correct document under a wrong description.
+   FORMATTED, BECAUSE THE ADDRESS IS PART OF THE ASSERT: this is a helper with eight record writers above it
+   and §AN-ASSERT-THAT-NAMES-A-REMEDY would otherwise stamp one line for all of them. The eight numbers are
+   what localize it — the kind whose counter is short is the one whose row does not account for the gap. */
+static void park_doc_agrees(void)
+{
+    long gen = g_park_gen_written ? 1 : 0;
+    long sum = gen + g_parked_census.segs + g_parked_census.flows + g_parked_census.cands +
+               g_parked_census.worlds + g_parked_census.orphans + g_parked_census.commits +
+               g_parked_census.delivers;
+
+    DCHECKF(g_park_recs == sum,
+            "the park document holds %ld record(s) and its census accounts for %ld — g %ld, s %ld, f %ld, "
+            "c %ld, w %ld, o %ld, r %ld, m %ld. A record kind was written without counting itself, so every "
+            "host that asks what this residue carries is told a kind that ran did not, and a census nobody "
+            "can check is a census anybody can state",
+            g_park_recs, sum, gen, g_parked_census.segs, g_parked_census.flows, g_parked_census.cands,
+            g_parked_census.worlds, g_parked_census.orphans, g_parked_census.commits,
+            g_parked_census.delivers);
 }
 
 /* EMIT `seg` AND EVERY UNEMITTED SEGMENT BELOW IT, base first, and answer its ordinal. Iterative and not
@@ -1009,6 +1059,7 @@ void cold_park_flow(Flow *f)
                    "FlowCommitArm) and this tier may not invent one, so a row without it would be written "
                    "out as FLOW_COMMIT_ARM_NONE and come back as a refusal that defers to nobody");
             park_rec_commit(vec, JS_VALUE_GET_INT(tv), (FlowCommitArm)JS_VALUE_GET_INT(av));
+            g_parked_census.commits++;
             JS_FreeCString(qctx, vec);
             JS_FreeValue(qctx, vv);
             JS_FreeValue(qctx, tv);
@@ -1034,6 +1085,7 @@ void cold_park_flow(Flow *f)
                   "the cold tier could not read a routed delivery off the flow it is parking — a message that "
                   "cannot be written is one the resumed session never receives");
             park_rec_deliver(record, origin);
+            g_parked_census.delivers++;
             JS_FreeCString(qctx, record);
             JS_FreeCString(qctx, origin);
             JS_FreeValue(qctx, rv);
@@ -1041,6 +1093,11 @@ void cold_park_flow(Flow *f)
             JS_FreeValue(qctx, e);
         }
     }
+    /* AND THE DOCUMENT STILL ADDS UP AFTER THE LAST RECORD THIS FLOW WROTE. park_open_rec asks BEFORE a
+       record and so can never see one, and a host that calls only this primitive — a PARTIAL self-park under
+       RAM pressure — never reaches cold_park's ask at all, so without this a per-flow park is checked to its
+       penultimate record and no further. */
+    park_doc_agrees();
     f->paged = 1;   /* its recipe exists: flow_release may now let its parked continuation go (flow.h) */
 }
 
@@ -1132,6 +1189,10 @@ void cold_park(void)
            "segment, a frozen decision chain) exists to serve the flows named beside it, so this residue "
            "resumes nothing while still reading as a residue: the host stores it, the next session chooses it "
            "over a boot flow, and that document is never explored again");
+    /* …AND WHAT IT WROTE IS WHAT IT COUNTED. The preamble above is the one block in this file that can run
+       with no flow after it, so a whole-frontier park over an empty registry writes records that no later
+       park_open_rec closes and that cold_park_flow's own ask is never reached to close either. */
+    park_doc_agrees();
 }
 
 const char *cold_park_recipes(void)

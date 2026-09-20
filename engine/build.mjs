@@ -2742,7 +2742,14 @@ function programCursorReading(b) {
    summing a gauge: the check passes for the wrong reason or fails for no reason, and here it was the second.
    The shelf identity is asserted at `coldRoundTrip`, where the value is READ and where a reader who hits it
    is already holding both paths. */
-const COLDPARK_FIELDS = ["records", "segs", "flows", "cands", "orphans", "worlds", "bytes"];
+/* `commits` AND `delivers` ARE IN THIS CONTRACT AND NOT IN THE PAIRING BELOW, which is the whole of what this
+   reader can honestly say about them. They are the 'r' and 'm' records — POSITIONAL fields of the flow they
+   follow, exactly as an orphan locator is — and solver/cold.h now counts both at the write while ColdResumed
+   still has no counterpart, so there is a park-side number and no rebuild to compare it against. Listing them
+   here makes an absent name THROW (this file's own field contract) instead of being compared as undefined,
+   which is the same refusal `store` gets one line down. */
+const COLDPARK_FIELDS = ["records", "segs", "flows", "cands", "orphans", "worlds", "commits", "delivers",
+                         "bytes"];
 /* THE @S ARRIVAL CENSUS, SPELLED AS THE RESULT DOCUMENT SPELLS IT. test_forced.c prints the same four numbers
    the document carries as `_sourceReads`/`_sinkReached`/`_sinkTainted`/`_sinkSuppressed`, from the same
    producers, and it prints them under the document's own names — one namespace, so a reader who learns these
@@ -2859,8 +2866,23 @@ function coldRoundTrip(v1, v2, store) {
                  ["worlds", park.worlds, res.worlds]];
   const lost = kinds.filter(([, p, r]) => p > 0 && r < p).map(([k]) => k);
   const never = kinds.filter(([, p]) => p === 0).map(([k]) => k);
+  /* THE TWO KINDS THIS COMPARISON MAY NOT PAIR, REPORTED AS PARK-SIDE COUNTS. Pairing them anyway would read
+     `undefined` off the resume census and print it as a rebuild — a defaulted field in the READER rather than
+     in the tree, which is the one thing this file's census contract exists to refuse. They are reported at all
+     because their ZERO is the finding: 'r' and 'm' are the arms of the recipe grammar that no gate in this
+     tree has ever run, and until solver/cold.c counted them a residue that carried none and a writer that was
+     never reached were the same absent number — recoverable only by subtracting every other kind from
+     `records`, which is the derivation a reader had to be trusted to do and could therefore state instead. */
+  const unpaired = park.commits === 0 && park.delivers === 0
+    ? `commits 0, delivers 0 — NEITHER ARM EXERCISED: this residue carried no sending-timeline commitment and ` +
+      `no unmade routed delivery, so the 'r' and 'm' writers and cold_resume's rebuilds of them did not run. ` +
+      `A zero the residue wrote, and park-side only — ColdResumed has no counter for either yet, so nothing ` +
+      `here says whether the rebuild would have worked`
+    : `commits ${park.commits}, delivers ${park.delivers} — park-side only: ColdResumed has no counter for ` +
+      `either, so these are records WRITTEN and nothing in session TWO's census says how many came back`;
   return `${park.records} record(s) / ${park.bytes} B parked into ` +
          kinds.map(([k, p, r]) => `${k} ${p}→${r}`).join(", ") +
+         `; ${unpaired}` +
          (lost.length ? `; REBUILT SHORT on ${lost.join(", ")} — a kind session ONE wrote and session TWO did ` +
                         `not fully re-materialize is the arm to look at`
                       : `; every kind session ONE wrote came back`) +

@@ -575,7 +575,12 @@ long cold_park_records(void);
    that cannot tell those apart cannot tell an exercised round trip from an unexercised one.
    THE 'g' RECORD IS NOT A KIND HERE, and that is deliberate rather than an omission: there is exactly one per
    document and it names no flow, so counting it would put a constant in every one of these numbers. It is in
-   cold_park_records (which is what the document HOLDS) and in neither census (which are what it RESUMES). */
+   cold_park_records (which is what the document HOLDS) and in neither census (which are what it RESUMES).
+   THAT SPLIT IS WHAT MAKES THE TWO NUMBERS AN IDENTITY RATHER THAN TWO READINGS, and cold.c asserts it at
+   every record: cold_park_records() is ONE 'g' plus every field below, so a kind written without counting
+   itself moves the total and nothing else. Until that was asserted a census of a residue could be STATED
+   and no instrument in the tree could contradict it — which is how a figure naming eight kinds, two of
+   which had no counter here at all, came to be relayed as something the program prints. */
 typedef struct {
     long segs;     /* 's': frozen decision segments, written once each however many flows stand on them */
     long flows;    /* 'f' */
@@ -590,6 +595,18 @@ typedef struct {
        no forced invocation at all, so the next session inherits the document's explored paths and none of its
        uncalled code. */
     long orphans;
+    /* 'r': WHICH SENDING TIMELINES the parked flows are in — one per [vector, taken, arm] row of a flow's
+       commitment record (solver/flow.h). A positional field of the record before it exactly as 'o' is, never
+       an alternative to being a flow or a candidate, so not a summand of flows+cands.
+       ZERO IS A REAL ANSWER AND IT IS WHAT THIS ROW IS FOR. No counter anywhere held an 'r', so a residue
+       that carried none and a writer that has never been reached read alike — and both halves of this kind,
+       this park's write and cold_resume's rebuild, are a pair no gate in this tree has exercised. */
+    long commits;
+    /* 'm': the ROUTED DELIVERIES this residue carries — messages a peer sent that the parked timeline had
+       not yet made. A positional field of the flow before it exactly as 'r' is, and zero is a real answer
+       for the same reason: a delivery is the one work item on this frontier that no replay re-derives, so a
+       park carrying none is a statement about the document rather than about the tier. */
+    long delivers;
 } ColdParked;
 void cold_parked(ColdParked *out);
 

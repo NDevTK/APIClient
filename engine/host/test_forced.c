@@ -27846,9 +27846,17 @@ int main(int argc, char **argv) {
            fixture's own census could not otherwise say anything about — ColdParked counts it and, until this
            column existed, only cold_park's internal preview check ever read the number. A kind that is written
            and never reported is a kind whose absence and whose zero read alike. */
+        /* AND THE COMMITMENTS AND UNMADE DELIVERIES BESIDE THEM, for the same sentence one kind over: an 'r'
+           and an 'm' are the two arms of this grammar that NO counter anywhere held, so a residue that
+           carried none and a writer that has never been reached were the same absent number — and the
+           `records` on this line minus the kinds beside it was the only way anybody could recover them.
+           They are park-side only: cold_resume rebuilds both and ColdResumed has no counter for either yet,
+           so @COLDRESUME states nothing about them and build.mjs reports these two as counts rather than as
+           a round trip. */
         printf("@COLDPARK {\"records\":%ld,\"segs\":%ld,\"flows\":%ld,\"cands\":%ld,\"orphans\":%ld,"
-               "\"worlds\":%ld,\"bytes\":%zu,\"store\":\"%s\"}\n",
+               "\"worlds\":%ld,\"commits\":%ld,\"delivers\":%ld,\"bytes\":%zu,\"store\":\"%s\"}\n",
                cold_park_records(), g_cp.segs, g_cp.flows, g_cp.cands, g_cp.orphans, g_cp.worlds,
+               g_cp.commits, g_cp.delivers,
                strlen(recipes), cold_park_path ? cold_park_path : "-");
     }
     if (cold_resume_path) {
