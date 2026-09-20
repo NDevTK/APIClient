@@ -1442,12 +1442,38 @@ typedef struct {
      * of this pair is a reading of WHERE IN A RUN it was taken. `slice_overruns` is the count of
      * TURNS whose step alone met or exceeded the budget, so `slice_overruns / steps` is a proper fraction of
      * a denominator this struct already carries and needs no mean at all.
-     * IT IS THE SAME INEQUALITY quantum_expired() ASKS, asked at the turn boundary instead of at an opcode —
-     * solver/quantum.c tests `quantum_thread_us() - <slice start> >= ENGINE_QUANTUM_MS * 1000` and this tests
-     * the step's own two readings against that same product. So the row is not a private opinion about the
-     * budget that could drift from the component that owns it; it is a count of the turns in which the flow
-     * never reached a raise point inside its slice, which is §scheduler's named transport gap made countable
-     * on a host where nothing can raise the yield bit mid-call.
+     * IT IS THE SAME INEQUALITY quantum_expired() ASKS ON ONE OF THE TWO BRANCHES, AND THE PARAGRAPH THAT SAID
+     * IT WAS BOTH IS REWRITTEN RATHER THAN DELETED BECAUSE IT IS THE CLAIM A READER RE-DERIVES. It read:
+     * "solver/quantum.c tests `quantum_thread_us() - <slice start> >= ENGINE_QUANTUM_MS * 1000` and this tests
+     * the step's own two readings against that same product", and that is the GENERIC branch. The LINUX branch
+     * — the one the native gate compiles, and so the one every number quoted off this row was measured on —
+     * returns `g_fired != 0`, a flag a CLOCK_THREAD_CPUTIME_ID timer sets. The two agree in INTENT and are not
+     * one test: this row compares two clock readings and that branch reads a signal flag, so a delayed or
+     * coalesced delivery moves one and not the other. The conclusion the paragraph drew is unchanged — the row
+     * is not a private opinion about the budget — but it rests on the two being written to the same MARGIN,
+     * never on their being the same expression.
+     * AND THE TAIL CLAUSE NAMED THE WRONG HOST, WHICH INVERTS WHAT A NATIVE OVERRUN MEANS. It called this
+     * count "§scheduler's named transport gap made countable on a host where nothing can raise the yield bit
+     * mid-call" — true of the wasm instance, which has no asynchronous edge, and FALSE of the native host,
+     * whose timer raises the bit mid-call by construction. So a native overrun is not the transport gap: it is
+     * a stretch that offered no raise point WHILE THE BIT WAS RAISABLE, which is the stronger reading and the
+     * one the seam verdict exists for.
+     * AND NEITHER SEAM VERDICT CAN JUDGE THE POPULATION THIS ROW COUNTS, WHICH IS WHY THE ROW KEEPS READING
+     * HIGH BESIDE A SILENT ABORT. Both verdicts in engine_sched_step are ANDed with `g_preempt_asked == pa0`
+     * — ZERO consultations across the WHOLE step — so they can only ever name a step that never offered a
+     * point AND never ended by being preempted. A turn in this row ended at the slice boundary, so the hook
+     * WAS consulted to end it, the conjunct is false, and both verdicts are disarmed AT ANY MARGIN. The CPU
+     * margin is independently too coarse for it: 400 slices against a measured population near 291. MEASURED
+     * on the native smoke at two adjacent revisions, 9e0f14dc and 3864b36a: `resume-program` overran 70 of
+     * 161 and 70 of 152 runs, `start-a-classic-program` 3 of 7 and 3 of 8, total 73 both times over 1521 and
+     * 945 steps, with ZERO @WHY in either log. The quantity the contract is about is the GAP between two
+     * consecutive offers, which this file already computes (`g_max_gap`, closed off with the tail) and prints
+     * without deciding on, because it is WALL and a wall gap cannot tell a seamless stretch from a descheduled
+     * one. On a host quantum_measure_is_cpu() answers for, that objection does not apply and the gap can be
+     * taken in the slice's own measure — which is the same move the CPU verdict already made for the TOTAL,
+     * owed to the quantity the seam is actually about.
+     * RETIREMENT: this record goes when a seam verdict decides on the GAP in the slice's own measure, so a
+     * step that rests once and then runs seamlessly cannot be silent.
      * A COUNT AND NOT A MAXIMUM. A high-water mark of turn length would saturate early and then plateau, and
      * a plateau is indistinguishable from a ceiling on a short run; a count only rises with the population it
      * is drawn from, and the population is printed beside it. */
