@@ -97,18 +97,29 @@ lxb_selectors_match_attribute(lxb_selectors_t *selectors,
                               lxb_dom_node_t *node, lxb_selectors_entry_t *entry);
 
 /*
- * THE HOST'S ONE CHANCE TO REFUSE A VALUE IT CANNOT STATE -- see lxb_selectors_host_cb_t.attr_value_read. It
- * is spelled once, here, because three arms below read an attribute's value and a per-arm copy of the NULL
- * test is three places for the seam to go missing from; an embedder that installed no table at all is a
- * matcher that asks nothing, which is the same deliberate NULL the table's own declaration describes.
+ * THE VALUE THIS MATCH IS DECIDED FROM -- see lxb_selectors_host_cb_t.attr_value_read. It is spelled once,
+ * here, because three arms below read an attribute's value and a per-arm copy of the NULL test is three
+ * places for the seam to go missing from; an embedder that installed no table at all is a matcher that asks
+ * nothing, which is the same deliberate NULL the table's own declaration describes.
+ *
+ * IT RETURNS THE VALUE TO COMPARE AGAINST, so the substitution happens in ONE place and no arm below can
+ * decide against the tree's bytes while another decides against the host's. `value` is what the tree holds
+ * and is what comes back whenever the host declines, which is every embedder that installs no table and every
+ * attribute the host has nothing to say about. `buf` is scratch the CALLER owns for the length of its own
+ * comparison; the bytes the host writes into it are the host's and are neither freed nor written here.
  */
-static void
+static const lexbor_str_t *
 lxb_selectors_host_attr_value(lxb_selectors_t *selectors, const lxb_dom_node_t *node,
-                              const lxb_dom_attr_t *attr)
+                              const lxb_dom_attr_t *attr, lexbor_str_t *buf,
+                              const lexbor_str_t *value)
 {
-    if (selectors->host != NULL && selectors->host->attr_value_read != NULL) {
-        selectors->host->attr_value_read(node, attr, selectors->host_ctx);
+    if (selectors->host != NULL && selectors->host->attr_value_read != NULL
+        && selectors->host->attr_value_read(node, attr, buf, selectors->host_ctx))
+    {
+        return buf;
     }
+
+    return value;
 }
 
 static bool
@@ -1307,6 +1318,7 @@ lxb_selectors_match(lxb_selectors_t *selectors, lxb_selectors_entry_t *entry,
                     lxb_dom_node_t *node)
 {
     lxb_dom_element_t *element;
+    lexbor_str_t host_value;
 
     switch (entry->selector->type) {
         case LXB_CSS_SELECTOR_TYPE_ANY:
@@ -1330,11 +1342,13 @@ lxb_selectors_match(lxb_selectors_t *selectors, lxb_selectors_entry_t *entry,
             /* §6.6 "Class selectors" IS an attribute value test and says so: "in [HTML], [SVG11], and
                [MATHML] membership in a class is given by the class attribute: in these languages it is
                equivalent to the ~= notation applied to the local class attribute (i.e. [class~=identifier])".
-               So the value it reads is asked about exactly as `[class~=x]`'s would be. */
-            lxb_selectors_host_attr_value(selectors, node, element->attr_class);
-
-            return lxb_selectors_match_class(element->attr_class->value,
-                                             &entry->selector->name, true);
+               So the value it reads is asked about exactly as `[class~=x]`'s would be -- and answered the
+               same way, which is what makes `el.className = <host unknown>` decidable once the host knows
+               what it wrote. */
+            return lxb_selectors_match_class(
+                       lxb_selectors_host_attr_value(selectors, node, element->attr_class,
+                                                     &host_value, element->attr_class->value),
+                       &entry->selector->name, true);
 
         case LXB_CSS_SELECTOR_TYPE_ATTRIBUTE:
             return lxb_selectors_match_attribute(selectors, entry->selector,
@@ -1384,6 +1398,7 @@ lxb_selectors_match_id(lxb_selectors_t *selectors,
 {
     const lexbor_str_t *trg, *src;
     lxb_dom_element_t *element;
+    lexbor_str_t host_value;
 
     element = lxb_dom_interface_element(node);
 
@@ -1393,10 +1408,9 @@ lxb_selectors_match_id(lxb_selectors_t *selectors,
 
     /* §6.7 "ID selectors" IS an attribute value test: "An ID selector represents an element instance that
        has an identifier that matches the identifier in the ID selector", and "In HTML all ID attributes are
-       named id" -- so the value it reads is asked about like any other attribute's. */
-    lxb_selectors_host_attr_value(selectors, node, element->attr_id);
-
-    trg = element->attr_id->value;
+       named id" -- so the value it reads is asked about like any other attribute's, and answered like one. */
+    trg = lxb_selectors_host_attr_value(selectors, node, element->attr_id,
+                                        &host_value, element->attr_id->value);
     src = &selector->name;
 
     return trg->length == src->length
@@ -1466,6 +1480,7 @@ lxb_selectors_match_attribute(lxb_selectors_t *selectors,
     lxb_dom_attr_t *dom_attr;
     lxb_dom_element_t *element;
     const lexbor_str_t *trg, *src;
+    lexbor_str_t host_value;
     const lxb_dom_attr_data_t *attr_data;
     const lxb_css_selector_attribute_t *attr;
 
@@ -1514,7 +1529,7 @@ lxb_selectors_match_attribute(lxb_selectors_t *selectors,
         || attr->match == LXB_CSS_SELECTOR_MATCH_EQUAL
         || attr->match == LXB_CSS_SELECTOR_MATCH_DASH)
     {
-        lxb_selectors_host_attr_value(selectors, node, dom_attr);
+        trg = lxb_selectors_host_attr_value(selectors, node, dom_attr, &host_value, trg);
     }
 
     ins = attr->modifier == LXB_CSS_SELECTOR_MODIFIER_I;

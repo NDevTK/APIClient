@@ -103,11 +103,20 @@ typedef struct {
      * ask, because `.x` and `#x` are attribute value tests that happen to have their own syntax -- §6.6 says
      * so outright for the first ("it is equivalent to the ~= notation applied to the local class attribute").
      *
-     * VOID, because there is nothing for the matcher to do with a refusal: a host that cannot state the value
-     * has no arm for this matcher to take, so it either stops the run or it accepts the byte comparison that
-     * follows. `attr` is the attribute the comparison is about and `node` its element.
+     * IT ANSWERS, AND THE ANSWER IS BYTES. This used to be VOID, on the reasoning that "there is nothing for
+     * the matcher to do with a refusal" -- true of a host that can only REFUSE, and that is not the only thing
+     * a host has to say. A host whose attribute value is a stand-in may have SINCE ESTABLISHED what it stands
+     * for, and then the honest value of the attribute for this match is those bytes and not what the tree
+     * holds; every operator below is then decided by the matcher's own comparison, on a real string, exactly
+     * as it would have been had the bytes been there all along. So the seam carries both answers: `true` with
+     * `*out` filled means "the value is THESE bytes", and `false` means "I have nothing to add" -- which is
+     * the refusal the old spelling could make, unchanged.
+     *
+     * `*out` IS BORROWED FOR THE DURATION OF THE MATCH and the matcher neither frees nor writes it. `attr` is
+     * the attribute the comparison is about and `node` its element.
      */
-    void (*attr_value_read)(const lxb_dom_node_t *node, const lxb_dom_attr_t *attr, void *ctx);
+    bool (*attr_value_read)(const lxb_dom_node_t *node, const lxb_dom_attr_t *attr,
+                            lexbor_str_t *out, void *ctx);
 }
 lxb_selectors_host_cb_t;
 

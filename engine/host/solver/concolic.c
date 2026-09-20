@@ -60,6 +60,20 @@ enum { CMP_ALGO_NONE = -1 };
 typedef struct {
     char *shape;        /* @H/@S display form */
     char *src;          /* INJECTION IDENTITY: the source an @S candidate substitutes at */
+    /* …AND WHETHER THAT IDENTITY NAMES *THIS* VALUE, which is a second fact about `src` and not a property of
+       it. A DERIVATION INHERITS ITS FIRST UNKNOWN OPERAND'S `src` — concolic_add_hook takes
+       `ca ? concolic_src_c(a) : concolic_src_c(b)` and says why — so `src` is the key a CANDIDATE is injected
+       at and NOT a name for the value holding it. concolic_example states the same asymmetry from the other
+       end about a different fact: "a derived value carries its operand's `src`, so keying by source would
+       silence the operand too — an inversion arrived at by accident".
+       THE PIN IS KEYED BY `src`, SO THIS IS WHAT MAKES READING ONE BACK SOUND. concolic_new's own pin arm is
+       written "AT THE MINT WHERE `src` IS THE VALUE'S OWN IDENTITY — which is what makes this the one
+       derivation the pin may be read at", and that sentence is a precondition no caller outside this file
+       could check. This is that precondition, recorded: 1 exactly where the mint established it.
+       STAMPED AT TWO MINTS AND CARRIED BY NOTHING. A negation copies the predicate OBSERVATIONS
+       (pred_carry_through_not) and not this, which is what keeps it meaning what it says — a value that got
+       here by any other route is a derivation, and a derivation's `src` names its operand. */
+    signed char src_self;
     char *root;         /* DELIVERY PROVENANCE: where the bytes ENTERED. Never changed by a derivation,
                            which UNIONS its operands' (one member = unchanged); a SET, walked by
                            root_member. NULL exactly when `src` is */
@@ -1673,6 +1687,46 @@ static JSValue pin_of(JSContext *ctx, const char *src) {
 
 static JSClassID g_concolic_class = 0;   /* runtime-allocated; 0 until concolic_init */
 
+/* THIS VALUE'S `src` NAMES THIS VALUE — the record's `src_self`, written from the two mints that read a pin
+   under it and from nowhere else. It is a FUNCTION rather than a field write at each site because the two
+   mints reach it through different returns (a source read through concolic_derived, a member read through
+   concolic_alloc) and a candidate re-fire makes one of them hand back something that is not a concolic at all:
+   concolic_deliver returns the attacker's own bytes, so the record this would stamp does not exist and the
+   absence is the right answer rather than a case to special-case. */
+static void pin_src_names_self(JSValueConst v) {
+    Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
+    if (!c) return;   /* a candidate re-fire delivered a plain value here — there is no record to stamp */
+    /* A SOURCE WITH NO PROVENANCE IS A REAL STATE AND NOT A DEFECT, so this is a guard and not an assert:
+       concolic_new says "A source with no provenance has no identity either, which is the honest answer and
+       the one that keeps both arms of every branch over it", and its own pin arm spells the same case
+       (`src ? pin_of(ctx, src) : JS_UNINITIALIZED`). The flag stays 0, which is exactly right — there is no
+       key, so there is no determination to read back and the reader answers none. */
+    if (!c->src) return;
+    c->src_self = 1;
+}
+
+/* THE BYTES THIS FLOW HAS PROVED THIS VALUE HOLDS — see concolic.h for what may read it and why it answers
+   bytes where the two in-file reads answer a JSValue. */
+const char *concolic_pin_bytes(JSValueConst v) {
+    Concolic *c = g_concolic_class ? JS_GetOpaque(v, g_concolic_class) : NULL;
+    const Cons *e;
+
+    /* THE PRECONDITION IS THE WHOLE OF THIS FUNCTION'S SOUNDNESS AND IT IS CHECKED, NOT ASSERTED. A derived
+       value reaching here is not a defect — `el.setAttribute('t', 'x-' + cfg.theme)` is ordinary page code and
+       its record legitimately carries `cfg.theme`'s `src` — so the answer for it is NONE, which leaves its
+       consumer exactly where it was. An abort here would be this engine crashing on a shape a page is
+       entitled to write, which §WHOSE-BYTES-STATE-THE-VALUE forbids in as many words. */
+    if (!c || !c->src_self || !c->src) return NULL;
+    e = cons_lookup(c->src);
+    if (!e || !e->val) return NULL;
+    /* BORROWED FROM THE CONSTRAINT ENTRY, which is what bounds how long it may be held: the bytes are a
+       strdup this flow's own chain owns, and they are replaced or released only by concolic_pin,
+       concolic_clear_pins and concolic_pins_resume — a write, a fresh flow and a context switch, none of
+       which can happen inside a caller that runs no page code and reaches no rest point. A caller that keeps
+       it past one copies it. */
+    return e->val;
+}
+
 static void concolic_finalizer(JSRuntime *rt, JSValueConst val) {
     Concolic *c = JS_GetOpaque(val, g_concolic_class);
     if (!c) return;
@@ -2720,6 +2774,12 @@ static JSValue concolic_exotic_get(JSContext *ctx, JSValueConst obj, JSAtom atom
        identity at all — but it is not a datum that arrives by a different route: whatever carried the object's
        bytes in carried this field's, and a report has to say so. */
     r = concolic_alloc(ctx, shape, shape, c->root, ident, example_member(ctx, c->example, atom));
+    /* A MEMBER READ'S `src` IS ITS OWN SHAPE and therefore names this value — which is exactly the
+       precondition this function's own `pin_of` arm above stands on, and the reason that arm is legitimate.
+       Recorded for the reader that is NOT this mint: a value stashed in the DOM by
+       `el.setAttribute('t', cfg.theme)` is asked the same question by the CSS cascade long after this call
+       returned, and it has only the JSValue to ask it of. */
+    pin_src_names_self(r);
     /* THE NAME THIS READ WENT THROUGH, KEPT ON THE VALUE — the one honest source for the method name the call
        handler below reports, and the reason it is stamped here rather than parsed out of the shape: a page may
        name a property anything at all, `.` included, so recovering it from `{x}.a.b` would answer `b` for a
@@ -5278,7 +5338,16 @@ JSValue concolic_new(JSContext *ctx, const char *shape, const char *src, JSValue
     f[0] = src;
     /* A SOURCE READ IS ITS OWN ROOT — stated here, once, rather than as a second argument every one of the
        seventeen components that owns a source would have to spell the same way twice. */
-    return concolic_derived(ctx, shape, src, src, concolic_ident_compose("s", f, 1), example);
+    {
+        JSValue r = concolic_derived(ctx, shape, src, src, concolic_ident_compose("s", f, 1), example);
+        /* …AND ITS OWN IDENTITY, WHICH IS THE PRECONDITION THE PIN ARM ABOVE STANDS ON, RECORDED RATHER THAN
+           LEFT AS A SENTENCE. The comment at that arm says this is "the one derivation the pin may be read
+           at"; `src_self` is that claim written where a reader outside this file can check it, so a seam that
+           holds a value long after the mint — the CSS cascade's, reading a value out of the DOM taint shadow —
+           can ask the same question this line already answered. */
+        pin_src_names_self(r);
+        return r;
+    }
 }
 
 int concolic_is(JSValueConst v) {

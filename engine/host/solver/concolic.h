@@ -115,6 +115,37 @@ char       *concolic_ident_compose(const char *tag, const char *const *fields, i
 JSValue     concolic_example(JSContext *ctx, JSValueConst v);   /* the concrete example (dup'd) or JS_UNDEFINED */
 void        concolic_set_example(JSContext *ctx, JSValueConst v, JSValue example);   /* attach/replace (consumes example) */
 
+/* WHAT THIS FLOW HAS *PROVED* THIS VALUE IS — CONCRETIZE-ON-PIN, asked of a VALUE and answered in BYTES.
+ *
+ * IT IS NOT THE EXAMPLE ABOVE AND THE TWO MUST NEVER BE SUBSTITUTED FOR EACH OTHER. An example is what a
+ * document or a server SUPPLIED, and §Solver-half is explicit that a loaded value "must NOT concretize the
+ * gate"; this is what the flow's OWN predicate determined — `parsed.theme === 'dark'` taken true — which is a
+ * fact the run established rather than one it read. §@H draws that line by whether a VALUE was determined, and
+ * this is the determined side of it.
+ *
+ * WHY A CALLER MAY NOT SPELL THE KEY ITSELF, which is the whole reason this is value-keyed. A pin is stored
+ * under `src`, and `src` is the INJECTION identity: a derivation inherits its first unknown operand's, so
+ * `concolic_pin_bytes` over `'x-' + cfg.theme` keyed by hand would hand back `cfg.theme`'s pinned bytes as if
+ * they were the concatenation's — a WRONG value where the absence of one merely leaves a caller where it was.
+ * The record knows which of the two it is and a caller holding only a JSValue cannot, so the question is asked
+ * of the value and the key is never exposed.
+ *
+ * WHY BYTES, WHERE THE TWO IN-FILE READS ANSWER A JSValue. Those two are re-mints: a READ of a source returns
+ * the pinned value, so it must be of the pinned value's TYPE and a caller handed bytes would have to decide
+ * what they mean. This is asked by a consumer whose slot is a STRING by definition — DOM §4.9 "Interface
+ * Element"'s attribute value, which `setAttribute` reaches through a Web IDL DOMString conversion — so the
+ * §7.1.19 ToString of the pinned value IS the answer rather than a lossy rendering of it, and the store
+ * already holds exactly that (literal_tok spells its token as the operand's ToString, and concolic_pin refuses
+ * every kind that spelling could not round-trip). A consumer whose slot is NOT a string wants the JSValue
+ * read and must not use this.
+ *
+ * NULL is the positive statement that this flow has determined nothing about this value — not concolic, not a
+ * value its own `src` names, or a source this flow has pinned nothing to — and never a failure. A caller
+ * reads it as `the bytes I already have are all there is`, which for the cascade is the crash that says so.
+ * BORROWED from the flow's constraint chain: valid until this flow pins again, is reset, or is switched away
+ * from, none of which a caller running no page code can reach. */
+const char *concolic_pin_bytes(JSValueConst v);
+
 /* INSTALL THE WHOLE HOOK SET. It exists because the set was written out as a struct literal at each entry —
    main.c and test_forced.c — and the two DRIFTED: the fixture harness installed three of the ten, so every
    targeted test in this repo ran against a weaker engine than the one that ships, and a relational compare on a
