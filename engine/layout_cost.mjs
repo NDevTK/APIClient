@@ -86,9 +86,37 @@ const MAX = Number(maxArg || 6);
    THE READING IS THE PAIR OF ORDERS AND NEVER ONE NUMBER: `bp_visit` is linear by construction, so a cascade
    row above it that is quadratic in `flat` names a per-SIBLING factor and one that rises to cubic in `deep`
    names a per-ANCESTOR factor on top of it. */
+/* AND THE SIZE DERIVATION UNDER THOSE ASKS, PLUS THE CHAIN THAT RECORDS IT — `used_value_px`, `uv_sized` and
+   `layout_question_repeat`, named rather than counted because a count beside its own list is the one claim
+   here nobody adds up. They are on it because the list WITHOUT them supports a reading of this table that is
+   false about the render, and the banner's blind-spot
+   paragraph above says why in advance: a cost living in a function not on this list reads here as a cost that
+   went away.
+   MEASURED, and it is the reading the flat/deep split exists to make: `uv_sized` is LINEAR in `flat`
+   (90 150 210 270 330 390) and QUADRATIC in `deep` (90 154 234 330 442 570), and so is the chain beside it.
+   AN ORDER THAT MOVES BETWEEN THE TWO SHAPES IS A COST PER ANCESTOR, and NOT ONE ROW OF THE OLDER LIST MOVED
+   ITS ORDER AT ALL — so a reader of that table could say `no order moved anywhere`, be right about every row
+   in front of them, and be wrong about the engine. That sentence was in fact written and relayed.
+   THE SHARPER READING IS THE PAIR, which is this instrument's own rule, AND THE `deep` TABLE DRAWS THE LINE
+   BY ITSELF: `bf_layout`, `bf_box`, `bp_visit` and `used_value_border_edge_px` are ALL LINEAR there, and
+   `used_value_px` and `uv_sized` directly beneath them are BOTH QUADRATIC. So the per-ancestor multiplier
+   sits strictly INSIDE the used-value cluster — below every ask on this list and above nothing on it — and
+   the border-edge entry reaches `uv_sized` UNCONDITIONALLY, through the box-edge helper, the content size
+   and the used-value ask, with no branch anywhere on that path. A LINEAR number of asks over a QUADRATIC
+   number of derivations is this file's own words for a walk re-deriving what another walk established, and
+   until these rows were added no row here could state which side of the boundary it was on.
+   `layout_question_repeat` IS ALSO THE WAY A CHAIN DIFF IS SCORED, and that is its second reason for being
+   here: it counts the dev-only cycle test's asks, so declaring a question kind at a new entry MUST move it by
+   that entry's own count and nothing else — a conservation identity a reader checks inside ONE table rather
+   than across two runs. Its siblings `_push` and `_pop` are deliberately NOT on the list: they are equal to it
+   on every healthy run, so carrying them would be three rows of one fact, and the identity is worth asserting
+   in a targeted run rather than printed three times on every one.
+   BOTH ROWS PASS THIS FILE'S OWN ADMISSION TEST, which is the one the dropped rule-list probe failed: each
+   reads the SAME NUMBER TWICE, reproduced to the digit under two differently-composed probe sets, so neither
+   is a single-location parse that happened to work once. */
 const PROBES = ['bf_layout', 'bf_box', 'block_flow_child_top', 'block_flow_auto_height',
                 'flow_border_box_origin', 'element_view_bounding_box_px', 'bp_visit',
-                'used_value_border_edge_px',
+                'used_value_border_edge_px', 'used_value_px', 'uv_sized', 'layout_question_repeat',
                 'cssom_cascaded_value', 'css_computed_value', 'css_cv_specified',
                 'css_logical_partner_of', 'cssd_ua_value', 'css_presentational_hint',
                 'lxb_css_stylesheet_parse', 'cascade_emit', 'style_sheet_list_add'];
@@ -191,6 +219,32 @@ try {
     for (const p of PROBES) {
       const v = rows.map((r) => r[p]);
       console.log(`  ${p.padEnd(30)} ${v.map((x) => String(x).padStart(6)).join('')}   ${order(v)} in N`);
+    }
+    /* THE CHAIN'S OWN CONSERVATION IDENTITY, PRINTED RATHER THAN INFERRED. Every question the dev-only cycle
+       test is asked comes from an entry that DECLARES a kind, and there is no other way to reach it — the
+       macro is expanded at the asking sites and nowhere else. So the ask count must equal the sum of those
+       entries' own call counts, EXACTLY, at every N. It is printed per shape because that is a check a reader
+       makes inside ONE table: a cross-run comparison of this number is a comparison of two binaries, and this
+       one is a comparison of a run with itself.
+       IT IS HOW A QUESTION-KIND DIFF IS SCORED. Declaring a kind at a new entry moves the ask count by that
+       entry's own count and by nothing else, so a node that was never reached leaves the identity SHORT by
+       exactly that entry's row — which is why `no assert fired` is not the claim to make about such a diff
+       and this is. A kind whose entry is NOT on the list above makes it short too, and that is the same
+       finding wearing the other hat: the list and the declared kinds are one contract.
+       IT REPORTS RATHER THAN THROWING, like every other verdict here — a shortfall is a real reading about a
+       real run and not a meaningless table, which is the one case this file does refuse to print. */
+    {
+      const parts = ['used_value_px', 'uv_sized', 'bf_box'].filter((k) => PROBES.includes(k));
+      if (PROBES.includes('layout_question_repeat')) {
+        const bad = ns.map((_, i) => [i + 1, rows[i].layout_question_repeat,
+                                      parts.reduce((a, k) => a + rows[i][k], 0)])
+                      .filter(([, got, want]) => got !== want);
+        console.log(`  chain identity: layout_question_repeat == ${parts.join(' + ')}  ` +
+          (bad.length === 0
+            ? `HOLDS at every N`
+            : `SHORT/LONG at ${bad.map(([n, g, w]) =>
+                `N=${n} (${g} vs ${w}, ${g - w >= 0 ? '+' : ''}${g - w})`).join(', ')}`));
+      }
     }
   }
   console.log('\nA row reading `linear in N` is a cost per box. `quadratic` is a cost per box times a cost');

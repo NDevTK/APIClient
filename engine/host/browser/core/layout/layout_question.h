@@ -69,7 +69,8 @@
 #define LAYOUT_QUESTIONS(X) \
     X(LAYOUT_Q_USED_VALUE_PX, "CSS 2.1 §6.1.3 \"Used values\"' used box-model length") \
     X(LAYOUT_Q_UV_SIZED, \
-      "CSS 2.1 §10.4 \"Minimum and maximum widths: 'min-width' and 'max-width'\"'/§10.7's final pass")
+      "CSS 2.1 §10.4 \"Minimum and maximum widths: 'min-width' and 'max-width'\"'/§10.7's final pass") \
+    X(LAYOUT_Q_BF_BOX, "CSS 2.1 §9.4.1 \"Block formatting contexts\"' stack contribution")
 
 /* THE SECOND KIND'S PARAMETER IS TWO VALUES AND THE FIELD THAT HOLDS A NUMBER IS ONE, which is the whole of
    what its site has to get right and is not what the clause that asked for this kind said it was.
@@ -92,6 +93,24 @@
    box type is IN the question rather than derived from the element inside this component: derive it and
    step 7's ask and the item's own ask become one question, and the engine aborts on a document that is
    doing nothing wrong. */
+
+/* THE THIRD KIND'S PARAMETER IS ONE SMALL NUMBER AND IT IS THE CASE THIS TYPE WAS ALREADY SHAPED FOR, which
+   is worth saying plainly because the kind ABOVE it needed two operands and this one needs the ordinary
+   arrangement again. `bf_box`'s question is (element, PASS): `name` stays NULL and the pass rides `code`
+   ONE-BASED, load-bearing for exactly the reason `UV_BOX_INLINE` was — `BF_BASELINE_NONE` is 0 and is the
+   pass every ordinary render runs, so a raw `code` would render the commonest question in the engine as one
+   carrying no parameter at all, and `#1`/`#2`/`#3` read as the three values of that enum in its own order.
+   WHY THIS ENTRY AND NOT THE WALK ABOVE IT IS A REFUSAL THE TYPE MADE AND NEVER A RANKING, and the reason
+   is recorded here because it is the one a reader most reliably carries to the wrong entry. CSS 2.1 §9.4.1's
+   WALK is the better cut by a clear margin, and its tuple carries a SECOND ELEMENT — the box it is looking
+   for — while this struct holds ONE; dropping that operand would render two walks of one container looking
+   for two different children as ONE question, and they are reachable one inside the other, so it aborts a
+   correct document. `bf_box` was CHOSEN because it does not have that problem. SO THE SHAPE QUESTION WAS
+   SETTLED FOR THIS KIND BEFORE IT WAS DECLARED AND WAS NEVER WHAT BLOCKED IT: what blocked it was ORDER, the
+   kind above it having a prediction no build had scored, and a reader who finds the walk's two-pointer
+   refusal and carries it across to this entry has carried the reason this entry EXISTS as a reason it cannot.
+   Measured: that carry was made once, by a coordinator quoting the walk's signature correctly and inferring
+   the same blocker here, and the entry's own signature refutes it in one line. */
 
 #define LAYOUT_QUESTION_ENUM(id, label) id,
 #define LAYOUT_QUESTION_LABEL(id, label) label,

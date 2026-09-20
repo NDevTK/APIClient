@@ -4402,11 +4402,12 @@ static CssPx uv_px_ask(lxb_dom_element_t *el, const char *name)
    quoting them: gdb, `break used_value_px` with a `bt` command, and count the frames whose names belong to
    core/layout.
 
-   NAMED RESIDUAL. WHAT IS NOT COVERED: every cycle that closes without crossing THIS entry OR `uv_sized`,
-   which after the second kind landed is TWENTY-ONE mutually recursive functions rather than sixty — eight of
-   them core/layout/block_flow.c's box walk, four each of core/layout/line_box.c's extents and
-   core/layout/flex_line.c's lines, two of core/layout/flex_cross_size.c's hypothetical crosses, and this
-   file's `uv_limit`, `uv_limits` and `used_value_border_edge_from_content_px`. So the chain still records the
+   NAMED RESIDUAL. WHAT IS NOT COVERED: every cycle that closes without crossing THIS entry, `uv_sized` OR
+   `bf_box` — a PROPERTY, which is what a reader can test a candidate against, and the COUNT beside it is a
+   figure from the cut ranking rather than a re-derivation. That ranking put the residual after this third
+   kind at SEVEN, against the twenty-one the second one left and the sixty before it, and it is quoted with
+   the caveat the method paragraph below states for every figure in this banner: the ranking is not in the
+   tree, so a reader who needs the number runs the SCC again rather than taking this one. So the chain still records the
    ASKS and not the LAYOUTS: between two consecutive nodes of it C frames come and go with nothing anywhere
    naming them, and C-stack exhaustion by DEPTH rather than by repetition is not a repeated pair and does not
    fire here.
@@ -4452,13 +4453,13 @@ static CssPx uv_px_ask(lxb_dom_element_t *el, const char *name)
    and both baseline entries (a different `pass`), so all three of this kind's discriminators vary INSIDE an
    open walk. A kind that cannot spell a discriminator its own callers vary is the one shape
    core/layout/layout_question.h names as turning a working engine into an abort.
-   WHAT THE NEXT DIFF BUILDS, THEREFORE: `bf_box`, whose question IS (element, pass) and fits the type exactly
-   — `name` NULL, `code` the pass ONE-BASED, which is load-bearing for the same reason `UV_BOX_INLINE` was,
-   since `BF_BASELINE_NONE` is 0 and is the pass every ordinary render runs. It costs ONE function against
-   `bf_layout` (a residual of seven rather than six) and it is the cut whose question this type can say.
-   ITS ARM CHECK IS READ AND THE TWO ROUTES THAT WOULD HAVE KILLED IT ARE EACH ACCOUNTED FOR — one by
-   construction, one by a spec-mandated guard — AND THAT IS NOT THE SAME AS CLEARED. What follows is what a
-   reading can settle, so the next reader starts past it rather than re-finding it.
+   `bf_box` IS THAT THIRD KIND AND IT IS BUILT, at core/layout/block_flow.c, with `name` NULL and `code` the
+   pass ONE-BASED — load-bearing for the same reason `UV_BOX_INLINE` was, since `BF_BASELINE_NONE` is 0 and is
+   the pass every ordinary render runs. It costs ONE function against `bf_layout` and it is the cut whose
+   question this type can say. THE CLAUSE THAT NAMED IT IS THEREFORE RETIRED AND ITS ARM CHECK IS KEPT, because
+   the reading is what a reader re-derives and the remedy string at that entry now depends on it: the two
+   routes are each ACCOUNTED FOR — one by construction, one by a spec-mandated guard — and that was never the
+   same as CLEARED. What follows is what a reading could settle before the kind landed.
    THE ROUTE THIS RESIDUAL NAMED IS REFUTED, AND STRUCTURALLY. It went `bf_box` -> `bf_box_compute` -> the
    `uv_abs_solve` chain -> `block_flow_child_top(cb, el)` -> `bf_layout(cb, el, …)` -> that walk reaching `el`
    -> `bf_box(el, pass)`. It cannot start: `bf_box`'s ONLY caller is `bf_layout`, that walk admits only
@@ -4480,13 +4481,32 @@ static CssPx uv_px_ask(lxb_dom_element_t *el, const char *name)
    which BOTH builds take — reaches everything the hit path does. The asymmetry is in WHEN the chain is
    exercised and never in WHAT it can reach, so the node belongs at `bf_box`, where a memo hit costs a check
    that could already have fired one call later.
-   WHY IT IS STILL NOT DECLARED, which is a decision and not an omission: the `uv_sized` kind's own prediction
-   is UNSCORED — no build has yet said whether it fires — and a third kind resting on the same premise as an
-   unverified second one is two subproblems taken out of order. The reading above is what the next diff starts
-   from; the build is what licenses it.
+   IT IS NOW DECLARED, AND WHAT LICENSED IT WAS THE `uv_sized` KIND'S PREDICTION BEING SCORED — the thing
+   that blocked it was ORDER and never SHAPE, which is the half a reader carries across wrongly. The clause
+   above refuses `bf_layout` because its tuple carries a SECOND ELEMENT and the type holds one; `bf_box` was
+   then CHOSEN for not having that problem, so its two-pointer refusal is the reason it exists and cannot
+   also be the reason it waited. Measured: that carry was made once, by a coordinator quoting `bf_layout`'s
+   signature correctly and inferring the same blocker for `bf_box`, whose own signature refutes it in a line.
+   HOW THE PREDICTION WAS SCORED, and the witness is a CONSERVATION IDENTITY rather than an absence, which is
+   what makes it readable at all: `node engine/layout_cost.mjs <native binary> 6`, run inside a frozen
+   snapshot at 5acd99d3 with the chain's own entries added to `PROBES`, has `layout_question_repeat`,
+   `layout_question_push` and `layout_question_pop` EQUAL at every cell of all three shapes — 3714 asks at
+   the deepest fixture. `DFAILF` aborts, so a single fire would leave `push` SHORT of `repeat`; the LIFO
+   close would leave `pop` short of `push`. The subject really ran and is not inferred from a neighbour:
+   `uv_sized` itself reads 570 there, and `objdump` of it shows the `call layout_question_repeat` the DEV arm
+   compiles to, so the zero is a reading and not a path nobody took.
+   AND THE WITNESS COVERS ONE OF THE THREE ROUTES THE ARM CHECK CLEARED, STATED BECAUSE A PREDICTION SCORED
+   OVER THE WRONG POPULATION READS EXACTLY LIKE ONE SCORED OVER THE RIGHT ONE. On that same run
+   `uv_pass_size` EQUALS `uv_sized` at every cell — so §10.4/§10.7 ran STEP 1 ONLY and the two re-runs that
+   could re-enter never happened — while `uv_abs_margins`, `used_value_abs_offset_px`,
+   `used_value_block_level_content_px` and `uv_table_used_width` all read ZERO in every shape, which are
+   BOTH of the shapes this kind's own remedy names as the two it exists to catch. What is scored is the
+   ordinary block-flow ask at scale, and the fixtures are three plain `<div>` documents. A document carrying
+   a `max-width`, an absolutely positioned box or a flex item is what would score the rest; naming that here
+   is cheaper than re-deriving which routes a run happened to take.
    HOW ITS ABSENCE WOULD SHOW: a terminal SIGSEGV on a real document with no `@WHY` line anywhere in the run
    and a backtrace that is one short frame cycle repeated to the guard page, whose repeated frames include
-   neither this function nor `uv_sized`. ---------------------------------------------------------------- */
+   none of this function, `uv_sized` and `bf_box`. ------------------------------------------------------ */
 CssPx used_value_px(lxb_dom_element_t *el, const char *name)
 {
 #if APICLIENT_DEV

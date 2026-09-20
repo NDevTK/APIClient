@@ -15,6 +15,7 @@
 #include "core/layout/flex_cross_size.h"
 #include "core/layout/flex_item.h"
 #include "core/layout/flow_placement.h"
+#include "core/layout/layout_question.h"
 #include "core/layout/line_box.h"
 #include "core/layout/replaced_element.h"
 #include "core/layout/scroll_container.h"
@@ -1852,10 +1853,47 @@ static bool bf_box_agrees(lxb_dom_element_t *el, const FlowPlacementBox *r)
    the measurement that says the cost beneath these asks is a multiplier rather than inherent. */
 static BfBox bf_box(lxb_dom_element_t *el, BfBaseline pass)
 {
+#if APICLIENT_DEV
+    /* The chain node is on THIS frame, like `used_value_px`'s and `uv_sized`'s — core/layout/layout_question.h
+       says why the chain is intrusive and why a heap-owned mirror of these frames would be the worse of two
+       copies rather than a step toward replacing them. */
+    LayoutQuestionOpen open;
+#endif
     FlowPlacementBox rec;
     BfBox b;
 
     DCHECK(el != NULL, "a box's contribution to §9.4.1's stack was asked for with no element");
+    /* THE NODE IS AT THIS ENTRY AND NOT AT `bf_box_compute`, WHICH IS THE OPPOSITE OF HOW THE MEMO READS.
+       A memo HIT runs `bf_box_agrees` under a `DCHECKF`, so the DEV build re-enters the used-value cluster
+       exactly where release returns from the record, and a dev-only node would then be open across a path
+       release never runs. That looks like a reason to push the node down past the memo and it is not: the
+       three non-leaf entries `bf_box_agrees` can reach are ALL in `bf_box_compute`'s own call set, so the
+       memo-MISS path — which BOTH builds take — reaches everything the hit path does. The asymmetry is in
+       WHEN the chain is exercised and never in WHAT it can reach, so the node belongs here, where a memo hit
+       costs a check that could already have fired one call later.
+       THE SINGLE EXIT BELOW IS WHAT MAKES THE CLOSE UNMISSABLE and it is a label rather than a guarding
+       forwarder, for the reason `uv_sized` states: a forwarder costs a C FRAME PER ASK at -O0, and C FRAMES
+       PER LEVEL OF NESTING is the number this component is measured by, so the guard would move the census
+       it is a guard for. A label costs none and one close. */
+    LAYOUT_QUESTION_OPEN(&open, layout_question(LAYOUT_Q_BF_BOX, el, NULL, (unsigned) pass + 1u),
+                         "BOTH ROUTES INTO THIS ENTRY WERE ACCOUNTED FOR BEFORE IT WAS DECLARED, so a repeat "
+                         "here is one of them RE-OPENED and the chain says which. The DESCENDING one was "
+                         "refused BY CONSTRUCTION: this function's only caller is the walk, that walk takes "
+                         "its boxes from `bf_block_box_at` which returns only `BLOCK_FLOW_CHILD_BLOCK`, and "
+                         "`bf_element_child` classifies a computed `position` of `absolute` or `fixed` as "
+                         "NO_BOX per CSS 2.1 §9.3.1 \"Choosing a positioning scheme: 'position' property\" "
+                         "and §10.6.3 \"Block-level non-replaced elements in normal flow when 'overflow' "
+                         "computes to 'visible'\" — so a subject here is an IN-FLOW BLOCK-LEVEL box always "
+                         "and the abs-margin arm the descending chain hangs from is unreachable from this "
+                         "entry's own `margin-top` ask. If the chain shows one, that classification has "
+                         "changed and the finding is there rather than here. The ASCENDING one — a "
+                         "PERCENTAGE height resolving against a containing block whose own height is the "
+                         "walk already open — is broken by CSS 2.1 §10.7 \"Minimum and maximum heights: "
+                         "'min-height' and 'max-height'\"' SECOND CONJUNCT read as a predicate, at "
+                         "`uv_cb_height`'s last gate, which refuses a basis when the containing block's "
+                         "height behaves as auto. If the chain shows THAT one, read whether that gate still "
+                         "refuses rather than adding a second guard beside it. FIX IT AT THE RULE THAT "
+                         "RE-ENTERS AND BY CONSTRUCTION, never by a limit.");
     if (pass == BF_BASELINE_NONE && flow_placement_box_ask(el, &rec)) {
         DCHECKF(bf_box_agrees(el, &rec),
                 "CSS 2.1 §10.6.3's recorded contribution for this box no longer satisfies the derivation "
@@ -1867,7 +1905,8 @@ static BfBox bf_box(lxb_dom_element_t *el, BfBaseline pass)
                 "exists to make impossible. If that chokepoint did not fire, the change arrived by a route "
                 "it does not own and the route is the finding",
                 rec.border_h.px, rec.content_h.px);
-        return bf_box_unpack(&rec);
+        b = bf_box_unpack(&rec);
+        goto done;
     }
     {
         bool from_content = false;
@@ -1878,6 +1917,8 @@ static BfBox bf_box(lxb_dom_element_t *el, BfBaseline pass)
             flow_placement_box_record(el, &rec);
         }
     }
+done:
+    LAYOUT_QUESTION_CLOSE(&open);
     return b;
 }
 
