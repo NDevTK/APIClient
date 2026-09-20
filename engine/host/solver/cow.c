@@ -516,6 +516,18 @@ static CowDelta *cow_state_ask(int kind) {
     return g_current;
 }
 
+/* IS THIS TARGET GENUINELY NOT IN THE DELTA YET? The one question the entries make answerable that the index
+   cannot be trusted to answer about ITSELF — asked from the DCHECK below and nowhere else, so it reads and
+   decides nothing, which is what a DCHECK condition must be. A FUNCTION rather than a loop written inline at
+   the assert, because DCHECKF's release expansion is `sizeof` over its CONDITION: a loop around the macro
+   keeps its `for` in release with an empty body, and a loop inside the condition cannot be written at all. */
+static bool cow_state_undeduped(const CowDelta *d, int kind, const void *key) {
+    int i;
+    for (i = 0; i < d->n - 1; i++)   /* d->n - 1: the entry being constructed is the last and is not itself */
+        if (d->e[i].is_state && d->e[i].state_kind == kind && d->e[i].state_key == key) return false;
+    return true;
+}
+
 /* THE ONE CONSTRUCTOR OF A STATE ENTRY — the kind and the flag are set together because an entry with one and
    not the other is read as a property write, and the count rides here so that a unit added later is counted by
    existing rather than by somebody remembering.
@@ -548,6 +560,25 @@ static void cow_state_entry_set(CowDelta *d, CowEntry *e, int kind, void *key) {
     DCHECK(key != NULL,
            "a COW state entry was constructed with no identity — every state capture dedups by one, so a NULL "
            "key files a row nothing can find and the unit records one entry per reach instead of one per flow");
+    /* AND THE INDEX DID NOT MISS ONE, WHICH IS THE HALF THE CONSTRUCTION ABOVE DOES NOT COVER. cow_key's match
+       makes a WRONG POSITIVE inexpressible — a find returns only an entry whose own key equals the one asked
+       for — and says nothing about a wrong NEGATIVE: an index that has somehow lost a row answers -1, the
+       caller records a SECOND entry for a target it already holds, and nothing anywhere says so. That
+       direction does not corrupt a timeline (unapply restores in reverse and apply replays forward, so two
+       entries over one target compose to the same state one does), which is exactly why it would never be
+       found by a run going wrong — it is slower and larger and right.
+       IT IS ASSERTED HERE BECAUSE HERE IS WHERE IT IS FREE. This is the MADE path, not the ASK path: a unit's
+       entries are its distinct targets, its asks are every reach of them, and the gap between the two is the
+       whole reason this file stopped scanning — measured on one page at ~90,000 asks per entry. So the dev
+       build keeps a FULL LINEAR CROSS-CHECK of the index at five orders of magnitude less than the scan this
+       change removed. The two sides can disagree: drop the cow_hash_add_last below, or file an entry under a
+       key it will not be looked up by, and the next capture of that target fires this. */
+    DCHECKF(cow_state_undeduped(d, kind, key),
+            "a COW state entry of kind `%s` is being recorded for a target this delta ALREADY holds — the "
+            "O(1) find said there was none, so the hash index has lost a row it was given. The duplicate "
+            "itself composes correctly; what it reports is that the index and the entries have come apart, "
+            "and that same index is what every slot and cell capture dedups by",
+            cow_state_kind_name(kind));
     e->is_state = 1;
     e->state_kind = kind;
     e->state_key = key;
