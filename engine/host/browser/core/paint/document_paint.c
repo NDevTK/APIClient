@@ -12,6 +12,7 @@
 #include "core/css/css_length.h"
 #include "core/frame/viewport.h"
 #include "core/graphics/raster_surface.h"
+#include "core/layout/flow_placement.h"
 #include "core/paint/box_paint.h"
 #include "core/paint/display_list.h"
 #include "core/paint/display_list_raster.h"
@@ -114,6 +115,19 @@ bool document_paint(JSContext *ctx, lxb_html_document_t *dom, RasterSurface *out
         count->complete = true;
     } else {
         display_list_init(&dl);
+        /* CSS 2.1 §9.4.1 "Block formatting contexts"' PLACEMENT PASS, OPENED HERE BECAUSE THIS IS THE ONE
+           ENTRY THAT WALKS THE WHOLE TREE FOR GEOMETRY. §E.2's walk asks where every box it offers SITS, and
+           §9.4.1's answer for one box comes out of a walk that establishes the position of every in-flow
+           child of that box's containing block — so without a pass the walk below runs one whole
+           containing-block layout per ask and discards all but one of its answers each time.
+           THE SPAN IS THIS WALK AND NOT THE RASTER BELOW IT, which is a span chosen by what reads the
+           DOCUMENT rather than by what is convenient to bracket: `display_list_raster` consumes marks that
+           are already four numbers each and asks the tree nothing, so holding a record across it would widen
+           the window this component's own assertions have to cover for no answer served.
+           NO PAGE CODE RUNS INSIDE IT, which is the premise the record is sound on and which is not left as a
+           sentence: core/layout/flow_placement.h names the three places that premise is asserted, and one of
+           them is a crash at the DOM attribute chokepoint rather than a check here. */
+        flow_placement_pass_open();
         /* CSS 2.1 §E.2 "Painting order" over the ROOT's stacking context. CSS 2.1 §9.9.1 "Specifying the stack
            level: the 'z-index' property"'s first sentence makes the root element form the root stacking
            context, which is box_paint's precondition satisfied by the operand rather than by a test here —
@@ -126,6 +140,11 @@ bool document_paint(JSContext *ctx, lxb_html_document_t *dom, RasterSurface *out
            canvas" included, because it is laid first. Rasterizing only a COMPLETE walk would throw that away
            and report the same empty surface for a document that painted nothing and one that painted all but
            its last box. */
+        /* THE PASS CLOSES WITH THE WALK, WHETHER OR NOT THE WALK FINISHED. `complete` false is a painter that
+           met an operand it could not compute and STOPPED, and it returns normally — so a close placed after
+           the raster would still run, and a close placed on the complete arm alone would leave the record
+           standing for the next paint to open on top of. There is no arm between these two lines. */
+        flow_placement_pass_close();
         display_list_raster(&dl, dpr, out, &rc);
         count->marks = rc.marks;
         count->spans = rc.spans;

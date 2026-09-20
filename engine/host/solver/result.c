@@ -26,6 +26,7 @@
    is the one that answers. §A-CAPABILITY-MATERIALIZED-PER-FLOW makes it a ceiling, and navigable.c's own OOM
    CHECK sends its reader to this number by name. */
 #include "core/frame/navigable.h"
+#include "core/layout/flow_placement.h"   /* what the render spent on CSS 2.1 §9.4.1's positions — see the `_layout` block */
 #include "core/frame/window_proxy.h"   /* the ASK behind the realm census — see window_proxy_destroy_releases */
 /* §8.1.4.6 "Runtime script errors"'s throw site — one component derives it, this one reports it. */
 #include "core/events/report_exception.h"
@@ -2311,6 +2312,12 @@ char *result_json(JSContext *ctx) {
            Document left to fire at" (§7.5.10 step 7) and "the scheduler lost the task", and only the last is a
            defect. All four ride the document rather than a log, for the reason the counts above them do. */
         long routedEnds[ROUTED_TASK_END_N];
+        /* THE RENDER'S GEOMETRY CENSUS, taken at the same instant as every other row here: it is read once,
+           into a local, rather than five accessor calls spread down the argument list, so the three rows a
+           reader divides cannot come from three moments. */
+        FlowPlacementCensus place;
+
+        flow_placement_census(&place);
         world_segment_stats(&made, &segf);
         solve_arrival_census(&sinkReached, &sinkTainted, &sinkSuppressed);
         engine_routed_census(&routedDelivered, &routedRefused, &routedZeroDelivery);
@@ -2452,6 +2459,25 @@ char *result_json(JSContext *ctx) {
                                 is neither a total nor a reading of an instant, but a property of the HOST that
                                 decides whether two of these documents may be compared at all. result.h and
                                 solver/quantum.h state the argument; nothing in this file composes it. */
+                             /* …AND WHAT THE RENDER SPENT ON GEOMETRY, which is neither a solver row nor a
+                                reading of an instant: five LIFETIME counters of this agent, every one
+                                differenceable, published together because two of them are a SHARE OF the
+                                third and a reader who takes one without the other has a numerator with no
+                                denominator. `childTopAsks` is how many times CSS 2.1 §9.4.1 "Block formatting
+                                contexts"' position of a box was asked for, `childTopServed` how many of those
+                                core/layout/flow_placement.h answered out of a whole-tree pass's record and
+                                `childTopWalks` how many ran §9.4.1's walk; the three close by construction and
+                                that component asserts it, so a reader may divide.
+                                `childTopWalks` IS THE ROW THIS BLOCK EXISTS FOR. §9.4.1's walk is over a
+                                container's WHOLE child list, so a render in which that number grows with the
+                                SQUARE of a container's children is a render running one layout per box — the
+                                shape that is invisible in every other row of this document, because the
+                                scheduler's counters are byte-identical for a document of one box and a
+                                document of forty. `placements` is how many positions those walks reported
+                                into the record and `passes` how many whole-tree spans opened; `placements /
+                                childTopWalks` is what one walk now pays for. */
+                             "\"_layout\":{\"childTopAsks\":%lld,\"childTopServed\":%lld,"
+                             "\"childTopWalks\":%lld,\"placements\":%lld,\"passes\":%lld},"
                              "\"_quantum\":%s,\"_park\":%s}",
                      eps, sinks, errs, errsRetracted, errsExplored,
                      engine_switch_count(), flow_created_count(), solve_candidate_count(),
@@ -2460,7 +2486,8 @@ char *result_json(JSContext *ctx) {
                      routedEnds[ROUTED_TASK_FIRED], routedEnds[ROUTED_TASK_TARGET_ORIGIN],
                      routedEnds[ROUTED_TASK_TARGET_GONE], routedEnds[ROUTED_TASK_THREW],
                      srcReads, sinkReached, sinkTainted, sinkSuppressed,
-                     orphansDriven, orphansAsked, wfq, cold, heap, swap, forkAt, absent, quantum,
+                     orphansDriven, orphansAsked, wfq, cold, heap, swap, forkAt, absent,
+                     place.asks, place.served, place.walks, place.placements, place.passes, quantum,
                      cold_park_json());
     }
     free(eps);

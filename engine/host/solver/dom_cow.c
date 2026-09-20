@@ -7,6 +7,7 @@
 #include "check.h"        /* CHECK — an OOM here corrupts DOM isolation, fatal in every build */
 #include "solver/dom_cow.h"
 #include "core/dom/document.h"   /* document_record_release — a destroyed document hands back its record */
+#include "core/layout/flow_placement.h"   /* the geometry span an attribute write may not land inside — see dom_attr_capture */
 #include "core/dom/attr_list.h"   /* §4.9's attribute-list algorithms — what the delta restores an attribute THROUGH */
 #include "core/dom/name_intern.h"   /* a node's names are per-DOCUMENT state, so kind 8 moves them with the pointer */
 #include "core/dom/node_heap.h"     /* …and its BYTES are the agent's, which is why kind 8 asserts and moves nothing */
@@ -486,6 +487,26 @@ static void dom_attr_capture(lxb_dom_element_t *el, const char *ns, const char *
     const lxb_char_t *cur, *prefix;
     DomUndo u;
 
+    /* AN ATTRIBUTE WRITE IS A STYLE WRITE AND `g_dom_version` DOES NOT MOVE FOR IT, WHICH IS THE ONE AXIS A
+       GEOMETRY PASS CANNOT WATCH FOR ITSELF. core/layout/flow_placement.h holds CSS 2.1 §9.4.1 "Block
+       formatting contexts"' stack positions for the span of one whole-tree walk, and the span is sound
+       because the document cannot change inside it. The TREE half of that is checked by the version above —
+       it advances on an insert, a removal and the COW swap. The STYLE half has no number: `class`, `style`
+       and every presentational attribute reach the cascade without touching the tree's shape, so a record
+       taken before one and read after it is a position computed from declarations that are gone, and nothing
+       downstream would say so. This is asserted at the WRITE rather than watched for at the read because that
+       is the only place the two can be made exclusive by construction; if it fires, the write is real and the
+       PASS is in the wrong place — the fix is where the pass opens and closes, never a re-check here. It sits
+       ahead of the capture gate on purpose: a write performed while capture is off is the same write to the
+       cascade. */
+    DCHECK(!flow_placement_pass_is_open(),
+           "an attribute was written while CSS 2.1 §9.4.1 \"Block formatting contexts\"' placement pass was "
+           "open. That pass holds every box position a whole-tree geometry walk has established, and it is "
+           "sound only over a span in which the cascade's inputs do not move — an attribute is one of those "
+           "inputs and `dom_cow_version` does not advance for it, so nothing else in this engine can see this "
+           "happen. Positions already served by that pass were computed against the declarations this write "
+           "is replacing. The pass is core/paint/document_paint.c's §E.2 walk and nothing in it may write: "
+           "find what did, and either take it out of the walk or move the pass inside it");
     if (!g_dom_capture) return;
     dom_capture_begin();   /* `a`, `cur` and `prefix` are the tree's, held across four allocations that can sell */
     a = dom_attr_get_ns(el, ns, local);

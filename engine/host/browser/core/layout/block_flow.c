@@ -14,6 +14,7 @@
 #include "core/layout/box_subject.h"
 #include "core/layout/flex_cross_size.h"
 #include "core/layout/flex_item.h"
+#include "core/layout/flow_placement.h"
 #include "core/layout/line_box.h"
 #include "core/layout/replaced_element.h"
 #include "core/layout/scroll_container.h"
@@ -1376,6 +1377,22 @@ static BfBox bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wa
                    "reporting a line box for §10.8.1's baseline. One of the two readings is wrong about "
                    "§9.4.2's zero-height line box, and the margin it already collapsed is a position every "
                    "box below this one on the stack has been placed against");
+            /* THE POSITION GOES TO THE RECORD FOR EVERY BOX AND TO `want_top` FOR ONE, and the order of
+               those two lines is the whole difference this walk's cost used to turn on: the number is in
+               hand either way, so reporting it only for the box somebody happened to ask about is what made
+               a caller run this walk once per child of one container. core/layout/flow_placement.h states
+               the arithmetic; here it is one call with no test in front of it, because deciding who might
+               want a position is the throw-away rather than a saving.
+               THE ONE TEST IN FRONT OF IT IS `block_flow_child_top`'s OWN PRECONDITION AND NOT A FILTER ON
+               WHO MIGHT ASK. That entry crashes for a box whose containing block is not its PARENT, and this
+               walk can place such a box: `block_flow_next_block_box` descends into an in-flow inline box that
+               §9.2.1.1 breaks, so a block-level box inside one is on THIS container's stack while its parent
+               element is the inline. Recording it would put a position under a key that entry refuses to
+               answer for, which in a build with the crash compiled out is a number returned where a refusal
+               used to be. The walked container is in hand here and the parent is one pointer, so the test
+               belongs at the write. */
+            if (ce != NULL && lxb_dom_interface_node(ce)->parent == lxb_dom_interface_node(el))
+                flow_placement_record(ce, through_top);
             if (ce != NULL && ce == want) {
                 *want_top = through_top;
                 *found = true;
@@ -1404,6 +1421,10 @@ static BfBox bf_layout(lxb_dom_element_t *el, lxb_dom_element_t *want, CssPx *wa
            anonymous box and its block-level siblings from disagreeing about where a margin collapsed. The box
            has no border and no padding (§9.2.1.1's initial values), so this top BORDER edge is also its top
            content edge and its top MARGIN edge. */
+        /* …AND THE SAME REPORT FOR A BOX THAT DID NOT COLLAPSE THROUGH — the collapse-through arm above
+           states the reason and it is one reason, not two, and so does the parent test. */
+        if (ce != NULL && lxb_dom_interface_node(ce)->parent == lxb_dom_interface_node(el))
+            flow_placement_record(ce, pos);
         if (ce != NULL && ce == want) {
             *want_top = pos;
             *found = true;
@@ -2031,6 +2052,14 @@ CssPx block_flow_child_top(lxb_dom_element_t *el)
            "reached the box",
            box_subject(el, nbuf, sizeof nbuf), box_subject(cb, cbuf, sizeof cbuf),
            box_subject_node(lxb_dom_interface_node(el)->parent, pbuf, sizeof pbuf));
+    /* §9.4.1's WALK ANSWERS ABOUT EVERY CHILD AND THIS ENTRY IS ASKED ABOUT ONE, so the first ask about any
+       child of a container is what pays for every later ask about its siblings. core/layout/flow_placement.h
+       holds the positions for the span of one whole-tree geometry pass and holds NOTHING outside one, which
+       is why this is not the memo block_flow.h refuses: there is no remembered answer here to go stale, only
+       a walk that reports what it has already computed instead of discarding it. Outside a pass this answers
+       FALSE on every call and the line below runs exactly as it always did. */
+    if (flow_placement_ask(el, &top)) return top;
+    flow_placement_walked();
     (void)bf_layout(cb, el, &top, &found, NULL, NULL, BF_BASELINE_NONE);
     if (!found)
         DFAIL("CSS 2 §9.4.1's walk over this box's containing block placed every in-flow block-level child it "
@@ -2041,6 +2070,21 @@ CssPx block_flow_child_top(lxb_dom_element_t *el)
               "the first and core/layout/flow_position.c's own §9.3 test covers the last. The two answers have "
               "come apart, and reporting a coordinate for a box that is not in this formatting context would be "
               "a number in the right units for a box that is not there");
+    /* THE WALK'S OWN ANSWER AND THE RECORD'S, ASSERTED AGAINST EACH OTHER AT EVERY MISS. They are written by
+       two DIFFERENT lines of one loop — `*want_top` for the box this entry named, `flow_placement_record` for
+       every box the walk passes — so they can disagree, and the day they do, a position every box below it on
+       the stack was placed against is wrong while both files read as correct. This arms on every ask the
+       record did not answer, which is every FIRST ask of every container, so it is exercised by any document
+       that is painted at all rather than by a case somebody has to think of. */
+    DCHECKF(!flow_placement_pass_is_open() || flow_placement_agrees(el, top),
+            "CSS 2 §9.4.1's walk reported this box's top border edge as %g and the placement record this same "
+            "walk wrote holds a different number for it — or holds nothing for it at all. The two come off ONE "
+            "loop over ONE child list: `want_top` is written where the walk recognises the box it was asked "
+            "about and the record is written for every box it passes, one line apart. So this is those two "
+            "lines having come apart, and the number every box below this one on the stack is placed against "
+            "is the one in question. Read core/layout/block_flow.c's two `flow_placement_record` calls against "
+            "the two `want_top` writes beside them before trusting either",
+            top.px);
     return top;
 }
 

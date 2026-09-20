@@ -204,11 +204,25 @@ BlockFlowChildKind block_flow_child_kind(lxb_dom_element_t *parent, lxb_dom_node
    IT COSTS A WALK OF THE WHOLE CONTEXT WHEN THE ANSWER IS `NULL`, AND THE CONTRACT SAYS SO RATHER THAN THE
    CALLERS GUESSING. A float ends the search where it is found, so a document that HAS one is answered out of
    the first few elements; a document that has NONE is a proof of absence, and there is no shorter proof than
-   the subtree, because a float reaching these line boxes may sit anywhere in the context. There is no memo and
-   there must not be one: a remembered answer is state about a tree the cascade can change under it, and
-   core/layout holds none. A caller that asks this per unit of work asks it once per unit of work; where that
-   is a check rather than a computation, `#if APICLIENT_DEV` is what keeps a release build from paying for a
-   proof it will not read. */
+   the subtree, because a float reaching these line boxes may sit anywhere in the context. THIS ANSWER IS NOT
+   REMEMBERED. A caller that asks this per unit of work asks it once per unit of work; where that is a check
+   rather than a computation, `#if APICLIENT_DEV` is what keeps a release build from paying for a proof it
+   will not read.
+   THE REASON THAT USED TO BE GIVEN FOR IT WAS WIDER THAN THE RULE IT SUPPORTS, AND THE CORRECTION IS WRITTEN
+   HERE BECAUSE A READER WILL OTHERWISE RE-DERIVE THE WIDE ONE. It read, and the run is shown rather than
+   quoted so that nothing judges this tree's own prose against a standard: `There is no memo and there must`
+   `not be one: a remembered answer is state about a tree the cascade can change under it, and core/layout`
+   `holds none.` The first half is exactly right and is the reason this entry has none — a caller that asks it per
+   line box asks it inside a walk that may itself be re-entered, and there is no span this file owns over
+   which the answer could be held. The second half was a claim about the DIRECTORY and it is the half that
+   rots: core/layout/flow_placement.h now holds §9.4.1's stack positions, and it is admissible for the one
+   property this entry's answer lacks — a SPAN with two ends in one function, over which the document is
+   asserted not to change, holding NOTHING before it opens and NOTHING after it closes. So the line is not
+   "layout remembers nothing" but "nothing is held without a span that says when it is empty", and a proposal
+   to hold THIS answer is a proposal to name such a span for it.
+   RETIREMENT: this paragraph goes when §9.5.1's placement is built and this entry's callers ask about a
+   PLACED float rather than about the context holding one, because the walk is then part of the layout that
+   produces the float's box and there is no per-line-box proof of absence left to price. */
 lxb_dom_element_t *block_flow_context_first_float(lxb_dom_element_t *el);
 
 /* ---- CSS 2.2 §9.2.1.1 "Anonymous block boxes"' BOX LIST, IN CONTENT ORDER --------------------------------
@@ -428,7 +442,16 @@ CssPx block_flow_auto_height(lxb_dom_element_t *el);
    `el` MUST BE AN IN-FLOW BLOCK-LEVEL BOX whose containing block is §10.1's second case — core/layout/
    flow_position.c is the caller and it has taken every other positioning scheme out through its own section
    first. An element the walk over its containing block's children never places crashes rather than answering
-   a coordinate no box has. */
+   a coordinate no box has.
+   THE WALK IT RUNS ANSWERS ABOUT EVERY CHILD AND THIS ENTRY IS ASKED ABOUT ONE, WHICH IS WHY IT REPORTS.
+   §9.4.1's rule is "boxes are laid out one after the other, vertically, beginning at the top of a containing
+   block", so the running offset the walk carries IS the top border edge of each box it passes — this entry
+   used to return the one its caller named and discard the rest, so a consumer asking about every box in a
+   container ran one whole walk per box. core/layout/flow_placement.h takes every position the walk
+   establishes, for the span of one whole-tree geometry pass and for no longer, and this entry asks it before
+   it walks. WHAT THAT DOES NOT CHANGE is the answer: outside a pass the record holds nothing and answers
+   nothing, so a page reading `offsetTop` between two renders gets the same freshly-walked number it always
+   did, and inside one the record's value is asserted equal to the walk's own at every miss. */
 CssPx block_flow_child_top(lxb_dom_element_t *el);
 
 /* ---- CSS 2.1 §10.3.7's and §10.6.4's STATIC POSITION -----------------------------------------------------
