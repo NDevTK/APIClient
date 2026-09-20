@@ -7553,7 +7553,30 @@ void engine_request_dump(const char *program) {
    flow finishing. A member waiting on the host is photographed when the host answers it.
    AN ASK OVER A DRAINED FRONTIER IS A QUESTION NOBODY IS LEFT TO ANSWER, and it is a DCHECK for
    engine_request_dump's reason exactly: the host would read an empty directory as a document that produced no
-   worlds rather than as a question that arrived after every timeline had finished. */
+   worlds rather than as a question that arrived after every timeline had finished.
+   THE ONE MEMBER THIS WALK SKIPS IS THE ONE WHOSE FINISH IS DEFERRED, AND THAT SKIP IS WHAT MAKES ASKING
+   AGAIN A THING A HOST CAN ACTUALLY DO. engine.h ends its contract with "a host that wants the arms a run has
+   since grown asks again", and until this line that sentence was an invitation to an ABORT: the discharge at
+   FLOW_STEP_DONE clears the mark, sets g_sess_finish_owed and returns with the member still in the frontier,
+   so an ask taken while the thread is with the host re-marks a world that has already ended — which the
+   deferred-finish path asserts against in as many words ("a mark laid down again while the thread was with
+   the host, which would photograph a world that has already ended"). That assert is RIGHT and stays; what was
+   missing is the ask honouring it, because the party that knows a finish is deferred is this one and not the
+   host. A host cannot see g_sess_finish_owed, has no entry that reports it, and would have to infer it from
+   the shape of its own previous round — which is the kind of second copy of a scheduler fact §Architecture
+   refuses.
+   AND THE SKIP LOSES NO PICTURE, which is the objection to answer rather than to assume: the member being
+   skipped is one whose mark was discharged one return ago, so the host is HOLDING its picture at this very
+   moment — the render is what it does between the two steps. Marking it again would not buy a second picture
+   of a second state; it would buy a second picture of the same ended world, and the finish would then run
+   with a mark still up.
+   WITH THAT, A PER-ROUND RE-ASK TERMINATES, and the argument is the discharge's own: a member's mark is spent
+   at its END (one return, one picture) or FREE at any yield it is standing for, and re-marking a member that
+   is already marked writes the bit it already has. So the price of asking every round is exactly one extra
+   return per member that ever ends — one picture per world, which is @PERWORLD's whole point — and never a
+   return per round per member. The residual in test_forced.c that predicted the opposite ("a round triggered
+   by a discharge would re-mark every member and buy another, which does not terminate") was reasoning about
+   an ask with no such skip, and it was right about that ask. */
 void engine_request_paint(void) {
     int n, i;
 
@@ -7565,7 +7588,11 @@ void engine_request_paint(void) {
            "an image of every world was asked of a document whose every timeline had already finished — there "
            "is no member left to be switched in, so the only world a host can render from here is the "
            "baseline, which is the very reach main.c's qjs_paint residual says this ask exists to widen");
-    for (i = 0; i < n; i++) flow_set_paint_owed(flow_at(i));
+    for (i = 0; i < n; i++) {
+        Flow *f = flow_at(i);
+        if (g_sess_finish_owed && f == g_sess_cur) continue;
+        flow_set_paint_owed(f);
+    }
 }
 
 /* THE OPERATION BECOMES THIS FLOW'S NEXT PROGRAM. Not a call: a peer answers by RUNNING a program, and every one

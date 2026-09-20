@@ -310,7 +310,17 @@ const char *engine_take_dumps(void);
  * a switch performed for a picture would forge a ranking for a pick the WFQ never made.
  *   THE MEMBERS ALIVE AT THE ASK, AND NO FORK AFTER IT. A newborn arm owes nothing (flow.h's `paint_owed` says
  * why: an ask that newborns inherited would never finish on a forking frontier, and §NO BOUNDS forbids capping
- * an answer once it is owed). A host that wants the arms a run has since grown asks again.
+ * an answer once it is owed). A host that wants the arms a run has since grown asks again — and THAT SENTENCE
+ * USED TO BE AN INVITATION TO AN ABORT, which is why it now carries the clause below rather than standing
+ * alone. A re-ask taken while the thread is with the host re-marks the member whose finish this session
+ * DEFERRED for a picture, and the deferred-finish path asserts against exactly that. So `engine_request_paint`
+ * skips that one member, the assert stays, and asking again is a thing a host can do on EVERY round: a mark is
+ * one bit, spent at a member's end or free at any yield it is standing for, so the price of the renewal is one
+ * extra return per member that ever ends — one picture per world — and never one per round per member.
+ *   THE HALF THAT IS THE HOST'S IS STILL THE HOST'S, and it is an ORDER rather than a cadence: the renewal
+ * goes AFTER the render of the standing world, because the member the skip protects is one whose image the
+ * host is holding at that instant. A host that asks before it paints has asked the engine to reason about a
+ * deferral it has not yet been paid for.
  *   AT MOST ONE IMAGE IS EVER UN-DRAINED, WHICH IS WHAT KEEPS THIS OUT OF §NO BOUNDS. The scheduler renders
  * nothing and holds nothing, so there is no register to overwrite and no world that can be silently not
  * painted: each mark costs exactly one return to the host, and the host that asked is the party that renders.

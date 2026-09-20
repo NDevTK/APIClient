@@ -26840,20 +26840,27 @@ static int abi_main(int argc, char **argv)
        forking frontier an ask that never finishes — every fork would owe an image, and §NO BOUNDS forbids
        capping the answer once it is owed", and solver/engine.h states the same decision as the contract.
        Building it would have overturned a decision by quoting a clause written without reading it.
-       WHAT IS NOT COVERED, now that those are settled, is a world FORKED AFTER THE ASK. `engine_request_paint`
-       marks the members alive when it is called and a fork inherits nothing, so an arm born later is
-       photographed only if the quantum happens to leave it standing — which for a document that finishes
-       inside one slice is never. This is a HOST question rather than an engine one and solver/engine.h
-       already states its answer in one sentence: "A host that wants the arms a run has since grown asks
-       again." WHAT THE NEXT DIFF BUILDS is therefore in THIS file — a re-ask on a cadence this driver can
-       defend, which is a decision about how many extra returns a picture is worth and not a mechanism the
-       scheduler is missing. It may not be a re-ask per round: a round triggered by a discharge would re-mark
-       every member and buy another, which does not terminate.
-       HOW ITS ABSENCE WOULD SHOW: a run whose `_forkAt` names two branch sites writes fewer image files than
-       it forked worlds, and the worlds that are missing are the ones whose flows were born after the host's
-       single ask — observed on the directory's file NAMES, which carry the world, against the fork table the
-       same run publishes. RETIREMENT: this record goes when a world this run forked is photographed because
-       somebody asked for it rather than because the quantum left it standing. */
+       AND THE WORLD FORKED AFTER THE ASK — which is what that clause named as NOT COVERED — IS COVERED BY THE
+       RE-ASK IN THE LOOP BELOW, so the residual is retired rather than restated. Its observation held exactly
+       as written: a document whose gate forks once published `_forkAt` naming one branch site, held TWO flows,
+       and wrote TWO images of which one was the `baseline` — so the arm born at the fork was photographed by
+       nothing, because `engine_request_paint` marks the members alive when it is called and a fork inherits
+       nothing.
+       ITS REMEDY CLAUSE WAS HALF RIGHT AND THE HALF IT GOT WRONG IS THE PART A READER WOULD HAVE ACTED ON,
+       which is why that is recorded here rather than deleted with it. It said the answer was a cadence THIS
+       FILE had to choose — "a decision about how many extra returns a picture is worth" — and that a re-ask
+       per round could not be it, because "a round triggered by a discharge would re-mark every member and buy
+       another, which does not terminate". The first half is the kind of guess §the-remedy-clause-is-a-
+       HYPOTHESIS warns about: it reads as a policy question and it was a MISSING GUARD, one line, in the
+       party that owns the fact. A mark is spent at a member's END or FREE at any yield it is standing for, so
+       re-marking a member that is already marked writes a bit it already has and a per-round ask costs
+       exactly one extra return per member that ever ends. What genuinely did not terminate — and what that
+       clause had correctly felt without being able to name — is the ONE member whose finish is DEFERRED
+       across the return: re-marking it is the state solver/engine.c's deferred-finish path aborts on by name.
+       `engine_request_paint` now skips exactly that member, and the argument is at its site.
+       SO THE CADENCE IS EVERY ROUND, WHICH IS NOT A CHOICE THIS FILE MAKES BUT THE ABSENCE OF ONE: a driver
+       that asks on every round cannot be holding a stale view of a frontier that forks, and there is no
+       constant here to tune, no counter to age and nothing for two hosts to disagree about. */
     if (paint_dir != NULL) qjs_request_paint();
 
     for (;;) {
@@ -26887,6 +26894,22 @@ static int abi_main(int argc, char **argv)
            capability hours earlier — and the findings are recoverable by re-running without the flag, which is
            what makes the trade payable at all. */
         if (paint_dir != NULL) abi_paint(paint_dir, doc_id, url);
+        /* AND THE ASK IS RENEWED, AFTER THE PICTURE AND NEVER BEFORE IT — @PERWORLD. The ask above this loop
+           names the members alive at the seed, which on a document that forks is the boot flow and nothing
+           else; every arm born at a gate afterwards is outside it, and the images such a run writes are its
+           baseline and whichever single world the quantum left standing. Renewing here is what makes the
+           directory a picture of a SOLVER rather than of one timeline.
+           THE ORDER IS LOAD-BEARING AND IS THE WHOLE OF WHY THIS LINE IS HERE RATHER THAN ONE LINE UP. The
+           round that discharges a member's LAST mark returns with that member's finish deferred, and the
+           picture of it is the `abi_paint` immediately above; asking before that render would mark a world
+           this host has not yet photographed and engine_request_paint's skip would then be reasoning about a
+           deferral the render had not yet been paid for. Ask after, and the member skipped is one whose image
+           is already on disk.
+           IT COSTS ONE EXTRA RETURN PER MEMBER THAT EVER ENDS AND NOT ONE PER ROUND, which is the arithmetic
+           the residual above got wrong and is settled at engine_request_paint: a mark is ONE BIT, spent at a
+           member's end or free at a yield it is standing for, so re-writing it on a member that already has
+           it is not a second obligation. */
+        if (paint_dir != NULL) qjs_request_paint();
         /* THE BILL GOES OUT ON EVERY ROUND AND IS READ BACK ON NONE OF THEM — see abi_announce for why the
            announcement and the payment are separate halves and why the channel is half-duplex between them. */
         abi_announce();
