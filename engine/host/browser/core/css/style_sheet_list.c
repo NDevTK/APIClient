@@ -21,6 +21,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/css/css_cascade_pass.h"   /* the render record a cascade-input write may not land inside */
 #include "core/css/css_style_sheet.h"
 #include "core/css/style_sheet_list.h"
 #include "core/dom/node.h"
@@ -166,6 +167,19 @@ void style_sheet_list_add(JSContext *ctx, JSValueConst sheet, JSValueConst owner
     JSValue root_wrap, list;
 
     DCHECK(css_style_sheet_is(sheet), "§6.2's add was given something that is not a CSS style sheet");
+    /* A CASCADE INPUT MOVING INSIDE A RENDER — see core/css/css_cascade_pass.h. The record that
+       span holds is sound only while the cascade's inputs stand still, and `dom_cow_version` does not
+       advance for this one, so the crash is HERE, at the write, rather than a re-check on the read
+       side that would run after the picture was drawn. */
+    DCHECK(!css_cascade_pass_is_open(),
+           "CSSOM §6.2's ADD A CSS STYLE SHEET ran while css-cascade-5 §4.2 \"Cascaded Values\"' record was open "
+           "for a render. The author origin IS this list, read for the element's own root, and every "
+           "cascaded value this render has already "
+           "served was the winner of a cascade over the sheet graph this write is replacing — "
+           "nothing else in this engine can see that happen, because the tree version does not move "
+           "for it. The span is core/paint/document_paint.c's CSS 2.1 §E.2 \"Painting order\" walk "
+           "and nothing in it may write: find what did, and either take it out of the walk or move "
+           "the pass inside it");
     /* §6.2's create is the only caller, and every sheet IT builds has an owner node. Two other kinds of sheet
        have none, and neither belongs in a document's collection: an @import'd sheet (a parent CSS style sheet
        and an owner CSS rule, no owner node) and a CONSTRUCTED one. The constructed one exists in this build —
@@ -229,6 +243,19 @@ void style_sheet_list_remove(JSContext *ctx, JSValueConst sheet)
     int64_t at;
 
     DCHECK(css_style_sheet_is(sheet), "§6.2's remove was given something that is not a CSS style sheet");
+    /* A CASCADE INPUT MOVING INSIDE A RENDER — see core/css/css_cascade_pass.h. The record that
+       span holds is sound only while the cascade's inputs stand still, and `dom_cow_version` does not
+       advance for this one, so the crash is HERE, at the write, rather than a re-check on the read
+       side that would run after the picture was drawn. */
+    DCHECK(!css_cascade_pass_is_open(),
+           "CSSOM §6.2's REMOVE A CSS STYLE SHEET ran while css-cascade-5 §4.2 \"Cascaded Values\"' record was open "
+           "for a render. The author origin IS this list, read for the element's own root, and every "
+           "cascaded value this render has already "
+           "served was the winner of a cascade over the sheet graph this write is replacing — "
+           "nothing else in this engine can see that happen, because the tree version does not move "
+           "for it. The span is core/paint/document_paint.c's CSS 2.1 §E.2 \"Painting order\" walk "
+           "and nothing in it may write: find what did, and either take it out of the walk or move "
+           "the pass inside it");
     if (JS_GetOwnSlot(ctx, &root_wrap, sheet, g_atom_holder) <= 0) root_wrap = JS_UNDEFINED;
     DCHECK(JS_IsObject(root_wrap),
            "§6.2's remove a CSS style sheet reached a sheet that no add ever put in a list — §6.1's create runs "

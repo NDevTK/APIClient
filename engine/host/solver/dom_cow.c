@@ -8,6 +8,7 @@
 #include "solver/dom_cow.h"
 #include "core/dom/document.h"   /* document_record_release — a destroyed document hands back its record */
 #include "core/layout/flow_placement.h"   /* the geometry span an attribute write may not land inside — see dom_attr_capture */
+#include "core/css/css_cascade_pass.h"   /* …and the CASCADE span, which the same write also moves */
 #include "core/dom/attr_list.h"   /* §4.9's attribute-list algorithms — what the delta restores an attribute THROUGH */
 #include "core/dom/name_intern.h"   /* a node's names are per-DOCUMENT state, so kind 8 moves them with the pointer */
 #include "core/dom/node_heap.h"     /* …and its BYTES are the agent's, which is why kind 8 asserts and moves nothing */
@@ -507,6 +508,21 @@ static void dom_attr_capture(lxb_dom_element_t *el, const char *ns, const char *
            "happen. Positions already served by that pass were computed against the declarations this write "
            "is replacing. The pass is core/paint/document_paint.c's §E.2 walk and nothing in it may write: "
            "find what did, and either take it out of the walk or move the pass inside it");
+    /* AND THE SAME WRITE IS A CASCADE INPUT, WHICH IS A SECOND RECORD OVER A SECOND SPAN AND NOT THE SAME
+       QUESTION ASKED TWICE. `style`, `class`, `id` and every presentational attribute reach
+       css-cascade-5 §6 "Cascading" — the inline origin, the selectors that match, and
+       css-cascade-5 §6.5 "Precedence of Non-CSS Presentational Hints" — so a write here moves the cascade
+       whether or not anything has asked for a POSITION. The two passes are nested today and that is a fact
+       about where they are opened rather than a property either one has: a diff that moves one bracket must
+       not silently take the other's guarantee with it, which is why this names its own record. */
+    DCHECK(!css_cascade_pass_is_open(),
+           "an attribute was written while css-cascade-5 §4.2 \"Cascaded Values\"' record was open for a "
+           "render. That record holds the declaration that won the cascade for every (element, property) the "
+           "walk has asked about, and `dom_cow_version` does not advance for an attribute — so a `style`, a "
+           "`class` or a presentational attribute replaced here leaves every value already served cascaded "
+           "against declarations that are gone, and nothing else in this engine can see it happen. The span "
+           "is core/paint/document_paint.c's CSS 2.1 §E.2 \"Painting order\" walk and nothing in it may "
+           "write: find what did, and either take it out of the walk or move the pass inside it");
     if (!g_dom_capture) return;
     dom_capture_begin();   /* `a`, `cur` and `prefix` are the tree's, held across four allocations that can sell */
     a = dom_attr_get_ns(el, ns, local);

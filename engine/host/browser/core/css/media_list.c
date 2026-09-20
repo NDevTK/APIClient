@@ -12,6 +12,7 @@
 #include "check.h"
 #include "quickjs.h"
 #include "quickjs-step.h"
+#include "core/css/css_cascade_pass.h"   /* the render record a cascade-input write may not land inside */
 #include "core/css/media_list.h"
 #include "core/css/media_query.h"
 #include "core/idl_args.h"
@@ -180,6 +181,17 @@ static void ml_set_text(JSContext *ctx, JSValueConst self, const char *text)
     int n, i;
 
     DCHECK(JS_IsArray(arr), "a MediaList's collection was replaced on an object that has none");
+    /* A CASCADE INPUT MOVING INSIDE A RENDER — see core/css/css_cascade_pass.h. A sheet whose media
+       stops matching leaves the author origin entirely, and `dom_cow_version` does not advance for it. */
+    DCHECK(!css_cascade_pass_is_open(),
+           "a MediaList's collection was replaced while css-cascade-5 §4.2 \"Cascaded Values\"' record "
+           "was open for a render. HTML §4.2.4.1 \"Processing the media attribute\" makes the media "
+           "attribute PRESCRIPTIVE — the user agent \"must apply the external resource when the media "
+           "attribute's value matches the environment… and must not apply it otherwise\" — so a list "
+           "rewritten here takes a whole sheet into or out of the author origin, and every value this "
+           "render has already served was cascaded over the other one. The span is core/paint/"
+           "document_paint.c's CSS 2.1 §E.2 \"Painting order\" walk and nothing in it may write: find "
+           "what did, and either take it out of the walk or move the pass inside it");
     JS_SetPropertyStr(ctx, arr, "length", JS_NewUint32(ctx, 0));      /* STEP 1 */
     if (!text || !*text) { JS_FreeValue(ctx, arr); return; }          /* STEP 2 */
     set = media_query_parse(text);                                    /* STEP 3 */

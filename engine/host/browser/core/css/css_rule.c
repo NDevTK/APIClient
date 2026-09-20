@@ -20,6 +20,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/css/css_cascade_pass.h"   /* the render record a cascade-input write may not land inside */
 #include "core/css/css_at_rule_prelude.h"
 #include "core/css/css_nesting.h"
 #include "core/css/css_page.h"
@@ -328,6 +329,20 @@ static CssRuleData *rule_of(JSValueConst v)
 #define rule_set(ctx_, r_, slot_, v_)                                                                          \
     do {                                                                                                       \
         JSValue rule_set_v_ = (v_);                                                                            \
+                                                                                                               \
+        /* A RULE RECORD IS A CASCADE INPUT, and core/css/css_cascade_pass.h's record is sound only over a  */ \
+        /* span in which those do not move. It expands at the SITE rather than sitting inside a function    */ \
+        /* for the same reason the CHECK below does: the abort then stamps the write, which is where the    */ \
+        /* fix is, instead of stamping this line for every writer in the file.                              */ \
+        DCHECK(!css_cascade_pass_is_open(),                                                                    \
+               "a CSS rule record's owned slot was written while css-cascade-5 §4.2 \"Cascaded Values\"' " \
+               "record was open for a render. A rule's declarations and its selector are the AUTHOR ORIGIN " \
+               "css-cascade-5 §6.2 \"Cascading Origins\" names, and `dom_cow_version` does not advance for " \
+               "either — so a cascaded value this render already served is the winner of a cascade over " \
+               "the rule this write is replacing, and nothing else in this engine can see it happen. The " \
+               "span is core/paint/document_paint.c's CSS 2.1 §E.2 \"Painting order\" walk and nothing " \
+               "in it may write: find what did, and either take it out of the walk or move the pass " \
+               "inside it");                                                                                 \
                                                                                                                \
         CHECKF(!JS_IsException(rule_set_v_),                                                                    \
                "a CSS rule record's owned slot was published with the FAILURE VALUE of `%s`, so the mint that "  \
@@ -2094,6 +2109,19 @@ JSValue css_rule_list_insert(JSContext *ctx, JSValueConst list, JSValueConst par
 
     DCHECK(JS_IsArray(list), "CSSOM §6.4's insert a CSS rule was given something that is not a CSS rule list");
     DCHECK(text != NULL, "CSSOM §6.4's insert a CSS rule was given no rule text");
+    /* A CASCADE INPUT MOVING INSIDE A RENDER — see core/css/css_cascade_pass.h. The record that
+       span holds is sound only while the cascade's inputs stand still, and `dom_cow_version` does not
+       advance for this one, so the crash is HERE, at the write, rather than a re-check on the read
+       side that would run after the picture was drawn. */
+    DCHECK(!css_cascade_pass_is_open(),
+           "CSSOM §6.4's INSERT A CSS RULE ran while css-cascade-5 §4.2 \"Cascaded Values\"' record "
+           "was open for a render. A rule entering a sheet is a declaration entering the AUTHOR ORIGIN "
+           "css-cascade-5 §6.2 \"Cascading Origins\" names, and every cascaded value this render has "
+           "already served was the winner of a cascade over the sheet graph this write is replacing — "
+           "nothing else in this engine can see that happen, because the tree version does not move "
+           "for it. The span is core/paint/document_paint.c's CSS 2.1 §E.2 \"Painting order\" walk "
+           "and nothing in it may write: find what did, and either take it out of the walk or move "
+           "the pass inside it");
     /* STEP 2, FIRST and before the parse, which is the order the algorithm states: a bad index throws even for
        text that would not have parsed. `index > length` and NOT `>=` — appending at the very end is LEGAL, and
        that asymmetry against remove's `>=` is the whole reason both are spelled out here. */
@@ -2176,6 +2204,19 @@ JSValue css_rule_list_delete(JSContext *ctx, JSValueConst list, uint32_t index)
     JSValue old;
 
     DCHECK(JS_IsArray(list), "CSSOM §6.4's remove a CSS rule was given something that is not a CSS rule list");
+    /* A CASCADE INPUT MOVING INSIDE A RENDER — see core/css/css_cascade_pass.h. The record that
+       span holds is sound only while the cascade's inputs stand still, and `dom_cow_version` does not
+       advance for this one, so the crash is HERE, at the write, rather than a re-check on the read
+       side that would run after the picture was drawn. */
+    DCHECK(!css_cascade_pass_is_open(),
+           "CSSOM §6.4's REMOVE A CSS RULE ran while css-cascade-5 §4.2 \"Cascaded Values\"' record was open "
+           "for a render. A rule leaving a sheet takes its declarations out of the AUTHOR ORIGIN "
+           "css-cascade-5 §6.2 \"Cascading Origins\" names, and every cascaded value this render has "
+           "already served was the winner of a cascade over the sheet graph this write is replacing — "
+           "nothing else in this engine can see that happen, because the tree version does not move "
+           "for it. The span is core/paint/document_paint.c's CSS 2.1 §E.2 \"Painting order\" walk "
+           "and nothing in it may write: find what did, and either take it out of the walk or move "
+           "the pass inside it");
     /* STEP 2 — `index >= length`, the asymmetry against insert's `>`. */
     if (index >= array_len(ctx, list))
         return JS_ThrowDOMException(ctx, "IndexSizeError", "the index is at or past the end of the rule list");

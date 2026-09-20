@@ -10,6 +10,7 @@
 #include "check.h"
 #include "core/css/css_computed_value.h"
 #include "core/css/css_length.h"
+#include "core/css/css_cascade_pass.h"   /* css-cascade-5 §4.2's record, opened around the same walk */
 #include "core/frame/viewport.h"
 #include "core/graphics/raster_surface.h"
 #include "core/layout/flow_placement.h"
@@ -127,6 +128,18 @@ bool document_paint(JSContext *ctx, lxb_html_document_t *dom, RasterSurface *out
            NO PAGE CODE RUNS INSIDE IT, which is the premise the record is sound on and which is not left as a
            sentence: core/layout/flow_placement.h names the three places that premise is asserted, and one of
            them is a crash at the DOM attribute chokepoint rather than a check here. */
+        /* css-cascade-5 §4.2 "Cascaded Values"' RECORD, OPENED AROUND THE SAME WALK AND FOR THE SAME
+           REASON — this is the one entry that asks the cascade about every element in the document, and it
+           asks about most of them many times over. The span is the WALK and not the raster beneath it,
+           which is the span core/layout/flow_placement.h chose and for the identical argument: the raster
+           consumes marks that are already numbers and asks the cascade nothing, so holding a record across
+           it would widen the window this component's own assertions have to cover for no answer served.
+           IT IS OPENED OUTSIDE CSS 2.1 §9.4.1 "Block formatting contexts"' PASS RATHER THAN INSIDE IT
+           because the geometry walk READS the cascade — core/layout/flow_position.c re-derives
+           CSS 2 §10.1 "Definition of 'containing block'"'s equation out of computed values at every
+           origin it serves — so a cascade record that closed first would leave the last of those asks
+           paying full price for no reason. The two spans are nested and not merely adjacent. */
+        css_cascade_pass_open();
         flow_placement_pass_open();
         /* CSS 2.1 §E.2 "Painting order" over the ROOT's stacking context. CSS 2.1 §9.9.1 "Specifying the stack
            level: the 'z-index' property"'s first sentence makes the root element form the root stacking
@@ -145,6 +158,9 @@ bool document_paint(JSContext *ctx, lxb_html_document_t *dom, RasterSurface *out
            the raster would still run, and a close placed on the complete arm alone would leave the record
            standing for the next paint to open on top of. There is no arm between these two lines. */
         flow_placement_pass_close();
+        /* AND THE CASCADE RECORD CLOSES WITH IT, ON THE SAME ARM AND WITH NOTHING BETWEEN THESE TWO
+           LINES — see the comment above for why it opened outside and therefore closes outside. */
+        css_cascade_pass_close();
         display_list_raster(&dl, dpr, out, &rc);
         count->marks = rc.marks;
         count->spans = rc.spans;

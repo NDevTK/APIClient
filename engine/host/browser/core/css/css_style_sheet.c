@@ -34,6 +34,7 @@
 
 #include "check.h"
 #include "quickjs.h"
+#include "core/css/css_cascade_pass.h"   /* the render record a cascade-input write may not land inside */
 #include "core/css/css_rule.h"
 #include "core/css/css_rule_list.h"
 #include "core/css/css_style_sheet.h"
@@ -327,6 +328,19 @@ void css_style_sheet_set_disabled(JSValueConst sheet, bool disabled)
     CssStyleSheetData *s = sheet_of(sheet);
 
     DCHECK(s != NULL, "the disabled flag was written on something that is not a CSS style sheet");
+    /* A CASCADE INPUT MOVING INSIDE A RENDER — see core/css/css_cascade_pass.h. The record that
+       span holds is sound only while the cascade's inputs stand still, and `dom_cow_version` does not
+       advance for this one, so the crash is HERE, at the write, rather than a re-check on the read
+       side that would run after the picture was drawn. */
+    DCHECK(!css_cascade_pass_is_open(),
+           "CSSOM §6.1's DISABLED FLAG was written while css-cascade-5 §4.2 \"Cascaded Values\"' record was open "
+           "for a render. The author cascade skips a disabled sheet entirely, and every cascaded value "
+           "this render has already "
+           "served was the winner of a cascade over the sheet graph this write is replacing — "
+           "nothing else in this engine can see that happen, because the tree version does not move "
+           "for it. The span is core/paint/document_paint.c's CSS 2.1 §E.2 \"Painting order\" walk "
+           "and nothing in it may write: find what did, and either take it out of the walk or move "
+           "the pass inside it");
     s->disabled = disabled;
 }
 

@@ -98,6 +98,7 @@
 #include "core/dom/selector_match.h"
 #include "core/html/integer_microsyntax.h"   /* §4.3.11.1's `headingoffset` runs §2.3.4.2's rules for parsing non-negative integers */
 #include "core/css/css_cascade.h"
+#include "core/css/css_cascade_pass.h"   /* css-cascade-5 §4.2's answer, held for one render */
 #include "core/css/css_computed_value.h"
 #include "core/css/css_defaulting.h"
 #include "core/css/css_font_family.h"
@@ -2908,6 +2909,15 @@ char *cssom_cascaded_value(lxb_dom_element_t *el, const char *name)
            "never looked at. §6.6.1's getPropertyValue owns the shorthand step, and both paths that can be "
            "asked for one run it BEFORE reaching here — cssd_property_value over a block's declarations, and "
            "css_resolved_value over CSSOM §7.2's resolved longhands. A third caller must run it too");
+    /* THE RENDER'S RECORD OF THIS EXACT QUESTION, ASKED BEFORE ANY OF THE WORK BELOW AND BEFORE
+       css-logical-1 §4's PAIRING — which is the whole point of asking here rather than in any caller. The
+       pairing is a PREREQUISITE of this cascade and is itself two computed values that INHERIT, so an ask
+       answered from the record skips two climbs to the root before it skips one sheet walk. See
+       core/css/css_cascade_pass.h for the two shapes that multiply, for the measurement, and for the three
+       places the span this record is sound over is asserted. A NULL answer is one of the values it carries
+       (css-cascade-5 §4.2 "Cascaded Values"' empty list), so a hit is the BOOLEAN and never the
+       pointer. */
+    if (css_cascade_pass_ask(el, name, &out)) return out;
     /* EVERY ORIGIN CONTRIBUTES INTO ONE LIST, AND THE SORT DECIDES — which is css-cascade-5 §6.1 and is not
        what asking each
        origin in turn does. The four used to be asked in precedence order and the first that answered won, and
@@ -3033,6 +3043,11 @@ char *cssom_cascaded_value(lxb_dom_element_t *el, const char *name)
     out = css_cascade_value(cascade);
     css_cascade_free(cascade);
     css_layer_order_free(order);
+    /* …AND THE ANSWER, REPORTED WHETHER OR NOT A PASS IS OPEN. The record's census counts the QUESTION and
+       the RESOLUTION at the same event, so a run that renders nothing still closes its own identity; what an
+       open pass decides is the STORAGE. `out` is BORROWED here — this caller still owns it and its one
+       caller still frees it. */
+    css_cascade_pass_record(el, name, out);
     return out;
 }
 

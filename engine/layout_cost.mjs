@@ -72,9 +72,26 @@ const MAX = Number(maxArg || 6);
    reading that separates a multiplier from an inherent cost: a linear number of asks over quadratic work
    means a walk is re-deriving what another walk already established, and asks that are themselves
    superlinear mean the multiplier is in the caller instead. Neither number says it alone. */
+/* AND THE CASCADE BENEATH THEM, WHICH IS A COST PER ASK RATHER THAN A COST PER BOX AND WAS NOT ON THIS LIST
+   WHILE IT WAS THE LARGEST THING A RENDER PAID. `cssom_cascaded_value` is css-cascade-5 §6 "Cascading"'s sort
+   for ONE (element, property) and is the work every row above it triggers; `css_computed_value` and
+   `css_cv_specified` are css-cascade-5 §7 "Defaulting"'s two halves above it, and the difference between them
+   is §7.2's ancestor climb; `css_logical_partner_of` is css-logical-1 §4's pairing, which is a PREREQUISITE of
+   the cascade and is itself two more computed values that inherit. `cssd_ua_value` and
+   `css_presentational_hint` are the two flat scans each resolution runs, so a row of either that is LARGER
+   than `cssom_cascaded_value` is the logical partner being asked for as well — which is a reading, not a
+   defect. `lxb_css_stylesheet_parse` is the sheet re-parse a resolution performs when the document HAS author
+   style, and it reads ZERO for a fixture that declares none: these two shapes declare none, so that row is
+   the instrument saying which half of the cost it is looking at rather than saying the half is free.
+   THE READING IS THE PAIR OF ORDERS AND NEVER ONE NUMBER: `bp_visit` is linear by construction, so a cascade
+   row above it that is quadratic in `flat` names a per-SIBLING factor and one that rises to cubic in `deep`
+   names a per-ANCESTOR factor on top of it. */
 const PROBES = ['bf_layout', 'bf_box', 'block_flow_child_top', 'block_flow_auto_height',
                 'flow_border_box_origin', 'element_view_bounding_box_px', 'bp_visit',
-                'used_value_border_edge_px'];
+                'used_value_border_edge_px',
+                'cssom_cascaded_value', 'css_computed_value', 'css_cv_specified',
+                'css_logical_partner_of', 'cssd_ua_value', 'css_presentational_hint',
+                'lxb_css_stylesheet_parse'];
 
 const flat = (n) => '<!DOCTYPE html><html><head><title>t</title></head><body>' +
   Array.from({ length: n }, (_, i) => `<div>r${i}</div>`).join('') + '</body></html>';
