@@ -43,7 +43,34 @@ static bool host_defined(const lxb_dom_node_t *node, void *ctx)
  * which is what a `DFAIL` is for.
  *
  * WHAT THE NEXT DIFFS BUILD, IN ORDER, and why none of them is this one:
- *   (1) THREE-VALUED MATCHING. `lxb_selectors_match_*` must be able to answer UNKNOWN, and `:not()`, `:is()`
+ *   (0) CONCRETIZE-ON-PIN AT THE MATCH, WHICH NEEDS NO FORK AND WAS LANDED BELOW (1) BY MISTAKE — THE
+ *       CORRECTION IS RECORDED HERE RATHER THAN BY REORDERING THE LIST IN SILENCE, because the reasoning
+ *       that put the pin last is the reasoning the next reader will re-derive. It went: the unknown reaches
+ *       the attribute with its example already dropped (the forced sibling of `if (stored)`), so nothing can
+ *       decide the match and a FORK is the only way out. That is true of the VALUE and false of the FLOW.
+ *       §Solver-half's CONCRETIZE-ON-PIN says "once `x==='admin'` pins the value, a later READ of that source
+ *       returns the pinned bytes, so a later branch on it is decided by RUNNING the real predicate on a real
+ *       string and does not fork at all" — so a flow whose own `===` already pinned the value HAS the answer
+ *       and the match need only ASK. That is what core/css/media_query.c's `media_query_matches_now` does
+ *       for a CSS read one component over, in its own words "C cannot fork, so it takes the arm this flow
+ *       already committed to", and it is the shape to copy.
+ *       WHAT MADE THE MISTAKE INVISIBLE IS THAT THE PIN IS WRITTEN BY THE PAGE AND NOT BY THIS ENGINE, so it
+ *       is in neither this file nor the sheet: the bundle that writes an unknown into an attribute is very
+ *       often the same bundle that BRANCHES on it a few statements later, and the branch seam has a resume
+ *       point where the match does not. Measured on the document this seam was built from: its theme script
+ *       sets the attribute and then tests the SAME unknown with `=== 'dark'` and `=== 'light'` three lines
+ *       down, so both worlds are already in the frontier, minted by the interpreter, each with the value
+ *       pinned — and the cascade answers false for both.
+ *       WHAT THE DIFF IS: concolic.c holds the read-back already, as the STATIC `pin_of`, keyed by the
+ *       value's own `src`; the attribute shadow hands this seam that same value, so what is missing is an
+ *       EXPORT of that read and a `=`/`|=` arm here that runs the real byte comparison against the pinned
+ *       bytes. The rest of §6's operators follow for free, because a pinned value is a real string and the
+ *       matcher's own comparison is then the right one.
+ *       HOW ITS ABSENCE WOULD SHOW, which is what this abort is: a flow that has PROVED what an attribute
+ *       holds still refusing to answer a selector over it.
+ *   (1) THREE-VALUED MATCHING, for the flows (0) cannot answer — the ones that reached the cascade having
+ *       committed to NEITHER arm, where there is no pin to read and a real question has to be asked.
+ *       `lxb_selectors_match_*` must be able to answer UNKNOWN, and `:not()`, `:is()`
  *       and the combinators must propagate it. The RULE is Kleene's and this engine already implements it,
  *       in core/css/media_query.c's `mq_not`/`mq_and`/`mq_or` over an `MQ_UNKNOWN` — so what is missing is
  *       the propagation and not the arithmetic. ITS CAUSE THERE IS NOT THE CAUSE HERE and the analogy stops
@@ -113,9 +140,10 @@ static void host_attr_value_read(const lxb_dom_node_t *node, const lxb_dom_attr_
            "false against a DISPLAY SHAPE that no operand can equal. §6's own rule is two-valued — \"an "
            "attribute selector must be considered to match an element if that element has an attribute that "
            "matches the attribute represented by the attribute selector\" — so the matcher has no third "
-           "answer and this engine has no fork here: a fork needs a RESUME POINT and a match is one C call "
-           "that returns before its driver can yield. See host_attr_value_read in this file for the five "
-           "ordered diffs, of which the first is three-valued matching.",
+           "answer. ASK FIRST WHETHER THIS FLOW ALREADY KNOWS: a page that writes an unknown into an "
+           "attribute very often branches on the SAME unknown a few statements later, and §Solver-half's "
+           "concretize-on-pin makes that flow's answer a real string. See host_attr_value_read in this "
+           "file for the ordered diffs, of which the first is that read and needs no fork at all.",
            (int)tag_n, tag ? (const char *)tag : "?",
            (int)name_n, name ? (const char *)name : "?",
            concolic_shape_c(taint) ? concolic_shape_c(taint) : "{}");
